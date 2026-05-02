@@ -80,6 +80,9 @@ temp/
 .superpowers/brainstorm/
 .superpowers/skills/_draft/
 
+# Git worktrees (isolated development workspaces)
+.worktrees/
+
 # Playwright MCP temporary files
 .playwright-mcp/
 
