@@ -1,0 +1,99 @@
+[package]
+name = "bedcode"
+version = "0.1.0"
+description = "Remote control for Claude Code via mobile devices"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "bedcode_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-os = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Security
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Regex for parsing
+regex = "1"
+
+# Network utilities
+local-ip-address = "0.6"
+
+# Desktop-only dependencies
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# PTY management
+portable-pty = "0.8"
+# WebSocket server
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+# mDNS discovery
+mdns-sd = "0.11"
+# Secure storage
+keyring = "3"
+
+[dev-dependencies]
+# Testing
+tokio-test = "0.4"
+pretty_assertions = "1"
+tempfile = "3"
+mockall = "0.12"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+# Benchmark targets
+[[bench]]
+name = "parser_bench"
+harness = false
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+# ==================== 开发模式优化 ====================
+# 减少调试信息大小，加速开发编译
+[profile.dev]
+debug = 1              # 仅保留行号信息，减少编译时间和磁盘占用
+incremental = true     # 启用增量编译
+split-debuginfo = "packed"  # 分离调试信息，减少主文件大小
+
+# 依赖项优化 - 开发时依赖项也优化编译
+[profile.dev.package."*"]
+opt-level = 2          # 依赖项使用 O2 优化，减少体积

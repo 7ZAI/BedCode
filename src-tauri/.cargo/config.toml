@@ -1,0 +1,50 @@
+# Cargo 构建配置
+# 文档: https://doc.rust-lang.org/cargo/reference/config.html
+
+[build]
+# 增量编译 - 减少重复编译时间
+incremental = true
+
+[profile.dev]
+# 减少调试信息大小
+# 0: 无调试信息
+# 1: 仅行号信息 (推荐)
+# 2: 完整调试信息 (默认，体积最大)
+debug = 1
+
+# 增量编译
+incremental = true
+
+# 将调试信息分离到单独文件 (减少主二进制文件大小)
+# Linux: 使用 packed 格式
+# Windows: 使用 pdb 格式
+# macOS: 使用 dsym 格式
+split-debuginfo = "packed"
+
+[profile.dev.package."*"]
+# 依赖项在开发模式下也进行优化
+# 减少依赖项的编译时间
+opt-level = 2
+
+# ==================== 链接器优化 ====================
+# 使用更快的链接器可以显著减少编译时间
+# 需要先安装: sudo apt install mold lld (Linux)
+
+# Linux - 使用 mold 链接器 (最快)
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Linux - 使用 lld 链接器 (次快)
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Windows - 使用 lld 链接器
+# [target.x86_64-pc-windows-msvc]
+# linker = "rust-lld.exe"
+
+# ==================== 编译缓存 ====================
+# 使用 sccache 加速编译 (需要先安装: cargo install sccache)
+# [build]
+# rustc-wrapper = "sccache"
