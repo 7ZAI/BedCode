@@ -1,6 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="64" fill="#0ea5e9"/>
-  <path d="M128 160h256v32H128zM128 240h192v32H128zM128 320h224v32H128z" fill="white"/>
-  <circle cx="384" cy="352" r="64" fill="#22c55e"/>
-  <path d="M368 352l24 24 40-48" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 背景 -->
+  <rect width="512" height="512" rx="112" fill="#c26a4d"/>
+
+  <!-- h形床架线条（缩放比例：512/120 = 4.27） -->
+  <!-- 原始path: M 5 5 L 5 70 L 115 70 L 115 40 L 5 40 -->
+  <!-- 缩放后: M 21.3 21.3 L 21.3 298.7 L 490.7 298.7 L 490.7 170.7 L 21.3 170.7 -->
+  <path d="M 21.3 21.3 L 21.3 298.7 L 490.7 298.7 L 490.7 170.7 L 21.3 170.7"
+        stroke="white" stroke-width="42.7"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- 代码文本 >>01000011 -->
+  <!-- 水平间隔: 512 × 16.7% = 85.3px -->
+  <!-- 垂直间隔: 512 × 13.3% = 68px -->
+  <!-- 字体大小: 512 × 12.5% = 64px -->
+  <text x="85.3" y="68" fill="#22c55e" font-family="monospace" font-weight="600" font-size="64">
+    >>01000011
+  </text>
 </svg>
