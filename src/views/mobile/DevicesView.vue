@@ -6,10 +6,10 @@
       <button
         class="p-2 rounded-lg bg-dark-700 text-dark-300"
         @click="handleScan"
-        :disabled="connection.state.value.status === 'connecting'"
+        :disabled="connection.state.value.status === 'connecting' || isConnecting"
       >
         <svg
-          :class="['w-5 h-5', connection.state.value.status === 'connecting' && 'animate-spin']"
+          :class="['w-5 h-5', (connection.state.value.status === 'connecting' || isConnecting) && 'animate-spin']"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -18,6 +18,35 @@
         </svg>
       </button>
     </header>
+
+    <!-- Connection Status Banner -->
+    <div v-if="connectionStatus" class="px-4 py-3 bg-dark-800 border-b border-dark-700">
+      <div class="flex items-center gap-3">
+        <!-- Connecting spinner -->
+        <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
+        <!-- Success icon -->
+        <svg v-else-if="connectionStatus === 'connected'" class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+        </svg>
+        <!-- Error icon -->
+        <svg v-else-if="connectionStatus === 'error'" class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+        <!-- Pairing icon -->
+        <div v-else-if="connectionStatus === 'pairing'" class="w-5 h-5 bg-primary-400 rounded-full flex items-center justify-center">
+          <span class="text-xs text-dark-900 font-bold">?</span>
+        </div>
+
+        <span class="text-sm" :class="{
+          'text-dark-300': connectionStatus === 'connecting',
+          'text-green-400': connectionStatus === 'connected',
+          'text-red-400': connectionStatus === 'error',
+          'text-primary-400': connectionStatus === 'pairing',
+        }">
+          {{ connectionStatusText }}
+        </span>
+      </div>
+    </div>
 
     <!-- Device List -->
     <div class="flex-1 overflow-auto p-4">
@@ -48,7 +77,7 @@
               name: device.name,
               isOnline: true
             }"
-            @click="handleConnect(device)"
+            @click="handleConnectDiscovered(device)"
           />
         </div>
       </div>
@@ -80,6 +109,8 @@
     <div class="p-4 border-t border-dark-700">
       <button
         class="w-full bg-dark-700 text-dark-200 py-3 rounded-xl font-medium active:bg-dark-600"
+        :class="{ 'opacity-50': isConnecting }"
+        :disabled="isConnecting"
         @click="showManualConnect = true"
       >
         手动输入地址连接
@@ -90,7 +121,7 @@
     <BottomSheet
       v-model="showManualConnect"
       title="手动连接"
-      placeholder="输入设备地址 (如: 192.168.1.100)"
+      placeholder="输入设备地址 (如: 192.168.1.100:8765)"
       @submit="handleConnectManual"
     />
 
@@ -105,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRemoteConnection, type RemoteDevice } from '@/composables/useRemoteConnection'
 import DeviceCard from '@/components/mobile/DeviceCard.vue'
@@ -119,9 +150,30 @@ const showManualConnect = ref(false)
 const showPairing = ref(false)
 const isPairing = ref(false)
 const pairingError = ref('')
+const isConnecting = ref(false)
+const connectionError = ref('')
 
 // Current device being connected
 const pendingDevice = ref<RemoteDevice | null>(null)
+
+// Connection status for UI display
+// 'idle' | 'connecting' | 'connected' | 'pairing' | 'error'
+const connectionStatus = ref<'idle' | 'connecting' | 'connected' | 'pairing' | 'error'>('idle')
+
+const connectionStatusText = computed(() => {
+  switch (connectionStatus.value) {
+    case 'connecting':
+      return `正在连接 ${pendingDevice.value?.name || '设备'}...`
+    case 'connected':
+      return '已连接，正在请求配对...'
+    case 'pairing':
+      return '请在桌面端查看 6 位配对码并输入'
+    case 'error':
+      return connectionError.value || '连接失败'
+    default:
+      return ''
+  }
+})
 
 onMounted(async () => {
   await connection.loadPairedDevices()
@@ -131,25 +183,77 @@ async function handleScan() {
   await connection.discoverDevices()
 }
 
-function handleConnect(device: RemoteDevice) {
-  pendingDevice.value = device
-  showPairing.value = true
+/**
+ * 连接发现的设备
+ * 流程：连接 → 请求配对 → 显示配对码对话框
+ */
+async function handleConnectDiscovered(device: RemoteDevice) {
+  await startConnection(device)
 }
 
+/**
+ * 手动输入地址连接
+ * 流程：连接 → 请求配对 → 显示配对码对话框
+ */
 async function handleConnectManual(address: string) {
+  // 解析地址
   const [host, portStr] = address.split(':')
   const port = portStr ? parseInt(portStr) : 8765
 
-  pendingDevice.value = {
+  const device: RemoteDevice = {
     id: `${host}:${port}`,
     name: host,
     address: host,
     port,
     isPaired: false,
   }
-  showPairing.value = true
+
+  await startConnection(device)
 }
 
+/**
+ * 启动连接流程
+ * 1. 建立 WebSocket 连接
+ * 2. 发送配对请求 (request_pairing)
+ * 3. 显示配对码输入对话框
+ */
+async function startConnection(device: RemoteDevice) {
+  pendingDevice.value = device
+  connectionStatus.value = 'connecting'
+  connectionError.value = ''
+  isConnecting.value = true
+
+  try {
+    // Step 1: 连接到设备
+    await connection.connect(device)
+    connectionStatus.value = 'connected'
+
+    // Step 2: 请求配对 (发送 request_pairing)
+    await connection.requestPairing()
+    connectionStatus.value = 'pairing'
+
+    // Step 3: 显示配对码输入对话框
+    showPairing.value = true
+  } catch (error) {
+    connectionStatus.value = 'error'
+    connectionError.value = String(error)
+    console.error('Connection failed:', error)
+
+    // 3秒后清除错误状态
+    setTimeout(() => {
+      if (connectionStatus.value === 'error') {
+        connectionStatus.value = 'idle'
+      }
+    }, 3000)
+  } finally {
+    isConnecting.value = false
+  }
+}
+
+/**
+ * 验证配对码
+ * 在连接和请求配对成功后，用户输入配对码进行验证
+ */
 async function handlePairingSubmit(code: string) {
   if (!pendingDevice.value) return
 
@@ -157,14 +261,12 @@ async function handlePairingSubmit(code: string) {
   pairingError.value = ''
 
   try {
-    // 连接到设备
-    await connection.connect(pendingDevice.value)
-
     // 验证配对码
     const success = await connection.verifyPairingCode(code)
 
     if (success) {
       showPairing.value = false
+      connectionStatus.value = 'idle'
       pendingDevice.value = null
 
       // 跳转到终端
