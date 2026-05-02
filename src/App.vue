@@ -19,14 +19,14 @@
 
     <!-- Mobile Layout -->
     <template v-else>
-      <div class="flex flex-col h-screen">
+      <div class="flex flex-col h-screen mobile-app">
         <!-- Main Content -->
         <main class="flex-1 overflow-hidden">
           <router-view />
         </main>
 
         <!-- Bottom Navigation (hide on terminal view) -->
-        <MobileNav v-if="!isTerminalRoute" />
+        <MobileNav v-if="!isTerminalRoute" class="mobile-nav-safe" />
       </div>
     </template>
   </div>

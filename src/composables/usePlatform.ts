@@ -38,7 +38,9 @@ const platformInfo = ref<PlatformInfo>({
   isLinux: false,
 })
 
+// 使用 Promise 来同步等待初始化完成
 let initialized = false
+let initPromise: Promise<PlatformInfo> | null = null
 
 /**
  * 检测是否在 Tauri 运行时环境中
@@ -148,6 +150,53 @@ export function usePlatform() {
     platformInfo: readonly(platformInfo),
     detectPlatform,
   }
+}
+
+/**
+ * 立即初始化平台检测（用于路由守卫）
+ * 返回 Promise，等待检测完成后返回平台信息
+ *
+ * 使用场景：在路由导航前确定平台类型
+ */
+export async function initPlatform(): Promise<PlatformInfo> {
+  // 已初始化，直接返回当前值
+  if (initialized && platformInfo.value.platform !== null) {
+    return platformInfo.value
+  }
+
+  // 正在初始化，等待完成
+  if (initPromise) {
+    return initPromise
+  }
+
+  // 开始初始化
+  initPromise = (async () => {
+    let info: PlatformInfo | null = null
+
+    if (isTauriRuntime()) {
+      info = await detectFromTauri()
+      if (info) {
+        console.log('[Platform] Detected (Tauri) via initPlatform:', info)
+      }
+    }
+
+    if (!info) {
+      info = simulateForBrowser()
+    }
+
+    platformInfo.value = info
+    initialized = true
+    return info
+  })()
+
+  return initPromise
+}
+
+/**
+ * 获取当前平台信息（同步，可能为初始状态）
+ */
+export function getPlatformInfo(): PlatformInfo {
+  return platformInfo.value
 }
 
 /**

@@ -14,12 +14,35 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Safe area insets for mobile devices */
+  /* 处理 Android 状态栏和 iOS 刘海屏遮挡问题 */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  /* 确保 body 延伸到安全区域 */
+  padding-top: var(--safe-area-inset-top);
+  padding-bottom: var(--safe-area-inset-bottom);
+  padding-left: var(--safe-area-inset-left);
+  padding-right: var(--safe-area-inset-right);
+}
+
+/* 移动端专用样式 */
+.mobile-app {
+  /* 防止内容被状态栏遮挡 */
+  padding-top: var(--safe-area-inset-top);
+}
+
+/* 移动端底部导航需要额外 padding */
+.mobile-nav-safe {
+  padding-bottom: var(--safe-area-inset-bottom);
 }
 
 /* Scrollbar styles */

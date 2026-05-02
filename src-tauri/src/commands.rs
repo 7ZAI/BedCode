@@ -44,7 +44,7 @@ pub fn is_tmux_available() -> bool {
 
 /// 创建 Tmux 会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn create_tmux_session(name: String, command: Option<String>) -> Result<()> {
     crate::pty::create_session(&name, command.as_deref())
 }
@@ -52,7 +52,7 @@ pub async fn create_tmux_session(name: String, command: Option<String>) -> Resul
 // ==================== Session Config Commands ====================
 
 /// 创建会话配置
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn create_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     name: String,
@@ -82,7 +82,7 @@ pub async fn list_session_configs(
 }
 
 /// 获取单个会话配置
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     id: String,
@@ -92,7 +92,7 @@ pub async fn get_session_config(
 }
 
 /// 删除会话配置
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     id: String,
@@ -102,7 +102,7 @@ pub async fn delete_session_config(
 }
 
 /// 更新会话配置
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn update_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     id: String,
@@ -135,12 +135,23 @@ pub async fn update_session_config(
 
 /// 启动会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn start_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     config_id: String,
 ) -> Result<String> {
-    session_manager.create_session(&config_id).await
+    tracing::info!("start_session called with config_id: {}", config_id);
+    let result = session_manager.create_session(&config_id).await;
+    match result {
+        Ok(id) => {
+            tracing::info!("Session created successfully: {}", id);
+            Ok(id)
+        }
+        Err(e) => {
+            tracing::error!("Failed to create session: {}", e);
+            Err(e)
+        }
+    }
 }
 
 /// 获取会话列表
@@ -154,7 +165,7 @@ pub async fn list_sessions(
 
 /// 终止会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn kill_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -164,7 +175,7 @@ pub async fn kill_session(
 
 /// 调整会话终端大小
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn resize_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -178,7 +189,7 @@ pub async fn resize_session(
 
 /// 输入数据到会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn write_to_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -189,7 +200,7 @@ pub async fn write_to_session(
 
 /// 发送特殊键
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn send_special_key(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -217,7 +228,7 @@ pub async fn get_discovered_devices(
 }
 
 /// 开始广播服务
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn start_broadcast(
     discovery_service: State<'_, Arc<DiscoveryService>>,
     service_name: String,
@@ -381,4 +392,78 @@ pub fn get_local_ip_addresses() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// ==================== Android Specific Commands ====================
+
+/// 获取 Android 状态栏高度（像素）
+/// 通过 JNI 调用 Android API 获取系统状态栏高度
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn get_status_bar_height(app_handle: tauri::AppHandle) -> Result<u32> {
+    // 通过 Android Activity 获取状态栏高度
+    // 使用 jni 调用 Android API
+    use tauri::Manager;
+
+    let window = app_handle.webview_windows().get("main");
+    if let Some(window) = window {
+        // Android 上通过 WebView 的安全区域获取
+        // 实际值会在前端通过 CSS env(safe-area-inset-top) 获取
+        // 这里返回 0，前端会使用 CSS 变量
+        return Ok(0);
+    }
+
+    Ok(0)
+}
+
+/// 非 Android 平台返回 0
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub fn get_status_bar_height() -> Result<u32> {
+    Ok(0)
+}
+
+/// 设置 Android 屏幕方向
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn set_screen_orientation(
+    app_handle: tauri::AppHandle,
+    orientation: String,
+) -> Result<()> {
+    // 通过 JNI 设置 Activity 的屏幕方向
+    // orientation: "portrait", "landscape", "unspecified"
+    tracing::info!("Setting screen orientation to: {}", orientation);
+
+    // TODO: 实现 JNI 调用 Android Activity.setRequestedOrientation
+    // 需要在 lib.rs 中注册 Android 专用模块
+
+    Ok(())
+}
+
+/// 非 Android 平台忽略
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn set_screen_orientation(_orientation: String) -> Result<()> {
+    Ok(())
+}
+
+/// 保持屏幕唤醒（防止锁屏）
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn keep_screen_awake(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<()> {
+    tracing::info!("Setting screen awake: {}", enabled);
+
+    // TODO: 通过 JNI 调用 Activity.getWindow().setKeepScreenOn()
+
+    Ok(())
+}
+
+/// 非 Android 平台忽略
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn keep_screen_awake(_enabled: bool) -> Result<()> {
+    Ok(())
 }

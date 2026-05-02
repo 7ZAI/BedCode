@@ -404,6 +404,10 @@ pub fn run() {
             commands::ping,
             commands::get_app_version,
             commands::get_local_ip_addresses,
+            // Android Specific
+            commands::get_status_bar_height,
+            commands::set_screen_orientation,
+            commands::keep_screen_awake,
             // Session Config (for displaying saved configs)
             commands::list_session_configs,
             commands::get_session_config,
