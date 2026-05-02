@@ -25,7 +25,8 @@ export interface SessionInfo {
   id: string
   configId: string
   name: string
-  status: 'Starting' | 'Running' | 'WaitingInput' | 'Stopped' | 'Error'
+  // 注意：后端使用 camelCase 序列化 enum，所以值是小写开头的
+  status: 'starting' | 'running' | 'waitingInput' | 'stopped' | 'error'
   createdAt: string
   startedAt?: string
   stoppedAt?: string

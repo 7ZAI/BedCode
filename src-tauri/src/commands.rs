@@ -44,7 +44,7 @@ pub fn is_tmux_available() -> bool {
 
 /// 创建 Tmux 会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn create_tmux_session(name: String, command: Option<String>) -> Result<()> {
     crate::pty::create_session(&name, command.as_deref())
 }
@@ -52,7 +52,7 @@ pub async fn create_tmux_session(name: String, command: Option<String>) -> Resul
 // ==================== Session Config Commands ====================
 
 /// 创建会话配置
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn create_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     name: String,
@@ -82,7 +82,7 @@ pub async fn list_session_configs(
 }
 
 /// 获取单个会话配置
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn get_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     id: String,
@@ -92,7 +92,7 @@ pub async fn get_session_config(
 }
 
 /// 删除会话配置
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn delete_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     id: String,
@@ -102,7 +102,7 @@ pub async fn delete_session_config(
 }
 
 /// 更新会话配置
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn update_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
     id: String,
@@ -135,7 +135,7 @@ pub async fn update_session_config(
 
 /// 启动会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn start_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     config_id: String,
@@ -165,7 +165,7 @@ pub async fn list_sessions(
 
 /// 终止会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn kill_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -175,7 +175,7 @@ pub async fn kill_session(
 
 /// 调整会话终端大小
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn resize_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -189,7 +189,7 @@ pub async fn resize_session(
 
 /// 输入数据到会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn write_to_session(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -200,7 +200,7 @@ pub async fn write_to_session(
 
 /// 发送特殊键
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn send_special_key(
     session_manager: State<'_, Arc<crate::session::SessionManager>>,
     session_id: String,
@@ -228,7 +228,7 @@ pub async fn get_discovered_devices(
 }
 
 /// 开始广播服务
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn start_broadcast(
     discovery_service: State<'_, Arc<DiscoveryService>>,
     service_name: String,

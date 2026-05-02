@@ -50,9 +50,9 @@
           <div
             :class="[
               'w-2 h-2 rounded-full',
-              session.status === 'Running' ? 'bg-green-500' :
-              session.status === 'WaitingInput' ? 'bg-yellow-500' :
-              session.status === 'Error' ? 'bg-red-500' : 'bg-dark-500'
+              session.status === 'running' ? 'bg-green-500' :
+              session.status === 'waitingInput' ? 'bg-yellow-500' :
+              session.status === 'error' ? 'bg-red-500' : 'bg-dark-500'
             ]"
           ></div>
           <span class="text-sm">{{ session.name }}</span>
@@ -95,8 +95,10 @@ const showCreateDialog = ref(false)
 const editingConfig = ref<SessionConfig | null>(null)
 
 // 只显示运行中的会话（排除已停止的）
+// 只显示运行中的会话（排除已停止的）
+// 注意：后端使用 camelCase 序列化，SessionStatus::Stopped 变成 "stopped"
 const runningSessions = computed(() => {
-  return sessionStore.sessions.filter(s => s.status !== 'Stopped')
+  return sessionStore.sessions.filter(s => s.status !== 'stopped')
 })
 
 onMounted(async () => {

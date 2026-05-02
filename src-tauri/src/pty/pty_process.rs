@@ -421,7 +421,29 @@ impl Drop for PtySession {
         // Only stop if this is the last reference
         if Arc::strong_count(&self.state) == 1 {
             self.running.store(false, Ordering::SeqCst);
-            tracing::debug!("PTY session dropped: {}", self.id);
+
+            // 尝试终止进程（同步方式，因为 Drop 不能是 async）
+            if let Ok(state) = self.state.try_lock() {
+                if let Some(pid) = state.process_id {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/C", &format!("taskkill /F /T /PID {}", pid)])
+                            .output();
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let _ = std::process::Command::new("kill")
+                            .args(["-9", &pid.to_string()])
+                            .output();
+                    }
+                    tracing::info!("PTY session killed on drop: {} (pid={})", self.id, pid);
+                } else {
+                    tracing::debug!("PTY session dropped (no pid): {}", self.id);
+                }
+            } else {
+                tracing::debug!("PTY session dropped (lock failed): {}", self.id);
+            }
         }
     }
 }

@@ -118,7 +118,7 @@ fn insert_default_quick_actions(db: &db::Database) -> Result<()> {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
     use session::SessionManager;
-    use tauri::Emitter;
+    use tauri::{Emitter, Listener};
     use websocket::WebSocketServer;
 
     tauri::Builder::default()
@@ -223,6 +223,17 @@ pub fn run() {
 
             // Setup system tray
             setup_tray(app_handle)?;
+
+            // 监听窗口关闭事件，清理资源
+            let window = app_handle.get_webview_window("main").expect("Failed to get main window");
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    tracing::info!("Window close requested, shutting down...");
+                    // SessionManager 的 Drop 会自动清理所有会话
+                    // DiscoveryService 的 Drop 会自动 shutdown mDNS daemon
+                    // WebSocketServer 会在 app exit 时自动清理
+                }
+            });
 
             tracing::info!("BedCode (Desktop) initialized - WebSocket server on port {}", ws_port);
             Ok(())

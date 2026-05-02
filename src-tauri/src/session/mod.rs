@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 /// 会话状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SessionStatus {
     /// 正在启动
     Starting,
@@ -141,8 +142,16 @@ impl SessionManager {
         // 启动 PTY
         pty_session.start().await?;
 
-        // 创建会话信息
-        let info = SessionInfo::new(config_id, &config.name);
+        // 创建会话信息（使用 PTY 的 session_id，而不是生成新的）
+        let info = SessionInfo {
+            id: session_id.clone(),
+            config_id: config_id.to_string(),
+            name: config.name.clone(),
+            status: SessionStatus::Running,  // 启动成功后设置为 Running
+            created_at: Utc::now(),
+            started_at: Some(Utc::now()),
+            stopped_at: None,
+        };
 
         // 保存到数据库
         let db = self.db.lock().await;
@@ -242,11 +251,16 @@ impl SessionManager {
 
     /// 终止会话
     pub async fn kill_session(&self, session_id: &str) -> Result<()> {
+        tracing::info!("kill_session called for: {}", session_id);
+
         // 终止 PTY
         {
             let sessions = self.pty_sessions.read().await;
             if let Some(session) = sessions.get(session_id) {
                 session.kill().await?;
+                tracing::info!("PTY killed for session: {}", session_id);
+            } else {
+                tracing::warn!("Session not found in pty_sessions: {}", session_id);
             }
         }
 
@@ -254,6 +268,7 @@ impl SessionManager {
         {
             let mut sessions = self.pty_sessions.write().await;
             sessions.remove(session_id);
+            tracing::info!("Session removed from pty_sessions: {}", session_id);
         }
 
         // 更新状态
@@ -262,6 +277,9 @@ impl SessionManager {
             if let Some(info) = info_map.get_mut(session_id) {
                 info.status = SessionStatus::Stopped;
                 info.stopped_at = Some(Utc::now());
+                tracing::info!("Session status updated to Stopped: {}", session_id);
+            } else {
+                tracing::warn!("Session not found in session_info: {}", session_id);
             }
         }
 
