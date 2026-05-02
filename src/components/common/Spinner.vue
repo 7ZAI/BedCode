@@ -53,7 +53,7 @@ import { computed } from 'vue'
 
 interface Props {
   size?: 'sm' | 'md' | 'lg' | 'xl'
-  color?: 'primary' | 'white' | 'dark'
+  color?: 'primary' | 'white' | 'dark' | 'danger' | 'success' | 'warning'
   variant?: 'circle' | 'dots' | 'pulse'
 }
 
@@ -86,6 +86,12 @@ const colorClass = computed(() => {
       return 'text-white'
     case 'dark':
       return 'text-dark-400'
+    case 'danger':
+      return 'text-red-500'
+    case 'success':
+      return 'text-green-500'
+    case 'warning':
+      return 'text-yellow-500'
     default:
       return 'text-primary-500'
   }

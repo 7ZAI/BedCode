@@ -81,10 +81,29 @@ describe('Spinner Component', () => {
       }
     })
 
-    // danger 颜色应该使用 text-red-500 (但实际实现是 text-primary-500 等)
-    // 检查是否应用了颜色类
+    // danger 颜色应该使用 text-red-500
     const dots = wrapper.findAll('.animate-bounce')
-    expect(dots[0].classes()).toContain('text-primary-500')
+    expect(dots[0].classes()).toContain('text-red-500')
+  })
+
+  it('should apply success color', () => {
+    const wrapper = mount(Spinner, {
+      props: {
+        color: 'success'
+      }
+    })
+
+    expect(wrapper.find('svg').classes()).toContain('text-green-500')
+  })
+
+  it('should apply warning color', () => {
+    const wrapper = mount(Spinner, {
+      props: {
+        color: 'warning'
+      }
+    })
+
+    expect(wrapper.find('svg').classes()).toContain('text-yellow-500')
   })
 
   it('should apply correct color for pulse variant', () => {
