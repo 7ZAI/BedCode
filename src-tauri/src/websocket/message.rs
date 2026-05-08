@@ -255,6 +255,9 @@ pub struct AuthPayload {
     /// 错误消息
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// QR 令牌
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qr_token: Option<String>,
 }
 
 /// 认证阶段
@@ -271,6 +274,10 @@ pub enum AuthStage {
     Authenticated,
     /// 认证失败
     Failed,
+    /// QR 码连接
+    QrConnect,
+    /// QR 连接失败
+    QrFailed,
 }
 
 /// 控制载荷

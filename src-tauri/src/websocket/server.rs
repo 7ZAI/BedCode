@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
+use uuid::Uuid;
+use tauri::Emitter;
+use tauri::AppHandle;
 
 /// 心跳超时时间（秒）
 const HEARTBEAT_TIMEOUT_SECS: u64 = 90;
@@ -33,6 +36,14 @@ pub struct ClientInfo {
     pub last_heartbeat: Instant,
 }
 
+/// 配对码生成事件 payload
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PairingCodeGeneratedEvent {
+    pub code: String,
+    pub expires_in: u64,
+    pub device_name: Option<String>,
+}
+
 /// WebSocket 服务器
 pub struct WebSocketServer {
     port: u16,
@@ -46,6 +57,8 @@ pub struct WebSocketServer {
     shutdown_tx: broadcast::Sender<()>,
     /// Whether the server is running
     is_running: Arc<RwLock<bool>>,
+    /// Tauri AppHandle for emitting events to frontend
+    app_handle: Option<Arc<AppHandle>>,
 }
 
 impl WebSocketServer {
@@ -67,7 +80,13 @@ impl WebSocketServer {
             client_senders: Arc::new(RwLock::new(HashMap::new())),
             shutdown_tx,
             is_running: Arc::new(RwLock::new(false)),
+            app_handle: None,
         }
+    }
+
+    /// 设置 AppHandle（用于发送事件到前端）
+    pub fn set_app_handle(&mut self, app_handle: Arc<AppHandle>) {
+        self.app_handle = Some(app_handle);
     }
 
     /// 启动服务器
@@ -150,6 +169,7 @@ impl WebSocketServer {
                     let clients = self.clients.clone();
                     let client_senders = self.client_senders.clone();
                     let mut shutdown_rx_inner = self.shutdown_tx.subscribe();
+                    let app_handle = self.app_handle.clone();
 
                     tokio::spawn(async move {
                         tracing::info!("New connection from {}", addr);
@@ -217,6 +237,7 @@ impl WebSocketServer {
                                                     &db,
                                                     &pairing_service,
                                                     &clients_for_recv,
+                                                    &app_handle,
                                                 )
                                                 .await;
 
@@ -372,19 +393,26 @@ impl OutputForwarder {
 
     /// 转发PTY输出到订阅的客户端
     async fn forward_output(&self, event: &PtyOutputEvent) -> Result<()> {
-        // 解码输出数据用于检测等待输入状态
+        // 仅解码用于检测等待输入状态，不重复编码
         let decoded_data = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
             &event.data,
         ).unwrap_or_default();
 
-        // 检测是否等待输入
         let is_waiting = crate::parser::detect_waiting_input(
             &String::from_utf8_lossy(&decoded_data)
         );
 
-        // 创建输出消息
-        let message = Message::output(&event.session_id, &decoded_data, is_waiting);
+        // 直接使用 PTY 事件中的 base64 数据构造 Output 消息
+        let message = Message::Output {
+            message_id: Uuid::new_v4().to_string(),
+            session_id: event.session_id.clone(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            payload: super::message::OutputPayload {
+                data: event.data.clone(),
+                is_waiting,
+            },
+        };
         let json = message.to_json()?;
         let ws_message = WsMessage::Text(json);
 
@@ -414,6 +442,7 @@ async fn handle_message(
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
+    app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
     // 更新客户端心跳时间（任何消息都算作活跃）
     {
@@ -424,7 +453,7 @@ async fn handle_message(
     }
 
     match message {
-        Message::Auth { message_id, payload, .. } => handle_auth(payload, message_id, addr, db, pairing_service, clients).await,
+        Message::Auth { message_id, payload, .. } => handle_auth(payload, message_id, addr, db, pairing_service, clients, app_handle).await,
 
         Message::Input { message_id, session_id, payload, .. } => {
             // 检查认证
@@ -476,10 +505,46 @@ async fn handle_auth(
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
+    app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
     match payload.stage {
         AuthStage::RequestPairing => {
-            // 客户端请求配对
+            // 检查是否已有活跃的配对码，避免覆盖
+            let existing_code = pairing_service.get_current_code().await;
+            let code = if let Some(ref existing) = existing_code {
+                if !existing.is_expired() {
+                    tracing::info!(
+                        "Reusing existing pairing code: {} for device {:?}",
+                        existing.code,
+                        payload.device_name
+                    );
+                    existing.clone()
+                } else {
+                    pairing_service.generate_code().await
+                }
+            } else {
+                pairing_service.generate_code().await
+            };
+
+            tracing::info!(
+                "Pairing requested by device {:?} ({:?}), code: {}",
+                payload.device_id,
+                payload.device_name,
+                code.code
+            );
+
+            // 发送事件到桌面端前端，显示配对码
+            if let Some(handle) = app_handle {
+                let event = PairingCodeGeneratedEvent {
+                    code: code.code.clone(),
+                    expires_in: code.expires_in,
+                    device_name: payload.device_name.clone(),
+                };
+                if let Err(e) = handle.emit("pairing-code-generated", &event) {
+                    tracing::error!("Failed to emit pairing code event: {}", e);
+                }
+            }
+
             Ok(Some(Message::Auth {
                 message_id: request_message_id,
                 session_id: None,
@@ -495,29 +560,25 @@ async fn handle_auth(
         }
 
         AuthStage::VerifyCode => {
-            // 验证配对码 - 使用 PairingService 进行验证
             let code = payload.pairing_code.unwrap_or_default();
-
-            // 使用配对服务验证配对码
             let is_valid = pairing_service.verify_code(&code).await;
 
             if is_valid {
-                // 配对成功，存储设备信息
-                let device_id = payload.device_id.unwrap_or_else(|| {
-                    uuid::Uuid::new_v4().to_string()
-                });
                 let device_name = payload.device_name.unwrap_or_else(|| "Unknown Device".to_string());
                 let fingerprint = payload.device_fingerprint.unwrap_or_default();
+                let address = format!("{}", addr);
+                let session_token = Uuid::new_v4().to_string();
 
                 let db = db.lock().await;
-                db.add_pairing(&device_name, &fingerprint, "")?;
+                let pairing_id = db.add_pairing(&device_name, &fingerprint, "", Some(&address))?;
+                db.update_pairing_token(&pairing_id, &session_token)?;
                 drop(db);
 
                 // 更新客户端状态
                 {
                     let mut clients = clients.write().await;
                     if let Some(client) = clients.get_mut(&addr) {
-                        client.device_id = Some(device_id.clone());
+                        client.device_id = Some(pairing_id.clone());
                         client.authenticated = true;
                     }
                 }
@@ -525,20 +586,22 @@ async fn handle_auth(
                 // 清除已使用的配对码
                 pairing_service.clear_code().await;
 
+                tracing::info!("Device paired: {} (fingerprint: {}, addr: {})", device_name, fingerprint, address);
+
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
                     session_id: None,
                     timestamp: chrono::Utc::now().timestamp_millis(),
                     payload: AuthPayload {
                         stage: AuthStage::Authenticated,
-                        device_id: Some(device_id),
-                        session_token: Some(uuid::Uuid::new_v4().to_string()),
+                        device_id: Some(pairing_id),
+                        device_fingerprint: Some(fingerprint),
+                        session_token: Some(session_token),
                         error: None,
                         ..Default::default()
                     },
                 }))
             } else {
-                // 检查是否有当前配对码来判断是过期还是无效
                 let current_code = pairing_service.get_current_code().await;
                 let error_message = if current_code.is_none() {
                     "No pairing code available. Please generate a new code."
@@ -560,17 +623,28 @@ async fn handle_auth(
         }
 
         AuthStage::Authenticated => {
-            // 已认证的设备
             let device_id = payload.device_id.unwrap_or_default();
+            let fingerprint = payload.device_fingerprint.unwrap_or_default();
+            let token = payload.session_token.unwrap_or_default();
 
-            // 检查设备是否已配对
             let db = db.lock().await;
             let pairings = db.get_pairings()?;
+
+            // 通过 fingerprint + token 验证已配对设备
+            // 也兼容通过 pairing id 匹配
+            let is_paired = if !fingerprint.is_empty() && !token.is_empty() {
+                pairings.iter().any(|p| p.device_fingerprint == fingerprint
+                    && p.session_token.as_deref() == Some(&token)
+                    && p.is_active)
+            } else if !device_id.is_empty() {
+                pairings.iter().any(|p| p.id == device_id && p.is_active)
+            } else {
+                false
+            };
             drop(db);
 
-            let is_paired = pairings.iter().any(|p| p.id == device_id && p.is_active);
-
             if is_paired {
+                // 更新客户端认证状态
                 {
                     let mut clients = clients.write().await;
                     if let Some(client) = clients.get_mut(&addr) {
@@ -579,6 +653,8 @@ async fn handle_auth(
                     }
                 }
 
+                tracing::info!("Device re-authenticated: {}", addr);
+
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
                     session_id: None,
@@ -586,19 +662,21 @@ async fn handle_auth(
                     payload: AuthPayload {
                         stage: AuthStage::Authenticated,
                         device_id: Some(device_id),
-                        session_token: Some(uuid::Uuid::new_v4().to_string()),
+                        device_fingerprint: Some(fingerprint),
+                        session_token: Some(token),
                         error: None,
                         ..Default::default()
                     },
                 }))
             } else {
+                tracing::warn!("Authentication failed for device {}", addr);
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
                     session_id: None,
                     timestamp: chrono::Utc::now().timestamp_millis(),
                     payload: AuthPayload {
                         stage: AuthStage::Failed,
-                        error: Some("Device not paired".to_string()),
+                        error: Some("Device not paired or invalid credentials".to_string()),
                         ..Default::default()
                     },
                 }))
@@ -794,6 +872,7 @@ impl Default for AuthPayload {
             pairing_code: None,
             session_token: None,
             error: None,
+            qr_token: None,
         }
     }
 }
