@@ -28,6 +28,8 @@ export interface PairedDeviceRaw {
   device_name: string
   device_fingerprint: string
   public_key: string
+  address?: string
+  session_token?: string
   paired_at: string
   last_seen?: string
   is_active: boolean
@@ -42,6 +44,13 @@ export function useRemoteConnection() {
   const discoveredDevices = ref<RemoteDevice[]>([])
   const pairedDevices = ref<RemoteDevice[]>([])
   const currentDevice = ref<RemoteDevice | null>(null)
+
+  // 认证凭据（配对成功后存储，用于重连）
+  const authCredentials = ref<{
+    pairingId: string
+    fingerprint: string
+    sessionToken: string
+  } | null>(null)
 
   // === WebSocket 依赖 ===
   const {
@@ -60,28 +69,17 @@ export function useRemoteConnection() {
 
   // === 方法 ===
 
-  /**
-   * 设置重连后的回调函数
-   * 用于在重连后恢复之前的会话订阅
-   */
   function setReconnectCallback(callback: ReconnectCallback | null) {
     setOnReconnect(callback)
   }
-
-  // === 方法 ===
 
   /** 发现局域网设备 (mDNS) */
   async function discoverDevices(): Promise<void> {
     state.value = { status: 'connecting' }
 
     try {
-      // 启动 mDNS 发现服务
       await invoke('start_discovery')
-
-      // 等待一段时间收集设备
       await new Promise(resolve => setTimeout(resolve, 3000))
-
-      // 获取发现的设备列表
       const devices = await invoke<DiscoveredDeviceRaw[]>('get_discovered_devices')
 
       discoveredDevices.value = devices.map(d => ({
@@ -105,6 +103,9 @@ export function useRemoteConnection() {
     currentDevice.value = device
 
     try {
+      // 清除上一次连接的错误状态
+      // connectionError 由 useWebSocket 管理，这里不需要手动清除
+
       wsConnect(device.address, device.port, false)
 
       // 等待连接建立
@@ -134,7 +135,41 @@ export function useRemoteConnection() {
     }
   }
 
-  /** 请求配对 - 发起配对流程 */
+  /** 使用已存储凭据重新认证（已配对设备重连） */
+  async function authenticate(): Promise<boolean> {
+    if (!isConnected.value) {
+      console.warn('Cannot authenticate: not connected')
+      return false
+    }
+
+    const creds = authCredentials.value
+    if (!creds || !creds.fingerprint) {
+      console.warn('Cannot authenticate: no stored credentials')
+      return false
+    }
+
+    try {
+      const response = await sendMessageWithResponse('auth', {
+        stage: 'authenticated',
+        device_id: creds.pairingId,
+        device_fingerprint: creds.fingerprint,
+        session_token: creds.sessionToken,
+      })
+
+      if (response.payload?.stage === 'authenticated') {
+        state.value = { status: 'paired' }
+        return true
+      } else {
+        console.warn('Re-authentication failed:', response.payload?.error)
+        return false
+      }
+    } catch (error) {
+      console.error('Re-authentication error:', error)
+      return false
+    }
+  }
+
+  /** 请求配对 */
   async function requestPairing(): Promise<void> {
     if (!isConnected.value || !currentDevice.value) {
       throw new Error('Not connected to any device')
@@ -147,6 +182,7 @@ export function useRemoteConnection() {
         stage: 'request_pairing',
         device_id: generateDeviceId(),
         device_name: getDeviceName(),
+        device_fingerprint: generateDeviceFingerprint(),
       })
 
       if (response.payload?.stage === 'verify_code') {
@@ -171,17 +207,33 @@ export function useRemoteConnection() {
         stage: 'verify_code',
         device_id: generateDeviceId(),
         device_name: getDeviceName(),
+        device_fingerprint: generateDeviceFingerprint(),
         pairing_code: code,
       })
 
       if (response.payload?.stage === 'authenticated') {
         state.value = { status: 'paired' }
 
+        // 存储服务端返回的凭据，用于重连
+        const pairingId = response.payload?.device_id || ''
+        const fingerprint = response.payload?.device_fingerprint || generateDeviceFingerprint()
+        const sessionToken = response.payload?.session_token || ''
+
+        authCredentials.value = {
+          pairingId,
+          fingerprint,
+          sessionToken,
+        }
+
+        // 持久化凭据到 localStorage
+        localStorage.setItem('auth_pairing_id', pairingId)
+        localStorage.setItem('auth_fingerprint', fingerprint)
+        localStorage.setItem('auth_session_token', sessionToken)
+
         // 更新当前设备为已配对
         if (currentDevice.value) {
           currentDevice.value.isPaired = true
 
-          // 添加到已配对设备列表
           if (!pairedDevices.value.find(d => d.id === currentDevice.value!.id)) {
             pairedDevices.value.push(currentDevice.value)
           }
@@ -198,6 +250,58 @@ export function useRemoteConnection() {
     }
   }
 
+  /** 通过 QR token 进行认证 */
+  async function sendQrToken(token: string): Promise<boolean> {
+    if (!isConnected.value) {
+      throw new Error('Not connected')
+    }
+
+    const deviceId = generateDeviceId()
+    const fingerprint = generateDeviceFingerprint()
+    const deviceName = getDeviceName()
+
+    const response = await sendMessageWithResponse('auth', {
+      stage: 'qr_connect',
+      device_id: deviceId,
+      device_name: deviceName,
+      device_fingerprint: fingerprint,
+      qr_token: token,
+    })
+
+    if (response?.payload?.stage === 'authenticated') {
+      const payload = response.payload as {
+        device_id?: string
+        device_fingerprint?: string
+        session_token?: string
+      }
+      const pairingId = payload.device_id || ''
+      const fp = payload.device_fingerprint || ''
+      const st = payload.session_token || ''
+
+      authCredentials.value = { pairingId, fingerprint: fp, sessionToken: st }
+
+      // 持久化凭据
+      localStorage.setItem('auth_pairing_id', pairingId)
+      localStorage.setItem('auth_fingerprint', fp)
+      localStorage.setItem('auth_session_token', st)
+
+      // 添加到已配对设备列表
+      pairedDevices.value.push({
+        id: pairingId,
+        name: deviceName,
+        address: currentDevice.value?.address || '',
+        port: currentDevice.value?.port || 8765,
+        isPaired: true,
+      })
+
+      state.value = { status: 'paired' }
+      return true
+    }
+
+    state.value = { status: 'error', error: response?.payload?.error || 'QR authentication failed' }
+    return false
+  }
+
   /** 断开连接 */
   function disconnect(): void {
     wsDisconnect()
@@ -205,7 +309,7 @@ export function useRemoteConnection() {
     currentDevice.value = null
   }
 
-  /** 加载已配对设备列表 (本地存储) */
+  /** 加载已配对设备列表 */
   async function loadPairedDevices(): Promise<void> {
     try {
       const devices = await invoke<PairedDeviceRaw[]>('list_paired_devices')
@@ -213,12 +317,27 @@ export function useRemoteConnection() {
       pairedDevices.value = devices.map(d => ({
         id: d.id,
         name: d.device_name,
-        address: '', // 需要从其他来源获取
+        address: d.address || '',
         port: 8765,
         isPaired: true,
       }))
     } catch (error) {
       console.error('Failed to load paired devices:', error)
+    }
+  }
+
+  /** 从 localStorage 加载认证凭据 */
+  function loadAuthCredentials(): void {
+    const pairingId = localStorage.getItem('auth_pairing_id')
+    const fingerprint = localStorage.getItem('auth_fingerprint')
+    const sessionToken = localStorage.getItem('auth_session_token')
+
+    if (fingerprint && sessionToken) {
+      authCredentials.value = {
+        pairingId: pairingId || '',
+        fingerprint,
+        sessionToken,
+      }
     }
   }
 
@@ -232,10 +351,23 @@ export function useRemoteConnection() {
     return id
   }
 
+  /** 生成设备指纹 */
+  function generateDeviceFingerprint(): string {
+    const stored = localStorage.getItem('device_fingerprint')
+    if (stored) return stored
+
+    const fp = crypto.randomUUID()
+    localStorage.setItem('device_fingerprint', fp)
+    return fp
+  }
+
   /** 获取设备名称 */
   function getDeviceName(): string {
     return localStorage.getItem('device_name') || 'Mobile Device'
   }
+
+  // === 初始化：加载持久化凭据 ===
+  loadAuthCredentials()
 
   // === 清理 ===
   onUnmounted(() => {
@@ -251,14 +383,18 @@ export function useRemoteConnection() {
     isConnected,
     lastMessage,
     isReady,
+    authCredentials,
 
     // 方法
     discoverDevices,
     connect,
+    authenticate,
     requestPairing,
     verifyPairingCode,
+    sendQrToken,
     disconnect,
     loadPairedDevices,
+    loadAuthCredentials,
     sendMessage,
     sendMessageWithResponse,
     setReconnectCallback,
