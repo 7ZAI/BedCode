@@ -5,7 +5,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { Ref } from 'vue'
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 
 // Types
 export interface SessionConfig {
@@ -75,6 +75,12 @@ export interface Pairing {
 export interface PairingCode {
   code: string
   expiresIn: number
+}
+
+export interface QrConnectionInfo {
+  token: string
+  host: string
+  port: number
 }
 
 export interface DiscoveredDevice {
@@ -249,9 +255,15 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
   async function startListening() {
     unlisten = await listen<PtyOutputEvent>('pty-output', (event) => {
       const sid = typeof sessionId === 'string' ? sessionId : sessionId.value
-      if (event.payload.sessionId === sid) {
-        // Decode base64
-        const data = atob(event.payload.data)
+
+      if (!sid || event.payload.sessionId === sid) {
+        const data = decodeBase64Utf8(event.payload.data)
+
+        // 检测清屏序列，重置输出缓冲区
+        if (data.includes('\x1b[2J')) {
+          output.value = []
+        }
+
         output.value.push(data)
 
         // Limit output buffer
@@ -259,7 +271,6 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
           output.value = output.value.slice(-500)
         }
 
-        // Detect waiting input
         isWaiting.value = detectWaitingInput(data)
       }
     })
@@ -283,6 +294,16 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
   onUnmounted(() => {
     stopListening()
   })
+
+  // 当 sessionId 变化时清空输出（切换会话）
+  if (typeof sessionId !== 'string') {
+    watch(sessionId, (newSid, oldSid) => {
+      if (newSid !== oldSid && oldSid !== undefined) {
+        console.log('[PTY] Session changed from', oldSid, 'to', newSid, 'clearing output')
+        clearOutput()
+      }
+    })
+  }
 
   return { output, isWaiting, clearOutput, startListening, stopListening }
 }
@@ -360,6 +381,60 @@ export function usePairing() {
   return { devices, pairingCode, loadDevices, generateCode, verifyCode, clearCode, removeDevice }
 }
 
+// QR Code Commands
+export function useQrCodeApi() {
+  async function generateQrCode(): Promise<string> {
+    try {
+      return await invoke<string>('generate_qr_code')
+    } catch (e) {
+      console.error('Failed to generate QR code:', e)
+      throw e
+    }
+  }
+
+  async function clearQrCode(): Promise<void> {
+    try {
+      await invoke('clear_qr_code')
+    } catch (e) {
+      console.error('Failed to clear QR code:', e)
+    }
+  }
+
+  async function getQrConnectionInfo(): Promise<QrConnectionInfo | null> {
+    try {
+      return await invoke<QrConnectionInfo | null>('get_qr_connection_info')
+    } catch (e) {
+      console.error('Failed to get QR connection info:', e)
+      return null
+    }
+  }
+
+  async function getQrTokenTtl(): Promise<number> {
+    try {
+      return await invoke<number>('get_qr_token_ttl')
+    } catch (e) {
+      console.error('Failed to get QR token TTL:', e)
+      return 300
+    }
+  }
+
+  async function setQrTokenTtl(seconds: number): Promise<void> {
+    try {
+      await invoke('set_qr_token_ttl', { seconds })
+    } catch (e) {
+      console.error('Failed to set QR token TTL:', e)
+    }
+  }
+
+  return {
+    generateQrCode,
+    clearQrCode,
+    getQrConnectionInfo,
+    getQrTokenTtl,
+    setQrTokenTtl,
+  }
+}
+
 // Discovery
 export function useDiscovery() {
   const discoveredDevices = ref<DiscoveredDevice[]>([])
@@ -412,6 +487,20 @@ export function useNetwork() {
 }
 
 // Utility functions
+
+/**
+ * Base64 解码为 UTF-8 字符串
+ * atob() 无法正确处理多字节 UTF-8 字符，需要使用 TextDecoder
+ */
+function decodeBase64Utf8(base64: string): string {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
 function detectWaitingInput(text: string): boolean {
   const patterns = [
     /> $/, // Claude Code default
