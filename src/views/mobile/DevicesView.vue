@@ -1,22 +1,8 @@
 <template>
   <div class="h-full flex flex-col bg-dark-900">
     <!-- Header with safe area padding -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3 flex items-center justify-between" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
       <h1 class="text-lg font-semibold">设备</h1>
-      <button
-        class="p-2 rounded-lg bg-dark-700 text-dark-300"
-        @click="handleScan"
-        :disabled="connection.state.value.status === 'connecting' || isConnecting"
-      >
-        <svg
-          :class="['w-5 h-5', (connection.state.value.status === 'connecting' || isConnecting) && 'animate-spin']"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
     </header>
 
     <!-- Connection Status Banner -->
@@ -50,35 +36,50 @@
 
     <!-- Device List -->
     <div class="flex-1 overflow-auto p-4">
-      <!-- Discovered Devices -->
+      <!-- Connection History -->
       <div class="mb-6">
-        <h3 class="text-dark-400 text-sm font-medium mb-3 flex items-center gap-2">
-          <span>发现设备</span>
-          <span v-if="connection.state.value.status === 'connecting'" class="text-primary-400">扫描中...</span>
+        <h3 class="text-dark-400 text-sm font-medium mb-3 flex items-center justify-between">
+          <span>连接历史</span>
+          <button
+            v-if="connectionHistory.length > 0"
+            class="text-dark-500 text-xs"
+            @click="clearHistory"
+          >
+            清除
+          </button>
         </h3>
 
-        <div v-if="connection.discoveredDevices.value.length === 0" class="text-center py-12">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-dark-800 flex items-center justify-center">
-            <svg class="w-8 h-8 text-dark-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-            </svg>
-          </div>
-          <p class="text-dark-500 text-sm">
-            {{ connection.state.value.status === 'connecting' ? '正在搜索附近设备...' : '点击右上角扫描设备' }}
-          </p>
+        <div v-if="connectionHistory.length === 0" class="text-center py-8">
+          <p class="text-dark-500 text-sm">暂无连接历史</p>
         </div>
 
         <div v-else class="space-y-2">
-          <DeviceCard
-            v-for="device in connection.discoveredDevices.value"
-            :key="device.id"
-            :device="{
-              id: device.id,
-              name: device.name,
-              isOnline: true
-            }"
-            @click="handleConnectDiscovered(device)"
-          />
+          <div
+            v-for="item in connectionHistory"
+            :key="item.address"
+            class="flex items-center justify-between p-3 bg-dark-800 rounded-lg"
+            @click="handleConnectFromHistory(item)"
+          >
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-dark-700 flex items-center justify-center">
+                <svg class="w-5 h-5 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div>
+                <p class="font-medium text-dark-200">{{ item.name || item.address }}</p>
+                <p class="text-dark-500 text-xs">{{ item.address }}</p>
+              </div>
+            </div>
+            <button
+              class="p-2 text-dark-500 hover:text-red-400"
+              @click.stop="removeFromHistory(item.address)"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -105,23 +106,33 @@
       </div>
     </div>
 
+    <!-- Scan QR Code FAB -->
+    <button
+      class="fixed bottom-20 right-4 w-14 h-14 bg-primary-500 hover:bg-primary-600 rounded-full flex items-center justify-center shadow-lg shadow-primary-500/30 transition-all active:scale-95 z-10"
+      @click="$router.push({ name: 'mobile-scan' })"
+    >
+      <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
+      </svg>
+    </button>
+
     <!-- Manual Connect Button -->
     <div class="p-4 border-t border-dark-700">
       <button
-        class="w-full bg-dark-700 text-dark-200 py-3 rounded-xl font-medium active:bg-dark-600"
+        class="w-full bg-primary-600 text-white py-3 rounded-xl font-medium active:bg-primary-700"
         :class="{ 'opacity-50': isConnecting }"
         :disabled="isConnecting"
         @click="showManualConnect = true"
       >
-        手动输入地址连接
+        连接新设备
       </button>
     </div>
 
     <!-- Manual Connect Dialog -->
     <BottomSheet
       v-model="showManualConnect"
-      title="手动连接"
-      placeholder="输入设备地址 (如: 192.168.1.100:8765)"
+      title="连接新设备"
+      placeholder="输入设备地址 (如: 10.186.131.120:8765)"
       @submit="handleConnectManual"
     />
 
@@ -153,11 +164,18 @@ const pairingError = ref('')
 const isConnecting = ref(false)
 const connectionError = ref('')
 
+// Connection history (stored in localStorage)
+interface ConnectionHistoryItem {
+  address: string
+  name: string
+  lastConnected: string
+}
+const connectionHistory = ref<ConnectionHistoryItem[]>([])
+
 // Current device being connected
 const pendingDevice = ref<RemoteDevice | null>(null)
 
 // Connection status for UI display
-// 'idle' | 'connecting' | 'connected' | 'pairing' | 'error'
 const connectionStatus = ref<'idle' | 'connecting' | 'connected' | 'pairing' | 'error'>('idle')
 
 const connectionStatusText = computed(() => {
@@ -175,28 +193,79 @@ const connectionStatusText = computed(() => {
   }
 })
 
-onMounted(async () => {
-  await connection.loadPairedDevices()
-})
-
-async function handleScan() {
-  await connection.discoverDevices()
+// Load connection history from localStorage
+function loadConnectionHistory() {
+  const stored = localStorage.getItem('connection_history')
+  if (stored) {
+    try {
+      connectionHistory.value = JSON.parse(stored)
+    } catch {
+      connectionHistory.value = []
+    }
+  }
 }
 
-/**
- * 连接发现的设备
- * 流程：连接 → 请求配对 → 显示配对码对话框
- */
-async function handleConnectDiscovered(device: RemoteDevice) {
+// Save connection history to localStorage
+function saveConnectionHistory() {
+  localStorage.setItem('connection_history', JSON.stringify(connectionHistory.value))
+}
+
+// Add to connection history
+function addToHistory(address: string, name?: string) {
+  // Remove existing entry with same address
+  connectionHistory.value = connectionHistory.value.filter(item => item.address !== address)
+
+  // Add new entry at the beginning
+  connectionHistory.value.unshift({
+    address,
+    name: name || address.split(':')[0],
+    lastConnected: new Date().toISOString(),
+  })
+
+  // Keep only last 10 entries
+  if (connectionHistory.value.length > 10) {
+    connectionHistory.value = connectionHistory.value.slice(0, 10)
+  }
+
+  saveConnectionHistory()
+}
+
+// Remove from connection history
+function removeFromHistory(address: string) {
+  connectionHistory.value = connectionHistory.value.filter(item => item.address !== address)
+  saveConnectionHistory()
+}
+
+// Clear all history
+function clearHistory() {
+  connectionHistory.value = []
+  saveConnectionHistory()
+}
+
+onMounted(async () => {
+  await connection.loadPairedDevices()
+  loadConnectionHistory()
+})
+
+// Connect from history
+async function handleConnectFromHistory(item: ConnectionHistoryItem) {
+  const [host, portStr] = item.address.split(':')
+  const port = portStr ? parseInt(portStr) : 8765
+
+  const device: RemoteDevice = {
+    id: `${host}:${port}`,
+    name: item.name,
+    address: host,
+    port,
+    isPaired: false,
+  }
+
   await startConnection(device)
 }
 
-/**
- * 手动输入地址连接
- * 流程：连接 → 请求配对 → 显示配对码对话框
- */
+// Manual address input
 async function handleConnectManual(address: string) {
-  // 解析地址
+  // Parse address
   const [host, portStr] = address.split(':')
   const port = portStr ? parseInt(portStr) : 8765
 
@@ -211,12 +280,7 @@ async function handleConnectManual(address: string) {
   await startConnection(device)
 }
 
-/**
- * 启动连接流程
- * 1. 建立 WebSocket 连接
- * 2. 发送配对请求 (request_pairing)
- * 3. 显示配对码输入对话框
- */
+// Start connection flow
 async function startConnection(device: RemoteDevice) {
   pendingDevice.value = device
   connectionStatus.value = 'connecting'
@@ -224,22 +288,25 @@ async function startConnection(device: RemoteDevice) {
   isConnecting.value = true
 
   try {
-    // Step 1: 连接到设备
+    // Step 1: Connect to device
     await connection.connect(device)
     connectionStatus.value = 'connected'
 
-    // Step 2: 请求配对 (发送 request_pairing)
+    // Step 2: Request pairing
     await connection.requestPairing()
     connectionStatus.value = 'pairing'
 
-    // Step 3: 显示配对码输入对话框
+    // Step 3: Show pairing input dialog
     showPairing.value = true
+
+    // Add to history after successful connection
+    addToHistory(`${device.address}:${device.port}`, device.name)
   } catch (error) {
     connectionStatus.value = 'error'
     connectionError.value = String(error)
     console.error('Connection failed:', error)
 
-    // 3秒后清除错误状态
+    // Clear error after 3 seconds
     setTimeout(() => {
       if (connectionStatus.value === 'error') {
         connectionStatus.value = 'idle'
@@ -250,10 +317,7 @@ async function startConnection(device: RemoteDevice) {
   }
 }
 
-/**
- * 验证配对码
- * 在连接和请求配对成功后，用户输入配对码进行验证
- */
+// Verify pairing code
 async function handlePairingSubmit(code: string) {
   if (!pendingDevice.value) return
 
@@ -261,7 +325,6 @@ async function handlePairingSubmit(code: string) {
   pairingError.value = ''
 
   try {
-    // 验证配对码
     const success = await connection.verifyPairingCode(code)
 
     if (success) {
@@ -269,7 +332,7 @@ async function handlePairingSubmit(code: string) {
       connectionStatus.value = 'idle'
       pendingDevice.value = null
 
-      // 跳转到终端
+      // Navigate to terminal
       router.push(`/mobile/terminal/${connection.currentDevice.value?.id}`)
     } else {
       pairingError.value = '配对码验证失败，请重试'
