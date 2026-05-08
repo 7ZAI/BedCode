@@ -3,9 +3,10 @@
 //! 暴露给前端的 Tauri 命令接口
 
 use crate::auth::{PairingCode, PairingService};
+use crate::config::AppConfig;
 use crate::db::{Database, QuickAction, SessionConfig};
-use crate::discovery::{DiscoveredDevice, DiscoveryService};
 use crate::Result;
+use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
@@ -209,34 +210,6 @@ pub async fn send_special_key(
     session_manager.send_special_key(&session_id, &key).await
 }
 
-// ==================== Discovery Commands ====================
-
-/// 开始设备发现
-#[tauri::command]
-pub async fn start_discovery(
-    discovery_service: State<'_, Arc<DiscoveryService>>,
-) -> Result<()> {
-    discovery_service.start_discovery()
-}
-
-/// 获取已发现的设备
-#[tauri::command]
-pub async fn get_discovered_devices(
-    discovery_service: State<'_, Arc<DiscoveryService>>,
-) -> Result<Vec<DiscoveredDevice>> {
-    Ok(discovery_service.get_discovered_devices().await)
-}
-
-/// 开始广播服务
-#[tauri::command]
-pub async fn start_broadcast(
-    discovery_service: State<'_, Arc<DiscoveryService>>,
-    service_name: String,
-    port: u16,
-) -> Result<()> {
-    discovery_service.start_broadcast(&service_name, port)
-}
-
 // ==================== Pairing Commands ====================
 
 /// 生成配对码
@@ -290,6 +263,90 @@ pub async fn remove_paired_device(
 ) -> Result<()> {
     let db = db.lock().await;
     db.remove_pairing(&id)
+}
+
+// ==================== QR Token Commands ====================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QrConnectionInfo {
+    pub token: String,
+    pub host: String,
+    pub port: u16,
+}
+
+#[tauri::command]
+pub async fn generate_qr_code(
+    qr_manager: tauri::State<'_, Arc<crate::auth::QrTokenManager>>,
+    db: tauri::State<'_, Arc<Mutex<Database>>>,
+) -> Result<String> {
+    let ttl = {
+        let db = db.lock().await;
+        db.get_setting("qr_token_ttl")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300)
+    };
+
+    let token = qr_manager.generate(ttl).await;
+    tracing::info!("QR code generated, TTL: {}s", ttl);
+    Ok(token)
+}
+
+#[tauri::command]
+pub async fn clear_qr_code(
+    qr_manager: tauri::State<'_, Arc<crate::auth::QrTokenManager>>,
+) -> Result<()> {
+    qr_manager.clear().await;
+    tracing::info!("QR code cleared");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_qr_connection_info(
+    qr_manager: tauri::State<'_, Arc<crate::auth::QrTokenManager>>,
+    app_handle: tauri::AppHandle,
+) -> Result<Option<QrConnectionInfo>> {
+    let active = qr_manager.get_active().await;
+    match active {
+        None => Ok(None),
+        Some((token, _ttl, _remaining)) => {
+            let host = crate::commands::get_local_ip_addresses()
+                .into_iter()
+                .find(|ip| !ip.starts_with("127.") && !ip.starts_with("169.254."))
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+
+            let config = AppConfig::load(
+                &app_handle.path().app_data_dir()
+                    .unwrap_or_default()
+                    .join("config.json")
+            ).unwrap_or_default();
+            let port = config.network.port;
+
+            Ok(Some(QrConnectionInfo { token, host, port }))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_qr_token_ttl(
+    db: tauri::State<'_, Arc<Mutex<Database>>>,
+) -> Result<u64> {
+    let db = db.lock().await;
+    match db.get_setting("qr_token_ttl") {
+        Ok(Some(value)) => value.parse::<u64>().map_err(|e| crate::AppError::Config(e.to_string())),
+        _ => Ok(300),
+    }
+}
+
+#[tauri::command]
+pub async fn set_qr_token_ttl(
+    db: tauri::State<'_, Arc<Mutex<Database>>>,
+    seconds: u64,
+) -> Result<()> {
+    let db = db.lock().await;
+    db.set_setting("qr_token_ttl", &seconds.to_string())
+        .map_err(|e| crate::AppError::Config(e.to_string()))
 }
 
 // ==================== Quick Actions Commands ====================
@@ -405,14 +462,13 @@ pub fn get_status_bar_height(app_handle: tauri::AppHandle) -> Result<u32> {
     // 使用 jni 调用 Android API
     use tauri::Manager;
 
-    let window = app_handle.webview_windows().get("main");
-    if let Some(window) = window {
-        // Android 上通过 WebView 的安全区域获取
-        // 实际值会在前端通过 CSS env(safe-area-inset-top) 获取
-        // 这里返回 0，前端会使用 CSS 变量
-        return Ok(0);
-    }
+    // 先获取 windows 集合，再从中获取 window，避免临时值被释放
+    let windows = app_handle.webview_windows();
+    let _window = windows.get("main");
 
+    // Android 上通过 WebView 的安全区域获取
+    // 实际值会在前端通过 CSS env(safe-area-inset-top) 获取
+    // 这里返回 0，前端会使用 CSS 变量
     Ok(0)
 }
 
@@ -427,7 +483,7 @@ pub fn get_status_bar_height() -> Result<u32> {
 #[cfg(target_os = "android")]
 #[tauri::command]
 pub async fn set_screen_orientation(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     orientation: String,
 ) -> Result<()> {
     // 通过 JNI 设置 Activity 的屏幕方向
@@ -451,7 +507,7 @@ pub async fn set_screen_orientation(_orientation: String) -> Result<()> {
 #[cfg(target_os = "android")]
 #[tauri::command]
 pub async fn keep_screen_awake(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     enabled: bool,
 ) -> Result<()> {
     tracing::info!("Setting screen awake: {}", enabled);

@@ -23,8 +23,6 @@ pub use error::{AppError, Result};
 
 use auth::PairingService;
 use auth::QrTokenManager;
-// AppConfig 目前未直接使用，但保留以备后续配置管理功能使用
-#[allow(unused_imports)]
 use config::AppConfig;
 use std::sync::Arc;
 use tauri::Manager;
@@ -266,6 +264,12 @@ pub fn run() {
             commands::clear_pairing_code,
             commands::list_paired_devices,
             commands::remove_paired_device,
+            // QR Code
+            commands::generate_qr_code,
+            commands::clear_qr_code,
+            commands::get_qr_connection_info,
+            commands::get_qr_token_ttl,
+            commands::set_qr_token_ttl,
             // Quick Actions
             commands::list_quick_actions,
             commands::create_quick_action,
