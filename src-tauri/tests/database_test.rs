@@ -40,7 +40,8 @@ fn test_pairing_crud() {
     let id = db.add_pairing(
         "Test Device",
         "fingerprint123",
-        "public_key_data"
+        "public_key_data",
+        None,
     ).unwrap();
 
     assert!(!id.is_empty());
@@ -278,9 +279,9 @@ fn test_multiple_pairings() {
     let (db, _temp_dir) = create_test_db();
 
     // Create multiple pairings
-    let id1 = db.add_pairing("Device 1", "fp1", "pk1").unwrap();
-    let id2 = db.add_pairing("Device 2", "fp2", "pk2").unwrap();
-    let id3 = db.add_pairing("Device 3", "fp3", "pk3").unwrap();
+    let id1 = db.add_pairing("Device 1", "fp1", "pk1", None).unwrap();
+    let id2 = db.add_pairing("Device 2", "fp2", "pk2", None).unwrap();
+    let id3 = db.add_pairing("Device 3", "fp3", "pk3", None).unwrap();
 
     let pairings = db.get_pairings().unwrap();
     assert_eq!(pairings.len(), 3);

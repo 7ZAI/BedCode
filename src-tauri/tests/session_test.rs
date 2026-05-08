@@ -45,11 +45,11 @@ mod session_status_tests {
     #[test]
     fn test_session_status_serialization() {
         let test_cases = vec![
-            (SessionStatus::Starting, "Starting"),
-            (SessionStatus::Running, "Running"),
-            (SessionStatus::WaitingInput, "WaitingInput"),
-            (SessionStatus::Stopped, "Stopped"),
-            (SessionStatus::Error, "Error"),
+            (SessionStatus::Starting, "starting"),
+            (SessionStatus::Running, "running"),
+            (SessionStatus::WaitingInput, "waitingInput"),
+            (SessionStatus::Stopped, "stopped"),
+            (SessionStatus::Error, "error"),
         ];
 
         for (status, expected) in test_cases {

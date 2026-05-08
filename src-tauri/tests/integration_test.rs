@@ -150,6 +150,7 @@ mod websocket_integration {
                 pairing_code: None,
                 session_token: None,
                 error: None,
+                    qr_token: None,
             },
         };
 
@@ -177,6 +178,7 @@ mod websocket_integration {
                 pairing_code: Some("123456".to_string()),
                 session_token: None,
                 error: None,
+                    qr_token: None,
             },
         };
 

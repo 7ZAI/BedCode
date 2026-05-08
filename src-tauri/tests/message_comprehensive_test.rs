@@ -50,6 +50,7 @@ mod message_id_tests {
                     pairing_code: None,
                     session_token: None,
                     error: None,
+                    qr_token: None,
                 },
             },
         ];

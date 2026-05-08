@@ -312,7 +312,7 @@ mod database_command_tests {
     fn test_add_and_remove_pairing() {
         let (db, _temp_dir) = create_test_db();
 
-        let id = db.add_pairing("My Phone", "fingerprint123", "public_key").unwrap();
+        let id = db.add_pairing("My Phone", "fingerprint123", "public_key", None).unwrap();
 
         let pairings = db.get_pairings().unwrap();
         assert_eq!(pairings.len(), 1);

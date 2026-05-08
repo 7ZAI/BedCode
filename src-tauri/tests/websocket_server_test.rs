@@ -40,6 +40,7 @@ mod auth_payload_tests {
             pairing_code: None,
             session_token: None,
             error: None,
+                    qr_token: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -57,6 +58,7 @@ mod auth_payload_tests {
             pairing_code: Some("123456".to_string()),
             session_token: None,
             error: None,
+                    qr_token: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -74,6 +76,7 @@ mod auth_payload_tests {
             pairing_code: None,
             session_token: Some("token-abc".to_string()),
             error: None,
+                    qr_token: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -91,6 +94,7 @@ mod auth_payload_tests {
             pairing_code: None,
             session_token: None,
             error: Some("Invalid code".to_string()),
+            qr_token: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();

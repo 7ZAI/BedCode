@@ -25,6 +25,7 @@ vi.mock('@/composables/useToast', () => ({
 vi.mock('@/composables/useTauri', () => ({
   usePairing: () => ({
     generateCode: vi.fn(),
+    clearCode: vi.fn(),
     verifyCode: vi.fn().mockResolvedValue(true),
     removeDevice: vi.fn(),
     loadDevices: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +41,31 @@ vi.mock('@/composables/useTauri', () => ({
     startDiscovery: vi.fn().mockResolvedValue(undefined),
     loadDiscoveredDevices: vi.fn().mockResolvedValue(undefined),
   }),
+  useQrCodeApi: () => ({
+    generateQrCode: vi.fn().mockResolvedValue('test-token'),
+    clearQrCode: vi.fn().mockResolvedValue(undefined),
+    getQrConnectionInfo: vi.fn().mockResolvedValue(null),
+    getQrTokenTtl: vi.fn().mockResolvedValue(300),
+    setQrTokenTtl: vi.fn().mockResolvedValue(undefined),
+  }),
+}))
+
+vi.mock('@/composables/useQrCode', () => ({
+  useQrCode: () => ({
+    qrData: { value: null },
+    remainingSeconds: { value: 0 },
+    isLoading: { value: false },
+    isExpired: { value: true },
+    hasQr: { value: false },
+    generateQr: vi.fn(),
+    clearQr: vi.fn(),
+  }),
+}))
+
+vi.mock('qrcode', () => ({
+  default: {
+    toCanvas: vi.fn().mockResolvedValue(undefined),
+  },
 }))
 
 // Mock components
