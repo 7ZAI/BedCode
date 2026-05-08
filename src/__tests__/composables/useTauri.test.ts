@@ -8,7 +8,6 @@ import {
   useSession,
   useQuickActions,
   usePairing,
-  useDiscovery,
   useNetwork,
 } from '@/composables/useTauri'
 
@@ -417,55 +416,6 @@ describe('useTauri Composables', () => {
       await result.removeDevice('device-id')
 
       expect(mockInvoke).toHaveBeenCalledWith('remove_paired_device', { id: 'device-id' })
-
-      wrapper.unmount()
-    })
-  })
-
-  describe('useDiscovery', () => {
-    it('should initialize with empty discovered devices', () => {
-      const { result, wrapper } = withComposable(() => useDiscovery())
-
-      expect(result.discoveredDevices.value).toEqual([])
-
-      wrapper.unmount()
-    })
-
-    it('should start discovery', async () => {
-      mockInvoke.mockResolvedValueOnce(undefined)
-
-      const { result, wrapper } = withComposable(() => useDiscovery())
-      await result.startDiscovery()
-
-      expect(mockInvoke).toHaveBeenCalledWith('start_discovery')
-
-      wrapper.unmount()
-    })
-
-    it('should load discovered devices', async () => {
-      mockInvoke.mockResolvedValueOnce([
-        { name: 'Device 1', address: '192.168.1.100', port: 8765 },
-      ])
-
-      const { result, wrapper } = withComposable(() => useDiscovery())
-      await result.loadDiscoveredDevices()
-
-      expect(mockInvoke).toHaveBeenCalledWith('get_discovered_devices')
-      expect(result.discoveredDevices.value).toHaveLength(1)
-
-      wrapper.unmount()
-    })
-
-    it('should start broadcast', async () => {
-      mockInvoke.mockResolvedValueOnce(undefined)
-
-      const { result, wrapper } = withComposable(() => useDiscovery())
-      await result.startBroadcast('my-service', 8765)
-
-      expect(mockInvoke).toHaveBeenCalledWith('start_broadcast', {
-        serviceName: 'my-service',
-        port: 8765,
-      })
 
       wrapper.unmount()
     })

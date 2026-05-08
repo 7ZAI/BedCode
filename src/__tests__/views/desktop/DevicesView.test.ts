@@ -36,11 +36,6 @@ vi.mock('@/composables/useTauri', () => ({
     localAddresses: { value: ['192.168.1.100'] },
     loadLocalAddresses: vi.fn().mockResolvedValue(undefined),
   }),
-  useDiscovery: () => ({
-    startBroadcast: vi.fn().mockResolvedValue(undefined),
-    startDiscovery: vi.fn().mockResolvedValue(undefined),
-    loadDiscoveredDevices: vi.fn().mockResolvedValue(undefined),
-  }),
   useQrCodeApi: () => ({
     generateQrCode: vi.fn().mockResolvedValue('test-token'),
     clearQrCode: vi.fn().mockResolvedValue(undefined),
@@ -204,26 +199,6 @@ describe('DevicesView', () => {
     expect(generateBtn).toBeDefined()
   })
 
-  it('should have mDNS toggle', async () => {
-    const wrapper = mount(DevicesView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          Button: true,
-          Toggle: {
-            template: '<button class="toggle" :class="{ active: modelValue }"><slot /></button>',
-            props: ['modelValue'],
-          },
-        },
-      },
-    })
-
-    await flushPromises()
-
-    const toggle = wrapper.find('.toggle')
-    expect(toggle.exists()).toBe(true)
-  })
-
   it('should display pairing code when generated', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -254,36 +229,6 @@ describe('DevicesView', () => {
     }
   })
 
-  it('should handle mDNS toggle', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(DevicesView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Toggle: {
-            template: '<button class="toggle" @click="$emit(\'update:modelValue\', !modelValue)"><slot /></button>',
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-          },
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Initial state
-    expect(wrapper.vm.mDnsEnabled).toBe(true)
-
-    // The toggleMDns function is async and toggles state
-    // After calling with false, it should set mDnsEnabled to false
-    await wrapper.vm.toggleMDns(false)
-
-    // Check that the function was called (the state is managed internally)
-    expect(typeof wrapper.vm.toggleMDns).toBe('function')
-  })
 })
 
 describe('DevicesView Countdown', () => {

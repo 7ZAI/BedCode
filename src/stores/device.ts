@@ -5,42 +5,16 @@ import { usePairing, type Pairing } from '@/composables/useTauri'
 
 export type { Pairing }
 
-export interface DiscoveredDevice {
-  name: string
-  address: string
-  port: number
-}
-
 export const useDeviceStore = defineStore('device', () => {
   const pairedDevices = ref<Pairing[]>([])
-  const discoveredDevices = ref<DiscoveredDevice[]>([])
   const pairingCode = ref<string | null>(null)
   const pairingExpiry = ref<number>(0)
-  const isScanning = ref(false)
 
   const pairingApi = usePairing()
 
   async function loadPairedDevices() {
     await pairingApi.loadDevices()
     pairedDevices.value = pairingApi.devices.value
-  }
-
-  async function startDiscovery() {
-    isScanning.value = true
-    discoveredDevices.value = []
-
-    try {
-      // Start discovery service
-      await invoke('start_discovery')
-
-      // Get discovered devices
-      const devices = await invoke<DiscoveredDevice[]>('get_discovered_devices')
-      discoveredDevices.value = devices
-    } catch (error) {
-      console.error('Discovery failed:', error)
-    } finally {
-      isScanning.value = false
-    }
   }
 
   async function startPairing() {
@@ -84,12 +58,9 @@ export const useDeviceStore = defineStore('device', () => {
 
   return {
     pairedDevices,
-    discoveredDevices,
     pairingCode,
     pairingExpiry,
-    isScanning,
     loadPairedDevices,
-    startDiscovery,
     startPairing,
     verifyPairing,
     removeDevice,

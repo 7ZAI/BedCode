@@ -19,23 +19,6 @@
                 class="w-full bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white focus:border-primary-500 outline-none"
               />
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-dark-300">启用设备发现 (mDNS)</span>
-              <button
-                @click="settingsStore.settings.network.enable_discovery = !settingsStore.settings.network.enable_discovery"
-                :class="[
-                  'w-12 h-6 rounded-full transition-colors',
-                  settingsStore.settings.network.enable_discovery ? 'bg-primary-600' : 'bg-dark-600'
-                ]"
-              >
-                <div
-                  :class="[
-                    'w-5 h-5 rounded-full bg-white transition-transform',
-                    settingsStore.settings.network.enable_discovery ? 'translate-x-6' : 'translate-x-1'
-                  ]"
-                ></div>
-              </button>
-            </div>
           </div>
         </div>
 

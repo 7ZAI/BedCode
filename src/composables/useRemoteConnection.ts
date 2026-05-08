@@ -15,14 +15,6 @@ export interface ConnectionState {
   error?: string
 }
 
-export interface DiscoveredDeviceRaw {
-  name: string
-  address: string
-  port: number
-  properties: Record<string, string>
-  discovered_at: string
-}
-
 export interface PairedDeviceRaw {
   id: string
   device_name: string
@@ -41,7 +33,6 @@ type ReconnectCallback = () => Promise<void>
 export function useRemoteConnection() {
   // === 状态 ===
   const state = ref<ConnectionState>({ status: 'disconnected' })
-  const discoveredDevices = ref<RemoteDevice[]>([])
   const pairedDevices = ref<RemoteDevice[]>([])
   const currentDevice = ref<RemoteDevice | null>(null)
 
@@ -71,30 +62,6 @@ export function useRemoteConnection() {
 
   function setReconnectCallback(callback: ReconnectCallback | null) {
     setOnReconnect(callback)
-  }
-
-  /** 发现局域网设备 (mDNS) */
-  async function discoverDevices(): Promise<void> {
-    state.value = { status: 'connecting' }
-
-    try {
-      await invoke('start_discovery')
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      const devices = await invoke<DiscoveredDeviceRaw[]>('get_discovered_devices')
-
-      discoveredDevices.value = devices.map(d => ({
-        id: `${d.address}:${d.port}`,
-        name: d.name,
-        address: d.address,
-        port: d.port,
-        isPaired: false,
-      }))
-
-      state.value = { status: 'disconnected' }
-    } catch (error) {
-      state.value = { status: 'error', error: String(error) }
-      console.error('Discovery failed:', error)
-    }
   }
 
   /** 连接到设备 */
@@ -377,7 +344,6 @@ export function useRemoteConnection() {
   return {
     // 状态
     state,
-    discoveredDevices,
     pairedDevices,
     currentDevice,
     isConnected,
@@ -386,7 +352,6 @@ export function useRemoteConnection() {
     authCredentials,
 
     // 方法
-    discoverDevices,
     connect,
     authenticate,
     requestPairing,

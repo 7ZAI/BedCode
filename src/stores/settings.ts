@@ -5,8 +5,6 @@ import { invoke } from '@tauri-apps/api/core'
 export interface Settings {
   network: {
     port: number
-    service_name: string
-    enable_discovery: boolean
   }
   session: {
     default_environment: string
@@ -26,8 +24,6 @@ export interface Settings {
 const defaultSettings: Settings = {
   network: {
     port: 8765,
-    service_name: 'bedcode',
-    enable_discovery: true,
   },
   session: {
     default_environment: 'windows',

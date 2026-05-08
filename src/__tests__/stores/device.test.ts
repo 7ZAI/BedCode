@@ -34,7 +34,6 @@ describe('Device Store', () => {
     const store = useDeviceStore()
 
     expect(store.pairedDevices).toEqual([])
-    expect(store.discoveredDevices).toEqual([])
     expect(store.pairingCode).toBeNull()
     expect(store.pairingExpiry).toBe(0)
   })
@@ -49,21 +48,6 @@ describe('Device Store', () => {
 
     expect(store.pairingCode).toBeNull()
     expect(store.pairingExpiry).toBe(0)
-  })
-
-  it('should add discovered device', () => {
-    const store = useDeviceStore()
-
-    const device = {
-      name: 'Desktop-PC',
-      address: '192.168.1.100',
-      port: 8765,
-    }
-
-    store.discoveredDevices.push(device)
-
-    expect(store.discoveredDevices).toHaveLength(1)
-    expect(store.discoveredDevices[0]).toEqual(device)
   })
 
   it('should add paired device', () => {

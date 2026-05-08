@@ -83,14 +83,6 @@ export interface QrConnectionInfo {
   port: number
 }
 
-export interface DiscoveredDevice {
-  name: string
-  address: string
-  port: number
-  properties: Record<string, string>
-  discoveredAt: string
-}
-
 // WSL Commands
 export function useWsl() {
   const distros = ref<WslDistro[]>([])
@@ -432,42 +424,6 @@ export function useQrCodeApi() {
     getQrConnectionInfo,
     getQrTokenTtl,
     setQrTokenTtl,
-  }
-}
-
-// Discovery
-export function useDiscovery() {
-  const discoveredDevices = ref<DiscoveredDevice[]>([])
-
-  async function startDiscovery() {
-    try {
-      await invoke('start_discovery')
-    } catch (e) {
-      console.error('Failed to start discovery:', e)
-    }
-  }
-
-  async function loadDiscoveredDevices() {
-    try {
-      discoveredDevices.value = await invoke('get_discovered_devices')
-    } catch (e) {
-      console.error('Failed to load discovered devices:', e)
-    }
-  }
-
-  async function startBroadcast(serviceName: string, port: number) {
-    try {
-      await invoke('start_broadcast', { serviceName, port })
-    } catch (e) {
-      console.error('Failed to start broadcast:', e)
-    }
-  }
-
-  return {
-    discoveredDevices,
-    startDiscovery,
-    loadDiscoveredDevices,
-    startBroadcast,
   }
 }
 

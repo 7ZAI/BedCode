@@ -16,11 +16,6 @@ describe('useRemoteConnection', () => {
     expect(state.value.status).toBe('disconnected')
   })
 
-  it('should have empty discovered devices initially', () => {
-    const { discoveredDevices } = useRemoteConnection()
-    expect(discoveredDevices.value).toEqual([])
-  })
-
   it('should have empty paired devices initially', () => {
     const { pairedDevices } = useRemoteConnection()
     expect(pairedDevices.value).toEqual([])
