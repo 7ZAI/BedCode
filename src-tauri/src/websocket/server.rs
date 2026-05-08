@@ -4,6 +4,7 @@
 
 use super::message::{AuthPayload, AuthStage, ControlAction, Message};
 use crate::auth::PairingService;
+use crate::auth::QrTokenManager;
 use crate::db::Database;
 use crate::pty::PtyOutputEvent;
 use crate::session::SessionManager;
@@ -50,6 +51,7 @@ pub struct WebSocketServer {
     session_manager: Arc<SessionManager>,
     db: Arc<Mutex<Database>>,
     pairing_service: Arc<PairingService>,
+    qr_manager: Arc<QrTokenManager>,
     clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     /// 客户端发送器映射（用于向特定客户端发送消息）
     client_senders: Arc<RwLock<HashMap<SocketAddr, mpsc::UnboundedSender<WsMessage>>>>,
@@ -68,6 +70,7 @@ impl WebSocketServer {
         session_manager: Arc<SessionManager>,
         db: Arc<Mutex<Database>>,
         pairing_service: Arc<PairingService>,
+        qr_manager: Arc<QrTokenManager>,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
 
@@ -76,6 +79,7 @@ impl WebSocketServer {
             session_manager,
             db,
             pairing_service,
+            qr_manager,
             clients: Arc::new(RwLock::new(HashMap::new())),
             client_senders: Arc::new(RwLock::new(HashMap::new())),
             shutdown_tx,
@@ -166,6 +170,7 @@ impl WebSocketServer {
                     let session_manager = self.session_manager.clone();
                     let db = self.db.clone();
                     let pairing_service = self.pairing_service.clone();
+                    let qr_manager = self.qr_manager.clone();
                     let clients = self.clients.clone();
                     let client_senders = self.client_senders.clone();
                     let mut shutdown_rx_inner = self.shutdown_tx.subscribe();
@@ -236,6 +241,7 @@ impl WebSocketServer {
                                                     &session_manager,
                                                     &db,
                                                     &pairing_service,
+                                                    &qr_manager,
                                                     &clients_for_recv,
                                                     &app_handle,
                                                 )
@@ -441,6 +447,7 @@ async fn handle_message(
     session_manager: &Arc<SessionManager>,
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
+    qr_manager: &Arc<QrTokenManager>,
     clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
@@ -453,7 +460,7 @@ async fn handle_message(
     }
 
     match message {
-        Message::Auth { message_id, payload, .. } => handle_auth(payload, message_id, addr, db, pairing_service, clients, app_handle).await,
+        Message::Auth { message_id, payload, .. } => handle_auth(payload, message_id, addr, db, pairing_service, qr_manager, clients, app_handle).await,
 
         Message::Input { message_id, session_id, payload, .. } => {
             // 检查认证
@@ -504,6 +511,7 @@ async fn handle_auth(
     addr: SocketAddr,
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
+    qr_manager: &Arc<QrTokenManager>,
     clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
@@ -680,6 +688,78 @@ async fn handle_auth(
                         ..Default::default()
                     },
                 }))
+            }
+        }
+
+        AuthStage::QrConnect => {
+            let qr_token = payload.qr_token.as_deref().unwrap_or("");
+
+            match qr_manager.verify(qr_token).await {
+                Ok(()) => {
+                    // 生成设备凭证
+                    let device_id = Uuid::new_v4().to_string();
+                    let device_fingerprint = payload.device_fingerprint
+                        .clone()
+                        .unwrap_or_else(|| Uuid::new_v4().to_string());
+                    let device_name = payload.device_name
+                        .clone()
+                        .unwrap_or_else(|| "QR Device".to_string());
+                    let session_token = Uuid::new_v4().to_string();
+
+                    // 创建配对记录
+                    let db = db.lock().await;
+                    let _pairing_id = db.add_pairing(
+                        &device_name,
+                        &device_fingerprint,
+                        "",
+                        Some(&addr.to_string()),
+                    ).unwrap_or_default();
+                    drop(db);
+
+                    // 标记客户端已认证
+                    {
+                        let mut clients = clients.write().await;
+                        if let Some(client) = clients.get_mut(&addr) {
+                            client.authenticated = true;
+                            client.device_id = Some(device_id.clone());
+                        }
+                    }
+
+                    let response = Message::Auth {
+                        message_id: request_message_id,
+                        session_id: None,
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                        payload: AuthPayload {
+                            stage: AuthStage::Authenticated,
+                            device_id: Some(device_id),
+                            device_fingerprint: Some(device_fingerprint),
+                            session_token: Some(session_token),
+                            device_name: Some(device_name),
+                            pairing_code: None,
+                            error: None,
+                            qr_token: None,
+                        },
+                    };
+                    Ok(Some(response))
+                }
+                Err(e) => {
+                    let response = Message::Auth {
+                        message_id: request_message_id,
+                        session_id: None,
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                        payload: AuthPayload {
+                            stage: AuthStage::QrFailed,
+                            error: Some(e.to_string()),
+                            device_id: None,
+                            device_fingerprint: None,
+                            session_token: None,
+                            device_name: None,
+                            pairing_code: None,
+                            qr_token: None,
+                        },
+                    };
+                    Ok(Some(response))
+                }
             }
         }
 

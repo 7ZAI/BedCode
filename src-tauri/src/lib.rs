@@ -22,8 +22,10 @@ pub mod websocket;
 pub use error::{AppError, Result};
 
 use auth::PairingService;
+use auth::QrTokenManager;
+// AppConfig 目前未直接使用，但保留以备后续配置管理功能使用
+#[allow(unused_imports)]
 use config::AppConfig;
-use discovery::DiscoveryService;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -118,7 +120,7 @@ fn insert_default_quick_actions(db: &db::Database) -> Result<()> {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
     use session::SessionManager;
-    use tauri::{Emitter, Listener};
+    use tauri::Emitter;
     use websocket::WebSocketServer;
 
     tauri::Builder::default()
@@ -144,8 +146,6 @@ pub fn run() {
                 AppConfig::default()
             });
             let ws_port = app_config.network.port;
-            let service_name = app_config.network.service_name.clone();
-            let enable_discovery = app_config.network.enable_discovery;
 
             // Initialize database
             let db_path = app_handle
@@ -174,21 +174,28 @@ pub fn run() {
             let session_manager = Arc::new(SessionManager::new(db.clone()));
             app.manage(session_manager.clone());
 
-            // Initialize discovery service
-            let discovery_service = Arc::new(DiscoveryService::new()?);
-            app.manage(discovery_service.clone());
-
             // Initialize pairing service
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service.clone());
 
+            // Initialize QR token manager
+            let qr_manager = Arc::new(QrTokenManager::new());
+            app.manage(qr_manager.clone());
+
             // Initialize and start WebSocket server
-            let ws_server = Arc::new(WebSocketServer::new(
+            let mut ws_server = WebSocketServer::new(
                 ws_port,
                 session_manager.clone(),
                 db.clone(),
                 pairing_service.clone(),
-            ));
+                qr_manager.clone(),
+            );
+
+            // Set app handle for event emission (wrap in Arc)
+            use std::sync::Arc as StdArc;
+            ws_server.set_app_handle(StdArc::new(app_handle.clone()));
+
+            let ws_server = Arc::new(ws_server);
 
             // Store WebSocket server in app state for later access
             app.manage(ws_server.clone());
@@ -214,13 +221,6 @@ pub fn run() {
                 }
             });
 
-            // Start mDNS broadcast if enabled
-            if enable_discovery {
-                if let Err(e) = discovery_service.start_broadcast(&service_name, ws_port) {
-                    tracing::error!("Failed to start mDNS broadcast: {}", e);
-                }
-            }
-
             // Setup system tray
             setup_tray(app_handle)?;
 
@@ -230,7 +230,6 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
                     tracing::info!("Window close requested, shutting down...");
                     // SessionManager 的 Drop 会自动清理所有会话
-                    // DiscoveryService 的 Drop 会自动 shutdown mDNS daemon
                     // WebSocketServer 会在 app exit 时自动清理
                 }
             });
@@ -260,10 +259,6 @@ pub fn run() {
             // PTY Input
             commands::write_to_session,
             commands::send_special_key,
-            // Discovery
-            commands::start_discovery,
-            commands::get_discovered_devices,
-            commands::start_broadcast,
             // Pairing
             commands::generate_pairing_code,
             commands::get_current_pairing_code,
@@ -382,10 +377,6 @@ pub fn run() {
             let db = Arc::new(Mutex::new(db));
             app.manage(db.clone());
 
-            // Initialize discovery service
-            let discovery_service = Arc::new(DiscoveryService::new()?);
-            app.manage(discovery_service.clone());
-
             // Initialize pairing service
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
@@ -394,10 +385,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Discovery
-            commands::start_discovery,
-            commands::get_discovered_devices,
-            commands::start_broadcast,
             // Pairing
             commands::generate_pairing_code,
             commands::get_current_pairing_code,
