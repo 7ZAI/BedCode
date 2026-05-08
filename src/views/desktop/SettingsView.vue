@@ -64,6 +64,25 @@
           </div>
         </div>
 
+        <!-- QR Code Settings -->
+        <div class="bg-dark-800 rounded-lg border border-dark-700 p-6">
+          <h3 class="text-lg font-medium mb-4">QR 码设置</h3>
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-dark-200">有效期（秒）</span>
+              <p class="text-dark-500 text-sm mt-1">QR 码配对令牌的有效期（60-3600 秒）</p>
+            </div>
+            <input
+              v-model.number="qrTokenTtl"
+              type="number"
+              :min="60"
+              :max="3600"
+              class="w-24 bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white text-center focus:border-primary-500 outline-none"
+              @blur="saveQrTokenTtl"
+            />
+          </div>
+        </div>
+
         <!-- UI Settings -->
         <div class="bg-dark-800 rounded-lg border border-dark-700 p-6">
           <h3 class="text-lg font-medium mb-4">界面设置</h3>
@@ -129,10 +148,24 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useQrCodeApi } from '@/composables/useTauri'
 
 const settingsStore = useSettingsStore()
+const qrApi = useQrCodeApi()
+
+const qrTokenTtl = ref(300)
+
+async function loadQrTokenTtl() {
+  qrTokenTtl.value = await qrApi.getQrTokenTtl()
+}
+
+async function saveQrTokenTtl() {
+  const val = Math.max(60, Math.min(3600, qrTokenTtl.value))
+  qrTokenTtl.value = val
+  await qrApi.setQrTokenTtl(val)
+}
 
 function incrementFontSize() {
   if (settingsStore.settings.ui.terminal_font_size < 24) {
@@ -148,5 +181,6 @@ function decrementFontSize() {
 
 onMounted(async () => {
   await settingsStore.loadSettings()
+  await loadQrTokenTtl()
 })
 </script>
