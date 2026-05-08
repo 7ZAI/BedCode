@@ -40,12 +40,52 @@
         </div>
       </div>
 
+      <!-- QR Code Section -->
+      <div class="bg-dark-800 rounded-lg border border-dark-700 p-6 mb-6">
+        <h3 class="text-lg font-medium mb-4">QR 码连接</h3>
+
+        <div v-if="!qr.hasQr.value" class="text-center py-4">
+          <p class="text-dark-400 mb-4">扫描二维码快速连接移动设备</p>
+          <Button variant="secondary" @click="qr.generateQr()" :loading="qr.isLoading.value">
+            <template #icon>
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
+              </svg>
+            </template>
+            生成二维码
+          </Button>
+        </div>
+
+        <div v-else class="text-center py-4">
+          <p class="text-dark-300 mb-4">使用移动端 BedCode 扫描二维码</p>
+
+          <!-- QR Code Canvas -->
+          <div class="inline-block bg-white p-4 rounded-lg mb-4">
+            <canvas ref="qrCanvasRef" class="w-48 h-48"></canvas>
+          </div>
+
+          <p class="text-dark-500 text-sm mb-4">
+            二维码有效期
+            <span class="text-primary-400 font-medium">{{ qr.remainingSeconds.value }}</span> 秒
+          </p>
+
+          <div class="flex items-center justify-center gap-3">
+            <Button variant="ghost" size="sm" @click="qr.clearQr()">
+              取消
+            </Button>
+            <Button variant="ghost" size="sm" @click="qr.generateQr()" :loading="qr.isLoading.value">
+              刷新
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <!-- Network Info -->
       <div class="bg-dark-800 rounded-lg border border-dark-700 p-6 mb-6">
         <h3 class="text-lg font-medium mb-4">网络信息</h3>
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-dark-400">端口</span>
+            <span class="text-dark-400">WebSocket 端口</span>
             <span class="font-mono">8765</span>
           </div>
           <div class="flex flex-col gap-2">
@@ -58,28 +98,6 @@
                 <span v-if="ipv4Addresses.length === 0" class="text-dark-500 text-sm">无</span>
               </div>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-dark-400">IPv6 地址</span>
-              <div class="flex items-center gap-2 flex-wrap justify-end">
-                <span v-for="ip in ipv6Addresses" :key="ip" class="font-mono text-sm bg-dark-700 px-2 py-1 rounded">
-                  {{ ip }}
-                </span>
-                <span v-if="ipv6Addresses.length === 0" class="text-dark-500 text-sm">无</span>
-              </div>
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="text-dark-400">子网掩码</span>
-              <div class="flex items-center gap-2 flex-wrap justify-end">
-                <span v-for="mask in subnetMasks" :key="mask" class="font-mono text-sm bg-dark-700 px-2 py-1 rounded">
-                  {{ mask }}
-                </span>
-                <span v-if="subnetMasks.length === 0" class="text-dark-500 text-sm">无</span>
-              </div>
-            </div>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="text-dark-400">mDNS 发现</span>
-            <Toggle v-model="mDnsEnabled" @update:model-value="toggleMDns" />
           </div>
         </div>
       </div>
@@ -142,23 +160,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDeviceStore } from '@/stores/device'
-import { usePairing, useNetwork, useDiscovery } from '@/composables/useTauri'
+import { usePairing, useNetwork } from '@/composables/useTauri'
+import { useQrCode } from '@/composables/useQrCode'
+import { listen } from '@tauri-apps/api/event'
 import Button from '@/components/common/Button.vue'
-import Toggle from '@/components/common/Toggle.vue'
 import { useToast } from '@/composables/useToast'
+import QRCode from 'qrcode'
 
 const deviceStore = useDeviceStore()
 const pairing = usePairing()
 const network = useNetwork()
-const discovery = useDiscovery()
 const toast = useToast()
 
 const isLoading = ref(false)
 const pairingCode = ref<{ code: string; expiresIn: number } | null>(null)
 const remainingSeconds = ref(0)
-const mDnsEnabled = ref(true)
 
 const localAddresses = computed(() => network.localAddresses.value)
 
@@ -167,45 +185,79 @@ const ipv4Addresses = computed(() => {
   return localAddresses.value.filter(ip => ip.includes('.'))
 })
 
-const ipv6Addresses = computed(() => {
-  return localAddresses.value.filter(ip => ip.includes(':'))
-})
-
-// 子网掩码（根据 IPv4 地址推断常用掩码）
-const subnetMasks = computed(() => {
-  // 常见私有网络的子网掩码
-  const masks: string[] = []
-  ipv4Addresses.value.forEach(ip => {
-    if (ip.startsWith('192.168.')) {
-      if (!masks.includes('255.255.255.0')) masks.push('255.255.255.0')
-    } else if (ip.startsWith('10.')) {
-      if (!masks.includes('255.0.0.0')) masks.push('255.0.0.0')
-    } else if (ip.startsWith('172.')) {
-      const second = parseInt(ip.split('.')[1])
-      if (second >= 16 && second <= 31) {
-        if (!masks.includes('255.240.0.0')) masks.push('255.240.0.0')
-      }
-    }
-  })
-  return masks
-})
-
 let countdownInterval: ReturnType<typeof setInterval> | null = null
+let pairingCodeListener: (() => void) | null = null
+
+const qr = useQrCode()
+const qrCanvasRef = ref<HTMLCanvasElement | null>(null)
+
+// 当 QR 数据变化时渲染 Canvas
+watch(
+  () => qr.qrData.value,
+  async (data) => {
+    if (data && qrCanvasRef.value) {
+      const qrContent = JSON.stringify({
+        host: data.host,
+        port: data.port,
+        token: data.token,
+      })
+      await QRCode.toCanvas(qrCanvasRef.value, qrContent, {
+        width: 192,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff',
+        },
+      })
+    }
+  },
+  { immediate: false }
+)
 
 onMounted(async () => {
   await deviceStore.loadPairedDevices()
   await network.loadLocalAddresses()
 
-  // Start mDNS broadcast
-  if (mDnsEnabled.value) {
-    await discovery.startBroadcast('BedCode', 8765)
-  }
+  // 监听配对码自动生成事件
+  pairingCodeListener = await listen<{ code: string; expires_in: number; device_name?: string }>(
+    'pairing-code-generated',
+    (event) => {
+      console.log('Received pairing-code-generated event:', event.payload)
+      pairingCode.value = {
+        code: event.payload.code,
+        expiresIn: event.payload.expires_in,
+      }
+      remainingSeconds.value = event.payload.expires_in
+
+      // 开始倒计时
+      if (countdownInterval) {
+        clearInterval(countdownInterval)
+      }
+      countdownInterval = setInterval(() => {
+        if (remainingSeconds.value > 0) {
+          remainingSeconds.value--
+        } else {
+          pairingCode.value = null
+          if (countdownInterval) {
+            clearInterval(countdownInterval)
+            countdownInterval = null
+          }
+        }
+      }, 1000)
+
+      toast.info(`移动端请求配对，请输入配对码: ${event.payload.code}`)
+    }
+  )
 })
 
 onUnmounted(() => {
   if (countdownInterval) {
     clearInterval(countdownInterval)
   }
+  if (pairingCodeListener) {
+    pairingCodeListener()
+  }
+  qr.clearQr()
 })
 
 async function generateCode() {
@@ -262,15 +314,6 @@ async function removeDevice(deviceId: string) {
   if (confirm('确定要移除此设备吗？移除后需要重新配对。')) {
     await deviceStore.removeDevice(deviceId)
     toast.success('设备已移除')
-  }
-}
-
-async function toggleMDns(enabled: boolean) {
-  if (enabled) {
-    await discovery.startBroadcast('BedCode', 8765)
-    toast.success('mDNS 发现已启用')
-  } else {
-    toast.info('mDNS 发现已禁用')
   }
 }
 
