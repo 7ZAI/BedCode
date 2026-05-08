@@ -27,9 +27,6 @@ pub enum AppError {
     #[error("Authentication error: {0}")]
     Auth(String),
 
-    #[error("Discovery error: {0}")]
-    Discovery(String),
-
     #[error("Configuration error: {0}")]
     Config(String),
 
@@ -70,13 +67,6 @@ impl Serialize for AppError {
 impl From<tokio_tungstenite::tungstenite::Error> for AppError {
     fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
         AppError::WebSocket(e.to_string())
-    }
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-impl From<mdns_sd::Error> for AppError {
-    fn from(e: mdns_sd::Error) -> Self {
-        AppError::Discovery(e.to_string())
     }
 }
 

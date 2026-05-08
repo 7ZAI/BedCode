@@ -17,10 +17,6 @@ pub struct AppConfig {
 pub struct NetworkConfig {
     /// WebSocket server port
     pub port: u16,
-    /// mDNS service name
-    pub service_name: String,
-    /// Enable mDNS discovery
-    pub enable_discovery: bool,
     /// Heartbeat interval in seconds (client should send heartbeat)
     pub heartbeat_interval_secs: u64,
     /// Heartbeat timeout in seconds (server disconnects if no heartbeat)
@@ -31,8 +27,6 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             port: 8765,
-            service_name: "bedcode".to_string(),
-            enable_discovery: true,
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
         }

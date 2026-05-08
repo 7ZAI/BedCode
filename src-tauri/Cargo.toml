@@ -63,8 +63,6 @@ portable-pty = "0.8"
 # WebSocket server
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
-# mDNS discovery
-mdns-sd = "0.11"
 # Secure storage
 keyring = "3"
 

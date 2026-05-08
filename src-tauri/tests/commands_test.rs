@@ -170,8 +170,6 @@ mod utility_command_tests {
 
         // Network defaults
         assert_eq!(settings.network.port, 8765);
-        assert_eq!(settings.network.service_name, "bedcode");
-        assert!(settings.network.enable_discovery);
 
         // Session defaults
         assert_eq!(settings.session.default_environment, "windows");

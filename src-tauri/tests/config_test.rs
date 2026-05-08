@@ -9,8 +9,6 @@ fn test_default_network_config() {
     let config = NetworkConfig::default();
 
     assert_eq!(config.port, 8765);
-    assert_eq!(config.service_name, "bedcode");
-    assert!(config.enable_discovery);
     assert_eq!(config.heartbeat_interval_secs, 30);
     assert_eq!(config.heartbeat_timeout_secs, 90);
 }
@@ -65,8 +63,6 @@ fn test_config_save_and_load() {
     let config = AppConfig {
         network: NetworkConfig {
             port: 9999,
-            service_name: "test-service".to_string(),
-            enable_discovery: false,
             heartbeat_interval_secs: 20,
             heartbeat_timeout_secs: 60,
         },
@@ -95,8 +91,6 @@ fn test_config_save_and_load() {
     let loaded = AppConfig::load(&path).unwrap();
 
     assert_eq!(loaded.network.port, 9999);
-    assert_eq!(loaded.network.service_name, "test-service");
-    assert!(!loaded.network.enable_discovery);
 
     assert_eq!(loaded.session.default_environment, "wsl2");
     assert_eq!(loaded.session.default_wsl_distro, Some("Ubuntu".to_string()));
@@ -122,15 +116,11 @@ fn test_config_load_nonexistent_file() {
 fn test_network_config_custom() {
     let config = NetworkConfig {
         port: 8080,
-        service_name: "custom-service".to_string(),
-        enable_discovery: false,
         heartbeat_interval_secs: 15,
         heartbeat_timeout_secs: 45,
     };
 
     assert_eq!(config.port, 8080);
-    assert_eq!(config.service_name, "custom-service");
-    assert!(!config.enable_discovery);
     assert_eq!(config.heartbeat_interval_secs, 15);
     assert_eq!(config.heartbeat_timeout_secs, 45);
 }

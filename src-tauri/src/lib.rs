@@ -4,7 +4,6 @@ pub mod auth;
 pub mod commands;
 pub mod config;
 pub mod db;
-pub mod discovery;
 pub mod error;
 pub mod notify;
 pub mod parser;
