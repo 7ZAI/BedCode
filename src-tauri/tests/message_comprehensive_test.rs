@@ -218,6 +218,8 @@ mod control_action_comprehensive_tests {
             id: "s1".to_string(),
             name: "Test Session".to_string(),
             status: "running".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            started_at: None,
         };
 
         let json = serde_json::to_string(&summary).unwrap();
