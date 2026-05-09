@@ -11,6 +11,8 @@ pub struct Pairing {
     pub device_name: String,
     pub device_fingerprint: String,
     pub public_key: String,
+    pub address: Option<String>,
+    pub session_token: Option<String>,
     pub paired_at: DateTime<Utc>,
     pub last_seen: Option<DateTime<Utc>>,
     pub is_active: bool,

@@ -120,7 +120,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, type SessionConfig, type SessionInfo } from '@/stores/session'
 import Button from '@/components/common/Button.vue'
 import Modal from '@/components/common/Modal.vue'
@@ -164,6 +165,17 @@ onMounted(async () => {
   await sessionStore.loadConfigs()
   await sessionStore.loadSessions()
   isLoading.value = false
+
+  // 等待 DOM 更新完成，确保首页渲染完毕
+  await nextTick()
+
+  // 输出应用启动耗时（从 Rust 进程启动到首页渲染完成的总耗时）
+  try {
+    const elapsed = await invoke<number>('get_startup_time')
+    console.log(`[BedCode] 应用启动耗时: ${elapsed}ms (从进程启动到首页渲染完成)`)
+  } catch (e) {
+    // 非 Tauri 环境（如浏览器开发）忽略
+  }
 })
 
 async function startSession(configId: string) {

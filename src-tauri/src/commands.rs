@@ -507,6 +507,13 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// 获取自应用启动以来的耗时（毫秒）
+/// 用于前端计算从进程启动到页面渲染完成的总耗时
+#[tauri::command]
+pub fn get_startup_time(start_time: State<'_, crate::AppStartTime>) -> u64 {
+    start_time.0.elapsed().as_millis() as u64
+}
+
 /// 获取本地 IP 地址
 #[tauri::command]
 pub fn get_local_ip_addresses() -> Vec<String> {

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite optimize && vite",
     "build": "vue-tsc --noEmit && vite build",
     "build:fast": "vite build",
     "preview": "vite preview",
@@ -24,6 +24,7 @@
     "tauri:android:init": "tauri android init",
     "tauri:android:build": "tauri android build --target aarch64",
     "tauri:android:build:fast": "tauri android build --target aarch64 --debug",
+    "tauri:android:build:emulator": "tauri android build --target x86_64 --debug",
     "tauri:android:build:all": "tauri android build",
     "target:size": "node scripts/check-target-size.js",
     "target:clean": "cd src-tauri && cargo clean",
