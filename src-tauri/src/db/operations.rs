@@ -37,22 +37,52 @@ fn parse_message_row(row: &rusqlite::Row) -> std::result::Result<Message, rusqli
 impl Database {
     // ==================== Pairing Operations ====================
 
-    pub fn add_pairing(&self, device_name: &str, fingerprint: &str, public_key: &str) -> Result<String> {
+    pub fn add_pairing(&self, device_name: &str, fingerprint: &str, public_key: &str, address: Option<&str>) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
         self.conn().execute(
-            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, paired_at, is_active)
-             VALUES (?1, ?2, ?3, ?4, ?5, 1)",
-            rusqlite::params![id, device_name, fingerprint, public_key, now],
+            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, paired_at, is_active)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+             ON CONFLICT(device_fingerprint) DO UPDATE SET
+                device_name = excluded.device_name,
+                public_key = excluded.public_key,
+                address = excluded.address,
+                paired_at = excluded.paired_at,
+                is_active = 1",
+            rusqlite::params![id, device_name, fingerprint, public_key, address, now],
         )?;
 
-        Ok(id)
+        // Return the existing id on conflict
+        let existing_id: String = self.conn().query_row(
+            "SELECT id FROM pairings WHERE device_fingerprint = ?1",
+            rusqlite::params![fingerprint],
+            |row| row.get(0),
+        ).unwrap_or(id);
+
+        Ok(existing_id)
+    }
+
+    pub fn update_pairing_token(&self, pairing_id: &str, token: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE pairings SET session_token = ?1 WHERE id = ?2",
+            rusqlite::params![token, pairing_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn verify_session_token(&self, device_fingerprint: &str, token: &str) -> Result<bool> {
+        let count: i32 = self.conn().query_row(
+            "SELECT COUNT(*) FROM pairings WHERE device_fingerprint = ?1 AND session_token = ?2 AND is_active = 1",
+            rusqlite::params![device_fingerprint, token],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     pub fn get_pairings(&self) -> Result<Vec<Pairing>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, device_name, device_fingerprint, public_key, paired_at, last_seen, is_active
+            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, paired_at, last_seen, is_active
              FROM pairings WHERE is_active = 1 ORDER BY paired_at DESC"
         )?;
 
@@ -62,9 +92,11 @@ impl Database {
                 device_name: row.get(1)?,
                 device_fingerprint: row.get(2)?,
                 public_key: row.get(3)?,
-                paired_at: parse_datetime_sql(&row.get::<_, String>(4)?, "paired_at")?,
-                last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(5)?, "last_seen")?,
-                is_active: row.get::<_, i32>(6)? == 1,
+                address: row.get(4)?,
+                session_token: row.get(5)?,
+                paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
+                last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
+                is_active: row.get::<_, i32>(8)? == 1,
             })
         })?.collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -413,6 +445,34 @@ impl Database {
             }
         };
         Ok(rows_deleted)
+    }
+
+    /// Get messages across all sessions (for history view)
+    pub fn get_all_messages(&self, limit: Option<usize>, before: Option<DateTime<Utc>>) -> Result<Vec<Message>> {
+        let sql = match before.is_some() {
+            true => "SELECT id, session_id, history_id, message_type, content, timestamp, metadata
+                     FROM messages WHERE timestamp < ?1 ORDER BY timestamp DESC LIMIT ?2",
+            false => "SELECT id, session_id, history_id, message_type, content, timestamp, metadata
+                      FROM messages ORDER BY timestamp DESC LIMIT ?1",
+        };
+
+        let mut stmt = self.conn().prepare(sql)?;
+
+        let limit_value = limit.unwrap_or(200) as i32;
+
+        let messages = match before {
+            Some(dt) => {
+                stmt.query_map(rusqlite::params![dt.to_rfc3339(), limit_value], parse_message_row)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+            None => {
+                stmt.query_map(rusqlite::params![limit_value], parse_message_row)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+        };
+
+        // Reverse to chronological order
+        Ok(messages.into_iter().rev().collect())
     }
 
     // ==================== Settings ====================
