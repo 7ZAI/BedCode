@@ -5,6 +5,8 @@ export interface RemoteSession {
   id: string
   name: string
   status: 'running' | 'waiting_input' | 'stopped'
+  createdAt: string
+  startedAt?: string
 }
 
 export interface SessionSummary {
@@ -67,9 +69,14 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     const payload = message.payload
     if (!payload?.data) return
 
-    // Base64 解码
+    // Base64 解码（使用 TextDecoder 支持 UTF-8 多字节字符）
     try {
-      const data = atob(payload.data)
+      const binary = atob(payload.data)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      const data = new TextDecoder('utf-8').decode(bytes)
       const lines = data.split('\n')
 
       outputBuffer.value.push(...lines)
@@ -91,10 +98,12 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     if (!action) return
 
     if (action.type === 'session_list') {
-      sessions.value = action.sessions.map((s: SessionSummary) => ({
+      sessions.value = action.sessions.map((s: any) => ({
         id: s.id,
         name: s.name,
         status: mapSessionStatus(s.status),
+        createdAt: s.created_at,
+        startedAt: s.started_at || undefined,
       }))
     }
   }
@@ -143,10 +152,12 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
       })
 
       if (response.payload?.action?.type === 'session_list') {
-        sessions.value = response.payload.action.sessions.map((s: SessionSummary) => ({
+        sessions.value = response.payload.action.sessions.map((s: any) => ({
           id: s.id,
           name: s.name,
           status: mapSessionStatus(s.status),
+          createdAt: s.created_at,
+          startedAt: s.started_at || undefined,
         }))
       }
     } catch (e) {
@@ -279,14 +290,14 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     }
   }
 
-  /** 发送输入 */
+  /** 发送输入（自动追加换行，与桌面端行为一致） */
   function sendInput(data: string): void {
     if (!currentSessionId.value || !connection.isConnected.value) {
       return
     }
 
     connection.sendMessage('input', {
-      data,
+      data: data + '\n',
       special_key: null,
     }, currentSessionId.value)
   }
