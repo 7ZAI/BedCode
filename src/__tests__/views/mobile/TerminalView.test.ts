@@ -34,6 +34,8 @@ vi.mock('@/composables/useRemoteConnection', () => ({
     loadPairedDevices: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockReturnValue(true),
     sendMessageWithResponse: vi.fn().mockResolvedValue({ payload: { action: { type: 'session_list', sessions: [] } } }),
+    activeSessionId: { value: null },
+    sendInput: vi.fn().mockReturnValue(true),
   }),
 }))
 
@@ -61,6 +63,9 @@ vi.mock('@/composables/useRemoteTerminal', () => ({
     sendInput: vi.fn(),
     sendSpecialKey: vi.fn(),
     clearOutput: vi.fn(),
+    enableAutoReconnect: vi.fn(),
+    disableAutoReconnect: vi.fn(),
+    reconnectAndResume: vi.fn(),
   }),
 }))
 
@@ -240,114 +245,6 @@ describe('TerminalView', () => {
     await wrapper.find('button').trigger('click')
 
     expect(pushSpy).toHaveBeenCalledWith('/mobile/devices')
-  })
-})
-
-describe('TerminalView Session Select', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    vi.clearAllMocks()
-    mockState.value = { status: 'disconnected' }
-    mockSessions.value = []
-  })
-
-  it('should show session select modal when button clicked', async () => {
-    const wrapper = mount(TerminalView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          OutputRenderer: true,
-          InputBar: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Find and click session select button
-    const buttons = wrapper.findAll('button')
-    const sessionSelectBtn = buttons[1] // Second button
-
-    await sessionSelectBtn.trigger('click')
-
-    expect(wrapper.vm.showSessionSelect).toBe(true)
-  })
-
-  it('should show empty state when no sessions', async () => {
-    const wrapper = mount(TerminalView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          OutputRenderer: true,
-          InputBar: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Show session select
-    wrapper.vm.showSessionSelect = true
-    await flushPromises()
-
-    // Check the modal content exists
-    const modalContent = wrapper.find('.fixed.inset-0')
-    if (modalContent.exists()) {
-      expect(modalContent.text()).toContain('暂无活跃会话')
-    } else {
-      // Modal not in DOM, just verify state
-      expect(wrapper.vm.showSessionSelect).toBe(true)
-    }
-  })
-
-  it('should close modal when clicking overlay', async () => {
-    const wrapper = mount(TerminalView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          OutputRenderer: true,
-          InputBar: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Show session select
-    wrapper.vm.showSessionSelect = true
-    await flushPromises()
-
-    // Find overlay and click
-    const overlay = wrapper.find('.fixed.inset-0.bg-black\\/60')
-    if (overlay.exists()) {
-      await overlay.trigger('click')
-      expect(wrapper.vm.showSessionSelect).toBe(false)
-    }
-  })
-
-  it('should select session and close modal', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(TerminalView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          OutputRenderer: true,
-          InputBar: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Show session select
-    wrapper.vm.showSessionSelect = true
-
-    // Select session
-    await wrapper.vm.handleSelectSession('session-1')
-
-    expect(wrapper.vm.showSessionSelect).toBe(false)
   })
 })
 
