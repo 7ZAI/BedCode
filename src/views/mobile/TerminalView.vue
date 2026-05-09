@@ -21,7 +21,6 @@
       </div>
       <button
         class="p-2 rounded-lg bg-dark-700 text-dark-300"
-        @click="showSessionSelect = true"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
@@ -48,36 +47,9 @@
       @special-key="handleSendSpecialKey"
     />
 
-    <!-- Session Select Modal -->
-    <Teleport to="body">
-      <Transition name="fade">
-        <div v-if="showSessionSelect" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/60" @click="showSessionSelect = false"></div>
-          <div class="relative w-full max-w-sm bg-dark-800 rounded-2xl p-4 max-h-[70vh] overflow-auto">
-            <h3 class="font-semibold mb-3">选择会话</h3>
+    <!-- 键盘避让区域：键盘弹出时增加底部间距，防止输入框被遮挡 -->
+    <div :style="{ height: keyboardHeight + 'px' }" class="shrink-0 transition-[height] duration-200" />
 
-            <div v-if="terminal.sessions.value.length === 0" class="text-center py-8">
-              <p class="text-dark-500 text-sm">暂无活跃会话</p>
-            </div>
-
-            <div v-else class="space-y-2">
-              <button
-                v-for="session in terminal.sessions.value"
-                :key="session.id"
-                :class="[
-                  'w-full p-3 rounded-lg text-left',
-                  terminal.currentSessionId.value === session.id ? 'bg-primary-900 text-primary-300' : 'bg-dark-700'
-                ]"
-                @click="handleSelectSession(session.id)"
-              >
-                <p class="font-medium">{{ session.name }}</p>
-                <p class="text-dark-400 text-sm">{{ session.status }}</p>
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </div>
 </template>
 
@@ -87,11 +59,14 @@ import { useRouter, useRoute } from 'vue-router'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
 import { useOutputParser } from '@/composables/useOutputParser'
+import { useKeyboardAvoidance } from '@/composables/useKeyboardAvoidance'
 import OutputRenderer from '@/components/mobile/OutputRenderer.vue'
 import InputBar from '@/components/mobile/InputBar.vue'
 
 const router = useRouter()
 const route = useRoute()
+
+const { keyboardHeight } = useKeyboardAvoidance()
 
 const connection = useRemoteConnection()
 const terminal = useRemoteTerminal({
@@ -112,7 +87,6 @@ const {
 
 const inputBarRef = ref<InstanceType<typeof InputBar> | null>(null)
 const autoScroll = ref(true)
-const showSessionSelect = ref(false)
 
 const deviceName = computed(() => connection.currentDevice.value?.name || 'Claude Code')
 
@@ -133,6 +107,7 @@ watch(() => terminal.isWaitingInput.value, (waiting) => {
 
 onMounted(async () => {
   const deviceId = route.params.deviceId as string
+  const sessionId = route.query.sessionId as string | undefined
 
   // 启用自动重连恢复
   terminal.enableAutoReconnect()
@@ -153,11 +128,14 @@ onMounted(async () => {
   // 加载远程会话
   await terminal.loadSessions()
 
-  // 如果有会话，自动选择第一个
-  if (terminal.sessions.value.length > 0) {
+  if (sessionId) {
+    // 通过查询参数直接加入指定会话
+    await terminal.joinSession(sessionId)
+    connection.activeSessionId.value = terminal.currentSessionId.value
+  } else if (terminal.sessions.value.length > 0) {
+    // 未指定会话时，自动选择第一个
     await terminal.joinSession(terminal.sessions.value[0].id)
-  } else {
-    showSessionSelect.value = true
+    connection.activeSessionId.value = terminal.currentSessionId.value
   }
 })
 
@@ -165,6 +143,8 @@ onUnmounted(async () => {
   // 禁用自动重连并离开会话
   terminal.disableAutoReconnect()
   await terminal.leaveSession()
+  // 清除活跃会话 ID，通知其他视图连接仍存在但会话已离开
+  connection.activeSessionId.value = null
 })
 
 function goBack() {
@@ -183,7 +163,8 @@ function handleSendSpecialKey(key: string) {
 
 async function handleSelectSession(sessionId: string) {
   await terminal.joinSession(sessionId)
-  showSessionSelect.value = false
+  // 同步活跃会话 ID
+  connection.activeSessionId.value = terminal.currentSessionId.value
   clearOutput()
 }
 </script>
