@@ -163,6 +163,8 @@ function handleSessionClick(session: RemoteSession) {
   const deviceId = connection.currentDevice.value?.id
   if (!deviceId) return
 
+  connection.activeSessionId.value = session.id
+
   router.push({
     name: 'mobile-terminal',
     params: { id: deviceId },
