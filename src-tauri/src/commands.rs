@@ -6,6 +6,7 @@ use crate::auth::{PairingCode, PairingService};
 use crate::config::AppConfig;
 use crate::db::{Database, QuickAction, SessionConfig};
 use crate::Result;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -376,6 +377,85 @@ pub async fn create_quick_action(
     let db = db.lock().await;
     db.create_quick_action(&action)?;
     Ok(action)
+}
+
+/// 更新快捷指令
+#[tauri::command]
+pub async fn update_quick_action(
+    db: State<'_, Arc<Mutex<Database>>>,
+    id: String,
+    name: String,
+    content: String,
+    icon: Option<String>,
+    color: Option<String>,
+) -> Result<QuickAction> {
+    let db = db.lock().await;
+    let mut action = db.get_quick_actions()?
+        .into_iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| crate::AppError::NotFound(format!("Quick action not found: {}", id)))?;
+
+    action.name = name;
+    action.content = content;
+    action.icon = icon;
+    action.color = color;
+
+    db.update_quick_action(&action)?;
+    Ok(action)
+}
+
+/// 删除快捷指令
+#[tauri::command]
+pub async fn delete_quick_action(
+    db: State<'_, Arc<Mutex<Database>>>,
+    id: String,
+) -> Result<()> {
+    let db = db.lock().await;
+    db.delete_quick_action(&id)
+}
+
+/// 获取终端历史消息（跨所有会话）
+#[tauri::command]
+pub async fn get_terminal_history(
+    db: State<'_, Arc<Mutex<Database>>>,
+    limit: Option<usize>,
+    before: Option<String>,
+) -> Result<Vec<crate::db::Message>> {
+    let db = db.lock().await;
+    let before_dt = before
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+    db.get_all_messages(limit, before_dt)
+}
+
+/// 搜索终端历史消息
+#[tauri::command]
+pub async fn search_terminal_history(
+    db: State<'_, Arc<Mutex<Database>>>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::db::Message>> {
+    let db = db.lock().await;
+    db.search_messages(&query, limit)
+}
+
+/// 获取所有数据库设置
+#[tauri::command]
+pub async fn get_all_db_settings(
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<crate::db::Setting>> {
+    let db = db.lock().await;
+    db.get_all_settings()
+}
+
+/// 设置数据库配置项
+#[tauri::command]
+pub async fn set_db_setting(
+    db: State<'_, Arc<Mutex<Database>>>,
+    key: String,
+    value: String,
+) -> Result<()> {
+    let db = db.lock().await;
+    db.set_setting(&key, &value)
 }
 
 // ==================== Settings Commands ====================
