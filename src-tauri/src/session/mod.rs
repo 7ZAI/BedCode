@@ -35,6 +35,20 @@ impl Default for SessionStatus {
     }
 }
 
+/// 会话类型（PTY 或 Plugin）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionType {
+    Pty,
+    Plugin,
+}
+
+impl Default for SessionType {
+    fn default() -> Self {
+        Self::Pty
+    }
+}
+
 /// 运行时 会话信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +60,7 @@ pub struct SessionInfo {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub stopped_at: Option<DateTime<Utc>>,
+    pub session_type: SessionType,
 }
 
 impl SessionInfo {
@@ -58,6 +73,20 @@ impl SessionInfo {
             created_at: Utc::now(),
             started_at: None,
             stopped_at: None,
+            session_type: SessionType::Pty,
+        }
+    }
+
+    pub fn new_plugin(project_name: &str, _project_path: &str) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            config_id: String::new(),
+            name: project_name.to_string(),
+            status: SessionStatus::Starting,
+            created_at: Utc::now(),
+            started_at: None,
+            stopped_at: None,
+            session_type: SessionType::Plugin,
         }
     }
 }
@@ -177,6 +206,7 @@ impl SessionManager {
             created_at: Utc::now(),
             started_at: Some(Utc::now()),
             stopped_at: None,
+            session_type: SessionType::Pty,
         };
 
         // 保存到内存
@@ -409,5 +439,70 @@ impl Default for SessionManager {
 impl Drop for SessionManager {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_info_default_new() {
+        let info = SessionInfo::new("config-123", "Test Session");
+        assert_eq!(info.session_type, SessionType::Pty);
+        assert_eq!(info.config_id, "config-123");
+        assert_eq!(info.name, "Test Session");
+        assert!(info.id.len() > 0);
+    }
+
+    #[test]
+    fn test_session_info_new_plugin() {
+        let info = SessionInfo::new_plugin("My Project", "/path/to/project");
+        assert_eq!(info.session_type, SessionType::Plugin);
+        assert_eq!(info.config_id, "");
+        assert_eq!(info.name, "My Project");
+        assert!(info.id.len() > 0);
+    }
+
+    #[test]
+    fn test_session_type_default() {
+        let session_type: SessionType = Default::default();
+        assert_eq!(session_type, SessionType::Pty);
+    }
+
+    #[test]
+    fn test_session_type_serialization() {
+        // 测试 PTY 序列化
+        let pty = SessionType::Pty;
+        let json = serde_json::to_string(&pty).unwrap();
+        assert_eq!(json, r#""pty""#);
+
+        // 测试 Plugin 序列化
+        let plugin = SessionType::Plugin;
+        let json = serde_json::to_string(&plugin).unwrap();
+        assert_eq!(json, r#""plugin""#);
+    }
+
+    #[test]
+    fn test_session_type_deserialization() {
+        // 测试 PTY 反序列化
+        let pty: SessionType = serde_json::from_str(r#""pty""#).unwrap();
+        assert_eq!(pty, SessionType::Pty);
+
+        // 测试 Plugin 反序列化
+        let plugin: SessionType = serde_json::from_str(r#""plugin""#).unwrap();
+        assert_eq!(plugin, SessionType::Plugin);
+
+        // 测试 camelCase 反序列化（前端传来的格式）
+        let camel: SessionType = serde_json::from_str(r#""plugin""#).unwrap();
+        assert_eq!(camel, SessionType::Plugin);
+    }
+
+    #[test]
+    fn test_session_info_serialization() {
+        let info = SessionInfo::new("test-config", "Test Session");
+        let json = serde_json::to_string(&info).unwrap();
+        // 验证 session_type 在 JSON 中
+        assert!(json.contains(r#""sessionType":""#));
     }
 }
