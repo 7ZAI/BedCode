@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3 flex items-center gap-3">
+    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3 flex items-center gap-3 shrink-0" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
       <button @click="goBack" class="p-2 -ml-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
@@ -21,34 +21,39 @@
       </div>
       <button
         class="p-2 rounded-lg bg-dark-700 text-dark-300"
+        @click="handleClear"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
       </button>
     </header>
 
-    <!-- Terminal Output -->
-    <div class="flex-1 overflow-hidden">
-      <OutputRenderer
-        :raw-output="rawOutput"
-        :auto-scroll="autoScroll"
+    <!-- Terminal Output (动态高度适配键盘) -->
+    <div
+      class="flex-1 overflow-hidden"
+      :style="{ height: terminalHeight + 'px' }"
+    >
+      <MobileTerminal
+        ref="terminalRef"
+        :output="terminal.outputBuffer.value"
+        @ready="onTerminalReady"
+        @clear="onTerminalClear"
       />
     </div>
 
-    <!-- Input Bar -->
+    <!-- Input Bar - 键盘弹出时使用 padding-bottom 适配 -->
     <InputBar
       ref="inputBarRef"
       :is-connected="connection.isConnected.value"
       :show-status="true"
+      :keyboard-height="keyboardHeight"
       placeholder="输入消息..."
       @submit="handleSendInput"
       @special-key="handleSendSpecialKey"
+      @focus="onInputFocus"
+      @blur="onInputBlur"
     />
-
-    <!-- 键盘避让区域：键盘弹出时增加底部间距，防止输入框被遮挡 -->
-    <div :style="{ height: keyboardHeight + 'px' }" class="shrink-0 transition-[height] duration-200" />
-
   </div>
 </template>
 
@@ -58,13 +63,19 @@ import { useRouter, useRoute } from 'vue-router'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
 import { useKeyboardAvoidance } from '@/composables/useKeyboardAvoidance'
-import OutputRenderer from '@/components/mobile/OutputRenderer.vue'
+import MobileTerminal from '@/components/mobile/MobileTerminal.vue'
 import InputBar from '@/components/mobile/InputBar.vue'
 
 const router = useRouter()
 const route = useRoute()
 
 const { keyboardHeight } = useKeyboardAvoidance()
+
+// 终端区域动态高度
+const terminalHeight = computed(() => {
+  // 当键盘弹出时，减少终端高度；键盘收起时恢复
+  return `calc(100% - ${keyboardHeight.value}px - 72px)` // 72px 是 InputBar 的高度
+})
 
 const connection = useRemoteConnection()
 const terminal = useRemoteTerminal({
@@ -76,23 +87,10 @@ const terminal = useRemoteTerminal({
   setReconnectCallback: connection.setReconnectCallback,
 })
 
-const rawOutput = ref('')
+const terminalRef = ref<InstanceType<typeof MobileTerminal> | null>(null)
 const inputBarRef = ref<InstanceType<typeof InputBar> | null>(null)
-const autoScroll = ref(true)
 
 const deviceName = computed(() => connection.currentDevice.value?.name || 'Claude Code')
-
-// 监听输出缓冲区，追加显示
-watch(() => terminal.outputBuffer.value, (buffer) => {
-  const output = buffer.join('\n')
-  if (output) {
-    rawOutput.value += output
-    // 限制大小，防止内存溢出
-    if (rawOutput.value.length > 100000) {
-      rawOutput.value = rawOutput.value.slice(-80000)
-    }
-  }
-}, { deep: true })
 
 // 监听等待输入状态
 watch(() => terminal.isWaitingInput.value, (waiting) => {
@@ -100,6 +98,34 @@ watch(() => terminal.isWaitingInput.value, (waiting) => {
     inputBarRef.value?.focus()
   }
 })
+
+// 输入框获得焦点时，确保终端能正确滚动
+function onInputFocus() {
+  // 短暂延迟后滚动到底部，确保键盘已弹出
+  setTimeout(() => {
+    terminalRef.value?.scrollToBottom()
+  }, 300)
+}
+
+// 输入框失去焦点时，收起键盘
+function onInputBlur() {
+  // 失去焦点时键盘会自动收起，这里可以做一些清理
+}
+
+// Terminal ready handler
+function onTerminalReady() {
+  console.log('Mobile terminal ready')
+}
+
+// Terminal clear handler
+function onTerminalClear() {
+  terminal.clearOutput()
+}
+
+// 清空终端
+function handleClear() {
+  terminalRef.value?.clear()
+}
 
 onMounted(async () => {
   const deviceId = route.params.deviceId as string
@@ -149,8 +175,7 @@ function goBack() {
 
 function handleSendInput(text: string) {
   terminal.sendInput(text)
-  // 在终端回显用户输入
-  rawOutput.value += `\n> ${text}\n`
+  // 无需手动回显，xterm.js 会通过 PTY echo 自动显示输入
 }
 
 function handleSendSpecialKey(key: string) {
@@ -161,7 +186,6 @@ async function handleSelectSession(sessionId: string) {
   await terminal.joinSession(sessionId)
   // 同步活跃会话 ID
   connection.activeSessionId.value = terminal.currentSessionId.value
-  rawOutput.value = ''
 }
 </script>
 

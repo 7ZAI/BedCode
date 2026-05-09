@@ -63,12 +63,21 @@
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-dark-400 text-sm font-medium">会话配置</h3>
           <button
-            class="text-dark-500 text-xs"
+            class="p-2 rounded-lg active:bg-dark-700 transition-colors"
             :class="{ 'opacity-50': isRefreshing }"
             :disabled="isRefreshing"
             @click="refreshConfigs"
+            title="刷新配置"
           >
-            {{ isRefreshing ? '刷新中...' : '刷新' }}
+            <svg
+              class="w-5 h-5 text-dark-400"
+              :class="{ 'animate-spin': isRefreshing }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
           </button>
         </div>
 
@@ -93,10 +102,9 @@
             v-for="config in sessionConfigs"
             :key="config.id"
             class="bg-dark-800 rounded-xl p-4 active:bg-dark-700 transition-colors"
-            @click="handleStartSession(config)"
           >
             <div class="flex items-start justify-between">
-              <div class="flex-1 min-w-0">
+              <div class="flex-1 min-w-0" @click="goToSessions">
                 <p class="font-medium">{{ config.name }}</p>
                 <div class="flex items-center gap-2 mt-1.5">
                   <span
@@ -112,15 +120,22 @@
                 <p class="text-dark-400 text-sm mt-1 truncate">{{ config.command }}</p>
                 <p class="text-dark-500 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
               </div>
-              <div class="flex items-center ml-3">
+              <button
+                class="ml-3 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg active:bg-primary-700 flex items-center gap-1.5 shrink-0"
+                :class="{ 'opacity-50': startingConfigId === config.id }"
+                :disabled="startingConfigId === config.id"
+                @click.stop="handleStartSession(config)"
+              >
                 <div
                   v-if="startingConfigId === config.id"
-                  class="w-5 h-5 border-2 border-primary-400 border-t-transparent rounded-full animate-spin"
+                  class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
                 />
-                <svg v-else class="w-5 h-5 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-              </div>
+                启动
+              </button>
             </div>
           </div>
         </div>
@@ -506,5 +521,9 @@ async function handlePairingSubmit(code: string) {
 function handleDisconnect() {
   connection.disconnect()
   sessionConfigs.value = []
+}
+
+function goToSessions() {
+  router.push({ name: 'mobile-sessions' })
 }
 </script>

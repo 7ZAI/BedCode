@@ -86,17 +86,6 @@
               <option value="large">大</option>
             </select>
           </div>
-
-          <div class="flex items-center justify-between">
-            <span>终端输出模式</span>
-            <select
-              v-model="settings.defaultOutputMode"
-              class="bg-dark-700 border border-dark-600 rounded-lg px-3 py-1 text-sm"
-            >
-              <option value="enhanced">增强</option>
-              <option value="raw">原始</option>
-            </select>
-          </div>
         </div>
       </div>
 
@@ -151,14 +140,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
+import { useSettingsStore } from '@/stores/settings'
 import Toggle from '@/components/common/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
 
 const connection = useRemoteConnection()
+const settingsStore = useSettingsStore()
 
-interface Settings {
+// 移动端本地设置（用于 UI 控制）
+interface MobileSettings {
   autoReconnect: boolean
   keepAlive: boolean
   reconnectInterval: number
@@ -167,10 +159,9 @@ interface Settings {
   vibrate: boolean
   darkMode: boolean
   fontSize: 'small' | 'medium' | 'large'
-  defaultOutputMode: 'enhanced' | 'raw'
 }
 
-const defaultSettings: Settings = {
+const defaultMobileSettings: MobileSettings = {
   autoReconnect: true,
   keepAlive: true,
   reconnectInterval: 5,
@@ -178,25 +169,34 @@ const defaultSettings: Settings = {
   notifyOnConnection: true,
   vibrate: true,
   darkMode: true,
-  fontSize: 'medium',
-  defaultOutputMode: 'enhanced'
+  fontSize: 'medium'
 }
 
-const settings = ref<Settings>({ ...defaultSettings })
+const settings = ref<MobileSettings>({ ...defaultMobileSettings })
+
+// 字体大小映射
+const fontSizeMap = {
+  small: 12,
+  medium: 14,
+  large: 16
+}
 
 onMounted(async () => {
-  // Load from localStorage first (fast path)
+  // 加载已保存的设置
   const saved = localStorage.getItem('mobile-settings')
   if (saved) {
     try {
       const parsed = JSON.parse(saved)
-      settings.value = { ...defaultSettings, ...parsed }
+      settings.value = { ...defaultMobileSettings, ...parsed }
     } catch (e) {
       console.error('Failed to load settings:', e)
     }
   }
 
-  // Then try to load from backend DB
+  // 同步到 settingsStore（使设置生效）
+  syncToSettingsStore()
+
+  // 尝试从后端加载
   try {
     const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
     for (const s of dbSettings) {
@@ -207,14 +207,30 @@ onMounted(async () => {
       }
     }
   } catch {
-    // Backend may not be available at this point
+    // Backend may not be available
   }
 })
 
+// 将移动端设置���步到全局 settingsStore
+function syncToSettingsStore() {
+  // 字体大小映射到终端字体大小
+  const terminalFontSize = fontSizeMap[settings.value.fontSize]
+  settingsStore.saveSettings({
+    ui: {
+      ...settingsStore.settings.ui,
+      terminal_font_size: terminalFontSize
+    }
+  })
+}
+
 function saveSettings() {
+  // 保存到本地存储
   localStorage.setItem('mobile-settings', JSON.stringify(settings.value))
 
-  // Also save to backend DB
+  // 同步到全局 settingsStore（使设置生效）
+  syncToSettingsStore()
+
+  // 同时保存到后端数据库
   for (const [key, value] of Object.entries(settings.value)) {
     invoke('set_db_setting', {
       key: `mobile.${key}`,
@@ -224,7 +240,7 @@ function saveSettings() {
 }
 
 function resetSettings() {
-  settings.value = { ...defaultSettings }
+  settings.value = { ...defaultMobileSettings }
   saveSettings()
 }
 
@@ -246,6 +262,5 @@ function checkUpdate() {
 }
 
 // Auto-save settings
-import { watch } from 'vue'
 watch(settings, saveSettings, { deep: true })
 </script>

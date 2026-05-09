@@ -6,12 +6,21 @@
         <h1 class="text-lg font-semibold">会话</h1>
         <button
           v-if="connection.isConnected.value"
-          class="text-dark-500 text-xs"
+          class="p-2 rounded-lg active:bg-dark-700 transition-colors"
           :class="{ 'opacity-50': isLoading }"
           :disabled="isLoading"
           @click="refreshSessions"
+          title="刷新会话"
         >
-          {{ isLoading ? '刷新中...' : '刷新' }}
+          <svg
+            class="w-5 h-5 text-dark-400"
+            :class="{ 'animate-spin': isLoading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
         </button>
       </div>
     </header>

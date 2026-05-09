@@ -1,5 +1,9 @@
 <template>
-  <div class="input-bar bg-dark-800 border-t border-dark-700 p-3">
+  <div
+    class="input-bar bg-dark-800 border-t border-dark-700 p-3"
+    :class="{ 'pb-safe': isKeyboardOpen }"
+    :style="containerStyle"
+  >
     <!-- Main input row -->
     <div class="flex items-center gap-2">
       <!-- Input field -->
@@ -13,6 +17,7 @@
           class="w-full bg-dark-700 border border-dark-600 rounded-xl px-4 py-2.5 pr-10 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 disabled:opacity-50"
           @keyup.enter="submitText"
           @focus="handleFocus"
+          @blur="handleBlur"
         />
         <!-- Send button -->
         <button
@@ -68,32 +73,45 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useKeyboardAvoidance } from '@/composables/useKeyboardAvoidance'
+import { ref, computed } from 'vue'
 
-defineProps<{
+const props = defineProps<{
   disabled?: boolean
   placeholder?: string
   isConnected?: boolean
   showStatus?: boolean
+  keyboardHeight?: number
 }>()
 
 const emit = defineEmits<{
   submit: [text: string]
   specialKey: [key: string]
+  focus: []
+  blur: []
 }>()
-
-const { scrollElementIntoView } = useKeyboardAvoidance()
 
 const inputText = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
 const showSpecialKeys = ref(false)
+const isKeyboardOpen = computed(() => (props.keyboardHeight || 0) > 0)
+
+// 容器样式：键盘弹出时使用 padding-bottom 避免被遮挡
+const containerStyle = computed(() => {
+  const height = props.keyboardHeight || 0
+  return {
+    paddingBottom: height > 0 ? `${height + 12}px` : undefined,
+    transition: 'padding-bottom 200ms ease-out'
+  }
+})
 
 function handleFocus() {
+  // 隐藏特殊键面板，腾出空间
   showSpecialKeys.value = false
-  if (inputRef.value) {
-    scrollElementIntoView(inputRef.value)
-  }
+  emit('focus')
+}
+
+function handleBlur() {
+  emit('blur')
 }
 
 const specialKeys = [
@@ -110,6 +128,10 @@ function submitText() {
   if (inputText.value.trim()) {
     emit('submit', inputText.value)
     inputText.value = ''
+    // 发送后保持焦点在输入框，方便连续输入
+    setTimeout(() => {
+      inputRef.value?.focus()
+    }, 50)
   }
 }
 

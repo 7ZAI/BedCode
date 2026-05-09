@@ -194,12 +194,30 @@ export function useSessionConfig() {
 export function useSession() {
   const sessions = ref<SessionInfo[]>([])
   const outputs = ref<Map<string, string[]>>(new Map())
+  let unlistenSessionChanged: (() => void) | null = null
 
   async function loadSessions() {
     try {
       sessions.value = await invoke('list_sessions')
     } catch (e) {
       console.error('Failed to load sessions:', e)
+    }
+  }
+
+  // 监听会话变更事件
+  async function setupSessionChangedListener() {
+    unlistenSessionChanged = await listen<{ change_type: string; session: any }>('session-changed', async (event) => {
+      console.log('Session changed:', event.payload)
+      // 刷新会话列表
+      await loadSessions()
+    })
+  }
+
+  // 清理监听器
+  function cleanupSessionChangedListener() {
+    if (unlistenSessionChanged) {
+      unlistenSessionChanged()
+      unlistenSessionChanged = null
     }
   }
 
@@ -226,6 +244,9 @@ export function useSession() {
     await invoke('resize_session', { sessionId, cols, rows })
   }
 
+  // 初始化监听器
+  setupSessionChangedListener()
+
   return {
     sessions,
     outputs,
@@ -235,6 +256,7 @@ export function useSession() {
     writeToSession,
     sendSpecialKey,
     resizeSession,
+    cleanupSessionChangedListener,
   }
 }
 

@@ -40,14 +40,15 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   const sessions = ref<RemoteSession[]>([])
   const sessionConfigs = ref<SessionConfigSummary[]>([])
   const currentSessionId = ref<string | null>(null)
-  const outputBuffer = ref<string[]>([])
+  // 输出缓冲区：保持原始 ANSI 序列的完整字符串，由 xterm.js 解析渲染
+  const outputBuffer = ref('')
   const isWaitingInput = ref(false)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
   // === 输出缓冲区限制 ===
-  const MAX_OUTPUT_LINES = 2000
-  const OUTPUT_TRIM_TO = 1000
+  const MAX_OUTPUT_BYTES = 500000  // 500KB 上限
+  const OUTPUT_TRIM_TO = 400000    // 超限后裁剪到 400KB
 
   // === 监听 WebSocket 消息 ===
   watch(
@@ -79,20 +80,29 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
         bytes[i] = binary.charCodeAt(i)
       }
       const data = new TextDecoder('utf-8').decode(bytes)
-      const lines = data.split('\n')
 
-      outputBuffer.value.push(...lines)
+      // 直接追加完整数据块，保持 ANSI 序列完整（由 xterm.js 解析）
+      outputBuffer.value += data
 
-      // 限制缓冲区大小
-      if (outputBuffer.value.length > MAX_OUTPUT_LINES) {
+      // 限制缓冲区大小（按字节数限制，防止 OOM）
+      if (outputBuffer.value.length > MAX_OUTPUT_BYTES) {
         outputBuffer.value = outputBuffer.value.slice(-OUTPUT_TRIM_TO)
       }
 
-      // 检测等待输入状态
-      isWaitingInput.value = payload.is_waiting || detectWaitingInput(data)
+      // 检测等待输入状态（对解码后的纯文本检测，移除 ANSI 序列）
+      isWaitingInput.value = payload.is_waiting || detectWaitingInput(stripAnsi(data))
     } catch (e) {
       console.error('Failed to decode output:', e)
     }
+  }
+
+  // 移除 ANSI 转义序列（用于检测等待输入状态）
+  function stripAnsi(text: string): string {
+    // CSI 序列: \x1b[...字母
+    const csiRegex = /\x1b\[[0-9;]*[A-Za-z]/g
+    // 其他转义序列
+    const otherRegex = /\x1b[^\x1b]*/g
+    return text.replace(csiRegex, '').replace(otherRegex, '')
   }
 
   function handleControlMessage(message: { type: string; payload?: any }) {
@@ -336,7 +346,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
 
   /** 清空输出 */
   function clearOutput(): void {
-    outputBuffer.value = []
+    outputBuffer.value = ''
     isWaitingInput.value = false
   }
 
