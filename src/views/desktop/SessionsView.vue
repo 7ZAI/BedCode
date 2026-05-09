@@ -12,7 +12,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
               </svg>
             </template>
-            新建会话
+            新建配置
           </Button>
         </div>
       </header>
@@ -31,7 +31,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
           <p class="text-dark-400">暂无会话配置</p>
-          <p class="text-dark-500 text-sm mt-2">点击"新建会话"创建第一个会话</p>
+          <p class="text-dark-500 text-sm mt-2">点击"新建配置"创建第一个配置</p>
         </div>
 
         <div v-else class="grid grid-cols-1 gap-4">
@@ -98,7 +98,7 @@
     </div>
 
     <!-- Create/Edit Dialog -->
-    <Modal v-model="showCreateDialog" title="新建会话" size="lg">
+    <Modal v-model="showCreateDialog" :title="editingConfig ? '编辑配置' : '新建配置'" size="lg">
       <SessionForm
         :config="editingConfig"
         @save="handleSaveConfig"

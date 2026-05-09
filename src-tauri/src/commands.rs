@@ -6,7 +6,6 @@ use crate::auth::{PairingCode, PairingService};
 use crate::config::AppConfig;
 use crate::db::{Database, QuickAction, SessionConfig};
 use crate::Result;
-use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -412,30 +411,6 @@ pub async fn delete_quick_action(
 ) -> Result<()> {
     let db = db.lock().await;
     db.delete_quick_action(&id)
-}
-
-/// 获取终端历史消息（跨所有会话）
-#[tauri::command]
-pub async fn get_terminal_history(
-    db: State<'_, Arc<Mutex<Database>>>,
-    limit: Option<usize>,
-    before: Option<String>,
-) -> Result<Vec<crate::db::Message>> {
-    let db = db.lock().await;
-    let before_dt = before
-        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
-    db.get_all_messages(limit, before_dt)
-}
-
-/// 搜索终端历史消息
-#[tauri::command]
-pub async fn search_terminal_history(
-    db: State<'_, Arc<Mutex<Database>>>,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<crate::db::Message>> {
-    let db = db.lock().await;
-    db.search_messages(&query, limit)
 }
 
 /// 获取所有数据库设置

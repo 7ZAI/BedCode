@@ -9,40 +9,45 @@ export interface WsMessage {
   code?: string
 }
 
-// Message ID generator for request-response tracking
 function generateMessageId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 }
 
-// Pending requests waiting for response
+// 心跳配置
+const HEARTBEAT_INTERVAL_MS = 30000 // 30秒发送一次心跳
+const HEARTBEAT_TIMEOUT_MS = 90000   // 90秒无消息视为断连
+
+// 重连回调类型
+type ReconnectCallback = () => Promise<void>
+
+// Singleton state — shared across all useWebSocket() calls so the WebSocket
+// connection survives Vue component mount/unmount cycles during route navigation.
+const ws = ref<WebSocket | null>(null)
+const isConnected = ref(false)
+const lastMessage = ref<WsMessage | null>(null)
+const connectionError = ref<string | null>(null)
+const reconnectAttempts = ref(0)
+const maxReconnectAttempts = 5
+
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+
+let onReconnectCallback: ReconnectCallback | null = null
+let connectionParams: { address: string; port: number; secure: boolean } | null = null
+
 const pendingRequests = new Map<string, {
   resolve: (response: WsMessage) => void
   reject: (error: Error) => void
   timeout: ReturnType<typeof setTimeout>
 }>()
 
-// 心跳配置
-const HEARTBEAT_INTERVAL_MS = 30000 // 30秒发送一次心跳
+let lastMessageTime: number = 0
 
-// 重连回调类型
-type ReconnectCallback = () => Promise<void>
+// Track how many components are using the connection
+let usageCount = 0
 
 export function useWebSocket() {
-  const ws = ref<WebSocket | null>(null)
-  const isConnected = ref(false)
-  const lastMessage = ref<WsMessage | null>(null)
-  const connectionError = ref<string | null>(null)
-  const reconnectAttempts = ref(0)
-  const maxReconnectAttempts = 5
-
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
-
-  // 重连后的回调函数
-  let onReconnectCallback: ReconnectCallback | null = null
-
-  // 保存连接参数用于重连
-  let connectionParams: { address: string; port: number; secure: boolean } | null = null
 
   function connect(address: string, port: number = 8765, secure: boolean = false) {
     // Clear any existing connection
@@ -51,9 +56,6 @@ export function useWebSocket() {
     // 保存连接参数
     connectionParams = { address, port, secure }
 
-    // Use appropriate protocol based on configuration
-    // For local development, use ws:// as we don't have TLS certificates
-    // For production with reverse proxy (nginx, etc.), use wss://
     const protocol = secure ? 'wss' : 'ws'
     const url = `${protocol}://${address}:${port}`
 
@@ -64,6 +66,7 @@ export function useWebSocket() {
         isConnected.value = true
         connectionError.value = null
         reconnectAttempts.value = 0
+        lastMessageTime = Date.now()
         console.log('WebSocket connected to', url)
 
         // 启动心跳定时器
@@ -81,27 +84,39 @@ export function useWebSocket() {
       }
 
       ws.value.onmessage = (event) => {
+        lastMessageTime = Date.now()
         try {
           const message = JSON.parse(event.data) as WsMessage
           lastMessage.value = message
+
+          // 心跳响应，无需进一步处理
+          if (message.type === 'heartbeat') return
+
+          // Handle application-level errors (even without message_id)
+          if (message.type === 'error') {
+            const errMsg = (message as any).message || message.code || 'Unknown error'
+            console.error('[WebSocket] Server error:', errMsg)
+
+            // Try to match to a pending request by message_id
+            if (message.message_id && pendingRequests.has(message.message_id)) {
+              const pending = pendingRequests.get(message.message_id)!
+              pendingRequests.delete(message.message_id)
+              clearTimeout(pending.timeout)
+              pending.reject(new Error(errMsg))
+            }
+            return
+          }
 
           // Check if this is a response to a pending request
           if (message.message_id && pendingRequests.has(message.message_id)) {
             const pending = pendingRequests.get(message.message_id)!
             pendingRequests.delete(message.message_id)
             clearTimeout(pending.timeout)
-
-            // Check if it's an error response
-            if (message.type === 'error') {
-              pending.reject(new Error((message.payload as any)?.message || message.code || 'Unknown error'))
-            } else {
-              pending.resolve(message)
-            }
+            pending.resolve(message)
           }
 
           // Handle waiting input notification
           if (message.type === 'output' && message.payload?.is_waiting) {
-            // Trigger notification through custom event
             window.dispatchEvent(new CustomEvent('claude-waiting-input', {
               detail: message
             }))
@@ -118,9 +133,9 @@ export function useWebSocket() {
         // 停止心跳
         stopHeartbeat()
 
-        // Auto reconnect if not intentional close
-        if (event.code !== 1000 && reconnectAttempts.value < maxReconnectAttempts) {
-          scheduleReconnect(address, port, secure)
+        // 非主动关闭时自动重连，使用 connectionParams
+        if (event.code !== 1000 && reconnectAttempts.value < maxReconnectAttempts && connectionParams) {
+          scheduleReconnect()
         }
       }
 
@@ -134,19 +149,15 @@ export function useWebSocket() {
     }
   }
 
-  /**
-   * 设置重连后的回调函数
-   * @param callback 重连后执行的回调
-   */
   function setOnReconnect(callback: ReconnectCallback | null) {
     onReconnectCallback = callback
   }
 
-  /**
-   * 启动心跳定时器
-   */
   function startHeartbeat() {
     stopHeartbeat()
+    lastMessageTime = Date.now()
+
+    // 定时发送心跳
     heartbeatTimer = setInterval(() => {
       if (ws.value && isConnected.value) {
         const heartbeat = {
@@ -160,19 +171,38 @@ export function useWebSocket() {
         }
       }
     }, HEARTBEAT_INTERVAL_MS)
+
+    // 心跳超时检测：90秒无消息则主动断开
+    checkHeartbeatTimeout()
   }
 
-  /**
-   * 停止心跳定时器
-   */
+  function checkHeartbeatTimeout() {
+    if (heartbeatTimeoutTimer) {
+      clearTimeout(heartbeatTimeoutTimer)
+    }
+    heartbeatTimeoutTimer = setTimeout(() => {
+      if (isConnected.value) {
+        const elapsed = Date.now() - lastMessageTime
+        if (elapsed > HEARTBEAT_TIMEOUT_MS) {
+          console.warn(`No message received for ${elapsed}ms, treating as disconnected`)
+          ws.value?.close(3001, 'Heartbeat timeout')
+        }
+      }
+    }, HEARTBEAT_TIMEOUT_MS + HEARTBEAT_INTERVAL_MS)
+  }
+
   function stopHeartbeat() {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer)
       heartbeatTimer = null
     }
+    if (heartbeatTimeoutTimer) {
+      clearTimeout(heartbeatTimeoutTimer)
+      heartbeatTimeoutTimer = null
+    }
   }
 
-  function scheduleReconnect(address: string, port: number, secure: boolean = false) {
+  function scheduleReconnect() {
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
     }
@@ -183,7 +213,9 @@ export function useWebSocket() {
     console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`)
 
     reconnectTimer = setTimeout(() => {
-      connect(address, port, secure)
+      if (connectionParams) {
+        connect(connectionParams.address, connectionParams.port, connectionParams.secure)
+      }
     }, delay)
   }
 
@@ -202,7 +234,9 @@ export function useWebSocket() {
 
     isConnected.value = false
     reconnectAttempts.value = 0
-    connectionParams = null
+    // 清除错误状态
+    connectionError.value = null
+    // 只清除连接参数，保留 pendingRequests 以允许多次 disconnect/connect
   }
 
   function sendMessage(type: string, payload: any, sessionId?: string): boolean {
@@ -228,14 +262,6 @@ export function useWebSocket() {
     }
   }
 
-  /**
-   * Send a message and wait for a response (request-response pattern)
-   * @param type Message type
-   * @param payload Message payload
-   * @param sessionId Optional session ID
-   * @param timeoutMs Timeout in milliseconds (default: 30000)
-   * @returns Promise that resolves with the response message
-   */
   function sendMessageWithResponse(
     type: string,
     payload: any,
@@ -257,13 +283,11 @@ export function useWebSocket() {
         payload
       }
 
-      // Set up timeout
       const timeout = setTimeout(() => {
         pendingRequests.delete(messageId)
         reject(new Error(`Request timeout for message ${messageId}`))
       }, timeoutMs)
 
-      // Store pending request
       pendingRequests.set(messageId, { resolve, reject, timeout })
 
       try {
@@ -278,7 +302,7 @@ export function useWebSocket() {
 
   function sendInput(data: string, sessionId: string, specialKey?: string) {
     return sendMessage('input', {
-      data,
+      data: data + '\n',
       special_key: specialKey || null
     }, sessionId)
   }
@@ -296,15 +320,21 @@ export function useWebSocket() {
     }, sessionId)
   }
 
-  // Cleanup on unmount
+  // Track usage for singleton lifecycle
+  usageCount++
+
+  // Cleanup on unmount — only disconnect when no components remain
   onUnmounted(() => {
-    // Clear all pending requests
-    for (const [id, pending] of pendingRequests) {
-      clearTimeout(pending.timeout)
-      pending.reject(new Error('WebSocket disconnected'))
-      pendingRequests.delete(id)
+    usageCount--
+    if (usageCount <= 0) {
+      usageCount = 0
+      for (const [id, pending] of pendingRequests) {
+        clearTimeout(pending.timeout)
+        pending.reject(new Error('WebSocket disconnected'))
+        pendingRequests.delete(id)
+      }
+      disconnect()
     }
-    disconnect()
   })
 
   return {

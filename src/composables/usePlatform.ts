@@ -31,7 +31,7 @@ const platformInfo = ref<PlatformInfo>({
   arch: null,
   osVersion: null,
   osType: null,
-  isDesktop: false,
+  isDesktop: true,   // 默认桌面端布局，initPlatform 完成后纠正
   isMobile: false,
   isWindows: false,
   isMacos: false,

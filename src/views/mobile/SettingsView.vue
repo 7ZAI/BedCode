@@ -5,6 +5,14 @@
       <h1 class="text-lg font-semibold">设置</h1>
     </header>
 
+    <!-- Connection Status -->
+    <div v-if="connection.isConnected.value" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-green-500"></div>
+        <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
+      </div>
+    </div>
+
     <!-- Settings List -->
     <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->
@@ -144,8 +152,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import Toggle from '@/components/common/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
+
+const connection = useRemoteConnection()
 
 interface Settings {
   autoReconnect: boolean

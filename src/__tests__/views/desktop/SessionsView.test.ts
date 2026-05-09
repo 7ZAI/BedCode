@@ -142,7 +142,7 @@ describe('SessionsView', () => {
 
     // Find the new session button
     const buttons = wrapper.findAll('button')
-    const newSessionBtn = buttons.find(b => b.text().includes('新建会话'))
+    const newSessionBtn = buttons.find(b => b.text().includes('新建配置'))
 
     if (newSessionBtn) {
       await newSessionBtn.trigger('click')

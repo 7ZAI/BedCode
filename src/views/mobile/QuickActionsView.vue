@@ -5,6 +5,32 @@
       <h1 class="text-lg font-semibold">快捷指令</h1>
     </header>
 
+    <!-- Connection Status -->
+    <div v-if="connection.isConnected.value" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-green-500"></div>
+        <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
+      </div>
+      <button
+        class="text-xs text-dark-400 hover:text-dark-300"
+        @click="router.push('/mobile/devices')"
+      >
+        管理
+      </button>
+    </div>
+    <div v-else class="px-4 py-2 bg-dark-800/50 border-b border-dark-700 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-dark-500"></div>
+        <span class="text-dark-400 text-sm">未连接</span>
+      </div>
+      <button
+        class="text-xs text-primary-400 hover:text-primary-300"
+        @click="router.push('/mobile/devices')"
+      >
+        连接
+      </button>
+    </div>
+
     <!-- Quick Actions -->
     <div class="flex-1 overflow-auto p-4">
       <!-- Preset Actions Grid -->
@@ -169,6 +195,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import QuickActionButton from '@/components/mobile/QuickActionButton.vue'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -181,6 +208,7 @@ interface QuickAction {
 }
 
 const router = useRouter()
+const connection = useRemoteConnection()
 
 const presetActions = ref<QuickAction[]>([
   { id: '1', name: '继续', content: '请继续', icon: '▶️', color: '#22c55e' },
@@ -218,14 +246,14 @@ async function loadQuickActions() {
 }
 
 function sendQuickAction(action: QuickAction) {
-  // Navigate to terminal and send action
-  // In real app, this would send to active session
-  router.push('/mobile/devices')
-
-  // Emit event for terminal to pick up
-  window.dispatchEvent(new CustomEvent('quick-action', {
-    detail: action.content
-  }))
+  // 通过 WebSocket 直接发送到当前活跃会话
+  const sent = connection.sendInput(action.content)
+  if (sent) {
+    console.log('Quick action sent:', action.name)
+  } else {
+    // 未连接或无活跃会话，跳转到设备页
+    router.push('/mobile/devices')
+  }
 }
 
 function editAction(action: QuickAction) {

@@ -180,13 +180,34 @@ function initTerminal() {
   terminal.open(terminalContainerRef.value)
   fitAddon.fit()
 
+  // 将终端尺寸同步到 PTY，确保 Claude Code 输出格式正确
+  syncTerminalSize()
+
+  // 监听终端尺寸变化，同步到 PTY
+  terminal.onResize(({ cols, rows }) => {
+    if (props.session) {
+      sessionStore.resizeSession(props.session.id, cols, rows)
+    }
+  })
+
   // 监听窗口大小变化
   const resizeObserver = new ResizeObserver(() => {
     if (fitAddon && terminal) {
       fitAddon.fit()
+      syncTerminalSize()
     }
   })
   resizeObserver.observe(terminalContainerRef.value)
+}
+
+/** 将当前终端尺寸同步到 PTY */
+function syncTerminalSize() {
+  if (!terminal || !props.session) return
+  const cols = terminal.cols
+  const rows = terminal.rows
+  if (cols > 0 && rows > 0) {
+    sessionStore.resizeSession(props.session.id, cols, rows)
+  }
 }
 
 // 写入输出到终端
@@ -222,6 +243,8 @@ watch(fontSize, (newSize) => {
   if (fitAddon) {
     fitAddon.fit()
   }
+  // 字体大小变化后终端列数可能变化，同步到 PTY
+  nextTick(() => syncTerminalSize())
   // 持久化到设置（带去抖）
   if (fontSizeSaveTimeout) clearTimeout(fontSizeSaveTimeout)
   fontSizeSaveTimeout = setTimeout(() => {
@@ -231,12 +254,17 @@ watch(fontSize, (newSize) => {
   }, 300)
 })
 
-// 监听会话变化，重置终端
+// 监听会话变化，重置终端并同步尺寸
 watch(sessionId, (newId, oldId) => {
-  if (newId !== oldId && oldId) {
-    console.log('[Terminal] Session changed, clearing terminal')
-    clearTerminal()
-    lastOutputIndex = 0
+  if (newId !== oldId) {
+    if (oldId) {
+      clearTerminal()
+      lastOutputIndex = 0
+    }
+    // 新会话激活时同步当前终端尺寸到 PTY
+    if (newId && terminal) {
+      nextTick(() => syncTerminalSize())
+    }
   }
 })
 

@@ -23,6 +23,29 @@ impl Database {
     /// Initialize database schema
     pub fn init_schema(&self) -> crate::Result<()> {
         self.conn.execute_batch(include_str!("schema.sql"))?;
+        self.run_migrations()?;
+        Ok(())
+    }
+
+    /// Apply schema migrations for columns added after initial schema
+    fn run_migrations(&self) -> crate::Result<()> {
+        // Check and add missing columns in pairings table
+        let existing_columns: Vec<String> = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(pairings)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        // Columns added in later schema versions; add if missing
+        for col in &["address", "session_token", "last_seen"] {
+            if !existing_columns.iter().any(|c| c == col) {
+                self.conn.execute(
+                    &format!("ALTER TABLE pairings ADD COLUMN {col} TEXT"),
+                    [],
+                )?;
+            }
+        }
+
         Ok(())
     }
 

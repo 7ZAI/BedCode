@@ -82,7 +82,7 @@
 
     <!-- Raw Mode -->
     <div v-else class="p-3">
-      <pre class="whitespace-pre-wrap break-words font-mono" :style="{ fontSize: fontSizeStyle }">{{ rawOutput }}</pre>
+      <div class="ansi-output whitespace-pre-wrap break-words font-mono" :style="{ fontSize: fontSizeStyle }" v-html="renderedHtml"></div>
     </div>
   </div>
 </template>
@@ -91,6 +91,7 @@
 import { ref, watch, nextTick, computed } from 'vue'
 import type { OutputBlock } from '@/composables/useOutputParser'
 import { useSettingsStore } from '@/stores/settings'
+import { useAnsiRenderer } from '@/composables/useAnsiRenderer'
 
 const props = defineProps<{
   blocks: OutputBlock[]
@@ -99,13 +100,19 @@ const props = defineProps<{
 }>()
 
 const settingsStore = useSettingsStore()
+const { renderToHtml } = useAnsiRenderer()
 
 const fontSizeStyle = computed(() => {
   return `${settingsStore.settings.ui.terminal_font_size}px`
 })
 
-const mode = ref<'enhanced' | 'raw'>('enhanced')
+const mode = ref<'enhanced' | 'raw'>('raw')
 const containerRef = ref<HTMLElement | null>(null)
+
+// ANSI 渲染后的 HTML（用于 Raw 模式）
+const renderedHtml = computed(() => {
+  return renderToHtml(props.rawOutput)
+})
 
 // Auto scroll to bottom when new content arrives
 watch(() => props.blocks.length, async () => {
@@ -151,7 +158,12 @@ function copyCode(code: string) {
 }
 
 .output-renderer pre,
-.output-renderer code {
+.output-renderer code,
+.ansi-output {
   font-family: v-bind('settingsStore.settings.ui.terminal_font_family'), 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.ansi-output span {
+  font-family: inherit;
 }
 </style>

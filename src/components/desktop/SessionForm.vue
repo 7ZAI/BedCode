@@ -57,7 +57,7 @@
     <Input
       v-model="form.tmuxSession"
       label="Tmux 会话 (可选)"
-      placeholder="留空则新建会话"
+      placeholder="留空则新建配置"
       help="输入已存在的 Tmux 会话名，或留空创建新会话"
     />
 

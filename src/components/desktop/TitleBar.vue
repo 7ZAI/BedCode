@@ -3,9 +3,9 @@
     class="titlebar h-9 bg-dark-800 flex items-center justify-between select-none border-b border-dark-700"
     data-tauri-drag-region
   >
-    <!-- Left: App Title -->
-    <div class="flex items-center gap-2 px-4" data-tauri-drag-region>
-      <span class="text-sm font-medium text-primary-400">BedCode</span>
+    <!-- Left: App Logo -->
+    <div class="flex items-center px-4" data-tauri-drag-region>
+      <img src="/src/assets/logo.svg" alt="BedCode" class="h-5 w-auto" />
     </div>
 
     <!-- Right: Window Controls -->

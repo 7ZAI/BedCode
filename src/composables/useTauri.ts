@@ -251,17 +251,9 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
       if (!sid || event.payload.sessionId === sid) {
         const data = decodeBase64Utf8(event.payload.data)
 
-        // 检测清屏序列，重置输出缓冲区
-        if (data.includes('\x1b[2J')) {
-          output.value = []
-        }
-
+        // 写入输出缓冲区（桌面端 xterm.js 通过 watcher 增量读取）
+        // 注意：不清空/裁剪数组，否则 TerminalPreview 的 lastOutputIndex 会失效
         output.value.push(data)
-
-        // Limit output buffer
-        if (output.value.length > 1000) {
-          output.value = output.value.slice(-500)
-        }
 
         isWaiting.value = detectWaitingInput(data)
       }

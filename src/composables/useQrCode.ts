@@ -37,8 +37,11 @@ export function useQrCode() {
       const token = await api.generateQrCode()
       const info = await api.getQrConnectionInfo()
       if (info) {
-        qrData.value = info
+        // 先获取 TTL，再同步设置 qrData 和倒计时
+        // 避免 await 导致的中间状态：qrData 已更新但倒计时未启动，
+        // 此时 hasQr 仍为 false，watch 触发时 canvas 未挂载，导致首次空白
         const ttl = await api.getQrTokenTtl()
+        qrData.value = info
         startCountdown(ttl)
       } else {
         qrData.value = null

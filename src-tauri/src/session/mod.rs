@@ -179,11 +179,6 @@ impl SessionManager {
             stopped_at: None,
         };
 
-        // 保存到数据库
-        let db = self.db.lock().await;
-        db.add_history(config_id, &config.name, None)?;
-        drop(db);
-
         // 保存到内存
         {
             let mut sessions = self.pty_sessions.write().await;

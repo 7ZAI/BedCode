@@ -93,6 +93,4 @@ debug = 1              # 仅保留行号信息，减少编译时间和磁盘占�
 incremental = true     # 启用增量编译
 split-debuginfo = "packed"  # 分离调试信息，减少主文件大小
 
-# 依赖项优化 - 开发时依赖项也优化编译
-[profile.dev.package."*"]
-opt-level = 2          # 依赖项使用 O2 优化，减少体积
+# 开发模式不优化依赖项，加速编译

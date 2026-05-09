@@ -41,7 +41,7 @@ describe('useRemoteTerminal', () => {
 
     expect(mockConnection.sendMessage).toHaveBeenCalledWith(
       'input',
-      { data: 'hello', special_key: null },
+      { data: 'hello\n', special_key: null },
       'test-session'
     )
   })

@@ -30,20 +30,25 @@ export interface PairedDeviceRaw {
 // 重连回调类型
 type ReconnectCallback = () => Promise<void>
 
+// Singleton state — shared across all useRemoteConnection() calls so connection
+// state and paired devices survive Vue component navigation.
+const state = ref<ConnectionState>({ status: 'disconnected' })
+const pairedDevices = ref<RemoteDevice[]>([])
+const currentDevice = ref<RemoteDevice | null>(null)
+const authCredentials = ref<{
+  pairingId: string
+  fingerprint: string
+  sessionToken: string
+} | null>(null)
+
+// 当前活跃的会话 ID，供 QuickActionsView/HistoryView 等跨视图发送输入使用
+const activeSessionId = ref<string | null>(null)
+
 export function useRemoteConnection() {
-  // === 状态 ===
-  const state = ref<ConnectionState>({ status: 'disconnected' })
-  const pairedDevices = ref<RemoteDevice[]>([])
-  const currentDevice = ref<RemoteDevice | null>(null)
+  // === 状态 (singleton) ===
+  // state, pairedDevices, currentDevice, authCredentials are module-level
 
-  // 认证凭据（配对成功后存储，用于重连）
-  const authCredentials = ref<{
-    pairingId: string
-    fingerprint: string
-    sessionToken: string
-  } | null>(null)
-
-  // === WebSocket 依赖 ===
+  // === WebSocket 依赖 (singleton) ===
   const {
     isConnected,
     lastMessage,
@@ -269,8 +274,21 @@ export function useRemoteConnection() {
     return false
   }
 
+  /** 发送输入到当前活跃会话（自动追加换行，与桌面端行为一致） */
+  function sendInput(data: string, specialKey?: string): boolean {
+    if (!isConnected.value || !activeSessionId.value) {
+      console.warn('Cannot send input: not connected or no active session')
+      return false
+    }
+    return sendMessage('input', {
+      data: data + '\n',
+      special_key: specialKey || null,
+    }, activeSessionId.value)
+  }
+
   /** 断开连接 */
   function disconnect(): void {
+    activeSessionId.value = null
     wsDisconnect()
     state.value = { status: 'disconnected' }
     currentDevice.value = null
@@ -333,12 +351,15 @@ export function useRemoteConnection() {
     return localStorage.getItem('device_name') || 'Mobile Device'
   }
 
-  // === 初始化：加载持久化凭据 ===
-  loadAuthCredentials()
+  // === 初始化：加载持久化凭据（只执行一次） ===
+  if (!authCredentials.value?.sessionToken) {
+    loadAuthCredentials()
+  }
 
-  // === 清理 ===
+  // === 清理：由 useWebSocket 的 usageCount 管理，这里不再主动断开 ===
   onUnmounted(() => {
-    disconnect()
+    // WebSocket is managed by useWebSocket singleton, which only disconnects
+    // when all components have unmounted (usageCount reaches 0).
   })
 
   return {
@@ -350,6 +371,7 @@ export function useRemoteConnection() {
     lastMessage,
     isReady,
     authCredentials,
+    activeSessionId,
 
     // 方法
     connect,
@@ -362,6 +384,7 @@ export function useRemoteConnection() {
     loadAuthCredentials,
     sendMessage,
     sendMessageWithResponse,
+    sendInput,
     setReconnectCallback,
   }
 }

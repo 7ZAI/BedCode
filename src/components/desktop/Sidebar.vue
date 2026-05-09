@@ -1,10 +1,5 @@
 <template>
   <aside class="w-64 bg-dark-800 border-r border-dark-700 flex flex-col">
-    <!-- Logo -->
-    <div class="h-12 px-4 border-b border-dark-700 flex items-center">
-      <h1 class="text-lg font-bold text-primary-400">BedCode</h1>
-    </div>
-
     <!-- Navigation -->
     <nav class="flex-1 p-4">
       <ul class="space-y-2">

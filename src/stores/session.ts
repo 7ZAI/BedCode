@@ -94,6 +94,10 @@ export const useSessionStore = defineStore('session', () => {
     await sessionApi.sendSpecialKey(sessionId, key)
   }
 
+  async function resizeSession(sessionId: string, cols: number, rows: number) {
+    await sessionApi.resizeSession(sessionId, cols, rows)
+  }
+
   return {
     sessions,
     configs,
@@ -107,5 +111,6 @@ export const useSessionStore = defineStore('session', () => {
     updateConfig,
     writeToSession,
     sendSpecialKey,
+    resizeSession,
   }
 })

@@ -289,8 +289,6 @@ pub fn run() {
             commands::create_quick_action,
             commands::update_quick_action,
             commands::delete_quick_action,
-            commands::get_terminal_history,
-            commands::search_terminal_history,
             commands::get_all_db_settings,
             commands::set_db_setting,
             // Settings
@@ -423,8 +421,6 @@ pub fn run() {
             commands::create_quick_action,
             commands::update_quick_action,
             commands::delete_quick_action,
-            commands::get_terminal_history,
-            commands::search_terminal_history,
             commands::get_all_db_settings,
             commands::set_db_setting,
             // Settings

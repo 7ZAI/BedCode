@@ -12,7 +12,7 @@
           :disabled="disabled"
           class="w-full bg-dark-700 border border-dark-600 rounded-xl px-4 py-2.5 pr-10 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 disabled:opacity-50"
           @keyup.enter="submitText"
-          @focus="showSpecialKeys = false"
+          @focus="handleFocus"
         />
         <!-- Send button -->
         <button
@@ -69,6 +69,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useKeyboardAvoidance } from '@/composables/useKeyboardAvoidance'
 
 defineProps<{
   disabled?: boolean
@@ -82,23 +83,27 @@ const emit = defineEmits<{
   specialKey: [key: string]
 }>()
 
+const { scrollElementIntoView } = useKeyboardAvoidance()
+
 const inputText = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
 const showSpecialKeys = ref(false)
 
+function handleFocus() {
+  showSpecialKeys.value = false
+  if (inputRef.value) {
+    scrollElementIntoView(inputRef.value)
+  }
+}
+
 const specialKeys = [
   { label: 'Tab', code: 'tab' },
+  { label: 'Enter', code: 'enter' },
   { label: 'Esc', code: 'escape' },
   { label: 'Ctrl+C', code: 'ctrl_c' },
   { label: 'Ctrl+D', code: 'ctrl_d' },
-  { label: 'Ctrl+Z', code: 'ctrl_z' },
-  { label: 'Ctrl+L', code: 'ctrl_l' },
-  { label: '↑', code: 'up' },
-  { label: '↓', code: 'down' },
-  { label: '←', code: 'left' },
-  { label: '→', code: 'right' },
-  { label: 'Home', code: 'home' },
-  { label: 'End', code: 'end' },
+  { label: '↑', code: 'arrow_up' },
+  { label: '↓', code: 'arrow_down' },
 ]
 
 function submitText() {
