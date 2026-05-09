@@ -13,6 +13,8 @@ export interface SessionSummary {
   id: string
   name: string
   status: string
+  created_at?: string
+  started_at?: string
 }
 
 export interface SessionConfigSummary {
@@ -98,7 +100,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     if (!action) return
 
     if (action.type === 'session_list') {
-      sessions.value = action.sessions.map((s: any) => ({
+      sessions.value = action.sessions.map((s: SessionSummary) => ({
         id: s.id,
         name: s.name,
         status: mapSessionStatus(s.status),
@@ -152,7 +154,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
       })
 
       if (response.payload?.action?.type === 'session_list') {
-        sessions.value = response.payload.action.sessions.map((s: any) => ({
+        sessions.value = response.payload.action.sessions.map((s: SessionSummary) => ({
           id: s.id,
           name: s.name,
           status: mapSessionStatus(s.status),
