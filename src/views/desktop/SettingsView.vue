@@ -131,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useQrCodeApi } from '@/composables/useTauri'
 
@@ -161,6 +161,18 @@ function decrementFontSize() {
     settingsStore.settings.ui.terminal_font_size--
   }
 }
+
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => settingsStore.settings,
+  () => {
+    if (saveTimeout) clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(() => {
+      settingsStore.saveSettings(settingsStore.settings)
+    }, 500)
+  },
+  { deep: true }
+)
 
 onMounted(async () => {
   await settingsStore.loadSettings()

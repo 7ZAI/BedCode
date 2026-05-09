@@ -442,6 +442,31 @@ export function useNetwork() {
   return { localAddresses, loadLocalAddresses }
 }
 
+// Connected Devices (WebSocket clients)
+export interface DeviceConnectionInfo {
+  addr: string
+  device_id: string
+  session_count: number
+}
+
+export function useConnectedDevices() {
+  const connectedDevices = ref<DeviceConnectionInfo[]>([])
+  const isLoading = ref(false)
+
+  async function loadConnectedDevices() {
+    isLoading.value = true
+    try {
+      connectedDevices.value = await invoke<DeviceConnectionInfo[]>('get_connected_devices')
+    } catch (e) {
+      console.error('Failed to load connected devices:', e)
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  return { connectedDevices, isLoading, loadConnectedDevices }
+}
+
 // Utility functions
 
 /**

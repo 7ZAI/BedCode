@@ -451,6 +451,17 @@ pub fn get_local_ip_addresses() -> Vec<String> {
         .unwrap_or_default()
 }
 
+// ==================== Device Connection Commands ====================
+
+/// 获取当前 WebSocket 已连接的设备列表
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn get_connected_devices(
+    ws_server: State<'_, Arc<crate::websocket::WebSocketServer>>,
+) -> Result<Vec<crate::websocket::DeviceConnectionInfo>> {
+    Ok(ws_server.get_connected_devices().await)
+}
+
 // ==================== Android Specific Commands ====================
 
 /// 获取 Android 状态栏高度（像素）

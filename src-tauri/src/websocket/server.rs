@@ -127,6 +127,7 @@ impl WebSocketServer {
         // 启动心跳超时检测任务
         let heartbeat_clients = self.clients.clone();
         let heartbeat_senders = self.client_senders.clone();
+        let heartbeat_app_handle = self.app_handle.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
@@ -147,6 +148,18 @@ impl WebSocketServer {
 
                         for addr in timeout_clients {
                             tracing::warn!("Client {} heartbeat timeout, disconnecting", addr);
+                            // Emit disconnect event before removing
+                            if let Some(client) = clients.get(&addr) {
+                                if client.authenticated {
+                                    if let Some(ref handle) = heartbeat_app_handle {
+                                        let _ = handle.emit("device-disconnected", &DeviceConnectionEvent {
+                                            addr: addr.to_string(),
+                                            device_id: client.device_id.clone().unwrap_or_default(),
+                                            event: "disconnected".to_string(),
+                                        });
+                                    }
+                                }
+                            }
                             clients.remove(&addr);
                             if let Some(tx) = senders.get(&addr) {
                                 let _ = tx.send(WsMessage::Close(None));
@@ -229,12 +242,16 @@ impl WebSocketServer {
 
                         // 接收任务：处理来自WebSocket的消息
                         let clients_for_recv = clients.clone();
+                        // Clone app_handle for disconnect event (recv_task moves the original)
+                        let app_handle_for_disconnect = app_handle.clone();
                         let recv_task = async move {
                             while let Some(msg_result) = ws_receiver.next().await {
                                 match msg_result {
                                     Ok(WsMessage::Text(text)) => {
                                         match Message::from_json(&text) {
                                             Ok(message) => {
+                                                // 提取 request ID 以便错误响应也能带上
+                                                let request_id = message.message_id().map(|s| s.to_string());
                                                 let response = handle_message(
                                                     message,
                                                     addr,
@@ -250,14 +267,24 @@ impl WebSocketServer {
                                                 match response {
                                                     Ok(Some(resp)) => {
                                                         if let Ok(json) = resp.to_json() {
-                                                            // 通过通道发送响应
+                                                            tracing::info!(
+                                                                "Sending response to {}: {}",
+                                                                addr,
+                                                                &json[..json.len().min(200)]
+                                                            );
                                                             let _ = tx_recv.send(WsMessage::Text(json));
                                                         }
                                                     }
                                                     Ok(None) => {}
                                                     Err(e) => {
-                                                        let error_msg =
-                                                            Message::error("HANDLER_ERROR", &e.to_string());
+                                                        tracing::error!(
+                                                            "Handler error for client {} (request {:?}): {}",
+                                                            addr, request_id, e
+                                                        );
+                                                        let error_msg = match &request_id {
+                                                            Some(id) => Message::error_with_id(id, "HANDLER_ERROR", &e.to_string()),
+                                                            None => Message::error("HANDLER_ERROR", &e.to_string()),
+                                                        };
                                                         if let Ok(json) = error_msg.to_json() {
                                                             let _ = tx_recv.send(WsMessage::Text(json));
                                                         }
@@ -265,7 +292,7 @@ impl WebSocketServer {
                                                 }
                                             }
                                             Err(e) => {
-                                                tracing::error!("Parse message error: {}", e);
+                                                tracing::error!("Parse message error from {}: {}", addr, e);
                                                 let error_msg = Message::error("PARSE_ERROR", &e.to_string());
                                                 if let Ok(json) = error_msg.to_json() {
                                                     let _ = tx_recv.send(WsMessage::Text(json));
@@ -297,6 +324,22 @@ impl WebSocketServer {
                             _ = shutdown_rx_inner.recv() => {
                                 tracing::info!("Closing connection to {} due to shutdown", addr);
                                 let _ = tx.send(WsMessage::Close(None));
+                            }
+                        }
+
+                        // 通知前端设备断开
+                        {
+                            let clients_read = clients.read().await;
+                            if let Some(client) = clients_read.get(&addr) {
+                                if client.authenticated {
+                                    if let Some(ref handle) = app_handle_for_disconnect {
+                                        let _ = handle.emit("device-disconnected", &DeviceConnectionEvent {
+                                            addr: addr.to_string(),
+                                            device_id: client.device_id.clone().unwrap_or_default(),
+                                            event: "disconnected".to_string(),
+                                        });
+                                    }
+                                }
                             }
                         }
 
@@ -355,6 +398,36 @@ impl WebSocketServer {
     pub async fn client_count(&self) -> usize {
         self.clients.read().await.len()
     }
+
+    /// 获取已认证的客户端列表
+    pub async fn get_connected_devices(&self) -> Vec<DeviceConnectionInfo> {
+        let clients = self.clients.read().await;
+        clients
+            .iter()
+            .filter(|(_, c)| c.authenticated)
+            .map(|(addr, c)| DeviceConnectionInfo {
+                addr: addr.to_string(),
+                device_id: c.device_id.clone().unwrap_or_default(),
+                session_count: c.subscribed_sessions.len(),
+            })
+            .collect()
+    }
+}
+
+/// 设备连接信息（前端展示用）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeviceConnectionInfo {
+    pub addr: String,
+    pub device_id: String,
+    pub session_count: usize,
+}
+
+/// 设备连接/断开事件（发给前端）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeviceConnectionEvent {
+    pub addr: String,
+    pub device_id: String,
+    pub event: String, // "connected", "disconnected", "authenticated"
 }
 
 /// 输出转发器
@@ -591,6 +664,15 @@ async fn handle_auth(
                     }
                 }
 
+                // 通知前端设备已认证
+                if let Some(handle) = app_handle {
+                    let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                        addr: addr.to_string(),
+                        device_id: pairing_id.clone(),
+                        event: "authenticated".to_string(),
+                    });
+                }
+
                 // 清除已使用的配对码
                 pairing_service.clear_code().await;
 
@@ -661,6 +743,15 @@ async fn handle_auth(
                     }
                 }
 
+                // 通知前端设备已重新认证
+                if let Some(handle) = app_handle {
+                    let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                        addr: addr.to_string(),
+                        device_id: device_id.clone(),
+                        event: "authenticated".to_string(),
+                    });
+                }
+
                 tracing::info!("Device re-authenticated: {}", addr);
 
                 Ok(Some(Message::Auth {
@@ -723,6 +814,15 @@ async fn handle_auth(
                             client.authenticated = true;
                             client.device_id = Some(device_id.clone());
                         }
+                    }
+
+                    // 通知前端设备已通过 QR 认证
+                    if let Some(handle) = app_handle {
+                        let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                            addr: addr.to_string(),
+                            device_id: device_id.clone(),
+                            event: "authenticated".to_string(),
+                        });
                     }
 
                     let response = Message::Auth {

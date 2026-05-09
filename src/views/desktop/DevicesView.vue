@@ -120,11 +120,11 @@
             class="flex items-center justify-between p-4 bg-dark-700 rounded-lg"
           >
             <div class="flex items-center gap-4">
-              <!-- Status Indicator -->
+              <!-- Status Indicator (live WebSocket status) -->
               <div
                 :class="[
                   'w-3 h-3 rounded-full',
-                  device.isActive ? 'bg-green-500' : 'bg-dark-500'
+                  isDeviceOnline(device.id) ? 'bg-green-500 animate-pulse' : 'bg-dark-500'
                 ]"
               ></div>
 
@@ -140,10 +140,10 @@
               <span
                 :class="[
                   'text-xs px-2 py-1 rounded',
-                  device.isActive ? 'bg-green-900/50 text-green-300' : 'bg-dark-600 text-dark-400'
+                  isDeviceOnline(device.id) ? 'bg-green-900/50 text-green-300' : 'bg-dark-600 text-dark-400'
                 ]"
               >
-                {{ device.isActive ? '在线' : '离线' }}
+                {{ isDeviceOnline(device.id) ? '已连接' : '离线' }}
               </span>
 
               <Button variant="ghost" size="sm" @click="removeDevice(device.id)">
@@ -156,23 +156,44 @@
         </div>
       </div>
     </div>
+
+    <!-- Remove Device Confirm Dialog -->
+    <Modal v-model="showRemoveDeviceDialog" title="确认移除" size="sm">
+      <p class="text-dark-300">确定要移除此设备吗？移除后需要重新配对。</p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showRemoveDeviceDialog = false">取消</Button>
+          <Button variant="danger" @click="confirmRemoveDevice">移除</Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDeviceStore } from '@/stores/device'
-import { usePairing, useNetwork } from '@/composables/useTauri'
+import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo } from '@/composables/useTauri'
 import { useQrCode } from '@/composables/useQrCode'
 import { listen } from '@tauri-apps/api/event'
 import Button from '@/components/common/Button.vue'
+import Modal from '@/components/common/Modal.vue'
 import { useToast } from '@/composables/useToast'
 import QRCode from 'qrcode'
 
 const deviceStore = useDeviceStore()
 const pairing = usePairing()
 const network = useNetwork()
+const connected = useConnectedDevices()
 const toast = useToast()
+
+// Real-time connected device IDs (from WebSocket events)
+const connectedDeviceIds = ref<Set<string>>(new Set())
+
+// 检查设备是否实时在线
+function isDeviceOnline(deviceId: string): boolean {
+  return connectedDeviceIds.value.has(deviceId)
+}
 
 const isLoading = ref(false)
 const pairingCode = ref<{ code: string; expiresIn: number } | null>(null)
@@ -190,6 +211,8 @@ let pairingCodeListener: (() => void) | null = null
 
 const qr = useQrCode()
 const qrCanvasRef = ref<HTMLCanvasElement | null>(null)
+const showRemoveDeviceDialog = ref(false)
+const pendingDeviceId = ref<string | null>(null)
 
 // 当 QR 数据变化时渲染 Canvas
 watch(
@@ -211,12 +234,31 @@ watch(
       })
     }
   },
-  { immediate: false }
+  { flush: 'post' }
 )
+
+let deviceConnectedListener: (() => void) | null = null
+let deviceDisconnectedListener: (() => void) | null = null
 
 onMounted(async () => {
   await deviceStore.loadPairedDevices()
   await network.loadLocalAddresses()
+
+  // Load initial connected device list
+  await connected.loadConnectedDevices()
+  const ids = new Set(connected.connectedDevices.value.map(d => d.device_id))
+  connectedDeviceIds.value = ids
+
+  // Listen for real-time device connection events
+  deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', (event) => {
+    const deviceId = event.payload.device_id
+    connectedDeviceIds.value = new Set([...connectedDeviceIds.value, deviceId])
+  })
+  deviceDisconnectedListener = await listen<DeviceConnectionInfo>('device-disconnected', (event) => {
+    const newSet = new Set(connectedDeviceIds.value)
+    newSet.delete(event.payload.device_id)
+    connectedDeviceIds.value = newSet
+  })
 
   // 监听配对码自动生成事件
   pairingCodeListener = await listen<{ code: string; expires_in: number; device_name?: string }>(
@@ -256,6 +298,12 @@ onUnmounted(() => {
   }
   if (pairingCodeListener) {
     pairingCodeListener()
+  }
+  if (deviceConnectedListener) {
+    deviceConnectedListener()
+  }
+  if (deviceDisconnectedListener) {
+    deviceDisconnectedListener()
   }
   qr.clearQr()
 })
@@ -311,10 +359,16 @@ function cancelPairing() {
 }
 
 async function removeDevice(deviceId: string) {
-  if (confirm('确定要移除此设备吗？移除后需要重新配对。')) {
-    await deviceStore.removeDevice(deviceId)
-    toast.success('设备已移除')
-  }
+  pendingDeviceId.value = deviceId
+  showRemoveDeviceDialog.value = true
+}
+
+async function confirmRemoveDevice() {
+  if (!pendingDeviceId.value) return
+  await deviceStore.removeDevice(pendingDeviceId.value)
+  toast.success('设备已移除')
+  showRemoveDeviceDialog.value = false
+  pendingDeviceId.value = null
 }
 
 function formatDate(dateStr: string): string {

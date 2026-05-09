@@ -142,6 +142,32 @@ impl SessionManager {
         // 启动 PTY
         pty_session.start().await?;
 
+        // 订阅生命周期事件，进程退出时自动更新会话状态
+        let mut lifecycle_rx = pty_session.subscribe_lifecycle();
+        let session_id_lifecycle = session_id.clone();
+        let session_info_ref = self.session_info.clone();
+        tokio::spawn(async move {
+            match lifecycle_rx.recv().await {
+                Ok(status) => {
+                    tracing::info!(
+                        "Session {} lifecycle event: {:?}, updating status",
+                        session_id_lifecycle, status
+                    );
+                    let session_status = match status {
+                        crate::pty::PtySessionStatus::Error => SessionStatus::Error,
+                        _ => SessionStatus::Stopped,
+                    };
+                    let mut info_map = session_info_ref.write().await;
+                    if let Some(info) = info_map.get_mut(&session_id_lifecycle) {
+                        info.status = session_status;
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Lifecycle channel closed for session: {} ({})", session_id_lifecycle, e);
+                }
+            }
+        });
+
         // 创建会话信息（使用 PTY 的 session_id，而不是生成新的）
         let info = SessionInfo {
             id: session_id.clone(),

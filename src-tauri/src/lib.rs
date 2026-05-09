@@ -279,6 +279,7 @@ pub fn run() {
             commands::ping,
             commands::get_app_version,
             commands::get_local_ip_addresses,
+            commands::get_connected_devices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

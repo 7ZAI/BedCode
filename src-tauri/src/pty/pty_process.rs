@@ -49,6 +49,8 @@ pub struct PtySessionState {
     pub writer: Option<Box<dyn Write + Send>>,
     /// 输出事件发送器
     pub output_tx: broadcast::Sender<PtyOutputEvent>,
+    /// 生命周期事件发送器（进程退出、错误等）
+    pub lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 读取线程句柄
     pub reader_handle: Option<JoinHandle<()>>,
     /// 进程 ID（用于强制终止）
@@ -64,6 +66,8 @@ pub struct PtySession {
     running: Arc<AtomicBool>,
     /// 输出事件发送器的共享引用
     output_tx: broadcast::Sender<PtyOutputEvent>,
+    /// 生命周期事件发送器的共享引用
+    lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 会话 ID 的缓存（避免频繁加锁）
     id: String,
 }
@@ -92,6 +96,7 @@ impl PtySession {
         let writer = pair.master.take_writer()
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
         let (output_tx, _) = broadcast::channel(1024);
+        let (lifecycle_tx, _) = broadcast::channel(16);
 
         let running = Arc::new(AtomicBool::new(true));
 
@@ -103,6 +108,7 @@ impl PtySession {
             writer: Some(writer),
             running: running.clone(),
             output_tx: output_tx.clone(),
+            lifecycle_tx: lifecycle_tx.clone(),
             reader_handle: None,
             process_id: None,
         };
@@ -111,6 +117,7 @@ impl PtySession {
             state: Arc::new(Mutex::new(state)),
             running,
             output_tx,
+            lifecycle_tx,
             id,
         })
     }
@@ -167,11 +174,12 @@ impl PtySession {
                 match shell {
                     WindowsShell::PowerShell => {
                         // 构建完整的 PowerShell 命令：
-                        // 1. 切换到指定目录
-                        // 2. 显示当前路径（让用户确认）
-                        // 3. 执行用户配置的命令
+                        // 1. 切换控制台编码为 UTF-8，确保中文等字符正确显示
+                        // 2. 切换到指定目录
+                        // 3. 显示当前路径（让用户确认）
+                        // 4. 执行用户配置的命令
                         let full_command = format!(
-                            "Set-Location '{}'; Write-Host 'Working directory:' $PWD.Path; {}",
+                            "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Set-Location '{}'; Write-Host 'Working directory:' $PWD.Path; {}",
                             config.working_dir,
                             config.command
                         );
@@ -184,9 +192,12 @@ impl PtySession {
                         cmd
                     }
                     WindowsShell::Cmd => {
-                        // Cmd 类似处理
+                        // 构建完整的 CMD 命令：
+                        // 1. 切换控制台编码为 UTF-8，确保中文等字符正确显示
+                        // 2. 切换到指定目录
+                        // 3. 执行用户配置的命令
                         let full_command = format!(
-                            "cd /d \"{}\" && echo Working directory: %cd% && {}",
+                            "@chcp 65001 > nul && cd /d \"{}\" && echo Working directory: %cd% && {}",
                             config.working_dir,
                             config.command
                         );
@@ -248,11 +259,13 @@ impl PtySession {
 
         let mut buf_reader = BufReader::new(reader);
         let output_tx = self.output_tx.clone();
+        let lifecycle_tx = self.lifecycle_tx.clone();
         let session_id = self.id.clone();
         let running = self.running.clone();
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 4096];
+            let mut exit_status = PtySessionStatus::Stopped;
 
             while running.load(Ordering::SeqCst) {
                 match buf_reader.read(&mut buffer) {
@@ -277,12 +290,15 @@ impl PtySession {
                     }
                     Err(e) => {
                         tracing::error!("PTY read error: {}", e);
+                        exit_status = PtySessionStatus::Error;
                         break;
                     }
                 }
             }
 
-            tracing::debug!("Output reader stopped for session: {}", session_id);
+            // Notify lifecycle subscribers that the process has exited
+            let _ = lifecycle_tx.send(exit_status);
+            tracing::debug!("Output reader stopped for session: {} (status: {:?})", session_id, exit_status);
         });
 
         // 保存线程句柄
@@ -353,6 +369,11 @@ impl PtySession {
         self.output_tx.subscribe()
     }
 
+    /// 订阅生命周期事件（进程退出、错误等）
+    pub fn subscribe_lifecycle(&self) -> broadcast::Receiver<PtySessionStatus> {
+        self.lifecycle_tx.subscribe()
+    }
+
     /// 获取会话状态
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
@@ -411,6 +432,7 @@ impl Clone for PtySession {
             state: self.state.clone(),
             running: self.running.clone(),
             output_tx: self.output_tx.clone(),
+            lifecycle_tx: self.lifecycle_tx.clone(),
             id: self.id.clone(),
         }
     }

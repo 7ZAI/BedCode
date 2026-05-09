@@ -36,6 +36,11 @@ vi.mock('@/composables/useTauri', () => ({
     localAddresses: { value: ['192.168.1.100'] },
     loadLocalAddresses: vi.fn().mockResolvedValue(undefined),
   }),
+  useConnectedDevices: () => ({
+    connectedDevices: { value: [] },
+    isLoading: { value: false },
+    loadConnectedDevices: vi.fn().mockResolvedValue(undefined),
+  }),
   useQrCodeApi: () => ({
     generateQrCode: vi.fn().mockResolvedValue('test-token'),
     clearQrCode: vi.fn().mockResolvedValue(undefined),
@@ -319,20 +324,22 @@ describe('DevicesView Device Management', () => {
             props: ['variant', 'size'],
           },
           Toggle: true,
+          Modal: {
+            template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
+            props: ['modelValue', 'title', 'size'],
+          },
         },
       },
     })
 
     await flushPromises()
 
-    // Mock confirm dialog
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // Call removeDevice (now shows a modal instead of confirm)
+    wrapper.vm.removeDevice('device-1')
+    await flushPromises()
 
-    // Call removeDevice
-    await wrapper.vm.removeDevice('device-1')
-
-    // Verify function executed without error
-    expect(true).toBe(true)
+    expect(wrapper.vm.showRemoveDeviceDialog).toBe(true)
+    expect(wrapper.vm.pendingDeviceId).toBe('device-1')
   })
 
   it('should display paired devices when available', async () => {
