@@ -315,6 +315,28 @@ pub enum ControlAction {
     JoinSession { session_id: String },
     /// 离开会话，停止接收输出
     LeaveSession { session_id: String },
+    /// 会话变更通知 (created/stopped/removed)
+    SessionChanged { change_type: String, session: SessionSummary },
+
+    // === 新增：Plugin 会话相关 ===
+    /// 注册 Plugin 会话
+    RegisterPluginSession {
+        project_name: String,
+        project_path: String,
+        jsonl_path: String,
+    },
+    /// 注册响应
+    RegisteredPluginSession {
+        session_id: String,
+    },
+    /// 注销 Plugin 会话
+    UnregisterPluginSession {
+        session_id: String,
+    },
+    /// Plugin 心跳
+    PluginHeartbeat {
+        session_id: String,
+    },
 }
 
 /// 会话摘要
