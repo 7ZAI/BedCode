@@ -16,17 +16,15 @@ pub struct WslDistro {
 
 /// 列出已安装的 WSL 发行版
 pub fn list_distributions() -> Result<Vec<WslDistro>> {
-    let output = Command::new("wsl.exe")
-        .args(["--list", "--verbose"])
+    // 强制使用 UTF-8 编码，解决中文系统上 wsl.exe 输出非 UTF-8 的问题
+    let output = Command::new("cmd.exe")
+        .args(["/c", "chcp 65001 >nul && wsl --list --verbose"])
         .output()?;
 
     if !output.status.success() {
         return Ok(vec![]);
     }
 
-    // 解析输出
-    // 格式: "  NAME            STATE           VERSION"
-    //       "* Ubuntu         Running         2"
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut distros = Vec::new();
 
@@ -130,8 +128,8 @@ pub fn wsl_to_windows_path(path: &str, distro: Option<&str>) -> String {
 
 /// 检查 WSL 是否可用
 pub fn is_wsl_available() -> bool {
-    Command::new("wsl.exe")
-        .arg("--version")
+    Command::new("cmd.exe")
+        .args(["/c", "chcp 65001 >nul && wsl --version"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
