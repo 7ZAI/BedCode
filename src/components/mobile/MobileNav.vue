@@ -25,7 +25,7 @@ import { h } from 'vue'
 const navItems = [
   {
     path: '/mobile/devices',
-    label: '设备',
+    label: '连接',
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', {
@@ -33,6 +33,20 @@ const navItems = [
           'stroke-linejoin': 'round',
           'stroke-width': '2',
           d: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'
+        })
+      ])
+    }
+  },
+  {
+    path: '/mobile/sessions',
+    label: '会话',
+    icon: {
+      render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          'stroke-width': '2',
+          d: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z'
         })
       ])
     }
@@ -47,20 +61,6 @@ const navItems = [
           'stroke-linejoin': 'round',
           'stroke-width': '2',
           d: 'M13 10V3L4 14h7v7l9-11h-7z'
-        })
-      ])
-    }
-  },
-  {
-    path: '/mobile/history',
-    label: '历史',
-    icon: {
-      render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
-        h('path', {
-          'stroke-linecap': 'round',
-          'stroke-linejoin': 'round',
-          'stroke-width': '2',
-          d: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'
         })
       ])
     }
