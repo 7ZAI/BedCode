@@ -885,6 +885,8 @@ async fn handle_control(
                     id: s.id,
                     name: s.name,
                     status: format!("{:?}", s.status),
+                    created_at: s.created_at.to_rfc3339(),
+                    started_at: s.started_at.map(|t| t.to_rfc3339()),
                 })
                 .collect();
 

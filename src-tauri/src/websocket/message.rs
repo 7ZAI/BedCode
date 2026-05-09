@@ -321,6 +321,8 @@ pub struct SessionSummary {
     pub id: String,
     pub name: String,
     pub status: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
 }
 
 /// 会话配置摘要
