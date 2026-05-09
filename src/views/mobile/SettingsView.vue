@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3">
+    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
       <h1 class="text-lg font-semibold">设置</h1>
     </header>
 
@@ -182,6 +182,9 @@ const fontSizeMap = {
 }
 
 onMounted(async () => {
+  // 先等待 settingsStore 加载完成
+  await settingsStore.loadSettings()
+
   // 加载已保存的设置
   const saved = localStorage.getItem('mobile-settings')
   if (saved) {
@@ -193,10 +196,7 @@ onMounted(async () => {
     }
   }
 
-  // 同步到 settingsStore（使设置生效）
-  syncToSettingsStore()
-
-  // 尝试从后端加载
+  // 尝试从后端加载移动端设置并同步
   try {
     const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
     for (const s of dbSettings) {
@@ -209,16 +209,24 @@ onMounted(async () => {
   } catch {
     // Backend may not be available
   }
+
+  // 同步到 settingsStore（使设置生效）
+  syncToSettingsStore()
 })
 
-// 将移动端设置���步到全局 settingsStore
+// 将移动端设置同步到全局 settingsStore
 function syncToSettingsStore() {
   // 字体大小映射到终端字体大小
   const terminalFontSize = fontSizeMap[settings.value.fontSize]
+
+  // 深色模式映射到 theme（darkMode: true = dark, false = light）
+  const theme = settings.value.darkMode ? 'dark' : 'light'
+
   settingsStore.saveSettings({
     ui: {
       ...settingsStore.settings.ui,
-      terminal_font_size: terminalFontSize
+      terminal_font_size: terminalFontSize,
+      theme: theme
     }
   })
 }

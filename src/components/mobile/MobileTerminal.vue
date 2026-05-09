@@ -66,8 +66,11 @@ function initTerminal() {
     },
     cursorBlink: true,
     cursorStyle: 'block',
-    scrollback: 10000,
+    // 移动端减少滚动缓冲区以节省内存
+    scrollback: 5000,
     allowProposedApi: true,
+    // 禁用光标样式渲染优化
+    cursorInactiveStyle: 'none',
   })
 
   fitAddon = new FitAddon()
@@ -75,18 +78,19 @@ function initTerminal() {
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalContainerRef.value)
 
-  // 移动端适配：fit 后等待 DOM 完成
-  setTimeout(() => {
-    if (fitAddon) {
-      fitAddon.fit()
-    }
-  }, 100)
+  // 移动端适配：fit 后等待 DOM 完成，使用防抖
+  let fitTimeout: ReturnType<typeof setTimeout> | null = null
+  const debouncedFit = () => {
+    if (fitTimeout) clearTimeout(fitTimeout)
+    fitTimeout = setTimeout(() => {
+      if (fitAddon) fitAddon.fit()
+    }, 100)
+  }
+  debouncedFit()
 
-  // 监听窗口大小变化
+  // 监听窗口大小变化，使用防抖避免频繁 fit
   const resizeObserver = new ResizeObserver(() => {
-    if (fitAddon && terminal) {
-      fitAddon.fit()
-    }
+    debouncedFit()
   })
   resizeObserver.observe(terminalContainerRef.value)
 
@@ -160,12 +164,16 @@ defineExpose({
 <style scoped>
 :deep(.xterm) {
   height: 100%;
-  padding: 4px;
+  padding: 0;
 }
 
 :deep(.xterm-viewport) {
   border-radius: 0;
   overflow-y: auto !important;
   overflow-x: hidden;
+}
+
+:deep(.xterm-screen) {
+  height: 100%;
 }
 </style>

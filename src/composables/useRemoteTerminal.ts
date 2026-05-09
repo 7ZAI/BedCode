@@ -40,8 +40,13 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   const sessions = ref<RemoteSession[]>([])
   const sessionConfigs = ref<SessionConfigSummary[]>([])
   const currentSessionId = ref<string | null>(null)
-  // 输出缓冲区：保持原始 ANSI 序列的完整字符串，由 xterm.js 解析渲染
+  // 输出缓冲区：使用数组存储，避免字符串拼接的 O(n) 性能问题
   const outputBuffer = ref('')
+  // 待合并的输出块数组（用于批量写入 xterm.js）
+  const outputChunks: string[] = []
+  // 合并定时器
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+
   const isWaitingInput = ref(false)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
@@ -49,6 +54,29 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   // === 输出缓冲区限制 ===
   const MAX_OUTPUT_BYTES = 500000  // 500KB 上限
   const OUTPUT_TRIM_TO = 400000    // 超限后裁剪到 400KB
+
+  // === 定期刷新输出缓冲区到字符串 ===
+  function flushOutput() {
+    if (outputChunks.length === 0) return
+
+    // 合并所有块
+    outputBuffer.value += outputChunks.join('')
+    outputChunks.length = 0  // 清空数组
+
+    // 限制缓冲区大小
+    if (outputBuffer.value.length > MAX_OUTPUT_BYTES) {
+      outputBuffer.value = outputBuffer.value.slice(-OUTPUT_TRIM_TO)
+    }
+  }
+
+  // 添加输出块（防抖合并，16ms 内合并一次，约 60fps）
+  function addOutput(data: string) {
+    outputChunks.push(data)
+
+    // 清除之前的定时器，设置新的
+    if (flushTimer) clearTimeout(flushTimer)
+    flushTimer = setTimeout(flushOutput, 16)
+  }
 
   // === 监听 WebSocket 消息 ===
   watch(
@@ -81,15 +109,10 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
       }
       const data = new TextDecoder('utf-8').decode(bytes)
 
-      // 直接追加完整数据块，保持 ANSI 序列完整（由 xterm.js 解析）
-      outputBuffer.value += data
+      // 使用优化的输出方法（批量合并）
+      addOutput(data)
 
-      // 限制缓冲区大小（按字节数限制，防止 OOM）
-      if (outputBuffer.value.length > MAX_OUTPUT_BYTES) {
-        outputBuffer.value = outputBuffer.value.slice(-OUTPUT_TRIM_TO)
-      }
-
-      // 检测等待输入状态（对解码后的纯文本检测，移除 ANSI 序列）
+      // 检测等待输入状态
       isWaitingInput.value = payload.is_waiting || detectWaitingInput(stripAnsi(data))
     } catch (e) {
       console.error('Failed to decode output:', e)
@@ -346,8 +369,25 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
 
   /** 清空输出 */
   function clearOutput(): void {
+    // 清除待合并的数据
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    flushOutput()  // 先刷新 pending 的数据
+
     outputBuffer.value = ''
+    outputChunks.length = 0
     isWaitingInput.value = false
+  }
+
+  /** 清理资源（应在组件卸载时调用） */
+  function cleanup(): void {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    outputChunks.length = 0
   }
 
   /**
@@ -430,6 +470,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     sendInput,
     sendSpecialKey,
     clearOutput,
+    cleanup,
     reconnectAndResume,
     enableAutoReconnect,
     disableAutoReconnect,

@@ -95,11 +95,14 @@ const inputRef = ref<HTMLInputElement | null>(null)
 const showSpecialKeys = ref(false)
 const isKeyboardOpen = computed(() => (props.keyboardHeight || 0) > 0)
 
-// 容器样式：键盘弹出时使用 padding-bottom 避免被遮挡
+// 容器样式：键盘弹出时使用 padding-bottom 避免被遮挡，同时处理底部安全区域
 const containerStyle = computed(() => {
   const height = props.keyboardHeight || 0
+  const safeAreaBottom = 'env(safe-area-inset-bottom, 0px)'
   return {
-    paddingBottom: height > 0 ? `${height + 12}px` : undefined,
+    paddingBottom: height > 0
+      ? `calc(${safeAreaBottom} + ${height + 12}px)`
+      : `calc(${safeAreaBottom} + 12px)`,
     transition: 'padding-bottom 200ms ease-out'
   }
 })

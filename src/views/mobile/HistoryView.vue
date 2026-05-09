@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3">
+    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
       <h1 class="text-lg font-semibold">历史记录</h1>
     </header>
 

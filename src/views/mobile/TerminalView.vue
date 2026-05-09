@@ -73,8 +73,26 @@ const { keyboardHeight } = useKeyboardAvoidance()
 
 // 终端区域动态高度
 const terminalHeight = computed(() => {
-  // 当键盘弹出时，减少终端高度；键盘收起时恢复
-  return `calc(100% - ${keyboardHeight.value}px - 72px)` // 72px 是 InputBar 的高度
+  // 底部安全区域高度
+  const safeAreaBottom = 'env(safe-area-inset-bottom, 0px)'
+
+  // Header 高度计算：基础 py-3 + padding-top 额外 12px + 额外 16px (safe-area) ≈ 64px
+  const headerHeight = 64
+  // InputBar 基础高度约 56px，特殊键面板展开时约 120px
+  const inputBarBaseHeight = 56
+  const inputBarExpandedHeight = 120
+  const isSpecialKeysOpen = false // 可通过状态检测
+
+  // 当键盘弹出时，减少终端高度
+  const kbHeight = keyboardHeight.value
+  const inputHeight = isSpecialKeysOpen ? inputBarExpandedHeight : inputBarBaseHeight
+
+  // 键盘弹出时：减去 header + 键盘高度 + 输入栏高度 + 底部安全区域
+  // 键盘收起时：减去 header + 输入栏高度 + 底部安全区��
+  if (kbHeight > 0) {
+    return `calc(100% - ${headerHeight}px - ${kbHeight}px - ${inputHeight}px - ${safeAreaBottom})`
+  }
+  return `calc(100% - ${headerHeight}px - ${inputHeight}px - ${safeAreaBottom})`
 })
 
 const connection = useRemoteConnection()
@@ -165,6 +183,8 @@ onUnmounted(async () => {
   // 禁用自动重连并离开会话
   terminal.disableAutoReconnect()
   await terminal.leaveSession()
+  // 清理输出缓冲区定时器
+  terminal.cleanup()
   // 清除活跃会话 ID，通知其他视图连接仍存在但会话已离开
   connection.activeSessionId.value = null
 })

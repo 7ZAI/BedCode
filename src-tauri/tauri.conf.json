@@ -62,7 +62,14 @@
       }
     },
     "android": {
-      "minSdkVersion": 24
+      "minSdkVersion": 24,
+      "window": {
+        "immersiveMode": true,
+        "translucentStatus": true,
+        "translucentNavigation": true,
+        "statusBarColor": "#111827",
+        "navigationBarColor": "#111827"
+      }
     }
   },
   "plugins": {}
