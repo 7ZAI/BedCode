@@ -31,7 +31,6 @@
     <!-- Terminal Output -->
     <div class="flex-1 overflow-hidden">
       <OutputRenderer
-        :blocks="outputBlocks"
         :raw-output="rawOutput"
         :auto-scroll="autoScroll"
       />
@@ -58,7 +57,6 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
-import { useOutputParser } from '@/composables/useOutputParser'
 import { useKeyboardAvoidance } from '@/composables/useKeyboardAvoidance'
 import OutputRenderer from '@/components/mobile/OutputRenderer.vue'
 import InputBar from '@/components/mobile/InputBar.vue'
@@ -78,24 +76,22 @@ const terminal = useRemoteTerminal({
   setReconnectCallback: connection.setReconnectCallback,
 })
 
-const {
-  blocks: outputBlocks,
-  rawOutput,
-  parseOutput,
-  clearOutput,
-} = useOutputParser()
-
+const rawOutput = ref('')
 const inputBarRef = ref<InstanceType<typeof InputBar> | null>(null)
 const autoScroll = ref(true)
 
 const deviceName = computed(() => connection.currentDevice.value?.name || 'Claude Code')
 
-// 监听输出缓冲区，更新显示
+// 监听输出缓冲区，追加显示
 watch(() => terminal.outputBuffer.value, (buffer) => {
-  // 将缓冲区内容合并并解析
   const output = buffer.join('\n')
-  clearOutput()
-  parseOutput(output)
+  if (output) {
+    rawOutput.value += output
+    // 限制大小，防止内存溢出
+    if (rawOutput.value.length > 100000) {
+      rawOutput.value = rawOutput.value.slice(-80000)
+    }
+  }
 }, { deep: true })
 
 // 监听等待输入状态
@@ -153,8 +149,8 @@ function goBack() {
 
 function handleSendInput(text: string) {
   terminal.sendInput(text)
-  // 显示用户输入
-  parseOutput(`\n> ${text}\n`)
+  // 在终端回显用户输入
+  rawOutput.value += `\n> ${text}\n`
 }
 
 function handleSendSpecialKey(key: string) {
@@ -165,7 +161,7 @@ async function handleSelectSession(sessionId: string) {
   await terminal.joinSession(sessionId)
   // 同步活跃会话 ID
   connection.activeSessionId.value = terminal.currentSessionId.value
-  clearOutput()
+  rawOutput.value = ''
 }
 </script>
 
