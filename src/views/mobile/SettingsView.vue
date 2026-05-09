@@ -64,7 +64,7 @@
         <div class="space-y-4">
           <div class="flex items-center justify-between">
             <span>深色模式</span>
-            <Toggle v-model="settings.darkMode" disabled />
+            <Toggle v-model="settings.darkMode" />
           </div>
 
           <div class="flex items-center justify-between">
@@ -145,6 +145,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import Toggle from '@/components/common/Toggle.vue'
+import { invoke } from '@tauri-apps/api/core'
 
 interface Settings {
   autoReconnect: boolean
@@ -172,8 +173,8 @@ const defaultSettings: Settings = {
 
 const settings = ref<Settings>({ ...defaultSettings })
 
-onMounted(() => {
-  // Load settings from storage
+onMounted(async () => {
+  // Load from localStorage first (fast path)
   const saved = localStorage.getItem('mobile-settings')
   if (saved) {
     try {
@@ -183,10 +184,32 @@ onMounted(() => {
       console.error('Failed to load settings:', e)
     }
   }
+
+  // Then try to load from backend DB
+  try {
+    const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
+    for (const s of dbSettings) {
+      if (s.key.startsWith('mobile.')) {
+        const settingKey = s.key.replace('mobile.', '')
+        const value = s.value === 'true' ? true : s.value === 'false' ? false : isNaN(Number(s.value)) ? s.value : Number(s.value)
+        ;(settings.value as any)[settingKey] = value
+      }
+    }
+  } catch {
+    // Backend may not be available at this point
+  }
 })
 
 function saveSettings() {
   localStorage.setItem('mobile-settings', JSON.stringify(settings.value))
+
+  // Also save to backend DB
+  for (const [key, value] of Object.entries(settings.value)) {
+    invoke('set_db_setting', {
+      key: `mobile.${key}`,
+      value: String(value),
+    }).catch(() => {})
+  }
 }
 
 function resetSettings() {
