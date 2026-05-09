@@ -112,6 +112,11 @@ fn insert_default_quick_actions(db: &db::Database) -> Result<()> {
     Ok(())
 }
 
+// ==================== 应用启动耗时记录 ====================
+
+/// 应用启动时间，用于计算启动耗时
+pub struct AppStartTime(std::time::Instant);
+
 // ==================== Desktop Entry Point ====================
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -120,14 +125,23 @@ pub fn run() {
     use tauri::Emitter;
     use websocket::WebSocketServer;
 
+    // 记录进程启动时间
+    let app_start = AppStartTime(std::time::Instant::now());
+    // Instant 实现了 Copy，此处复制一份供 setup 闭包内使用
+    // app_start 在闭包内被 move 到 app.manage 后无法再访问
+    let start = app_start.0;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
-        .setup(|app| {
+        .setup(move |app| {
             // 初始化日志系统
             init_logging(app.handle())?;
+
+            // 将启动时间注入状态，供前端查询启动耗时
+            app.manage(app_start);
 
             // 获取配置路径
             let app_handle = app.handle();
@@ -231,7 +245,8 @@ pub fn run() {
                 }
             });
 
-            tracing::info!("BedCode (Desktop) initialized - WebSocket server on port {}", ws_port);
+            let init_elapsed = start.elapsed();
+            tracing::info!("BedCode (Desktop) initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -272,12 +287,19 @@ pub fn run() {
             // Quick Actions
             commands::list_quick_actions,
             commands::create_quick_action,
+            commands::update_quick_action,
+            commands::delete_quick_action,
+            commands::get_terminal_history,
+            commands::search_terminal_history,
+            commands::get_all_db_settings,
+            commands::set_db_setting,
             // Settings
             commands::get_app_settings,
             commands::save_app_settings,
             // Utility
             commands::ping,
             commands::get_app_version,
+            commands::get_startup_time,
             commands::get_local_ip_addresses,
             commands::get_connected_devices,
         ])
@@ -399,6 +421,12 @@ pub fn run() {
             // Quick Actions
             commands::list_quick_actions,
             commands::create_quick_action,
+            commands::update_quick_action,
+            commands::delete_quick_action,
+            commands::get_terminal_history,
+            commands::search_terminal_history,
+            commands::get_all_db_settings,
+            commands::set_db_setting,
             // Settings
             commands::get_app_settings,
             commands::save_app_settings,
