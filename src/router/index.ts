@@ -35,6 +35,12 @@ const router = createRouter({
       meta: { platform: 'mobile' },
     },
     {
+      path: '/mobile/sessions',
+      name: 'mobile-sessions',
+      component: () => import('@/views/mobile/SessionsView.vue'),
+      meta: { platform: 'mobile' },
+    },
+    {
       path: '/mobile/terminal/:id',
       name: 'mobile-terminal',
       component: () => import('@/views/mobile/TerminalView.vue'),
