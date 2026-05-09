@@ -303,6 +303,8 @@ pub enum ControlAction {
     StartSession { config_id: String },
     /// 停止会话
     StopSession { session_id: String },
+    /// 删除会话
+    RemoveSession { session_id: String },
     /// 调整终端大小
     ResizeSession { session_id: String, cols: u16, rows: u16 },
     /// 列出快捷指令

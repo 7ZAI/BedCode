@@ -308,6 +308,29 @@ impl SessionManager {
         Ok(())
     }
 
+    /// 删除会话（从 info map 中完全移除）
+    pub async fn remove_session(&self, session_id: &str) -> Result<()> {
+        tracing::info!("remove_session called for: {}", session_id);
+
+        // 终止 PTY 仍在运行的会话
+        {
+            let mut sessions = self.pty_sessions.write().await;
+            if let Some(session) = sessions.remove(session_id) {
+                session.kill().await?;
+                tracing::info!("PTY killed for removed session: {}", session_id);
+            }
+        }
+
+        // 从 info map 中移除
+        {
+            let mut info_map = self.session_info.write().await;
+            info_map.remove(session_id);
+            tracing::info!("Session removed from info map: {}", session_id);
+        }
+
+        Ok(())
+    }
+
     /// 订阅全局输出
     pub fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
         self.output_tx.subscribe()

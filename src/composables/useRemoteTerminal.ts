@@ -250,6 +250,24 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     }
   }
 
+  /** 删除会话 */
+  async function removeSession(sessionId: string): Promise<void> {
+    if (!connection.isConnected.value) {
+      throw new Error('Not connected')
+    }
+
+    try {
+      await connection.sendMessageWithResponse('control', {
+        action: { type: 'remove_session', session_id: sessionId },
+      })
+
+      await loadSessions()
+    } catch (e) {
+      error.value = String(e)
+      throw e
+    }
+  }
+
   /** 加入会话 (开始接收输出) */
   async function joinSession(sessionId: string): Promise<void> {
     if (!connection.isConnected.value) {
@@ -396,6 +414,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     loadSessionConfigs,
     startSession,
     stopSession,
+    removeSession,
     joinSession,
     leaveSession,
     sendInput,

@@ -960,6 +960,27 @@ async fn handle_control(
             }))
         }
 
+        ControlAction::RemoveSession { session_id } => {
+            session_manager.remove_session(&session_id).await?;
+
+            // 从客户端订阅列表中移除该会话
+            {
+                let mut clients = clients.write().await;
+                if let Some(client) = clients.get_mut(&addr) {
+                    client.subscribed_sessions.retain(|s| s != &session_id);
+                }
+            }
+
+            Ok(Some(Message::Control {
+                message_id: request_message_id,
+                session_id: Some(session_id.clone()),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                payload: super::message::ControlPayload {
+                    action: ControlAction::RemoveSession { session_id },
+                },
+            }))
+        }
+
         ControlAction::ResizeSession { session_id, cols, rows } => {
             session_manager.resize_session(&session_id, cols, rows).await?;
             Ok(None)
