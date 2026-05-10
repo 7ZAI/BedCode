@@ -30,6 +30,7 @@ export interface SessionInfo {
   createdAt: string
   startedAt?: string
   stoppedAt?: string
+  sessionType: 'pty' | 'plugin'
 }
 
 export interface PtyOutputEvent {
