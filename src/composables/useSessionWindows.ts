@@ -39,13 +39,27 @@ export function useSessionWindows() {
     const terminalWidth = Math.floor(mainSize.width * 0.5)
     const terminalHeight = mainSize.height
 
+    // 计算新窗口位置，确保不超过屏幕边界
+    let terminalX = mainPosition.x + mainSize.width
+    const screenWidth = window.screen.width
+
+    // 如果窗口会超出屏幕右侧，放到主窗口左侧
+    if (terminalX + terminalWidth > screenWidth) {
+      terminalX = mainPosition.x - terminalWidth
+    }
+
+    // 如果左侧也超出（屏幕太窄），则居中显示
+    if (terminalX < 0) {
+      terminalX = Math.floor((screenWidth - terminalWidth) / 2)
+    }
+
     // 创建终端窗口
     const terminalWindow = new WebviewWindow(`terminal-${session.id}`, {
       url: `/terminal-window/${session.id}`,
       title: `终端 - ${session.name}`,
       width: terminalWidth,
       height: terminalHeight,
-      x: mainPosition.x + mainSize.width,
+      x: terminalX,
       y: mainPosition.y,
       resizable: true,
       decorations: false,
