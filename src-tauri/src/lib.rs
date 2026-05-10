@@ -7,6 +7,7 @@ pub mod db;
 pub mod error;
 pub mod notify;
 pub mod parser;
+pub mod plugin;
 
 // PTY and Session modules are desktop-only
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
