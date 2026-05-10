@@ -32,41 +32,8 @@
       </div>
     </header>
 
-    <!-- Terminal Container (xterm.js) -->
+    <!-- Terminal Container (xterm.js) - 原生键盘输入 -->
     <div ref="terminalContainerRef" class="flex-1 overflow-hidden"></div>
-
-    <!-- Input Bar -->
-    <div v-if="showInput && session" class="border-t border-dark-700 p-3 bg-dark-800">
-      <div class="flex gap-2">
-        <input
-          v-model="inputText"
-          type="text"
-          placeholder="输入命令..."
-          class="flex-1 bg-dark-700 border border-dark-600 rounded-lg px-4 py-2 text-white placeholder-dark-400 focus:border-primary-500 outline-none"
-          @keydown.enter="sendInput"
-          @keydown.tab.prevent="sendSpecialKey('tab')"
-          @keydown.up.prevent="navigateHistory(-1)"
-          @keydown.down.prevent="navigateHistory(1)"
-        />
-        <Button variant="primary" @click="sendInput">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-          </svg>
-        </Button>
-      </div>
-
-      <!-- Quick Keys -->
-      <div class="flex gap-2 mt-2">
-        <button
-          v-for="key in quickKeys"
-          :key="key.value"
-          class="px-3 py-1 bg-dark-700 hover:bg-dark-600 rounded text-xs text-dark-300 transition-colors"
-          @click="sendSpecialKey(key.value)"
-        >
-          {{ key.label }}
-        </button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -95,18 +62,16 @@ const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
-const inputText = ref('')
-const historyIndex = ref(-1)
 
 // xterm.js 实例
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
-let lastOutputIndex = 0 // 记录上次处理的输出索引
 
 const sessionId = computed(() => props.session?.id || '')
 
 const { output, clearOutput } = usePtyOutput(sessionId)
 
+// 快速键（仅用于 UI 显示，实际功能已集成到 xterm 原生输入）
 const quickKeys = [
   { label: 'Tab', value: 'tab' },
   { label: 'Enter', value: 'enter' },
@@ -135,8 +100,6 @@ const statusColor = computed(() => {
       return 'bg-dark-500'
   }
 })
-
-const inputHistory = ref<string[]>([])
 
 // 初始化 xterm.js
 function initTerminal() {
@@ -198,6 +161,13 @@ function initTerminal() {
     }
   })
   resizeObserver.observe(terminalContainerRef.value)
+
+  // 捕获键盘输入，直接发送到 PTY（原生终端体验）
+  terminal.onData((data: string) => {
+    if (!props.session) return
+    console.log('[Terminal] onData:', JSON.stringify(data))
+    sessionStore.writeToSession(props.session.id, data)
+  })
 }
 
 /** 将当前终端尺寸同步到 PTY */
@@ -221,31 +191,26 @@ function clearTerminal() {
   if (!terminal) return
   terminal.clear()
   clearOutput()
-  lastOutputIndex = 0
 }
 
-// 监听 PTY 输出，写入 xterm（只处理新增的）
+// 监听 PTY 输出，写入 xterm
 watch(output, (newOutput) => {
   if (!terminal) return
-
-  // 只写入新增的输出（从上次索引之后）
-  for (let i = lastOutputIndex; i < newOutput.length; i++) {
-    terminal.write(newOutput[i])
+  // 写入所有新的输出
+  for (const data of newOutput) {
+    terminal.write(data)
   }
-  lastOutputIndex = newOutput.length
 }, { deep: true })
 
 let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
-// 监听字体大小变化
+// 监听本地 fontSize 变化并更新终端
 watch(fontSize, (newSize) => {
   if (!terminal) return
   terminal.options.fontSize = newSize
   if (fitAddon) {
     fitAddon.fit()
   }
-  // 字体大小变化后终端列数可能变化，同步到 PTY
   nextTick(() => syncTerminalSize())
-  // 持久化到设置（带去抖）
   if (fontSizeSaveTimeout) clearTimeout(fontSizeSaveTimeout)
   fontSizeSaveTimeout = setTimeout(() => {
     settingsStore.saveSettings({
@@ -253,13 +218,24 @@ watch(fontSize, (newSize) => {
     })
   }, 300)
 })
+// 监听设置中的字体大小变化（从设置页面加载时）
+watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => {
+  console.log('[TerminalPreview] Store fontSize changed:', oldSize, '->', newSize)
+  if (fontSize.value !== newSize) {
+    fontSize.value = newSize
+    if (terminal) {
+      terminal.options.fontSize = newSize
+      if (fitAddon) fitAddon.fit()
+      nextTick(() => syncTerminalSize())
+    }
+  }
+}, { immediate: true })
 
 // 监听会话变化，重置终端并同步尺寸
 watch(sessionId, (newId, oldId) => {
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
-      lastOutputIndex = 0
     }
     // 新会话激活时同步当前终端尺寸到 PTY
     if (newId && terminal) {
@@ -281,52 +257,15 @@ onUnmounted(() => {
   }
 })
 
-async function sendInput() {
-  if (!inputText.value.trim() || !props.session) return
-
-  const text = inputText.value
-  console.log('[Terminal] Sending input:', text, 'to session:', props.session.id)
-
-  inputHistory.value.push(text)
-  historyIndex.value = -1
-
-  // 写入终端显示用户输入
-  if (terminal) {
-    terminal.write(text + '\n')
-  }
-
-  // 发送到 PTY
-  await sessionStore.writeToSession(props.session.id, text + '\n')
-
-  inputText.value = ''
-}
-
+/**
+ * 发送特殊键（通过快速键按钮触发）
+ * 注意：xterm.js 的 onData 已处理普通键盘输入，此方法仅用于 UI 按钮
+ */
 async function sendSpecialKey(key: string) {
   if (!props.session) return
 
   console.log('[Terminal] Sending special key:', key, 'to session:', props.session.id)
-
-  if (key === 'tab') {
-    inputText.value += '\t'
-  } else {
-    await sessionStore.sendSpecialKey(props.session.id, key)
-  }
-}
-
-function navigateHistory(direction: number) {
-  if (inputHistory.value.length === 0) return
-
-  const newIndex = historyIndex.value + direction
-  if (newIndex < -1) return
-  if (newIndex >= inputHistory.value.length) return
-
-  historyIndex.value = newIndex
-
-  if (newIndex === -1) {
-    inputText.value = ''
-  } else {
-    inputText.value = inputHistory.value[inputHistory.value.length - 1 - newIndex]
-  }
+  await sessionStore.sendSpecialKey(props.session.id, key)
 }
 </script>
 
