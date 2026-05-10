@@ -3,7 +3,11 @@
 //! Parses Claude Code's JSONL conversation log and formats for display
 
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+
+/// Maximum read size to prevent unbounded memory allocation (1MB)
+const MAX_READ_SIZE: u64 = 1024 * 1024;
 
 /// JSONL entry types from Claude Code
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,8 +83,13 @@ pub struct FormattedOutput {
 impl ClaudeMessage {
     /// Parse a JSONL line and format for display
     pub fn parse_line(line: &str) -> Option<FormattedOutput> {
-        let msg: ClaudeMessage = serde_json::from_str(line).ok()?;
-        Some(msg.format())
+        match serde_json::from_str::<ClaudeMessage>(line) {
+            Ok(msg) => Some(msg.format()),
+            Err(e) => {
+                tracing::debug!("Failed to parse JSONL line: {}", e);
+                None
+            }
+        }
     }
 
     /// Format message for terminal display
@@ -116,21 +125,23 @@ impl ClaudeMessage {
             }
             ClaudeMessage::ToolUse { name, input, .. } => {
                 let input_str = serde_json::to_string(input).unwrap_or_default();
-                let truncated = if input_str.len() > 200 {
-                    format!("{}...", &input_str[..200])
+                let truncated = truncate(&input_str, 200);
+                let display = if input_str.chars().count() > 200 {
+                    format!("{}...", truncated)
                 } else {
-                    input_str
+                    truncated
                 };
                 FormattedOutput {
-                    text: format!("[Tool: {}]: {}", name, truncated),
+                    text: format!("[Tool: {}]: {}", name, display),
                     is_waiting: false,
                 }
             }
             ClaudeMessage::ToolResult { content, is_error, .. } => {
-                let truncated = if content.len() > 500 {
-                    format!("{}...", &content[..500])
+                let truncated = truncate(content, 500);
+                let display = if content.chars().count() > 500 {
+                    format!("{}...", truncated)
                 } else {
-                    content.clone()
+                    truncated
                 };
                 let prefix = if is_error.unwrap_or(false) {
                     "[Error]"
@@ -138,7 +149,7 @@ impl ClaudeMessage {
                     "[Result]"
                 };
                 FormattedOutput {
-                    text: format!("{}: {}", prefix, truncated),
+                    text: format!("{}: {}", prefix, display),
                     is_waiting: false,
                 }
             }
@@ -152,24 +163,39 @@ impl ClaudeMessage {
 
 /// Read new lines from JSONL file (since last position)
 pub fn read_new_lines(path: &Path, last_pos: u64) -> std::io::Result<(Vec<String>, u64)> {
-    use std::io::{Read, Seek, SeekFrom};
-
     let mut file = std::fs::File::open(path)?;
-    let metadata = file.metadata()?;
-    let file_size = metadata.len();
+    let file_size = file.metadata()?.len();
 
     if file_size <= last_pos {
         return Ok((vec![], last_pos));
     }
 
     file.seek(SeekFrom::Start(last_pos))?;
-    let mut buffer = vec![0; (file_size - last_pos) as usize];
-    file.read_exact(&mut buffer)?;
+
+    let read_size = std::cmp::min(file_size - last_pos, MAX_READ_SIZE);
+    if read_size == 0 {
+        return Ok((vec![], last_pos));
+    }
+
+    let mut buffer = vec![0u8; read_size as usize];
+    let bytes_read = file.read(&mut buffer)?;
+    if bytes_read == 0 {
+        return Ok((vec![], last_pos));
+    }
+    // Shrink buffer to actual bytes read in case file shrank between metadata and read
+    buffer.truncate(bytes_read);
 
     let content = String::from_utf8_lossy(&buffer);
     let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
-    Ok((lines, file_size))
+    let new_pos = last_pos + bytes_read as u64;
+    Ok((lines, new_pos))
+}
+
+/// Safely truncate a string to a maximum number of characters without panicking
+/// on multi-byte UTF-8 characters.
+fn truncate(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
 
 #[cfg(test)]
