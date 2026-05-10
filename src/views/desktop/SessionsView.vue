@@ -68,6 +68,15 @@
               ]"
             ></div>
             <span class="text-sm">{{ session.name }}</span>
+            <span
+              v-if="session.sessionType"
+              :class="[
+                'text-xs px-2 py-0.5 rounded',
+                session.sessionType === 'plugin' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
+              ]"
+            >
+              {{ session.sessionType }}
+            </span>
             <button
               @click.stop="killSession(session.id)"
               class="text-dark-400 hover:text-red-400 transition-colors"
