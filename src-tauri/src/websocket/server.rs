@@ -6,8 +6,9 @@ use super::message::{AuthPayload, AuthStage, ControlAction, Message};
 use crate::auth::PairingService;
 use crate::auth::QrTokenManager;
 use crate::db::Database;
+use crate::plugin::PluginManager;
 use crate::pty::PtyOutputEvent;
-use crate::session::SessionManager;
+use crate::session::{SessionManager, SessionType};
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -49,10 +50,11 @@ pub struct PairingCodeGeneratedEvent {
 pub struct WebSocketServer {
     port: u16,
     session_manager: Arc<SessionManager>,
+    plugin_manager: Arc<PluginManager>,
     db: Arc<Mutex<Database>>,
     pairing_service: Arc<PairingService>,
     qr_manager: Arc<QrTokenManager>,
-    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
+    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>,
     /// 客户端发送器映射（用于向特定客户端发送消息）
     client_senders: Arc<RwLock<HashMap<SocketAddr, mpsc::UnboundedSender<WsMessage>>>>,
     /// Shutdown signal sender
@@ -68,6 +70,7 @@ impl WebSocketServer {
     pub fn new(
         port: u16,
         session_manager: Arc<SessionManager>,
+        plugin_manager: Arc<PluginManager>,
         db: Arc<Mutex<Database>>,
         pairing_service: Arc<PairingService>,
         qr_manager: Arc<QrTokenManager>,
@@ -77,6 +80,7 @@ impl WebSocketServer {
         Self {
             port,
             session_manager,
+            plugin_manager,
             db,
             pairing_service,
             qr_manager,
@@ -181,6 +185,7 @@ impl WebSocketServer {
                     let (stream, addr) = accept_result?;
 
                     let session_manager = self.session_manager.clone();
+                    let plugin_manager = self.plugin_manager.clone();
                     let db = self.db.clone();
                     let pairing_service = self.pairing_service.clone();
                     let qr_manager = self.qr_manager.clone();
@@ -256,6 +261,7 @@ impl WebSocketServer {
                                                     message,
                                                     addr,
                                                     &session_manager,
+                                                    &plugin_manager,
                                                     &db,
                                                     &pairing_service,
                                                     &qr_manager,
