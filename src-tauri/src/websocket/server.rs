@@ -54,7 +54,7 @@ pub struct WebSocketServer {
     db: Arc<Mutex<Database>>,
     pairing_service: Arc<PairingService>,
     qr_manager: Arc<QrTokenManager>,
-    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>,
+    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     /// 客户端发送器映射（用于向特定客户端发送消息）
     client_senders: Arc<RwLock<HashMap<SocketAddr, mpsc::UnboundedSender<WsMessage>>>>,
     /// Shutdown signal sender
@@ -524,6 +524,7 @@ async fn handle_message(
     message: Message,
     addr: SocketAddr,
     session_manager: &Arc<SessionManager>,
+    plugin_manager: &Arc<PluginManager>,
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     qr_manager: &Arc<QrTokenManager>,
@@ -571,7 +572,7 @@ async fn handle_message(
                 }
             }
 
-            handle_control(payload.action, message_id, session_manager, db, clients, addr).await
+            handle_control(payload.action, message_id, session_manager, plugin_manager, db, clients, addr).await
         }
 
         Message::Heartbeat { .. } => {
@@ -878,6 +879,7 @@ async fn handle_control(
     action: ControlAction,
     request_message_id: String,
     session_manager: &Arc<SessionManager>,
+    plugin_manager: &Arc<PluginManager>,
     db: &Arc<Mutex<Database>>,
     clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     addr: SocketAddr,

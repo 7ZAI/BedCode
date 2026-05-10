@@ -106,6 +106,11 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// 获取输出广播发送器
+    pub fn output_tx(&self) -> broadcast::Sender<PtyOutputEvent> {
+        self.output_tx.clone()
+    }
+
     /// 创建新的 Session Manager
     pub fn new(db: Arc<Mutex<Database>>) -> Self {
         let (output_tx, _) = broadcast::channel(2048);

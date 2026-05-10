@@ -186,6 +186,12 @@ pub fn run() {
             let session_manager = Arc::new(SessionManager::new(db.clone()));
             app.manage(session_manager.clone());
 
+            // Create PluginManager
+            let plugin_manager = Arc::new(plugin::PluginManager::new(
+                session_manager.output_tx(),
+                db.clone(),
+            ));
+
             // Initialize pairing service
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service.clone());
@@ -198,6 +204,7 @@ pub fn run() {
             let mut ws_server = WebSocketServer::new(
                 ws_port,
                 session_manager.clone(),
+                plugin_manager.clone(),
                 db.clone(),
                 pairing_service.clone(),
                 qr_manager.clone(),
@@ -228,9 +235,8 @@ pub fn run() {
                 let port_file = app_handle_clone
                     .path()
                     .app_data_dir()
-                    .map(|p| p.join("bedcode-port.txt"))
                     .ok()
-                    .flatten();
+                    .map(|p| p.join("bedcode-port.txt"));
 
                 if let Some(port_file) = port_file {
                     if let Some(parent) = port_file.parent() {
