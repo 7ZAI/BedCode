@@ -221,6 +221,29 @@ pub fn run() {
                 }
             });
 
+            // Write port file for plugin discovery
+            let app_handle_clone = app_handle.clone();
+            let ws_port_copy = ws_port;
+            tauri::async_runtime::spawn(async move {
+                let port_file = app_handle_clone
+                    .path()
+                    .app_data_dir()
+                    .map(|p| p.join("bedcode-port.txt"))
+                    .ok()
+                    .flatten();
+
+                if let Some(port_file) = port_file {
+                    if let Some(parent) = port_file.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    if let Err(e) = tokio::fs::write(&port_file, ws_port_copy.to_string()).await {
+                        tracing::warn!("Failed to write port file: {}", e);
+                    } else {
+                        tracing::info!("Wrote port file: {}", port_file.display());
+                    }
+                }
+            });
+
             // Start output event forwarder (forward PTY output to frontend)
             let app_handle_clone = app_handle.clone();
             let session_manager_clone = session_manager.clone();
