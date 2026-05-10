@@ -162,8 +162,8 @@ function initTerminal() {
   syncTerminalSize()
 
   // 监听终端尺寸变化
-  terminal.onResize(({ col: col, row: row }) => {
-    invoke('resize_session', { sessionId: sessionId.value, cols: col, rows: row }).catch(console.error)
+  terminal.onResize(({ cols, rows }) => {
+    invoke('resize_session', { sessionId: sessionId.value, cols, rows }).catch(console.error)
   })
 
   // 监听窗口大小变化
