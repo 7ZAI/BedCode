@@ -2,6 +2,7 @@
   <button
     :type="type"
     :disabled="disabled || loading"
+    :title="title"
     class="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-900"
     :class="[variantClass, sizeClass, { 'opacity-50 cursor-not-allowed': disabled || loading }]"
     @click="$emit('click', $event)"
@@ -34,6 +35,7 @@ interface Props {
   type?: 'button' | 'submit' | 'reset'
   disabled?: boolean
   loading?: boolean
+  title?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -42,6 +44,7 @@ const props = withDefaults(defineProps<Props>(), {
   type: 'button',
   disabled: false,
   loading: false,
+  title: '',
 })
 
 defineEmits(['click'])
