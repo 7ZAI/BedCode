@@ -157,35 +157,21 @@ impl PluginManager {
         }
 
         // 启动文件监听器读取日志更新
-        self.start_file_watcher(session_id.clone(), jsonl_path.clone())?;
+        // 返回监听器和初始位置，然后在 async 上下文中更新会话状态
+        let (watcher, initial_pos) = self
+            .start_file_watcher(session_id.clone(), jsonl_path.clone())
+            .await?;
 
-        tracing::info!(
-            "Plugin session registered: {} (jsonl: {})",
-            session_id,
-            jsonl_path.display()
-        );
-        Ok(())
-    }
-
-    /// 启动文件监听进程
-    ///
-    /// 使用 notify 库监听 JSONL 文件的修改事件，当文件更新时
-    /// 读取新内容并转发到输出通道
-    fn start_file_watcher(&self, session_id: String, jsonl_path: PathBuf) -> Result<()> {
-        let sessions = self.sessions.clone();
-        let output_tx = self.output_tx.clone();
-
-        // 获取初始文件位置（从文件结尾开始，忽略历史内容）
-        let initial_pos = std::fs::metadata(&jsonl_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-
+        // 更新会话状态，写入文件位置和监听器
         {
-            let mut sessions = sessions.blocking_write();
+            let mut sessions = self.sessions.write().await;
             if let Some(state) = sessions.get_mut(&session_id) {
                 state.file_position = initial_pos;
+                state.watcher = Some(watcher);
+
                 // 读取并转发初始位置到结尾的内容
-                if let Ok((lines, new_pos)) = jsonl::read_new_lines(&jsonl_path, initial_pos) {
+                if let Ok((lines, new_pos)) = jsonl::read_new_lines(&jsonl_path, initial_pos)
+                {
                     state.file_position = new_pos;
                     for line in lines {
                         if line.trim().is_empty() {
@@ -202,7 +188,7 @@ impl PluginManager {
                                     timestamp: chrono::Utc::now(),
                                     is_waiting: output.is_waiting,
                                 };
-                                let _ = output_tx.send(event);
+                                let _ = self.output_tx.send(event);
                             }
                         }
                     }
@@ -210,13 +196,38 @@ impl PluginManager {
             }
         }
 
+        tracing::info!(
+            "Plugin session registered: {} (jsonl: {})",
+            session_id,
+            jsonl_path.display()
+        );
+        Ok(())
+    }
+
+    /// 启动文件监听进程
+    ///
+    /// 使用 notify 库监听 JSONL 文件的修改事件，当文件更新时
+    /// 读取新内容并转发到输出通道
+    async fn start_file_watcher(
+        &self,
+        session_id: String,
+        jsonl_path: PathBuf,
+    ) -> Result<(RecommendedWatcher, u64)> {
+        let sessions = self.sessions.clone();
+        let output_tx = self.output_tx.clone();
+
+        // 获取初始文件位置（从文件结尾开始，忽略历史内容）
+        let initial_pos = tokio::fs::metadata(&jsonl_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
         // 创建 notify 监听器
         // 使用 500ms 轮询间隔平衡响应速度和 CPU 占用
         let mut watcher = {
             let sessions = sessions.clone();
             let output_tx = output_tx.clone();
             let session_id = session_id.clone();
-            let jsonl_path_clone = jsonl_path.clone();
 
             RecommendedWatcher::new(
                 move |res: std::result::Result<notify::Event, notify::Error>| {
@@ -244,15 +255,8 @@ impl PluginManager {
         // 开始监听（非递归，仅监听单个文件）
         watcher.watch(&jsonl_path, RecursiveMode::NonRecursive)?;
 
-        // 保存监听器到会话状态
-        {
-            let mut sessions = self.sessions.blocking_write();
-            if let Some(state) = sessions.get_mut(&session_id) {
-                state.watcher = Some(watcher);
-            }
-        }
-
-        Ok(())
+        // 返回监听器和初始文件位置，由 register_session 负责异步写入会话状态
+        Ok((watcher, initial_pos))
     }
 
     /// 读取并处理 JSONL 文件更新
@@ -388,11 +392,11 @@ impl PluginManager {
 
         // 确保 .claude 目录存在
         if let Some(parent) = pending_file.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         // 写入输入内容
-        std::fs::write(&pending_file, data)?;
+        tokio::fs::write(&pending_file, data).await?;
 
         tracing::info!("Input written to pending file: {}", pending_file.display());
         Ok(())
@@ -446,7 +450,7 @@ impl PluginManager {
         let timeout = Duration::from_secs(90);
         let mut disconnected = vec![];
 
-        let mut sessions = self.sessions.write().await;
+        let sessions = self.sessions.write().await;
         for (id, state) in sessions.iter() {
             if now.duration_since(state.last_heartbeat) > timeout {
                 disconnected.push(id.clone());
