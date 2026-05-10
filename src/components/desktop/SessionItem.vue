@@ -52,7 +52,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
           </svg>
         </Button>
-        <Button variant="ghost" size="sm" @click="$emit('view')">
+        <Button variant="ghost" size="sm" @click="handleView">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
@@ -106,6 +106,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { SessionInfo } from '@/stores/session'
 import Button from '@/components/common/Button.vue'
+import { useSessionWindows } from '@/composables/useSessionWindows'
 
 const props = defineProps<{
   session: SessionInfo
@@ -119,6 +120,7 @@ const emit = defineEmits<{
   (e: 'delete'): void
 }>()
 
+const { openTerminalWindow } = useSessionWindows()
 const isExpanded = ref(false)
 
 // 判断会话是否在运行
@@ -201,6 +203,13 @@ const statusBadgeClass = computed(() => {
 
 function toggleExpand() {
   isExpanded.value = !isExpanded.value
+}
+
+function handleView() {
+  // 打开独立终端窗口
+  openTerminalWindow(props.session)
+  // 保留原有事件
+  emit('view')
 }
 
 function formatDateTime(dateStr: string): string {
