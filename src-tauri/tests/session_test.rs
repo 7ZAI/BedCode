@@ -283,6 +283,7 @@ mod pty_output_event_tests {
             session_id: "session-1".to_string(),
             data: "SGVsbG8sIFdvcmxkIQ==".to_string(), // Base64 encoded
             timestamp: chrono::Utc::now(),
+            is_waiting: false,
         };
 
         assert_eq!(event.session_id, "session-1");
@@ -295,6 +296,7 @@ mod pty_output_event_tests {
             session_id: "session-1".to_string(),
             data: "dGVzdA==".to_string(),
             timestamp: chrono::Utc::now(),
+            is_waiting: false,
         };
 
         let cloned = event.clone();
@@ -308,6 +310,7 @@ mod pty_output_event_tests {
             session_id: "session-1".to_string(),
             data: "dGVzdCBkYXRh".to_string(),
             timestamp: chrono::Utc::now(),
+            is_waiting: false,
         };
 
         let json = serde_json::to_string(&event).unwrap();

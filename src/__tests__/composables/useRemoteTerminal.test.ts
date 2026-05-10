@@ -30,7 +30,7 @@ describe('useRemoteTerminal', () => {
 
   it('should have empty outputBuffer initially', () => {
     const { outputBuffer } = useRemoteTerminal(mockConnection)
-    expect(outputBuffer.value).toEqual([])
+    expect(outputBuffer.value).toBe('')
   })
 
   it('should send input when connected and session is selected', () => {

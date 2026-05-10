@@ -7,6 +7,9 @@ pub mod db;
 pub mod error;
 pub mod notify;
 pub mod parser;
+
+// Plugin module is desktop-only (requires PTY and session management)
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod plugin;
 
 // PTY and Session modules are desktop-only
@@ -297,6 +300,8 @@ pub fn run() {
             commands::start_session,
             commands::list_sessions,
             commands::kill_session,
+            commands::delete_session,
+            commands::restart_session,
             commands::resize_session,
             // PTY Input
             commands::write_to_session,

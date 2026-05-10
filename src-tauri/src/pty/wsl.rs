@@ -16,16 +16,25 @@ pub struct WslDistro {
 
 /// 列出已安装的 WSL 发行版
 pub fn list_distributions() -> Result<Vec<WslDistro>> {
-    // 强制使用 UTF-8 编码，解决中文系统上 wsl.exe 输出非 UTF-8 的问题
+    // 尝试使用 UTF-8 编码，如果失败则使用系统默认编码
     let output = Command::new("cmd.exe")
-        .args(["/c", "chcp 65001 >nul && wsl --list --verbose"])
+        .args(["/c", "chcp 65001 >nul 2>&1 && wsl --list --verbose"])
         .output()?;
 
     if !output.status.success() {
         return Ok(vec![]);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 尝试 UTF-8 解码，失败则使用 GBK
+    let stdout = match String::from_utf8(output.stdout.clone()) {
+        Ok(s) => s,
+        Err(_) => {
+            // GBK 解码
+            let mutgbk = encoding_rs::GBK;
+            let (decoded, _, _) = mutgbk.decode(&output.stdout);
+            decoded.to_string()
+        }
+    };
     let mut distros = Vec::new();
 
     for line in stdout.lines().skip(1) {

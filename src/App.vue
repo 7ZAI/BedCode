@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-dark-900 text-dark-100">
+  <div :class="themeClasses.container">
     <!-- Desktop Layout -->
     <template v-if="isDesktop">
       <div class="flex flex-col h-screen">
@@ -33,7 +33,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, provide, watch, onMounted, onUnmounted } from 'vue'
+import { computed, provide, watch, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TitleBar from './components/desktop/TitleBar.vue'
 import Sidebar from './components/desktop/Sidebar.vue'
@@ -46,46 +46,77 @@ const router = useRouter()
 const { platformInfo } = usePlatform()
 const settingsStore = useSettingsStore()
 
-// Theme management
+// 主题管理
 let systemThemeQuery: MediaQueryList | null = null
+const isSystemDark = ref(false)
+
 const systemThemeHandler = (e: MediaQueryListEvent) => {
   document.documentElement.classList.toggle('dark', e.matches)
+  isSystemDark.value = e.matches
 }
 
 function applyTheme(theme: string) {
   const root = document.documentElement
-  if (theme === 'dark') {
-    root.classList.add('dark')
-  } else if (theme === 'light') {
-    root.classList.remove('dark')
-  } else {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    root.classList.toggle('dark', prefersDark)
+  let isDark = theme === 'dark'
+
+  // system 主题需要检测系统偏好
+  if (theme === 'system') {
+    isDark = isSystemDark.value
   }
+
+  if (isDark) {
+    root.classList.add('dark')
+  } else {
+    root.classList.remove('dark')
+  }
+}
+
+function applyFontSize(size: number) {
+  const root = document.documentElement
+  root.style.setProperty('--font-size-base', `${size}px`)
+  root.style.setProperty('--global-font-size', `${size}px`)
 }
 
 function setupTheme() {
   const theme = settingsStore.settings.ui.theme
-  applyTheme(theme)
 
+  // 初始化系统主题检测
   if (theme === 'system') {
+    isSystemDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
     systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
     systemThemeQuery.addEventListener('change', systemThemeHandler)
   }
+
+  applyTheme(theme)
 }
 
-watch(() => settingsStore.settings.ui.theme, (theme) => {
+function setupFontSize() {
+  const fontSize = settingsStore.settings.ui.terminal_font_size || 14
+  applyFontSize(fontSize)
+}
+
+// 初始加载设置后再应用主题
+onMounted(async () => {
+  await settingsStore.loadSettings()
+  setupTheme()
+  setupFontSize()
+})
+
+// 监听主题变化
+watch(() => settingsStore.settings.ui.theme, (newTheme) => {
   if (systemThemeQuery) {
     systemThemeQuery.removeEventListener('change', systemThemeHandler)
     systemThemeQuery = null
   }
-  applyTheme(theme)
+  applyTheme(newTheme)
   setupTheme()
 })
 
-onMounted(async () => {
-  await settingsStore.loadSettings()
-  setupTheme()
+// 监听字体大小变化
+watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
+  if (newSize) {
+    applyFontSize(newSize)
+  }
 })
 
 onUnmounted(() => {
@@ -109,6 +140,23 @@ const isTerminalRoute = computed(() => {
 
 // Use platform detection for desktop/mobile layout
 const isDesktop = computed(() => platformInfo.value.isDesktop)
+
+// 主题对应的类名
+const themeClasses = computed(() => {
+  const theme = settingsStore.settings.ui.theme
+  let isDark = theme === 'dark'
+
+  // system 主题需要检测系统偏好
+  if (theme === 'system') {
+    isDark = isSystemDark.value
+  }
+
+  return {
+    container: isDark
+      ? 'min-h-screen bg-dark-900 text-dark-100'
+      : 'min-h-screen bg-gray-100 text-gray-900'
+  }
+})
 
 // Provide to child components
 provide('isDesktop', isDesktop)

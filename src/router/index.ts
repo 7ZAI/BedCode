@@ -17,6 +17,12 @@ const router = createRouter({
       meta: { platform: 'desktop' },
     },
     {
+      path: '/session-manager',
+      name: 'session-manager',
+      component: () => import('@/views/desktop/SessionManagerView.vue'),
+      meta: { platform: 'desktop' },
+    },
+    {
       path: '/devices',
       name: 'devices',
       component: () => import('@/views/desktop/DevicesView.vue'),

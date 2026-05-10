@@ -233,6 +233,17 @@ export function useSession() {
     await loadSessions()
   }
 
+  async function deleteSession(sessionId: string) {
+    await invoke('delete_session', { sessionId })
+    await loadSessions()
+  }
+
+  async function restartSession(sessionId: string): Promise<string> {
+    const newSessionId = await invoke('restart_session', { sessionId })
+    await loadSessions()
+    return newSessionId as string
+  }
+
   async function writeToSession(sessionId: string, data: string) {
     await invoke('write_to_session', { sessionId, data })
   }
@@ -254,6 +265,8 @@ export function useSession() {
     loadSessions,
     startSession,
     killSession,
+    deleteSession,
+    restartSession,
     writeToSession,
     sendSpecialKey,
     resizeSession,

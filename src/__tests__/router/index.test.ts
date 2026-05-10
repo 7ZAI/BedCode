@@ -7,11 +7,11 @@ describe('Router Configuration', () => {
   })
 
   describe('route definitions', () => {
-    it('should have root redirect to sessions', () => {
+    it('should have root route with LoadingView component', () => {
       const route = router.getRoutes().find((r) => r.path === '/')
 
       expect(route).toBeDefined()
-      expect(route?.redirect).toBe('/sessions')
+      expect(route?.name).toBe('root')
     })
 
     it('should have sessions route', () => {

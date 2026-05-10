@@ -22,8 +22,13 @@
           </div>
 
           <!-- Body -->
-          <div class="p-6">
-            <slot></slot>
+          <div
+            class="flex flex-col overflow-hidden"
+            :class="bodyMaxHeightClass"
+          >
+            <div class="flex-1 overflow-y-auto p-6">
+              <slot></slot>
+            </div>
           </div>
 
           <!-- Footer -->
@@ -80,6 +85,23 @@ const sizeClass = computed(() => {
       return 'w-full max-w-4xl'
     default:
       return 'w-full max-w-md'
+  }
+})
+
+const bodyMaxHeightClass = computed(() => {
+  // 根据弹窗大小设置不同的最大高度
+  switch (props.size) {
+    case 'sm':
+      return 'max-h-[60vh]'
+    case 'md':
+      return 'max-h-[70vh]'
+    case 'lg':
+      return 'max-h-[75vh]'
+    case 'xl':
+    case 'full':
+      return 'max-h-[80vh]'
+    default:
+      return 'max-h-[70vh]'
   }
 })
 

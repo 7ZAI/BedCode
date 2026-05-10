@@ -55,6 +55,30 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  async function deleteSession(sessionId: string) {
+    console.log('deleteSession called with sessionId:', sessionId)
+    await sessionApi.deleteSession(sessionId)
+    sessions.value = sessionApi.sessions.value
+
+    if (activeSession.value?.id === sessionId) {
+      activeSession.value = null
+    }
+  }
+
+  async function restartSession(sessionId: string) {
+    console.log('restartSession called with sessionId:', sessionId)
+    const newSessionId = await sessionApi.restartSession(sessionId)
+    sessions.value = sessionApi.sessions.value
+
+    // Find the new session and set as active
+    const session = sessions.value.find(s => s.id === newSessionId)
+    if (session) {
+      activeSession.value = session
+    }
+
+    return newSessionId
+  }
+
   async function createConfig(
     name: string,
     environment: string,
@@ -106,6 +130,8 @@ export const useSessionStore = defineStore('session', () => {
     loadSessions,
     createSession,
     killSession,
+    deleteSession,
+    restartSession,
     createConfig,
     deleteConfig,
     updateConfig,

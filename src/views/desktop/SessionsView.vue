@@ -1,118 +1,66 @@
 <template>
-  <div class="h-full flex">
-    <!-- Left Panel: Session List -->
-    <div class="w-1/2 flex flex-col bg-dark-900 border-r border-dark-700">
-      <!-- Header -->
-      <header class="bg-dark-800 border-b border-dark-700 px-6 py-3 h-12 flex items-center">
-        <div class="flex items-center justify-between w-full">
-          <h2 class="text-lg font-semibold">会话管理</h2>
-          <Button variant="primary" @click="showCreateDialog = true">
-            <template #icon>
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-            </template>
-            新建配置
-          </Button>
-        </div>
-      </header>
+  <div class="h-full flex flex-col bg-dark-900">
+    <!-- Header -->
+    <header class="bg-dark-800 border-b border-dark-700 px-6 py-3 h-12 flex items-center">
+      <div class="flex items-center justify-between w-full">
+        <h2 class="text-lg font-semibold">会话配置</h2>
+        <Button variant="primary" @click="showCreateDialog = true">
+          <template #icon>
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+          </template>
+          新建配置
+        </Button>
+      </div>
+    </header>
 
-      <!-- Session List -->
-      <div class="flex-1 overflow-auto p-6">
-        <!-- Loading State -->
-        <div v-if="isLoading" class="text-center py-12">
-          <Spinner size="xl" color="primary" class="mb-4" />
-          <p class="text-dark-400">加载中...</p>
-        </div>
-
-        <!-- Empty State -->
-        <div v-else-if="sessionStore.configs.length === 0" class="text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-          <p class="text-dark-400">暂无会话配置</p>
-          <p class="text-dark-500 text-sm mt-2">点击"新建配置"创建第一个配置</p>
-        </div>
-
-        <div v-else class="grid grid-cols-1 gap-4">
-          <SessionCard
-            v-for="config in sessionStore.configs"
-            :key="config.id"
-            :config="config"
-            @start="startSession(config.id)"
-            @edit="editConfig(config)"
-            @delete="deleteConfig(config.id)"
-          />
-        </div>
+    <!-- Config List -->
+    <div class="flex-1 overflow-auto p-4">
+      <!-- Loading State -->
+      <div v-if="isLoading" class="text-center py-12">
+        <Spinner size="xl" color="primary" class="mb-4" />
+        <p class="text-dark-400">加载中...</p>
       </div>
 
-      <!-- Running Sessions -->
-      <div v-if="runningSessions.length > 0" class="border-t border-dark-700 p-4 bg-dark-850">
-        <h3 class="text-sm font-medium text-dark-400 mb-3">运行中的会话</h3>
-        <div class="flex gap-3 overflow-x-auto pb-2">
-          <div
-            v-for="session in runningSessions"
-            :key="session.id"
-            :class="[
-              'flex-shrink-0 bg-dark-700 rounded-lg px-4 py-2 flex items-center gap-3 cursor-pointer hover:bg-dark-600 transition-colors',
-              sessionStore.activeSession?.id === session.id ? 'ring-2 ring-primary-500' : ''
-            ]"
-            @click="selectSession(session)"
-          >
-            <div
-              :class="[
-                'w-2 h-2 rounded-full',
-                session.status === 'running' ? 'bg-green-500' :
-                session.status === 'waitingInput' ? 'bg-yellow-500' :
-                session.status === 'error' ? 'bg-red-500' : 'bg-dark-500'
-              ]"
-            ></div>
-            <span class="text-sm">{{ session.name }}</span>
-            <span
-              v-if="session.sessionType"
-              :class="[
-                'text-xs px-2 py-0.5 rounded',
-                session.sessionType === 'plugin' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
-              ]"
-            >
-              {{ session.sessionType }}
-            </span>
-            <button
-              @click.stop="killSession(session.id)"
-              class="text-dark-400 hover:text-red-400 transition-colors"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Right Panel: Terminal Preview -->
-    <div class="w-1/2 flex flex-col">
-      <TerminalPreview
-        v-if="sessionStore.activeSession"
-        :session="sessionStore.activeSession"
-        :show-input="true"
-      />
-      <div v-else class="h-full flex flex-col items-center justify-center text-dark-500 bg-dark-900">
-        <svg class="w-20 h-20 mb-4 text-dark-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <!-- Empty State -->
+      <div v-else-if="sessionStore.configs.length === 0" class="text-center py-12">
+        <svg class="w-16 h-16 mx-auto text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <p class="text-lg">选择一个运行中的会话</p>
-        <p class="text-dark-600 text-sm mt-2">点击下方运行中的会话查看终端输出</p>
+        <p class="text-dark-400">暂无会话配置</p>
+        <p class="text-dark-500 text-sm mt-2">点击"新建配置"创建第一个配置</p>
+      </div>
+
+      <!-- Config Cards (Long Card Mode) -->
+      <div v-else class="space-y-3">
+        <SessionCard
+          v-for="config in sessionStore.configs"
+          :key="config.id"
+          :config="config"
+          :sessions="sessionStore.sessions"
+          @start="startSession(config.id)"
+          @edit="editConfig(config)"
+          @delete="deleteConfig(config.id)"
+          @view-session="goToSessionManager"
+          @stop-session="killSession"
+        />
       </div>
     </div>
 
     <!-- Create/Edit Dialog -->
     <Modal v-model="showCreateDialog" :title="editingConfig ? '编辑配置' : '新建配置'" size="lg">
       <SessionForm
+        ref="sessionFormRef"
         :config="editingConfig"
         @save="handleSaveConfig"
-        @cancel="showCreateDialog = false"
       />
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="secondary" @click="showCreateDialog = false">取消</Button>
+          <Button variant="primary" @click="submitForm">{{ editingConfig ? '保存' : '创建' }}</Button>
+        </div>
+      </template>
     </Modal>
 
     <!-- Delete Confirm Dialog -->
@@ -129,18 +77,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
-import { useSessionStore, type SessionConfig, type SessionInfo } from '@/stores/session'
+import { useSessionStore, type SessionConfig } from '@/stores/session'
 import Button from '@/components/common/Button.vue'
 import Modal from '@/components/common/Modal.vue'
 import SessionCard from '@/components/desktop/SessionCard.vue'
 import SessionForm from '@/components/desktop/SessionForm.vue'
-import TerminalPreview from '@/components/desktop/TerminalPreview.vue'
 import Spinner from '@/components/common/Spinner.vue'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 import { useToast } from '@/composables/useToast'
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const toast = useToast()
 
@@ -149,6 +98,7 @@ const editingConfig = ref<SessionConfig | null>(null)
 const isLoading = ref(true)
 const showDeleteConfirmDialog = ref(false)
 const pendingDeleteConfigId = ref<string | null>(null)
+const sessionFormRef = ref<InstanceType<typeof SessionForm> | null>(null)
 
 // Page-level keyboard shortcuts
 useKeyboardShortcuts([
@@ -163,40 +113,30 @@ useKeyboardShortcuts([
   },
 ])
 
-// 只显示运行中的会话（排除已停止的）
-// 注意：后端使用 camelCase 序列化，SessionStatus::Stopped 变成 "stopped"
-const runningSessions = computed(() => {
-  return sessionStore.sessions.filter(s => s.status !== 'stopped')
-})
-
 onMounted(async () => {
   isLoading.value = true
   await sessionStore.loadConfigs()
   await sessionStore.loadSessions()
   isLoading.value = false
 
-  // 等待 DOM 更新完成，确保首页渲染完毕
+  // 等待 DOM 更新完成
   await nextTick()
 
-  // 输出应用启动耗时（从 Rust 进程启动到首页渲染完成的总耗时）
+  // 输出应用启动耗时
   try {
     const elapsed = await invoke<number>('get_startup_time')
-    console.log(`[BedCode] 应用启动耗时: ${elapsed}ms (从进程启动到首页渲染完成)`)
+    console.log(`[BedCode] 应用启动耗时: ${elapsed}ms`)
   } catch (e) {
-    // 非 Tauri 环境（如浏览器开发）忽略
+    // 非 Tauri 环境忽略
   }
 })
 
 async function startSession(configId: string) {
   try {
-    const sessionId = await sessionStore.createSession(configId)
+    await sessionStore.createSession(configId)
     toast.success('会话已启动')
-
-    // 自动选中新启动的会话
-    const session = sessionStore.sessions.find(s => s.id === sessionId)
-    if (session) {
-      sessionStore.activeSession = session
-    }
+    // 跳转到会话管理页面
+    router.push({ name: 'session-manager' })
   } catch (e) {
     toast.error('启动会话失败: ' + (e as Error).message)
   }
@@ -222,9 +162,7 @@ async function confirmDelete() {
 
 async function killSession(sessionId: string) {
   try {
-    console.log('Killing session:', sessionId)
     await sessionStore.killSession(sessionId)
-    console.log('Session killed, sessions:', sessionStore.sessions)
     toast.info('会话已终止')
   } catch (e) {
     console.error('Failed to kill session:', e)
@@ -232,8 +170,14 @@ async function killSession(sessionId: string) {
   }
 }
 
-function selectSession(session: SessionInfo) {
-  sessionStore.activeSession = session
+function goToSessionManager() {
+  router.push({ name: 'session-manager' })
+}
+
+function submitForm() {
+  if (sessionFormRef.value) {
+    handleSaveConfig(sessionFormRef.value.form)
+  }
 }
 
 interface SessionFormData {
@@ -249,7 +193,6 @@ interface SessionFormData {
 async function handleSaveConfig(form: SessionFormData) {
   try {
     if (editingConfig.value) {
-      // 更新已有配置
       await sessionStore.updateConfig(
         editingConfig.value.id,
         form.name,
@@ -262,7 +205,6 @@ async function handleSaveConfig(form: SessionFormData) {
       )
       toast.success('会话配置已更新')
     } else {
-      // 创建新配置
       await sessionStore.createConfig(
         form.name,
         form.environment,

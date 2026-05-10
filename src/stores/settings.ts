@@ -46,14 +46,13 @@ export const useSettingsStore = defineStore('settings', () => {
   async function loadSettings() {
     try {
       const loaded = await invoke<Settings>('get_app_settings')
-      // Deep merge with defaults
       settings.value = {
         network: { ...defaultSettings.network, ...loaded.network },
         session: { ...defaultSettings.session, ...loaded.session },
         ui: { ...defaultSettings.ui, ...loaded.ui },
       }
     } catch (e) {
-      console.error('Failed to load settings:', e)
+      console.error('[Settings] Failed to load settings:', e)
     }
   }
 
@@ -63,7 +62,7 @@ export const useSettingsStore = defineStore('settings', () => {
       await invoke('save_app_settings', { settings: merged })
       settings.value = merged
     } catch (e) {
-      console.error('Failed to save settings:', e)
+      console.error('[Settings] Failed to save settings:', e)
     }
   }
 

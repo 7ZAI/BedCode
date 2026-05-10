@@ -163,12 +163,17 @@ function decrementFontSize() {
 }
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
+let isSaving = false  // 防止循环保存
+
 watch(
   () => settingsStore.settings,
   () => {
+    if (isSaving) return  // 跳过由保存触发的更新
     if (saveTimeout) clearTimeout(saveTimeout)
     saveTimeout = setTimeout(() => {
+      isSaving = true
       settingsStore.saveSettings(settingsStore.settings)
+      setTimeout(() => { isSaving = false }, 100)  // 100ms 后重置标志
     }, 500)
   },
   { deep: true }

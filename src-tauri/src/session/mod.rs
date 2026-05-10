@@ -139,6 +139,9 @@ impl SessionManager {
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
         drop(db);
 
+        // 生成唯一的会话名称
+        let session_name = self.generate_unique_name(config_id, &config.name).await;
+
         // 构建启动配置
         let launch_config = self.build_launch_config(&config)?;
 
@@ -206,7 +209,7 @@ impl SessionManager {
         let info = SessionInfo {
             id: session_id.clone(),
             config_id: config_id.to_string(),
-            name: config.name.clone(),
+            name: session_name.clone(),
             status: SessionStatus::Running,  // 启动成功后设置为 Running
             created_at: Utc::now(),
             started_at: Some(Utc::now()),
@@ -224,8 +227,40 @@ impl SessionManager {
             info_map.insert(session_id.clone(), info);
         }
 
-        tracing::info!("Session created: {} ({})", config.name, session_id);
+        tracing::info!("Session created: {} ({})", session_name, session_id);
         Ok(session_id)
+    }
+
+    /// 生成唯一的会话名称
+    async fn generate_unique_name(&self, config_id: &str, base_name: &str) -> String {
+        let info_map = self.session_info.read().await;
+
+        // 统计同一配置下的会话数量
+        let count = info_map
+            .values()
+            .filter(|s| s.config_id == config_id && s.status != SessionStatus::Stopped)
+            .count();
+
+        if count == 0 {
+            base_name.to_string()
+        } else {
+            format!("{}({})", base_name, count)
+        }
+    }
+
+    /// 重启会话
+    pub async fn restart_session(&self, session_id: &str) -> Result<String> {
+        // 获取原会话的配置信息
+        let config_id = {
+            let info_map = self.session_info.read().await;
+            let info = info_map
+                .get(session_id)
+                .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
+            info.config_id.clone()
+        };
+
+        // 创建新会话
+        self.create_session(&config_id).await
     }
 
     /// 从配置构建启动配置

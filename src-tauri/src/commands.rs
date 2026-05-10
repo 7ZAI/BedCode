@@ -174,6 +174,26 @@ pub async fn kill_session(
     session_manager.kill_session(&session_id).await
 }
 
+/// 删除会话
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn delete_session(
+    session_manager: State<'_, Arc<crate::session::SessionManager>>,
+    session_id: String,
+) -> Result<()> {
+    session_manager.remove_session(&session_id).await
+}
+
+/// 重启会话
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn restart_session(
+    session_manager: State<'_, Arc<crate::session::SessionManager>>,
+    session_id: String,
+) -> Result<String> {
+    session_manager.restart_session(&session_id).await
+}
+
 /// 调整会话终端大小
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]

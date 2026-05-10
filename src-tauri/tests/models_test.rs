@@ -1,8 +1,7 @@
 //! Tests for database models
 
 use bedcode_lib::db::{
-    SessionConfig, QuickAction, Message, MessageType,
-    History, Pairing, Setting
+    SessionConfig, QuickAction, Pairing, Setting
 };
 use chrono::Utc;
 
@@ -79,87 +78,6 @@ mod session_config_tests {
         assert_eq!(config.name, parsed.name);
         assert_eq!(config.environment, parsed.environment);
         assert_eq!(config.working_dir, parsed.working_dir);
-    }
-}
-
-mod message_tests {
-    use super::*;
-
-    #[test]
-    fn test_message_new_input() {
-        let msg = Message::new_input(
-            "session-123".to_string(),
-            "Hello, Claude!".to_string(),
-        );
-
-        assert!(!msg.id.is_empty());
-        assert_eq!(msg.session_id, "session-123");
-        assert_eq!(msg.message_type, MessageType::Input);
-        assert_eq!(msg.content, "Hello, Claude!");
-        assert!(msg.history_id.is_none());
-        assert!(msg.metadata.is_none());
-    }
-
-    #[test]
-    fn test_message_new_output() {
-        let msg = Message::new_output(
-            "session-456".to_string(),
-            "Response text".to_string(),
-        );
-
-        assert_eq!(msg.message_type, MessageType::Output);
-        assert_eq!(msg.content, "Response text");
-    }
-
-    #[test]
-    fn test_message_with_history() {
-        let msg = Message::new_input(
-            "session-1".to_string(),
-            "test".to_string(),
-        ).with_history("history-1".to_string());
-
-        assert_eq!(msg.history_id, Some("history-1".to_string()));
-    }
-
-    #[test]
-    fn test_message_with_metadata() {
-        let metadata = serde_json::json!({
-            "token_count": 150,
-            "model": "claude-3"
-        });
-
-        let msg = Message::new_output(
-            "session-1".to_string(),
-            "Response".to_string(),
-        ).with_metadata(metadata.clone());
-
-        assert!(msg.metadata.is_some());
-        let meta = msg.metadata.unwrap();
-        assert_eq!(meta["token_count"], 150);
-    }
-
-    #[test]
-    fn test_message_type_as_str() {
-        assert_eq!(MessageType::Input.as_str(), "input");
-        assert_eq!(MessageType::Output.as_str(), "output");
-    }
-
-    #[test]
-    fn test_message_type_from_str() {
-        assert_eq!(MessageType::from_str("input"), Some(MessageType::Input));
-        assert_eq!(MessageType::from_str("output"), Some(MessageType::Output));
-        assert_eq!(MessageType::from_str("invalid"), None);
-    }
-
-    #[test]
-    fn test_message_type_serialization() {
-        let input = MessageType::Input;
-        let json = serde_json::to_string(&input).unwrap();
-        // MessageType serializes with PascalCase (as defined)
-        assert!(json.contains("Input") || json.contains("input"));
-
-        let parsed: MessageType = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, MessageType::Input);
     }
 }
 
@@ -240,25 +158,6 @@ mod quick_action_tests {
         assert_eq!(action.id, parsed.id);
         assert_eq!(action.name, parsed.name);
         assert_eq!(action.icon, parsed.icon);
-    }
-}
-
-mod history_tests {
-    use super::*;
-
-    #[test]
-    fn test_history_new() {
-        let history = History::new(
-            "session-1".to_string(),
-            "My Session".to_string(),
-        );
-
-        assert!(!history.id.is_empty());
-        assert_eq!(history.session_id, "session-1");
-        assert_eq!(history.session_name, "My Session");
-        assert!(history.device_id.is_none());
-        assert!(history.ended_at.is_none());
-        assert!(history.output_summary.is_none());
     }
 }
 

@@ -8,7 +8,7 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: dark;
+  /* color-scheme 由 App.vue 根据设置动态设置 */
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -22,6 +22,30 @@
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
 }
+
+/* 默认浅色模式 */
+:root {
+  color-scheme: light;
+}
+
+/* 深色模式 */
+:root.dark {
+  color-scheme: dark;
+}
+
+/* 全局字体大小变量 */
+:root {
+  --font-size-base: 14px;
+  --font-size-small: 12px;
+  --font-size-medium: 14px;
+  --font-size-large: 16px;
+}
+
+/* 字体大小类 */
+.text-base { font-size: var(--font-size-base); }
+.text-small { font-size: var(--font-size-small); }
+.text-medium { font-size: var(--font-size-medium); }
+.text-large { font-size: var(--font-size-large); }
 
 body {
   margin: 0;
@@ -40,22 +64,35 @@ body {
   padding-bottom: var(--safe-area-inset-bottom);
 }
 
-/* Scrollbar styles */
+/* Scrollbar styles - 浅色模式默认 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: theme('colors.dark.800');
+  background: #e5e7eb;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: theme('colors.dark.600');
+  background: #9ca3af;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* Scrollbar styles - 深色模式 */
+:root.dark ::-webkit-scrollbar-track {
+  background: theme('colors.dark.800');
+}
+
+:root.dark ::-webkit-scrollbar-thumb {
+  background: theme('colors.dark.600');
+}
+
+:root.dark ::-webkit-scrollbar-thumb:hover {
   background: theme('colors.dark.500');
 }
 

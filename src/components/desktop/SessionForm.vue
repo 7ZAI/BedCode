@@ -66,26 +66,15 @@
       v-model="form.autoStart"
       label="开机自动启动"
     />
-
-    <!-- Actions -->
-    <div class="flex justify-end gap-3 pt-4 border-t border-dark-700">
-      <Button type="button" variant="secondary" @click="$emit('cancel')">
-        取消
-      </Button>
-      <Button type="submit" variant="primary">
-        {{ config ? '保存' : '创建' }}
-      </Button>
-    </div>
   </form>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, defineExpose } from 'vue'
 import type { SessionConfig } from '@/stores/session'
 import Input from '@/components/common/Input.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
-import Button from '@/components/common/Button.vue'
 import { useWsl } from '@/composables/useTauri'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSettingsStore } from '@/stores/settings'
@@ -96,7 +85,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'save', form: SessionFormData): void
-  (e: 'cancel'): void
 }>()
 
 interface SessionFormData {
@@ -130,9 +118,7 @@ const environmentOptions = [
 const wslDistroOptions = ref<Array<{ value: string; label: string }>>([])
 
 watch(() => props.config, (config) => {
-  // 每次配置变化时更新表单
   if (config) {
-    // 编辑模式：使用配置的值
     form.value = {
       name: config.name,
       environment: config.environment,
@@ -143,7 +129,6 @@ watch(() => props.config, (config) => {
       autoStart: config.autoStart,
     }
   } else {
-    // 创建模式：使用默认设置
     form.value = {
       name: '',
       environment: settingsStore.settings.session.default_environment || 'windows',
@@ -167,7 +152,6 @@ watch(() => form.value.environment, async (env) => {
 })
 
 onMounted(async () => {
-  // 加载 WSL 发行版列表
   await loadDistros()
   wslDistroOptions.value = distros.value.map(d => ({
     value: d.name,
@@ -193,4 +177,12 @@ async function browseDir() {
 function handleSubmit() {
   emit('save', form.value)
 }
+
+// 暴露表单数据供父组件获取
+defineExpose({
+  form,
+  validate: () => {
+    return !!form.value.name && !!form.value.workingDir && !!form.value.command
+  }
+})
 </script>

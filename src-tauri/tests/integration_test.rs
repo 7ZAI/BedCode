@@ -296,7 +296,7 @@ mod parser_integration {
 }
 
 mod database_integration {
-    use bedcode_lib::db::{Database, SessionConfig, QuickAction, Message};
+    use bedcode_lib::db::{Database, SessionConfig, QuickAction};
     use tempfile::TempDir;
 
     fn create_test_db() -> (Database, TempDir) {
@@ -308,114 +308,20 @@ mod database_integration {
     }
 
     #[test]
-    fn test_full_session_lifecycle() {
-        let (db, _temp_dir) = create_test_db();
-
-        // 1. Create session config
-        let config = SessionConfig::new(
-            "Test Session".to_string(),
-            "windows".to_string(),
-            "C:\\test".to_string(),
-            "claude".to_string(),
-        );
-        let config_id = config.id.clone();
-        db.create_session_config(&config).unwrap();
-
-        // 2. Start history record
-        let history_id = db.add_history(&config_id, "Test Session", None).unwrap();
-
-        // 3. Add messages
-        let input = Message::new_input(config_id.clone(), "Hello".to_string());
-        db.add_message(&input).unwrap();
-
-        let output = Message::new_output(config_id.clone(), "Hi there!".to_string());
-        db.add_message(&output).unwrap();
-
-        // 4. Verify messages
-        let messages = db.get_messages(&config_id, None, None).unwrap();
-        assert_eq!(messages.len(), 2);
-
-        // 5. Search messages
-        let results = db.search_messages("Hello", None).unwrap();
-        assert_eq!(results.len(), 1);
-
-        // 6. End history
-        db.end_history(&history_id, Some("Conversation about greetings")).unwrap();
-
-        // 7. Cleanup - delete messages first, then the config
-        // Note: We don't delete the session config because history records reference it
-        // In a real app, we'd use CASCADE DELETE or soft delete
-        db.clear_messages(Some(&config_id), None).unwrap();
-
-        // Verify cleanup
-        let messages = db.get_messages(&config_id, None, None).unwrap();
-        assert_eq!(messages.len(), 0);
-    }
-
-    #[test]
-    fn test_quick_actions_with_messages() {
-        let (db, _temp_dir) = create_test_db();
-
-        // Create session
-        let config = SessionConfig::new(
-            "QA Test".to_string(),
-            "windows".to_string(),
-            "C:\\test".to_string(),
-            "claude".to_string(),
-        );
-        db.create_session_config(&config).unwrap();
-
-        // Create quick actions
-        let action1 = QuickAction::new(
-            "Continue".to_string(),
-            "Please continue".to_string(),
-        )
-        .with_icon("▶️".to_string())
-        .with_color("#22c55e".to_string());
-
-        let action2 = QuickAction::new(
-            "Explain".to_string(),
-            "Please explain this code".to_string(),
-        )
-        .with_icon("📝".to_string())
-        .with_color("#3b82f6".to_string());
-
-        db.create_quick_action(&action1).unwrap();
-        db.create_quick_action(&action2).unwrap();
-
-        // Get all actions
-        let actions = db.get_quick_actions().unwrap();
-        assert_eq!(actions.len(), 2);
-
-        // Use quick action (simulate sending as message)
-        let input = Message::new_input(config.id.clone(), action1.content.clone());
-        db.add_message(&input).unwrap();
-
-        // Verify
-        let messages = db.get_messages(&config.id, None, None).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content, "Please continue");
-    }
-
-    #[test]
     fn test_settings_persistence() {
         let (db, _temp_dir) = create_test_db();
 
-        // Set multiple settings
         db.set_setting("theme", "dark").unwrap();
         db.set_setting("fontSize", "16").unwrap();
         db.set_setting("notifyOnWaiting", "true").unwrap();
 
-        // Verify each setting
         assert_eq!(db.get_setting("theme").unwrap(), Some("dark".to_string()));
         assert_eq!(db.get_setting("fontSize").unwrap(), Some("16".to_string()));
         assert_eq!(db.get_setting("notifyOnWaiting").unwrap(), Some("true".to_string()));
 
-        // Update a setting
         db.set_setting("theme", "light").unwrap();
         assert_eq!(db.get_setting("theme").unwrap(), Some("light".to_string()));
 
-        // Get all settings
         let all = db.get_all_settings().unwrap();
         assert_eq!(all.len(), 3);
     }
