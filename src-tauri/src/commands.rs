@@ -164,6 +164,16 @@ pub async fn list_sessions(
     Ok(session_manager.list_sessions().await)
 }
 
+/// 获取单个会话信息
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn get_session(
+    session_manager: State<'_, Arc<crate::session::SessionManager>>,
+    session_id: String,
+) -> Result<Option<crate::session::SessionInfo>> {
+    Ok(session_manager.get_session(&session_id).await)
+}
+
 /// 终止会话
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]

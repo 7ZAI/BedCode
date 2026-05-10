@@ -299,6 +299,7 @@ pub fn run() {
             // Session
             commands::start_session,
             commands::list_sessions,
+            commands::get_session,
             commands::kill_session,
             commands::delete_session,
             commands::restart_session,
