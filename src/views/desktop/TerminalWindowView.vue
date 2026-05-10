@@ -1,33 +1,5 @@
 <template>
   <div class="h-screen flex flex-col bg-dark-900">
-    <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3 flex items-center justify-between h-12 shrink-0" data-tauri-drag-region>
-      <div class="flex items-center gap-3">
-        <div :class="['w-2 h-2 rounded-full', statusColor]"></div>
-        <h3 class="font-medium text-white">{{ sessionName }}</h3>
-        <span class="text-xs text-dark-400">({{ sessionId }})</span>
-      </div>
-      <div class="flex items-center gap-2">
-        <!-- Window Controls -->
-        <button @click="minimizeWindow" class="p-1 hover:bg-dark-700 rounded">
-          <svg class="w-4 h-4 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
-          </svg>
-        </button>
-        <button @click="toggleMaximize" class="p-1 hover:bg-dark-700 rounded">
-          <svg class="w-4 h-4 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path v-if="!isMaximized" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h4" />
-            <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5 5m5-5l5-5m-5 5v-4.5m0 4.5h4.5" />
-          </svg>
-        </button>
-        <button @click="closeWindow" class="p-1 hover:bg-red-600 rounded">
-          <svg class="w-4 h-4 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-    </header>
-
     <!-- Terminal Container -->
     <div ref="terminalContainerRef" class="flex-1 overflow-hidden"></div>
 
@@ -72,7 +44,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Terminal } from '@xterm/xterm'
@@ -82,11 +53,9 @@ import '@xterm/xterm/css/xterm.css'
 
 const route = useRoute()
 const sessionId = computed(() => route.params.id as string)
-const sessionName = ref('')
 const sessionStatus = ref<'running' | 'stopped' | 'error' | 'waitingInput'>('running')
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const inputText = ref('')
-const isMaximized = ref(false)
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -102,23 +71,12 @@ const quickKeys = [
   { label: '↓', value: 'arrow_down' },
 ]
 
-const statusColor = computed(() => {
-  switch (sessionStatus.value) {
-    case 'running': return 'bg-green-500'
-    case 'waitingInput': return 'bg-yellow-500 animate-pulse'
-    case 'error': return 'bg-red-500'
-    case 'stopped': return 'bg-dark-500'
-    default: return 'bg-dark-500'
-  }
-})
-
 const inputHistory = ref<string[]>([])
 const historyIndex = ref(-1)
 
 async function loadSessionInfo() {
   try {
-    const session = await invoke<{ name: string; status: string }>('get_session', { sessionId: sessionId.value })
-    sessionName.value = session.name
+    const session = await invoke<{ status: string }>('get_session', { sessionId: sessionId.value })
     sessionStatus.value = session.status as 'running' | 'stopped' | 'error' | 'waitingInput'
   } catch (e) {
     console.error('[TerminalWindow] Failed to load session info:', e)
@@ -158,15 +116,12 @@ function initTerminal() {
   terminal.open(terminalContainerRef.value)
   fitAddon.fit()
 
-  // 同步终端尺寸到 PTY
   syncTerminalSize()
 
-  // 监听终端尺寸变化
   terminal.onResize(({ cols, rows }) => {
     invoke('resize_session', { sessionId: sessionId.value, cols, rows }).catch(console.error)
   })
 
-  // 监听窗口大小变化
   const resizeObserver = new ResizeObserver(() => {
     if (fitAddon && terminal) {
       fitAddon.fit()
@@ -178,10 +133,10 @@ function initTerminal() {
 
 function syncTerminalSize() {
   if (!terminal) return
-  const col = terminal.cols
-  const row = terminal.rows
-  if (col > 0 && row > 0) {
-    invoke('resize_session', { sessionId: sessionId.value, cols: col, rows: row }).catch(console.error)
+  const cols = terminal.cols
+  const rows = terminal.rows
+  if (cols > 0 && rows > 0) {
+    invoke('resize_session', { sessionId: sessionId.value, cols, rows }).catch(console.error)
   }
 }
 
@@ -223,28 +178,6 @@ function navigateHistory(direction: number) {
   } else {
     inputText.value = inputHistory.value[inputHistory.value.length - 1 - newIndex]
   }
-}
-
-async function minimizeWindow() {
-  const win = getCurrentWindow()
-  await win.minimize()
-}
-
-async function toggleMaximize() {
-  const win = getCurrentWindow()
-  const maximized = await win.isMaximized()
-  if (maximized) {
-    await win.unmaximize()
-    isMaximized.value = false
-  } else {
-    await win.maximize()
-    isMaximized.value = true
-  }
-}
-
-async function closeWindow() {
-  const win = getCurrentWindow()
-  await win.close()
 }
 
 onMounted(async () => {
