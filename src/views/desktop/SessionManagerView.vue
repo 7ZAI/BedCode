@@ -94,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore, type SessionInfo } from '@/stores/session'
 import Button from '@/components/common/Button.vue'
@@ -103,10 +103,33 @@ import SessionItem from '@/components/desktop/SessionItem.vue'
 import TerminalPreview from '@/components/desktop/TerminalPreview.vue'
 import Spinner from '@/components/common/Spinner.vue'
 import { useToast } from '@/composables/useToast'
+import { useSessionWindows } from '@/composables/useSessionWindows'
 
 const router = useRouter()
 const sessionStore = useSessionStore()
 const toast = useToast()
+const { closeTerminalWindow } = useSessionWindows()
+
+// 监听会话列表变化，自动关闭已停止会话的终端窗口
+watch(() => sessionStore.sessions, (newSessions, oldSessions) => {
+  if (!oldSessions) return
+
+  for (const oldSession of oldSessions) {
+    const newSession = newSessions.find(s => s.id === oldSession.id)
+
+    // 如果会话从运行中变为停止/错误，关闭终端窗口
+    if (oldSession.status === 'running' || oldSession.status === 'waitingInput') {
+      if (newSession && (newSession.status === 'stopped' || newSession.status === 'error')) {
+        closeTerminalWindow(oldSession.id)
+      }
+    }
+
+    // 如果会话被删除
+    if (!newSession) {
+      closeTerminalWindow(oldSession.id)
+    }
+  }
+}, { deep: true })
 
 const isLoading = ref(true)
 const expandedSessionId = ref<string | null>(null)
