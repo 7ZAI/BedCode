@@ -19,6 +19,9 @@ pub struct PtyOutputEvent {
     pub session_id: String,
     pub data: String, // Base64 encoded
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// 是否等待用户输入（用于插件会话）
+    #[serde(default)]
+    pub is_waiting: bool,
 }
 
 /// PTY 会话状态
@@ -282,6 +285,7 @@ impl PtySession {
                                 &buffer[..n],
                             ),
                             timestamp: chrono::Utc::now(),
+                            is_waiting: false,
                         };
 
                         if output_tx.send(event).is_err() {

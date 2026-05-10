@@ -82,3 +82,9 @@ impl From<tauri::Error> for AppError {
         AppError::Internal(e.to_string())
     }
 }
+
+impl From<notify::Error> for AppError {
+    fn from(e: notify::Error) -> Self {
+        AppError::Internal(format!("File watcher error: {}", e))
+    }
+}
