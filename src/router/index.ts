@@ -76,6 +76,13 @@ const router = createRouter({
       component: () => import('@/views/mobile/ScanView.vue'),
       meta: { platform: 'mobile' },
     },
+    // 终端窗口路由
+    {
+      path: '/terminal-window/:id',
+      name: 'terminal-window',
+      component: () => import('@/views/desktop/TerminalWindowView.vue'),
+      meta: { platform: 'desktop' },
+    },
   ],
 })
 
