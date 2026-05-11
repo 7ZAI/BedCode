@@ -1,19 +1,19 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
       <div class="flex items-center justify-between">
         <h1 class="text-lg font-semibold">会话</h1>
         <button
           v-if="connection.isConnected.value"
-          class="p-2 rounded-lg active:bg-dark-700 transition-colors"
+          class="p-2 rounded-lg active:bg-gray-100 dark:bg-dark-700 transition-colors"
           :class="{ 'opacity-50': isLoading }"
           :disabled="isLoading"
           @click="refreshSessions"
           title="刷新会话"
         >
           <svg
-            class="w-5 h-5 text-dark-400"
+            class="w-5 h-5 text-gray- dark:text-dark-400"
             :class="{ 'animate-spin': isLoading }"
             fill="none"
             stroke="currentColor"
@@ -28,11 +28,11 @@
     <!-- Not Connected -->
     <div v-if="!connection.isConnected.value" class="flex-1 flex items-center justify-center p-8">
       <div class="text-center">
-        <svg class="w-16 h-16 mx-auto text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-16 h-16 mx-auto text-gray- dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
         </svg>
-        <p class="text-dark-300 font-medium mb-2">未连接设备</p>
-        <p class="text-dark-500 text-sm mb-4">请先在"连接"页面连接到桌面端</p>
+        <p class="text-gray- dark:text-dark-300 font-medium mb-2">未连接设备</p>
+        <p class="text-gray- dark:text-dark-500 text-sm mb-4">请先在"连接"页面连接到桌面端</p>
         <button
           class="bg-primary-600 text-white px-6 py-2.5 rounded-xl text-sm font-medium active:bg-primary-700"
           @click="$router.push({ name: 'mobile-devices' })"
@@ -46,18 +46,18 @@
     <div v-else-if="isLoading && sessions.length === 0" class="flex-1 flex items-center justify-center">
       <div class="text-center">
         <div class="w-8 h-8 border-2 border-primary-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-        <p class="text-dark-500 text-sm">加载会话中...</p>
+        <p class="text-gray- dark:text-dark-500 text-sm">加载会话中...</p>
       </div>
     </div>
 
     <!-- Connected: Empty -->
     <div v-else-if="sessions.length === 0" class="flex-1 flex items-center justify-center p-8">
       <div class="text-center">
-        <svg class="w-16 h-16 mx-auto text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-16 h-16 mx-auto text-gray- dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <p class="text-dark-300 font-medium mb-2">暂无活跃会话</p>
-        <p class="text-dark-500 text-sm">前往"连接"页面启动新会话</p>
+        <p class="text-gray- dark:text-dark-300 font-medium mb-2">暂无活跃会话</p>
+        <p class="text-gray- dark:text-dark-500 text-sm">前往"连接"页面启动新会话</p>
       </div>
     </div>
 
@@ -66,14 +66,14 @@
       <!-- Connection info bar -->
       <div class="flex items-center gap-2 mb-3">
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-dark-400 text-xs">{{ connection.currentDevice.value?.name || '已连接' }} · {{ sessions.length }} 个会话</span>
+        <span class="text-gray- dark:text-dark-400 text-xs">{{ connection.currentDevice.value?.name || '已连接' }} · {{ sessions.length }} 个会话</span>
       </div>
 
       <div class="space-y-2">
         <div
           v-for="session in sessions"
           :key="session.id"
-          class="bg-dark-800 rounded-xl active:bg-dark-700 transition-colors overflow-hidden"
+          class="bg-white dark:bg-dark-800 rounded-xl active:bg-gray-100 dark:bg-dark-700 transition-colors overflow-hidden"
           :class="{ 'opacity-60': session.status === 'stopped' }"
         >
           <div class="flex">
@@ -101,10 +101,10 @@
                     >
                       {{ statusLabel(session.status) }}
                     </span>
-                    <span class="text-dark-500 text-xs">{{ elapsedTime(session) }}</span>
+                    <span class="text-gray- dark:text-dark-500 text-xs">{{ elapsedTime(session) }}</span>
                   </div>
                 </div>
-                <svg class="w-5 h-5 text-dark-400 shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-5 h-5 text-gray- dark:text-dark-400 shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                 </svg>
               </div>
@@ -113,7 +113,7 @@
             <!-- Stop button (running/waiting sessions) -->
             <button
               v-if="session.status !== 'stopped'"
-              class="px-3 flex items-center justify-center active:bg-dark-700"
+              class="px-3 flex items-center justify-center active:bg-gray-100 dark:bg-dark-700"
               @click.stop="handleStopSession(session)"
               title="停止会话"
             >
@@ -124,11 +124,11 @@
             <!-- Delete button (stopped sessions) -->
             <button
               v-if="session.status === 'stopped'"
-              class="px-3 flex items-center justify-center active:bg-dark-700"
+              class="px-3 flex items-center justify-center active:bg-gray-100 dark:bg-dark-700"
               @click.stop="handleRemoveSession(session)"
               title="删除会话"
             >
-              <svg class="w-5 h-5 text-dark-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-gray- dark:text-dark-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
               </svg>
             </button>

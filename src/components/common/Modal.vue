@@ -11,13 +11,13 @@
 
         <!-- Modal Content -->
         <div
-          class="relative bg-dark-800 rounded-xl shadow-2xl border border-dark-700"
-          :class="[sizeClass]"
+          class="relative rounded-xl shadow-2xl border"
+          :class="[sizeClass, 'bg-white dark:bg-dark-800 border-gray-200 dark:border-dark-700']"
         >
           <!-- Header -->
-          <div v-if="title || $slots.header" class="px-6 py-4 border-b border-dark-700">
+          <div v-if="title || $slots.header" class="px-6 py-4 border-b border-gray-200 dark:border-dark-700">
             <slot name="header">
-              <h3 class="text-lg font-semibold text-white">{{ title }}</h3>
+              <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ title }}</h3>
             </slot>
           </div>
 
@@ -32,7 +32,7 @@
           </div>
 
           <!-- Footer -->
-          <div v-if="$slots.footer" class="px-6 py-4 border-t border-dark-700">
+          <div v-if="$slots.footer" class="px-6 py-4 border-t border-gray-200 dark:border-dark-700">
             <slot name="footer"></slot>
           </div>
 
@@ -40,7 +40,7 @@
           <button
             v-if="closable"
             @click="close()"
-            class="absolute top-4 right-4 text-dark-400 hover:text-white transition-colors"
+            class="absolute top-4 right-4 text-gray-500 dark:text-dark-400 hover:text-gray-700 dark:hover:text-white transition-colors"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />

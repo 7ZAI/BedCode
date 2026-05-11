@@ -1,7 +1,7 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3 flex items-center gap-3 shrink-0" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3 flex items-center gap-3 shrink-0" style="padding-top: 12px;">
       <button @click="goBack" class="p-2 -ml-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
@@ -16,11 +16,11 @@
               connection.isConnected.value ? 'bg-green-500' : 'bg-red-500'
             ]"
           ></div>
-          <span class="text-dark-400">{{ connection.isConnected.value ? '已连接' : '未连接' }}</span>
+          <span class="text-gray- dark:text-dark-400">{{ connection.isConnected.value ? '已连接' : '未连接' }}</span>
         </div>
       </div>
       <button
-        class="p-2 rounded-lg bg-dark-700 text-dark-300"
+        class="p-2 rounded-lg bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300"
         @click="handleClear"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

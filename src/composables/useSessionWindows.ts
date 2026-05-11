@@ -1,27 +1,82 @@
 import { shallowRef } from 'vue'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { SessionInfo } from '@/composables/useTauri'
+
+const SNAP_THRESHOLD = 15  // 贴靠阈值（像素）
+
+interface TerminalWindowState {
+  window: WebviewWindow
+  isSnapped: boolean
+  snapDirection: 'left' | 'right' | null
+  lastPosition: { x: number; y: number }
+}
+
+// ==================== 单例模式 ====================
+// 模块级别的状态，确保所有组件共享同一个实例
+const windows = shallowRef<Map<string, TerminalWindowState>>(new Map())
+
+// 跟踪正在关闭的窗口，防止重复调用
+const closingWindows = new Set<string>()
+
+// 存储事件监听器（模块级别，只初始化一次）
+let unlistenMoved: UnlistenFn | null = null
+let unlistenResized: UnlistenFn | null = null
+let isListenersInitialized = false
+
+/**
+ * 初始化主窗口事件监听（只执行一次）
+ */
+async function initMainWindowListeners() {
+  if (isListenersInitialized) return
+
+  const mainWindow = getCurrentWindow()
+
+  // 监听主窗口移动
+  unlistenMoved = await mainWindow.onMoved(async (event) => {
+    const mainPos = event.payload
+    // 发送主窗口位置给所有终端窗口
+    await emit('main-window-moved', {
+      x: mainPos.x,
+      y: mainPos.y,
+      width: 0, // PhysicalPosition 没有 width/height
+      height: 0
+    })
+  })
+
+  // 监听主窗口大小变化
+  unlistenResized = await mainWindow.onResized(async (event) => {
+    const mainSize = event.payload
+    await emit('main-window-resized', {
+      width: mainSize.width,
+      height: mainSize.height
+    })
+  })
+
+  isListenersInitialized = true
+}
 
 /**
  * 终端窗口管理器
  *
- * 管理每个会话对应的终端窗口的创建、聚焦、关闭
+ * 管理每个会话对应的终端窗口的创建、聚焦、关闭、贴靠
+ * 使用单例模式，确保所有组件共享状态
  */
 export function useSessionWindows() {
-  // 使用 shallowRef 存储 WebviewWindow 实例，避免深度响应
-  const windows = shallowRef<Map<string, WebviewWindow>>(new Map())
+  // 初始化事件监听（只执行一次）
+  initMainWindowListeners()
 
   /**
    * 为会话创建或聚焦终端窗口
    */
   async function openTerminalWindow(session: SessionInfo) {
     // 检查是否已有窗口
-    const existingWindow = windows.value.get(session.id)
-    if (existingWindow) {
+    const existingState = windows.value.get(session.id)
+    if (existingState) {
       // 窗口已存在，聚焦它
       try {
-        await existingWindow.setFocus()
+        await existingState.window.setFocus()
         return
       } catch (e) {
         // 窗口可能已关闭，移除引用
@@ -34,10 +89,18 @@ export function useSessionWindows() {
     const mainWindow = getCurrentWindow()
     const mainPosition = await mainWindow.outerPosition()
     const mainSize = await mainWindow.outerSize()
+    const mainInnerSize = await mainWindow.innerSize()
 
-    // 计算终端窗口位置（贴靠主窗口右侧）
-    const terminalWidth = Math.floor(mainSize.width * 0.5)
-    const terminalHeight = mainSize.height
+    console.log('[useSessionWindows] Main window position:', mainPosition)
+    console.log('[useSessionWindows] Main window size (outerSize):', mainSize)
+    console.log('[useSessionWindows] Main window size (innerSize):', mainInnerSize)
+
+    // 计算终端窗口位置（紧贴主窗口右侧）
+    // 使用 innerSize 确保与主窗口内容区高度一致
+    const terminalWidth = Math.floor(mainInnerSize.width * 0.4)
+    const terminalHeight = mainInnerSize.height
+
+    console.log('[useSessionWindows] Terminal window size - width:', terminalWidth, 'height:', terminalHeight)
 
     // 计算新窗口位置，确保不超过屏幕边界
     let terminalX = mainPosition.x + mainSize.width
@@ -53,7 +116,7 @@ export function useSessionWindows() {
       terminalX = Math.floor((screenWidth - terminalWidth) / 2)
     }
 
-    // 创建终端窗口
+    // 创建终端窗口 - 使用独立的 terminal.html 页面
     const terminalWindow = new WebviewWindow(`terminal-${session.id}`, {
       url: `/terminal-window/${session.id}`,
       title: `终端 - ${session.name}`,
@@ -73,8 +136,14 @@ export function useSessionWindows() {
       windows.value.delete(session.id)
     })
 
-    // 存储窗口引用
-    windows.value.set(session.id, terminalWindow)
+    // 存储窗口状态
+    windows.value.set(session.id, {
+      window: terminalWindow,
+      isSnapped: false,
+      snapDirection: null,
+      lastPosition: { x: terminalX, y: mainPosition.y }
+    })
+    console.log('[useSessionWindows] Window stored, keys:', Array.from(windows.value.keys()))
 
     // 监听窗口创建失败
     terminalWindow.once('tauri://error', (e) => {
@@ -85,16 +154,51 @@ export function useSessionWindows() {
 
   /**
    * 关闭指定会话的终端窗口
+   * @param sessionId - 会话 ID
    */
   async function closeTerminalWindow(sessionId: string) {
-    const window = windows.value.get(sessionId)
-    if (window) {
-      try {
-        await window.close()
-      } catch (e) {
-        console.error('[useSessionWindows] Close window error:', e)
+    // 防止重复调用
+    if (closingWindows.has(sessionId)) {
+      console.log('[useSessionWindows] Window already closing, skipping:', sessionId)
+      return
+    }
+
+    console.log('[useSessionWindows] closeTerminalWindow called, sessionId:', sessionId)
+    console.log('[useSessionWindows] windows.value keys:', Array.from(windows.value.keys()))
+
+    // 标记为正在关闭
+    closingWindows.add(sessionId)
+
+    try {
+      // 使用 getByLabel 检查窗口是否仍然存在
+      const windowLabel = `terminal-${sessionId}`
+      console.log('[useSessionWindows] Checking window with label:', windowLabel)
+
+      const window = await WebviewWindow.getByLabel(windowLabel)
+      console.log('[useSessionWindows] getByLabel result:', window)
+      console.log('[useSessionWindows] window type:', window ? typeof window : 'null')
+
+      if (window) {
+        console.log('[useSessionWindows] Window exists, closing...')
+        console.log('[useSessionWindows] window.label:', window.label)
+        try {
+          await window.close()
+          console.log('[useSessionWindows] Close request sent')
+        } catch (e) {
+          console.error('[useSessionWindows] Close error:', e)
+        }
+      } else {
+        console.log('[useSessionWindows] Window already closed or never existed')
       }
+
+      // 从本地状态中移除
       windows.value.delete(sessionId)
+    } catch (e) {
+      console.error('[useSessionWindows] Error checking window:', e)
+      windows.value.delete(sessionId)
+    } finally {
+      // 移除正在关闭的标记
+      closingWindows.delete(sessionId)
     }
   }
 
@@ -102,9 +206,9 @@ export function useSessionWindows() {
    * 关闭所有终端窗口
    */
   async function closeAllTerminalWindows() {
-    for (const [sessionId, window] of windows.value) {
+    for (const [sessionId, state] of windows.value) {
       try {
-        await window.close()
+        await state.window.close()
       } catch (e) {
         console.error('[useSessionWindows] Close window error:', e)
       }
@@ -119,11 +223,60 @@ export function useSessionWindows() {
     return windows.value.has(sessionId)
   }
 
+  /**
+   * 更新终端窗口的贴靠状态
+   */
+  async function updateWindowSnapState(sessionId: string, isSnapped: boolean, snapDirection: 'left' | 'right' | null) {
+    const state = windows.value.get(sessionId)
+    if (state) {
+      state.isSnapped = isSnapped
+      state.snapDirection = snapDirection
+    }
+  }
+
+  /**
+   * 获取终端窗口的当前位置
+   */
+  async function getTerminalWindowPosition(sessionId: string): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    const state = windows.value.get(sessionId)
+    if (!state) return null
+
+    try {
+      const position = await state.window.outerPosition()
+      const size = await state.window.outerSize()
+      return {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height
+      }
+    } catch (e) {
+      return null
+    }
+  }
+
+  /**
+   * 设置终端窗口位置
+   */
+  async function setTerminalWindowPosition(sessionId: string, x: number, y: number) {
+    const state = windows.value.get(sessionId)
+    if (!state) return
+
+    try {
+      await state.window.setPosition(new PhysicalPosition(x, y))
+    } catch (e) {
+      console.error('[useSessionWindows] Set position error:', e)
+    }
+  }
+
   return {
     windows,
     openTerminalWindow,
     closeTerminalWindow,
     closeAllTerminalWindows,
     hasTerminalWindow,
+    updateWindowSnapState,
+    getTerminalWindowPosition,
+    setTerminalWindowPosition,
   }
 }

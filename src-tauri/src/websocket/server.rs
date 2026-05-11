@@ -552,11 +552,23 @@ async fn handle_message(
                 }
             }
 
-            // 处理输入
-            if let Some(key) = &payload.special_key {
-                session_manager.send_special_key(&session_id, key.as_str()).await?;
+            // 检查会话类型（Plugin 会话使用文件监听，PTY 会话使用 PTY）
+            let is_plugin = session_manager
+                .get_session(&session_id)
+                .await
+                .map(|s| s.session_type == SessionType::Plugin)
+                .unwrap_or(false);
+
+            if is_plugin {
+                // Plugin 会话：写入到 pending 文件
+                plugin_manager.write_input(&session_id, &payload.data).await?;
             } else {
-                session_manager.write_input(&session_id, &payload.data).await?;
+                // PTY 会话：发送到 PTY
+                if let Some(key) = &payload.special_key {
+                    session_manager.send_special_key(&session_id, key.as_str()).await?;
+                } else {
+                    session_manager.write_input(&session_id, &payload.data).await?;
+                }
             }
 
             Ok(None)
@@ -886,24 +898,43 @@ async fn handle_control(
 ) -> Result<Option<Message>> {
     match action {
         ControlAction::ListSessions => {
-            let sessions = session_manager.list_sessions().await;
-            let summaries = sessions
-                .into_iter()
-                .map(|s| super::message::SessionSummary {
+            // 合并 PTY 会话和 Plugin 会话
+            let pty_sessions = session_manager.list_sessions().await;
+            let plugin_sessions = plugin_manager.list_sessions().await;
+
+            // 收集所有会话（PTY 优先）
+            let mut all_sessions = Vec::new();
+
+            // 添加 PTY 会话
+            for s in pty_sessions {
+                all_sessions.push(super::message::SessionSummary {
                     id: s.id,
                     name: s.name,
                     status: format!("{:?}", s.status),
                     created_at: s.created_at.to_rfc3339(),
                     started_at: s.started_at.map(|t| t.to_rfc3339()),
-                })
-                .collect();
+                    session_type: Some("pty".to_string()),
+                });
+            }
+
+            // 添加 Plugin 会话
+            for s in plugin_sessions {
+                all_sessions.push(super::message::SessionSummary {
+                    id: s.id,
+                    name: s.name,
+                    status: format!("{:?}", s.status),
+                    created_at: s.created_at.to_rfc3339(),
+                    started_at: s.started_at.map(|t| t.to_rfc3339()),
+                    session_type: Some("plugin".to_string()),
+                });
+            }
 
             Ok(Some(Message::Control {
                 message_id: request_message_id,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 payload: super::message::ControlPayload {
-                    action: ControlAction::SessionList { sessions: summaries },
+                    action: ControlAction::SessionList { sessions: all_sessions },
                 },
             }))
         }
@@ -1067,6 +1098,45 @@ async fn handle_control(
                     action: ControlAction::LeaveSession { session_id },
                 },
             }))
+        }
+
+        // === Plugin 会话相关 ===
+        ControlAction::RegisterPluginSession {
+            project_name,
+            project_path,
+            jsonl_path,
+        } => {
+            use uuid::Uuid;
+
+            let session_id = Uuid::new_v4().to_string();
+
+            plugin_manager
+                .register_session(
+                    session_id.clone(),
+                    project_name,
+                    project_path,
+                    jsonl_path,
+                )
+                .await?;
+
+            Ok(Some(Message::Control {
+                message_id: request_message_id,
+                session_id: Some(session_id.clone()),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                payload: super::message::ControlPayload {
+                    action: ControlAction::RegisteredPluginSession { session_id },
+                },
+            }))
+        }
+
+        ControlAction::UnregisterPluginSession { session_id } => {
+            plugin_manager.unregister_session(&session_id).await?;
+            Ok(None)
+        }
+
+        ControlAction::PluginHeartbeat { session_id } => {
+            plugin_manager.handle_heartbeat(&session_id).await?;
+            Ok(None)
         }
 
         _ => Ok(None),

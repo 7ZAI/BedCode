@@ -15,12 +15,15 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* Safe area insets for mobile devices */
-  /* 处理 Android 状态栏和 iOS 刘海屏遮挡问题 */
+  /* 安全区域 - 默认使用 env()，在不支持的环境会回退到 0 */
   --safe-area-inset-top: env(safe-area-inset-top, 0px);
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
+
+  /* 备用安全区域（用于 Android 刘海屏等特殊设备） */
+  --status-bar-height: 0px;
+  --navigation-bar-height: 0px;
 }
 
 /* 默认浅色模式 */
@@ -33,19 +36,157 @@
   color-scheme: dark;
 }
 
-/* 全局字体大小变量 */
+/* 全局字体大小变量 - 默认值 */
 :root {
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
   --font-size-base: 14px;
-  --font-size-small: 12px;
-  --font-size-medium: 14px;
-  --font-size-large: 16px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
 }
 
-/* 字体大小类 */
+/* 桌面端整体字体大小 - 基于设置动态变化 */
+.desktop-ui {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+/* 桌面端标题字体 */
+.desktop-ui h1,
+.desktop-ui .text-xl,
+.desktop-ui .title-xl {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* 桌面端副标题 */
+.desktop-ui h2,
+.desktop-ui .text-lg,
+.desktop-ui .title-lg {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* 桌面端正文 */
+.desktop-ui p,
+.desktop-ui .text-base {
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+}
+
+/* 桌面端小号文字 */
+.desktop-ui .text-sm,
+.desktop-ui small {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 桌面端极小号文字 */
+.desktop-ui .text-xs {
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+/* 桌面端导航链接 */
+.desktop-ui nav a,
+.desktop-ui .nav-link {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+}
+
+/* ==================== 移动端字体样式 ==================== */
+.mobile-ui {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+/* 移动端标题 */
+.mobile-ui h1,
+.mobile-ui .text-xl,
+.mobile-ui .title-xl {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* 移动端副标题 */
+.mobile-ui h2,
+.mobile-ui .text-lg,
+.mobile-ui .title-lg {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* 移动端正文 */
+.mobile-ui p,
+.mobile-ui .text-base,
+.mobile-ui .body-text {
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+}
+
+/* 移动端小号文字 */
+.mobile-ui .text-sm,
+.mobile-ui small {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 移动端极小号文字 */
+.mobile-ui .text-xs {
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+/* 移动端按钮文字 */
+.mobile-ui button,
+.mobile-ui .btn {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+}
+
+/* 移动端输入框 */
+.mobile-ui input,
+.mobile-ui textarea,
+.mobile-ui select {
+  font-size: var(--font-size-base);
+}
+
+/* 移动端列表项 */
+.mobile-ui li,
+.mobile-ui .list-item {
+  font-size: var(--font-size-base);
+}
+
+/* 移动端导航 */
+.mobile-ui .bottom-nav,
+.mobile-ui nav {
+  font-size: var(--font-size-sm);
+}
+
+/* 移动端卡片标题 */
+.mobile-ui .card-title,
+.mobile-ui .item-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+}
+
+/* 移动端卡片描述 */
+.mobile-ui .card-desc,
+.mobile-ui .item-desc {
+  font-size: var(--font-size-sm);
+  color: oklch(var(--bc) / 0.7);
+}
+
+/* 字体大小类 - 使用 CSS 变量 */
+.text-xs { font-size: var(--font-size-xs); }
+.text-sm { font-size: var(--font-size-sm); }
 .text-base { font-size: var(--font-size-base); }
-.text-small { font-size: var(--font-size-small); }
-.text-medium { font-size: var(--font-size-medium); }
-.text-large { font-size: var(--font-size-large); }
+.text-lg { font-size: var(--font-size-lg); }
+.text-xl { font-size: var(--font-size-xl); }
 
 body {
   margin: 0;
@@ -55,13 +196,18 @@ body {
 
 /* 移动端专用样式 */
 .mobile-app {
-  /* 防止内容被状态栏遮挡 */
-  padding-top: var(--safe-area-inset-top);
+  /* 安全区域由 App.vue 通过 JavaScript 动态设置 */
+  /* 保留 CSS env() 作为备用 */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* 确保移动端全屏显示 */
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
-/* 移动端底部导航需要额外 padding */
+/* 移动端底部导航需要额外 padding - 使用 env() */
 .mobile-nav-safe {
-  padding-bottom: var(--safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* Scrollbar styles - 浅色模式默认 */

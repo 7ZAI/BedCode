@@ -1,6 +1,6 @@
 <template>
   <div
-    class="titlebar h-9 bg-dark-800 flex items-center justify-between select-none border-b border-dark-700"
+    class="titlebar h-9 bg-white dark:bg-dark-800 flex items-center justify-between select-none border-b border-gray-200 dark:border-dark-700"
     data-tauri-drag-region
   >
     <!-- Left: App Logo -->
@@ -12,29 +12,29 @@
     <div class="flex items-center titlebar-buttons">
       <button
         @click="minimize"
-        class="w-12 h-9 flex items-center justify-center hover:bg-dark-600 transition-colors"
+        class="w-12 h-9 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-dark-600 transition-colors"
       >
-        <svg class="w-4 h-4 text-dark-300 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 text-gray-600 dark:text-dark-300 hover:text-gray-900 dark:hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
         </svg>
       </button>
       <button
         @click="toggleMaximize"
-        class="w-12 h-9 flex items-center justify-center hover:bg-dark-600 transition-colors"
+        class="w-12 h-9 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-dark-600 transition-colors"
       >
-        <svg v-if="!isMaximized" class="w-3.5 h-3.5 text-dark-300 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg v-if="!isMaximized" class="w-3.5 h-3.5 text-gray-600 dark:text-dark-300 hover:text-gray-900 dark:hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <rect x="4" y="4" width="16" height="16" rx="1" stroke-width="2" />
         </svg>
-        <svg v-else class="w-3.5 h-3.5 text-dark-300 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg v-else class="w-3.5 h-3.5 text-gray-600 dark:text-dark-300 hover:text-gray-900 dark:hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <rect x="2" y="6" width="14" height="14" rx="1" stroke-width="2" />
           <path stroke-width="2" d="M6 6V4a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1h-2" />
         </svg>
       </button>
       <button
         @click="close"
-        class="w-12 h-9 flex items-center justify-center hover:bg-red-600 transition-colors"
+        class="w-12 h-9 flex items-center justify-center hover:bg-red-600 hover:text-white transition-colors"
       >
-        <svg class="w-4 h-4 text-dark-300 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 text-gray-600 dark:text-dark-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>

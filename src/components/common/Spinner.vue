@@ -85,7 +85,7 @@ const colorClass = computed(() => {
     case 'white':
       return 'text-white'
     case 'dark':
-      return 'text-dark-400'
+      return 'text-gray-400 dark:text-dark-400'
     case 'danger':
       return 'text-red-500'
     case 'success':

@@ -70,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, defineExpose } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import type { SessionConfig } from '@/stores/session'
 import Input from '@/components/common/Input.vue'
 import Select from '@/components/common/Select.vue'

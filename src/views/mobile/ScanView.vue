@@ -1,16 +1,16 @@
 <template>
   <div class="h-full w-full bg-black flex flex-col">
     <!-- Header -->
-    <header class="bg-dark-900/90 backdrop-blur-sm border-b border-dark-800 px-4 py-3 flex items-center gap-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-gray-50/90 dark:bg-dark-900/90 backdrop-blur-sm border-b border-gray-200 dark:border-dark-800 px-4 pb-3 flex items-center gap-3" style="padding-top: 12px;">
       <button
-        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-dark-800 transition-colors"
+        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white dark:bg-dark-800 transition-colors"
         @click="goBack"
       >
-        <svg class="w-5 h-5 text-dark-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5 text-gray-900 dark:text-dark-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
-      <h2 class="text-lg font-semibold text-dark-100">扫描二维码</h2>
+      <h2 class="text-lg font-semibold text-gray- dark:text-dark-100">扫描二维码</h2>
     </header>
 
     <!-- Scanner area -->
@@ -37,15 +37,15 @@
         </div>
       </div>
 
-      <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-dark-400 text-sm">
+      <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-gray- dark:text-dark-400 text-sm">
         将二维码对准框内扫描
       </p>
 
       <!-- Connecting state -->
       <div v-if="isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
         <div class="animate-spin rounded-full h-12 w-12 border-2 border-primary-400 border-t-transparent mb-4"></div>
-        <p class="text-dark-300 text-lg mb-2">{{ connectingStep }}</p>
-        <p class="text-dark-500 text-sm">{{ connectingDetail }}</p>
+        <p class="text-gray- dark:text-dark-300 text-lg mb-2">{{ connectingStep }}</p>
+        <p class="text-gray- dark:text-dark-500 text-sm">{{ connectingDetail }}</p>
       </div>
 
       <!-- Error state -->
@@ -54,10 +54,10 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
         </svg>
         <p class="text-red-400 text-lg mb-2">连接失败</p>
-        <p class="text-dark-400 text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
+        <p class="text-gray- dark:text-dark-400 text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
         <div class="flex gap-3">
           <button
-            class="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg hover:bg-dark-600 transition-colors"
+            class="px-4 py-2 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-200 rounded-lg hover:bg-gray-200 dark:bg-dark-600 transition-colors"
             @click="goBack"
           >
             返回

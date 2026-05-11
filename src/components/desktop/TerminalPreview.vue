@@ -1,7 +1,7 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-100 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3 flex items-center justify-between">
+    <header class="px-4 py-3 flex items-center justify-between border-b border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800">
       <div class="flex items-center gap-3">
         <div
           :class="[
@@ -9,14 +9,14 @@
             statusColor
           ]"
         ></div>
-        <h3 class="font-medium">{{ session?.name || '终端' }}</h3>
+        <h3 class="font-medium text-gray-900 dark:text-white">{{ session?.name || '终端' }}</h3>
       </div>
 
       <div class="flex items-center gap-2">
         <!-- Font Size -->
         <select
           v-model="fontSize"
-          class="bg-dark-700 border border-dark-600 rounded px-2 py-1 text-sm text-white"
+          class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
         >
           <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
             {{ size }}px
@@ -66,6 +66,11 @@ const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
 // xterm.js 实例
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+let lastOutputIndex = 0
+
+// 滚动状态追踪
+let isUserScrolling = false
+let scrollTimeout: ReturnType<typeof setTimeout> | null = null
 
 const sessionId = computed(() => props.session?.id || '')
 
@@ -83,7 +88,7 @@ const quickKeys = [
 ]
 
 const statusColor = computed(() => {
-  if (!props.session) return 'bg-dark-500'
+  if (!props.session) return 'bg-gray-400 dark:bg-dark-500'
 
   switch (props.session.status) {
     case 'running':
@@ -93,13 +98,73 @@ const statusColor = computed(() => {
     case 'error':
       return 'bg-red-500'
     case 'stopped':
-      return 'bg-dark-500'
+      return 'bg-gray-400 dark:bg-dark-500'
     case 'starting':
       return 'bg-blue-500 animate-pulse'
     default:
-      return 'bg-dark-500'
+      return 'bg-gray-400 dark:bg-dark-500'
   }
 })
+
+// 检测当前是否为深色模式
+const isDarkMode = computed(() => {
+  return document.documentElement.classList.contains('dark')
+})
+
+// 浅色主题
+const lightTheme = {
+  background: '#ffffff',
+  foreground: '#333333',
+  cursor: '#000000',
+  cursorAccent: '#ffffff',
+  selectionBackground: '#b4d7ff',
+  black: '#000000',
+  red: '#cd3131',
+  green: '#0dbc79',
+  yellow: '#e5e510',
+  blue: '#2472c8',
+  magenta: '#bc3fbc',
+  cyan: '#11a8cd',
+  white: '#e5e5e5',
+  brightBlack: '#666666',
+  brightRed: '#f14c4c',
+  brightGreen: '#23d18b',
+  brightYellow: '#f5f543',
+  brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6',
+  brightCyan: '#29b8db',
+  brightWhite: '#ffffff',
+}
+
+// 深色主题
+const darkTheme = {
+  background: '#1a1a2e',
+  foreground: '#e0e0e0',
+  cursor: '#ffffff',
+  cursorAccent: '#1a1a2e',
+  selectionBackground: '#4a4a6a',
+  black: '#000000',
+  red: '#ff5555',
+  green: '#50fa7b',
+  yellow: '#f1fa8c',
+  blue: '#bd93f9',
+  magenta: '#ff79c6',
+  cyan: '#8be9fd',
+  white: '#bbbbbb',
+  brightBlack: '#555555',
+  brightRed: '#ff5555',
+  brightGreen: '#50fa7b',
+  brightYellow: '#f1fa8c',
+  brightBlue: '#bd93f9',
+  brightMagenta: '#ff79c6',
+  brightCyan: '#8be9fd',
+  brightWhite: '#ffffff',
+}
+
+// 根据当前主题返回对应的 xterm 主题
+function getTheme() {
+  return isDarkMode.value ? darkTheme : lightTheme
+}
 
 // 初始化 xterm.js
 function initTerminal() {
@@ -108,29 +173,7 @@ function initTerminal() {
   terminal = new Terminal({
     fontSize: fontSize.value,
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
-    theme: {
-      background: '#1a1a2e',
-      foreground: '#e0e0e0',
-      cursor: '#ffffff',
-      cursorAccent: '#1a1a2e',
-      selectionBackground: '#4a4a6a',
-      black: '#000000',
-      red: '#ff5555',
-      green: '#50fa7b',
-      yellow: '#f1fa8c',
-      blue: '#bd93f9',
-      magenta: '#ff79c6',
-      cyan: '#8be9fd',
-      white: '#bbbbbb',
-      brightBlack: '#555555',
-      brightRed: '#ff5555',
-      brightGreen: '#50fa7b',
-      brightYellow: '#f1fa8c',
-      brightBlue: '#bd93f9',
-      brightMagenta: '#ff79c6',
-      brightCyan: '#8be9fd',
-      brightWhite: '#ffffff',
-    },
+    theme: getTheme(),
     cursorBlink: true,
     cursorStyle: 'block',
     scrollback: 10000,
@@ -186,6 +229,33 @@ function writeToTerminal(data: string) {
   terminal.write(data)
 }
 
+/** 滚动到底部 */
+function scrollToBottom() {
+  if (!terminal) return
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    viewport.scrollTop = viewport.scrollHeight
+  }
+}
+
+/** 滚动事件处理 - 检测用户是否在滚动 */
+function handleScroll() {
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (!viewport) return
+
+  // 检测是否在底部（允许 50px 误差）
+  const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
+
+  // 用户不在底部 = 正在向上滚动查看历史
+  isUserScrolling = !isAtBottom
+
+  // 滚动停止后清除状态（300ms 防抖）
+  if (scrollTimeout) clearTimeout(scrollTimeout)
+  scrollTimeout = setTimeout(() => {
+    isUserScrolling = false
+  }, 300)
+}
+
 // 清空终端
 function clearTerminal() {
   if (!terminal) return
@@ -196,9 +266,15 @@ function clearTerminal() {
 // 监听 PTY 输出，写入 xterm
 watch(output, (newOutput) => {
   if (!terminal) return
-  // 写入所有新的输出
-  for (const data of newOutput) {
-    terminal.write(data)
+  // 增量写入：只写入新增的部分
+  for (let i = lastOutputIndex; i < newOutput.length; i++) {
+    terminal.write(newOutput[i])
+  }
+  lastOutputIndex = newOutput.length
+
+  // 只有用户不在滚动时才自动滚动到底部
+  if (!isUserScrolling) {
+    scrollToBottom()
   }
 }, { deep: true })
 
@@ -220,7 +296,6 @@ watch(fontSize, (newSize) => {
 })
 // 监听设置中的字体大小变化（从设置页面加载时）
 watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => {
-  console.log('[TerminalPreview] Store fontSize changed:', oldSize, '->', newSize)
   if (fontSize.value !== newSize) {
     fontSize.value = newSize
     if (terminal) {
@@ -247,10 +322,36 @@ watch(sessionId, (newId, oldId) => {
 onMounted(() => {
   nextTick(() => {
     initTerminal()
+
+    // 添加滚动事件监听
+    const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+    if (viewport) {
+      viewport.addEventListener('scroll', handleScroll)
+    }
+  })
+
+  // 监听主题变化
+  const observer = new MutationObserver(() => {
+    if (terminal) {
+      terminal.options.theme = getTheme()
+    }
+  })
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class'],
   })
 })
 
 onUnmounted(() => {
+  // 清理滚动事件监听器
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    viewport.removeEventListener('scroll', handleScroll)
+  }
+  if (scrollTimeout) {
+    clearTimeout(scrollTimeout)
+  }
+
   if (terminal) {
     terminal.dispose()
     terminal = null

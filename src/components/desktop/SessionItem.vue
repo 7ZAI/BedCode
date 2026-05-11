@@ -1,8 +1,8 @@
 <template>
-  <div class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
+  <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 overflow-hidden">
     <!-- Session Header -->
     <div
-      class="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-dark-750 transition-colors"
+      class="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-dark-750 transition-colors"
       @click="toggleExpand"
     >
       <!-- Left: Status Indicator -->
@@ -15,8 +15,8 @@
 
       <!-- Center: Session Info -->
       <div class="flex-1 min-w-0">
-        <h3 class="font-medium text-white truncate">{{ session.name }}</h3>
-        <p class="text-dark-400 text-sm">{{ displayTime }}</p>
+        <h3 class="font-medium text-gray-900 dark:text-white truncate">{{ session.name }}</h3>
+        <p class="text-gray-500 dark:text-dark-400 text-sm">{{ displayTime }}</p>
       </div>
 
       <!-- Status Badge -->
@@ -79,23 +79,23 @@
     </div>
 
     <!-- Expandable Info Area -->
-    <div v-if="isExpanded" class="border-t border-dark-700 px-4 py-3 bg-dark-900">
+    <div v-if="isExpanded" class="border-t border-gray-200 dark:border-dark-700 px-4 py-3 bg-gray-50 dark:bg-dark-900">
       <div class="grid grid-cols-2 gap-4 text-sm">
         <div>
-          <span class="text-dark-400">会话ID:</span>
-          <span class="text-dark-300 ml-2 font-mono text-xs">{{ session.id }}</span>
+          <span class="text-gray-500 dark:text-dark-400">会话ID:</span>
+          <span class="text-gray-700 dark:text-dark-300 ml-2 font-mono text-xs">{{ session.id }}</span>
         </div>
         <div>
-          <span class="text-dark-400">配置ID:</span>
-          <span class="text-dark-300 ml-2 font-mono text-xs">{{ session.configId }}</span>
+          <span class="text-gray-500 dark:text-dark-400">配置ID:</span>
+          <span class="text-gray-700 dark:text-dark-300 ml-2 font-mono text-xs">{{ session.configId }}</span>
         </div>
         <div>
-          <span class="text-dark-400">创建时间:</span>
-          <span class="text-dark-300 ml-2">{{ formatDateTime(session.createdAt) }}</span>
+          <span class="text-gray-500 dark:text-dark-400">创建时间:</span>
+          <span class="text-gray-700 dark:text-dark-300 ml-2">{{ formatDateTime(session.createdAt) }}</span>
         </div>
         <div v-if="session.startedAt">
-          <span class="text-dark-400">{{ isRunning ? '启动时间' : '停止时间' }}:</span>
-          <span class="text-dark-300 ml-2">{{ isRunning ? formatDateTime(session.startedAt) : formatDateTime(session.stoppedAt || '') }}</span>
+          <span class="text-gray-500 dark:text-dark-400">{{ isRunning ? '启动时间' : '停止时间' }}:</span>
+          <span class="text-gray-700 dark:text-dark-300 ml-2">{{ isRunning ? formatDateTime(session.startedAt) : formatDateTime(session.stoppedAt || '') }}</span>
         </div>
       </div>
     </div>
@@ -193,11 +193,11 @@ const statusText = computed(() => {
 // 状态徽章样式
 const statusBadgeClass = computed(() => {
   switch (props.session.status) {
-    case 'running': return 'bg-green-900/50 text-green-300'
-    case 'waitingInput': return 'bg-yellow-900/50 text-yellow-300'
-    case 'error': return 'bg-red-900/50 text-red-300'
-    case 'stopped': return 'bg-dark-600 text-dark-400'
-    default: return 'bg-dark-600 text-dark-400'
+    case 'running': return 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
+    case 'waitingInput': return 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300'
+    case 'error': return 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300'
+    case 'stopped': return 'bg-gray-100 dark:bg-dark-600 text-gray-600 dark:text-dark-400'
+    default: return 'bg-gray-100 dark:bg-dark-600 text-gray-600 dark:text-dark-400'
   }
 })
 

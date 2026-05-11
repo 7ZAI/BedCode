@@ -1,12 +1,12 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header with safe area padding -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
       <h1 class="text-lg font-semibold">会话配置</h1>
     </header>
 
     <!-- Connection Status Banner -->
-    <div v-if="connectionStatus" class="px-4 py-3 bg-dark-800 border-b border-dark-700">
+    <div v-if="connectionStatus" class="px-4 py-3 bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700">
       <div class="flex items-center gap-3">
         <!-- Connecting spinner -->
         <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
@@ -20,11 +20,11 @@
         </svg>
         <!-- Pairing icon -->
         <div v-else-if="connectionStatus === 'pairing'" class="w-5 h-5 bg-primary-400 rounded-full flex items-center justify-center">
-          <span class="text-xs text-dark-900 font-bold">?</span>
+          <span class="text-xs text-gray- dark:text-dark-900 font-bold">?</span>
         </div>
 
         <span class="text-sm" :class="{
-          'text-dark-300': connectionStatus === 'connecting',
+          'text-gray- dark:text-dark-300': connectionStatus === 'connecting',
           'text-green-400': connectionStatus === 'connected',
           'text-red-400': connectionStatus === 'error',
           'text-primary-400': connectionStatus === 'pairing',
@@ -48,7 +48,7 @@
           </div>
         </div>
         <button
-          class="px-3 py-1.5 bg-dark-700 text-dark-300 text-sm rounded-lg"
+          class="px-3 py-1.5 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-sm rounded-lg"
           @click="handleDisconnect"
         >
           断开
@@ -61,16 +61,16 @@
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-dark-400 text-sm font-medium">会话配置</h3>
+          <h3 class="text-gray- dark:text-dark-400 text-sm font-medium">会话配置</h3>
           <button
-            class="p-2 rounded-lg active:bg-dark-700 transition-colors"
+            class="p-2 rounded-lg active:bg-gray-100 dark:bg-dark-700 transition-colors"
             :class="{ 'opacity-50': isRefreshing }"
             :disabled="isRefreshing"
             @click="refreshConfigs"
             title="刷新配置"
           >
             <svg
-              class="w-5 h-5 text-dark-400"
+              class="w-5 h-5 text-gray- dark:text-dark-400"
               :class="{ 'animate-spin': isRefreshing }"
               fill="none"
               stroke="currentColor"
@@ -84,16 +84,16 @@
         <!-- Loading -->
         <div v-if="isLoadingConfigs" class="text-center py-12">
           <div class="w-8 h-8 border-2 border-primary-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p class="text-dark-500 text-sm">加载配置中...</p>
+          <p class="text-gray- dark:text-dark-500 text-sm">加载配置中...</p>
         </div>
 
         <!-- Empty -->
         <div v-else-if="sessionConfigs.length === 0" class="text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-16 h-16 mx-auto text-gray- dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <p class="text-dark-400">暂无会话配置</p>
-          <p class="text-dark-500 text-sm mt-2">请在桌面端创建会话配置</p>
+          <p class="text-gray- dark:text-dark-400">暂无会话配置</p>
+          <p class="text-gray- dark:text-dark-500 text-sm mt-2">请在桌面端创建会话配置</p>
         </div>
 
         <!-- Config List -->
@@ -101,7 +101,7 @@
           <div
             v-for="config in sessionConfigs"
             :key="config.id"
-            class="bg-dark-800 rounded-xl p-4 active:bg-dark-700 transition-colors"
+            class="bg-white dark:bg-dark-800 rounded-xl p-4 active:bg-gray-100 dark:bg-dark-700 transition-colors"
           >
             <div class="flex items-start justify-between">
               <div class="flex-1 min-w-0" @click="goToSessions">
@@ -115,10 +115,10 @@
                   >
                     {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
                   </span>
-                  <span v-if="config.wsl_distro" class="text-dark-500 text-xs">{{ config.wsl_distro }}</span>
+                  <span v-if="config.wsl_distro" class="text-gray- dark:text-dark-500 text-xs">{{ config.wsl_distro }}</span>
                 </div>
-                <p class="text-dark-400 text-sm mt-1 truncate">{{ config.command }}</p>
-                <p class="text-dark-500 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
+                <p class="text-gray- dark:text-dark-400 text-sm mt-1 truncate">{{ config.command }}</p>
+                <p class="text-gray- dark:text-dark-500 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
               </div>
               <button
                 class="ml-3 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg active:bg-primary-700 flex items-center gap-1.5 shrink-0"
@@ -143,11 +143,11 @@
 
       <!-- Connection History (when not connected) -->
       <div v-else>
-        <h3 class="text-dark-400 text-sm font-medium mb-3 flex items-center justify-between">
+        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3 flex items-center justify-between">
           <span>连接历史</span>
           <button
             v-if="connectionHistory.length > 0"
-            class="text-dark-500 text-xs"
+            class="text-gray- dark:text-dark-500 text-xs"
             @click="clearHistory"
           >
             清除
@@ -155,29 +155,29 @@
         </h3>
 
         <div v-if="connectionHistory.length === 0" class="text-center py-8">
-          <p class="text-dark-500 text-sm">暂无连接历史</p>
+          <p class="text-gray- dark:text-dark-500 text-sm">暂无连接历史</p>
         </div>
 
         <div v-else class="space-y-2">
           <div
             v-for="item in connectionHistory"
             :key="item.address"
-            class="flex items-center justify-between p-3 bg-dark-800 rounded-lg"
+            class="flex items-center justify-between p-3 bg-white dark:bg-dark-800 rounded-lg"
             @click="handleConnectFromHistory(item)"
           >
             <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-full bg-dark-700 flex items-center justify-center">
-                <svg class="w-5 h-5 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-dark-700 flex items-center justify-center">
+                <svg class="w-5 h-5 text-gray- dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
               <div>
-                <p class="font-medium text-dark-200">{{ item.name || item.address }}</p>
-                <p class="text-dark-500 text-xs">{{ item.address }}</p>
+                <p class="font-medium text-gray- dark:text-dark-200">{{ item.name || item.address }}</p>
+                <p class="text-gray- dark:text-dark-500 text-xs">{{ item.address }}</p>
               </div>
             </div>
             <button
-              class="p-2 text-dark-500 hover:text-red-400"
+              class="p-2 text-gray- dark:text-dark-500 hover:text-red-400"
               @click.stop="removeFromHistory(item.address)"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -190,10 +190,10 @@
     </div>
 
     <!-- Action Buttons (when not connected) -->
-    <div v-if="!isConnected" class="p-4 border-t border-dark-700 space-y-3">
+    <div v-if="!isConnected" class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-3">
       <!-- Scan QR Code Button -->
       <button
-        class="w-full bg-dark-700 text-white py-3 rounded-xl font-medium active:bg-dark-600 flex items-center justify-center gap-2"
+        class="w-full bg-gray-100 dark:bg-dark-700 text-white py-3 rounded-xl font-medium active:bg-gray-200 dark:bg-dark-600 flex items-center justify-center gap-2"
         :class="{ 'opacity-50': isConnecting }"
         :disabled="isConnecting"
         @click="$router.push({ name: 'mobile-scan' })"

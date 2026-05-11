@@ -2,7 +2,7 @@
 //!
 //! 封装 portable-pty，提供跨平台的 PTY 管理功能
 
-use super::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
+use super::{windows_to_wsl_path, ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
 use crate::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
 use std::io::{BufReader, Read, Write};
@@ -85,6 +85,11 @@ impl PtySession {
     /// 创建新的 PTY 会话
     pub fn new(config: SessionLaunchConfig) -> Result<Self> {
         let id = Uuid::new_v4().to_string();
+        Self::with_id(id, config)
+    }
+
+    /// 使用指定 ID 创建 PTY 会话（用于重启时复用旧 ID）
+    pub fn with_id(id: String, config: SessionLaunchConfig) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -221,14 +226,16 @@ impl PtySession {
                 cmd.arg("-lic");
 
                 // 构建在 WSL 中执行的命令：
-                // 1. 切换到指定目录
-                // 2. 显示当前路径
-                // 3. 执行用户命令
+                // 1. 将 Windows 路径转换为 WSL 路径（如 \\wsl.localhost\Ubuntu\... -> /home/...）
+                // 2. 切换到指定目录
+                // 3. 显示当前路径
+                // 4. 执行用户命令
                 // -l 使 bash 加载登录配置（包括 PATH）
                 // -i 使 bash 交互式运行
+                let wsl_path = windows_to_wsl_path(&config.working_dir);
                 let wsl_command = format!(
                     "cd '{}' && pwd && {}",
-                    config.working_dir.replace('\\', "/"),
+                    wsl_path,
                     config.command
                 );
                 cmd.arg(wsl_command);

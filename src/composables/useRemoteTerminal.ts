@@ -7,6 +7,7 @@ export interface RemoteSession {
   status: 'running' | 'waiting_input' | 'stopped'
   createdAt: string
   startedAt?: string
+  sessionType?: 'pty' | 'plugin'
 }
 
 export interface SessionSummary {
@@ -15,6 +16,7 @@ export interface SessionSummary {
   status: string
   created_at?: string
   started_at?: string
+  session_type?: string
 }
 
 export interface SessionConfigSummary {
@@ -139,6 +141,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
         status: mapSessionStatus(s.status),
         createdAt: s.created_at,
         startedAt: s.started_at || undefined,
+        sessionType: (s.session_type || 'pty') as 'pty' | 'plugin',
       }))
     }
   }
@@ -193,6 +196,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
           status: mapSessionStatus(s.status),
           createdAt: s.created_at,
           startedAt: s.started_at || undefined,
+          sessionType: (s.session_type || 'pty') as 'pty' | 'plugin',
         }))
       }
     } catch (e) {

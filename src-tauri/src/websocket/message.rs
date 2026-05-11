@@ -347,6 +347,9 @@ pub struct SessionSummary {
     pub status: String,
     pub created_at: String,
     pub started_at: Option<String>,
+    /// 会话类型：pty 或 plugin
+    #[serde(default)]
+    pub session_type: Option<String>,
 }
 
 /// 会话配置摘要

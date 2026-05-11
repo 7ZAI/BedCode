@@ -1,7 +1,7 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
       <h1 class="text-lg font-semibold">设置</h1>
     </header>
 
@@ -16,8 +16,8 @@
     <!-- Settings List -->
     <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->
-      <div class="px-4 py-3 border-b border-dark-800">
-        <h3 class="text-dark-400 text-sm font-medium mb-3">连接设置</h3>
+      <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
+        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">连接设置</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
@@ -37,15 +37,15 @@
               type="number"
               min="1"
               max="60"
-              class="w-16 bg-dark-700 border border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
+              class="w-16 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
             />
           </div>
         </div>
       </div>
 
       <!-- Notification Settings -->
-      <div class="px-4 py-3 border-b border-dark-800">
-        <h3 class="text-dark-400 text-sm font-medium mb-3">通知设置</h3>
+      <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
+        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">通知设置</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
@@ -66,8 +66,8 @@
       </div>
 
       <!-- Appearance Settings -->
-      <div class="px-4 py-3 border-b border-dark-800">
-        <h3 class="text-dark-400 text-sm font-medium mb-3">外观设置</h3>
+      <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
+        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">外观设置</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
@@ -79,7 +79,7 @@
             <span>字体大小</span>
             <select
               v-model="settings.fontSize"
-              class="bg-dark-700 border border-dark-600 rounded-lg px-3 py-1 text-sm"
+              class="bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-1 text-sm"
             >
               <option value="small">小</option>
               <option value="medium">中</option>
@@ -91,28 +91,28 @@
 
       <!-- About -->
       <div class="px-4 py-3">
-        <h3 class="text-dark-400 text-sm font-medium mb-3">关于</h3>
+        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">关于</h3>
 
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-dark-300">版本</span>
-            <span class="text-dark-500">0.1.0</span>
+            <span class="text-gray- dark:text-dark-300">版本</span>
+            <span class="text-gray- dark:text-dark-500">0.1.0</span>
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-dark-300">构建</span>
-            <span class="text-dark-500">2026-04-30</span>
+            <span class="text-gray- dark:text-dark-300">构建</span>
+            <span class="text-gray- dark:text-dark-500">2026-04-30</span>
           </div>
 
           <button
-            class="w-full text-left text-dark-300 py-2"
+            class="w-full text-left text-gray- dark:text-dark-300 py-2"
             @click="openGitHub"
           >
             GitHub 仓库 →
           </button>
 
           <button
-            class="w-full text-left text-dark-300 py-2"
+            class="w-full text-left text-gray- dark:text-dark-300 py-2"
             @click="checkUpdate"
           >
             检查更新
@@ -122,9 +122,9 @@
     </div>
 
     <!-- Footer Actions -->
-    <div class="p-4 border-t border-dark-700 space-y-2">
+    <div class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-2">
       <button
-        class="w-full bg-dark-700 text-dark-200 py-3 rounded-xl font-medium"
+        class="w-full bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-200 py-3 rounded-xl font-medium"
         @click="resetSettings"
       >
         重置设置

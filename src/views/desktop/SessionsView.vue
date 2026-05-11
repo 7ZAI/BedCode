@@ -1,9 +1,9 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-6 py-3 h-12 flex items-center">
+    <header class="px-6 py-3 h-12 flex items-center border-b border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800">
       <div class="flex items-center justify-between w-full">
-        <h2 class="text-lg font-semibold">会话配置</h2>
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">会话配置</h2>
         <Button variant="primary" @click="showCreateDialog = true">
           <template #icon>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -20,16 +20,16 @@
       <!-- Loading State -->
       <div v-if="isLoading" class="text-center py-12">
         <Spinner size="xl" color="primary" class="mb-4" />
-        <p class="text-dark-400">加载中...</p>
+        <p class="text-gray-500 dark:text-dark-400">加载中...</p>
       </div>
 
       <!-- Empty State -->
       <div v-else-if="sessionStore.configs.length === 0" class="text-center py-12">
-        <svg class="w-16 h-16 mx-auto text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-16 h-16 mx-auto text-gray-400 dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <p class="text-dark-400">暂无会话配置</p>
-        <p class="text-dark-500 text-sm mt-2">点击"新建配置"创建第一个配置</p>
+        <p class="text-gray-600 dark:text-dark-400">暂无会话配置</p>
+        <p class="text-gray-500 dark:text-dark-500 text-sm mt-2">点击"新建配置"创建第一个配置</p>
       </div>
 
       <!-- Config Cards (Long Card Mode) -->
@@ -65,7 +65,7 @@
 
     <!-- Delete Confirm Dialog -->
     <Modal v-model="showDeleteConfirmDialog" title="确认删除" size="sm">
-      <p class="text-dark-300">确定要删除此会话配置吗？此操作无法撤销。</p>
+      <p class="text-gray-700 dark:text-dark-300">确定要删除此会话配置吗？此操作无法撤销。</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <Button variant="ghost" @click="showDeleteConfirmDialog = false">取消</Button>
@@ -73,6 +73,14 @@
         </div>
       </template>
     </Modal>
+
+    <!-- Global Loading Overlay -->
+    <div v-if="isOperating" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-white dark:bg-dark-800 rounded-lg p-6 flex flex-col items-center gap-4 min-w-[200px]">
+        <Spinner size="lg" color="primary" />
+        <p class="text-gray- dark:text-dark-300">{{ operatingMessage }}</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -99,6 +107,10 @@ const isLoading = ref(true)
 const showDeleteConfirmDialog = ref(false)
 const pendingDeleteConfigId = ref<string | null>(null)
 const sessionFormRef = ref<InstanceType<typeof SessionForm> | null>(null)
+
+// 操作中的 loading 状态
+const isOperating = ref(false)
+const operatingMessage = ref('处理中...')
 
 // Page-level keyboard shortcuts
 useKeyboardShortcuts([
@@ -132,6 +144,9 @@ onMounted(async () => {
 })
 
 async function startSession(configId: string) {
+  isOperating.value = true
+  operatingMessage.value = '正在启动会话...'
+
   try {
     await sessionStore.createSession(configId)
     toast.success('会话已启动')
@@ -139,6 +154,8 @@ async function startSession(configId: string) {
     router.push({ name: 'session-manager' })
   } catch (e) {
     toast.error('启动会话失败: ' + (e as Error).message)
+  } finally {
+    isOperating.value = false
   }
 }
 
@@ -161,12 +178,17 @@ async function confirmDelete() {
 }
 
 async function killSession(sessionId: string) {
+  isOperating.value = true
+  operatingMessage.value = '正在停止会话...'
+
   try {
     await sessionStore.killSession(sessionId)
     toast.info('会话已终止')
   } catch (e) {
     console.error('Failed to kill session:', e)
     toast.error('终止会话失败: ' + (e as Error).message)
+  } finally {
+    isOperating.value = false
   }
 }
 

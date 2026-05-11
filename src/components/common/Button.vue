@@ -3,7 +3,7 @@
     :type="type"
     :disabled="disabled || loading"
     :title="title"
-    class="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-900"
+    class="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-dark-900"
     :class="[variantClass, sizeClass, { 'opacity-50 cursor-not-allowed': disabled || loading }]"
     @click="$emit('click', $event)"
   >
@@ -54,11 +54,11 @@ const variantClass = computed(() => {
     case 'primary':
       return 'bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500'
     case 'secondary':
-      return 'bg-dark-700 hover:bg-dark-600 text-white border border-dark-600 focus:ring-dark-500'
+      return 'bg-gray-200 dark:bg-dark-700 hover:bg-gray-300 dark:hover:bg-dark-600 text-gray-800 dark:text-white border border-gray-300 dark:border-dark-600 focus:ring-dark-500'
     case 'danger':
       return 'bg-red-600 hover:bg-red-700 text-white focus:ring-red-500'
     case 'ghost':
-      return 'bg-transparent hover:bg-dark-700 text-dark-300 hover:text-white focus:ring-dark-500'
+      return 'bg-transparent hover:bg-gray-100 dark:hover:bg-dark-700 text-gray-700 dark:text-dark-300 hover:text-gray-900 dark:hover:text-white focus:ring-dark-500'
     default:
       return 'bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500'
   }

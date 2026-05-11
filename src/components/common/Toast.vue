@@ -64,13 +64,13 @@ const visible = ref(false)
 const typeClass = computed(() => {
   switch (props.type) {
     case 'success':
-      return 'bg-green-900/90 border-green-700 text-green-100'
+      return 'bg-green-500 border-green-600 text-white'
     case 'error':
-      return 'bg-red-900/90 border-red-700 text-red-100'
+      return 'bg-red-500 border-red-600 text-white'
     case 'warning':
-      return 'bg-yellow-900/90 border-yellow-700 text-yellow-100'
+      return 'bg-yellow-500 border-yellow-600 text-white'
     default:
-      return 'bg-dark-800/90 border-dark-600 text-dark-100'
+      return 'bg-white dark:bg-dark-800 border-gray-200 dark:border-dark-600 text-gray-900 dark:text-dark-100'
   }
 })
 

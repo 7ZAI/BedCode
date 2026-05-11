@@ -5,7 +5,7 @@
       <slot name="icon">
         <!-- 默认图标：空文件夹 -->
         <svg
-          class="text-dark-400"
+          class="text-gray-400 dark:text-dark-400"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -27,10 +27,10 @@
     </div>
 
     <!-- Title -->
-    <h3 class="text-lg font-medium text-dark-200 mb-2">{{ title }}</h3>
+    <h3 class="text-lg font-medium text-gray-800 dark:text-dark-200 mb-2">{{ title }}</h3>
 
     <!-- Description -->
-    <p v-if="description" class="text-sm text-dark-400 text-center max-w-sm mb-6">
+    <p v-if="description" class="text-sm text-center max-w-sm mb-6 text-gray-500 dark:text-dark-400">
       {{ description }}
     </p>
 

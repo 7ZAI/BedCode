@@ -1,7 +1,7 @@
 <template>
-  <div class="h-full flex flex-col bg-dark-900">
+  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-4 py-3" style="padding-top: calc(var(--safe-area-inset-top, 0px) + 12px);">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
       <h1 class="text-lg font-semibold">快捷指令</h1>
     </header>
 
@@ -12,16 +12,16 @@
         <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
       </div>
       <button
-        class="text-xs text-dark-400 hover:text-dark-300"
+        class="text-xs text-gray- dark:text-dark-400 hover:text-gray- dark:text-dark-300"
         @click="router.push('/mobile/devices')"
       >
         管理
       </button>
     </div>
-    <div v-else class="px-4 py-2 bg-dark-800/50 border-b border-dark-700 flex items-center justify-between">
+    <div v-else class="px-4 py-2 bg-white dark:bg-dark-800/50 border-b border-gray-200 dark:border-dark-700 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-dark-500"></div>
-        <span class="text-dark-400 text-sm">未连接</span>
+        <span class="text-gray- dark:text-dark-400 text-sm">未连接</span>
       </div>
       <button
         class="text-xs text-primary-400 hover:text-primary-300"
@@ -35,7 +35,7 @@
     <div class="flex-1 overflow-auto p-4">
       <!-- Preset Actions Grid -->
       <div class="mb-6">
-        <h3 class="text-dark-400 text-sm font-medium mb-3">预设指令</h3>
+        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">预设指令</h3>
         <div class="grid grid-cols-2 gap-3">
           <QuickActionButton
             v-for="action in presetActions"
@@ -52,7 +52,7 @@
       <!-- Custom Actions -->
       <div>
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-dark-400 text-sm font-medium">自定义指令</h3>
+          <h3 class="text-gray- dark:text-dark-400 text-sm font-medium">自定义指令</h3>
           <button
             class="text-primary-400 text-sm"
             @click="showAddDialog = true"
@@ -62,14 +62,14 @@
         </div>
 
         <div v-if="customActions.length === 0" class="text-center py-8">
-          <p class="text-dark-500 text-sm">暂无自定义指令</p>
+          <p class="text-gray- dark:text-dark-500 text-sm">暂无自定义指令</p>
         </div>
 
         <div v-else class="space-y-2">
           <div
             v-for="action in customActions"
             :key="action.id"
-            class="bg-dark-800 rounded-xl p-4 flex items-center gap-3 active:bg-dark-700"
+            class="bg-white dark:bg-dark-800 rounded-xl p-4 flex items-center gap-3 active:bg-gray-100 dark:bg-dark-700"
           >
             <div
               class="w-10 h-10 rounded-lg flex items-center justify-center"
@@ -79,11 +79,11 @@
             </div>
             <div class="flex-1 min-w-0">
               <p class="font-medium truncate">{{ action.name }}</p>
-              <p class="text-dark-400 text-sm truncate">{{ action.content }}</p>
+              <p class="text-gray- dark:text-dark-400 text-sm truncate">{{ action.content }}</p>
             </div>
             <div class="flex gap-2">
               <button
-                class="p-2 text-dark-400 hover:text-white"
+                class="p-2 text-gray- dark:text-dark-400 hover:text-white"
                 @click="editAction(action)"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -91,7 +91,7 @@
                 </svg>
               </button>
               <button
-                class="p-2 text-dark-400 hover:text-red-400"
+                class="p-2 text-gray- dark:text-dark-400 hover:text-red-400"
                 @click="deleteAction(action.id)"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -109,41 +109,41 @@
       <Transition name="fade">
         <div v-if="showAddDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/60" @click="closeDialog"></div>
-          <div class="relative w-full max-w-sm bg-dark-800 rounded-2xl p-6">
+          <div class="relative w-full max-w-sm bg-white dark:bg-dark-800 rounded-2xl p-6">
             <h3 class="text-lg font-semibold mb-4">
               {{ editingAction ? '编辑指令' : '添加指令' }}
             </h3>
 
             <div class="space-y-4">
               <div>
-                <label class="text-dark-400 text-sm mb-1 block">名称</label>
+                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">名称</label>
                 <input
                   v-model="form.name"
                   type="text"
                   placeholder="指令名称"
-                  class="w-full bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500"
+                  class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500"
                 />
               </div>
 
               <div>
-                <label class="text-dark-400 text-sm mb-1 block">内容</label>
+                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">内容</label>
                 <textarea
                   v-model="form.content"
                   placeholder="指令内容"
                   rows="3"
-                  class="w-full bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 resize-none"
+                  class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 resize-none"
                 ></textarea>
               </div>
 
               <div>
-                <label class="text-dark-400 text-sm mb-1 block">图标</label>
+                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">图标</label>
                 <div class="flex gap-2">
                   <button
                     v-for="emoji in iconOptions"
                     :key="emoji"
                     :class="[
                       'w-10 h-10 rounded-lg text-lg',
-                      form.icon === emoji ? 'bg-primary-600' : 'bg-dark-700'
+                      form.icon === emoji ? 'bg-primary-600' : 'bg-gray-100 dark:bg-dark-700'
                     ]"
                     @click="form.icon = emoji"
                   >
@@ -153,7 +153,7 @@
               </div>
 
               <div>
-                <label class="text-dark-400 text-sm mb-1 block">颜色</label>
+                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">颜色</label>
                 <div class="flex gap-2">
                   <button
                     v-for="color in colorOptions"
@@ -171,7 +171,7 @@
 
             <div class="flex gap-3 mt-6">
               <button
-                class="flex-1 bg-dark-700 text-dark-300 py-2.5 rounded-xl font-medium"
+                class="flex-1 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 py-2.5 rounded-xl font-medium"
                 @click="closeDialog"
               >
                 取消

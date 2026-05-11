@@ -1,6 +1,6 @@
 <template>
   <div
-    class="input-bar bg-dark-800 border-t border-dark-700 p-3"
+    class="input-bar bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 p-3"
     :class="{ 'pb-safe': isKeyboardOpen }"
     :style="containerStyle"
   >
@@ -14,7 +14,7 @@
           type="text"
           :placeholder="placeholder"
           :disabled="disabled"
-          class="w-full bg-dark-700 border border-dark-600 rounded-xl px-4 py-2.5 pr-10 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 disabled:opacity-50"
+          class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-xl px-4 py-2.5 pr-10 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 disabled:opacity-50"
           @keyup.enter="submitText"
           @focus="handleFocus"
           @blur="handleBlur"
@@ -34,7 +34,7 @@
       <!-- Special keys toggle -->
       <button
         class="p-2.5 rounded-xl"
-        :class="showSpecialKeys ? 'bg-primary-600 text-white' : 'bg-dark-700 text-dark-400'"
+        :class="showSpecialKeys ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-400'"
         @click="toggleSpecialKeys"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -49,7 +49,7 @@
         <button
           v-for="key in specialKeys"
           :key="key.code"
-          class="bg-dark-700 text-dark-300 text-sm py-2 rounded-lg active:bg-dark-600"
+          class="bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-sm py-2 rounded-lg active:bg-gray-200 dark:bg-dark-600"
           @click="sendSpecialKey(key.code)"
         >
           {{ key.label }}
@@ -65,7 +65,7 @@
           isConnected ? 'bg-green-500' : 'bg-red-500'
         ]"
       ></div>
-      <span class="text-xs text-dark-400">
+      <span class="text-xs text-gray- dark:text-dark-400">
         {{ isConnected ? '已连接' : '未连接' }}
       </span>
     </div>

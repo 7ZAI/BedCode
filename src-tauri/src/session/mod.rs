@@ -13,6 +13,25 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use uuid::Uuid;
 
+/// 会话状态变化事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStatusEvent {
+    pub session_id: String,
+    pub old_status: Option<SessionStatus>,
+    pub new_status: SessionStatus,
+    pub session_name: String,
+}
+
+/// 会话重启事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRestartEvent {
+    pub old_session_id: String,
+    pub new_session_id: String,
+    pub session_name: String,
+}
+
 /// 会话状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +120,10 @@ pub struct SessionManager {
     db: Arc<Mutex<Database>>,
     /// 全局输出广播
     output_tx: broadcast::Sender<PtyOutputEvent>,
+    /// 会话状态变化广播
+    status_tx: broadcast::Sender<SessionStatusEvent>,
+    /// 会话重启广播
+    restart_tx: broadcast::Sender<SessionRestartEvent>,
     /// 运行标志
     running: Arc<AtomicBool>,
 }
@@ -111,9 +134,21 @@ impl SessionManager {
         self.output_tx.clone()
     }
 
+    /// 获取会话状态变化广播发送器
+    pub fn status_tx(&self) -> broadcast::Sender<SessionStatusEvent> {
+        self.status_tx.clone()
+    }
+
+    /// 获取会话重启广播发送器
+    pub fn restart_tx(&self) -> broadcast::Sender<SessionRestartEvent> {
+        self.restart_tx.clone()
+    }
+
     /// 创建新的 Session Manager
     pub fn new(db: Arc<Mutex<Database>>) -> Self {
         let (output_tx, _) = broadcast::channel(2048);
+        let (status_tx, _) = broadcast::channel(64);
+        let (restart_tx, _) = broadcast::channel(64);
         let running = Arc::new(AtomicBool::new(true));
 
         Self {
@@ -121,6 +156,8 @@ impl SessionManager {
             session_info: Arc::new(RwLock::new(HashMap::new())),
             db,
             output_tx,
+            status_tx,
+            restart_tx,
             running,
         }
     }
@@ -183,6 +220,7 @@ impl SessionManager {
         let mut lifecycle_rx = pty_session.subscribe_lifecycle();
         let session_id_lifecycle = session_id.clone();
         let session_info_ref = self.session_info.clone();
+        let status_tx = self.status_tx.clone();
         tokio::spawn(async move {
             match lifecycle_rx.recv().await {
                 Ok(status) => {
@@ -194,9 +232,24 @@ impl SessionManager {
                         crate::pty::PtySessionStatus::Error => SessionStatus::Error,
                         _ => SessionStatus::Stopped,
                     };
-                    let mut info_map = session_info_ref.write().await;
-                    if let Some(info) = info_map.get_mut(&session_id_lifecycle) {
-                        info.status = session_status;
+                    let session_name = {
+                        let info_map = session_info_ref.read().await;
+                        info_map.get(&session_id_lifecycle).map(|i| i.name.clone()).unwrap_or_default()
+                    };
+                    {
+                        let mut info_map = session_info_ref.write().await;
+                        if let Some(info) = info_map.get_mut(&session_id_lifecycle) {
+                            let old_status = info.status;
+                            info.status = session_status;
+
+                            // 发送状态变化事件
+                            let _ = status_tx.send(SessionStatusEvent {
+                                session_id: session_id_lifecycle.clone(),
+                                old_status: Some(old_status),
+                                new_status: session_status,
+                                session_name,
+                            });
+                        }
                     }
                 }
                 Err(e) => {
@@ -249,18 +302,120 @@ impl SessionManager {
     }
 
     /// 重启会话
+    /// 返回原会话的 ID（复用旧 ID），前端更新现有卡片而非新增
     pub async fn restart_session(&self, session_id: &str) -> Result<String> {
-        // 获取原会话的配置信息
-        let config_id = {
+        // 获取原会话的信息
+        let (config_id, old_name) = {
             let info_map = self.session_info.read().await;
             let info = info_map
                 .get(session_id)
                 .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
-            info.config_id.clone()
+            (info.config_id.clone(), info.name.clone())
         };
 
-        // 创建新会话
-        self.create_session(&config_id).await
+        // 停止并清理旧会话（但保留 session_id 用于重启后的新会话）
+        let _ = self.remove_session(session_id).await;
+
+        // 从数据库加载配置
+        let db = self.db.lock().await;
+        let config = db
+            .get_session_config(&config_id)?
+            .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
+        drop(db);
+
+        // 构建启动配置
+        let mut launch_config = self.build_launch_config(&config)?;
+        launch_config.name = old_name.clone(); // 继承旧名称
+
+        // 保存 old_name 的克隆用于后续使用
+        let old_name_for_info = old_name.clone();
+        let old_name_for_event = old_name.clone();
+
+        // 创建 PTY 会话，使用旧的 session_id
+        let pty_session = PtySession::with_id(session_id.to_string(), launch_config.clone())?;
+
+        // 订阅输出并转发到全局广播
+        let mut rx = pty_session.subscribe_output();
+        let output_tx = self.output_tx.clone();
+        let running = self.running.clone();
+
+        tokio::spawn(async move {
+            loop {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+                match rx.recv().await {
+                    Ok(event) => {
+                        let _ = output_tx.send(event);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Output channel lagged {} messages", n);
+                    }
+                }
+            }
+        });
+
+        // 订阅生命周期事件
+        let mut lifecycle_rx = pty_session.subscribe_lifecycle();
+        let session_info_ref = self.session_info.clone();
+        let status_tx = self.status_tx.clone();
+        let session_id_for_lifecycle = session_id.to_string();
+        tokio::spawn(async move {
+            if let Ok(status) = lifecycle_rx.recv().await {
+                let session_status = match status {
+                    crate::pty::PtySessionStatus::Error => SessionStatus::Error,
+                    _ => SessionStatus::Stopped,
+                };
+                let mut info_map = session_info_ref.write().await;
+                if let Some(info) = info_map.get_mut(&session_id_for_lifecycle) {
+                    let old_status = info.status;
+                    info.status = session_status;
+                    let _ = status_tx.send(SessionStatusEvent {
+                        session_id: session_id_for_lifecycle,
+                        old_status: Some(old_status),
+                        new_status: session_status,
+                        session_name: info.name.clone(),
+                    });
+                }
+            }
+        });
+
+        // 启动 PTY
+        pty_session.start().await?;
+
+        // 存储会话信息（使用旧 ID）
+        let info = SessionInfo {
+            id: session_id.to_string(),
+            config_id: config_id.clone(),
+            name: old_name_for_info,
+            status: SessionStatus::Running,
+            created_at: chrono::Utc::now(),
+            started_at: Some(chrono::Utc::now()),
+            stopped_at: None,
+            session_type: SessionType::Pty,
+        };
+
+        // 保存到内存
+        {
+            let mut sessions = self.pty_sessions.write().await;
+            sessions.insert(session_id.to_string(), pty_session);
+        }
+        {
+            let mut info_map = self.session_info.write().await;
+            info_map.insert(session_id.to_string(), info);
+        }
+
+        tracing::info!("Session restarted: {} ({})", old_name_for_event, session_id);
+
+        // 发送重启事件
+        let _ = self.restart_tx.send(SessionRestartEvent {
+            old_session_id: session_id.to_string(),
+            new_session_id: session_id.to_string(),
+            session_name: old_name,
+        });
+
+        Ok(session_id.to_string())
     }
 
     /// 从配置构建启动配置
@@ -362,13 +517,22 @@ impl SessionManager {
             tracing::info!("Session removed from pty_sessions: {}", session_id);
         }
 
-        // 更新状态
+        // 更新状态并发送事件
         {
             let mut info_map = self.session_info.write().await;
             if let Some(info) = info_map.get_mut(session_id) {
+                let old_status = info.status;
                 info.status = SessionStatus::Stopped;
                 info.stopped_at = Some(Utc::now());
                 tracing::info!("Session status updated to Stopped: {}", session_id);
+
+                // 发送状态变化事件
+                let _ = self.status_tx.send(SessionStatusEvent {
+                    session_id: session_id.to_string(),
+                    old_status: Some(old_status),
+                    new_status: SessionStatus::Stopped,
+                    session_name: info.name.clone(),
+                });
             } else {
                 tracing::warn!("Session not found in session_info: {}", session_id);
             }
@@ -404,6 +568,16 @@ impl SessionManager {
     /// 订阅全局输出
     pub fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
         self.output_tx.subscribe()
+    }
+
+    /// 订阅会话状态变化
+    pub fn subscribe_status(&self) -> broadcast::Receiver<SessionStatusEvent> {
+        self.status_tx.subscribe()
+    }
+
+    /// 订阅会话重启
+    pub fn subscribe_restart(&self) -> broadcast::Receiver<SessionRestartEvent> {
+        self.restart_tx.subscribe()
     }
 
     /// 获取会话状态

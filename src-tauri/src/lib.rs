@@ -265,6 +265,30 @@ pub fn run() {
                 }
             });
 
+            // Start session status event forwarder
+            let app_handle_clone2 = app_handle.clone();
+            let session_manager_clone2 = session_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut rx = session_manager_clone2.subscribe_status();
+                while let Ok(event) = rx.recv().await {
+                    if let Err(e) = app_handle_clone2.emit("session-status-changed", &event) {
+                        tracing::error!("Failed to emit status event: {}", e);
+                    }
+                }
+            });
+
+            // Start session restart event forwarder
+            let app_handle_clone3 = app_handle.clone();
+            let session_manager_clone3 = session_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut rx = session_manager_clone3.subscribe_restart();
+                while let Ok(event) = rx.recv().await {
+                    if let Err(e) = app_handle_clone3.emit("session-restarted", &event) {
+                        tracing::error!("Failed to emit restart event: {}", e);
+                    }
+                }
+            });
+
             // Setup system tray
             setup_tray(app_handle)?;
 

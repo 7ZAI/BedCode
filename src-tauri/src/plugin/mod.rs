@@ -177,7 +177,7 @@ impl PluginManager {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        if let Some(output) = jsonl::ClaudeMessage::parse_line(&line) {
+                        if let Some(output) = jsonl::ClaudeEntry::parse_line(&line) {
                             if !output.text.is_empty() {
                                 let event = PtyOutputEvent {
                                     session_id: session_id.clone(),
@@ -306,7 +306,7 @@ impl PluginManager {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Some(output) = jsonl::ClaudeMessage::parse_line(&line) {
+            if let Some(output) = jsonl::ClaudeEntry::parse_line(&line) {
                 if output.text.is_empty() {
                     continue;
                 }

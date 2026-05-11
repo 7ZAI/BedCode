@@ -1,17 +1,17 @@
 <template>
   <div class="h-full flex flex-col">
     <!-- Header -->
-    <header class="bg-dark-800 border-b border-dark-700 px-6 py-3 h-12 flex items-center">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-6 py-3 h-12 flex items-center">
       <h2 class="text-lg font-semibold">设备配对</h2>
     </header>
 
     <div class="flex-1 overflow-auto p-6">
       <!-- Pairing Section -->
-      <div class="bg-dark-800 rounded-lg border border-dark-700 p-6 mb-6">
+      <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6 mb-6">
         <h3 class="text-lg font-medium mb-4">新建配对</h3>
 
         <div v-if="!pairingCode" class="text-center py-4">
-          <p class="text-dark-400 mb-4">生成配对码以连接移动设备</p>
+          <p class="text-gray- dark:text-dark-400 mb-4">生成配对码以连接移动设备</p>
           <Button variant="primary" @click="generateCode" :loading="isLoading">
             <template #icon>
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -23,14 +23,14 @@
         </div>
 
         <div v-else class="text-center py-4">
-          <p class="text-dark-400 mb-4">请移动端输入以下配对码</p>
+          <p class="text-gray- dark:text-dark-400 mb-4">请移动端输入以下配对码</p>
 
           <!-- Pairing Code Display -->
           <div class="text-5xl font-mono font-bold text-primary-400 tracking-widest mb-4">
             {{ pairingCode.code }}
           </div>
 
-          <p class="text-dark-500 text-sm mb-6">
+          <p class="text-gray- dark:text-dark-500 text-sm mb-6">
             配对码将在 <span class="text-primary-400 font-medium">{{ remainingSeconds }}</span> 秒后过期
           </p>
 
@@ -41,11 +41,11 @@
       </div>
 
       <!-- QR Code Section -->
-      <div class="bg-dark-800 rounded-lg border border-dark-700 p-6 mb-6">
+      <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6 mb-6">
         <h3 class="text-lg font-medium mb-4">QR 码连接</h3>
 
         <div v-if="!qr.hasQr.value" class="text-center py-4">
-          <p class="text-dark-400 mb-4">扫描二维码快速连接移动设备</p>
+          <p class="text-gray- dark:text-dark-400 mb-4">扫描二维码快速连接移动设备</p>
           <Button variant="secondary" @click="qr.generateQr()" :loading="qr.isLoading.value">
             <template #icon>
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -57,14 +57,14 @@
         </div>
 
         <div v-else class="text-center py-4">
-          <p class="text-dark-300 mb-4">使用移动端 BedCode 扫描二维码</p>
+          <p class="text-gray- dark:text-dark-300 mb-4">使用移动端 BedCode 扫描二维码</p>
 
           <!-- QR Code Canvas -->
           <div class="inline-block bg-white p-4 rounded-lg mb-4">
             <canvas ref="qrCanvasRef" class="w-48 h-48"></canvas>
           </div>
 
-          <p class="text-dark-500 text-sm mb-4">
+          <p class="text-gray- dark:text-dark-500 text-sm mb-4">
             二维码有效期
             <span class="text-primary-400 font-medium">{{ qr.remainingSeconds.value }}</span> 秒
           </p>
@@ -81,21 +81,21 @@
       </div>
 
       <!-- Network Info -->
-      <div class="bg-dark-800 rounded-lg border border-dark-700 p-6 mb-6">
+      <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6 mb-6">
         <h3 class="text-lg font-medium mb-4">网络信息</h3>
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-dark-400">WebSocket 端口</span>
+            <span class="text-gray- dark:text-dark-400">WebSocket 端口</span>
             <span class="font-mono">8765</span>
           </div>
           <div class="flex flex-col gap-2">
             <div class="flex items-center justify-between">
-              <span class="text-dark-400">IPv4 地址</span>
+              <span class="text-gray- dark:text-dark-400">IPv4 地址</span>
               <div class="flex items-center gap-2 flex-wrap justify-end">
-                <span v-for="ip in ipv4Addresses" :key="ip" class="font-mono text-sm bg-dark-700 px-2 py-1 rounded">
+                <span v-for="ip in ipv4Addresses" :key="ip" class="font-mono text-sm bg-gray-100 dark:bg-dark-700 px-2 py-1 rounded">
                   {{ ip }}
                 </span>
-                <span v-if="ipv4Addresses.length === 0" class="text-dark-500 text-sm">无</span>
+                <span v-if="ipv4Addresses.length === 0" class="text-gray- dark:text-dark-500 text-sm">无</span>
               </div>
             </div>
           </div>
@@ -103,21 +103,21 @@
       </div>
 
       <!-- Paired Devices -->
-      <div class="bg-dark-800 rounded-lg border border-dark-700 p-6">
+      <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
         <h3 class="text-lg font-medium mb-4">已配对设备</h3>
 
         <div v-if="deviceStore.pairedDevices.length === 0" class="text-center py-8">
-          <svg class="w-12 h-12 mx-auto text-dark-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-12 h-12 mx-auto text-gray- dark:text-dark-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
           </svg>
-          <p class="text-dark-400">暂无已配对设备</p>
+          <p class="text-gray- dark:text-dark-400">暂无已配对设备</p>
         </div>
 
         <div v-else class="space-y-3">
           <div
             v-for="device in deviceStore.pairedDevices"
             :key="device.id"
-            class="flex items-center justify-between p-4 bg-dark-700 rounded-lg"
+            class="flex items-center justify-between p-4 bg-gray-100 dark:bg-dark-700 rounded-lg"
           >
             <div class="flex items-center gap-4">
               <!-- Status Indicator (live WebSocket status) -->
@@ -130,7 +130,7 @@
 
               <div>
                 <p class="font-medium">{{ device.deviceName }}</p>
-                <p class="text-dark-400 text-sm">
+                <p class="text-gray- dark:text-dark-400 text-sm">
                   配对于 {{ formatDate(device.pairedAt) }}
                 </p>
               </div>
@@ -140,7 +140,7 @@
               <span
                 :class="[
                   'text-xs px-2 py-1 rounded',
-                  isDeviceOnline(device.id) ? 'bg-green-900/50 text-green-300' : 'bg-dark-600 text-dark-400'
+                  isDeviceOnline(device.id) ? 'bg-green-900/50 text-green-300' : 'bg-gray-200 dark:bg-dark-600 text-gray- dark:text-dark-400'
                 ]"
               >
                 {{ isDeviceOnline(device.id) ? '已连接' : '离线' }}
@@ -159,7 +159,7 @@
 
     <!-- Remove Device Confirm Dialog -->
     <Modal v-model="showRemoveDeviceDialog" title="确认移除" size="sm">
-      <p class="text-dark-300">确定要移除此设备吗？移除后需要重新配对。</p>
+      <p class="text-gray- dark:text-dark-300">确定要移除此设备吗？移除后需要重新配对。</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <Button variant="ghost" @click="showRemoveDeviceDialog = false">取消</Button>

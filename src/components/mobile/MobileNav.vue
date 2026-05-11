@@ -1,5 +1,5 @@
 <template>
-  <nav class="bg-dark-800 border-t border-dark-700 px-4 py-2">
+  <nav class="bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-4 py-2 mobile-nav">
     <div class="flex justify-around">
       <router-link
         v-for="item in navItems"
@@ -9,7 +9,7 @@
         :class="[
           $route.path === item.path
             ? 'text-primary-400'
-            : 'text-dark-400 hover:text-dark-200'
+            : 'text-gray-500 dark:text-dark-400 hover:text-gray-700 dark:text-dark-200'
         ]"
       >
         <component :is="item.icon" class="w-6 h-6" />

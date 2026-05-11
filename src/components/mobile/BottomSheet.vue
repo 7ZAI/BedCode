@@ -6,10 +6,10 @@
         <div class="absolute inset-0 bg-black/60" @click="close"></div>
 
         <!-- Panel - 居中显示，避免被输入法遮挡 -->
-        <div class="relative w-full max-w-sm bg-dark-800 rounded-2xl p-6">
+        <div class="relative w-full max-w-sm bg-white dark:bg-dark-800 rounded-2xl p-6">
           <!-- Close button -->
           <button
-            class="absolute top-4 right-4 p-2 text-dark-400 hover:text-white"
+            class="absolute top-4 right-4 p-2 text-gray- dark:text-dark-400 hover:text-white"
             @click="close"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27,7 +27,7 @@
               v-model="inputValue"
               type="text"
               :placeholder="placeholder"
-              class="w-full bg-dark-700 border border-dark-600 rounded-xl px-4 py-3 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500"
+              class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-xl px-4 py-3 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500"
               @keyup.enter="submit"
             />
           </div>
@@ -35,7 +35,7 @@
           <!-- Actions -->
           <div class="flex gap-3">
             <button
-              class="flex-1 bg-dark-700 text-dark-300 py-3 rounded-xl font-medium active:bg-dark-600"
+              class="flex-1 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 py-3 rounded-xl font-medium active:bg-gray-200 dark:bg-dark-600"
               @click="close"
             >
               取消

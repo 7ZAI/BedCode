@@ -39,6 +39,19 @@ export interface PtyOutputEvent {
   timestamp: string
 }
 
+export interface SessionStatusEvent {
+  sessionId: string
+  oldStatus: 'starting' | 'running' | 'waitingInput' | 'stopped' | 'error' | null
+  newStatus: 'starting' | 'running' | 'waitingInput' | 'stopped' | 'error'
+  sessionName: string
+}
+
+export interface SessionRestartEvent {
+  oldSessionId: string
+  newSessionId: string
+  sessionName: string
+}
+
 export interface WslDistro {
   name: string
   isDefault: boolean
