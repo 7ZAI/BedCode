@@ -202,14 +202,16 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
-  // 不清理输出缓冲区和会话订阅
-  // 用户返回时保持后台运行，继续接收消息
-  // 只清除活跃会话 ID 标记
+  // 离开会话，停止接收输出
+  await terminal.leaveSession()
+  // 清除活跃会话 ID 标记
   connection.activeSessionId.value = null
 })
 
 function goBack() {
-  router.push('/mobile/devices')
+  // 离开会话，停止接收输出
+  terminal.leaveSession()
+  router.push('/mobile/sessions')
 }
 
 function handleSendInput(text: string) {
