@@ -3,9 +3,14 @@
     ref="terminalContainerRef"
     class="h-full w-full overflow-hidden terminal-wrapper"
   >
-    <!-- 强制宽度容器，防止宽度变化 -->
-    <div class="terminal-inner">
-      <div ref="xtermContainerRef" class="h-full"></div>
+    <!-- 外部滚动容器 -->
+    <div
+      ref="scrollContainerRef"
+      class="scroll-container"
+      @scroll="handleScroll"
+    >
+      <!-- 内部内容容器：xterm 固定高度，内容溢出到外部滚动容器 -->
+      <div ref="xtermContainerRef" class="xterm-container"></div>
     </div>
 
     <!-- 回到底部按钮 - 当用户滚动到上方时显示 -->
@@ -35,6 +40,7 @@ import '@xterm/xterm/css/xterm.css'
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const xtermContainerRef = ref<HTMLElement | null>(null)
+const scrollContainerRef = ref<HTMLDivElement | null>(null)
 
 // xterm.js 实例
 let terminal: Terminal | null = null
@@ -133,8 +139,8 @@ function initTerminal() {
     theme: isDarkMode ? darkTheme : lightTheme,
     cursorBlink: false, // 移动端禁用光标闪烁，节省性能
     cursorStyle: 'bar',
-    // 移动端减少滚动缓冲区以节省内存
-    scrollback: 1000,
+    // 禁用 xterm 内部滚动，由外部 div 处理
+    scrollback: 0,
     allowProposedApi: true,
     // 禁用光标样式渲染优化
     cursorInactiveStyle: 'none',
@@ -206,25 +212,22 @@ function clear() {
 
 /** 滚动到底部 */
 function scrollToBottom() {
-  if (!terminal) return
-  const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.scrollTop = viewport.scrollHeight
-    // 滚动到底部后隐藏按钮
-    nextTick(() => {
-      showScrollToBottom.value = false
-      isUserScrolling = false
-    })
-  }
+  if (!scrollContainerRef.value) return
+  scrollContainerRef.value.scrollTop = scrollContainerRef.value.scrollHeight
+  // 滚动到底部后隐藏按钮
+  nextTick(() => {
+    showScrollToBottom.value = false
+    isUserScrolling = false
+  })
 }
 
 /** 滚动事件处理 - 检测用户是否在滚动 */
 function handleScroll() {
-  const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (!viewport) return
+  if (!scrollContainerRef.value) return
 
+  const container = scrollContainerRef.value
   // 检测是否在底部（允许 50px 误差）
-  const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
+  const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50
 
   // 用户不在底部 = 正在向上滚动查看历史
   isUserScrolling = !isAtBottom
@@ -237,7 +240,7 @@ function handleScroll() {
   scrollTimeout = setTimeout(() => {
     isUserScrolling = false
     // 滚动停止后检查是否在底部
-    const nowAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
+    const nowAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50
     showScrollToBottom.value = !nowAtBottom
   }, 300)
 }
@@ -249,10 +252,10 @@ function checkScrollPosition() {
   scrollCheckScheduled = true
   requestAnimationFrame(() => {
     scrollCheckScheduled = false
-    const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-    if (!viewport) return
+    if (!scrollContainerRef.value) return
 
-    const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
+    const container = scrollContainerRef.value
+    const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50
     showScrollToBottom.value = !isAtBottom && !isUserScrolling
   })
 }
@@ -299,12 +302,6 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
 
 onMounted(() => {
   initTerminal()
-
-  // 添加滚动事件监听
-  const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.addEventListener('scroll', handleScroll)
-  }
 
   // 使用 ResizeObserver 监听容器尺寸变化，使用节流
   if (terminalContainerRef.value) {
@@ -382,11 +379,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  // 清理滚动事件监听器
-  const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.removeEventListener('scroll', handleScroll)
-  }
   if (scrollTimeout) {
     clearTimeout(scrollTimeout)
   }
@@ -434,29 +426,34 @@ defineExpose({
   outline: none;
 }
 
-.terminal-inner {
+/* 外部滚动容器 */
+.scroll-container {
   width: 100%;
   height: 100%;
-  /* 确保内部元素不会超出容器 */
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 隐藏 xterm 内部滚动条 */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* xterm 容器 */
+.xterm-container {
+  /* xterm 内容高度自适应，不固定 */
+  min-height: 100%;
 }
 
 :deep(.xterm) {
-  height: 100%;
+  height: auto;
+  min-height: 100%;
   padding: 0;
 }
 
+/* 隐藏 xterm 内部滚动条 */
 :deep(.xterm-viewport) {
-  border-radius: 0;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
-  /* 防止视口宽度变化 */
-  width: 100% !important;
+  display: none !important;
 }
 
 :deep(.xterm-screen) {
-  height: 100%;
-  /* 确保屏幕宽度固定 */
   width: 100%;
 }
 
