@@ -80,14 +80,14 @@
             输入命令
           </div>
 
-          <input
+          <textarea
             ref="modalInputRef"
             v-model="inputText"
-            type="text"
-            class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-dark-100 placeholder-dark-400 focus:outline-none focus:border-primary-500"
+            class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-dark-100 placeholder-dark-400 focus:outline-none focus:border-primary-500 resize-none"
             placeholder="输入命令..."
-            @keyup.enter="submitText"
-          />
+            rows="4"
+            @keydown.enter.ctrl="submitText"
+          ></textarea>
 
           <div class="flex justify-end gap-2 mt-4">
             <button
@@ -175,15 +175,10 @@ const specialKeys = [
   { label: 'Tab', code: 'tab' },
   { label: 'Enter', code: 'enter' },
   { label: 'Esc', code: 'escape' },
+  { label: 'Del', code: 'delete' },
   { label: 'Ctrl+C', code: 'ctrl_c' },
-  { label: 'Ctrl+D', code: 'ctrl_d' },
   { label: 'Ctrl+Z', code: 'ctrl_z' },
   { label: 'Ctrl+L', code: 'ctrl_l' },
-  { label: 'Ctrl+A', code: 'ctrl_a' },
-  { label: 'Ctrl+E', code: 'ctrl_e' },
-  { label: 'Ctrl+U', code: 'ctrl_u' },
-  { label: 'Ctrl+K', code: 'ctrl_k' },
-  { label: 'Ctrl+P', code: 'ctrl_p' },
   { label: '↑', code: 'arrow_up' },
   { label: '↓', code: 'arrow_down' },
   { label: '←', code: 'arrow_left' },
