@@ -120,8 +120,8 @@ function initTerminal() {
     allowProposedApi: true,
     // 禁用光标样式渲染优化
     cursorInactiveStyle: 'none',
-    // 移动端优化
-    disableStdin: false,
+    // 移动端优化：禁用终端直接输入，输入只能通过弹窗
+    disableStdin: true,
     allowTransparency: false,
   })
 
@@ -381,6 +381,13 @@ defineExpose({
   /* 禁止文本选择，避免移动端误触 */
   user-select: none;
   -webkit-user-select: none;
+  /* 禁止获取焦点，防止点击触发输入法 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+.terminal-wrapper:focus,
+.terminal-wrapper:focus-visible {
+  outline: none;
 }
 
 .terminal-inner {
@@ -407,5 +414,14 @@ defineExpose({
   height: 100%;
   /* 确保屏幕宽度固定 */
   width: 100%;
+}
+
+/* 禁用 xterm 的 focus 样式 */
+:deep(.xterm:focus) {
+  outline: none;
+}
+
+:deep(.xterm-focus) {
+  outline: none;
 }
 </style>
