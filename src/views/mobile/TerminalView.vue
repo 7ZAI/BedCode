@@ -52,6 +52,7 @@
       :is-landscape="isLandscapeValue"
       placeholder="输入消息..."
       @submit="handleSendInput"
+      @execute="handleExecuteInput"
       @special-key="handleSendSpecialKey"
       @focus="onInputFocus"
       @blur="onInputBlur"
@@ -217,6 +218,15 @@ function goBack() {
 function handleSendInput(text: string) {
   terminal.sendInput(text)
   // 无需手动回显，xterm.js 会通过 PTY echo 自动显示输入
+}
+
+function handleExecuteInput(text: string) {
+  // 执行：发送文本并自动发送 Enter
+  terminal.sendInput(text)
+  // 延迟发送 Enter，确保命令先到达
+  setTimeout(() => {
+    terminal.sendSpecialKey('enter')
+  }, 50)
 }
 
 function handleSendSpecialKey(key: string) {

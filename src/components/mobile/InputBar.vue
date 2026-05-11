@@ -89,20 +89,29 @@
             @keydown.enter.ctrl="submitText"
           ></textarea>
 
-          <div class="flex justify-end gap-2 mt-4">
+          <div class="flex justify-between gap-2 mt-4">
             <button
               class="px-4 py-2 text-sm text-gray-600 dark:text-dark-300"
               @click="showInputModal = false"
             >
               取消
             </button>
-            <button
-              class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg"
-              :disabled="!inputText.trim()"
-              @click="submitText"
-            >
-              发送
-            </button>
+            <div class="flex gap-2">
+              <button
+                class="px-4 py-2 text-sm bg-gray-200 dark:bg-dark-600 text-gray-700 dark:text-dark-200 rounded-lg"
+                :disabled="!inputText.trim()"
+                @click="submitText"
+              >
+                发送
+              </button>
+              <button
+                class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg"
+                :disabled="!inputText.trim()"
+                @click="executeText"
+              >
+                执行
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -124,6 +133,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   submit: [text: string]
+  execute: [text: string]
   specialKey: [key: string]
   focus: []
   blur: []
@@ -188,6 +198,14 @@ const specialKeys = [
 function submitText() {
   if (inputText.value.trim()) {
     emit('submit', inputText.value)
+    inputText.value = ''
+    showInputModal.value = false
+  }
+}
+
+function executeText() {
+  if (inputText.value.trim()) {
+    emit('execute', inputText.value)
     inputText.value = ''
     showInputModal.value = false
   }
