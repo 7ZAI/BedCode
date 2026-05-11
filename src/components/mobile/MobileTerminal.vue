@@ -7,6 +7,20 @@
     <div class="terminal-inner">
       <div ref="xtermContainerRef" class="h-full"></div>
     </div>
+
+    <!-- 回到底部按钮 - 当用户滚动到上方时显示 -->
+    <transition name="fade">
+      <button
+        v-if="showScrollToBottom"
+        class="scroll-to-bottom-btn"
+        @click="scrollToBottom"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        </svg>
+        底部
+      </button>
+    </transition>
   </div>
 </template>
 
@@ -34,6 +48,10 @@ let lastContainerWidth = 0
 // 滚动状态追踪
 let isUserScrolling = false
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null
+let scrollCheckScheduled = false
+
+// 是否显示"回到底部"按钮
+const showScrollToBottom = ref(false)
 
 const props = defineProps<{
   output?: string
@@ -192,6 +210,11 @@ function scrollToBottom() {
   const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
   if (viewport) {
     viewport.scrollTop = viewport.scrollHeight
+    // 滚动到底部后隐藏按钮
+    nextTick(() => {
+      showScrollToBottom.value = false
+      isUserScrolling = false
+    })
   }
 }
 
@@ -206,31 +229,48 @@ function handleScroll() {
   // 用户不在底部 = 正在向上滚动查看历史
   isUserScrolling = !isAtBottom
 
+  // 显示/隐藏回到底部按钮
+  showScrollToBottom.value = !isAtBottom
+
   // 滚动停止后清除状态（300ms 防抖）
   if (scrollTimeout) clearTimeout(scrollTimeout)
   scrollTimeout = setTimeout(() => {
     isUserScrolling = false
+    // 滚动停止后检查是否在底部
+    const nowAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
+    showScrollToBottom.value = !nowAtBottom
   }, 300)
+}
+
+/** 检测滚动位置，更新按钮显示状态 */
+function checkScrollPosition() {
+  if (scrollCheckScheduled) return
+
+  scrollCheckScheduled = true
+  requestAnimationFrame(() => {
+    scrollCheckScheduled = false
+    const viewport = xtermContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+    if (!viewport) return
+
+    const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
+    showScrollToBottom.value = !isAtBottom && !isUserScrolling
+  })
 }
 
 // 监听输出变化，增量写入
 watch(() => props.output, (newOutput) => {
-  console.log('[MobileTerminal] output changed, length:', newOutput?.length, 'lastIndex:', lastOutputIndex)
   if (!terminal || !newOutput) {
-    console.log('[MobileTerminal] early return - terminal or output is null')
     return
   }
 
   // 检测输出重置（远程重连等情况），重置索引
   if (newOutput.length < lastOutputIndex) {
-    console.log('[MobileTerminal] output reset detected, resetting index')
     lastOutputIndex = 0
   }
 
   // 只写入新增的部分（增量写入）
   const startIndex = lastOutputIndex
   const newContent = newOutput.slice(startIndex)
-  console.log('[MobileTerminal] writing new content, start:', startIndex, 'chars:', newContent.length)
 
   if (newContent.length > 0) {
     terminal.write(newContent)
@@ -240,6 +280,10 @@ watch(() => props.output, (newOutput) => {
     if (!isUserScrolling) {
       scrollToBottom()
     }
+    // 输出变化后检查滚动位置，更新按钮状态
+    nextTick(() => {
+      checkScrollPosition()
+    })
   }
 }, { deep: true })
 
@@ -423,5 +467,42 @@ defineExpose({
 
 :deep(.xterm-focus) {
   outline: none;
+}
+
+/* 回到底部按钮 */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 80px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  border-radius: 20px;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.scroll-to-bottom-btn:active {
+  transform: scale(0.95);
+}
+
+:global(.dark) .scroll-to-bottom-btn {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* 过渡动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>
