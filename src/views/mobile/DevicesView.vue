@@ -190,7 +190,7 @@
     </div>
 
     <!-- Action Buttons (when not connected) -->
-    <div v-if="!isConnected" class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-3">
+    <div v-if="!isConnected" class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-3 pb-safe">
       <!-- Scan QR Code Button -->
       <button
         class="w-full bg-gray-100 dark:bg-dark-700 text-white py-3 rounded-xl font-medium active:bg-gray-200 dark:bg-dark-600 flex items-center justify-center gap-2"
@@ -222,7 +222,7 @@
     <BottomSheet
       v-model="showManualConnect"
       title="连接新设备"
-      placeholder="输入设备地址 (如: 10.186.131.120:8765)"
+      placeholder="输入设备地址 (如: 10.186.131.120)"
       @submit="handleConnectManual"
     />
 
@@ -237,7 +237,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRemoteConnection, type RemoteDevice } from '@/composables/useRemoteConnection'
 import BottomSheet from '@/components/mobile/BottomSheet.vue'
@@ -408,8 +408,21 @@ async function handleStartSession(config: SessionConfigSummary) {
 onMounted(async () => {
   loadConnectionHistory()
 
+  // 启用自动重连恢复，确保断开后重连能恢复会话配置
+  terminal.enableAutoReconnect()
+
   // If already connected, load session configs and active sessions
   if (isConnected.value) {
+    await loadSessionConfigs()
+    await terminal.loadSessions()
+  }
+})
+
+// 监听连接状态变化，从扫描页面返回后自动加载配置和会话
+// 同时监听连接和配对状态，确保认证完成后才加载会话列表
+watch([isConnected, () => connection.state.value.status], async ([connected, status]) => {
+  // 只有在已连接且已完成认证（paired）时才加载
+  if (connected && status === 'paired') {
     await loadSessionConfigs()
     await terminal.loadSessions()
   }

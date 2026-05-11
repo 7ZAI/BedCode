@@ -1,23 +1,27 @@
 <template>
   <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
-    <!-- Header -->
-    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3 flex items-center gap-3 shrink-0" style="padding-top: 12px;">
+    <!-- Header - 横屏时更紧凑 -->
+    <header
+      class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-2 flex items-center gap-2 shrink-0"
+      :class="{ 'py-1': isLandscapeValue, 'py-3 pb-3': !isLandscapeValue }"
+      :style="{ paddingTop: isLandscapeValue ? '8px' : '12px' }"
+    >
       <button @click="goBack" class="p-2 -ml-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
-      <div class="flex-1">
-        <h1 class="font-semibold">{{ deviceName }}</h1>
-        <div class="flex items-center gap-1.5 text-xs">
-          <div
-            :class="[
-              'w-1.5 h-1.5 rounded-full',
-              connection.isConnected.value ? 'bg-green-500' : 'bg-red-500'
-            ]"
-          ></div>
-          <span class="text-gray- dark:text-dark-400">{{ connection.isConnected.value ? '已连接' : '未连接' }}</span>
-        </div>
+      <div class="flex-1 min-w-0">
+        <h1 class="font-semibold truncate" :class="isLandscapeValue ? 'text-sm' : ''">{{ sessionName }}</h1>
+      </div>
+      <div class="flex items-center gap-1.5 text-xs">
+        <div
+          :class="[
+            'w-1.5 h-1.5 rounded-full',
+            connection.isConnected.value ? 'bg-green-500' : 'bg-red-500'
+          ]"
+        ></div>
+        <span class="text-gray- dark:text-dark-400">{{ connection.isConnected.value ? '已连接' : '未连接' }}</span>
       </div>
       <button
         class="p-2 rounded-lg bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300"
@@ -29,11 +33,8 @@
       </button>
     </header>
 
-    <!-- Terminal Output (动态高度适配键盘) -->
-    <div
-      class="flex-1 overflow-hidden"
-      :style="{ height: terminalHeight + 'px' }"
-    >
+    <!-- Terminal Output (使用 flex 填充剩余空间) -->
+    <div class="flex-1 overflow-hidden min-h-0">
       <MobileTerminal
         ref="terminalRef"
         :output="terminal.outputBuffer.value"
@@ -42,12 +43,13 @@
       />
     </div>
 
-    <!-- Input Bar - 键盘弹出时使用 padding-bottom 适配 -->
+    <!-- Input Bar - 键盘弹出时使用 fixed 定位 -->
     <InputBar
       ref="inputBarRef"
-      :is-connected="connection.isConnected.value"
-      :show-status="true"
+      :is-connected="isConnectedValue"
+      :show-status="false"
       :keyboard-height="keyboardHeight"
+      :is-landscape="isLandscapeValue"
       placeholder="输入消息..."
       @submit="handleSendInput"
       @special-key="handleSendSpecialKey"
@@ -58,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, inject, type Ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
@@ -69,51 +71,69 @@ import InputBar from '@/components/mobile/InputBar.vue'
 const router = useRouter()
 const route = useRoute()
 
+// 注入屏幕方向
+const isLandscape = inject<Ref<boolean>>('isLandscape', ref(false))
+const isLandscapeValue = computed(() => isLandscape.value)
+
 const { keyboardHeight } = useKeyboardAvoidance()
 
-// 终端区域动态高度
+// 终端区域动态高度（使用 calc 计算固定高度）
 const terminalHeight = computed(() => {
-  // 底部安全区域高度
+  // Header 高度
+  const headerHeight = isLandscapeValue.value ? 44 : 52 // 横屏时更紧凑
+  // InputBar 基础高度（键盘收起时）
+  const inputBarHeight = isLandscapeValue.value ? 56 : 100 // 横屏时只显示输入框
+  // 底部安全区域
   const safeAreaBottom = 'env(safe-area-inset-bottom, 0px)'
 
-  // Header 高度计算：基础 py-3 + padding-top 额外 12px + 额外 16px (safe-area) ≈ 64px
-  const headerHeight = 64
-  // InputBar 基础高度约 56px，特殊键面板展开时约 120px
-  const inputBarBaseHeight = 56
-  const inputBarExpandedHeight = 120
-  const isSpecialKeysOpen = false // 可通过状态检测
-
-  // 当键盘弹出时，减少终端高度
   const kbHeight = keyboardHeight.value
-  const inputHeight = isSpecialKeysOpen ? inputBarExpandedHeight : inputBarBaseHeight
 
-  // 键盘弹出时：减去 header + 键盘高度 + 输入栏高度 + 底部安全区域
-  // 键盘收起时：减去 header + 输入栏高度 + 底部安全区��
   if (kbHeight > 0) {
-    return `calc(100% - ${headerHeight}px - ${kbHeight}px - ${inputHeight}px - ${safeAreaBottom})`
+    // 键盘弹出时：键盘高度由 InputBar 的 fixed 定位处理
+    return `calc(100% - ${headerHeight}px - ${safeAreaBottom})`
   }
-  return `calc(100% - ${headerHeight}px - ${inputHeight}px - ${safeAreaBottom})`
+  // 键盘收起时
+  return `calc(100% - ${headerHeight}px - ${inputBarHeight}px - ${safeAreaBottom})`
 })
 
 const connection = useRemoteConnection()
+
+// 解包 isConnected Ref 为布尔值
+const isConnectedValue = computed(() => connection.isConnected.value)
+
+// 创建自定义的连接包装，禁用自动清理
 const terminal = useRemoteTerminal({
   state: connection.state,
-  isConnected: connection.isConnected,
+  isConnected: isConnectedValue,
   lastMessage: connection.lastMessage,
   sendMessage: connection.sendMessage,
   sendMessageWithResponse: connection.sendMessageWithResponse,
-  setReconnectCallback: connection.setReconnectCallback,
+  // 覆盖 setReconnectCallback 为空操作，防止自动清理
+  setReconnectCallback: () => {},
 })
 
 const terminalRef = ref<InstanceType<typeof MobileTerminal> | null>(null)
 const inputBarRef = ref<InstanceType<typeof InputBar> | null>(null)
 
-const deviceName = computed(() => connection.currentDevice.value?.name || 'Claude Code')
+// 会话名称 - 显示当前活跃会话的名称，如果没有则显示设备名称
+const sessionName = computed(() => {
+  const currentSession = terminal.sessions.value.find(
+    s => s.id === terminal.currentSessionId.value
+  )
+  return currentSession?.name || connection.currentDevice.value?.name || 'Claude Code'
+})
 
 // 监听等待输入状态
 watch(() => terminal.isWaitingInput.value, (waiting) => {
   if (waiting) {
     inputBarRef.value?.focus()
+  }
+})
+
+// 监听连接状态变化，认证完成后自动加载会话
+watch(() => connection.state.value.status, async (status) => {
+  if (status === 'paired' && terminal.sessions.value.length === 0) {
+    await terminal.loadSessions()
   }
 })
 
@@ -165,27 +185,26 @@ onMounted(async () => {
     }
   }
 
-  // 加载远程会话
-  await terminal.loadSessions()
+  // 只有在已认证状态下才加载远程会话
+  if (connection.state.value.status === 'paired') {
+    await terminal.loadSessions()
 
-  if (sessionId) {
-    // 通过查询参数直接加入指定会话
-    await terminal.joinSession(sessionId)
-    connection.activeSessionId.value = terminal.currentSessionId.value
-  } else if (terminal.sessions.value.length > 0) {
-    // 未指定会话时，自动选择第一个
-    await terminal.joinSession(terminal.sessions.value[0].id)
-    connection.activeSessionId.value = terminal.currentSessionId.value
+    if (sessionId) {
+      // 通过查询参数直接加入指定会话
+      await terminal.joinSession(sessionId)
+      connection.activeSessionId.value = terminal.currentSessionId.value
+    } else if (terminal.sessions.value.length > 0) {
+      // 未指定会话时，自动选择第一个
+      await terminal.joinSession(terminal.sessions.value[0].id)
+      connection.activeSessionId.value = terminal.currentSessionId.value
+    }
   }
 })
 
 onUnmounted(async () => {
-  // 禁用自动重连并离开会话
-  terminal.disableAutoReconnect()
-  await terminal.leaveSession()
-  // 清理输出缓冲区定时器
-  terminal.cleanup()
-  // 清除活跃会话 ID，通知其他视图连接仍存在但会话已离开
+  // 不清理输出缓冲区和会话订阅
+  // 用户返回时保持后台运行，继续接收消息
+  // 只清除活跃会话 ID 标记
   connection.activeSessionId.value = null
 })
 

@@ -6,7 +6,7 @@
     </header>
 
     <!-- Connection Status -->
-    <div v-if="connection.isConnected.value" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
+    <div v-if="isConnected" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
         <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
@@ -193,7 +193,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import QuickActionButton from '@/components/mobile/QuickActionButton.vue'
@@ -209,6 +209,9 @@ interface QuickAction {
 
 const router = useRouter()
 const connection = useRemoteConnection()
+
+// 需要同时检查 WebSocket 连接和配对状态
+const isConnected = computed(() => connection.state.value.status === 'paired' && connection.isConnected.value)
 
 const presetActions = ref<QuickAction[]>([
   { id: '1', name: '继续', content: '请继续', icon: '▶️', color: '#22c55e' },

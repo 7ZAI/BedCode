@@ -44,9 +44,34 @@ const authCredentials = ref<{
 // 当前活跃的会话 ID，供 QuickActionsView/HistoryView 等跨视图发送输入使用
 const activeSessionId = ref<string | null>(null)
 
+// 设备信息缓存（模块级，只初始化一次）
+let _deviceId: string = ''
+let _deviceFingerprint: string = ''
+
+// 初始化设备信息
+function initDeviceInfo() {
+  if (_deviceId) return  // 已初始化
+
+  const storedDeviceId = localStorage.getItem('device_id')
+  if (storedDeviceId) {
+    _deviceId = storedDeviceId
+  } else {
+    _deviceId = crypto.randomUUID()
+    localStorage.setItem('device_id', _deviceId)
+  }
+
+  const storedFingerprint = localStorage.getItem('device_fingerprint')
+  if (storedFingerprint) {
+    _deviceFingerprint = storedFingerprint
+  } else {
+    _deviceFingerprint = crypto.randomUUID()
+    localStorage.setItem('device_fingerprint', _deviceFingerprint)
+  }
+}
+
 export function useRemoteConnection() {
-  // === 状态 (singleton) ===
-  // state, pairedDevices, currentDevice, authCredentials are module-level
+  // 初始化设备信息
+  initDeviceInfo()
 
   // === WebSocket 依赖 (singleton) ===
   const {
@@ -83,7 +108,7 @@ export function useRemoteConnection() {
       // 等待连接建立
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout'))
+          reject(new Error(`连接超时：无法连接到 ${device.address}:${device.port}，请检查桌面端是否已启动并在同一网络下`))
         }, 10000)
 
         const unwatch = setInterval(() => {
@@ -101,6 +126,20 @@ export function useRemoteConnection() {
       })
 
       state.value = { status: 'connected' }
+
+      // 连接成功后自动尝试认证（如果有存储的凭据）
+      if (device.isPaired && authCredentials.value) {
+        const authSuccess = await authenticate()
+        if (!authSuccess) {
+          // 认证失败，清除本地凭据，状态改为 error 等待用户重新配对
+          console.warn('Auto-authentication failed after connection')
+          authCredentials.value = null
+          localStorage.removeItem('auth_pairing_id')
+          localStorage.removeItem('auth_fingerprint')
+          localStorage.removeItem('auth_session_token')
+          state.value = { status: 'error', error: '认证失败，请重新配对设备' }
+        }
+      }
     } catch (error) {
       state.value = { status: 'error', error: String(error) }
       throw error
@@ -232,6 +271,8 @@ export function useRemoteConnection() {
     const fingerprint = generateDeviceFingerprint()
     const deviceName = getDeviceName()
 
+    console.log('[QR] Sending QR token, length:', token.length, 'token:', token.substring(0, 16) + '...')
+
     const response = await sendMessageWithResponse('auth', {
       stage: 'qr_connect',
       device_id: deviceId,
@@ -239,6 +280,8 @@ export function useRemoteConnection() {
       device_fingerprint: fingerprint,
       qr_token: token,
     })
+
+    console.log('[QR] Response received:', response)
 
     if (response?.payload?.stage === 'authenticated') {
       const payload = response.payload as {
@@ -257,12 +300,14 @@ export function useRemoteConnection() {
       localStorage.setItem('auth_fingerprint', fp)
       localStorage.setItem('auth_session_token', st)
 
+      const defaultPort = getDefaultPort()
+
       // 添加到已配对设备列表
       pairedDevices.value.push({
         id: pairingId,
         name: deviceName,
         address: currentDevice.value?.address || '',
-        port: currentDevice.value?.port || 8765,
+        port: currentDevice.value?.port || defaultPort,
         isPaired: true,
       })
 
@@ -271,6 +316,7 @@ export function useRemoteConnection() {
     }
 
     state.value = { status: 'error', error: response?.payload?.error || 'QR authentication failed' }
+    console.error('[QR] Authentication failed:', response?.payload?.error)
     return false
   }
 
@@ -294,16 +340,33 @@ export function useRemoteConnection() {
     currentDevice.value = null
   }
 
+  /** 获取默认端口 */
+  function getDefaultPort(): number {
+    try {
+      const saved = localStorage.getItem('mobile-settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.defaultPort && parsed.defaultPort > 0 && parsed.defaultPort <= 65535) {
+          return parsed.defaultPort
+        }
+      }
+    } catch (e) {
+      console.error('Failed to get default port:', e)
+    }
+    return 8765
+  }
+
   /** 加载已配对设备列表 */
   async function loadPairedDevices(): Promise<void> {
     try {
       const devices = await invoke<PairedDeviceRaw[]>('list_paired_devices')
+      const defaultPort = getDefaultPort()
 
       pairedDevices.value = devices.map(d => ({
         id: d.id,
         name: d.device_name,
         address: d.address || '',
-        port: 8765,
+        port: defaultPort,
         isPaired: true,
       }))
     } catch (error) {
@@ -326,24 +389,9 @@ export function useRemoteConnection() {
     }
   }
 
-  /** 生成设备 ID */
+  /** 生成设备 ID（模块级缓存） */
   function generateDeviceId(): string {
-    const stored = localStorage.getItem('device_id')
-    if (stored) return stored
-
-    const id = crypto.randomUUID()
-    localStorage.setItem('device_id', id)
-    return id
-  }
-
-  /** 生成设备指纹 */
-  function generateDeviceFingerprint(): string {
-    const stored = localStorage.getItem('device_fingerprint')
-    if (stored) return stored
-
-    const fp = crypto.randomUUID()
-    localStorage.setItem('device_fingerprint', fp)
-    return fp
+    return _deviceId
   }
 
   /** 获取设备名称 */
@@ -351,9 +399,14 @@ export function useRemoteConnection() {
     return localStorage.getItem('device_name') || 'Mobile Device'
   }
 
-  // === 初始化：加载持久化凭据（只执行一次） ===
+  // === 加载持久化凭据 ===
   if (!authCredentials.value?.sessionToken) {
     loadAuthCredentials()
+  }
+
+  // === 提供设备指纹获取函数 ===
+  function generateDeviceFingerprint(): string {
+    return _deviceFingerprint
   }
 
   // === 清理：由 useWebSocket 的 usageCount 管理，这里不再主动断开 ===
@@ -380,6 +433,7 @@ export function useRemoteConnection() {
     verifyPairingCode,
     sendQrToken,
     disconnect,
+    getDefaultPort,
     loadPairedDevices,
     loadAuthCredentials,
     sendMessage,

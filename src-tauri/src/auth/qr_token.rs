@@ -58,9 +58,15 @@ impl QrTokenManager {
     pub async fn verify(&self, input: &str) -> crate::Result<()> {
         let mut guard = self.current_token.lock().await;
 
+        tracing::debug!("QR token verify: input length={}, current_token present={}",
+            input.len(), guard.is_some());
+
         match guard.as_mut() {
             None => Err(crate::AppError::Auth("No active QR token".to_string())),
             Some(token) => {
+                tracing::debug!("Current token: length={}, used={}, expired={}, input_matches={}",
+                    token.token.len(), token.used, token.is_expired(), token.token == input);
+
                 if token.is_expired() {
                     *guard = None;
                     Err(crate::AppError::Auth("QR token expired".to_string()))
@@ -70,6 +76,7 @@ impl QrTokenManager {
                     Err(crate::AppError::Auth("Invalid QR token".to_string()))
                 } else {
                     token.used = true;
+                    tracing::info!("QR token verified successfully");
                     Ok(())
                 }
             }

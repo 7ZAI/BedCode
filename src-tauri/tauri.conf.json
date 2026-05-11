@@ -50,8 +50,6 @@
       "timestampUrl": "",
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "headerImage": "icons/header.bmp",
-        "sidebarImage": "icons/sidebar.bmp",
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"]
       }

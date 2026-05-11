@@ -1,5 +1,8 @@
 <template>
-  <div ref="terminalContainerRef" class="h-full w-full overflow-hidden terminal-wrapper">
+  <div
+    ref="terminalContainerRef"
+    class="h-full w-full overflow-hidden terminal-wrapper"
+  >
     <!-- 强制宽度容器，防止宽度变化 -->
     <div class="terminal-inner">
       <div ref="xtermContainerRef" class="h-full"></div>
@@ -22,6 +25,7 @@ const xtermContainerRef = ref<HTMLElement | null>(null)
 // xterm.js 实例
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+let resizeObserver: ResizeObserver | null = null
 let lastOutputIndex = 0
 
 // 记录容器宽度，防止多次计算
@@ -48,9 +52,9 @@ function initTerminal() {
   terminalContainerRef.value.style.width = '100%'
   xtermContainerRef.value.style.width = '100%'
 
+  // 使用与桌面端一致的配置
   const fontSize = settingsStore.settings.ui.terminal_font_size || 14
-  // 移动端优先使用等宽字体
-  const fontFamily = "'SF Mono', 'Fira Code', Consolas, Monaco, 'Courier New', monospace"
+  const fontFamily = 'Consolas, Monaco, Courier New, monospace'
 
   // 检测当前是否为深色模式
   const isDarkMode = document.documentElement.classList.contains('dark')
@@ -109,13 +113,16 @@ function initTerminal() {
     fontSize,
     fontFamily,
     theme: isDarkMode ? darkTheme : lightTheme,
-    cursorBlink: true,
-    cursorStyle: 'block',
+    cursorBlink: false, // 移动端禁用光标闪烁，节省性能
+    cursorStyle: 'bar',
     // 移动端减少滚动缓冲区以节省内存
-    scrollback: 5000,
+    scrollback: 1000,
     allowProposedApi: true,
     // 禁用光标样式渲染优化
     cursorInactiveStyle: 'none',
+    // 移动端优化
+    disableStdin: false,
+    allowTransparency: false,
   })
 
   fitAddon = new FitAddon()
@@ -208,17 +215,31 @@ function handleScroll() {
 
 // 监听输出变化，增量写入
 watch(() => props.output, (newOutput) => {
-  if (!terminal || !newOutput) return
+  console.log('[MobileTerminal] output changed, length:', newOutput?.length, 'lastIndex:', lastOutputIndex)
+  if (!terminal || !newOutput) {
+    console.log('[MobileTerminal] early return - terminal or output is null')
+    return
+  }
+
+  // 检测输出重置（远程重连等情况），重置索引
+  if (newOutput.length < lastOutputIndex) {
+    console.log('[MobileTerminal] output reset detected, resetting index')
+    lastOutputIndex = 0
+  }
 
   // 只写入新增的部分（增量写入）
-  for (let i = lastOutputIndex; i < newOutput.length; i++) {
-    terminal!.write(newOutput[i])
-  }
-  lastOutputIndex = newOutput.length
+  const startIndex = lastOutputIndex
+  const newContent = newOutput.slice(startIndex)
+  console.log('[MobileTerminal] writing new content, start:', startIndex, 'chars:', newContent.length)
 
-  // 只有用户不在滚动时才自动滚动到底部
-  if (!isUserScrolling) {
-    scrollToBottom()
+  if (newContent.length > 0) {
+    terminal.write(newContent)
+    lastOutputIndex = newOutput.length
+
+    // 只有用户不在滚动时才自动滚动到底部
+    if (!isUserScrolling) {
+      scrollToBottom()
+    }
   }
 }, { deep: true })
 
@@ -243,7 +264,7 @@ onMounted(() => {
 
   // 使用 ResizeObserver 监听容器尺寸变化，使用节流
   if (terminalContainerRef.value) {
-    const resizeObserver = new ResizeObserver((entries) => {
+    resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         // 只在尺寸真正变化时触发 fit
         if (entry.contentRect.width !== lastContainerWidth) {
@@ -326,9 +347,18 @@ onUnmounted(() => {
     clearTimeout(scrollTimeout)
   }
 
+  // 清理 ResizeObserver
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+
   if (terminal) {
     terminal.dispose()
     terminal = null
+  }
+  if (fitAddon) {
+    fitAddon = null
   }
   if (fitRafId !== null) {
     cancelAnimationFrame(fitRafId)
@@ -348,6 +378,9 @@ defineExpose({
 .terminal-wrapper {
   /* 固定宽度布局，防止内容宽度变化 */
   contain: layout style;
+  /* 禁止文本选择，避免移动端误触 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .terminal-inner {

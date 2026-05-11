@@ -6,10 +6,16 @@
     </header>
 
     <!-- Connection Status -->
-    <div v-if="connection.isConnected.value" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
+    <div v-if="isConnected" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
         <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
+      </div>
+    </div>
+    <div v-else class="px-4 py-2 bg-white dark:bg-dark-800/50 border-b border-gray-200 dark:border-dark-700 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-dark-500"></div>
+        <span class="text-gray- dark:text-dark-400 text-sm">未连接</span>
       </div>
     </div>
 
@@ -38,6 +44,17 @@
               min="1"
               max="60"
               class="w-16 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
+            />
+          </div>
+
+          <div class="flex items-center justify-between">
+            <span>默认端口</span>
+            <input
+              v-model.number="settings.defaultPort"
+              type="number"
+              min="1"
+              max="65535"
+              class="w-20 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
             />
           </div>
         </div>
@@ -122,7 +139,7 @@
     </div>
 
     <!-- Footer Actions -->
-    <div class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-2">
+    <div class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-2 pb-safe">
       <button
         class="w-full bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-200 py-3 rounded-xl font-medium"
         @click="resetSettings"
@@ -140,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRemoteConnection } from '@/composables/useRemoteConnection'
 import { useSettingsStore } from '@/stores/settings'
 import Toggle from '@/components/common/Toggle.vue'
@@ -149,11 +166,15 @@ import { invoke } from '@tauri-apps/api/core'
 const connection = useRemoteConnection()
 const settingsStore = useSettingsStore()
 
+// 需要同时检查 WebSocket 连接和配对状态
+const isConnected = computed(() => connection.state.value.status === 'paired' && connection.isConnected.value)
+
 // 移动端本地设置（用于 UI 控制）
 interface MobileSettings {
   autoReconnect: boolean
   keepAlive: boolean
   reconnectInterval: number
+  defaultPort: number
   notifyOnWaiting: boolean
   notifyOnConnection: boolean
   vibrate: boolean
@@ -165,6 +186,7 @@ const defaultMobileSettings: MobileSettings = {
   autoReconnect: true,
   keepAlive: true,
   reconnectInterval: 5,
+  defaultPort: 8765,
   notifyOnWaiting: true,
   notifyOnConnection: true,
   vibrate: true,

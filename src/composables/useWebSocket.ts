@@ -65,15 +65,15 @@ export function useWebSocket() {
       ws.value.onopen = async () => {
         isConnected.value = true
         connectionError.value = null
-        reconnectAttempts.value = 0
         lastMessageTime = Date.now()
         console.log('WebSocket connected to', url)
 
         // 启动心跳定时器
         startHeartbeat()
 
-        // 如果是重连且有回调，执行重连回调
-        if (onReconnectCallback) {
+        // 只有在重连成功时才执行回调（reconnectAttempts > 0 表示这是重连）
+        // 首次连接不执行回调，由调用方处理认证和数据加载
+        if (reconnectAttempts.value > 0 && onReconnectCallback) {
           try {
             await onReconnectCallback()
             console.log('Reconnect callback executed successfully')
@@ -81,6 +81,9 @@ export function useWebSocket() {
             console.error('Reconnect callback failed:', e)
           }
         }
+
+        // 重连成功后重置计数（保持在这里以确保状态正确）
+        reconnectAttempts.value = 0
       }
 
       ws.value.onmessage = (event) => {
@@ -91,6 +94,23 @@ export function useWebSocket() {
 
           // 心跳响应，无需进一步处理
           if (message.type === 'heartbeat') return
+
+          // Handle server closed notification (desktop app shutting down)
+          if (message.type === 'server_closed') {
+            const reason = (message as any).reason || 'Server closed'
+            const willReconnect = (message as any).will_reconnect ?? false
+            console.warn('[WebSocket] Server closed:', reason, 'willReconnect:', willReconnect)
+
+            // Dispatch event for UI to handle
+            window.dispatchEvent(new CustomEvent('server-closed', {
+              detail: { reason, willReconnect }
+            }))
+
+            // 标记为断开连接状态
+            isConnected.value = false
+            // 不自动重连，因为桌面端已经退出
+            return
+          }
 
           // Handle application-level errors (even without message_id)
           if (message.type === 'error') {
@@ -136,12 +156,22 @@ export function useWebSocket() {
         // 非主动关闭时自动重连，使用 connectionParams
         if (event.code !== 1000 && reconnectAttempts.value < maxReconnectAttempts && connectionParams) {
           scheduleReconnect()
+        } else if (reconnectAttempts.value >= maxReconnectAttempts) {
+          // 重连次数超过最大值，通知用户连接失败
+          const wsUrl = connectionParams
+            ? `${connectionParams.secure ? 'wss' : 'ws'}://${connectionParams.address}:${connectionParams.port}`
+            : 'unknown'
+          connectionError.value = `连接失败，已达到最大重试次数。请检查：\n1. 桌面端是否已启动\n2. 设备是否在同一网络下\n3. 防火墙是否阻止了连接`
         }
       }
 
       ws.value.onerror = (error) => {
-        connectionError.value = 'Connection failed'
-        console.error('WebSocket error:', error)
+        // 收集更多诊断信息
+        const wsUrl = connectionParams
+          ? `${connectionParams.secure ? 'wss' : 'ws'}://${connectionParams.address}:${connectionParams.port}`
+          : 'unknown'
+        connectionError.value = `无法连接到 ${wsUrl}，请检查：\n1. 桌面端是否已启动\n2. 设备是否在同一网络下\n3. 防火墙是否阻止了连接`
+        console.error('WebSocket error:', error, 'Target:', wsUrl)
       }
     } catch (error) {
       connectionError.value = 'Failed to create WebSocket connection'
@@ -172,15 +202,16 @@ export function useWebSocket() {
       }
     }, HEARTBEAT_INTERVAL_MS)
 
-    // 心跳超时检测：90秒无消息则主动断开
+    // 心跳超时检测：每 10 秒检查一次，超过 90 秒无消息则断开
     checkHeartbeatTimeout()
   }
 
   function checkHeartbeatTimeout() {
     if (heartbeatTimeoutTimer) {
-      clearTimeout(heartbeatTimeoutTimer)
+      clearInterval(heartbeatTimeoutTimer)
     }
-    heartbeatTimeoutTimer = setTimeout(() => {
+    // 每 10 秒检查一次，而不是一次性延迟
+    heartbeatTimeoutTimer = setInterval(() => {
       if (isConnected.value) {
         const elapsed = Date.now() - lastMessageTime
         if (elapsed > HEARTBEAT_TIMEOUT_MS) {
@@ -188,7 +219,7 @@ export function useWebSocket() {
           ws.value?.close(3001, 'Heartbeat timeout')
         }
       }
-    }, HEARTBEAT_TIMEOUT_MS + HEARTBEAT_INTERVAL_MS)
+    }, 10000)
   }
 
   function stopHeartbeat() {
@@ -197,7 +228,7 @@ export function useWebSocket() {
       heartbeatTimer = null
     }
     if (heartbeatTimeoutTimer) {
-      clearTimeout(heartbeatTimeoutTimer)
+      clearInterval(heartbeatTimeoutTimer)
       heartbeatTimeoutTimer = null
     }
   }
@@ -323,17 +354,14 @@ export function useWebSocket() {
   // Track usage for singleton lifecycle
   usageCount++
 
-  // Cleanup on unmount — only disconnect when no components remain
+  // Cleanup on unmount — WebSocket 是 singleton，组件卸载时不断开连接
+  // 只清理引用，避免内存泄漏
   onUnmounted(() => {
     usageCount--
     if (usageCount <= 0) {
       usageCount = 0
-      for (const [id, pending] of pendingRequests) {
-        clearTimeout(pending.timeout)
-        pending.reject(new Error('WebSocket disconnected'))
-        pendingRequests.delete(id)
-      }
-      disconnect()
+      // 不调用 disconnect()，保持 WebSocket 连接供其他组件使用
+      // pendingRequests 保留，因为连接仍然活跃
     }
   })
 

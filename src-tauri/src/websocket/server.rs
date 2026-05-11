@@ -2,13 +2,14 @@
 //!
 //! 提供 WebSocket 服务端功能，处理移动端连接和消息路由
 
-use super::message::{AuthPayload, AuthStage, ControlAction, Message};
+use crate::websocket::handlers::handle_message;
+use crate::websocket::output_forwarder::OutputForwarder;
+use crate::websocket::message::{Message, DeviceConnectionEvent};
 use crate::auth::PairingService;
 use crate::auth::QrTokenManager;
 use crate::db::Database;
 use crate::plugin::PluginManager;
-use crate::pty::PtyOutputEvent;
-use crate::session::{SessionManager, SessionType};
+use crate::session::SessionManager;
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -18,7 +19,6 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
-use uuid::Uuid;
 use tauri::Emitter;
 use tauri::AppHandle;
 
@@ -30,20 +30,13 @@ const HEARTBEAT_TIMEOUT_SECS: u64 = 90;
 pub struct ClientInfo {
     pub addr: SocketAddr,
     pub device_id: Option<String>,
+    pub device_name: Option<String>,
     pub authenticated: bool,
     pub session_ids: Vec<String>,
     /// 订阅的会话列表（用于输出转发）
     pub subscribed_sessions: Vec<String>,
     /// 最后收到心跳的时间
     pub last_heartbeat: Instant,
-}
-
-/// 配对码生成事件 payload
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PairingCodeGeneratedEvent {
-    pub code: String,
-    pub expires_in: u64,
-    pub device_name: Option<String>,
 }
 
 /// WebSocket 服务器
@@ -97,6 +90,59 @@ impl WebSocketServer {
         self.app_handle = Some(app_handle);
     }
 
+    /// 向除指定客户端外的所有客户端广播消息
+    pub async fn broadcast_to_others(&self, exclude_addr: SocketAddr, message: Message) {
+        let json = match message.to_json() {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::error!("Failed to serialize message: {}", e);
+                return;
+            }
+        };
+        let ws_message = WsMessage::Text(json);
+
+        let clients = self.clients.read().await;
+        let senders = self.client_senders.read().await;
+
+        for (addr, client) in clients.iter() {
+            // 跳过排除的客户端和未认证的客户端
+            if addr == &exclude_addr || !client.authenticated {
+                continue;
+            }
+            if let Some(tx) = senders.get(addr) {
+                if let Err(e) = tx.send(ws_message.clone()) {
+                    tracing::debug!("Failed to broadcast to {}: {}", addr, e);
+                }
+            }
+        }
+    }
+
+    /// 向所有已认证客户端广播消息
+    pub async fn broadcast_to_all(&self, message: Message) {
+        let json = match message.to_json() {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::error!("Failed to serialize message: {}", e);
+                return;
+            }
+        };
+        let ws_message = WsMessage::Text(json);
+
+        let clients = self.clients.read().await;
+        let senders = self.client_senders.read().await;
+
+        for (addr, client) in clients.iter() {
+            if !client.authenticated {
+                continue;
+            }
+            if let Some(tx) = senders.get(addr) {
+                if let Err(e) = tx.send(ws_message.clone()) {
+                    tracing::debug!("Failed to broadcast to {}: {}", addr, e);
+                }
+            }
+        }
+    }
+
     /// 启动服务器
     pub async fn start(&self) -> Result<()> {
         let addr: SocketAddr = format!("0.0.0.0:{}", self.port)
@@ -112,12 +158,12 @@ impl WebSocketServer {
 
         tracing::info!("WebSocket server listening on ws://{}", addr);
 
-        // 启动输出转发任务
-        let output_forwarder = OutputForwarder {
-            session_manager: self.session_manager.clone(),
-            clients: self.clients.clone(),
-            client_senders: self.client_senders.clone(),
-        };
+        // 创建输出转发器
+        let output_forwarder = OutputForwarder::new(
+            self.session_manager.clone(),
+            self.clients.clone(),
+            self.client_senders.clone(),
+        );
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let mut forwarder_shutdown = self.shutdown_tx.subscribe();
@@ -159,6 +205,7 @@ impl WebSocketServer {
                                         let _ = handle.emit("device-disconnected", &DeviceConnectionEvent {
                                             addr: addr.to_string(),
                                             device_id: client.device_id.clone().unwrap_or_default(),
+                                            device_name: client.device_name.clone(),
                                             event: "disconnected".to_string(),
                                         });
                                     }
@@ -218,6 +265,7 @@ impl WebSocketServer {
                                 ClientInfo {
                                     addr,
                                     device_id: None,
+                                    device_name: None,
                                     authenticated: false,
                                     session_ids: vec![],
                                     subscribed_sessions: vec![],
@@ -247,12 +295,14 @@ impl WebSocketServer {
 
                         // 接收任务：处理来自WebSocket的消息
                         let clients_for_recv = clients.clone();
+                        let senders_for_recv = client_senders.clone();
                         // Clone app_handle for disconnect event (recv_task moves the original)
                         let app_handle_for_disconnect = app_handle.clone();
                         let recv_task = async move {
                             while let Some(msg_result) = ws_receiver.next().await {
                                 match msg_result {
                                     Ok(WsMessage::Text(text)) => {
+                                        tracing::debug!("Received message from {}: {}", addr, &text[..text.len().min(500)]);
                                         match Message::from_json(&text) {
                                             Ok(message) => {
                                                 // 提取 request ID 以便错误响应也能带上
@@ -266,6 +316,7 @@ impl WebSocketServer {
                                                     &pairing_service,
                                                     &qr_manager,
                                                     &clients_for_recv,
+                                                    &senders_for_recv,
                                                     &app_handle,
                                                 )
                                                 .await;
@@ -338,12 +389,29 @@ impl WebSocketServer {
                             let clients_read = clients.read().await;
                             if let Some(client) = clients_read.get(&addr) {
                                 if client.authenticated {
+                                    // Emit Tauri event for desktop frontend
                                     if let Some(ref handle) = app_handle_for_disconnect {
                                         let _ = handle.emit("device-disconnected", &DeviceConnectionEvent {
                                             addr: addr.to_string(),
                                             device_id: client.device_id.clone().unwrap_or_default(),
+                                            device_name: client.device_name.clone(),
                                             event: "disconnected".to_string(),
                                         });
+                                    }
+
+                                    // Broadcast client_disconnected to other WebSocket clients
+                                    let device_name = client.device_name.clone().unwrap_or_else(|| "Unknown".to_string());
+                                    let disconnect_msg = Message::client_disconnected(&device_name, "Connection closed");
+                                    if let Ok(json) = disconnect_msg.to_json() {
+                                        let ws_msg = tokio_tungstenite::tungstenite::protocol::Message::Text(json);
+                                        let senders = client_senders.read().await;
+                                        for (a, client) in clients_read.iter() {
+                                            if a != &addr && client.authenticated {
+                                                if let Some(tx) = senders.get(a) {
+                                                    let _ = tx.send(ws_msg.clone());
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -352,7 +420,21 @@ impl WebSocketServer {
                         // 移除客户端
                         {
                             let mut clients = clients.write().await;
+                            // 获取客户端信息用于发送断开事件
+                            let client_info = clients.get(&addr).cloned();
                             clients.remove(&addr);
+
+                            // 发送设备断开事件到桌面端前端
+                            if let Some(ref handle) = app_handle_for_disconnect {
+                                if let Some(client) = client_info {
+                                    let _ = handle.emit("device-disconnected", &DeviceConnectionEvent {
+                                        addr: addr.to_string(),
+                                        device_id: client.device_id.clone().unwrap_or_default(),
+                                        device_name: client.device_name.clone(),
+                                        event: "disconnected".to_string(),
+                                    });
+                                }
+                            }
                         }
                         {
                             let mut senders = client_senders.write().await;
@@ -365,6 +447,16 @@ impl WebSocketServer {
                 // Handle shutdown signal
                 _ = shutdown_rx.recv() => {
                     tracing::info!("WebSocket server shutting down");
+
+                    // 广播服务端关闭消息给所有客户端
+                    let server_closed_msg = Message::server_closed("Server shutting down", false);
+                    if let Ok(json) = server_closed_msg.to_json() {
+                        let ws_msg = WsMessage::Text(json);
+                        let senders = self.client_senders.read().await;
+                        for (_, tx) in senders.iter() {
+                            let _ = tx.send(ws_msg.clone());
+                        }
+                    }
 
                     // Mark as not running
                     {
@@ -426,734 +518,4 @@ pub struct DeviceConnectionInfo {
     pub addr: String,
     pub device_id: String,
     pub session_count: usize,
-}
-
-/// 设备连接/断开事件（发给前端）
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DeviceConnectionEvent {
-    pub addr: String,
-    pub device_id: String,
-    pub event: String, // "connected", "disconnected", "authenticated"
-}
-
-/// 输出转发器
-///
-/// 负责将 PTY 输出转发给订阅了相应会话的客户端
-struct OutputForwarder {
-    session_manager: Arc<SessionManager>,
-    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
-    client_senders: Arc<RwLock<HashMap<SocketAddr, mpsc::UnboundedSender<WsMessage>>>>,
-}
-
-impl OutputForwarder {
-    async fn run(&self, shutdown_rx: &mut broadcast::Receiver<()>) {
-        let mut output_rx = self.session_manager.subscribe_output();
-
-        loop {
-            tokio::select! {
-                result = output_rx.recv() => {
-                    match result {
-                        Ok(event) => {
-                            // 转发输出给订阅了该会话的客户端
-                            if let Err(e) = self.forward_output(&event).await {
-                                tracing::error!("Failed to forward output: {}", e);
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            tracing::debug!("Output channel closed");
-                            break;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!("Output channel lagged {} messages", n);
-                        }
-                    }
-                }
-                _ = shutdown_rx.recv() => {
-                    tracing::info!("Output forwarder shutting down");
-                    break;
-                }
-            }
-        }
-    }
-
-    /// 转发PTY输出到订阅的客户端
-    async fn forward_output(&self, event: &PtyOutputEvent) -> Result<()> {
-        // 仅解码用于检测等待输入状态，不重复编码
-        let decoded_data = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &event.data,
-        ).unwrap_or_default();
-
-        let is_waiting = crate::parser::detect_waiting_input(
-            &String::from_utf8_lossy(&decoded_data)
-        );
-
-        // 直接使用 PTY 事件中的 base64 数据构造 Output 消息
-        let message = Message::Output {
-            message_id: Uuid::new_v4().to_string(),
-            session_id: event.session_id.clone(),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            payload: super::message::OutputPayload {
-                data: event.data.clone(),
-                is_waiting,
-            },
-        };
-        let json = message.to_json()?;
-        let ws_message = WsMessage::Text(json);
-
-        // 获取所有订阅了该会话的客户端
-        let clients = self.clients.read().await;
-        let senders = self.client_senders.read().await;
-
-        for (addr, client) in clients.iter() {
-            if client.authenticated && client.subscribed_sessions.contains(&event.session_id) {
-                if let Some(tx) = senders.get(addr) {
-                    if tx.send(ws_message.clone()).is_err() {
-                        tracing::debug!("Failed to send output to client {}", addr);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-/// 处理消息
-async fn handle_message(
-    message: Message,
-    addr: SocketAddr,
-    session_manager: &Arc<SessionManager>,
-    plugin_manager: &Arc<PluginManager>,
-    db: &Arc<Mutex<Database>>,
-    pairing_service: &Arc<PairingService>,
-    qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
-    app_handle: &Option<Arc<AppHandle>>,
-) -> Result<Option<Message>> {
-    // 更新客户端心跳时间（任何消息都算作活跃）
-    {
-        let mut clients = clients.write().await;
-        if let Some(client) = clients.get_mut(&addr) {
-            client.last_heartbeat = Instant::now();
-        }
-    }
-
-    match message {
-        Message::Auth { message_id, payload, .. } => handle_auth(payload, message_id, addr, db, pairing_service, qr_manager, clients, app_handle).await,
-
-        Message::Input { message_id, session_id, payload, .. } => {
-            // 检查认证
-            {
-                let clients = clients.read().await;
-                let client = clients.get(&addr);
-                if client.map(|c| !c.authenticated).unwrap_or(true) {
-                    return Ok(Some(Message::error_with_id(&message_id, "UNAUTHORIZED", "Not authenticated")));
-                }
-            }
-
-            // 检查会话类型（Plugin 会话使用文件监听，PTY 会话使用 PTY）
-            let is_plugin = session_manager
-                .get_session(&session_id)
-                .await
-                .map(|s| s.session_type == SessionType::Plugin)
-                .unwrap_or(false);
-
-            if is_plugin {
-                // Plugin 会话：写入到 pending 文件
-                plugin_manager.write_input(&session_id, &payload.data).await?;
-            } else {
-                // PTY 会话：发送到 PTY
-                if let Some(key) = &payload.special_key {
-                    session_manager.send_special_key(&session_id, key.as_str()).await?;
-                } else {
-                    session_manager.write_input(&session_id, &payload.data).await?;
-                }
-            }
-
-            Ok(None)
-        }
-
-        Message::Control { message_id, payload, .. } => {
-            // 检查认证
-            {
-                let clients = clients.read().await;
-                let client = clients.get(&addr);
-                if client.map(|c| !c.authenticated).unwrap_or(true) {
-                    return Ok(Some(Message::error_with_id(&message_id, "UNAUTHORIZED", "Not authenticated")));
-                }
-            }
-
-            handle_control(payload.action, message_id, session_manager, plugin_manager, db, clients, addr).await
-        }
-
-        Message::Heartbeat { .. } => {
-            // 心跳时间已在 handle_message 开头更新
-            Ok(Some(Message::heartbeat()))
-        }
-
-        _ => Ok(Some(Message::error("UNKNOWN_MESSAGE", "Unknown message type"))),
-    }
-}
-
-/// 处理认证消息
-async fn handle_auth(
-    payload: AuthPayload,
-    request_message_id: String,
-    addr: SocketAddr,
-    db: &Arc<Mutex<Database>>,
-    pairing_service: &Arc<PairingService>,
-    qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
-    app_handle: &Option<Arc<AppHandle>>,
-) -> Result<Option<Message>> {
-    match payload.stage {
-        AuthStage::RequestPairing => {
-            // 检查是否已有活跃的配对码，避免覆盖
-            let existing_code = pairing_service.get_current_code().await;
-            let code = if let Some(ref existing) = existing_code {
-                if !existing.is_expired() {
-                    tracing::info!(
-                        "Reusing existing pairing code: {} for device {:?}",
-                        existing.code,
-                        payload.device_name
-                    );
-                    existing.clone()
-                } else {
-                    pairing_service.generate_code().await
-                }
-            } else {
-                pairing_service.generate_code().await
-            };
-
-            tracing::info!(
-                "Pairing requested by device {:?} ({:?}), code: {}",
-                payload.device_id,
-                payload.device_name,
-                code.code
-            );
-
-            // 发送事件到桌面端前端，显示配对码
-            if let Some(handle) = app_handle {
-                let event = PairingCodeGeneratedEvent {
-                    code: code.code.clone(),
-                    expires_in: code.expires_in,
-                    device_name: payload.device_name.clone(),
-                };
-                if let Err(e) = handle.emit("pairing-code-generated", &event) {
-                    tracing::error!("Failed to emit pairing code event: {}", e);
-                }
-            }
-
-            Ok(Some(Message::Auth {
-                message_id: request_message_id,
-                session_id: None,
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: AuthPayload {
-                    stage: AuthStage::VerifyCode,
-                    device_id: payload.device_id,
-                    device_name: payload.device_name,
-                    error: None,
-                    ..Default::default()
-                },
-            }))
-        }
-
-        AuthStage::VerifyCode => {
-            let code = payload.pairing_code.unwrap_or_default();
-            let is_valid = pairing_service.verify_code(&code).await;
-
-            if is_valid {
-                let device_name = payload.device_name.unwrap_or_else(|| "Unknown Device".to_string());
-                let fingerprint = payload.device_fingerprint.unwrap_or_default();
-                let address = format!("{}", addr);
-                let session_token = Uuid::new_v4().to_string();
-
-                let db = db.lock().await;
-                let pairing_id = db.add_pairing(&device_name, &fingerprint, "", Some(&address))?;
-                db.update_pairing_token(&pairing_id, &session_token)?;
-                drop(db);
-
-                // 更新客户端状态
-                {
-                    let mut clients = clients.write().await;
-                    if let Some(client) = clients.get_mut(&addr) {
-                        client.device_id = Some(pairing_id.clone());
-                        client.authenticated = true;
-                    }
-                }
-
-                // 通知前端设备已认证
-                if let Some(handle) = app_handle {
-                    let _ = handle.emit("device-connected", &DeviceConnectionEvent {
-                        addr: addr.to_string(),
-                        device_id: pairing_id.clone(),
-                        event: "authenticated".to_string(),
-                    });
-                }
-
-                // 清除已使用的配对码
-                pairing_service.clear_code().await;
-
-                tracing::info!("Device paired: {} (fingerprint: {}, addr: {})", device_name, fingerprint, address);
-
-                Ok(Some(Message::Auth {
-                    message_id: request_message_id,
-                    session_id: None,
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: AuthPayload {
-                        stage: AuthStage::Authenticated,
-                        device_id: Some(pairing_id),
-                        device_fingerprint: Some(fingerprint),
-                        session_token: Some(session_token),
-                        error: None,
-                        ..Default::default()
-                    },
-                }))
-            } else {
-                let current_code = pairing_service.get_current_code().await;
-                let error_message = if current_code.is_none() {
-                    "No pairing code available. Please generate a new code."
-                } else {
-                    "Invalid or expired pairing code"
-                };
-
-                Ok(Some(Message::Auth {
-                    message_id: request_message_id,
-                    session_id: None,
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: AuthPayload {
-                        stage: AuthStage::Failed,
-                        error: Some(error_message.to_string()),
-                        ..Default::default()
-                    },
-                }))
-            }
-        }
-
-        AuthStage::Authenticated => {
-            let device_id = payload.device_id.unwrap_or_default();
-            let fingerprint = payload.device_fingerprint.unwrap_or_default();
-            let token = payload.session_token.unwrap_or_default();
-
-            let db = db.lock().await;
-            let pairings = db.get_pairings()?;
-
-            // 通过 fingerprint + token 验证已配对设备
-            // 也兼容通过 pairing id 匹配
-            let is_paired = if !fingerprint.is_empty() && !token.is_empty() {
-                pairings.iter().any(|p| p.device_fingerprint == fingerprint
-                    && p.session_token.as_deref() == Some(&token)
-                    && p.is_active)
-            } else if !device_id.is_empty() {
-                pairings.iter().any(|p| p.id == device_id && p.is_active)
-            } else {
-                false
-            };
-            drop(db);
-
-            if is_paired {
-                // 更新客户端认证状态
-                {
-                    let mut clients = clients.write().await;
-                    if let Some(client) = clients.get_mut(&addr) {
-                        client.device_id = Some(device_id.clone());
-                        client.authenticated = true;
-                    }
-                }
-
-                // 通知前端设备已重新认证
-                if let Some(handle) = app_handle {
-                    let _ = handle.emit("device-connected", &DeviceConnectionEvent {
-                        addr: addr.to_string(),
-                        device_id: device_id.clone(),
-                        event: "authenticated".to_string(),
-                    });
-                }
-
-                tracing::info!("Device re-authenticated: {}", addr);
-
-                Ok(Some(Message::Auth {
-                    message_id: request_message_id,
-                    session_id: None,
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: AuthPayload {
-                        stage: AuthStage::Authenticated,
-                        device_id: Some(device_id),
-                        device_fingerprint: Some(fingerprint),
-                        session_token: Some(token),
-                        error: None,
-                        ..Default::default()
-                    },
-                }))
-            } else {
-                tracing::warn!("Authentication failed for device {}", addr);
-                Ok(Some(Message::Auth {
-                    message_id: request_message_id,
-                    session_id: None,
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: AuthPayload {
-                        stage: AuthStage::Failed,
-                        error: Some("Device not paired or invalid credentials".to_string()),
-                        ..Default::default()
-                    },
-                }))
-            }
-        }
-
-        AuthStage::QrConnect => {
-            let qr_token = payload.qr_token.as_deref().unwrap_or("");
-
-            match qr_manager.verify(qr_token).await {
-                Ok(()) => {
-                    // 生成设备凭证
-                    let device_id = Uuid::new_v4().to_string();
-                    let device_fingerprint = payload.device_fingerprint
-                        .clone()
-                        .unwrap_or_else(|| Uuid::new_v4().to_string());
-                    let device_name = payload.device_name
-                        .clone()
-                        .unwrap_or_else(|| "QR Device".to_string());
-                    let session_token = Uuid::new_v4().to_string();
-
-                    // 创建配对记录
-                    let db = db.lock().await;
-                    let _pairing_id = db.add_pairing(
-                        &device_name,
-                        &device_fingerprint,
-                        "",
-                        Some(&addr.to_string()),
-                    ).unwrap_or_default();
-                    drop(db);
-
-                    // 标记客户端已认证
-                    {
-                        let mut clients = clients.write().await;
-                        if let Some(client) = clients.get_mut(&addr) {
-                            client.authenticated = true;
-                            client.device_id = Some(device_id.clone());
-                        }
-                    }
-
-                    // 通知前端设备已通过 QR 认证
-                    if let Some(handle) = app_handle {
-                        let _ = handle.emit("device-connected", &DeviceConnectionEvent {
-                            addr: addr.to_string(),
-                            device_id: device_id.clone(),
-                            event: "authenticated".to_string(),
-                        });
-                    }
-
-                    let response = Message::Auth {
-                        message_id: request_message_id,
-                        session_id: None,
-                        timestamp: chrono::Utc::now().timestamp_millis(),
-                        payload: AuthPayload {
-                            stage: AuthStage::Authenticated,
-                            device_id: Some(device_id),
-                            device_fingerprint: Some(device_fingerprint),
-                            session_token: Some(session_token),
-                            device_name: Some(device_name),
-                            pairing_code: None,
-                            error: None,
-                            qr_token: None,
-                        },
-                    };
-                    Ok(Some(response))
-                }
-                Err(e) => {
-                    let response = Message::Auth {
-                        message_id: request_message_id,
-                        session_id: None,
-                        timestamp: chrono::Utc::now().timestamp_millis(),
-                        payload: AuthPayload {
-                            stage: AuthStage::QrFailed,
-                            error: Some(e.to_string()),
-                            device_id: None,
-                            device_fingerprint: None,
-                            session_token: None,
-                            device_name: None,
-                            pairing_code: None,
-                            qr_token: None,
-                        },
-                    };
-                    Ok(Some(response))
-                }
-            }
-        }
-
-        _ => Ok(Some(Message::error_with_id(&request_message_id, "INVALID_AUTH_STAGE", "Invalid auth stage"))),
-    }
-}
-
-/// 处理控制消息
-async fn handle_control(
-    action: ControlAction,
-    request_message_id: String,
-    session_manager: &Arc<SessionManager>,
-    plugin_manager: &Arc<PluginManager>,
-    db: &Arc<Mutex<Database>>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
-    addr: SocketAddr,
-) -> Result<Option<Message>> {
-    match action {
-        ControlAction::ListSessions => {
-            // 合并 PTY 会话和 Plugin 会话
-            let pty_sessions = session_manager.list_sessions().await;
-            let plugin_sessions = plugin_manager.list_sessions().await;
-
-            // 收集所有会话（PTY 优先）
-            let mut all_sessions = Vec::new();
-
-            // 添加 PTY 会话
-            for s in pty_sessions {
-                all_sessions.push(super::message::SessionSummary {
-                    id: s.id,
-                    name: s.name,
-                    status: format!("{:?}", s.status),
-                    created_at: s.created_at.to_rfc3339(),
-                    started_at: s.started_at.map(|t| t.to_rfc3339()),
-                    session_type: Some("pty".to_string()),
-                });
-            }
-
-            // 添加 Plugin 会话
-            for s in plugin_sessions {
-                all_sessions.push(super::message::SessionSummary {
-                    id: s.id,
-                    name: s.name,
-                    status: format!("{:?}", s.status),
-                    created_at: s.created_at.to_rfc3339(),
-                    started_at: s.started_at.map(|t| t.to_rfc3339()),
-                    session_type: Some("plugin".to_string()),
-                });
-            }
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: None,
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::SessionList { sessions: all_sessions },
-                },
-            }))
-        }
-
-        ControlAction::ListSessionConfigs => {
-            let db = db.lock().await;
-            let configs = db.get_session_configs()?;
-            drop(db);
-
-            let summaries = configs
-                .into_iter()
-                .map(|c| super::message::SessionConfigSummary {
-                    id: c.id,
-                    name: c.name,
-                    environment: c.environment,
-                    wsl_distro: c.wsl_distro,
-                    working_dir: c.working_dir,
-                    command: c.command,
-                })
-                .collect();
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: None,
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::SessionConfigList { configs: summaries },
-                },
-            }))
-        }
-
-        ControlAction::StartSession { config_id } => {
-            let session_id = session_manager.create_session(&config_id).await?;
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::StartSession { config_id },
-                },
-            }))
-        }
-
-        ControlAction::StopSession { session_id } => {
-            session_manager.kill_session(&session_id).await?;
-
-            // 从客户端订阅列表中移除该会话
-            {
-                let mut clients = clients.write().await;
-                if let Some(client) = clients.get_mut(&addr) {
-                    client.subscribed_sessions.retain(|s| s != &session_id);
-                }
-            }
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::StopSession { session_id },
-                },
-            }))
-        }
-
-        ControlAction::RemoveSession { session_id } => {
-            session_manager.remove_session(&session_id).await?;
-
-            // 从客户端订阅列表中移除该会话
-            {
-                let mut clients = clients.write().await;
-                if let Some(client) = clients.get_mut(&addr) {
-                    client.subscribed_sessions.retain(|s| s != &session_id);
-                }
-            }
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::RemoveSession { session_id },
-                },
-            }))
-        }
-
-        ControlAction::ResizeSession { session_id, cols, rows } => {
-            session_manager.resize_session(&session_id, cols, rows).await?;
-            Ok(None)
-        }
-
-        ControlAction::ListQuickActions => {
-            let db = db.lock().await;
-            let actions = db.get_quick_actions()?;
-            drop(db);
-
-            let summaries = actions
-                .into_iter()
-                .map(|a| super::message::QuickActionSummary {
-                    id: a.id,
-                    name: a.name,
-                    content: a.content,
-                    icon: a.icon,
-                    color: a.color,
-                })
-                .collect();
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: None,
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::QuickActionList { actions: summaries },
-                },
-            }))
-        }
-
-        ControlAction::JoinSession { session_id } => {
-            // 检查会话是否存在
-            let sessions = session_manager.list_sessions().await;
-            if !sessions.iter().any(|s| s.id == session_id) {
-                return Ok(Some(Message::error_with_id(&request_message_id, "SESSION_NOT_FOUND", &format!("Session not found: {}", session_id))));
-            }
-
-            // 更新客户端订阅列表
-            {
-                let mut clients = clients.write().await;
-                if let Some(client) = clients.get_mut(&addr) {
-                    if !client.subscribed_sessions.contains(&session_id) {
-                        client.subscribed_sessions.push(session_id.clone());
-                        tracing::info!("Client {} joined session {}", addr, session_id);
-                    }
-                }
-            }
-
-            // 返回成功响应
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::JoinSession { session_id },
-                },
-            }))
-        }
-
-        ControlAction::LeaveSession { session_id } => {
-            // 从客户端订阅列表中移除
-            {
-                let mut clients = clients.write().await;
-                if let Some(client) = clients.get_mut(&addr) {
-                    client.subscribed_sessions.retain(|s| s != &session_id);
-                    tracing::info!("Client {} left session {}", addr, session_id);
-                }
-            }
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::LeaveSession { session_id },
-                },
-            }))
-        }
-
-        // === Plugin 会话相关 ===
-        ControlAction::RegisterPluginSession {
-            project_name,
-            project_path,
-            jsonl_path,
-        } => {
-            use uuid::Uuid;
-
-            let session_id = Uuid::new_v4().to_string();
-
-            plugin_manager
-                .register_session(
-                    session_id.clone(),
-                    project_name,
-                    project_path,
-                    jsonl_path,
-                )
-                .await?;
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: super::message::ControlPayload {
-                    action: ControlAction::RegisteredPluginSession { session_id },
-                },
-            }))
-        }
-
-        ControlAction::UnregisterPluginSession { session_id } => {
-            plugin_manager.unregister_session(&session_id).await?;
-            Ok(None)
-        }
-
-        ControlAction::PluginHeartbeat { session_id } => {
-            plugin_manager.handle_heartbeat(&session_id).await?;
-            Ok(None)
-        }
-
-        _ => Ok(None),
-    }
-}
-
-impl Default for AuthPayload {
-    fn default() -> Self {
-        Self {
-            stage: AuthStage::RequestPairing,
-            device_id: None,
-            device_name: None,
-            device_fingerprint: None,
-            pairing_code: None,
-            session_token: None,
-            error: None,
-            qr_token: None,
-        }
-    }
 }

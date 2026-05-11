@@ -1,31 +1,55 @@
 <template>
-  <nav class="bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-4 py-2 mobile-nav">
+  <nav class="bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-4 py-2 mobile-nav pb-safe">
     <div class="flex justify-around">
-      <router-link
+      <button
         v-for="item in navItems"
         :key="item.path"
-        :to="item.path"
         class="flex flex-col items-center gap-1 px-4 py-2 rounded-lg transition-colors"
         :class="[
-          $route.path === item.path
+          currentPage === item.pageIndex
             ? 'text-primary-400'
             : 'text-gray-500 dark:text-dark-400 hover:text-gray-700 dark:text-dark-200'
         ]"
+        @click="navigateTo(item)"
       >
         <component :is="item.icon" class="w-6 h-6" />
         <span class="text-xs">{{ item.label }}</span>
-      </router-link>
+      </button>
     </div>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { h } from 'vue'
+import { h, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+const route = useRoute()
+const router = useRouter()
+
+// 路由名称到页面索引的映射
+const pageRouteNames: Record<string, number> = {
+  'mobile-devices': 0,
+  'mobile-sessions': 1,
+  'mobile-quick-actions': 2,
+  'mobile-settings': 3,
+  'mobile-home': 0 // 默认首页
+}
+
+// 当前页面索引
+const currentPage = computed(() => {
+  const name = route.name as string
+  if (pageRouteNames[name] !== undefined) {
+    return pageRouteNames[name]
+  }
+  return 0
+})
 
 const navItems = [
   {
-    path: '/mobile/devices',
+    path: '/mobile',
+    pageIndex: 0,
     label: '连接',
+    isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', {
@@ -38,8 +62,10 @@ const navItems = [
     }
   },
   {
-    path: '/mobile/sessions',
+    path: '/mobile',
+    pageIndex: 1,
     label: '会话',
+    isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', {
@@ -52,8 +78,10 @@ const navItems = [
     }
   },
   {
-    path: '/mobile/quick-actions',
+    path: '/mobile',
+    pageIndex: 2,
     label: '快捷',
+    isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', {
@@ -66,8 +94,10 @@ const navItems = [
     }
   },
   {
-    path: '/mobile/settings',
+    path: '/mobile',
+    pageIndex: 3,
     label: '设置',
+    isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', {
@@ -86,4 +116,14 @@ const navItems = [
     }
   }
 ]
+
+// 导航处理
+function navigateTo(item: typeof navItems[0]) {
+  if (item.isSwipe) {
+    // 跳转到滑动容器主页，并带上页面索引参数
+    router.push({ name: 'mobile-home', query: { page: item.pageIndex.toString() } })
+  } else {
+    router.push(item.path)
+  }
+}
 </script>

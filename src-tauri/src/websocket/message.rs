@@ -6,6 +6,23 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// 配对码生成事件 payload
+#[derive(Debug, Clone, Serialize)]
+pub struct PairingCodeGeneratedEvent {
+    pub code: String,
+    pub expires_in: u64,
+    pub device_name: Option<String>,
+}
+
+/// 设备连接/断开事件（发给前端）
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceConnectionEvent {
+    pub addr: String,
+    pub device_id: String,
+    pub device_name: Option<String>,
+    pub event: String, // "connected", "disconnected", "authenticated"
+}
+
 /// WebSocket 消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -68,6 +85,38 @@ pub enum Message {
     #[serde(rename = "heartbeat")]
     Heartbeat {
         timestamp: i64,
+    },
+
+    /// 服务端关闭通知 (服务端 → 客户端)
+    /// 桌面端退出时通知所有移动端连接已断开
+    #[serde(rename = "server_closed")]
+    ServerClosed {
+        /// 关闭原因
+        reason: String,
+        /// 是否会重连（目前桌面端退出后不会重连）
+        will_reconnect: bool,
+    },
+
+    /// 客户端断开通知 (服务端 → 客户端)
+    /// 移动端断开连接时通知其他客户端
+    #[serde(rename = "client_disconnected")]
+    ClientDisconnected {
+        /// 断开的设备名称
+        device_name: String,
+        /// 断开原因
+        reason: String,
+    },
+
+    /// 客户端会话变更通知 (服务端 → 客户端)
+    /// 移动端创建/停止会话时通知所有客户端
+    #[serde(rename = "session_event")]
+    SessionEvent {
+        /// 事件类型: created, stopped, removed
+        event_type: String,
+        /// 会话信息
+        session: SessionSummary,
+        /// 触发设备名称
+        device_name: String,
     },
 }
 
@@ -138,6 +187,31 @@ impl Message {
         }
     }
 
+    /// 创建服务端关闭消息
+    pub fn server_closed(reason: &str, will_reconnect: bool) -> Self {
+        Message::ServerClosed {
+            reason: reason.to_string(),
+            will_reconnect,
+        }
+    }
+
+    /// 创建客户端断开通知
+    pub fn client_disconnected(device_name: &str, reason: &str) -> Self {
+        Message::ClientDisconnected {
+            device_name: device_name.to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    /// 创建会话事件通知
+    pub fn session_event(event_type: &str, session: SessionSummary, device_name: &str) -> Self {
+        Message::SessionEvent {
+            event_type: event_type.to_string(),
+            session,
+            device_name: device_name.to_string(),
+        }
+    }
+
     /// 获取消息ID
     pub fn message_id(&self) -> Option<&str> {
         match self {
@@ -147,6 +221,9 @@ impl Message {
             Message::Control { message_id, .. } => Some(message_id),
             Message::Error { message_id, .. } => message_id.as_deref(),
             Message::Heartbeat { .. } => None,
+            Message::ServerClosed { .. } => None,
+            Message::ClientDisconnected { .. } => None,
+            Message::SessionEvent { .. } => None,
         }
     }
 

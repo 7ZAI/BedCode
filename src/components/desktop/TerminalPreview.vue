@@ -197,10 +197,29 @@ function initTerminal() {
   })
 
   // 监听窗口大小变化
+  let lastCols = 0
+  let lastRows = 0
   const resizeObserver = new ResizeObserver(() => {
     if (fitAddon && terminal) {
       fitAddon.fit()
-      syncTerminalSize()
+      const newCols = terminal.cols
+      const newRows = terminal.rows
+
+      // 检查终端尺寸是否发生显著变化（列宽变化超过 10% 或行高变化超过 5 行）
+      // 这种情况下需要刷新终端内容，因为已输出的文本是按旧尺寸换行的
+      const colsChanged = Math.abs(newCols - lastCols) > lastCols * 0.1
+      const rowsChanged = Math.abs(newRows - lastRows) > 5
+
+      if ((colsChanged || rowsChanged) && lastCols > 0 && lastRows > 0) {
+        // 尺寸发生显著变化，重新同步 PTY 大小并刷新终端内容
+        syncTerminalSize()
+        refreshTerminal()
+      } else {
+        syncTerminalSize()
+      }
+
+      lastCols = newCols
+      lastRows = newRows
     }
   })
   resizeObserver.observe(terminalContainerRef.value)
@@ -227,6 +246,36 @@ function syncTerminalSize() {
 function writeToTerminal(data: string) {
   if (!terminal) return
   terminal.write(data)
+}
+
+/** 刷新终端显示 - 当窗口尺寸发生显著变化时调用
+ *
+ * 原因：已输出的内容是按照旧的终端宽度换行的
+ * 当窗口变宽/变窄时，这些换行符位置不变，导致显示错乱
+ * 解决方案：
+ * 1. 清空终端显示
+ * 2. 发送清屏 + 光标归位序列，触发应用程序重新绘制
+ * 3. 重新写入输出缓冲区的内容（作为后备）
+ */
+function refreshTerminal() {
+  if (!terminal || !props.session) return
+
+  // 清空终端显示
+  terminal.clear()
+
+  // 发送终端刷新序列：
+  // - \x1b[2J: 清屏（保持光标位置）
+  // - \x1b[H: 光标归位到左上角
+  // 这会触发大多数终端应用程序重新绘制当前屏幕
+  terminal.write('\x1b[2J\x1b[H')
+
+  // 重新写入输出缓冲区的内容
+  for (const data of output.value) {
+    terminal.write(data)
+  }
+
+  // 滚动到底部
+  scrollToBottom()
 }
 
 /** 滚动到底部 */

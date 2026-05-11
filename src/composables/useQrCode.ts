@@ -31,11 +31,11 @@ export function useQrCode() {
     }
   }
 
-  async function generateQr() {
+  async function generateQr(host?: string) {
     isLoading.value = true
     try {
       const token = await api.generateQrCode()
-      const info = await api.getQrConnectionInfo()
+      const info = await api.getQrConnectionInfo(host)
       if (info) {
         // 先获取 TTL，再同步设置 qrData 和倒计时
         // 避免 await 导致的中间状态：qrData 已更新但倒计时未启动，

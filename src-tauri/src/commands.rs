@@ -336,15 +336,19 @@ pub async fn clear_qr_code(
 pub async fn get_qr_connection_info(
     qr_manager: tauri::State<'_, Arc<crate::auth::QrTokenManager>>,
     app_handle: tauri::AppHandle,
+    // 指定 host，若为空则自动选择
+    host: Option<String>,
 ) -> Result<Option<QrConnectionInfo>> {
     let active = qr_manager.get_active().await;
     match active {
         None => Ok(None),
         Some((token, _ttl, _remaining)) => {
-            let host = crate::commands::get_local_ip_addresses()
-                .into_iter()
-                .find(|ip| !ip.starts_with("127.") && !ip.starts_with("169.254."))
-                .unwrap_or_else(|| "127.0.0.1".to_string());
+            // 若未指定 host，则自动选择第一个非回环/链路本地的 IP
+            let host = host.or_else(|| {
+                crate::commands::get_local_ip_addresses()
+                    .into_iter()
+                    .find(|ip| !ip.starts_with("127.") && !ip.starts_with("169.254."))
+            }).unwrap_or_else(|| "127.0.0.1".to_string());
 
             let config = AppConfig::load(
                 &app_handle.path().app_data_dir()

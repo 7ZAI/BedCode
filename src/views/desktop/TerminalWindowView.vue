@@ -18,7 +18,7 @@
           </svg>
         </button>
         <button @click="closeWindow" class="p-1.5 hover:bg-red-600 rounded transition-colors" title="关闭">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 text-gray- dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -50,6 +50,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TerminalPreview from '@/components/desktop/TerminalPreview.vue'
 import type { SessionInfo } from '@/composables/useTauri'
 
+const appWindow = getCurrentWindow()
+
 const SNAP_THRESHOLD = 15  // 贴靠阈值（像素）
 
 const route = useRoute()
@@ -60,7 +62,6 @@ const isMaximized = ref(false)
 const isLoading = ref(true)
 const isSnapped = ref(false)  // 是否已贴靠
 const snapDirection = ref<'left' | 'right' | null>(null)  // 贴靠方向
-const isClosing = ref(false)  // 防止重复关闭
 
 // 记录主窗口上一次的位置
 let lastMainWindowPos = { x: 0, y: 0, width: 0, height: 0 }
@@ -92,7 +93,7 @@ async function loadSessionInfo() {
  * 初始化窗口位置和贴靠检测
  */
 async function initWindowPosition() {
-  const win = getCurrentWindow()
+  const win = appWindow
 
   // 获取本窗口当前位置
   const pos = await win.outerPosition()
@@ -138,7 +139,7 @@ async function handleMainWindowMoved(event: { payload: { x: number; y: number; w
   }
 
   // 已贴靠：跟随主窗口移动
-  const win = getCurrentWindow()
+  const win = appWindow
   const terminalPos = await win.outerPosition()
   const terminalSize = await win.outerSize()
 
@@ -170,7 +171,7 @@ async function handleMainWindowResized(event: { payload: { width: number; height
   if (!isSnapped.value) return
 
   const mainSize = event.payload
-  const win = getCurrentWindow()
+  const win = appWindow
   const terminalPos = await win.outerPosition()
   const terminalSize = await win.outerSize()
 
@@ -191,7 +192,7 @@ async function handleMainWindowResized(event: { payload: { width: number; height
  * 检测并执行贴靠
  */
 async function checkAndSnap(mainPos: { x: number; y: number; width: number; height: number }) {
-  const win = getCurrentWindow()
+  const win = appWindow
   const terminalPos = await win.outerPosition()
   const terminalSize = await win.outerSize()
 
@@ -220,12 +221,12 @@ async function checkAndSnap(mainPos: { x: number; y: number; width: number; heig
 }
 
 async function minimizeWindow() {
-  const win = getCurrentWindow()
+  const win = appWindow
   await win.minimize()
 }
 
 async function toggleMaximize() {
-  const win = getCurrentWindow()
+  const win = appWindow
   const maximized = await win.isMaximized()
   if (maximized) {
     await win.unmaximize()
@@ -237,15 +238,10 @@ async function toggleMaximize() {
 }
 
 async function closeWindow() {
-  if (isClosing.value) return
-  isClosing.value = true
-
   try {
-    const win = getCurrentWindow()
-    await win.close()
+    await appWindow.close()
   } catch (e) {
     console.error('[TerminalWindowView] Close error:', e)
-    isClosing.value = false
   }
 }
 

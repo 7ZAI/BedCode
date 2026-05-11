@@ -1,39 +1,47 @@
 <template>
   <div
-    class="input-bar bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 p-3"
-    :class="{ 'pb-safe': isKeyboardOpen }"
+    class="input-bar bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-2 pt-2"
+    :class="{ 'fixed left-0 right-0 z-50': isKeyboardOpen, 'landscape-mode': isLandscapeMode }"
     :style="containerStyle"
   >
-    <!-- Main input row -->
-    <div class="flex items-center gap-2">
-      <!-- Input field -->
-      <div class="flex-1 relative">
-        <input
-          ref="inputRef"
-          v-model="inputText"
-          type="text"
-          :placeholder="placeholder"
-          :disabled="disabled"
-          class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-xl px-4 py-2.5 pr-10 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 disabled:opacity-50"
-          @keyup.enter="submitText"
-          @focus="handleFocus"
-          @blur="handleBlur"
-        />
-        <!-- Send button -->
-        <button
-          v-if="inputText"
-          class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-primary-400"
-          @click="submitText"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- Special keys toggle -->
+    <!-- Special keys panel - 默认显示 -->
+    <div v-if="showSpecialKeys && !isKeyboardOpen && !isLandscapeMode" class="mb-2 grid grid-cols-8 gap-1.5">
       <button
-        class="p-2.5 rounded-xl"
+        v-for="key in specialKeys"
+        :key="key.code"
+        class="bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-xs py-2 rounded-lg active:bg-gray-200 dark:bg-dark-600"
+        @click="sendSpecialKey(key.code)"
+      >
+        {{ key.label }}
+      </button>
+    </div>
+
+    <!-- 键盘展开时或横屏时显示的快捷键行 -->
+    <div v-if="isKeyboardOpen || isLandscapeMode" class="mb-1.5 flex flex-wrap gap-1">
+      <button
+        v-for="key in specialKeys"
+        :key="key.code"
+        class="bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-xs py-1 px-1.5 rounded active:bg-gray-200"
+        @click="sendSpecialKey(key.code)"
+      >
+        {{ key.label }}
+      </button>
+    </div>
+
+    <!-- Main input row -->
+    <div class="flex items-center gap-2 pb-1">
+      <!-- 输入按钮 -->
+      <button
+        class="flex-1 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-600 dark:text-dark-300 text-left"
+        @click="showInputModal = true"
+      >
+        点击输入命令...
+      </button>
+
+      <!-- Special keys toggle - 键盘收起且非横屏时显示 -->
+      <button
+        v-if="!isKeyboardOpen && !isLandscapeMode"
+        class="p-2 rounded-xl"
         :class="showSpecialKeys ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-400'"
         @click="toggleSpecialKeys"
       >
@@ -43,22 +51,8 @@
       </button>
     </div>
 
-    <!-- Special keys panel -->
-    <Transition name="slide">
-      <div v-if="showSpecialKeys" class="mt-3 grid grid-cols-4 gap-2">
-        <button
-          v-for="key in specialKeys"
-          :key="key.code"
-          class="bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-sm py-2 rounded-lg active:bg-gray-200 dark:bg-dark-600"
-          @click="sendSpecialKey(key.code)"
-        >
-          {{ key.label }}
-        </button>
-      </div>
-    </Transition>
-
     <!-- Connection status -->
-    <div v-if="showStatus" class="flex items-center justify-center gap-2 mt-2">
+    <div v-if="showStatus" class="flex items-center justify-center gap-2 mt-1">
       <div
         :class="[
           'w-2 h-2 rounded-full',
@@ -69,11 +63,55 @@
         {{ isConnected ? '已连接' : '未连接' }}
       </span>
     </div>
+
+    <!-- 输入弹窗 -->
+    <Teleport to="body">
+      <div
+        v-if="showInputModal"
+        class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+        @click.self="showInputModal = false"
+      >
+        <!-- 弹窗背景 -->
+        <div class="absolute inset-0 bg-black/50" @click="showInputModal = false"></div>
+
+        <!-- 弹窗内容 -->
+        <div class="relative bg-white dark:bg-dark-800 rounded-xl w-full max-w-md p-4 shadow-xl">
+          <div class="text-sm font-medium text-gray-700 dark:text-dark-200 mb-3">
+            输入命令
+          </div>
+
+          <input
+            ref="modalInputRef"
+            v-model="inputText"
+            type="text"
+            class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-dark-100 placeholder-dark-400 focus:outline-none focus:border-primary-500"
+            placeholder="输入命令..."
+            @keyup.enter="submitText"
+          />
+
+          <div class="flex justify-end gap-2 mt-4">
+            <button
+              class="px-4 py-2 text-sm text-gray-600 dark:text-dark-300"
+              @click="showInputModal = false"
+            >
+              取消
+            </button>
+            <button
+              class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg"
+              :disabled="!inputText.trim()"
+              @click="submitText"
+            >
+              发送
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 
 const props = defineProps<{
   disabled?: boolean
@@ -81,6 +119,7 @@ const props = defineProps<{
   isConnected?: boolean
   showStatus?: boolean
   keyboardHeight?: number
+  isLandscape?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -92,24 +131,39 @@ const emit = defineEmits<{
 
 const inputText = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
-const showSpecialKeys = ref(false)
+const modalInputRef = ref<HTMLInputElement | null>(null)
+const showSpecialKeys = ref(true) // 默认显示
+const showInputModal = ref(false)
 const isKeyboardOpen = computed(() => (props.keyboardHeight || 0) > 0)
+const isLandscapeMode = computed(() => props.isLandscape || false)
 
-// 容器样式：键盘弹出时使用 padding-bottom 避免被遮挡，同时处理底部安全区域
+// 弹窗打开时聚焦输入框
+watch(showInputModal, async (show) => {
+  if (show) {
+    inputText.value = ''
+    await nextTick()
+    modalInputRef.value?.focus()
+  }
+})
+
+// 容器样式：键盘弹出时使用 fixed 定位 + bottom，避免被遮挡
 const containerStyle = computed(() => {
   const height = props.keyboardHeight || 0
   const safeAreaBottom = 'env(safe-area-inset-bottom, 0px)'
+
+  if (height > 0) {
+    return {
+      bottom: `calc(${safeAreaBottom} + 8px)`,
+      transition: 'bottom 200ms ease-out'
+    }
+  }
   return {
-    paddingBottom: height > 0
-      ? `calc(${safeAreaBottom} + ${height + 12}px)`
-      : `calc(${safeAreaBottom} + 12px)`,
+    paddingBottom: `calc(${safeAreaBottom} + 12px)`,
     transition: 'padding-bottom 200ms ease-out'
   }
 })
 
 function handleFocus() {
-  // 隐藏特殊键面板，腾出空间
-  showSpecialKeys.value = false
   emit('focus')
 }
 
@@ -123,18 +177,24 @@ const specialKeys = [
   { label: 'Esc', code: 'escape' },
   { label: 'Ctrl+C', code: 'ctrl_c' },
   { label: 'Ctrl+D', code: 'ctrl_d' },
+  { label: 'Ctrl+Z', code: 'ctrl_z' },
+  { label: 'Ctrl+L', code: 'ctrl_l' },
+  { label: 'Ctrl+A', code: 'ctrl_a' },
+  { label: 'Ctrl+E', code: 'ctrl_e' },
+  { label: 'Ctrl+U', code: 'ctrl_u' },
+  { label: 'Ctrl+K', code: 'ctrl_k' },
+  { label: 'Ctrl+P', code: 'ctrl_p' },
   { label: '↑', code: 'arrow_up' },
   { label: '↓', code: 'arrow_down' },
+  { label: '←', code: 'arrow_left' },
+  { label: '→', code: 'arrow_right' },
 ]
 
 function submitText() {
   if (inputText.value.trim()) {
     emit('submit', inputText.value)
     inputText.value = ''
-    // 发送后保持焦点在输入框，方便连续输入
-    setTimeout(() => {
-      inputRef.value?.focus()
-    }, 50)
+    showInputModal.value = false
   }
 }
 
@@ -147,21 +207,8 @@ function toggleSpecialKeys() {
 }
 
 function focus() {
-  inputRef.value?.focus()
+  showInputModal.value = true
 }
 
 defineExpose({ focus })
 </script>
-
-<style scoped>
-.slide-enter-active,
-.slide-leave-active {
-  transition: all 0.2s ease;
-}
-
-.slide-enter-from,
-.slide-leave-to {
-  opacity: 0;
-  transform: translateY(-10px);
-}
-</style>

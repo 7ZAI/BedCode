@@ -433,9 +433,9 @@ export function useQrCodeApi() {
     }
   }
 
-  async function getQrConnectionInfo(): Promise<QrConnectionInfo | null> {
+  async function getQrConnectionInfo(host?: string): Promise<QrConnectionInfo | null> {
     try {
-      return await invoke<QrConnectionInfo | null>('get_qr_connection_info')
+      return await invoke<QrConnectionInfo | null>('get_qr_connection_info', { host: host || null })
     } catch (e) {
       console.error('Failed to get QR connection info:', e)
       return null

@@ -5,6 +5,8 @@ import { invoke } from '@tauri-apps/api/core'
 export interface Settings {
   network: {
     port: number
+    // QR 码使用的 IP 地址（用于多网卡环境）
+    qr_host?: string
   }
   session: {
     default_environment: string

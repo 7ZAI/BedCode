@@ -167,22 +167,26 @@ async function onScanSuccess(decodedText: string) {
 
   // Step 2: 发送 QR token 认证
   connectingStep.value = '正在配对...'
+  console.log('[Scan] QR data:', qrData)
 
   try {
     const success = await connection.sendQrToken(qrData.token)
     if (!success) {
+      console.error('[Scan] QR token failed, state:', connection.state.value)
       errorMessage.value = 'QR 码已过期或已使用，请在桌面端重新生成'
       isConnecting.value = false
       return
     }
-  } catch {
-    errorMessage.value = '配对验证失败，请重试'
+  } catch (e) {
+    console.error('[Scan] QR token error:', e)
+    errorMessage.value = '配对验证失败，请重试: ' + String(e)
     isConnecting.value = false
     return
   }
 
-  // 成功
-  router.push({ name: 'mobile-terminal', params: { id: connection.currentDevice.value?.id || '0' } })
+  // 成功 - 返回连接页面，会自动加载会话配置
+  // 不自动进入终端，让用户在连接页面选择会话配置启动
+  router.push({ name: 'mobile-home', query: { page: '0' } })
 }
 
 function retry() {

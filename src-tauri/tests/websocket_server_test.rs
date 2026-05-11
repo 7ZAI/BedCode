@@ -161,6 +161,7 @@ mod message_handling_tests {
                     status: "running".to_string(),
                     created_at: "2024-01-01T00:00:00Z".to_string(),
                     started_at: None,
+                    session_type: Some("pty".to_string()),
                 }],
             },
             None,

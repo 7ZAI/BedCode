@@ -35,16 +35,22 @@ const router = createRouter({
       meta: { platform: 'desktop' },
     },
     {
+      path: '/mobile',
+      name: 'mobile-home',
+      component: () => import('@/components/mobile/MobileSwipeContainer.vue'),
+      meta: { platform: 'mobile' },
+    },
+    {
       path: '/mobile/devices',
       name: 'mobile-devices',
       component: () => import('@/views/mobile/DevicesView.vue'),
-      meta: { platform: 'mobile' },
+      meta: { platform: 'mobile', standAlone: true },
     },
     {
       path: '/mobile/sessions',
       name: 'mobile-sessions',
       component: () => import('@/views/mobile/SessionsView.vue'),
-      meta: { platform: 'mobile' },
+      meta: { platform: 'mobile', standAlone: true },
     },
     {
       path: '/mobile/terminal/:id',
@@ -56,19 +62,13 @@ const router = createRouter({
       path: '/mobile/quick-actions',
       name: 'mobile-quick-actions',
       component: () => import('@/views/mobile/QuickActionsView.vue'),
-      meta: { platform: 'mobile' },
-    },
-    {
-      path: '/mobile/history',
-      name: 'mobile-history',
-      component: () => import('@/views/mobile/HistoryView.vue'),
-      meta: { platform: 'mobile' },
+      meta: { platform: 'mobile', standAlone: true },
     },
     {
       path: '/mobile/settings',
       name: 'mobile-settings',
       component: () => import('@/views/mobile/SettingsView.vue'),
-      meta: { platform: 'mobile' },
+      meta: { platform: 'mobile', standAlone: true },
     },
     {
       path: '/mobile/scan',
@@ -99,8 +99,8 @@ router.beforeEach(async (to, from, next) => {
     const platformInfo = await initPlatform()
 
     if (platformInfo.isMobile) {
-      // 移动端跳转到设备页面
-      next({ name: 'mobile-devices', replace: true })
+      // 移动端跳转到主页面（滑动容器）
+      next({ name: 'mobile-home', replace: true })
     } else {
       // 桌面端跳转到会话页面
       next({ name: 'sessions', replace: true })

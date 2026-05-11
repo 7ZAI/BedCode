@@ -46,7 +46,7 @@
 
         <div v-if="!qr.hasQr.value" class="text-center py-4">
           <p class="text-gray- dark:text-dark-400 mb-4">扫描二维码快速连接移动设备</p>
-          <Button variant="secondary" @click="qr.generateQr()" :loading="qr.isLoading.value">
+          <Button variant="secondary" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
             <template #icon>
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
@@ -73,7 +73,7 @@
             <Button variant="ghost" size="sm" @click="qr.clearQr()">
               取消
             </Button>
-            <Button variant="ghost" size="sm" @click="qr.generateQr()" :loading="qr.isLoading.value">
+            <Button variant="ghost" size="sm" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
               刷新
             </Button>
           </div>
@@ -86,21 +86,52 @@
         <div class="space-y-3">
           <div class="flex items-center justify-between">
             <span class="text-gray- dark:text-dark-400">WebSocket 端口</span>
-            <span class="font-mono">8765</span>
+            <span class="font-mono">{{ port }}</span>
           </div>
           <div class="flex flex-col gap-2">
             <div class="flex items-center justify-between">
               <span class="text-gray- dark:text-dark-400">IPv4 地址</span>
-              <div class="flex items-center gap-2 flex-wrap justify-end">
-                <span v-for="ip in ipv4Addresses" :key="ip" class="font-mono text-sm bg-gray-100 dark:bg-dark-700 px-2 py-1 rounded">
-                  {{ ip }}
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-sm bg-gray-100 dark:bg-dark-700 px-2 py-1 rounded">
+                  {{ displayIp }}
                 </span>
-                <span v-if="ipv4Addresses.length === 0" class="text-gray- dark:text-dark-500 text-sm">无</span>
+                <button
+                  @click="showIpSelector = true"
+                  class="text-sm text-primary-400 hover:text-primary-300"
+                >
+                  选择
+                </button>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      <!-- IP Selector Modal -->
+      <Modal v-model="showIpSelector" title="选择 IP 地址">
+        <div class="space-y-2">
+          <p class="text-sm text-gray- dark:text-dark-400 mb-4">选择移动设备可访问的 IP 地址</p>
+          <div
+            v-for="ip in ipv4Addresses"
+            :key="ip"
+            @click="selectIp(ip)"
+            :class="[
+              'p-3 rounded-lg cursor-pointer border transition-colors',
+              selectedIp === ip
+                ? 'border-primary-400 bg-primary-400/10'
+                : 'border-gray-200 dark:border-dark-600 hover:border-primary-300'
+            ]"
+          >
+            <span class="font-mono">{{ ip }}</span>
+          </div>
+          <p v-if="ipv4Addresses.length === 0" class="text-gray- dark:text-dark-500 text-center py-4">
+            未找到可用的 IPv4 地址
+          </p>
+        </div>
+        <div class="mt-4 flex justify-end">
+          <Button variant="ghost" @click="showIpSelector = false">取消</Button>
+        </div>
+      </Modal>
 
       <!-- Paired Devices -->
       <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
@@ -173,6 +204,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDeviceStore } from '@/stores/device'
+import { useSettingsStore } from '@/stores/settings'
 import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo } from '@/composables/useTauri'
 import { useQrCode } from '@/composables/useQrCode'
 import { listen } from '@tauri-apps/api/event'
@@ -182,10 +214,31 @@ import { useToast } from '@/composables/useToast'
 import QRCode from 'qrcode'
 
 const deviceStore = useDeviceStore()
+const settingsStore = useSettingsStore()
 const pairing = usePairing()
 const network = useNetwork()
 const connected = useConnectedDevices()
 const toast = useToast()
+
+// 从配置获取端口
+const port = computed(() => settingsStore.settings.network.port)
+const qrHost = computed(() => settingsStore.settings.network.qr_host)
+
+// 显示的 IP（优先使用配置的 qr_host，否则显示 "未选择"）
+const displayIp = computed(() => qrHost.value || '未选择')
+
+// 选中的 IP 用于 QR 码生成（从配置初始化）
+const selectedIp = ref<string | null>(qrHost.value || null)
+
+// 选择 IP 地址并保存到配置
+async function selectIp(ip: string) {
+  selectedIp.value = ip
+  showIpSelector.value = false
+  // 保存到配置
+  await settingsStore.saveSettings({
+    network: { ...settingsStore.settings.network, qr_host: ip }
+  })
+}
 
 // Real-time connected device IDs (from WebSocket events)
 const connectedDeviceIds = ref<Set<string>>(new Set())
@@ -196,6 +249,7 @@ function isDeviceOnline(deviceId: string): boolean {
 }
 
 const isLoading = ref(false)
+const showIpSelector = ref(false)
 const pairingCode = ref<{ code: string; expiresIn: number } | null>(null)
 const remainingSeconds = ref(0)
 
@@ -241,8 +295,19 @@ let deviceConnectedListener: (() => void) | null = null
 let deviceDisconnectedListener: (() => void) | null = null
 
 onMounted(async () => {
+  await settingsStore.loadSettings()
   await deviceStore.loadPairedDevices()
   await network.loadLocalAddresses()
+
+  // 如果配置中没有 qr_host，自动选择一个合适的 IP
+  if (!settingsStore.settings.network.qr_host && ipv4Addresses.value.length > 0) {
+    selectedIp.value = ipv4Addresses.value[0]
+    await settingsStore.saveSettings({
+      network: { ...settingsStore.settings.network, qr_host: selectedIp.value }
+    })
+  } else {
+    selectedIp.value = qrHost.value || null
+  }
 
   // Load initial connected device list
   await connected.loadConnectedDevices()
@@ -253,6 +318,24 @@ onMounted(async () => {
   deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', (event) => {
     const deviceId = event.payload.device_id
     connectedDeviceIds.value = new Set([...connectedDeviceIds.value, deviceId])
+
+    // 当有设备连接成功后，自动刷新二维码（token 已被消费）
+    if (qr.hasQr.value) {
+      console.log('Device connected, refreshing QR code...')
+      qr.generateQr(selectedIp.value || undefined)
+    }
+
+    // 当有设备连接成功后，清除已使用的配对码并刷新显示
+    if (pairingCode.value) {
+      console.log('Device connected, clearing pairing code...')
+      pairing.clearCode()
+      pairingCode.value = null
+      remainingSeconds.value = 0
+      if (countdownInterval) {
+        clearInterval(countdownInterval)
+        countdownInterval = null
+      }
+    }
   })
   deviceDisconnectedListener = await listen<DeviceConnectionInfo>('device-disconnected', (event) => {
     const newSet = new Set(connectedDeviceIds.value)

@@ -40,6 +40,9 @@
         <MobileNav v-if="!isTerminalRoute" class="mobile-nav-safe" />
       </div>
     </template>
+
+    <!-- Global Toast Container -->
+    <ToastContainer />
   </div>
 </template>
 
@@ -52,11 +55,15 @@ import MobileNav from './components/mobile/MobileNav.vue'
 import { usePlatform } from './composables/usePlatform'
 import { useSettingsStore } from './stores/settings'
 import { useSafeAreaDetection } from './composables/useSafeAreaDetection'
+import { useGlobalNotifications } from './composables/useGlobalNotifications'
+import { useOrientation } from './composables/useOrientation'
+import { ToastContainer } from './composables/useToast'
 
 const route = useRoute()
 const router = useRouter()
 const { platformInfo } = usePlatform()
 const settingsStore = useSettingsStore()
+const { isLandscape, orientation } = useOrientation()
 
 // 移动端安全区域检测
 const { safeArea, isDetected: safeAreaDetected } = useSafeAreaDetection()
@@ -129,6 +136,11 @@ onMounted(async () => {
   await settingsStore.loadSettings()
   setupTheme()
   setupFontSize()
+
+  // 启动全局通知监听（桌面端）
+  if (isDesktop.value) {
+    startGlobalNotifications()
+  }
 })
 
 // 监听主题变化
@@ -152,6 +164,7 @@ onUnmounted(() => {
   if (systemThemeQuery) {
     systemThemeQuery.removeEventListener('change', systemThemeHandler)
   }
+  stopGlobalNotifications()
 })
 
 // Global keyboard shortcuts
@@ -174,6 +187,9 @@ const isTerminalWindow = computed(() => {
 
 // Use platform detection for desktop/mobile layout
 const isDesktop = computed(() => platformInfo.value.isDesktop)
+
+// 全局通知监听
+const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } = useGlobalNotifications()
 
 // 主题对应的类名
 const themeClasses = computed(() => {
@@ -212,4 +228,6 @@ const mobilePaddingStyle = computed(() => {
 // Provide to child components
 provide('isDesktop', isDesktop)
 provide('platformInfo', platformInfo)
+provide('isLandscape', isLandscape)
+provide('orientation', orientation)
 </script>

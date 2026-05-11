@@ -37,11 +37,17 @@ export interface UseRemoteConnection {
   setReconnectCallback: (callback: (() => Promise<void>) | null) => void
 }
 
+// Singleton state — shared across all useRemoteTerminal() calls so session data
+// survives Vue component navigation. When user navigates from TerminalView to
+// DevicesView, the session data remains available.
+const sessions = ref<RemoteSession[]>([])
+const sessionConfigs = ref<SessionConfigSummary[]>([])
+const currentSessionId = ref<string | null>(null)
+const isWaitingInput = ref(false)
+const isLoading = ref(false)
+const error = ref<string | null>(null)
+
 export function useRemoteTerminal(connection: UseRemoteConnection) {
-  // === 状态 ===
-  const sessions = ref<RemoteSession[]>([])
-  const sessionConfigs = ref<SessionConfigSummary[]>([])
-  const currentSessionId = ref<string | null>(null)
   // 输出缓冲区：使用数组存储，避免字符串拼接的 O(n) 性能问题
   const outputBuffer = ref('')
   // 待合并的输出块数组（用于批量写入 xterm.js）
@@ -49,13 +55,22 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   // 合并定时器
   let flushTimer: ReturnType<typeof setTimeout> | null = null
 
-  const isWaitingInput = ref(false)
-  const isLoading = ref(false)
-  const error = ref<string | null>(null)
+  // === 输出缓冲区限制（按字节计算） ===
+  const MAX_OUTPUT_BYTES = 500000   // 500KB 上限
+  const OUTPUT_TRIM_TO = 400000     // 超限后裁剪到 400KB
 
-  // === 输出缓冲区限制 ===
-  const MAX_OUTPUT_BYTES = 500000  // 500KB 上限
-  const OUTPUT_TRIM_TO = 400000    // 超限后裁剪到 400KB
+  // 计算字符串的字节长度
+  function getByteLength(str: string): number {
+    return new Blob([str]).size
+  }
+
+  // 截断字符串到指定字节长度
+  function sliceByByte(str: string, maxBytes: number): string {
+    const encoder = new TextEncoder()
+    const bytes = encoder.encode(str)
+    if (bytes.length <= maxBytes) return str
+    return new TextDecoder().decode(bytes.slice(0, maxBytes))
+  }
 
   // === 定期刷新输出缓冲区到字符串 ===
   function flushOutput() {
@@ -65,9 +80,10 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     outputBuffer.value += outputChunks.join('')
     outputChunks.length = 0  // 清空数组
 
-    // 限制缓冲区大小
-    if (outputBuffer.value.length > MAX_OUTPUT_BYTES) {
-      outputBuffer.value = outputBuffer.value.slice(-OUTPUT_TRIM_TO)
+    // 按字节限制缓冲区大小
+    const currentBytes = getByteLength(outputBuffer.value)
+    if (currentBytes > MAX_OUTPUT_BYTES) {
+      outputBuffer.value = sliceByByte(outputBuffer.value, OUTPUT_TRIM_TO)
     }
   }
 
@@ -181,6 +197,12 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
       return
     }
 
+    // 检查是否已认证
+    if (connection.state.value.status !== 'paired') {
+      error.value = 'Not authenticated'
+      return
+    }
+
     isLoading.value = true
     error.value = null
 
@@ -211,6 +233,12 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   async function loadSessionConfigs(): Promise<void> {
     if (!connection.isConnected.value) {
       error.value = 'Not connected'
+      return
+    }
+
+    // 检查是否已认证
+    if (connection.state.value.status !== 'paired') {
+      error.value = 'Not authenticated'
       return
     }
 
@@ -359,6 +387,18 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     }, currentSessionId.value)
   }
 
+  /** 直接发送键盘输入（不添加换行符，用于直接输入模式） */
+  function sendKeyboardInput(data: string): void {
+    if (!currentSessionId.value || !connection.isConnected.value) {
+      return
+    }
+
+    connection.sendMessage('input', {
+      data: data,
+      special_key: null,
+    }, currentSessionId.value)
+  }
+
   /** 发送特殊键 */
   function sendSpecialKey(key: string): void {
     if (!currentSessionId.value || !connection.isConnected.value) {
@@ -397,16 +437,26 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   /**
    * 重连后恢复会话订阅
    * 当连接断开后重连成功时自动调用
+   * 只有在认证成功（paired 状态）时才加载数据
    */
   async function reconnectAndResume(): Promise<void> {
     if (!connection.isConnected.value) {
       return
     }
 
+    // 检查是否已认证，只有已认证状态才加载数据
+    if (connection.state.value.status !== 'paired') {
+      console.log('Not authenticated, skipping session reload')
+      return
+    }
+
     console.log('Reconnecting and resuming session...')
 
-    // 重新加载会话列表
-    await loadSessions()
+    // 重新加载会话列表和配置
+    await Promise.all([
+      loadSessions(),
+      loadSessionConfigs(),
+    ])
 
     // 如果之前有订阅的会话，重新订阅
     if (currentSessionId.value) {
@@ -447,11 +497,19 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     connection.setReconnectCallback(null)
   }
 
-  // === 清理 ===
-  onUnmounted(async () => {
+  /**
+   * 离开会话并清理资源
+   * 当确定不再需要该会话时调用（如导航到其他页面）
+   */
+  async function destroy(): Promise<void> {
     disableAutoReconnect()
     await leaveSession()
-  })
+    cleanup()
+    clearOutput()
+  }
+
+  // 移除自动 onUnmounted 清理
+  // 调用者负责在适当时机调用 destroy()
 
   return {
     // 状态
@@ -472,9 +530,11 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     joinSession,
     leaveSession,
     sendInput,
+    sendKeyboardInput,
     sendSpecialKey,
     clearOutput,
     cleanup,
+    destroy,
     reconnectAndResume,
     enableAutoReconnect,
     disableAutoReconnect,

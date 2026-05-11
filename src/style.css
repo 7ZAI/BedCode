@@ -210,6 +210,16 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* 通用底部安全区域类 */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* 通用顶部安全区域类 */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 /* Scrollbar styles - 浅色模式默认 */
 ::-webkit-scrollbar {
   width: 8px;
