@@ -32,7 +32,7 @@
     </div>
 
     <!-- Quick Actions -->
-    <div class="flex-1 overflow-auto p-4">
+    <div class="flex-1 overflow-auto p-4" @touchmove.stop>
       <!-- Preset Actions Grid -->
       <div class="mb-6">
         <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">预设指令</h3>
