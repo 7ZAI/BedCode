@@ -116,6 +116,44 @@ export function useAndroidFeatures() {
   }
 
   /**
+   * 发送带会话信息的通知
+   * @param sessionName - 会话名称
+   * @param message - 通知内容
+   * @param sessionId - 会话 ID（用于点击回调）
+   */
+  async function sendSessionNotification(
+    sessionName: string,
+    message: string,
+    sessionId?: string
+  ): Promise<void> {
+    if (!isAndroid.value || !hasNotificationPermission.value) {
+      console.log('[Android] Notification permission not granted')
+      return
+    }
+
+    try {
+      const { sendNotification: send, isPermissionGranted } = await import('@tauri-apps/plugin-notification')
+
+      // 再次检查权限（应用可能在运行期间权限被收回）
+      if (!(await isPermissionGranted())) {
+        hasNotificationPermission.value = false
+        return
+      }
+
+      await send({
+        title: sessionName,
+        body: message,
+      })
+
+      console.log('[Android] Session notification sent:', sessionName, message)
+      // sessionId 预留给后续点击通知跳转对应会话的功能
+      void sessionId
+    } catch (e) {
+      console.error('[Android] Failed to send session notification:', e)
+    }
+  }
+
+  /**
    * 设置屏幕方向
    * @param orientation - 'portrait' | 'landscape' | 'unspecified'
    */
@@ -148,7 +186,8 @@ export function useAndroidFeatures() {
     isInBackground,
     hasNotificationPermission,
     requestNotificationPermission,
-    sendNotification,
+    sendNotification,           // 保留原有方法
+    sendSessionNotification,    // 新增：带会话信息的通知
     setScreenOrientation,
     keepScreenAwake,
   }
