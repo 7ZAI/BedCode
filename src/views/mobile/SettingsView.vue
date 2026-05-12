@@ -20,7 +20,7 @@
     </div>
 
     <!-- Settings List -->
-    <div class="flex-1 overflow-auto">
+    <div class="flex-1 overflow-auto" @touchmove.stop>
       <!-- Connection Settings -->
       <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
         <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">连接设置</h3>
