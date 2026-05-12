@@ -122,7 +122,9 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     if (!payload?.data) return
 
     // 检查是否已订阅（而不是是否活跃）
-    const isSubscribed = joinedSessions.value.has(message.session_id)
+    const sessionId = message.session_id
+    if (!sessionId) return
+    const isSubscribed = joinedSessions.value.has(sessionId)
     if (!isSubscribed) return  // 未订阅的会话，完全忽略
 
     // Base64 解码（使用 TextDecoder 支持 UTF-8 多字节字符）
