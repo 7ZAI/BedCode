@@ -14,6 +14,23 @@ pub mod mobile;
 // Re-export shared types
 pub use shared::{AppError, Result};
 
+// Re-export shared modules for testing
+pub use shared::auth;
+pub use shared::db;
+pub use shared::error;
+pub use shared::parser;
+pub use shared::config;
+
+// Re-export desktop modules for testing
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use desktop::session;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use desktop::pty;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use desktop::websocket;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use desktop::plugin;
+
 use shared::auth::{PairingService, QrTokenManager};
 use shared::config::AppConfig;
 use shared::db::Database;

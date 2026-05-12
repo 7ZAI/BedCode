@@ -53,11 +53,11 @@ mod qr_token_tests {
         let result1 = manager.verify(&token1).await;
         assert!(result1.is_ok());
 
-        // Generate new token, old token should still work
+        // Generate new token, old token should be invalid (replaced)
         let _token2 = manager.generate(300).await;
         let result2 = manager.verify(&token1).await;
-        // Old token should still be valid (no expiry for test)
-        assert!(result2.is_ok());
+        // Old token should fail because it was replaced and marked as used
+        assert!(result2.is_err());
     }
 
     #[tokio::test]
@@ -129,11 +129,11 @@ mod pairing_service_tests {
         let code1 = service.generate_code().await;
         let code1_str = code1.code.clone();
 
-        // Request another code (should reuse since not expired)
+        // Request another code (should generate NEW code, not reuse)
         let code2 = service.generate_code().await;
 
-        // Should be the same code
-        assert_eq!(code1_str, code2.code);
+        // Should be different codes (not reused)
+        assert_ne!(code1_str, code2.code);
     }
 
     #[tokio::test]
