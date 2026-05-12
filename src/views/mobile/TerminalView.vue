@@ -57,6 +57,12 @@
       @focus="onInputFocus"
       @blur="onInputBlur"
     />
+    <!-- Input Assistant 悬浮球 -->
+    <InputAssistant
+      :terminal-ref="terminalRef"
+      :terminal-instance="terminal"
+      :is-connected="isConnectedValue"
+    />
   </div>
 </template>
 
@@ -68,6 +74,7 @@ import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
 import { useKeyboardAvoidance } from '@/composables/useKeyboardAvoidance'
 import MobileTerminal from '@/components/mobile/MobileTerminal.vue'
 import InputBar from '@/components/mobile/InputBar.vue'
+import InputAssistant from '@/components/mobile/InputAssistant.vue'
 
 const router = useRouter()
 const route = useRoute()
