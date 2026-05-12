@@ -1,6 +1,8 @@
 import { ref, watch, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useBackgroundMonitor } from './useBackgroundMonitor'
+import { useAndroidFeatures } from './useAndroidFeatures'
 
 export interface RemoteSession {
   id: string
@@ -151,6 +153,9 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
 
     // 检测等待输入状态
     isWaitingInput.value = payload.is_waiting || detectWaitingInput(stripAnsi(data))
+
+    // 检测重要输出并发送通知（仅在后台时）
+    checkAndNotify(sessionId, data, isWaitingInput.value)
   }
 
   // 移除 ANSI 转义序列（用于检测等待输入状态）
@@ -162,6 +167,44 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     // 单独 ESC 字符
     const escRegex = /\x1b/g
     return text.replace(csiRegex, '').replace(oscRegex, '').replace(escRegex, '')
+  }
+
+  // 检测重要输出并发送通知
+  function checkAndNotify(sessionId: string, data: string, isWaiting: boolean) {
+    const settingsStore = useSettingsStore()
+
+    // 检查是否启用后台通知
+    if (settingsStore.settings.ui.notify_in_background !== true) return
+
+    const { isInBackground } = useBackgroundMonitor()
+    if (!isInBackground.value) return  // 只有在后台才发送通知
+
+    const { sendSessionNotification } = useAndroidFeatures()
+    const sessionName = getSessionName(sessionId)
+
+    // 检测重要输出类型
+    if (isWaiting) {
+      sendSessionNotification(sessionName, '等待交互', sessionId)
+      return
+    }
+
+    // 检测错误输出
+    if (/\b(error|Error|failed|Failed|✗|Failed to)\b/i.test(data)) {
+      sendSessionNotification(sessionName, '命令执行出错', sessionId)
+      return
+    }
+
+    // 检测交互式提示
+    if (/\[\s*[YynN]\s*\]|\?\s*$|select.*:|^[0-9]+\)/i.test(data)) {
+      sendSessionNotification(sessionName, '等待交互', sessionId)
+      return
+    }
+  }
+
+  // 获取会话名称
+  function getSessionName(sessionId: string): string {
+    const session = sessions.value.find(s => s.id === sessionId)
+    return session?.name || '终端会话'
   }
 
   function handleControlMessage(message: { type: string; payload?: any }) {
