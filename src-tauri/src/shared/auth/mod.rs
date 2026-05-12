@@ -12,7 +12,11 @@
 mod pairing;
 pub mod qr_token;
 mod storage;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod storage_desktop;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
 mod storage_mobile;
 
 pub use pairing::*;

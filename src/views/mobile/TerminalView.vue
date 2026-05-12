@@ -91,7 +91,7 @@ const terminal = useRemoteTerminal({
   addDisconnectCallback: () => {},
 })
 
-const terminalRef = ref<InstanceType<typeof MobileTerminal> | null>(null)
+const terminalRef = ref<any>(null)
 
 // 会话名称 - 显示当前活跃会话的名称，如果没有则显示设备名称
 const sessionName = computed(() => {

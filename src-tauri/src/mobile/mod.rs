@@ -4,5 +4,5 @@
 
 pub mod commands;
 
-// Mobile uses shared error types
-pub use shared::error::{AppError, Result};
+// Mobile uses crate-level re-exports
+pub use crate::shared::error::{AppError, Result};

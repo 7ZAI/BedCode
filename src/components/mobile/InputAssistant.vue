@@ -165,8 +165,8 @@ interface TerminalInstance {
 }
 
 const props = defineProps<{
-  terminalRef: { value?: { clear: () => void } } | null
-  terminalInstance: TerminalInstance | null
+  terminalRef: any
+  terminalInstance: any
   isConnected: boolean
 }>()
 
@@ -361,9 +361,10 @@ function submitText() {
 
 function executeText() {
   if (inputText.value.trim() && props.terminalInstance) {
-    props.terminalInstance.sendInput(inputText.value)
+    const terminal = props.terminalInstance
+    terminal.sendInput(inputText.value)
     setTimeout(() => {
-      props.terminalInstance.sendSpecialKey('enter')
+      terminal.sendSpecialKey('enter')
     }, 50)
     inputText.value = ''
     showInputModal.value = false
