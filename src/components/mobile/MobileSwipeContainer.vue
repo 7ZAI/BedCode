@@ -2,6 +2,9 @@
   <div
     ref="containerRef"
     class="swipe-container"
+    @touchstart="handleTouchStart"
+    @touchmove="handleTouchMove"
+    @touchend="handleTouchEnd"
   >
     <!-- 连接页面 -->
     <div class="swipe-page">
@@ -97,65 +100,65 @@ onUnmounted(() => {
   // Cleanup if needed
 })
 
-// 触摸滑动相关变量 - 已禁用滑动切换功能
-// let startX = 0
-// let startY = 0
-// let isDragging = false
-// const threshold = 50
+// 触摸滑动相关变量
+let startX = 0
+let startY = 0
+let isDragging = false
+const threshold = 50
 
-// function handleTouchStart(e: TouchEvent) {
-//   startX = e.touches[0].clientX
-//   startY = e.touches[0].clientY
-//   isDragging = true
-// }
+function handleTouchStart(e: TouchEvent) {
+  startX = e.touches[0].clientX
+  startY = e.touches[0].clientY
+  isDragging = true
+}
 
-// function handleTouchMove(e: TouchEvent) {
-//   if (!isDragging) return
+function handleTouchMove(e: TouchEvent) {
+  if (!isDragging) return
 
-//   const deltaX = e.touches[0].clientX - startX
-//   const deltaY = e.touches[0].clientY - startY
+  const deltaX = e.touches[0].clientX - startX
+  const deltaY = e.touches[0].clientY - startY
 
-//   // 忽略垂直滑动
-//   if (Math.abs(deltaY) > Math.abs(deltaX)) return
+  // 忽略垂直滑动（垂直距离大于水平距离）
+  if (Math.abs(deltaY) > Math.abs(deltaX)) return
 
-//   // 阻止默认滚动行为
-//   if (containerRef.value) {
-//     containerRef.value.style.overflow = 'hidden'
-//   }
-// }
+  // 阻止默认滚动行为
+  if (containerRef.value) {
+    containerRef.value.style.overflow = 'hidden'
+  }
+}
 
-// function handleTouchEnd(e: TouchEvent) {
-//   if (!isDragging) return
+function handleTouchEnd(e: TouchEvent) {
+  if (!isDragging) return
 
-//   const endX = e.changedTouches[0].clientX
-//   const deltaX = endX - startX
+  const endX = e.changedTouches[0].clientX
+  const deltaX = endX - startX
 
-//   // 根据滑动方向和距离决定是否切换页面
-//   if (Math.abs(deltaX) > threshold) {
-//     if (deltaX < 0) {
-//       // 向左滑 -> 下一页
-//       if (currentPage.value < 3) {
-//         currentPage.value++
-//         scrollToPage(currentPage.value)
-//         syncRoute(currentPage.value)
-//       }
-//     } else {
-//       // 向右滑 -> 上一页
-//       if (currentPage.value > 0) {
-//         currentPage.value--
-//         scrollToPage(currentPage.value)
-//         syncRoute(currentPage.value)
-//       }
-//     }
-//   }
+  // 根据滑动方向和距离决定是否切换页面
+  if (Math.abs(deltaX) > threshold) {
+    if (deltaX < 0) {
+      // 向左滑 -> 下一页
+      if (currentPage.value < 3) {
+        currentPage.value++
+        scrollToPage(currentPage.value)
+        syncRoute(currentPage.value)
+      }
+    } else {
+      // 向右滑 -> 上一页
+      if (currentPage.value > 0) {
+        currentPage.value--
+        scrollToPage(currentPage.value)
+        syncRoute(currentPage.value)
+      }
+    }
+  }
 
-//   isDragging = false
+  isDragging = false
 
-//   // 恢复滚动
-//   if (containerRef.value) {
-//     containerRef.value.style.overflow = ''
-//   }
-// }
+  // 恢复滚动
+  if (containerRef.value) {
+    containerRef.value.style.overflow = ''
+  }
+}
 
 function scrollToPage(page: number, smooth = true) {
   if (!containerRef.value) return
@@ -165,6 +168,12 @@ function scrollToPage(page: number, smooth = true) {
     left: page * containerWidth,
     behavior: smooth ? 'smooth' : 'auto'
   })
+}
+
+// 同步路由
+function syncRoute(page: number) {
+  const routeNames = ['mobile-devices', 'mobile-sessions', 'mobile-quick-actions', 'mobile-settings']
+  router.replace({ name: routeNames[page] })
 }
 </script>
 
