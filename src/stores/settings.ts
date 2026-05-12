@@ -22,6 +22,8 @@ export interface Settings {
     show_preview: boolean
     // 移动端终端页面缓存最大数量
     max_cached_terminals?: number
+    // 是否在后台时发送通知
+    notify_in_background?: boolean
   }
 }
 
@@ -42,6 +44,7 @@ const defaultSettings: Settings = {
     terminal_font_family: 'Consolas',
     show_preview: true,
     max_cached_terminals: 10,
+    notify_in_background: true,
   },
 }
 
