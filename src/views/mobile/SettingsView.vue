@@ -79,6 +79,11 @@
             <span>振动反馈</span>
             <Toggle v-model="settings.vibrate" />
           </div>
+
+          <div class="flex items-center justify-between">
+            <span>后台通知</span>
+            <Toggle v-model="settings.notifyInBackground" />
+          </div>
         </div>
       </div>
 
@@ -188,6 +193,7 @@ interface MobileSettings {
   defaultPort: number
   notifyOnWaiting: boolean
   notifyOnConnection: boolean
+  notifyInBackground: boolean
   vibrate: boolean
   darkMode: boolean
   fontSize: 'small' | 'medium' | 'large'
@@ -201,6 +207,7 @@ const defaultMobileSettings: MobileSettings = {
   defaultPort: 8765,
   notifyOnWaiting: true,
   notifyOnConnection: true,
+  notifyInBackground: true,
   vibrate: true,
   darkMode: true,
   fontSize: 'medium',
