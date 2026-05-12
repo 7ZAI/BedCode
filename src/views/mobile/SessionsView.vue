@@ -62,7 +62,7 @@
     </div>
 
     <!-- Connected: Session List -->
-    <div v-else class="flex-1 overflow-auto p-4">
+    <div v-else class="flex-1 overflow-auto p-4" @touchmove.stop>
       <!-- Connection info bar -->
       <div class="flex items-center gap-2 mb-4">
         <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
