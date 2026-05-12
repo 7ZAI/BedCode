@@ -203,15 +203,15 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
-  // 离开会话，停止接收输出
-  await terminal.leaveSession()
+  // 只设置活跃会话为 null，不断开订阅（后台继续接收数据）
+  terminal.setActiveSession(null)
   // 清除活跃会话 ID 标记
   connection.activeSessionId.value = null
 })
 
 function goBack() {
-  // 离开会话，停止接收输出
-  terminal.leaveSession()
+  // 只设置活跃会话为 null，不断开订阅（后台继续接收数据）
+  terminal.setActiveSession(null)
   router.push('/mobile/sessions')
 }
 

@@ -47,6 +47,11 @@ const isWaitingInput = ref(false)
 const isLoading = ref(false)
 const error = ref<string | null>(null)
 
+// 已加入的会话订阅（用于后台接收数据）
+const joinedSessions = ref<Set<string>>(new Set())
+// 当前活跃显示的会话（用于控制台输出显示）
+const activeSessionId = ref<string | null>(null)
+
 export function useRemoteTerminal(connection: UseRemoteConnection) {
   // 输出缓冲区：使用数组存储，避免字符串拼接的 O(n) 性能问题
   const outputBuffer = ref('')
@@ -113,28 +118,35 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   // === 消息处理 ===
 
   function handleOutputMessage(message: { type: string; payload?: any; session_id?: string }) {
-    if (message.session_id !== currentSessionId.value) return
-
     const payload = message.payload
     if (!payload?.data) return
 
+    // 检查是否已订阅（而不是是否活跃）
+    const isSubscribed = joinedSessions.value.has(message.session_id)
+    if (!isSubscribed) return  // 未订阅的会话，完全忽略
+
     // Base64 解码（使用 TextDecoder 支持 UTF-8 多字节字符）
+    let data: string
     try {
       const binary = atob(payload.data)
       const bytes = new Uint8Array(binary.length)
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i)
       }
-      const data = new TextDecoder('utf-8').decode(bytes)
-
-      // 使用优化的输出方法（批量合并）
-      addOutput(data)
-
-      // 检测等待输入状态
-      isWaitingInput.value = payload.is_waiting || detectWaitingInput(stripAnsi(data))
+      data = new TextDecoder('utf-8').decode(bytes)
     } catch (e) {
       console.error('Failed to decode output:', e)
+      return
     }
+
+    // 关键改动���数据始终写入缓冲区（无论是否活跃）
+    addOutput(data)
+
+    // 只在活跃会话时才写入终端显示并更新等待输入状态
+    if (message.session_id !== activeSessionId.value) return
+
+    // 检测等待输入状态
+    isWaitingInput.value = payload.is_waiting || detectWaitingInput(stripAnsi(data))
   }
 
   // 移除 ANSI 转义序列（用于检测等待输入状态）
@@ -339,22 +351,25 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
       throw new Error('Not connected')
     }
 
-    // 先离开当前会话
-    if (currentSessionId.value) {
-      await leaveSession()
+    // 检查是否已订阅，避免重复订阅
+    if (!joinedSessions.value.has(sessionId)) {
+      try {
+        await connection.sendMessageWithResponse('control', {
+          action: { type: 'join_session', session_id: sessionId },
+        }, sessionId)
+        // 订阅成功，添加到已订阅集合
+        joinedSessions.value.add(sessionId)
+      } catch (e) {
+        console.error('Failed to join session:', e)
+        // 即使失败也尝试添加，因为后端可能不支持 join_session
+        joinedSessions.value.add(sessionId)
+      }
     }
 
+    // 设置为当前活跃会话（控制输出显示）
     currentSessionId.value = sessionId
+    activeSessionId.value = sessionId
     clearOutput()
-
-    try {
-      await connection.sendMessageWithResponse('control', {
-        action: { type: 'join_session', session_id: sessionId },
-      }, sessionId)
-    } catch (e) {
-      console.error('Failed to join session:', e)
-      // 即使失败也保持会话ID，因为可能只是服务器不支持
-    }
   }
 
   /** 离开会话 */
@@ -508,6 +523,39 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     clearOutput()
   }
 
+  /** 设置当前活跃会话（切换显示的终端内容） */
+  function setActiveSession(sessionId: string | null): void {
+    activeSessionId.value = sessionId
+    currentSessionId.value = sessionId
+    // 切换活跃会话时清空显示缓冲区，避免新旧数据混合
+    clearOutput()
+  }
+
+  /** 离开会话（取消订阅） */
+  async function unsubscribeSession(sessionId: string): Promise<void> {
+    if (!connection.isConnected.value) {
+      return
+    }
+
+    // 从已订阅集合中移除
+    joinedSessions.value.delete(sessionId)
+
+    // 如��是当前活跃会话，清除活跃状态
+    if (activeSessionId.value === sessionId) {
+      activeSessionId.value = null
+      currentSessionId.value = null
+      clearOutput()
+    }
+
+    try {
+      await connection.sendMessageWithResponse('control', {
+        action: { type: 'leave_session', session_id: sessionId },
+      }, sessionId)
+    } catch (e) {
+      console.error('Failed to unsubscribe session:', e)
+    }
+  }
+
   // 移除自动 onUnmounted 清理
   // 调用者负责在适当时机调用 destroy()
 
@@ -516,6 +564,8 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     sessions,
     sessionConfigs,
     currentSessionId,
+    activeSessionId,
+    joinedSessions,
     outputBuffer,
     isWaitingInput,
     isLoading,
@@ -538,5 +588,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     reconnectAndResume,
     enableAutoReconnect,
     disableAutoReconnect,
+    setActiveSession,
+    unsubscribeSession,
   }
 }
