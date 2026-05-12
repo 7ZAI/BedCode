@@ -20,6 +20,8 @@ export interface Settings {
     terminal_font_size: number
     terminal_font_family: string
     show_preview: boolean
+    // 移动端终端页面缓存最大数量
+    max_cached_terminals?: number
   }
 }
 
@@ -39,6 +41,7 @@ const defaultSettings: Settings = {
     terminal_font_size: 14,
     terminal_font_family: 'Consolas',
     show_preview: true,
+    max_cached_terminals: 10,
   },
 }
 
@@ -68,9 +71,15 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  // 获��终端缓存最大数量
+  function getMaxCachedTerminals(): number {
+    return settings.value.ui.max_cached_terminals || 10
+  }
+
   return {
     settings,
     loadSettings,
     saveSettings,
+    getMaxCachedTerminals,
   }
 })

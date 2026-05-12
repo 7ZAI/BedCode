@@ -2,10 +2,10 @@
 //!
 //! 处理设备配对和认证逻辑
 
-use crate::auth::PairingService;
-use crate::auth::QrTokenManager;
-use crate::db::Database;
-use crate::websocket::message::{AuthPayload, AuthStage, Message, PairingCodeGeneratedEvent, DeviceConnectionEvent};
+use crate::shared::auth::PairingService;
+use crate::shared::auth::QrTokenManager;
+use crate::shared::db::Database;
+use crate::desktop::websocket::message::{AuthPayload, AuthStage, Message, PairingCodeGeneratedEvent, DeviceConnectionEvent};
 use crate::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,7 +23,7 @@ pub async fn handle_auth(
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::websocket::server::ClientInfo>>>,
+    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::websocket::server::ClientInfo>>>,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
     tracing::info!("handle_auth called with stage: {:?}", payload.stage);
@@ -295,13 +295,26 @@ pub async fn handle_auth(
                 }
                 Err(e) => {
                     tracing::warn!("QR token verification failed from {}: {}", addr, e);
+                    // 根据错误类型返回更友好的错误信息
+                    let error_msg = e.to_string();
+                    let user_message = if error_msg.contains("expired") {
+                        "二维码已过期，请重新生成".to_string()
+                    } else if error_msg.contains("already used") {
+                        "二维码已绑定其他设备，请重新扫描".to_string()
+                    } else if error_msg.contains("No active QR token") {
+                        "请先在桌面端生成二维码".to_string()
+                    } else if error_msg.contains("Invalid QR token") {
+                        "无效的二维码，请重新扫描".to_string()
+                    } else {
+                        error_msg
+                    };
                     let response = Message::Auth {
                         message_id: request_message_id,
                         session_id: None,
                         timestamp: chrono::Utc::now().timestamp_millis(),
                         payload: AuthPayload {
                             stage: AuthStage::QrFailed,
-                            error: Some(e.to_string()),
+                            error: Some(user_message),
                             device_id: None,
                             device_fingerprint: None,
                             session_token: None,

@@ -75,7 +75,7 @@ export function useRemoteConnection() {
 
   // === WebSocket 依赖 (singleton) ===
   const {
-    isConnected,
+    isConnected: isWsConnected,
     lastMessage,
     connectionError,
     connect: wsConnect,
@@ -83,16 +83,46 @@ export function useRemoteConnection() {
     sendMessage,
     sendMessageWithResponse,
     setOnReconnect,
+    setOnDisconnect,
   } = useWebSocket()
 
   // === 计算属性 ===
-  const isReady = computed(() => state.value.status === 'paired' && isConnected.value)
+  // isConnected: 统一的连接状态（已配对 + WebSocket 连接）
+  const isConnected = computed(() => state.value.status === 'paired' && isWsConnected.value)
+  // 兼容旧代码：isWsConnected 表示 WebSocket 层连接状态
+  const isSocketConnected = isWsConnected
 
   // === 方法 ===
 
   function setReconnectCallback(callback: ReconnectCallback | null) {
     setOnReconnect(callback)
   }
+
+  // 外部注册的断开回调列表（用于清除终端状态等）
+  const disconnectCallbacks: Array<() => void> = []
+
+  /** 注册断开连接时的回调 */
+  function addDisconnectCallback(callback: () => void) {
+    disconnectCallbacks.push(callback)
+  }
+
+  /** 断开连接时清除所有会话相关状态 */
+  function clearSessionState() {
+    activeSessionId.value = null
+    // 触发所有注册的断开回调
+    disconnectCallbacks.forEach(cb => cb())
+    disconnectCallbacks.length = 0  // 清空回调列表
+    console.log('Session state cleared on disconnect')
+  }
+
+  // 监听 WebSocket 断开，自动清除会话状态
+  // 注意：只在真正断开时清除状态，保留 paired 状态以便重连后自动认证
+  // 重连成功后会通过 onReconnectCallback 重新加载数据
+  setOnDisconnect(async () => {
+    // 清除会话相关状态，但保持连接状态为 paired（等待重连）
+    // 这样重连成功后可以通过 onReconnectCallback 恢复
+    clearSessionState()
+  })
 
   /** 连接到设备 */
   async function connect(device: RemoteDevice): Promise<void> {
@@ -112,7 +142,7 @@ export function useRemoteConnection() {
         }, 10000)
 
         const unwatch = setInterval(() => {
-          if (isConnected.value) {
+          if (isWsConnected.value) {
             clearTimeout(timeout)
             clearInterval(unwatch)
             resolve()
@@ -338,6 +368,10 @@ export function useRemoteConnection() {
     wsDisconnect()
     state.value = { status: 'disconnected' }
     currentDevice.value = null
+    // 清除重连回调，防止断开后触发重连逻辑
+    setOnReconnect(null)
+    // 清除断开回调
+    setOnDisconnect(null)
   }
 
   /** 获取默认端口 */
@@ -420,9 +454,9 @@ export function useRemoteConnection() {
     state,
     pairedDevices,
     currentDevice,
-    isConnected,
+    isConnected,         // 统一的连接状态：已配对 + WebSocket 连接
+    isSocketConnected,   // WebSocket 层连接状态
     lastMessage,
-    isReady,
     authCredentials,
     activeSessionId,
 
@@ -440,5 +474,6 @@ export function useRemoteConnection() {
     sendMessageWithResponse,
     sendInput,
     setReconnectCallback,
+    addDisconnectCallback,
   }
 }

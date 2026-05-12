@@ -1,14 +1,12 @@
 //! Error types for Claude Code Remote
+//!
+//! 共享错误类型 - 桌面端和移动端都可用
 
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[error("PTY error: {0}")]
-    Pty(String),
-
     #[error("Session error: {0}")]
     Session(String),
 
@@ -36,10 +34,6 @@ pub enum AppError {
     #[error("Notification error: {0}")]
     Notification(String),
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[error("Keyring error: {0}")]
-    Keyring(String),
-
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -48,6 +42,14 @@ pub enum AppError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[error("PTY error: {0}")]
+    Pty(String),
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[error("Keyring error: {0}")]
+    Keyring(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -59,21 +61,6 @@ impl Serialize for AppError {
         S: Serializer,
     {
         serializer.serialize_str(&self.to_string())
-    }
-}
-
-// Implement From for other error types
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-impl From<tokio_tungstenite::tungstenite::Error> for AppError {
-    fn from(e: tokio_tungstenite::tungstenite::Error) -> Self {
-        AppError::WebSocket(e.to_string())
-    }
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-impl From<keyring::Error> for AppError {
-    fn from(e: keyring::Error) -> Self {
-        AppError::Keyring(e.to_string())
     }
 }
 

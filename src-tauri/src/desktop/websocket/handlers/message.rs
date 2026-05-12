@@ -2,12 +2,12 @@
 //!
 //! WebSocket 消息路由入口
 
-use crate::auth::PairingService;
-use crate::auth::QrTokenManager;
-use crate::db::Database;
-use crate::plugin::PluginManager;
-use crate::session::{SessionManager, SessionType};
-use crate::websocket::message::{ControlAction, Message};
+use crate::shared::auth::PairingService;
+use crate::shared::auth::QrTokenManager;
+use crate::shared::db::Database;
+use crate::desktop::plugin::PluginManager;
+use crate::desktop::session::{SessionManager, SessionType};
+use crate::desktop::websocket::message::{ControlAction, Message};
 use crate::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -25,7 +25,7 @@ pub async fn handle_message(
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::websocket::server::ClientInfo>>>,
+    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::websocket::server::ClientInfo>>>,
     client_senders: &Arc<RwLock<HashMap<SocketAddr, tokio::sync::mpsc::UnboundedSender<tokio_tungstenite::tungstenite::protocol::Message>>>>,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
@@ -113,7 +113,7 @@ pub async fn handle_message(
                         if let Ok(Some(Message::Control { session_id: Some(session_id), .. })) = &result {
                             let session = session_manager.get_session(&session_id).await;
                             session.map(|s| {
-                                let summary = crate::websocket::message::SessionSummary {
+                                let summary = crate::desktop::websocket::message::SessionSummary {
                                     id: s.id.clone(),
                                     name: s.name.clone(),
                                     status: format!("{:?}", s.status),
@@ -121,12 +121,12 @@ pub async fn handle_message(
                                     started_at: s.started_at.map(|t| t.to_rfc3339()),
                                     session_type: Some("pty".to_string()),
                                 };
-                                crate::websocket::message::Message::session_event("created", summary, device_name.as_deref().unwrap_or("Mobile"))
+                                crate::desktop::websocket::message::Message::session_event("created", summary, device_name.as_deref().unwrap_or("Mobile"))
                             })
                         } else { None }
                     },
                     ControlAction::StopSession { session_id, .. } => {
-                        let summary = crate::websocket::message::SessionSummary {
+                        let summary = crate::desktop::websocket::message::SessionSummary {
                             id: session_id.clone(),
                             name: session_id.clone(),
                             status: "Stopped".to_string(),
@@ -134,7 +134,7 @@ pub async fn handle_message(
                             started_at: None,
                             session_type: Some("pty".to_string()),
                         };
-                        Some(crate::websocket::message::Message::session_event("stopped", summary, device_name.as_deref().unwrap_or("Mobile")))
+                        Some(crate::desktop::websocket::message::Message::session_event("stopped", summary, device_name.as_deref().unwrap_or("Mobile")))
                     },
                     _ => None,
                 };
@@ -144,8 +144,8 @@ pub async fn handle_message(
                     // Emit Tauri event for desktop frontend
                     if let Some(ref handle) = app_handle {
                         let event_name = match &msg {
-                            crate::websocket::message::Message::ClientDisconnected { .. } => "device-disconnected",
-                            crate::websocket::message::Message::SessionEvent { event_type, .. } => {
+                            crate::desktop::websocket::message::Message::ClientDisconnected { .. } => "device-disconnected",
+                            crate::desktop::websocket::message::Message::SessionEvent { event_type, .. } => {
                                 match event_type.as_str() {
                                     "created" => "session-created-from-mobile",
                                     "stopped" => "session-stopped-from-mobile",

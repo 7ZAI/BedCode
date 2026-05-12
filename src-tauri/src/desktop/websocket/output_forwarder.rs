@@ -2,8 +2,8 @@
 //!
 //! 负责将 PTY 输出转发给订阅了相应会话的客户端
 
-use crate::pty::PtyOutputEvent;
-use crate::session::SessionManager;
+use crate::desktop::pty::PtyOutputEvent;
+use crate::desktop::session::SessionManager;
 use crate::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -74,7 +74,7 @@ impl OutputForwarder {
             &event.data,
         ).unwrap_or_default();
 
-        let is_waiting = crate::parser::detect_waiting_input(
+        let is_waiting = crate::shared::parser::detect_waiting_input(
             &String::from_utf8_lossy(&decoded_data)
         );
 

@@ -34,6 +34,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null
 
 let onReconnectCallback: ReconnectCallback | null = null
+let onDisconnectCallback: ReconnectCallback | null = null
 let connectionParams: { address: string; port: number; secure: boolean } | null = null
 
 const pendingRequests = new Map<string, {
@@ -153,6 +154,12 @@ export function useWebSocket() {
         // 停止心跳
         stopHeartbeat()
 
+        // 触发断开连接回调
+        if (onDisconnectCallback) {
+          onDisconnectCallback()
+          onDisconnectCallback = null  // 回调只执行一次
+        }
+
         // 非主动关闭时自动重连，使用 connectionParams
         if (event.code !== 1000 && reconnectAttempts.value < maxReconnectAttempts && connectionParams) {
           scheduleReconnect()
@@ -161,7 +168,13 @@ export function useWebSocket() {
           const wsUrl = connectionParams
             ? `${connectionParams.secure ? 'wss' : 'ws'}://${connectionParams.address}:${connectionParams.port}`
             : 'unknown'
-          connectionError.value = `连接失败，已达到最大重试次数。请检查：\n1. 桌面端是否已启动\n2. 设备是否在同一网络下\n3. 防火墙是否阻止了连接`
+          const errorMsg = `连接失败，已达到最大重试次数。请检查：\n1. 桌面端是否已启动\n2. 设备是否在同一网络下\n3. 防火墙是否阻止了连接`
+          connectionError.value = errorMsg
+
+          // 触发重连失败事件，让 UI 可以显示错误
+          window.dispatchEvent(new CustomEvent('reconnect-failed', {
+            detail: { reason: errorMsg }
+          }))
         }
       }
 
@@ -181,6 +194,10 @@ export function useWebSocket() {
 
   function setOnReconnect(callback: ReconnectCallback | null) {
     onReconnectCallback = callback
+  }
+
+  function setOnDisconnect(callback: ReconnectCallback | null) {
+    onDisconnectCallback = callback
   }
 
   function startHeartbeat() {
@@ -379,5 +396,6 @@ export function useWebSocket() {
     sendSpecialKey,
     resize,
     setOnReconnect,
+    setOnDisconnect,
   }
 }

@@ -33,7 +33,11 @@
       >
         <!-- Main Content -->
         <main class="flex-1 overflow-hidden">
-          <router-view />
+          <router-view v-slot="{ Component, route }">
+            <keep-alive :include="cachedMobileRoutes" :max="maxCachedTerminals">
+              <component :is="Component" :key="route.fullPath" />
+            </keep-alive>
+          </router-view>
         </main>
 
         <!-- Bottom Navigation (hide on terminal view) -->
@@ -187,6 +191,11 @@ const isTerminalWindow = computed(() => {
 
 // Use platform detection for desktop/mobile layout
 const isDesktop = computed(() => platformInfo.value.isDesktop)
+
+// 需要 KeepAlive 缓存的移动端组件名称
+const cachedMobileRoutes = ['MobileTerminal']
+// 动态获取缓存最大数量
+const maxCachedTerminals = computed(() => settingsStore.settings.ui.max_cached_terminals || 10)
 
 // 全局通知监听
 const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } = useGlobalNotifications()

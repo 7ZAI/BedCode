@@ -5,8 +5,31 @@ export interface ShortcutStats {
   [key: string]: number
 }
 
+export interface InputAssistantSettings {
+  size: number
+  gestures: {
+    doubleTap: boolean
+    swipeDown: boolean
+    swipeUp: boolean
+    swipeLeft: boolean
+    swipeRight: boolean
+  }
+}
+
+const DEFAULT_SETTINGS: InputAssistantSettings = {
+  size: 48,
+  gestures: {
+    doubleTap: true,
+    swipeDown: true,
+    swipeUp: true,
+    swipeLeft: true,
+    swipeRight: true,
+  }
+}
+
 const STORAGE_KEY_STATS = 'terminal_shortcut_stats'
 const STORAGE_KEY_POSITION = 'input_assistant_position'
+const STORAGE_KEY_SETTINGS = 'input_assistant_settings'
 
 export const useInputAssistantStore = defineStore('inputAssistant', () => {
   // 悬浮球位置
@@ -17,6 +40,9 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
 
   // 快捷键使用频次
   const shortcutStats = ref<ShortcutStats>({})
+
+  // 设置配置
+  const settings = ref<InputAssistantSettings>({ ...DEFAULT_SETTINGS })
 
   // 从 localStorage 加载数据
   function loadFromStorage() {
@@ -31,6 +57,12 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
       const savedStats = localStorage.getItem(STORAGE_KEY_STATS)
       if (savedStats) {
         shortcutStats.value = JSON.parse(savedStats)
+      }
+
+      // 加载设置
+      const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS)
+      if (savedSettings) {
+        settings.value = { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) }
       }
     } catch (e) {
       console.error('Failed to load input assistant storage:', e)
@@ -48,6 +80,18 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
     const current = shortcutStats.value[key] || 0
     shortcutStats.value[key] = current + 1
     localStorage.setItem(STORAGE_KEY_STATS, JSON.stringify(shortcutStats.value))
+  }
+
+  // 保存设置
+  function saveSettings(newSettings: Partial<InputAssistantSettings>) {
+    settings.value = { ...settings.value, ...newSettings }
+    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings.value))
+  }
+
+  // 重置设置
+  function resetSettings() {
+    settings.value = { ...DEFAULT_SETTINGS }
+    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings.value))
   }
 
   // 获取高频快捷键（top 3）
@@ -76,10 +120,13 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
     isExpanded,
     shortcutStats,
     topShortcuts,
+    settings,
     savePosition,
     recordShortcut,
     toggleExpanded,
     collapse,
     loadFromStorage,
+    saveSettings,
+    resetSettings,
   }
 })

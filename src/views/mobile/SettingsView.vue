@@ -20,7 +20,7 @@
     </div>
 
     <!-- Settings List -->
-    <div class="flex-1 overflow-auto" @touchmove.stop>
+    <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->
       <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
         <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">连接设置</h3>
@@ -103,6 +103,17 @@
               <option value="large">大</option>
             </select>
           </div>
+
+          <div class="flex items-center justify-between">
+            <span>终端缓存数量</span>
+            <input
+              v-model.number="settings.maxCachedTerminals"
+              type="number"
+              min="1"
+              max="50"
+              class="w-16 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
+            />
+          </div>
         </div>
       </div>
 
@@ -166,8 +177,8 @@ import { invoke } from '@tauri-apps/api/core'
 const connection = useRemoteConnection()
 const settingsStore = useSettingsStore()
 
-// 需要同时检查 WebSocket 连接和配对状态
-const isConnected = computed(() => connection.state.value.status === 'paired' && connection.isConnected.value)
+// 使用统一的连接状态
+const isConnected = connection.isConnected
 
 // 移动端本地设置（用于 UI 控制）
 interface MobileSettings {
@@ -180,6 +191,7 @@ interface MobileSettings {
   vibrate: boolean
   darkMode: boolean
   fontSize: 'small' | 'medium' | 'large'
+  maxCachedTerminals: number
 }
 
 const defaultMobileSettings: MobileSettings = {
@@ -191,7 +203,8 @@ const defaultMobileSettings: MobileSettings = {
   notifyOnConnection: true,
   vibrate: true,
   darkMode: true,
-  fontSize: 'medium'
+  fontSize: 'medium',
+  maxCachedTerminals: 10,
 }
 
 const settings = ref<MobileSettings>({ ...defaultMobileSettings })

@@ -176,8 +176,10 @@ function initTerminal() {
     theme: getTheme(),
     cursorBlink: true,
     cursorStyle: 'block',
-    scrollback: 10000,
+    scrollback: 50000,
     allowProposedApi: true,
+    // 确保光标样式正确
+    cursorWidth: 1,
   })
 
   fitAddon = new FitAddon()
@@ -428,5 +430,25 @@ async function sendSpecialKey(key: string) {
 
 :deep(.xterm-viewport) {
   border-radius: 0;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+}
+
+/* 确保滚动条始终可见 */
+:deep(.xterm-viewport)::-webkit-scrollbar {
+  width: 10px;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-thumb {
+  background: #666;
+  border-radius: 5px;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
+  background: #888;
 }
 </style>

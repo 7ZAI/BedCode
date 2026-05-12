@@ -57,7 +57,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-auto p-4" @touchmove.stop>
+    <div class="flex-1 overflow-auto p-4">
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
@@ -82,13 +82,25 @@
         </div>
 
         <!-- Loading -->
-        <div v-if="isLoadingConfigs" class="text-center py-12">
-          <div class="w-8 h-8 border-2 border-primary-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p class="text-gray- dark:text-dark-500 text-sm">加载配置中...</p>
+        <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-2">
+          <div v-for="i in 3" :key="i" class="bg-white dark:bg-dark-800 rounded-xl p-4 animate-pulse">
+            <div class="flex items-start justify-between">
+              <div class="flex-1">
+                <div class="h-5 w-32 bg-gray-200 dark:bg-dark-700 rounded mb-2"></div>
+                <div class="flex items-center gap-2">
+                  <div class="h-5 w-16 bg-gray-200 dark:bg-dark-700 rounded-full"></div>
+                  <div class="h-4 w-20 bg-gray-200 dark:bg-dark-700 rounded"></div>
+                </div>
+                <div class="h-4 w-48 bg-gray-200 dark:bg-dark-700 rounded mt-2"></div>
+                <div class="h-3 w-36 bg-gray-200 dark:bg-dark-700 rounded mt-1"></div>
+              </div>
+              <div class="h-8 w-16 bg-gray-200 dark:bg-dark-700 rounded-lg"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Empty -->
-        <div v-else-if="sessionConfigs.length === 0" class="text-center py-12">
+        <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="text-center py-12">
           <svg class="w-16 h-16 mx-auto text-gray- dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
@@ -101,42 +113,91 @@
           <div
             v-for="config in sessionConfigs"
             :key="config.id"
-            class="bg-white dark:bg-dark-800 rounded-xl p-4 active:bg-gray-100 dark:bg-dark-700 transition-colors"
+            class="bg-white dark:bg-dark-800 rounded-xl active:bg-gray-100 dark:bg-dark-700 transition-colors overflow-hidden"
           >
-            <div class="flex items-start justify-between">
-              <div class="flex-1 min-w-0" @click="goToSessions">
-                <p class="font-medium">{{ config.name }}</p>
-                <div class="flex items-center gap-2 mt-1.5">
-                  <span
-                    :class="[
-                      'text-xs px-2 py-0.5 rounded-full',
-                      config.environment === 'wsl2' ? 'bg-purple-900/50 text-purple-400' : 'bg-blue-900/50 text-blue-400'
-                    ]"
-                  >
-                    {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
-                  </span>
-                  <span v-if="config.wsl_distro" class="text-gray- dark:text-dark-500 text-xs">{{ config.wsl_distro }}</span>
+            <!-- 主卡片 -->
+            <div class="p-4">
+              <div class="flex items-start justify-between">
+                <div class="flex-1 min-w-0" @click="goToSessions">
+                  <p class="font-medium">{{ config.name }}</p>
+                  <div class="flex items-center gap-2 mt-1.5">
+                    <span
+                      :class="[
+                        'text-xs px-2 py-0.5 rounded-full',
+                        config.environment === 'wsl2' ? 'bg-purple-900/50 text-purple-400' : 'bg-blue-900/50 text-blue-400'
+                      ]"
+                    >
+                      {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
+                    </span>
+                    <span v-if="config.wsl_distro" class="text-gray- dark:text-dark-500 text-xs">{{ config.wsl_distro }}</span>
+                  </div>
+                  <p class="text-gray- dark:text-dark-400 text-sm mt-1 truncate">{{ config.command }}</p>
+                  <p class="text-gray- dark:text-dark-500 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
                 </div>
-                <p class="text-gray- dark:text-dark-400 text-sm mt-1 truncate">{{ config.command }}</p>
-                <p class="text-gray- dark:text-dark-500 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
+                <button
+                  class="ml-3 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg active:bg-primary-700 flex items-center gap-1.5 shrink-0"
+                  :class="{ 'opacity-50': startingConfigId === config.id }"
+                  :disabled="startingConfigId === config.id"
+                  @click.stop="handleStartSession(config)"
+                >
+                  <div
+                    v-if="startingConfigId === config.id"
+                    class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+                  />
+                  <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  启动
+                </button>
               </div>
-              <button
-                class="ml-3 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg active:bg-primary-700 flex items-center gap-1.5 shrink-0"
-                :class="{ 'opacity-50': startingConfigId === config.id }"
-                :disabled="startingConfigId === config.id"
-                @click.stop="handleStartSession(config)"
+
+              <!-- 展开按钮和运行中的会话数量 -->
+              <div
+                v-if="getRunningSessionsByConfig(config.id).length > 0"
+                class="mt-3 pt-3 border-t border-gray-100 dark:border-dark-600 flex items-center justify-between cursor-pointer"
+                @click.stop="toggleConfigExpanded(config.id)"
               >
-                <div
-                  v-if="startingConfigId === config.id"
-                  class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
-                />
-                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <div class="flex items-center gap-2">
+                  <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                  <span class="text-green-400 text-sm">{{ getRunningSessionsByConfig(config.id).length }} 个运行中</span>
+                </div>
+                <svg
+                  class="w-5 h-5 text-gray- dark:text-dark-400 transition-transform duration-200"
+                  :class="{ 'rotate-180': expandedConfigId === config.id }"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                 </svg>
-                启动
-              </button>
+              </div>
             </div>
+
+            <!-- 折叠的运行中会话列表 -->
+            <transition name="slide">
+              <div v-if="expandedConfigId === config.id" class="border-t border-gray-100 dark:border-dark-600">
+                <div
+                  v-for="session in getRunningSessionsByConfig(config.id)"
+                  :key="session.id"
+                  class="px-4 py-3 flex items-center justify-between active:bg-gray-50 dark:active:bg-dark-600"
+                  @click="handleSessionClick(session)"
+                >
+                  <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-2 h-2 rounded-full bg-green-500 shrink-0"></div>
+                    <span class="text-sm truncate">{{ session.name }}</span>
+                  </div>
+                  <button
+                    class="shrink-0 p-1.5 text-gray- dark:text-dark-400 hover:text-red-400"
+                    @click.stop="handleStopSession(session)"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </transition>
           </div>
         </div>
       </div>
@@ -242,7 +303,7 @@ import { useRouter } from 'vue-router'
 import { useRemoteConnection, type RemoteDevice } from '@/composables/useRemoteConnection'
 import BottomSheet from '@/components/mobile/BottomSheet.vue'
 import PairingInput from '@/components/mobile/PairingInput.vue'
-import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
+import { useRemoteTerminal, type RemoteSession } from '@/composables/useRemoteTerminal'
 
 const router = useRouter()
 const connection = useRemoteConnection()
@@ -254,7 +315,35 @@ const terminal = useRemoteTerminal({
   sendMessage: connection.sendMessage,
   sendMessageWithResponse: connection.sendMessageWithResponse,
   setReconnectCallback: connection.setReconnectCallback,
+  addDisconnectCallback: connection.addDisconnectCallback,
 })
+
+// 运行中的会话列表
+const activeSessions = computed(() => terminal.sessions.value)
+
+// 根据配置ID获取运行中的会话
+function getRunningSessionsByConfig(configId: string) {
+  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waiting_input')
+}
+
+// 展开/折叠配置
+function toggleConfigExpanded(configId: string) {
+  expandedConfigId.value = expandedConfigId.value === configId ? null : configId
+}
+
+// 点击会话跳转到终端
+function handleSessionClick(session: RemoteSession) {
+  connection.activeSessionId.value = session.id
+  router.push({
+    name: 'mobile-terminal',
+    params: { deviceId: connection.currentDevice.value?.id },
+  })
+}
+
+// 停止会话
+async function handleStopSession(session: RemoteSession) {
+  await terminal.stopSession(session.id)
+}
 
 const showManualConnect = ref(false)
 const showPairing = ref(false)
@@ -274,8 +363,12 @@ interface SessionConfigSummary {
 }
 const sessionConfigs = ref<SessionConfigSummary[]>([])
 const isLoadingConfigs = ref(false)
+const hasLoadedConfigs = ref(false) // 标记是否已经加载过数据（防止闪烁）
 const isRefreshing = ref(false)
 const startingConfigId = ref<string | null>(null)
+
+// 展开的会话配置ID（用于显示运行中的会话）
+const expandedConfigId = ref<string | null>(null)
 
 // Connection history (stored in localStorage)
 interface ConnectionHistoryItem {
@@ -291,7 +384,8 @@ const pendingDevice = ref<RemoteDevice | null>(null)
 // Connection status for UI display
 const connectionStatus = ref<'idle' | 'connecting' | 'connected' | 'pairing' | 'error'>('idle')
 
-const isConnected = computed(() => connection.state.value.status === 'paired' && connection.isConnected.value)
+// 使用统一的连接状态
+const isConnected = connection.isConnected
 
 const connectionStatusText = computed(() => {
   switch (connectionStatus.value) {
@@ -366,9 +460,11 @@ async function loadSessionConfigs() {
         working_dir: c.working_dir,
         command: c.command,
       }))
+      hasLoadedConfigs.value = true  // 标记已加载过数据
     }
   } catch (e) {
     console.error('Failed to load session configs:', e)
+    hasLoadedConfigs.value = true  // 即使失败也标记已尝试加载
   } finally {
     isLoadingConfigs.value = false
   }
@@ -410,6 +506,18 @@ onMounted(async () => {
 
   // 启用自动重连恢复，确保断开后重连能恢复会话配置
   terminal.enableAutoReconnect()
+
+  // 注册断开连接回调，清除会话状态
+  connection.addDisconnectCallback(() => {
+    terminal.clearAllSessionState()
+    hasLoadedConfigs.value = false  // 重置标记，重新连接后显示加载状态
+  })
+
+  // 监听重连失败事件，显示错误提示
+  window.addEventListener('reconnect-failed', ((e: CustomEvent) => {
+    connectionStatus.value = 'error'
+    connectionError.value = e.detail.reason
+  }) as EventListener)
 
   // If already connected, load session configs and active sessions
   if (isConnected.value) {
@@ -540,3 +648,21 @@ function goToSessions() {
   router.push({ name: 'mobile-sessions' })
 }
 </script>
+
+<style scoped>
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.2s ease;
+}
+
+.slide-enter-from,
+.slide-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+
+.slide-enter-to,
+.slide-leave-from {
+  max-height: 200px;
+}
+</style>

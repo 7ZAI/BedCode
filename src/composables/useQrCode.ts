@@ -68,5 +68,6 @@ export function useQrCode() {
     hasQr,
     generateQr,
     clearQr,
+    api,
   }
 }

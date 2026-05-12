@@ -135,11 +135,22 @@ async function onScanSuccess(decodedText: string) {
   let qrData: QrConnectData
   try {
     qrData = JSON.parse(decodedText)
-    if (!qrData.host || !qrData.port || !qrData.token) {
-      throw new Error('Invalid QR data')
-    }
   } catch {
-    errorMessage.value = '无效的二维码，请重新扫描 BedCode 桌面端二维码'
+    errorMessage.value = '无效的二维码格式，请重新扫描 BedCode 桌面端二维码'
+    return
+  }
+
+  // 验证必要字段
+  if (!qrData.host) {
+    errorMessage.value = '二维码缺少主机信息，请重新扫描'
+    return
+  }
+  if (!qrData.port) {
+    errorMessage.value = '二维码缺少端口信息，请重新扫描'
+    return
+  }
+  if (!qrData.token) {
+    errorMessage.value = '二维码缺少认证信息，请重新扫描'
     return
   }
 
@@ -186,6 +197,24 @@ async function onScanSuccess(decodedText: string) {
 
   // 成功 - 返回连接页面，会自动加载会话配置
   // 不自动进入终端，让用户在连接页面选择会话配置启动
+  // 保存连接历史
+  const address = `${qrData.host}:${qrData.port}`
+  const stored = localStorage.getItem('connection_history')
+  let history: Array<{ address: string; name: string; time: number }> = []
+  if (stored) {
+    try {
+      history = JSON.parse(stored)
+    } catch {
+      history = []
+    }
+  }
+  history = history.filter(item => item.address !== address)
+  history.unshift({ address, name: 'Desktop', time: Date.now() })
+  if (history.length > 10) {
+    history = history.slice(0, 10)
+  }
+  localStorage.setItem('connection_history', JSON.stringify(history))
+
   router.push({ name: 'mobile-home', query: { page: '0' } })
 }
 

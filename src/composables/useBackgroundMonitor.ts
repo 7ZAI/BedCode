@@ -1,50 +1,44 @@
-import { ref, onMounted, onUnmounted } from 'vue'
-import { listen } from '@tauri-apps/api/event'
-import { usePlatform } from './usePlatform'
+import { ref, watch } from 'vue'
+import { useAndroidFeatures } from './useAndroidFeatures'
 
 /**
  * 前后台状态监听
  *
  * 监听应用进入前台/后台的状态变化
  * 用于后台运行时触发通知等场景
+ *
+ * 注意：内部委托给 useAndroidFeatures 管理 isInBackground 状态
+ * 本模块只添加 wasInBackground 功能
  */
 export function useBackgroundMonitor() {
-  const { platformInfo } = usePlatform()
-  const isInBackground = ref(false)
-  const wasInBackground = ref(false)  // 用于检测刚从后台恢复
+  const { isInBackground } = useAndroidFeatures()
 
-  let unlistenResume: (() => void) | null = null
-  let unlistenPause: (() => void) | null = null
+  // 用于检测刚从后台恢复 - 在恢复后立即设为 true，消费者处理后需清除
+  const wasInBackground = ref(false)
 
-  onMounted(async () => {
-    // 等待平台检测完成
-    const info = platformInfo.value
-    if (!info.isMobile) return
+  // 记录上一次的状态，用于检测变化
+  let previousIsInBackground = isInBackground.value
 
-    // 监听应用生命周期事件
-    try {
-      unlistenResume = await listen('app-resume', () => {
-        wasInBackground.value = isInBackground.value
-        isInBackground.value = false
-        console.log('[BackgroundMonitor] App resumed, wasInBackground:', wasInBackground.value)
-      })
-
-      unlistenPause = await listen('app-pause', () => {
-        isInBackground.value = true
-        console.log('[BackgroundMonitor] App paused')
-      })
-    } catch (e) {
-      console.error('[BackgroundMonitor] Failed to listen lifecycle events:', e)
+  // 监听 isInBackground 的变化
+  watch(isInBackground, (newValue) => {
+    // 从后台恢复到前台
+    if (!newValue && previousIsInBackground) {
+      wasInBackground.value = true
     }
+    previousIsInBackground = newValue
   })
 
-  onUnmounted(() => {
-    unlistenResume?.()
-    unlistenPause?.()
-  })
+  /**
+   * 清除 wasInBackground 标志
+   * 消费者在处理完"刚从后台恢复"的事件后应该调用此方法
+   */
+  function clearWasInBackground() {
+    wasInBackground.value = false
+  }
 
   return {
     isInBackground,
     wasInBackground,
+    clearWasInBackground,
   }
 }

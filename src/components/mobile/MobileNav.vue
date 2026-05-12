@@ -1,5 +1,5 @@
 <template>
-  <nav class="bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-4 py-2 mobile-nav pb-safe">
+  <nav class="bg-white dark:bg-dark-800 px-4 py-2 mobile-nav pb-safe">
     <div class="flex justify-around">
       <button
         v-for="item in navItems"
@@ -37,6 +37,17 @@ const pageRouteNames: Record<string, number> = {
 
 // 当前页面索引
 const currentPage = computed(() => {
+  // 优先从查询参数获取页面索引
+  const queryPage = route.query.page
+  if (queryPage) {
+    const page = parseInt(queryPage as string, 10)
+    const maxPage = navItems.length - 1
+    if (!isNaN(page) && page >= 0 && page <= maxPage) {
+      return page
+    }
+  }
+
+  // 其次从路由名称获取
   const name = route.name as string
   if (pageRouteNames[name] !== undefined) {
     return pageRouteNames[name]

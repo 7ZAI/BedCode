@@ -201,7 +201,7 @@ impl Default for PairingService {
     }
 }
 
-impl Default for crate::auth::PairingCode {
+impl Default for crate::shared::auth::PairingCode {
     fn default() -> Self {
         Self::generate()
     }

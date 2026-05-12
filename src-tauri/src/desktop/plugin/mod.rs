@@ -9,8 +9,8 @@
 
 pub mod jsonl;
 
-use crate::db::Database;
-use crate::pty::PtyOutputEvent;
+use crate::shared::db::Database;
+use crate::desktop::pty::PtyOutputEvent;
 use crate::Result;
 use base64::Engine;
 use chrono::Utc;
@@ -70,7 +70,7 @@ pub struct PluginManager {
     /// 活动会话状态（ID → 状态）
     sessions: Arc<RwLock<HashMap<String, PluginSessionState>>>,
     /// 会话信息（与 session 模块兼容）
-    session_info: Arc<RwLock<HashMap<String, crate::session::SessionInfo>>>,
+    session_info: Arc<RwLock<HashMap<String, crate::desktop::session::SessionInfo>>>,
     /// 输出事件广播
     output_tx: broadcast::Sender<PtyOutputEvent>,
     /// 数据库连接
@@ -129,9 +129,9 @@ impl PluginManager {
 
         // 创建 SessionInfo（可与 PTY 会话共存）
         let mut info =
-            crate::session::SessionInfo::new_plugin(&project_name, &project_path.to_string_lossy());
+            crate::desktop::session::SessionInfo::new_plugin(&project_name, &project_path.to_string_lossy());
         info.id = session_id.clone();
-        info.status = crate::session::SessionStatus::Running;
+        info.status = crate::desktop::session::SessionStatus::Running;
 
         // 保存会话信息到内存
         {
@@ -362,7 +362,7 @@ impl PluginManager {
         {
             let mut info_map = self.session_info.write().await;
             if let Some(info) = info_map.get_mut(session_id) {
-                info.status = crate::session::SessionStatus::Stopped;
+                info.status = crate::desktop::session::SessionStatus::Stopped;
                 info.stopped_at = Some(Utc::now());
             }
         }
@@ -403,13 +403,13 @@ impl PluginManager {
     }
 
     /// 获取会话信息
-    pub async fn get_session(&self, session_id: &str) -> Option<crate::session::SessionInfo> {
+    pub async fn get_session(&self, session_id: &str) -> Option<crate::desktop::session::SessionInfo> {
         let info_map = self.session_info.read().await;
         info_map.get(session_id).cloned()
     }
 
     /// 列出所有会话
-    pub async fn list_sessions(&self) -> Vec<crate::session::SessionInfo> {
+    pub async fn list_sessions(&self) -> Vec<crate::desktop::session::SessionInfo> {
         let info_map = self.session_info.read().await;
         info_map.values().cloned().collect()
     }
@@ -463,7 +463,7 @@ impl PluginManager {
             let mut info_map = self.session_info.write().await;
             for id in &disconnected {
                 if let Some(info) = info_map.get_mut(id) {
-                    info.status = crate::session::SessionStatus::Error;
+                    info.status = crate::desktop::session::SessionStatus::Error;
                 }
             }
         }
@@ -490,11 +490,11 @@ impl PluginManager {
     pub async fn get_session_status(&self, session_id: &str) -> Option<PluginSessionStatus> {
         let info_map = self.session_info.read().await;
         info_map.get(session_id).map(|session| match session.status {
-            crate::session::SessionStatus::Running => PluginSessionStatus::Running,
-            crate::session::SessionStatus::Starting => PluginSessionStatus::Starting,
-            crate::session::SessionStatus::Stopped => PluginSessionStatus::Stopped,
-            crate::session::SessionStatus::Error => PluginSessionStatus::Disconnected,
-            crate::session::SessionStatus::WaitingInput => PluginSessionStatus::Running,
+            crate::desktop::session::SessionStatus::Running => PluginSessionStatus::Running,
+            crate::desktop::session::SessionStatus::Starting => PluginSessionStatus::Starting,
+            crate::desktop::session::SessionStatus::Stopped => PluginSessionStatus::Stopped,
+            crate::desktop::session::SessionStatus::Error => PluginSessionStatus::Disconnected,
+            crate::desktop::session::SessionStatus::WaitingInput => PluginSessionStatus::Running,
         })
     }
 }

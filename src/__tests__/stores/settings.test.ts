@@ -101,7 +101,7 @@ describe('Settings Store', () => {
 
       // Should keep default settings on error
       expect(store.settings.network.port).toBe(8765)
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to load settings:', expect.any(Error))
+      expect(consoleSpy).toHaveBeenCalledWith('[Settings] Failed to load settings:', expect.any(Error))
 
       consoleSpy.mockRestore()
     })
@@ -188,7 +188,7 @@ describe('Settings Store', () => {
         },
       })
 
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to save settings:', expect.any(Error))
+      expect(consoleSpy).toHaveBeenCalledWith('[Settings] Failed to save settings:', expect.any(Error))
 
       consoleSpy.mockRestore()
     })

@@ -86,6 +86,7 @@
 <script setup lang="ts">
 import { computed, ref, h } from 'vue'
 import type { RemoteSession } from '@/composables/useRemoteTerminal'
+import { useRunTime } from '@/composables/useRunTime'
 
 const props = defineProps<{
   session: RemoteSession
@@ -98,6 +99,17 @@ defineEmits<{
 }>()
 
 const isHovered = ref(false)
+
+// 判断是否在运行
+const isRunning = computed(() => {
+  return props.session.status === 'running' || props.session.status === 'waiting_input'
+})
+
+// 使用 useRunTime composable 实现每秒更新
+const { runTime: elapsed } = useRunTime(
+  () => props.session.startedAt || props.session.createdAt,
+  isRunning
+)
 
 const statusConfig = computed(() => {
   switch (props.session.status) {
@@ -138,17 +150,5 @@ const statusConfig = computed(() => {
 const sessionType = computed(() => {
   const type = props.session.sessionType
   return type === 'plugin' ? 'Plugin' : type === 'pty' ? 'PTY' : null
-})
-
-const elapsed = computed(() => {
-  const start = props.session.startedAt || props.session.createdAt
-  if (!start) return ''
-  const elapsedMs = Date.now() - new Date(start).getTime()
-  const seconds = Math.floor(elapsedMs / 1000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
 })
 </script>

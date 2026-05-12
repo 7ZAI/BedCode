@@ -2,14 +2,14 @@
 //!
 //! 提供 WebSocket 服务端功能，处理移动端连接和消息路由
 
-use crate::websocket::handlers::handle_message;
-use crate::websocket::output_forwarder::OutputForwarder;
-use crate::websocket::message::{Message, DeviceConnectionEvent};
-use crate::auth::PairingService;
-use crate::auth::QrTokenManager;
-use crate::db::Database;
-use crate::plugin::PluginManager;
-use crate::session::SessionManager;
+use crate::desktop::websocket::handlers::handle_message;
+use crate::desktop::websocket::output_forwarder::OutputForwarder;
+use crate::desktop::websocket::message::{Message, DeviceConnectionEvent};
+use crate::shared::auth::PairingService;
+use crate::shared::auth::QrTokenManager;
+use crate::shared::db::Database;
+use crate::desktop::plugin::PluginManager;
+use crate::desktop::session::SessionManager;
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -37,6 +37,10 @@ pub struct ClientInfo {
     pub subscribed_sessions: Vec<String>,
     /// 最后收到心跳的时间
     pub last_heartbeat: Instant,
+    /// 客户端的终端列数（每个客户端独立）
+    pub cols: u16,
+    /// 客户端的终端行数（每个客户端独立）
+    pub rows: u16,
 }
 
 /// WebSocket 服务器
@@ -270,6 +274,8 @@ impl WebSocketServer {
                                     session_ids: vec![],
                                     subscribed_sessions: vec![],
                                     last_heartbeat: Instant::now(),
+                                    cols: 120,
+                                    rows: 40,
                                 },
                             );
                         }
@@ -417,24 +423,10 @@ impl WebSocketServer {
                             }
                         }
 
-                        // 移除客户端
+                        // 移除客户端（不重复发送事件，前面已发送）
                         {
                             let mut clients = clients.write().await;
-                            // 获取客户端信息用于发送断开事件
-                            let client_info = clients.get(&addr).cloned();
                             clients.remove(&addr);
-
-                            // 发送设备断开事件到桌面端前端
-                            if let Some(ref handle) = app_handle_for_disconnect {
-                                if let Some(client) = client_info {
-                                    let _ = handle.emit("device-disconnected", &DeviceConnectionEvent {
-                                        addr: addr.to_string(),
-                                        device_id: client.device_id.clone().unwrap_or_default(),
-                                        device_name: client.device_name.clone(),
-                                        event: "disconnected".to_string(),
-                                    });
-                                }
-                            }
                         }
                         {
                             let mut senders = client_senders.write().await;
@@ -509,6 +501,22 @@ impl WebSocketServer {
                 session_count: c.subscribed_sessions.len(),
             })
             .collect()
+    }
+
+    /// 更新指定客户端的终端尺寸
+    pub async fn update_client_size(&self, addr: &SocketAddr, cols: u16, rows: u16) {
+        let mut clients = self.clients.write().await;
+        if let Some(client) = clients.get_mut(addr) {
+            client.cols = cols;
+            client.rows = rows;
+            tracing::debug!("Updated client {} terminal size to {}x{}", addr, cols, rows);
+        }
+    }
+
+    /// 获取指定客户端的终端尺寸
+    pub async fn get_client_size(&self, addr: &SocketAddr) -> Option<(u16, u16)> {
+        let clients = self.clients.read().await;
+        clients.get(addr).map(|c| (c.cols, c.rows))
     }
 }
 

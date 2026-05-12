@@ -2,8 +2,8 @@
 //!
 //! 提供会话状态管理、持久化和恢复功能
 
-use crate::db::{Database, SessionConfig as DbSessionConfig};
-use crate::pty::{PtyOutputEvent, PtySession, SessionLaunchConfig};
+use crate::shared::db::{Database, SessionConfig as DbSessionConfig};
+use crate::desktop::pty::{PtyOutputEvent, PtySession, SessionLaunchConfig};
 use crate::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ impl SessionManager {
                         session_id_lifecycle, status
                     );
                     let session_status = match status {
-                        crate::pty::PtySessionStatus::Error => SessionStatus::Error,
+                        crate::desktop::pty::PtySessionStatus::Error => SessionStatus::Error,
                         _ => SessionStatus::Stopped,
                     };
                     let session_name = {
@@ -364,7 +364,7 @@ impl SessionManager {
         tokio::spawn(async move {
             if let Ok(status) = lifecycle_rx.recv().await {
                 let session_status = match status {
-                    crate::pty::PtySessionStatus::Error => SessionStatus::Error,
+                    crate::desktop::pty::PtySessionStatus::Error => SessionStatus::Error,
                     _ => SessionStatus::Stopped,
                 };
                 let mut info_map = session_info_ref.write().await;
@@ -420,7 +420,7 @@ impl SessionManager {
 
     /// 从配置构建启动配置
     fn build_launch_config(&self, config: &DbSessionConfig) -> Result<SessionLaunchConfig> {
-        use crate::pty::{ExecutionEnvironment, WindowsShell};
+        use crate::desktop::pty::{ExecutionEnvironment, WindowsShell};
 
         let environment = match config.environment.as_str() {
             "wsl2" => ExecutionEnvironment::Wsl2 {
@@ -596,7 +596,7 @@ impl SessionManager {
 
     /// 检测等待输入状态
     pub async fn detect_waiting_input(&self, session_id: &str, output: &str) -> bool {
-        let waiting = crate::parser::detect_waiting_input(output);
+        let waiting = crate::shared::parser::detect_waiting_input(output);
 
         if waiting {
             self.update_session_status(session_id, SessionStatus::WaitingInput).await;

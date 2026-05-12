@@ -103,10 +103,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import type { SessionInfo } from '@/stores/session'
 import Button from '@/components/common/Button.vue'
 import { useSessionWindows } from '@/composables/useSessionWindows'
+import { useRunTime } from '@/composables/useRunTime'
 
 const props = defineProps<{
   session: SessionInfo
@@ -128,43 +129,18 @@ const isRunning = computed(() => {
   return props.session.status === 'running' || props.session.status === 'waitingInput' || props.session.status === 'starting'
 })
 
+// 使用 useRunTime composable 实现���秒更新
+const { runTime: runTimeValue } = useRunTime(
+  () => props.session.startedAt || props.session.createdAt,
+  isRunning
+)
+
 // 显示的时间
 const displayTime = computed(() => {
   if (isRunning.value) {
-    return `运行时间: ${runTime.value}`
+    return `运行时间: ${runTimeValue.value}`
   } else {
     return `已停止`
-  }
-})
-
-// 计算运行时间
-const runTime = computed(() => {
-  const start = props.session.startedAt || props.session.createdAt
-  if (!start) return '--'
-
-  const startTime = new Date(start).getTime()
-  const now = Date.now()
-  const diff = Math.floor((now - startTime) / 1000)
-
-  if (diff < 60) return `${diff}秒`
-  if (diff < 3600) return `${Math.floor(diff / 60)}分${diff % 60}秒`
-  const hours = Math.floor(diff / 3600)
-  const minutes = Math.floor((diff % 3600) / 60)
-  return `${hours}小时${minutes}分`
-})
-
-// 实时更新时间
-let intervalId: ReturnType<typeof setInterval> | null = null
-
-onMounted(() => {
-  intervalId = setInterval(() => {
-    // 触发响应式更新 - 通过空操作保持组件活跃
-  }, 1000)
-})
-
-onUnmounted(() => {
-  if (intervalId) {
-    clearInterval(intervalId)
   }
 })
 

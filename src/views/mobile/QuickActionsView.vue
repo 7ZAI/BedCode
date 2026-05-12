@@ -32,7 +32,7 @@
     </div>
 
     <!-- Quick Actions -->
-    <div class="flex-1 overflow-auto p-4" @touchmove.stop>
+    <div class="flex-1 overflow-auto p-4">
       <!-- Preset Actions Grid -->
       <div class="mb-6">
         <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">预设指令</h3>
@@ -210,8 +210,8 @@ interface QuickAction {
 const router = useRouter()
 const connection = useRemoteConnection()
 
-// 需要同时检查 WebSocket 连接和配对状态
-const isConnected = computed(() => connection.state.value.status === 'paired' && connection.isConnected.value)
+// 使用统一的连接状态
+const isConnected = connection.isConnected
 
 const presetActions = ref<QuickAction[]>([
   { id: '1', name: '继续', content: '请继续', icon: '▶️', color: '#22c55e' },

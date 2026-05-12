@@ -1,36 +1,15 @@
 <template>
   <div
     ref="terminalContainerRef"
-    class="h-full w-full overflow-hidden terminal-wrapper"
+    class="h-full w-full terminal-wrapper"
   >
-    <!-- 外部滚动容器 -->
-    <div
-      ref="scrollContainerRef"
-      class="scroll-container"
-      @scroll="handleScroll"
-    >
-      <!-- 内部内容容器：xterm 固定高度，内容溢出到外部滚动容器 -->
-      <div ref="xtermContainerRef" class="xterm-container"></div>
-    </div>
-
-    <!-- 回到底部按钮 - 当用户滚动到上方时显示 -->
-    <transition name="fade">
-      <button
-        v-if="showScrollToBottom"
-        class="scroll-to-bottom-btn"
-        @click="scrollToBottom"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-        </svg>
-        底部
-      </button>
-    </transition>
+    <!-- 与桌面端一致：xterm 内部处理滚动，readonly 防止触发输入法 -->
+    <div ref="xtermContainerRef" class="xterm-container" readonly></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -40,7 +19,6 @@ import '@xterm/xterm/css/xterm.css'
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const xtermContainerRef = ref<HTMLElement | null>(null)
-const scrollContainerRef = ref<HTMLDivElement | null>(null)
 
 // xterm.js 实例
 let terminal: Terminal | null = null
@@ -51,13 +29,9 @@ let lastOutputIndex = 0
 // 记录容器宽度，防止多次计算
 let lastContainerWidth = 0
 
-// 滚动状态追踪
+// 滚动状态追踪（与桌面端一致）
 let isUserScrolling = false
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null
-let scrollCheckScheduled = false
-
-// 是否显示"回到底部"按钮
-const showScrollToBottom = ref(false)
 
 const props = defineProps<{
   output?: string
@@ -66,17 +40,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   ready: []
   clear: []
+  resize: [cols: number, rows: number]
 }>()
 
-/** 初始化 xterm.js */
+/** 初始化 xterm.js - 与桌面端一致 */
 function initTerminal() {
   if (!terminalContainerRef.value || !xtermContainerRef.value) return
 
-  // 强制容器宽度为 100%
-  terminalContainerRef.value.style.width = '100%'
-  xtermContainerRef.value.style.width = '100%'
-
-  // 使用与桌面端一致的配置
   const fontSize = settingsStore.settings.ui.terminal_font_size || 14
   const fontFamily = 'Consolas, Monaco, Courier New, monospace'
 
@@ -133,20 +103,18 @@ function initTerminal() {
     brightWhite: '#ffffff',
   }
 
+  // 与桌面端一致的配置
   terminal = new Terminal({
     fontSize,
     fontFamily,
     theme: isDarkMode ? darkTheme : lightTheme,
-    cursorBlink: false, // 移动端禁用光标闪烁，节省性能
+    cursorBlink: false, // 移动端禁用光标闪烁
     cursorStyle: 'bar',
-    // 禁用 xterm 内部滚动，由外部 div 处理
-    scrollback: 0,
+    scrollback: 10000, // 与桌面端一致，保留 10000 行历史
     allowProposedApi: true,
-    // 禁用光标样式渲染优化
     cursorInactiveStyle: 'none',
-    // 移动端优化：禁用终端直接输入，输入只能通过弹窗
+    // 移动端：禁用终端直接输入，输入只能通过弹窗
     disableStdin: true,
-    allowTransparency: false,
   })
 
   fitAddon = new FitAddon()
@@ -154,15 +122,31 @@ function initTerminal() {
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(xtermContainerRef.value)
 
-  // 初始 fit，使用 nextTick 确保 DOM 完成
+  // 初始 fit
   nextTick(() => {
     performFit()
+    if (terminal) {
+      emit('resize', terminal.cols, terminal.rows)
+    }
+  })
+
+  // 监听终端尺寸变化
+  terminal.onResize(({ cols, rows }) => {
+    emit('resize', cols, rows)
+  })
+
+  // 添加滚动事件监听（与桌面端一致）
+  nextTick(() => {
+    const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+    if (viewport) {
+      viewport.addEventListener('scroll', handleScroll)
+    }
   })
 
   emit('ready')
 }
 
-/** 执行 fit 操作，带宽度检查防止重复计算 */
+/** 执行 fit 操作 */
 function performFit() {
   if (!fitAddon || !terminalContainerRef.value) return
 
@@ -174,10 +158,10 @@ function performFit() {
   lastContainerWidth = containerWidth
   fitAddon.fit()
 
-  // 额外触发一次 resize 事件确保终端正确响应
   nextTick(() => {
     if (terminal) {
       terminal.resize(terminal.cols, terminal.rows)
+      emit('resize', terminal.cols, terminal.rows)
     }
   })
 }
@@ -210,57 +194,37 @@ function clear() {
   emit('clear')
 }
 
-/** 滚动到底部 */
+/** 滚动到底部 - 与桌面端一致 */
 function scrollToBottom() {
-  if (!scrollContainerRef.value) return
-  scrollContainerRef.value.scrollTop = scrollContainerRef.value.scrollHeight
-  // 滚动到底部后隐藏按钮
+  if (!terminal) return
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    viewport.scrollTop = viewport.scrollHeight
+  }
   nextTick(() => {
-    showScrollToBottom.value = false
     isUserScrolling = false
   })
 }
 
-/** 滚动事件处理 - 检测用户是否在滚动 */
+/** 滚动事件处理 - 检测用户是否在滚动（与桌面端一致） */
 function handleScroll() {
-  if (!scrollContainerRef.value) return
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (!viewport) return
 
-  const container = scrollContainerRef.value
   // 检测是否在底部（允许 50px 误差）
-  const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50
+  const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
 
   // 用户不在底部 = 正在向上滚动查看历史
   isUserScrolling = !isAtBottom
-
-  // 显示/隐藏回到底部按钮
-  showScrollToBottom.value = !isAtBottom
 
   // 滚动停止后清除状态（300ms 防抖）
   if (scrollTimeout) clearTimeout(scrollTimeout)
   scrollTimeout = setTimeout(() => {
     isUserScrolling = false
-    // 滚动停止后检查是否在底部
-    const nowAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50
-    showScrollToBottom.value = !nowAtBottom
   }, 300)
 }
 
-/** 检测滚动位置，更新按钮显示状态 */
-function checkScrollPosition() {
-  if (scrollCheckScheduled) return
-
-  scrollCheckScheduled = true
-  requestAnimationFrame(() => {
-    scrollCheckScheduled = false
-    if (!scrollContainerRef.value) return
-
-    const container = scrollContainerRef.value
-    const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50
-    showScrollToBottom.value = !isAtBottom && !isUserScrolling
-  })
-}
-
-// 监听输出变化，增量写入
+// 监听输出变化，增量写入（与桌面���一致）
 watch(() => props.output, (newOutput) => {
   if (!terminal || !newOutput) {
     return
@@ -283,10 +247,6 @@ watch(() => props.output, (newOutput) => {
     if (!isUserScrolling) {
       scrollToBottom()
     }
-    // 输出变化后检查滚动位置，更新按钮状态
-    nextTick(() => {
-      checkScrollPosition()
-    })
   }
 }, { deep: true })
 
@@ -294,7 +254,6 @@ watch(() => props.output, (newOutput) => {
 watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
   if (!terminal) return
   terminal.options.fontSize = newSize
-  // 字体变化后需要重新 fit
   nextTick(() => {
     performFit()
   })
@@ -303,11 +262,10 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
 onMounted(() => {
   initTerminal()
 
-  // 使用 ResizeObserver 监听容器尺寸变化，使用节流
+  // 监听容器尺寸变化
   if (terminalContainerRef.value) {
     resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        // 只在尺寸真正变化时触发 fit
         if (entry.contentRect.width !== lastContainerWidth) {
           scheduleFit()
         }
@@ -315,7 +273,7 @@ onMounted(() => {
     })
     resizeObserver.observe(terminalContainerRef.value)
 
-    // 监听窗口 resize 事件（处理键盘弹出等场景）
+    // 监听窗口 resize 事件
     window.addEventListener('resize', scheduleFit)
   }
 
@@ -378,12 +336,22 @@ onMounted(() => {
   })
 })
 
+// KeepAlive 恢复时重置输出索引，确保从正确位置开始渲染
+onActivated(() => {
+  lastOutputIndex = 0
+})
+
 onUnmounted(() => {
+  // 清理滚动事件监听器
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    viewport.removeEventListener('scroll', handleScroll)
+  }
+
   if (scrollTimeout) {
     clearTimeout(scrollTimeout)
   }
 
-  // 清理 ResizeObserver
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -393,12 +361,15 @@ onUnmounted(() => {
     terminal.dispose()
     terminal = null
   }
+
   if (fitAddon) {
     fitAddon = null
   }
+
   if (fitRafId !== null) {
     cancelAnimationFrame(fitRafId)
   }
+
   window.removeEventListener('resize', scheduleFit)
 })
 
@@ -412,7 +383,7 @@ defineExpose({
 
 <style scoped>
 .terminal-wrapper {
-  /* 固定宽度布局，防止内容宽度变化 */
+  /* 固定宽度布局 */
   contain: layout style;
   /* 禁止文本选择，避免移动端误触 */
   user-select: none;
@@ -426,31 +397,14 @@ defineExpose({
   outline: none;
 }
 
-/* 外部滚动容器 */
-.scroll-container {
-  width: 100%;
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  /* 隐藏 xterm 内部滚动条 */
-  -webkit-overflow-scrolling: touch;
-}
-
-/* xterm 容器 */
+/* xterm 容器 - 与桌面端一致 */
 .xterm-container {
-  /* xterm 内容高度自适应，不固定 */
-  min-height: 100%;
+  height: 100%;
 }
 
 :deep(.xterm) {
-  height: auto;
-  min-height: 100%;
+  height: 100%;
   padding: 0;
-}
-
-/* 隐藏 xterm 内部滚动条 */
-:deep(.xterm-viewport) {
-  display: none !important;
 }
 
 :deep(.xterm-screen) {
@@ -464,42 +418,5 @@ defineExpose({
 
 :deep(.xterm-focus) {
   outline: none;
-}
-
-/* 回到底部按钮 */
-.scroll-to-bottom-btn {
-  position: absolute;
-  bottom: 80px;
-  right: 16px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  border-radius: 20px;
-  font-size: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  z-index: 10;
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-
-.scroll-to-bottom-btn:active {
-  transform: scale(0.95);
-}
-
-:global(.dark) .scroll-to-bottom-btn {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* 过渡动画 */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
 }
 </style>

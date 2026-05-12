@@ -6,9 +6,53 @@
     </header>
 
     <div class="flex-1 overflow-auto p-6">
+      <!-- QR Code Section -->
+      <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6 mb-6">
+        <h3 class="text-lg font-medium mb-4">QR 码连接</h3>
+
+        <div v-if="!qr.hasQr.value" class="text-center py-4">
+          <p class="text-gray- dark:text-dark-400 mb-4">扫描二维码快速连接移动设备</p>
+          <Button variant="secondary" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
+            <template #icon>
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
+              </svg>
+            </template>
+            生成二维码
+          </Button>
+        </div>
+
+        <div v-else class="text-center py-4">
+          <p class="text-gray- dark:text-dark-300 mb-4">使用移动端 BedCode 扫描二维码</p>
+
+          <!-- QR Code Canvas -->
+          <div class="inline-block bg-white p-4 rounded-lg mb-4">
+            <canvas ref="qrCanvasRef" class="w-48 h-48"></canvas>
+          </div>
+
+          <p class="text-gray- dark:text-dark-500 text-sm mb-2">
+            二维码有效期
+            <span class="text-primary-400 font-medium">{{ qr.remainingSeconds.value }}</span> 秒
+          </p>
+
+          <p class="text-gray- dark:text-dark-600 text-xs">
+            每个二维码只能绑定一个设备
+          </p>
+
+          <div class="flex items-center justify-center gap-3 mt-4">
+            <Button variant="ghost" size="sm" @click="qr.clearQr()">
+              取消
+            </Button>
+            <Button variant="ghost" size="sm" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
+              刷新
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <!-- Pairing Section -->
       <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6 mb-6">
-        <h3 class="text-lg font-medium mb-4">新建配对</h3>
+        <h3 class="text-lg font-medium mb-4">配对码连接</h3>
 
         <div v-if="!pairingCode" class="text-center py-4">
           <p class="text-gray- dark:text-dark-400 mb-4">生成配对码以连接移动设备</p>
@@ -37,46 +81,6 @@
           <Button variant="ghost" size="sm" @click="cancelPairing">
             取消
           </Button>
-        </div>
-      </div>
-
-      <!-- QR Code Section -->
-      <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6 mb-6">
-        <h3 class="text-lg font-medium mb-4">QR 码连接</h3>
-
-        <div v-if="!qr.hasQr.value" class="text-center py-4">
-          <p class="text-gray- dark:text-dark-400 mb-4">扫描二维码快速连接移动设备</p>
-          <Button variant="secondary" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
-            <template #icon>
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
-              </svg>
-            </template>
-            生成二维码
-          </Button>
-        </div>
-
-        <div v-else class="text-center py-4">
-          <p class="text-gray- dark:text-dark-300 mb-4">使用移动端 BedCode 扫描二维码</p>
-
-          <!-- QR Code Canvas -->
-          <div class="inline-block bg-white p-4 rounded-lg mb-4">
-            <canvas ref="qrCanvasRef" class="w-48 h-48"></canvas>
-          </div>
-
-          <p class="text-gray- dark:text-dark-500 text-sm mb-4">
-            二维码有效期
-            <span class="text-primary-400 font-medium">{{ qr.remainingSeconds.value }}</span> 秒
-          </p>
-
-          <div class="flex items-center justify-center gap-3">
-            <Button variant="ghost" size="sm" @click="qr.clearQr()">
-              取消
-            </Button>
-            <Button variant="ghost" size="sm" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
-              刷新
-            </Button>
-          </div>
         </div>
       </div>
 
@@ -314,6 +318,13 @@ onMounted(async () => {
   const ids = new Set(connected.connectedDevices.value.map(d => d.device_id))
   connectedDeviceIds.value = ids
 
+  // 检查是否有活跃的 QR token，若有则自动恢复显示
+  const ttl = await qr.api.getQrTokenTtl()
+  if (ttl > 0) {
+    console.log('Restoring active QR token with TTL:', ttl)
+    await qr.generateQr(selectedIp.value || undefined)
+  }
+
   // Listen for real-time device connection events
   deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', (event) => {
     const deviceId = event.payload.device_id
@@ -455,7 +466,13 @@ async function confirmRemoveDevice() {
 }
 
 function formatDate(dateStr: string): string {
+  if (!dateStr || dateStr === '') {
+    return '未知'
+  }
   const date = new Date(dateStr)
+  if (isNaN(date.getTime())) {
+    return '未知'
+  }
   return date.toLocaleDateString('zh-CN', {
     year: 'numeric',
     month: 'short',

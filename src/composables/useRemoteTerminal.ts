@@ -1,5 +1,6 @@
 import { ref, watch, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
 
 export interface RemoteSession {
   id: string
@@ -35,6 +36,7 @@ export interface UseRemoteConnection {
   sendMessage: (type: string, payload: any, sessionId?: string) => boolean
   sendMessageWithResponse: (type: string, payload: any, sessionId?: string, timeoutMs?: number) => Promise<any>
   setReconnectCallback: (callback: (() => Promise<void>) | null) => void
+  addDisconnectCallback: (callback: () => void) => void
 }
 
 // Singleton state — shared across all useRemoteTerminal() calls so session data
@@ -153,11 +155,13 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
 
   // 移除 ANSI 转义序列（用于检测等待输入状态）
   function stripAnsi(text: string): string {
-    // CSI 序列: \x1b[...字母
+    // CSI 序列: \x1b[...字母 (如 \x1b[32m 颜色)
     const csiRegex = /\x1b\[[0-9;]*[A-Za-z]/g
-    // 其他转义序列
-    const otherRegex = /\x1b[^\x1b]*/g
-    return text.replace(csiRegex, '').replace(otherRegex, '')
+    // OSC 序列: \x1b]...BEL (如 \x1b]0;...\x07 标题)
+    const oscRegex = /\x1b\][^\x07]*\x07/g
+    // 单独 ESC 字符
+    const escRegex = /\x1b/g
+    return text.replace(csiRegex, '').replace(oscRegex, '').replace(escRegex, '')
   }
 
   function handleControlMessage(message: { type: string; payload?: any }) {
@@ -348,19 +352,34 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
   }
 
   /** 加入会话 (开始接收输出) */
-  async function joinSession(sessionId: string): Promise<void> {
+  async function joinSession(sessionId: string, forceResubscribe: boolean = false): Promise<void> {
     if (!connection.isConnected.value) {
       throw new Error('Not connected')
     }
 
     // 检查是否已订阅，避免重复订阅
-    if (!joinedSessions.value.has(sessionId)) {
+    // forceResubscribe 为 true 时，强制重新订阅（用于重连后恢复）
+    const isAlreadySubscribed = joinedSessions.value.has(sessionId)
+    const isNewSubscription = !isAlreadySubscribed || forceResubscribe
+
+    if (isNewSubscription) {
+      // 获取最大缓存数量限制
+      const settingsStore = useSettingsStore()
+      const maxCached = settingsStore.getMaxCachedTerminals()
+      const currentCount = joinedSessions.value.size
+
+      // 如果已达到限制，不再创建新的订阅
+      if (currentCount >= maxCached && !forceResubscribe) {
+        throw new Error(`已达到最大终端数量限制 (${maxCached})，请先关闭其他终端页面`)
+      }
+
       try {
         await connection.sendMessageWithResponse('control', {
           action: { type: 'join_session', session_id: sessionId },
         }, sessionId)
         // 订阅成功，添加到已订阅集合
         joinedSessions.value.add(sessionId)
+        console.log(`Joined session: ${sessionId}, forceResubscribe: ${forceResubscribe}`)
       } catch (e) {
         console.error('Failed to join session:', e)
         // 即使失败也尝试添加，因为后端可能不支持 join_session
@@ -371,7 +390,10 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     // 设置为当前活跃会话（控制输出显示）
     currentSessionId.value = sessionId
     activeSessionId.value = sessionId
-    clearOutput()
+    // 只有首次订阅时才清空输出，重新加入已订阅的会话保留历史输出
+    if (isNewSubscription) {
+      clearOutput()
+    }
   }
 
   /** 离开会话 */
@@ -442,6 +464,23 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     isWaitingInput.value = false
   }
 
+  /** 断开连接时清除所有会话相关状态 */
+  function clearAllSessionState(): void {
+    // 清除会话列表
+    sessions.value = []
+    // 清除会话配置
+    sessionConfigs.value = []
+    // 清除订阅状态
+    joinedSessions.value.clear()
+    // 清除当前活跃会话
+    currentSessionId.value = null
+    activeSessionId.value = null
+    // 清除输出缓冲区
+    clearOutput()
+
+    console.log('All session state cleared')
+  }
+
   /** 清理资源（应在组件卸载时调用） */
   function cleanup(): void {
     if (flushTimer) {
@@ -475,17 +514,17 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
       loadSessionConfigs(),
     ])
 
-    // 如果之前有订阅的会话，重新订阅
+    // 如果之前有订阅的会话，重新订阅（强制重新订阅，因为后端已清除订阅状态）
     if (currentSessionId.value) {
       const sessionId = currentSessionId.value
-      // 检查会话是否还存在
+      // 检查会��是否还存在
       const sessionExists = sessions.value.some(s => s.id === sessionId)
 
       if (sessionExists) {
         try {
-          await connection.sendMessageWithResponse('control', {
-            action: { type: 'join_session', session_id: sessionId },
-          }, sessionId)
+          // 使用 forceResubscribe = true 强制重新订阅
+          // 因为 WebSocket 重连后，后端的订阅状态已丢失
+          await joinSession(sessionId, true)
           console.log('Successfully rejoined session:', sessionId)
         } catch (e) {
           console.error('Failed to rejoin session:', e)
@@ -527,10 +566,13 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
 
   /** 设置当前活跃会话（切换显示的终端内容） */
   function setActiveSession(sessionId: string | null): void {
+    // 只有切换到另一个会话时才清空输出缓冲区
+    // 设为 null（退出）时保留历史输出，供下次进入时恢复显示
+    if (sessionId !== null) {
+      clearOutput()
+    }
     activeSessionId.value = sessionId
     currentSessionId.value = sessionId
-    // 切换活跃会话时清空显示缓冲区，避免新旧数据混合
-    clearOutput()
   }
 
   /** 离开会话（取消订阅） */
@@ -585,6 +627,7 @@ export function useRemoteTerminal(connection: UseRemoteConnection) {
     sendKeyboardInput,
     sendSpecialKey,
     clearOutput,
+    clearAllSessionState,
     cleanup,
     destroy,
     reconnectAndResume,

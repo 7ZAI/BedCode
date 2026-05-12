@@ -1,32 +1,22 @@
 //! BedCode - Library Entry Point
 
-pub mod auth;
-pub mod commands;
-pub mod config;
-pub mod db;
-pub mod error;
-pub mod notify;
-pub mod parser;
+// Shared modules - available on both desktop and mobile
+pub mod shared;
 
-// Plugin module is desktop-only (requires PTY and session management)
+// Desktop-only modules
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub mod plugin;
+pub mod desktop;
 
-// PTY and Session modules are desktop-only
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub mod pty;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub mod session;
+// Mobile-only modules
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub mod mobile;
 
-// WebSocket server is desktop-only (mobile acts as client)
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub mod websocket;
+// Re-export shared types
+pub use shared::{AppError, Result};
 
-pub use error::{AppError, Result};
-
-use auth::PairingService;
-use auth::QrTokenManager;
-use config::AppConfig;
+use shared::auth::{PairingService, QrTokenManager};
+use shared::config::AppConfig;
+use shared::db::Database;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -34,26 +24,21 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 初始化日志系统
 fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
-    // 获取日志目录
     let log_dir = app_handle
         .path()
         .app_log_dir()
         .expect("Failed to get log directory");
 
-    // 确保日志目录存在
     std::fs::create_dir_all(&log_dir)?;
 
-    // 创建日志文件
-    let _log_file = log_dir.join("bedcode.log");
     let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix("bedcode")
         .filename_suffix("log")
-        .max_log_files(7) // 保留 7 天的日志
+        .max_log_files(7)
         .build(&log_dir)
         .expect("Failed to create log file appender");
 
-    // 创建日志层
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_appender)
         .with_ansi(false)
@@ -61,7 +46,6 @@ fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
         .with_thread_ids(false)
         .with_line_number(true);
 
-    // 初始化日志订阅者
     #[cfg(debug_assertions)]
     {
         let console_layer = tracing_subscriber::fmt::layer()
@@ -92,7 +76,7 @@ fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
 }
 
 /// Insert default quick actions
-fn insert_default_quick_actions(db: &db::Database) -> Result<()> {
+fn insert_default_quick_actions(db: &Database) -> Result<()> {
     let actions = db.get_quick_actions()?;
     if !actions.is_empty() {
         return Ok(());
@@ -106,7 +90,7 @@ fn insert_default_quick_actions(db: &db::Database) -> Result<()> {
     ];
 
     for (name, content, icon, color) in default_actions {
-        let mut action = db::QuickAction::new(name.to_string(), content.to_string());
+        let mut action = shared::db::QuickAction::new(name.to_string(), content.to_string());
         action.icon = Some(icon.to_string());
         action.color = Some(color.to_string());
         db.create_quick_action(&action)?;
@@ -116,8 +100,6 @@ fn insert_default_quick_actions(db: &db::Database) -> Result<()> {
     Ok(())
 }
 
-// ==================== 应用启动耗时记录 ====================
-
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
 
@@ -125,14 +107,11 @@ pub struct AppStartTime(std::time::Instant);
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
-    use session::SessionManager;
+    use desktop::session::SessionManager;
+    use desktop::websocket::WebSocketServer;
     use tauri::Emitter;
-    use websocket::WebSocketServer;
 
-    // 记录进程启动时间
     let app_start = AppStartTime(std::time::Instant::now());
-    // Instant 实现了 Copy，此处复制一份供 setup 闭包内使用
-    // app_start 在闭包内被 move 到 app.manage 后无法再访问
     let start = app_start.0;
 
     tauri::Builder::default()
@@ -141,13 +120,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .setup(move |app| {
-            // 初始化日志系统
             init_logging(app.handle())?;
-
-            // 将启动时间注入状态，供前端查询启动耗时
             app.manage(app_start);
 
-            // 获取配置路径
             let app_handle = app.handle();
             let config_path = app_handle
                 .path()
@@ -155,55 +130,43 @@ pub fn run() {
                 .expect("Failed to get app data dir")
                 .join("config.json");
 
-            // 加载应用配置
             let app_config = AppConfig::load(&config_path).unwrap_or_else(|e| {
                 tracing::warn!("Failed to load config, using defaults: {}", e);
                 AppConfig::default()
             });
             let ws_port = app_config.network.port;
 
-            // Initialize database
             let db_path = app_handle
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir")
                 .join("bedcode.db");
 
-            // Ensure parent directory exists
             if let Some(parent) = db_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
 
-            // Initialize database
-            let db = db::Database::new(&db_path)?;
+            let db = Database::new(&db_path)?;
             db.init_schema()?;
-
-            // Insert default quick actions if empty
             insert_default_quick_actions(&db)?;
 
-            // Store database in app state
             let db = Arc::new(Mutex::new(db));
             app.manage(db.clone());
 
-            // Initialize session manager
             let session_manager = Arc::new(SessionManager::new(db.clone()));
             app.manage(session_manager.clone());
 
-            // Create PluginManager
-            let plugin_manager = Arc::new(plugin::PluginManager::new(
+            let plugin_manager = Arc::new(desktop::plugin::PluginManager::new(
                 session_manager.output_tx(),
                 db.clone(),
             ));
 
-            // Initialize pairing service
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service.clone());
 
-            // Initialize QR token manager
             let qr_manager = Arc::new(QrTokenManager::new());
             app.manage(qr_manager.clone());
 
-            // Initialize and start WebSocket server
             let mut ws_server = WebSocketServer::new(
                 ws_port,
                 session_manager.clone(),
@@ -213,16 +176,12 @@ pub fn run() {
                 qr_manager.clone(),
             );
 
-            // Set app handle for event emission (wrap in Arc)
             use std::sync::Arc as StdArc;
             ws_server.set_app_handle(StdArc::new(app_handle.clone()));
 
             let ws_server = Arc::new(ws_server);
-
-            // Store WebSocket server in app state for later access
             app.manage(ws_server.clone());
 
-            // Start WebSocket server in background
             let ws_server_clone = ws_server.clone();
             tauri::async_runtime::spawn(async move {
                 tracing::info!("Starting WebSocket server on port {}", ws_port);
@@ -231,7 +190,6 @@ pub fn run() {
                 }
             });
 
-            // Write port file for plugin discovery
             let app_handle_clone = app_handle.clone();
             let ws_port_copy = ws_port;
             tauri::async_runtime::spawn(async move {
@@ -253,7 +211,6 @@ pub fn run() {
                 }
             });
 
-            // Start output event forwarder (forward PTY output to frontend)
             let app_handle_clone = app_handle.clone();
             let session_manager_clone = session_manager.clone();
             tauri::async_runtime::spawn(async move {
@@ -265,7 +222,6 @@ pub fn run() {
                 }
             });
 
-            // Start session status event forwarder
             let app_handle_clone2 = app_handle.clone();
             let session_manager_clone2 = session_manager.clone();
             tauri::async_runtime::spawn(async move {
@@ -277,7 +233,6 @@ pub fn run() {
                 }
             });
 
-            // Start session restart event forwarder
             let app_handle_clone3 = app_handle.clone();
             let session_manager_clone3 = session_manager.clone();
             tauri::async_runtime::spawn(async move {
@@ -289,16 +244,12 @@ pub fn run() {
                 }
             });
 
-            // Setup system tray
             setup_tray(app_handle)?;
 
-            // 监听窗口关闭事件，清理资源
             let window = app_handle.get_webview_window("main").expect("Failed to get main window");
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
                     tracing::info!("Window close requested, shutting down...");
-                    // SessionManager 的 Drop 会自动清理所有会话
-                    // WebSocketServer 会在 app exit 时自动清理
                 }
             });
 
@@ -308,58 +259,58 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // WSL
-            commands::list_wsl_distributions,
-            commands::is_wsl_available,
+            desktop::commands::list_wsl_distributions,
+            desktop::commands::is_wsl_available,
             // Tmux
-            commands::list_tmux_sessions,
-            commands::is_tmux_available,
-            commands::create_tmux_session,
+            desktop::commands::list_tmux_sessions,
+            desktop::commands::is_tmux_available,
+            desktop::commands::create_tmux_session,
             // Session Config
-            commands::create_session_config,
-            commands::list_session_configs,
-            commands::get_session_config,
-            commands::delete_session_config,
-            commands::update_session_config,
+            shared::commands::create_session_config,
+            shared::commands::list_session_configs,
+            shared::commands::get_session_config,
+            shared::commands::delete_session_config,
+            shared::commands::update_session_config,
             // Session
-            commands::start_session,
-            commands::list_sessions,
-            commands::get_session,
-            commands::kill_session,
-            commands::delete_session,
-            commands::restart_session,
-            commands::resize_session,
+            desktop::commands::start_session,
+            desktop::commands::list_sessions,
+            desktop::commands::get_session,
+            desktop::commands::kill_session,
+            desktop::commands::delete_session,
+            desktop::commands::restart_session,
+            desktop::commands::resize_session,
             // PTY Input
-            commands::write_to_session,
-            commands::send_special_key,
+            desktop::commands::write_to_session,
+            desktop::commands::send_special_key,
             // Pairing
-            commands::generate_pairing_code,
-            commands::get_current_pairing_code,
-            commands::verify_pairing_code,
-            commands::clear_pairing_code,
-            commands::list_paired_devices,
-            commands::remove_paired_device,
+            shared::commands::generate_pairing_code,
+            shared::commands::get_current_pairing_code,
+            shared::commands::verify_pairing_code,
+            shared::commands::clear_pairing_code,
+            shared::commands::list_paired_devices,
+            shared::commands::remove_paired_device,
             // QR Code
-            commands::generate_qr_code,
-            commands::clear_qr_code,
-            commands::get_qr_connection_info,
-            commands::get_qr_token_ttl,
-            commands::set_qr_token_ttl,
+            shared::commands::generate_qr_code,
+            shared::commands::clear_qr_code,
+            shared::commands::get_qr_connection_info,
+            shared::commands::get_qr_token_ttl,
+            shared::commands::set_qr_token_ttl,
             // Quick Actions
-            commands::list_quick_actions,
-            commands::create_quick_action,
-            commands::update_quick_action,
-            commands::delete_quick_action,
-            commands::get_all_db_settings,
-            commands::set_db_setting,
+            shared::commands::list_quick_actions,
+            shared::commands::create_quick_action,
+            shared::commands::update_quick_action,
+            shared::commands::delete_quick_action,
+            shared::commands::get_all_db_settings,
+            shared::commands::set_db_setting,
             // Settings
-            commands::get_app_settings,
-            commands::save_app_settings,
+            shared::commands::get_app_settings,
+            shared::commands::save_app_settings,
             // Utility
-            commands::ping,
-            commands::get_app_version,
-            commands::get_startup_time,
-            commands::get_local_ip_addresses,
-            commands::get_connected_devices,
+            shared::commands::ping,
+            shared::commands::get_app_version,
+            shared::commands::get_startup_time,
+            shared::commands::get_local_ip_addresses,
+            desktop::commands::get_connected_devices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -373,15 +324,12 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
 
-    // Create menu items
     let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "隐藏窗口", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
-    // Create menu
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
 
-    // Create tray icon
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
@@ -434,10 +382,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
-            // 初始化日志系统
             init_logging(app.handle())?;
 
-            // Initialize database
             let app_handle = app.handle();
             let db_path = app_handle
                 .path()
@@ -445,23 +391,17 @@ pub fn run() {
                 .expect("Failed to get app data dir")
                 .join("bedcode.db");
 
-            // Ensure parent directory exists
             if let Some(parent) = db_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
 
-            // Initialize database
-            let db = db::Database::new(&db_path)?;
+            let db = Database::new(&db_path)?;
             db.init_schema()?;
-
-            // Insert default quick actions if empty
             insert_default_quick_actions(&db)?;
 
-            // Store database in app state
             let db = Arc::new(Mutex::new(db));
             app.manage(db.clone());
 
-            // Initialize pairing service
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
 
@@ -470,33 +410,33 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // Pairing
-            commands::generate_pairing_code,
-            commands::get_current_pairing_code,
-            commands::verify_pairing_code,
-            commands::clear_pairing_code,
-            commands::list_paired_devices,
-            commands::remove_paired_device,
+            shared::commands::generate_pairing_code,
+            shared::commands::get_current_pairing_code,
+            shared::commands::verify_pairing_code,
+            shared::commands::clear_pairing_code,
+            shared::commands::list_paired_devices,
+            shared::commands::remove_paired_device,
             // Quick Actions
-            commands::list_quick_actions,
-            commands::create_quick_action,
-            commands::update_quick_action,
-            commands::delete_quick_action,
-            commands::get_all_db_settings,
-            commands::set_db_setting,
+            shared::commands::list_quick_actions,
+            shared::commands::create_quick_action,
+            shared::commands::update_quick_action,
+            shared::commands::delete_quick_action,
+            shared::commands::get_all_db_settings,
+            shared::commands::set_db_setting,
             // Settings
-            commands::get_app_settings,
-            commands::save_app_settings,
+            shared::commands::get_app_settings,
+            shared::commands::save_app_settings,
             // Utility
-            commands::ping,
-            commands::get_app_version,
-            commands::get_local_ip_addresses,
+            shared::commands::ping,
+            shared::commands::get_app_version,
+            shared::commands::get_local_ip_addresses,
             // Android Specific
-            commands::get_status_bar_height,
-            commands::set_screen_orientation,
-            commands::keep_screen_awake,
-            // Session Config (for displaying saved configs)
-            commands::list_session_configs,
-            commands::get_session_config,
+            mobile::commands::get_status_bar_height,
+            mobile::commands::set_screen_orientation,
+            mobile::commands::keep_screen_awake,
+            // Session Config
+            shared::commands::list_session_configs,
+            shared::commands::get_session_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

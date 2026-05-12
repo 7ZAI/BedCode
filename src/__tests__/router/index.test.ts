@@ -58,13 +58,6 @@ describe('Router Configuration', () => {
       expect(route?.name).toBe('mobile-quick-actions')
     })
 
-    it('should have mobile history route', () => {
-      const route = router.getRoutes().find((r) => r.path === '/mobile/history')
-
-      expect(route).toBeDefined()
-      expect(route?.name).toBe('mobile-history')
-    })
-
     it('should have mobile settings route', () => {
       const route = router.getRoutes().find((r) => r.path === '/mobile/settings')
 
@@ -82,7 +75,6 @@ describe('Router Configuration', () => {
         'mobile-devices',
         'mobile-terminal',
         'mobile-quick-actions',
-        'mobile-history',
         'mobile-settings',
       ]
 
@@ -107,7 +99,6 @@ describe('Router Configuration', () => {
         '/mobile/devices',
         '/mobile/terminal/:id',
         '/mobile/quick-actions',
-        '/mobile/history',
         '/mobile/settings',
       ]
 

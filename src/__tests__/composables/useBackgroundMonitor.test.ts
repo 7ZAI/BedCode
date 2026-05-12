@@ -1,31 +1,42 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
-import { defineComponent } from 'vue'
+import { describe, it, expect, vi } from 'vitest'
+import { ref } from 'vue'
 import { useBackgroundMonitor } from '@/composables/useBackgroundMonitor'
 
-// Mock Tauri APIs
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(vi.fn()),
-}))
-
-// Mock usePlatform to return mobile platform
-vi.mock('@/composables/usePlatform', () => ({
-  usePlatform: () => ({
-    platformInfo: {
-      value: {
-        isMobile: true,
-        isDesktop: false,
-      },
-    },
-  }),
+// Mock useAndroidFeatures
+vi.mock('@/composables/useAndroidFeatures', () => ({
+  useAndroidFeatures: vi.fn(() => ({
+    isInBackground: ref(false),
+  })),
 }))
 
 describe('useBackgroundMonitor', () => {
-  it('should export isInBackground and wasInBackground refs', () => {
-    const { isInBackground, wasInBackground } = useBackgroundMonitor()
+  it('should return isInBackground from useAndroidFeatures', () => {
+    const { isInBackground } = useBackgroundMonitor()
     expect(isInBackground).toBeDefined()
-    expect(wasInBackground).toBeDefined()
     expect(isInBackground.value).toBe(false)
+  })
+
+  it('should return wasInBackground ref initialized to false', () => {
+    const { wasInBackground } = useBackgroundMonitor()
+    expect(wasInBackground).toBeDefined()
+    expect(wasInBackground.value).toBe(false)
+  })
+
+  it('should return clearWasInBackground function', () => {
+    const { clearWasInBackground } = useBackgroundMonitor()
+    expect(clearWasInBackground).toBeDefined()
+    expect(typeof clearWasInBackground).toBe('function')
+  })
+
+  it('should allow clearing wasInBackground', () => {
+    const { wasInBackground, clearWasInBackground } = useBackgroundMonitor()
+
+    // Simulate wasInBackground being set
+    ;(wasInBackground as any).value = true
+    expect(wasInBackground.value).toBe(true)
+
+    // Clear it
+    clearWasInBackground()
     expect(wasInBackground.value).toBe(false)
   })
 })

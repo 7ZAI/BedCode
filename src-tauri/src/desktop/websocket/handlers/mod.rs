@@ -11,4 +11,4 @@ pub use control::handle_control;
 pub use message::handle_message;
 
 // 重新导出 ControlAction 供外部使用
-pub use crate::websocket::message::ControlAction;
+pub use crate::desktop::websocket::message::ControlAction;
