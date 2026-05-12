@@ -57,7 +57,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-auto p-4">
+    <div class="flex-1 overflow-auto p-4" @touchmove.stop>
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
