@@ -1,35 +1,29 @@
 <template>
-  <div
-    ref="containerRef"
-    class="swipe-container"
-    @touchstart="handleTouchStart"
-    @touchmove="handleTouchMove"
-    @touchend="handleTouchEnd"
-  >
-    <!-- 连接页面 -->
-    <div class="swipe-page">
-      <DevicesView />
-    </div>
-
-    <!-- 会话页面 -->
-    <div class="swipe-page">
-      <SessionsView />
-    </div>
-
-    <!-- 快捷页面 -->
-    <div class="swipe-page">
-      <QuickActionsView />
-    </div>
-
-    <!-- 设置页面 -->
-    <div class="swipe-page">
-      <SettingsView />
+  <div class="swipe-container" ref="containerRef" @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd" @touchcancel="handleTouchEnd">
+    <div
+      class="swipe-track"
+      ref="trackRef"
+      :class="{ dragging: isDragging }"
+      :style="trackStyle"
+    >
+      <div class="swipe-page">
+        <DevicesView />
+      </div>
+      <div class="swipe-page">
+        <SessionsView />
+      </div>
+      <div class="swipe-page">
+        <QuickActionsView />
+      </div>
+      <div class="swipe-page">
+        <SettingsView />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DevicesView from '@/views/mobile/DevicesView.vue'
 import SessionsView from '@/views/mobile/SessionsView.vue'
@@ -39,154 +33,221 @@ import SettingsView from '@/views/mobile/SettingsView.vue'
 const route = useRoute()
 const router = useRouter()
 const containerRef = ref<HTMLElement | null>(null)
-const currentPage = ref(0)
+const trackRef = ref<HTMLElement | null>(null)
 
-// 路由名称到页面索引的映射
-const pageRoutes: Record<string, number> = {
-  'mobile-devices': 0,
-  'mobile-sessions': 1,
-  'mobile-quick-actions': 2,
-  'mobile-settings': 3
+// 页面配置
+const pages = [
+  { name: 'mobile-devices', component: DevicesView },
+  { name: 'mobile-sessions', component: SessionsView },
+  { name: 'mobile-quick-actions', component: QuickActionsView },
+  { name: 'mobile-settings', component: SettingsView }
+]
+
+// 状态
+const currentPage = ref(0)
+const translateX = ref(0)
+const isDragging = ref(false)
+const isAnimating = ref(false)
+
+// 触摸状态
+let startX = 0
+let startY = 0
+let startTime = 0
+let lastX = 0
+let direction: 'horizontal' | 'vertical' | null = null
+
+// 参数配置
+const CONFIG = {
+  directionThreshold: 20,
+  swipeThreshold: 80,
+  velocityThreshold: 0.3,
+  maxOvershoot: 50,
+  animationDuration: 300
 }
+
+// 计算轨道样式
+const trackStyle = computed(() => ({
+  transform: `translate3d(${translateX.value}px, 0, 0)`,
+  transition: isDragging.value || isAnimating.value
+    ? 'none'
+    : `transform ${CONFIG.animationDuration}ms cubic-bezier(0.4, 0, 0.2, 1)`
+}))
 
 // 初始化页面
 function initPage() {
-  // 优先检查查询参数
   const queryPage = route.query.page
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
     if (!isNaN(page) && page >= 0 && page <= 3) {
       currentPage.value = page
-      scrollToPage(page, false)
+      translateX.value = -page * window.innerWidth
       return
     }
   }
 
-  // 其次检查路由名称
   const name = route.name as string
-  if (name && pageRoutes[name] !== undefined) {
-    currentPage.value = pageRoutes[name]
-    scrollToPage(currentPage.value, false)
+  const pageIndex = pages.findIndex(p => p.name === name)
+  if (pageIndex !== -1) {
+    currentPage.value = pageIndex
+    translateX.value = -pageIndex * window.innerWidth
   }
-}
-
-// 监听路由变化，同步页面（同时监听路由名称和查询参数）
-watch([() => route.name, () => route.query], ([name, query]) => {
-  // 优先检查查询参数
-  if (query.page) {
-    const page = parseInt(query.page as string, 10)
-    if (!isNaN(page) && page >= 0 && page <= 3 && page !== currentPage.value) {
-      currentPage.value = page
-      scrollToPage(page, false)
-      return
-    }
-  }
-
-  // 其次检查路由名称
-  if (name && pageRoutes[name as string] !== undefined) {
-    const targetPage = pageRoutes[name as string]
-    if (targetPage !== currentPage.value) {
-      currentPage.value = targetPage
-      scrollToPage(targetPage, false)
-    }
-  }
-}, { immediate: true })
-
-onMounted(() => {
-  initPage()
-})
-
-onUnmounted(() => {
-  // Cleanup if needed
-})
-
-// 触摸滑动相关变量
-let startX = 0
-let startY = 0
-let isDragging = false
-const threshold = 50
-
-function handleTouchStart(e: TouchEvent) {
-  startX = e.touches[0].clientX
-  startY = e.touches[0].clientY
-  isDragging = true
-}
-
-function handleTouchMove(e: TouchEvent) {
-  if (!isDragging) return
-
-  const deltaX = e.touches[0].clientX - startX
-  const deltaY = e.touches[0].clientY - startY
-
-  // 忽略垂直滑动（垂直距离大于水平距离）
-  if (Math.abs(deltaY) > Math.abs(deltaX)) return
-
-  // 阻止默认滚动行为
-  if (containerRef.value) {
-    containerRef.value.style.overflow = 'hidden'
-  }
-}
-
-function handleTouchEnd(e: TouchEvent) {
-  if (!isDragging) return
-
-  const endX = e.changedTouches[0].clientX
-  const deltaX = endX - startX
-
-  // 根据滑动方向和距离决定是否切换页面
-  if (Math.abs(deltaX) > threshold) {
-    if (deltaX < 0) {
-      // 向左滑 -> 下一页
-      if (currentPage.value < 3) {
-        currentPage.value++
-        scrollToPage(currentPage.value)
-        syncRoute(currentPage.value)
-      }
-    } else {
-      // 向右滑 -> 上一页
-      if (currentPage.value > 0) {
-        currentPage.value--
-        scrollToPage(currentPage.value)
-        syncRoute(currentPage.value)
-      }
-    }
-  }
-
-  isDragging = false
-
-  // 恢复滚动
-  if (containerRef.value) {
-    containerRef.value.style.overflow = ''
-  }
-}
-
-function scrollToPage(page: number, smooth = true) {
-  if (!containerRef.value) return
-
-  const containerWidth = window.innerWidth
-  containerRef.value.scrollTo({
-    left: page * containerWidth,
-    behavior: smooth ? 'smooth' : 'auto'
-  })
 }
 
 // 同步路由
 function syncRoute(page: number) {
-  const routeNames = ['mobile-devices', 'mobile-sessions', 'mobile-quick-actions', 'mobile-settings']
-  router.replace({ name: routeNames[page] })
+  const routeNames = pages.map(p => p.name)
+  router.replace({ name: routeNames[page], query: { page: page.toString() } })
 }
+
+// 切换到指定页面
+function goToPage(page: number, animate = true) {
+  if (page < 0 || page > 3 || page === currentPage.value) return
+
+  isAnimating.value = animate
+  currentPage.value = page
+  translateX.value = -page * window.innerWidth
+
+  syncRoute(page)
+
+  setTimeout(() => {
+    isAnimating.value = false
+  }, animate ? CONFIG.animationDuration : 0)
+}
+
+// 触摸事件处理
+function handleTouchStart(e: TouchEvent) {
+  if (isAnimating.value) return
+
+  startX = e.touches[0].clientX
+  startY = e.touches[0].clientY
+  startTime = Date.now()
+  lastX = startX
+  direction = null
+  isDragging.value = true
+}
+
+function handleTouchMove(e: TouchEvent) {
+  if (!isDragging.value || direction === 'vertical') return
+
+  const deltaX = e.touches[0].clientX - startX
+  const deltaY = e.touches[0].clientY - startY
+
+  // 首次移动确定方向
+  if (!direction) {
+    if (Math.abs(deltaX) > CONFIG.directionThreshold || Math.abs(deltaY) > CONFIG.directionThreshold) {
+      direction = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical'
+
+      if (direction === 'vertical') {
+        isDragging.value = false
+        direction = null
+        return
+      }
+    } else {
+      return
+    }
+  }
+
+  // 水平滑动
+  if (direction === 'horizontal') {
+    e.preventDefault()
+
+    const containerWidth = window.innerWidth
+    const baseTranslate = -currentPage.value * containerWidth
+    let newTranslate = baseTranslate + deltaX
+
+    // 边界弹性处理
+    if (currentPage.value === 0 && deltaX > 0) {
+      newTranslate = baseTranslate + deltaX * 0.3
+    } else if (currentPage.value === 3 && deltaX < 0) {
+      newTranslate = baseTranslate + deltaX * 0.3
+    }
+
+    translateX.value = newTranslate
+    lastX = e.touches[0].clientX
+  }
+}
+
+function handleTouchEnd(e: TouchEvent) {
+  if (!isDragging.value || direction !== 'horizontal') {
+    isDragging.value = false
+    direction = null
+    return
+  }
+
+  const endX = e.changedTouches[0].clientX
+  const deltaX = endX - startX
+  const deltaTime = Date.now() - startTime
+  const velocity = Math.abs(deltaX) / deltaTime
+
+  const containerWidth = window.innerWidth
+  const shouldSwipe = Math.abs(deltaX) > CONFIG.swipeThreshold || velocity > CONFIG.velocityThreshold
+
+  if (shouldSwipe) {
+    if (deltaX < 0 && currentPage.value < 3) {
+      goToPage(currentPage.value + 1)
+    } else if (deltaX > 0 && currentPage.value > 0) {
+      goToPage(currentPage.value - 1)
+    } else {
+      translateX.value = -currentPage.value * containerWidth
+    }
+  } else {
+    translateX.value = -currentPage.value * containerWidth
+  }
+
+  isDragging.value = false
+  direction = null
+}
+
+// 路由监听
+watch(() => route.query.page, (queryPage) => {
+  if (queryPage) {
+    const page = parseInt(queryPage as string, 10)
+    if (!isNaN(page) && page >= 0 && page <= 3 && page !== currentPage.value) {
+      goToPage(page, false)
+    }
+  }
+})
+
+// 窗口大小变化
+function handleResize() {
+  translateX.value = -currentPage.value * window.innerWidth
+}
+
+onMounted(() => {
+  initPage()
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
+
+// 暴露给导航组件使用
+defineExpose({
+  goToPage,
+  currentPage
+})
+
+// 提供给子组件的上下文
+provide('swipeContainer', {
+  goToPage,
+  currentPage
+})
 </script>
 
 <style scoped>
 .swipe-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.swipe-track {
   display: flex;
   width: 100%;
   height: 100%;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: smooth;
-  -webkit-overflow-scrolling: touch;
+  will-change: transform;
 }
 
 .swipe-page {
@@ -194,6 +255,7 @@ function syncRoute(page: number) {
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  scroll-snap-align: start;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 </style>
