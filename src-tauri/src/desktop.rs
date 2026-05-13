@@ -3,6 +3,7 @@
 //! 桌面端专用模块
 
 pub mod commands;
+pub mod connection;
 pub mod error;
 pub mod plugin;
 pub mod pty;
