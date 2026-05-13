@@ -591,8 +591,8 @@ impl Drop for SessionManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_session_manager_default() {
+    #[tokio::test]
+    async fn test_session_manager_default() {
         let manager: SessionManager = Default::default();
         assert!(manager.list_sessions().await.is_empty());
     }

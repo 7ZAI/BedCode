@@ -1,0 +1,10 @@
+//! System module
+//!
+//! 系统级功能模块
+
+pub mod commands;
+pub mod config;
+pub mod error;
+
+pub use config::AppConfig;
+pub use error::{AppError, Result};

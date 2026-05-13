@@ -2,13 +2,13 @@
 //!
 //! 提供跨平台的 PTY 管理功能，支持 Windows 原生和 WSL2 环境
 
-mod pty_process;
-mod wsl;
-mod tmux;
+pub mod pty_process;
+pub mod wsl;
+pub mod tmux;
 
-pub use pty_process::*;
-pub use wsl::*;
-pub use tmux::*;
+pub use pty_process::{PtyOutputEvent, PtySessionStatus, PtySessionState, PtySession};
+pub use wsl::{WslDistro, list_distributions, execute_command, windows_to_wsl_path, wsl_to_windows_path, is_wsl_available, get_default_distro};
+pub use tmux::{TmuxSession, is_tmux_available, get_tmux_version, list_sessions, session_exists, create_session, create_session_in_dir, kill_session, send_keys, send_special_key, capture_pane, get_attach_command, get_tmux_command};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

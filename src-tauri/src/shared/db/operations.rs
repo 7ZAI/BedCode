@@ -1,6 +1,6 @@
 //! Database operations
 
-use super::{Database, Pairing, SessionConfig, QuickAction, Setting};
+use super::{Database, Pairing, QuickAction, SessionConfig, Setting};
 use crate::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;

@@ -195,7 +195,7 @@ pub async fn get_qr_connection_info(
         None => Ok(None),
         Some((token, _ttl, _remaining)) => {
             let host = host.or_else(|| {
-                crate::shared::commands::get_local_ip_addresses()
+                crate::shared::system::commands::get_local_ip_addresses()
                     .into_iter()
                     .find(|ip| !ip.starts_with("127.") && !ip.starts_with("169.254."))
             }).unwrap_or_else(|| "127.0.0.1".to_string());
@@ -323,14 +323,14 @@ pub async fn set_db_setting(
 #[tauri::command]
 pub async fn get_app_settings(
     app_handle: tauri::AppHandle,
-) -> crate::Result<crate::shared::config::AppConfig> {
+) -> crate::Result<crate::shared::system::config::AppConfig> {
     let config_path = app_handle
         .path()
         .app_data_dir()
         .map(|p| p.join("config.json"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
-    crate::shared::config::AppConfig::load(&config_path)
+    crate::shared::system::config::AppConfig::load(&config_path)
         .map_err(|e| crate::AppError::Config(e.to_string()))
 }
 
@@ -338,7 +338,7 @@ pub async fn get_app_settings(
 #[tauri::command]
 pub async fn save_app_settings(
     app_handle: tauri::AppHandle,
-    settings: crate::shared::config::AppConfig,
+    settings: crate::shared::system::config::AppConfig,
 ) -> crate::Result<()> {
     let config_path = app_handle
         .path()

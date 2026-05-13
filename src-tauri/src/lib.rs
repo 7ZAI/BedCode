@@ -17,9 +17,9 @@ pub use shared::{AppError, Result};
 // Re-export shared modules for testing
 pub use shared::auth;
 pub use shared::db;
-pub use shared::error;
 pub use shared::parser;
-pub use shared::config;
+pub use shared::notify;
+pub use shared::system;
 
 // Re-export desktop modules for testing
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -32,7 +32,7 @@ pub use desktop::websocket;
 pub use desktop::plugin;
 
 use shared::auth::{PairingService, QrTokenManager};
-use shared::config::AppConfig;
+use shared::system::config::AppConfig;
 use shared::db::Database;
 use std::sync::Arc;
 use tauri::Manager;
@@ -284,11 +284,11 @@ pub fn run() {
             desktop::commands::is_tmux_available,
             desktop::commands::create_tmux_session,
             // Session Config
-            shared::commands::create_session_config,
-            shared::commands::list_session_configs,
-            shared::commands::get_session_config,
-            shared::commands::delete_session_config,
-            shared::commands::update_session_config,
+            shared::system::commands::create_session_config,
+            shared::system::commands::list_session_configs,
+            shared::system::commands::get_session_config,
+            shared::system::commands::delete_session_config,
+            shared::system::commands::update_session_config,
             // Session
             desktop::commands::start_session,
             desktop::commands::list_sessions,
@@ -301,33 +301,33 @@ pub fn run() {
             desktop::commands::write_to_session,
             desktop::commands::send_special_key,
             // Pairing
-            shared::commands::generate_pairing_code,
-            shared::commands::get_current_pairing_code,
-            shared::commands::verify_pairing_code,
-            shared::commands::clear_pairing_code,
-            shared::commands::list_paired_devices,
-            shared::commands::remove_paired_device,
+            shared::system::commands::generate_pairing_code,
+            shared::system::commands::get_current_pairing_code,
+            shared::system::commands::verify_pairing_code,
+            shared::system::commands::clear_pairing_code,
+            shared::system::commands::list_paired_devices,
+            shared::system::commands::remove_paired_device,
             // QR Code
-            shared::commands::generate_qr_code,
-            shared::commands::clear_qr_code,
-            shared::commands::get_qr_connection_info,
-            shared::commands::get_qr_token_ttl,
-            shared::commands::set_qr_token_ttl,
+            shared::system::commands::generate_qr_code,
+            shared::system::commands::clear_qr_code,
+            shared::system::commands::get_qr_connection_info,
+            shared::system::commands::get_qr_token_ttl,
+            shared::system::commands::set_qr_token_ttl,
             // Quick Actions
-            shared::commands::list_quick_actions,
-            shared::commands::create_quick_action,
-            shared::commands::update_quick_action,
-            shared::commands::delete_quick_action,
-            shared::commands::get_all_db_settings,
-            shared::commands::set_db_setting,
+            shared::system::commands::list_quick_actions,
+            shared::system::commands::create_quick_action,
+            shared::system::commands::update_quick_action,
+            shared::system::commands::delete_quick_action,
+            shared::system::commands::get_all_db_settings,
+            shared::system::commands::set_db_setting,
             // Settings
-            shared::commands::get_app_settings,
-            shared::commands::save_app_settings,
+            shared::system::commands::get_app_settings,
+            shared::system::commands::save_app_settings,
             // Utility
-            shared::commands::ping,
-            shared::commands::get_app_version,
-            shared::commands::get_startup_time,
-            shared::commands::get_local_ip_addresses,
+            shared::system::commands::ping,
+            shared::system::commands::get_app_version,
+            shared::system::commands::get_startup_time,
+            shared::system::commands::get_local_ip_addresses,
             desktop::commands::get_connected_devices,
         ])
         .run(tauri::generate_context!())
@@ -428,33 +428,33 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // Pairing
-            shared::commands::generate_pairing_code,
-            shared::commands::get_current_pairing_code,
-            shared::commands::verify_pairing_code,
-            shared::commands::clear_pairing_code,
-            shared::commands::list_paired_devices,
-            shared::commands::remove_paired_device,
+            shared::system::commands::generate_pairing_code,
+            shared::system::commands::get_current_pairing_code,
+            shared::system::commands::verify_pairing_code,
+            shared::system::commands::clear_pairing_code,
+            shared::system::commands::list_paired_devices,
+            shared::system::commands::remove_paired_device,
             // Quick Actions
-            shared::commands::list_quick_actions,
-            shared::commands::create_quick_action,
-            shared::commands::update_quick_action,
-            shared::commands::delete_quick_action,
-            shared::commands::get_all_db_settings,
-            shared::commands::set_db_setting,
+            shared::system::commands::list_quick_actions,
+            shared::system::commands::create_quick_action,
+            shared::system::commands::update_quick_action,
+            shared::system::commands::delete_quick_action,
+            shared::system::commands::get_all_db_settings,
+            shared::system::commands::set_db_setting,
             // Settings
-            shared::commands::get_app_settings,
-            shared::commands::save_app_settings,
+            shared::system::commands::get_app_settings,
+            shared::system::commands::save_app_settings,
             // Utility
-            shared::commands::ping,
-            shared::commands::get_app_version,
-            shared::commands::get_local_ip_addresses,
+            shared::system::commands::ping,
+            shared::system::commands::get_app_version,
+            shared::system::commands::get_local_ip_addresses,
             // Android Specific
             mobile::commands::get_status_bar_height,
             mobile::commands::set_screen_orientation,
             mobile::commands::keep_screen_awake,
             // Session Config
-            shared::commands::list_session_configs,
-            shared::commands::get_session_config,
+            shared::system::commands::list_session_configs,
+            shared::system::commands::get_session_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,7 +2,8 @@
 //!
 //! 封装 portable-pty，提供跨平台的 PTY 管理功能
 
-use super::{windows_to_wsl_path, ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
+use super::wsl::windows_to_wsl_path;
+use super::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
 use crate::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
 use std::io::{BufReader, Read, Write};
