@@ -22,7 +22,7 @@ impl Database {
 
     /// Initialize database schema
     pub fn init_schema(&self) -> crate::Result<()> {
-        self.conn.execute_batch(include_str!("schema.sql"))?;
+        self.conn.execute_batch(include_str!("db/schema.sql"))?;
         self.run_migrations()?;
         Ok(())
     }

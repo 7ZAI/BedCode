@@ -3,6 +3,8 @@
 //! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
 
 use super::{PtySessionHandler, SessionStorage};
+use super::storage::SessionStore;
+use super::pty_handler::PtyHandler;
 use crate::desktop::pty::{PtyOutputEvent, PtySession, SessionLaunchConfig};
 use crate::Result;
 use chrono::Utc;
@@ -249,7 +251,8 @@ impl SessionManager {
 
         let config = self
             .storage
-            .get_config(&config_id)?
+            .get_config(&config_id)
+            .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
         let mut launch_config = self.build_launch_config(&config)?;
