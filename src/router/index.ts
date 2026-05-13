@@ -92,10 +92,15 @@ const router = createRouter({
  * 首次进入应用时，检测平台并跳转到对应的默认页面：
  * - 桌面端：/sessions
  * - 移动端：/mobile/devices
+ *
+ * 优化：不再阻塞等待平台检测，而是：
+ * 1. 先使用乐观假设（移动端 layout）
+ * 2. 平台检测完成后，如果需要切换则触发路由更新
  */
 router.beforeEach(async (to, from, next) => {
   // 根路由需要动态重定向
   if (to.name === 'root') {
+    // 尝试获取已初始化的平台信息（可能已完成或正在初始化）
     const platformInfo = await initPlatform()
 
     if (platformInfo.isMobile) {

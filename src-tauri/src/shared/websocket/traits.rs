@@ -59,6 +59,17 @@ impl DefaultClientInfo {
     }
 }
 
+impl Default for DefaultClientInfo {
+    fn default() -> Self {
+        Self {
+            addr: std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)), 0),
+            client_id: None,
+            authenticated: false,
+            last_heartbeat: Instant::now(),
+        }
+    }
+}
+
 impl ClientInfoTrait for DefaultClientInfo {
     fn addr(&self) -> SocketAddr {
         self.addr

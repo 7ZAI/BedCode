@@ -136,8 +136,9 @@ function setupFontSize() {
 }
 
 // 初始加载设置后再应用主题
-onMounted(async () => {
-  await settingsStore.loadSettings()
+// 注意：设置已在 main.ts 中预加载，这里直接应用
+onMounted(() => {
+  // 设置可能已在 main.ts 中加载完成，直接应用主题
   setupTheme()
   setupFontSize()
 

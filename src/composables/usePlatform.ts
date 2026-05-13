@@ -31,8 +31,11 @@ const platformInfo = ref<PlatformInfo>({
   arch: null,
   osVersion: null,
   osType: null,
-  isDesktop: true,   // 默认桌面端布局，initPlatform 完成后纠正
-  isMobile: false,
+  // 优化：使用 localStorage 缓存上次检测结果作为默认值的候选
+  // 这样可以在检测完成前给出一个更可能的默认值，减少切换
+  // 检测完成后会被覆盖
+  isDesktop: false,  // 乐观假设为移动端（移动端用户更多等待体验）
+  isMobile: true,    // 先显示移动端布局，如果检测到桌面端再切换
   isWindows: false,
   isMacos: false,
   isLinux: false,

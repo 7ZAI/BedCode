@@ -47,26 +47,33 @@ const activeSessionId = ref<string | null>(null)
 // 设备信息缓存（模块级，只初始化一次）
 let _deviceId: string = ''
 let _deviceFingerprint: string = ''
+let _deviceInfoInitialized = false
 
-// 初始化设备信息
+// 延迟初始化设备信息（避免阻塞首屏渲染）
+// 仅在真正需要设备ID时再初始化
 function initDeviceInfo() {
-  if (_deviceId) return  // 已初始化
+  if (_deviceInfoInitialized) return  // 已初始化
+  _deviceInfoInitialized = true
 
-  const storedDeviceId = localStorage.getItem('device_id')
-  if (storedDeviceId) {
-    _deviceId = storedDeviceId
-  } else {
-    _deviceId = crypto.randomUUID()
-    localStorage.setItem('device_id', _deviceId)
-  }
+  // 延迟到下一个事件循环，让首屏先渲染
+  requestAnimationFrame(() => {
+    const storedDeviceId = localStorage.getItem('device_id')
+    if (storedDeviceId) {
+      _deviceId = storedDeviceId
+    } else {
+      _deviceId = crypto.randomUUID()
+      localStorage.setItem('device_id', _deviceId)
+    }
 
-  const storedFingerprint = localStorage.getItem('device_fingerprint')
-  if (storedFingerprint) {
-    _deviceFingerprint = storedFingerprint
-  } else {
-    _deviceFingerprint = crypto.randomUUID()
-    localStorage.setItem('device_fingerprint', _deviceFingerprint)
-  }
+    const storedFingerprint = localStorage.getItem('device_fingerprint')
+    if (storedFingerprint) {
+      _deviceFingerprint = storedFingerprint
+    } else {
+      _deviceFingerprint = crypto.randomUUID()
+      localStorage.setItem('device_fingerprint', _deviceFingerprint)
+    }
+    console.log('[Device] Info initialized:', _deviceId.substring(0, 8))
+  })
 }
 
 export function useRemoteConnection() {

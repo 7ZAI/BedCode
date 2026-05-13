@@ -33,9 +33,11 @@ pub use desktop::plugin;
 
 use shared::auth::{PairingService, QrTokenManager};
 use shared::system::config::AppConfig;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use shared::db::Database;
 use std::sync::Arc;
 use tauri::Manager;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -92,7 +94,8 @@ fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Insert default quick actions
+/// Insert default quick actions (Desktop only)
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn insert_default_quick_actions(db: &Database) -> Result<()> {
     let actions = db.get_quick_actions()?;
     if !actions.is_empty() {
@@ -394,6 +397,8 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn run() {
+    use crate::shared::system::settings::SettingsManager;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -403,22 +408,14 @@ pub fn run() {
             init_logging(app.handle())?;
 
             let app_handle = app.handle();
-            let db_path = app_handle
+
+            // 初始化移动端设置管理器 (JSON 文件存储)
+            let app_data_dir = app_handle
                 .path()
                 .app_data_dir()
-                .expect("Failed to get app data dir")
-                .join("bedcode.db");
-
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let db = Database::new(&db_path)?;
-            db.init_schema()?;
-            insert_default_quick_actions(&db)?;
-
-            let db = Arc::new(Mutex::new(db));
-            app.manage(db.clone());
+                .expect("Failed to get app data dir");
+            let settings_manager = SettingsManager::new(&app_data_dir)?;
+            app.manage(settings_manager);
 
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
@@ -434,14 +431,15 @@ pub fn run() {
             shared::system::commands::clear_pairing_code,
             shared::system::commands::list_paired_devices,
             shared::system::commands::remove_paired_device,
-            // Quick Actions
-            shared::system::commands::list_quick_actions,
-            shared::system::commands::create_quick_action,
-            shared::system::commands::update_quick_action,
-            shared::system::commands::delete_quick_action,
-            shared::system::commands::get_all_db_settings,
-            shared::system::commands::set_db_setting,
-            // Settings
+            // Quick Actions (移动端使用内存存储)
+            shared::system::commands::list_quick_actions_mobile,
+            shared::system::commands::create_quick_action_mobile,
+            shared::system::commands::update_quick_action_mobile,
+            shared::system::commands::delete_quick_action_mobile,
+            // Settings (移动端使用 JSON 文件)
+            shared::system::commands::get_all_db_settings_mobile,
+            shared::system::commands::set_db_setting_mobile,
+            // App Settings
             shared::system::commands::get_app_settings,
             shared::system::commands::save_app_settings,
             // Utility
@@ -452,9 +450,9 @@ pub fn run() {
             mobile::commands::get_status_bar_height,
             mobile::commands::set_screen_orientation,
             mobile::commands::keep_screen_awake,
-            // Session Config
-            shared::system::commands::list_session_configs,
-            shared::system::commands::get_session_config,
+            // Session Config (移动端使用内存存储)
+            shared::system::commands::list_session_configs_mobile,
+            shared::system::commands::get_session_config_mobile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

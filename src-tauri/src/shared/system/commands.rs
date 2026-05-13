@@ -10,9 +10,10 @@ use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
-// ==================== Session Config Commands ====================
+// ==================== Session Config Commands (Desktop Only) ====================
 
 /// 创建会话配置
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn create_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -34,6 +35,7 @@ pub async fn create_session_config(
 }
 
 /// 获取所有会话配置
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn list_session_configs(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -43,6 +45,7 @@ pub async fn list_session_configs(
 }
 
 /// 获取单个会话配置
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn get_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -53,6 +56,7 @@ pub async fn get_session_config(
 }
 
 /// 删除会话配置
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn delete_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -63,6 +67,7 @@ pub async fn delete_session_config(
 }
 
 /// 更新会话配置
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn update_session_config(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -147,7 +152,7 @@ pub async fn remove_paired_device(
     db.remove_pairing(&id)
 }
 
-// ==================== QR Token Commands ====================
+// ==================== QR Token Commands (Desktop Only) ====================
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QrConnectionInfo {
@@ -156,6 +161,7 @@ pub struct QrConnectionInfo {
     pub port: u16,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn generate_qr_code(
     qr_manager: tauri::State<'_, Arc<crate::shared::auth::QrTokenManager>>,
@@ -175,6 +181,7 @@ pub async fn generate_qr_code(
     Ok(token)
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn clear_qr_code(
     qr_manager: tauri::State<'_, Arc<crate::shared::auth::QrTokenManager>>,
@@ -184,6 +191,7 @@ pub async fn clear_qr_code(
     Ok(())
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn get_qr_connection_info(
     qr_manager: tauri::State<'_, Arc<crate::shared::auth::QrTokenManager>>,
@@ -212,6 +220,7 @@ pub async fn get_qr_connection_info(
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn get_qr_token_ttl(
     db: tauri::State<'_, Arc<Mutex<Database>>>,
@@ -223,6 +232,7 @@ pub async fn get_qr_token_ttl(
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn set_qr_token_ttl(
     db: tauri::State<'_, Arc<Mutex<Database>>>,
@@ -233,9 +243,10 @@ pub async fn set_qr_token_ttl(
         .map_err(|e| crate::AppError::Config(e.to_string()))
 }
 
-// ==================== Quick Actions Commands ====================
+// ==================== Quick Actions Commands (Desktop Only) ====================
 
 /// 获取快捷指令
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn list_quick_actions(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -245,6 +256,7 @@ pub async fn list_quick_actions(
 }
 
 /// 创建快捷指令
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn create_quick_action(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -263,6 +275,7 @@ pub async fn create_quick_action(
 }
 
 /// 更新快捷指令
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn update_quick_action(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -288,6 +301,7 @@ pub async fn update_quick_action(
 }
 
 /// 删除快捷指令
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn delete_quick_action(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -298,6 +312,7 @@ pub async fn delete_quick_action(
 }
 
 /// 获取所有数据库设置
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn get_all_db_settings(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -307,6 +322,7 @@ pub async fn get_all_db_settings(
 }
 
 /// 设置数据库配置项
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn set_db_setting(
     db: State<'_, Arc<Mutex<Database>>>,
@@ -395,3 +411,145 @@ pub fn get_local_ip_addresses() -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+// ==================== Mobile-Only Commands (In-Memory Storage) ====================
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile_commands {
+    use super::*;
+    use crate::shared::system::settings::SettingsManager;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    /// 移动端内存存储的快捷指令
+    static QUICK_ACTIONS: std::sync::LazyLock<Arc<RwLock<Vec<QuickAction>>>> =
+        std::sync::LazyLock::new(|| {
+            Arc::new(RwLock::new(vec![
+                QuickAction {
+                    id: Uuid::new_v4().to_string(),
+                    name: "继续".to_string(),
+                    content: "请继续".to_string(),
+                    icon: Some("▶️".to_string()),
+                    color: Some("#22c55e".to_string()),
+                    category: None,
+                    sort_order: 0,
+                    created_at: Utc::now(),
+                },
+                QuickAction {
+                    id: Uuid::new_v4().to_string(),
+                    name: "解释代码".to_string(),
+                    content: "请解释这段代码的作用".to_string(),
+                    icon: Some("📝".to_string()),
+                    color: Some("#3b82f6".to_string()),
+                    category: None,
+                    sort_order: 1,
+                    created_at: Utc::now(),
+                },
+            ]))
+        });
+
+    /// 移动端内存存储的会话配置
+    static SESSION_CONFIGS: std::sync::LazyLock<Arc<RwLock<Vec<SessionConfig>>>> =
+        std::sync::LazyLock::new(|| Arc::new(RwLock::new(Vec::new())));
+
+    /// 获取快捷指令 (移动端内存存储)
+    #[tauri::command]
+    pub async fn list_quick_actions_mobile() -> Result<Vec<QuickAction>> {
+        let actions = QUICK_ACTIONS.read().await;
+        Ok(actions.clone())
+    }
+
+    /// 创建快捷指令 (移动端内存存储)
+    #[tauri::command]
+    pub async fn create_quick_action_mobile(
+        name: String,
+        content: String,
+        icon: Option<String>,
+        color: Option<String>,
+    ) -> Result<QuickAction> {
+        let mut action = QuickAction::new(name, content);
+        action.icon = icon;
+        action.color = color;
+
+        let mut actions = QUICK_ACTIONS.write().await;
+        actions.push(action.clone());
+        Ok(action)
+    }
+
+    /// 更新快捷指令 (移动端内存存储)
+    #[tauri::command]
+    pub async fn update_quick_action_mobile(
+        id: String,
+        name: String,
+        content: String,
+        icon: Option<String>,
+        color: Option<String>,
+    ) -> Result<QuickAction> {
+        let mut actions = QUICK_ACTIONS.write().await;
+        let action = actions
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or_else(|| crate::AppError::NotFound(format!("Quick action not found: {}", id)))?;
+
+        action.name = name;
+        action.content = content;
+        action.icon = icon;
+        action.color = color;
+
+        Ok(action.clone())
+    }
+
+    /// 删除快捷指令 (移动端内存存储)
+    #[tauri::command]
+    pub async fn delete_quick_action_mobile(id: String) -> Result<()> {
+        let mut actions = QUICK_ACTIONS.write().await;
+        actions.retain(|a| a.id != id);
+        Ok(())
+    }
+
+    /// 获取所有设置 (移动端 JSON 文件存储)
+    #[tauri::command]
+    pub async fn get_all_db_settings_mobile(
+        settings_manager: State<'_, SettingsManager>,
+    ) -> Result<Vec<crate::shared::db::Setting>> {
+        let settings = settings_manager.get_all().await?;
+        let now = Utc::now();
+        Ok(settings
+            .into_iter()
+            .map(|(key, value)| crate::shared::db::Setting {
+                key,
+                value,
+                updated_at: now,
+            })
+            .collect())
+    }
+
+    /// 设置配置项 (移动端 JSON 文件存储)
+    #[tauri::command]
+    pub async fn set_db_setting_mobile(
+        settings_manager: State<'_, SettingsManager>,
+        key: String,
+        value: String,
+    ) -> Result<()> {
+        settings_manager.set(key, value).await
+    }
+
+    /// 获取所有会话配置 (移动端内存存储)
+    #[tauri::command]
+    pub async fn list_session_configs_mobile() -> Result<Vec<SessionConfig>> {
+        let configs = SESSION_CONFIGS.read().await;
+        Ok(configs.clone())
+    }
+
+    /// 获取单个会话配置 (移动端内存存储)
+    #[tauri::command]
+    pub async fn get_session_config_mobile(id: String) -> Result<Option<SessionConfig>> {
+        let configs = SESSION_CONFIGS.read().await;
+        Ok(configs.iter().find(|c| c.id == id).cloned())
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub use mobile_commands::*;

@@ -1,10 +1,18 @@
 //! Mobile-specific modules
 //!
-//! 移动端专用模块
+//! 移动端业务模块 - 使用 shared WebSocket 基础设施
 
+pub mod auth;
 pub mod commands;
 pub mod connection;
-pub mod websocket;
+pub mod handler;
+pub mod session;
+
+// Re-export public types
+pub use self::auth::{AuthCredentials, AuthManager, AuthStatus};
+pub use self::connection::{ConnectionManager, ConnectionStatus, TargetDevice};
+pub use self::handler::{MobileEvent, MobileHandler, MobileMessage};
+pub use self::session::{SessionInfo, SessionManager, SessionStatus};
 
 // Mobile uses crate-level re-exports
-pub use crate::shared::error::{AppError, Result};
+pub use crate::shared::system::error::{AppError, Result};
