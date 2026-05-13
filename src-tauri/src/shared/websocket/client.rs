@@ -112,6 +112,12 @@ pub struct WsClient {
     event_tx: broadcast::Sender<WsClientEvent>,
     /// 客户端 ID
     client_id: RwLock<Option<String>>,
+    /// 消息处理器
+    handler: RwLock<Option<Arc<dyn crate::shared::websocket::traits::ClientMessageHandler>>>,
+    /// 发送策略
+    strategy: RwLock<Arc<dyn crate::shared::websocket::traits::SendStrategy>>,
+    /// 发送拦截器链
+    interceptors: RwLock<Vec<Arc<dyn crate::shared::websocket::traits::SendInterceptor>>>,
 }
 
 impl WsClient {
@@ -126,6 +132,9 @@ impl WsClient {
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_tx,
             client_id: RwLock::new(None),
+            handler: RwLock::new(None),
+            strategy: RwLock::new(Arc::new(crate::shared::websocket::traits::DefaultSendStrategy)),
+            interceptors: RwLock::new(Vec::new()),
         })
     }
 
@@ -329,6 +338,29 @@ impl WsClient {
     async fn handle_text_message(&self, text: &str) -> Result<()> {
         match WsMessage::from_json(text) {
             Ok(ws_msg) => {
+                // 如果有注册处理器，调用它
+                let handler_response = if let Some(handler) = self.handler.read().await.as_ref() {
+                    match handler.handle(ws_msg.clone()).await {
+                        Ok(Some(response)) => {
+                            // 发送响应
+                            let _ = self.send(&response).await;
+                            Some(response)
+                        }
+                        Ok(None) => None,
+                        Err(e) => {
+                            tracing::error!("Handler error: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // 如果处理器已经处理了消息，不再进行默认处理
+                if handler_response.is_some() {
+                    return Ok(());
+                }
+
                 match ws_msg.message_type() {
                     WsMessageType::Ping => {
                         // 收到 ping，发送 pong
@@ -448,6 +480,105 @@ impl WsClient {
             Ok(())
         } else {
             Err(crate::AppError::WebSocket("Not connected".to_string()))
+        }
+    }
+
+    // ==================== 泛型扩展方法 ====================
+
+    /// 设置消息处理器
+    pub fn set_handler(&self, handler: Arc<dyn crate::shared::websocket::traits::ClientMessageHandler>) {
+        let mut guard = self.handler.blocking_write();
+        *guard = Some(handler);
+    }
+
+    /// 获取当前消息处理器
+    pub fn get_handler(&self) -> Option<Arc<dyn crate::shared::websocket::traits::ClientMessageHandler>> {
+        let guard = self.handler.blocking_read();
+        guard.clone()
+    }
+
+    /// 移除消息处理器
+    pub fn remove_handler(&self) {
+        let mut guard = self.handler.blocking_write();
+        *guard = None;
+    }
+
+    /// 设置发送策略
+    pub fn set_strategy(&self, strategy: Arc<dyn crate::shared::websocket::traits::SendStrategy>) {
+        let mut guard = self.strategy.blocking_write();
+        *guard = strategy;
+    }
+
+    /// 获取当前发送策略
+    pub fn get_strategy(&self) -> Arc<dyn crate::shared::websocket::traits::SendStrategy> {
+        let guard = self.strategy.blocking_read();
+        guard.clone()
+    }
+
+    /// 添加发送拦截器
+    pub fn add_interceptor(&self, interceptor: Arc<dyn crate::shared::websocket::traits::SendInterceptor>) {
+        let mut guard = self.interceptors.blocking_write();
+        guard.push(interceptor);
+    }
+
+    /// 移除指定拦截器（按名称）
+    pub fn remove_interceptor(&self, name: &str) {
+        let mut guard = self.interceptors.blocking_write();
+        guard.retain(|i| i.name() != name);
+    }
+
+    /// 移除所有拦截器
+    pub fn clear_interceptors(&self) {
+        let mut guard = self.interceptors.blocking_write();
+        guard.clear();
+    }
+
+    /// 获取所有拦截器
+    pub fn get_interceptors(&self) -> Vec<Arc<dyn crate::shared::websocket::traits::SendInterceptor>> {
+        let guard = self.interceptors.blocking_read();
+        guard.clone()
+    }
+
+    /// 发送消息并等待响应
+    pub async fn send_and_wait(&self, message: &WsMessage, timeout: std::time::Duration) -> Result<WsMessage> {
+        let message_id = message.message_id().map(|s| s.to_string());
+
+        // 订阅事件以接收响应
+        let mut receiver = self.event_tx.subscribe();
+
+        // 发送消息
+        self.send(message).await?;
+
+        // 等待响应或超时
+        tokio::select! {
+            result = receiver.recv() => {
+                match result {
+                    Ok(event) => {
+                        match event {
+                            WsClientEvent::TextMessage { message_id: resp_id, content } => {
+                                // 检查是否是我们发送的消息的响应
+                                if let Some(ref sent_id) = message_id {
+                                    if let Some(ref resp_id) = resp_id {
+                                        if resp_id == sent_id {
+                                            return WsMessage::from_json(&content);
+                                        }
+                                    }
+                                }
+                                // 如果没有匹配的消息ID，返回错误
+                                Err(crate::AppError::WebSocket("Unexpected response".to_string()))
+                            }
+                            WsClientEvent::Error { message } => {
+                                Err(crate::AppError::WebSocket(message))
+                            }
+                            _ => Err(crate::AppError::WebSocket("Unexpected event".to_string()))
+                        }
+                    }
+                    Err(_) => Err(crate::AppError::WebSocket("Receiver error".to_string()))
+                }
+            }
+            _ = tokio::time::sleep(timeout) => {
+                Err(crate::AppError::WebSocket("Response timeout".to_string()))
+            }
         }
     }
 }

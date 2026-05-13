@@ -3,8 +3,10 @@
 //! 定义泛型 trait，支持不同业务场景扩展
 
 use std::fmt::Debug;
+use std::future::Future;
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
 
 use crate::shared::websocket::message::WsMessage;
 use crate::Result;
@@ -87,7 +89,7 @@ impl ClientInfoTrait for DefaultClientInfo {
     }
 }
 
-/// 消息处理器 trait（泛型版本）
+/// 消息处理器 trait（泛型版本，用于���务器端）
 pub trait MessageHandler<C: ClientInfoTrait>: Send + Sync {
     /// 处理文本消息（核心方法）
     fn handle_text(
@@ -122,4 +124,257 @@ pub trait MessageHandler<C: ClientInfoTrait>: Send + Sync {
 
     /// 心跳超时回调
     fn on_heartbeat_timeout(&self, _addr: SocketAddr, _client_id: Option<&str>) {}
+}
+
+// ==================== ClientMessageHandler (for WsClient) ====================
+
+/// 客户端消息处理器 trait - 用于 WsClient 处理接收到的消息
+pub trait ClientMessageHandler: Send + Sync {
+    /// 处理接收到的消息
+    fn handle(
+        &self,
+        message: WsMessage,
+    ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>>;
+
+    /// 处理器名称
+    fn name(&self) -> &str;
+}
+
+/// 空处理器 - 不处理任何消息
+#[derive(Debug, Clone, Default)]
+pub struct NoopHandler;
+
+impl ClientMessageHandler for NoopHandler {
+    fn handle(
+        &self,
+        _message: WsMessage,
+    ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn name(&self) -> &str {
+        "NoopHandler"
+    }
+}
+
+// ==================== SendStrategy ====================
+
+/// 发送策略 trait - 定义消息发送的具体逻辑
+pub trait SendStrategy: Send + Sync {
+    /// 发送消息（异步，不等待响应）
+    fn send<'a>(
+        &'a self,
+        client: &'a crate::shared::websocket::WsClient,
+        message: &'a WsMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+    /// 发送消息并等待响应
+    fn send_and_wait<'a>(
+        &'a self,
+        client: &'a crate::shared::websocket::WsClient,
+        message: &'a WsMessage,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<WsMessage>> + Send + 'a>>;
+
+    /// 策略名称
+    fn name(&self) -> &str;
+}
+
+/// 默认发送策略 - 直接发送
+#[derive(Debug, Clone, Default)]
+pub struct DefaultSendStrategy;
+
+impl SendStrategy for DefaultSendStrategy {
+    fn send<'a>(
+        &'a self,
+        client: &'a crate::shared::websocket::WsClient,
+        message: &'a WsMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(client.send(message))
+    }
+
+    fn send_and_wait<'a>(
+        &'a self,
+        client: &'a crate::shared::websocket::WsClient,
+        message: &'a WsMessage,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<WsMessage>> + Send + 'a>> {
+        Box::pin(async move {
+            client.send_and_wait(message, timeout).await
+        })
+    }
+
+    fn name(&self) -> &str {
+        "DefaultSendStrategy"
+    }
+}
+
+/// 重试发送策略
+#[derive(Debug, Clone)]
+pub struct RetrySendStrategy {
+    pub max_retries: u32,
+    pub delay: Duration,
+}
+
+impl Default for RetrySendStrategy {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            delay: Duration::from_secs(1),
+        }
+    }
+}
+
+impl SendStrategy for RetrySendStrategy {
+    fn send<'a>(
+        &'a self,
+        client: &'a crate::shared::websocket::WsClient,
+        message: &'a WsMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let client = client.clone();
+        let message = message.clone();
+        let max_retries = self.max_retries;
+        let delay = self.delay;
+
+        Box::pin(async move {
+            let mut last_error = None;
+            for attempt in 0..max_retries {
+                if attempt > 0 {
+                    tokio::time::sleep(delay).await;
+                }
+                match client.send(&message).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        tracing::warn!("Send attempt {} failed: {}", attempt + 1, e);
+                        last_error = Some(e);
+                    }
+                }
+            }
+            Err(last_error.unwrap_or_else(|| {
+                crate::AppError::WebSocket("Max retries exceeded".to_string())
+            }))
+        })
+    }
+
+    fn send_and_wait<'a>(
+        &'a self,
+        client: &'a crate::shared::websocket::WsClient,
+        message: &'a WsMessage,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<WsMessage>> + Send + 'a>> {
+        let client = client.clone();
+        let message = message.clone();
+        let max_retries = self.max_retries;
+        let delay = self.delay;
+
+        Box::pin(async move {
+            let mut last_error = None;
+            for attempt in 0..max_retries {
+                if attempt > 0 {
+                    tokio::time::sleep(delay).await;
+                }
+                match client.send_and_wait(&message, timeout).await {
+                    Ok(msg) => return Ok(msg),
+                    Err(e) => {
+                        tracing::warn!("SendAndWait attempt {} failed: {}", attempt + 1, e);
+                        last_error = Some(e);
+                    }
+                }
+            }
+            Err(last_error.unwrap_or_else(|| {
+                crate::AppError::WebSocket("Max retries exceeded".to_string())
+            }))
+        })
+    }
+
+    fn name(&self) -> &str {
+        "RetrySendStrategy"
+    }
+}
+
+// ==================== SendInterceptor ====================
+
+/// 发送拦截器 trait - 在发送前后执行自定义逻辑
+pub trait SendInterceptor: Send + Sync {
+    /// 发送前调用
+    fn on_before_send(&self, message: &WsMessage) -> Result<()>;
+
+    /// 发送后调用
+    fn on_after_send(&self, message: &WsMessage, result: &Result<()>);
+
+    /// 拦截器名称
+    fn name(&self) -> &str;
+}
+
+/// 日志拦截器
+#[derive(Debug, Clone, Default)]
+pub struct LoggingInterceptor;
+
+impl SendInterceptor for LoggingInterceptor {
+    fn on_before_send(&self, message: &WsMessage) -> Result<()> {
+        tracing::debug!(
+            "[LoggingInterceptor] Sending message: type={}",
+            message.message_type()
+        );
+        Ok(())
+    }
+
+    fn on_after_send(&self, _message: &WsMessage, result: &Result<()>) {
+        match result {
+            Ok(()) => tracing::debug!("[LoggingInterceptor] Message sent successfully"),
+            Err(e) => tracing::error!("[LoggingInterceptor] Send failed: {}", e),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "LoggingInterceptor"
+    }
+}
+
+/// 监控拦截器
+#[derive(Debug, Default)]
+pub struct MetricsInterceptor {
+    sent_total: std::sync::atomic::AtomicU64,
+    sent_success: std::sync::atomic::AtomicU64,
+    sent_failure: std::sync::atomic::AtomicU64,
+}
+
+impl MetricsInterceptor {
+    pub fn sent_total(&self) -> u64 {
+        self.sent_total
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn sent_success(&self) -> u64 {
+        self.sent_success
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn sent_failure(&self) -> u64 {
+        self.sent_failure
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl SendInterceptor for MetricsInterceptor {
+    fn on_before_send(&self, _message: &WsMessage) -> Result<()> {
+        self.sent_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn on_after_send(&self, _message: &WsMessage, result: &Result<()>) {
+        match result {
+            Ok(()) => self
+                .sent_success
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            Err(_) => self
+                .sent_failure
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        };
+    }
+
+    fn name(&self) -> &str {
+        "MetricsInterceptor"
+    }
 }

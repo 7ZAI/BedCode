@@ -15,5 +15,9 @@ mod traits;
 
 pub use client::{WsClient, WsClientConfig, WsClientEvent, ConnectionStatus};
 pub use message::{BinaryPayload, TextPayload, WsMessage, WsMessageType};
-pub use server::{ClientInfo, HandlerResult, WsServer, WsServerConfig, WsServerEvent};
-pub use traits::ClientInfoTrait;
+pub use server::{ClientInfo, WsServer, WsServerConfig, WsServerEvent};
+pub use traits::{
+    ClientInfoTrait, DefaultClientInfo, HandlerResult, MessageHandler,
+    ClientMessageHandler, NoopHandler, SendStrategy, DefaultSendStrategy, RetrySendStrategy,
+    SendInterceptor, LoggingInterceptor, MetricsInterceptor,
+};
