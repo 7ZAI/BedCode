@@ -1,8 +1,18 @@
 //! Session Management
 //!
 //! 提供会话状态管理、持久化和恢复功能
+//!
+//! 模块划分:
+//! - mod.rs: SessionManager 主类（依赖 trait）
+//! - storage.rs: SessionStore trait 和实现
+//! - pty_handler.rs: PtyHandler trait 和实现
 
-use crate::shared::db::{Database, SessionConfig as DbSessionConfig};
+mod pty_handler;
+mod storage;
+
+pub use pty_handler::{PtyHandler, PtySessionHandler};
+pub use storage::{SessionStore, SessionStorage};
+
 use crate::desktop::pty::{PtyOutputEvent, PtySession, SessionLaunchConfig};
 use crate::Result;
 use chrono::{DateTime, Utc};
@@ -10,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
 /// 会话状态变化事件
@@ -111,13 +121,19 @@ impl SessionInfo {
 }
 
 /// Session Manager
+///
+/// 使用依赖注入模式，通过具体类型获取服务
+/// - SessionStorage: 负责会话配置的数据库操作
+/// - PtySessionHandler: 负责 PTY 生命周期管理
 pub struct SessionManager {
     /// 运行中的 PTY 会话
     pty_sessions: Arc<RwLock<HashMap<String, PtySession>>>,
     /// 会话信息
     session_info: Arc<RwLock<HashMap<String, SessionInfo>>>,
-    /// 数据库
-    db: Arc<Mutex<Database>>,
+    /// 会话存储（数据库操作）
+    storage: Arc<SessionStorage>,
+    /// PTY 处理器
+    pty_handler: Arc<PtySessionHandler>,
     /// 全局输出广播
     output_tx: broadcast::Sender<PtyOutputEvent>,
     /// 会话状态变化广播
@@ -144,8 +160,25 @@ impl SessionManager {
         self.restart_tx.clone()
     }
 
-    /// 创建新的 Session Manager
-    pub fn new(db: Arc<Mutex<Database>>) -> Self {
+    /// 创建新的 Session Manager（使用具体实现）
+    pub fn new(storage: Arc<SessionStorage>) -> Self {
+        let pty_handler = Arc::new(PtySessionHandler::new());
+        Self::new_with_handlers(storage, pty_handler)
+    }
+
+    /// 从数据库创建 Session Manager（兼容旧 API）
+    pub fn from_database(db: crate::shared::db::Database) -> Self {
+        let db = Arc::new(tokio::sync::Mutex::new(db));
+        let storage = Arc::new(SessionStorage::new(db));
+        let pty_handler = Arc::new(PtySessionHandler::new());
+        Self::new_with_handlers(storage, pty_handler)
+    }
+
+    /// 创建新的 Session Manager（使用具体类型注入）
+    pub fn new_with_handlers(
+        storage: Arc<SessionStorage>,
+        pty_handler: Arc<PtySessionHandler>,
+    ) -> Self {
         let (output_tx, _) = broadcast::channel(2048);
         let (status_tx, _) = broadcast::channel(64);
         let (restart_tx, _) = broadcast::channel(64);
@@ -154,7 +187,8 @@ impl SessionManager {
         Self {
             pty_sessions: Arc::new(RwLock::new(HashMap::new())),
             session_info: Arc::new(RwLock::new(HashMap::new())),
-            db,
+            storage,
+            pty_handler,
             output_tx,
             status_tx,
             restart_tx,
@@ -162,19 +196,12 @@ impl SessionManager {
         }
     }
 
-    /// 创建新的 Session Manager (从 Database 值)
-    pub fn from_database(db: Database) -> Self {
-        Self::new(Arc::new(Mutex::new(db)))
-    }
-
     /// 从配置创建会话
     pub async fn create_session(&self, config_id: &str) -> Result<String> {
-        // 从数据库加载配置
-        let db = self.db.lock().await;
-        let config = db
-            .get_session_config(config_id)?
+        // 从存储加载配置（通过 trait）
+        let config = self.storage
+            .get_config(config_id).await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
-        drop(db);
 
         // 生成唯一的会话名称
         let session_name = self.generate_unique_name(config_id, &config.name).await;
@@ -182,8 +209,8 @@ impl SessionManager {
         // 构建启动配置
         let launch_config = self.build_launch_config(&config)?;
 
-        // 创建 PTY 会话
-        let pty_session = PtySession::new(launch_config.clone())?;
+        // 通过 trait 创建 PTY 会话
+        let pty_session = self.pty_handler.create_session(launch_config.clone())?;
         let session_id = pty_session.id().to_string();
 
         // 订阅输出并转发到全局广播
@@ -316,12 +343,10 @@ impl SessionManager {
         // 停止并清理旧会话（但保留 session_id 用于重启后的新会话）
         let _ = self.remove_session(session_id).await;
 
-        // 从数据库加载配置
-        let db = self.db.lock().await;
-        let config = db
-            .get_session_config(&config_id)?
+        // 从存储加载配置（通过 trait）
+        let config = self.storage
+            .get_config(&config_id).await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
-        drop(db);
 
         // 构建启动配置
         let mut launch_config = self.build_launch_config(&config)?;
@@ -331,8 +356,8 @@ impl SessionManager {
         let old_name_for_info = old_name.clone();
         let old_name_for_event = old_name.clone();
 
-        // 创建 PTY 会话，使用旧的 session_id
-        let pty_session = PtySession::with_id(session_id.to_string(), launch_config.clone())?;
+        // 通过 trait 创建 PTY 会话，使用旧的 session_id
+        let pty_session = self.pty_handler.create_session_with_id(session_id.to_string(), launch_config.clone())?;
 
         // 订阅输出并转发到全局广播
         let mut rx = pty_session.subscribe_output();
@@ -419,7 +444,7 @@ impl SessionManager {
     }
 
     /// 从配置构建启动配置
-    fn build_launch_config(&self, config: &DbSessionConfig) -> Result<SessionLaunchConfig> {
+    fn build_launch_config(&self, config: &crate::shared::db::SessionConfig) -> Result<SessionLaunchConfig> {
         use crate::desktop::pty::{ExecutionEnvironment, WindowsShell};
 
         let environment = match config.environment.as_str() {
@@ -643,10 +668,16 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         // 创建内存数据库用于测试
-        let db = Database::new(std::path::Path::new(":memory:"))
+        let db = crate::shared::db::Database::new(std::path::Path::new(":memory:"))
             .expect("Failed to create memory database");
         db.init_schema().expect("Failed to init schema");
-        Self::from_database(db)
+
+        // 使用具体实现创建 storage 和 handler
+        let db = Arc::new(tokio::sync::Mutex::new(db));
+        let storage = Arc::new(SessionStorage::new(db));
+        let pty_handler = Arc::new(PtySessionHandler::new());
+
+        Self::new_with_handlers(storage, pty_handler)
     }
 }
 

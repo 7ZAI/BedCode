@@ -4,16 +4,14 @@
 
 use bedcode_lib::session::{SessionManager, SessionStatus};
 use bedcode_lib::db::Database;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::path::Path;
 use std::time::Duration;
 
 /// 创建测试用的 SessionManager（带配置）
 async fn create_test_session_manager_with_config() -> (SessionManager, String) {
-    let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:"))
-        .expect("Failed to create memory database")));
-    db.lock().await.init_schema().expect("Failed to init schema");
+    let db = Database::new(Path::new(":memory:"))
+        .expect("Failed to create memory database");
+    db.init_schema().expect("Failed to init schema");
 
     // 创建会话配置
     let config = bedcode_lib::db::SessionConfig::new(
@@ -22,9 +20,9 @@ async fn create_test_session_manager_with_config() -> (SessionManager, String) {
         "C:\\Users".to_string(),
         "powershell.exe -NoExit -Command \"Write-Host SessionReady\"".to_string(),
     );
-    db.lock().await.create_session_config(&config).expect("Failed to create config");
+    db.create_session_config(&config).expect("Failed to create config");
 
-    let manager = SessionManager::new(db.clone());
+    let manager = SessionManager::from_database(db);
     (manager, config.id)
 }
 

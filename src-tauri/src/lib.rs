@@ -124,7 +124,6 @@ pub struct AppStartTime(std::time::Instant);
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
-    use desktop::session::SessionManager;
     use desktop::websocket::WebSocketServer;
     use tauri::Emitter;
 
@@ -170,7 +169,9 @@ pub fn run() {
             let db = Arc::new(Mutex::new(db));
             app.manage(db.clone());
 
-            let session_manager = Arc::new(SessionManager::new(db.clone()));
+            // 创建会话存储（通过 trait）
+            let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
+            let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
             app.manage(session_manager.clone());
 
             let plugin_manager = Arc::new(desktop::plugin::PluginManager::new(

@@ -155,7 +155,7 @@ mod session_manager_tests {
     #[tokio::test]
     async fn test_session_manager_new() {
         let (db, _temp_dir) = create_test_db();
-        let manager = SessionManager::new(Arc::new(Mutex::new(db)));
+        let manager = SessionManager::from_database(db);
 
         let sessions = manager.list_sessions().await;
         assert!(sessions.is_empty());
