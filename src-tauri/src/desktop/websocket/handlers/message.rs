@@ -25,7 +25,7 @@ pub async fn handle_message(
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::websocket::server::ClientInfo>>>,
+    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::connection::ClientInfo>>>,
     client_senders: &Arc<RwLock<HashMap<SocketAddr, tokio::sync::mpsc::UnboundedSender<tokio_tungstenite::tungstenite::protocol::Message>>>>,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {

@@ -2,26 +2,14 @@
 //!
 //! 定义移动端和桌面端之间的通信协议
 
+// Re-export types from connection module
+pub use crate::desktop::connection::{
+    AuthPayload, AuthStage, DeviceConnectionEvent, DeviceConnectionInfo, PairingCodeGeneratedEvent
+};
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-/// 配对码生成事件 payload
-#[derive(Debug, Clone, Serialize)]
-pub struct PairingCodeGeneratedEvent {
-    pub code: String,
-    pub expires_in: u64,
-    pub device_name: Option<String>,
-}
-
-/// 设备连接/断开事件（发给前端）
-#[derive(Debug, Clone, Serialize)]
-pub struct DeviceConnectionEvent {
-    pub addr: String,
-    pub device_id: String,
-    pub device_name: Option<String>,
-    pub event: String, // "connected", "disconnected", "authenticated"
-}
 
 /// WebSocket 消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,54 +295,6 @@ impl SpecialKey {
             _ => None,
         }
     }
-}
-
-/// 认证载荷
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthPayload {
-    /// 认证阶段
-    pub stage: AuthStage,
-    /// 设备 ID
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_id: Option<String>,
-    /// 设备名称
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_name: Option<String>,
-    /// 设备指纹
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub device_fingerprint: Option<String>,
-    /// 配对码
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pairing_code: Option<String>,
-    /// 会话令牌
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_token: Option<String>,
-    /// 错误消息
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    /// QR 令牌
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub qr_token: Option<String>,
-}
-
-/// 认证阶段
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthStage {
-    /// 请求配对
-    RequestPairing,
-    /// 配对码验证
-    VerifyCode,
-    /// 交换证书
-    ExchangeCertificate,
-    /// 认证成功
-    Authenticated,
-    /// 认证失败
-    Failed,
-    /// QR 码连接
-    QrConnect,
-    /// QR 连接失败
-    QrFailed,
 }
 
 /// 控制载荷

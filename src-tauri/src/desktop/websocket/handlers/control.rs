@@ -19,7 +19,7 @@ pub async fn handle_control(
     session_manager: &Arc<SessionManager>,
     plugin_manager: &Arc<PluginManager>,
     db: &Arc<Mutex<Database>>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::websocket::server::ClientInfo>>>,
+    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::connection::ClientInfo>>>,
     addr: SocketAddr,
     _device_name: Option<String>,
 ) -> Result<Option<Message>> {

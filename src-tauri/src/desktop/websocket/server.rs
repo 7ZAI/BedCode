@@ -26,22 +26,7 @@ use tauri::AppHandle;
 const HEARTBEAT_TIMEOUT_SECS: u64 = 90;
 
 /// 客户端连接信息
-#[derive(Debug, Clone)]
-pub struct ClientInfo {
-    pub addr: SocketAddr,
-    pub device_id: Option<String>,
-    pub device_name: Option<String>,
-    pub authenticated: bool,
-    pub session_ids: Vec<String>,
-    /// 订阅的会话列表（用于输出转发）
-    pub subscribed_sessions: Vec<String>,
-    /// 最后收到心跳的时间
-    pub last_heartbeat: Instant,
-    /// 客户端的终端列数（每个客户端独立）
-    pub cols: u16,
-    /// 客户端的终端行数（每个客户端独立）
-    pub rows: u16,
-}
+pub use crate::desktop::connection::ClientInfo;
 
 /// WebSocket 服务器
 pub struct WebSocketServer {
@@ -521,9 +506,4 @@ impl WebSocketServer {
 }
 
 /// 设备连接信息（前端展示用）
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DeviceConnectionInfo {
-    pub addr: String,
-    pub device_id: String,
-    pub session_count: usize,
-}
+pub use crate::desktop::connection::DeviceConnectionInfo;
