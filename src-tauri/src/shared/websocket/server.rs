@@ -4,6 +4,7 @@
 //! 提供连接管理、消息收发的基础框架
 
 use crate::shared::websocket::message::{WsMessage, WsMessageType};
+use crate::shared::websocket::traits::ClientInfoTrait;
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -61,6 +62,36 @@ pub struct ClientInfo {
     pub authenticated: bool,
     /// 最后收到心跳的时间
     pub last_heartbeat: std::time::Instant,
+}
+
+impl ClientInfoTrait for ClientInfo {
+    fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+
+    fn set_client_id(&mut self, id: Option<String>) {
+        self.client_id = id;
+    }
+
+    fn is_authenticated(&self) -> bool {
+        self.authenticated
+    }
+
+    fn set_authenticated(&mut self, auth: bool) {
+        self.authenticated = auth;
+    }
+
+    fn last_heartbeat(&self) -> std::time::Instant {
+        self.last_heartbeat
+    }
+
+    fn set_last_heartbeat(&mut self, time: std::time::Instant) {
+        self.last_heartbeat = time;
+    }
 }
 
 /// WebSocket 服务器配置
