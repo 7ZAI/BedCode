@@ -177,7 +177,7 @@ impl AuthManager {
                 "device_name": device_name,
                 "device_fingerprint": fingerprint,
             }
-        }));
+        })).unwrap());
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
@@ -214,7 +214,7 @@ impl AuthManager {
                 "device_fingerprint": fingerprint,
                 "pairing_code": code,
             }
-        }));
+        })).unwrap());
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
@@ -273,7 +273,7 @@ impl AuthManager {
                 "device_fingerprint": fingerprint,
                 "qr_token": token,
             }
-        }));
+        })).unwrap());
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
