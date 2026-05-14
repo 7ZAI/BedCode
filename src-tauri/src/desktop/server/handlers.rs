@@ -3,10 +3,12 @@
 //! WebSocket 消息处理层
 
 pub mod auth;
+pub mod business;
 pub mod control;
 pub mod input;
 
 pub use auth::handle_auth;
+pub use business::BusinessMessageHandler;
 pub use control::handle_control;
 pub use input::handle_input;
 
