@@ -85,7 +85,7 @@ impl SessionManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "control",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -94,7 +94,7 @@ impl SessionManager {
                     "type": "list_sessions"
                 }
             }
-        }));
+        })).unwrap());
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
@@ -118,7 +118,7 @@ impl SessionManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "control",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -128,7 +128,7 @@ impl SessionManager {
                     "config_id": config_id
                 }
             }
-        }));
+        })).unwrap());
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(60)).await?;
 
@@ -160,7 +160,7 @@ impl SessionManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "control",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -170,7 +170,7 @@ impl SessionManager {
                     "session_id": session_id
                 }
             }
-        }));
+        })).unwrap());
 
         self.connection.send(&message).await?;
 
@@ -193,7 +193,7 @@ impl SessionManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "input",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "session_id": session_id,
@@ -202,7 +202,7 @@ impl SessionManager {
                 "data": data,
                 "special_key": special_key
             }
-        }));
+        })).unwrap());
 
         self.connection.send(&message).await
     }
@@ -213,7 +213,7 @@ impl SessionManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "control",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "session_id": session_id,
@@ -226,7 +226,7 @@ impl SessionManager {
                     "rows": rows
                 }
             }
-        }));
+        })).unwrap());
 
         self.connection.send(&message).await
     }

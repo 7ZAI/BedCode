@@ -199,7 +199,7 @@ pub async fn ws_resize_terminal(session_id: String, cols: u32, rows: u32) -> Res
 pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
     let conn = get_connection_manager();
 
-    let message = WsMessage::text(serde_json::json!({
+    let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
         "type": "control",
         "message_id": uuid::Uuid::new_v4().to_string(),
         "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -208,7 +208,7 @@ pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
                 "type": "list_session_configs"
             }
         }
-    }));
+    })).unwrap());
 
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 

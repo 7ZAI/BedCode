@@ -68,21 +68,6 @@ impl ConnectionManager {
         let (event_tx, _) = broadcast::channel(1024);
         let handler = MobileHandler::new();
 
-        // 克隆 handler 用于事件转发
-        let handler_clone = handler.clone();
-        let event_tx_clone = event_tx.clone();
-
-        // 启动事件转发任务
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                let mut rx = handler_clone.subscribe();
-                while let Ok(event) = rx.recv().await {
-                    let _ = event_tx_clone.send(event);
-                }
-            });
-        });
-
         Arc::new(Self {
             status: RwLock::new(ConnectionStatus::Disconnected),
             target: RwLock::new(None),
@@ -140,6 +125,21 @@ impl ConnectionManager {
 
         // 启动运行标记
         self.running.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // 启动事件转发任务（在 async 上下文中）
+        let handler = self.handler.clone();
+        let event_tx = self.event_tx.clone();
+        let running = self.running.clone();
+        tokio::spawn(async move {
+            let mut rx = handler.subscribe();
+            while running.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Ok(event) = rx.recv().await {
+                    let _ = event_tx.send(event);
+                } else {
+                    break;
+                }
+            }
+        });
 
         let client_clone = client.clone();
         let status_clone = self.status.clone();

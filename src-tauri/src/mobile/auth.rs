@@ -121,7 +121,7 @@ impl AuthManager {
         if let Some(creds) = creds {
             *self.status.write().await = AuthStatus::Authenticating;
 
-            let message = WsMessage::text(serde_json::json!({
+            let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
                 "type": "auth",
                 "message_id": uuid::Uuid::new_v4().to_string(),
                 "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -131,7 +131,7 @@ impl AuthManager {
                     "device_fingerprint": creds.fingerprint,
                     "session_token": creds.session_token,
                 }
-            }));
+            })).unwrap());
 
             match self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await {
                 Ok(response) => {
@@ -167,7 +167,7 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "auth",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -203,7 +203,7 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "auth",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -262,7 +262,7 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = WsMessage::text(serde_json::json!({
+        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
             "type": "auth",
             "message_id": uuid::Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().timestamp_millis(),
