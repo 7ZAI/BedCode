@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::shared::websocket::{
-    ConnectionStatus as WsConnectionStatus, WsClient, WsClientConfig, WsClientEvent,
+    ConnectionStatus as WsConnectionStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
 };
 use crate::Result;
 
@@ -49,11 +49,11 @@ pub struct TargetDevice {
 /// 连接管理器
 pub struct ConnectionManager {
     /// 当前连接状态
-    status: RwLock<ConnectionStatus>,
+    status: Arc<RwLock<ConnectionStatus>>,
     /// 目标设备
-    target: RwLock<Option<TargetDevice>>,
+    target: Arc<RwLock<Option<TargetDevice>>>,
     /// WebSocket 客户端
-    client: RwLock<Option<Arc<WsClient>>>,
+    client: Arc<RwLock<Option<Arc<WsClient>>>>,
     /// 消息处理器
     handler: Arc<MobileHandler>,
     /// 事件发送器
@@ -69,9 +69,9 @@ impl ConnectionManager {
         let handler = MobileHandler::new();
 
         Arc::new(Self {
-            status: RwLock::new(ConnectionStatus::Disconnected),
-            target: RwLock::new(None),
-            client: RwLock::new(None),
+            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+            target: Arc::new(RwLock::new(None)),
+            client: Arc::new(RwLock::new(None)),
             handler,
             event_tx,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -142,7 +142,7 @@ impl ConnectionManager {
         });
 
         let client_clone = client.clone();
-        let status_clone = self.status.clone();
+        let status = self.status.clone();
         let event_tx_clone = self.event_tx.clone();
         let running = self.running.clone();
 
@@ -154,7 +154,7 @@ impl ConnectionManager {
             // 启动连接
             if let Err(e) = client_clone.connect().await {
                 tracing::error!("Failed to connect: {}", e);
-                *status_clone.write().await = ConnectionStatus::Error(e.to_string());
+                *status.write().await = ConnectionStatus::Error(e.to_string());
                 let _ = event_tx_clone.send(MobileEvent::Error {
                     message: format!("Connection failed: {}", e),
                 });
@@ -162,7 +162,7 @@ impl ConnectionManager {
             }
 
             // 连接成功，更新状态
-            *status_clone.write().await = ConnectionStatus::Connected;
+            *status.write().await = ConnectionStatus::Connected;
             let _ = event_tx_clone.send(MobileEvent::Connected);
 
             // 等待连接断开
@@ -270,9 +270,9 @@ impl Default for ConnectionManager {
         let handler = MobileHandler::new();
 
         Self {
-            status: RwLock::new(ConnectionStatus::Disconnected),
-            target: RwLock::new(None),
-            client: RwLock::new(None),
+            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+            target: Arc::new(RwLock::new(None)),
+            client: Arc::new(RwLock::new(None)),
             handler,
             event_tx,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),

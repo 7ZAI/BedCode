@@ -27,14 +27,14 @@ pub trait MessageHandler: Send + Sync {
         client_info: &ClientInfo,
     ) -> HandlerResult;
 
-    /// 处理二进制消息
+    /// 处理二进制消息  
     fn handle_binary(
-        &self,
+        &self, 
         message: &WsMessage,
         addr: SocketAddr,
         client_info: &ClientInfo,
     ) -> HandlerResult {
-        let _ = (message, addr, client_info);
+        let _ = (message, addr, client_info); 
         Ok(None)
     }
 
@@ -159,6 +159,8 @@ pub enum WsServerEvent {
 pub struct WsServer {
     /// 配置
     config: WsServerConfig,
+    /// 消息处理器
+    handler: Option<Arc<dyn MessageHandler>>,
     /// 已连接客户端
     clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     /// 客户端发送器映射
@@ -172,13 +174,19 @@ pub struct WsServer {
 }
 
 impl WsServer {
-    /// 创建新的 WebSocket 服务器
+    /// 创建新的 WebSocket 服务器（不带处理器）
     pub fn new(config: WsServerConfig) -> Self {
+        Self::with_handler(config, None)
+    }
+
+    /// 创建带有消息处理器的 WebSocket 服务器
+    pub fn with_handler(config: WsServerConfig, handler: Option<Arc<dyn MessageHandler>>) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
         let (event_tx, _) = broadcast::channel(1024);
 
         Self {
             config,
+            handler,
             clients: Arc::new(RwLock::new(HashMap::new())),
             client_senders: Arc::new(RwLock::new(HashMap::new())),
             shutdown_tx,
@@ -270,6 +278,32 @@ impl WsServer {
         clients.values().filter(|c| c.authenticated).count()
     }
 
+    /// 获取客户端信息（只读）
+    pub async fn get_client(&self, addr: &SocketAddr) -> Option<ClientInfo> {
+        let clients = self.clients.read().await;
+        clients.get(addr).cloned()
+    }
+
+    /// 获取所有已认证客户端地址
+    pub async fn get_authenticated_clients(&self) -> Vec<SocketAddr> {
+        let clients = self.clients.read().await;
+        clients
+            .iter()
+            .filter(|(_, c)| c.authenticated)
+            .map(|(addr, _)| *addr)
+            .collect()
+    }
+
+    /// 获取客户端 Arc 引用（用于外部 handler）
+    pub fn clients(&self) -> &Arc<RwLock<HashMap<SocketAddr, ClientInfo>>> {
+        &self.clients
+    }
+
+    /// 获取发送器 Arc 引用（用于外部 handler）
+    pub fn client_senders(&self) -> &Arc<RwLock<HashMap<SocketAddr, mpsc::Sender<WsMsg>>>> {
+        &self.client_senders
+    }
+
     /// 检查服务器是否运行中
     pub async fn is_running(&self) -> bool {
         *self.is_running.read().await
@@ -298,29 +332,35 @@ impl WsServer {
         let heartbeat_senders = self.client_senders.clone();
         let mut heartbeat_shutdown = self.shutdown_tx.subscribe();
         let timeout_secs = self.config.heartbeat_timeout_secs;
+        let interval_secs = self.config.heartbeat_interval_secs;
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let mut clients = heartbeat_clients.write().await;
-                        let senders = heartbeat_senders.read().await;
                         let now = std::time::Instant::now();
 
-                        let timeout_clients: Vec<SocketAddr> = clients
-                            .iter()
-                            .filter(|(_, client)| {
-                                now.duration_since(client.last_heartbeat).as_secs() > timeout_secs
-                            })
-                            .map(|(addr, _)| *addr)
-                            .collect();
+                        // 获取超时客户端列表
+                        let timeout_addrs: Vec<SocketAddr> = {
+                            let clients = heartbeat_clients.read().await;
+                            clients
+                                .iter()
+                                .filter(|(_, client)| {
+                                    now.duration_since(client.last_heartbeat).as_secs() > timeout_secs
+                                })
+                                .map(|(addr, _)| *addr)
+                                .collect()
+                        };
 
-                        for addr in timeout_clients {
-                            tracing::warn!("Client {} heartbeat timeout, disconnecting", addr);
-                            clients.remove(&addr);
-                            if let Some(tx) = senders.get(&addr) {
-                                let _ = tx.send(WsMsg::Close(None));
+                        // 移除超时的客户端（同时清理 clients 和 senders）
+                        if !timeout_addrs.is_empty() {
+                            let mut clients = heartbeat_clients.write().await;
+                            let mut senders = heartbeat_senders.write().await;
+                            for addr in timeout_addrs {
+                                tracing::warn!("Client {} heartbeat timeout, disconnecting", addr);
+                                clients.remove(&addr);
+                                senders.remove(&addr);
                             }
                         }
                     }
@@ -385,7 +425,7 @@ impl WsServer {
                         }
 
                         // 创建发送任务
-                        let send_task = tokio::spawn(async move {
+                        let mut send_task = tokio::spawn(async move {
                             let mut ws_sender = ws_sender;
                             while let Some(msg) = rx.recv().await {
                                 if ws_sender.send(msg).await.is_err() {
@@ -396,7 +436,7 @@ impl WsServer {
 
                         // 创建接收任务
                         let tx_for_recv = tx_clone.clone();
-                        let recv_task = tokio::spawn(async move {
+                        let mut recv_task = tokio::spawn(async move {
                             let tx = tx_for_recv;
                             while let Some(msg_result) = ws_receiver.next().await {
                                 match msg_result {
@@ -483,12 +523,18 @@ impl WsServer {
                             }
                         });
 
-                        // 等待关闭或任务完成
+                        // 等待关闭或任务完成，当一个任务结束时取消另一个
                         tokio::select! {
-                            _ = send_task => {}
-                            _ = recv_task => {}
+                            _ = &mut send_task => {
+                                recv_task.abort();
+                            }
+                            _ = &mut recv_task => {
+                                send_task.abort();
+                            }
                             _ = shutdown_rx_inner.recv() => {
                                 // 从 client_senders 获取发送器来发送关闭消息
+                                send_task.abort();
+                                recv_task.abort();
                                 let senders = client_senders.read().await;
                                 if let Some(tx) = senders.get(&addr) {
                                     let _ = tx.send(WsMsg::Close(None)).await;
@@ -523,11 +569,11 @@ impl WsServer {
                 _ = shutdown_rx.recv() => {
                     tracing::info!("WebSocket server shutting down");
 
-                    // 发送关闭消息给所有客户端
+                    // 发送关闭消息给所有客户端（使用 try_send 避免阻塞）
                     let close_msg = WsMsg::Close(None);
                     let senders = self.client_senders.read().await;
                     for (_, tx) in senders.iter() {
-                        let _ = tx.send(close_msg.clone()).await;
+                        let _ = tx.try_send(close_msg.clone());
                     }
 
                     {

@@ -3,9 +3,8 @@
 //! Tests WebSocket server and client interaction, including performance tests
 
 use bedcode_lib::shared::websocket::{
-    client::{WsClient, WsClientConfig, ConnectionStatus},
-    message::{WsMessage, WsMessageType},
-    server::{WsServer, WsServerConfig, WsServerEvent},
+    ConnectionStatus, WsClient, WsClientConfig, WsMessage, WsMessageType, WsServer, WsServerConfig,
+    WsServerEvent,
 };
 use std::sync::Arc;
 use std::time::Instant;

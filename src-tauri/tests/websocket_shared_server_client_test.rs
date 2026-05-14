@@ -4,7 +4,7 @@
 
 #[cfg(test)]
 mod ws_server_config_tests {
-    use bedcode_lib::shared::websocket::server::WsServerConfig;
+    use bedcode_lib::shared::websocket::WsServerConfig;
 
     #[test]
     fn test_ws_server_config_default() {
@@ -43,7 +43,7 @@ mod ws_server_config_tests {
 
 #[cfg(test)]
 mod ws_server_event_tests {
-    use bedcode_lib::shared::websocket::server::WsServerEvent;
+    use bedcode_lib::shared::websocket::WsServerEvent;
     use std::net::SocketAddr;
 
     #[test]
@@ -115,7 +115,7 @@ mod ws_server_event_tests {
 
 #[cfg(test)]
 mod ws_client_config_tests {
-    use bedcode_lib::shared::websocket::client::WsClientConfig;
+    use bedcode_lib::shared::websocket::WsClientConfig;
 
     #[test]
     fn test_ws_client_config_default() {
@@ -157,7 +157,7 @@ mod ws_client_config_tests {
 
 #[cfg(test)]
 mod connection_status_tests {
-    use bedcode_lib::shared::websocket::client::ConnectionStatus;
+    use bedcode_lib::shared::websocket::ConnectionStatus;
 
     #[test]
     fn test_connection_status_variants() {
@@ -194,7 +194,7 @@ mod connection_status_tests {
 
 #[cfg(test)]
 mod ws_client_event_tests {
-    use bedcode_lib::shared::websocket::client::WsClientEvent;
+    use bedcode_lib::shared::websocket::WsClientEvent;
 
     #[test]
     fn test_ws_client_event_connected() {

@@ -215,6 +215,252 @@ impl WebSocketManager {
     pub fn port(&self) -> Option<u16> {
         self.inner.port.blocking_read().clone()
     }
+
+    // ==================== Client Management APIs ====================
+
+    /// 获取所有已连接客户端列表
+    pub async fn list_clients(&self) -> Vec<ClientSummary> {
+        if let Some(server) = &self.inner.server {
+            let clients = server.clients().read().await;
+            let addr_to_client_id = self.inner.addr_to_client_id.read().await;
+            let addr_to_device_name = self.inner.addr_to_device_name.read().await;
+            let addr_to_connected_at = self.inner.addr_to_connected_at.read().await;
+
+            clients
+                .iter()
+                .map(|(addr, info)| {
+                    let client_id = addr_to_client_id
+                        .get(addr)
+                        .cloned()
+                        .unwrap_or_else(|| addr.to_string());
+                    let device_name = addr_to_device_name.get(addr).cloned();
+                    let connected_at = addr_to_connected_at
+                        .get(addr)
+                        .copied()
+                        .unwrap_or_else(|| Utc::now().timestamp_millis());
+
+                    ClientSummary {
+                        client_id,
+                        device_name,
+                        addr: addr.to_string(),
+                        authenticated: info.authenticated,
+                        connected_at,
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        }
+    }
+
+    /// 获取已认证客户端列表
+    pub async fn list_authenticated_clients(&self) -> Vec<ClientSummary> {
+        self.list_clients()
+            .await
+            .into_iter()
+            .filter(|c| c.authenticated)
+            .collect()
+    }
+
+    /// 获取指定客户端信息（通过 client_id）
+    pub async fn get_client(&self, client_id: &str) -> Option<ClientSummary> {
+        let addr = {
+            let client_id_to_addr = self.inner.client_id_to_addr.read().await;
+            client_id_to_addr.get(client_id).copied()
+        };
+
+        if let Some(addr) = addr {
+            self.get_client_by_addr(&addr).await
+        } else {
+            None
+        }
+    }
+
+    /// 获取指定客户端信息（通过 SocketAddr）
+    pub async fn get_client_by_addr(&self, addr: &SocketAddr) -> Option<ClientSummary> {
+        if let Some(server) = &self.inner.server {
+            let client_info = server.get_client(addr).await?;
+            let client_id = self.inner.addr_to_client_id.read().await
+                .get(addr)
+                .cloned()
+                .unwrap_or_else(|| addr.to_string());
+            let device_name = self.inner.addr_to_device_name.read().await
+                .get(addr)
+                .cloned();
+            let connected_at = self.inner.addr_to_connected_at.read().await
+                .get(addr)
+                .copied()
+                .unwrap_or_else(|| Utc::now().timestamp_millis());
+
+            Some(ClientSummary {
+                client_id,
+                device_name,
+                addr: addr.to_string(),
+                authenticated: client_info.authenticated,
+                connected_at,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// 获取客户端数量
+    pub async fn client_count(&self) -> usize {
+        if let Some(server) = &self.inner.server {
+            server.client_count().await
+        } else {
+            0
+        }
+    }
+
+    /// 获取已认证客户端数量
+    pub async fn authenticated_count(&self) -> usize {
+        if let Some(server) = &self.inner.server {
+            server.authenticated_count().await
+        } else {
+            0
+        }
+    }
+
+    // ==================== Message Sending APIs ====================
+
+    /// 向指定客户端发送消息（通过 client_id）
+    pub async fn send_to_client(&self, client_id: &str, message: &BusinessMessage) -> Result<()> {
+        let addr = {
+            let client_id_to_addr = self.inner.client_id_to_addr.read().await;
+            client_id_to_addr.get(client_id).copied()
+        };
+
+        if let Some(addr) = addr {
+            Self::send_to_addr(&self.inner, &addr, message).await
+        } else {
+            Err(AppError::WebSocket(format!("Client {} not found", client_id)))
+        }
+    }
+
+    /// 向指���客户端发送文本（通过 client_id）
+    pub async fn send_text_to_client(&self, client_id: &str, text: &str) -> Result<()> {
+        let message = BusinessMessage::from_json(text)
+            .map_err(|e| AppError::WebSocket(format!("Invalid message: {}", e)))?;
+        self.send_to_client(client_id, &message).await
+    }
+
+    /// 向指定客户端发送消息（通过 SocketAddr）
+    pub async fn send_to_addr(&self, addr: &SocketAddr, message: &BusinessMessage) -> Result<()> {
+        if let Some(server) = &self.inner.server {
+            let json = message.to_json()?;
+            server.send_text_to(addr, &json).await
+        } else {
+            Err(AppError::WebSocket("Server not started".to_string()))
+        }
+    }
+
+    /// 向多个指定客户端发送消息
+    pub async fn send_to_clients(&self, client_ids: &[&str], message: &BusinessMessage) -> Result<()> {
+        let mut errors = vec![];
+
+        for client_id in client_ids {
+            if let Err(e) = self.send_to_client(client_id, message).await {
+                errors.push(format!("{}: {}", client_id, e));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::WebSocket(format!(
+                "Failed to send to some clients: {}",
+                errors.join(", ")
+            )))
+        }
+    }
+
+    /// 向除指定客户端外的所有客户端广播
+    pub async fn broadcast_to_others(
+        &self,
+        exclude_client_id: &str,
+        message: &BusinessMessage,
+    ) -> Result<()> {
+        let exclude_addr = {
+            let client_id_to_addr = self.inner.client_id_to_addr.read().await;
+            client_id_to_addr.get(exclude_client_id).copied()
+        };
+
+        if let Some(server) = &self.inner.server {
+            if let Some(addr) = exclude_addr {
+                let json = message.to_json()?;
+                let ws_msg = crate::shared::websocket::WsMessage::text(&json);
+                server.broadcast_to_others(&addr, &ws_msg).await?;
+            } else {
+                self.broadcast(message).await?;
+            }
+            Ok(())
+        } else {
+            Err(AppError::WebSocket("Server not started".to_string()))
+        }
+    }
+
+    /// 向所有已认证客户端广播
+    pub async fn broadcast(&self, message: &BusinessMessage) -> Result<()> {
+        if let Some(server) = &self.inner.server {
+            let json = message.to_json()?;
+            let ws_msg = crate::shared::websocket::WsMessage::text(&json);
+            server.broadcast(&ws_msg).await
+        } else {
+            Err(AppError::WebSocket("Server not started".to_string()))
+        }
+    }
+
+    /// 向所有客户端广播（包含未认证）
+    pub async fn broadcast_all(&self, message: &BusinessMessage) -> Result<()> {
+        self.broadcast(message).await
+    }
+
+    // ==================== Event Subscription ====================
+
+    /// 订阅服务器事件
+    pub fn subscribe(&self) -> broadcast::Receiver<WsServerEvent> {
+        if let Some(server) = &self.inner.server {
+            server.subscribe()
+        } else {
+            let (tx, _) = broadcast::channel(1);
+            tx
+        }
+    }
+
+    // ==================== Helper Methods ====================
+
+    /// 设置设备名称（用于内部映射）
+    pub async fn set_device_name(&self, addr: &SocketAddr, device_name: Option<String>) {
+        if let Some(name) = device_name {
+            let mut addr_to_device_name = self.inner.addr_to_device_name.write().await;
+            addr_to_device_name.insert(*addr, name);
+        }
+    }
+
+    /// 更新客户端认证状态
+    pub async fn set_authenticated(&self, addr: &SocketAddr, client_id: Option<String>) {
+        if let Some(server) = &self.inner.server {
+            server.set_authenticated(addr, client_id.clone()).await;
+
+            if let Some(cid) = client_id {
+                let mut client_id_to_addr = self.inner.client_id_to_addr.write().await;
+                client_id_to_addr.insert(cid, *addr);
+
+                let mut addr_to_client_id = self.inner.addr_to_client_id.write().await;
+                addr_to_client_id.insert(*addr, cid);
+            }
+        }
+    }
+
+    /// 客户端是否已认证
+    pub async fn is_client_authenticated(&self, client_id: &str) -> bool {
+        if let Some(client) = self.get_client(client_id).await {
+            client.authenticated
+        } else {
+            false
+        }
+    }
 }
 
 // ==================== Private Helper Methods ====================

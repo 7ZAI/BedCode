@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use serde::{Deserialize, Serialize};
 
 use crate::shared::websocket::WsMessage;
 use crate::Result;
@@ -11,7 +12,7 @@ use crate::Result;
 use super::connection::ConnectionManager;
 
 /// 会话状态
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionStatus {
     /// 空闲
     Idle,
@@ -30,7 +31,7 @@ pub enum SessionStatus {
 }
 
 /// 会话信息
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     /// 会话 ID
     pub id: String,
@@ -98,13 +99,11 @@ impl SessionManager {
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-        if let Ok(json) = response.to_json() {
-            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) {
-                if let Some(sessions_array) = payload.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("sessions")) {
-                    if let Ok(sessions) = serde_json::from_value::<Vec<SessionInfo>>(sessions_array.clone()) {
-                        *self.sessions.write().await = sessions.clone();
-                        return Ok(sessions);
-                    }
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
+            if let Some(sessions_array) = payload.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("sessions")) {
+                if let Ok(sessions) = serde_json::from_value::<Vec<SessionInfo>>(sessions_array.clone()) {
+                    *self.sessions.write().await = sessions.clone();
+                    return Ok(sessions);
                 }
             }
         }
@@ -132,22 +131,20 @@ impl SessionManager {
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(60)).await?;
 
-        if let Ok(json) = response.to_json() {
-            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) {
-                if let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) {
-                    let session = SessionInfo {
-                        id: session_id.to_string(),
-                        name: format!("Session-{}", &session_id[..8]),
-                        config_id: config_id.to_string(),
-                        status: SessionStatus::Running,
-                        created_at: chrono::Utc::now().timestamp_millis(),
-                    };
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
+            if let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) {
+                let session = SessionInfo {
+                    id: session_id.to_string(),
+                    name: format!("Session-{}", &session_id[..8]),
+                    config_id: config_id.to_string(),
+                    status: SessionStatus::Running,
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                };
 
-                    *self.active_session.write().await = Some(session.clone());
-                    self.sessions.write().await.push(session);
+                *self.active_session.write().await = Some(session.clone());
+                self.sessions.write().await.push(session);
 
-                    return Ok(session_id.to_string());
-                }
+                return Ok(session_id.to_string());
             }
         }
 

@@ -2,7 +2,7 @@
 //!
 //! Tests WsMessage types
 
-use bedcode_lib::{
+use bedcode_lib::websocket::{
     WsMessage, WsMessageType, TextPayload, BinaryPayload,
 };
 

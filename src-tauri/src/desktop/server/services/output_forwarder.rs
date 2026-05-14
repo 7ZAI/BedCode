@@ -1,9 +1,11 @@
-//! Output Forwarder
+//! Output Forwarder Service
 //!
 //! 负责将 PTY 输出转发给订阅了相应会话的客户端
 
 use crate::desktop::pty::PtyOutputEvent;
 use crate::desktop::session::SessionManager;
+use crate::desktop::server::client_info::ClientInfo;
+use crate::desktop::server::message::Message;
 use crate::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -17,7 +19,7 @@ use uuid::Uuid;
 /// 负责将 PTY 输出转发给订阅了相应会话的客户端
 pub struct OutputForwarder {
     session_manager: Arc<SessionManager>,
-    clients: Arc<RwLock<HashMap<SocketAddr, super::server::ClientInfo>>>,
+    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     client_senders: Arc<RwLock<HashMap<SocketAddr, tokio::sync::mpsc::UnboundedSender<WsMessage>>>>,
 }
 
@@ -25,7 +27,7 @@ impl OutputForwarder {
     /// 创建新的输出转发器
     pub fn new(
         session_manager: Arc<SessionManager>,
-        clients: Arc<RwLock<HashMap<SocketAddr, super::server::ClientInfo>>>,
+        clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
         client_senders: Arc<RwLock<HashMap<SocketAddr, tokio::sync::mpsc::UnboundedSender<WsMessage>>>>,
     ) -> Self {
         Self {
@@ -79,11 +81,11 @@ impl OutputForwarder {
         );
 
         // 直接使用 PTY 事件中的 base64 数据构造 Output 消息
-        let message = super::message::Message::Output {
+        let message = Message::Output {
             message_id: Uuid::new_v4().to_string(),
             session_id: event.session_id.clone(),
             timestamp: chrono::Utc::now().timestamp_millis(),
-            payload: super::message::OutputPayload {
+            payload: crate::desktop::server::message::OutputPayload {
                 data: event.data.clone(),
                 is_waiting,
             },

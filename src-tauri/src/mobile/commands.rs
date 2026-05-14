@@ -212,12 +212,10 @@ pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
 
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-    if let Ok(json) = response.to_json() {
-        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) {
-            if let Some(configs) = payload.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("configs")) {
-                if let Ok(configs_vec) = serde_json::from_value(configs.clone()) {
-                    return Ok(configs_vec);
-                }
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
+        if let Some(configs) = payload.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("configs")) {
+            if let Ok(configs_vec) = serde_json::from_value(configs.clone()) {
+                return Ok(configs_vec);
             }
         }
     }

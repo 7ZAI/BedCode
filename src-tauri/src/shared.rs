@@ -10,3 +10,4 @@ pub mod system;
 pub mod websocket;
 
 pub use system::error::{AppError, Result};
+pub use system::config;

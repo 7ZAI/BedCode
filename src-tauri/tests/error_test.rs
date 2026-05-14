@@ -1,6 +1,6 @@
 //! Tests for error types
 
-use bedcode_lib::error::AppError;
+use bedcode_lib::AppError;
 
 #[test]
 fn test_error_display() {

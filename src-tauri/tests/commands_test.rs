@@ -162,7 +162,7 @@ mod session_info_tests {
 }
 
 mod utility_command_tests {
-    use bedcode_lib::config::{AppConfig, NetworkConfig, SessionConfig as ConfigSession, UiConfig};
+    use bedcode_lib::shared::config::{AppConfig, NetworkConfig, SessionConfig as ConfigSession, UiConfig};
 
     #[test]
     fn test_get_app_settings_default() {
@@ -324,7 +324,7 @@ mod database_command_tests {
 }
 
 mod error_tests {
-    use bedcode_lib::error::AppError;
+    use bedcode_lib::AppError;
 
     #[test]
     fn test_app_error_display() {

@@ -1,11 +1,11 @@
-//! Control Handler
+//! Session Control Service
 //!
-//! 处理控制命令相关逻辑
+//! 处理会话启动/停止/缩放等控制逻辑
 
 use crate::desktop::plugin::PluginManager;
 use crate::desktop::session::SessionManager;
+use crate::desktop::server::message::{ControlAction, Message, SessionSummary, SessionConfigSummary, QuickActionSummary};
 use crate::shared::db::Database;
-use crate::desktop::websocket::message::{ControlAction, Message, SessionSummary, SessionConfigSummary, QuickActionSummary};
 use crate::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -19,7 +19,7 @@ pub async fn handle_control(
     session_manager: &Arc<SessionManager>,
     plugin_manager: &Arc<PluginManager>,
     db: &Arc<Mutex<Database>>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::connection::ClientInfo>>>,
+    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::server::ClientInfo>>>,
     addr: SocketAddr,
     _device_name: Option<String>,
 ) -> Result<Option<Message>> {
@@ -60,7 +60,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::SessionList { sessions: all_sessions },
                 },
             }))
@@ -87,7 +87,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::SessionConfigList { configs: summaries },
                 },
             }))
@@ -99,7 +99,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::StartSession { config_id },
                 },
             }))
@@ -120,7 +120,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::StopSession { session_id },
                 },
             }))
@@ -141,7 +141,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::RemoveSession { session_id },
                 },
             }))
@@ -181,7 +181,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::QuickActionList { actions: summaries },
                 },
             }))
@@ -210,7 +210,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::JoinSession { session_id },
                 },
             }))
@@ -230,7 +230,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::LeaveSession { session_id },
                 },
             }))
@@ -259,7 +259,7 @@ pub async fn handle_control(
                 message_id: request_message_id,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::websocket::message::ControlPayload {
+                payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::RegisteredPluginSession { session_id },
                 },
             }))

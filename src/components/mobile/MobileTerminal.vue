@@ -110,7 +110,7 @@ function initTerminal() {
     theme: isDarkMode ? darkTheme : lightTheme,
     cursorBlink: false, // 移动端禁用光标闪烁
     cursorStyle: 'bar',
-    scrollback: 10000, // 与桌面端一致，保留 10000 行历史
+    scrollback: 20000, // 移动端保留 20000 行历史
     allowProposedApi: true,
     cursorInactiveStyle: 'none',
     // 移动端：禁用终端直接输入，输入只能通过弹窗

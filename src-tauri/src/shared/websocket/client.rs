@@ -173,17 +173,26 @@ impl WsClient {
 
     /// 连接到服务器
     pub async fn connect(self: &Arc<Self>) -> Result<()> {
+        // 使用原子操作确保只有一个连接任务在运行
+        if !self.running.compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        ).is_ok() {
+            tracing::warn!("Already connected or connecting");
+            return Ok(());
+        }
+
         // 检查当前状态
         {
             let status = self.status.read().await.clone();
-            if status == ConnectionStatus::Connecting || status == ConnectionStatus::Connected {
-                tracing::warn!("Already connected or connecting");
+            if status == ConnectionStatus::Connected {
+                self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+                tracing::warn!("Already connected");
                 return Ok(());
             }
         }
-
-        // 设置状态为连接中
-        *self.status.write().await = ConnectionStatus::Connecting;
 
         let url = self.config.url();
         tracing::info!("Connecting to {}", url);
@@ -212,14 +221,11 @@ impl WsClient {
         // 设置状态为已连接
         *self.status.write().await = ConnectionStatus::Connected;
 
-        // 启动运行标记
-        self.running.store(true, std::sync::atomic::Ordering::SeqCst);
-
         let self_clone = self.clone();
         let running = self.running.clone();
 
         // 发送任务：处理待发送消息和心跳
-        let sender_task = tokio::spawn(async move {
+        let mut sender_task = tokio::spawn(async move {
             let mut heartbeat_interval = interval(std::time::Duration::from_secs(
                 self_clone.config.heartbeat_interval_secs,
             ));
@@ -278,7 +284,7 @@ impl WsClient {
         let self_clone2 = self.clone();
 
         // 接收任务：处理接收到的消息
-        let receiver_task = tokio::spawn(async move {
+        let mut receiver_task = tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(WsMsg::Text(text)) => {
@@ -325,10 +331,14 @@ impl WsClient {
         // 发送连接成功事件
         let _ = self.event_tx.send(WsClientEvent::Connected);
 
-        // 等待任一任务结束
+        // 等待任一任务结束，当一个任务结束时取消另一个
         tokio::select! {
-            _ = sender_task => {}
-            _ = receiver_task => {}
+            _ = &mut sender_task => {
+                receiver_task.abort();
+            }
+            _ = &mut receiver_task => {
+                sender_task.abort();
+            }
         }
 
         Ok(())
@@ -543,6 +553,12 @@ impl WsClient {
     pub async fn send_and_wait(&self, message: &WsMessage, timeout: std::time::Duration) -> Result<WsMessage> {
         let message_id = message.message_id().map(|s| s.to_string());
 
+        // 如果没有 message_id，无法匹配响应
+        let sent_id = match message_id {
+            Some(id) => id,
+            None => return Err(crate::AppError::WebSocket("Message has no message_id, cannot wait for response".to_string())),
+        };
+
         // 订阅事件以接收响应
         let mut receiver = self.event_tx.subscribe();
 
@@ -550,35 +566,39 @@ impl WsClient {
         self.send(message).await?;
 
         // 等待响应或超时
-        tokio::select! {
-            result = receiver.recv() => {
-                match result {
-                    Ok(event) => {
-                        match event {
-                            WsClientEvent::TextMessage { message_id: resp_id, content } => {
-                                // 检查是否是我们发送的消息的响应
-                                if let Some(ref sent_id) = message_id {
-                                    if let Some(ref resp_id) = resp_id {
-                                        if resp_id == sent_id {
-                                            return WsMessage::from_json(&content);
-                                        }
-                                    }
-                                }
-                                // 如果没有匹配的消息ID，返回错误
-                                Err(crate::AppError::WebSocket("Unexpected response".to_string()))
+        let timeout = tokio::time::timeout(timeout, async {
+            loop {
+                match receiver.recv().await {
+                    Ok(WsClientEvent::TextMessage { message_id: resp_id, content }) => {
+                        // 检查是否是我们发送的消息的响应
+                        if let Some(resp_id) = resp_id {
+                            if resp_id == sent_id {
+                                return WsMessage::from_json(&content);
                             }
-                            WsClientEvent::Error { message } => {
-                                Err(crate::AppError::WebSocket(message))
-                            }
-                            _ => Err(crate::AppError::WebSocket("Unexpected event".to_string()))
                         }
+                        // 消息ID不匹配，继续等待
                     }
-                    Err(_) => Err(crate::AppError::WebSocket("Receiver error".to_string()))
+                    Ok(WsClientEvent::Error { message }) => {
+                        return Err(crate::AppError::WebSocket(message));
+                    }
+                    Ok(WsClientEvent::Disconnected) => {
+                        return Err(crate::AppError::WebSocket("Connection lost".to_string()));
+                    }
+                    Ok(WsClientEvent::ServerClosed { reason }) => {
+                        return Err(crate::AppError::WebSocket(format!("Server closed: {}", reason)));
+                    }
+                    // 忽略其他事件类型，继续等待
+                    Ok(_) => {}
+                    Err(_) => {
+                        return Err(crate::AppError::WebSocket("Receiver error".to_string()));
+                    }
                 }
             }
-            _ = tokio::time::sleep(timeout) => {
-                Err(crate::AppError::WebSocket("Response timeout".to_string()))
-            }
+        });
+
+        match timeout.await {
+            Ok(result) => result,
+            Err(_) => Err(crate::AppError::WebSocket("Response timeout".to_string())),
         }
     }
 }

@@ -386,7 +386,7 @@ mod session_config_tests {
 }
 
 mod error_handling_tests {
-    use bedcode_lib::error::AppError;
+    use bedcode_lib::AppError;
 
     #[test]
     fn test_session_not_found_error() {

@@ -91,7 +91,7 @@ impl SettingsManager {
 
     /// 设置值
     pub async fn set(&self, key: String, value: String) -> Result<()> {
-        let settings = self.settings.write().await;
+        let mut settings = self.settings.write().await;
         settings.set(key, value);
         // 在写锁作用域内保存，避免并发竞争
         settings.save(&self.path)?;

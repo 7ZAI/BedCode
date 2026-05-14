@@ -144,7 +144,7 @@ pub async fn send_special_key(
 /// 获取当前 WebSocket 已连接的设备列表
 #[tauri::command]
 pub async fn get_connected_devices(
-    ws_server: State<'_, Arc<crate::desktop::websocket::WebSocketServer>>,
-) -> Result<Vec<crate::desktop::websocket::DeviceConnectionInfo>> {
+    ws_server: State<'_, Arc<crate::desktop::server::WebSocketServer>>,
+) -> Result<Vec<crate::desktop::server::DeviceConnectionInfo>> {
     Ok(ws_server.get_connected_devices().await)
 }

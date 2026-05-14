@@ -66,7 +66,7 @@ impl AuthManager {
     }
 
     /// 初始化设备信息
-    pub fn init_device_info(&self) {
+    pub async fn init_device_info(&self) {
         // 从 localStorage 或生成新的设备 ID
         // 这里使用固定值，实际应从 Tauri 获取
         let device_id = uuid::Uuid::new_v4().to_string();
@@ -181,12 +181,10 @@ impl AuthManager {
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-        if let Ok(json) = response.to_json() {
-            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) {
-                if payload.get("payload").and_then(|p| p.get("stage")) == Some(&serde_json::json!("verify_code")) {
-                    *self.status.write().await = AuthStatus::WaitingPairingCode;
-                    return Ok(());
-                }
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
+            if payload.get("payload").and_then(|p| p.get("stage")) == Some(&serde_json::json!("verify_code")) {
+                *self.status.write().await = AuthStatus::WaitingPairingCode;
+                return Ok(());
             }
         }
 
@@ -218,33 +216,31 @@ impl AuthManager {
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-        if let Ok(json) = response.to_json() {
-            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) {
-                let stage = payload.get("payload").and_then(|p| p.get("stage"));
-                if stage == Some(&serde_json::json!("authenticated")) {
-                    // 提取凭据
-                    let pairing_id = payload.get("payload")
-                        .and_then(|p| p.get("device_id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let session_token = payload.get("payload")
-                        .and_then(|p| p.get("session_token"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
+            let stage = payload.get("payload").and_then(|p| p.get("stage"));
+            if stage == Some(&serde_json::json!("authenticated")) {
+                // 提取凭据
+                let pairing_id = payload.get("payload")
+                    .and_then(|p| p.get("device_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let session_token = payload.get("payload")
+                    .and_then(|p| p.get("session_token"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
 
-                    let creds = AuthCredentials {
-                        pairing_id: pairing_id.clone(),
-                        fingerprint: fingerprint.clone(),
-                        session_token: session_token.clone(),
-                    };
+                let creds = AuthCredentials {
+                    pairing_id: pairing_id.clone(),
+                    fingerprint: fingerprint.clone(),
+                    session_token: session_token.clone(),
+                };
 
-                    self.set_credentials(creds).await;
-                    *self.status.write().await = AuthStatus::Authenticated;
-                    self.connection.set_paired().await;
-                    return Ok(true);
-                }
+                self.set_credentials(creds).await;
+                *self.status.write().await = AuthStatus::Authenticated;
+                self.connection.set_paired().await;
+                return Ok(true);
             }
         }
 
@@ -277,31 +273,29 @@ impl AuthManager {
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-        if let Ok(json) = response.to_json() {
-            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&json) {
-                if payload.get("payload").and_then(|p| p.get("stage")) == Some(&serde_json::json!("authenticated")) {
-                    let pairing_id = payload.get("payload")
-                        .and_then(|p| p.get("device_id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let session_token = payload.get("payload")
-                        .and_then(|p| p.get("session_token"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
+            if payload.get("payload").and_then(|p| p.get("stage")) == Some(&serde_json::json!("authenticated")) {
+                let pairing_id = payload.get("payload")
+                    .and_then(|p| p.get("device_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let session_token = payload.get("payload")
+                    .and_then(|p| p.get("session_token"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
 
-                    let creds = AuthCredentials {
-                        pairing_id: pairing_id.clone(),
-                        fingerprint: fingerprint.clone(),
-                        session_token: session_token.clone(),
-                    };
+                let creds = AuthCredentials {
+                    pairing_id: pairing_id.clone(),
+                    fingerprint: fingerprint.clone(),
+                    session_token: session_token.clone(),
+                };
 
-                    self.set_credentials(creds).await;
-                    *self.status.write().await = AuthStatus::Authenticated;
-                    self.connection.set_paired().await;
-                    return Ok(true);
-                }
+                self.set_credentials(creds).await;
+                *self.status.write().await = AuthStatus::Authenticated;
+                self.connection.set_paired().await;
+                return Ok(true);
             }
         }
 

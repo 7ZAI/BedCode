@@ -1,9 +1,9 @@
-//! Authentication Handler
+//! Authentication Service
 //!
 //! 处理设备配对和认证逻辑
 
-use crate::desktop::connection::types::{AuthPayload, AuthStage, DeviceConnectionEvent, PairingCodeGeneratedEvent};
-use crate::desktop::websocket::message::Message;
+use crate::desktop::server::connection_types::{AuthPayload, AuthStage, DeviceConnectionEvent, PairingCodeGeneratedEvent};
+use crate::desktop::server::message::Message;
 use crate::shared::auth::PairingService;
 use crate::shared::auth::QrTokenManager;
 use crate::shared::db::Database;
@@ -24,7 +24,7 @@ pub async fn handle_auth(
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::connection::client::ClientInfo>>>,
+    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::server::ClientInfo>>>,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
     tracing::info!("handle_auth called with stage: {:?}", payload.stage);

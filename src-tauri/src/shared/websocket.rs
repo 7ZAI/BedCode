@@ -21,12 +21,12 @@ mod traits;
 
 pub use client::{WsClient, WsClientConfig, WsClientEvent, ConnectionStatus};
 pub use codec::{JsonCodec, MessageCodec};
-pub use events::{WsServerEvent, WsServerEventBuilder};
+pub use events::WsServerEventBuilder;
 pub use heartbeat::{HeartbeatConfig, HeartbeatEvent, HeartbeatManager, HeartbeatSender};
 pub use message::{BinaryPayload, TextPayload, WsMessage, WsMessageType};
 pub use server::{
-    HandlerResult, WsServer,
-    WsServerConfig,
+    ClientInfo, HandlerResult, WsServer,
+    WsServerConfig, WsServerEvent,
 };
 pub use traits::{
     ClientInfoTrait, DefaultClientInfo, HandlerResult as TraitHandlerResult, MessageHandler,

@@ -3,12 +3,12 @@
 //! 桌面端专用模块
 
 pub mod commands;
-pub mod connection;
-pub mod error;
 pub mod plugin;
 pub mod pty;
 pub mod session;
 pub mod server;
-pub mod websocket;
+pub mod websocket_manager;
+
+pub use websocket_manager::{BusinessHandler, ClientSummary, WebSocketManager};
 
 pub use crate::shared::{AppError, Result};

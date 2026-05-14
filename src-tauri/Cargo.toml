@@ -62,13 +62,14 @@ regex = "1"
 # Network utilities
 local-ip-address = "0.6"
 
+# WebSocket (shared between desktop and mobile)
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
 # Desktop-only dependencies
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # PTY management
 portable-pty = "0.8"
-# WebSocket server
-tokio-tungstenite = "0.24"
-futures-util = "0.3"
 # Secure storage
 keyring = "3"
 

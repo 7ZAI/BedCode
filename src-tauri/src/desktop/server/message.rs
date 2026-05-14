@@ -2,8 +2,8 @@
 //!
 //! 定义移动端和桌面端之间的通信协议
 
-// Re-export types from connection module
-pub use crate::desktop::connection::{
+// Re-export types from connection_types module
+pub use crate::desktop::server::connection_types::{
     AuthPayload, AuthStage, DeviceConnectionEvent, DeviceConnectionInfo, PairingCodeGeneratedEvent
 };
 

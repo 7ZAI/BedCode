@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 use crate::shared::websocket::{
-    ClientMessageHandler, HandlerResult, WsMessage, WsClientEvent,
+    ClientMessageHandler, HandlerResult, WsMessage,
 };
 use crate::Result;
 

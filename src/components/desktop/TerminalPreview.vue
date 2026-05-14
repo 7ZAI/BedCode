@@ -176,7 +176,7 @@ function initTerminal() {
     theme: getTheme(),
     cursorBlink: true,
     cursorStyle: 'block',
-    scrollback: 50000,
+    scrollback: 50000, // 桌面端实时预览保留 50000 行历史
     allowProposedApi: true,
     // 确保光标样式正确
     cursorWidth: 1,

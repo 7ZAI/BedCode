@@ -75,3 +75,10 @@ impl From<notify::Error> for AppError {
         AppError::Internal(format!("File watcher error: {}", e))
     }
 }
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl From<keyring::Error> for AppError {
+    fn from(e: keyring::Error) -> Self {
+        AppError::Keyring(e.to_string())
+    }
+}

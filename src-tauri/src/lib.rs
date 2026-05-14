@@ -16,10 +16,12 @@ pub use shared::{AppError, Result};
 
 // Re-export shared modules for testing
 pub use shared::auth;
+pub use shared::config;
 pub use shared::db;
 pub use shared::parser;
 pub use shared::notify;
 pub use shared::system;
+pub use shared::websocket;
 
 // Re-export desktop modules for testing
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -27,7 +29,7 @@ pub use desktop::session;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::pty;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use desktop::websocket;
+pub use desktop::server;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::plugin;
 
@@ -127,7 +129,7 @@ pub struct AppStartTime(std::time::Instant);
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
-    use desktop::websocket::WebSocketServer;
+    use desktop::server::WebSocketServer;
     use tauri::Emitter;
 
     let app_start = AppStartTime(std::time::Instant::now());
