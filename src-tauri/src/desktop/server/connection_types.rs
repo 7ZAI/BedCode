@@ -30,4 +30,4 @@ pub struct DeviceConnectionInfo {
 }
 
 // Re-export from shared module for backward compatibility
-pub use crate::shared::message_types::types::{AuthPayload, AuthStage};
+pub use crate::shared::enums::{AuthPayload, AuthStage};

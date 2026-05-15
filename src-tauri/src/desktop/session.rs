@@ -19,4 +19,4 @@ pub use storage::{SessionStore, SessionStorage};
 pub use types::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 
 // Re-export from shared module
-pub use crate::shared::message_types::{SessionStatus, SessionType};
+pub use crate::shared::enums::{SessionStatus, SessionType};

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::message_types::SessionStatus;
+use crate::shared::enums::SessionStatus;
 use crate::shared::websocket::WsMessage;
 use crate::Result;
 

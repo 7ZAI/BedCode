@@ -1,10 +1,10 @@
 //! WebSocket Message Types
 //!
 //! 定义移动端和桌面端之间的通信协议
-//! 类型已移至 shared::message_types
+//! 类型已移至 shared::enums
 
-// Re-export types from shared message_types module
-pub use crate::shared::message_types::types::{
+// Re-export types from shared enums module
+pub use crate::shared::enums::{
     AuthPayload, AuthStage, ControlAction, ControlPayload, InputPayload, Message,
     OutputPayload, QuickActionSummary, SessionConfigSummary, SessionSummary, SpecialKey,
 };
@@ -15,5 +15,5 @@ pub use crate::desktop::server::connection_types::{
     DeviceConnectionInfo, PairingCodeGeneratedEvent,
 };
 
-// 注意：connection_types 中的 AuthPayload/AuthStage 与 enum/types 中的相同
-// 为了兼容，保留 connection_types 中的定义，但使用 enum_mod 中的版本作为主版本
+// 注意：connection_types 中的 AuthPayload/AuthStage 与 enums 中的相同
+// 为了兼容，保留 connection_types 中的定义，但使用 enums 中的版本作为主版本

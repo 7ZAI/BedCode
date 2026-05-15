@@ -4,7 +4,7 @@
 
 pub mod auth;
 pub mod db;
-pub mod message_types;
+pub mod enums;
 pub mod notify;
 pub mod parser;
 pub mod system;

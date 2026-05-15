@@ -1,0 +1,39 @@
+//! Summary Types
+//!
+//! 摘要类型定义
+
+use serde::{Deserialize, Serialize};
+
+/// 会话摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    /// 会话类型：pty 或 plugin
+    #[serde(default)]
+    pub session_type: Option<String>,
+}
+
+/// 会话配置摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfigSummary {
+    pub id: String,
+    pub name: String,
+    pub environment: String,
+    pub wsl_distro: Option<String>,
+    pub working_dir: String,
+    pub command: String,
+}
+
+/// 快捷指令摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickActionSummary {
+    pub id: String,
+    pub name: String,
+    pub content: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+}

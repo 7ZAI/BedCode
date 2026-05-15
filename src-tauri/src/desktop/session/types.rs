@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::shared::message_types::{SessionStatus, SessionType};
+use crate::shared::enums::{SessionStatus, SessionType};
 
 /// 会话状态变化事件
 #[derive(Debug, Clone, Serialize, Deserialize)]
