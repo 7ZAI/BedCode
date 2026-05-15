@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import DevicesView from '@/views/mobile/DevicesView.vue'
+import DevicesView from '@/modules/mobile/views/DevicesView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -21,7 +21,7 @@ const mockIsConnected = { value: false }
 const mockSendMessageWithResponse = vi.fn()
 const mockActiveSessionId = { value: null }
 
-vi.mock('@/composables/useRemoteConnection', () => ({
+vi.mock('@/modules/shared/composables/useRemoteConnection', () => ({
   useRemoteConnection: () => ({
     state: mockState,
     pairedDevices: mockPairedDevices,
@@ -43,7 +43,7 @@ vi.mock('@/composables/useRemoteConnection', () => ({
 }))
 
 // Mock useRemoteTerminal composable
-vi.mock('@/composables/useRemoteTerminal', () => ({
+vi.mock('@/modules/shared/composables/useRemoteTerminal', () => ({
   useRemoteTerminal: () => ({
     sessions: { value: [] },
     sessionConfigs: { value: [] },
@@ -68,7 +68,7 @@ vi.mock('@/composables/useRemoteTerminal', () => ({
 }))
 
 // Mock components
-vi.mock('@/components/mobile/BottomSheet.vue', () => ({
+vi.mock('@/modules/mobile/components/BottomSheet.vue', () => ({
   default: {
     template: '<div v-if="modelValue" class="bottom-sheet"><slot /></div>',
     props: ['modelValue', 'title', 'placeholder'],
@@ -76,7 +76,7 @@ vi.mock('@/components/mobile/BottomSheet.vue', () => ({
   },
 }))
 
-vi.mock('@/components/mobile/PairingInput.vue', () => ({
+vi.mock('@/modules/mobile/components/PairingInput.vue', () => ({
   default: {
     template: '<div v-if="modelValue" class="pairing-input"><slot /></div>',
     props: ['modelValue', 'loading', 'error'],

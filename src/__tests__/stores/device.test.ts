@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useDeviceStore } from '@/stores/device'
+import { useDeviceStore } from '@/modules/shared/stores/device'
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -10,7 +10,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 // Create a mutable devices array that will be managed by the mock
 let mockDevicesValue: any[] = []
 
-vi.mock('@/composables/useTauri', () => ({
+vi.mock('@/modules/shared/composables/useTauri', () => ({
   usePairing: () => ({
     devices: {
       get value() { return mockDevicesValue },

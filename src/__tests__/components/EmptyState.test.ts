@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import EmptyState from '@/components/common/EmptyState.vue'
+import EmptyState from '@/modules/shared/components/EmptyState.vue'
 
 describe('EmptyState Component', () => {
   it('should render title', () => {
@@ -45,7 +45,7 @@ describe('EmptyState Component', () => {
       }
     })
 
-    // 默认图标是空文件夹 SVG
+    // 默认图标是空文件�?SVG
     expect(wrapper.find('svg').exists()).toBe(true)
   })
 

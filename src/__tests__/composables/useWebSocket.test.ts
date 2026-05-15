@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
-import { useWebSocket } from '@/composables/useWebSocket'
+import { useWebSocket } from '@/modules/shared/composables/useWebSocket'
 
 // Mock WebSocket that properly manages lifecycle
 class MockWebSocket {

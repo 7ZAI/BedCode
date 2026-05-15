@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Tooltip from '@/components/common/Tooltip.vue'
+import Tooltip from '@/modules/shared/components/Tooltip.vue'
 
 describe('Tooltip Component', () => {
   beforeEach(() => {
@@ -85,8 +85,7 @@ describe('Tooltip Component', () => {
       }
     })
 
-    // tooltip 内容初始不可见（v-if="visible"，visible 初始为 false）
-    const tooltipContent = wrapper.find('.fixed.z-50')
+    // tooltip 内容初始不可见（v-if="visible"，visible 初始�?false�?    const tooltipContent = wrapper.find('.fixed.z-50')
     expect(tooltipContent.exists()).toBe(false)
   })
 
@@ -122,8 +121,7 @@ describe('Tooltip Component', () => {
     vi.advanceTimersByTime(100)
     await wrapper.vm.$nextTick()
 
-    // tooltip 应该在 body 中渲染
-    const tooltip = document.querySelector('.fixed.z-50')
+    // tooltip 应该�?body 中渲�?    const tooltip = document.querySelector('.fixed.z-50')
     expect(tooltip).toBeTruthy()
   })
 

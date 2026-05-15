@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useQuickActionStore } from '@/stores/quickAction'
+import { useQuickActionStore } from '@/modules/shared/stores/quickAction'
 
 describe('useQuickActionStore', () => {
   beforeEach(() => {

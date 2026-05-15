@@ -9,7 +9,7 @@ import {
   useQuickActions,
   usePairing,
   useNetwork,
-} from '@/composables/useTauri'
+} from '@/modules/shared/composables/useTauri'
 
 // Mock Tauri APIs
 const mockInvoke = vi.fn()

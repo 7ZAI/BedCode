@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import NotificationBadge from '@/components/common/NotificationBadge.vue'
+import NotificationBadge from '@/modules/shared/components/NotificationBadge.vue'
 
 describe('NotificationBadge Component', () => {
   it('should render trigger element', () => {

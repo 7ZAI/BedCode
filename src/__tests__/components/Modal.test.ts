@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
-import Modal from '@/components/common/Modal.vue'
+import Modal from '@/modules/shared/components/Modal.vue'
 
 // Helper to mount Modal with Teleport handling
 function mountModal(options: Parameters<typeof mount<typeof Modal>>[1] = {}) {

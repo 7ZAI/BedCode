@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import DevicesView from '@/views/desktop/DevicesView.vue'
+import DevicesView from '@/modules/desktop/views/DevicesView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 // Mock composables
-vi.mock('@/composables/useToast', () => ({
+vi.mock('@/modules/shared/composables/useToast', () => ({
   useToast: () => ({
     success: vi.fn(),
     error: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock('@/composables/useToast', () => ({
   }),
 }))
 
-vi.mock('@/composables/useTauri', () => ({
+vi.mock('@/modules/shared/composables/useTauri', () => ({
   usePairing: () => ({
     generateCode: vi.fn(),
     clearCode: vi.fn(),
@@ -50,7 +50,7 @@ vi.mock('@/composables/useTauri', () => ({
   }),
 }))
 
-vi.mock('@/composables/useQrCode', () => ({
+vi.mock('@/modules/shared/composables/useQrCode', () => ({
   useQrCode: () => ({
     qrData: { value: null },
     remainingSeconds: { value: 0 },
@@ -69,14 +69,14 @@ vi.mock('qrcode', () => ({
 }))
 
 // Mock components
-vi.mock('@/components/common/Button.vue', () => ({
+vi.mock('@/modules/shared/components/Button.vue', () => ({
   default: {
     template: '<button @click="$emit(\'click\')"><slot /><slot name="icon" /></button>',
     props: ['variant', 'size', 'loading', 'disabled'],
   },
 }))
 
-vi.mock('@/components/common/Toggle.vue', () => ({
+vi.mock('@/modules/shared/components/Toggle.vue', () => ({
   default: {
     template: '<button @click="$emit(\'update:modelValue\', !modelValue)" :class="{ active: modelValue }"><slot /></button>',
     props: ['modelValue'],
@@ -130,7 +130,7 @@ describe('DevicesView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('新建配对')
-    expect(wrapper.text()).toContain('生成配对码')
+    expect(wrapper.text()).toContain('生成配对�?)
   })
 
   it('should show network info section', async () => {
@@ -163,7 +163,7 @@ describe('DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已配对设备')
+    expect(wrapper.text()).toContain('已配对设�?)
   })
 
   it('should show empty paired devices state', async () => {
@@ -179,7 +179,7 @@ describe('DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂无已配对设备')
+    expect(wrapper.text()).toContain('暂无已配对设�?)
   })
 
   it('should have generate code button', async () => {
@@ -199,7 +199,7 @@ describe('DevicesView', () => {
     await flushPromises()
 
     const buttons = wrapper.findAll('button')
-    const generateBtn = buttons.find(b => b.text().includes('生成配对码'))
+    const generateBtn = buttons.find(b => b.text().includes('生成配对�?))
 
     expect(generateBtn).toBeDefined()
   })

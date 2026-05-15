@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
-import { useRemoteTerminal } from '@/composables/useRemoteTerminal'
+import { useRemoteTerminal } from '@/modules/shared/composables/useRemoteTerminal'
 
 describe('useRemoteTerminal', () => {
   let mockConnection: any

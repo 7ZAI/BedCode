@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import SplashLoading from '@/components/common/SplashLoading.vue'
+import SplashLoading from '@/modules/shared/components/SplashLoading.vue'
 
 describe('SplashLoading Component', () => {
   beforeEach(() => {
@@ -38,7 +38,7 @@ describe('SplashLoading Component', () => {
       attachTo: document.body
     })
 
-    // 验证组件接收了 visible prop
+    // 验证组件接收�?visible prop
     expect(wrapper.props('visible')).toBe(true)
   })
 
@@ -126,7 +126,7 @@ describe('SplashLoading Component', () => {
       attachTo: document.body
     })
 
-    // 检查 Spinner 组件是否存在
+    // 检�?Spinner 组件是否存在
     const spinnerComponent = wrapper.findComponent({ name: 'Spinner' })
     expect(spinnerComponent.exists()).toBe(true)
   })
@@ -165,7 +165,7 @@ describe('SplashLoading Component', () => {
       attachTo: document.body
     })
 
-    // 在 body 中查找渲染的内容
+    // �?body 中查找渲染的内容
     const overlay = document.querySelector('.fixed.inset-0')
     expect(overlay).toBeTruthy()
     expect(overlay?.classList.contains('z-[100]')).toBe(true)

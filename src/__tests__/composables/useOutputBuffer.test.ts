@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
-import { useOutputBuffer } from '@/composables/useOutputBuffer'
+import { useOutputBuffer } from '@/modules/shared/composables/useOutputBuffer'
 
 // Helper function to wrap composable in a component context
 function withComposable<T>(composable: () => T) {

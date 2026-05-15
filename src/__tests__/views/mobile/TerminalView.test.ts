@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import TerminalView from '@/views/mobile/TerminalView.vue'
+import TerminalView from '@/modules/mobile/views/TerminalView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -20,7 +20,7 @@ const mockCurrentDevice = { value: null }
 const mockPairedDevices = { value: [] }
 const mockLastMessage = { value: null }
 
-vi.mock('@/composables/useRemoteConnection', () => ({
+vi.mock('@/modules/shared/composables/useRemoteConnection', () => ({
   useRemoteConnection: () => ({
     state: mockState,
     isConnected: mockIsConnected,
@@ -47,7 +47,7 @@ const mockIsWaitingInput = { value: false }
 const mockIsLoading = { value: false }
 const mockError = { value: null }
 
-vi.mock('@/composables/useRemoteTerminal', () => ({
+vi.mock('@/modules/shared/composables/useRemoteTerminal', () => ({
   useRemoteTerminal: () => ({
     sessions: mockSessions,
     currentSessionId: mockCurrentSessionId,
@@ -70,7 +70,7 @@ vi.mock('@/composables/useRemoteTerminal', () => ({
 }))
 
 // Mock useOutputParser composable
-vi.mock('@/composables/useOutputParser', () => ({
+vi.mock('@/modules/shared/composables/useOutputParser', () => ({
   useOutputParser: () => ({
     blocks: { value: [] },
     rawOutput: { value: '' },
@@ -80,14 +80,14 @@ vi.mock('@/composables/useOutputParser', () => ({
 }))
 
 // Mock components
-vi.mock('@/components/mobile/OutputRenderer.vue', () => ({
+vi.mock('@/modules/mobile/components/OutputRenderer.vue', () => ({
   default: {
     template: '<div class="output-renderer"><slot /></div>',
     props: ['blocks', 'rawOutput', 'autoScroll'],
   },
 }))
 
-vi.mock('@/components/mobile/InputBar.vue', () => ({
+vi.mock('@/modules/mobile/components/InputBar.vue', () => ({
   default: {
     template: '<div class="input-bar"><input @keyup.enter="$emit(\'submit\', $event.target.value)" /><slot /></div>',
     props: ['isConnected', 'showStatus', 'placeholder'],
@@ -167,7 +167,7 @@ describe('TerminalView', () => {
     await flushPromises()
 
     // Should show connection status
-    expect(wrapper.text()).toContain('未连接')
+    expect(wrapper.text()).toContain('未连�?)
   })
 
   it('should show session select button', async () => {
@@ -320,7 +320,7 @@ describe('TerminalView Connection Status', () => {
     // isConnected is a ref from useRemoteConnection, so check the reactive value
     const statusText = wrapper.text()
     // Either connected or disconnected text should be present
-    expect(statusText.includes('已连接') || statusText.includes('未连接')).toBe(true)
+    expect(statusText.includes('已连�?) || statusText.includes('未连�?)).toBe(true)
   })
 
   it('should show green indicator when connected', async () => {
@@ -340,7 +340,7 @@ describe('TerminalView Connection Status', () => {
 
     // Simulate connection by checking the text contains connection status
     const statusText = wrapper.text()
-    expect(statusText.includes('已连接') || statusText.includes('未连接')).toBe(true)
+    expect(statusText.includes('已连�?) || statusText.includes('未连�?)).toBe(true)
   })
 })
 

@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Spinner from '@/components/common/Spinner.vue'
+import Spinner from '@/modules/shared/components/Spinner.vue'
 
 describe('Spinner Component', () => {
   it('should render with default props (circle variant)', () => {
     const wrapper = mount(Spinner)
 
-    // 默认是 circle variant，应该渲染 SVG
+    // 默认�?circle variant，应该渲�?SVG
     expect(wrapper.find('svg').exists()).toBe(true)
     expect(wrapper.find('svg').classes()).toContain('animate-spin')
   })
@@ -40,8 +40,7 @@ describe('Spinner Component', () => {
       }
     })
 
-    // dots variant 应该渲染 3 个圆点
-    expect(wrapper.find('svg').exists()).toBe(false)
+    // dots variant 应该渲染 3 个圆�?    expect(wrapper.find('svg').exists()).toBe(false)
     expect(wrapper.findAll('span.rounded-full.animate-bounce')).toHaveLength(3)
   })
 
@@ -65,7 +64,7 @@ describe('Spinner Component', () => {
       }
     })
 
-    // xl 尺寸的 dots 应该是 w-3 h-3
+    // xl 尺寸�?dots 应该�?w-3 h-3
     const dots = wrapper.findAll('.animate-bounce')
     dots.forEach(dot => {
       expect(dot.classes()).toContain('w-3')

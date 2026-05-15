@@ -7,6 +7,7 @@ use crate::desktop::server::message::Message as BusinessMessage;
 use crate::shared::websocket::{WsServer, WsServerConfig, WsServerEvent};
 use crate::shared::system::error::AppError;
 use crate::Result;
+use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -29,6 +30,7 @@ pub struct ClientSummary {
 }
 
 /// 业务消息处理器 trait
+#[async_trait]
 pub trait BusinessHandler: Send + Sync {
     /// 处理收到的消息
     async fn handle_message(
@@ -52,6 +54,7 @@ pub trait BusinessHandler: Send + Sync {
 #[derive(Debug, Clone, Default)]
 pub struct NoopBusinessHandler;
 
+#[async_trait]
 impl BusinessHandler for NoopBusinessHandler {
     async fn handle_message(
         &self,
@@ -105,9 +108,10 @@ pub struct WebSocketManager {
 impl WebSocketManager {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: WebSocketManager = WebSocketManager {
-            inner: Arc::new(WsManagerInner::new()),
-        };
+        static INSTANCE: std::sync::LazyLock<WebSocketManager> =
+            std::sync::LazyLock::new(|| WebSocketManager {
+                inner: Arc::new(WsManagerInner::new()),
+            });
         &INSTANCE
     }
 
@@ -502,7 +506,7 @@ impl WebSocketManager {
                         // 调用业务处理器
                         if let Some(response) = inner.handler.handle_message(msg, &cid).await {
                             // 发送响应
-                            if let Err(e) = Self::send_to_addr(&inner, &addr, &response).await {
+                            if let Err(e) = Self::send_to_addr_internal(&inner, &addr, &response).await {
                                 tracing::error!("Failed to send response: {}", e);
                             }
                         }
@@ -564,7 +568,7 @@ impl WebSocketManager {
     }
 
     /// 向指定地址发送消息
-    async fn send_to_addr(
+    async fn send_to_addr_internal(
         inner: &Arc<WsManagerInner>,
         addr: &SocketAddr,
         message: &BusinessMessage,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Skeleton from '@/components/common/Skeleton.vue'
+import Skeleton from '@/modules/shared/components/Skeleton.vue'
 
 describe('Skeleton Component', () => {
   it('should render with default shape (text)', () => {
@@ -29,7 +29,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    // rect shape 没有额外的 shape class
+    // rect shape 没有额外�?shape class
     expect(wrapper.find('.bg-dark-700').exists()).toBe(true)
   })
 
