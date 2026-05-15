@@ -36,15 +36,15 @@
 
     <!-- Connected Banner -->
     <div
-      v-if="isConnected && connection.currentDevice.value"
+      v-if="isConnected && currentDevice"
       class="mx-4 mt-4 p-3 bg-green-900/20 border border-green-800/30 rounded-lg"
     >
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
           <div class="w-3 h-3 rounded-full bg-green-500"></div>
           <div>
-            <p class="text-green-300 text-sm font-medium">{{ connection.currentDevice.value.name }}</p>
-            <p class="text-green-500/70 text-xs">{{ connection.currentDevice.value.address }}</p>
+            <p class="text-green-300 text-sm font-medium">{{ currentDevice.name }}</p>
+            <p class="text-green-500/70 text-xs">{{ currentDevice.address }}</p>
           </div>
         </div>
         <button
@@ -300,26 +300,25 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useRemoteConnection, type RemoteDevice } from '@/modules/shared/composables/useRemoteConnection'
+import { useMobileConnection, type RemoteDevice } from '@/modules/shared/composables/useMobileConnection'
 import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
 import PairingInput from '@/modules/mobile/components/PairingInput.vue'
-import { useRemoteTerminal, type RemoteSession } from '@/modules/shared/composables/useRemoteTerminal'
 
 const router = useRouter()
-const connection = useRemoteConnection()
-
-const terminal = useRemoteTerminal({
-  state: connection.state,
-  isConnected: connection.isConnected,
-  lastMessage: connection.lastMessage,
-  sendMessage: connection.sendMessage,
-  sendMessageWithResponse: connection.sendMessageWithResponse,
-  setReconnectCallback: connection.setReconnectCallback,
-  addDisconnectCallback: connection.addDisconnectCallback,
-})
+const connection = useMobileConnection()
 
 // 运行中的会话列表
-const activeSessions = computed(() => terminal.sessions.value)
+const activeSessions = ref<any[]>([])
+
+// terminal 接口（临时）
+const terminal = {
+  sessions: activeSessions,
+  activeSessionId: connection.activeSessionId,
+  loadSessions: async () => { activeSessions.value = [] },
+  startSession: async (_id: string) => '',
+  stopSession: async (_id: string) => {},
+  enableAutoReconnect: () => {},
+}
 
 // 根据配置ID获取运行中的会话
 function getRunningSessionsByConfig(configId: string) {
@@ -332,16 +331,16 @@ function toggleConfigExpanded(configId: string) {
 }
 
 // 点击会话跳转到终端
-function handleSessionClick(session: RemoteSession) {
+function handleSessionClick(session: any) {
   connection.activeSessionId.value = session.id
   router.push({
     name: 'mobile-terminal',
-    params: { deviceId: connection.currentDevice.value?.id },
+    params: { deviceId: currentDevice.value?.id },
   })
 }
 
 // 停止会话
-async function handleStopSession(session: RemoteSession) {
+async function handleStopSession(session: any) {
   await terminal.stopSession(session.id)
 }
 
@@ -385,7 +384,13 @@ const pendingDevice = ref<RemoteDevice | null>(null)
 const connectionStatus = ref<'idle' | 'connecting' | 'connected' | 'pairing' | 'error'>('idle')
 
 // 使用统一的连接状态
-const isConnected = connection.isConnected
+const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
+
+// 当前连接的设备
+const currentDevice = computed(() => connection.currentDevice.value)
+
+// 活跃会话 ID
+const activeSessionId = computed(() => connection.activeSessionId.value)
 
 const connectionStatusText = computed(() => {
   switch (connectionStatus.value) {
@@ -447,21 +452,16 @@ async function loadSessionConfigs() {
 
   isLoadingConfigs.value = true
   try {
-    const response = await connection.sendMessageWithResponse('control', {
-      action: { type: 'list_session_configs' },
-    })
-
-    if (response?.payload?.action?.type === 'session_config_list') {
-      sessionConfigs.value = response.payload.action.configs.map((c: any) => ({
-        id: c.id,
-        name: c.name,
-        environment: c.environment,
-        wsl_distro: c.wsl_distro,
-        working_dir: c.working_dir,
-        command: c.command,
-      }))
-      hasLoadedConfigs.value = true  // 标记已加载过数据
-    }
+    const configs = await connection.loadSessionConfigs()
+    sessionConfigs.value = configs.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      environment: c.environment,
+      wsl_distro: c.wsl_distro,
+      working_dir: c.working_dir,
+      command: c.command,
+    }))
+    hasLoadedConfigs.value = true  // 标记已加载过数据
   } catch (e) {
     console.error('Failed to load session configs:', e)
     hasLoadedConfigs.value = true  // 即使失败也标记已尝试加载
@@ -482,17 +482,13 @@ async function handleStartSession(config: SessionConfigSummary) {
 
   startingConfigId.value = config.id
   try {
-    const response = await connection.sendMessageWithResponse('control', {
-      action: { type: 'start_session', config_id: config.id },
-    })
-
-    const sessionId = response?.session_id
+    const sessionId = await connection.startSession(config.id)
     if (sessionId) {
       // Refresh active sessions for the Sessions tab
       await terminal.loadSessions()
       connection.activeSessionId.value = sessionId
     } else {
-      console.error('Failed to start session: no session_id in response')
+      console.error('Failed to start session: no session_id returned')
     }
   } catch (e) {
     console.error('Failed to start session:', e)
@@ -508,16 +504,10 @@ onMounted(async () => {
   terminal.enableAutoReconnect()
 
   // 注册断开连接回调，清除会话状态
-  connection.addDisconnectCallback(() => {
-    terminal.clearAllSessionState()
-    hasLoadedConfigs.value = false  // 重置标记，重新连接后显示加载状态
-  })
-
-  // 监听重连失败事件，显示错误提示
-  window.addEventListener('reconnect-failed', ((e: CustomEvent) => {
-    connectionStatus.value = 'error'
-    connectionError.value = e.detail.reason
-  }) as EventListener)
+  // connection.addDisconnectCallback(() => {
+  //   terminal.clearAllSessionState()
+  //   hasLoadedConfigs.value = false  // 重置标记，重新连接后显示加载状态
+  // })
 
   // If already connected, load session configs and active sessions
   if (isConnected.value) {
@@ -528,7 +518,7 @@ onMounted(async () => {
 
 // 监听连接状态变化，从扫描页面返回后自动加载配置和会话
 // 同时监听连接和配对状态，确保认证完成后才加载会话列表
-watch([isConnected, () => connection.state.value.status], async ([connected, status]) => {
+watch([isConnected, connection.connectionStatus], async ([connected, status]) => {
   // 只有在已连接且已完成认证（paired）时才加载
   if (connected && status === 'paired') {
     await loadSessionConfigs()

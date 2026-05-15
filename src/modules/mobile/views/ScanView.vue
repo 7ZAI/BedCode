@@ -78,7 +78,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Html5Qrcode } from 'html5-qrcode'
-import { useRemoteConnection } from '@/modules/shared/composables/useRemoteConnection'
+import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
+import { wsAuthenticateWithQr } from '@/modules/shared/composables/useMobileCommands'
 
 interface QrConnectData {
   host: string
@@ -87,7 +88,7 @@ interface QrConnectData {
 }
 
 const router = useRouter()
-const connection = useRemoteConnection()
+const connection = useMobileConnection()
 
 const readerRef = ref<HTMLElement | null>(null)
 const isConnecting = ref(false)
@@ -98,65 +99,34 @@ const errorMessage = ref('')
 let html5QrCode: Html5Qrcode | null = null
 
 function goBack() {
-  stopScanner()
-  router.push({ name: 'mobile-devices' })
+  router.back()
 }
 
-async function startScanner() {
-  if (!readerRef.value) return
+function retry() {
+  errorMessage.value = ''
+  startScanner()
+}
 
-  html5QrCode = new Html5Qrcode('qr-reader')
-
-  try {
-    await html5QrCode.start(
-      { facingMode: 'environment' },
-      {
-        fps: 10,
-        qrbox: { width: 250, height: 250 },
-      },
-      onScanSuccess,
-      () => {} // ignore scan failure
-    )
-  } catch (err) {
-    errorMessage.value = '无法打开相机，请检查相机权限设置'
+async function handleQrScan(decodedText: string) {
+  // 停止扫描
+  if (html5QrCode) {
+    await html5QrCode.stop()
+    html5QrCode = null
   }
-}
-
-function stopScanner() {
-  if (html5QrCode?.isScanning) {
-    html5QrCode.stop().catch(() => {})
-  }
-}
-
-async function onScanSuccess(decodedText: string) {
-  stopScanner()
 
   // 解析 QR 数据
   let qrData: QrConnectData
   try {
     qrData = JSON.parse(decodedText)
   } catch {
-    errorMessage.value = '无效的二维码格式，请重新扫描 BedCode 桌面端二维码'
+    errorMessage.value = '无效的二维码'
     return
   }
 
-  // 验证必要字段
-  if (!qrData.host) {
-    errorMessage.value = '二维码缺少主机信息，请重新扫描'
+  if (!qrData.host || !qrData.port || !qrData.token) {
+    errorMessage.value = '无效的二维码数据'
     return
   }
-  if (!qrData.port) {
-    errorMessage.value = '二维码缺少端口信息，请重新扫描'
-    return
-  }
-  if (!qrData.token) {
-    errorMessage.value = '二维码缺少认证信息，请重新扫描'
-    return
-  }
-
-  // 开始连接流程
-  isConnecting.value = true
-  errorMessage.value = ''
 
   // Step 1: WebSocket 连接
   connectingStep.value = '正在连接...'
@@ -181,9 +151,9 @@ async function onScanSuccess(decodedText: string) {
   console.log('[Scan] QR data:', qrData)
 
   try {
-    const success = await connection.sendQrToken(qrData.token)
+    const success = await wsAuthenticateWithQr(qrData.token)
     if (!success) {
-      console.error('[Scan] QR token failed, state:', connection.state.value)
+      console.error('[Scan] QR token failed')
       errorMessage.value = 'QR 码已过期或已使用，请在桌面端重新生成'
       isConnecting.value = false
       return
@@ -195,8 +165,7 @@ async function onScanSuccess(decodedText: string) {
     return
   }
 
-  // 成功 - 返回连接页面，会自动加载会话配置
-  // 不自动进入终端，让用户在连接页面选择会话配置启动
+  // 成功 - 返回连接页面
   // 保存连接历史
   const address = `${qrData.host}:${qrData.port}`
   const stored = localStorage.getItem('connection_history')
@@ -208,27 +177,53 @@ async function onScanSuccess(decodedText: string) {
       history = []
     }
   }
-  history = history.filter(item => item.address !== address)
-  history.unshift({ address, name: 'Desktop', time: Date.now() })
+
+  // 添加新连接历史
+  history = history.filter(h => h.address !== address)
+  history.unshift({
+    address,
+    name: 'Desktop',
+    time: Date.now(),
+  })
+
+  // 只保留最近 10 条
   if (history.length > 10) {
     history = history.slice(0, 10)
   }
+
   localStorage.setItem('connection_history', JSON.stringify(history))
 
-  router.push({ name: 'mobile-home', query: { page: '0' } })
+  // 返回上一页
+  router.back()
 }
 
-function retry() {
-  errorMessage.value = ''
-  isConnecting.value = false
-  startScanner()
+async function startScanner() {
+  if (!readerRef.value) return
+
+  try {
+    html5QrCode = new Html5Qrcode('qr-reader')
+    await html5QrCode.start(
+      { facingMode: 'environment' },
+      {
+        fps: 10,
+        qrbox: { width: 250, height: 250 },
+      },
+      handleQrScan,
+      () => {} // 忽略扫描错误
+    )
+  } catch (e) {
+    console.error('Failed to start scanner:', e)
+    errorMessage.value = '无法启动摄像头'
+  }
 }
 
 onMounted(() => {
   startScanner()
 })
 
-onUnmounted(() => {
-  stopScanner()
+onUnmounted(async () => {
+  if (html5QrCode) {
+    await html5QrCode.stop()
+  }
 })
 </script>

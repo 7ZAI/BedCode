@@ -9,7 +9,7 @@
     <div v-if="isConnected" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
+        <span class="text-green-400 text-sm">已连接 {{ currentDeviceName }}</span>
       </div>
       <button
         class="text-xs text-gray- dark:text-dark-400 hover:text-gray- dark:text-dark-300"
@@ -195,7 +195,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useRemoteConnection } from '@/modules/shared/composables/useRemoteConnection'
+import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
+import { wsSendInput } from '@/modules/shared/composables/useMobileCommands'
 import QuickActionButton from '@/modules/mobile/components/QuickActionButton.vue'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -208,10 +209,13 @@ interface QuickAction {
 }
 
 const router = useRouter()
-const connection = useRemoteConnection()
+const connection = useMobileConnection()
 
 // 使用统一的连接状态
-const isConnected = connection.isConnected
+const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
+
+// 当前设备名称
+const currentDeviceName = computed(() => connection.currentDevice.value?.name || '')
 
 const presetActions = ref<QuickAction[]>([
   { id: '1', name: '继续', content: '请继续', icon: '▶️', color: '#22c55e' },
@@ -248,13 +252,19 @@ async function loadQuickActions() {
   }
 }
 
-function sendQuickAction(action: QuickAction) {
+async function sendQuickAction(action: QuickAction) {
   // 通过 WebSocket 直接发送到当前活跃会话
-  const sent = connection.sendInput(action.content)
-  if (sent) {
-    console.log('Quick action sent:', action.name)
+  const sessionId = connection.activeSessionId.value
+  if (sessionId) {
+    try {
+      await wsSendInput(sessionId, action.content)
+      console.log('Quick action sent:', action.name)
+    } catch (e) {
+      console.error('Failed to send quick action:', e)
+      router.push('/mobile/devices')
+    }
   } else {
-    // 未连接或无活跃会话，跳转到设备页
+    // 无活跃会话，跳转到设备页
     router.push('/mobile/devices')
   }
 }

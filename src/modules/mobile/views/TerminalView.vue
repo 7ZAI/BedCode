@@ -18,10 +18,10 @@
         <div
           :class="[
             'w-1.5 h-1.5 rounded-full',
-            connection.isConnected.value ? 'bg-green-500' : 'bg-red-500'
+            isConnectedValue ? 'bg-green-500' : 'bg-red-500'
           ]"
         ></div>
-        <span class="text-gray- dark:text-dark-400">{{ connection.isConnected.value ? '已连接' : '未连接' }}</span>
+        <span class="text-gray- dark:text-dark-400">{{ isConnectedValue ? '已连接' : '未连接' }}</span>
       </div>
       <button
         class="p-2 rounded-lg bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300"
@@ -37,7 +37,7 @@
     <div class="flex-1 overflow-hidden min-h-0">
       <MobileTerminal
         ref="terminalRef"
-        :output="terminal.outputBuffer.value"
+        :output="outputBuffer"
         @ready="onTerminalReady"
         @clear="onTerminalClear"
         @resize="handleTerminalResize"
@@ -47,14 +47,14 @@
     <!-- Input Assistant 悬浮球 -->
     <InputAssistant
       :terminal-ref="terminalRef"
-      :terminal-instance="terminal"
+      :terminal-instance="null"
       :is-connected="isConnectedValue"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, inject, type Ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted, inject, type Ref } from 'vue'
 
 // 定义组件名称，用于 KeepAlive 缓存
 defineOptions({
@@ -62,8 +62,7 @@ defineOptions({
 })
 
 import { useRouter, useRoute } from 'vue-router'
-import { useRemoteConnection } from '@/modules/shared/composables/useRemoteConnection'
-import { useRemoteTerminal } from '@/modules/shared/composables/useRemoteTerminal'
+import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
 import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
 import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
 
@@ -74,35 +73,24 @@ const route = useRoute()
 const isLandscape = inject<Ref<boolean>>('isLandscape', ref(false))
 const isLandscapeValue = computed(() => isLandscape.value)
 
-const connection = useRemoteConnection()
+const connection = useMobileConnection()
 
-// 使用统一的连接状态（computed 会自动解包）
-const isConnectedValue = connection.isConnected
+// 使用统一的连接状态
+const isConnectedValue = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 
-// 创建自定义的连接包装，禁用自动清理
-const terminal = useRemoteTerminal({
-  state: connection.state,
-  isConnected: isConnectedValue,
-  lastMessage: connection.lastMessage,
-  sendMessage: connection.sendMessage,
-  sendMessageWithResponse: connection.sendMessageWithResponse,
-  // 覆盖 setReconnectCallback 为空操作，防止自动清理
-  setReconnectCallback: () => {},
-  addDisconnectCallback: () => {},
-})
+// 输出缓冲区
+const outputBuffer = ref<string>('')
 
 const terminalRef = ref<any>(null)
 
-// 会话名称 - 显示当前活跃会话的名称，如果没有则显示设备名称
+// 会话名称
 const sessionName = computed(() => {
-  const currentSession = terminal.sessions.value.find(
-    s => s.id === terminal.currentSessionId.value
-  )
-  return currentSession?.name || connection.currentDevice.value?.name || 'Claude Code'
+  return connection.currentDevice.value?.name || 'Claude Code'
 })
 
 // 清空终端
 function handleClear() {
+  outputBuffer.value = ''
   terminalRef.value?.clear()
 }
 
@@ -111,113 +99,26 @@ function onTerminalReady() {
   console.log('Mobile terminal ready')
 }
 
-// Terminal resize handler - 发送终端尺寸到后端
+// Terminal resize handler
 function handleTerminalResize(cols: number, rows: number) {
-  if (terminal.currentSessionId.value) {
-    connection.sendMessage('control', {
-      action: { type: 'resize_session', session_id: terminal.currentSessionId.value, cols, rows }
-    })
-  }
+  // TODO: 实现调整终端大小
+  console.log('Terminal resize:', cols, rows)
 }
 
 // Terminal clear handler
 function onTerminalClear() {
-  terminal.clearOutput()
+  outputBuffer.value = ''
 }
 
-// KeepAlive 恢复时的处理
-// 当组件被 KeepAlive 缓存后再次激活时，需要恢复活跃会话状态
-onActivated(async () => {
-  // 检查是否有已订阅的会话
-  if (terminal.joinedSessions.value.size > 0 && !terminal.activeSessionId.value) {
-    // 如果有已订阅的会话但没有活跃会话，恢复第一个
-    const firstSessionId = terminal.joinedSessions.value.values().next().value
-    if (firstSessionId) {
-      // 恢复活跃会话状态，但不重新订阅（已订阅）
-      terminal.activeSessionId.value = firstSessionId
-      terminal.currentSessionId.value = firstSessionId
-      // 恢复活跃会话 ID 标记到 connection
-      connection.activeSessionId.value = firstSessionId
-      console.log('Restored active session:', firstSessionId)
-    }
-  }
-
-  // 如果已有活跃会话，确保 connection.activeSessionId 也同步
-  if (terminal.activeSessionId.value) {
-    connection.activeSessionId.value = terminal.activeSessionId.value
-  }
-})
-
-// KeepAlive 停用时的处理
-onDeactivated(() => {
-  // 组件被缓存时，不需要做任何清理
-  // 保留活跃会话状态，供恢复时使用
-  console.log('TerminalView deactivated, keeping session state')
-})
-
 onMounted(async () => {
-  const deviceId = route.params.deviceId as string
-  const sessionId = route.query.sessionId as string | undefined
-
-  // 启用自动重连恢复
-  terminal.enableAutoReconnect()
-
-  // 注册断开连接回调，清除会话状态
-  connection.addDisconnectCallback(() => {
-    terminal.clearAllSessionState()
-  })
-
-  // 如果未连接，先连接
-  if (connection.state.value.status !== 'connected' && connection.state.value.status !== 'paired') {
-    const device = connection.pairedDevices.value.find(d => d.id === deviceId)
-    if (device) {
-      try {
-        await connection.connect(device)
-      } catch (error) {
-        console.error('Failed to connect:', error)
-        return
-      }
-    }
-  }
-
-  // 只有在已认证状态下才加载远程会话
-  if (connection.state.value.status === 'paired') {
-    await terminal.loadSessions()
-
-    if (sessionId) {
-      // 通过查询参数直接加入指定会话
-      try {
-        await terminal.joinSession(sessionId)
-        connection.activeSessionId.value = terminal.currentSessionId.value
-      } catch (e) {
-        console.error('Failed to join session:', e)
-        alert((e as Error).message)
-        router.push('/mobile/sessions')
-      }
-    } else if (terminal.sessions.value.length > 0) {
-      // 未指定会话时，自动选择第一个
-      try {
-        await terminal.joinSession(terminal.sessions.value[0].id)
-        connection.activeSessionId.value = terminal.currentSessionId.value
-      } catch (e) {
-        console.error('Failed to join session:', e)
-        alert((e as Error).message)
-        router.push('/mobile/sessions')
-      }
-    }
-  }
+  // TODO: 实现完整的 terminal 功能
 })
 
 onUnmounted(async () => {
-  // 只设置活跃会话为 null，不断开订阅（后台继续接收数据）
-  terminal.setActiveSession(null)
-  // 清除活跃会话 ID 标记
-  connection.activeSessionId.value = null
+  // 清理
 })
 
 function goBack() {
-  // 只设置活跃会话为 null，不断开订阅（后台继续接收数据）
-  terminal.setActiveSession(null)
   router.push('/mobile/sessions')
 }
 </script>

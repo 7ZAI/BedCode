@@ -11,6 +11,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
 
 use crate::Result;
 use crate::mobile::{
@@ -63,13 +64,27 @@ pub struct ConnectionInfo {
 
 /// 连接到桌面端
 #[tauri::command]
-pub async fn ws_connect(address: String, port: u16, name: Option<String>) -> Result<ConnectionInfo> {
+pub async fn ws_connect(
+    app_handle: AppHandle,
+    address: String,
+    port: u16,
+    name: Option<String>,
+) -> Result<ConnectionInfo> {
     tracing::info!("WebSocket connecting to {}:{}", address, port);
 
     let conn = get_connection_manager();
     conn.connect(address.clone(), port, name).await?;
 
     let status = conn.get_status().await;
+
+    // 发射连接成功事件到前端
+    if matches!(status, ConnStatus::Connected | ConnStatus::Paired) {
+        let _ = app_handle.emit("ws_connected", serde_json::json!({
+            "address": address,
+            "port": port,
+        }));
+    }
+
     Ok(ConnectionInfo {
         address,
         port,
@@ -134,23 +149,44 @@ pub async fn ws_get_auth_status() -> Result<AuthState> {
 
 /// 使用已存储凭据认证
 #[tauri::command]
-pub async fn ws_authenticate() -> Result<bool> {
+pub async fn ws_authenticate(app_handle: AppHandle) -> Result<bool> {
     let auth = get_auth_manager();
-    auth.authenticate().await
+    let result = auth.authenticate().await?;
+
+    if result {
+        let _ = app_handle.emit("ws_auth_success", ());
+    }
+
+    Ok(result)
 }
 
 /// 请求配对
 #[tauri::command]
-pub async fn ws_request_pairing() -> Result<()> {
+pub async fn ws_request_pairing(app_handle: AppHandle) -> Result<()> {
     let auth = get_auth_manager();
-    auth.request_pairing().await
+    auth.request_pairing().await?;
+
+    // 发射配对请求事件
+    let _ = app_handle.emit("ws_pairing_request", ());
+
+    Ok(())
 }
 
 /// 验证配对码
 #[tauri::command]
-pub async fn ws_verify_pairing_code(code: String) -> Result<bool> {
+pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Result<bool> {
     let auth = get_auth_manager();
-    auth.verify_pairing_code(&code).await
+    let result = auth.verify_pairing_code(&code).await?;
+
+    if result {
+        let _ = app_handle.emit("ws_pairing_verified", ());
+    } else {
+        let _ = app_handle.emit("ws_auth_failed", serde_json::json!({
+            "reason": "Pairing verification failed"
+        }));
+    }
+
+    Ok(result)
 }
 
 /// 使用 QR token 认证
@@ -188,6 +224,45 @@ pub async fn ws_stop_session(session_id: String) -> Result<()> {
 pub async fn ws_send_input(_session_id: String, data: String, _special_key: Option<String>) -> Result<()> {
     let session_mgr = get_session_manager();
     session_mgr.send_input(data).await
+}
+
+/// 发送消息（不等待响应）
+#[tauri::command]
+pub async fn ws_send_message(message_type: String, payload: serde_json::Value) -> Result<()> {
+    let conn = get_connection_manager();
+    let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
+        "type": message_type,
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": payload,
+    })).unwrap());
+
+    conn.send(&message).await
+}
+
+/// 发送消息并等待响应
+#[tauri::command]
+pub async fn ws_send_and_wait(
+    message_type: String,
+    payload: serde_json::Value,
+    timeout_secs: Option<u64>,
+) -> Result<serde_json::Value> {
+    let conn = get_connection_manager();
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
+
+    let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
+        "type": message_type,
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": payload,
+    })).unwrap());
+
+    let response = conn.send_and_wait(&message, timeout).await?;
+    let json_str = response.to_json()?;
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| crate::AppError::Parse(e.to_string()))?;
+
+    Ok(parsed)
 }
 
 /// 调整终端大小 (移动端不支持)

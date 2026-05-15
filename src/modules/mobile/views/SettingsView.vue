@@ -9,7 +9,7 @@
     <div v-if="isConnected" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-green-400 text-sm">已连接 {{ connection.currentDevice.value?.name || '' }}</span>
+        <span class="text-green-400 text-sm">已连接 {{ currentDeviceName }}</span>
       </div>
     </div>
     <div v-else class="px-4 py-2 bg-white dark:bg-dark-800/50 border-b border-gray-200 dark:border-dark-700 flex items-center justify-between">
@@ -174,16 +174,19 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRemoteConnection } from '@/modules/shared/composables/useRemoteConnection'
+import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 import Toggle from '@/modules/shared/components/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
 
-const connection = useRemoteConnection()
+const connection = useMobileConnection()
 const settingsStore = useSettingsStore()
 
 // 使用统一的连接状态
-const isConnected = connection.isConnected
+const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
+
+// 当前设备名称
+const currentDeviceName = computed(() => connection.currentDevice.value?.name || '')
 
 // 移动端本地设置（用于 UI 控制）
 interface MobileSettings {
