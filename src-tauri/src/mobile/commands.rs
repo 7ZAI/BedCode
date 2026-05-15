@@ -85,9 +85,12 @@ pub async fn ws_disconnect() -> Result<()> {
     let conn = get_connection_manager();
     conn.disconnect().await;
 
-    // 清除会话状态
+    // 清除会话状态 - 使用公共方法
     let session_mgr = get_session_manager();
-    session_mgr.clear().await;
+    // 停止活跃会话
+    if let Some(session) = session_mgr.get_active_session().await {
+        let _ = session_mgr.stop_session(&session.id).await;
+    }
 
     Ok(())
 }
@@ -163,7 +166,7 @@ pub async fn ws_authenticate_with_qr(token: String) -> Result<bool> {
 #[tauri::command]
 pub async fn ws_load_sessions() -> Result<Vec<SessionInfo>> {
     let session_mgr = get_session_manager();
-    session_mgr.load_sessions().await
+    Ok(session_mgr.get_sessions().await)
 }
 
 /// 启动会话
@@ -182,16 +185,16 @@ pub async fn ws_stop_session(session_id: String) -> Result<()> {
 
 /// 发送输入到会话
 #[tauri::command]
-pub async fn ws_send_input(session_id: String, data: String, special_key: Option<String>) -> Result<()> {
+pub async fn ws_send_input(_session_id: String, data: String, _special_key: Option<String>) -> Result<()> {
     let session_mgr = get_session_manager();
-    session_mgr.send_input(&session_id, &data, special_key).await
+    session_mgr.send_input(data).await
 }
 
-/// 调整终端大小
+/// 调整终端大小 (移动端不支持)
 #[tauri::command]
-pub async fn ws_resize_terminal(session_id: String, cols: u32, rows: u32) -> Result<()> {
-    let session_mgr = get_session_manager();
-    session_mgr.resize(&session_id, cols, rows).await
+pub async fn ws_resize_terminal(_session_id: String, _cols: u32, _rows: u32) -> Result<()> {
+    // 移动端不支持调整终端大小
+    Ok(())
 }
 
 /// 获取会话配置列表

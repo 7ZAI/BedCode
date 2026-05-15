@@ -173,8 +173,8 @@ impl SessionManager {
                     {
                         let mut info_map = session_info_ref.write().await;
                         if let Some(info) = info_map.get_mut(&session_id_lifecycle) {
-                            let old_status = info.status;
-                            info.status = session_status;
+                            let old_status = info.status.clone();
+                            info.status = session_status.clone();
 
                             // 发送状态变化事件
                             let _ = status_tx.send(super::SessionStatusEvent {
@@ -293,13 +293,13 @@ impl SessionManager {
         tokio::spawn(async move {
             if let Ok(status) = lifecycle_rx.recv().await {
                 let session_status = match status {
-                    crate::desktop::pty::PtySessionStatus::Error => super::SessionStatus::Error,
+                    crate::desktop::pty::PtySessionStatus::Error => super::SessionStatus::Error(None),
                     _ => super::SessionStatus::Stopped,
                 };
                 let mut info_map = session_info_ref.write().await;
                 if let Some(info) = info_map.get_mut(&session_id_for_lifecycle) {
-                    let old_status = info.status;
-                    info.status = session_status;
+                    let old_status = info.status.clone();
+                    info.status = session_status.clone();
                     let _ = status_tx.send(super::SessionStatusEvent {
                         session_id: session_id_for_lifecycle,
                         old_status: Some(old_status),
@@ -451,7 +451,7 @@ impl SessionManager {
         {
             let mut info_map = self.session_info.write().await;
             if let Some(info) = info_map.get_mut(session_id) {
-                let old_status = info.status;
+                let old_status = info.status.clone();
                 info.status = super::SessionStatus::Stopped;
                 info.stopped_at = Some(Utc::now());
                 tracing::info!("Session status updated to Stopped: {}", session_id);
@@ -510,7 +510,7 @@ impl SessionManager {
     /// 获取会话状态
     pub async fn get_session_status(&self, session_id: &str) -> Option<super::SessionStatus> {
         let info_map = self.session_info.read().await;
-        info_map.get(session_id).map(|i| i.status)
+        info_map.get(session_id).map(|i| i.status.clone())
     }
 
     /// 更新会话状态

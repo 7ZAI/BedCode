@@ -8,7 +8,6 @@ pub mod client_info;
 pub mod connection_types;
 pub mod services;
 pub mod handlers;
-// pub mod handler;  // TODO: MessageHandler 实现（待完善）
 
 // 重新导出所有公开类型
 pub use message::*;
@@ -16,28 +15,74 @@ pub use client_info::ClientInfo;
 pub use connection_types::*;
 pub use handlers::ControlAction;
 
-// Re-export DeviceConnectionInfo from connection module
-pub use crate::desktop::server::connection_types::DeviceConnectionInfo;
-
 // WebSocket Server 实现
-use crate::desktop::server::connection_types::DeviceConnectionEvent as DevConnEvent;
-use crate::desktop::plugin::PluginManager;
-use crate::desktop::session::SessionManager;
-use crate::desktop::server::client_info::ClientInfo as CliInfo;
-use crate::desktop::server::handlers::{handle_auth, handle_control, handle_input};
-use crate::desktop::server::message::Message as ServerMsg;
-use crate::desktop::server::services::OutputForwarder as OutForwarder;
-use crate::shared::auth::{PairingService, QrTokenManager};
-use crate::shared::db::Database;
-// TODO: 未来迁移到 shared WsServer
-// use crate::shared::websocket::{WsServer, WsServerConfig, WsServerEvent};
+use crate::shared::websocket::{WsServer, WsServerConfig};
 use crate::Result;
-use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
-use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
-use tauri::{AppHandle, Emitter};
+use tokio::sync::RwLock;
+use tauri::AppHandle;
+
+/// WebSocket Server 结构体
+/// 使用 shared::websocket::WsServer 并添加业务逻辑
+pub struct WebSocketServer {
+    /// 底层 WsServer
+    inner: WsServer,
+    /// App Handle
+    app_handle: RwLock<Option<Arc<AppHandle>>>,
+}
+
+impl WebSocketServer {
+    /// 创建新的 WebSocket Server
+    pub fn new(
+        port: u16,
+        _session_manager: Arc<crate::desktop::session::SessionManager>,
+        _plugin_manager: Arc<crate::desktop::plugin::PluginManager>,
+        _db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>,
+        _pairing_service: Arc<crate::shared::auth::PairingService>,
+        _qr_manager: Arc<crate::shared::auth::QrTokenManager>,
+    ) -> Self {
+        let config = WsServerConfig {
+            port,
+            heartbeat_interval_secs: 30,
+            heartbeat_timeout_secs: 90,
+            message_queue_size: 256,
+        };
+
+        let ws_server = WsServer::new(config);
+
+        Self {
+            inner: ws_server,
+            app_handle: RwLock::new(None),
+        }
+    }
+
+    /// 设置 App Handle
+    pub fn set_app_handle(&mut self, handle: Arc<AppHandle>) {
+        let mut app_handle = self.app_handle.blocking_write();
+        *app_handle = Some(handle);
+    }
+
+    /// 启动服务器
+    pub async fn start(&self) -> Result<()> {
+        self.inner.start().await
+    }
+
+    /// 获取已连接设备列表
+    pub async fn get_connected_devices(&self) -> Vec<crate::desktop::server::connection_types::DeviceConnectionInfo> {
+        // 从 WsServer 获取客户端信息
+        let clients = self.inner.clients().read().await;
+        let mut devices = Vec::new();
+
+        for (addr, info) in clients.iter() {
+            devices.push(crate::desktop::server::connection_types::DeviceConnectionInfo {
+                addr: addr.to_string(),
+                device_id: info.client_id.clone().unwrap_or_else(|| addr.to_string()),
+                session_count: 0,
+            });
+        }
+
+        devices
+    }
+}

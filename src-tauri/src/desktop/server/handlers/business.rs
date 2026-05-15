@@ -197,23 +197,14 @@ impl BusinessMessageHandler {
                 Ok(None)
             }
             BusinessMessage::Control {
-                message_id,
-                session_id,
-                timestamp,
-                payload,
+                message_id: _,
+                session_id: _,
+                timestamp: _,
+                payload: _,
             } => {
-                handle_control(
-                    payload.action,
-                    message_id,
-                    // TODO: 从 dependency injection 获取
-                    &Arc::new(crate::desktop::session::SessionManager::new()),
-                    &Arc::new(crate::desktop::plugin::PluginManager::new()),
-                    &self.db,
-                    &self.clients,
-                    addr,
-                    None,
-                )
-                .await
+                // TODO: 实现会话控制功能，需要注入 SessionManager 和 PluginManager
+                tracing::debug!("Control message received - not implemented yet");
+                Ok(None)
             }
             BusinessMessage::Input {
                 message_id,

@@ -68,9 +68,9 @@ impl BusinessHandler for NoopBusinessHandler {
 /// WebSocket 管理器内部状态
 struct WsManagerInner {
     /// 底层 WebSocket 服务器
-    server: Option<Arc<WsServer>>,
+    server: RwLock<Option<Arc<WsServer>>>,
     /// 业务消息处理器
-    handler: Arc<dyn BusinessHandler>,
+    handler: RwLock<Arc<dyn BusinessHandler>>,
     /// client_id 到 SocketAddr 的映射
     client_id_to_addr: RwLock<HashMap<String, SocketAddr>>,
     /// SocketAddr 到 client_id 的反向映射
@@ -88,8 +88,8 @@ struct WsManagerInner {
 impl WsManagerInner {
     fn new() -> Self {
         Self {
-            server: None,
-            handler: Arc::new(NoopBusinessHandler),
+            server: RwLock::new(None),
+            handler: RwLock::new(Arc::new(NoopBusinessHandler)),
             client_id_to_addr: RwLock::new(HashMap::new()),
             addr_to_client_id: RwLock::new(HashMap::new()),
             addr_to_device_name: RwLock::new(HashMap::new()),
@@ -124,7 +124,8 @@ impl WebSocketManager {
         }
 
         if let Some(h) = handler {
-            self.inner.handler = h;
+            let mut handler_lock = self.inner.handler.write().await;
+            *handler_lock = h;
         }
 
         *initialized = true;
@@ -145,11 +146,14 @@ impl WebSocketManager {
         }
 
         // 检查是否已启动
-        if let Some(server) = &self.inner.server {
-            if server.is_running().await {
-                return Err(AppError::WebSocket(
-                    "WebSocket server already running".to_string(),
-                ));
+        {
+            let server = self.inner.server.read().await;
+            if let Some(s) = &*server {
+                if s.is_running().await {
+                    return Err(AppError::WebSocket(
+                        "WebSocket server already running".to_string(),
+                    ));
+                }
             }
         }
 
@@ -188,8 +192,14 @@ impl WebSocketManager {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // 保存服务器引用和端口
-        self.inner.server.replace(server);
-        *self.inner.port.write().await = Some(port);
+        {
+            let mut server_lock = self.inner.server.write().await;
+            *server_lock = Some(server);
+        }
+        {
+            let mut port_lock = self.inner.port.write().await;
+            *port_lock = Some(port);
+        }
 
         tracing::info!("WebSocketManager started on port {}", port);
         Ok(())
@@ -197,19 +207,29 @@ impl WebSocketManager {
 
     /// 停止服务器
     pub async fn stop(&self) -> Result<()> {
-        if let Some(server) = &self.inner.server {
-            server.stop().await?;
-            self.inner.server = None;
-            *self.inner.port.write().await = None;
-            tracing::info!("WebSocketManager stopped");
+        let server = {
+            let mut server_lock = self.inner.server.write().await;
+            server_lock.take()
+        };
+
+        if let Some(s) = server {
+            s.stop().await?;
         }
+
+        {
+            let mut port_lock = self.inner.port.write().await;
+            *port_lock = None;
+        }
+
+        tracing::info!("WebSocketManager stopped");
         Ok(())
     }
 
     /// 服务器是否运行中
     pub async fn is_running(&self) -> bool {
-        if let Some(server) = &self.inner.server {
-            server.is_running().await
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            s.is_running().await
         } else {
             false
         }
@@ -224,8 +244,9 @@ impl WebSocketManager {
 
     /// 获取所有已连接客户端列表
     pub async fn list_clients(&self) -> Vec<ClientSummary> {
-        if let Some(server) = &self.inner.server {
-            let clients = server.clients().read().await;
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            let clients = s.clients().read().await;
             let addr_to_client_id = self.inner.addr_to_client_id.read().await;
             let addr_to_device_name = self.inner.addr_to_device_name.read().await;
             let addr_to_connected_at = self.inner.addr_to_connected_at.read().await;
@@ -282,8 +303,9 @@ impl WebSocketManager {
 
     /// 获取指定客户端信息（通过 SocketAddr）
     pub async fn get_client_by_addr(&self, addr: &SocketAddr) -> Option<ClientSummary> {
-        if let Some(server) = &self.inner.server {
-            let client_info = server.get_client(addr).await?;
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            let client_info = s.get_client(addr).await?;
             let client_id = self.inner.addr_to_client_id.read().await
                 .get(addr)
                 .cloned()
@@ -310,8 +332,9 @@ impl WebSocketManager {
 
     /// 获取客户端数量
     pub async fn client_count(&self) -> usize {
-        if let Some(server) = &self.inner.server {
-            server.client_count().await
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            s.client_count().await
         } else {
             0
         }
@@ -319,8 +342,9 @@ impl WebSocketManager {
 
     /// 获取已认证客户端数量
     pub async fn authenticated_count(&self) -> usize {
-        if let Some(server) = &self.inner.server {
-            server.authenticated_count().await
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            s.authenticated_count().await
         } else {
             0
         }
@@ -328,7 +352,7 @@ impl WebSocketManager {
 
     // ==================== Message Sending APIs ====================
 
-    /// 向指定客户端发送消息（通过 client_id）
+    /// 向指定客户端发���消息（通过 client_id）
     pub async fn send_to_client(&self, client_id: &str, message: &BusinessMessage) -> Result<()> {
         let addr = {
             let client_id_to_addr = self.inner.client_id_to_addr.read().await;
@@ -336,13 +360,13 @@ impl WebSocketManager {
         };
 
         if let Some(addr) = addr {
-            Self::send_to_addr(&self.inner, &addr, message).await
+            self.send_to_addr(&addr, message).await
         } else {
             Err(AppError::WebSocket(format!("Client {} not found", client_id)))
         }
     }
 
-    /// 向指���客户端发送文本（通过 client_id）
+    /// 向指定客户端发送文本（通过 client_id）
     pub async fn send_text_to_client(&self, client_id: &str, text: &str) -> Result<()> {
         let message = BusinessMessage::from_json(text)
             .map_err(|e| AppError::WebSocket(format!("Invalid message: {}", e)))?;
@@ -351,9 +375,10 @@ impl WebSocketManager {
 
     /// 向指定客户端发送消息（通过 SocketAddr）
     pub async fn send_to_addr(&self, addr: &SocketAddr, message: &BusinessMessage) -> Result<()> {
-        if let Some(server) = &self.inner.server {
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
             let json = message.to_json()?;
-            server.send_text_to(addr, &json).await
+            s.send_text_to(addr, &json).await
         } else {
             Err(AppError::WebSocket("Server not started".to_string()))
         }
@@ -390,11 +415,12 @@ impl WebSocketManager {
             client_id_to_addr.get(exclude_client_id).copied()
         };
 
-        if let Some(server) = &self.inner.server {
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
             if let Some(addr) = exclude_addr {
                 let json = message.to_json()?;
                 let ws_msg = crate::shared::websocket::WsMessage::text(&json);
-                server.broadcast_to_others(&addr, &ws_msg).await?;
+                s.broadcast_to_others(&addr, &ws_msg).await?;
             } else {
                 self.broadcast(message).await?;
             }
@@ -406,10 +432,11 @@ impl WebSocketManager {
 
     /// 向所有已认证客户端广播
     pub async fn broadcast(&self, message: &BusinessMessage) -> Result<()> {
-        if let Some(server) = &self.inner.server {
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
             let json = message.to_json()?;
             let ws_msg = crate::shared::websocket::WsMessage::text(&json);
-            server.broadcast(&ws_msg).await
+            s.broadcast(&ws_msg).await
         } else {
             Err(AppError::WebSocket("Server not started".to_string()))
         }
@@ -424,8 +451,10 @@ impl WebSocketManager {
 
     /// 订阅服务器事件
     pub fn subscribe(&self) -> broadcast::Receiver<WsServerEvent> {
-        if let Some(server) = &self.inner.server {
-            server.subscribe()
+        // 注意：这里需要获取 server 的锁，但在没有 server 的情况下返回一个空的 receiver
+        let server = self.inner.server.blocking_read();
+        if let Some(s) = &*server {
+            s.subscribe()
         } else {
             let (tx, rx) = broadcast::channel(1);
             let _ = tx; // 避免未使用警告
@@ -445,12 +474,14 @@ impl WebSocketManager {
 
     /// 更新客户端认证状态
     pub async fn set_authenticated(&self, addr: &SocketAddr, client_id: Option<String>) {
-        if let Some(server) = &self.inner.server {
-            server.set_authenticated(addr, client_id.clone()).await;
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            let cid = client_id.clone();
+            s.set_authenticated(addr, cid).await;
 
             if let Some(cid) = client_id {
                 let mut client_id_to_addr = self.inner.client_id_to_addr.write().await;
-                client_id_to_addr.insert(cid, *addr);
+                client_id_to_addr.insert(cid.clone(), *addr);
 
                 let mut addr_to_client_id = self.inner.addr_to_client_id.write().await;
                 addr_to_client_id.insert(*addr, cid);
@@ -484,7 +515,8 @@ impl WebSocketManager {
                 // 调用业务处理器
                 let device_name = inner.addr_to_device_name.read().await.get(&addr).cloned();
                 let client_id = client_id.unwrap_or_else(|| addr.to_string());
-                inner.handler.on_connected(&client_id, device_name);
+                let handler = inner.handler.read().await;
+                handler.on_connected(&client_id, device_name);
 
                 tracing::info!("Client connected: {}", addr);
             }
@@ -494,7 +526,8 @@ impl WebSocketManager {
 
                 // 调用业务处理器
                 if let Some(cid) = client_id {
-                    inner.handler.on_disconnected(&cid);
+                    let handler = inner.handler.read().await;
+                    handler.on_disconnected(&cid);
                 }
 
                 tracing::info!("Client disconnected: {}", addr);
@@ -505,10 +538,19 @@ impl WebSocketManager {
                     Ok(msg) => {
                         let cid = client_id.unwrap_or_else(|| addr.to_string());
                         // 调用业务处理器
-                        if let Some(response) = inner.handler.handle_message(msg, &cid).await {
-                            // 发送响应
-                            if let Err(e) = Self::send_to_addr_internal(&inner, &addr, &response).await {
-                                tracing::error!("Failed to send response: {}", e);
+                        let handler = inner.handler.read().await;
+                        match handler.handle_message(msg, &cid).await {
+                            Ok(Some(response)) => {
+                                // 发送响应
+                                if let Err(e) = Self::send_to_addr_internal(&inner, &addr, &response).await {
+                                    tracing::error!("Failed to send response: {}", e);
+                                }
+                            }
+                            Ok(None) => {
+                                // 无需响应
+                            }
+                            Err(e) => {
+                                tracing::error!("Handler error: {}", e);
                             }
                         }
                     }
@@ -516,23 +558,6 @@ impl WebSocketManager {
                         tracing::error!("Failed to parse message: {}", e);
                     }
                 }
-            }
-            WsServerEvent::AuthSuccess { addr, client_id } => {
-                // 更新 client_id 映射
-                {
-                    let mut client_id_to_addr = inner.client_id_to_addr.write().await;
-                    client_id_to_addr.insert(client_id.clone(), addr);
-                }
-                {
-                    let mut addr_to_client_id = inner.addr_to_client_id.write().await;
-                    addr_to_client_id.insert(addr, client_id.clone());
-                }
-
-                // 调用业务处理器
-                let device_name = inner.addr_to_device_name.read().await.get(&addr).cloned();
-                inner.handler.on_authenticated(&client_id, device_name);
-
-                tracing::info!("Client authenticated: {} ({})", client_id, addr);
             }
             _ => {}
         }
@@ -574,9 +599,10 @@ impl WebSocketManager {
         addr: &SocketAddr,
         message: &BusinessMessage,
     ) -> Result<()> {
-        if let Some(server) = &inner.server {
+        let server = inner.server.read().await;
+        if let Some(s) = &*server {
             let json = message.to_json()?;
-            server.send_text_to(addr, &json).await
+            s.send_text_to(addr, &json).await
         } else {
             Err(AppError::WebSocket("Server not started".to_string()))
         }

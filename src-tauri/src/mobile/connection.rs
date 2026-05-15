@@ -6,26 +6,14 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::shared::websocket::{
-    ConnectionStatus as WsConnectionStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
+    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
 };
 use crate::Result;
 
 use super::handler::{MobileEvent, MobileHandler};
 
-/// 连接状态（使用共享模块的枚举）
+// Re-export ConnectionStatus for public API
 pub use crate::shared::websocket::ConnectionStatus;
-
-impl From<WsConnectionStatus> for ConnectionStatus {
-    fn from(ws_status: WsConnectionStatus) -> Self {
-        match ws_status {
-            WsConnectionStatus::Disconnected => ConnectionStatus::Disconnected,
-            WsConnectionStatus::Connecting => ConnectionStatus::Connecting,
-            WsConnectionStatus::Connected => ConnectionStatus::Connected,
-            WsConnectionStatus::Paired => ConnectionStatus::Paired,
-            WsConnectionStatus::Error(e) => ConnectionStatus::Error(e),
-        }
-    }
-}
 
 /// 目标设备信息
 #[derive(Debug, Clone)]
@@ -38,7 +26,7 @@ pub struct TargetDevice {
 /// 连接管理器
 pub struct ConnectionManager {
     /// 当前连接状态
-    status: Arc<RwLock<ConnectionStatus>>,
+    status: Arc<RwLock<WsConnStatus>>,
     /// 目标设备
     target: Arc<RwLock<Option<TargetDevice>>>,
     /// WebSocket 客户端
@@ -58,7 +46,7 @@ impl ConnectionManager {
         let handler = MobileHandler::new();
 
         Arc::new(Self {
-            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+            status: Arc::new(RwLock::new(WsConnStatus::Disconnected)),
             target: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
             handler,
@@ -68,7 +56,7 @@ impl ConnectionManager {
     }
 
     /// 获取当前连接状态
-    pub async fn get_status(&self) -> ConnectionStatus {
+    pub async fn get_status(&self) -> WsConnStatus {
         self.status.read().await.clone()
     }
 
@@ -87,14 +75,14 @@ impl ConnectionManager {
         // 检查当前状态
         {
             let status = self.status.read().await.clone();
-            if status == ConnectionStatus::Connecting || status == ConnectionStatus::Connected || status == ConnectionStatus::Paired {
+            if status == WsConnStatus::Connecting || status == WsConnStatus::Connected || status == WsConnStatus::Paired {
                 tracing::warn!("Already connected or connecting");
                 return Ok(());
             }
         }
 
         // 设置状态为连接中
-        *self.status.write().await = ConnectionStatus::Connecting;
+        *self.status.write().await = WsConnStatus::Connecting;
 
         // 保存目标设备
         *self.target.write().await = Some(TargetDevice {
@@ -132,6 +120,7 @@ impl ConnectionManager {
 
         let client_clone = client.clone();
         let status = self.status.clone();
+        let status_clone = self.status.clone();
         let event_tx_clone = self.event_tx.clone();
         let running = self.running.clone();
 
@@ -143,7 +132,7 @@ impl ConnectionManager {
             // 启动连接
             if let Err(e) = client_clone.connect().await {
                 tracing::error!("Failed to connect: {}", e);
-                *status.write().await = ConnectionStatus::Error(e.to_string());
+                *status.write().await = WsConnStatus::Error(e.to_string());
                 let _ = event_tx_clone.send(MobileEvent::Error {
                     message: format!("Connection failed: {}", e),
                 });
@@ -151,7 +140,7 @@ impl ConnectionManager {
             }
 
             // 连接成功，更新状态
-            *status.write().await = ConnectionStatus::Connected;
+            *status.write().await = WsConnStatus::Connected;
             let _ = event_tx_clone.send(MobileEvent::Connected);
 
             // 等待连接断开
@@ -159,17 +148,17 @@ impl ConnectionManager {
                 if let Ok(event) = rx.recv().await {
                     match event {
                         WsClientEvent::Disconnected => {
-                            *status_clone.write().await = ConnectionStatus::Disconnected;
+                            *status_clone.write().await = WsConnStatus::Disconnected;
                             let _ = event_tx_clone.send(MobileEvent::Disconnected);
                             break;
                         }
                         WsClientEvent::ServerClosed { reason } => {
-                            *status_clone.write().await = ConnectionStatus::Disconnected;
+                            *status_clone.write().await = WsConnStatus::Disconnected;
                             let _ = event_tx_clone.send(MobileEvent::ServerClosed { reason });
                             break;
                         }
                         WsClientEvent::Error { message } => {
-                            *status_clone.write().await = ConnectionStatus::Error(message.clone());
+                            *status_clone.write().await = WsConnStatus::Error(message.clone());
                             let _ = event_tx_clone.send(MobileEvent::Error { message });
                         }
                         _ => {}
@@ -188,10 +177,10 @@ impl ConnectionManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
             let status = self.status.read().await.clone();
-            if status == ConnectionStatus::Connected || status == ConnectionStatus::Paired {
+            if status == WsConnStatus::Connected || status == WsConnStatus::Paired {
                 return Ok(());
             }
-            if let ConnectionStatus::Error(e) = &status {
+            if let WsConnStatus::Error(e) = &status {
                 return Err(crate::AppError::WebSocket(e.clone()));
             }
 
@@ -217,7 +206,7 @@ impl ConnectionManager {
         *self.client.write().await = None;
 
         // 更新状态
-        *self.status.write().await = ConnectionStatus::Disconnected;
+        *self.status.write().await = WsConnStatus::Disconnected;
 
         // 清除目标
         *self.target.write().await = None;
@@ -244,12 +233,12 @@ impl ConnectionManager {
     /// 检查是否已连接
     pub async fn is_connected(&self) -> bool {
         let status = self.status.read().await;
-        matches!(*status, ConnectionStatus::Connected | ConnectionStatus::Paired)
+        matches!(*status, WsConnStatus::Connected | WsConnStatus::Paired)
     }
 
     /// 设置为已配对状态
     pub async fn set_paired(&self) {
-        *self.status.write().await = ConnectionStatus::Paired;
+        *self.status.write().await = WsConnStatus::Paired;
     }
 }
 
@@ -259,7 +248,7 @@ impl Default for ConnectionManager {
         let handler = MobileHandler::new();
 
         Self {
-            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
+            status: Arc::new(RwLock::new(WsConnStatus::Disconnected)),
             target: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
             handler,
