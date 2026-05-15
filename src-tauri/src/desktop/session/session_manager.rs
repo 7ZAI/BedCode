@@ -160,7 +160,7 @@ impl SessionManager {
                         session_id_lifecycle, status
                     );
                     let session_status = match status {
-                        crate::desktop::pty::PtySessionStatus::Error => super::SessionStatus::Error,
+                        crate::desktop::pty::PtySessionStatus::Error => super::SessionStatus::Error(None),
                         _ => super::SessionStatus::Stopped,
                     };
                     let session_name = {

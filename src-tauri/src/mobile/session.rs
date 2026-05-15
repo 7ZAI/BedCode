@@ -6,29 +6,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
+use crate::shared::message_types::SessionStatus;
 use crate::shared::websocket::WsMessage;
 use crate::Result;
 
 use super::connection::ConnectionManager;
-
-/// 会话状态
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SessionStatus {
-    /// 空闲
-    Idle,
-    /// 启动中
-    Starting,
-    /// 运行中
-    Running,
-    /// 等待输入
-    WaitingInput,
-    /// 停止中
-    Stopping,
-    /// 已停止
-    Stopped,
-    /// 错误
-    Error(String),
-}
 
 /// 会话信息
 #[derive(Debug, Clone, Serialize, Deserialize)]

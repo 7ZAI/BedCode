@@ -463,7 +463,7 @@ impl PluginManager {
             let mut info_map = self.session_info.write().await;
             for id in &disconnected {
                 if let Some(info) = info_map.get_mut(id) {
-                    info.status = crate::desktop::session::SessionStatus::Error;
+                    info.status = crate::desktop::session::SessionStatus::Error(None);
                 }
             }
         }
@@ -493,8 +493,10 @@ impl PluginManager {
             crate::desktop::session::SessionStatus::Running => PluginSessionStatus::Running,
             crate::desktop::session::SessionStatus::Starting => PluginSessionStatus::Starting,
             crate::desktop::session::SessionStatus::Stopped => PluginSessionStatus::Stopped,
-            crate::desktop::session::SessionStatus::Error => PluginSessionStatus::Disconnected,
+            crate::desktop::session::SessionStatus::Error(_) => PluginSessionStatus::Disconnected,
             crate::desktop::session::SessionStatus::WaitingInput => PluginSessionStatus::Running,
+            crate::desktop::session::SessionStatus::Idle => PluginSessionStatus::Starting,
+            crate::desktop::session::SessionStatus::Stopping => PluginSessionStatus::Stopped,
         })
     }
 }

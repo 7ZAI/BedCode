@@ -12,20 +12,8 @@ use crate::Result;
 
 use super::handler::{MobileEvent, MobileHandler};
 
-/// 连接状态
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectionStatus {
-    /// 未连接
-    Disconnected,
-    /// 正在连接
-    Connecting,
-    /// 已连接（WebSocket 连接已建立，等待认证）
-    Connected,
-    /// 已认证（配对成功）
-    Paired,
-    /// 连接错误
-    Error(String),
-}
+/// 连接状态（使用共享模块的枚举）
+pub use crate::shared::websocket::ConnectionStatus;
 
 impl From<WsConnectionStatus> for ConnectionStatus {
     fn from(ws_status: WsConnectionStatus) -> Self {
@@ -33,6 +21,7 @@ impl From<WsConnectionStatus> for ConnectionStatus {
             WsConnectionStatus::Disconnected => ConnectionStatus::Disconnected,
             WsConnectionStatus::Connecting => ConnectionStatus::Connecting,
             WsConnectionStatus::Connected => ConnectionStatus::Connected,
+            WsConnectionStatus::Paired => ConnectionStatus::Paired,
             WsConnectionStatus::Error(e) => ConnectionStatus::Error(e),
         }
     }

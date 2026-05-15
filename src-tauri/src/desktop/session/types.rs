@@ -1,10 +1,12 @@
 //! Session Types
 //!
-//! 会话相关的公共类型定义
+//! 会话相关的公共类型定义，使用共享的 SessionStatus 和 SessionType
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::shared::message_types::{SessionStatus, SessionType};
 
 /// 会话状态变化事件
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,42 +25,6 @@ pub struct SessionRestartEvent {
     pub old_session_id: String,
     pub new_session_id: String,
     pub session_name: String,
-}
-
-/// 会话状态
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SessionStatus {
-    /// 正在启动
-    Starting,
-    /// 运行中
-    Running,
-    /// 等待输入
-    WaitingInput,
-    /// 已停止
-    Stopped,
-    /// 出错
-    Error,
-}
-
-impl Default for SessionStatus {
-    fn default() -> Self {
-        Self::Starting
-    }
-}
-
-/// 会话类型（PTY 或 Plugin）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SessionType {
-    Pty,
-    Plugin,
-}
-
-impl Default for SessionType {
-    fn default() -> Self {
-        Self::Pty
-    }
 }
 
 /// 运行时会话信息

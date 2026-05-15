@@ -6,20 +6,23 @@
 use crate::shared::websocket::message::{WsMessage, WsMessageType};
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::interval;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
 /// 连接状态
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionStatus {
     /// 未连接
     Disconnected,
     /// 正在连接
     Connecting,
-    /// 已连接（WebSocket 连接已建立）
+    /// 已连接（WebSocket 连接已建立，等待认证）
     Connected,
+    /// 已认证（配对成功，仅移动端使用）
+    Paired,
     /// 连接错误
     Error(String),
 }
