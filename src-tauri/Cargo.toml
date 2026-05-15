@@ -63,6 +63,9 @@ regex = "1"
 # Network utilities
 local-ip-address = "0.6"
 
+# Async trait for dyn compatibility
+async-trait = "0.1"
+
 # WebSocket (shared between desktop and mobile)
 tokio-tungstenite = "0.24"
 futures-util = "0.3"

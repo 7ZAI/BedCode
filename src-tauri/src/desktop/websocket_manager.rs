@@ -427,8 +427,9 @@ impl WebSocketManager {
         if let Some(server) = &self.inner.server {
             server.subscribe()
         } else {
-            let (tx, _) = broadcast::channel(1);
-            tx
+            let (tx, rx) = broadcast::channel(1);
+            let _ = tx; // 避免未使用警告
+            rx
         }
     }
 
