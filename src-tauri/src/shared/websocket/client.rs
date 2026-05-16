@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::interval;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
+use tracing::{debug, error, info, warn};
 
 /// 连接状态
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,18 +199,29 @@ impl WsClient {
         }
 
         let url = self.config.url();
-        tracing::info!("Connecting to {}", url);
+        info!("[WsClient] Connecting to {}", url);
+        debug!("[WsClient] Address: {}, Port: {}", self.config.address, self.config.port);
 
         // 建立 WebSocket 连接（带超时）
+        let connect_start = std::time::Instant::now();
+        info!("[WsClient] Starting WebSocket handshake with {}ms timeout...", self.config.connect_timeout_ms);
+
         let ws_stream = tokio::time::timeout(
             std::time::Duration::from_millis(self.config.connect_timeout_ms),
             tokio_tungstenite::connect_async(&url),
         )
         .await
-        .map_err(|_| crate::AppError::WebSocket("Connection timeout".to_string()))?
-        .map_err(|e| crate::AppError::WebSocket(format!("Failed to connect: {}", e)))?;
+        .map_err(|_| {
+            error!("[WsClient] Connection timeout after {}ms", self.config.connect_timeout_ms);
+            crate::AppError::WebSocket("Connection timeout".to_string())
+        })?
+        .map_err(|e| {
+            error!("[WsClient] Failed to connect to {}: {:#}", url, e);
+            crate::AppError::WebSocket(format!("Failed to connect: {}", e))
+        })?;
 
-        tracing::info!("WebSocket connected");
+        let connect_duration = connect_start.elapsed();
+        tracing::info!("WebSocket handshake completed in {}ms", connect_duration.as_millis());
 
         // 获取读写流 - 解包 tuple 并使用 split
         let (ws_stream, _) = ws_stream;
@@ -334,15 +346,9 @@ impl WsClient {
         // 发送连接成功事件
         let _ = self.event_tx.send(WsClientEvent::Connected);
 
-        // 等待任一任务结束，当一个任务结束时取消另一个
-        tokio::select! {
-            _ = &mut sender_task => {
-                receiver_task.abort();
-            }
-            _ = &mut receiver_task => {
-                sender_task.abort();
-            }
-        }
+        // 注意：不等待 sender_task 和 receiver_task 结束
+        // 它们在后台持续运行，直到连接断开
+        // 调用者应该通过订阅事件来监听连接状态变化
 
         Ok(())
     }

@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
+use tauri::{AppHandle, Emitter};
+use log;
 
 use crate::shared::websocket::{
     ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
@@ -71,12 +73,24 @@ impl ConnectionManager {
     }
 
     /// 连接到目标设备
-    pub async fn connect(&self, address: String, port: u16, name: Option<String>) -> Result<()> {
+    pub async fn connect(&self, app_handle: AppHandle, address: String, port: u16, name: Option<String>) -> Result<()> {
         // 检查当前状态
         {
             let status = self.status.read().await.clone();
-            if status == WsConnStatus::Connecting || status == WsConnStatus::Connected || status == WsConnStatus::Paired {
-                tracing::warn!("Already connected or connecting");
+            if status == WsConnStatus::Connecting {
+                // 连接正在进行中，发射事件通知前端
+                let _ = app_handle.emit("ws_connecting", serde_json::json!({
+                    "address": address,
+                    "port": port,
+                    "status": "already_connecting"
+                }));
+                log::warn!("Already connecting, emitting event to frontend");
+                return Ok(());
+            }
+            if status == WsConnStatus::Connected || status == WsConnStatus::Paired {
+                // 已经连接，发射事件通知前端
+                let _ = app_handle.emit("ws_connected", ());
+                log::warn!("Already connected, emitting event to frontend");
                 return Ok(());
             }
         }
@@ -123,6 +137,7 @@ impl ConnectionManager {
         let status_clone = self.status.clone();
         let event_tx_clone = self.event_tx.clone();
         let running = self.running.clone();
+        let app_handle_clone = app_handle.clone();
 
         // 在后台任务中运行连接
         tokio::spawn(async move {
@@ -131,35 +146,57 @@ impl ConnectionManager {
 
             // 启动连接
             if let Err(e) = client_clone.connect().await {
-                tracing::error!("Failed to connect: {}", e);
+                log::error!("Failed to connect: {}", e);
                 *status.write().await = WsConnStatus::Error(e.to_string());
                 let _ = event_tx_clone.send(MobileEvent::Error {
                     message: format!("Connection failed: {}", e),
                 });
+                // 发射错误事件到前端
+                let _ = app_handle_clone.emit("ws_error", serde_json::json!({
+                    "message": format!("Connection failed: {}", e)
+                }));
                 return;
             }
 
             // 连接成功，更新状态
             *status.write().await = WsConnStatus::Connected;
             let _ = event_tx_clone.send(MobileEvent::Connected);
+            // 发射连接成功事件到前端
+            let _ = app_handle_clone.emit("ws_connected", ());
 
             // 等待连接断开
             while running.load(std::sync::atomic::Ordering::SeqCst) {
                 if let Ok(event) = rx.recv().await {
                     match event {
+                        WsClientEvent::Connected => {
+                            // 连接成功事件已在上面处理
+                            log::debug!("Received Connected event");
+                        }
                         WsClientEvent::Disconnected => {
                             *status_clone.write().await = WsConnStatus::Disconnected;
                             let _ = event_tx_clone.send(MobileEvent::Disconnected);
+                            // 发射断开连接事件到前端
+                            let _ = app_handle_clone.emit("ws_disconnected", serde_json::json!({
+                                "reason": "Connection lost"
+                            }));
                             break;
                         }
                         WsClientEvent::ServerClosed { reason } => {
                             *status_clone.write().await = WsConnStatus::Disconnected;
-                            let _ = event_tx_clone.send(MobileEvent::ServerClosed { reason });
+                            let _ = event_tx_clone.send(MobileEvent::ServerClosed { reason: reason.clone() });
+                            // 发射服务器关闭事件到前端
+                            let _ = app_handle_clone.emit("ws_server_closed", serde_json::json!({
+                                "reason": reason
+                            }));
                             break;
                         }
                         WsClientEvent::Error { message } => {
                             *status_clone.write().await = WsConnStatus::Error(message.clone());
-                            let _ = event_tx_clone.send(MobileEvent::Error { message });
+                            let _ = event_tx_clone.send(MobileEvent::Error { message: message.clone() });
+                            // 发射错误事件到前端
+                            let _ = app_handle_clone.emit("ws_error", serde_json::json!({
+                                "message": message
+                            }));
                         }
                         _ => {}
                     }
@@ -192,7 +229,7 @@ impl ConnectionManager {
 
     /// 断开连接
     pub async fn disconnect(&self) {
-        tracing::info!("Disconnecting...");
+        log::info!("Disconnecting...");
 
         // 停止运行
         self.running.store(false, std::sync::atomic::Ordering::SeqCst);

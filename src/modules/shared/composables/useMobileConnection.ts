@@ -35,6 +35,10 @@ const currentDevice = ref<RemoteDevice | null>(null)
 const connectionError = ref<string | null>(null)
 const isConnecting = ref(false)
 
+// 连接超时控制
+let connectionTimeout: ReturnType<typeof setTimeout> | null = null
+const CONNECTION_TIMEOUT_MS = 15000 // 15秒超时
+
 // 认证凭据
 const authCredentials = ref<AuthCredentials | null>(null)
 
@@ -60,51 +64,71 @@ export const isPaired = computed(() =>
 /**
  * 初始化事件监听和凭据
  */
-function init() {
+async function init() {
   // 加载保存的凭据
   const savedCreds = loadAuthCredentials()
   if (savedCreds) {
     authCredentials.value = savedCreds
   }
 
-  // 初始化事件监听
-  initMobileEventListeners({
+  // 初始化事件监听 - 状态由后端事件驱动
+  await initMobileEventListeners({
+    onConnecting: () => {
+      connectionStatus.value = 'connecting'
+      isConnecting.value = true
+      connectionError.value = null
+      console.log('[MobileConnection] Connecting...')
+    },
     onConnected: () => {
+      clearConnectionTimeout()
       connectionStatus.value = 'connected'
       isConnecting.value = false
       connectionError.value = null
       console.log('[MobileConnection] Connected')
     },
     onDisconnected: () => {
+      clearConnectionTimeout()
       connectionStatus.value = 'disconnected'
+      isConnecting.value = false
       console.log('[MobileConnection] Disconnected')
     },
-    onAuthSuccess: () => {
+    onPaired: () => {
+      clearConnectionTimeout()
       connectionStatus.value = 'paired'
+      isConnecting.value = false
+      console.log('[MobileConnection] Paired')
+    },
+    onAuthSuccess: () => {
+      // ws_paired 会触发 onPaired
       console.log('[MobileConnection] Auth success')
     },
     onAuthFailed: (reason) => {
       connectionStatus.value = 'error'
       connectionError.value = reason
+      isConnecting.value = false
       console.log('[MobileConnection] Auth failed:', reason)
     },
     onPairingRequest: () => {
+      clearConnectionTimeout()
       connectionStatus.value = 'pairing'
       console.log('[MobileConnection] Pairing requested')
     },
     onPairingVerified: () => {
-      connectionStatus.value = 'paired'
+      // 等待 ws_paired 事件
       console.log('[MobileConnection] Pairing verified')
     },
     onError: (message) => {
+      clearConnectionTimeout()
       connectionError.value = message
       connectionStatus.value = 'error'
       isConnecting.value = false
       console.error('[MobileConnection] Error:', message)
     },
     onServerClosed: (reason) => {
+      clearConnectionTimeout()
       connectionStatus.value = 'disconnected'
       connectionError.value = reason
+      isConnecting.value = false
       console.log('[MobileConnection] Server closed:', reason)
     },
   })
@@ -119,38 +143,58 @@ init()
  * 连接到设备
  */
 export async function connect(device: RemoteDevice): Promise<void> {
-  connectionStatus.value = 'connecting'
-  isConnecting.value = true
+  console.log('[MobileConnection] Starting connection to:', device.address, device.port)
   currentDevice.value = device
   connectionError.value = null
+  isConnecting.value = true
+
+  // 设置连接超时
+  clearConnectionTimeout()
+  connectionTimeout = setTimeout(() => {
+    if (isConnecting.value) {
+      console.warn('[MobileConnection] Connection timeout, disconnecting...')
+      connectionError.value = '连接超时 (15秒)'
+      connectionStatus.value = 'error'
+      isConnecting.value = false
+      disconnect()
+    }
+  }, CONNECTION_TIMEOUT_MS)
 
   try {
-    await wsConnect(device.address, device.port, device.name)
-
-    // 等待连接成功事件触发状态更新
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('连接超时'))
-      }, 15000)
-
-      const checkConnection = setInterval(() => {
-        if (connectionStatus.value === 'connected' || connectionStatus.value === 'paired') {
-          clearTimeout(timeout)
-          clearInterval(checkConnection)
-          resolve()
-        }
-        if (connectionError.value) {
-          clearTimeout(timeout)
-          clearInterval(checkConnection)
-          reject(new Error(connectionError.value))
-        }
-      }, 100)
-    })
+    // 调用后端连接，状态由后端事件驱动更新
+    const result = await wsConnect(device.address, device.port, device.name)
+    console.log('[MobileConnection] wsConnect returned:', result)
   } catch (error) {
-    connectionStatus.value = 'error'
-    connectionError.value = String(error)
+    clearConnectionTimeout()
+    console.error('[MobileConnection] wsConnect failed:', error)
+    // 如果命令本身失败（如地址无效），抛出错误
+    // 状态由后端事件驱动更新，不需要手动设置
     isConnecting.value = false
     throw error
+  }
+}
+
+/**
+ * 取消连接
+ */
+export async function cancelConnection(): Promise<void> {
+  clearConnectionTimeout()
+  if (isConnecting.value) {
+    console.log('[MobileConnection] Cancelling connection...')
+    connectionError.value = '用户取消连接'
+    connectionStatus.value = 'disconnected'
+    isConnecting.value = false
+    await disconnect()
+  }
+}
+
+/**
+ * 清除连接超时定时器
+ */
+function clearConnectionTimeout() {
+  if (connectionTimeout) {
+    clearTimeout(connectionTimeout)
+    connectionTimeout = null
   }
 }
 
@@ -160,10 +204,9 @@ export async function connect(device: RemoteDevice): Promise<void> {
 export async function disconnect(): Promise<void> {
   try {
     await wsDisconnect()
+    // 状态由后端 ws_disconnected 事件驱动更新
   } finally {
-    connectionStatus.value = 'disconnected'
     currentDevice.value = null
-    cleanupMobileEventListeners()
   }
 }
 
@@ -178,9 +221,9 @@ export async function authenticate(): Promise<boolean> {
 
   try {
     const result = await wsAuthenticate()
-    if (result) {
-      connectionStatus.value = 'paired'
-    }
+    // 成功时后端会 emit ws_auth_success 和 ws_paired 事件
+    // 失败时后端会 emit ws_auth_failed 事件
+    // 状态由事件驱动，不需要手动设置
     return result
   } catch (error) {
     console.error('[MobileConnection] Auth failed:', error)
@@ -195,7 +238,7 @@ export async function authenticate(): Promise<boolean> {
  */
 export async function requestPairing(): Promise<void> {
   await wsRequestPairing()
-  connectionStatus.value = 'pairing'
+  // 状态由后端事件驱动
 }
 
 /**
@@ -204,9 +247,9 @@ export async function requestPairing(): Promise<void> {
 export async function verifyPairingCode(code: string): Promise<boolean> {
   try {
     const result = await wsVerifyPairingCode(code)
-    if (result) {
-      connectionStatus.value = 'paired'
-    }
+    // 成功时后端会 emit ws_pairing_verified 和 ws_paired 事件
+    // 失败时后端会 emit ws_auth_failed 事件
+    // 状态由事件驱动，不需要手动设置
     return result
   } catch (error) {
     console.error('[MobileConnection] Pairing verification failed:', error)
@@ -280,6 +323,7 @@ export function useMobileConnection() {
 
     // Operations
     connect,
+    cancelConnection,
     disconnect,
     authenticate,
     requestPairing,

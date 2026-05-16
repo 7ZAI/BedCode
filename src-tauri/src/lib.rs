@@ -41,10 +41,37 @@ use std::sync::Arc;
 use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tokio::sync::Mutex;
+#[cfg(target_os = "android")]
+use android_logger::Config;
+#[cfg(target_os = "android")]
+use log::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 初始化日志系统
-fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
+#[allow(unused_variables)]
+fn init_logging(_app_handle: &tauri::AppHandle) -> Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        // Android: 使用 android_logger 输出到 logcat
+        // 在 debug 和 release 构建时都启用，方便调试
+        android_logger::init_once(
+            Config::default()
+                .with_max_level(LevelFilter::Debug)
+                .with_tag("BedCode")
+        );
+        log::info!("BedCode Android logging initialized");
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        init_logging_desktop(_app_handle)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
     let log_dir = app_handle
         .path()
         .app_log_dir()
@@ -207,9 +234,10 @@ pub fn run() {
 
             let ws_server_clone = ws_server.clone();
             tauri::async_runtime::spawn(async move {
-                tracing::info!("Starting WebSocket server on port {}", ws_port);
-                if let Err(e) = ws_server_clone.start().await {
-                    tracing::error!("WebSocket server error: {}", e);
+                tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port);
+                match ws_server_clone.start().await {
+                    Ok(_) => tracing::info!("[BedCode] WebSocket server started successfully"),
+                    Err(e) => tracing::error!("[BedCode] WebSocket server failed to start: {}", e),
                 }
             });
 
@@ -400,6 +428,18 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn run() {
     use crate::shared::system::settings::SettingsManager;
+    use android_logger::Config;
+    use log::LevelFilter;
+
+    // 尽可能早地初始化日志
+    android_logger::init_once(
+        Config::default()
+            .with_max_level(LevelFilter::Debug)
+            .with_tag("BedCode")
+    );
+    log::info!("BedCode Mobile early logging init");
+
+    log::info!("Building Tauri application...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -407,7 +447,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
-            init_logging(app.handle())?;
+            // 日志已在 run() 中早期初始化，这里不再重复初始化
+            log::info!("BedCode setup starting...");
+
+            // 插件初始化日志
+            log::info!("Plugins initialized");
 
             let app_handle = app.handle();
 
@@ -422,10 +466,28 @@ pub fn run() {
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
 
-            tracing::info!("BedCode (Mobile) initialized");
+            log::info!("BedCode Mobile started successfully!");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Mobile WebSocket Commands
+            mobile::commands::ws_connect,
+            mobile::commands::ws_disconnect,
+            mobile::commands::ws_get_status,
+            mobile::commands::ws_is_connected,
+            mobile::commands::ws_get_auth_status,
+            mobile::commands::ws_authenticate,
+            mobile::commands::ws_request_pairing,
+            mobile::commands::ws_verify_pairing_code,
+            mobile::commands::ws_authenticate_with_qr,
+            mobile::commands::ws_load_sessions,
+            mobile::commands::ws_start_session,
+            mobile::commands::ws_stop_session,
+            mobile::commands::ws_send_input,
+            mobile::commands::ws_send_message,
+            mobile::commands::ws_send_and_wait,
+            mobile::commands::ws_resize_terminal,
+            mobile::commands::ws_load_session_configs,
             // Pairing
             shared::system::commands::generate_pairing_code,
             shared::system::commands::get_current_pairing_code,
@@ -458,4 +520,7 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    // 这行永远不会执行，因为 run() 会阻塞
+    log::info!("BedCode application closed");
 }

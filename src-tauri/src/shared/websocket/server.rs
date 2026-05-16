@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
+use tracing::{debug, error, info, warn};
 
 /// WebSocket 消息处理结果
 pub type HandlerResult = Result<Option<WsMessage>>;
@@ -316,6 +317,7 @@ impl WsServer {
             .map_err(|e| crate::AppError::WebSocket(format!("Invalid address: {}", e)))?;
 
         let listener = TcpListener::bind(&addr).await?;
+        debug!("[WsServer] TCP listener bound to {}", addr);
 
         // 标记为运行中
         {
@@ -323,7 +325,7 @@ impl WsServer {
             *running = true;
         }
 
-        tracing::info!("WebSocket server listening on ws://{}", addr);
+        info!("[WsServer] WebSocket server listening on ws://{}", addr);
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -358,7 +360,7 @@ impl WsServer {
                             let mut clients = heartbeat_clients.write().await;
                             let mut senders = heartbeat_senders.write().await;
                             for addr in timeout_addrs {
-                                tracing::warn!("Client {} heartbeat timeout, disconnecting", addr);
+                                warn!("Client {} heartbeat timeout, disconnecting", addr);
                                 clients.remove(&addr);
                                 senders.remove(&addr);
                             }
@@ -375,6 +377,7 @@ impl WsServer {
             tokio::select! {
                 accept_result = listener.accept() => {
                     let (stream, addr) = accept_result?;
+                    debug!("[WsServer] Received accept request from {}", addr);
 
                     let clients = self.clients.clone();
                     let client_senders = self.client_senders.clone();
@@ -388,12 +391,12 @@ impl WsServer {
                     let event_tx_for_cleanup = self.event_tx.clone();
 
                     tokio::spawn(async move {
-                        tracing::info!("New connection from {}", addr);
+                        info!("[WsServer] New connection from {}", addr);
 
                         let ws_stream = match tokio_tungstenite::accept_async(stream).await {
                             Ok(ws) => ws,
                             Err(e) => {
-                                tracing::error!("WebSocket handshake error: {}", e);
+                                error!("WebSocket handshake error: {}", e);
                                 return;
                             }
                         };
@@ -496,7 +499,7 @@ impl WsServer {
                                                 }
                                             }
                                             Err(e) => {
-                                                tracing::error!("Parse message error: {}", e);
+                                                error!("Parse message error: {}", e);
                                             }
                                         }
                                     }
@@ -510,12 +513,12 @@ impl WsServer {
                                         }
                                     }
                                     Ok(WsMsg::Close(_)) => {
-                                        tracing::info!("Client {} closed connection", addr);
+                                        info!("Client {} closed connection", addr);
                                         break;
                                     }
                                     Ok(WsMsg::Binary(_)) => {}
                                     Err(e) => {
-                                        tracing::error!("WebSocket error: {}", e);
+                                        error!("WebSocket error: {}", e);
                                         break;
                                     }
                                     _ => {}
@@ -562,12 +565,12 @@ impl WsServer {
                             s.remove(&addr);
                         }
 
-                        tracing::info!("Client {} disconnected", addr);
+                        info!("Client {} disconnected", addr);
                     });
                 }
 
                 _ = shutdown_rx.recv() => {
-                    tracing::info!("WebSocket server shutting down");
+                    info!("WebSocket server shutting down");
 
                     // 发送关闭消息给所有客户端（使用 try_send 避免阻塞）
                     let close_msg = WsMsg::Close(None);
@@ -595,7 +598,7 @@ impl WsServer {
 
     /// 停止服务器
     pub async fn stop(&self) -> Result<()> {
-        tracing::info!("Sending shutdown signal to WebSocket server");
+        info!("Sending shutdown signal to WebSocket server");
         let _ = self.shutdown_tx.send(());
         Ok(())
     }
