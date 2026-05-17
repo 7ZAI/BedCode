@@ -312,7 +312,7 @@ export function useMobileConnection() {
     connectionStatus: readonly(connectionStatus),
     currentDevice: readonly(currentDevice),
     connectionError: readonly(connectionError),
-    isConnecting: readonly(isConnecting),
+    isConnecting,  // 不使用 readonly，允许组件设置
     authCredentials: readonly(authCredentials),
     activeSessionId,
     lastMessage,

@@ -5,10 +5,7 @@
 use bedcode_lib::auth::PairingCode;
 use bedcode_lib::db::{Database, SessionConfig};
 use bedcode_lib::session::SessionInfo;
-use chrono::Utc;
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
 
 mod pairing_tests {
     use super::*;
@@ -66,7 +63,6 @@ mod pairing_tests {
 }
 
 mod pairing_service_tests {
-    use super::*;
     use bedcode_lib::auth::PairingService;
 
     #[tokio::test]
@@ -150,7 +146,7 @@ mod session_info_tests {
             SessionStatus::Running,
             SessionStatus::WaitingInput,
             SessionStatus::Stopped,
-            SessionStatus::Error,
+            SessionStatus::Error(None),
         ];
 
         for status in statuses {
@@ -162,7 +158,7 @@ mod session_info_tests {
 }
 
 mod utility_command_tests {
-    use bedcode_lib::shared::config::{AppConfig, NetworkConfig, SessionConfig as ConfigSession, UiConfig};
+    use bedcode_lib::shared::config::AppConfig;
 
     #[test]
     fn test_get_app_settings_default() {

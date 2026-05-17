@@ -204,8 +204,10 @@ export async function keepScreenAwake(enabled: boolean): Promise<void> {
 
 // ==================== Event Listeners ====================
 
+let unlistenConnecting: UnlistenFn | null = null
 let unlistenConnected: UnlistenFn | null = null
 let unlistenDisconnected: UnlistenFn | null = null
+let unlistenPaired: UnlistenFn | null = null
 let unlistenAuthSuccess: UnlistenFn | null = null
 let unlistenAuthFailed: UnlistenFn | null = null
 let unlistenPairingRequest: UnlistenFn | null = null
@@ -218,8 +220,10 @@ let unlistenOutput: UnlistenFn | null = null
  * 初始化事件监听
  */
 export async function initMobileEventListeners(callbacks: {
+  onConnecting?: () => void
   onConnected?: () => void
   onDisconnected?: () => void
+  onPaired?: () => void
   onAuthSuccess?: () => void
   onAuthFailed?: (reason: string) => void
   onPairingRequest?: () => void
@@ -228,11 +232,17 @@ export async function initMobileEventListeners(callbacks: {
   onServerClosed?: (reason: string) => void
   onOutput?: (data: any) => void
 }) {
+  if (callbacks.onConnecting) {
+    unlistenConnecting = await listen('ws_connecting', callbacks.onConnecting)
+  }
   if (callbacks.onConnected) {
     unlistenConnected = await listen('ws_connected', callbacks.onConnected)
   }
   if (callbacks.onDisconnected) {
     unlistenDisconnected = await listen('ws_disconnected', callbacks.onDisconnected)
+  }
+  if (callbacks.onPaired) {
+    unlistenPaired = await listen('ws_paired', callbacks.onPaired)
   }
   if (callbacks.onAuthSuccess) {
     unlistenAuthSuccess = await listen('ws_auth_success', callbacks.onAuthSuccess)
@@ -267,8 +277,10 @@ export async function initMobileEventListeners(callbacks: {
  * 清理所有事件监听
  */
 export function cleanupMobileEventListeners() {
+  unlistenConnecting?.()
   unlistenConnected?.()
   unlistenDisconnected?.()
+  unlistenPaired?.()
   unlistenAuthSuccess?.()
   unlistenAuthFailed?.()
   unlistenPairingRequest?.()

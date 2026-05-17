@@ -146,6 +146,21 @@ async function handleQrScan(decodedText: string) {
     return
   }
 
+  // 等待连接建立完成（解决竞态问题）
+  connectingStep.value = '等待连接...'
+  const maxWaitTime = 10000 // 最多等待 10 秒
+  const checkInterval = 200 // 每 200ms 检查一次
+  const startTime = Date.now()
+
+  while (!connection.isConnected.value) {
+    if (Date.now() - startTime > maxWaitTime) {
+      errorMessage.value = '连接超时，请重试'
+      isConnecting.value = false
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, checkInterval))
+  }
+
   // Step 2: 发送 QR token 认证
   connectingStep.value = '正在配对...'
   console.log('[Scan] QR data:', qrData)

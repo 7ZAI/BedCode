@@ -255,8 +255,8 @@
       <!-- Scan QR Code Button -->
       <button
         class="w-full bg-gray-100 dark:bg-dark-700 text-white py-3 rounded-xl font-medium active:bg-gray-200 dark:bg-dark-600 flex items-center justify-center gap-2"
-        :class="{ 'opacity-50': isConnecting }"
-        :disabled="isConnecting"
+        :class="{ 'opacity-50': connection.isConnecting.value }"
+        :disabled="connection.isConnecting.value"
         @click="$router.push({ name: 'mobile-scan' })"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -268,8 +268,8 @@
       <!-- Manual Connect Button -->
       <button
         class="w-full bg-primary-600 text-white py-3 rounded-xl font-medium active:bg-primary-700 flex items-center justify-center gap-2"
-        :class="{ 'opacity-50': isConnecting }"
-        :disabled="isConnecting"
+        :class="{ 'opacity-50': connection.isConnecting.value }"
+        :disabled="connection.isConnecting.value"
         @click="showManualConnect = true"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -284,7 +284,9 @@
       v-model="showManualConnect"
       title="连接新设备"
       placeholder="输入设备地址 (如: 10.186.131.120)"
+      :loading="connection.isConnecting.value"
       @submit="handleConnectManual"
+      @cancel="handleCancelConnection"
     />
 
     <!-- Pairing Dialog -->
@@ -348,7 +350,6 @@ const showManualConnect = ref(false)
 const showPairing = ref(false)
 const isPairing = ref(false)
 const pairingError = ref('')
-const isConnecting = ref(false)
 const connectionError = ref('')
 
 // Session configs from connected desktop
@@ -380,8 +381,8 @@ const connectionHistory = ref<ConnectionHistoryItem[]>([])
 // Current device being connected
 const pendingDevice = ref<RemoteDevice | null>(null)
 
-// Connection status for UI display
-const connectionStatus = ref<'idle' | 'connecting' | 'connected' | 'pairing' | 'error'>('idle')
+// 使用后端统一的连接状态
+const connectionStatus = computed(() => connection.connectionStatus.value)
 
 // 使用统一的连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
@@ -393,7 +394,7 @@ const currentDevice = computed(() => connection.currentDevice.value)
 const activeSessionId = computed(() => connection.activeSessionId.value)
 
 const connectionStatusText = computed(() => {
-  switch (connectionStatus.value) {
+  switch (connection.connectionStatus.value) {
     case 'connecting':
       return `正在连接 ${pendingDevice.value?.name || '连接'}...`
     case 'connected':
@@ -561,20 +562,17 @@ async function handleConnectManual(address: string) {
 // Start connection flow
 async function startConnection(device: RemoteDevice) {
   pendingDevice.value = device
-  connectionStatus.value = 'connecting'
   connectionError.value = ''
-  isConnecting.value = true
+  connection.isConnecting.value = true
 
   try {
-    // Step 1: Connect to device
+    // Step 1: Connect to device - 状态由后端事件驱动
     await connection.connect(device)
-    connectionStatus.value = 'connected'
 
     // Step 2: Try stored credentials first (for reconnection without re-pairing)
     const authenticated = await connection.authenticate()
     if (authenticated) {
       // Successfully reconnected, load configs
-      connectionStatus.value = 'idle'
       pendingDevice.value = null
       addToHistory(`${device.address}:${device.port}`, device.name)
       await loadSessionConfigs()
@@ -583,21 +581,21 @@ async function startConnection(device: RemoteDevice) {
 
     // Step 3: Need to pair
     await connection.requestPairing()
-    connectionStatus.value = 'pairing'
     showPairing.value = true
     addToHistory(`${device.address}:${device.port}`, device.name)
   } catch (error) {
-    connectionStatus.value = 'error'
     connectionError.value = String(error)
     console.error('Connection failed:', error)
-    setTimeout(() => {
-      if (connectionStatus.value === 'error') {
-        connectionStatus.value = 'idle'
-      }
-    }, 3000)
   } finally {
-    isConnecting.value = false
+    connection.isConnecting.value = false
   }
+}
+
+// Cancel connection
+async function handleCancelConnection() {
+  await connection.cancelConnection()
+  connection.isConnecting.value = false
+  connectionError.value = '用户取消连接'
 }
 
 // Verify pairing code
@@ -612,7 +610,6 @@ async function handlePairingSubmit(code: string) {
 
     if (success) {
       showPairing.value = false
-      connectionStatus.value = 'idle'
       pendingDevice.value = null
 
       // Load session configs instead of navigating to terminal

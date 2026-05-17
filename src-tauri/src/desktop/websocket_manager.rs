@@ -4,7 +4,10 @@
 //! 提供移动端远程控制功能的便捷操作 API
 
 use crate::desktop::server::message::Message as BusinessMessage;
-use crate::shared::websocket::{WsServer, WsServerConfig, WsServerEvent};
+use crate::shared::websocket::{
+    ClientInfo, HandlerResult, MessageHandler, NoopHandler,
+    WsMessage, WsServer, WsServerConfig, WsServerEvent,
+};
 use crate::shared::system::error::AppError;
 use crate::Result;
 use async_trait::async_trait;
@@ -13,6 +16,80 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
+
+// ==================== WsMessageHandler Adapter ====================
+
+/// WsServer 的 MessageHandler 适配器
+///
+/// 将 WsServer 的消息处理器 trait 桥接到 BusinessHandler trait，
+/// 负责解析 WsMessage → BusinessMessage → 调用 handler → 包装返回 WsMessage
+struct WsMessageHandler {
+    inner: Arc<dyn BusinessHandler>,
+}
+
+impl WsMessageHandler {
+    fn new(handler: Arc<dyn BusinessHandler>) -> Self {
+        Self { inner: handler }
+    }
+}
+
+impl MessageHandler for WsMessageHandler {
+    fn handle_text(
+        &self,
+        message: &WsMessage,
+        addr: SocketAddr,
+        client_info: &ClientInfo,
+    ) -> HandlerResult {
+        // 从 WsMessage::Text.payload.content 中提取业务消息 JSON
+        let content = match message {
+            WsMessage::Text { ref payload, .. } => &payload.content,
+            _ => return Ok(None),
+        };
+
+        let business_msg = BusinessMessage::from_json(content)
+            .map_err(|e| crate::AppError::Parse(format!("Failed to parse business message: {}", e)))?;
+
+        // 获取 client_id
+        let client_id = client_info.client_id.clone().unwrap_or_else(|| addr.to_string());
+
+        // 调用 async handler (使用 block_in_place 因为 handle_text 是 sync)
+        let handler = self.inner.clone();
+        let json_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async move {
+                match handler.handle_message(business_msg, &client_id).await {
+                    Ok(Some(response)) => {
+                        match response.to_json() {
+                            Ok(json) => Ok(Some(WsMessage::text(json))),
+                            Err(e) => Err(e),
+                        }
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            })
+        }));
+
+        match json_result {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(crate::AppError::WebSocket("Handler panicked".to_string())),
+        }
+    }
+
+    fn handle_binary(
+        &self,
+        _message: &WsMessage,
+        _addr: SocketAddr,
+        _client_info: &ClientInfo,
+    ) -> HandlerResult {
+        Ok(None)
+    }
+
+    fn on_authenticated(&self, _addr: SocketAddr, _client_id: &str) {}
+
+    fn on_disconnected(&self, _addr: SocketAddr, _client_id: Option<&str>) {}
+}
 
 /// 客户端摘要（对外暴露的信息）
 #[derive(Debug, Clone)]
@@ -165,8 +242,13 @@ impl WebSocketManager {
             message_queue_size: 256,
         };
 
-        // 创建底层 WebSocket 服务器
-        let server = Arc::new(WsServer::new(config));
+        // 创建 WsServer，注入 handler
+        let handler = self.inner.handler.read().await;
+        let ws_handler: Option<std::sync::Arc<dyn crate::shared::websocket::MessageHandler>> =
+            Some(Arc::new(WsMessageHandler::new(handler.clone())));
+        drop(handler);
+
+        let server = Arc::new(WsServer::with_handler(config, ws_handler));
 
         // 启动服务器
         let server_clone = server.clone();

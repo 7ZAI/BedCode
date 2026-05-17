@@ -1,27 +1,37 @@
 //! Authentication and Pairing
 //!
-//! 提供设备认证和配对功能
+//! 提供设备认证和配对基础功能
 //!
 //! 模块划分:
-//! - pairing.rs: 配对服务
-//! - qr_token.rs: QR 码 token 管理
+//! - pairing.rs: 配对基础数据结构
+//! - qr_token.rs: QR 码 token 基础方法
 //! - jwt.rs: JWT 认证服务
 //! - storage.rs: 安全存储接口定义
-//! - storage_desktop.rs: 桌面端存储实现（keyring）
-//! - storage_mobile.rs: 移动端存储实现（内存）
 
-mod pairing;
+pub mod pairing;
 pub mod qr_token;
 mod jwt;
 mod storage;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod storage_desktop;
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-mod storage_mobile;
-
+// Re-export basic structures
 pub use pairing::*;
 pub use qr_token::*;
 pub use jwt::*;
 pub use storage::*;
+
+// Conditional re-exports for platform-specific implementations
+// Desktop: use PairingService from desktop module
+// Mobile: use PairingService from mobile module
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use crate::desktop::server::services::pairing_service::PairingService;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub use crate::mobile::pairing_service::PairingService;
+
+// QR Token: desktop uses QrTokenService, mobile uses QrTokenManager from shared
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use crate::desktop::server::services::qr_token_service::QrTokenService as QrTokenManager;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub use crate::shared::auth::qr_token::QrTokenManager;

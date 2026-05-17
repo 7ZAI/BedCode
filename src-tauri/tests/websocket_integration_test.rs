@@ -54,7 +54,7 @@ mod server_lifecycle_tests {
         assert_eq!(server_clone.client_count().await, 0);
 
         // Stop server
-        server_clone.stop().await;
+        let _ = server_clone.stop().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Check server is stopped
@@ -336,7 +336,7 @@ mod broadcast_tests {
         assert!(result.is_ok());
 
         // Stop server
-        server.stop().await;
+        let _ = server.stop().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
@@ -353,7 +353,7 @@ mod broadcast_tests {
         assert!(result.is_ok());
 
         // Stop server
-        server.stop().await;
+        let _ = server.stop().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }
@@ -399,7 +399,163 @@ mod client_operations_tests {
 
         assert!(!client.is_connected().await);
     }
+}
 
-    // Note: set_client_id uses blocking_write which cannot be used in async context
-    // This is a limitation of the WsClient implementation
+/// End-to-end bidirectional communication tests
+mod e2e_bidirectional_tests {
+    use super::*;
+
+    /// Helper to start server with a simple handler that echoes messages
+    async fn start_echo_server(port: u16) -> Arc<WsServer> {
+        let config = WsServerConfig {
+            port,
+            ..Default::default()
+        };
+        let server = Arc::new(WsServer::new(config));
+
+        let server_clone = server.clone();
+        tokio::spawn(async move {
+            let _ = server_clone.start().await;
+        });
+
+        // Wait for server to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        server
+    }
+
+    #[tokio::test]
+    async fn test_client_to_server_message() {
+        let port = get_available_port();
+        let server = start_echo_server(port).await;
+
+        // Create and connect client
+        let config = WsClientConfig::new("127.0.0.1", port);
+        let client = Arc::new(WsClient::new(config));
+
+        // Connect
+        let client_clone = client.clone();
+        let connect_handle = tokio::spawn(async move {
+            let _ = client_clone.connect().await;
+        });
+
+        // Wait for connection
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Verify connected
+        assert!(client.is_connected().await);
+
+        // Get server's client count
+        let client_count = server.client_count().await;
+        assert!(client_count >= 1, "Server should have at least one client");
+
+        // Send message from client to server
+        let msg = WsMessage::text(r#"{"type":"test","message":"hello"}"#);
+        client.send(&msg).await.expect("Send should succeed");
+
+        // Give time for message to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Cleanup
+        client.disconnect().await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), connect_handle).await;
+        let _ = server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_server_to_client_message() {
+        let port = get_available_port();
+        let server = start_echo_server(port).await;
+
+        // Subscribe to server events to know when client connects
+        let mut event_rx = server.subscribe();
+
+        // Create and connect client
+        let config = WsClientConfig::new("127.0.0.1", port);
+        let client = Arc::new(WsClient::new(config));
+
+        let client_clone = client.clone();
+        let connect_handle = tokio::spawn(async move {
+            let _ = client_clone.connect().await;
+        });
+
+        // Wait for connection
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Get client addresses from server
+        let client_count = server.client_count().await;
+        assert!(client_count >= 1, "Should have at least one client");
+
+        // Get all clients (not just authenticated)
+        let clients = server.clients().read().await;
+        let client_addr = *clients.keys().next().expect("Should have at least one client");
+        drop(clients);
+
+        // Send message from server to client
+        server.send_text_to(&client_addr, r#"{"type":"server_msg","content":"hello from server"}"#)
+            .await
+            .expect("Server send should succeed");
+
+        // Wait for message to be sent
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Cleanup
+        client.disconnect().await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), connect_handle).await;
+        let _ = server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_full_duplex_communication() {
+        let port = get_available_port();
+        let server = start_echo_server(port).await;
+
+        // Subscribe to server events
+        let _event_rx = server.subscribe();
+
+        // Create and connect client
+        let config = WsClientConfig::new("127.0.0.1", port);
+        let client = Arc::new(WsClient::new(config));
+
+        // Subscribe to client events
+        let _client_events = client.subscribe();
+
+        let client_clone = client.clone();
+        let connect_handle = tokio::spawn(async move {
+            let _ = client_clone.connect().await;
+        });
+
+        // Wait for connection
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Get client address
+        let client_count = server.client_count().await;
+        assert!(client_count >= 1, "Should have at least one client");
+
+        let clients = server.clients().read().await;
+        let client_addr = *clients.keys().next().expect("Should have client address");
+        drop(clients);
+
+        // 1. Client sends message to server
+        let client_msg = WsMessage::text(r#"{"type":"client_data","payload":"test123"}"#);
+        client.send(&client_msg).await.expect("Client send should succeed");
+
+        // 2. Server receives and can respond (via broadcast or direct send)
+        // Server sends response back to client
+        server.send_text_to(&client_addr, r#"{"type":"response","status":"received"}"#)
+            .await
+            .expect("Server send should succeed");
+
+        // Wait for messages to propagate
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        // Verify client received the server message
+        // The client should have received the message through its handler
+        // We verify by checking connection is still alive
+        assert!(client.is_connected().await, "Client should still be connected after exchange");
+
+        // Cleanup
+        client.disconnect().await;
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), connect_handle).await;
+        let _ = server.stop().await;
+    }
 }

@@ -1,15 +1,14 @@
 //! Handlers Module
 //!
 //! WebSocket 消息处理层
+//! 注意：auth 和 control 委托直接到 services 层
 
-pub mod auth;
 pub mod business;
-pub mod control;
 pub mod input;
 
-pub use auth::handle_auth;
+pub use crate::desktop::server::services::auth::handle_auth;
 pub use business::BusinessMessageHandler;
-pub use control::handle_control;
+pub use crate::desktop::server::services::session_control::handle_control;
 pub use input::handle_input;
 
 pub use crate::desktop::server::message::ControlAction;

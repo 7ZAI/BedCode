@@ -5,9 +5,7 @@
 use bedcode_lib::db::{Database, SessionConfig};
 use bedcode_lib::session::{SessionInfo, SessionManager, SessionStatus};
 use chrono::Utc;
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
 
 mod session_status_tests {
     use super::*;
@@ -25,7 +23,7 @@ mod session_status_tests {
             SessionStatus::Running,
             SessionStatus::WaitingInput,
             SessionStatus::Stopped,
-            SessionStatus::Error,
+            SessionStatus::Error(None),
         ];
 
         // All variants should be distinct
@@ -49,7 +47,7 @@ mod session_status_tests {
             (SessionStatus::Running, "running"),
             (SessionStatus::WaitingInput, "waitingInput"),
             (SessionStatus::Stopped, "stopped"),
-            (SessionStatus::Error, "error"),
+            (SessionStatus::Error(None), "error"),
         ];
 
         for (status, expected) in test_cases {

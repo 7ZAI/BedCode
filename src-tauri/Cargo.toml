@@ -70,6 +70,11 @@ async-trait = "0.1"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 
+# Android-only dependencies
+[target.'cfg(target_os = "android")'.dependencies]
+log = "0.4"
+android_logger = "0.14"
+
 # Desktop-only dependencies
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # PTY management

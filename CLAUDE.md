@@ -109,13 +109,29 @@ pub async fn start_session(...) -> Result<String> {
 
 ### Logging
 
-使用 `tracing`：
+根据平台选择日志库：
 
+**桌面端 (desktop/):** 使用 `tracing`
 ```rust
 use tracing::{info, debug, error, warn};
 
 info!("Session created: {} ({})", name, id);
+debug!("Processing request: {:?}", request);
 ```
+
+**移动端 (mobile/):** 使用 `log`
+```rust
+use log::{info, debug, error, warn};
+
+info!("Connection established: {}", addr);
+debug!("Sending message: {:?}", msg);
+```
+
+**日志级别规范：**
+- `debug!`: 常规操作日志，记录函数调用、流程步骤
+- `info!`: 关键信息日志，如连接建立、会话创建、用户操作
+- `warn!`: 警告日志，如重试、超时、降级处理
+- `error!`: 错误日志，如连接失败、异常处理
 
 ---
 

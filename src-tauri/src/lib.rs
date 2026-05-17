@@ -33,7 +33,13 @@ pub use desktop::server;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::plugin;
 
-use shared::auth::{PairingService, QrTokenManager};
+use shared::auth::qr_token::QrTokenManager;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use desktop::server::services::PairingService;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use desktop::server::services::QrTokenService;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use shared::auth::PairingService;
 use shared::system::config::AppConfig;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use shared::db::Database;
@@ -45,6 +51,8 @@ use tokio::sync::Mutex;
 use android_logger::Config;
 #[cfg(target_os = "android")]
 use log::LevelFilter;
+#[cfg(target_os = "android")]
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 初始化日志系统
@@ -52,14 +60,25 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 fn init_logging(_app_handle: &tauri::AppHandle) -> Result<()> {
     #[cfg(target_os = "android")]
     {
-        // Android: 使用 android_logger 输出到 logcat
-        // 在 debug 和 release 构建时都启用，方便调试
+        // Android: 使用 tracing-subscriber 输出到 stderr（logcat）
+        // 同时初始化 android_logger 捕获 log crate 的输出
         android_logger::init_once(
             Config::default()
                 .with_max_level(LevelFilter::Debug)
                 .with_tag("BedCode")
         );
-        log::info!("BedCode Android logging initialized");
+
+        // 使用 EnvFilter 过滤日志级别
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("debug"));
+
+        // 初始化 tracing-subscriber，输出到 stderr（Android logcat）
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer().with_writer(std::io::stderr))
+            .init();
+
+        tracing::info!("BedCode Android logging initialized (tracing + log)");
     }
 
     #[cfg(not(target_os = "android"))]
@@ -156,7 +175,6 @@ pub struct AppStartTime(std::time::Instant);
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
-    use desktop::server::WebSocketServer;
     use tauri::Emitter;
 
     let app_start = AppStartTime(std::time::Instant::now());
@@ -214,28 +232,28 @@ pub fn run() {
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service.clone());
 
-            let qr_manager = Arc::new(QrTokenManager::new());
+            let qr_manager = Arc::new(QrTokenService::new());
             app.manage(qr_manager.clone());
 
-            let mut ws_server = WebSocketServer::new(
-                ws_port,
-                session_manager.clone(),
-                plugin_manager.clone(),
-                db.clone(),
-                pairing_service.clone(),
-                qr_manager.clone(),
+            use std::sync::Arc as StdArc;
+
+            // 创建 BusinessMessageHandler 并注入依赖
+            let business_handler = Arc::new(
+                desktop::server::handlers::BusinessMessageHandler::new(
+                    db.clone(),
+                    pairing_service.clone(),
+                    qr_manager.clone(),
+                    Some(StdArc::new(app_handle.clone())),
+                )
             );
 
-            use std::sync::Arc as StdArc;
-            ws_server.set_app_handle(StdArc::new(app_handle.clone()));
-
-            let ws_server = Arc::new(ws_server);
-            app.manage(ws_server.clone());
-
-            let ws_server_clone = ws_server.clone();
+            // 初始化并启动 WebSocketManager（需要在 async runtime 中）
+            let ws_manager = desktop::websocket_manager::WebSocketManager::global();
             tauri::async_runtime::spawn(async move {
+                ws_manager.init(Some(business_handler as Arc<dyn desktop::websocket_manager::BusinessHandler>)).await
+                    .expect("Failed to initialize WebSocketManager");
                 tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port);
-                match ws_server_clone.start().await {
+                match ws_manager.start(ws_port).await {
                     Ok(_) => tracing::info!("[BedCode] WebSocket server started successfully"),
                     Err(e) => tracing::error!("[BedCode] WebSocket server failed to start: {}", e),
                 }

@@ -244,7 +244,7 @@ onMounted(async () => {
 
 async function loadQuickActions() {
   try {
-    const actions = await invoke<QuickAction[]>('list_quick_actions')
+    const actions = await invoke<QuickAction[]>('list_quick_actions_mobile')
     // Filter out preset actions (first 4)
     customActions.value = actions.slice(4)
   } catch (error) {

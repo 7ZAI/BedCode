@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use log;
 
 use crate::Result;
 use crate::mobile::{
@@ -70,20 +71,34 @@ pub async fn ws_connect(
     port: u16,
     name: Option<String>,
 ) -> Result<ConnectionInfo> {
-    tracing::info!("WebSocket connecting to {}:{}", address, port);
+    eprintln!("[ws_connect] START - address={}, port={}, name={:?}", address, port, name);
+    log::info!("WebSocket connecting to {}:{}", address, port);
+
+    // 发射连接开始事件
+    let _ = app_handle.emit("ws_connecting", serde_json::json!({
+        "address": address,
+        "port": port,
+    }));
+    log::info!("Emitted ws_connecting event");
 
     let conn = get_connection_manager();
-    conn.connect(address.clone(), port, name).await?;
+    log::info!("Calling conn.connect()...");
+
+    match conn.connect(app_handle.clone(), address.clone(), port, name).await {
+        Ok(_) => {
+            log::info!("conn.connect() returned Ok");
+        }
+        Err(e) => {
+            log::error!("conn.connect() returned error: {}", e);
+            let _ = app_handle.emit("ws_error", serde_json::json!({
+                "message": format!("Connection failed: {}", e)
+            }));
+            return Err(e);
+        }
+    }
 
     let status = conn.get_status().await;
-
-    // 发射连接成功事件到前端
-    if matches!(status, ConnStatus::Connected | ConnStatus::Paired) {
-        let _ = app_handle.emit("ws_connected", serde_json::json!({
-            "address": address,
-            "port": port,
-        }));
-    }
+    log::info!("Connection status: {:?}", status);
 
     Ok(ConnectionInfo {
         address,
@@ -94,11 +109,16 @@ pub async fn ws_connect(
 
 /// 断开连接
 #[tauri::command]
-pub async fn ws_disconnect() -> Result<()> {
-    tracing::info!("WebSocket disconnecting");
+pub async fn ws_disconnect(app_handle: AppHandle) -> Result<()> {
+    log::info!("WebSocket disconnecting");
 
     let conn = get_connection_manager();
     conn.disconnect().await;
+
+    // 发射断开连接事件
+    let _ = app_handle.emit("ws_disconnected", serde_json::json!({
+        "reason": "User initiated disconnect"
+    }));
 
     // 清除会话状态 - 使用公共方法
     let session_mgr = get_session_manager();
@@ -155,6 +175,7 @@ pub async fn ws_authenticate(app_handle: AppHandle) -> Result<bool> {
 
     if result {
         let _ = app_handle.emit("ws_auth_success", ());
+        let _ = app_handle.emit("ws_paired", ());
     }
 
     Ok(result)
@@ -180,6 +201,7 @@ pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Resu
 
     if result {
         let _ = app_handle.emit("ws_pairing_verified", ());
+        let _ = app_handle.emit("ws_paired", ());
     } else {
         let _ = app_handle.emit("ws_auth_failed", serde_json::json!({
             "reason": "Pairing verification failed"
@@ -330,7 +352,7 @@ pub async fn set_screen_orientation(
     _app_handle: tauri::AppHandle,
     orientation: String,
 ) -> Result<()> {
-    tracing::info!("Setting screen orientation to: {}", orientation);
+    log::info!("Setting screen orientation to: {}", orientation);
     Ok(())
 }
 
@@ -348,7 +370,7 @@ pub async fn keep_screen_awake(
     _app_handle: tauri::AppHandle,
     enabled: bool,
 ) -> Result<()> {
-    tracing::info!("Setting screen awake: {}", enabled);
+    log::info!("Setting screen awake: {}", enabled);
     Ok(())
 }
 

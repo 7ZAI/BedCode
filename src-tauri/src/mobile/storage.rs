@@ -3,6 +3,7 @@
 //! 移动端安全存储实现 - 使用内存存储
 
 use crate::Result;
+use crate::shared::auth::storage::{SecureStorageTrait, CertificateStorageTrait, TokenStorageTrait};
 use std::sync::RwLock;
 
 /// 安全存储 - 移动端实现
@@ -59,6 +60,27 @@ impl SecureStorage {
     }
 }
 
+impl SecureStorageTrait for SecureStorage {
+    fn store_device_key(&self, key: &str) -> Result<()> {
+        Self::store_device_key(self, key)
+    }
+    fn get_device_key(&self) -> Result<Option<String>> {
+        Self::get_device_key(self)
+    }
+    fn delete_device_key(&self) -> Result<()> {
+        Self::delete_device_key(self)
+    }
+    fn store_server_key(&self, key: &str) -> Result<()> {
+        Self::store_server_key(self, key)
+    }
+    fn get_server_key(&self) -> Result<Option<String>> {
+        Self::get_server_key(self)
+    }
+    fn delete_server_key(&self) -> Result<()> {
+        Self::delete_server_key(self)
+    }
+}
+
 impl Default for SecureStorage {
     fn default() -> Self {
         Self::new().expect("Failed to create secure storage")
@@ -98,6 +120,18 @@ impl CertificateStorage {
     }
 }
 
+impl CertificateStorageTrait for CertificateStorage {
+    fn store_certificate(&self, cert: &str) -> Result<()> {
+        Self::store_certificate(self, cert)
+    }
+    fn get_certificate(&self) -> Result<Option<String>> {
+        Self::get_certificate(self)
+    }
+    fn delete_certificate(&self) -> Result<()> {
+        Self::delete_certificate(self)
+    }
+}
+
 /// Token 存储 - 移动端实现
 pub struct TokenStorage {
     token: RwLock<Option<String>>,
@@ -125,5 +159,17 @@ impl TokenStorage {
         let mut guard = self.token.write().unwrap();
         *guard = None;
         Ok(())
+    }
+}
+
+impl TokenStorageTrait for TokenStorage {
+    fn store_token(&self, token: &str) -> Result<()> {
+        Self::store_token(self, token)
+    }
+    fn get_token(&self) -> Result<Option<String>> {
+        Self::get_token(self)
+    }
+    fn delete_token(&self) -> Result<()> {
+        Self::delete_token(self)
     }
 }

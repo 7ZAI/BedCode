@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
+use tracing;
 use crate::shared::websocket::{
     ClientMessageHandler, HandlerResult, WsMessage,
 };
@@ -128,8 +129,13 @@ impl ClientMessageHandler for MobileHandler {
     ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
         let self_clone = self.clone();
         Box::pin(async move {
-            let msg_json = message.to_json().map_err(|e| crate::AppError::Parse(e.to_string()))?;
-            let mobile_msg: MobileMessage = serde_json::from_str(&msg_json)
+            // 从 WsMessage::Text.payload.content 中提取业务消息 JSON
+            let content = match &message {
+                WsMessage::Text { ref payload, .. } => &payload.content,
+                _ => return Ok(None),
+            };
+
+            let mobile_msg: MobileMessage = serde_json::from_str(content)
                 .map_err(|e| crate::AppError::Parse(format!("Failed to parse mobile message: {}", e)))?;
 
             match mobile_msg {

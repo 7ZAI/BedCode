@@ -4,17 +4,17 @@
 
 use crate::desktop::server::connection_types::{AuthPayload, AuthStage, DeviceConnectionEvent, PairingCodeGeneratedEvent};
 use crate::desktop::server::message::Message;
-use crate::shared::auth::PairingService;
-use crate::shared::auth::QrTokenManager;
+use crate::desktop::server::services::pairing_service::PairingService;
+use crate::desktop::server::services::qr_token_service::QrTokenService;
+use crate::desktop::websocket_manager::WebSocketManager;
+use crate::shared::auth::JwtService;
 use crate::shared::db::Database;
 use crate::Result;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::AppHandle;
-use tokio::sync::{Mutex, RwLock};
-use uuid::Uuid;
+use tokio::sync::Mutex;
 
 /// 处理认证消息
 pub async fn handle_auth(
@@ -23,8 +23,9 @@ pub async fn handle_auth(
     addr: SocketAddr,
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
-    qr_manager: &Arc<QrTokenManager>,
-    clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::server::ClientInfo>>>,
+    qr_manager: &Arc<QrTokenService>,
+    jwt_service: &JwtService,
+    ws_manager: &WebSocketManager,
     app_handle: &Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
     tracing::info!("handle_auth called with stage: {:?}", payload.stage);
@@ -78,26 +79,24 @@ pub async fn handle_auth(
                 let device_name_for_client = payload.device_name.clone();
                 let fingerprint = payload.device_fingerprint.unwrap_or_default();
                 let address = format!("{}", addr);
-                let session_token = Uuid::new_v4().to_string();
 
-                let db = db.lock().await;
-                let pairing_id = db.add_pairing(&device_name, &fingerprint, "", Some(&address))?;
-                db.update_pairing_token(&pairing_id, &session_token)?;
-                drop(db);
+                // 生成 JWT token
+                let session_token = jwt_service.generate_token(
+                    "pending".to_string(),
+                    Some(device_name.clone()),
+                    Some(fingerprint.clone()),
+                ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
 
-                {
-                    let mut clients = clients.write().await;
-                    if let Some(client) = clients.get_mut(&addr) {
-                        client.device_id = Some(pairing_id.clone());
-                        client.device_name = device_name_for_client;
-                        client.authenticated = true;
-                    }
+                // 使用 WebSocketManager 设置真正的客户端认证状态
+                ws_manager.set_authenticated(&addr, Some("pending".to_string())).await;
+                if let Some(ref name) = device_name_for_client {
+                    ws_manager.set_device_name(&addr, Some(name.clone())).await;
                 }
 
                 if let Some(handle) = app_handle {
                     let _ = handle.emit("device-connected", &DeviceConnectionEvent {
                         addr: addr.to_string(),
-                        device_id: pairing_id.clone(),
+                        device_id: "pending".to_string(),
                         device_name: payload.device_name.clone(),
                         event: "authenticated".to_string(),
                     });
@@ -112,7 +111,7 @@ pub async fn handle_auth(
                     timestamp: chrono::Utc::now().timestamp_millis(),
                     payload: AuthPayload {
                         stage: AuthStage::Authenticated,
-                        device_id: Some(pairing_id),
+                        device_id: Some("pending".to_string()),
                         device_fingerprint: Some(fingerprint),
                         session_token: Some(session_token),
                         error: None,
@@ -145,65 +144,45 @@ pub async fn handle_auth(
             let fingerprint = payload.device_fingerprint.unwrap_or_default();
             let token = payload.session_token.unwrap_or_default();
 
-            let db = db.lock().await;
-            let pairings = db.get_pairings()?;
-
-            let is_paired = if !fingerprint.is_empty() && !token.is_empty() {
-                pairings.iter().any(|p| p.device_fingerprint == fingerprint && p.session_token.as_deref() == Some(&token) && p.is_active)
-            } else if !device_id.is_empty() {
-                pairings.iter().any(|p| p.id == device_id && p.is_active)
-            } else {
-                false
+            // 直接验证 JWT token，不使用数据库
+            let claims = match jwt_service.verify_token_with_expiry(&token) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("JWT verification failed: {:?}", e);
+                    return Ok(Some(Message::error_with_id(&request_message_id, "INVALID_TOKEN", "Invalid or expired token")));
+                }
             };
-            drop(db);
 
-            if is_paired {
-                {
-                    let mut clients = clients.write().await;
-                    if let Some(client) = clients.get_mut(&addr) {
-                        client.device_id = Some(device_id.clone());
-                        client.device_name = payload.device_name.clone();
-                        client.authenticated = true;
-                    }
-                }
+            tracing::info!("Device re-authenticated: {} (sub: {})", addr, claims.sub);
 
-                if let Some(handle) = app_handle {
-                    let _ = handle.emit("device-connected", &DeviceConnectionEvent {
-                        addr: addr.to_string(),
-                        device_id: device_id.clone(),
-                        device_name: payload.device_name.clone(),
-                        event: "authenticated".to_string(),
-                    });
-                }
-
-                tracing::info!("Device re-authenticated: {}", addr);
-
-                Ok(Some(Message::Auth {
-                    message_id: request_message_id,
-                    session_id: None,
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: AuthPayload {
-                        stage: AuthStage::Authenticated,
-                        device_id: Some(device_id),
-                        device_fingerprint: Some(fingerprint),
-                        session_token: Some(token),
-                        error: None,
-                        ..Default::default()
-                    },
-                }))
-            } else {
-                tracing::warn!("Authentication failed for device {}", addr);
-                Ok(Some(Message::Auth {
-                    message_id: request_message_id,
-                    session_id: None,
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: AuthPayload {
-                        stage: AuthStage::Failed,
-                        error: Some("Device not paired or invalid credentials".to_string()),
-                        ..Default::default()
-                    },
-                }))
+            // 使用 WebSocketManager 设置真正的客户端认证状态
+            ws_manager.set_authenticated(&addr, Some(claims.sub.clone())).await;
+            if let Some(name) = &payload.device_name {
+                ws_manager.set_device_name(&addr, Some(name.clone())).await;
             }
+
+            if let Some(handle) = app_handle {
+                let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                    addr: addr.to_string(),
+                    device_id: claims.sub.clone(),
+                    device_name: payload.device_name.clone(),
+                    event: "authenticated".to_string(),
+                });
+            }
+
+            Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                session_id: None,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                payload: AuthPayload {
+                    stage: AuthStage::Authenticated,
+                    device_id: Some(claims.sub),
+                    device_fingerprint: Some(fingerprint),
+                    session_token: Some(token),
+                    error: None,
+                    ..Default::default()
+                },
+            }))
         }
 
         AuthStage::QrConnect => {
@@ -212,29 +191,24 @@ pub async fn handle_auth(
 
             match qr_manager.verify(qr_token).await {
                 Ok(()) => {
-                    let device_id = Uuid::new_v4().to_string();
-                    let device_fingerprint = payload.device_fingerprint.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                    let device_fingerprint = payload.device_fingerprint.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                     let device_name = payload.device_name.clone().unwrap_or_else(|| "QR Device".to_string());
-                    let session_token = Uuid::new_v4().to_string();
 
-                    let db = db.lock().await;
-                    let pairing_id = db.add_pairing(&device_name, &device_fingerprint, "", Some(&addr.to_string()))?;
-                    db.update_pairing_token(&pairing_id, &session_token)?;
-                    drop(db);
+                    // 生成 JWT token
+                    let session_token = jwt_service.generate_token(
+                        "pending".to_string(),
+                        Some(device_name.clone()),
+                        Some(device_fingerprint.clone()),
+                    ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
 
-                    {
-                        let mut clients = clients.write().await;
-                        if let Some(client) = clients.get_mut(&addr) {
-                            client.authenticated = true;
-                            client.device_id = Some(device_id.clone());
-                            client.device_name = Some(device_name.clone());
-                        }
-                    }
+                    // 使用 WebSocketManager 设置真正的客户端认证状态
+                    ws_manager.set_authenticated(&addr, Some("pending".to_string())).await;
+                    ws_manager.set_device_name(&addr, Some(device_name.clone())).await;
 
                     if let Some(handle) = app_handle {
                         let _ = handle.emit("device-connected", &DeviceConnectionEvent {
                             addr: addr.to_string(),
-                            device_id: device_id.clone(),
+                            device_id: "pending".to_string(),
                             device_name: Some(device_name.clone()),
                             event: "authenticated".to_string(),
                         });
@@ -246,7 +220,7 @@ pub async fn handle_auth(
                         timestamp: chrono::Utc::now().timestamp_millis(),
                         payload: AuthPayload {
                             stage: AuthStage::Authenticated,
-                            device_id: Some(device_id),
+                            device_id: Some("pending".to_string()),
                             device_fingerprint: Some(device_fingerprint),
                             session_token: Some(session_token),
                             device_name: Some(device_name),

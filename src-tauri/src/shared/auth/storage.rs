@@ -30,10 +30,3 @@ pub trait TokenStorageTrait: Send + Sync {
     fn get_token(&self) -> Result<Option<String>>;
     fn delete_token(&self) -> Result<()>;
 }
-
-// Re-export platform-specific implementations
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use super::storage_desktop::{SecureStorage, CertificateStorage, TokenStorage};
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub use super::storage_mobile::{SecureStorage, CertificateStorage, TokenStorage};

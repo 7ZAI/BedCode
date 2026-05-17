@@ -6,6 +6,7 @@
 use crate::shared::websocket::message::{WsMessage, WsMessageType};
 use crate::shared::websocket::traits::ClientInfoTrait;
 use crate::Result;
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -233,16 +234,22 @@ impl WsServer {
         let json = message.to_json()?;
         let ws_message = WsMsg::Text(json);
 
-        let clients = self.clients.read().await;
-        let senders = self.client_senders.read().await;
+        // 在一次锁操作中获取发送器并发送，避免状态不一致
+        let senders: Vec<mpsc::Sender<WsMsg>> = {
+            let clients = self.clients.read().await;
+            let senders = self.client_senders.read().await;
 
-        for (addr, _) in clients.iter() {
-            if addr == exclude_addr {
-                continue;
-            }
-            if let Some(tx) = senders.get(addr) {
-                let _ = tx.try_send(ws_message.clone());
-            }
+            clients
+                .iter()
+                .filter(|(addr, _)| **addr != *exclude_addr)
+                .filter(|(addr, _)| senders.contains_key(addr))
+                .filter_map(|(addr, _)| senders.get(addr).cloned())
+                .collect()
+        };
+
+        // 释放锁后再发送
+        for tx in senders {
+            let _ = tx.try_send(ws_message.clone());
         }
         Ok(())
     }
@@ -252,8 +259,14 @@ impl WsServer {
         let json = message.to_json()?;
         let ws_message = WsMsg::Text(json);
 
-        let senders = self.client_senders.read().await;
-        for (_, tx) in senders.iter() {
+        // 先 clone 发送器再释放锁
+        let senders: Vec<mpsc::Sender<WsMsg>> = {
+            let senders = self.client_senders.read().await;
+            senders.values().cloned().collect()
+        };
+
+        // 释放锁后再发送
+        for tx in senders {
             let _ = tx.try_send(ws_message.clone());
         }
         Ok(())
@@ -343,9 +356,10 @@ impl WsServer {
                     _ = interval.tick() => {
                         let now = std::time::Instant::now();
 
-                        // 获取超时客户端列表
+                        // 收集超时客户端地址
                         let timeout_addrs: Vec<SocketAddr> = {
                             let clients = heartbeat_clients.read().await;
+
                             clients
                                 .iter()
                                 .filter(|(_, client)| {
@@ -355,10 +369,11 @@ impl WsServer {
                                 .collect()
                         };
 
-                        // 移除超时的客户端（同时清理 clients 和 senders）
+                        // 释放读锁后获取写锁移除超时客户端
                         if !timeout_addrs.is_empty() {
                             let mut clients = heartbeat_clients.write().await;
                             let mut senders = heartbeat_senders.write().await;
+
                             for addr in timeout_addrs {
                                 warn!("Client {} heartbeat timeout, disconnecting", addr);
                                 clients.remove(&addr);
@@ -389,6 +404,7 @@ impl WsServer {
                     let clients_for_cleanup = clients.clone();
                     let senders_for_cleanup = client_senders.clone();
                     let event_tx_for_cleanup = self.event_tx.clone();
+                    let handler = self.handler.clone();
 
                     tokio::spawn(async move {
                         info!("[WsServer] New connection from {}", addr);
@@ -432,6 +448,7 @@ impl WsServer {
                             let mut ws_sender = ws_sender;
                             while let Some(msg) = rx.recv().await {
                                 if ws_sender.send(msg).await.is_err() {
+                                    debug!("[WsServer] Send task failed for {}, connection broken", addr);
                                     break;
                                 }
                             }
@@ -439,8 +456,10 @@ impl WsServer {
 
                         // 创建接收任务
                         let tx_for_recv = tx_clone.clone();
+                        let handler_for_recv = handler.clone();
                         let mut recv_task = tokio::spawn(async move {
                             let tx = tx_for_recv;
+                            let handler = handler_for_recv;
                             while let Some(msg_result) = ws_receiver.next().await {
                                 match msg_result {
                                     Ok(WsMsg::Text(text)) => {
@@ -467,39 +486,74 @@ impl WsServer {
                                                         }
                                                     }
                                                     _ => {
-                                                        let client_id = {
+                                                        // 获取客户端信息用于 handler
+                                                        let client_info = {
                                                             let clients = clients.read().await;
-                                                            clients.get(&addr).and_then(|c| c.client_id.clone())
+                                                            clients.get(&addr).cloned()
                                                         };
 
-                                                        match &ws_msg {
-                                                            WsMessage::Text { message_id, payload, .. } => {
-                                                                let _ = event_tx_clone.send(WsServerEvent::TextMessage {
-                                                                    addr,
-                                                                    client_id,
-                                                                    message_id: Some(message_id.clone()),
-                                                                    content: payload.content.clone(),
-                                                                });
+                                                        // 调用 MessageHandler 处理业务逻辑
+                                                        let handler_result = if let (Some(ref h), Some(ref info)) = (handler.as_ref(), &client_info) {
+                                                            match h.handle_text(&ws_msg, addr, info) {
+                                                                Ok(Some(response)) => {
+                                                                    // 发送 handler 响应
+                                                                    let _ = tx.send(WsMsg::Text(response.to_json().unwrap_or_default())).await;
+                                                                }
+                                                                Ok(None) => {}
+                                                                Err(e) => {
+                                                                    warn!("[WsServer] Handler error for {}: {}", addr, e);
+                                                                    // 向客户端返回错误响应
+                                                                    let error_msg = WsMessage::error("HANDLER_ERROR", e.to_string());
+                                                                    let _ = tx.send(WsMsg::Text(error_msg.to_json().unwrap_or_default())).await;
+                                                                }
                                                             }
-                                                            WsMessage::Binary { message_id, payload, .. } => {
-                                                                let data = base64::Engine::decode(
-                                                                    &base64::engine::general_purpose::STANDARD,
-                                                                    &payload.data,
-                                                                ).unwrap_or_default();
-                                                                let _ = event_tx_clone.send(WsServerEvent::BinaryMessage {
-                                                                    addr,
-                                                                    client_id,
-                                                                    message_id: Some(message_id.clone()),
-                                                                    data,
-                                                                });
+                                                            true // 表示已处理
+                                                        } else {
+                                                            false // 未处理，发送事件
+                                                        };
+
+                                                        // 如果没有 handler 处理，则发送事件给外部
+                                                        if !handler_result {
+                                                            let client_id = client_info.as_ref().and_then(|c| c.client_id.clone());
+
+                                                            match &ws_msg {
+                                                                WsMessage::Text { message_id, payload, .. } => {
+                                                                    let _ = event_tx_clone.send(WsServerEvent::TextMessage {
+                                                                        addr,
+                                                                        client_id,
+                                                                        message_id: Some(message_id.clone()),
+                                                                        content: payload.content.clone(),
+                                                                    });
+                                                                }
+                                                                WsMessage::Binary { message_id, payload, .. } => {
+                                                                    let data = base64::engine::general_purpose::STANDARD
+                                                                        .decode(&payload.data)
+                                                                        .unwrap_or_else(|e| {
+                                                                            warn!("[WsServer] Base64 decode failed for {}: {}", addr, e);
+                                                                            Vec::new()
+                                                                        });
+                                                                    let _ = event_tx_clone.send(WsServerEvent::BinaryMessage {
+                                                                        addr,
+                                                                        client_id,
+                                                                        message_id: Some(message_id.clone()),
+                                                                        data,
+                                                                    });
+                                                                }
+                                                                _ => {}
                                                             }
-                                                            _ => {}
                                                         }
                                                     }
                                                 }
                                             }
                                             Err(e) => {
                                                 error!("Parse message error: {}", e);
+                                                // 向客户端返回解析错误
+                                                let error_msg = WsMessage::error_with_id(
+                                                    "",
+                                                    "PARSE_ERROR",
+                                                    format!("Failed to parse message: {}", e),
+                                                );
+                                                let _ = tx.send(WsMsg::Text(error_msg.to_json().unwrap_or_default())).await;
                                             }
                                         }
                                     }
@@ -545,25 +599,20 @@ impl WsServer {
                             }
                         }
 
-                        // 获取断开事件需要的 client_id - 使用新的 clone
+                        // 获取 client_id 并同时移除客户端，避免竞态条件
                         let client_id = {
-                            let clients = clients_for_cleanup.read().await;
-                            clients.get(&addr).and_then(|c| c.client_id.clone())
-                        };
-                        let _ = event_tx_for_cleanup.send(WsServerEvent::ClientDisconnected {
-                            addr,
-                            client_id,
-                        });
-
-                        // 移除客户端 - 使用新的 clone
-                        {
                             let mut c = clients_for_cleanup.write().await;
-                            c.remove(&addr);
-                        }
+                            c.remove(&addr).and_then(|c| c.client_id.clone())
+                        };
                         {
                             let mut s = senders_for_cleanup.write().await;
                             s.remove(&addr);
                         }
+
+                        let _ = event_tx_for_cleanup.send(WsServerEvent::ClientDisconnected {
+                            addr,
+                            client_id,
+                        });
 
                         info!("Client {} disconnected", addr);
                     });
@@ -572,12 +621,22 @@ impl WsServer {
                 _ = shutdown_rx.recv() => {
                     info!("WebSocket server shutting down");
 
-                    // 发送关闭消息给所有客户端（使用 try_send 避免阻塞）
+                    // 先 clone 发送器，释放锁后再发送
+                    let senders: Vec<(SocketAddr, mpsc::Sender<WsMsg>)> = {
+                        let senders = self.client_senders.read().await;
+                        senders.iter().map(|(k, v)| (*k, v.clone())).collect()
+                    };
+
+                    // 发送关闭消息给所有客户端（使用 send 而非 try_send 确保送达）
                     let close_msg = WsMsg::Close(None);
-                    let senders = self.client_senders.read().await;
-                    for (_, tx) in senders.iter() {
-                        let _ = tx.try_send(close_msg.clone());
+                    for (addr, tx) in senders {
+                        if tx.send(close_msg.clone()).await.is_err() {
+                            debug!("[WsServer] Failed to send close message to {}", addr);
+                        }
                     }
+
+                    // 等待客户端接收关闭消息
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
                     {
                         let mut running = self.is_running.write().await;
