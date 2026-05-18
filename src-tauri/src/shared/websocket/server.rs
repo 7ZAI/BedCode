@@ -443,6 +443,12 @@ impl WsServer {
                             senders.insert(addr, tx);
                         }
 
+                        // 发送客户端连接事件
+                        let _ = event_tx_clone.send(WsServerEvent::ClientConnected {
+                            addr,
+                            client_id: None,
+                        });
+
                         // 创建发送任务
                         let mut send_task = tokio::spawn(async move {
                             let mut ws_sender = ws_sender;
@@ -463,6 +469,8 @@ impl WsServer {
                             while let Some(msg_result) = ws_receiver.next().await {
                                 match msg_result {
                                     Ok(WsMsg::Text(text)) => {
+                                        debug!("[WsServer] <<< RECV from {}: {}", addr, &text[..text.len().min(200)]);
+
                                         // 更新心跳时间
                                         {
                                             let mut clients = clients.write().await;
@@ -486,6 +494,7 @@ impl WsServer {
                                                         }
                                                     }
                                                     _ => {
+                                                        tracing::info!("[WsServer] Handling non-Ping message from {}: {}", addr, &text[..text.len().min(200)]);
                                                         // 获取客户端信息用于 handler
                                                         let client_info = {
                                                             let clients = clients.read().await;
@@ -496,8 +505,10 @@ impl WsServer {
                                                         let handler_result = if let (Some(ref h), Some(ref info)) = (handler.as_ref(), &client_info) {
                                                             match h.handle_text(&ws_msg, addr, info) {
                                                                 Ok(Some(response)) => {
+                                                                    let resp_json = response.to_json().unwrap_or_default();
+                                                                    debug!("[WsServer] >>> SEND to {}: {}", addr, &resp_json[..resp_json.len().min(200)]);
                                                                     // 发送 handler 响应
-                                                                    let _ = tx.send(WsMsg::Text(response.to_json().unwrap_or_default())).await;
+                                                                    let _ = tx.send(WsMsg::Text(resp_json)).await;
                                                                 }
                                                                 Ok(None) => {}
                                                                 Err(e) => {

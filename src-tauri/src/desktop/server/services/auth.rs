@@ -5,7 +5,7 @@
 use crate::desktop::server::connection_types::{AuthPayload, AuthStage, DeviceConnectionEvent, PairingCodeGeneratedEvent};
 use crate::desktop::server::message::Message;
 use crate::desktop::server::services::pairing_service::PairingService;
-use crate::desktop::server::services::qr_token_service::QrTokenService;
+use crate::shared::auth::qr_token::QrTokenManager;
 use crate::desktop::websocket_manager::WebSocketManager;
 use crate::shared::auth::JwtService;
 use crate::shared::db::Database;
@@ -23,7 +23,7 @@ pub async fn handle_auth(
     addr: SocketAddr,
     db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
-    qr_manager: &Arc<QrTokenService>,
+    qr_manager: &Arc<QrTokenManager>,
     jwt_service: &JwtService,
     ws_manager: &WebSocketManager,
     app_handle: &Option<Arc<AppHandle>>,
@@ -44,6 +44,7 @@ pub async fn handle_auth(
             };
 
             tracing::info!("Pairing requested by device {:?} ({:?}), code: {}", payload.device_id, payload.device_name, code.code);
+            tracing::info!("app_handle is_some={}", app_handle.is_some());
 
             if let Some(handle) = app_handle {
                 let event = PairingCodeGeneratedEvent {
@@ -51,9 +52,14 @@ pub async fn handle_auth(
                     expires_in: code.expires_in,
                     device_name: payload.device_name.clone(),
                 };
+                tracing::info!("Emitting pairing-code-generated event: code={}", event.code);
                 if let Err(e) = handle.emit("pairing-code-generated", &event) {
                     tracing::error!("Failed to emit pairing code event: {}", e);
+                } else {
+                    tracing::info!("pairing-code-generated event emitted successfully");
                 }
+            } else {
+                tracing::warn!("app_handle is None, cannot emit pairing-code-generated event");
             }
 
             Ok(Some(Message::Auth {
@@ -79,16 +85,17 @@ pub async fn handle_auth(
                 let device_name_for_client = payload.device_name.clone();
                 let fingerprint = payload.device_fingerprint.unwrap_or_default();
                 let address = format!("{}", addr);
+                let device_id = payload.device_id.clone().unwrap_or_else(|| addr.to_string());
 
-                // 生成 JWT token
+                // 生成 JWT token（使用真实的设备 ID）
                 let session_token = jwt_service.generate_token(
-                    "pending".to_string(),
+                    device_id.clone(),
                     Some(device_name.clone()),
                     Some(fingerprint.clone()),
                 ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
 
                 // 使用 WebSocketManager 设置真正的客户端认证状态
-                ws_manager.set_authenticated(&addr, Some("pending".to_string())).await;
+                ws_manager.set_authenticated(&addr, Some(device_id.clone())).await;
                 if let Some(ref name) = device_name_for_client {
                     ws_manager.set_device_name(&addr, Some(name.clone())).await;
                 }
@@ -96,7 +103,7 @@ pub async fn handle_auth(
                 if let Some(handle) = app_handle {
                     let _ = handle.emit("device-connected", &DeviceConnectionEvent {
                         addr: addr.to_string(),
-                        device_id: "pending".to_string(),
+                        device_id: device_id.clone(),
                         device_name: payload.device_name.clone(),
                         event: "authenticated".to_string(),
                     });
@@ -111,7 +118,7 @@ pub async fn handle_auth(
                     timestamp: chrono::Utc::now().timestamp_millis(),
                     payload: AuthPayload {
                         stage: AuthStage::Authenticated,
-                        device_id: Some("pending".to_string()),
+                        device_id: Some(device_id),
                         device_fingerprint: Some(fingerprint),
                         session_token: Some(session_token),
                         error: None,
@@ -193,22 +200,23 @@ pub async fn handle_auth(
                 Ok(()) => {
                     let device_fingerprint = payload.device_fingerprint.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                     let device_name = payload.device_name.clone().unwrap_or_else(|| "QR Device".to_string());
+                    let device_id = payload.device_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    // 生成 JWT token
+                    // 生成 JWT token（使用真实的设备 ID）
                     let session_token = jwt_service.generate_token(
-                        "pending".to_string(),
+                        device_id.clone(),
                         Some(device_name.clone()),
                         Some(device_fingerprint.clone()),
                     ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
 
                     // 使用 WebSocketManager 设置真正的客户端认证状态
-                    ws_manager.set_authenticated(&addr, Some("pending".to_string())).await;
+                    ws_manager.set_authenticated(&addr, Some(device_id.clone())).await;
                     ws_manager.set_device_name(&addr, Some(device_name.clone())).await;
 
                     if let Some(handle) = app_handle {
                         let _ = handle.emit("device-connected", &DeviceConnectionEvent {
                             addr: addr.to_string(),
-                            device_id: "pending".to_string(),
+                            device_id: device_id.clone(),
                             device_name: Some(device_name.clone()),
                             event: "authenticated".to_string(),
                         });
@@ -220,7 +228,7 @@ pub async fn handle_auth(
                         timestamp: chrono::Utc::now().timestamp_millis(),
                         payload: AuthPayload {
                             stage: AuthStage::Authenticated,
-                            device_id: Some("pending".to_string()),
+                            device_id: Some(device_id),
                             device_fingerprint: Some(device_fingerprint),
                             session_token: Some(session_token),
                             device_name: Some(device_name),

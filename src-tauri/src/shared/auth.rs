@@ -18,20 +18,3 @@ pub use pairing::*;
 pub use qr_token::*;
 pub use jwt::*;
 pub use storage::*;
-
-// Conditional re-exports for platform-specific implementations
-// Desktop: use PairingService from desktop module
-// Mobile: use PairingService from mobile module
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use crate::desktop::server::services::pairing_service::PairingService;
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub use crate::mobile::pairing_service::PairingService;
-
-// QR Token: desktop uses QrTokenService, mobile uses QrTokenManager from shared
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use crate::desktop::server::services::qr_token_service::QrTokenService as QrTokenManager;
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub use crate::shared::auth::qr_token::QrTokenManager;

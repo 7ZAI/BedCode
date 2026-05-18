@@ -6,6 +6,7 @@ pub mod auth;
 pub mod commands;
 pub mod connection;
 pub mod handler;
+pub mod pairing_service;
 pub mod session;
 
 // Re-export public types

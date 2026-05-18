@@ -1,8 +1,26 @@
 <template>
   <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
+    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3 flex items-center justify-between" style="padding-top: 12px;">
       <h1 class="text-lg font-semibold">会话</h1>
+      <button
+        v-if="isConnected"
+        class="p-2 rounded-lg active:bg-gray-100 dark:active:bg-dark-700 transition-colors"
+        :class="{ 'opacity-50': isRefreshing }"
+        :disabled="isRefreshing"
+        @click="refreshSessions"
+        title="刷新会话"
+      >
+        <svg
+          class="w-5 h-5 text-gray- dark:text-dark-400"
+          :class="{ 'animate-spin': isRefreshing }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
     </header>
 
     <!-- Content -->
@@ -43,9 +61,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
+import { wsLoadSessions, wsStopSession } from '@/modules/shared/composables/useMobileCommands'
 import SessionCard from '@/modules/mobile/components/SessionCard.vue'
 
 const router = useRouter()
@@ -57,33 +76,48 @@ const isConnected = computed(() => connection.connectionStatus.value === 'connec
 // 当前设备名称
 const currentDeviceName = computed(() => connection.currentDevice.value?.name || '已连接')
 
-// 会话列表（临时空数组）
+// 会话列表
 const sessions = ref<any[]>([])
 const isLoading = ref(false)
+const isRefreshing = ref(false)
 
 function handleSessionClick(session: any) {
-  const deviceId = connection.currentDevice.value?.id
-  if (!deviceId) return
-
   connection.activeSessionId.value = session.id
 
   router.push({
     name: 'mobile-terminal',
-    params: { deviceId },
-    query: { sessionId: session.id },
+    params: { id: currentDeviceName.value || 'default' },
   })
 }
 
 async function handleStopSession(session: any) {
-  // TODO: 实现停止会话
-  console.log('Stop session:', session.id)
+  const name = session.name || session.id
+  if (!window.confirm(`确定停止会话 "${name}" 吗？`)) return
+  try {
+    await wsStopSession(session.id)
+    sessions.value = sessions.value.filter(s => s.id !== session.id)
+  } catch (e) {
+    console.error('[SessionsView] Failed to stop session:', e)
+  }
 }
 
 async function refreshSessions() {
   if (!isConnected.value) return
-  // TODO: 实现加载会话
-  // sessions.value = await connection.loadSessions()
+  isRefreshing.value = true
+  isLoading.value = true
+  try {
+    sessions.value = await wsLoadSessions()
+  } catch (e) {
+    console.error('[SessionsView] Failed to load sessions:', e)
+  } finally {
+    isLoading.value = false
+    isRefreshing.value = false
+  }
 }
+
+onActivated(() => {
+  refreshSessions()
+})
 
 onMounted(async () => {
   await refreshSessions()

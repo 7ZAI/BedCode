@@ -109,9 +109,8 @@ pub async fn start_session(...) -> Result<String> {
 
 ### Logging
 
-根据平台选择日志库：
+全部使用 `tracing`，桌面端和移动端统一：
 
-**桌面端 (desktop/):** 使用 `tracing`
 ```rust
 use tracing::{info, debug, error, warn};
 
@@ -119,13 +118,7 @@ info!("Session created: {} ({})", name, id);
 debug!("Processing request: {:?}", request);
 ```
 
-**移动端 (mobile/):** 使用 `log`
-```rust
-use log::{info, debug, error, warn};
-
-info!("Connection established: {}", addr);
-debug!("Sending message: {:?}", msg);
-```
+**Android 平台**：`tracing` 的 `log` feature 自动将 `tracing::` 宏转发到 `log` crate，再由 `android_logger` 发送到 `adb logcat`。开发者无需关心底层实现，统一写 `tracing::info!()` 即可。
 
 **日志级别规范：**
 - `debug!`: 常规操作日志，记录函数调用、流程步骤

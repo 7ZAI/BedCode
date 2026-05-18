@@ -61,12 +61,19 @@ export const isPaired = computed(() =>
 
 // ==================== Initialization ====================
 
+let initialized = false
+
 /**
- * 初始化事件监听和凭据
+ * 初始化事件监听和凭据（全局单例，仅执行一次）
+ * 模块加载时立即执行，确保事件监听在用户操作前注册完毕
+ * Tauri 事件不会缓冲，监听器必须在事件触发前注册
  */
 async function init() {
+  if (initialized) return
+  initialized = true
   // 加载保存的凭据
   const savedCreds = loadAuthCredentials()
+  console.log('[MobileConnection] init() loaded credentials:', savedCreds ? { ...savedCreds, sessionToken: savedCreds.sessionToken ? `length=${savedCreds.sessionToken.length}` : 'missing' } : null)
   if (savedCreds) {
     authCredentials.value = savedCreds
   }
@@ -134,7 +141,7 @@ async function init() {
   })
 }
 
-// 立即初始化
+// 模块加载时立即初始化，确保事件监听尽早注册
 init()
 
 // ==================== Operations ====================
@@ -211,22 +218,37 @@ export async function disconnect(): Promise<void> {
 }
 
 /**
- * 使用已存储凭据认证
+ * 使用已存储的 JWT token 重新认证（重连时调用）
+ * 带 5 秒超时，超时后自动降级到配对流程
  */
 export async function authenticate(): Promise<boolean> {
-  if (!authCredentials.value) {
-    console.warn('[MobileConnection] No stored credentials')
+  console.log('[MobileConnection] authenticate() called')
+  console.log('[MobileConnection]   authCredentials.value =', authCredentials.value)
+  console.log('[MobileConnection]   localStorage auth_session_token =', localStorage.getItem('auth_session_token'))
+  console.log('[MobileConnection]   localStorage auth_pairing_id =', localStorage.getItem('auth_pairing_id'))
+  console.log('[MobileConnection]   localStorage auth_fingerprint =', localStorage.getItem('auth_fingerprint'))
+
+  if (!authCredentials.value?.sessionToken) {
+    console.log('[MobileConnection] No stored credentials, skipping auth -> false')
     return false
   }
 
+  console.log('[MobileConnection] Attempting JWT re-auth, token length:', authCredentials.value.sessionToken.length)
   try {
-    const result = await wsAuthenticate()
-    // 成功时后端会 emit ws_auth_success 和 ws_paired 事件
-    // 失败时后端会 emit ws_auth_failed 事件
-    // 状态由事件驱动，不需要手动设置
+    const result = await Promise.race([
+      wsAuthenticate(authCredentials.value.sessionToken),
+      new Promise<boolean>((_, reject) =>
+        setTimeout(() => reject(new Error('Auth timeout')), 5000)
+      ),
+    ])
+    console.log('[MobileConnection] Auth result:', result)
+    if (!result) {
+      clearAuthCredentials()
+      authCredentials.value = null
+    }
     return result
   } catch (error) {
-    console.error('[MobileConnection] Auth failed:', error)
+    console.error('[MobileConnection] Auth failed/timeout:', error)
     clearAuthCredentials()
     authCredentials.value = null
     return false
@@ -237,20 +259,25 @@ export async function authenticate(): Promise<boolean> {
  * 请求配对
  */
 export async function requestPairing(): Promise<void> {
+  console.log('[MobileConnection] requestPairing: calling wsRequestPairing (invoke)...')
   await wsRequestPairing()
+  console.log('[MobileConnection] requestPairing: wsRequestPairing returned')
   // 状态由后端事件驱动
 }
 
 /**
- * 验证配对码
+ * 验证配对码，成功后保存凭据
  */
 export async function verifyPairingCode(code: string): Promise<boolean> {
   try {
-    const result = await wsVerifyPairingCode(code)
-    // 成功时后端会 emit ws_pairing_verified 和 ws_paired 事件
-    // 失败时后端会 emit ws_auth_failed 事件
-    // 状态由事件驱动，不需要手动设置
-    return result
+    const creds = await wsVerifyPairingCode(code)
+    if (creds) {
+      // 成功时后端会 emit ws_pairing_verified 和 ws_paired 事件
+      // 保存 JWT 凭据到 localStorage，后续请求携带此 token
+      saveCredentials(creds)
+      return true
+    }
+    return false
   } catch (error) {
     console.error('[MobileConnection] Pairing verification failed:', error)
     return false
@@ -267,8 +294,8 @@ export async function loadSessionConfigs(): Promise<any[]> {
 /**
  * 启动会话
  */
-export async function startSession(configId: string): Promise<string> {
-  return await wsStartSession(configId)
+export async function startSession(configId: string, sessionName?: string): Promise<string> {
+  return await wsStartSession(configId, sessionName)
 }
 
 /**
@@ -305,6 +332,9 @@ export function clearCredentials() {
 
 /**
  * 移动端连接管理 composable
+ *
+ * 全局单例模式：连接状态在 app 生命周期内共享。
+ * 首次调用时延迟初始化事件监听，后续组件复用同一份状态。
  */
 export function useMobileConnection() {
   return {

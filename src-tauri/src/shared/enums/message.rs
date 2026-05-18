@@ -6,11 +6,10 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::auth::{AuthPayload, AuthStage};
+use super::auth::AuthPayload;
 use super::control::{ControlAction, ControlPayload};
-use super::session::SessionType;
 use super::special_key::SpecialKey;
-use super::sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
+use super::sumary::SessionSummary;
 
 /// 输出载荷
 #[derive(Debug, Clone, Serialize, Deserialize)]

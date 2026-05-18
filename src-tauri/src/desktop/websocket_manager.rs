@@ -52,15 +52,29 @@ impl MessageHandler for WsMessageHandler {
         // 获取 client_id
         let client_id = client_info.client_id.clone().unwrap_or_else(|| addr.to_string());
 
+        // 获取原始消息的 message_id，用于响应匹配
+        // 确保 send_and_wait 能匹配到响应
+        let orig_message_id = message.message_id().map(|s| s.to_string());
+
         // 调用 async handler (使用 block_in_place 因为 handle_text 是 sync)
         let handler = self.inner.clone();
         let json_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async move {
+            tokio::task::block_in_place(|| {
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(async move {
                 match handler.handle_message(business_msg, &client_id).await {
                     Ok(Some(response)) => {
                         match response.to_json() {
-                            Ok(json) => Ok(Some(WsMessage::text(json))),
+                            Ok(json) => {
+                                // 复用原始消息的 message_id，确保 send_and_wait 能匹配响应
+                                let mut response_ws_msg = WsMessage::text(json);
+                                if let Some(ref orig_id) = orig_message_id {
+                                    if let WsMessage::Text { ref mut message_id, .. } = response_ws_msg {
+                                        *message_id = orig_id.clone();
+                                    }
+                                }
+                                Ok(Some(response_ws_msg))
+                            }
                             Err(e) => Err(e),
                         }
                     }
@@ -68,12 +82,23 @@ impl MessageHandler for WsMessageHandler {
                     Err(e) => Err(e),
                 }
             })
+            })
         }));
 
         match json_result {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(crate::AppError::WebSocket("Handler panicked".to_string())),
+            Err(panic_err) => {
+                let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic".to_string()
+                };
+                tracing::error!("[WsMessageHandler] Handler panic: {}", msg);
+                Err(crate::AppError::WebSocket(format!("Handler panicked: {}", msg)))
+            }
         }
     }
 
@@ -588,7 +613,6 @@ impl WebSocketManager {
     async fn handle_server_event(inner: Arc<WsManagerInner>, event: WsServerEvent) {
         match event {
             WsServerEvent::ClientConnected { addr, client_id } => {
-                // 记录连接时间
                 {
                     let mut connected_at = inner.addr_to_connected_at.write().await;
                     connected_at.insert(addr, Utc::now().timestamp_millis());
@@ -603,7 +627,6 @@ impl WebSocketManager {
                 tracing::info!("Client connected: {}", addr);
             }
             WsServerEvent::ClientDisconnected { addr, client_id } => {
-                // 清理映射
                 Self::cleanup_client(&inner, &addr).await;
 
                 // 调用业务处理器
@@ -614,33 +637,8 @@ impl WebSocketManager {
 
                 tracing::info!("Client disconnected: {}", addr);
             }
-            WsServerEvent::TextMessage { addr, client_id, message_id: _, content } => {
-                // 解析业务消息
-                match BusinessMessage::from_json(&content) {
-                    Ok(msg) => {
-                        let cid = client_id.unwrap_or_else(|| addr.to_string());
-                        // 调用业务处理器
-                        let handler = inner.handler.read().await;
-                        match handler.handle_message(msg, &cid).await {
-                            Ok(Some(response)) => {
-                                // 发送响应
-                                if let Err(e) = Self::send_to_addr_internal(&inner, &addr, &response).await {
-                                    tracing::error!("Failed to send response: {}", e);
-                                }
-                            }
-                            Ok(None) => {
-                                // 无需响应
-                            }
-                            Err(e) => {
-                                tracing::error!("Handler error: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to parse message: {}", e);
-                    }
-                }
-            }
+            // 消息已由 WsServer 的 MessageHandler 路径处理，此处不再重复处理
+            // (WsServer 在有 handler 时不 emit TextMessage/BinaryMessage 事件)
             _ => {}
         }
     }

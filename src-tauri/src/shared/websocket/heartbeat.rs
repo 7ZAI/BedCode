@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::interval;
-use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
 /// 心跳配置
 #[derive(Debug, Clone)]

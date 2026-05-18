@@ -47,7 +47,7 @@
     <!-- Input Assistant 悬浮球 -->
     <InputAssistant
       :terminal-ref="terminalRef"
-      :terminal-instance="null"
+      :terminal-instance="terminalInstance"
       :is-connected="isConnectedValue"
     />
   </div>
@@ -55,6 +55,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, inject, type Ref } from 'vue'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // 定义组件名称，用于 KeepAlive 缓存
 defineOptions({
@@ -63,6 +64,7 @@ defineOptions({
 
 import { useRouter, useRoute } from 'vue-router'
 import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
+import { wsLoadSessions, wsSendInput } from '@/modules/shared/composables/useMobileCommands'
 import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
 import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
 
@@ -83,9 +85,39 @@ const outputBuffer = ref<string>('')
 
 const terminalRef = ref<any>(null)
 
-// 会话名称
+// 终端操作接口（供 InputAssistant 使用）
+const terminalInstance = computed(() => ({
+  sendInput: async (data: string) => {
+    const sessionId = connection.activeSessionId.value
+    if (!sessionId) return
+    try {
+      await wsSendInput(sessionId, data)
+    } catch (e) {
+      console.error('[TerminalView] sendInput failed:', e)
+    }
+  },
+  sendSpecialKey: async (key: string) => {
+    const sessionId = connection.activeSessionId.value
+    if (!sessionId) return
+    try {
+      await wsSendInput(sessionId, '', key)
+    } catch (e) {
+      console.error('[TerminalView] sendSpecialKey failed:', e)
+    }
+  },
+}))
+
+// 活跃会话列表（用于获取会话名称）
+const activeSessionsList = ref<any[]>([])
+
+// 会话名称 - 从活跃会话中查找
 const sessionName = computed(() => {
-  return connection.currentDevice.value?.name || 'Claude Code'
+  const activeId = connection.activeSessionId.value
+  if (activeId) {
+    const found = activeSessionsList.value.find((s: any) => s.id === activeId)
+    if (found?.name) return found.name
+  }
+  return connection.currentDevice.value?.name || '终端'
 })
 
 // 清空终端
@@ -110,12 +142,39 @@ function onTerminalClear() {
   outputBuffer.value = ''
 }
 
+let unlistenOutput: UnlistenFn | null = null
+
+/** Base64 解码为 UTF-8 字符串（支持多字节字符） */
+function decodeBase64Utf8(base64: string): string {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
 onMounted(async () => {
-  // TODO: 实现完整的 terminal 功能
+  // 加载会话列表以获取会话名称
+  try {
+    activeSessionsList.value = await wsLoadSessions()
+  } catch (e) {
+    console.error('[TerminalView] Failed to load sessions:', e)
+  }
+
+  // 监听 ws_output 事件，只显示当前活跃会话的输出
+  unlistenOutput = await listen<{ session_id: string; data: string; is_waiting: boolean }>('ws_output', (event) => {
+    // 只显示当前活跃会话的输出
+    if (connection.activeSessionId.value && event.payload.session_id !== connection.activeSessionId.value) {
+      return
+    }
+    const decoded = decodeBase64Utf8(event.payload.data)
+    outputBuffer.value += decoded
+  })
 })
 
 onUnmounted(async () => {
-  // 清理
+  unlistenOutput?.()
 })
 
 function goBack() {

@@ -3,17 +3,22 @@
 //! 桌面端业务消息处理入口
 //! 负责认证拦截和消息路由
 
+use crate::desktop::plugin::PluginManager;
 use crate::desktop::server::connection_types::AuthPayload;
 use crate::desktop::server::message::Message as BusinessMessage;
 use crate::desktop::server::services::session_control::handle_control;
-use crate::desktop::server::services::qr_token_service::QrTokenService;
+use crate::shared::auth::qr_token::QrTokenManager;
+use crate::desktop::session::SessionManager;
 use crate::desktop::websocket_manager::BusinessHandler;
 use crate::shared::auth::JwtService;
-use crate::shared::auth::PairingService;
 use crate::shared::db::Database;
 use crate::shared::enums::AuthStage;
+use crate::shared::enums::ControlAction;
+use crate::shared::enums::ControlPayload;
+use crate::desktop::server::services::PairingService;
 use crate::Result;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -33,7 +38,11 @@ pub struct BusinessMessageHandler {
     /// 配对服务
     pairing_service: Arc<PairingService>,
     /// QR 令牌管理器
-    qr_manager: Arc<QrTokenService>,
+    qr_manager: Arc<QrTokenManager>,
+    /// 会话管理器
+    session_manager: Option<Arc<SessionManager>>,
+    /// 插件管理器
+    plugin_manager: Option<Arc<PluginManager>>,
     /// App Handle（用于发送事件）
     app_handle: Option<Arc<AppHandle>>,
 }
@@ -43,7 +52,9 @@ impl BusinessMessageHandler {
     pub fn new(
         db: Arc<Mutex<Database>>,
         pairing_service: Arc<PairingService>,
-        qr_manager: Arc<QrTokenService>,
+        qr_manager: Arc<QrTokenManager>,
+        session_manager: Option<Arc<SessionManager>>,
+        plugin_manager: Option<Arc<PluginManager>>,
         app_handle: Option<Arc<AppHandle>>,
     ) -> Self {
         Self {
@@ -51,6 +62,8 @@ impl BusinessMessageHandler {
             db,
             pairing_service,
             qr_manager,
+            session_manager,
+            plugin_manager,
             app_handle,
         }
     }
@@ -221,24 +234,102 @@ impl BusinessMessageHandler {
                 Ok(None)
             }
             BusinessMessage::Control {
-                message_id: _,
-                session_id: _,
-                timestamp: _,
-                payload: _,
-            } => {
-                // TODO: 实现会话控制功能，需要注入 SessionManager 和 PluginManager
-                tracing::debug!("Control message received - not implemented yet");
-                Ok(None)
-            }
-            BusinessMessage::Input {
                 message_id,
                 session_id,
                 timestamp,
                 payload,
             } => {
-                // 处理输入消息，转发到 PTY
-                // TODO: 实现输入转发
-                tracing::debug!("Input message for session {}: {:?}", session_id, payload);
+                match payload.action {
+                    ControlAction::ListSessionConfigs => {
+                        let db = self.db.lock().await;
+                        let configs = db.get_session_configs()?;
+                        drop(db);
+
+                        use crate::shared::enums::sumary::SessionConfigSummary;
+                        let summaries: Vec<SessionConfigSummary> = configs
+                            .into_iter()
+                            .map(|c| SessionConfigSummary {
+                                id: c.id,
+                                name: c.name,
+                                environment: c.environment,
+                                wsl_distro: c.wsl_distro,
+                                working_dir: c.working_dir,
+                                command: c.command,
+                            })
+                            .collect();
+
+                        Ok(Some(BusinessMessage::Control {
+                            message_id,
+                            session_id,
+                            timestamp,
+                            payload: ControlPayload {
+                                action: ControlAction::SessionConfigList { configs: summaries },
+                            },
+                        }))
+                    }
+                    ControlAction::ListSessions
+                    | ControlAction::StartSession { .. }
+                    | ControlAction::StopSession { .. }
+                    | ControlAction::ResizeSession { .. }
+                    | ControlAction::JoinSession { .. }
+                    | ControlAction::LeaveSession { .. }
+                    | ControlAction::RemoveSession { .. } => {
+                        if let (Some(sm), Some(pm)) = (&self.session_manager, &self.plugin_manager) {
+                            // 从 WebSocketManager 获取客户端列表
+                            let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+                            let clients = HashMap::<SocketAddr, crate::desktop::server::ClientInfo>::new();
+
+                            handle_control(
+                                payload.action,
+                                message_id,
+                                sm,
+                                pm,
+                                &self.db,
+                                &Arc::new(tokio::sync::RwLock::new(clients)),
+                                addr,
+                                None,
+                            ).await
+                        } else {
+                            tracing::warn!("Session manager not available");
+                            Ok(None)
+                        }
+                    }
+                    _ => {
+                        tracing::debug!("Unhandled control action: {:?}", payload.action);
+                        Ok(None)
+                    }
+                }
+            }
+            BusinessMessage::Input {
+                session_id,
+                payload,
+                ..
+            } => {
+                if let Some(ref sm) = self.session_manager {
+                    if !payload.data.is_empty() {
+                        if let Err(e) = sm.write_input(&session_id, &payload.data).await {
+                            tracing::error!("Failed to write input to session {}: {}", session_id, e);
+                        }
+                    }
+                    if let Some(ref key) = payload.special_key {
+                        let key_bytes = match key {
+                            crate::shared::enums::SpecialKey::Tab => "\t",
+                            crate::shared::enums::SpecialKey::Enter => "\r",
+                            crate::shared::enums::SpecialKey::Escape => "\x1b",
+                            crate::shared::enums::SpecialKey::CtrlC => "\x03",
+                            crate::shared::enums::SpecialKey::CtrlD => "\x04",
+                            crate::shared::enums::SpecialKey::CtrlZ => "\x1a",
+                            crate::shared::enums::SpecialKey::ArrowUp => "\x1b[A",
+                            crate::shared::enums::SpecialKey::ArrowDown => "\x1b[B",
+                            crate::shared::enums::SpecialKey::ArrowLeft => "\x1b[D",
+                            crate::shared::enums::SpecialKey::ArrowRight => "\x1b[C",
+                            crate::shared::enums::SpecialKey::Backspace => "\x7f",
+                        };
+                        if let Err(e) = sm.write_input(&session_id, key_bytes).await {
+                            tracing::error!("Failed to write special key to session {}: {}", session_id, e);
+                        }
+                    }
+                }
                 Ok(None)
             }
             BusinessMessage::Output { .. } => {
@@ -266,8 +357,14 @@ impl BusinessHandler for BusinessMessageHandler {
         if let Ok(addr) = client_id.parse::<SocketAddr>() {
             self.handle_message(msg, addr).await
         } else {
-            // If client_id is not a valid SocketAddr, try as identifier
-            tracing::warn!("Invalid client_id format: {}", client_id);
+            // If client_id is not a valid SocketAddr, try looking up in WebSocketManager
+            let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+            if let Some(client) = ws_manager.get_client(client_id).await {
+                if let Ok(addr) = client.addr.parse::<SocketAddr>() {
+                    return self.handle_message(msg, addr).await;
+                }
+            }
+            tracing::warn!("Invalid client_id format: {} (not found in client map)", client_id);
             Ok(None)
         }
     }

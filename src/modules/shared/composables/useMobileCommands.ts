@@ -88,10 +88,10 @@ export async function wsGetAuthStatus(): Promise<AuthState> {
 }
 
 /**
- * 使用已存储凭据认证
+ * 使用 JWT token 认证（重连时使用已存储的 session_token）
  */
-export async function wsAuthenticate(): Promise<boolean> {
-  return await invoke('ws_authenticate')
+export async function wsAuthenticate(sessionToken: string): Promise<boolean> {
+  return await invoke('ws_authenticate', { sessionToken })
 }
 
 /**
@@ -102,16 +102,16 @@ export async function wsRequestPairing(): Promise<void> {
 }
 
 /**
- * 验证配对码
+ * 验证配对码，成功后返回凭据（含 JWT token）
  */
-export async function wsVerifyPairingCode(code: string): Promise<boolean> {
+export async function wsVerifyPairingCode(code: string): Promise<AuthCredentials | null> {
   return await invoke('ws_verify_pairing_code', { code })
 }
 
 /**
  * 使用 QR token 认证
  */
-export async function wsAuthenticateWithQr(token: string): Promise<boolean> {
+export async function wsAuthenticateWithQr(token: string): Promise<AuthCredentials | null> {
   return await invoke('ws_authenticate_with_qr', { token })
 }
 
@@ -127,8 +127,8 @@ export async function wsLoadSessions(): Promise<SessionInfo[]> {
 /**
  * 启动会话
  */
-export async function wsStartSession(configId: string): Promise<string> {
-  return await invoke('ws_start_session', { configId })
+export async function wsStartSession(configId: string, sessionName?: string): Promise<string> {
+  return await invoke('ws_start_session', { configId, sessionName })
 }
 
 /**

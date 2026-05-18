@@ -47,7 +47,7 @@ impl MessageCodec for JsonCodec {
                 let ws_msg = WsMessage::from_json(&text)?;
                 Ok(Some(ws_msg))
             }
-            WsMsg::Ping(data) => Ok(Some(WsMessage::ping())),
+            WsMsg::Ping(_) => Ok(Some(WsMessage::ping())),
             WsMsg::Pong(_) => Ok(Some(WsMessage::pong())),
             WsMsg::Close(reason) => {
                 Ok(Some(WsMessage::close(reason.map(|r| r.to_string()).unwrap_or_default())))

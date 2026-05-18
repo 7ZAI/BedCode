@@ -15,6 +15,9 @@ pub struct SessionSummary {
     /// 会话类型：pty 或 plugin
     #[serde(default)]
     pub session_type: Option<String>,
+    /// 对应的会话配置 ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_id: Option<String>,
 }
 
 /// 会话配置摘要

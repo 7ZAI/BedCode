@@ -40,7 +40,7 @@ impl WebSocketServer {
         _session_manager: Arc<crate::desktop::session::SessionManager>,
         _plugin_manager: Arc<crate::desktop::plugin::PluginManager>,
         _db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>,
-        _pairing_service: Arc<crate::shared::auth::PairingService>,
+        _pairing_service: Arc<crate::desktop::server::services::PairingService>,
         _qr_manager: Arc<crate::shared::auth::QrTokenManager>,
     ) -> Self {
         let config = WsServerConfig {

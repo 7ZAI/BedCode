@@ -166,13 +166,15 @@ async function handleQrScan(decodedText: string) {
   console.log('[Scan] QR data:', qrData)
 
   try {
-    const success = await wsAuthenticateWithQr(qrData.token)
-    if (!success) {
+    const creds = await wsAuthenticateWithQr(qrData.token)
+    if (!creds) {
       console.error('[Scan] QR token failed')
       errorMessage.value = 'QR 码已过期或已使用，请在桌面端重新生成'
       isConnecting.value = false
       return
     }
+    // 保存 JWT 凭据到 localStorage
+    connection.saveCredentials(creds)
   } catch (e) {
     console.error('[Scan] QR token error:', e)
     errorMessage.value = '配对验证失败，请重试: ' + String(e)
@@ -184,7 +186,7 @@ async function handleQrScan(decodedText: string) {
   // 保存连接历史
   const address = `${qrData.host}:${qrData.port}`
   const stored = localStorage.getItem('connection_history')
-  let history: Array<{ address: string; name: string; time: number }> = []
+  let history: Array<{ address: string; name: string; lastConnected: string }> = []
   if (stored) {
     try {
       history = JSON.parse(stored)
@@ -198,7 +200,7 @@ async function handleQrScan(decodedText: string) {
   history.unshift({
     address,
     name: 'Desktop',
-    time: Date.now(),
+    lastConnected: new Date().toISOString(),
   })
 
   // 只保留最近 10 条

@@ -5,10 +5,10 @@
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tauri::{AppHandle, Emitter};
-use log;
+use tracing;
 
 use crate::shared::websocket::{
-    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
+    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsMessage,
 };
 use crate::Result;
 
@@ -73,6 +73,11 @@ impl ConnectionManager {
         self.event_tx.subscribe()
     }
 
+    /// 获取消息处理器（用于订阅输出事件等）
+    pub fn handler(&self) -> Arc<MobileHandler> {
+        self.handler.clone()
+    }
+
     /// 连接到目标设备
     ///
     /// 简化逻辑：
@@ -89,12 +94,12 @@ impl ConnectionManager {
                     "port": port,
                     "status": "already_connecting"
                 }));
-                log::info!("Already connecting");
+                tracing::info!("Already connecting");
                 return Ok(());
             }
             if status == WsConnStatus::Connected || status == WsConnStatus::Paired {
                 let _ = app_handle.emit("ws_connected", ());
-                log::info!("Already connected");
+                tracing::info!("Already connected");
                 return Ok(());
             }
         }
@@ -104,36 +109,39 @@ impl ConnectionManager {
             "address": address,
             "port": port,
         }));
-        log::info!("WebSocket connecting to {}:{}", address, port);
+        tracing::info!("WebSocket connecting to {}:{}", address, port);
+
+        // 清除上一次连接的客户端（如果有）
+        *self.client.write().await = None;
 
         // 保存目标设备
-        log::debug!("Saving target device...");
+        tracing::debug!("Saving target device...");
         *self.target.write().await = Some(TargetDevice {
             address: address.clone(),
             port,
-            name,
+            name: name.clone(),
         });
-        log::debug!("Target device saved");
+        tracing::debug!("Target device saved");
 
         // 创建配置和客户端
-        log::debug!("Creating WsClientConfig with address: {}, port: {}", address, port);
+        tracing::debug!("Creating WsClientConfig with address: {}, port: {}", address, port);
         let config = WsClientConfig::new(&address, port);
-        log::debug!("WsClientConfig created, url: {}", config.url());
+        tracing::debug!("WsClientConfig created, url: {}", config.url());
 
-        log::debug!("Creating WsClient...");
+        tracing::debug!("Creating WsClient...");
         let client = WsClient::new(config);
-        log::debug!("WsClient created");
+        tracing::debug!("WsClient created");
 
-        log::debug!("Setting handler (async)...");
+        tracing::debug!("Setting handler (async)...");
         client.set_handler(self.handler.clone()).await;
-        log::debug!("Handler set, now calling client.connect()...");
-        log::info!("About to call client.connect(), this should show Connection log...");
+        tracing::debug!("Handler set, now calling client.connect()...");
+        tracing::info!("About to call client.connect(), this should show Connection log...");
         match client.connect().await {
             Ok(_) => {
-                log::info!("client.connect() succeeded");
+                tracing::info!("client.connect() succeeded");
             }
             Err(e) => {
-                log::error!("client.connect() failed: {}", e);
+                tracing::error!("client.connect() failed: {}", e);
                 let _ = app_handle.emit("ws_error", serde_json::json!({
                     "message": format!("Connection failed: {}", e)
                 }));
@@ -149,7 +157,7 @@ impl ConnectionManager {
 
         // 发射连接成功事件
         let _ = app_handle.emit("ws_connected", ());
-        log::info!("Connection established");
+        tracing::info!("Connection established");
 
         Ok(())
     }
@@ -188,7 +196,7 @@ impl ConnectionManager {
 
     /// 断开连接
     pub async fn disconnect(&self) {
-        log::info!("Disconnecting...");
+        tracing::info!("Disconnecting...");
 
         // 断开 WebSocket
         if let Some(client) = self.client.read().await.as_ref() {
@@ -214,8 +222,10 @@ impl ConnectionManager {
     /// 发送消息并等待响应
     pub async fn send_and_wait(&self, message: &WsMessage, timeout: std::time::Duration) -> Result<WsMessage> {
         if let Some(client) = self.client.read().await.as_ref() {
+            tracing::info!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
             client.send_and_wait(message, timeout).await
         } else {
+            tracing::error!("[ConnectionManager] send_and_wait: client is None!");
             Err(crate::AppError::WebSocket("Not connected".to_string()))
         }
     }

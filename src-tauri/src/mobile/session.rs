@@ -53,22 +53,61 @@ impl SessionManager {
     }
 
     /// 启动会话
-    pub async fn start_session(&self, config_id: &str) -> Result<String> {
-        // 创建会话信息
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let session = SessionInfo {
-            id: session_id.clone(),
-            name: format!("Session-{}", &session_id[..8]),
-            config_id: config_id.to_string(),
-            status: SessionStatus::Running,
-            created_at: chrono::Utc::now().timestamp_millis(),
-        };
+    pub async fn start_session(&self, config_id: &str, session_name: Option<&str>) -> Result<String> {
+        tracing::info!("[start_session] config_id={}, session_name={:?}", config_id, session_name);
 
-        *self.active_session.write().await = Some(session.clone());
-        self.sessions.write().await.push(session);
+        // 通过 WebSocket 发送 StartSession 控制消息到桌面端
+        let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+            "type": "control",
+            "message_id": uuid::Uuid::new_v4().to_string(),
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+            "payload": {
+                "action": {
+                    "type": "start_session",
+                    "config_id": config_id
+                }
+            }
+        })).unwrap());
 
-        tracing::info!("Session started: {}", session_id);
-        Ok(session_id)
+        let response = self.connection
+            .send_and_wait(&message, std::time::Duration::from_secs(30))
+            .await
+            .map_err(|e| {
+                tracing::error!("[start_session] send_and_wait failed: {}", e);
+                e
+            })?;
+        tracing::info!("[start_session] send_and_wait succeeded");
+
+        // 解析响应获取真实 session_id
+        if let crate::shared::websocket::WsMessage::Text { payload: text_payload, .. } = &response {
+            tracing::info!("[start_session] response content: {}", &text_payload.content[..text_payload.content.len().min(200)]);
+            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
+                if let Some(session_id) = inner.get("session_id").and_then(|s| s.as_str()) {
+                    let name = session_name.unwrap_or(&format!("Session-{}", &session_id[..8])).to_string();
+                    let session = SessionInfo {
+                        id: session_id.to_string(),
+                        name,
+                        config_id: config_id.to_string(),
+                        status: SessionStatus::Running,
+                        created_at: chrono::Utc::now().timestamp_millis(),
+                    };
+
+                    *self.active_session.write().await = Some(session.clone());
+                    self.sessions.write().await.push(session.clone());
+                    tracing::info!("[start_session] Session added to local list, total sessions: {}", self.sessions.read().await.len());
+                    return Ok(session_id.to_string());
+                } else {
+                    tracing::error!("[start_session] No session_id in response: {:?}", inner);
+                }
+            } else {
+                tracing::error!("[start_session] Failed to parse response JSON");
+            }
+        } else {
+            tracing::error!("[start_session] Unexpected response type: {:?}", response);
+        }
+
+        tracing::error!("[start_session] Failed to parse StartSession response");
+        Err(crate::AppError::WebSocket("Failed to start session: invalid response".to_string()))
     }
 
     /// 停止会话

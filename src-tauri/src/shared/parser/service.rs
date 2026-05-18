@@ -6,7 +6,7 @@ use regex::Regex;
 use std::collections::VecDeque;
 
 pub use super::types::ParsedSegment;
-pub use super::{AnsiParser, AnsiStyle, MarkdownParser, StyledSegment};
+pub use super::{AnsiParser, MarkdownParser, StyledSegment};
 
 /// Output parser combining ANSI and Markdown parsing
 pub struct OutputParser {

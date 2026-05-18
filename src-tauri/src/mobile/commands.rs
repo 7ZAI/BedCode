@@ -9,15 +9,15 @@
 //! - ws_send_with_response: 发送消息并等待响应
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use log;
+use tracing;
 
 use crate::Result;
 use crate::mobile::{
-    AuthManager, ConnectionManager, ConnectionStatus as ConnStatus,
+    AuthCredentials, AuthManager, ConnectionManager,
     SessionInfo, SessionManager,
+    MobileEvent,
 };
 use crate::shared::websocket::WsMessage;
 
@@ -63,6 +63,9 @@ pub struct ConnectionInfo {
     pub status: String,
 }
 
+/// 输出事件转发标志（只启动一次）
+static OUTPUT_FORWARDING_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 连接到桌面端
 #[tauri::command]
 pub async fn ws_connect(
@@ -72,24 +75,44 @@ pub async fn ws_connect(
     name: Option<String>,
 ) -> Result<ConnectionInfo> {
     eprintln!("[ws_connect] START - address={}, port={}, name={:?}", address, port, name);
-    log::info!("WebSocket connecting to {}:{}", address, port);
+    tracing::info!("WebSocket connecting to {}:{}", address, port);
 
     // 发射连接开始事件
     let _ = app_handle.emit("ws_connecting", serde_json::json!({
         "address": address,
         "port": port,
     }));
-    log::info!("Emitted ws_connecting event");
+    tracing::info!("Emitted ws_connecting event");
+
+    // 启动输出事件转发（仅一次），将 MobileEvent::Output 转发为 Tauri ws_output 事件
+    if !OUTPUT_FORWARDING_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let conn_fwd = get_connection_manager();
+        let mut event_rx = conn_fwd.handler().subscribe();
+        let app_clone = app_handle.clone();
+        tokio::spawn(async move {
+            tracing::info!("[OutputForwarder] Started forwarding output events");
+            while let Ok(event) = event_rx.recv().await {
+                if let MobileEvent::Output { session_id, data, is_waiting } = event {
+                    let _ = app_clone.emit("ws_output", serde_json::json!({
+                        "session_id": session_id,
+                        "data": data,
+                        "is_waiting": is_waiting,
+                    }));
+                }
+            }
+            tracing::warn!("[OutputForwarder] Event channel closed");
+        });
+    }
 
     let conn = get_connection_manager();
-    log::info!("Calling conn.connect()...");
+    tracing::info!("Calling conn.connect()...");
 
     match conn.connect(app_handle.clone(), address.clone(), port, name).await {
         Ok(_) => {
-            log::info!("conn.connect() returned Ok");
+            tracing::info!("conn.connect() returned Ok");
         }
         Err(e) => {
-            log::error!("conn.connect() returned error: {}", e);
+            tracing::error!("conn.connect() returned error: {}", e);
             let _ = app_handle.emit("ws_error", serde_json::json!({
                 "message": format!("Connection failed: {}", e)
             }));
@@ -98,7 +121,7 @@ pub async fn ws_connect(
     }
 
     let status = conn.get_status().await;
-    log::info!("Connection status: {:?}", status);
+    tracing::info!("Connection status: {:?}", status);
 
     Ok(ConnectionInfo {
         address,
@@ -110,7 +133,7 @@ pub async fn ws_connect(
 /// 断开连接
 #[tauri::command]
 pub async fn ws_disconnect(app_handle: AppHandle) -> Result<()> {
-    log::info!("WebSocket disconnecting");
+    tracing::info!("WebSocket disconnecting");
 
     let conn = get_connection_manager();
     conn.disconnect().await;
@@ -167,11 +190,12 @@ pub async fn ws_get_auth_status() -> Result<AuthState> {
     })
 }
 
-/// 使用已存储凭据认证
+/// 使用 JWT token 认证（重连时使用已存储的 session_token）
 #[tauri::command]
-pub async fn ws_authenticate(app_handle: AppHandle) -> Result<bool> {
+pub async fn ws_authenticate(app_handle: AppHandle, session_token: String) -> Result<bool> {
+    tracing::info!("[ws_authenticate] called, token length={}", session_token.len());
     let auth = get_auth_manager();
-    let result = auth.authenticate().await?;
+    let result = auth.authenticate_with_token(&session_token).await?;
 
     if result {
         let _ = app_handle.emit("ws_auth_success", ());
@@ -184,54 +208,101 @@ pub async fn ws_authenticate(app_handle: AppHandle) -> Result<bool> {
 /// 请求配对
 #[tauri::command]
 pub async fn ws_request_pairing(app_handle: AppHandle) -> Result<()> {
+    eprintln!("[ws_request_pairing] COMMAND ENTERED!");
+    tracing::info!("[ws_request_pairing] command entered");
+
     let auth = get_auth_manager();
-    auth.request_pairing().await?;
-
-    // 发射配对请求事件
-    let _ = app_handle.emit("ws_pairing_request", ());
-
-    Ok(())
+    tracing::info!("[ws_request_pairing] got auth manager, calling request_pairing...");
+    match auth.request_pairing().await {
+        Ok(()) => {
+            tracing::info!("[ws_request_pairing] request_pairing OK, emitting event");
+            let _ = app_handle.emit("ws_pairing_request", ());
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("[ws_request_pairing] request_pairing failed: {}", e);
+            Err(e)
+        }
+    }
 }
 
-/// 验证配对码
+/// 验证配对码，成功后返回凭据（含 JWT token）
 #[tauri::command]
-pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Result<bool> {
+pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Result<Option<crate::mobile::auth::AuthCredentials>> {
     let auth = get_auth_manager();
     let result = auth.verify_pairing_code(&code).await?;
 
     if result {
         let _ = app_handle.emit("ws_pairing_verified", ());
         let _ = app_handle.emit("ws_paired", ());
+        // 返回存储的凭据，前端持久化到 localStorage
+        Ok(auth.get_credentials().await)
     } else {
         let _ = app_handle.emit("ws_auth_failed", serde_json::json!({
             "reason": "Pairing verification failed"
         }));
+        Ok(None)
     }
-
-    Ok(result)
 }
 
 /// 使用 QR token 认证
 #[tauri::command]
-pub async fn ws_authenticate_with_qr(token: String) -> Result<bool> {
+pub async fn ws_authenticate_with_qr(app_handle: AppHandle, token: String) -> Result<Option<AuthCredentials>> {
     let auth = get_auth_manager();
-    auth.authenticate_with_qr(&token).await
+    let result = auth.authenticate_with_qr(&token).await?;
+
+    if result {
+        let _ = app_handle.emit("ws_pairing_verified", ());
+        let _ = app_handle.emit("ws_paired", ());
+        return Ok(auth.get_credentials().await);
+    }
+
+    Ok(None)
 }
 
 // ==================== Session Commands ====================
 
-/// 加载会话列表
+/// 加载会话列表（从桌面端拉取真实会话）
 #[tauri::command]
-pub async fn ws_load_sessions() -> Result<Vec<SessionInfo>> {
-    let session_mgr = get_session_manager();
-    Ok(session_mgr.get_sessions().await)
+pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
+    tracing::info!("[ws_load_sessions] Sending ListSessions request");
+    let conn = get_connection_manager();
+    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+        "type": "control",
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": {
+            "action": {
+                "type": "list_sessions"
+            }
+        }
+    })).unwrap());
+
+    let response = conn.send_and_wait(&message, std::time::Duration::from_secs(15)).await?;
+
+    if let crate::shared::websocket::WsMessage::Text { payload: text_payload, .. } = &response {
+        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
+            if let Some(sessions) = inner.get("payload")
+                .and_then(|p| p.get("action"))
+                .and_then(|a| a.get("sessions"))
+            {
+                let count = sessions.as_array().map(|a| a.len()).unwrap_or(0);
+                tracing::info!("[ws_load_sessions] Response OK, {} sessions", count);
+                if let Ok(list) = serde_json::from_value(sessions.clone()) {
+                    return Ok(list);
+                }
+            }
+        }
+    }
+
+    Ok(Vec::new())
 }
 
 /// 启动会话
 #[tauri::command]
-pub async fn ws_start_session(config_id: String) -> Result<String> {
+pub async fn ws_start_session(config_id: String, session_name: Option<String>) -> Result<String> {
     let session_mgr = get_session_manager();
-    session_mgr.start_session(&config_id).await
+    session_mgr.start_session(&config_id, session_name.as_deref()).await
 }
 
 /// 停止会话
@@ -243,9 +314,23 @@ pub async fn ws_stop_session(session_id: String) -> Result<()> {
 
 /// 发送输入到会话
 #[tauri::command]
-pub async fn ws_send_input(_session_id: String, data: String, _special_key: Option<String>) -> Result<()> {
-    let session_mgr = get_session_manager();
-    session_mgr.send_input(data).await
+pub async fn ws_send_input(session_id: String, data: String, special_key: Option<String>) -> Result<()> {
+    tracing::info!("[ws_send_input] session_id={}, data_len={}, has_special_key={}",
+        session_id, data.len(), special_key.is_some());
+    let conn = get_connection_manager();
+    let payload = serde_json::json!({
+        "type": "input",
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": {
+            "data": data,
+            "special_key": special_key,
+        },
+    });
+    tracing::info!("[ws_send_input] sending message: {}", &serde_json::to_string(&payload).unwrap_or_default()[..200]);
+    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&payload).unwrap());
+    conn.send(&message).await
 }
 
 /// 发送消息（不等待响应）
@@ -297,6 +382,7 @@ pub async fn ws_resize_terminal(_session_id: String, _cols: u32, _rows: u32) -> 
 /// 获取会话配置列表
 #[tauri::command]
 pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
+    tracing::info!("[ws_load_session_configs] Sending ListSessionConfigs request");
     let conn = get_connection_manager();
 
     let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
@@ -312,14 +398,20 @@ pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
 
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&response.to_json()?) {
-        if let Some(configs) = payload.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("configs")) {
-            if let Ok(configs_vec) = serde_json::from_value(configs.clone()) {
-                return Ok(configs_vec);
+    // 从 WsMessage 的 payload.content 中提取业务响应 JSON
+    if let WsMessage::Text { payload: text_payload, .. } = &response {
+        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
+            if let Some(configs) = inner.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("configs")) {
+                let count = configs.as_array().map(|a| a.len()).unwrap_or(0);
+                tracing::info!("[ws_load_session_configs] Response OK, {} configs", count);
+                if let Ok(configs_vec) = serde_json::from_value(configs.clone()) {
+                    return Ok(configs_vec);
+                }
             }
         }
     }
 
+    tracing::warn!("[ws_load_session_configs] Failed to parse response, returning empty");
     Ok(Vec::new())
 }
 
@@ -352,7 +444,7 @@ pub async fn set_screen_orientation(
     _app_handle: tauri::AppHandle,
     orientation: String,
 ) -> Result<()> {
-    log::info!("Setting screen orientation to: {}", orientation);
+    tracing::info!("Setting screen orientation to: {}", orientation);
     Ok(())
 }
 
@@ -370,7 +462,7 @@ pub async fn keep_screen_awake(
     _app_handle: tauri::AppHandle,
     enabled: bool,
 ) -> Result<()> {
-    log::info!("Setting screen awake: {}", enabled);
+    tracing::info!("Setting screen awake: {}", enabled);
     Ok(())
 }
 

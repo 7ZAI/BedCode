@@ -11,11 +11,17 @@ use tracing;
 use crate::shared::websocket::{
     ClientMessageHandler, HandlerResult, WsMessage,
 };
-use crate::Result;
+
+/// 输出消息的 payload 数据结构
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OutputPayloadData {
+    pub data: String,
+    pub is_waiting: bool,
+}
 
 /// Mobile 消息类型（与桌面端协商的业务协议）
 #[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum MobileMessage {
     /// 认证相关
     Auth {
@@ -40,8 +46,7 @@ pub enum MobileMessage {
     /// 输出消息
     Output {
         session_id: String,
-        data: String,
-        is_waiting: Option<bool>,
+        payload: OutputPayloadData,
     },
     /// 心跳
     Heartbeat,
@@ -139,14 +144,15 @@ impl ClientMessageHandler for MobileHandler {
                 .map_err(|e| crate::AppError::Parse(format!("Failed to parse mobile message: {}", e)))?;
 
             match mobile_msg {
-                MobileMessage::Output { session_id, data, is_waiting } => {
-                    let is_waiting = is_waiting.unwrap_or(false);
+                MobileMessage::Output { session_id, payload } => {
+                    let is_waiting = payload.is_waiting;
+                    let data_len = payload.data.len();
                     self_clone.send_event(MobileEvent::Output {
                         session_id,
-                        data: data.clone(),
+                        data: payload.data,
                         is_waiting,
                     });
-                    tracing::debug!("Output received for session, data length: {}", data.len());
+                    tracing::debug!("Output received for session, data length: {}", data_len);
                 }
                 MobileMessage::Auth { stage, device_id, session_token, error, .. } => {
                     match stage.as_str() {

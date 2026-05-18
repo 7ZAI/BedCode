@@ -65,10 +65,10 @@ const CONFIG = {
   animationDuration: 300
 }
 
-// 计算轨道样式
+// 计算轨道样式（拖动时无过渡，松手后 CSS 动画平滑滑动）
 const trackStyle = computed(() => ({
   transform: `translate3d(${translateX.value}px, 0, 0)`,
-  transition: isDragging.value || isAnimating.value
+  transition: isDragging.value
     ? 'none'
     : `transform ${CONFIG.animationDuration}ms cubic-bezier(0.4, 0, 0.2, 1)`
 }))
@@ -93,10 +93,9 @@ function initPage() {
   }
 }
 
-// 同步路由
+// 同步路由（只更新 query，不切换到独立页面路由以免容器被卸载）
 function syncRoute(page: number) {
-  const routeNames = pages.map(p => p.name)
-  router.replace({ name: routeNames[page], query: { page: page.toString() } })
+  router.replace({ name: 'mobile-home', query: { page: page.toString() } })
 }
 
 // 切换到指定页面

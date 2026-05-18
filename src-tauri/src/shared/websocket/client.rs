@@ -7,12 +7,11 @@ use crate::shared::websocket::message::{WsMessage, WsMessageType};
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use base64::Engine;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::interval;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// 连接状态
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,10 +228,14 @@ impl WsClient {
         )
         .await
         .map_err(|_| {
+            // 超时时重置 running 标志，允许后续重试
+            self.running.store(false, std::sync::atomic::Ordering::SeqCst);
             error!("[WsClient] Connection timeout after {}ms", self.config.connect_timeout_ms);
             crate::AppError::WebSocket("Connection timeout".to_string())
         })?
         .map_err(|e| {
+            // 连接失败时重置 running 标志，允许后续重试
+            self.running.store(false, std::sync::atomic::Ordering::SeqCst);
             error!("[WsClient] Failed to connect to {}: {:#}", url, e);
             crate::AppError::WebSocket(format!("Failed to connect: {}", e))
         })?;
@@ -258,7 +261,7 @@ impl WsClient {
         let running = self.running.clone();
 
         // 发送任务：处理待发送消息和心跳
-        let mut sender_task = tokio::spawn(async move {
+        let sender_task = tokio::spawn(async move {
             let mut heartbeat_interval = interval(std::time::Duration::from_secs(
                 self_clone.config.heartbeat_interval_secs,
             ));
@@ -307,10 +310,12 @@ impl WsClient {
                     msg = rx.recv() => {
                         match msg {
                             Some(WsMsg::Text(text)) => {
+                                tracing::info!("[WsClient] Sender task sending text msg (len={})", text.len());
                                 if write.send(WsMsg::Text(text)).await.is_err() {
                                     tracing::error!("Failed to send message");
                                     break;
                                 }
+                                tracing::info!("[WsClient] Sender task text msg sent OK");
                             }
                             Some(WsMsg::Binary(data)) => {
                                 if write.send(WsMsg::Binary(data)).await.is_err() {
@@ -344,6 +349,7 @@ impl WsClient {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(WsMsg::Text(text)) => {
+                        tracing::debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(200)]);
                         if let Err(e) = self_clone2.handle_text_message(&text).await {
                             tracing::error!("Failed to handle message: {}", e);
                         }
@@ -500,14 +506,18 @@ impl WsClient {
     pub async fn disconnect(&self) {
         tracing::info!("Disconnecting...");
 
-        // 停止运行标记
+        // 先发送 WebSocket Close 帧，让接收任务尽快退出
+        if let Some(tx) = self.ws_sender.read().await.as_ref() {
+            let _ = tx.send(WsMsg::Close(None)).await;
+        }
+        // 再停止运行标记
         self.running.store(false, std::sync::atomic::Ordering::SeqCst);
 
         // 关闭 WebSocket 发送器，触发发送任务退出
         *self.ws_sender.write().await = None;
 
         // 等待任务结束，带超时避免永久阻塞
-        self.await_tasks(5).await;
+        self.await_tasks(3).await;
 
         // 清理状态（仅在非主动断开时由 on_disconnected 处理，这里确保一致性）
         // 检查当前状态，避免重复清理
@@ -579,6 +589,7 @@ impl WsClient {
     pub async fn send(&self, message: &WsMessage) -> Result<()> {
         if let Some(sender) = self.ws_sender.read().await.as_ref() {
             let json = message.to_json()?;
+            tracing::info!("[WsClient] >>> SEND: {}...", &json[..json.len().min(200)]);
             sender
                 .send(WsMsg::Text(json))
                 .await
@@ -662,11 +673,18 @@ impl WsClient {
             None => return Err(crate::AppError::WebSocket("Message has no message_id, cannot wait for response".to_string())),
         };
 
+        tracing::info!("[WsClient] send_and_wait waiting for message_id={}", sent_id);
+
         // 订阅事件以接收响应
         let mut receiver = self.event_tx.subscribe();
 
         // 发送消息
+        tracing::info!("[WsClient] send_and_wait calling self.send() for msg_id={}", sent_id);
         self.send(message).await?;
+        tracing::info!("[WsClient] send_and_wait self.send() OK, now waiting for response msg_id={}", sent_id);
+
+        // clone sent_id 用于后续日志输出（async 块会 move 它）
+        let sent_id_for_log = sent_id.clone();
 
         // 等待响应或超时
         let timeout = tokio::time::timeout(timeout, async {
@@ -674,14 +692,17 @@ impl WsClient {
                 match receiver.recv().await {
                     Ok(WsClientEvent::TextMessage { message_id: resp_id, content }) => {
                         // 检查是否是我们发送的消息的响应
-                        if let Some(resp_id) = resp_id {
-                            if resp_id == sent_id {
+                        if let Some(ref resp_id) = resp_id {
+                            tracing::debug!("[WsClient] send_and_wait got TextMessage id={}, expected={}", resp_id, sent_id);
+                            if *resp_id == sent_id {
+                                tracing::info!("[WsClient] send_and_wait MATCHED! id={}", sent_id);
                                 return Ok(WsMessage::text(content));
                             }
                         }
                         // 消息ID不匹配，继续等待
                     }
                     Ok(WsClientEvent::Ack { message_id }) => {
+                        tracing::debug!("[WsClient] send_and_wait got Ack id={}, expected={}", message_id, sent_id);
                         // 检查是否是与我们发送的消息匹配的 Ack
                         if message_id == sent_id {
                             // Ack 确认消息已收到，构造一���简单的响应
@@ -689,12 +710,15 @@ impl WsClient {
                         }
                     }
                     Ok(WsClientEvent::Error { message }) => {
+                        tracing::warn!("[WsClient] send_and_wait got Error: {}", message);
                         return Err(crate::AppError::WebSocket(message));
                     }
                     Ok(WsClientEvent::Disconnected) => {
+                        tracing::warn!("[WsClient] send_and_wait got Disconnected");
                         return Err(crate::AppError::WebSocket("Connection lost".to_string()));
                     }
                     Ok(WsClientEvent::ServerClosed { reason }) => {
+                        tracing::warn!("[WsClient] send_and_wait got ServerClosed: {}", reason);
                         return Err(crate::AppError::WebSocket(format!("Server closed: {}", reason)));
                     }
                     // 忽略其他事件类型，继续等待
@@ -708,7 +732,10 @@ impl WsClient {
 
         match timeout.await {
             Ok(result) => result,
-            Err(_) => Err(crate::AppError::WebSocket("Response timeout".to_string())),
+            Err(_) => {
+                tracing::warn!("[WsClient] send_and_wait TIMEOUT for message_id={}", sent_id_for_log);
+                Err(crate::AppError::WebSocket("Response timeout".to_string()))
+            },
         }
     }
 }

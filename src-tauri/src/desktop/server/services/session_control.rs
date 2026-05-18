@@ -37,10 +37,11 @@ pub async fn handle_control(
                 all_sessions.push(SessionSummary {
                     id: s.id,
                     name: s.name,
-                    status: format!("{:?}", s.status),
+                    status: serde_json::to_value(&s.status).and_then(|v| serde_json::from_value::<String>(v)).unwrap_or_else(|_| format!("{:?}", s.status)),
                     created_at: s.created_at.to_rfc3339(),
                     started_at: s.started_at.map(|t| t.to_rfc3339()),
                     session_type: Some("pty".to_string()),
+                    config_id: Some(s.config_id),
                 });
             }
 
@@ -49,10 +50,11 @@ pub async fn handle_control(
                 all_sessions.push(SessionSummary {
                     id: s.id,
                     name: s.name,
-                    status: format!("{:?}", s.status),
+                    status: serde_json::to_value(&s.status).and_then(|v| serde_json::from_value::<String>(v)).unwrap_or_else(|_| format!("{:?}", s.status)),
                     created_at: s.created_at.to_rfc3339(),
                     started_at: s.started_at.map(|t| t.to_rfc3339()),
                     session_type: Some("plugin".to_string()),
+                    config_id: Some(s.config_id),
                 });
             }
 

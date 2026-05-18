@@ -33,14 +33,11 @@ pub use desktop::server;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::plugin;
 
-use shared::auth::qr_token::QrTokenManager;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use desktop::server::services::PairingService;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use desktop::server::services::QrTokenService;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-use shared::auth::PairingService;
-use shared::system::config::AppConfig;
+use mobile::pairing_service::PairingService;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use shared::db::Database;
 use std::sync::Arc;
@@ -51,8 +48,6 @@ use tokio::sync::Mutex;
 use android_logger::Config;
 #[cfg(target_os = "android")]
 use log::LevelFilter;
-#[cfg(target_os = "android")]
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 初始化日志系统
@@ -60,25 +55,16 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 fn init_logging(_app_handle: &tauri::AppHandle) -> Result<()> {
     #[cfg(target_os = "android")]
     {
-        // Android: 使用 tracing-subscriber 输出到 stderr（logcat）
-        // 同时初始化 android_logger 捕获 log crate 的输出
+        // Android: 只初始化 android_logger
+        // tracing 的 "log" feature 会自动将 tracing:: 宏转发到 log::
+        // android_logger 再将 log:: 输出发送到 adb logcat
         android_logger::init_once(
             Config::default()
                 .with_max_level(LevelFilter::Debug)
                 .with_tag("BedCode")
         );
 
-        // 使用 EnvFilter 过滤日志级别
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("debug"));
-
-        // 初始化 tracing-subscriber，输出到 stderr（Android logcat）
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .init();
-
-        tracing::info!("BedCode Android logging initialized (tracing + log)");
+        tracing::info!("BedCode Android logging initialized (tracing → log → logcat)");
     }
 
     #[cfg(not(target_os = "android"))]
@@ -196,9 +182,9 @@ pub fn run() {
                 .expect("Failed to get app data dir")
                 .join("config.json");
 
-            let app_config = AppConfig::load(&config_path).unwrap_or_else(|e| {
+            let app_config = crate::shared::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
                 tracing::warn!("Failed to load config, using defaults: {}", e);
-                AppConfig::default()
+                crate::shared::system::config::AppConfig::default()
             });
             let ws_port = app_config.network.port;
 
@@ -232,7 +218,7 @@ pub fn run() {
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service.clone());
 
-            let qr_manager = Arc::new(QrTokenService::new());
+            let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
             app.manage(qr_manager.clone());
 
             use std::sync::Arc as StdArc;
@@ -243,6 +229,8 @@ pub fn run() {
                     db.clone(),
                     pairing_service.clone(),
                     qr_manager.clone(),
+                    Some(session_manager.clone()),
+                    Some(plugin_manager.clone()),
                     Some(StdArc::new(app_handle.clone())),
                 )
             );
@@ -287,6 +275,34 @@ pub fn run() {
                 while let Ok(event) = rx.recv().await {
                     if let Err(e) = app_handle_clone.emit("pty-output", &event) {
                         tracing::error!("Failed to emit output event: {}", e);
+                    }
+                }
+            });
+
+            // 转发 PTY 输出到所有 WebSocket 客户端（移动端）
+            let ws_manager_output = ws_manager.clone();
+            let session_manager_output = session_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut rx = session_manager_output.subscribe_output();
+                while let Ok(event) = rx.recv().await {
+                    let decoded_data = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &event.data,
+                    ).unwrap_or_default();
+                    let is_waiting = crate::shared::parser::detect_waiting_input(
+                        &String::from_utf8_lossy(&decoded_data)
+                    );
+                    let message = crate::desktop::server::message::Message::Output {
+                        message_id: uuid::Uuid::new_v4().to_string(),
+                        session_id: event.session_id.clone(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                        payload: crate::desktop::server::message::OutputPayload {
+                            data: event.data.clone(),
+                            is_waiting,
+                        },
+                    };
+                    if let Err(e) = ws_manager_output.broadcast(&message).await {
+                        tracing::error!("Failed to broadcast PTY output: {}", e);
                     }
                 }
             });
@@ -446,18 +462,18 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn run() {
     use crate::shared::system::settings::SettingsManager;
-    use android_logger::Config;
-    use log::LevelFilter;
 
     // 尽可能早地初始化日志
+    // tracing 的 "log" feature 将 tracing:: 宏自动转发到 log crate
+    // android_logger 将 log:: 输出发送到 adb logcat
     android_logger::init_once(
         Config::default()
             .with_max_level(LevelFilter::Debug)
             .with_tag("BedCode")
     );
-    log::info!("BedCode Mobile early logging init");
+    tracing::info!("BedCode Mobile early logging init (tracing → log → logcat)");
 
-    log::info!("Building Tauri application...");
+    tracing::info!("Building Tauri application...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -466,10 +482,10 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
             // 日志已在 run() 中早期初始化，这里不再重复初始化
-            log::info!("BedCode setup starting...");
+            tracing::info!("BedCode setup starting...");
 
             // 插件初始化日志
-            log::info!("Plugins initialized");
+            tracing::info!("Plugins initialized");
 
             let app_handle = app.handle();
 
@@ -484,7 +500,7 @@ pub fn run() {
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
 
-            log::info!("BedCode Mobile started successfully!");
+            tracing::info!("BedCode Mobile started successfully!");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -540,5 +556,5 @@ pub fn run() {
         .expect("error while running tauri application");
 
     // 这行永远不会执行，因为 run() 会阻塞
-    log::info!("BedCode application closed");
+    tracing::info!("BedCode application closed");
 }

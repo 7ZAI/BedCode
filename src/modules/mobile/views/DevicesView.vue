@@ -5,18 +5,18 @@
       <h1 class="text-lg font-semibold">会话配置</h1>
     </header>
 
-    <!-- Connection Status Banner -->
-    <div v-if="connectionStatus" class="px-4 py-3 bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700">
+    <!-- Connection Status Banner (connecting/配对中/错误时显示) -->
+    <div v-if="connectionStatus === 'connecting' || connectionStatus === 'connected' || connectionStatus === 'pairing' || connectionStatus === 'error'" class="px-4 py-3 bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700">
       <div class="flex items-center gap-3">
         <!-- Connecting spinner -->
         <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
-        <!-- Success icon -->
+        <!-- Success icon (connected) -->
         <svg v-else-if="connectionStatus === 'connected'" class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
         </svg>
         <!-- Error icon -->
         <svg v-else-if="connectionStatus === 'error'" class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
         </svg>
         <!-- Pairing icon -->
         <div v-else-if="connectionStatus === 'pairing'" class="w-5 h-5 bg-primary-400 rounded-full flex items-center justify-center">
@@ -34,14 +34,18 @@
       </div>
     </div>
 
-    <!-- Connected Banner -->
+    <!-- Connected Banner (连接后显示，已认证时用盾牌图标替换绿点) -->
     <div
       v-if="isConnected && currentDevice"
       class="mx-4 mt-4 p-3 bg-green-900/20 border border-green-800/30 rounded-lg"
     >
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <div class="w-3 h-3 rounded-full bg-green-500"></div>
+          <!-- 已认证显示盾牌图标，未认证显示绿点 -->
+          <svg v-if="connectionStatus === 'paired'" class="w-5 h-5 text-green-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+          <div v-else class="w-3 h-3 rounded-full bg-green-500 shrink-0"></div>
           <div>
             <p class="text-green-300 text-sm font-medium">{{ currentDevice.name }}</p>
             <p class="text-green-500/70 text-xs">{{ currentDevice.address }}</p>
@@ -300,9 +304,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onActivated, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useMobileConnection, type RemoteDevice } from '@/modules/shared/composables/useMobileConnection'
+import { wsLoadSessions } from '@/modules/shared/composables/useMobileCommands'
 import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
 import PairingInput from '@/modules/mobile/components/PairingInput.vue'
 
@@ -312,19 +317,33 @@ const connection = useMobileConnection()
 // 运行中的会话列表
 const activeSessions = ref<any[]>([])
 
-// terminal 接口（临时）
+// terminal 接口
 const terminal = {
   sessions: activeSessions,
   activeSessionId: connection.activeSessionId,
-  loadSessions: async () => { activeSessions.value = [] },
+  loadSessions: async () => {
+    try {
+      activeSessions.value = await wsLoadSessions()
+    } catch (e) {
+      console.error('[DevicesView] Failed to load sessions:', e)
+    }
+  },
   startSession: async (_id: string) => '',
-  stopSession: async (_id: string) => {},
+  stopSession: async (id: string) => {
+    try {
+      await connection.stopSession(id)
+      // 从本地列表移除
+      activeSessions.value = activeSessions.value.filter(s => s.id !== id)
+    } catch (e) {
+      console.error('[DevicesView] Failed to stop session:', e)
+    }
+  },
   enableAutoReconnect: () => {},
 }
 
 // 根据配置ID获取运行中的会话
 function getRunningSessionsByConfig(configId: string) {
-  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waiting_input')
+  return activeSessions.value.filter(s => s.config_id === configId && (s.status === 'running' || s.status === 'waiting_input'))
 }
 
 // 展开/折叠配置
@@ -337,12 +356,14 @@ function handleSessionClick(session: any) {
   connection.activeSessionId.value = session.id
   router.push({
     name: 'mobile-terminal',
-    params: { deviceId: currentDevice.value?.id },
+    params: { id: currentDevice.value?.id || 'default' },
   })
 }
 
-// 停止会话
+// 停止会话（带确认弹窗）
 async function handleStopSession(session: any) {
+  const name = session.name || session.id
+  if (!window.confirm(`确定停止会话 "${name}" 吗？`)) return
   await terminal.stopSession(session.id)
 }
 
@@ -401,10 +422,12 @@ const connectionStatusText = computed(() => {
       return '已连接，正在请求配对...'
     case 'pairing':
       return '请在桌面端查看 6 位配对码并输入'
+    case 'paired':
+      return '已认证，连接正常'
     case 'error':
       return connectionError.value || '连接失败'
     default:
-      return ''
+      return connection.connectionStatus.value === 'disconnected' ? '未连接' : ''
   }
 })
 
@@ -483,11 +506,14 @@ async function handleStartSession(config: SessionConfigSummary) {
 
   startingConfigId.value = config.id
   try {
-    const sessionId = await connection.startSession(config.id)
+    const sessionId = await connection.startSession(config.id, config.name)
     if (sessionId) {
-      // Refresh active sessions for the Sessions tab
-      await terminal.loadSessions()
       connection.activeSessionId.value = sessionId
+      // After starting, navigate to terminal view
+      router.push({
+        name: 'mobile-terminal',
+        params: { id: currentDevice.value?.id || 'default' },
+      })
     } else {
       console.error('Failed to start session: no session_id returned')
     }
@@ -497,6 +523,19 @@ async function handleStartSession(config: SessionConfigSummary) {
     startingConfigId.value = null
   }
 }
+
+// 从扫描等页面返回时重新加载连接历史
+onActivated(() => {
+  loadConnectionHistory()
+})
+
+// 从其他页面返回时自动刷新会话配置和会话
+onActivated(() => {
+  if (isConnected.value) {
+    loadSessionConfigs()
+    terminal.loadSessions()
+  }
+})
 
 onMounted(async () => {
   loadConnectionHistory()
@@ -556,6 +595,9 @@ async function handleConnectManual(address: string) {
     isPaired: false,
   }
 
+  // 关闭手动连接弹窗，后续由 PairingInput 接管
+  showManualConnect.value = false
+
   await startConnection(device)
 }
 
@@ -565,28 +607,42 @@ async function startConnection(device: RemoteDevice) {
   connectionError.value = ''
   connection.isConnecting.value = true
 
+  console.log('[DevicesView] startConnection: Step 1 connect...')
+  console.time('startConnection')
+
   try {
     // Step 1: Connect to device - 状态由后端事件驱动
     await connection.connect(device)
+    console.log('[DevicesView] startConnection: Step 1 done')
 
-    // Step 2: Try stored credentials first (for reconnection without re-pairing)
+    // Step 2: Try stored JWT token first (重连时免配对)
+    console.log('[DevicesView] startConnection: Step 2 authenticate...')
     const authenticated = await connection.authenticate()
+    console.log('[DevicesView] startConnection: Step 2 done, authenticated=', authenticated)
     if (authenticated) {
-      // Successfully reconnected, load configs
       pendingDevice.value = null
       addToHistory(`${device.address}:${device.port}`, device.name)
       await loadSessionConfigs()
       return
     }
 
-    // Step 3: Need to pair
-    await connection.requestPairing()
+    // Step 3: Need to pair - 带超时保护，避免卡住
+    console.log('[DevicesView] startConnection: Step 3 requestPairing...')
+    const pairingTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('配对请求超时，请确保桌面端正在运行')), 10000)
+    )
+    await Promise.race([
+      connection.requestPairing(),
+      pairingTimeout,
+    ])
+    console.log('[DevicesView] startConnection: Step 3 done, showPairing=true')
     showPairing.value = true
     addToHistory(`${device.address}:${device.port}`, device.name)
   } catch (error) {
     connectionError.value = String(error)
-    console.error('Connection failed:', error)
+    console.error('[DevicesView] startConnection failed:', error)
   } finally {
+    console.timeEnd('startConnection')
     connection.isConnecting.value = false
   }
 }
