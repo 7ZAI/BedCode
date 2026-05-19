@@ -54,8 +54,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, inject, type Ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted, inject, watch, type Ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { createStreamingDecoder } from '@/modules/shared/composables/useTauri'
 
 // 定义组件名称，用于 KeepAlive 缓存
 defineOptions({
@@ -64,7 +65,7 @@ defineOptions({
 
 import { useRouter, useRoute } from 'vue-router'
 import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
-import { wsLoadSessions, wsSendInput } from '@/modules/shared/composables/useMobileCommands'
+import { wsLoadSessions, wsSendInput, wsResizeTerminal } from '@/modules/shared/composables/useMobileCommands'
 import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
 import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
 
@@ -82,6 +83,15 @@ const isConnectedValue = computed(() => connection.connectionStatus.value === 'c
 
 // 输出缓冲区
 const outputBuffer = ref<string>('')
+const MAX_OUTPUT_BUFFER = 512000 // 500KB 上限，防止内存泄漏
+
+/** 安全追加输出到缓冲区，超限时从头部裁剪 */
+function appendOutput(data: string) {
+  outputBuffer.value += data
+  if (outputBuffer.value.length > MAX_OUTPUT_BUFFER) {
+    outputBuffer.value = outputBuffer.value.slice(-MAX_OUTPUT_BUFFER)
+  }
+}
 
 const terminalRef = ref<any>(null)
 
@@ -89,18 +99,35 @@ const terminalRef = ref<any>(null)
 const terminalInstance = computed(() => ({
   sendInput: async (data: string) => {
     const sessionId = connection.activeSessionId.value
-    if (!sessionId) return
+    console.log('[TerminalView] sendInput sessionId=' + sessionId + ', data_len=' + data.length + ' data="' + data.slice(0, 100) + '"')
+    if (!sessionId) { console.warn('[TerminalView] sendInput: no activeSessionId'); return }
     try {
       await wsSendInput(sessionId, data)
+      console.log('[TerminalView] sendInput OK')
     } catch (e) {
       console.error('[TerminalView] sendInput failed:', e)
     }
   },
+  sendInputWithEnter: async (data: string) => {
+    const sessionId = connection.activeSessionId.value
+    console.log('[TerminalView] sendInputWithEnter sessionId=' + sessionId + ', data_len=' + data.length + ' data="' + data.slice(0, 100) + '"')
+    if (!sessionId) { console.warn('[TerminalView] sendInputWithEnter: no activeSessionId'); return }
+    try {
+      // 一次 invoke 同时发送文本和 Enter，避免两次独立 invoke 的竞态条件
+      // 桌面端 Input handler 会先写入 data，再写入 special_key
+      await wsSendInput(sessionId, data, 'enter')
+      console.log('[TerminalView] sendInputWithEnter OK')
+    } catch (e) {
+      console.error('[TerminalView] sendInputWithEnter failed:', e)
+    }
+  },
   sendSpecialKey: async (key: string) => {
     const sessionId = connection.activeSessionId.value
-    if (!sessionId) return
+    console.log('[TerminalView] sendSpecialKey sessionId=' + sessionId + ', key=' + key)
+    if (!sessionId) { console.warn('[TerminalView] sendSpecialKey: no activeSessionId'); return }
     try {
       await wsSendInput(sessionId, '', key)
+      console.log('[TerminalView] sendSpecialKey OK')
     } catch (e) {
       console.error('[TerminalView] sendSpecialKey failed:', e)
     }
@@ -131,10 +158,13 @@ function onTerminalReady() {
   console.log('Mobile terminal ready')
 }
 
-// Terminal resize handler
+// Terminal resize handler - 将移动端真实终端尺寸同步到桌面 PTY
+// 确保 Claude Code 的输出按移动端屏幕宽度排版，避免 \r 光标定位错乱
 function handleTerminalResize(cols: number, rows: number) {
-  // TODO: 实现调整终端大小
-  console.log('Terminal resize:', cols, rows)
+  const sessionId = connection.activeSessionId.value
+  if (sessionId && cols > 0 && rows > 0) {
+    wsResizeTerminal(sessionId, cols, rows)
+  }
 }
 
 // Terminal clear handler
@@ -144,15 +174,20 @@ function onTerminalClear() {
 
 let unlistenOutput: UnlistenFn | null = null
 
-/** Base64 解码为 UTF-8 字符串（支持多字节字符） */
-function decodeBase64Utf8(base64: string): string {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
+// 流式解码器：PTY 输出每 4096 字节切一次，用 streaming 模式确保多字节
+// UTF-8 字符被切分到两个 chunk 时仍能正确解码，而非输出 U+FFFD
+const outputDecoder = createStreamingDecoder()
+
+// 断线重连后清除旧输出
+watch(() => connection.connectionStatus.value, (newStatus, oldStatus) => {
+  if ((newStatus === 'connected' || newStatus === 'paired') &&
+      (oldStatus === 'disconnected' || oldStatus === 'error' || oldStatus === undefined)) {
+    console.log('[TerminalView] Reconnected, clearing output buffer')
+    outputBuffer.value = ''
+    outputDecoder.flush()
+    terminalRef.value?.clear()
   }
-  return new TextDecoder('utf-8').decode(bytes)
-}
+})
 
 onMounted(async () => {
   // 加载会话列表以获取会话名称
@@ -168,8 +203,8 @@ onMounted(async () => {
     if (connection.activeSessionId.value && event.payload.session_id !== connection.activeSessionId.value) {
       return
     }
-    const decoded = decodeBase64Utf8(event.payload.data)
-    outputBuffer.value += decoded
+    const decoded = outputDecoder.decode(event.payload.data)
+    appendOutput(decoded)
   })
 })
 

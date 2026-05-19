@@ -77,11 +77,47 @@ src/
 
 ### Error Handling
 
-使用 `shared/error.rs` 中的统一错误类型：
+使用 `shared/system/error.rs` 中的 `AppError` 统一错误类型：
 
 ```rust
 pub type Result<T> = std::result::Result<T, AppError>;
 ```
+
+**全局机制（已启用）：**
+- **Panic Hook** (`main.rs`) — 全局 `set_hook` 捕获所有未处理 panic，输出到 stderr。**注意：** panic hook 中禁止调用 `tracing::error!`（可能因锁冲突导致死锁），只使用 `eprintln!`
+- **Error Boundary** (`shared/system/error_boundary.rs`) — `spawn_with_error_boundary()` 包装 `tokio::spawn`，后台任务 panic 时自动捕获并记录日志，不传播到整个进程
+- **anyhow::Context** — `.context()` / `.with_context()` 可在 `crate::Result` 函数中使用（自动将 `anyhow::Error` → `AppError::Internal`），为错误添加调用链上下文
+
+**错误处理规范：**
+
+```rust
+// ✅ 好：使用 typed error 保留错误类型
+Err(AppError::WebSocket("Not connected".to_string()))
+
+// ✅ 好：在关键调用链使用 anyhow::Context 添加上下文
+use anyhow::Context;
+let data = fetch_data().await
+    .with_context(|| format!("Failed to fetch data for session {}", id))
+    .map_err(|e| AppError::WebSocket(e.to_string()))?;
+
+// ✅ 好：结构化的 tracing 错误日志
+tracing::error!(
+    error = %e,
+    session_id = %session_id,
+    "Failed to write input",
+);
+
+// ✅ 好：tokio::spawn 使用 error boundary
+use crate::shared::system::error_boundary::spawn_with_error_boundary;
+spawn_with_error_boundary("task_name", async move {
+    // 可能 panic 的任务逻辑
+});
+```
+
+**禁止：**
+- 使用 `unsafe impl Send/Sync` 解决并发问题
+- 在重要路径上使用 `let _ =` 静默忽略错误（仅在断开清理等预期场景允许）
+- 无上下文的裸字符串错误：`AppError::WebSocket("failed".to_string())` — 应说明什么操作在哪失败
 
 ### Thread Safety
 
