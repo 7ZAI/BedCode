@@ -172,26 +172,36 @@ function doSwipe(e: PointerEvent) {
 }
 
 // ---------- actions ----------
-function doClear()    { store.collapse(); props.terminalRef?.value?.clear() }
-function doInput()    { store.collapse(); showInput.value = true }
-function doCtrlC()    { store.collapse(); props.terminalInstance?.sendSpecialKey?.('ctrl_c') }
-function doShortcuts(){ store.collapse(); showShortcuts.value = true }
+function doClear()    { console.log('[InputAssistant] doClear'); store.collapse(); props.terminalRef?.value?.clear() }
+function doInput()    { console.log('[InputAssistant] doInput'); store.collapse(); showInput.value = true }
+function doCtrlC()    {
+  console.log('[InputAssistant] doCtrlC, terminalInstance=', !!props.terminalInstance)
+  store.collapse(); props.terminalInstance?.sendSpecialKey?.('ctrl_c')
+}
+function doShortcuts(){ console.log('[InputAssistant] doShortcuts'); store.collapse(); showShortcuts.value = true }
 function doSettings() { store.collapse(); showSettings.value = true }
 
 function onSubmit() {
-  if (!inputText.value.trim() || !props.terminalInstance) return
-  props.terminalInstance.sendInput(inputText.value)
+  const text = inputText.value.trim()
+  console.log('[InputAssistant] onSubmit called, text="' + text + '", terminalInstance=', !!props.terminalInstance)
+  if (!text || !props.terminalInstance) return
+  props.terminalInstance.sendInput(text)
   inputText.value = ''; showInput.value = false
 }
 
 async function onExecute() {
-  if (!inputText.value.trim() || !props.terminalInstance) return
-  await props.terminalInstance.sendInput(inputText.value)
-  await props.terminalInstance.sendSpecialKey?.('enter')
+  const text = inputText.value.trim()
+  console.log('[InputAssistant] onExecute called, text="' + text + '", terminalInstance=', !!props.terminalInstance)
+  if (!text || !props.terminalInstance) return
+  // 一次发送同时携带文本和 Enter，避免两次 invoke 的竞态条件
+  // 桌面端 Input handler 按 data → special_key 顺序写入 PTY
+  await props.terminalInstance.sendInputWithEnter?.(text)
+  console.log('[InputAssistant] onExecute completed')
   inputText.value = ''; showInput.value = false
 }
 
 async function onShortcut(key: string) {
+  console.log('[InputAssistant] onShortcut called, key="' + key + '", terminalInstance=', !!props.terminalInstance)
   await props.terminalInstance?.sendSpecialKey?.(key)
 }
 

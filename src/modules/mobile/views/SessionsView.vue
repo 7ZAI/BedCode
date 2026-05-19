@@ -49,6 +49,7 @@
           :session="session"
           @click="handleSessionClick(session)"
           @stop="handleStopSession(session)"
+          @delete="handleDeleteSession(session)"
         />
       </div>
     </div>
@@ -57,6 +58,32 @@
     <div v-if="isConnected" class="px-4 py-2 bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700">
       <span class="text-gray- dark:text-dark-400 text-xs font-medium">{{ currentDeviceName }} · {{ sessions.length }} 个会话</span>
     </div>
+
+    <!-- Stop Confirmation Modal -->
+    <Modal v-model="showStopConfirm" title="确认停止会话" size="sm">
+      <p class="text-gray-600 dark:text-dark-300">
+        确定要停止会话 "<span class="text-white font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showStopConfirm = false">取消</Button>
+          <Button variant="danger" :loading="isStopping" @click="confirmStop">停止</Button>
+        </div>
+      </template>
+    </Modal>
+
+    <!-- Delete Confirmation Modal -->
+    <Modal v-model="showDeleteConfirm" title="确认删除会话" size="sm">
+      <p class="text-gray-600 dark:text-dark-300">
+        确定要删除会话 "<span class="text-white font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？此操作不可恢复。
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showDeleteConfirm = false">取消</Button>
+          <Button variant="danger" :loading="isDeleting" @click="confirmDelete">删除</Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -64,8 +91,10 @@
 import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
-import { wsLoadSessions, wsStopSession } from '@/modules/shared/composables/useMobileCommands'
+import { wsLoadSessions, wsStopSession, wsRemoveSession } from '@/modules/shared/composables/useMobileCommands'
 import SessionCard from '@/modules/mobile/components/SessionCard.vue'
+import Modal from '@/modules/shared/components/Modal.vue'
+import Button from '@/modules/shared/components/Button.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
@@ -81,6 +110,15 @@ const sessions = ref<any[]>([])
 const isLoading = ref(false)
 const isRefreshing = ref(false)
 
+// 停止确认弹窗
+const showStopConfirm = ref(false)
+const pendingSession = ref<any>(null)
+const isStopping = ref(false)
+
+// 删除确认弹窗
+const showDeleteConfirm = ref(false)
+const isDeleting = ref(false)
+
 function handleSessionClick(session: any) {
   connection.activeSessionId.value = session.id
 
@@ -90,14 +128,43 @@ function handleSessionClick(session: any) {
   })
 }
 
-async function handleStopSession(session: any) {
-  const name = session.name || session.id
-  if (!window.confirm(`确定停止会话 "${name}" 吗？`)) return
+function handleStopSession(session: any) {
+  pendingSession.value = session
+  showStopConfirm.value = true
+}
+
+async function confirmStop() {
+  if (!pendingSession.value) return
+  isStopping.value = true
   try {
-    await wsStopSession(session.id)
-    sessions.value = sessions.value.filter(s => s.id !== session.id)
+    await wsStopSession(pendingSession.value.id)
+    sessions.value = sessions.value.filter(s => s.id !== pendingSession.value.id)
+    showStopConfirm.value = false
+    pendingSession.value = null
   } catch (e) {
     console.error('[SessionsView] Failed to stop session:', e)
+  } finally {
+    isStopping.value = false
+  }
+}
+
+function handleDeleteSession(session: any) {
+  pendingSession.value = session
+  showDeleteConfirm.value = true
+}
+
+async function confirmDelete() {
+  if (!pendingSession.value) return
+  isDeleting.value = true
+  try {
+    await wsRemoveSession(pendingSession.value.id)
+    sessions.value = sessions.value.filter(s => s.id !== pendingSession.value.id)
+    showDeleteConfirm.value = false
+    pendingSession.value = null
+  } catch (e) {
+    console.error('[SessionsView] Failed to delete session:', e)
+  } finally {
+    isDeleting.value = false
   }
 }
 

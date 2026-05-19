@@ -86,7 +86,7 @@ const allShortcuts = [
   { label: 'Tab', code: 'tab', icon: '⇥' },
   { label: 'Enter', code: 'enter', icon: '↵' },
   { label: 'Esc', code: 'escape', icon: '⎋' },
-  { label: 'Del', code: 'delete', icon: '⌫' },
+  { label: 'Del', code: 'backspace', icon: '⌫' },
   { label: 'Ctrl+C', code: 'ctrl_c', icon: '⚡' },
   { label: 'Ctrl+Z', code: 'ctrl_z', icon: '↺' },
   { label: 'Ctrl+L', code: 'ctrl_l', icon: '🗑' },

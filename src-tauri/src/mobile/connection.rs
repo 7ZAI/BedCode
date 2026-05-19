@@ -2,20 +2,27 @@
 //!
 //! 连接管理 - 使用 shared WsClient 实现连接/断开/重连
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use anyhow::Context;
 use tokio::sync::{broadcast, RwLock};
 use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::shared::websocket::{
-    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsMessage,
+    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
 };
+use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
 use super::handler::{MobileEvent, MobileHandler};
 
 // Re-export ConnectionStatus for public API
 pub use crate::shared::websocket::ConnectionStatus;
+
+/// 重连配置
+const MAX_RETRY: u32 = 3;
+const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000]; // 指数退避（毫秒）
 
 /// 目标设备信息
 #[derive(Debug, Clone)]
@@ -38,6 +45,12 @@ pub struct ConnectionManager {
     handler: Arc<MobileHandler>,
     /// 事件发送器（用于内部业务逻辑监听）
     event_tx: broadcast::Sender<MobileEvent>,
+    /// 手动断开标记，用于区分意外断开（true=用户主动断开，不弹通知）
+    manual_disconnect: Arc<AtomicBool>,
+    /// 重试计数（用于重连）
+    retry_count: Arc<AtomicU32>,
+    /// 重连中标记
+    is_reconnecting: Arc<AtomicBool>,
 }
 
 impl ConnectionManager {
@@ -51,6 +64,9 @@ impl ConnectionManager {
             client: Arc::new(RwLock::new(None)),
             handler,
             event_tx,
+            manual_disconnect: Arc::new(AtomicBool::new(false)),
+            retry_count: Arc::new(AtomicU32::new(0)),
+            is_reconnecting: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -104,6 +120,9 @@ impl ConnectionManager {
             }
         }
 
+        // 重置手动断开标记（新连接）
+        self.manual_disconnect.store(false, Ordering::SeqCst);
+
         // 发射连接开始事件
         let _ = app_handle.emit("ws_connecting", serde_json::json!({
             "address": address,
@@ -147,6 +166,41 @@ impl ConnectionManager {
                 }));
                 return Err(e);
             }
+        }
+
+        // 创建连接断开监控任务
+        // 订阅 WsClientEvent，在意外断开时通知前端
+        {
+            let mut event_rx = client.subscribe();
+            let app_clone = app_handle.clone();
+            let manual_flag = self.manual_disconnect.clone();
+            spawn_with_error_boundary("connection_monitor", async move {
+                tracing::debug!("[ConnMonitor] Started monitoring connection");
+                while let Ok(event) = event_rx.recv().await {
+                    match event {
+                        WsClientEvent::Disconnected
+                        | WsClientEvent::Error { .. }
+                        | WsClientEvent::ServerClosed { .. } => {
+                            if !manual_flag.load(Ordering::SeqCst) {
+                                tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
+                                let reason = match &event {
+                                    WsClientEvent::ServerClosed { reason } => reason.clone(),
+                                    WsClientEvent::Error { message } => message.clone(),
+                                    _ => "Connection lost".to_string(),
+                                };
+                                let _ = app_clone.emit("ws_unexpected_disconnect", serde_json::json!({
+                                    "reason": reason
+                                }));
+                            } else {
+                                tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                tracing::debug!("[ConnMonitor] Stopped");
+            });
         }
 
         // 保存客户端引用
@@ -196,6 +250,8 @@ impl ConnectionManager {
 
     /// 断开连接
     pub async fn disconnect(&self) {
+        // 设置手动断开标记，阻止监控任务弹出通知
+        self.manual_disconnect.store(true, Ordering::SeqCst);
         tracing::info!("Disconnecting...");
 
         // 断开 WebSocket
@@ -210,11 +266,93 @@ impl ConnectionManager {
         *self.target.write().await = None;
     }
 
+    /// 尝试重连（最多3次，指数退避）
+    pub async fn reconnect(&self, app_handle: AppHandle, token: Option<String>) -> Result<()> {
+        let mut current_retry: u32 = 0;
+
+        while current_retry < MAX_RETRY {
+            // 检查是否已经在重连
+            if self.is_reconnecting.load(Ordering::SeqCst) {
+                tracing::info!("Already reconnecting, skip");
+                return Ok(());
+            }
+
+            self.is_reconnecting.store(true, Ordering::SeqCst);
+            self.retry_count.store(current_retry, Ordering::SeqCst);
+
+            // 发射重连开始事件
+            let _ = app_handle.emit("ws_reconnecting", serde_json::json!({
+                "retry": current_retry + 1,
+                "max_retry": MAX_RETRY
+            }));
+            tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, MAX_RETRY);
+
+            // 等待指数退避间隔（首次不等待）
+            if current_retry > 0 {
+                let delay = RETRY_DELAYS[(current_retry - 1) as usize];
+                tracing::info!("Waiting {}ms before retry...", delay);
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+            }
+
+            // 获取目标设备信息
+            let target = self.target.read().await.clone();
+            let Some(target) = target else {
+                tracing::error!("No target device for reconnect");
+                break;
+            };
+
+            // 清除旧客户端
+            *self.client.write().await = None;
+
+            // 创建新客户端
+            let config = WsClientConfig::new(&target.address, target.port);
+            let client = WsClient::new(config);
+            client.set_handler(self.handler.clone()).await;
+
+            match client.connect().await {
+                Ok(_) => {
+                    tracing::info!("Reconnect attempt {} succeeded", current_retry + 1);
+
+                    // 保存新客户端
+                    *self.client.write().await = Some(client);
+
+                    // 重连成功，重置状态
+                    self.is_reconnecting.store(false, Ordering::SeqCst);
+                    self.retry_count.store(0, Ordering::SeqCst);
+
+                    let _ = app_handle.emit("ws_reconnected", ());
+                    tracing::info!("Reconnect successful!");
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!("Reconnect attempt {} failed: {}", current_retry + 1, e);
+                    current_retry += 1;
+                }
+            }
+        }
+
+        // 重连失败
+        self.is_reconnecting.store(false, Ordering::SeqCst);
+        let _ = app_handle.emit("ws_reconnect_failed", serde_json::json!({
+            "reason": "Max retries exceeded"
+        }));
+        tracing::error!("Reconnect failed after {} attempts", MAX_RETRY);
+
+        Err(crate::AppError::WebSocket("Reconnect failed".to_string()))
+    }
+
     /// 发送消息
     pub async fn send(&self, message: &WsMessage) -> Result<()> {
+        let msg_preview = message.to_json().unwrap_or_default();
+        tracing::info!("[ConnectionManager] send() message_type={:?}, preview={}",
+            message.message_type(),
+            &msg_preview[..msg_preview.len().min(200)]);
         if let Some(client) = self.client.read().await.as_ref() {
-            client.send(message).await
+            let result = client.send(message).await;
+            tracing::info!("[ConnectionManager] send() result: {:?}", result.as_ref().map(|_| "OK").unwrap_or(&"ERR"));
+            result
         } else {
+            tracing::error!("[ConnectionManager] send() client is None!");
             Err(crate::AppError::WebSocket("Not connected".to_string()))
         }
     }
@@ -224,6 +362,8 @@ impl ConnectionManager {
         if let Some(client) = self.client.read().await.as_ref() {
             tracing::info!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
             client.send_and_wait(message, timeout).await
+                .with_context(|| format!("send_and_wait timeout={}s", timeout.as_secs()))
+                .map_err(|e| crate::AppError::WebSocket(e.to_string()))
         } else {
             tracing::error!("[ConnectionManager] send_and_wait: client is None!");
             Err(crate::AppError::WebSocket("Not connected".to_string()))
@@ -254,6 +394,9 @@ impl Default for ConnectionManager {
             client: Arc::new(RwLock::new(None)),
             handler,
             event_tx,
+            manual_disconnect: Arc::new(AtomicBool::new(false)),
+            retry_count: Arc::new(AtomicU32::new(0)),
+            is_reconnecting: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -265,6 +408,9 @@ impl Clone for ConnectionManager {
             client: self.client.clone(),
             handler: self.handler.clone(),
             event_tx: self.event_tx.clone(),
+            manual_disconnect: self.manual_disconnect.clone(),
+            retry_count: self.retry_count.clone(),
+            is_reconnecting: self.is_reconnecting.clone(),
         }
     }
 }

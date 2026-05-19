@@ -78,6 +78,13 @@ export async function wsIsConnected(): Promise<boolean> {
   return await invoke('ws_is_connected')
 }
 
+/**
+ * 重新连接（断线重连）
+ */
+export async function wsReconnect(sessionToken?: string): Promise<void> {
+  return await invoke('ws_reconnect', { sessionToken: sessionToken || null })
+}
+
 // ==================== Auth Commands ====================
 
 /**
@@ -139,9 +146,17 @@ export async function wsStopSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * 删除会话
+ */
+export async function wsRemoveSession(sessionId: string): Promise<void> {
+  return await invoke('ws_remove_session', { sessionId })
+}
+
+/**
  * 发送输入到会话
  */
 export async function wsSendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
+  console.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
   return await invoke('ws_send_input', { sessionId, data, specialKey })
 }
 
@@ -214,6 +229,7 @@ let unlistenPairingRequest: UnlistenFn | null = null
 let unlistenPairingVerified: UnlistenFn | null = null
 let unlistenError: UnlistenFn | null = null
 let unlistenServerClosed: UnlistenFn | null = null
+let unlistenUnexpectedDisconnect: UnlistenFn | null = null
 let unlistenOutput: UnlistenFn | null = null
 
 /**
@@ -230,6 +246,7 @@ export async function initMobileEventListeners(callbacks: {
   onPairingVerified?: () => void
   onError?: (message: string) => void
   onServerClosed?: (reason: string) => void
+  onUnexpectedDisconnect?: (reason: string) => void
   onOutput?: (data: any) => void
 }) {
   if (callbacks.onConnecting) {
@@ -268,6 +285,11 @@ export async function initMobileEventListeners(callbacks: {
       callbacks.onServerClosed?.(event.payload.reason)
     })
   }
+  if (callbacks.onUnexpectedDisconnect) {
+    unlistenUnexpectedDisconnect = await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
+      callbacks.onUnexpectedDisconnect?.(event.payload.reason)
+    })
+  }
   if (callbacks.onOutput) {
     unlistenOutput = await listen('ws_output', callbacks.onOutput)
   }
@@ -287,6 +309,7 @@ export function cleanupMobileEventListeners() {
   unlistenPairingVerified?.()
   unlistenError?.()
   unlistenServerClosed?.()
+  unlistenUnexpectedDisconnect?.()
   unlistenOutput?.()
 }
 

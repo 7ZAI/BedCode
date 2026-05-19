@@ -3,11 +3,14 @@
 //! 移动端连接管理 - 基于 useMobileCommands 的高级封装
 
 import { ref, computed, readonly } from 'vue'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { useToast } from '@/modules/shared/composables/useToast'
 import {
   wsConnect,
   wsDisconnect,
   wsGetStatus,
   wsIsConnected,
+  wsReconnect,
   wsAuthenticate,
   wsRequestPairing,
   wsVerifyPairingCode,
@@ -38,6 +41,9 @@ const isConnecting = ref(false)
 // 连接超时控制
 let connectionTimeout: ReturnType<typeof setTimeout> | null = null
 const CONNECTION_TIMEOUT_MS = 15000 // 15秒超时
+
+// 意外断开监听器
+let unlistenUnexpectedDisconnect: UnlistenFn | null = null
 
 // 认证凭据
 const authCredentials = ref<AuthCredentials | null>(null)
@@ -139,6 +145,21 @@ async function init() {
       console.log('[MobileConnection] Server closed:', reason)
     },
   })
+
+  // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射）
+  unlistenUnexpectedDisconnect = await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
+    console.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
+    connectionStatus.value = 'disconnected'
+    connectionError.value = event.payload.reason
+    isConnecting.value = false
+
+    // 弹出 Toast 通知（手动断开不会触发此事件）
+    const toast = useToast()
+    toast.error(`连接已断开: ${event.payload.reason}`, 5000)
+
+    // 触发重连
+    handleUnexpectedDisconnect(event.payload.reason)
+  })
 }
 
 // 模块加载时立即初始化，确保事件监听尽早注册
@@ -202,6 +223,36 @@ function clearConnectionTimeout() {
   if (connectionTimeout) {
     clearTimeout(connectionTimeout)
     connectionTimeout = null
+  }
+}
+
+/**
+ * 处理意外断开，尝试重连
+ */
+async function handleUnexpectedDisconnect(reason: string) {
+  console.log('[MobileConnection] Handling unexpected disconnect, reason:', reason)
+
+  // 从 localStorage 读取凭据
+  const creds = loadAuthCredentials()
+  if (!creds) {
+    console.log('[MobileConnection] No credentials found, cannot reconnect')
+    return
+  }
+
+  // 检查是否有目标设备
+  if (!currentDevice.value) {
+    console.log('[MobileConnection] No target device, cannot reconnect')
+    return
+  }
+
+  console.log('[MobileConnection] Starting reconnect with token, length:', creds.sessionToken.length)
+
+  try {
+    await wsReconnect(creds.sessionToken)
+    console.log('[MobileConnection] Reconnect initiated successfully')
+  } catch (error) {
+    console.error('[MobileConnection] Reconnect failed:', error)
+    connectionError.value = `重连失败: ${error}`
   }
 }
 

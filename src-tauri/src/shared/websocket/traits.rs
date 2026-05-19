@@ -389,3 +389,32 @@ impl SendInterceptor for MetricsInterceptor {
         "MetricsInterceptor"
     }
 }
+
+/// 响应处理器 trait
+/// 用于处理需要响应的 WebSocket 消息
+pub trait ResponseHandler: Send + Sync {
+    /// 处理需要响应的消息
+    /// - ws_message: 原始 WebSocket 消息
+    /// - business_message: 解析后的业务消息
+    /// 返回 None 表示使用默认响应，返回 Some(WsResponse) 使用自定义响应
+    fn handle_response(
+        &self,
+        ws_message: &WsMessage,
+        business_message: &crate::shared::enums::message::Message,
+    ) -> Option<crate::shared::websocket::message::WsResponse>;
+}
+
+/// 默认响应处理器
+/// 返回成功响应（code=0, message="OK"）
+pub struct DefaultResponseHandler;
+
+impl ResponseHandler for DefaultResponseHandler {
+    fn handle_response(
+        &self,
+        _ws_message: &WsMessage,
+        _business_message: &crate::shared::enums::message::Message,
+    ) -> Option<crate::shared::websocket::message::WsResponse> {
+        // 默认返回成功响应
+        Some(crate::shared::websocket::message::WsResponse::success())
+    }
+}

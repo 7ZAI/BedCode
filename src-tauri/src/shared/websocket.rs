@@ -23,7 +23,7 @@ pub use client::{WsClient, WsClientConfig, WsClientEvent, ConnectionStatus};
 pub use codec::{JsonCodec, MessageCodec};
 pub use events::WsServerEventBuilder;
 pub use heartbeat::{HeartbeatConfig, HeartbeatEvent, HeartbeatManager, HeartbeatSender};
-pub use message::{BinaryPayload, TextPayload, WsMessage, WsMessageType};
+pub use message::{BinaryPayload, TextPayload, WsMessage, WsMessageType, WsResponse};
 pub use server::{
     ClientInfo, HandlerResult, MessageHandler, WsServer,
     WsServerConfig, WsServerEvent,
@@ -32,4 +32,5 @@ pub use traits::{
     ClientInfoTrait, DefaultClientInfo, HandlerResult as TraitHandlerResult,
     ClientMessageHandler, NoopHandler, SendStrategy, DefaultSendStrategy, RetrySendStrategy,
     SendInterceptor, LoggingInterceptor, MetricsInterceptor,
+    ResponseHandler, DefaultResponseHandler,
 };

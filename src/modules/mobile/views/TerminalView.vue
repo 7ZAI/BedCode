@@ -38,9 +38,11 @@
       <MobileTerminal
         ref="terminalRef"
         :output="outputBuffer"
+        :rendered-index="renderedIndex"
         @ready="onTerminalReady"
         @clear="onTerminalClear"
         @resize="handleTerminalResize"
+        @activated="onTerminalActivated"
       />
     </div>
 
@@ -85,11 +87,19 @@ const isConnectedValue = computed(() => connection.connectionStatus.value === 'c
 const outputBuffer = ref<string>('')
 const MAX_OUTPUT_BUFFER = 512000 // 500KB 上限，防止内存泄漏
 
+// 跟踪终端已渲染的输出索引，用于增量写入
+// 由父组件完全控制，避免子组件索引不同步问题
+const renderedIndex = ref(0)
+
 /** 安全追加输出到缓冲区，超限时从头部裁剪 */
 function appendOutput(data: string) {
   outputBuffer.value += data
+  // 更新已渲染索引为当前缓冲区长度
+  renderedIndex.value = outputBuffer.value.length
   if (outputBuffer.value.length > MAX_OUTPUT_BUFFER) {
     outputBuffer.value = outputBuffer.value.slice(-MAX_OUTPUT_BUFFER)
+    // 缓冲区裁剪后，需要重置 renderedIndex
+    renderedIndex.value = outputBuffer.value.length
   }
 }
 
@@ -150,12 +160,15 @@ const sessionName = computed(() => {
 // 清空终端
 function handleClear() {
   outputBuffer.value = ''
+  renderedIndex.value = 0
   terminalRef.value?.clear()
 }
 
 // Terminal ready handler
 function onTerminalReady() {
   console.log('Mobile terminal ready')
+  // 终端准备好后，同步当前已渲染的索引
+  renderedIndex.value = outputBuffer.value.length
 }
 
 // Terminal resize handler - 将移动端真实终端尺寸同步到桌面 PTY
@@ -170,6 +183,15 @@ function handleTerminalResize(cols: number, rows: number) {
 // Terminal clear handler
 function onTerminalClear() {
   outputBuffer.value = ''
+  renderedIndex.value = 0
+}
+
+// KeepAlive 恢复时触发，重置渲染��引避免重复显示
+function onTerminalActivated() {
+  console.log('[TerminalView] onTerminalActivated, resetting renderedIndex')
+  renderedIndex.value = 0
+  // 同时清空终端显示
+  terminalRef.value?.clear()
 }
 
 let unlistenOutput: UnlistenFn | null = null
@@ -184,6 +206,7 @@ watch(() => connection.connectionStatus.value, (newStatus, oldStatus) => {
       (oldStatus === 'disconnected' || oldStatus === 'error' || oldStatus === undefined)) {
     console.log('[TerminalView] Reconnected, clearing output buffer')
     outputBuffer.value = ''
+    renderedIndex.value = 0
     outputDecoder.flush()
     terminalRef.value?.clear()
   }

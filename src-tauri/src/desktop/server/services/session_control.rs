@@ -149,9 +149,17 @@ pub async fn handle_control(
             }))
         }
 
-        ControlAction::ResizeSession { session_id: _, cols, rows } => {
-            // 只更新客户端的终端尺寸，不再修改全局 PTY 尺寸
-            // 这样桌面端和移动端可以各自保持独立的终端尺寸
+        ControlAction::ResizeSession { session_id, cols, rows } => {
+            // 更新 PTY 尺寸，使输出按移动端实际屏幕宽度排版
+            //
+            // 桌面端 PTY 的尺寸由最后一个调整尺寸的客户端决定。
+            // 如果桌面端和移动端同时使用，后调整的一方会覆盖前者的设置。
+            // 这是有意为之：PTY 只能有一个尺寸，输出格式必须匹配实际渲染端。
+            if let Err(e) = session_manager.resize_session(&session_id, cols, rows).await {
+                tracing::warn!("Failed to resize PTY session: {}", e);
+            }
+
+            // 同时更新客户端的终端尺寸记录（用于后续可能的 per-client 渲染）
             {
                 let mut clients = clients.write().await;
                 if let Some(client) = clients.get_mut(&addr) {

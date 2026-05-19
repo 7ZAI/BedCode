@@ -26,6 +26,9 @@ pub enum WsMessage {
     Text {
         #[serde(default = "generate_message_id")]
         message_id: String,
+        /// 是否需要服务端响应
+        #[serde(default)]
+        expect_response: bool,
         timestamp: i64,
         payload: TextPayload,
     },
@@ -88,6 +91,31 @@ impl WsMessage {
     pub fn text(content: impl Into<String>) -> Self {
         WsMessage::Text {
             message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            payload: TextPayload {
+                content: content.into(),
+            },
+        }
+    }
+
+    /// 创建文本消息（可配置是否需要响应）
+    pub fn text_with_response(content: impl Into<String>, expect_response: bool) -> Self {
+        WsMessage::Text {
+            message_id: generate_message_id(),
+            expect_response,
+            timestamp: Utc::now().timestamp_millis(),
+            payload: TextPayload {
+                content: content.into(),
+            },
+        }
+    }
+
+    /// 创建带指定 message_id 的文本消息
+    pub fn text_with_id(content: impl Into<String>, message_id: String, expect_response: bool) -> Self {
+        WsMessage::Text {
+            message_id,
+            expect_response,
             timestamp: Utc::now().timestamp_millis(),
             payload: TextPayload {
                 content: content.into(),
@@ -186,6 +214,14 @@ impl WsMessage {
         }
     }
 
+    /// 获取 expect_response 标记
+    pub fn expect_response(&self) -> bool {
+        match self {
+            WsMessage::Text { expect_response, .. } => *expect_response,
+            _ => false,
+        }
+    }
+
     /// 序列化为 JSON 字符串
     pub fn to_json(&self) -> crate::Result<String> {
         Ok(serde_json::to_string(self)?)
@@ -250,6 +286,47 @@ impl std::fmt::Display for WsMessageType {
             WsMessageType::Error => write!(f, "error"),
             WsMessageType::Close => write!(f, "close"),
             WsMessageType::Ack => write!(f, "ack"),
+        }
+    }
+}
+
+/// 标准响应结构
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WsResponse {
+    /// 响应码：0=成功，非0=失败（如 1=参数错误, -1=通用错误）
+    pub code: i32,
+    /// 响应描述
+    pub message: String,
+    /// 可选响应数据
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+impl WsResponse {
+    /// 创建成功响应
+    pub fn success() -> Self {
+        Self {
+            code: 0,
+            message: "OK".to_string(),
+            data: None,
+        }
+    }
+
+    /// 创建带数据的成功响应
+    pub fn success_with_data(data: impl Into<serde_json::Value>) -> Self {
+        Self {
+            code: 0,
+            message: "OK".to_string(),
+            data: Some(data.into()),
+        }
+    }
+
+    /// 创建错误响应
+    pub fn error(code: i32, message: &str) -> Self {
+        Self {
+            code,
+            message: message.to_string(),
+            data: None,
         }
     }
 }

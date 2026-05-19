@@ -305,10 +305,13 @@ impl BusinessMessageHandler {
                 payload,
                 ..
             } => {
+                tracing::info!("[BusinessHandler] Input message received: session_id={}, data_len={}, special_key={:?}",
+                    session_id, payload.data.len(), payload.special_key);
                 if let Some(ref sm) = self.session_manager {
                     if !payload.data.is_empty() {
+                        tracing::debug!("[BusinessHandler] writing data to session {}", session_id);
                         if let Err(e) = sm.write_input(&session_id, &payload.data).await {
-                            tracing::error!("Failed to write input to session {}: {}", session_id, e);
+                            tracing::error!("[BusinessHandler] Failed to write input to session {}: {}", session_id, e);
                         }
                     }
                     if let Some(ref key) = payload.special_key {
@@ -318,6 +321,7 @@ impl BusinessMessageHandler {
                             crate::shared::enums::SpecialKey::Escape => "\x1b",
                             crate::shared::enums::SpecialKey::CtrlC => "\x03",
                             crate::shared::enums::SpecialKey::CtrlD => "\x04",
+                            crate::shared::enums::SpecialKey::CtrlL => "\x0c",
                             crate::shared::enums::SpecialKey::CtrlZ => "\x1a",
                             crate::shared::enums::SpecialKey::ArrowUp => "\x1b[A",
                             crate::shared::enums::SpecialKey::ArrowDown => "\x1b[B",
@@ -325,12 +329,24 @@ impl BusinessMessageHandler {
                             crate::shared::enums::SpecialKey::ArrowRight => "\x1b[C",
                             crate::shared::enums::SpecialKey::Backspace => "\x7f",
                         };
+                        tracing::debug!("[BusinessHandler] writing special_key key={:?} bytes={:?}", key, key_bytes);
                         if let Err(e) = sm.write_input(&session_id, key_bytes).await {
-                            tracing::error!("Failed to write special key to session {}: {}", session_id, e);
+                            tracing::error!("[BusinessHandler] Failed to write special key to session {}: {}", session_id, e);
                         }
                     }
+                } else {
+                    tracing::warn!("[BusinessHandler] session_manager is None, cannot handle Input message for session {}", session_id);
                 }
-                Ok(None)
+                // 返回 Input 确认响应，让 send_and_wait 能收到匹配的 ACK
+                Ok(Some(BusinessMessage::Input {
+                    message_id: String::new(), // 会被 websocket_manager.rs 替换为原始 message_id
+                    session_id: session_id.clone(),
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                    payload: crate::shared::enums::message::InputPayload {
+                        data: String::new(),
+                        special_key: None,
+                    },
+                }))
             }
             BusinessMessage::Output { .. } => {
                 // 服务端不需要处理 Output 消息

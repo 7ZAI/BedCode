@@ -91,6 +91,9 @@ pub enum Message {
     /// 心跳消息 (双向)
     #[serde(rename = "heartbeat")]
     Heartbeat {
+        /// Unique message ID for request-response tracking
+        #[serde(default = "generate_message_id")]
+        message_id: String,
         timestamp: i64,
     },
 
@@ -190,6 +193,7 @@ impl Message {
     /// 创建心跳消息
     pub fn heartbeat() -> Self {
         Message::Heartbeat {
+            message_id: generate_message_id(),
             timestamp: Utc::now().timestamp_millis(),
         }
     }
@@ -227,7 +231,7 @@ impl Message {
             Message::Auth { message_id, .. } => Some(message_id),
             Message::Control { message_id, .. } => Some(message_id),
             Message::Error { message_id, .. } => message_id.as_deref(),
-            Message::Heartbeat { .. } => None,
+            Message::Heartbeat { message_id, .. } => Some(message_id),
             Message::ServerClosed { .. } => None,
             Message::ClientDisconnected { .. } => None,
             Message::SessionEvent { .. } => None,

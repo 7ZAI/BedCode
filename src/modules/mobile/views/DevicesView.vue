@@ -300,6 +300,19 @@
       :error="pairingError"
       @submit="handlePairingSubmit"
     />
+
+    <!-- Stop Confirmation Modal -->
+    <Modal v-model="showStopConfirm" title="确认停止会话" size="sm">
+      <p class="text-gray-600 dark:text-dark-300">
+        确定要停止会话 "<span class="text-white font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showStopConfirm = false">取消</Button>
+          <Button variant="danger" :loading="isStopping" @click="confirmStop">停止</Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -310,6 +323,8 @@ import { useMobileConnection, type RemoteDevice } from '@/modules/shared/composa
 import { wsLoadSessions } from '@/modules/shared/composables/useMobileCommands'
 import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
 import PairingInput from '@/modules/mobile/components/PairingInput.vue'
+import Modal from '@/modules/shared/components/Modal.vue'
+import Button from '@/modules/shared/components/Button.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
@@ -361,10 +376,27 @@ function handleSessionClick(session: any) {
 }
 
 // 停止会话（带确认弹窗）
-async function handleStopSession(session: any) {
-  const name = session.name || session.id
-  if (!window.confirm(`确定停止会话 "${name}" 吗？`)) return
-  await terminal.stopSession(session.id)
+const showStopConfirm = ref(false)
+const pendingSession = ref<any>(null)
+const isStopping = ref(false)
+
+function handleStopSession(session: any) {
+  pendingSession.value = session
+  showStopConfirm.value = true
+}
+
+async function confirmStop() {
+  if (!pendingSession.value) return
+  isStopping.value = true
+  try {
+    await terminal.stopSession(pendingSession.value.id)
+    showStopConfirm.value = false
+    pendingSession.value = null
+  } catch (e) {
+    console.error('[DevicesView] Failed to stop session:', e)
+  } finally {
+    isStopping.value = false
+  }
 }
 
 const showManualConnect = ref(false)

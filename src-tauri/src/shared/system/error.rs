@@ -82,3 +82,13 @@ impl From<keyring::Error> for AppError {
         AppError::Keyring(e.to_string())
     }
 }
+
+/// 允许在 crate::Result 函数中使用 anyhow::Context
+///
+/// 使用方式：在 Result<crate::AppError> 上调用 .context() / .with_context()
+/// 后，通过 ? 运算符自动转换为 AppError::Internal（保留完整错误链）
+impl From<anyhow::Error> for AppError {
+    fn from(e: anyhow::Error) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}

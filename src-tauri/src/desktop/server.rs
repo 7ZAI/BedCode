@@ -48,6 +48,7 @@ impl WebSocketServer {
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            response_handler: None,
         };
 
         let ws_server = WsServer::new(config);

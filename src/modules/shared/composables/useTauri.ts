@@ -292,13 +292,15 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
   const output = ref<string[]>([])
   const isWaiting = ref(false)
   let unlisten: (() => void) | null = null
+  // 流式解码器：避免多字节字符被 PTY 分片读取时损坏
+  const decoder = createStreamingDecoder()
 
   async function startListening() {
     unlisten = await listen<PtyOutputEvent>('pty-output', (event) => {
       const sid = typeof sessionId === 'string' ? sessionId : sessionId.value
 
       if (!sid || event.payload.sessionId === sid) {
-        const data = decodeBase64Utf8(event.payload.data)
+        const data = decoder.decode(event.payload.data)
 
         // 写入输出缓冲区（桌面端 xterm.js 通过 watcher 增量读取）
         // 注意：不清空/裁剪数组，否则 TerminalPreview 的 lastOutputIndex 会失效
@@ -521,6 +523,35 @@ function decodeBase64Utf8(base64: string): string {
     bytes[i] = binary.charCodeAt(i)
   }
   return new TextDecoder('utf-8').decode(bytes)
+}
+
+/**
+ * 创建流式 Base64 → UTF-8 解码器
+ *
+ * PTY 输出每次读取 4096 字节，如果一个多字节 UTF-8 字符被切分到两个 chunk 中，
+ * 普通的 TextDecoder.decode() 会产生 U+FFFD 替换字符，损坏输出。
+ *
+ * 使用 {stream: true} 让解码器在内部缓存不完整的字节序列，等后续 chunk 到达后
+ * 再组合成完整的字符，保证多字节字符的正确渲染。
+ */
+export function createStreamingDecoder() {
+  const decoder = new TextDecoder('utf-8', { fatal: false })
+
+  return {
+    /** 解码一段 Base64 数据，内部缓存不完整的 UTF-8 序列 */
+    decode(base64: string): string {
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      return decoder.decode(bytes, { stream: true })
+    },
+    /** 刷新解码器缓冲区，返回剩余的未完成字符 */
+    flush(): string {
+      return decoder.decode(new Uint8Array(0), { stream: false })
+    },
+  }
 }
 
 function detectWaitingInput(text: string): boolean {

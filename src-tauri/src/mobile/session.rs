@@ -83,7 +83,12 @@ impl SessionManager {
             tracing::info!("[start_session] response content: {}", &text_payload.content[..text_payload.content.len().min(200)]);
             if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
                 if let Some(session_id) = inner.get("session_id").and_then(|s| s.as_str()) {
-                    let name = session_name.unwrap_or(&format!("Session-{}", &session_id[..8])).to_string();
+                    let name = session_name
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| {
+                            let short_id = if session_id.len() > 8 { &session_id[..8] } else { session_id };
+                            format!("Session-{}", short_id)
+                        });
                     let session = SessionInfo {
                         id: session_id.to_string(),
                         name,
@@ -112,14 +117,89 @@ impl SessionManager {
 
     /// 停止会话
     pub async fn stop_session(&self, session_id: &str) -> Result<()> {
-        // 标记会话为已停止
+        tracing::info!("[stop_session] Sending StopSession request for session_id={}", session_id);
+
+        // 通过 WebSocket 发送 StopSession 控制消息到桌面端
+        // 让桌面端实际终止 PTY 进程
+        let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+            "type": "control",
+            "message_id": uuid::Uuid::new_v4().to_string(),
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+            "payload": {
+                "action": {
+                    "type": "stop_session",
+                    "session_id": session_id
+                }
+            }
+        })).unwrap());
+
+        match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
+            Ok(_) => {
+                tracing::info!("[stop_session] Desktop confirmed session stopped: {}", session_id);
+            }
+            Err(e) => {
+                tracing::warn!("[stop_session] Desktop stop request failed (session may already be stopped): {}", e);
+            }
+        }
+
+        // 标记会话为已停止（本地状态）
         if let Some(ref mut session) = *self.active_session.write().await {
             if session.id == session_id {
                 session.status = SessionStatus::Stopped;
             }
         }
 
-        tracing::info!("Session stopped: {}", session_id);
+        // 从本地会话列表中移除
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.retain(|s| s.id != session_id);
+        }
+
+        tracing::info!("[stop_session] Session stopped: {}", session_id);
+        Ok(())
+    }
+
+    /// 删除会话
+    pub async fn remove_session(&self, session_id: &str) -> Result<()> {
+        tracing::info!("[remove_session] Sending RemoveSession request for session_id={}", session_id);
+
+        // 通过 WebSocket 发送 RemoveSession 控制消息到桌面端
+        // 让桌面端实际删除会话
+        let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+            "type": "control",
+            "message_id": uuid::Uuid::new_v4().to_string(),
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+            "payload": {
+                "action": {
+                    "type": "remove_session",
+                    "session_id": session_id
+                }
+            }
+        })).unwrap());
+
+        match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
+            Ok(_) => {
+                tracing::info!("[remove_session] Desktop confirmed session removed: {}", session_id);
+            }
+            Err(e) => {
+                tracing::warn!("[remove_session] Desktop remove request failed: {}", e);
+            }
+        }
+
+        // 从本地会话列表中移除（不等待桌面端响应，因为桌面端可能已经删除了）
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.retain(|s| s.id != session_id);
+        }
+
+        // 如果是活跃会话，也清除
+        if let Some(ref mut session) = *self.active_session.write().await {
+            if session.id == session_id {
+                *self.active_session.write().await = None;
+            }
+        }
+
+        tracing::info!("[remove_session] Session removed from local list: {}", session_id);
         Ok(())
     }
 

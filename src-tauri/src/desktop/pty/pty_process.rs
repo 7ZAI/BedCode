@@ -419,20 +419,26 @@ impl PtySession {
     pub async fn write(&self, data: &[u8]) -> Result<()> {
         let mut state = self.state.lock().await;
         let writer = state.writer.as_mut()
-            .ok_or_else(|| crate::AppError::Pty("Writer not available".to_string()))?;
+            .ok_or_else(|| {
+                tracing::error!("[PtyProcess] write: writer not available");
+                crate::AppError::Pty("Writer not available".to_string())
+            })?;
 
         writer.write_all(data)?;
         writer.flush()?;
+        tracing::debug!("[PtyProcess] wrote {} bytes to PTY", data.len());
         Ok(())
     }
 
     /// 写入字符串
     pub async fn write_str(&self, text: &str) -> Result<()> {
+        tracing::debug!("[PtyProcess] write_str: len={}, preview={:?}", text.len(), &text[..text.len().min(50)]);
         self.write(text.as_bytes()).await
     }
 
     /// 发送特殊键
     pub async fn send_special_key(&self, key: &str) -> Result<()> {
+        tracing::debug!("[PtyProcess] send_special_key: key={}", key);
         let sequence = match key.to_lowercase().as_str() {
             "enter" => "\r",
             "tab" => "\t",
@@ -451,9 +457,13 @@ impl PtySession {
             "arrow_down" | "down" => "\x1b[B",
             "arrow_right" | "right" => "\x1b[C",
             "arrow_left" | "left" => "\x1b[D",
-            _ => return Err(crate::AppError::InvalidInput(format!("Unknown special key: {}", key))),
+            _ => {
+                tracing::error!("[PtyProcess] unknown special key: {}", key);
+                return Err(crate::AppError::InvalidInput(format!("Unknown special key: {}", key)))
+            },
         };
 
+        tracing::debug!("[PtyProcess] sending special_key {} -> sequence={:?}", key, sequence);
         self.write(sequence.as_bytes()).await
     }
 

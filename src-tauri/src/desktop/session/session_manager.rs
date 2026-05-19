@@ -391,10 +391,15 @@ impl SessionManager {
 
     /// 向会话写入输入
     pub async fn write_input(&self, session_id: &str, data: &str) -> Result<()> {
+        tracing::info!("[SessionManager] write_input session_id={}, data_len={}, data={:?}",
+            session_id, data.len(), &data[..data.len().min(50)]);
         let sessions = self.pty_sessions.read().await;
         let session = sessions
             .get(session_id)
-            .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
+            .ok_or_else(|| {
+                tracing::error!("[SessionManager] write_input: session not found: {}", session_id);
+                crate::AppError::NotFound(format!("Session not found: {}", session_id))
+            })?;
 
         session.write_str(data).await?;
 
@@ -403,17 +408,23 @@ impl SessionManager {
             info.status = super::SessionStatus::Running;
         }
 
+        tracing::info!("[SessionManager] write_input OK session_id={}", session_id);
         Ok(())
     }
 
     /// 发送特殊键
     pub async fn send_special_key(&self, session_id: &str, key: &str) -> Result<()> {
+        tracing::info!("[SessionManager] send_special_key session_id={}, key={:?}", session_id, key);
         let sessions = self.pty_sessions.read().await;
         let session = sessions
             .get(session_id)
-            .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
+            .ok_or_else(|| {
+                tracing::error!("[SessionManager] send_special_key: session not found: {}", session_id);
+                crate::AppError::NotFound(format!("Session not found: {}", session_id))
+            })?;
 
         session.send_special_key(key).await?;
+        tracing::info!("[SessionManager] send_special_key OK session_id={}", session_id);
         Ok(())
     }
 

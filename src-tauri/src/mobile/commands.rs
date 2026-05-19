@@ -9,6 +9,7 @@
 //! - ws_send_with_response: 发送消息并等待响应
 
 use std::sync::Arc;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tracing;
@@ -19,6 +20,7 @@ use crate::mobile::{
     SessionInfo, SessionManager,
     MobileEvent,
 };
+use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::shared::websocket::WsMessage;
 
 // ==================== Singleton Managers ====================
@@ -89,7 +91,7 @@ pub async fn ws_connect(
         let conn_fwd = get_connection_manager();
         let mut event_rx = conn_fwd.handler().subscribe();
         let app_clone = app_handle.clone();
-        tokio::spawn(async move {
+        spawn_with_error_boundary("output_forwarder", async move {
             tracing::info!("[OutputForwarder] Started forwarding output events");
             while let Ok(event) = event_rx.recv().await {
                 if let MobileEvent::Output { session_id, data, is_waiting } = event {
@@ -166,6 +168,28 @@ pub async fn ws_get_status() -> Result<String> {
 pub async fn ws_is_connected() -> Result<bool> {
     let conn = get_connection_manager();
     Ok(conn.is_connected().await)
+}
+
+// ==================== Reconnection Commands ====================
+
+/// 重新连接（断线重连）
+#[tauri::command]
+pub async fn ws_reconnect(
+    app_handle: AppHandle,
+    session_token: Option<String>,
+) -> Result<()> {
+    tracing::info!("[ws_reconnect] session_token: {:?}", session_token.as_ref().map(|t| format!("len={}", t.len())));
+
+    let manager = get_connection_manager();
+
+    // 检查是否已连接
+    if manager.is_connected().await {
+        tracing::info!("Already connected, skipping reconnect");
+        return Ok(());
+    }
+
+    // 调用重连
+    manager.reconnect(app_handle, session_token).await
 }
 
 // ==================== Auth Commands ====================
@@ -312,25 +336,51 @@ pub async fn ws_stop_session(session_id: String) -> Result<()> {
     session_mgr.stop_session(&session_id).await
 }
 
+/// 删除会话
+#[tauri::command]
+pub async fn ws_remove_session(session_id: String) -> Result<()> {
+    let session_mgr = get_session_manager();
+    session_mgr.remove_session(&session_id).await
+}
+
 /// 发送输入到会话
 #[tauri::command]
 pub async fn ws_send_input(session_id: String, data: String, special_key: Option<String>) -> Result<()> {
     tracing::info!("[ws_send_input] session_id={}, data_len={}, has_special_key={}",
         session_id, data.len(), special_key.is_some());
     let conn = get_connection_manager();
+
+    // 裁剪尾部换行，避免 data 末尾已含换行时与 special_key=Enter 重复执行
+    let trimmed_data = if special_key.as_deref() == Some("enter") {
+        data.trim_end_matches('\n').trim_end_matches('\r').to_string()
+    } else {
+        data
+    };
+
     let payload = serde_json::json!({
         "type": "input",
         "message_id": uuid::Uuid::new_v4().to_string(),
         "session_id": session_id,
         "timestamp": chrono::Utc::now().timestamp_millis(),
         "payload": {
-            "data": data,
+            "data": trimmed_data,
             "special_key": special_key,
         },
     });
-    tracing::info!("[ws_send_input] sending message: {}", &serde_json::to_string(&payload).unwrap_or_default()[..200]);
+    let msg_json = serde_json::to_string(&payload).unwrap_or_default();
+    let preview_len = msg_json.len().min(200);
+    tracing::info!("[ws_send_input] sending message: {}", &msg_json[..preview_len]);
     let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&payload).unwrap());
-    conn.send(&message).await
+
+    // 使用 send_and_wait 等待桌面端确认，确保输入已送达
+    conn.send_and_wait(&message, std::time::Duration::from_secs(5)).await
+        .with_context(|| format!("Input not acknowledged by desktop (session={})", &session_id[..session_id.len().min(16)]))
+        .map_err(|e| {
+            tracing::error!("[ws_send_input] failed: {:?}", e);
+            crate::AppError::WebSocket(e.to_string())
+        })?;
+    tracing::info!("[ws_send_input] desktop ACK received");
+    Ok(())
 }
 
 /// 发送消息（不等待响应）
@@ -372,11 +422,33 @@ pub async fn ws_send_and_wait(
     Ok(parsed)
 }
 
-/// 调整终端大小 (移动端不支持)
+/// 调整终端大小
+///
+/// 将移动端终端的实际尺寸 (cols, rows) 通过 WebSocket 发送到桌面端。
+/// 桌面端收到后更新 PTY 尺寸，使输出按移动端屏幕宽度排版，
+/// 避免因宽度不匹配导致 \r 光标定位错乱、多行输出堆叠等问题。
 #[tauri::command]
-pub async fn ws_resize_terminal(_session_id: String, _cols: u32, _rows: u32) -> Result<()> {
-    // 移动端不支持调整终端大小
-    Ok(())
+pub async fn ws_resize_terminal(session_id: String, cols: u32, rows: u32) -> Result<()> {
+    tracing::info!("[ws_resize_terminal] session_id={}, cols={}, rows={}", session_id, cols, rows);
+    let conn = get_connection_manager();
+    let payload = serde_json::json!({
+        "type": "control",
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": {
+            "action": {
+                "type": "resize_session",
+                "session_id": session_id,
+                "cols": cols,
+                "rows": rows,
+            }
+        },
+    });
+    let message = crate::shared::websocket::WsMessage::text(
+        serde_json::to_string(&payload).unwrap()
+    );
+    conn.send(&message).await
 }
 
 /// 获取会话配置列表

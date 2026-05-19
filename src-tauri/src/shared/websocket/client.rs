@@ -130,6 +130,9 @@ pub struct WsClient {
     sender_task: RwLock<Option<tokio::task::JoinHandle<()>>>,
     /// 接收任务句柄
     receiver_task: RwLock<Option<tokio::task::JoinHandle<()>>>,
+    /// 等待响应的回调（非阻塞模式）
+    /// Key: message_id, Value: 回调函数
+    pending_callbacks: RwLock<std::collections::HashMap<String, Arc<dyn Fn(WsMessage) + Send + Sync + 'static>>>,
 }
 
 impl WsClient {
@@ -149,6 +152,7 @@ impl WsClient {
             interceptors: RwLock::new(Vec::new()),
             sender_task: RwLock::new(None),
             receiver_task: RwLock::new(None),
+            pending_callbacks: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -454,10 +458,24 @@ impl WsClient {
                     }
                     WsMessageType::Text { .. } => {
                         if let WsMessage::Text { message_id, payload, .. } = ws_msg {
-                            let _ = self.event_tx.send(WsClientEvent::TextMessage {
-                                message_id: Some(message_id),
-                                content: payload.content,
-                            });
+                            // 检查是否有待处理的回调
+                            let callback = {
+                                let mut callbacks = self.pending_callbacks.write().await;
+                                callbacks.remove(&message_id)
+                            };
+
+                            if let Some(cb) = callback {
+                                // 执行回调（非阻塞）
+                                let ws_msg_response = WsMessage::text(payload.content.clone());
+                                cb(ws_msg_response);
+                                // 执行回调后不发送事件
+                            } else {
+                                // 没有回调，作为普通消息处理（广播给订阅者）
+                                let _ = self.event_tx.send(WsClientEvent::TextMessage {
+                                    message_id: Some(message_id),
+                                    content: payload.content,
+                                });
+                            }
                         }
                     }
                     WsMessageType::Binary { .. } => {
@@ -661,6 +679,32 @@ impl WsClient {
     pub fn get_interceptors(&self) -> Vec<Arc<dyn crate::shared::websocket::traits::SendInterceptor>> {
         let guard = self.interceptors.blocking_read();
         guard.clone()
+    }
+
+    /// 发送消息并注册回调（非阻塞）
+    /// 消息发送后立即返回，响应到达时自动调用回调函数
+    pub async fn send_with_callback(
+        &self,
+        message: &WsMessage,
+        callback: Arc<dyn Fn(WsMessage) + Send + Sync + 'static>,
+    ) -> Result<()> {
+        let message_id = message.message_id().ok_or_else(|| {
+            crate::AppError::WebSocket("Message has no message_id, cannot use callback".to_string())
+        })?;
+
+        tracing::info!("[WsClient] send_with_callback message_id={}", message_id);
+
+        // 注册回调
+        {
+            let mut callbacks = self.pending_callbacks.write().await;
+            callbacks.insert(message_id.to_string(), callback);
+        }
+
+        // 发送消息
+        self.send(message).await?;
+
+        tracing::info!("[WsClient] send_with_callback sent, waiting for response");
+        Ok(())
     }
 
     /// 发送消息并等待响应

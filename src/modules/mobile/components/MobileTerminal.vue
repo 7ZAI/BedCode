@@ -3,7 +3,7 @@
     ref="terminalContainerRef"
     class="h-full w-full terminal-wrapper"
   >
-    <!-- 与桌面端一致：xterm 内部处理滚动，readonly 防止触发输入法 -->
+    <!-- xterm 容器，移动端禁用点击和触摸选择 -->
     <div ref="xtermContainerRef" class="xterm-container" readonly></div>
   </div>
 </template>
@@ -15,6 +15,76 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+
+// ==================== 主题常量 ====================
+
+const LIGHT_THEME = {
+  background: '#ffffff',
+  foreground: '#333333',
+  cursor: '#000000',
+  cursorAccent: '#ffffff',
+  selectionBackground: '#b4d7ff',
+  black: '#000000',
+  red: '#cd3131',
+  green: '#0dbc79',
+  yellow: '#e5e510',
+  blue: '#2472c8',
+  magenta: '#bc3fbc',
+  cyan: '#11a8cd',
+  white: '#e5e5e5',
+  brightBlack: '#666666',
+  brightRed: '#f14c4c',
+  brightGreen: '#23d18b',
+  brightYellow: '#f5f543',
+  brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6',
+  brightCyan: '#29b8db',
+  brightWhite: '#ffffff',
+}
+
+const DARK_THEME = {
+  background: '#1a1a2e',
+  foreground: '#e0e0e0',
+  cursor: '#ffffff',
+  cursorAccent: '#1a1a2e',
+  selectionBackground: '#4a4a6a',
+  black: '#000000',
+  red: '#ff5555',
+  green: '#50fa7b',
+  yellow: '#f1fa8c',
+  blue: '#bd93f9',
+  magenta: '#ff79c6',
+  cyan: '#8be9fd',
+  white: '#bbbbbb',
+  brightBlack: '#555555',
+  brightRed: '#ff5555',
+  brightGreen: '#50fa7b',
+  brightYellow: '#f1fa8c',
+  brightBlue: '#bd93f9',
+  brightMagenta: '#ff79c6',
+  brightCyan: '#8be9fd',
+  brightWhite: '#ffffff',
+}
+
+// ==================== 写批次处理 ====================
+// 移动端 CPU 较弱，将连续 write 调用合并为批次写入
+let writeBatchBuffer = ''
+let writeBatchTimer: ReturnType<typeof setTimeout> | null = null
+const WRITE_BATCH_DELAY = 16 // ~60fps 一帧的时间
+
+function flushWriteBatch() {
+  if (!terminal || !writeBatchBuffer) return
+  terminal.write(writeBatchBuffer)
+  writeBatchBuffer = ''
+}
+
+function scheduleWrite(data: string) {
+  writeBatchBuffer += data
+  if (writeBatchTimer) clearTimeout(writeBatchTimer)
+  writeBatchTimer = setTimeout(flushWriteBatch, WRITE_BATCH_DELAY)
+}
+
+// ==================== 组件状态 ====================
 
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
@@ -35,92 +105,73 @@ let scrollTimeout: ReturnType<typeof setTimeout> | null = null
 
 const props = defineProps<{
   output?: string
+  /** 父组件已渲染的输出索引，用于增量写入 */
+  renderedIndex?: number
 }>()
 
 const emit = defineEmits<{
   ready: []
   clear: []
   resize: [cols: number, rows: number]
+  /** KeepAlive 恢复时触发，由父组件处理重置逻辑 */
+  activated: []
 }>()
 
-/** 初始化 xterm.js - 与桌面端一致 */
+/** 根据屏幕宽度计算移动端自适应字号 */
+function getAdaptiveFontSize(): number {
+  const baseSize = settingsStore.settings.ui.terminal_font_size || 14
+  const screenWidth = window.innerWidth
+  // 小屏手机 (< 400px): 使用较小字号
+  // 大屏手机/小平板 (400-600px): 保持默认
+  // 大平板 (> 600px): 适当增大
+  if (screenWidth < 400) {
+    return Math.min(baseSize, 13)
+  } else if (screenWidth >= 600) {
+    return Math.max(baseSize, 15)
+  }
+  return baseSize
+}
+
+/** 禁用 xterm 内部 textarea，防止移动端弹出键盘 */
+function disableXtermTextarea() {
+  if (!xtermContainerRef.value) return
+  const textarea = xtermContainerRef.value.querySelector('textarea')
+  if (textarea) {
+    textarea.setAttribute('readonly', '')
+    textarea.setAttribute('inputmode', 'none')
+    textarea.style.pointerEvents = 'none'
+    textarea.style.display = 'none'
+  }
+}
+
+/** 初始化 xterm.js */
 function initTerminal() {
   if (!terminalContainerRef.value || !xtermContainerRef.value) return
 
-  const fontSize = settingsStore.settings.ui.terminal_font_size || 14
+  const fontSize = getAdaptiveFontSize()
   const fontFamily = 'Consolas, Monaco, Courier New, monospace'
-
-  // 检测当前是否为深色模式
   const isDarkMode = document.documentElement.classList.contains('dark')
 
-  // 浅色主题
-  const lightTheme = {
-    background: '#ffffff',
-    foreground: '#333333',
-    cursor: '#000000',
-    cursorAccent: '#ffffff',
-    selectionBackground: '#b4d7ff',
-    black: '#000000',
-    red: '#cd3131',
-    green: '#0dbc79',
-    yellow: '#e5e510',
-    blue: '#2472c8',
-    magenta: '#bc3fbc',
-    cyan: '#11a8cd',
-    white: '#e5e5e5',
-    brightBlack: '#666666',
-    brightRed: '#f14c4c',
-    brightGreen: '#23d18b',
-    brightYellow: '#f5f543',
-    brightBlue: '#3b8eea',
-    brightMagenta: '#d670d6',
-    brightCyan: '#29b8db',
-    brightWhite: '#ffffff',
-  }
-
-  // 深色主题
-  const darkTheme = {
-    background: '#1a1a2e',
-    foreground: '#e0e0e0',
-    cursor: '#ffffff',
-    cursorAccent: '#1a1a2e',
-    selectionBackground: '#4a4a6a',
-    black: '#000000',
-    red: '#ff5555',
-    green: '#50fa7b',
-    yellow: '#f1fa8c',
-    blue: '#bd93f9',
-    magenta: '#ff79c6',
-    cyan: '#8be9fd',
-    white: '#bbbbbb',
-    brightBlack: '#555555',
-    brightRed: '#ff5555',
-    brightGreen: '#50fa7b',
-    brightYellow: '#f1fa8c',
-    brightBlue: '#bd93f9',
-    brightMagenta: '#ff79c6',
-    brightCyan: '#8be9fd',
-    brightWhite: '#ffffff',
-  }
-
-  // 与桌面端一致的配置
   terminal = new Terminal({
     fontSize,
     fontFamily,
-    theme: isDarkMode ? darkTheme : lightTheme,
-    cursorBlink: false, // 移动端禁用光标闪烁
+    theme: isDarkMode ? DARK_THEME : LIGHT_THEME,
+    cursorBlink: false,
     cursorStyle: 'bar',
-    scrollback: 20000, // 移动端保留 20000 行历史
+    scrollback: 20000,
     allowProposedApi: true,
     cursorInactiveStyle: 'none',
-    // 移动端：禁用终端直接输入，输入只能通过弹窗
     disableStdin: true,
+    convertEol: true, // 自动转换 \n → \r\n，移动端程序输出更可靠
   })
 
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(xtermContainerRef.value)
+
+  // 禁用内部 textarea，防止键盘弹出
+  disableXtermTextarea()
 
   // 初始 fit
   nextTick(() => {
@@ -180,10 +231,10 @@ function scheduleFit() {
   })
 }
 
-/** 写入数据到终端 */
+/** 写入数据到终端（使用批次写入优化性能） */
 function write(data: string) {
   if (!terminal) return
-  terminal.write(data)
+  scheduleWrite(data)
 }
 
 /** 清空终端 */
@@ -224,24 +275,24 @@ function handleScroll() {
   }, 300)
 }
 
-// 监听输出变化，增量写入（与桌面���一致）
+// 监听输出变化，增量写入
+// 由父组件通过 renderedIndex 控制增量位置，避免索引不同步问题
 watch(() => props.output, (newOutput) => {
-  if (!terminal || !newOutput) {
-    return
-  }
+  if (!terminal || !newOutput) return
 
-  // 检测输出重置（远程重连等情况），重置索引
-  if (newOutput.length < lastOutputIndex) {
-    lastOutputIndex = 0
-  }
+  // 使用父组件传入的 renderedIndex，如果未提供则使用内部 lastOutputIndex（兼容旧版）
+  const startIndex = props.renderedIndex ?? lastOutputIndex
 
-  // 只写入新增的部分（增量写入）
-  const startIndex = lastOutputIndex
-  const newContent = newOutput.slice(startIndex)
+  // 边界保护：若 startIndex 超过当前输出长度，重置为 0
+  const safeStartIndex = Math.min(startIndex, newOutput.length)
+  const newContent = newOutput.slice(safeStartIndex)
 
   if (newContent.length > 0) {
-    terminal.write(newContent)
-    lastOutputIndex = newOutput.length
+    scheduleWrite(newContent)
+    // 只有当没有传入 renderedIndex 时才更新内部索引
+    if (props.renderedIndex === undefined) {
+      lastOutputIndex = newOutput.length
+    }
 
     // 只有用户不在滚动时才自动滚动到底部
     if (!isUserScrolling) {
@@ -250,10 +301,10 @@ watch(() => props.output, (newOutput) => {
   }
 }, { deep: true })
 
-// 监听字体大小变化
-watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
+// 监听字体大小变化（使用自适应字号）
+watch(() => settingsStore.settings.ui.terminal_font_size, () => {
   if (!terminal) return
-  terminal.options.fontSize = newSize
+  terminal.options.fontSize = getAdaptiveFontSize()
   nextTick(() => {
     performFit()
   })
@@ -277,57 +328,11 @@ onMounted(() => {
     window.addEventListener('resize', scheduleFit)
   }
 
-  // 监听主题变化
+  // 监听主题变化（使用主题常量）
   const observer = new MutationObserver(() => {
     if (terminal) {
       const isDarkMode = document.documentElement.classList.contains('dark')
-      const darkTheme = {
-        background: '#1a1a2e',
-        foreground: '#e0e0e0',
-        cursor: '#ffffff',
-        cursorAccent: '#1a1a2e',
-        selectionBackground: '#4a4a6a',
-        black: '#000000',
-        red: '#ff5555',
-        green: '#50fa7b',
-        yellow: '#f1fa8c',
-        blue: '#bd93f9',
-        magenta: '#ff79c6',
-        cyan: '#8be9fd',
-        white: '#bbbbbb',
-        brightBlack: '#555555',
-        brightRed: '#ff5555',
-        brightGreen: '#50fa7b',
-        brightYellow: '#f1fa8c',
-        brightBlue: '#bd93f9',
-        brightMagenta: '#ff79c6',
-        brightCyan: '#8be9fd',
-        brightWhite: '#ffffff',
-      }
-      const lightTheme = {
-        background: '#ffffff',
-        foreground: '#333333',
-        cursor: '#000000',
-        cursorAccent: '#ffffff',
-        selectionBackground: '#b4d7ff',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#ffffff',
-      }
-      terminal.options.theme = isDarkMode ? darkTheme : lightTheme
+      terminal.options.theme = isDarkMode ? DARK_THEME : LIGHT_THEME
     }
   })
   observer.observe(document.documentElement, {
@@ -336,21 +341,26 @@ onMounted(() => {
   })
 })
 
-// KeepAlive 恢复时重置输出索引，确保从正确位置开始渲染
+// KeepAlive 恢复时通知父组件，由父组件控制是否重置输出
+// 避免子组件独自重置索引导致重复渲染
 onActivated(() => {
-  lastOutputIndex = 0
+  emit('activated')
 })
 
 onUnmounted(() => {
+  // 清理写批次定时器
+  if (writeBatchTimer) {
+    clearTimeout(writeBatchTimer)
+    flushWriteBatch() // 清空剩余缓冲区
+  }
+
   // 清理滚动事件监听器
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
   if (viewport) {
     viewport.removeEventListener('scroll', handleScroll)
   }
 
-  if (scrollTimeout) {
-    clearTimeout(scrollTimeout)
-  }
+  if (scrollTimeout) clearTimeout(scrollTimeout)
 
   if (resizeObserver) {
     resizeObserver.disconnect()
@@ -362,13 +372,9 @@ onUnmounted(() => {
     terminal = null
   }
 
-  if (fitAddon) {
-    fitAddon = null
-  }
+  if (fitAddon) fitAddon = null
 
-  if (fitRafId !== null) {
-    cancelAnimationFrame(fitRafId)
-  }
+  if (fitRafId !== null) cancelAnimationFrame(fitRafId)
 
   window.removeEventListener('resize', scheduleFit)
 })
@@ -418,5 +424,28 @@ defineExpose({
 
 :deep(.xterm-focus) {
   outline: none;
+}
+
+/* xterm 视口滚动 - 修复移动端无法滚动问题 */
+:deep(.xterm-viewport) {
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  /* 启用移动端弹性滚动 */
+  -webkit-overflow-scrolling: touch;
+  /* 防止滚动到边界时触发页面整体滚动 */
+  overscroll-behavior: contain;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar {
+  width: 6px;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.4);
+  border-radius: 3px;
 }
 </style>

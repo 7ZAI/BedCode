@@ -265,6 +265,7 @@ impl WebSocketManager {
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            response_handler: None,
         };
 
         // 创建 WsServer，注入 handler

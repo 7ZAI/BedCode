@@ -4,7 +4,7 @@
 //! 提供连接管理、消息收发的基础框架
 
 use crate::shared::websocket::message::{WsMessage, WsMessageType};
-use crate::shared::websocket::traits::ClientInfoTrait;
+use crate::shared::websocket::traits::{ClientInfoTrait, ResponseHandler};
 use crate::Result;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -97,7 +97,7 @@ impl ClientInfoTrait for ClientInfo {
 }
 
 /// WebSocket 服务器配置
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WsServerConfig {
     /// 监听端口
     pub port: u16,
@@ -107,6 +107,8 @@ pub struct WsServerConfig {
     pub heartbeat_timeout_secs: u64,
     /// 消息队列大小
     pub message_queue_size: usize,
+    /// 响应处理器（处理需要响应的消息）
+    pub response_handler: Option<Arc<dyn ResponseHandler>>,
 }
 
 impl Default for WsServerConfig {
@@ -116,7 +118,20 @@ impl Default for WsServerConfig {
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            response_handler: None,
         }
+    }
+}
+
+impl std::fmt::Debug for WsServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WsServerConfig")
+            .field("port", &self.port)
+            .field("heartbeat_interval_secs", &self.heartbeat_interval_secs)
+            .field("heartbeat_timeout_secs", &self.heartbeat_timeout_secs)
+            .field("message_queue_size", &self.message_queue_size)
+            .field("response_handler", &"...")
+            .finish()
     }
 }
 
@@ -163,6 +178,8 @@ pub struct WsServer {
     config: WsServerConfig,
     /// 消息处理器
     handler: Option<Arc<dyn MessageHandler>>,
+    /// 响应处理器
+    response_handler: Option<Arc<dyn ResponseHandler>>,
     /// 已连接客户端
     clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
     /// 客户端发送器映射
@@ -186,15 +203,24 @@ impl WsServer {
         let (shutdown_tx, _) = broadcast::channel(1);
         let (event_tx, _) = broadcast::channel(1024);
 
+        // 从配置中获取 response_handler
+        let response_handler = config.response_handler.clone();
+
         Self {
             config,
             handler,
+            response_handler,
             clients: Arc::new(RwLock::new(HashMap::new())),
             client_senders: Arc::new(RwLock::new(HashMap::new())),
             shutdown_tx,
             event_tx,
             is_running: Arc::new(RwLock::new(false)),
         }
+    }
+
+    /// 设置响应处理器
+    pub fn set_response_handler(&mut self, handler: Option<Arc<dyn ResponseHandler>>) {
+        self.response_handler = handler;
     }
 
     /// 获取配置
@@ -405,6 +431,7 @@ impl WsServer {
                     let senders_for_cleanup = client_senders.clone();
                     let event_tx_for_cleanup = self.event_tx.clone();
                     let handler = self.handler.clone();
+                    let response_handler = self.response_handler.clone();
 
                     tokio::spawn(async move {
                         info!("[WsServer] New connection from {}", addr);
@@ -463,6 +490,7 @@ impl WsServer {
                         // 创建接收任务
                         let tx_for_recv = tx_clone.clone();
                         let handler_for_recv = handler.clone();
+                        let response_handler_for_recv = response_handler.clone();
                         let mut recv_task = tokio::spawn(async move {
                             let tx = tx_for_recv;
                             let handler = handler_for_recv;
@@ -510,7 +538,34 @@ impl WsServer {
                                                                     // 发送 handler 响应
                                                                     let _ = tx.send(WsMsg::Text(resp_json)).await;
                                                                 }
-                                                                Ok(None) => {}
+                                                                Ok(None) => {
+                                                                    // Handler 没有返回响应，检查是否需要自动响应
+                                                                    if ws_msg.expect_response() {
+                                                                        // 调用 response_handler 生成响应
+                                                                        if let Some(ref resp_h) = response_handler_for_recv {
+                                                                            // 解析业务消息用于 response_handler
+                                                                            let business_msg = if let WsMessage::Text { payload, .. } = &ws_msg {
+                                                                                crate::shared::enums::message::Message::from_json(&payload.content).ok()
+                                                                            } else {
+                                                                                None
+                                                                            };
+
+                                                                            if let Some(biz_msg) = business_msg {
+                                                                                if let Some(resp) = resp_h.handle_response(&ws_msg, &biz_msg) {
+                                                                                    // 构建响应消息
+                                                                                    let resp_ws_msg = WsMessage::text_with_id(
+                                                                                        serde_json::to_string(&resp).unwrap_or_default(),
+                                                                                        ws_msg.message_id().unwrap_or("").to_string(),
+                                                                                        false,
+                                                                                    );
+                                                                                    let resp_json = resp_ws_msg.to_json().unwrap_or_default();
+                                                                                    debug!("[WsServer] >>> AUTO RESPONSE to {}: {}", addr, &resp_json[..resp_json.len().min(200)]);
+                                                                                    let _ = tx.send(WsMsg::Text(resp_json)).await;
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                                 Err(e) => {
                                                                     warn!("[WsServer] Handler error for {}: {}", addr, e);
                                                                     // 向客户端返回错误响应
