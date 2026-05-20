@@ -135,7 +135,7 @@ export async function createSessionConfig(config: {
   command?: string
   wsl_distro?: string
   tmux_session?: string
-}): Promise<string> {
+}): Promise<SessionConfig> {
   return await invoke('create_session_config', {
     name: config.name,
     environment: config.environment,
