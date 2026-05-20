@@ -128,8 +128,22 @@ export async function getConnectedDevices(): Promise<DeviceConnectionInfo[]> {
 /**
  * 创建会话配置
  */
-export async function createSessionConfig(config: Omit<SessionConfig, 'id'>): Promise<string> {
-  return await invoke('create_session_config', { config })
+export async function createSessionConfig(config: {
+  name: string
+  environment: string
+  working_dir?: string
+  command?: string
+  wsl_distro?: string
+  tmux_session?: string
+}): Promise<string> {
+  return await invoke('create_session_config', {
+    name: config.name,
+    environment: config.environment,
+    working_dir: config.working_dir || '',
+    command: config.command || '',
+    wsl_distro: config.wsl_distro,
+    tmux_session: config.tmux_session,
+  })
 }
 
 /**
@@ -143,21 +157,39 @@ export async function listSessionConfigs(): Promise<SessionConfig[]> {
  * 获取单个会话配置
  */
 export async function getSessionConfig(configId: string): Promise<SessionConfig | null> {
-  return await invoke('get_session_config', { configId })
+  return await invoke('get_session_config', { id: configId })
 }
 
 /**
  * 删除会话配置
  */
 export async function deleteSessionConfig(configId: string): Promise<void> {
-  return await invoke('delete_session_config', { configId })
+  return await invoke('delete_session_config', { id: configId })
 }
 
 /**
  * 更新会话配置
  */
-export async function updateSessionConfig(config: SessionConfig): Promise<void> {
-  return await invoke('update_session_config', { config })
+export async function updateSessionConfig(config: {
+  id: string
+  name: string
+  environment: string
+  working_dir?: string
+  command?: string
+  wsl_distro?: string
+  tmux_session?: string
+  auto_start?: boolean
+}): Promise<void> {
+  return await invoke('update_session_config', {
+    id: config.id,
+    name: config.name,
+    environment: config.environment,
+    working_dir: config.working_dir || '',
+    command: config.command || '',
+    wsl_distro: config.wsl_distro,
+    tmux_session: config.tmux_session,
+    auto_start: config.auto_start,
+  })
 }
 
 // ==================== Pairing Commands ====================
