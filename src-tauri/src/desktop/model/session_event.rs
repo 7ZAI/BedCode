@@ -35,6 +35,19 @@ impl SessionInfo {
             session_type: SessionType::Pty,
         }
     }
+
+    pub fn new_plugin(project_name: &str, _project_path: &str) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            config_id: String::new(),
+            name: project_name.to_string(),
+            status: SessionStatus::Starting,
+            created_at: Utc::now(),
+            started_at: None,
+            stopped_at: None,
+            session_type: SessionType::Plugin,
+        }
+    }
 }
 
 /// 会话状态变化事件

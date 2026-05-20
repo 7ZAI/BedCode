@@ -92,15 +92,25 @@ export const useSessionStore = defineStore('session', () => {
     wslDistro?: string,
     tmuxSession?: string
   ) {
-    await createSessionConfig({
-      name,
-      environment,
-      working_dir: workingDir,
-      command,
-      wsl_distro: wslDistro,
-      tmux_session: tmuxSession,
-    })
-    configs.value = await listSessionConfigs()
+    console.log('[session store] createConfig called:', { name, environment, workingDir, command })
+    try {
+      const result = await createSessionConfig({
+        name,
+        environment,
+        working_dir: workingDir,
+        command,
+        wsl_distro: wslDistro,
+        tmux_session: tmuxSession,
+      })
+      console.log('[session store] createSessionConfig returned:', result)
+      configs.value = await listSessionConfigs()
+      console.log('[session store] configs refreshed:', configs.value.length)
+    } catch (e: any) {
+      console.error('[session store] createConfig error:', e)
+      console.error('[session store] error message:', e?.message)
+      console.error('[session store] error stack:', e?.stack)
+      throw e
+    }
   }
 
   async function deleteConfigAction(id: string) {
@@ -118,17 +128,16 @@ export const useSessionStore = defineStore('session', () => {
     tmuxSession?: string,
     autoStart?: boolean
   ) {
-    const config: SessionConfig = {
+    await updateSessionConfig({
       id,
       name,
       environment,
-      working_dir: workingDir,
-      command,
+      working_dir: workingDir || '',
+      command: command || '',
       wsl_distro: wslDistro,
       tmux_session: tmuxSession,
       auto_start: autoStart,
-    }
-    await updateSessionConfig(config)
+    })
     configs.value = await listSessionConfigs()
   }
 

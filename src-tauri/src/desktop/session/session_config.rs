@@ -68,6 +68,8 @@ impl SessionConfigManager {
         tmux_session: Option<String>,
         auto_start: bool,
     ) -> Result<SessionConfig> {
+        tracing::info!("SessionConfigManager::create_config_full called: name={}", name);
+
         let now = Utc::now();
         let config = SessionConfig {
             id: Uuid::new_v4().to_string(),
@@ -85,16 +87,34 @@ impl SessionConfigManager {
         let config_name = config.name.clone();
         let result_config = config.clone();
 
-        let db = self.db.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = db.blocking_lock();
-            db.create_session_config(&config)
-        })
-        .await
-        .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))??;
+        tracing::info!("Config created in memory: id={}", config_id);
 
-        tracing::info!("Session config created: {} ({})", config_name, config_id);
-        Ok(result_config)
+        let db = self.db.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            tracing::info!("spawn_blocking: starting db insert");
+            let db = db.blocking_lock();
+            let insert_result = db.create_session_config(&config);
+            tracing::info!("spawn_blocking: db insert completed");
+            insert_result
+        })
+        .await;
+
+        tracing::info!("spawn_blocking result received");
+
+        match result {
+            Ok(Ok(())) => {
+                tracing::info!("Session config created: {} ({})", config_name, config_id);
+                Ok(result_config)
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Database error: {:?}", e);
+                Err(e)
+            }
+            Err(e) => {
+                tracing::error!("Task join error: {:?}", e);
+                Err(crate::AppError::Internal(format!("Task join error: {}", e)))
+            }
+        }
     }
 
     /// 获取配置

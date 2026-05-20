@@ -24,7 +24,7 @@
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="sessionStore.configs.length === 0" class="text-center py-12">
+      <div v-else-if="configs.length === 0" class="text-center py-12">
         <svg class="w-16 h-16 mx-auto text-gray-400 dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
@@ -35,10 +35,10 @@
       <!-- Config Cards (Long Card Mode) -->
       <div v-else class="space-y-3">
         <SessionCard
-          v-for="config in sessionStore.configs"
+          v-for="config in configs"
           :key="config.id"
           :config="config"
-          :sessions="sessionStore.sessions"
+          :sessions="sessions"
           @start="startSession(config.id)"
           @edit="editConfig(config)"
           @delete="deleteConfig(config.id)"
@@ -88,7 +88,6 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
-import { useSessionStore, type SessionConfig } from '@/modules/shared/stores/session'
 import Button from '@/modules/shared/components/Button.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
 import SessionCard from '@/modules/desktop/components/SessionCard.vue'
@@ -96,11 +95,22 @@ import SessionForm from '@/modules/desktop/components/SessionForm.vue'
 import Spinner from '@/modules/shared/components/Spinner.vue'
 import { useKeyboardShortcuts } from '@/modules/shared/composables/useKeyboardShortcuts'
 import { useToast } from '@/modules/shared/composables/useToast'
+import {
+  createSessionConfig,
+  listSessionConfigs,
+  deleteSessionConfig,
+  updateSessionConfig,
+  listSessions,
+  startSession as createSession,
+  killSession as stopSession,
+  type SessionConfig
+} from '@/modules/desktop/composables/useDesktopCommands'
 
 const router = useRouter()
-const sessionStore = useSessionStore()
 const toast = useToast()
 
+const configs = ref<SessionConfig[]>([])
+const sessions = ref<any[]>([])
 const showCreateDialog = ref(false)
 const editingConfig = ref<SessionConfig | null>(null)
 const isLoading = ref(true)
@@ -127,8 +137,12 @@ useKeyboardShortcuts([
 
 onMounted(async () => {
   isLoading.value = true
-  await sessionStore.loadConfigs()
-  await sessionStore.loadSessions()
+  try {
+    configs.value = await listSessionConfigs()
+    sessions.value = await listSessions()
+  } catch (e) {
+    console.error('Failed to load data:', e)
+  }
   isLoading.value = false
 
   // 等待 DOM 更新完成
@@ -148,12 +162,13 @@ async function startSession(configId: string) {
   operatingMessage.value = '正在启动会话...'
 
   try {
-    await sessionStore.createSession(configId)
+    await createSession(configId)
     toast.success('会话已启动')
     // 跳转到会话管理页面
     router.push({ name: 'session-manager' })
-  } catch (e) {
-    toast.error('启动会话失败: ' + (e as Error).message)
+  } catch (e: any) {
+    console.error('[SessionsView] startSession error:', e)
+    toast.error('启动会话失败: ' + (e?.message || e))
   } finally {
     isOperating.value = false
   }
@@ -171,7 +186,8 @@ async function deleteConfig(configId: string) {
 
 async function confirmDelete() {
   if (!pendingDeleteConfigId.value) return
-  await sessionStore.deleteConfig(pendingDeleteConfigId.value)
+  await deleteSessionConfig(pendingDeleteConfigId.value)
+  configs.value = await listSessionConfigs()
   toast.success('会话配置已删除')
   showDeleteConfirmDialog.value = false
   pendingDeleteConfigId.value = null
@@ -182,11 +198,12 @@ async function killSession(sessionId: string) {
   operatingMessage.value = '正在停止会话...'
 
   try {
-    await sessionStore.killSession(sessionId)
+    await stopSession(sessionId)
+    sessions.value = await listSessions()
     toast.info('会话已终止')
-  } catch (e) {
-    console.error('Failed to kill session:', e)
-    toast.error('终止会话失败: ' + (e as Error).message)
+  } catch (e: any) {
+    console.error('[SessionsView] killSession error:', e)
+    toast.error('终止会话失败: ' + (e?.message || e))
   } finally {
     isOperating.value = false
   }
@@ -213,35 +230,40 @@ interface SessionFormData {
 }
 
 async function handleSaveConfig(form: SessionFormData) {
+  console.log('[SessionsView] handleSaveConfig called:', form)
   try {
     if (editingConfig.value) {
-      await sessionStore.updateConfig(
-        editingConfig.value.id,
-        form.name,
-        form.environment,
-        form.workingDir,
-        form.command,
-        form.wslDistro || undefined,
-        form.tmuxSession || undefined,
-        form.autoStart
-      )
+      console.log('[SessionsView] editing mode, calling updateSessionConfig')
+      await updateSessionConfig({
+        id: editingConfig.value.id,
+        name: form.name,
+        environment: form.environment,
+        working_dir: form.workingDir || '',
+        command: form.command || '',
+        wsl_distro: form.wslDistro || undefined,
+        tmux_session: form.tmuxSession || undefined,
+        auto_start: form.autoStart,
+      })
       toast.success('会话配置已更新')
     } else {
-      await sessionStore.createConfig(
-        form.name,
-        form.environment,
-        form.workingDir,
-        form.command,
-        form.wslDistro || undefined,
-        form.tmuxSession || undefined
-      )
+      console.log('[SessionsView] create mode, calling createSessionConfig')
+      await createSessionConfig({
+        name: form.name,
+        environment: form.environment,
+        working_dir: form.workingDir || '',
+        command: form.command || '',
+        wsl_distro: form.wslDistro || undefined,
+        tmux_session: form.tmuxSession || undefined,
+      })
       toast.success('会话配置已创建')
     }
+    configs.value = await listSessionConfigs()
     showCreateDialog.value = false
     editingConfig.value = null
-    await sessionStore.loadConfigs()
-  } catch (e) {
-    toast.error('保存失败: ' + (e as Error).message)
+  } catch (e: any) {
+    console.error('[SessionsView] handleSaveConfig error:', e)
+    console.error('[SessionsView] error message:', e?.message)
+    toast.error('保存失败: ' + (e?.message || e))
   }
 }
 </script>

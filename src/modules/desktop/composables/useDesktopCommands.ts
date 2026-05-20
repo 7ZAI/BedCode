@@ -136,7 +136,7 @@ export async function createSessionConfig(config: {
   wsl_distro?: string
   tmux_session?: string
 }): Promise<SessionConfig> {
-  return await invoke('create_session_config', {
+  console.log('[createSessionConfig] calling backend with:', {
     name: config.name,
     environment: config.environment,
     working_dir: config.working_dir || '',
@@ -144,6 +144,18 @@ export async function createSessionConfig(config: {
     wsl_distro: config.wsl_distro,
     tmux_session: config.tmux_session,
   })
+
+  const result = await invoke('create_session_config', {
+    name: config.name,
+    environment: config.environment,
+    working_dir: config.working_dir || '',
+    command: config.command || '',
+    wsl_distro: config.wsl_distro,
+    tmux_session: config.tmux_session,
+  })
+
+  console.log('[createSessionConfig] backend returned:', result)
+  return result as SessionConfig
 }
 
 /**
@@ -174,18 +186,19 @@ export async function updateSessionConfig(config: {
   id: string
   name: string
   environment: string
-  working_dir?: string
-  command?: string
+  working_dir: string
+  command: string
   wsl_distro?: string
   tmux_session?: string
   auto_start?: boolean
 }): Promise<void> {
+  console.log('[updateSessionConfig] calling with:', config)
   return await invoke('update_session_config', {
     id: config.id,
     name: config.name,
     environment: config.environment,
-    working_dir: config.working_dir || '',
-    command: config.command || '',
+    working_dir: config.working_dir,
+    command: config.command,
     wsl_distro: config.wsl_distro,
     tmux_session: config.tmux_session,
     auto_start: config.auto_start,

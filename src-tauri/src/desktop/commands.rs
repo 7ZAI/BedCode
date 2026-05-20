@@ -20,7 +20,9 @@ pub async fn create_session_config(
     wsl_distro: Option<String>,
     tmux_session: Option<String>,
 ) -> Result<crate::shared::db::SessionConfig> {
-    config_manager
+    tracing::info!("create_session_config called: name={}, environment={}", name, environment);
+
+    let result = config_manager
         .create_config_full(
             name,
             environment,
@@ -30,7 +32,14 @@ pub async fn create_session_config(
             tmux_session,
             false,
         )
-        .await
+        .await;
+
+    match &result {
+        Ok(config) => tracing::info!("create_session_config success: id={}", config.id),
+        Err(e) => tracing::error!("create_session_config failed: {:?}", e),
+    }
+
+    result
 }
 
 /// 获取所有会话配置

@@ -12,7 +12,7 @@ const router = createRouter({
     {
       path: '/sessions',
       name: 'sessions',
-      component: () => import('@/modules/desktop/views/SessionsView.vue'),
+      component: () => import('@/modules/desktop/views/SessionsConfigView.vue'),
       meta: { platform: 'desktop' },
     },
     {

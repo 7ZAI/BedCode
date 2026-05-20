@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import SessionsView from '@/modules/desktop/views/SessionsView.vue'
+import SessionsConfigView from '@/modules/desktop/views/SessionsConfigView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -78,14 +78,14 @@ const mockRouter = createRouter({
   ],
 })
 
-describe('SessionsView', () => {
+describe('SessionsConfigView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
   it('should render header with title and create button', async () => {
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
@@ -104,7 +104,7 @@ describe('SessionsView', () => {
   })
 
   it('should show empty state when no configs', async () => {
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
@@ -123,7 +123,7 @@ describe('SessionsView', () => {
   })
 
   it('should show create dialog when clicking new button', async () => {
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
@@ -157,7 +157,7 @@ describe('SessionsView', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
 
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, pinia],
         stubs: {
@@ -202,7 +202,7 @@ describe('SessionsView', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
 
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, pinia],
         stubs: {
@@ -246,7 +246,7 @@ describe('SessionsView', () => {
 
     const loadConfigsSpy = vi.fn()
 
-    mount(SessionsView, {
+    mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, pinia],
         stubs: {
@@ -273,12 +273,12 @@ describe('SessionsView', () => {
   })
 })
 
-describe('SessionsView Integration', () => {
+describe('SessionsConfigView Integration', () => {
   it('should handle session lifecycle', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
 
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, pinia],
         stubs: {
@@ -300,7 +300,7 @@ describe('SessionsView Integration', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
 
-    const wrapper = mount(SessionsView, {
+    const wrapper = mount(SessionsConfigView, {
       global: {
         plugins: [mockRouter, pinia],
         stubs: {
