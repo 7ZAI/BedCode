@@ -1,14 +1,8 @@
 import { onMounted, onUnmounted } from 'vue'
 
-export interface Shortcut {
-  key: string
-  ctrl?: boolean
-  meta?: boolean
-  shift?: boolean
-  handler: (event: KeyboardEvent) => void
-  /** 当有输入焦点时也触发 */
-  ignoreInput?: boolean
-}
+// Re-export from model
+import type { Shortcut } from './model'
+export type { Shortcut }
 
 /**
  * 注册键盘快捷键
@@ -37,7 +31,7 @@ export function useKeyboardShortcuts(shortcuts: Shortcut[]) {
         }
 
         event.preventDefault()
-        sc.handler(event)
+        sc.handler?.()
         return
       }
     }

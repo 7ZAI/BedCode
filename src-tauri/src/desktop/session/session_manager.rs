@@ -2,10 +2,8 @@
 //!
 //! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
 
-use super::{PtySessionHandler, SessionStorage};
-use super::storage::SessionStore;
-use super::pty_handler::PtyHandler;
-use crate::desktop::pty::{PtyOutputEvent, PtySession, SessionLaunchConfig};
+use super::storage::{SessionStore, SessionStorage};
+use crate::desktop::pty::{PtyHandler, PtySessionHandler, PtyOutputEvent, PtySession, SessionLaunchConfig};
 use crate::Result;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -35,7 +33,14 @@ pub struct SessionManager {
     restart_tx: broadcast::Sender<super::SessionRestartEvent>,
     /// 运行标志
     running: Arc<AtomicBool>,
+    /// PTY 输出缓存（供移动端订阅时获取历史输出）
+    output_cache: Arc<RwLock<HashMap<String, Vec<PtyOutputEvent>>>>,
+    /// 每个会话最大缓存条数
+    max_cache_size: usize,
 }
+
+/// 每个会话默认最大缓存条数
+const DEFAULT_MAX_CACHE_SIZE: usize = 1000;
 
 impl SessionManager {
     /// 获取输出广播发送器
@@ -86,6 +91,8 @@ impl SessionManager {
             status_tx,
             restart_tx,
             running,
+            output_cache: Arc::new(RwLock::new(HashMap::new())),
+            max_cache_size: DEFAULT_MAX_CACHE_SIZE,
         }
     }
 
@@ -123,7 +130,10 @@ impl SessionManager {
                 }
                 match rx.recv().await {
                     Ok(event) => {
-                        let _ = output_tx.send(event);
+                        // 只在有活跃订阅者时才转发，减少无效消息
+                        if output_tx.receiver_count() > 0 {
+                            let _ = output_tx.send(event);
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         tracing::debug!(
@@ -176,13 +186,15 @@ impl SessionManager {
                             let old_status = info.status.clone();
                             info.status = session_status.clone();
 
-                            // 发送状态变化事件
-                            let _ = status_tx.send(super::SessionStatusEvent {
-                                session_id: session_id_lifecycle.clone(),
-                                old_status: Some(old_status),
-                                new_status: session_status,
-                                session_name,
-                            });
+                            // 只在有活跃订阅者时才发送状态变化事件
+                            if status_tx.receiver_count() > 0 {
+                                let _ = status_tx.send(super::SessionStatusEvent {
+                                    session_id: session_id_lifecycle.clone(),
+                                    old_status: Some(old_status),
+                                    new_status: session_status,
+                                    session_name,
+                                });
+                            }
                         }
                     }
                 }
@@ -276,7 +288,10 @@ impl SessionManager {
                 }
                 match rx.recv().await {
                     Ok(event) => {
-                        let _ = output_tx.send(event);
+                        // 只在有活跃订阅者时才转发，减少无效消息
+                        if output_tx.receiver_count() > 0 {
+                            let _ = output_tx.send(event);
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -300,12 +315,15 @@ impl SessionManager {
                 if let Some(info) = info_map.get_mut(&session_id_for_lifecycle) {
                     let old_status = info.status.clone();
                     info.status = session_status.clone();
-                    let _ = status_tx.send(super::SessionStatusEvent {
-                        session_id: session_id_for_lifecycle,
-                        old_status: Some(old_status),
-                        new_status: session_status,
-                        session_name: info.name.clone(),
-                    });
+                    // 只在有活跃订阅者时才发送状态���化事件
+                    if status_tx.receiver_count() > 0 {
+                        let _ = status_tx.send(super::SessionStatusEvent {
+                            session_id: session_id_for_lifecycle,
+                            old_status: Some(old_status),
+                            new_status: session_status,
+                            session_name: info.name.clone(),
+                        });
+                    }
                 }
             }
         });
@@ -486,6 +504,9 @@ impl SessionManager {
     pub async fn remove_session(&self, session_id: &str) -> Result<()> {
         tracing::info!("remove_session called for: {}", session_id);
 
+        // 清理缓存
+        self.clear_output_cache(session_id).await;
+
         {
             let mut sessions = self.pty_sessions.write().await;
             if let Some(session) = sessions.remove(session_id) {
@@ -506,6 +527,44 @@ impl SessionManager {
     /// 订阅全局输出
     pub fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
         self.output_tx.subscribe()
+    }
+
+    /// 缓存 PTY 输出（供移动端订阅时获取历史输出）
+    pub async fn cache_output(&self, event: &PtyOutputEvent) {
+        let mut cache = self.output_cache.write().await;
+        let entries = cache.entry(event.session_id.clone()).or_insert_with(Vec::new);
+
+        // 保持固定大小，移除最旧的
+        if entries.len() >= self.max_cache_size {
+            entries.remove(0);
+        }
+        entries.push(event.clone());
+
+        tracing::debug!(
+            "Cached PTY output for session {}: {} entries",
+            event.session_id,
+            entries.len()
+        );
+    }
+
+    /// 获取缓存的 PTY 输出
+    pub async fn get_output_cache(&self, session_id: &str) -> Vec<PtyOutputEvent> {
+        let cache = self.output_cache.read().await;
+        cache.get(session_id).cloned().unwrap_or_default()
+    }
+
+    /// 清理指定会话的缓存
+    pub async fn clear_output_cache(&self, session_id: &str) {
+        let mut cache = self.output_cache.write().await;
+        cache.remove(session_id);
+        tracing::debug!("Cleared PTY output cache for session: {}", session_id);
+    }
+
+    /// 清理所有会话的缓存
+    pub async fn clear_all_output_cache(&self) {
+        let mut cache = self.output_cache.write().await;
+        cache.clear();
+        tracing::debug!("Cleared all PTY output cache");
     }
 
     /// 订阅会话状态变化

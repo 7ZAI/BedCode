@@ -4,15 +4,11 @@
 
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import type { SessionInfo } from './useTauri'
+import type { SessionInfo } from '@/modules/desktop/composables/model'
 
-export interface PluginSessionInfo {
-  id: string
-  name: string
-  status: string
-  sessionType: 'pty' | 'plugin'
-  projectPath?: string
-}
+// Re-export from model
+import type { PluginSessionInfo } from './model'
+export type { PluginSessionInfo }
 
 export function usePluginSession() {
   const sessions = ref<PluginSessionInfo[]>([])
@@ -23,13 +19,14 @@ export function usePluginSession() {
     try {
       const allSessions = await invoke<SessionInfo[]>('list_sessions')
       sessions.value = allSessions
-        .filter(s => s.sessionType === 'plugin')
+        .filter(s => (s.session_type || s.sessionType) === 'plugin')
         .map(s => ({
           id: s.id,
           name: s.name,
+          config_id: s.config_id || s.configId || '',
           status: s.status,
-          sessionType: 'plugin' as const,
-          projectPath: s.configId || '',
+          session_type: 'plugin',
+          created_at: s.created_at || s.createdAt || new Date().toISOString(),
         }))
     } catch (e) {
       console.error('Failed to load plugin sessions:', e)

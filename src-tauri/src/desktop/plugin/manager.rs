@@ -187,6 +187,7 @@ impl PluginManager {
                                     ),
                                     timestamp: chrono::Utc::now(),
                                     is_waiting: output.is_waiting,
+                                    index: crate::desktop::pty::next_output_index(),
                                 };
                                 let _ = self.output_tx.send(event);
                             }
@@ -319,6 +320,7 @@ impl PluginManager {
                     ),
                     timestamp: chrono::Utc::now(),
                     is_waiting: output.is_waiting,
+                    index: crate::desktop::pty::next_output_index(),
                 };
 
                 let _ = output_tx.send(event);

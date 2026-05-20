@@ -3,12 +3,11 @@
 import { h, ref } from 'vue'
 import Toast from '@/modules/shared/components/Toast.vue'
 
-interface ToastOptions {
-  message: string
-  type?: 'success' | 'error' | 'warning' | 'info'
-  duration?: number
-  position?: 'top' | 'bottom'
-}
+// Re-export from model
+import type { ToastOptions } from './model'
+export type { ToastOptions }
+
+
 
 const toasts = ref<Array<{ id: number; options: ToastOptions }>>([])
 let toastId = 0

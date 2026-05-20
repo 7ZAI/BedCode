@@ -46,6 +46,10 @@ impl OutputForwarder {
                 result = output_rx.recv() => {
                     match result {
                         Ok(event) => {
+                            tracing::debug!(
+                                "[OutputForwarder] Received output for session {}, data_len={}",
+                                event.session_id, event.data.len()
+                            );
                             // 转发输出给订阅了该会话的客户端
                             if let Err(e) = self.forward_output(&event).await {
                                 tracing::error!("Failed to forward output: {}", e);
@@ -88,6 +92,7 @@ impl OutputForwarder {
             payload: crate::desktop::server::message::OutputPayload {
                 data: event.data.clone(),
                 is_waiting,
+                index: event.index,
             },
         };
         let json = message.to_json()?;
@@ -97,15 +102,34 @@ impl OutputForwarder {
         let clients = self.clients.read().await;
         let senders = self.client_senders.read().await;
 
+        tracing::debug!(
+            "[OutputForwarder] Forwarding to {} clients, target_session={}",
+            clients.len(), event.session_id
+        );
+
+        let mut sent_count = 0;
         for (addr, client) in clients.iter() {
-            if client.authenticated && client.subscribed_sessions.contains(&event.session_id) {
+            let is_subscribed = client.subscribed_sessions.contains(&event.session_id);
+            tracing::debug!(
+                "[OutputForwarder] Client {}: authenticated={}, subscribed_sessions={:?}, target_match={}",
+                addr, client.authenticated, client.subscribed_sessions, is_subscribed
+            );
+            if client.authenticated && is_subscribed {
                 if let Some(tx) = senders.get(addr) {
                     if tx.send(ws_message.clone()).is_err() {
                         tracing::debug!("Failed to send output to client {}", addr);
+                    } else {
+                        sent_count += 1;
+                        tracing::debug!("[OutputForwarder] Sent output to client {}", addr);
                     }
                 }
             }
         }
+
+        tracing::debug!(
+            "[OutputForwarder] Forwarded output for session {}, sent to {} clients",
+            event.session_id, sent_count
+        );
 
         Ok(())
     }

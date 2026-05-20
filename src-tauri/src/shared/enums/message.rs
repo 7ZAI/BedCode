@@ -18,6 +18,8 @@ pub struct OutputPayload {
     pub data: String,
     /// 是否等待输入
     pub is_waiting: bool,
+    /// 全局递增索引，用于去重
+    pub index: usize,
 }
 
 /// 输入载荷
@@ -137,7 +139,7 @@ fn generate_message_id() -> String {
 
 impl Message {
     /// 创建输出消息
-    pub fn output(session_id: &str, data: &[u8], is_waiting: bool) -> Self {
+    pub fn output(session_id: &str, data: &[u8], is_waiting: bool, index: usize) -> Self {
         Message::Output {
             message_id: generate_message_id(),
             session_id: session_id.to_string(),
@@ -145,6 +147,7 @@ impl Message {
             payload: OutputPayload {
                 data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
                 is_waiting,
+                index,
             },
         }
     }

@@ -1,6 +1,9 @@
 import { listen } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/modules/shared/stores/session'
-import type { SessionStatusEvent, SessionRestartEvent } from '@/modules/shared/composables/useTauri'
+
+// Re-export from model
+import type { SessionStatusEvent, SessionRestartEvent } from './model'
+export type { SessionStatusEvent, SessionRestartEvent }
 
 let unlistenStatusChange: (() => void) | null = null
 let unlistenRestart: (() => void) | null = null

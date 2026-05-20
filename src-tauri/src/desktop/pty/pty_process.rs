@@ -1,132 +1,20 @@
 //! PTY Process Management
 //!
 //! 封装 portable-pty，提供跨平台的 PTY 管理功能
+//! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
 
-use super::wsl::windows_to_wsl_path;
+use crate::desktop::enums::{PtySessionStatus, SessionLaunchConfig};
+use crate::desktop::model::PtyOutputEvent;
+use crate::desktop::pty::command::build_command;
 use crate::Result;
-use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+use portable_pty::{native_pty_system, PtyPair, PtySize};
 use std::io::{BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
-
-/// 执行环境类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type")]
-pub enum ExecutionEnvironment {
-    /// Windows 原生环境
-    Windows {
-        shell: WindowsShell,
-    },
-    /// WSL2 环境
-    Wsl2 {
-        distro: String,
-    },
-}
-
-/// Windows Shell 类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum WindowsShell {
-    PowerShell,
-    Cmd,
-}
-
-impl Default for ExecutionEnvironment {
-    fn default() -> Self {
-        Self::Windows {
-            shell: WindowsShell::PowerShell,
-        }
-    }
-}
-
-/// 会话启动配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionLaunchConfig {
-    /// 会话名称
-    pub name: String,
-    /// 执行环境
-    pub environment: ExecutionEnvironment,
-    /// 工作目录
-    pub working_dir: String,
-    /// 启动命令
-    pub command: String,
-    /// 环境变量
-    #[serde(default)]
-    pub env_vars: HashMap<String, String>,
-    /// Tmux 会话名（可选）
-    pub tmux_session: Option<String>,
-    /// 终端列数
-    #[serde(default = "default_cols")]
-    pub cols: u16,
-    /// 终端行数
-    #[serde(default = "default_rows")]
-    pub rows: u16,
-}
-
-fn default_cols() -> u16 { 120 }
-fn default_rows() -> u16 { 40 }
-
-impl SessionLaunchConfig {
-    /// 创建新的启动配置
-    pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            environment: ExecutionEnvironment::default(),
-            working_dir: std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            command: command.into(),
-            env_vars: HashMap::new(),
-            tmux_session: None,
-            cols: default_cols(),
-            rows: default_rows(),
-        }
-    }
-
-    /// 设置执行环境
-    pub fn with_environment(mut self, env: ExecutionEnvironment) -> Self {
-        self.environment = env;
-        self
-    }
-
-    /// 设置工作目录
-    pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.working_dir = dir.into();
-        self
-    }
-
-    /// 设置 Tmux 会话
-    pub fn with_tmux_session(mut self, session: impl Into<String>) -> Self {
-        self.tmux_session = Some(session.into());
-        self
-    }
-}
-
-/// PTY 输出事件
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PtyOutputEvent {
-    pub session_id: String,
-    pub data: String, // Base64 encoded
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    /// 是否等待用户输入（用于插件会话）
-    #[serde(default)]
-    pub is_waiting: bool,
-}
-
-/// PTY 会话状态
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PtySessionStatus {
-    Starting,
-    Running,
-    WaitingInput,
-    Stopped,
-    Error,
-}
 
 /// PTY 会话内部状态
 ///
@@ -239,7 +127,7 @@ impl PtySession {
     pub async fn start(&self) -> Result<()> {
         let (cmd, pair) = {
             let mut state = self.state.lock().await;
-            let cmd = self.build_command(&state.config)?;
+            let cmd = build_command(&state.config)?;
 
             // 从 state 中取出 pair
             let pair = state.pair.take()
@@ -266,152 +154,6 @@ impl PtySession {
         self.start_output_reader().await?;
 
         tracing::info!("PTY session started: {} ({}, pid={:?})", self.id, self.id, pid);
-        Ok(())
-    }
-
-    /// 构建命令
-    fn build_command(&self, config: &SessionLaunchConfig) -> Result<CommandBuilder> {
-        let mut cmd = match &config.environment {
-            ExecutionEnvironment::Windows { shell } => {
-                match shell {
-                    WindowsShell::PowerShell => {
-                        // 构建完整的 PowerShell 命令：
-                        // 1. 切换控制台编码为 UTF-8，确保中文等字符正确显示
-                        // 2. 切换到指定目录
-                        // 3. 显示当前路径（让用户确认）
-                        // 4. 执行用户配置的命令
-                        let full_command = format!(
-                            "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Set-Location '{}'; Write-Host 'Working directory:' $PWD.Path; {}",
-                            config.working_dir,
-                            config.command
-                        );
-
-                        let mut cmd = CommandBuilder::new("powershell.exe");
-                        cmd.arg("-NoLogo");
-                        cmd.arg("-NoExit");
-                        cmd.arg("-Command");
-                        cmd.arg(full_command);
-                        cmd
-                    }
-                    WindowsShell::Cmd => {
-                        // 构建完整的 CMD 命令：
-                        // 1. 切换控制台编码为 UTF-8，确保中文等字符正确显示
-                        // 2. 切换到指定目录
-                        // 3. 执行用户配置的命令
-                        let full_command = format!(
-                            "@chcp 65001 > nul && cd /d \"{}\" && echo Working directory: %cd% && {}",
-                            config.working_dir,
-                            config.command
-                        );
-
-                        let mut cmd = CommandBuilder::new("cmd.exe");
-                        cmd.arg("/K");
-                        cmd.arg(full_command);
-                        cmd
-                    }
-                }
-            }
-            ExecutionEnvironment::Wsl2 { distro } => {
-                let mut cmd = CommandBuilder::new("wsl.exe");
-                cmd.arg("-d");
-                cmd.arg(distro);
-                cmd.arg("--");
-                cmd.arg("bash");
-                cmd.arg("-lic");
-
-                // 构建在 WSL 中执行的命令：
-                // 1. 将 Windows 路径转换为 WSL 路径（如 \\wsl.localhost\Ubuntu\... -> /home/...）
-                // 2. 切换到指定目录
-                // 3. 显示当前路径
-                // 4. 执行用户命令
-                // -l 使 bash 加载登录配置（包括 PATH）
-                // -i 使 bash 交互式运行
-                let wsl_path = windows_to_wsl_path(&config.working_dir);
-                let wsl_command = format!(
-                    "cd '{}' && pwd && {}",
-                    wsl_path,
-                    config.command
-                );
-                cmd.arg(wsl_command);
-                cmd
-            }
-        };
-
-        // 设置进程工作目录（作为备选，确保进程启动位置正确）
-        if matches!(config.environment, ExecutionEnvironment::Windows { .. }) {
-            cmd.cwd(&config.working_dir);
-        }
-
-        // 设置环境变量
-        for (key, value) in &config.env_vars {
-            cmd.env(key, value);
-        }
-
-        Ok(cmd)
-    }
-
-    /// 启动输出读取线程
-    async fn start_output_reader(&self) -> Result<()> {
-        let reader = {
-            let mut state = self.state.lock().await;
-            let pair = state.pair.as_mut()
-                .ok_or_else(|| crate::AppError::Pty("PTY pair not available".to_string()))?;
-
-            pair.master.try_clone_reader()
-                .map_err(|e| crate::AppError::Pty(e.to_string()))?
-        };
-
-        let mut buf_reader = BufReader::new(reader);
-        let output_tx = self.output_tx.clone();
-        let lifecycle_tx = self.lifecycle_tx.clone();
-        let session_id = self.id.clone();
-        let running = self.running.clone();
-
-        let handle = thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
-            let mut exit_status = PtySessionStatus::Stopped;
-
-            while running.load(Ordering::SeqCst) {
-                match buf_reader.read(&mut buffer) {
-                    Ok(0) => {
-                        // EOF - process exited
-                        tracing::info!("PTY session ended: {}", session_id);
-                        break;
-                    }
-                    Ok(n) => {
-                        let event = PtyOutputEvent {
-                            session_id: session_id.clone(),
-                            data: base64::Engine::encode(
-                                &base64::engine::general_purpose::STANDARD,
-                                &buffer[..n],
-                            ),
-                            timestamp: chrono::Utc::now(),
-                            is_waiting: false,
-                        };
-
-                        if output_tx.send(event).is_err() {
-                            tracing::debug!("No output subscribers for session: {}", session_id);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("PTY read error: {}", e);
-                        exit_status = PtySessionStatus::Error;
-                        break;
-                    }
-                }
-            }
-
-            // Notify lifecycle subscribers that the process has exited
-            let _ = lifecycle_tx.send(exit_status);
-            tracing::debug!("Output reader stopped for session: {} (status: {:?})", session_id, exit_status);
-        });
-
-        // 保存线程句柄
-        {
-            let mut state = self.state.lock().await;
-            state.reader_handle = Some(handle);
-        }
-
         Ok(())
     }
 
@@ -517,7 +259,6 @@ impl PtySession {
 
         // 如果有进程 ID，强制终止进程树
         if let Some(pid) = pid {
-            // 在 Windows 上使用 taskkill 强制终止进程及其子进程
             #[cfg(target_os = "windows")]
             {
                 tracing::info!("Executing taskkill for PID {}", pid);
@@ -530,7 +271,6 @@ impl PtySession {
                 }
             }
 
-            // 在 Linux/macOS 上使用 kill
             #[cfg(not(target_os = "windows"))]
             {
                 let _ = std::process::Command::new("kill")
@@ -543,6 +283,73 @@ impl PtySession {
         }
 
         tracing::info!("PTY session killed: {} (pid={:?})", self.id, pid);
+        Ok(())
+    }
+
+    /// 启动输出读取线程
+    async fn start_output_reader(&self) -> Result<()> {
+        let reader = {
+            let mut state = self.state.lock().await;
+            let pair = state.pair.as_mut()
+                .ok_or_else(|| crate::AppError::Pty("PTY pair not available".to_string()))?;
+
+            pair.master.try_clone_reader()
+                .map_err(|e| crate::AppError::Pty(e.to_string()))?
+        };
+
+        let mut buf_reader = BufReader::new(reader);
+        let output_tx = self.output_tx.clone();
+        let lifecycle_tx = self.lifecycle_tx.clone();
+        let session_id: String = self.id.clone();
+        let running = self.running.clone();
+        let next_index = crate::desktop::pty::next_output_index;
+
+        let handle = thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            let mut exit_status = PtySessionStatus::Stopped;
+
+            while running.load(Ordering::SeqCst) {
+                match buf_reader.read(&mut buffer) {
+                    Ok(0) => {
+                        // EOF - process exited
+                        tracing::info!("PTY session ended: {}", session_id);
+                        break;
+                    }
+                    Ok(n) => {
+                        let event = PtyOutputEvent {
+                            session_id: session_id.clone(),
+                            data: base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &buffer[..n],
+                            ),
+                            timestamp: chrono::Utc::now(),
+                            is_waiting: false,
+                            index: next_index(),
+                        };
+
+                        if output_tx.send(event).is_err() {
+                            tracing::debug!("No output subscribers for session: {}", session_id);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("PTY read error: {}", e);
+                        exit_status = PtySessionStatus::Error;
+                        break;
+                    }
+                }
+            }
+
+            // Notify lifecycle subscribers that the process has exited
+            let _ = lifecycle_tx.send(exit_status);
+            tracing::debug!("Output reader stopped for session: {} (status: {:?})", session_id, exit_status);
+        });
+
+        // 保存线程句柄
+        {
+            let mut state = self.state.lock().await;
+            state.reader_handle = Some(handle);
+        }
+
         Ok(())
     }
 }

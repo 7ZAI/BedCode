@@ -2,24 +2,16 @@ import { listen } from '@tauri-apps/api/event'
 import { useToast } from './useToast'
 import { useSessionStore } from '@/modules/shared/stores/session'
 
+// Re-export from model
+import type { SessionEventPayload, DeviceEventPayload } from './model'
+export type { SessionEventPayload, DeviceEventPayload }
+
 let unlistenDeviceConnected: (() => void) | null = null
 let unlistenDeviceDisconnected: (() => void) | null = null
 let unlistenSessionCreated: (() => void) | null = null
 let unlistenSessionStopped: (() => void) | null = null
 
-interface SessionEventPayload {
-  type: string
-  event_type?: string
-  session?: { id: string; name: string; status: string }
-  device_name?: string
-}
 
-interface DeviceEventPayload {
-  addr?: string
-  device_id?: string
-  device_name?: string
-  event?: string
-}
 
 /**
  * 全局通知监听

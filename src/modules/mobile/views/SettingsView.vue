@@ -174,7 +174,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
+import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 import Toggle from '@/modules/shared/components/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'

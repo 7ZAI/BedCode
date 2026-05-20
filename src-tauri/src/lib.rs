@@ -208,6 +208,11 @@ pub fn run() {
             // 创建会话存储（通过 trait）
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
+
+            // 创建会话配置管理器
+            let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
+            app.manage(config_manager.clone());
+
             app.manage(session_manager.clone());
 
             let plugin_manager = Arc::new(desktop::plugin::PluginManager::new(
@@ -279,12 +284,15 @@ pub fn run() {
                 }
             });
 
-            // 转发 PTY 输出到所有 WebSocket 客户端（移动端）
-            let ws_manager_output = ws_manager.clone();
+            // 转发 PTY 输出到已认证并订阅了该会话的 WebSocket 客户端（移动端）
+            let ws_manager_output: &desktop::WebSocketManager = ws_manager.clone();
             let session_manager_output = session_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let mut rx = session_manager_output.subscribe_output();
                 while let Ok(event) = rx.recv().await {
+                    // 写入缓存，供移动端后续订阅时获取历史输出
+                    session_manager_output.cache_output(&event).await;
+
                     let decoded_data = base64::Engine::decode(
                         &base64::engine::general_purpose::STANDARD,
                         &event.data,
@@ -299,8 +307,10 @@ pub fn run() {
                         payload: crate::desktop::server::message::OutputPayload {
                             data: event.data.clone(),
                             is_waiting,
+                            index: event.index,
                         },
                     };
+                    // 仅转发给已认证并订阅了该会话的客户端（OutputForwarder 逻辑）
                     if let Err(e) = ws_manager_output.broadcast(&message).await {
                         tracing::error!("Failed to broadcast PTY output: {}", e);
                     }
@@ -351,11 +361,11 @@ pub fn run() {
             desktop::commands::is_tmux_available,
             desktop::commands::create_tmux_session,
             // Session Config
-            shared::system::commands::create_session_config,
-            shared::system::commands::list_session_configs,
-            shared::system::commands::get_session_config,
-            shared::system::commands::delete_session_config,
-            shared::system::commands::update_session_config,
+            desktop::commands::create_session_config,
+            desktop::commands::list_session_configs,
+            desktop::commands::get_session_config,
+            desktop::commands::delete_session_config,
+            desktop::commands::update_session_config,
             // Session
             desktop::commands::start_session,
             desktop::commands::list_sessions,
@@ -375,18 +385,18 @@ pub fn run() {
             shared::system::commands::list_paired_devices,
             shared::system::commands::remove_paired_device,
             // QR Code
-            shared::system::commands::generate_qr_code,
-            shared::system::commands::clear_qr_code,
-            shared::system::commands::get_qr_connection_info,
-            shared::system::commands::get_qr_token_ttl,
-            shared::system::commands::set_qr_token_ttl,
+            desktop::commands::generate_qr_code,
+            desktop::commands::clear_qr_code,
+            desktop::commands::get_qr_connection_info,
+            desktop::commands::get_qr_token_ttl,
+            desktop::commands::set_qr_token_ttl,
             // Quick Actions
-            shared::system::commands::list_quick_actions,
-            shared::system::commands::create_quick_action,
-            shared::system::commands::update_quick_action,
-            shared::system::commands::delete_quick_action,
-            shared::system::commands::get_all_db_settings,
-            shared::system::commands::set_db_setting,
+            desktop::commands::list_quick_actions,
+            desktop::commands::create_quick_action,
+            desktop::commands::update_quick_action,
+            desktop::commands::delete_quick_action,
+            desktop::commands::get_all_db_settings,
+            desktop::commands::set_db_setting,
             // Settings
             shared::system::commands::get_app_settings,
             shared::system::commands::save_app_settings,
@@ -524,6 +534,8 @@ pub fn run() {
             mobile::commands::ws_send_and_wait,
             mobile::commands::ws_resize_terminal,
             mobile::commands::ws_load_session_configs,
+            mobile::commands::ws_join_session,
+            mobile::commands::ws_leave_session,
             // Pairing
             shared::system::commands::generate_pairing_code,
             shared::system::commands::get_current_pairing_code,

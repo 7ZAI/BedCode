@@ -75,7 +75,7 @@ import type { SessionConfig } from '@/modules/shared/stores/session'
 import Input from '@/modules/shared/components/Input.vue'
 import Select from '@/modules/shared/components/Select.vue'
 import Toggle from '@/modules/shared/components/Toggle.vue'
-import { useWsl } from '@/modules/shared/composables/useTauri'
+import { useWsl } from '@/modules/desktop/composables/useWsl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 
@@ -122,11 +122,11 @@ watch(() => props.config, (config) => {
     form.value = {
       name: config.name,
       environment: config.environment,
-      wslDistro: config.wslDistro || '',
-      workingDir: config.workingDir,
-      command: config.command,
-      tmuxSession: config.tmuxSession || '',
-      autoStart: config.autoStart,
+      wslDistro: config.wslDistro || config.wsl_distro || '',
+      workingDir: config.workingDir || config.working_dir || '',
+      command: config.command || '',
+      tmuxSession: config.tmuxSession || config.tmux_session || '',
+      autoStart: config.autoStart ?? config.auto_start ?? false,
     }
   } else {
     form.value = {

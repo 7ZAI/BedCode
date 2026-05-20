@@ -1,9 +1,8 @@
 import { ref, onUnmounted } from 'vue'
 
-export interface BufferedOutput {
-  text: string
-  timestamp: number
-}
+// Re-export from model
+import type { BufferedOutput } from './model'
+export type { BufferedOutput }
 
 export function useOutputBuffer(flushInterval: number = 50, maxBufferSize: number = 10000) {
   const buffer = ref<string[]>([])

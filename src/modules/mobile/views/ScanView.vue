@@ -78,8 +78,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Html5Qrcode } from 'html5-qrcode'
-import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
-import { wsAuthenticateWithQr } from '@/modules/shared/composables/useMobileCommands'
+import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
+import { wsAuthenticateWithQr } from '@/modules/mobile/composables/useMobileCommands'
 
 interface QrConnectData {
   host: string

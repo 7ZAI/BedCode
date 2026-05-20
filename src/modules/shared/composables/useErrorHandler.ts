@@ -4,12 +4,9 @@
 
 import { ref, readonly } from 'vue'
 
-export interface AppError {
-  code: string
-  message: string
-  timestamp: Date
-  details?: unknown
-}
+// Re-export from model
+import type { AppError } from './model'
+export type { AppError }
 
 type ErrorSeverity = 'error' | 'warning' | 'info'
 
@@ -60,13 +57,13 @@ function parseBackendError(error: unknown): AppError {
       return {
         code: match[1],
         message: match[2],
-        timestamp: new Date(),
+        timestamp: Date.now(),
       }
     }
     return {
       code: 'UNKNOWN_ERROR',
       message: error,
-      timestamp: new Date(),
+      timestamp: Date.now(),
     }
   }
 
@@ -74,16 +71,16 @@ function parseBackendError(error: unknown): AppError {
     return {
       code: 'UNKNOWN_ERROR',
       message: error.message,
-      timestamp: new Date(),
-      details: error,
+      timestamp: Date.now(),
+      details: error.message,
     }
   }
 
   return {
     code: 'UNKNOWN_ERROR',
     message: String(error),
-    timestamp: new Date(),
-    details: error,
+    timestamp: Date.now(),
+    details: String(error),
   }
 }
 
@@ -109,7 +106,7 @@ export function useErrorHandler() {
     const fullError: AppError = {
       ...appError,
       message: friendlyMessage,
-      details: options.details || appError.details,
+      details: (options.details || appError.details) as string | undefined,
     }
 
     // 记录错误

@@ -58,9 +58,9 @@ import Sidebar from '@/modules/desktop/components/Sidebar.vue'
 import MobileNav from '@/modules/mobile/components/MobileNav.vue'
 import { usePlatform } from '@/modules/shared/composables/usePlatform'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
-import { useSafeAreaDetection } from '@/modules/shared/composables/useSafeAreaDetection'
+import { useSafeAreaDetection } from '@/modules/mobile/composables/useSafeAreaDetection'
 import { useGlobalNotifications } from '@/modules/shared/composables/useGlobalNotifications'
-import { useOrientation } from '@/modules/shared/composables/useOrientation'
+import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { ToastContainer } from '@/modules/shared/composables/useToast'
 
 const route = useRoute()

@@ -1,26 +1,36 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { usePairing, type Pairing } from '@/modules/shared/composables/useTauri'
+import {
+  generatePairingCode,
+  verifyPairingCode,
+  listPairedDevices,
+  removePairedDevice,
+} from '@/modules/desktop/composables/useDesktopCommands'
 
-export type { Pairing }
+export interface PairedDevice {
+  id: string
+  name: string
+  deviceName?: string
+  address: string
+  port: number
+  pairedAt?: string
+}
 
 export const useDeviceStore = defineStore('device', () => {
-  const pairedDevices = ref<Pairing[]>([])
+  const pairedDevices = ref<PairedDevice[]>([])
   const pairingCode = ref<string | null>(null)
   const pairingExpiry = ref<number>(0)
 
-  const pairingApi = usePairing()
-
   async function loadPairedDevices() {
-    await pairingApi.loadDevices()
-    pairedDevices.value = pairingApi.devices.value
+    pairedDevices.value = await listPairedDevices()
   }
 
   async function startPairing() {
-    const result = await invoke<{ code: string; expires_in: number }>('generate_pairing_code')
-    pairingCode.value = result.code
-    pairingExpiry.value = result.expires_in
+    const code = await generatePairingCode()
+    pairingCode.value = code
+    // Default 5 minutes expiry
+    pairingExpiry.value = 300
 
     // Start countdown
     const interval = setInterval(() => {
@@ -35,11 +45,8 @@ export const useDeviceStore = defineStore('device', () => {
 
   async function verifyPairing(code: string, _deviceAddress?: string, _devicePort?: number): Promise<boolean> {
     try {
-      // In real implementation, this would connect to the desktop app
-      // and verify the pairing code
-      // For now, we'll use the local Tauri command
-      await invoke('verify_pairing_code', { code })
-      return true
+      const result = await verifyPairingCode(code)
+      return result
     } catch (error) {
       console.error('Pairing verification failed:', error)
       return false
@@ -47,8 +54,8 @@ export const useDeviceStore = defineStore('device', () => {
   }
 
   async function removeDevice(deviceId: string) {
-    await pairingApi.removeDevice(deviceId)
-    pairedDevices.value = pairingApi.devices.value
+    await removePairedDevice(deviceId)
+    pairedDevices.value = await listPairedDevices()
   }
 
   function clearPairingCode() {

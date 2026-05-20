@@ -195,8 +195,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
-import { wsSendInput } from '@/modules/shared/composables/useMobileCommands'
+import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
+import { wsSendInput } from '@/modules/mobile/composables/useMobileCommands'
 import QuickActionButton from '@/modules/mobile/components/QuickActionButton.vue'
 import { invoke } from '@tauri-apps/api/core'
 

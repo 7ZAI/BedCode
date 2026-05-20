@@ -17,6 +17,7 @@ use crate::shared::websocket::{
 pub struct OutputPayloadData {
     pub data: String,
     pub is_waiting: bool,
+    pub index: usize,
 }
 
 /// Mobile 消息类型（与桌面端协商的业务协议）
@@ -73,6 +74,8 @@ pub enum MobileEvent {
         session_id: String,
         data: String,
         is_waiting: bool,
+        /// 全局递增索引，用于去重
+        index: usize,
     },
     /// 认证成功
     AuthSuccess {
@@ -147,12 +150,15 @@ impl ClientMessageHandler for MobileHandler {
                 MobileMessage::Output { session_id, payload } => {
                     let is_waiting = payload.is_waiting;
                     let data_len = payload.data.len();
+                    let index = payload.index;
+                    tracing::debug!("[MobileHandler] Output received: session_id={}, data_len={}, is_waiting={}, index={}", session_id, data_len, is_waiting, index);
                     self_clone.send_event(MobileEvent::Output {
-                        session_id,
-                        data: payload.data,
+                        session_id: session_id.clone(),
+                        data: payload.data.clone(),
                         is_waiting,
+                        index,
                     });
-                    tracing::debug!("Output received for session, data length: {}", data_len);
+                    tracing::debug!("[MobileHandler] Output event sent: session_id={}", session_id);
                 }
                 MobileMessage::Auth { stage, device_id, session_token, error, .. } => {
                     match stage.as_str() {

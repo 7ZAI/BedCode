@@ -18,7 +18,7 @@ use crate::Result;
 use crate::mobile::{
     AuthCredentials, AuthManager, ConnectionManager,
     SessionInfo, SessionManager,
-    MobileEvent,
+    MobileEvent, get_terminal_manager,
 };
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::shared::websocket::WsMessage;
@@ -87,19 +87,40 @@ pub async fn ws_connect(
     tracing::info!("Emitted ws_connecting event");
 
     // 启动输出事件转发（仅一次），将 MobileEvent::Output 转发为 Tauri ws_output 事件
+    // 同时将数据写入 TerminalBuffer（由 Rust 后端管理缓冲区）
     if !OUTPUT_FORWARDING_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         let conn_fwd = get_connection_manager();
         let mut event_rx = conn_fwd.handler().subscribe();
         let app_clone = app_handle.clone();
+        let terminal_mgr = get_terminal_manager();
         spawn_with_error_boundary("output_forwarder", async move {
             tracing::info!("[OutputForwarder] Started forwarding output events");
             while let Ok(event) = event_rx.recv().await {
-                if let MobileEvent::Output { session_id, data, is_waiting } = event {
-                    let _ = app_clone.emit("ws_output", serde_json::json!({
+                if let MobileEvent::Output { session_id, data, is_waiting, index: global_index } = event {
+                    tracing::debug!("[MobileCommands] Output event received: session_id={}, data_len={}, global_index={}", session_id, data.len(), global_index);
+                    // 1. 写入 TerminalBuffer（Rust 后端管理缓冲区，负责 Base64 解码和字节限制）
+                    // 注意：这里的 index 应该使用桌面端传来的全局索引，而不是缓冲区自己的索引
+                    terminal_mgr.write_output_with_index(&session_id, data.clone(), is_waiting, global_index).await;
+                    tracing::debug!("[MobileCommands] Written to buffer with global_index={}", global_index);
+
+                    // 2. 转发解码后的数据给前端（前端不再需要 Base64 解码）
+                    let decoded_data = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &data,
+                    ).unwrap_or_default();
+                    let decoded_str = String::from_utf8_lossy(&decoded_data).to_string();
+
+                    let emit_result = app_clone.emit("ws_output", serde_json::json!({
                         "session_id": session_id,
-                        "data": data,
+                        "data": decoded_str,
                         "is_waiting": is_waiting,
+                        "index": global_index,
                     }));
+                    if let Err(e) = emit_result {
+                        tracing::error!("[MobileCommands] Failed to emit ws_output: {}", e);
+                    } else {
+                        tracing::debug!("[MobileCommands] Emitted ws_output: session_id={}", session_id);
+                    }
                 }
             }
             tracing::warn!("[OutputForwarder] Event channel closed");
@@ -322,6 +343,50 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
     Ok(Vec::new())
 }
 
+/// 订阅会话，开始接收该会话的输出
+#[tauri::command]
+pub async fn ws_join_session(session_id: String) -> Result<()> {
+    tracing::info!("[ws_join_session] session_id={}", session_id);
+    let conn = get_connection_manager();
+    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+        "type": "control",
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": {
+            "action": {
+                "type": "join_session",
+                "session_id": session_id
+            }
+        }
+    })).unwrap());
+
+    conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
+    tracing::info!("[ws_join_session] Joined session successfully: {}", session_id);
+    Ok(())
+}
+
+/// 取消订阅会话，停止接收该会话的输出
+#[tauri::command]
+pub async fn ws_leave_session(session_id: String) -> Result<()> {
+    tracing::info!("[ws_leave_session] session_id={}", session_id);
+    let conn = get_connection_manager();
+    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+        "type": "control",
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "payload": {
+            "action": {
+                "type": "leave_session",
+                "session_id": session_id
+            }
+        }
+    })).unwrap());
+
+    conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
+    tracing::info!("[ws_leave_session] Left session successfully: {}", session_id);
+    Ok(())
+}
+
 /// 启动会话
 #[tauri::command]
 pub async fn ws_start_session(config_id: String, session_name: Option<String>) -> Result<String> {
@@ -542,5 +607,84 @@ pub async fn keep_screen_awake(
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn keep_screen_awake(_enabled: bool) -> Result<()> {
+    Ok(())
+}
+
+// ==================== Terminal Commands ====================
+
+/// 获取会话的完整输出历史（用于首次连接或断线重连后恢复数据）
+#[tauri::command]
+pub async fn ws_get_terminal_history(session_id: String) -> Result<crate::mobile::TerminalHistory> {
+    let terminal_mgr = get_terminal_manager();
+    let history = terminal_mgr.get_history(&session_id).await;
+    tracing::debug!(
+        "[ws_get_terminal_history] session_id={}, events_count={}, current_index={}",
+        session_id,
+        history.events.len(),
+        history.current_index
+    );
+    Ok(history)
+}
+
+/// 订阅终端（记录当前索引位置，用于增量获取）
+#[tauri::command]
+pub async fn ws_subscribe_terminal(session_id: String) -> Result<usize> {
+    let terminal_mgr = get_terminal_manager();
+    let index = terminal_mgr.subscribe(&session_id).await;
+    tracing::debug!("[ws_subscribe_terminal] session_id={}, index={}", session_id, index);
+    Ok(index)
+}
+
+/// 取消订阅终端
+#[tauri::command]
+pub async fn ws_unsubscribe_terminal(session_id: String) -> Result<()> {
+    let terminal_mgr = get_terminal_manager();
+    terminal_mgr.unsubscribe(&session_id).await;
+    tracing::debug!("[ws_unsubscribe_terminal] session_id={}", session_id);
+    Ok(())
+}
+
+/// 获取增量输出（自上次获取之后的新数据）
+#[tauri::command]
+pub async fn ws_get_terminal_incremental(
+    session_id: String,
+) -> Result<Option<crate::mobile::TerminalIncrementalOutput>> {
+    let terminal_mgr = get_terminal_manager();
+    let incremental = terminal_mgr.get_incremental(&session_id).await;
+    if let Some(ref inc) = incremental {
+        tracing::debug!(
+            "[ws_get_terminal_incremental] session_id={}, new_events={}, current_index={}",
+            session_id,
+            inc.events.len(),
+            inc.current_index
+        );
+    }
+    Ok(incremental)
+}
+
+/// 更新订阅者的索引位置（在增量数据消费后调用）
+#[tauri::command]
+pub async fn ws_update_terminal_index(session_id: String, index: usize) -> Result<()> {
+    let terminal_mgr = get_terminal_manager();
+    terminal_mgr.update_subscriber_index(&session_id, index).await;
+    tracing::debug!("[ws_update_terminal_index] session_id={}, index={}", session_id, index);
+    Ok(())
+}
+
+/// 清空终端缓冲区
+#[tauri::command]
+pub async fn ws_clear_terminal_buffer(session_id: String) -> Result<()> {
+    let terminal_mgr = get_terminal_manager();
+    terminal_mgr.clear_buffer(&session_id).await;
+    tracing::debug!("[ws_clear_terminal_buffer] session_id={}", session_id);
+    Ok(())
+}
+
+/// 清除所有终端缓冲区（断开连接时调用）
+#[tauri::command]
+pub async fn ws_clear_all_terminal_buffers() -> Result<()> {
+    let terminal_mgr = get_terminal_manager();
+    terminal_mgr.clear_all().await;
+    tracing::debug!("[ws_clear_all_terminal_buffers] All buffers cleared");
     Ok(())
 }

@@ -1,567 +1,67 @@
-//! Tauri API Composable
+//! Tauri API Types Re-export and Composables
 //!
-//! Vue composable for calling Tauri backend commands
+//! 从各模块重新导出 Tauri 相关的类型和函数
 
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
-import type { Ref } from 'vue'
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref } from 'vue'
+import {
+  generateQrCode,
+  clearQrCode,
+  getQrConnectionInfo,
+  getQrTokenTtl,
+  setQrTokenTtl,
+} from '@/modules/desktop/composables/useDesktopCommands'
 
-// Types
-export interface SessionConfig {
-  id: string
-  name: string
-  environment: 'windows' | 'wsl2'
-  wslDistro?: string
-  workingDir: string
-  command: string
-  tmuxSession?: string
-  autoStart: boolean
-  createdAt: string
-  updatedAt: string
-}
+// Re-export types from desktop model
+export type { SessionInfo, SessionConfig, DeviceConnectionInfo, WslDistro, TmuxSession } from '@/modules/desktop/composables/model'
 
-export interface SessionInfo {
-  id: string
-  configId: string
-  name: string
-  // 注意：后端使用 camelCase 序列化 enum，所以值是小写开头的
-  status: 'starting' | 'running' | 'waitingInput' | 'stopped' | 'error'
-  createdAt: string
-  startedAt?: string
-  stoppedAt?: string
-  sessionType: 'pty' | 'plugin'
-}
+// Re-export types from mobile model
+export type { ConnectionStatus, RemoteDevice, AuthCredentials, ConnectionInfo, AuthState, RemoteSession, TerminalOutputEvent, TerminalHistory, TerminalIncrementalOutput } from '@/modules/mobile/composables/model'
 
-export interface PtyOutputEvent {
-  sessionId: string
-  data: string // Base64 encoded
-  timestamp: string
-}
+// Re-export types from shared model
+export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, PluginSessionInfo, AnsiRenderOptions, AppError, Shortcut, BufferedOutput, OutputBlock, PairedDevice, Notification } from '@/modules/shared/composables/model'
 
-export interface SessionStatusEvent {
-  sessionId: string
-  oldStatus: 'starting' | 'running' | 'waitingInput' | 'stopped' | 'error' | null
-  newStatus: 'starting' | 'running' | 'waitingInput' | 'stopped' | 'error'
-  sessionName: string
-}
+// 重新导出桌面端 composables
+export { useWsl } from '@/modules/desktop/composables/useWsl'
+export { usePtyOutput } from '@/modules/desktop/composables/usePtyOutput'
+export { usePairing } from '@/modules/desktop/composables/usePairing'
+export { useNetwork } from '@/modules/desktop/composables/useNetwork'
+export { useConnectedDevices } from '@/modules/desktop/composables/useConnectedDevices'
 
-export interface SessionRestartEvent {
-  oldSessionId: string
-  newSessionId: string
-  sessionName: string
-}
+// 重新导出 QR 码 composable
+export { useQrCode } from '@/modules/shared/composables/useQrCode'
 
-export interface WslDistro {
-  name: string
-  isDefault: boolean
-  state: string
-  version: number
-}
-
-export interface TmuxSession {
-  name: string
-  windows: number
-  isAttached: boolean
-  created?: string
-}
-
-export interface QuickAction {
-  id: string
-  name: string
-  content: string
-  icon?: string
-  color?: string
-  sortOrder: number
-  createdAt: string
-}
-
-export interface Pairing {
-  id: string
-  deviceName: string
-  deviceFingerprint: string
-  publicKey: string
-  pairedAt: string
-  lastSeen?: string
-  isActive: boolean
-}
-
-export interface PairingCode {
-  code: string
-  expiresIn: number
-}
-
-export interface QrConnectionInfo {
-  token: string
-  host: string
-  port: number
-}
-
-// WSL Commands
-export function useWsl() {
-  const distros = ref<WslDistro[]>([])
-  const isAvailable = ref(false)
-
-  async function loadDistros() {
-    try {
-      isAvailable.value = await invoke('is_wsl_available')
-      if (isAvailable.value) {
-        distros.value = await invoke('list_wsl_distributions')
-      }
-    } catch (e) {
-      console.error('Failed to load WSL distros:', e)
-    }
-  }
-
-  return { distros, isAvailable, loadDistros }
-}
-
-// Tmux Commands
-export function useTmux() {
-  const sessions = ref<TmuxSession[]>([])
-  const isAvailable = ref(false)
-
-  async function loadSessions() {
-    try {
-      isAvailable.value = await invoke('is_tmux_available')
-      if (isAvailable.value) {
-        sessions.value = await invoke('list_tmux_sessions')
-      }
-    } catch (e) {
-      console.error('Failed to load tmux sessions:', e)
-    }
-  }
-
-  async function createSession(name: string, command?: string) {
-    await invoke('create_tmux_session', { name, command })
-    await loadSessions()
-  }
-
-  return { sessions, isAvailable, loadSessions, createSession }
-}
-
-// Session Config Commands
-export function useSessionConfig() {
-  const configs = ref<SessionConfig[]>([])
-
-  async function loadConfigs() {
-    try {
-      configs.value = await invoke('list_session_configs')
-    } catch (e) {
-      console.error('Failed to load session configs:', e)
-    }
-  }
-
-  async function createConfig(
-    name: string,
-    environment: string,
-    workingDir: string,
-    command: string,
-    wslDistro?: string,
-    tmuxSession?: string
-  ): Promise<SessionConfig> {
-    const config = await invoke('create_session_config', {
-      name,
-      environment,
-      workingDir,
-      command,
-      wslDistro,
-      tmuxSession,
-    })
-    await loadConfigs()
-    return config as SessionConfig
-  }
-
-  async function deleteConfig(id: string) {
-    await invoke('delete_session_config', { id })
-    await loadConfigs()
-  }
-
-  async function updateConfig(
-    id: string,
-    name: string,
-    environment: string,
-    workingDir: string,
-    command: string,
-    wslDistro?: string,
-    tmuxSession?: string,
-    autoStart?: boolean
-  ): Promise<SessionConfig> {
-    const config = await invoke('update_session_config', {
-      id,
-      name,
-      environment,
-      workingDir,
-      command,
-      wslDistro,
-      tmuxSession,
-      autoStart,
-    })
-    await loadConfigs()
-    return config as SessionConfig
-  }
-
-  return { configs, loadConfigs, createConfig, deleteConfig, updateConfig }
-}
-
-// Session Commands
-export function useSession() {
-  const sessions = ref<SessionInfo[]>([])
-  const outputs = ref<Map<string, string[]>>(new Map())
-  let unlistenSessionChanged: (() => void) | null = null
-
-  async function loadSessions() {
-    try {
-      sessions.value = await invoke('list_sessions')
-    } catch (e) {
-      console.error('Failed to load sessions:', e)
-    }
-  }
-
-  // 监听会话变更事件
-  async function setupSessionChangedListener() {
-    unlistenSessionChanged = await listen<{ change_type: string; session: any }>('session-changed', async (event) => {
-      console.log('Session changed:', event.payload)
-      // 刷新会话列表
-      await loadSessions()
-    })
-  }
-
-  // 清理监听器
-  function cleanupSessionChangedListener() {
-    if (unlistenSessionChanged) {
-      unlistenSessionChanged()
-      unlistenSessionChanged = null
-    }
-  }
-
-  async function startSession(configId: string): Promise<string> {
-    const sessionId = await invoke('start_session', { configId })
-    await loadSessions()
-    return sessionId as string
-  }
-
-  async function killSession(sessionId: string) {
-    await invoke('kill_session', { sessionId })
-    await loadSessions()
-  }
-
-  async function deleteSession(sessionId: string) {
-    await invoke('delete_session', { sessionId })
-    await loadSessions()
-  }
-
-  async function restartSession(sessionId: string): Promise<string> {
-    const newSessionId = await invoke('restart_session', { sessionId })
-    await loadSessions()
-    return newSessionId as string
-  }
-
-  async function writeToSession(sessionId: string, data: string) {
-    await invoke('write_to_session', { sessionId, data })
-  }
-
-  async function sendSpecialKey(sessionId: string, key: string) {
-    await invoke('send_special_key', { sessionId, key })
-  }
-
-  async function resizeSession(sessionId: string, cols: number, rows: number) {
-    await invoke('resize_session', { sessionId, cols, rows })
-  }
-
-  // 初始化监听器
-  setupSessionChangedListener()
-
-  return {
-    sessions,
-    outputs,
-    loadSessions,
-    startSession,
-    killSession,
-    deleteSession,
-    restartSession,
-    writeToSession,
-    sendSpecialKey,
-    resizeSession,
-    cleanupSessionChangedListener,
-  }
-}
-
-// PTY Output Listener
-export function usePtyOutput(sessionId: string | Ref<string>) {
-  const output = ref<string[]>([])
-  const isWaiting = ref(false)
-  let unlisten: (() => void) | null = null
-  // 流式解码器：避免多字节字符被 PTY 分片读取时损坏
-  const decoder = createStreamingDecoder()
-
-  async function startListening() {
-    unlisten = await listen<PtyOutputEvent>('pty-output', (event) => {
-      const sid = typeof sessionId === 'string' ? sessionId : sessionId.value
-
-      if (!sid || event.payload.sessionId === sid) {
-        const data = decoder.decode(event.payload.data)
-
-        // 写入输出缓冲区（桌面端 xterm.js 通过 watcher 增量读取）
-        // 注意：不清空/裁剪数组，否则 TerminalPreview 的 lastOutputIndex 会失效
-        output.value.push(data)
-
-        isWaiting.value = detectWaitingInput(data)
-      }
-    })
-  }
-
-  function stopListening() {
-    if (unlisten) {
-      unlisten()
-      unlisten = null
-    }
-  }
-
-  function clearOutput() {
-    output.value = []
-  }
-
-  onMounted(() => {
-    startListening()
-  })
-
-  onUnmounted(() => {
-    stopListening()
-  })
-
-  // 当 sessionId 变化时清空输出（切换会话）
-  if (typeof sessionId !== 'string') {
-    watch(sessionId, (newSid, oldSid) => {
-      if (newSid !== oldSid && oldSid !== undefined) {
-        console.log('[PTY] Session changed from', oldSid, 'to', newSid, 'clearing output')
-        clearOutput()
-      }
-    })
-  }
-
-  return { output, isWaiting, clearOutput, startListening, stopListening }
-}
-
-// Quick Actions
-export function useQuickActions() {
-  const actions = ref<QuickAction[]>([])
-
-  async function loadActions() {
-    try {
-      actions.value = await invoke('list_quick_actions')
-    } catch (e) {
-      console.error('Failed to load quick actions:', e)
-    }
-  }
-
-  async function createAction(
-    name: string,
-    content: string,
-    icon?: string,
-    color?: string
-  ): Promise<QuickAction> {
-    const action = await invoke('create_quick_action', { name, content, icon, color })
-    await loadActions()
-    return action as QuickAction
-  }
-
-  return { actions, loadActions, createAction }
-}
-
-// Pairing
-export function usePairing() {
-  const devices = ref<Pairing[]>([])
-  const pairingCode = ref<PairingCode | null>(null)
-
-  async function loadDevices() {
-    try {
-      devices.value = await invoke('list_paired_devices')
-    } catch (e) {
-      console.error('Failed to load paired devices:', e)
-    }
-  }
-
-  async function generateCode() {
-    try {
-      pairingCode.value = await invoke('generate_pairing_code')
-    } catch (e) {
-      console.error('Failed to generate pairing code:', e)
-    }
-  }
-
-  async function verifyCode(code: string): Promise<boolean> {
-    try {
-      return await invoke('verify_pairing_code', { code })
-    } catch (e) {
-      console.error('Failed to verify pairing code:', e)
-      return false
-    }
-  }
-
-  async function clearCode() {
-    try {
-      await invoke('clear_pairing_code')
-      pairingCode.value = null
-    } catch (e) {
-      console.error('Failed to clear pairing code:', e)
-    }
-  }
-
-  async function removeDevice(id: string) {
-    await invoke('remove_paired_device', { id })
-    await loadDevices()
-  }
-
-  return { devices, pairingCode, loadDevices, generateCode, verifyCode, clearCode, removeDevice }
-}
-
-// QR Code Commands
+// QR 码 API（用于设置页面）
 export function useQrCodeApi() {
-  async function generateQrCode(): Promise<string> {
-    try {
-      return await invoke<string>('generate_qr_code')
-    } catch (e) {
-      console.error('Failed to generate QR code:', e)
-      throw e
-    }
+  const qrTokenTtl = ref(300)
+
+  async function getQrTokenTtlApi() {
+    qrTokenTtl.value = await getQrTokenTtl()
+    return qrTokenTtl.value
   }
 
-  async function clearQrCode(): Promise<void> {
-    try {
-      await invoke('clear_qr_code')
-    } catch (e) {
-      console.error('Failed to clear QR code:', e)
-    }
+  async function setQrTokenTtlApi(ttl: number) {
+    await setQrTokenTtl(ttl)
+    qrTokenTtl.value = ttl
   }
 
-  async function getQrConnectionInfo(host?: string): Promise<QrConnectionInfo | null> {
-    try {
-      return await invoke<QrConnectionInfo | null>('get_qr_connection_info', { host: host || null })
-    } catch (e) {
-      console.error('Failed to get QR connection info:', e)
-      return null
-    }
+  async function generateQrCodeApi() {
+    await generateQrCode()
   }
 
-  async function getQrTokenTtl(): Promise<number> {
-    try {
-      return await invoke<number>('get_qr_token_ttl')
-    } catch (e) {
-      console.error('Failed to get QR token TTL:', e)
-      return 300
-    }
+  async function clearQrCodeApi() {
+    await clearQrCode()
   }
 
-  async function setQrTokenTtl(seconds: number): Promise<void> {
-    try {
-      await invoke('set_qr_token_ttl', { seconds })
-    } catch (e) {
-      console.error('Failed to set QR token TTL:', e)
-    }
+  async function getQrConnectionInfoApi(host?: string) {
+    return await getQrConnectionInfo(host)
   }
 
   return {
-    generateQrCode,
-    clearQrCode,
-    getQrConnectionInfo,
-    getQrTokenTtl,
-    setQrTokenTtl,
+    qrTokenTtl,
+    getQrTokenTtl: getQrTokenTtlApi,
+    setQrTokenTtl: setQrTokenTtlApi,
+    generateQrCode: generateQrCodeApi,
+    clearQrCode: clearQrCodeApi,
+    getQrConnectionInfo: getQrConnectionInfoApi,
   }
-}
-
-// Network utilities
-export function useNetwork() {
-  const localAddresses = ref<string[]>([])
-
-  async function loadLocalAddresses() {
-    try {
-      localAddresses.value = await invoke('get_local_ip_addresses')
-    } catch (e) {
-      console.error('Failed to get local IP addresses:', e)
-    }
-  }
-
-  return { localAddresses, loadLocalAddresses }
-}
-
-// Connected Devices (WebSocket clients)
-export interface DeviceConnectionInfo {
-  addr: string
-  device_id: string
-  session_count: number
-}
-
-export function useConnectedDevices() {
-  const connectedDevices = ref<DeviceConnectionInfo[]>([])
-  const isLoading = ref(false)
-
-  async function loadConnectedDevices() {
-    isLoading.value = true
-    try {
-      connectedDevices.value = await invoke<DeviceConnectionInfo[]>('get_connected_devices')
-    } catch (e) {
-      console.error('Failed to load connected devices:', e)
-    } finally {
-      isLoading.value = false
-    }
-  }
-
-  return { connectedDevices, isLoading, loadConnectedDevices }
-}
-
-// Utility functions
-
-/**
- * Base64 解码为 UTF-8 字符串
- * atob() 无法正确处理多字节 UTF-8 字符，需要使用 TextDecoder
- */
-function decodeBase64Utf8(base64: string): string {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return new TextDecoder('utf-8').decode(bytes)
-}
-
-/**
- * 创建流式 Base64 → UTF-8 解码器
- *
- * PTY 输出每次读取 4096 字节，如果一个多字节 UTF-8 字符被切分到两个 chunk 中，
- * 普通的 TextDecoder.decode() 会产生 U+FFFD 替换字符，损坏输出。
- *
- * 使用 {stream: true} 让解码器在内部缓存不完整的字节序列，等后续 chunk 到达后
- * 再组合成完整的字符，保证多字节字符的正确渲染。
- */
-export function createStreamingDecoder() {
-  const decoder = new TextDecoder('utf-8', { fatal: false })
-
-  return {
-    /** 解码一段 Base64 数据，内部缓存不完整的 UTF-8 序列 */
-    decode(base64: string): string {
-      const binary = atob(base64)
-      const bytes = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i)
-      }
-      return decoder.decode(bytes, { stream: true })
-    },
-    /** 刷新解码器缓冲区，返回剩余的未完成字符 */
-    flush(): string {
-      return decoder.decode(new Uint8Array(0), { stream: false })
-    },
-  }
-}
-
-function detectWaitingInput(text: string): boolean {
-  const patterns = [
-    /> $/, // Claude Code default
-    /❯ $/, // Some shells
-    /\?\s*$/, // Question ending
-    /\[Y\/n\]\s*$/, // Confirmation prompt
-    /press any key/i, // Key press prompt
-  ]
-
-  return patterns.some((p) => p.test(text))
 }

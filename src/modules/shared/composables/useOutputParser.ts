@@ -1,14 +1,8 @@
 import { ref } from 'vue'
 
-export interface OutputBlock {
-  id: string
-  type: 'text' | 'markdown' | 'code' | 'progress' | 'error' | 'tool_use'
-  content: string
-  language?: string
-  percent?: number
-  message?: string
-  timestamp: number
-}
+// Re-export from model
+import type { OutputBlock } from './model'
+export type { OutputBlock }
 
 export function useOutputParser() {
   const blocks = ref<OutputBlock[]>([])

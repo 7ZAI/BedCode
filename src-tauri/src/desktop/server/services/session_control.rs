@@ -215,6 +215,39 @@ pub async fn handle_control(
                 }
             }
 
+            // 发送缓存的历史输出给刚加入的客户端
+            let cached_output = session_manager.get_output_cache(&session_id).await;
+            let cached_count = cached_output.len();
+            if cached_count > 0 {
+                let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+                for event in &cached_output {
+                    // 检测等待输入状态
+                    let decoded_data = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &event.data,
+                    ).unwrap_or_default();
+                    let is_waiting = crate::shared::parser::detect_waiting_input(
+                        &String::from_utf8_lossy(&decoded_data)
+                    );
+
+                    let message = Message::Output {
+                        message_id: uuid::Uuid::new_v4().to_string(),
+                        session_id: event.session_id.clone(),
+                        timestamp: event.timestamp.timestamp_millis(),
+                        payload: crate::shared::enums::message::OutputPayload {
+                            data: event.data.clone(),
+                            is_waiting,
+                            index: event.index,
+                        },
+                    };
+
+                    if let Err(e) = ws_manager.send_to_addr(&addr, &message).await {
+                        tracing::warn!("Failed to send cached output to client {}: {}", addr, e);
+                    }
+                }
+                tracing::info!("Sent {} cached output messages to client {} for session {}", cached_count, addr, session_id);
+            }
+
             // 返回成功响应
             Ok(Some(Message::Control {
                 message_id: request_message_id,

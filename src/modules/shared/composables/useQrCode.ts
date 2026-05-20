@@ -1,10 +1,16 @@
 import { ref, computed } from 'vue'
-import { useQrCodeApi } from './useTauri'
-import type { QrConnectionInfo } from './useTauri'
+import {
+  generateQrCode,
+  clearQrCode,
+  getQrConnectionInfo,
+  getQrTokenTtl,
+} from '@/modules/desktop/composables/useDesktopCommands'
+
+// Re-export from model
+import type { QrConnectionInfo } from './model'
+export type { QrConnectionInfo }
 
 export function useQrCode() {
-  const api = useQrCodeApi()
-
   const qrData = ref<QrConnectionInfo | null>(null)
   const remainingSeconds = ref(0)
   const isLoading = ref(false)
@@ -34,13 +40,13 @@ export function useQrCode() {
   async function generateQr(host?: string) {
     isLoading.value = true
     try {
-      const token = await api.generateQrCode()
-      const info = await api.getQrConnectionInfo(host)
+      await generateQrCode()
+      const info = await getQrConnectionInfo(host)
       if (info) {
         // 先获取 TTL，再同步设置 qrData 和倒计时
         // 避免 await 导致的中间状态：qrData 已更新但倒计时未启动，
         // 此时 hasQr 仍为 false，watch 触发时 canvas 未挂载，导致首次空白
-        const ttl = await api.getQrTokenTtl()
+        const ttl = await getQrTokenTtl()
         qrData.value = info
         startCountdown(ttl)
       } else {
@@ -55,7 +61,7 @@ export function useQrCode() {
   }
 
   async function clearQr() {
-    await api.clearQrCode()
+    await clearQrCode()
     qrData.value = null
     stopCountdown()
   }
@@ -68,6 +74,6 @@ export function useQrCode() {
     hasQr,
     generateQr,
     clearQr,
-    api,
+    getQrTokenTtl,
   }
 }

@@ -11,20 +11,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { usePlatform } from './usePlatform'
+import { usePlatform } from '../../shared/composables/usePlatform'
 
-// 导出 PlatformInfo 类型（从 usePlatform 复制）
-export interface PlatformInfo {
-  platform: 'windows' | 'macos' | 'linux' | 'android' | 'ios' | null
-  arch: 'x86_64' | 'aarch64' | 'arm' | null
-  osVersion: string | null
-  osType: string | null
-  isDesktop: boolean
-  isMobile: boolean
-  isWindows: boolean
-  isMacos: boolean
-  isLinux: boolean
-}
+
 
 /**
  * Android 设备专用功能

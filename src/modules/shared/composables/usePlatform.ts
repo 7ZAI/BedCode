@@ -11,20 +11,14 @@
 
 import { ref, readonly, onMounted } from 'vue'
 
+// Re-export from model
+import type { PlatformInfo } from './model'
+export type { PlatformInfo }
+
 export type Platform = 'windows' | 'macos' | 'linux' | 'android' | 'ios'
 export type Arch = 'x86_64' | 'aarch64' | 'arm'
 
-interface PlatformInfo {
-  platform: Platform | null
-  arch: Arch | null
-  osVersion: string | null
-  osType: string | null
-  isDesktop: boolean
-  isMobile: boolean
-  isWindows: boolean
-  isMacos: boolean
-  isLinux: boolean
-}
+
 
 const platformInfo = ref<PlatformInfo>({
   platform: null,

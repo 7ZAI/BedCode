@@ -23,7 +23,7 @@
     "tauri:build": "tauri build",
     "tauri:android:init": "tauri android init",
     "tauri:android:build": "tauri android build --target aarch64",
-    "tauri:android:build:fast": "tauri android build --target aarch64 --debug",
+    "tauri:android:build:fast": "npm run build:fast && tauri android build --target aarch64 --debug",
     "tauri:android:build:emulator": "tauri android build --target x86_64 --debug",
     "tauri:android:build:all": "tauri android build",
     "target:size": "node scripts/check-target-size.js",

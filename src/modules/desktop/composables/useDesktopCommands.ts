@@ -7,38 +7,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
 
-export interface WslDistro {
-  name: string
-  state: string
-}
-
-export interface TmuxSession {
-  name: string
-  windows: number
-}
-
-export interface SessionInfo {
-  id: string
-  name: string
-  config_id: string
-  status: string
-  created_at: string
-}
-
-export interface SessionConfig {
-  id: string
-  name: string
-  environment: string
-  wsl_distro?: string
-  working_dir?: string
-  command?: string
-}
-
-export interface DeviceConnectionInfo {
-  addr: string
-  device_id: string
-  session_count: number
-}
+import type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo } from './model'
+export type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo }
 
 // ==================== WSL Commands ====================
 
@@ -370,22 +340,25 @@ let unlistenPtyOutput: UnlistenFn | null = null
 /**
  * 监听设备连接事件
  */
-export async function onDeviceConnected(callback: (event: any) => void) {
+export async function onDeviceConnected(callback: (event: any) => void): Promise<() => void> {
   unlistenDeviceConnected = await listen('device-connected', callback)
+  return unlistenDeviceConnected
 }
 
 /**
  * 监听设备断开事件
  */
-export async function onDeviceDisconnected(callback: (event: any) => void) {
+export async function onDeviceDisconnected(callback: (event: any) => void): Promise<() => void> {
   unlistenDeviceDisconnected = await listen('device-disconnected', callback)
+  return unlistenDeviceDisconnected
 }
 
 /**
  * 监听 PTY 输出事件
  */
-export async function onPtyOutput(callback: (event: any) => void) {
+export async function onPtyOutput(callback: (event: any) => void): Promise<() => void> {
   unlistenPtyOutput = await listen('pty-output', callback)
+  return unlistenPtyOutput
 }
 
 /**

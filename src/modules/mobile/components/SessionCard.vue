@@ -85,7 +85,7 @@
 
 <script setup lang="ts">
 import { computed, ref, h } from 'vue'
-import type { RemoteSession } from '@/modules/shared/composables/useRemoteTerminal'
+import type { RemoteSession } from '@/modules/mobile/composables/useMobileCommands'
 import { useRunTime } from '@/modules/shared/composables/useRunTime'
 
 const props = defineProps<{

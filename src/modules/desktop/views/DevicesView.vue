@@ -166,7 +166,7 @@
               <div>
                 <p class="font-medium">{{ device.deviceName }}</p>
                 <p class="text-gray- dark:text-dark-400 text-sm">
-                  配对于 {{ formatDate(device.pairedAt) }}
+                  配对于 {{ formatDate(device.pairedAt || '') }}
                 </p>
               </div>
             </div>
@@ -315,11 +315,11 @@ onMounted(async () => {
 
   // Load initial connected device list
   await connected.loadConnectedDevices()
-  const ids = new Set(connected.connectedDevices.value.map(d => d.device_id))
+  const ids = new Set<string>(connected.connectedDevices.value.map((d: any) => d.device_id || d.id))
   connectedDeviceIds.value = ids
 
   // 检查是否有活跃的 QR token，若有则自动恢复显示
-  const ttl = await qr.api.getQrTokenTtl()
+  const ttl = await qr.getQrTokenTtl()
   if (ttl > 0) {
     console.log('Restoring active QR token with TTL:', ttl)
     await qr.generateQr(selectedIp.value || undefined)

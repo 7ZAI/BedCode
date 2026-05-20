@@ -9,14 +9,30 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
-import { useSettingsStore } from '@/modules/shared/stores/settings'
+import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
-// ==================== 主题常量 ====================
+// ==================== Props ====================
+
+interface Props {
+  output: string
+}
+
+const props = defineProps<Props>()
+
+// ==================== Emits ====================
+
+const emit = defineEmits<{
+  ready: []
+  clear: []
+  resize: [cols: number, rows: number]
+  activated: []
+}>()
+
+// ==================== Theme Constants ====================
 
 const LIGHT_THEME = {
   background: '#ffffff',
@@ -66,324 +82,174 @@ const DARK_THEME = {
   brightWhite: '#ffffff',
 }
 
-// ==================== 写批次处理 ====================
-// 移动端 CPU 较弱，将连续 write 调用合并为批次写入
-let writeBatchBuffer = ''
-let writeBatchTimer: ReturnType<typeof setTimeout> | null = null
-const WRITE_BATCH_DELAY = 16 // ~60fps 一帧的时间
+// ==================== Theme Helpers ====================
 
-function flushWriteBatch() {
-  if (!terminal || !writeBatchBuffer) return
-  terminal.write(writeBatchBuffer)
-  writeBatchBuffer = ''
+function getCurrentTheme(): 'light' | 'dark' {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
 }
 
-function scheduleWrite(data: string) {
-  writeBatchBuffer += data
-  if (writeBatchTimer) clearTimeout(writeBatchTimer)
-  writeBatchTimer = setTimeout(flushWriteBatch, WRITE_BATCH_DELAY)
+function getTheme() {
+  const theme = getCurrentTheme()
+  return theme === 'dark' ? DARK_THEME : LIGHT_THEME
 }
 
-// ==================== 组件状态 ====================
+// ==================== Refs ====================
 
-const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const xtermContainerRef = ref<HTMLElement | null>(null)
 
-// xterm.js 实例
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
-let resizeObserver: ResizeObserver | null = null
-let lastOutputIndex = 0
 
-// 记录容器宽度，防止多次计算
-let lastContainerWidth = 0
+// 当前已渲染的输出长度
+const currentOutputLength = ref(0)
 
-// 滚动状态追踪（与桌面端一致）
-let isUserScrolling = false
-let scrollTimeout: ReturnType<typeof setTimeout> | null = null
+// ==================== Terminal Initialization ====================
 
-const props = defineProps<{
-  output?: string
-  /** 父组件已渲染的输出索引，用于增量写入 */
-  renderedIndex?: number
-}>()
-
-const emit = defineEmits<{
-  ready: []
-  clear: []
-  resize: [cols: number, rows: number]
-  /** KeepAlive 恢复时触发，由父组件处理重置逻辑 */
-  activated: []
-}>()
-
-/** 根据屏幕宽度计算移动端自适应字号 */
-function getAdaptiveFontSize(): number {
-  const baseSize = settingsStore.settings.ui.terminal_font_size || 14
-  const screenWidth = window.innerWidth
-  // 小屏手机 (< 400px): 使用较小字号
-  // 大屏手机/小平板 (400-600px): 保持默认
-  // 大平板 (> 600px): 适当增大
-  if (screenWidth < 400) {
-    return Math.min(baseSize, 13)
-  } else if (screenWidth >= 600) {
-    return Math.max(baseSize, 15)
-  }
-  return baseSize
-}
-
-/** 禁用 xterm 内部 textarea，防止移动端弹出键盘 */
-function disableXtermTextarea() {
-  if (!xtermContainerRef.value) return
-  const textarea = xtermContainerRef.value.querySelector('textarea')
-  if (textarea) {
-    textarea.setAttribute('readonly', '')
-    textarea.setAttribute('inputmode', 'none')
-    textarea.style.pointerEvents = 'none'
-    textarea.style.display = 'none'
-  }
-}
-
-/** 初始化 xterm.js */
 function initTerminal() {
-  if (!terminalContainerRef.value || !xtermContainerRef.value) return
+  if (!xtermContainerRef.value) return
 
-  const fontSize = getAdaptiveFontSize()
-  const fontFamily = 'Consolas, Monaco, Courier New, monospace'
-  const isDarkMode = document.documentElement.classList.contains('dark')
+  const theme = getTheme()
 
   terminal = new Terminal({
-    fontSize,
-    fontFamily,
-    theme: isDarkMode ? DARK_THEME : LIGHT_THEME,
-    cursorBlink: false,
-    cursorStyle: 'bar',
-    scrollback: 20000,
+    theme,
+    fontFamily: '"SF Mono", "Menlo", "Monaco", "Courier New", monospace',
+    fontSize: 14,
+    lineHeight: 1.2,
+    cursorBlink: true,
+    cursorStyle: 'block',
     allowProposedApi: true,
-    cursorInactiveStyle: 'none',
-    disableStdin: true,
-    convertEol: true, // 自动转换 \n → \r\n，移动端程序输出更可靠
+    // 移动端优化
+    scrollback: 10000,
+    convertEol: true,
   })
 
+  // 添加 Fit addon
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
+
+  // 添加 Web Links addon
   terminal.loadAddon(new WebLinksAddon())
+
+  // 禁用右键菜单（移动端）
+  terminal.element?.addEventListener('contextmenu', (e) => e.preventDefault())
+
+  // 打开终端
   terminal.open(xtermContainerRef.value)
 
-  // 禁用内部 textarea，防止键盘弹出
-  disableXtermTextarea()
-
-  // 初始 fit
+  // Fit 到容器
   nextTick(() => {
-    performFit()
+    fitTerminal()
+    emit('ready')
+  })
+
+  // 监听终端大小变化
+  terminal.onResize(() => {
     if (terminal) {
       emit('resize', terminal.cols, terminal.rows)
     }
   })
 
-  // 监听终端尺寸变化
-  terminal.onResize(({ cols, rows }) => {
-    emit('resize', cols, rows)
+  // 监听窗口大小变化
+  const resizeObserver = new ResizeObserver(() => {
+    fitTerminal()
   })
-
-  // 添加滚动事件监听（与桌面端一致）
-  nextTick(() => {
-    const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-    if (viewport) {
-      viewport.addEventListener('scroll', handleScroll)
-    }
-  })
-
-  emit('ready')
+  if (xtermContainerRef.value) {
+    resizeObserver.observe(xtermContainerRef.value)
+  }
 }
 
-/** 执行 fit 操作 */
-function performFit() {
-  if (!fitAddon || !terminalContainerRef.value) return
-
-  const containerWidth = terminalContainerRef.value.offsetWidth
-
-  // 宽度没有变化，跳过 fit
-  if (containerWidth === lastContainerWidth && containerWidth > 0) return
-
-  lastContainerWidth = containerWidth
-  fitAddon.fit()
-
-  nextTick(() => {
-    if (terminal) {
-      terminal.resize(terminal.cols, terminal.rows)
+function fitTerminal() {
+  if (fitAddon && terminal) {
+    try {
+      fitAddon.fit()
+      // 强制调整大小以触发 PTY 更新
       emit('resize', terminal.cols, terminal.rows)
+    } catch (e) {
+      console.warn('[MobileTerminal] fit failed:', e)
     }
-  })
+  }
 }
 
-// 使用 requestAnimationFrame 节流 fit 操作
-let fitRafId: number | null = null
-let fitRafScheduled = false
+// ==================== Output Handling ====================
 
-function scheduleFit() {
-  if (fitRafScheduled) return
+// 监听输出变化，追加新数据
+import { watch } from 'vue'
 
-  fitRafScheduled = true
-  fitRafId = requestAnimationFrame(() => {
-    fitRafScheduled = false
-    performFit()
-  })
-}
+watch(
+  () => props.output,
+  (newOutput) => {
+    if (!terminal) return
 
-/** 写入数据到终端（使用批次写入优化性能） */
-function write(data: string) {
-  if (!terminal) return
-  scheduleWrite(data)
-}
+    // 获取新数据（从上次渲染的位置开始）
+    const newData = newOutput.slice(currentOutputLength.value)
 
-/** 清空终端 */
+    if (newData) {
+      // 写入终端
+      terminal.write(newData)
+      currentOutputLength.value = newOutput.length
+
+      // 滚动到底部
+      nextTick(() => {
+        terminal?.scrollToBottom()
+      })
+    }
+  }
+)
+
+// ==================== Public Methods ====================
+
 function clear() {
-  if (!terminal) return
-  terminal.clear()
-  lastOutputIndex = 0
+  if (terminal) {
+    terminal.clear()
+    currentOutputLength.value = 0
+  }
   emit('clear')
 }
 
-/** 滚动到底部 - 与桌面端一致 */
-function scrollToBottom() {
-  if (!terminal) return
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.scrollTop = viewport.scrollHeight
-  }
-  nextTick(() => {
-    isUserScrolling = false
-  })
+function getTerminal(): Terminal | null {
+  return terminal
 }
 
-/** 滚动事件处理 - 检测用户是否在滚动（与桌面端一致） */
-function handleScroll() {
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (!viewport) return
-
-  // 检测是否在底部（允许 50px 误差）
-  const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
-
-  // 用户不在底部 = 正在向上滚动查看历史
-  isUserScrolling = !isAtBottom
-
-  // 滚动停止后清除状态（300ms 防抖）
-  if (scrollTimeout) clearTimeout(scrollTimeout)
-  scrollTimeout = setTimeout(() => {
-    isUserScrolling = false
-  }, 300)
+function getCols(): number {
+  return terminal?.cols ?? 80
 }
 
-// 监听输出变化，增量写入
-// 由父组件通过 renderedIndex 控制增量位置，避免索引不同步问题
-watch(() => props.output, (newOutput) => {
-  if (!terminal || !newOutput) return
+function getRows(): number {
+  return terminal?.rows ?? 24
+}
 
-  // 使用父组件传入的 renderedIndex，如果未提供则使用内部 lastOutputIndex（兼容旧版）
-  const startIndex = props.renderedIndex ?? lastOutputIndex
-
-  // 边界保护：若 startIndex 超过当前输出长度，重置为 0
-  const safeStartIndex = Math.min(startIndex, newOutput.length)
-  const newContent = newOutput.slice(safeStartIndex)
-
-  if (newContent.length > 0) {
-    scheduleWrite(newContent)
-    // 只有当没有传入 renderedIndex 时才更新内部索引
-    if (props.renderedIndex === undefined) {
-      lastOutputIndex = newOutput.length
-    }
-
-    // 只有用户不在滚动时才自动滚动到底部
-    if (!isUserScrolling) {
-      scrollToBottom()
-    }
-  }
-}, { deep: true })
-
-// 监听字体大小变化（使用自适应字号）
-watch(() => settingsStore.settings.ui.terminal_font_size, () => {
-  if (!terminal) return
-  terminal.options.fontSize = getAdaptiveFontSize()
-  nextTick(() => {
-    performFit()
-  })
+// 暴露给父组件
+defineExpose({
+  clear,
+  getTerminal,
+  getCols,
+  getRows,
 })
+
+// ==================== Lifecycle ====================
 
 onMounted(() => {
   initTerminal()
 
-  // 监听容器尺寸变化
-  if (terminalContainerRef.value) {
-    resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.contentRect.width !== lastContainerWidth) {
-          scheduleFit()
-        }
-      }
-    })
-    resizeObserver.observe(terminalContainerRef.value)
-
-    // 监听窗口 resize 事件
-    window.addEventListener('resize', scheduleFit)
-  }
-
-  // 监听主题变化（使用主题常量）
+  // 监听 DOM 变化以检测主题切换
   const observer = new MutationObserver(() => {
     if (terminal) {
-      const isDarkMode = document.documentElement.classList.contains('dark')
-      terminal.options.theme = isDarkMode ? DARK_THEME : LIGHT_THEME
+      const theme = getTheme()
+      terminal.options.theme = theme
     }
   })
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['class'],
-  })
-})
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 
-// KeepAlive 恢复时通知父组件，由父组件控制是否重置输出
-// 避免子组件独自重置索引导致重复渲染
-onActivated(() => {
+  // 触发 activated 事件（用于 KeepAlive 恢复）
   emit('activated')
 })
 
-onUnmounted(() => {
-  // 清理写批次定时器
-  if (writeBatchTimer) {
-    clearTimeout(writeBatchTimer)
-    flushWriteBatch() // 清空剩余缓冲区
-  }
-
-  // 清理滚动事件监听器
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.removeEventListener('scroll', handleScroll)
-  }
-
-  if (scrollTimeout) clearTimeout(scrollTimeout)
-
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
-  }
-
+onBeforeUnmount(() => {
   if (terminal) {
     terminal.dispose()
     terminal = null
   }
-
-  if (fitAddon) fitAddon = null
-
-  if (fitRafId !== null) cancelAnimationFrame(fitRafId)
-
-  window.removeEventListener('resize', scheduleFit)
-})
-
-defineExpose({
-  write,
-  clear,
-  scrollToBottom,
-  performFit,
 })
 </script>
 

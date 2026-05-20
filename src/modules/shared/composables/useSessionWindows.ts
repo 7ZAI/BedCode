@@ -2,16 +2,16 @@ import { shallowRef } from 'vue'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { SessionInfo } from '@/modules/shared/composables/useTauri'
+import type { SessionInfo } from '@/modules/desktop/composables/useDesktopCommands'
+
+// Re-export from model
+import type { TerminalWindowState } from './model'
+export type { TerminalWindowState }
+
 
 const SNAP_THRESHOLD = 15  // 贴靠阈值（像素）
 
-interface TerminalWindowState {
-  window: WebviewWindow
-  isSnapped: boolean
-  snapDirection: 'left' | 'right' | null
-  lastPosition: { x: number; y: number }
-}
+
 
 // ==================== 单例模式 ====================
 // 模块级别的状态，确保所有组件共享同一个实例

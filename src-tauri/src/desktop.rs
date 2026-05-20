@@ -3,6 +3,8 @@
 //! 桌面端专用模块
 
 pub mod commands;
+pub mod enums;
+pub mod model;
 pub mod plugin;
 pub mod pty;
 pub mod session;

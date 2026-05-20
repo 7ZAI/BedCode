@@ -1,11 +1,21 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
-  useSessionConfig as useConfigApi,
-  useSession as useSessionApi,
+  listSessions,
+  startSession,
+  killSession,
+  deleteSession,
+  restartSession,
+  writeToSession,
+  sendSpecialKey,
+  resizeSession,
+  listSessionConfigs,
+  createSessionConfig,
+  deleteSessionConfig,
+  updateSessionConfig,
   type SessionConfig,
   type SessionInfo
-} from '@/modules/shared/composables/useTauri'
+} from '@/modules/desktop/composables/useDesktopCommands'
 
 export { type SessionConfig, type SessionInfo }
 
@@ -14,23 +24,18 @@ export const useSessionStore = defineStore('session', () => {
   const configs = ref<SessionConfig[]>([])
   const activeSession = ref<SessionInfo | null>(null)
 
-  const configApi = useConfigApi()
-  const sessionApi = useSessionApi()
-
   async function loadConfigs() {
-    await configApi.loadConfigs()
-    configs.value = configApi.configs.value
+    configs.value = await listSessionConfigs()
   }
 
   async function loadSessions() {
-    await sessionApi.loadSessions()
-    sessions.value = sessionApi.sessions.value
+    sessions.value = await listSessions()
     console.log('loadSessions completed, sessions:', sessions.value.map(s => ({ id: s.id, status: s.status })))
   }
 
   async function createSession(configId: string) {
-    const sessionId = await sessionApi.startSession(configId)
-    sessions.value = sessionApi.sessions.value
+    const sessionId = await startSession(configId)
+    sessions.value = await listSessions()
     console.log('createSession completed, sessionId:', sessionId, 'sessions:', sessions.value.map(s => ({ id: s.id, status: s.status })))
 
     // Find the new session and set as active
@@ -44,10 +49,10 @@ export const useSessionStore = defineStore('session', () => {
     return sessionId
   }
 
-  async function killSession(sessionId: string) {
+  async function killSessionAction(sessionId: string) {
     console.log('killSession called with sessionId:', sessionId)
-    await sessionApi.killSession(sessionId)
-    sessions.value = sessionApi.sessions.value
+    await killSession(sessionId)
+    sessions.value = await listSessions()
     console.log('killSession completed, sessions:', sessions.value.map(s => ({ id: s.id, status: s.status })))
 
     if (activeSession.value?.id === sessionId) {
@@ -55,28 +60,28 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  async function deleteSession(sessionId: string) {
+  async function deleteSessionAction(sessionId: string) {
     console.log('deleteSession called with sessionId:', sessionId)
-    await sessionApi.deleteSession(sessionId)
-    sessions.value = sessionApi.sessions.value
+    await deleteSession(sessionId)
+    sessions.value = await listSessions()
 
     if (activeSession.value?.id === sessionId) {
       activeSession.value = null
     }
   }
 
-  async function restartSession(sessionId: string) {
+  async function restartSessionAction(sessionId: string) {
     console.log('restartSession called with sessionId:', sessionId)
-    const newSessionId = await sessionApi.restartSession(sessionId)
-    sessions.value = sessionApi.sessions.value
+    await restartSession(sessionId)
+    sessions.value = await listSessions()
 
-    // Find the new session and set as active
-    const session = sessions.value.find(s => s.id === newSessionId)
+    // Find the restarted session (should have same name but new id)
+    const session = sessions.value.find(s => s.id === sessionId || s.name === sessions.value.find(s2 => s2.id === sessionId)?.name)
     if (session) {
       activeSession.value = session
     }
 
-    return newSessionId
+    return sessionId
   }
 
   async function createConfig(
@@ -87,16 +92,23 @@ export const useSessionStore = defineStore('session', () => {
     wslDistro?: string,
     tmuxSession?: string
   ) {
-    await configApi.createConfig(name, environment, workingDir, command, wslDistro, tmuxSession)
-    configs.value = configApi.configs.value
+    await createSessionConfig({
+      name,
+      environment,
+      working_dir: workingDir,
+      command,
+      wsl_distro: wslDistro,
+      tmux_session: tmuxSession,
+    })
+    configs.value = await listSessionConfigs()
   }
 
-  async function deleteConfig(id: string) {
-    await configApi.deleteConfig(id)
-    configs.value = configApi.configs.value
+  async function deleteConfigAction(id: string) {
+    await deleteSessionConfig(id)
+    configs.value = await listSessionConfigs()
   }
 
-  async function updateConfig(
+  async function updateConfigAction(
     id: string,
     name: string,
     environment: string,
@@ -106,20 +118,30 @@ export const useSessionStore = defineStore('session', () => {
     tmuxSession?: string,
     autoStart?: boolean
   ) {
-    await configApi.updateConfig(id, name, environment, workingDir, command, wslDistro, tmuxSession, autoStart)
-    configs.value = configApi.configs.value
+    const config: SessionConfig = {
+      id,
+      name,
+      environment,
+      working_dir: workingDir,
+      command,
+      wsl_distro: wslDistro,
+      tmux_session: tmuxSession,
+      auto_start: autoStart,
+    }
+    await updateSessionConfig(config)
+    configs.value = await listSessionConfigs()
   }
 
-  async function writeToSession(sessionId: string, data: string) {
-    await sessionApi.writeToSession(sessionId, data)
+  async function writeToSessionAction(sessionId: string, data: string) {
+    await writeToSession(sessionId, data)
   }
 
-  async function sendSpecialKey(sessionId: string, key: string) {
-    await sessionApi.sendSpecialKey(sessionId, key)
+  async function sendSpecialKeyAction(sessionId: string, key: string) {
+    await sendSpecialKey(sessionId, key)
   }
 
-  async function resizeSession(sessionId: string, cols: number, rows: number) {
-    await sessionApi.resizeSession(sessionId, cols, rows)
+  async function resizeSessionAction(sessionId: string, cols: number, rows: number) {
+    await resizeSession(sessionId, cols, rows)
   }
 
   return {
@@ -129,14 +151,14 @@ export const useSessionStore = defineStore('session', () => {
     loadConfigs,
     loadSessions,
     createSession,
-    killSession,
-    deleteSession,
-    restartSession,
+    killSession: killSessionAction,
+    deleteSession: deleteSessionAction,
+    restartSession: restartSessionAction,
     createConfig,
-    deleteConfig,
-    updateConfig,
-    writeToSession,
-    sendSpecialKey,
-    resizeSession,
+    deleteConfig: deleteConfigAction,
+    updateConfig: updateConfigAction,
+    writeToSession: writeToSessionAction,
+    sendSpecialKey: sendSpecialKeyAction,
+    resizeSession: resizeSessionAction,
   }
 })

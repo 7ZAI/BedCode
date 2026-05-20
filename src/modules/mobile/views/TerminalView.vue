@@ -38,7 +38,6 @@
       <MobileTerminal
         ref="terminalRef"
         :output="outputBuffer"
-        :rendered-index="renderedIndex"
         @ready="onTerminalReady"
         @clear="onTerminalClear"
         @resize="handleTerminalResize"
@@ -58,18 +57,25 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, inject, watch, type Ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { createStreamingDecoder } from '@/modules/shared/composables/useTauri'
+
+import { useRouter, useRoute } from 'vue-router'
+import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
+import { wsLoadSessions, wsSendInput, wsResizeTerminal, wsJoinSession, wsGetTerminalHistory, wsLeaveSession } from '@/modules/mobile/composables/useMobileCommands'
+import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
+import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
 
 // 定义组件名称，用于 KeepAlive 缓存
 defineOptions({
-  name: 'MobileTerminal',
+  name: 'TerminalView',
 })
 
-import { useRouter, useRoute } from 'vue-router'
-import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
-import { wsLoadSessions, wsSendInput, wsResizeTerminal } from '@/modules/shared/composables/useMobileCommands'
-import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
-import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
+// ws_output 事件的 payload 类型
+interface WsOutputPayload {
+  session_id: string
+  data: string
+  is_waiting: boolean
+  index: number
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -83,27 +89,62 @@ const connection = useMobileConnection()
 // 使用统一的连接状态
 const isConnectedValue = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 
-// 输出缓冲区
+// 输出缓冲区（无大小限制，由 xterm.js scrollback 控制）
 const outputBuffer = ref<string>('')
-const MAX_OUTPUT_BUFFER = 512000 // 500KB 上限，防止内存泄漏
 
-// 跟踪终端已渲染的输出索引，用于增量写入
-// 由父组件完全控制，避免子组件索引不同步问题
+// 跟踪已渲染的全局索引，用于去重
 const renderedIndex = ref(0)
 
-/** 安全追加输出到缓冲区，超限时从头部裁剪 */
-function appendOutput(data: string) {
-  outputBuffer.value += data
-  // 更新已渲染索引为当前缓冲区长度
-  renderedIndex.value = outputBuffer.value.length
-  if (outputBuffer.value.length > MAX_OUTPUT_BUFFER) {
-    outputBuffer.value = outputBuffer.value.slice(-MAX_OUTPUT_BUFFER)
-    // 缓冲区裁剪后，需要重置 renderedIndex
-    renderedIndex.value = outputBuffer.value.length
+// 已知的索引集合（用于快速去重）
+const knownIndices = new Set<number>()
+
+// 加载历史数据并订阅实时输出
+async function loadHistoryAndSubscribe(sessionId: string) {
+  try {
+    // 1. 获取历史数据
+    const history = await wsGetTerminalHistory(sessionId)
+    console.log('[TerminalView] History loaded:', history.events.length, 'events, current_index:', history.current_index)
+
+    // 2. 按索引排序历史事件（确保按顺序追加）
+    const sortedEvents = [...history.events].sort((a, b) => a.index - b.index)
+
+    // 3. 追加历史数据到缓冲区
+    for (const event of sortedEvents) {
+      if (!knownIndices.has(event.index)) {
+        outputBuffer.value += event.data
+        knownIndices.add(event.index)
+      }
+    }
+
+    // 4. 更新已渲染索引
+    renderedIndex.value = history.current_index
+    console.log('[TerminalView] History applied, renderedIndex:', renderedIndex.value, 'known indices:', knownIndices.size)
+
+    // 5. 订阅会话以接收实时输出
+    await wsJoinSession(sessionId)
+    console.log('[TerminalView] Subscribed to session for real-time output')
+  } catch (e) {
+    console.error('[TerminalView] Failed to load history:', e)
+    // 即使加载历史失败，也尝试订阅实时输出
+    await wsJoinSession(sessionId)
   }
 }
 
-const terminalRef = ref<any>(null)
+// 追加输出到缓冲区（带索引去重）
+function appendOutput(data: string, index: number) {
+  // 检查是否已存在该索引的数据（避免重复）
+  if (knownIndices.has(index)) {
+    console.log('[TerminalView] Skipping duplicate output, index:', index)
+    return
+  }
+
+  outputBuffer.value += data
+  knownIndices.add(index)
+  renderedIndex.value = index
+  console.log('[TerminalView] Appended output, index:', index, 'total rendered:', renderedIndex.value)
+}
+
+const terminalRef = ref<InstanceType<typeof MobileTerminal> | null>(null)
 
 // 终端操作接口（供 InputAssistant 使用）
 const terminalInstance = computed(() => ({
@@ -160,15 +201,18 @@ const sessionName = computed(() => {
 // 清空终端
 function handleClear() {
   outputBuffer.value = ''
-  renderedIndex.value = 0
   terminalRef.value?.clear()
 }
 
 // Terminal ready handler
 function onTerminalReady() {
-  console.log('Mobile terminal ready')
-  // 终端准备好后，同步当前已渲染的索引
-  renderedIndex.value = outputBuffer.value.length
+  console.log('[MobileTerminal] ready')
+
+  // 订阅会话以开始接收输出
+  const sessionId = connection.activeSessionId.value
+  if (sessionId) {
+    wsJoinSession(sessionId).catch(e => console.error('[TerminalView] wsJoinSession failed:', e))
+  }
 }
 
 // Terminal resize handler - 将移动端真实终端尺寸同步到桌面 PTY
@@ -183,36 +227,44 @@ function handleTerminalResize(cols: number, rows: number) {
 // Terminal clear handler
 function onTerminalClear() {
   outputBuffer.value = ''
-  renderedIndex.value = 0
 }
 
-// KeepAlive 恢复时触发，重置渲染��引避免重复显示
+// KeepAlive 恢复时触发，重置缓冲区避免重复显示
 function onTerminalActivated() {
-  console.log('[TerminalView] onTerminalActivated, resetting renderedIndex')
-  renderedIndex.value = 0
-  // 同时清空终端显示
+  console.log('[TerminalView] onTerminalActivated, clearing buffer')
+  outputBuffer.value = ''
   terminalRef.value?.clear()
 }
 
 let unlistenOutput: UnlistenFn | null = null
 
-// 流式解码器：PTY 输出每 4096 字节切一次，用 streaming 模式确保多字节
-// UTF-8 字符被切分到两个 chunk 时仍能正确解码，而非输出 U+FFFD
-const outputDecoder = createStreamingDecoder()
-
-// 断线重连后清除旧输出
+// 监听 ws_output 事件，只显示当前活跃会话的输出
+// 注意：后端已经做了 Base64 解码，前端直接接收解码后的字符串
 watch(() => connection.connectionStatus.value, (newStatus, oldStatus) => {
   if ((newStatus === 'connected' || newStatus === 'paired') &&
       (oldStatus === 'disconnected' || oldStatus === 'error' || oldStatus === undefined)) {
-    console.log('[TerminalView] Reconnected, clearing output buffer')
+    console.log('[TerminalView] Reconnected, clearing output buffer and reloading history')
+    // 清空缓冲区和索引状态
     outputBuffer.value = ''
+    knownIndices.clear()
     renderedIndex.value = 0
-    outputDecoder.flush()
     terminalRef.value?.clear()
+
+    // 重新加载历史数据并订阅实时输出
+    const sessionId = connection.activeSessionId.value
+    if (sessionId) {
+      loadHistoryAndSubscribe(sessionId).catch(e => console.error('[TerminalView] Failed to reload history:', e))
+    }
   }
 })
 
 onMounted(async () => {
+  // 从路由获取会话 ID
+  const sessionId = route.params.sessionId as string
+  if (sessionId) {
+    connection.activeSessionId.value = sessionId
+  }
+
   // 加载会话列表以获取会话名称
   try {
     activeSessionsList.value = await wsLoadSessions()
@@ -221,18 +273,34 @@ onMounted(async () => {
   }
 
   // 监听 ws_output 事件，只显示当前活跃会话的输出
-  unlistenOutput = await listen<{ session_id: string; data: string; is_waiting: boolean }>('ws_output', (event) => {
+  // 事件 payload 现在包含 index 字段用于去重
+  unlistenOutput = await listen<WsOutputPayload>('ws_output', (event) => {
     // 只显示当前活跃会话的输出
     if (connection.activeSessionId.value && event.payload.session_id !== connection.activeSessionId.value) {
       return
     }
-    const decoded = outputDecoder.decode(event.payload.data)
-    appendOutput(decoded)
+    // 后端已解码，使用索引去重
+    appendOutput(event.payload.data, event.payload.index)
   })
+
+  // 如果已连接，加载历史数据
+  if (isConnectedValue.value && sessionId) {
+    await loadHistoryAndSubscribe(sessionId)
+  }
 })
 
 onUnmounted(async () => {
   unlistenOutput?.()
+  // 取消订阅会话
+  const sessionId = connection.activeSessionId.value
+  if (sessionId) {
+    try {
+      const { wsLeaveSession } = await import('@/modules/mobile/composables/useMobileCommands')
+      await wsLeaveSession(sessionId)
+    } catch (e) {
+      console.error('[TerminalView] wsLeaveSession failed:', e)
+    }
+  }
 })
 
 function goBack() {

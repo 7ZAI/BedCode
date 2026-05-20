@@ -319,8 +319,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useMobileConnection, type RemoteDevice } from '@/modules/shared/composables/useMobileConnection'
-import { wsLoadSessions } from '@/modules/shared/composables/useMobileCommands'
+import { useMobileConnection, type RemoteDevice } from '@/modules/mobile/composables/useMobileConnection'
+import { wsLoadSessions } from '@/modules/mobile/composables/useMobileCommands'
 import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
 import PairingInput from '@/modules/mobile/components/PairingInput.vue'
 import Modal from '@/modules/shared/components/Modal.vue'

@@ -91,7 +91,7 @@
         </div>
         <div>
           <span class="text-gray-500 dark:text-dark-400">创建时间:</span>
-          <span class="text-gray-700 dark:text-dark-300 ml-2">{{ formatDateTime(session.createdAt) }}</span>
+          <span class="text-gray-700 dark:text-dark-300 ml-2">{{ formatDateTime(session.createdAt || session.created_at || '') }}</span>
         </div>
         <div v-if="session.startedAt">
           <span class="text-gray-500 dark:text-dark-400">{{ isRunning ? '启动时间' : '停止时间' }}:</span>

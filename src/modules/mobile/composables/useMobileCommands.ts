@@ -7,45 +7,29 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
 
-export type ConnectionStatus =
-  | 'disconnected'
-  | 'connecting'
-  | 'connected'
-  | 'pairing'
-  | 'paired'
-  | 'error'
-
-export interface RemoteDevice {
-  id: string
-  name: string
-  address: string
-  port: number
-  isPaired: boolean
-}
-
-export interface AuthCredentials {
-  pairingId: string
-  fingerprint: string
-  sessionToken: string
-}
-
-export interface ConnectionInfo {
-  address: string
-  port: number
-  status: string
-}
-
-export interface AuthState {
-  status: string
-  is_authenticated: boolean
-}
-
-export interface SessionInfo {
-  id: string
-  name: string
-  config_id: string
-  status: string
-  created_at: string
+import type {
+  ConnectionStatus,
+  RemoteDevice,
+  AuthCredentials,
+  ConnectionInfo,
+  AuthState,
+  SessionInfo,
+  RemoteSession,
+  TerminalOutputEvent,
+  TerminalHistory,
+  TerminalIncrementalOutput,
+} from './model'
+export type {
+  ConnectionStatus,
+  RemoteDevice,
+  AuthCredentials,
+  ConnectionInfo,
+  AuthState,
+  SessionInfo,
+  RemoteSession,
+  TerminalOutputEvent,
+  TerminalHistory,
+  TerminalIncrementalOutput,
 }
 
 // ==================== WebSocket Connection Commands ====================
@@ -132,6 +116,22 @@ export async function wsLoadSessions(): Promise<SessionInfo[]> {
 }
 
 /**
+ * 订阅会话，开始接收该会话的输出
+ */
+export async function wsJoinSession(sessionId: string): Promise<void> {
+  console.log('[wsJoinSession] sessionId=' + sessionId)
+  return await invoke('ws_join_session', { sessionId })
+}
+
+/**
+ * 取消订阅会话，停止接收该会话的输出
+ */
+export async function wsLeaveSession(sessionId: string): Promise<void> {
+  console.log('[wsLeaveSession] sessionId=' + sessionId)
+  return await invoke('ws_leave_session', { sessionId })
+}
+
+/**
  * 启动会话
  */
 export async function wsStartSession(configId: string, sessionName?: string): Promise<string> {
@@ -215,6 +215,57 @@ export async function setScreenOrientation(orientation: string): Promise<void> {
  */
 export async function keepScreenAwake(enabled: boolean): Promise<void> {
   return await invoke('keep_screen_awake', { enabled })
+}
+
+// ==================== Terminal Commands ====================
+
+/**
+ * 获取会话的完整输出历史（用于首次连接或断线重连后恢复数据）
+ */
+export async function wsGetTerminalHistory(sessionId: string): Promise<TerminalHistory> {
+  return await invoke('ws_get_terminal_history', { sessionId })
+}
+
+/**
+ * 订阅终端（记录当前索引位置，用于增量获取）
+ */
+export async function wsSubscribeTerminal(sessionId: string): Promise<number> {
+  return await invoke('ws_subscribe_terminal', { sessionId })
+}
+
+/**
+ * 取消订阅终端
+ */
+export async function wsUnsubscribeTerminal(sessionId: string): Promise<void> {
+  return await invoke('ws_unsubscribe_terminal', { sessionId })
+}
+
+/**
+ * 获取增量输出（自上次获取之后的新数据）
+ */
+export async function wsGetTerminalIncremental(sessionId: string): Promise<TerminalIncrementalOutput | null> {
+  return await invoke('ws_get_terminal_incremental', { sessionId })
+}
+
+/**
+ * 更新订阅者的索引位置（在增量数据消费后调用）
+ */
+export async function wsUpdateTerminalIndex(sessionId: string, index: number): Promise<void> {
+  return await invoke('ws_update_terminal_index', { sessionId, index })
+}
+
+/**
+ * 清空终端缓冲区
+ */
+export async function wsClearTerminalBuffer(sessionId: string): Promise<void> {
+  return await invoke('ws_clear_terminal_buffer', { sessionId })
+}
+
+/**
+ * 清除所有终端缓冲区（断开连接时调用）
+ */
+export async function wsClearAllTerminalBuffers(): Promise<void> {
+  return await invoke('ws_clear_all_terminal_buffers')
 }
 
 // ==================== Event Listeners ====================
@@ -345,6 +396,15 @@ export function useMobileCommands() {
     // Message
     wsSendMessage,
     wsSendAndWait,
+
+    // Terminal (Rust-managed buffer)
+    wsGetTerminalHistory,
+    wsSubscribeTerminal,
+    wsUnsubscribeTerminal,
+    wsGetTerminalIncremental,
+    wsUpdateTerminalIndex,
+    wsClearTerminalBuffer,
+    wsClearAllTerminalBuffers,
 
     // Android-specific
     getStatusBarHeight,

@@ -90,8 +90,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMobileConnection } from '@/modules/shared/composables/useMobileConnection'
-import { wsLoadSessions, wsStopSession, wsRemoveSession } from '@/modules/shared/composables/useMobileCommands'
+import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
+import { wsLoadSessions, wsStopSession, wsRemoveSession } from '@/modules/mobile/composables/useMobileCommands'
 import SessionCard from '@/modules/mobile/components/SessionCard.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
 import Button from '@/modules/shared/components/Button.vue'

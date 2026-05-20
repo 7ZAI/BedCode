@@ -6,10 +6,9 @@
 
 import { AnsiUp } from 'ansi_up'
 
-export interface AnsiRenderOptions {
-  /** 使用 CSS 类名而非内联样式 */
-  useClasses?: boolean
-}
+// Re-export from model
+import type { AnsiRenderOptions } from './model'
+export type { AnsiRenderOptions }
 
 // ANSI 转义序列正则表达式（标准 CSI 序列）
 const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g
