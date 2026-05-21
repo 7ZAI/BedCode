@@ -6,6 +6,7 @@
 use crate::desktop::enums::{PtySessionStatus, SessionLaunchConfig};
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::command::build_command;
+use crate::desktop::pty::subscription::OutputRingBuffer;
 use crate::Result;
 
 use portable_pty::{native_pty_system, PtyPair, PtySize};
@@ -13,7 +14,7 @@ use std::io::{BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use uuid::Uuid;
 
 /// PTY 会话内部状态
@@ -40,6 +41,8 @@ pub struct PtySessionState {
     pub reader_handle: Option<JoinHandle<()>>,
     /// 进程 ID（用于强制终止）
     pub process_id: Option<u32>,
+    /// 输出环形缓冲区（用于历史消息存储）
+    pub output_buffer: Arc<RwLock<OutputRingBuffer>>,
 }
 
 /// PTY 会话 - 线程安全的包装器
@@ -101,6 +104,7 @@ impl PtySession {
             lifecycle_tx: lifecycle_tx.clone(),
             reader_handle: None,
             process_id: None,
+            output_buffer: Arc::new(RwLock::new(OutputRingBuffer::new(10000))),
         };
 
         Ok(Self {
@@ -237,6 +241,27 @@ impl PtySession {
         self.lifecycle_tx.subscribe()
     }
 
+    /// 缓存输出事件
+    pub async fn cache_output(&self, event: PtyOutputEvent) {
+        let mut state = self.state.lock().await;
+        let mut buffer = state.output_buffer.write().await;
+        buffer.push(event);
+    }
+
+    /// 获取缓存的输出
+    pub async fn get_output_cache(&self) -> Vec<PtyOutputEvent> {
+        let state = self.state.lock().await;
+        let buffer = state.output_buffer.read().await;
+        buffer.get_since(0)
+    }
+
+    /// 清理输出缓存
+    pub async fn clear_output_cache(&self) {
+        let state = self.state.lock().await;
+        let mut buffer = state.output_buffer.write().await;
+        buffer.clear();
+    }
+
     /// 获取会话状态
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
@@ -304,10 +329,17 @@ impl PtySession {
         let running = self.running.clone();
         let next_index = crate::desktop::pty::next_output_index;
 
+        // 获取 output_buffer 的引用
+        let output_buffer = {
+            let state = self.state.lock().await;
+            state.output_buffer.clone()
+        };
+
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 4096];
             let mut exit_status = PtySessionStatus::Stopped;
 
+            // 需要使用阻塞锁，因为我们在子线程中
             while running.load(Ordering::SeqCst) {
                 match buf_reader.read(&mut buffer) {
                     Ok(0) => {
@@ -327,6 +359,12 @@ impl PtySession {
                             index: next_index(),
                         };
 
+                        // 先写入 RingBuffer（历史缓存）
+                        if let Ok(mut buf) = output_buffer.try_write() {
+                            buf.push(event.clone());
+                        }
+
+                        // 再广播实时消息
                         if output_tx.send(event).is_err() {
                             tracing::debug!("No output subscribers for session: {}", session_id);
                         }
