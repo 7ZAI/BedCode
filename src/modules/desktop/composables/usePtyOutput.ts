@@ -27,8 +27,25 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
 
     // 建立实时监听
     unlisten = await onPtyOutput((event: any) => {
+      console.log('[usePtyOutput] Received pty-output event:', event);
       if (event.sessionId === targetSessionId) {
-        output.value += event.data
+        console.log('[usePtyOutput] Session match, appending data, length:', event.data?.length);
+        // 解码 base64 数据后再追加
+        try {
+          // atob() 解码后是 Latin-1 编码，需要转换为 UTF-8
+          const binaryString = atob(event.data)
+          const bytes = new Uint8Array(binaryString.length)
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i)
+          }
+          const decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+          console.log('[usePtyOutput] Decoded data preview:', decodedData.slice(0, 100));
+          output.value += decodedData
+        } catch (e) {
+          console.error('[usePtyOutput] Failed to decode base64:', e);
+          // 如果解码失败，直接使用原始数据（可能是旧数据格式）
+          output.value += event.data
+        }
       }
     })
     console.log('[usePtyOutput] Listener set up for session:', targetSessionId)

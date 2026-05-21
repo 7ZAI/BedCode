@@ -144,7 +144,10 @@ impl SessionManager {
         let session_id = pty_session.id().to_string();
 
         // 先注册输出监听器（如果已设置），再启动 PTY
-        self.register_output_listener(&pty_session).await;
+        let listener = self.output_listener.read().await.clone();
+        if let Some(listener) = listener {
+            pty_session.add_output_listener(listener);
+        }
 
         // 启动 PTY 会话
         pty_session.start().await?;
@@ -196,7 +199,10 @@ impl SessionManager {
         let session_id = pty_session.id().to_string();
 
         // 注册输出监听器
-        self.register_output_listener(&pty_session).await;
+        let listener = self.output_listener.read().await.clone();
+        if let Some(listener) = listener {
+            pty_session.add_output_listener(listener);
+        }
 
         // 不启动 PTY，只保存会话信息
         // pty_session.start().await?; // 这里不启动
@@ -241,12 +247,13 @@ impl SessionManager {
         pty_session.start().await?;
 
         // 更新会话状态为 Running
+        let session_name = session_info.name.clone();
         let mut updated_info = session_info;
         updated_info.status = SessionStatus::Running;
         updated_info.started_at = Some(Utc::now());
         self.session_info.insert(updated_info).await;
 
-        tracing::info!("Session started: {} ({})", session_info.name, session_id);
+        tracing::info!("Session started: {} ({})", session_name, session_id);
         Ok(())
     }
 

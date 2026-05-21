@@ -174,8 +174,8 @@ function initTerminal() {
     fontSize: fontSize.value,
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
     theme: getTheme(),
-    cursorBlink: true,
-    cursorStyle: 'block',
+    cursorBlink: false,
+    cursorStyle: 'none',
     scrollback: 50000, // 桌面端实时预览保留 50000 行历史
     allowProposedApi: true,
     // 确保光标样式正确
@@ -318,8 +318,10 @@ function clearTerminal() {
 watch(output, (newOutput) => {
   if (!terminal) return
   // 增量写入：只写入新增的部分
-  for (let i = lastOutputIndex; i < newOutput.length; i++) {
-    terminal.write(newOutput[i])
+  const newContent = newOutput.slice(lastOutputIndex)
+  console.log('[TerminalPreview] output changed, lastIndex:', lastOutputIndex, 'newLength:', newOutput.length, 'newContent length:', newContent.length, 'preview:', newContent.slice(0, 50))
+  if (newContent.length > 0) {
+    terminal.write(newContent)
   }
   lastOutputIndex = newOutput.length
 

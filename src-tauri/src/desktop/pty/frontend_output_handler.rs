@@ -5,7 +5,7 @@
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::traits::PtyOutputHandler;
 use async_trait::async_trait;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 /// 向前端发送 PTY 输出事件的 Handler
 pub struct FrontendOutputHandler {
@@ -32,13 +32,14 @@ impl FrontendOutputHandler {
 #[async_trait]
 impl PtyOutputHandler for FrontendOutputHandler {
     async fn handle(&self, event: PtyOutputEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        tracing::debug!("[FrontendOutputHandler] handle called for session: {}", event.session_id);
         match self.app_handle.emit("pty-output", &event) {
             Ok(()) => {
-                tracing::debug!("Emitted pty-output event for session: {}", event.session_id);
+                tracing::debug!("[FrontendOutputHandler] Emitted pty-output event for session: {}", event.session_id);
                 Ok(())
             }
             Err(e) => {
-                tracing::error!("Failed to emit pty-output event: {}", e);
+                tracing::error!("[FrontendOutputHandler] Failed to emit pty-output event: {}", e);
                 Err(Box::new(e))
             }
         }

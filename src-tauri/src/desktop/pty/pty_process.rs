@@ -245,14 +245,19 @@ impl PtySession {
         let listeners = {
             if let Ok(state) = self.state.try_lock() {
                 if let Ok(listeners) = state.output_listeners.try_lock() {
-                    listeners.clone()
+                    Some(listeners.clone())
                 } else {
-                    return;
+                    None
                 }
+            } else {
+                None
             }
         };
-        for listener in listeners {
-            listener.on_output(event.clone());
+
+        if let Some(listeners) = listeners {
+            for listener in listeners {
+                listener.on_output(event.clone());
+            }
         }
     }
 

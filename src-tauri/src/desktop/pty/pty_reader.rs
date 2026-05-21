@@ -46,6 +46,8 @@ impl PtyReader {
                         break;
                     }
                     Ok(n) => {
+                        let data_preview = String::from_utf8_lossy(&buffer[..n]);
+                        tracing::debug!("[PtyReader] Read {} bytes from PTY, preview: {:?}", n, data_preview.chars().take(50).collect::<String>());
                         let event = PtyOutputEvent {
                             session_id: session_id.clone(),
                             data: base64::Engine::encode(
@@ -56,12 +58,28 @@ impl PtyReader {
                             is_waiting: false,
                             index: next_output_index(),
                         };
+                        tracing::debug!("[PtyReader] Created PtyOutputEvent, session_id: {}, data length: {}", event.session_id, event.data.len());
 
                         // 通知所有监听器（观察者模式）
+                        // 注意：在同步线程中调用 async fn 不会自动执行
+                        // 需要使用 tokio::spawn 在异步 runtime 中执行
+                        tracing::debug!("[PtyReader] Notifying listeners for session: {}", session_id);
                         if let Ok(listeners) = output_listeners.try_lock() {
+                            tracing::debug!("[PtyReader] Number of listeners: {}", listeners.len());
                             for listener in listeners.iter() {
-                                listener.on_output(event.clone());
+                                let listener_name = listener.name();
+                                tracing::debug!("[PtyReader] Calling on_output for listener: {}", listener_name);
+
+                                let event_clone = event.clone();
+                                let listener_clone = listener.clone();
+
+                                // 在 tokio 异步 runtime 中 spawn 任务来执行 async on_output
+                                tauri::async_runtime::spawn(async move {
+                                    listener_clone.on_output(event_clone).await;
+                                });
                             }
+                        } else {
+                            tracing::warn!("[PtyReader] Failed to acquire lock on output_listeners");
                         }
                     }
                     Err(e) => {

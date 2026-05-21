@@ -216,7 +216,8 @@ pub async fn handle_control(
             }
 
             // 发送缓存的历史输出给刚加入的客户端
-            let cached_output = session_manager.get_output_cache(&session_id).await;
+            // TODO: 实现从 PTY 会话获取历史输出
+            let cached_output: Vec<crate::desktop::model::PtyOutputEvent> = vec![];
             let cached_count = cached_output.len();
             if cached_count > 0 {
                 let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();

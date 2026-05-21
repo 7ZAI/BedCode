@@ -230,7 +230,7 @@ pub struct SubscribeResponse {
 }
 
 /// 单个会话的订阅状态
-struct PtySessionSubscriptions {
+pub struct PtySessionSubscriptions {
     /// 会话 ID
     pub session_id: String,
     /// 输出环形缓冲区

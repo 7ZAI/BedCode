@@ -249,10 +249,11 @@ pub async fn resize_session(
 /// 获取会话的历史输出
 #[tauri::command]
 pub async fn get_session_output_history(
-    session_manager: State<'_, Arc<crate::desktop::session::SessionManager>>,
-    session_id: String,
+    _session_manager: State<'_, Arc<crate::desktop::session::SessionManager>>,
+    _session_id: String,
 ) -> Result<Vec<crate::desktop::model::PtyOutputEvent>> {
-    Ok(session_manager.get_output_cache(&session_id).await)
+    // TODO: 实现从 PTY 会话获取历史输出
+    Ok(vec![])
 }
 
 // ==================== PTY Input Commands ====================

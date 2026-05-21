@@ -4,6 +4,8 @@
 
 BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。桌面端 (Tauri + Vue 3) 作为主机，移动端作为远程终端。
 
+而你是一个资深的Tauri开发专家！
+
 **Tech Stack:**
 - **Desktop**: Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS
 - **Backend**: Rust (Tokio async runtime)

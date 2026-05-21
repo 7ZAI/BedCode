@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
+const host = process.env.TAURI_DEV_HOST
+const isMobile = !!/android|ios/.exec(process.env.TAURI_ENV_PLATFORM || '')
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [vue()],
@@ -11,8 +14,16 @@ export default defineConfig({
     },
   },
   server: {
+    host: isMobile || host ? '0.0.0.0' : false,
     port: 1420,
     strictPort: true,
+    hmr: host
+      ? {
+          protocol: 'ws',
+          host: host,
+          port: 1421,
+        }
+      : undefined,
     fs: {
       allow: [
         resolve(__dirname, 'src'),

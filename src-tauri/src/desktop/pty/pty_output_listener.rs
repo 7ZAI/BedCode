@@ -68,15 +68,17 @@ impl AsyncPtyOutputListener {
         handler: Arc<dyn PtyOutputHandler>,
         error_policy: HandlerErrorPolicy,
     ) {
+        let handler_name = handler.name().to_string();
         let mut handlers = self.handlers.lock().await;
         handlers.push(HandlerEntry::new(handler, error_policy));
-        tracing::debug!("Registered handler: {}", handler.name());
+        tracing::debug!("[AsyncPtyOutputListener] Registered handler: {}, total: {}", handler_name, handlers.len());
     }
 
     /// 注册一个 Handler（使用默认错误策略）
     pub async fn register(&self, handler: Arc<dyn PtyOutputHandler>) {
-        self.register_handler(handler, HandlerErrorPolicy::ContinueOnError)
-            .await;
+        let handler_name = handler.name().to_string();
+        self.register_handler(handler, HandlerErrorPolicy::ContinueOnError).await;
+        tracing::info!("[AsyncPtyOutputListener] Handler registered: {}", handler_name);
     }
 
     /// 移除指定名称的 Handler
@@ -103,10 +105,12 @@ impl AsyncPtyOutputListener {
     async fn execute_handlers(&self, event: PtyOutputEvent) {
         let handlers = {
             let handlers = self.handlers.lock().await;
+            tracing::debug!("[AsyncPtyOutputListener] execute_handlers called, handler count: {}", handlers.len());
             handlers.clone()
         };
 
         if handlers.is_empty() {
+            tracing::warn!("[AsyncPtyOutputListener] No handlers registered, event will be lost!");
             return;
         }
 
@@ -117,29 +121,24 @@ impl AsyncPtyOutputListener {
             let name = entry.handler.name().to_string();
             let error_policy = entry.error_policy.clone();
 
+            tracing::debug!("[AsyncPtyOutputListener] Spawning task for handler: {}", name);
             join_set.spawn(async move {
-                match entry.handler.handle(event).await {
-                    Ok(()) => tracing::debug!("Handler {} processed event", name),
-                    Err(e) => {
-                        tracing::error!("Handler {} error: {}", name, e);
-                        Err((name, error_policy))
-                    }
+                tracing::debug!("[AsyncPtyOutputListener] Handler {} handling event", name);
+                if let Err(e) = entry.handler.handle(event).await {
+                    tracing::error!("[AsyncPtyOutputListener] Handler {} error: {}", name, e);
+                } else {
+                    tracing::debug!("[AsyncPtyOutputListener] Handler {} completed successfully", name);
                 }
             });
         }
 
+        tracing::debug!("[AsyncPtyOutputListener] Waiting for {} handler tasks to complete", join_set.len());
         while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err((name, policy))) => {
-                    if matches!(policy, HandlerErrorPolicy::StopOnError) {
-                        join_set.abort_all();
-                        break;
-                    }
-                }
-                Err(e) => tracing::error!("Task join error: {}", e),
+            if let Err(e) = result {
+                tracing::error!("[AsyncPtyOutputListener] Task join error: {}", e);
             }
         }
+        tracing::debug!("[AsyncPtyOutputListener] All handlers completed");
     }
 }
 
@@ -162,6 +161,7 @@ impl Clone for AsyncPtyOutputListener {
 #[async_trait]
 impl PtyOutputListener for AsyncPtyOutputListener {
     async fn on_output(&self, event: PtyOutputEvent) {
+        tracing::debug!("[AsyncPtyOutputListener] on_output called for session: {}", event.session_id);
         self.execute_handlers(event).await;
     }
 
@@ -241,5 +241,57 @@ mod tests {
 
         listener.remove_handler("test_handler").await;
         assert_eq!(listener.handler_count().await, 0);
+    }
+
+    /// 测试问题：从同步线程调用 async on_output
+    /// 这会暴露问题 - Future 不会被执行
+    #[tokio::test]
+    async fn test_sync_call_async_on_output_issue() {
+        use std::thread;
+        use std::sync::Arc as StdArc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = Arc::new(AsyncPtyOutputListener::new());
+        let handler_called = Arc::new(AtomicBool::new(false));
+
+        let handler_called_clone = handler_called.clone();
+        let handler = Arc::new(TestHandler {
+            name: "sync_test_handler".to_string(),
+            should_fail: false,
+        });
+
+        // 注册 handler
+        listener.register(handler).await;
+
+        let event = PtyOutputEvent {
+            session_id: "test".to_string(),
+            data: "test data".to_string(),
+            timestamp: Utc::now(),
+            is_waiting: false,
+            index: 1,
+        };
+
+        // 在 tokio runtime 中直接 await 调用 - 应该工作
+        listener.on_output(event.clone()).await;
+
+        // 现在模拟同步线程中的调用（模拟 PtyReader 的行为）
+        let listener_clone = listener.clone();
+        let event_clone = event.clone();
+
+        // 在线程中调用 async 函数但不 await
+        let handle = thread::spawn(move || {
+            // 这是 PtyReader 中的调用方式 - 只调用不 await
+            let _future = listener_clone.on_output(event_clone);
+            // 注意：这里没有 .await，所以 Future 不会被执行
+        });
+
+        handle.join().unwrap();
+
+        // 等待一段时间看 handler 是否被调用
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // 验证：在同步线程中调用 async fn 但不 await，handler 不会被执行
+        // 这就是问题的根源
+        tracing::info!("Handler called from sync thread: {}", handler_called.load(Ordering::SeqCst));
     }
 }

@@ -424,8 +424,12 @@ export async function onDeviceDisconnected(callback: (event: any) => void): Prom
  * 监听 PTY 输出事件
  */
 export async function onPtyOutput(callback: (event: any) => void): Promise<() => void> {
-  unlistenPtyOutput = await listen('pty-output', callback)
-  return unlistenPtyOutput
+  console.log('[useDesktopCommands] onPtyOutput: Setting up listener');
+  unlistenPtyOutput = await listen('pty-output', (event) => {
+    console.log('[useDesktopCommands] onPtyOutput: Received event', event);
+    callback(event.payload);
+  });
+  return unlistenPtyOutput;
 }
 
 /**
