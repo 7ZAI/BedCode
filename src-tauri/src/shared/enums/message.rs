@@ -109,6 +109,40 @@ pub enum Message {
         will_reconnect: bool,
     },
 
+    /// 订阅输出 (客户端 → 服务端)
+    #[serde(rename = "subscribe")]
+    Subscribe {
+        /// Unique message ID for request-response tracking
+        #[serde(default = "generate_message_id")]
+        message_id: String,
+        session_id: String,
+        /// 起始序号，不指定则从头补完
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_seq: Option<u64>,
+    },
+
+    /// 订阅响应 (服务端 → 客户端)
+    #[serde(rename = "subscribe_response")]
+    SubscribeResponse {
+        /// Unique message ID for request-response tracking
+        #[serde(default = "generate_message_id")]
+        message_id: String,
+        session_id: String,
+        /// 当前最大序号
+        current_max_seq: u64,
+        /// 历史消息数量
+        history_count: usize,
+    },
+
+    /// 取消订阅 (客户端 → 服务端)
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe {
+        /// Unique message ID for request-response tracking
+        #[serde(default = "generate_message_id")]
+        message_id: String,
+        session_id: String,
+    },
+
     /// 客户端断开通知 (服务端 → 客户端)
     /// 移动端断开连接时通知其他客户端
     #[serde(rename = "client_disconnected")]
@@ -238,6 +272,9 @@ impl Message {
             Message::ServerClosed { .. } => None,
             Message::ClientDisconnected { .. } => None,
             Message::SessionEvent { .. } => None,
+            Message::Subscribe { message_id, .. } => Some(message_id),
+            Message::SubscribeResponse { message_id, .. } => Some(message_id),
+            Message::Unsubscribe { message_id, .. } => Some(message_id),
         }
     }
 
