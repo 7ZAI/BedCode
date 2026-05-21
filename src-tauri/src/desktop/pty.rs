@@ -5,6 +5,7 @@
 pub mod command;
 pub mod pty_process;
 pub mod reader;
+pub mod subscription;
 pub mod wsl;
 pub mod tmux;
 mod pty_handler;
