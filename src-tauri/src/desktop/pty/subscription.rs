@@ -3,7 +3,11 @@
 //! 提供 PTY 输出的订阅消费机制，满足"持久化订阅 + 实时广播"场景
 
 use crate::desktop::model::PtyOutputEvent;
+use chrono::Utc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
 
 /// 环形缓冲区 - 存储最近 N 条 PTY 输出消息
 pub struct OutputRingBuffer {
@@ -193,5 +197,222 @@ mod tests {
 
         // total_produced 仍然累加
         assert_eq!(buffer.total_produced(), 4);
+    }
+}
+
+// ==================== Subscription Manager ====================
+
+/// 订阅状态
+#[derive(Debug, Clone)]
+pub struct Subscription {
+    /// 客户端 ID
+    pub client_id: String,
+    /// 会话 ID
+    pub session_id: String,
+    /// 客户端指定起始序号
+    pub start_seq: u64,
+    /// 订阅时间戳（毫秒）
+    pub subscribed_at: i64,
+    /// 是否活跃
+    pub active: bool,
+}
+
+/// 订阅响应
+#[derive(Debug, Clone)]
+pub struct SubscribeResponse {
+    /// 当前最大序号
+    pub current_max_seq: u64,
+    /// 历史消息数量
+    pub history_count: usize,
+}
+
+/// 单个会话的订阅状态
+struct PtySessionSubscriptions {
+    /// 会话 ID
+    session_id: String,
+    /// 输出环形缓冲区
+    ring_buffer: Arc<RwLock<OutputRingBuffer>>,
+    /// 实时广播发送器
+    broadcast_tx: broadcast::Sender<PtyOutputEvent>,
+    /// 订阅表
+    subscriptions: RwLock<HashMap<String, Subscription>>,
+}
+
+/// 订阅管理器
+///
+/// 管理所有 PTY 会话的订阅状态，支持客户端指定起始序号进行历史回放
+pub struct PtySubscriptionManager {
+    /// 会话订阅状态表
+    sessions: RwLock<HashMap<String, Arc<PtySessionSubscriptions>>>,
+}
+
+impl PtySubscriptionManager {
+    /// 创建新的订阅管理器
+    pub fn new() -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// 注册会话（由 PtySession 创建时调用）
+    ///
+    /// 返回环形缓冲区的引用和广播发送器
+    pub fn register_session(
+        &self,
+        session_id: &str,
+    ) -> (Arc<RwLock<OutputRingBuffer>>, broadcast::Sender<PtyOutputEvent>) {
+        let ring_buffer = Arc::new(RwLock::new(OutputRingBuffer::new(10000)));
+        let (broadcast_tx, _) = broadcast::channel(1024);
+
+        let session = Arc::new(PtySessionSubscriptions {
+            session_id: session_id.to_string(),
+            ring_buffer: ring_buffer.clone(),
+            broadcast_tx: broadcast_tx.clone(),
+            subscriptions: RwLock::new(HashMap::new()),
+        });
+
+        let mut sessions = self.sessions.blocking_write();
+        sessions.insert(session_id.to_string(), session);
+
+        (ring_buffer, broadcast_tx)
+    }
+
+    /// 取消注册会话
+    pub fn unregister_session(&self, session_id: &str) {
+        let mut sessions = self.sessions.blocking_write();
+        sessions.remove(session_id);
+    }
+
+    /// 客户端订阅
+    ///
+    /// - `client_id`: 客户端标识
+    /// - `session_id`: 要订阅的会话 ID
+    /// - `start_seq`: 起始序号，None 表示从头补完
+    pub async fn subscribe(
+        &self,
+        client_id: String,
+        session_id: String,
+        start_seq: Option<u64>,
+    ) -> Result<SubscribeResponse, String> {
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+
+        let ring_buffer = session.ring_buffer.read().await;
+        let max_seq = ring_buffer.max_seq();
+        let total_count = ring_buffer.total_produced() as usize;
+        drop(ring_buffer);
+
+        // 确定起始序号：None 则从 0 开始
+        let actual_start = start_seq.unwrap_or(0);
+
+        // 注册订阅
+        let subscription = Subscription {
+            client_id: client_id.clone(),
+            session_id: session_id.clone(),
+            start_seq: actual_start,
+            subscribed_at: Utc::now().timestamp_millis(),
+            active: true,
+        };
+
+        session
+            .subscriptions
+            .write()
+            .await
+            .insert(client_id.clone(), subscription);
+
+        // 异步发送历史消息（不阻塞订阅响应）
+        let client_id_clone = client_id.clone();
+        let session_id_clone = session_id.clone();
+        let start_seq_clone = actual_start;
+
+        tokio::spawn(async move {
+            Self::send_history(&session_id_clone, &client_id_clone, start_seq_clone).await;
+        });
+
+        Ok(SubscribeResponse {
+            current_max_seq: max_seq,
+            history_count: total_count,
+        })
+    }
+
+    /// 取消订阅
+    pub async fn unsubscribe(&self, client_id: &str, session_id: &str) -> Result<(), String> {
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+
+        let mut subs = session.subscriptions.write().await;
+        if let Some(sub) = subs.get_mut(client_id) {
+            sub.active = false;
+        }
+        subs.remove(client_id);
+
+        Ok(())
+    }
+
+    /// 发送历史消息（内部方法）
+    async fn send_history(session_id: &str, client_id: &str, start_seq: u64) {
+        // TODO: 通过 WebSocketManager 发送消息
+        tracing::debug!(
+            "Sending history to client {} for session {}, start_seq={}",
+            client_id,
+            session_id,
+            start_seq
+        );
+    }
+
+    /// 获取会话的广播发送器
+    pub fn get_broadcast_sender(&self, session_id: &str) -> Option<broadcast::Sender<PtyOutputEvent>> {
+        let sessions = self.sessions.blocking_read();
+        sessions.get(session_id).map(|s| s.broadcast_tx.clone())
+    }
+
+    /// 检查客户端是否订阅了指定会话
+    pub async fn is_subscribed(&self, client_id: &str, session_id: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            let subs = session.subscriptions.read().await;
+            subs.get(client_id).map(|s| s.active).unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    /// 获取会话的所有活跃订阅者
+    pub async fn get_active_subscribers(&self, session_id: &str) -> Vec<String> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            let subs = session.subscriptions.read().await;
+            subs.values()
+                .filter(|s| s.active)
+                .map(|s| s.client_id.clone())
+                .collect()
+        } else {
+            vec![]
+        }
+    }
+
+    /// 获取订阅信息
+    pub async fn get_subscription(
+        &self,
+        client_id: &str,
+        session_id: &str,
+    ) -> Option<Subscription> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            let subs = session.subscriptions.read().await;
+            subs.get(client_id).cloned()
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for PtySubscriptionManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

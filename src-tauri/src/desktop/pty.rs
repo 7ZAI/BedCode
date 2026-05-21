@@ -33,6 +33,7 @@ pub use tmux::{
 };
 pub use command::build_command;
 pub use reader::OutputReader;
+pub use subscription::{OutputRingBuffer, PtySubscriptionManager, SubscribeResponse, Subscription};
 
 /// 全局 PTY 输出索引计数器（跨所有会话）
 static OUTPUT_INDEX_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
