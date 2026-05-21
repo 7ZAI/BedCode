@@ -3,9 +3,10 @@
 //! 单例模式的 WebSocket 服务器管理器
 //! 提供移动端远程控制功能的便捷操作 API
 
+use crate::desktop::pty::PtySubscriptionManager;
 use crate::desktop::server::message::Message as BusinessMessage;
 use crate::shared::websocket::{
-    ClientInfo, HandlerResult, MessageHandler, NoopHandler,
+    ClientInfo, HandlerResult, MessageHandler,
     WsMessage, WsServer, WsServerConfig, WsServerEvent,
 };
 use crate::shared::system::error::AppError;
@@ -173,6 +174,8 @@ struct WsManagerInner {
     server: RwLock<Option<Arc<WsServer>>>,
     /// 业务消息处理器
     handler: RwLock<Arc<dyn BusinessHandler>>,
+    /// PTY 输出订阅管理器
+    subscription_manager: Arc<PtySubscriptionManager>,
     /// client_id 到 SocketAddr 的映射
     client_id_to_addr: RwLock<HashMap<String, SocketAddr>>,
     /// SocketAddr 到 client_id 的反向映射
@@ -192,6 +195,7 @@ impl WsManagerInner {
         Self {
             server: RwLock::new(None),
             handler: RwLock::new(Arc::new(NoopBusinessHandler)),
+            subscription_manager: Arc::new(PtySubscriptionManager::new()),
             client_id_to_addr: RwLock::new(HashMap::new()),
             addr_to_client_id: RwLock::new(HashMap::new()),
             addr_to_device_name: RwLock::new(HashMap::new()),
@@ -346,6 +350,11 @@ impl WebSocketManager {
     /// 获取服务器端口
     pub fn port(&self) -> Option<u16> {
         self.inner.port.blocking_read().clone()
+    }
+
+    /// 获取订阅管理器
+    pub fn subscription_manager(&self) -> Arc<PtySubscriptionManager> {
+        self.inner.subscription_manager.clone()
     }
 
     // ==================== Client Management APIs ====================
