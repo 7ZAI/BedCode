@@ -209,6 +209,17 @@ pub fn run() {
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
 
+            // 创建异步 PTY 输出监听器，并注册前端输出处理器（在 async 块中执行）
+            let app_handle_for_listener = app_handle.clone();
+            let session_manager_for_setup = session_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle_for_listener));
+                let async_listener = Arc::new(desktop::pty::AsyncPtyOutputListener::new());
+                async_listener.register(frontend_handler).await;
+                session_manager_for_setup.set_output_listener(async_listener).await;
+                tracing::info!("PTY output listener configured");
+            });
+
             // 创建会话配置管理器
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
             app.manage(config_manager.clone());
@@ -273,71 +284,14 @@ pub fn run() {
                 }
             });
 
-            let app_handle_clone = app_handle.clone();
-            let session_manager_clone = session_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut rx = session_manager_clone.subscribe_output();
-                while let Ok(event) = rx.recv().await {
-                    if let Err(e) = app_handle_clone.emit("pty-output", &event) {
-                        tracing::error!("Failed to emit output event: {}", e);
-                    }
-                }
-            });
+          
 
-            // 转发 PTY 输出到已认证并订阅了该会话的 WebSocket 客户端（移动端）
-            let ws_manager_output: &desktop::WebSocketManager = ws_manager.clone();
-            let session_manager_output = session_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut rx = session_manager_output.subscribe_output();
-                while let Ok(event) = rx.recv().await {
-                    // 写入缓存，供移动端后续订阅时获取历史输出
-                    session_manager_output.cache_output(&event).await;
-
-                    let decoded_data = base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &event.data,
-                    ).unwrap_or_default();
-                    let is_waiting = crate::shared::parser::detect_waiting_input(
-                        &String::from_utf8_lossy(&decoded_data)
-                    );
-                    let message = crate::desktop::server::message::Message::Output {
-                        message_id: uuid::Uuid::new_v4().to_string(),
-                        session_id: event.session_id.clone(),
-                        timestamp: chrono::Utc::now().timestamp_millis(),
-                        payload: crate::desktop::server::message::OutputPayload {
-                            data: event.data.clone(),
-                            is_waiting,
-                            index: event.index,
-                        },
-                    };
-                    // 仅转发给已认证并订阅了该会话的客户端（OutputForwarder 逻辑）
-                    if let Err(e) = ws_manager_output.broadcast(&message).await {
-                        tracing::error!("Failed to broadcast PTY output: {}", e);
-                    }
-                }
-            });
-
-            let app_handle_clone2 = app_handle.clone();
-            let session_manager_clone2 = session_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut rx = session_manager_clone2.subscribe_status();
-                while let Ok(event) = rx.recv().await {
-                    if let Err(e) = app_handle_clone2.emit("session-status-changed", &event) {
-                        tracing::error!("Failed to emit status event: {}", e);
-                    }
-                }
-            });
-
-            let app_handle_clone3 = app_handle.clone();
-            let session_manager_clone3 = session_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut rx = session_manager_clone3.subscribe_restart();
-                while let Ok(event) = rx.recv().await {
-                    if let Err(e) = app_handle_clone3.emit("session-restarted", &event) {
-                        tracing::error!("Failed to emit restart event: {}", e);
-                    }
-                }
-            });
+            // 启动事件转发器：将 SessionManager 的事件转发到前端
+            let event_forwarder = desktop::EventForwarder::new(
+                app_handle.clone(),
+                session_manager.clone(),
+            );
+            event_forwarder.start();
 
             setup_tray(app_handle)?;
 
@@ -368,12 +322,15 @@ pub fn run() {
             desktop::commands::update_session_config,
             // Session
             desktop::commands::start_session,
+            desktop::commands::create_session_no_start,
+            desktop::commands::start_existing_session,
             desktop::commands::list_sessions,
             desktop::commands::get_session,
             desktop::commands::kill_session,
             desktop::commands::delete_session,
             desktop::commands::restart_session,
             desktop::commands::resize_session,
+            desktop::commands::get_session_output_history,
             // PTY Input
             desktop::commands::write_to_session,
             desktop::commands::send_special_key,

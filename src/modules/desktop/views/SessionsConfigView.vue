@@ -111,6 +111,7 @@ const toast = useToast()
 
 const configs = ref<SessionConfig[]>([])
 const sessions = ref<any[]>([])
+const activeSession = ref<any | null>(null)
 const showCreateDialog = ref(false)
 const editingConfig = ref<SessionConfig | null>(null)
 const isLoading = ref(true)
@@ -162,8 +163,16 @@ async function startSession(configId: string) {
   operatingMessage.value = '正在启动会话...'
 
   try {
-    await createSession(configId)
-    toast.success('会话已启动')
+    // 两阶段启动：先创建会话（不启动 PTY）
+    const sessionId = await createSession(configId)
+
+    // 设置为当前会话（TerminalPreview 会监听并在准备好后启动 PTY）
+    const session = sessions.value.find(s => s.id === sessionId)
+    if (session) {
+      activeSession.value = session
+    }
+
+    toast.success('会话已创建，正在启动终端...')
     // 跳转到会话管理页面
     router.push({ name: 'session-manager' })
   } catch (e: any) {

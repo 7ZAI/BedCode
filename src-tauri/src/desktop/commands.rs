@@ -10,7 +10,7 @@ use tauri::{Manager, State};
 // ==================== Session Config Commands ====================
 
 /// 创建会话配置
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn create_session_config(
     config_manager: State<'_, Arc<SessionConfigManager>>,
     name: String,
@@ -69,7 +69,7 @@ pub async fn delete_session_config(
 }
 
 /// 更新会话配置
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn update_session_config(
     config_manager: State<'_, Arc<SessionConfigManager>>,
     id: String,
@@ -151,6 +151,46 @@ pub async fn start_session(
     }
 }
 
+/// 创建会话但不启动 PTY（前端准备好后需调用 start_existing_session）
+#[tauri::command]
+pub async fn create_session_no_start(
+    session_manager: State<'_, Arc<crate::desktop::session::SessionManager>>,
+    config_id: String,
+) -> Result<String> {
+    tracing::info!("create_session_no_start called with config_id: {}", config_id);
+    let result = session_manager.create_session_no_start(&config_id).await;
+    match result {
+        Ok(id) => {
+            tracing::info!("Session created (not started) successfully: {}", id);
+            Ok(id)
+        }
+        Err(e) => {
+            tracing::error!("Failed to create session (not started): {}", e);
+            Err(e)
+        }
+    }
+}
+
+/// 启动已存在的会话（用于延迟启动场景）
+#[tauri::command]
+pub async fn start_existing_session(
+    session_manager: State<'_, Arc<crate::desktop::session::SessionManager>>,
+    session_id: String,
+) -> Result<()> {
+    tracing::info!("start_existing_session called with session_id: {}", session_id);
+    let result = session_manager.start_existing_session(&session_id).await;
+    match result {
+        Ok(_) => {
+            tracing::info!("Session started successfully: {}", session_id);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("Failed to start session: {}", e);
+            Err(e)
+        }
+    }
+}
+
 /// 获取会话列表
 #[tauri::command]
 pub async fn list_sessions(
@@ -204,6 +244,15 @@ pub async fn resize_session(
     rows: u16,
 ) -> Result<()> {
     session_manager.resize_session(&session_id, cols, rows).await
+}
+
+/// 获取会话的历史输出
+#[tauri::command]
+pub async fn get_session_output_history(
+    session_manager: State<'_, Arc<crate::desktop::session::SessionManager>>,
+    session_id: String,
+) -> Result<Vec<crate::desktop::model::PtyOutputEvent>> {
+    Ok(session_manager.get_output_cache(&session_id).await)
 }
 
 // ==================== PTY Input Commands ====================

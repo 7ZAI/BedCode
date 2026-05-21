@@ -3,6 +3,8 @@ import { ref } from 'vue'
 import {
   listSessions,
   startSession,
+  createSessionNoStart,
+  startExistingSession,
   killSession,
   deleteSession,
   restartSession,
@@ -34,19 +36,25 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function createSession(configId: string) {
-    const sessionId = await startSession(configId)
+    // 两阶段启动：先创建会话（不启动 PTY），前端准备好后再启动
+    const sessionId = await createSessionNoStart(configId)
     sessions.value = await listSessions()
-    console.log('createSession completed, sessionId:', sessionId, 'sessions:', sessions.value.map(s => ({ id: s.id, status: s.status })))
+    console.log('createSession (no start) completed, sessionId:', sessionId)
+    return sessionId
+  }
 
-    // Find the new session and set as active
+  // 启动已创建的会话（用于两阶段启动的第二阶段）
+  async function startSessionAction(sessionId: string) {
+    console.log('startSession called with sessionId:', sessionId)
+    await startExistingSession(sessionId)
+    sessions.value = await listSessions()
+    console.log('startSession completed, sessionId:', sessionId)
+
+    // 更新 activeSession
     const session = sessions.value.find(s => s.id === sessionId)
     if (session) {
       activeSession.value = session
-    } else {
-      console.warn('New session not found in sessions array!')
     }
-
-    return sessionId
   }
 
   async function killSessionAction(sessionId: string) {
@@ -160,6 +168,7 @@ export const useSessionStore = defineStore('session', () => {
     loadConfigs,
     loadSessions,
     createSession,
+    startSession: startSessionAction,
     killSession: killSessionAction,
     deleteSession: deleteSessionAction,
     restartSession: restartSessionAction,

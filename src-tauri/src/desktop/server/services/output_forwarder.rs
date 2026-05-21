@@ -1,40 +1,27 @@
 //! Output Forwarder Service
 //!
-//! 负责将 PTY 输出转发给订阅了相应会话的客户端
+//! 负责将 PTY 输出转发给已认证的 WebSocket 客户端
 
 use crate::desktop::pty::PtyOutputEvent;
 use crate::desktop::session::SessionManager;
-use crate::desktop::server::client_info::ClientInfo;
 use crate::desktop::server::message::Message;
+use crate::desktop::websocket_manager::WebSocketManager;
 use crate::Result;
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
-use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 /// 输出转发器
 ///
-/// 负责将 PTY 输出转发给订阅了相应会话的客户端
+/// 负责将 PTY 输出转发给已认证的 WebSocket 客户端
 pub struct OutputForwarder {
     session_manager: Arc<SessionManager>,
-    clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
-    client_senders: Arc<RwLock<HashMap<SocketAddr, tokio::sync::mpsc::UnboundedSender<WsMessage>>>>,
 }
 
 impl OutputForwarder {
     /// 创建新的输出转发器
-    pub fn new(
-        session_manager: Arc<SessionManager>,
-        clients: Arc<RwLock<HashMap<SocketAddr, ClientInfo>>>,
-        client_senders: Arc<RwLock<HashMap<SocketAddr, tokio::sync::mpsc::UnboundedSender<WsMessage>>>>,
-    ) -> Self {
-        Self {
-            session_manager,
-            clients,
-            client_senders,
-        }
+    pub fn new(session_manager: Arc<SessionManager>) -> Self {
+        Self { session_manager }
     }
 
     /// 运行输出转发器
@@ -74,7 +61,7 @@ impl OutputForwarder {
 
     /// 转发PTY输出到订阅的客户端
     async fn forward_output(&self, event: &PtyOutputEvent) -> Result<()> {
-        // 仅解码用于检测等待输入状态，不重复编码
+        // 仅解码用于检测等待输入状态
         let decoded_data = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
             &event.data,
@@ -84,7 +71,7 @@ impl OutputForwarder {
             &String::from_utf8_lossy(&decoded_data)
         );
 
-        // 直接使用 PTY 事件中的 base64 数据构造 Output 消息
+        // 构造输出消息
         let message = Message::Output {
             message_id: Uuid::new_v4().to_string(),
             session_id: event.session_id.clone(),
@@ -96,33 +83,20 @@ impl OutputForwarder {
             },
         };
         let json = message.to_json()?;
-        let ws_message = WsMessage::Text(json);
 
-        // 获取所有订阅了该会话的客户端
-        let clients = self.clients.read().await;
-        let senders = self.client_senders.read().await;
+        // 通过 WebSocketManager 发送消息给已认证的客户端
+        // 注意：由于订阅状态未持久化，当前简化为发送给所有已认证客户端
+        // 客户端会根据 sessionId 自行过滤
+        let ws_manager = WebSocketManager::global();
 
-        tracing::debug!(
-            "[OutputForwarder] Forwarding to {} clients, target_session={}",
-            clients.len(), event.session_id
-        );
+        // 获取所有已认证的客户端
+        let clients = ws_manager.list_authenticated_clients().await;
 
         let mut sent_count = 0;
-        for (addr, client) in clients.iter() {
-            let is_subscribed = client.subscribed_sessions.contains(&event.session_id);
-            tracing::debug!(
-                "[OutputForwarder] Client {}: authenticated={}, subscribed_sessions={:?}, target_match={}",
-                addr, client.authenticated, client.subscribed_sessions, is_subscribed
-            );
-            if client.authenticated && is_subscribed {
-                if let Some(tx) = senders.get(addr) {
-                    if tx.send(ws_message.clone()).is_err() {
-                        tracing::debug!("Failed to send output to client {}", addr);
-                    } else {
-                        sent_count += 1;
-                        tracing::debug!("[OutputForwarder] Sent output to client {}", addr);
-                    }
-                }
+        for client in clients {
+            // 直接发送给每个客户端
+            if ws_manager.send_text_to_client(&client.client_id, &json).await.is_ok() {
+                sent_count += 1;
             }
         }
 

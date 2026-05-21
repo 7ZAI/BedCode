@@ -2,6 +2,7 @@
 //!
 //! 会话配置 CRUD 服务
 
+use crate::desktop::session::SessionConfigManager;
 use crate::desktop::server::message::{SessionConfigSummary, QuickActionSummary};
 use crate::shared::db::Database;
 use crate::Result;
@@ -9,10 +10,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// 获取会话配置列表
-pub async fn list_session_configs(db: &Arc<Mutex<Database>>) -> Result<Vec<SessionConfigSummary>> {
-    let db = db.lock().await;
-    let configs = db.get_session_configs()?;
-    drop(db);
+pub async fn list_session_configs(
+    config_manager: &SessionConfigManager,
+) -> Result<Vec<SessionConfigSummary>> {
+    let configs = config_manager.list_configs().await?;
 
     let summaries = configs
         .into_iter()

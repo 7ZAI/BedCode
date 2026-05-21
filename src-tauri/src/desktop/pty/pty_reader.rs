@@ -1,31 +1,37 @@
-//! Output Reader
+//! PTY Output Reader
 //!
-//! PTY 输出读取线程（当前未使用，保留用于未来重构）
+//! PTY 输出读取线程，使用观察者模式通知监听器
 
 use std::io::{BufReader, Read};
-use std::thread::{self, JoinHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 
 use crate::desktop::enums::PtySessionStatus;
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::next_output_index;
-use crate::Result;
+use crate::desktop::traits::PtyOutputListener;
 
-/// 输出读取器
-pub struct OutputReader {
+/// PTY 输出读取器
+pub struct PtyReader {
     handle: Option<JoinHandle<()>>,
 }
 
-impl OutputReader {
+impl PtyReader {
     /// 创建并启动输出读取线程
+    ///
+    /// - `reader`: PTY 读取器
+    /// - `output_listeners`: 观察者列表，用于通知输出事件
+    /// - `lifecycle_tx`: 生命周期事件发送器
+    /// - `session_id`: 会话 ID
+    /// - `running`: 运行标志
     pub fn start(
         reader: Box<dyn Read + Send + 'static>,
-        output_tx: tokio::sync::broadcast::Sender<PtyOutputEvent>,
+        output_listeners: Arc<tokio::sync::Mutex<Vec<Arc<dyn PtyOutputListener>>>>,
         lifecycle_tx: tokio::sync::broadcast::Sender<PtySessionStatus>,
         session_id: String,
         running: Arc<AtomicBool>,
-    ) -> Result<Self> {
+    ) -> Self {
         let mut buf_reader = BufReader::new(reader);
 
         let handle = thread::spawn(move || {
@@ -51,8 +57,11 @@ impl OutputReader {
                             index: next_output_index(),
                         };
 
-                        if output_tx.send(event).is_err() {
-                            tracing::debug!("No output subscribers for session: {}", session_id);
+                        // 通知所有监听器（观察者模式）
+                        if let Ok(listeners) = output_listeners.try_lock() {
+                            for listener in listeners.iter() {
+                                listener.on_output(event.clone());
+                            }
                         }
                     }
                     Err(e) => {
@@ -68,9 +77,9 @@ impl OutputReader {
             tracing::debug!("Output reader stopped for session: {} (status: {:?})", session_id, exit_status);
         });
 
-        Ok(Self {
+        Self {
             handle: Some(handle),
-        })
+        }
     }
 
     /// 等待线程结束
@@ -78,5 +87,10 @@ impl OutputReader {
         if let Some(handle) = self.handle {
             let _ = handle.join();
         }
+    }
+
+    /// 获取内部线程句柄（用于保存到状态中）
+    pub fn into_inner(self) -> JoinHandle<()> {
+        self.handle.expect(" PtyReader handle is None")
     }
 }

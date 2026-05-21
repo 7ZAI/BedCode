@@ -2,7 +2,7 @@
 //!
 //! PTY 会话注册表 - 负责 PTY 会话的存储和基本操作
 
-use crate::desktop::pty::PtySession;
+use crate::desktop::pty::{PtyOutputEvent, PtySession};
 use crate::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;

@@ -25,8 +25,9 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
       return
     }
 
+    // 建立实时监听
     unlisten = await onPtyOutput((event: any) => {
-      if (event.session_id === targetSessionId) {
+      if (event.sessionId === targetSessionId) {
         output.value += event.data
       }
     })

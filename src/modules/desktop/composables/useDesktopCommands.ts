@@ -7,8 +7,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
 
-import type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo } from './model'
-export type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo }
+import type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent } from './model'
+export type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent }
 
 // ==================== WSL Commands ====================
 
@@ -59,6 +59,21 @@ export async function startSession(configId: string): Promise<string> {
 }
 
 /**
+ * 创建会话但不启动 PTY
+ * 返回 sessionId，前端准备好后可调用 startExistingSession 启动
+ */
+export async function createSessionNoStart(configId: string): Promise<string> {
+  return await invoke('create_session_no_start', { configId })
+}
+
+/**
+ * 启动已存在的会话（用于延迟启动场景）
+ */
+export async function startExistingSession(sessionId: string): Promise<void> {
+  return await invoke('start_existing_session', { sessionId })
+}
+
+/**
  * 获取会话列表
  */
 export async function listSessions(): Promise<SessionInfo[]> {
@@ -98,6 +113,13 @@ export async function restartSession(sessionId: string): Promise<void> {
  */
 export async function resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
   return await invoke('resize_session', { sessionId, cols, rows })
+}
+
+/**
+ * 获取会话的历史输出（用于回放）
+ */
+export async function getSessionOutputHistory(sessionId: string): Promise<PtyOutputEvent[]> {
+  return await invoke('get_session_output_history', { sessionId })
 }
 
 /**
@@ -434,12 +456,15 @@ export function useDesktopCommands() {
 
     // Session
     startSession,
+    createSessionNoStart,
+    startExistingSession,
     listSessions,
     getSession,
     killSession,
     deleteSession,
     restartSession,
     resizeSession,
+    getSessionOutputHistory,
     writeToSession,
     sendSpecialKey,
 

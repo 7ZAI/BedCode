@@ -6,16 +6,19 @@
 use crate::desktop::enums::{PtySessionStatus, SessionLaunchConfig};
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::command::build_command;
-use crate::desktop::pty::subscription::OutputRingBuffer;
+use crate::desktop::pty::pty_reader::PtyReader;
+use crate::desktop::traits::PtyOutputListener;
 use crate::Result;
 
 use portable_pty::{native_pty_system, PtyPair, PtySize};
-use std::io::{BufReader, Read, Write};
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use std::thread::JoinHandle;
+use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
+
+
 
 /// PTY 会话内部状态
 ///
@@ -33,16 +36,16 @@ pub struct PtySessionState {
     pub pair: Option<PtyPair>,
     /// 写入器
     pub writer: Option<Box<dyn Write + Send>>,
-    /// 输出事件发送器
-    pub output_tx: broadcast::Sender<PtyOutputEvent>,
+    /// 输出事件监听器列表（观察者模式）
+    /// 使用 Mutex 保护，允许跨线程访问
+    /// 支持存储异步 PtyOutputListener (AsyncPtyOutputListener 实现了该 trait)
+    output_listeners: Arc<Mutex<Vec<Arc<dyn PtyOutputListener>>>>,
     /// 生命周期事件发送器（进程退出、错误等）
     pub lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 读取线程句柄
     pub reader_handle: Option<JoinHandle<()>>,
     /// 进程 ID（用于强制终止）
     pub process_id: Option<u32>,
-    /// 输出环形缓冲区（用于历史消息存储）
-    pub output_buffer: Arc<RwLock<OutputRingBuffer>>,
 }
 
 /// PTY 会话 - 线程安全的包装器
@@ -52,8 +55,6 @@ pub struct PtySession {
     state: Arc<Mutex<PtySessionState>>,
     /// 运行标志的共享引用（用于快速检查）
     running: Arc<AtomicBool>,
-    /// 输出事件发送器的共享引用
-    output_tx: broadcast::Sender<PtyOutputEvent>,
     /// 生命周期事件发送器的共享引用
     lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 会话 ID 的缓存（避免频繁加锁）
@@ -88,7 +89,6 @@ impl PtySession {
 
         let writer = pair.master.take_writer()
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
-        let (output_tx, _) = broadcast::channel(1024);
         let (lifecycle_tx, _) = broadcast::channel(16);
 
         let running = Arc::new(AtomicBool::new(true));
@@ -100,17 +100,15 @@ impl PtySession {
             pair: Some(pair),
             writer: Some(writer),
             running: running.clone(),
-            output_tx: output_tx.clone(),
+            output_listeners: Arc::new(Mutex::new(Vec::new())),
             lifecycle_tx: lifecycle_tx.clone(),
             reader_handle: None,
             process_id: None,
-            output_buffer: Arc::new(RwLock::new(OutputRingBuffer::new(10000))),
         };
 
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
             running,
-            output_tx,
             lifecycle_tx,
             id,
         })
@@ -231,9 +229,31 @@ impl PtySession {
         Ok(())
     }
 
-    /// 订阅输出事件
-    pub fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
-        self.output_tx.subscribe()
+    /// 添加输出事件监听器（观察者模式）
+    ///
+    /// 外部实现 PtyOutputListener trait 来接收输出事件
+    pub fn add_output_listener(&self, listener: Arc<dyn PtyOutputListener>) {
+        if let Ok(mut state) = self.state.try_lock() {
+            if let Ok(mut listeners) = state.output_listeners.try_lock() {
+                listeners.push(listener);
+            }
+        }
+    }
+
+    /// 通知所有监听器（内部方法，在输出产生时调用）
+    fn notify_listeners(&self, event: PtyOutputEvent) {
+        let listeners = {
+            if let Ok(state) = self.state.try_lock() {
+                if let Ok(listeners) = state.output_listeners.try_lock() {
+                    listeners.clone()
+                } else {
+                    return;
+                }
+            }
+        };
+        for listener in listeners {
+            listener.on_output(event.clone());
+        }
     }
 
     /// 订阅生命周期事件（进程退出、错误等）
@@ -241,26 +261,6 @@ impl PtySession {
         self.lifecycle_tx.subscribe()
     }
 
-    /// 缓存输出事件
-    pub async fn cache_output(&self, event: PtyOutputEvent) {
-        let mut state = self.state.lock().await;
-        let mut buffer = state.output_buffer.write().await;
-        buffer.push(event);
-    }
-
-    /// 获取缓存的输出
-    pub async fn get_output_cache(&self) -> Vec<PtyOutputEvent> {
-        let state = self.state.lock().await;
-        let buffer = state.output_buffer.read().await;
-        buffer.get_since(0)
-    }
-
-    /// 清理输出缓存
-    pub async fn clear_output_cache(&self) {
-        let state = self.state.lock().await;
-        let mut buffer = state.output_buffer.write().await;
-        buffer.clear();
-    }
 
     /// 获取会话状态
     pub fn is_running(&self) -> bool {
@@ -322,70 +322,24 @@ impl PtySession {
                 .map_err(|e| crate::AppError::Pty(e.to_string()))?
         };
 
-        let mut buf_reader = BufReader::new(reader);
-        let output_tx = self.output_tx.clone();
-        let lifecycle_tx = self.lifecycle_tx.clone();
-        let session_id: String = self.id.clone();
-        let running = self.running.clone();
-        let next_index = crate::desktop::pty::next_output_index;
-
-        // 获取 output_buffer 的引用
-        let output_buffer = {
+        // 使用 PtyReader（观察者模式）
+        let output_listeners = {
             let state = self.state.lock().await;
-            state.output_buffer.clone()
+            state.output_listeners.clone()
         };
 
-        let handle = thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
-            let mut exit_status = PtySessionStatus::Stopped;
-
-            // 需要使用阻塞锁，因为我们在子线程中
-            while running.load(Ordering::SeqCst) {
-                match buf_reader.read(&mut buffer) {
-                    Ok(0) => {
-                        // EOF - process exited
-                        tracing::info!("PTY session ended: {}", session_id);
-                        break;
-                    }
-                    Ok(n) => {
-                        let event = PtyOutputEvent {
-                            session_id: session_id.clone(),
-                            data: base64::Engine::encode(
-                                &base64::engine::general_purpose::STANDARD,
-                                &buffer[..n],
-                            ),
-                            timestamp: chrono::Utc::now(),
-                            is_waiting: false,
-                            index: next_index(),
-                        };
-
-                        // 先写入 RingBuffer（历史缓存）
-                        if let Ok(mut buf) = output_buffer.try_write() {
-                            buf.push(event.clone());
-                        }
-
-                        // 再广播实时消息
-                        if output_tx.send(event).is_err() {
-                            tracing::debug!("No output subscribers for session: {}", session_id);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("PTY read error: {}", e);
-                        exit_status = PtySessionStatus::Error;
-                        break;
-                    }
-                }
-            }
-
-            // Notify lifecycle subscribers that the process has exited
-            let _ = lifecycle_tx.send(exit_status);
-            tracing::debug!("Output reader stopped for session: {} (status: {:?})", session_id, exit_status);
-        });
+        let pty_reader = PtyReader::start(
+            reader,
+            output_listeners,
+            self.lifecycle_tx.clone(),
+            self.id.clone(),
+            self.running.clone(),
+        );
 
         // 保存线程句柄
         {
             let mut state = self.state.lock().await;
-            state.reader_handle = Some(handle);
+            state.reader_handle = Some(pty_reader.into_inner());
         }
 
         Ok(())
@@ -397,7 +351,6 @@ impl Clone for PtySession {
         Self {
             state: self.state.clone(),
             running: self.running.clone(),
-            output_tx: self.output_tx.clone(),
             lifecycle_tx: self.lifecycle_tx.clone(),
             id: self.id.clone(),
         }

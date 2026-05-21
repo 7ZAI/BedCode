@@ -1,0 +1,50 @@
+//! Frontend Output Handler
+//!
+//! 向前端发送 PTY 输出事件的 Handler 实现
+
+use crate::desktop::model::PtyOutputEvent;
+use crate::desktop::traits::PtyOutputHandler;
+use async_trait::async_trait;
+use tauri::AppHandle;
+
+/// 向前端发送 PTY 输出事件的 Handler
+pub struct FrontendOutputHandler {
+    name: String,
+    app_handle: AppHandle,
+}
+
+impl FrontendOutputHandler {
+    pub fn new(app_handle: AppHandle) -> Self {
+        Self {
+            name: "FrontendOutputHandler".to_string(),
+            app_handle,
+        }
+    }
+
+    pub fn with_name(app_handle: AppHandle, name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            app_handle,
+        }
+    }
+}
+
+#[async_trait]
+impl PtyOutputHandler for FrontendOutputHandler {
+    async fn handle(&self, event: PtyOutputEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match self.app_handle.emit("pty-output", &event) {
+            Ok(()) => {
+                tracing::debug!("Emitted pty-output event for session: {}", event.session_id);
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Failed to emit pty-output event: {}", e);
+                Err(Box::new(e))
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}

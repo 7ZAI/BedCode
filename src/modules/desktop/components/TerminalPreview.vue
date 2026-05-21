@@ -358,14 +358,21 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => 
 }, { immediate: true })
 
 // 监听会话变化，重置终端并同步尺寸
-watch(sessionId, (newId, oldId) => {
+watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
     }
-    // 新会话激活时同步当前终端尺寸到 PTY
+
+    // 新会话激活时
     if (newId && terminal) {
       nextTick(() => syncTerminalSize())
+
+      // 两阶段启动：如果会话状态是 starting，启动 PTY
+      if (props.session?.status === 'starting') {
+        console.log('[TerminalPreview] Session is starting, launching PTY...')
+        await sessionStore.startSession(newId)
+      }
     }
   }
 })

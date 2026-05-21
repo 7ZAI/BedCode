@@ -5,11 +5,11 @@
 
 use crate::desktop::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::desktop::pty::{PtyOutputEvent, PtySessionHandler, PtyHandler};
+use crate::desktop::traits::PtyOutputListener;
 use crate::desktop::session::{
     config_mapper::{ConfigMapper, DefaultConfigMapper},
     event_bus::{DefaultSessionEventBus, SessionEventBus},
     naming_service::{DefaultNamingService, NamingService},
-    output_cache::{DefaultOutputCache, OutputCache},
     pty_registry::{DefaultPtyRegistry, PtyRegistry},
     session_info::{DefaultSessionInfoRegistry, SessionInfoRegistry},
     status_detector::{DefaultStatusDetector, StatusDetector},
@@ -20,7 +20,7 @@ use crate::Result;
 use chrono::Utc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 /// Session Manager
 ///
@@ -31,8 +31,6 @@ pub struct SessionManager {
     pty_registry: Arc<DefaultPtyRegistry>,
     /// 会话信息注册表
     session_info: Arc<DefaultSessionInfoRegistry>,
-    /// 输出缓存
-    output_cache: Arc<DefaultOutputCache>,
     /// 事件总线
     event_bus: Arc<DefaultSessionEventBus>,
     /// 命名服务
@@ -47,9 +45,26 @@ pub struct SessionManager {
     storage: Arc<SessionStorage>,
     /// 运行标志
     running: Arc<AtomicBool>,
+    /// PTY 输出事件监听器（可动态添加）
+    output_listener: Arc<RwLock<Option<Arc<dyn PtyOutputListener>>>>,
 }
 
 impl SessionManager {
+    /// 设置 PTY 输出事件监听器
+    ///
+    /// 在启动会话前设置，用于接收 PTY 输出事件
+    /// 传入 Arc<dyn PtyOutputListener>，任何实现该 trait 的类型都可以
+    pub async fn set_output_listener(&self, listener: Arc<dyn PtyOutputListener>) {
+        let mut output_listener = self.output_listener.write().await;
+        *output_listener = Some(listener);
+    }
+
+    /// 清除 PTY 输出事件监听器
+    pub async fn clear_output_listener(&self) {
+        let mut output_listener = self.output_listener.write().await;
+        *output_listener = None;
+    }
+
     /// 获取输出广播发送器
     pub fn output_tx(&self) -> broadcast::Sender<PtyOutputEvent> {
         self.event_bus.output_sender()
@@ -86,7 +101,6 @@ impl SessionManager {
     ) -> Self {
         let pty_registry = Arc::new(DefaultPtyRegistry::new());
         let session_info = Arc::new(DefaultSessionInfoRegistry::new());
-        let output_cache = Arc::new(DefaultOutputCache::new(1000));
         let event_bus = Arc::new(DefaultSessionEventBus::new());
         let naming_service = Arc::new(DefaultNamingService::new());
         let config_mapper = Arc::new(DefaultConfigMapper::new());
@@ -96,7 +110,6 @@ impl SessionManager {
         Self {
             pty_registry,
             session_info,
-            output_cache,
             event_bus,
             naming_service,
             config_mapper,
@@ -104,13 +117,14 @@ impl SessionManager {
             pty_handler,
             storage,
             running,
+            output_listener: Arc::new(RwLock::new(None)),
         }
     }
 
     /// 从配置创建会话
     pub async fn create_session(&self, config_id: &str) -> Result<String> {
         // 从存储加载配置
-        let config = self
+        let config: crate::db::SessionConfig = self
             .storage
             .get_config(config_id)
             .await?
@@ -129,8 +143,11 @@ impl SessionManager {
         let pty_session = self.pty_handler.create_session(launch_config.clone())?;
         let session_id = pty_session.id().to_string();
 
-        // 启动输出转发器
-        self.start_output_forwarder(&session_id, pty_session.subscribe_output()).await;
+        // 先注册输出监听器（如果已设置），再启动 PTY
+        self.register_output_listener(&pty_session).await;
+
+        // 启动 PTY 会话
+        pty_session.start().await?;
 
         // 启动生命周期处理器
         self.start_lifecycle_handler(&session_id).await;
@@ -155,39 +172,84 @@ impl SessionManager {
         Ok(session_id)
     }
 
-    /// 启动输出转发器
-    async fn start_output_forwarder(&self, session_id: &str, mut rx: broadcast::Receiver<PtyOutputEvent>) {
-        let output_tx = self.event_bus.output_sender();
-        let running = self.running.clone();
-        let output_cache = self.output_cache.clone();
-        let sid = session_id.to_string();
+    /// 创建会话但不启动 PTY（仅创建会话信息）
+    /// 返回 session_id，前端准备好后可调用 start_existing_session 启动
+    pub async fn create_session_no_start(&self, config_id: &str) -> Result<String> {
+        // 从存储加载配置
+        let config: crate::db::SessionConfig = self
+            .storage
+            .get_config(config_id)
+            .await?
+            .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        tokio::spawn(async move {
-            loop {
-                if !running.load(Ordering::SeqCst) {
-                    break;
-                }
-                match rx.recv().await {
-                    Ok(event) => {
-                        // 缓存输出
-                        output_cache.cache(event.clone()).await;
-                        // 只在有活跃订阅者时才转发，减少无效消息
-                        if output_tx.receiver_count() > 0 {
-                            let _ = output_tx.send(event);
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        tracing::debug!("Output channel closed for session: {}", sid);
-                        break;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Output channel lagged {} messages for session: {}", n, sid);
-                    }
-                }
-            }
-            tracing::debug!("Output forwarder stopped for session: {}", sid);
-        });
+        // 获取现有会话列表用于生成唯一名称
+        let sessions = self.session_info.list().await;
+        let session_name = self
+            .naming_service
+            .generate_unique_name(config_id, &config.name, &sessions);
+
+        // 使用配置映射服务构建启动配置
+        let launch_config = self.config_mapper.to_launch_config(&config)?;
+
+        // 创建 PTY 会话
+        let pty_session = self.pty_handler.create_session(launch_config.clone())?;
+        let session_id = pty_session.id().to_string();
+
+        // 注册输出监听器
+        self.register_output_listener(&pty_session).await;
+
+        // 不启动 PTY，只保存会话信息
+        // pty_session.start().await?; // 这里不启动
+
+        // 启动生命周期处理器
+        self.start_lifecycle_handler(&session_id).await;
+
+        // 创建会话信息（状态为 starting）
+        let info = SessionInfo {
+            id: session_id.clone(),
+            config_id: config_id.to_string(),
+            name: session_name.clone(),
+            status: SessionStatus::Starting,
+            created_at: Utc::now(),
+            started_at: None,
+            stopped_at: None,
+            session_type: SessionType::Pty,
+        };
+
+        // 保存到各服务
+        self.pty_registry.insert(session_id.clone(), pty_session).await;
+        self.session_info.insert(info).await;
+
+        tracing::info!("Session created (not started): {} ({})", session_name, session_id);
+        Ok(session_id)
     }
+
+    /// 启动已存在的会话（用于延迟启动场景）
+    pub async fn start_existing_session(&self, session_id: &str) -> Result<()> {
+        // 获取会话信息
+        let session_info = self
+            .session_info
+            .get(session_id)
+            .await
+            .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
+
+        // 获取 PTY 会话
+        let pty_session = self.pty_registry.get(session_id).await
+            .ok_or_else(|| crate::AppError::NotFound(format!("PTY session not found: {}", session_id)))?;
+
+        // 启动 PTY
+        pty_session.start().await?;
+
+        // 更新会话状态为 Running
+        let mut updated_info = session_info;
+        updated_info.status = SessionStatus::Running;
+        updated_info.started_at = Some(Utc::now());
+        self.session_info.insert(updated_info).await;
+
+        tracing::info!("Session started: {} ({})", session_info.name, session_id);
+        Ok(())
+    }
+
 
     /// 启动生命周期处理器
     async fn start_lifecycle_handler(&self, session_id: &str) {
@@ -257,13 +319,10 @@ impl SessionManager {
         let old_name_for_info = old_name.clone();
         let old_name_for_event = old_name.clone();
 
-        // 创建 PTY 会话（使用相同 ID���
+        // 创建 PTY 会话（使用相同 ID
         let pty_session = self
             .pty_handler
             .create_session_with_id(session_id.to_string(), launch_config.clone())?;
-
-        // 启动输出转发器
-        self.start_output_forwarder(session_id, pty_session.subscribe_output()).await;
 
         // 启动生命周期处理器
         self.start_lifecycle_handler(session_id).await;
@@ -387,10 +446,7 @@ impl SessionManager {
     pub async fn remove_session(&self, session_id: &str) -> Result<()> {
         tracing::info!("remove_session called for: {}", session_id);
 
-        // 清理缓存
-        self.output_cache.clear(session_id).await;
-
-        // 从各注册表移除
+        // 从各注册表移除（PTY 的缓存会随 PTY 一起被清理）
         let _ = self.pty_registry.remove(session_id).await;
         let _ = self.session_info.remove(session_id).await;
 
@@ -401,26 +457,6 @@ impl SessionManager {
     /// 订阅全局输出
     pub fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
         self.event_bus.output_sender().subscribe()
-    }
-
-    /// 缓存 PTY 输出（供移动端订阅时获取历史输出）
-    pub async fn cache_output(&self, event: &PtyOutputEvent) {
-        self.output_cache.cache(event.clone()).await;
-    }
-
-    /// 获取缓存的 PTY 输出
-    pub async fn get_output_cache(&self, session_id: &str) -> Vec<PtyOutputEvent> {
-        self.output_cache.get(session_id).await
-    }
-
-    /// 清理指定会话的缓存
-    pub async fn clear_output_cache(&self, session_id: &str) {
-        self.output_cache.clear(session_id).await;
-    }
-
-    /// 清理所有会话的缓存
-    pub async fn clear_all_output_cache(&self) {
-        self.output_cache.clear_all().await;
     }
 
     /// 订阅会话状态变化
@@ -476,13 +512,10 @@ impl SessionManager {
         tracing::info!("SessionManager shutting down...");
         self.running.store(false, Ordering::SeqCst);
 
-        // 终止所有 PTY 会话
+        // 终止所有 PTY 会话（缓存会随 PTY 一起清理）
         if let Err(e) = self.pty_registry.kill_all().await {
             tracing::error!("Failed to kill all sessions: {}", e);
         }
-
-        // 清理所有缓存
-        self.output_cache.clear_all().await;
 
         tracing::info!("SessionManager shutdown complete");
     }
