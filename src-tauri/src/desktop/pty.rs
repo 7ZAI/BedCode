@@ -4,14 +4,25 @@
 
 pub mod command;
 pub mod pty_process;
-pub mod reader;
+pub mod pty_reader;
 pub mod subscription;
+pub mod pty_subscription_handler;
 pub mod wsl;
 pub mod tmux;
 mod pty_handler;
+mod pty_output_listener;
+pub mod frontend_output_handler;
 
 pub use pty_handler::{PtyHandler, PtySessionHandler};
+// Re-export from pty_process (同步版本，使用 traits 中的定义)
 pub use pty_process::PtySession;
+// Re-export async implementation
+pub use pty_output_listener::AsyncPtyOutputListener;
+// Re-export FrontendOutputHandler
+pub use frontend_output_handler::FrontendOutputHandler;
+// Re-export PtySubscriptionHandler
+pub use pty_subscription_handler::PtySubscriptionHandler;
+
 
 // Re-export from enums
 pub use crate::desktop::enums::{
@@ -32,7 +43,7 @@ pub use tmux::{
     session_exists, TmuxSession,
 };
 pub use command::build_command;
-pub use reader::OutputReader;
+pub use pty_reader::PtyReader;
 pub use subscription::{OutputRingBuffer, PtySubscriptionManager, SubscribeResponse, Subscription};
 
 /// 全局 PTY 输出索引计数器（跨所有会话）

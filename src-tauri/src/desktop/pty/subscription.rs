@@ -3,6 +3,9 @@
 //! 提供 PTY 输出的订阅消费机制，满足"持久化订阅 + 实时广播"场景
 
 use crate::desktop::model::PtyOutputEvent;
+use crate::desktop::websocket_manager::WebSocketManager;
+use crate::shared::enums::message::{Message, OutputPayload};
+use crate::shared::system::error::AppError;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -229,13 +232,13 @@ pub struct SubscribeResponse {
 /// 单个会话的订阅状态
 struct PtySessionSubscriptions {
     /// 会话 ID
-    session_id: String,
+    pub session_id: String,
     /// 输出环形缓冲区
-    ring_buffer: Arc<RwLock<OutputRingBuffer>>,
+    pub ring_buffer: Arc<RwLock<OutputRingBuffer>>,
     /// 实时广播发送器
-    broadcast_tx: broadcast::Sender<PtyOutputEvent>,
+    pub broadcast_tx: broadcast::Sender<PtyOutputEvent>,
     /// 订阅表
-    subscriptions: RwLock<HashMap<String, Subscription>>,
+    pub subscriptions: RwLock<HashMap<String, Subscription>>,
 }
 
 /// 订阅管理器
@@ -243,7 +246,7 @@ struct PtySessionSubscriptions {
 /// 管理所有 PTY 会话的订阅状态，支持客户端指定起始序号进行历史回放
 pub struct PtySubscriptionManager {
     /// 会话订阅状态表
-    sessions: RwLock<HashMap<String, Arc<PtySessionSubscriptions>>>,
+    pub sessions: RwLock<HashMap<String, Arc<PtySessionSubscriptions>>>,
 }
 
 impl PtySubscriptionManager {
@@ -354,10 +357,133 @@ impl PtySubscriptionManager {
     }
 
     /// 发送历史消息（内部方法）
-    async fn send_history(session_id: &str, client_id: &str, start_seq: u64) {
-        // TODO: 通过 WebSocketManager 发送消息
+    /// 将指定起始序号之后的所有消息发送给指定客户端
+    pub async fn send_history_to_client(
+        &self,
+        client_id: &str,
+        session_id: &str,
+        start_seq: u64,
+    ) -> Result<usize, AppError> {
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| AppError::Internal(format!("Session {} not found", session_id)))?;
+
+        // 从环形缓冲区获取历史消息
+        let ring_buffer = session.ring_buffer.read().await;
+        let messages = ring_buffer.get_since(start_seq);
+        let count = messages.len();
+        drop(ring_buffer);
+
+        if count == 0 {
+            tracing::debug!(
+                "No history messages to send to client {} for session {} (start_seq={})",
+                client_id,
+                session_id,
+                start_seq
+            );
+            return Ok(0);
+        }
+
+        // 通过 WebSocketManager 发送历史消息
+        let ws_manager = WebSocketManager::global();
+        let mut last_index: Option<usize> = None;
+
+        for event in messages {
+            last_index = Some(event.index);
+
+            let message = Message::Output {
+                message_id: format!("history-{}-{}", session_id, event.index),
+                session_id: session_id.to_string(),
+                timestamp: event.timestamp.timestamp_millis(),
+                payload: OutputPayload {
+                    data: event.data,
+                    is_waiting: event.is_waiting,
+                    index: event.index,
+                },
+            };
+
+            if let Err(e) = ws_manager.send_to_client(client_id, &message).await {
+                tracing::warn!(
+                    "Failed to send history message {} to client {}: {}",
+                    event.index,
+                    client_id,
+                    e
+                );
+            }
+        }
+
         tracing::debug!(
-            "Sending history to client {} for session {}, start_seq={}",
+            "Sent {} history messages to client {} for session {}, last_index={:?}",
+            count,
+            client_id,
+            session_id,
+            last_index
+        );
+
+        Ok(count)
+    }
+
+    /// 内部：发送历史消息（由 subscribe 调用）
+    async fn send_history(session_id: &str, client_id: &str, start_seq: u64) {
+        let ws_manager = WebSocketManager::global();
+        let subscription_manager = ws_manager.subscription_manager();
+
+        // 获取会话
+        let sessions = subscription_manager.sessions.read().await;
+        let session = match sessions.get(session_id) {
+            Some(s) => s,
+            None => {
+                tracing::warn!("Session {} not found for history send", session_id);
+                return;
+            }
+        };
+
+        // 从环形缓冲区获取历史消息
+        let ring_buffer = session.ring_buffer.read().await;
+        let messages = ring_buffer.get_since(start_seq);
+        let count = messages.len();
+        drop(ring_buffer);
+
+        if count == 0 {
+            tracing::debug!(
+                "No history messages to send to client {} for session {} (start_seq={})",
+                client_id,
+                session_id,
+                start_seq
+            );
+            return;
+        }
+
+        // 释放 sessions 锁
+        drop(sessions);
+
+        // 通过 WebSocketManager 发送历史消息
+        for event in messages {
+            let message = Message::Output {
+                message_id: format!("history-{}-{}", session_id, event.index),
+                session_id: session_id.to_string(),
+                timestamp: event.timestamp.timestamp_millis(),
+                payload: OutputPayload {
+                    data: event.data,
+                    is_waiting: event.is_waiting,
+                    index: event.index,
+                },
+            };
+
+            if let Err(e) = ws_manager.send_to_client(client_id, &message).await {
+                tracing::warn!(
+                    "Failed to send history message {} to client {}: {}",
+                    event.index,
+                    client_id,
+                    e
+                );
+            }
+        }
+
+        tracing::debug!(
+            "Sent {} history messages to client {} for session {}, start_seq={}",
+            count,
             client_id,
             session_id,
             start_seq
