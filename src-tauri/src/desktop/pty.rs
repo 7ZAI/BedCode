@@ -20,8 +20,8 @@ pub use pty_process::PtySession;
 pub use pty_output_listener::AsyncPtyOutputListener;
 // Re-export FrontendOutputHandler
 pub use frontend_output_handler::FrontendOutputHandler;
-// Re-export PtySubscriptionHandler
-pub use pty_subscription_handler::PtySubscriptionHandler;
+// Re-export PtySubscriptionHandler and GlobalSubscriptionHandler
+pub use pty_subscription_handler::{GlobalSubscriptionHandler, PtySubscriptionHandler};
 
 
 // Re-export from enums

@@ -4,7 +4,10 @@
 //! 重构后只负责流程编排，各职责已拆分到独立模块
 
 use crate::desktop::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
-use crate::desktop::pty::{PtyOutputEvent, PtySessionHandler, PtyHandler};
+use crate::desktop::pty::{
+    AsyncPtyOutputListener, PtyOutputEvent, PtySessionHandler, PtyHandler,
+    PtySubscriptionHandler, PtySubscriptionManager,
+};
 use crate::desktop::traits::PtyOutputListener;
 use crate::desktop::session::{
     config_mapper::{ConfigMapper, DefaultConfigMapper},
@@ -47,6 +50,8 @@ pub struct SessionManager {
     running: Arc<AtomicBool>,
     /// PTY 输出事件监听器（可动态添加）
     output_listener: Arc<RwLock<Option<Arc<dyn PtyOutputListener>>>>,
+    /// 订阅管理器（用于移动端 PTY 输出订阅）
+    subscription_manager: Arc<PtySubscriptionManager>,
 }
 
 impl SessionManager {
@@ -118,7 +123,21 @@ impl SessionManager {
             storage,
             running,
             output_listener: Arc::new(RwLock::new(None)),
+            subscription_manager: Arc::new(PtySubscriptionManager::new()),
         }
+    }
+
+    /// 获取订阅管理器（用于移动端订阅）
+    pub fn subscription_manager(&self) -> Arc<PtySubscriptionManager> {
+        self.subscription_manager.clone()
+    }
+
+    /// 为会话注册订阅处理器
+    /// 在创建 PTY session 后调用，启用移动端订阅功能
+    pub fn register_subscription_handler(&self, session_id: &str) {
+        // 注册会话到订阅管理器（创建环形缓冲区）
+        self.subscription_manager.register_session(session_id);
+        tracing::info!("Registered session {} in subscription manager", session_id);
     }
 
     /// 从配置创建会话
@@ -170,6 +189,9 @@ impl SessionManager {
         // 保存到各服务
         self.pty_registry.insert(session_id.clone(), pty_session).await;
         self.session_info.insert(info).await;
+
+        // 注册到订阅管理器（启用移动端订阅功能）
+        self.register_subscription_handler(&session_id);
 
         tracing::info!("Session created: {} ({})", session_name, session_id);
         Ok(session_id)
@@ -330,6 +352,12 @@ impl SessionManager {
         let pty_session = self
             .pty_handler
             .create_session_with_id(session_id.to_string(), launch_config.clone())?;
+
+        // 先注册输出监听器（如果已设置），再启动 PTY
+        let listener = self.output_listener.read().await.clone();
+        if let Some(listener) = listener {
+            pty_session.add_output_listener(listener);
+        }
 
         // 启动生命周期处理器
         self.start_lifecycle_handler(session_id).await;

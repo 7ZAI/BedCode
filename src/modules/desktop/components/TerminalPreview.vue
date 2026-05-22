@@ -175,11 +175,10 @@ function initTerminal() {
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
     theme: getTheme(),
     cursorBlink: false,
-    cursorStyle: 'none',
+    cursorStyle: 'block',
+    cursorWidth: 1,
     scrollback: 50000, // 桌面端实时预览保留 50000 行历史
     allowProposedApi: true,
-    // 确保光标样式正确
-    cursorWidth: 1,
   })
 
   fitAddon = new FitAddon()

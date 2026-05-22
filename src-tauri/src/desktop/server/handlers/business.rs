@@ -6,19 +6,18 @@
 use crate::desktop::plugin::PluginManager;
 use crate::desktop::server::connection_types::AuthPayload;
 use crate::desktop::server::message::Message as BusinessMessage;
-use crate::desktop::server::services::session_control::handle_control;
+use crate::desktop::server::services::session_control::handle_control_message;
+use crate::desktop::server::services::auth_service::handle_jwt_auth;
+use crate::desktop::server::services::input_service::handle_input;
 use crate::shared::auth::qr_token::QrTokenManager;
 use crate::desktop::session::SessionManager;
 use crate::desktop::websocket_manager::BusinessHandler;
 use crate::shared::auth::JwtService;
 use crate::shared::db::Database;
 use crate::shared::enums::AuthStage;
-use crate::shared::enums::ControlAction;
-use crate::shared::enums::ControlPayload;
 use crate::desktop::server::services::PairingService;
 use crate::Result;
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -93,9 +92,9 @@ impl BusinessMessageHandler {
                 payload,
             } => {
                 match payload.stage {
-                    // 配对和 QR 连接流程 → 委托给 services/auth.rs::handle_auth
+                    // 配对和 QR 连接流程 → 委托给 auth_service::handle_auth
                     AuthStage::RequestPairing | AuthStage::VerifyCode | AuthStage::QrConnect => {
-                        crate::desktop::server::services::auth::handle_auth(
+                        crate::desktop::server::services::auth_service::handle_auth(
                             payload,
                             message_id,
                             addr,
@@ -109,12 +108,26 @@ impl BusinessMessageHandler {
                     }
                     // 已认证 JWT Token → 走 JWT 验证
                     AuthStage::Authenticated => {
-                        self.handle_jwt_auth(message_id, session_id, timestamp, payload, addr)
-                            .await
+                        handle_jwt_auth(
+                            message_id,
+                            session_id,
+                            timestamp,
+                            payload,
+                            addr,
+                            &self.jwt_service,
+                            &self.app_handle,
+                        ).await
                     }
                     _ => {
-                        self.handle_jwt_auth(message_id, session_id, timestamp, payload, addr)
-                            .await
+                        handle_jwt_auth(
+                            message_id,
+                            session_id,
+                            timestamp,
+                            payload,
+                            addr,
+                            &self.jwt_service,
+                            &self.app_handle,
+                        ).await
                     }
                 }
             }
@@ -125,99 +138,6 @@ impl BusinessMessageHandler {
                     "NOT_AUTHENTICATED",
                     "Please authenticate first by sending an Auth message with valid JWT token",
                 )))
-            }
-        }
-    }
-
-    /// 处理 JWT 认证
-    async fn handle_jwt_auth(
-        &self,
-        message_id: String,
-        session_id: Option<String>,
-        timestamp: i64,
-        payload: AuthPayload,
-        addr: SocketAddr,
-    ) -> Result<Option<BusinessMessage>> {
-        // 从 payload 中获取 JWT token
-        let token = match &payload.session_token {
-            Some(t) if !t.is_empty() => t.clone(),
-            _ => {
-                // 没有 token，返回认证失败
-                return Ok(Some(BusinessMessage::Auth {
-                    message_id,
-                    session_id,
-                    timestamp,
-                    payload: AuthPayload {
-                        stage: crate::desktop::server::connection_types::AuthStage::Failed,
-                        error: Some("No JWT token provided".to_string()),
-                        ..Default::default()
-                    },
-                }));
-            }
-        };
-
-        // 验证 JWT
-        match self.jwt_service.verify_token_with_expiry(&token) {
-            Ok(claims) => {
-                // JWT 验证成功，使用 WebSocketManager 设置客户端为已认证
-                let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
-                ws_manager.set_authenticated(&addr, Some(claims.sub.clone())).await;
-                if let Some(name) = &claims.device_name {
-                    ws_manager.set_device_name(&addr, Some(name.clone())).await;
-                }
-
-                // 发送认证成功事件给前端
-                if let Some(handle) = &self.app_handle {
-                    let event = crate::desktop::server::connection_types::DeviceConnectionEvent {
-                        addr: addr.to_string(),
-                        device_id: claims.sub.clone(),
-                        device_name: claims.device_name.clone(),
-                        event: "authenticated".to_string(),
-                    };
-                    let _ = handle.emit("device-connected", &event);
-                }
-
-                tracing::info!(
-                    "Client {} authenticated via JWT (device: {})",
-                    addr,
-                    claims.sub
-                );
-
-                // 返回认证成功响应
-                Ok(Some(BusinessMessage::Auth {
-                    message_id,
-                    session_id,
-                    timestamp,
-                    payload: AuthPayload {
-                        stage: crate::desktop::server::connection_types::AuthStage::Authenticated,
-                        device_id: Some(claims.sub),
-                        device_name: claims.device_name,
-                        device_fingerprint: claims.fingerprint,
-                        session_token: Some(token),
-                        error: None,
-                        ..Default::default()
-                    },
-                }))
-            }
-            Err(e) => {
-                tracing::warn!("JWT verification failed for {}: {}", addr, e);
-
-                // 返回认证失败响应
-                let error_msg = match e {
-                    crate::shared::auth::JwtError::TokenExpired => "JWT token expired, please re-authenticate",
-                    _ => "Invalid JWT token",
-                };
-
-                Ok(Some(BusinessMessage::Auth {
-                    message_id,
-                    session_id,
-                    timestamp,
-                    payload: AuthPayload {
-                        stage: crate::desktop::server::connection_types::AuthStage::Failed,
-                        error: Some(error_msg.to_string()),
-                        ..Default::default()
-                    },
-                }))
             }
         }
     }
@@ -239,114 +159,30 @@ impl BusinessMessageHandler {
                 timestamp,
                 payload,
             } => {
-                match payload.action {
-                    ControlAction::ListSessionConfigs => {
-                        let db = self.db.lock().await;
-                        let configs = db.get_session_configs()?;
-                        drop(db);
-
-                        use crate::shared::enums::sumary::SessionConfigSummary;
-                        let summaries: Vec<SessionConfigSummary> = configs
-                            .into_iter()
-                            .map(|c| SessionConfigSummary {
-                                id: c.id,
-                                name: c.name,
-                                environment: c.environment,
-                                wsl_distro: c.wsl_distro,
-                                working_dir: c.working_dir,
-                                command: c.command,
-                            })
-                            .collect();
-
-                        Ok(Some(BusinessMessage::Control {
-                            message_id,
-                            session_id,
-                            timestamp,
-                            payload: ControlPayload {
-                                action: ControlAction::SessionConfigList { configs: summaries },
-                            },
-                        }))
-                    }
-                    ControlAction::ListSessions
-                    | ControlAction::StartSession { .. }
-                    | ControlAction::StopSession { .. }
-                    | ControlAction::ResizeSession { .. }
-                    | ControlAction::JoinSession { .. }
-                    | ControlAction::LeaveSession { .. }
-                    | ControlAction::RemoveSession { .. } => {
-                        if let (Some(sm), Some(pm)) = (&self.session_manager, &self.plugin_manager) {
-                            // 从 WebSocketManager 获取客户端列表
-                            let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
-                            let clients = HashMap::<SocketAddr, crate::desktop::server::ClientInfo>::new();
-
-                            handle_control(
-                                payload.action,
-                                message_id,
-                                sm,
-                                pm,
-                                &self.db,
-                                &Arc::new(tokio::sync::RwLock::new(clients)),
-                                addr,
-                                None,
-                            ).await
-                        } else {
-                            tracing::warn!("Session manager not available");
-                            Ok(None)
-                        }
-                    }
-                    _ => {
-                        tracing::debug!("Unhandled control action: {:?}", payload.action);
-                        Ok(None)
-                    }
-                }
+                // 委托给 session_control 服务统一处理
+                handle_control_message(
+                    message_id,
+                    session_id,
+                    timestamp,
+                    payload.action,
+                    &self.session_manager,
+                    &self.plugin_manager,
+                    &self.db,
+                    addr,
+                ).await
             }
             BusinessMessage::Input {
                 session_id,
                 payload,
-                ..
+                message_id,
+                timestamp,
             } => {
-                tracing::info!("[BusinessHandler] Input message received: session_id={}, data_len={}, special_key={:?}",
-                    session_id, payload.data.len(), payload.special_key);
-                if let Some(ref sm) = self.session_manager {
-                    if !payload.data.is_empty() {
-                        tracing::debug!("[BusinessHandler] writing data to session {}", session_id);
-                        if let Err(e) = sm.write_input(&session_id, &payload.data).await {
-                            tracing::error!("[BusinessHandler] Failed to write input to session {}: {}", session_id, e);
-                        }
-                    }
-                    if let Some(ref key) = payload.special_key {
-                        let key_bytes = match key {
-                            crate::shared::enums::SpecialKey::Tab => "\t",
-                            crate::shared::enums::SpecialKey::Enter => "\r",
-                            crate::shared::enums::SpecialKey::Escape => "\x1b",
-                            crate::shared::enums::SpecialKey::CtrlC => "\x03",
-                            crate::shared::enums::SpecialKey::CtrlD => "\x04",
-                            crate::shared::enums::SpecialKey::CtrlL => "\x0c",
-                            crate::shared::enums::SpecialKey::CtrlZ => "\x1a",
-                            crate::shared::enums::SpecialKey::ArrowUp => "\x1b[A",
-                            crate::shared::enums::SpecialKey::ArrowDown => "\x1b[B",
-                            crate::shared::enums::SpecialKey::ArrowLeft => "\x1b[D",
-                            crate::shared::enums::SpecialKey::ArrowRight => "\x1b[C",
-                            crate::shared::enums::SpecialKey::Backspace => "\x7f",
-                        };
-                        tracing::debug!("[BusinessHandler] writing special_key key={:?} bytes={:?}", key, key_bytes);
-                        if let Err(e) = sm.write_input(&session_id, key_bytes).await {
-                            tracing::error!("[BusinessHandler] Failed to write special key to session {}: {}", session_id, e);
-                        }
-                    }
-                } else {
-                    tracing::warn!("[BusinessHandler] session_manager is None, cannot handle Input message for session {}", session_id);
-                }
-                // 返回 Input 确认响应，让 send_and_wait 能收到匹配的 ACK
-                Ok(Some(BusinessMessage::Input {
-                    message_id: String::new(), // 会被 websocket_manager.rs 替换为原始 message_id
-                    session_id: session_id.clone(),
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                    payload: crate::shared::enums::message::InputPayload {
-                        data: String::new(),
-                        special_key: None,
-                    },
-                }))
+                // 委托给 input_service 处理
+                handle_input(
+                    &session_id,
+                    payload,
+                    &self.session_manager,
+                ).await
             }
             BusinessMessage::Output { .. } => {
                 // 服务端不需要处理 Output 消息
@@ -355,6 +191,63 @@ impl BusinessMessageHandler {
             BusinessMessage::Heartbeat { .. } => {
                 // 心跳消息直接响应
                 Ok(Some(BusinessMessage::heartbeat()))
+            }
+            BusinessMessage::Subscribe {
+                message_id,
+                session_id,
+                start_seq,
+            } => {
+                // 处理订阅请求
+                let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+                let subscription_manager = ws_manager.subscription_manager();
+
+                // 获取客户端标识
+                let client = ws_manager.get_client_by_addr(&addr).await;
+                let client_id = client.map(|c| c.client_id.clone()).unwrap_or_else(|| addr.to_string());
+
+                // 调用订阅管理器处理订阅
+                match subscription_manager.subscribe(client_id.clone(), session_id.clone(), start_seq).await {
+                    Ok(response) => {
+                        tracing::info!("Client subscribed to session: {} (client: {})", session_id, client_id);
+                        Ok(Some(BusinessMessage::SubscribeResponse {
+                            message_id,
+                            session_id,
+                            current_max_seq: response.current_max_seq,
+                            history_count: response.history_count,
+                        }))
+                    }
+                    Err(e) => {
+                        tracing::error!("Subscribe failed: {}", e);
+                        Ok(Some(BusinessMessage::error("SUBSCRIBE_FAILED", &e)))
+                    }
+                }
+            }
+            BusinessMessage::Unsubscribe {
+                message_id,
+                session_id,
+            } => {
+                // 处理取消订阅请求
+                let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+                let subscription_manager = ws_manager.subscription_manager();
+
+                // 获取客户端标识
+                let client = ws_manager.get_client_by_addr(&addr).await;
+                let client_id = client.map(|c| c.client_id.clone()).unwrap_or_else(|| addr.to_string());
+
+                // 调用订阅管理器处理取消订阅
+                match subscription_manager.unsubscribe(&client_id, &session_id).await {
+                    Ok(_) => {
+                        tracing::info!("Client unsubscribed from session: {} (client: {})", session_id, client_id);
+                        Ok(Some(BusinessMessage::UnsubscribeResponse {
+                            message_id,
+                            session_id,
+                        }))
+                    }
+                    Err(e) => {
+                        tracing::error!("Unsubscribe failed: {}", e);
+                        Ok(Some(BusinessMessage::error("UNSUBSCRIBE_FAILED", &e)))
+                    }
+                }
             }
             _ => Ok(None),
         }

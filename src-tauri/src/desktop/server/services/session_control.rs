@@ -4,7 +4,7 @@
 
 use crate::desktop::plugin::PluginManager;
 use crate::desktop::session::SessionManager;
-use crate::desktop::server::message::{ControlAction, Message, SessionSummary, SessionConfigSummary, QuickActionSummary};
+use crate::desktop::server::message::{ControlAction, Message, SessionSummary, QuickActionSummary};
 use crate::shared::db::Database;
 use crate::Result;
 use std::collections::HashMap;
@@ -64,33 +64,6 @@ pub async fn handle_control(
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 payload: crate::desktop::server::message::ControlPayload {
                     action: ControlAction::SessionList { sessions: all_sessions },
-                },
-            }))
-        }
-
-        ControlAction::ListSessionConfigs => {
-            let db = db.lock().await;
-            let configs = db.get_session_configs()?;
-            drop(db);
-
-            let summaries = configs
-                .into_iter()
-                .map(|c| SessionConfigSummary {
-                    id: c.id,
-                    name: c.name,
-                    environment: c.environment,
-                    wsl_distro: c.wsl_distro,
-                    working_dir: c.working_dir,
-                    command: c.command,
-                })
-                .collect();
-
-            Ok(Some(Message::Control {
-                message_id: request_message_id,
-                session_id: None,
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                payload: crate::desktop::server::message::ControlPayload {
-                    action: ControlAction::SessionConfigList { configs: summaries },
                 },
             }))
         }
@@ -320,5 +293,57 @@ pub async fn handle_control(
         }
 
         _ => Ok(None),
+    }
+}
+
+/// 处理完整的 Control 消息（路由层）
+pub async fn handle_control_message(
+    message_id: String,
+    session_id: Option<String>,
+    _timestamp: i64,
+    action: ControlAction,
+    session_manager: &Option<Arc<SessionManager>>,
+    plugin_manager: &Option<Arc<PluginManager>>,
+    db: &Arc<Mutex<Database>>,
+    addr: SocketAddr,
+) -> Result<Option<Message>> {
+    match action {
+        ControlAction::ListSessionConfigs => {
+            // 委托给 session_config 服务
+            crate::desktop::server::services::session_config::list_session_configs(
+                message_id,
+                db,
+            ).await
+        }
+        ControlAction::ListSessions
+        | ControlAction::StartSession { .. }
+        | ControlAction::StopSession { .. }
+        | ControlAction::ResizeSession { .. }
+        | ControlAction::JoinSession { .. }
+        | ControlAction::LeaveSession { .. }
+        | ControlAction::RemoveSession { .. } => {
+            if let (Some(sm), Some(pm)) = (session_manager, plugin_manager) {
+                let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+                let clients = HashMap::<SocketAddr, crate::desktop::server::ClientInfo>::new();
+
+                handle_control(
+                    action,
+                    message_id,
+                    sm,
+                    pm,
+                    db,
+                    &Arc::new(RwLock::new(clients)),
+                    addr,
+                    None,
+                ).await
+            } else {
+                tracing::warn!("Session manager not available");
+                Ok(None)
+            }
+        }
+        _ => {
+            tracing::debug!("Unhandled control action: {:?}", action);
+            Ok(None)
+        }
     }
 }

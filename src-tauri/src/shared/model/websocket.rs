@@ -204,10 +204,9 @@ impl WsMessage {
                 let text = String::from_utf8_lossy(&data);
                 Ok(Some(serde_json::from_str(&text)?))
             }
-            tokio_tungstenite::tungstenite::Message::Ping(_) => {
-                Ok(Some(WsMessage::pong()))
+            tokio_tungstenite::tungstenite::Message::Ping(_) | tokio_tungstenite::tungstenite::Message::Pong(_) => {
+                Ok(None) // 协议层心跳由 tungstenite 自动处理
             }
-            tokio_tungstenite::tungstenite::Message::Pong(_) => Ok(Some(WsMessage::pong())),
             tokio_tungstenite::tungstenite::Message::Close(reason) => {
                 Ok(Some(WsMessage::close(reason.map(|r| r.to_string()).unwrap_or_default())))
             }

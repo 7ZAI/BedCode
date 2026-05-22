@@ -3,6 +3,7 @@
 //! 跨平台命令 - 桌面端和移动端都可用
 
 use crate::shared::auth::PairingCode;
+use crate::shared::db::{QuickAction, SessionConfig};
 use crate::shared::db::Database;
 use crate::Result;
 use std::sync::Arc;

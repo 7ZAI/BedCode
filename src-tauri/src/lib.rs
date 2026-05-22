@@ -209,15 +209,18 @@ pub fn run() {
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
 
-            // 创建异步 PTY 输出监听器，并注册前端输出处理器（在 async 块中执行）
+            // 创建异步 PTY 输出监听器，并注册前端输出处理器和移动端订阅处理器
             let app_handle_for_listener = app_handle.clone();
             let session_manager_for_setup = session_manager.clone();
+            let subscription_manager = session_manager.subscription_manager();
             tauri::async_runtime::spawn(async move {
                 let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle_for_listener));
+                let subscription_handler = Arc::new(desktop::pty::GlobalSubscriptionHandler::new(subscription_manager));
                 let async_listener = Arc::new(desktop::pty::AsyncPtyOutputListener::new());
                 async_listener.register(frontend_handler).await;
+                async_listener.register(subscription_handler).await;
                 session_manager_for_setup.set_output_listener(async_listener).await;
-                tracing::info!("PTY output listener configured");
+                tracing::info!("PTY output listener configured (frontend + mobile subscription)");
             });
 
             // 创建会话配置管理器
@@ -486,13 +489,14 @@ pub fn run() {
             mobile::commands::ws_start_session,
             mobile::commands::ws_stop_session,
             mobile::commands::ws_remove_session,
-            mobile::commands::ws_send_input,
+            mobile::commands::ws_send_input_async,
             mobile::commands::ws_send_message,
             mobile::commands::ws_send_and_wait,
             mobile::commands::ws_resize_terminal,
             mobile::commands::ws_load_session_configs,
             mobile::commands::ws_join_session,
             mobile::commands::ws_leave_session,
+            mobile::commands::ws_subscribe_session,
             // Pairing
             shared::system::commands::generate_pairing_code,
             shared::system::commands::get_current_pairing_code,

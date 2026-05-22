@@ -344,46 +344,68 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
 }
 
 /// 订阅会话，开始接收该会话的输出
+/// 使用桌面端的 Message::Subscribe 消息，支持指定起始序号用于历史回放
 #[tauri::command]
 pub async fn ws_join_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_join_session] session_id={}", session_id);
     let conn = get_connection_manager();
+
+    // 使用新的 Subscribe 消息类型
     let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "control",
+        "type": "subscribe",
         "message_id": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
         "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": {
-            "action": {
-                "type": "join_session",
-                "session_id": session_id
-            }
-        }
+        // start_seq 为 None 表示从头接收所有历史消息
+        "start_seq": null
     })).unwrap());
 
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
-    tracing::info!("[ws_join_session] Joined session successfully: {}", session_id);
+    tracing::info!("[ws_join_session] Subscribed to session successfully: {}", session_id);
     Ok(())
 }
 
 /// 取消订阅会话，停止接收该会话的输出
+/// 使用桌面端的 Message::Unsubscribe 消息
 #[tauri::command]
 pub async fn ws_leave_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_leave_session] session_id={}", session_id);
     let conn = get_connection_manager();
+
+    // 使用新的 Unsubscribe 消息类型
     let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "control",
+        "type": "unsubscribe",
         "message_id": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
         "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": {
-            "action": {
-                "type": "leave_session",
-                "session_id": session_id
-            }
-        }
     })).unwrap());
 
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
-    tracing::info!("[ws_leave_session] Left session successfully: {}", session_id);
+    tracing::info!("[ws_leave_session] Unsubscribed from session successfully: {}", session_id);
+    Ok(())
+}
+
+/// 带起始序号的订阅会话（用于断线重连后从断点继续）
+///
+/// - 首次订阅：`start_seq = None` 或 `0` → 从头接收所有历史
+/// - 断线重连：使用之前记录的最大 index → 从断点继续接收
+/// - 切换会话：使用当前缓冲区最大 index → 避免重复接收
+#[tauri::command]
+pub async fn ws_subscribe_session(session_id: String, start_seq: Option<u64>) -> Result<()> {
+    tracing::info!("[ws_subscribe_session] session_id={}, start_seq={:?}", session_id, start_seq);
+    let conn = get_connection_manager();
+
+    // 使用 Message::Subscribe，带可选的起始序号
+    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
+        "type": "subscribe",
+        "message_id": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "start_seq": start_seq
+    })).unwrap());
+
+    conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
+    tracing::info!("[ws_subscribe_session] Subscribed to session with start_seq={:?}: {}", start_seq, session_id);
     Ok(())
 }
 
@@ -408,14 +430,15 @@ pub async fn ws_remove_session(session_id: String) -> Result<()> {
     session_mgr.remove_session(&session_id).await
 }
 
-/// 发送输入到会话
+/// 发送输入到会话（异步模式，不等待服务端确认）
+/// 实现真正的终端输入体验：发送后立即返回，不阻塞 UI
 #[tauri::command]
-pub async fn ws_send_input(session_id: String, data: String, special_key: Option<String>) -> Result<()> {
-    tracing::info!("[ws_send_input] session_id={}, data_len={}, has_special_key={}",
+pub async fn ws_send_input_async(session_id: String, data: String, special_key: Option<String>) -> Result<()> {
+    tracing::debug!("[ws_send_input_async] session_id={}, data_len={}, has_special_key={}",
         session_id, data.len(), special_key.is_some());
     let conn = get_connection_manager();
 
-    // 裁剪尾部换行，避免 data 末尾已含换行时与 special_key=Enter 重复执行
+    // 裁剪尾部换行
     let trimmed_data = if special_key.as_deref() == Some("enter") {
         data.trim_end_matches('\n').trim_end_matches('\r').to_string()
     } else {
@@ -432,19 +455,14 @@ pub async fn ws_send_input(session_id: String, data: String, special_key: Option
             "special_key": special_key,
         },
     });
-    let msg_json = serde_json::to_string(&payload).unwrap_or_default();
-    let preview_len = msg_json.len().min(200);
-    tracing::info!("[ws_send_input] sending message: {}", &msg_json[..preview_len]);
-    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&payload).unwrap());
 
-    // 使用 send_and_wait 等待桌面端确认，确保输入已送达
-    conn.send_and_wait(&message, std::time::Duration::from_secs(5)).await
-        .with_context(|| format!("Input not acknowledged by desktop (session={})", &session_id[..session_id.len().min(16)]))
-        .map_err(|e| {
-            tracing::error!("[ws_send_input] failed: {:?}", e);
-            crate::AppError::WebSocket(e.to_string())
-        })?;
-    tracing::info!("[ws_send_input] desktop ACK received");
+    let message = WsMessage::text(serde_json::to_string(&payload).unwrap());
+
+    // fire-and-forget：只确保发送到缓冲区，不等待服务端 ACK
+    // 这样用户体验像真正的终端：输入后立即返回
+    conn.send(&message).await?;
+
+    tracing::debug!("[ws_send_input_async] sent to buffer (no ACK waiting)");
     Ok(())
 }
 

@@ -49,6 +49,16 @@ pub enum MobileMessage {
         session_id: String,
         payload: OutputPayloadData,
     },
+    /// 订阅响应
+    SubscribeResponse {
+        session_id: String,
+        current_max_seq: u64,
+        history_count: usize,
+    },
+    /// 取消订阅响应
+    UnsubscribeResponse {
+        session_id: String,
+    },
     /// 心跳
     Heartbeat,
     /// 错误
@@ -76,6 +86,16 @@ pub enum MobileEvent {
         is_waiting: bool,
         /// 全局递增索引，用于去重
         index: usize,
+    },
+    /// 订阅响应
+    SubscribeResponse {
+        session_id: String,
+        current_max_seq: u64,
+        history_count: usize,
+    },
+    /// 取消订阅响应
+    UnsubscribeResponse {
+        session_id: String,
     },
     /// 认证成功
     AuthSuccess {
@@ -183,6 +203,21 @@ impl ClientMessageHandler for MobileHandler {
                 MobileMessage::ServerClosed { reason } => {
                     let reason = reason.unwrap_or_else(|| "Unknown".to_string());
                     self_clone.send_event(MobileEvent::ServerClosed { reason });
+                }
+                MobileMessage::SubscribeResponse { session_id, current_max_seq, history_count } => {
+                    tracing::debug!("[MobileHandler] SubscribeResponse: session_id={}, current_max_seq={}, history_count={}",
+                        session_id, current_max_seq, history_count);
+                    self_clone.send_event(MobileEvent::SubscribeResponse {
+                        session_id,
+                        current_max_seq,
+                        history_count,
+                    });
+                }
+                MobileMessage::UnsubscribeResponse { session_id } => {
+                    tracing::debug!("[MobileHandler] UnsubscribeResponse: session_id={}", session_id);
+                    self_clone.send_event(MobileEvent::UnsubscribeResponse {
+                        session_id,
+                    });
                 }
                 MobileMessage::Error { message, code } => {
                     let msg = message.or(code).unwrap_or_else(|| "Unknown error".to_string());

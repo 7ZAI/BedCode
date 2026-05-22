@@ -2,20 +2,22 @@
 //!
 //! 会话配置 CRUD 服务
 
-use crate::desktop::session::SessionConfigManager;
-use crate::desktop::server::message::{SessionConfigSummary, QuickActionSummary};
+use crate::desktop::server::message::{ControlAction, Message, SessionConfigSummary, QuickActionSummary};
 use crate::shared::db::Database;
 use crate::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// 获取会话配置列表
+/// 获取会话配置列表并构建响应消息
 pub async fn list_session_configs(
-    config_manager: &SessionConfigManager,
-) -> Result<Vec<SessionConfigSummary>> {
-    let configs = config_manager.list_configs().await?;
+    request_message_id: String,
+    db: &Arc<Mutex<Database>>,
+) -> Result<Option<Message>> {
+    let db = db.lock().await;
+    let configs = db.get_session_configs()?;
+    drop(db);
 
-    let summaries = configs
+    let summaries: Vec<SessionConfigSummary> = configs
         .into_iter()
         .map(|c| SessionConfigSummary {
             id: c.id,
@@ -27,7 +29,14 @@ pub async fn list_session_configs(
         })
         .collect();
 
-    Ok(summaries)
+    Ok(Some(Message::Control {
+        message_id: request_message_id,
+        session_id: None,
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        payload: crate::desktop::server::message::ControlPayload {
+            action: ControlAction::SessionConfigList { configs: summaries },
+        },
+    }))
 }
 
 /// 获取快捷指令列表

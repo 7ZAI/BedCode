@@ -41,16 +41,6 @@ pub enum WsMessage {
         payload: BinaryPayload,
     },
 
-    /// 心跳/ping 消息
-    Ping {
-        timestamp: i64,
-    },
-
-    /// 心跳/ pong 响应
-    Pong {
-        timestamp: i64,
-    },
-
     /// 错误消息
     Error {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,20 +127,6 @@ impl WsMessage {
         }
     }
 
-    /// 创建 Ping 消息
-    pub fn ping() -> Self {
-        WsMessage::Ping {
-            timestamp: Utc::now().timestamp_millis(),
-        }
-    }
-
-    /// 创建 Pong 消息
-    pub fn pong() -> Self {
-        WsMessage::Pong {
-            timestamp: Utc::now().timestamp_millis(),
-        }
-    }
-
     /// 创建错误消息
     pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
         WsMessage::Error {
@@ -180,6 +156,22 @@ impl WsMessage {
         }
     }
 
+    /// 创建 Pong 响应消息（用于响应 Ping）
+    pub fn pong() -> Self {
+        WsMessage::Ack {
+            original_id: "__PONG__".to_string(),
+            timestamp: Utc::now().timestamp_millis(),
+        }
+    }
+
+    /// 创建 Ping 消息
+    pub fn ping() -> Self {
+        WsMessage::Ack {
+            original_id: "__PING__".to_string(),
+            timestamp: Utc::now().timestamp_millis(),
+        }
+    }
+
     /// 创建确认消息
     pub fn ack(original_id: impl Into<String>) -> Self {
         WsMessage::Ack {
@@ -195,8 +187,6 @@ impl WsMessage {
             WsMessage::Binary { message_id, .. } => Some(message_id),
             WsMessage::Error { message_id, .. } => message_id.as_deref(),
             WsMessage::Ack { original_id, .. } => Some(original_id),
-            WsMessage::Ping { .. } => None,
-            WsMessage::Pong { .. } => None,
             WsMessage::Close { .. } => None,
         }
     }
@@ -206,11 +196,17 @@ impl WsMessage {
         match self {
             WsMessage::Text { .. } => WsMessageType::Text,
             WsMessage::Binary { .. } => WsMessageType::Binary,
-            WsMessage::Ping { .. } => WsMessageType::Ping,
-            WsMessage::Pong { .. } => WsMessageType::Pong,
             WsMessage::Error { .. } => WsMessageType::Error,
             WsMessage::Close { .. } => WsMessageType::Close,
-            WsMessage::Ack { .. } => WsMessageType::Ack,
+            WsMessage::Ack { original_id, .. } => {
+                if original_id == "__PING__" {
+                    WsMessageType::Ping
+                } else if original_id == "__PONG__" {
+                    WsMessageType::Pong
+                } else {
+                    WsMessageType::Ack
+                }
+            }
         }
     }
 
@@ -269,11 +265,11 @@ impl WsMessage {
 pub enum WsMessageType {
     Text,
     Binary,
-    Ping,
-    Pong,
     Error,
     Close,
     Ack,
+    Ping,
+    Pong,
 }
 
 impl std::fmt::Display for WsMessageType {
@@ -281,11 +277,11 @@ impl std::fmt::Display for WsMessageType {
         match self {
             WsMessageType::Text => write!(f, "text"),
             WsMessageType::Binary => write!(f, "binary"),
-            WsMessageType::Ping => write!(f, "ping"),
-            WsMessageType::Pong => write!(f, "pong"),
             WsMessageType::Error => write!(f, "error"),
             WsMessageType::Close => write!(f, "close"),
             WsMessageType::Ack => write!(f, "ack"),
+            WsMessageType::Ping => write!(f, "ping"),
+            WsMessageType::Pong => write!(f, "pong"),
         }
     }
 }

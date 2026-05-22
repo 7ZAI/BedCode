@@ -8,6 +8,7 @@ pub mod client_info;
 pub mod connection_types;
 pub mod services;
 pub mod handlers;
+pub mod router;
 
 // 重新导出所有公开类型
 pub use message::*;
@@ -43,9 +44,11 @@ impl WebSocketServer {
     ) -> Self {
         let config = WsServerConfig {
             port,
+            max_connections: 0,
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            ip_filter: crate::shared::websocket::IpFilter::default(),
             response_handler: None,
         };
 

@@ -153,11 +153,11 @@ export async function wsRemoveSession(sessionId: string): Promise<void> {
 }
 
 /**
- * 发送输入到会话
+ * 发送输入到会话（异步模式，不等待服务端确认）
  */
 export async function wsSendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
   console.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
-  return await invoke('ws_send_input', { sessionId, data, specialKey })
+  return await invoke('ws_send_input_async', { sessionId, data, specialKey })
 }
 
 /**

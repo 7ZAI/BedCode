@@ -276,3 +276,97 @@ pub async fn handle_auth(
         _ => Ok(Some(Message::error_with_id(&request_message_id, "INVALID_AUTH_STAGE", "Invalid auth stage"))),
     }
 }
+
+/// 处理 JWT Token 认证（已认证客户端的 JWT 验证）
+pub async fn handle_jwt_auth(
+    request_message_id: String,
+    session_id: Option<String>,
+    timestamp: i64,
+    payload: AuthPayload,
+    addr: SocketAddr,
+    jwt_service: &JwtService,
+    app_handle: &Option<Arc<AppHandle>>,
+) -> Result<Option<Message>> {
+    // 从 payload 中获取 JWT token
+    let token = match &payload.session_token {
+        Some(t) if !t.is_empty() => t.clone(),
+        _ => {
+            // 没有 token，返回认证失败
+            return Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                session_id,
+                timestamp,
+                payload: AuthPayload {
+                    stage: AuthStage::Failed,
+                    error: Some("No JWT token provided".to_string()),
+                    ..Default::default()
+                },
+            }));
+        }
+    };
+
+    // 验证 JWT
+    match jwt_service.verify_token_with_expiry(&token) {
+        Ok(claims) => {
+            // JWT 验证成功，使用 WebSocketManager 设置客户端为已认证
+            let ws_manager = WebSocketManager::global();
+            ws_manager.set_authenticated(&addr, Some(claims.sub.clone())).await;
+            if let Some(name) = &claims.device_name {
+                ws_manager.set_device_name(&addr, Some(name.clone())).await;
+            }
+
+            // 发送认证成功事件给前端
+            if let Some(handle) = app_handle {
+                let event = DeviceConnectionEvent {
+                    addr: addr.to_string(),
+                    device_id: claims.sub.clone(),
+                    device_name: claims.device_name.clone(),
+                    event: "authenticated".to_string(),
+                };
+                let _ = handle.emit("device-connected", &event);
+            }
+
+            tracing::info!(
+                "Client {} authenticated via JWT (device: {})",
+                addr,
+                claims.sub
+            );
+
+            // 返回认证成功响应
+            Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                session_id,
+                timestamp,
+                payload: AuthPayload {
+                    stage: AuthStage::Authenticated,
+                    device_id: Some(claims.sub),
+                    device_name: claims.device_name,
+                    device_fingerprint: claims.fingerprint,
+                    session_token: Some(token),
+                    error: None,
+                    ..Default::default()
+                },
+            }))
+        }
+        Err(e) => {
+            tracing::warn!("JWT verification failed for {}: {}", addr, e);
+
+            // 返回认证失败响应
+            let error_msg = match e {
+                crate::shared::auth::JwtError::TokenExpired => "JWT token expired, please re-authenticate",
+                _ => "Invalid JWT token",
+            };
+
+            Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                session_id,
+                timestamp,
+                payload: AuthPayload {
+                    stage: AuthStage::Failed,
+                    error: Some(error_msg.to_string()),
+                    ..Default::default()
+                },
+            }))
+        }
+    }
+}

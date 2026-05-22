@@ -143,6 +143,15 @@ pub enum Message {
         session_id: String,
     },
 
+    /// 取消订阅响应 (服务端 → 客户端)
+    #[serde(rename = "unsubscribe_response")]
+    UnsubscribeResponse {
+        /// Unique message ID for request-response tracking
+        #[serde(default = "generate_message_id")]
+        message_id: String,
+        session_id: String,
+    },
+
     /// 客户端断开通知 (服务端 → 客户端)
     /// 移动端断开连接时通知其他客户端
     #[serde(rename = "client_disconnected")]
@@ -275,6 +284,7 @@ impl Message {
             Message::Subscribe { message_id, .. } => Some(message_id),
             Message::SubscribeResponse { message_id, .. } => Some(message_id),
             Message::Unsubscribe { message_id, .. } => Some(message_id),
+            Message::UnsubscribeResponse { message_id, .. } => Some(message_id),
         }
     }
 

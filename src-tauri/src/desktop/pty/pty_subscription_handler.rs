@@ -13,6 +13,190 @@ use crate::shared::enums::message::{Message, OutputPayload};
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// 全局 PTY 订阅处理器
+///
+/// 处理所有 session 的输出事件，根据 event.session_id 动态路由
+/// 需要在应用启动时注册一次，而不是为每个 session 创建单独的处理器
+pub struct GlobalSubscriptionHandler {
+    name: String,
+    subscription_manager: Arc<PtySubscriptionManager>,
+}
+
+impl GlobalSubscriptionHandler {
+    /// 创建新的全局订阅处理器
+    pub fn new(subscription_manager: Arc<PtySubscriptionManager>) -> Self {
+        Self {
+            name: "GlobalSubscriptionHandler".to_string(),
+            subscription_manager,
+        }
+    }
+
+    /// 处理输出事件（动态路由到对应 session）
+    async fn handle_event(&self, event: &PtyOutputEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let session_id = &event.session_id;
+
+        // 1. 将事件写入环形缓冲区（持久化）
+        {
+            let sessions = self.subscription_manager.sessions.read().await;
+            if let Some(session) = sessions.get(session_id) {
+                let mut buffer = session.ring_buffer.write().await;
+                buffer.push(event.clone());
+            } else {
+                // Session 未注册到订阅管理器，跳过
+                tracing::debug!("Session {} not registered in subscription manager, skipping", session_id);
+                return Ok(());
+            }
+        }
+
+        // 2. 触发待处理的订阅者发送历史消息
+        let pending_subscriptions: Vec<Subscription> = {
+            let sessions = self.subscription_manager.sessions.read().await;
+            if let Some(session) = sessions.get(session_id) {
+                let subs = session.subscriptions.read().await;
+                subs.values()
+                    .filter(|s| s.active)
+                    .cloned()
+                    .collect()
+            } else {
+                vec![]
+            }
+        };
+
+        // 检查每个订阅者是否有待补推的历史消息
+        for subscription in pending_subscriptions {
+            let ring_buffer = {
+                let sessions = self.subscription_manager.sessions.read().await;
+                match sessions.get(session_id) {
+                    Some(session) => session.ring_buffer.clone(),
+                    None => continue,
+                }
+            };
+
+            let max_seq = {
+                let buffer = ring_buffer.read().await;
+                buffer.max_seq()
+            };
+
+            if subscription.start_seq < max_seq {
+                self.send_pending_history(session_id, &subscription).await;
+            }
+        }
+
+        // 3. 广播实时输出给所有活跃订阅者
+        self.broadcast_to_subscribers(session_id, event).await;
+
+        Ok(())
+    }
+
+    /// 发送实时输出给所有活跃订阅者
+    async fn broadcast_to_subscribers(&self, session_id: &str, event: &PtyOutputEvent) {
+        let ws_manager = WebSocketManager::global();
+
+        let subscribers = self
+            .subscription_manager
+            .get_active_subscribers(session_id)
+            .await;
+
+        if subscribers.is_empty() {
+            return;
+        }
+
+        let message = Message::Output {
+            message_id: format!("realtime-{}-{}", session_id, event.index),
+            session_id: session_id.to_string(),
+            timestamp: event.timestamp.timestamp_millis(),
+            payload: OutputPayload {
+                data: event.data.clone(),
+                is_waiting: event.is_waiting,
+                index: event.index,
+            },
+        };
+
+        for client_id in subscribers {
+            if let Err(e) = ws_manager.send_to_client(&client_id, &message).await {
+                tracing::warn!(
+                    "Failed to send realtime output to client {}: {}",
+                    client_id,
+                    e
+                );
+            }
+        }
+    }
+
+    /// 处理新订阅者：发送历史消息补推
+    async fn send_pending_history(&self, session_id: &str, subscription: &Subscription) {
+        let ring_buffer = {
+            let sessions = self.subscription_manager.sessions.read().await;
+            match sessions.get(session_id) {
+                Some(session) => session.ring_buffer.clone(),
+                None => return,
+            }
+        };
+
+        let max_seq = {
+            let buffer = ring_buffer.read().await;
+            buffer.max_seq()
+        };
+
+        if subscription.start_seq >= max_seq {
+            return;
+        }
+
+        let ws_manager = WebSocketManager::global();
+        let buffer = ring_buffer.read().await;
+        let messages = buffer.get_since(subscription.start_seq);
+        let count = messages.len();
+        drop(buffer);
+
+        if count == 0 {
+            return;
+        }
+
+        tracing::info!(
+            "Sending {} pending history messages to client {}, start_seq={}",
+            count,
+            subscription.client_id,
+            subscription.start_seq
+        );
+
+        for event in messages {
+            let message = Message::Output {
+                message_id: format!("history-{}-{}", session_id, event.index),
+                session_id: session_id.to_string(),
+                timestamp: event.timestamp.timestamp_millis(),
+                payload: OutputPayload {
+                    data: event.data,
+                    is_waiting: event.is_waiting,
+                    index: event.index,
+                },
+            };
+
+            if let Err(e) = ws_manager
+                .send_to_client(&subscription.client_id, &message)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to send pending history message {} to client {}: {}",
+                    event.index,
+                    subscription.client_id,
+                    e
+                );
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl PtyOutputHandler for GlobalSubscriptionHandler {
+    async fn handle(&self, event: PtyOutputEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.handle_event(&event).await
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// PTY 订阅处理器
 ///
 /// 实现 PtyOutputHandler trait，作为 PTY 输出事件的处理器：

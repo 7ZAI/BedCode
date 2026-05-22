@@ -47,8 +47,7 @@ impl MessageCodec for JsonCodec {
                 let ws_msg = WsMessage::from_json(&text)?;
                 Ok(Some(ws_msg))
             }
-            WsMsg::Ping(_) => Ok(Some(WsMessage::ping())),
-            WsMsg::Pong(_) => Ok(Some(WsMessage::pong())),
+            WsMsg::Ping(_) | WsMsg::Pong(_) => Ok(None), // 协议层心跳由 tungstenite 自动处理
             WsMsg::Close(reason) => {
                 Ok(Some(WsMessage::close(reason.map(|r| r.to_string()).unwrap_or_default())))
             }

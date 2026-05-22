@@ -6,7 +6,7 @@
 use crate::desktop::pty::PtySubscriptionManager;
 use crate::desktop::server::message::Message as BusinessMessage;
 use crate::shared::websocket::{
-    ClientInfo, HandlerResult, MessageHandler,
+    DefaultClientInfo, HandlerResult, MessageHandler,
     WsMessage, WsServer, WsServerConfig, WsServerEvent,
 };
 use crate::shared::system::error::AppError;
@@ -39,7 +39,7 @@ impl MessageHandler for WsMessageHandler {
         &self,
         message: &WsMessage,
         addr: SocketAddr,
-        client_info: &ClientInfo,
+        client_info: &DefaultClientInfo,
     ) -> HandlerResult {
         // 从 WsMessage::Text.payload.content 中提取业务消息 JSON
         let content = match message {
@@ -107,7 +107,7 @@ impl MessageHandler for WsMessageHandler {
         &self,
         _message: &WsMessage,
         _addr: SocketAddr,
-        _client_info: &ClientInfo,
+        _client_info: &DefaultClientInfo,
     ) -> HandlerResult {
         Ok(None)
     }
@@ -266,9 +266,11 @@ impl WebSocketManager {
         // 创建服务器配置
         let config = WsServerConfig {
             port,
+            max_connections: 0,
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            ip_filter: crate::shared::websocket::IpFilter::default(),
             response_handler: None,
         };
 

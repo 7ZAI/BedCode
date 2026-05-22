@@ -7,7 +7,7 @@ use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::traits::{PtyOutputHandler, PtyOutputListener};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 
 /// Handler 错误处理策略
@@ -79,6 +79,12 @@ impl AsyncPtyOutputListener {
         let handler_name = handler.name().to_string();
         self.register_handler(handler, HandlerErrorPolicy::ContinueOnError).await;
         tracing::info!("[AsyncPtyOutputListener] Handler registered: {}", handler_name);
+    }
+
+    /// 获取内部 handlers 用于调试
+    pub async fn get_handler_names(&self) -> Vec<String> {
+        let handlers = self.handlers.lock().await;
+        handlers.iter().map(|h| h.handler.name().to_string()).collect()
     }
 
     /// 移除指定名称的 Handler
