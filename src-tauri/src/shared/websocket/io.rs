@@ -215,4 +215,39 @@ impl WebSocketIo {
             Err(_) => Err(crate::AppError::WebSocket("Response timeout".to_string())),
         }
     }
+
+    /// 发送并自动重试
+    pub async fn send_with_retry(
+        &self,
+        sender: &dyn MessageSender,
+        msg: &WsMessage,
+    ) -> Result<()> {
+        let max_retries = self.config.max_retries;
+        let retry_interval = Duration::from_millis(self.config.retry_interval_ms);
+
+        let mut last_error = None;
+
+        for attempt in 0..max_retries {
+            match self.send(sender, msg).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < max_retries - 1 {
+                        warn!(
+                            "[WebSocketIo] Send failed (attempt {}/{}), retrying in {:?}: {}",
+                            attempt + 1,
+                            max_retries,
+                            retry_interval,
+                            last_error.as_ref().unwrap()
+                        );
+                        tokio::time::sleep(retry_interval).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            crate::AppError::WebSocket("Send failed with unknown error".to_string())
+        }))
+    }
 }
