@@ -137,4 +137,16 @@ impl WebSocketIo {
 
         sender.send(msg.clone()).await
     }
+
+    /// 广播消息
+    pub async fn broadcast(
+        &self,
+        sender: &dyn BroadcastSender,
+        msg: &WsMessage,
+    ) -> Result<()> {
+        let json = msg.to_json()?;
+        info!("[WebSocketIo] >>> BROADCAST: {}...", &json[..json.len().min(200)]);
+
+        sender.broadcast(msg.clone()).await
+    }
 }
