@@ -82,3 +82,15 @@ pub enum IoEvent {
         message: String,
     },
 }
+
+/// 消息发送者 trait
+pub trait MessageSender: Send + Sync {
+    /// 发送消息
+    async fn send(&self, msg: WsMessage) -> Result<()>;
+}
+
+/// 广播发送者 trait
+pub trait BroadcastSender: Send + Sync {
+    /// 广播消息
+    async fn broadcast(&self, msg: WsMessage) -> Result<()>;
+}
