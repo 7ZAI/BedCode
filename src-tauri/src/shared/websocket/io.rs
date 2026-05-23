@@ -125,4 +125,16 @@ impl WebSocketIo {
     pub fn config(&self) -> &IoConfig {
         &self.config
     }
+
+    /// 发送消息
+    pub async fn send(
+        &self,
+        sender: &dyn MessageSender,
+        msg: &WsMessage,
+    ) -> Result<()> {
+        let json = msg.to_json()?;
+        debug!("[WebSocketIo] >>> SEND: {}...", &json[..json.len().min(200)]);
+
+        sender.send(msg.clone()).await
+    }
 }
