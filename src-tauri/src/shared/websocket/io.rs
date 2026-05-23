@@ -48,3 +48,37 @@ impl IoConfig {
         }
     }
 }
+
+/// IO 事件类型
+#[derive(Debug, Clone)]
+pub enum IoEvent {
+    /// 文本消息
+    Text {
+        /// 消息ID（如果有）
+        message_id: Option<String>,
+        /// 消息内容
+        content: String,
+    },
+    /// 二进制消息
+    Binary {
+        /// 消息ID（如果有）
+        message_id: Option<String>,
+        /// 二进制数据
+        data: Vec<u8>,
+    },
+    /// 消息确认
+    Ack {
+        /// 对应的请求消息ID
+        original_id: String,
+    },
+    /// 连接关闭
+    Close {
+        /// 关闭原因
+        reason: String,
+    },
+    /// 错误
+    Error {
+        /// 错误信息
+        message: String,
+    },
+}
