@@ -93,7 +93,7 @@ impl ConnectionManager {
     pub async fn connect(
         self: &Arc<Self>,
     ) -> Result<(
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
         tokio::sync::mpsc::Sender<WsMsg>,
     )> {
         // 使用原子操作确保只有一个连接任务在运行
@@ -133,14 +133,14 @@ impl ConnectionManager {
         .await
         .map_err(|_| {
             self.running.store(false, std::sync::atomic::Ordering::SeqCst);
-            self.lifecycle.set_status(ConnectionStatus::Error("Connection timeout".to_string())).await;
+            self.lifecycle.set_status_sync(ConnectionStatus::Error("Connection timeout".to_string()));
             error!("[ConnectionManager] Connection timeout after {}ms", self.config.connect_timeout_ms);
             crate::AppError::WebSocket("Connection timeout".to_string())
         })?
         .map_err(|e| {
             self.running.store(false, std::sync::atomic::Ordering::SeqCst);
             let error_msg = format!("Failed to connect: {}", e);
-            self.lifecycle.set_status(ConnectionStatus::Error(error_msg.clone())).await;
+            self.lifecycle.set_status_sync(ConnectionStatus::Error(error_msg.clone()));
             error!("[ConnectionManager] Failed to connect to {}: {:#}", url, e);
             crate::AppError::WebSocket(error_msg)
         })?;

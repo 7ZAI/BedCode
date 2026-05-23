@@ -16,8 +16,8 @@ pub mod reconnect;
 pub mod router;
 
 // 主客户端
-pub mod wsclient;
-pub use wsclient::WsClient;
+pub mod ws_client;
+pub use ws_client::WsClient;
 
 // Re-exports
 pub use connection::{ConnectionManager, WsClientConfig};

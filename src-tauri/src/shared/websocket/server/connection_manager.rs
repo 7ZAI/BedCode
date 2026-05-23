@@ -4,9 +4,11 @@
 //! 只关心谁在线和如何向他们发消息，不关心消息内容。
 
 use crate::shared::websocket::server::server_config::{IpFilter, WsServerConfig};
+use crate::shared::websocket::traits::ClientInfoTrait;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, warn};
@@ -59,6 +61,37 @@ impl Connection {
     /// 检查是否有指定标签
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tags.contains(&tag.to_string())
+    }
+}
+
+/// 实现 ClientInfoTrait，使 Connection 可以替代 DefaultClientInfo
+impl ClientInfoTrait for Connection {
+    fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+
+    fn set_client_id(&mut self, id: Option<String>) {
+        self.client_id = id;
+    }
+
+    fn is_authenticated(&self) -> bool {
+        self.authenticated
+    }
+
+    fn set_authenticated(&mut self, auth: bool) {
+        self.authenticated = auth;
+    }
+
+    fn last_heartbeat(&self) -> Instant {
+        self.last_heartbeat
+    }
+
+    fn set_last_heartbeat(&mut self, time: Instant) {
+        self.last_heartbeat = time;
     }
 }
 
@@ -238,8 +271,20 @@ impl ConnectionManager {
     pub async fn set_client_id(&self, id: ConnectionId, client_id: Option<String>) {
         let mut connections = self.connections.write().await;
         if let Some((_, _, conn)) = connections.get_mut(&id) {
+            let was_authenticated = conn.authenticated;
             conn.client_id = client_id.clone();
             conn.authenticated = client_id.is_some();
+
+            // 发布认证事件
+            if let Some(ref new_client_id) = client_id {
+                if !was_authenticated {
+                    // 首次认证成功
+                    let _ = self.event_tx.send(ConnectionEvent::Authenticated {
+                        id,
+                        client_id: new_client_id.clone(),
+                    });
+                }
+            }
         }
     }
 
@@ -316,74 +361,46 @@ impl ConnectionManager {
         connections.values().filter(|(_, _, c)| c.authenticated).count()
     }
 
-    /// 向指定连接发送消息
-    pub async fn send_to(&self, id: ConnectionId, message: WsMsg) -> Result<(), String> {
-        let senders = self.connections.read().await;
-        if let Some((_, tx, _)) = senders.get(&id) {
-            tx.send(message)
-                .await
-                .map_err(|e| format!("Failed to send: {}", e))
-        } else {
-            Err(format!("Connection {} not found", id))
-        }
+    /// 获取指定连接的发送通道
+    pub async fn get_sender(&self, id: ConnectionId) -> Option<mpsc::Sender<WsMsg>> {
+        let connections = self.connections.read().await;
+        connections.get(&id).map(|(_, tx, _)| tx.clone())
     }
 
-    /// 向指定地址发送消息
-    pub async fn send_to_addr(&self, addr: &SocketAddr, message: WsMsg) -> Result<(), String> {
-        let id = self.get_id_by_addr(addr).await;
-        if let Some(id) = id {
-            self.send_to(id, message).await
-        } else {
-            Err(format!("Client {} not found", addr))
-        }
+    /// 获取指定地址的发送通道
+    pub async fn get_sender_by_addr(&self, addr: &SocketAddr) -> Option<mpsc::Sender<WsMsg>> {
+        let id = self.get_id_by_addr(addr).await?;
+        self.get_sender(id).await
     }
 
-    /// 向多个连接广播消息
-    pub async fn broadcast_to_ids(&self, ids: &[ConnectionId], message: &WsMsg) {
-        let senders: Vec<mpsc::Sender<WsMsg>> = {
-            let connections = self.connections.read().await;
-            ids.iter()
-                .filter_map(|id| connections.get(id).map(|(_, tx, _)| tx.clone()))
-                .collect()
-        };
-
-        for tx in senders {
-            let _ = tx.try_send(message.clone());
-        }
+    /// 获取所有连接的发送通道
+    pub async fn get_all_senders(&self) -> Vec<mpsc::Sender<WsMsg>> {
+        let connections = self.connections.read().await;
+        connections.values().map(|(_, tx, _)| tx.clone()).collect()
     }
 
-    /// 向所有连接广播消息
-    pub async fn broadcast(&self, message: &WsMsg) {
-        let senders: Vec<mpsc::Sender<WsMsg>> = {
-            let connections = self.connections.read().await;
-            connections.values().map(|(_, tx, _)| tx.clone()).collect()
-        };
-
-        for tx in senders {
-            let _ = tx.try_send(message.clone());
-        }
+    /// 获取多个连接的发送通道
+    pub async fn get_senders(&self, ids: &[ConnectionId]) -> Vec<mpsc::Sender<WsMsg>> {
+        let connections = self.connections.read().await;
+        ids.iter()
+            .filter_map(|id| connections.get(id).map(|(_, tx, _)| tx.clone()))
+            .collect()
     }
 
-    /// 向除指定连接外的所有连接广播
-    pub async fn broadcast_to_others(&self, exclude_id: ConnectionId, message: &WsMsg) {
-        let senders: Vec<mpsc::Sender<WsMsg>> = {
-            let connections = self.connections.read().await;
-            connections
-                .iter()
-                .filter(|(id, _)| **id != exclude_id)
-                .map(|(_, (_, tx, _))| tx.clone())
-                .collect()
-        };
-
-        for tx in senders {
-            let _ = tx.try_send(message.clone());
-        }
+    /// 获取除指定连接外的所有发送通道
+    pub async fn get_other_senders(&self, exclude_id: ConnectionId) -> Vec<mpsc::Sender<WsMsg>> {
+        let connections = self.connections.read().await;
+        connections
+            .iter()
+            .filter(|(id, _)| **id != exclude_id)
+            .map(|(_, (_, tx, _))| tx.clone())
+            .collect()
     }
 
-    /// 向指定标签组广播
-    pub async fn broadcast_to_tag(&self, tag: &str, message: &WsMsg) {
+    /// 获取指定标签的所有连接发送通道
+    pub async fn get_senders_by_tag(&self, tag: &str) -> Vec<mpsc::Sender<WsMsg>> {
         let ids = self.ids_by_tag(tag).await;
-        self.broadcast_to_ids(&ids, message).await;
+        self.get_senders(&ids).await
     }
 
     /// 获取事件订阅

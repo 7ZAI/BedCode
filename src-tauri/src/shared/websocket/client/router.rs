@@ -2,11 +2,13 @@
 //!
 //! 职责：接收消息分发，基于消息类型或订阅者模式
 
-use crate::shared::websocket::message::{WsMessage, WsMessageType};
+use crate::shared::websocket::message::{WsMessage};
 use crate::Result;
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::debug;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
 /// 消息路由事件
 #[derive(Debug, Clone)]
@@ -14,7 +16,7 @@ pub enum RouterEvent {
     /// 消息路由完成
     Routed {
         message_id: Option<String>,
-        message_type: WsMessageType,
+        message_type: WsMsg,
     },
     /// 路由失败
     RouteFailed {
@@ -23,9 +25,10 @@ pub enum RouterEvent {
 }
 
 /// 消息处理器 trait（用于处理特定类型的消息）
+#[async_trait]
 pub trait MessageRouter: Send + Sync {
     /// 处理接收到的消息
-    fn handle(&self, message: WsMessage) -> impl std::future::Future<Output = Result<Option<WsMessage>>> + Send;
+    async fn handle(&self, message: WsMessage) -> Result<Option<WsMessage>>;
 
     /// 处理器名称
     fn name(&self) -> &str;
@@ -35,6 +38,7 @@ pub trait MessageRouter: Send + Sync {
 #[derive(Debug, Clone, Default)]
 pub struct DefaultRouter;
 
+#[async_trait]
 impl MessageRouter for DefaultRouter {
     async fn handle(&self, _message: WsMessage) -> Result<Option<WsMessage>> {
         Ok(None)

@@ -2,7 +2,7 @@
 //!
 //! 业务处理器 trait 定义
 
-use crate::shared::websocket::{DefaultClientInfo, HandlerResult, WsClient, WsMessage};
+use crate::shared::websocket::{HandlerResult, WsClient, WsMessage};
 
 pub trait BusinessHandler: Send + Sync {
     fn handle(&self, client: &WsClient, msg: WsMessage) -> HandlerResult;

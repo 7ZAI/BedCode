@@ -14,6 +14,11 @@ use crate::Result;
 /// 消息处理结果类型
 pub type HandlerResult = Result<Option<WsMessage>>;
 
+//// 空实现
+pub trait BedCodeMessage:Send + Sync + Debug + Clone {
+    
+}
+
 /// 客户端信息 trait（泛型基础）
 /// 让不同业务场景可以定义自己的客户端信息结构
 pub trait ClientInfoTrait: Send + Sync + Debug + Clone {
@@ -39,68 +44,7 @@ pub trait ClientInfoTrait: Send + Sync + Debug + Clone {
     fn set_last_heartbeat(&mut self, time: Instant);
 }
 
-/// 默认基础实现（无业务扩展字段）
-#[derive(Debug, Clone)]
-pub struct DefaultClientInfo {
-    pub addr: SocketAddr,
-    pub client_id: Option<String>,
-    pub authenticated: bool,
-    pub last_heartbeat: Instant,
-}
-
-impl DefaultClientInfo {
-    pub fn new(addr: SocketAddr) -> Self {
-        Self {
-            addr,
-            client_id: None,
-            authenticated: false,
-            last_heartbeat: Instant::now(),
-        }
-    }
-}
-
-impl Default for DefaultClientInfo {
-    fn default() -> Self {
-        Self {
-            addr: std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)), 0),
-            client_id: None,
-            authenticated: false,
-            last_heartbeat: Instant::now(),
-        }
-    }
-}
-
-impl ClientInfoTrait for DefaultClientInfo {
-    fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    fn client_id(&self) -> Option<&str> {
-        self.client_id.as_deref()
-    }
-
-    fn set_client_id(&mut self, id: Option<String>) {
-        self.client_id = id;
-    }
-
-    fn is_authenticated(&self) -> bool {
-        self.authenticated
-    }
-
-    fn set_authenticated(&mut self, auth: bool) {
-        self.authenticated = auth;
-    }
-
-    fn last_heartbeat(&self) -> Instant {
-        self.last_heartbeat
-    }
-
-    fn set_last_heartbeat(&mut self, time: Instant) {
-        self.last_heartbeat = time;
-    }
-}
-
-/// 消息处理器 trait（泛型版本，用于���务器端）
+/// 消息处理器 trait（泛型版本，用于服务器端）
 pub trait MessageHandler<C: ClientInfoTrait>: Send + Sync {
     /// 处理文本消息（核心方法）
     fn handle_text(

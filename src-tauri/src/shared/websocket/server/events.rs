@@ -2,12 +2,13 @@
 //!
 //! 泛型事件系统，支持自定义事件类型
 
+use crate::shared::event::AppEvent;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 
 /// 服务器事件 trait - 泛型事件基础
 /// 让业务可以定义自己的事件类型
-pub trait ServerEvent: Clone + Send + Sync + Debug {}
+pub trait ServerEvent: Clone + Send + Sync + Debug + AppEvent {}
 
 /// 服务器事件构建器 trait
 /// 用于服务器内部创建各种事件
@@ -31,15 +32,51 @@ pub trait ServerEventBuilder<E: ServerEvent>: Send + Sync {
 /// 默认服务器事件实现
 #[derive(Debug, Clone)]
 pub enum WsServerEvent {
-    /// 新客户端连接
+    /// 服务器正在启动
+    ServerStarting {
+        addr: SocketAddr,
+    },
+    /// 服务器启动成功（开始监听）
+    ServerStarted {
+        port: u16,
+    },
+    /// 服务器正在关闭
+    ServerStopping {
+        reason: String,
+    },
+    /// 服务器已关闭
+    ServerClosed {
+        reason: String,
+    },
+    /// WebSocket 握手成功
+    HandshakeSuccess {
+        addr: SocketAddr,
+    },
+    /// WebSocket 握手失败
+    HandshakeFailed {
+        addr: SocketAddr,
+        error: String,
+    },
+    /// 新客户端连接（TCP 连接建立）
     ClientConnected {
         addr: SocketAddr,
         client_id: Option<String>,
     },
-    /// 客户端断开
+    /// 连接已注册到 ConnectionManager
+    ConnectionRegistered {
+        addr: SocketAddr,
+        connection_id: String,
+    },
+    /// 客户端断开连接
     ClientDisconnected {
         addr: SocketAddr,
         client_id: Option<String>,
+        reason: Option<String>,
+    },
+    /// 连接已从 ConnectionManager 注销
+    ConnectionUnregistered {
+        addr: SocketAddr,
+        connection_id: String,
     },
     /// 收到文本消息
     TextMessage {
@@ -55,12 +92,61 @@ pub enum WsServerEvent {
         message_id: Option<String>,
         data: Vec<u8>,
     },
+    /// 消息发送成功
+    MessageSent {
+        addr: SocketAddr,
+        client_id: Option<String>,
+        message_id: Option<String>,
+    },
+    /// 消息发送失败
+    MessageSentFailed {
+        addr: SocketAddr,
+        client_id: Option<String>,
+        error: String,
+    },
+    /// 广播消息发送完成
+    BroadcastCompleted {
+        total: usize,
+        success_count: usize,
+    },
+    /// 收到 Ping
+    PingReceived {
+        addr: SocketAddr,
+    },
+    /// 收到 Pong（心跳更新）
+    PongReceived {
+        addr: SocketAddr,
+    },
+    /// 客户端正在认证
+    Authenticating {
+        addr: SocketAddr,
+    },
+    /// 认证成功
+    AuthSuccess {
+        addr: SocketAddr,
+        client_id: String,
+    },
+    /// 认证失败
+    AuthFailed {
+        addr: SocketAddr,
+        client_id: Option<String>,
+        error: String,
+    },
+    /// 心跳超时
+    HeartbeatTimeout {
+        addr: SocketAddr,
+        client_id: Option<String>,
+    },
     /// 收到心跳
     Heartbeat {
         addr: SocketAddr,
     },
-    /// 服务器关闭
-    ServerClosed {
+    /// 收到关闭帧
+    CloseFrameReceived {
+        addr: SocketAddr,
+    },
+    /// 服务器关闭信号已接收
+    ShutdownReceived {
         reason: String,
     },
     /// 消息处理错误
@@ -68,14 +154,12 @@ pub enum WsServerEvent {
         addr: SocketAddr,
         error: String,
     },
-    /// 认证成功
-    AuthSuccess {
-        addr: SocketAddr,
-        client_id: String,
-    },
 }
 
 impl ServerEvent for WsServerEvent {}
+
+/// 为 WsServerEvent 实现 AppEvent
+impl AppEvent for WsServerEvent {}
 
 /// WsServerEvent 的构建器实现
 impl ServerEventBuilder<WsServerEvent> for WsServerEventBuilder {
@@ -110,7 +194,11 @@ impl ServerEventBuilder<WsServerEvent> for WsServerEventBuilder {
     }
 
     fn client_disconnected(&self, addr: SocketAddr, client_id: Option<String>) -> WsServerEvent {
-        WsServerEvent::ClientDisconnected { addr, client_id }
+        WsServerEvent::ClientDisconnected {
+            addr,
+            client_id,
+            reason: None,
+        }
     }
 
     fn message_error(&self, addr: SocketAddr, error: String) -> WsServerEvent {
@@ -179,6 +267,7 @@ impl WsServerEventBuilder {
         WsServerEvent::ClientDisconnected {
             addr: self.addr.unwrap(),
             client_id: self.client_id.flatten(),
+            reason: None,
         }
     }
 }

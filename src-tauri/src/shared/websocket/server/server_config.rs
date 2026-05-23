@@ -38,6 +38,8 @@ pub struct WsServerConfig {
     pub heartbeat_timeout_secs: u64,
     /// 消息队列大小
     pub message_queue_size: usize,
+    /// 业务处理线程池大小（0 表示使用 tokio 默认的阻塞线程池）
+    pub business_thread_pool_size: usize,
     /// IP 过滤规则
     pub ip_filter: IpFilter,
     /// 响应处理器（处理需要响应的消息）
@@ -52,6 +54,7 @@ impl Default for WsServerConfig {
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            business_thread_pool_size: 0, // 使用 tokio 默认
             ip_filter: IpFilter::default(),
             response_handler: None,
         }
@@ -66,6 +69,7 @@ impl std::fmt::Debug for WsServerConfig {
             .field("heartbeat_interval_secs", &self.heartbeat_interval_secs)
             .field("heartbeat_timeout_secs", &self.heartbeat_timeout_secs)
             .field("message_queue_size", &self.message_queue_size)
+            .field("business_thread_pool_size", &self.business_thread_pool_size)
             .field("ip_filter", &self.ip_filter)
             .field("response_handler", &"...")
             .finish()

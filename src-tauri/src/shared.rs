@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod db;
 pub mod enums;
+pub mod event;
 pub mod notify;
 pub mod parser;
 pub mod system;

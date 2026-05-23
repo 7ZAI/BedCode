@@ -48,6 +48,7 @@ impl WebSocketServer {
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
+            business_thread_pool_size: 0,
             ip_filter: crate::shared::websocket::IpFilter::default(),
             response_handler: None,
         };
@@ -73,16 +74,19 @@ impl WebSocketServer {
 
     /// 获取已连接设备列表
     pub async fn get_connected_devices(&self) -> Vec<crate::desktop::server::connection_types::DeviceConnectionInfo> {
-        // 从 WsServer 获取客户端信息
-        let clients = self.inner.clients().read().await;
+        // 通过 ConnectionManager 获取所有连接
+        let cm = self.inner.connection_manager();
+        let ids = cm.all_ids().await;
         let mut devices = Vec::new();
 
-        for (addr, info) in clients.iter() {
-            devices.push(crate::desktop::server::connection_types::DeviceConnectionInfo {
-                addr: addr.to_string(),
-                device_id: info.client_id.clone().unwrap_or_else(|| addr.to_string()),
-                session_count: 0,
-            });
+        for id in ids {
+            if let Some(conn) = cm.get(id).await {
+                devices.push(crate::desktop::server::connection_types::DeviceConnectionInfo {
+                    addr: conn.addr.to_string(),
+                    device_id: conn.client_id.clone().unwrap_or_else(|| conn.addr.to_string()),
+                    session_count: 0,
+                });
+            }
         }
 
         devices

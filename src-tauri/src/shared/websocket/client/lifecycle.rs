@@ -104,6 +104,33 @@ impl LifecycleManager {
         tracing::debug!("Status changed: {:?} -> {:?}", old_status, status);
     }
 
+    /// 同步设置状态（用于非 async 上下文）
+    #[allow(dead_code)]
+    pub fn set_status_sync(&self, status: ConnectionStatus) {
+        let old_status = self.status.blocking_read();
+        *self.status.blocking_write() = status.clone();
+
+        match &status {
+            ConnectionStatus::Connected => {
+                let _ = self.event_tx.send(LifecycleEvent::Connected);
+            }
+            ConnectionStatus::Paired => {
+                let _ = self.event_tx.send(LifecycleEvent::Paired);
+            }
+            ConnectionStatus::Disconnected => {
+                let _ = self.event_tx.send(LifecycleEvent::Disconnected);
+            }
+            ConnectionStatus::Connecting => {}
+            ConnectionStatus::Error(msg) => {
+                let _ = self.event_tx.send(LifecycleEvent::Error {
+                    message: msg.clone(),
+                });
+            }
+        }
+
+        tracing::debug!("Status changed: {:?} -> {:?}", old_status, status);
+    }
+
     /// 设置客户端ID（配对成功后调用）
     pub async fn set_client_id(&self, client_id: impl Into<String>) {
         let mut guard = self.client_id.write().await;
