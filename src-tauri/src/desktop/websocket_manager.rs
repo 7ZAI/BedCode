@@ -6,9 +6,10 @@
 use crate::desktop::pty::PtySubscriptionManager;
 use crate::desktop::server::message::Message as BusinessMessage;
 use crate::shared::websocket::{
-    DefaultClientInfo, HandlerResult, MessageHandler,
+    MessageHandler,
     WsMessage, WsServer, WsServerConfig, WsServerEvent,
 };
+use crate::shared::websocket::server::server_config::IpFilter;
 use crate::shared::system::error::AppError;
 use crate::Result;
 use async_trait::async_trait;
@@ -17,6 +18,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
+use std::result::Result as StdResult;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
 // ==================== WsMessageHandler Adapter ====================
 
@@ -35,86 +38,63 @@ impl WsMessageHandler {
 }
 
 impl MessageHandler for WsMessageHandler {
-    fn handle_text(
+    fn handle(
         &self,
-        message: &WsMessage,
+        message: WsMsg,
         addr: SocketAddr,
-        client_info: &DefaultClientInfo,
-    ) -> HandlerResult {
+        client_id: Option<&str>,
+    ) -> StdResult<Option<WsMessage>, String> {
+        // 从原始 WsMsg 中解析出 WsMessage
+        let ws_msg = WsMessage::from_ws_message(message)
+            .map_err(|e| format!("Failed to parse WsMsg: {}", e))?;
+
+        // from_ws_message 返回 None 表示不需要业务处理的消息（如 Frame）
+        let ws_msg = match ws_msg {
+            Some(msg) => msg,
+            None => return Ok(None),
+        };
+
         // 从 WsMessage::Text.payload.content 中提取业务消息 JSON
-        let content = match message {
+        let content = match &ws_msg {
             WsMessage::Text { ref payload, .. } => &payload.content,
             _ => return Ok(None),
         };
 
         let business_msg = BusinessMessage::from_json(content)
-            .map_err(|e| crate::AppError::Parse(format!("Failed to parse business message: {}", e)))?;
+            .map_err(|e| format!("Failed to parse business message: {}", e))?;
 
         // 获取 client_id
-        let client_id = client_info.client_id.clone().unwrap_or_else(|| addr.to_string());
+        let client_id = client_id.map(|s| s.to_string()).unwrap_or_else(|| addr.to_string());
 
         // 获取原始消息的 message_id，用于响应匹配
-        // 确保 send_and_wait 能匹配到响应
-        let orig_message_id = message.message_id().map(|s| s.to_string());
+        let orig_message_id = ws_msg.message_id().map(|s| s.to_string());
 
-        // 调用 async handler (使用 block_in_place 因为 handle_text 是 sync)
+        // 同步调用 async handler
         let handler = self.inner.clone();
-        let json_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::task::block_in_place(|| {
-                let rt = tokio::runtime::Handle::current();
-                rt.block_on(async move {
-                match handler.handle_message(business_msg, &client_id).await {
-                    Ok(Some(response)) => {
-                        match response.to_json() {
-                            Ok(json) => {
-                                // 复用原始消息的 message_id，确保 send_and_wait 能匹配响应
-                                let mut response_ws_msg = WsMessage::text(json);
-                                if let Some(ref orig_id) = orig_message_id {
-                                    if let WsMessage::Text { ref mut message_id, .. } = response_ws_msg {
-                                        *message_id = orig_id.clone();
-                                    }
-                                }
-                                Ok(Some(response_ws_msg))
-                            }
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(e),
-                }
-            })
-            })
-        }));
+        let rt = tokio::runtime::Handle::current();
 
-        match json_result {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(e)) => Err(e),
-            Err(panic_err) => {
-                let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_err.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "Unknown panic".to_string()
-                };
-                tracing::error!("[WsMessageHandler] Handler panic: {}", msg);
-                Err(crate::AppError::WebSocket(format!("Handler panicked: {}", msg)))
+        let result = rt.block_on(async move {
+            handler.handle_message(business_msg, &client_id).await
+        });
+
+        match result {
+            Ok(Some(response)) => {
+                let json = response.to_json()
+                    .map_err(|e| format!("Failed to serialize response: {}", e))?;
+
+                // 复用原始消息的 message_id
+                let mut response_ws_msg = WsMessage::text(json.clone());
+                if let Some(orig_id) = orig_message_id {
+                    if let WsMessage::Text { ref mut message_id, .. } = response_ws_msg {
+                        *message_id = orig_id;
+                    }
+                }
+                Ok(Some(response_ws_msg))
             }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
         }
     }
-
-    fn handle_binary(
-        &self,
-        _message: &WsMessage,
-        _addr: SocketAddr,
-        _client_info: &DefaultClientInfo,
-    ) -> HandlerResult {
-        Ok(None)
-    }
-
-    fn on_authenticated(&self, _addr: SocketAddr, _client_id: &str) {}
-
-    fn on_disconnected(&self, _addr: SocketAddr, _client_id: Option<&str>) {}
 }
 
 /// 客户端摘要（对外暴露的信息）
@@ -270,7 +250,8 @@ impl WebSocketManager {
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 90,
             message_queue_size: 256,
-            ip_filter: crate::shared::websocket::IpFilter::default(),
+            business_thread_pool_size: 0,
+            ip_filter: IpFilter::default(),
             response_handler: None,
         };
 
@@ -365,21 +346,31 @@ impl WebSocketManager {
     pub async fn list_clients(&self) -> Vec<ClientSummary> {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
-            let clients = s.clients().read().await;
+            let cm = s.connection_manager();
+            let ids = cm.all_ids().await;
             let addr_to_client_id = self.inner.addr_to_client_id.read().await;
             let addr_to_device_name = self.inner.addr_to_device_name.read().await;
             let addr_to_connected_at = self.inner.addr_to_connected_at.read().await;
 
-            clients
+            // 先获取所有连接信息
+            let mut connections = Vec::new();
+            for id in ids {
+                if let Some(info) = cm.get(id).await {
+                    connections.push(info);
+                }
+            }
+
+            connections
                 .iter()
-                .map(|(addr, info)| {
+                .map(|info| {
+                    let addr = info.addr;
                     let client_id = addr_to_client_id
-                        .get(addr)
+                        .get(&addr)
                         .cloned()
                         .unwrap_or_else(|| addr.to_string());
-                    let device_name = addr_to_device_name.get(addr).cloned();
+                    let device_name = addr_to_device_name.get(&addr).cloned();
                     let connected_at = addr_to_connected_at
-                        .get(addr)
+                        .get(&addr)
                         .copied()
                         .unwrap_or_else(|| Utc::now().timestamp_millis());
 
@@ -638,7 +629,7 @@ impl WebSocketManager {
 
                 tracing::info!("Client connected: {}", addr);
             }
-            WsServerEvent::ClientDisconnected { addr, client_id } => {
+            WsServerEvent::ClientDisconnected { addr, client_id, reason: _ } => {
                 Self::cleanup_client(&inner, &addr).await;
 
                 // 调用业务处理器

@@ -5,6 +5,8 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use uuid::Uuid;
 
 /// 生成唯一消息ID
@@ -326,3 +328,29 @@ impl WsResponse {
         }
     }
 }
+
+/// 简化的消息处理器 trait
+///
+/// 只处理 Text 和 Binary 类型消息，其他消息类型（Ping/Pong/Close/Ack）由框架自动处理
+pub trait MessageHandler: Send + Sync {
+    /// 处理接收到的 WebSocket 消息
+    ///
+    /// # Arguments
+    /// * `message` - 接收到的原始 WebSocket 消息（WsMsg::Text 或 WsMsg::Binary）
+    /// * `addr` - 客户端地址
+    /// * `client_id` - 客户端标识（如果已认证）
+    ///
+    /// # Returns
+    /// * `Ok(Some(response))` - 返回响应消息
+    /// * `Ok(None)` - 不返回响应
+    /// * `Err(e)` - 处理失败
+    fn handle(
+        &self,
+        message: WsMsg,
+        addr: SocketAddr,
+        client_id: Option<&str>,
+    ) -> std::result::Result<Option<WsMessage>, String>;
+}
+
+/// 消息处理结果类型
+pub type HandlerResult = Result<Option<WsMessage>, String>;
