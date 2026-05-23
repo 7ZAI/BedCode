@@ -261,3 +261,89 @@ impl WebSocketIo {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    /// 测试用的消息发送者实现
+    struct TestSender {
+        sent: Arc<Mutex<Vec<WsMessage>>>,
+    }
+
+    #[async_trait]
+    impl MessageSender for TestSender {
+        async fn send(&self, msg: WsMessage) -> Result<()> {
+            let mut guard = self.sent.lock().await;
+            guard.push(msg);
+            Ok(())
+        }
+    }
+
+    /// 测试用的广播发送者实现
+    struct TestBroadcaster {
+        broadcasted: Arc<Mutex<Vec<WsMessage>>>,
+    }
+
+    #[async_trait]
+    impl BroadcastSender for TestBroadcaster {
+        async fn broadcast(&self, msg: WsMessage) -> Result<()> {
+            let mut guard = self.broadcasted.lock().await;
+            guard.push(msg);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_io_config_default() {
+        let config = IoConfig::default();
+        assert_eq!(config.queue_size, 256);
+        assert_eq!(config.default_timeout_ms, 5000);
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.retry_interval_ms, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_io_config_custom() {
+        let config = IoConfig::new(512, 10000, 5, 2000);
+        assert_eq!(config.queue_size, 512);
+        assert_eq!(config.default_timeout_ms, 10000);
+        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.retry_interval_ms, 2000);
+    }
+
+    #[tokio::test]
+    async fn test_websocket_io_new() {
+        let io = WebSocketIo::new(IoConfig::default());
+        let _receiver = io.subscribe();
+        let _config = io.config();
+    }
+
+    #[tokio::test]
+    async fn test_send_message() {
+        let io = WebSocketIo::new(IoConfig::default());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sender = TestSender { sent: sent.clone() };
+
+        let msg = WsMessage::text("hello");
+        io.send(&sender, &msg).await.unwrap();
+
+        let guard = sent.lock().await;
+        assert_eq!(guard.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_message() {
+        let io = WebSocketIo::new(IoConfig::default());
+        let broadcasted = Arc::new(Mutex::new(Vec::new()));
+        let broadcaster = TestBroadcaster { broadcasted: broadcasted.clone() };
+
+        let msg = WsMessage::text("broadcast test");
+        io.broadcast(&broadcaster, &msg).await.unwrap();
+
+        let guard = broadcasted.lock().await;
+        assert_eq!(guard.len(), 1);
+    }
+}
