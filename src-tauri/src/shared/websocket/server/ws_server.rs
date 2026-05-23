@@ -9,11 +9,9 @@ use crate::shared::websocket::server::{
     server_config::WsServerConfig,
     events::WsServerEvent,
     io::{ServerIo, ServerIoConfig},
-    business_pool::execute_in_pool,
 };
 use crate::shared::websocket::{
     message::{WsMessage, MessageHandler},
-    message_handler::{handle_message, MessageHandlerDeps},
     traits::ResponseHandler,
     server::connection_manager::Connection,
 };
@@ -24,7 +22,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// WebSocket 服务器
 pub struct WsServer {
@@ -403,10 +401,8 @@ impl WsServer {
                         // 创建接收任务（业务处理分离到线程池）
                         let tx_for_recv = tx_clone.clone();
                         let handler_for_recv = handler.clone();
-                        let response_handler_for_recv = response_handler.clone();
                         let connection_manager_for_recv = connection_manager.clone();
                         let event_tx_for_recv = event_tx_clone.clone();
-                        let use_thread_pool = config.business_thread_pool_size > 0;
                         let mut recv_task = tokio::spawn(async move {
                             let tx = tx_for_recv;
                             while let Some(msg_result) = ws_receiver.next().await {
@@ -421,33 +417,33 @@ impl WsServer {
                                             }
                                         };
 
-                                        let deps = MessageHandlerDeps {
-                                            connection_manager: connection_manager_for_recv.clone(),
-                                            tx: tx.clone(),
-                                            event_tx: event_tx_for_recv.clone(),
-                                            addr,
-                                            client_id: client_id.clone(),
-                                        };
+                                        // 更新心跳
+                                        if let Some(id) = connection_manager_for_recv.get_id_by_addr(&addr).await {
+                                            connection_manager_for_recv.update_heartbeat(id).await;
+                                        }
 
-                                        if use_thread_pool {
-                                            let text_clone = text.clone();
-                                            let handler_clone = handler_for_recv.clone();
-                                            let deps_clone = MessageHandlerDeps {
-                                                connection_manager: connection_manager_for_recv.clone(),
-                                                tx: tx.clone(),
-                                                event_tx: event_tx_for_recv.clone(),
-                                                addr,
-                                                client_id,
-                                            };
+                                        debug!("[WsServer] <<< RECV from {}: {}", addr, &text[..text.len().min(200)]);
 
-                                            execute_in_pool(move || {
-                                                let rt = tokio::runtime::Handle::current();
-                                                rt.block_on(async {
-                                                    handle_message(WsMsg::Text(text_clone), &deps_clone, handler_clone.as_ref(), None).await;
-                                                })
-                                            }).await;
-                                        } else {
-                                            handle_message(WsMsg::Text(text), &deps, handler_for_recv.as_ref(), None).await;
+                                        // 直接调用 handler 处理
+                                        let handler = handler_for_recv.clone();
+                                        if let Some(h) = handler {
+                                            match h.handle(WsMsg::Text(text), addr, client_id.as_deref()) {
+                                                Ok(Some(response)) => {
+                                                    let resp_json = response.to_json().unwrap_or_default();
+                                                    debug!(
+                                                        "[WsServer] >>> SEND to {}: {}",
+                                                        addr,
+                                                        &resp_json[..resp_json.len().min(200)]
+                                                    );
+                                                    let _ = tx.send(WsMsg::Text(resp_json)).await;
+                                                }
+                                                Ok(None) => {}
+                                                Err(e) => {
+                                                    warn!("[WsServer] Handler error for {}: {}", addr, e);
+                                                    let error_msg = WsMessage::error("HANDLER_ERROR", e);
+                                                    let _ = tx.send(WsMsg::Text(error_msg.to_json().unwrap_or_default())).await;
+                                                }
+                                            }
                                         }
                                     }
                                     Ok(WsMsg::Binary(data)) => {
@@ -460,33 +456,27 @@ impl WsServer {
                                             }
                                         };
 
-                                        let deps = MessageHandlerDeps {
-                                            connection_manager: connection_manager_for_recv.clone(),
-                                            tx: tx.clone(),
-                                            event_tx: event_tx_for_recv.clone(),
-                                            addr,
-                                            client_id: client_id.clone(),
-                                        };
+                                        // 更新心跳
+                                        if let Some(id) = connection_manager_for_recv.get_id_by_addr(&addr).await {
+                                            connection_manager_for_recv.update_heartbeat(id).await;
+                                        }
 
-                                        if use_thread_pool {
-                                            let data_clone = data.clone();
-                                            let handler_clone = handler_for_recv.clone();
-                                            let deps_clone = MessageHandlerDeps {
-                                                connection_manager: connection_manager_for_recv.clone(),
-                                                tx: tx.clone(),
-                                                event_tx: event_tx_for_recv.clone(),
-                                                addr,
-                                                client_id,
-                                            };
+                                        debug!("[WsServer] <<< RECV Binary from {}: {} bytes", addr, data.len());
 
-                                            execute_in_pool(move || {
-                                                let rt = tokio::runtime::Handle::current();
-                                                rt.block_on(async {
-                                                    handle_message(WsMsg::Binary(data_clone), &deps_clone, handler_clone.as_ref(), None).await;
-                                                })
-                                            }).await;
-                                        } else {
-                                            handle_message(WsMsg::Binary(data), &deps, handler_for_recv.as_ref(), None).await;
+                                        // 直接调用 handler 处理
+                                        let handler = handler_for_recv.clone();
+                                        if let Some(h) = handler {
+                                            match h.handle(WsMsg::Binary(data), addr, client_id.as_deref()) {
+                                                Ok(Some(response)) => {
+                                                    let resp_json = response.to_json().unwrap_or_default();
+                                                    let _ = tx.send(WsMsg::Text(resp_json)).await;
+                                                }
+                                                Ok(None) => {}
+                                                Err(e) => {
+                                                    let error_msg = WsMessage::error("HANDLER_ERROR", e);
+                                                    let _ = tx.send(WsMsg::Text(error_msg.to_json().unwrap_or_default())).await;
+                                                }
+                                            }
                                         }
                                     }
                                     Ok(WsMsg::Ping(data)) => {
