@@ -94,3 +94,35 @@ pub trait BroadcastSender: Send + Sync {
     /// 广播消息
     async fn broadcast(&self, msg: WsMessage) -> Result<()>;
 }
+
+use tracing::{debug, info, warn, error};
+
+/// WebSocket 统一收发模块
+pub struct WebSocketIo {
+    /// 配置
+    config: IoConfig,
+    /// 事件发送器
+    event_tx: broadcast::Sender<IoEvent>,
+}
+
+impl WebSocketIo {
+    /// 创建新的 IO 模块
+    pub fn new(config: IoConfig) -> Arc<Self> {
+        let (event_tx, _) = broadcast::channel(config.queue_size);
+
+        Arc::new(Self {
+            config,
+            event_tx,
+        })
+    }
+
+    /// 订阅消息事件
+    pub fn subscribe(&self) -> broadcast::Receiver<IoEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// 获取配置
+    pub fn config(&self) -> &IoConfig {
+        &self.config
+    }
+}
