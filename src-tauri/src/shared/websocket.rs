@@ -8,22 +8,24 @@
 
 pub mod client;
 pub mod codec;
-mod events;
+pub mod io;
 pub mod message;
 pub mod message_handler;
 pub mod server;
 mod traits;
 
 // Re-exports from submodules
-pub use client::wsclient::WsClient;
+pub use client::ws_client::WsClient;
 pub use client::{WsClientConfig, WsClientEvent, ConnectionStatus};
 pub use client::connection::ConnectionManager as ClientConnMgr;
 pub use message::{WsMessage, WsMessageType, WsResponse, TextPayload, BinaryPayload};
 pub use message_handler::{handle_text_message, MessageHandlerDeps};
-pub use server::wsserver::{WsServer, WsServerEvent, HandlerResult, MessageHandler};
+pub use server::ws_server::{HandlerResult, MessageHandler, WsServer};
+pub use server::events::WsServerEvent;
 pub use server::server_config::{WsServerConfig, IpFilter};
 pub use server::connection_manager::{ConnectionManager, ConnectionId, Connection, ConnectionEvent};
 pub use server::heartbeat::{HeartbeatManager, HeartbeatConfig, HeartbeatEvent};
+pub use io::{IoConfig, IoEvent, WebSocketIo, MessageSender, BroadcastSender};
 pub use traits::{
     ClientInfoTrait, DefaultClientInfo,
     SendStrategy, DefaultSendStrategy, RetrySendStrategy,

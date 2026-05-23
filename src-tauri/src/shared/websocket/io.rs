@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use crate::Result;
 use crate::shared::websocket::message::WsMessage;
 
@@ -84,12 +85,14 @@ pub enum IoEvent {
 }
 
 /// 消息发送者 trait
+#[async_trait]
 pub trait MessageSender: Send + Sync {
     /// 发送消息
     async fn send(&self, msg: WsMessage) -> Result<()>;
 }
 
 /// 广播发送者 trait
+#[async_trait]
 pub trait BroadcastSender: Send + Sync {
     /// 广播消息
     async fn broadcast(&self, msg: WsMessage) -> Result<()>;
@@ -187,6 +190,13 @@ impl WebSocketIo {
                         if let Some(ref resp_id) = resp_id {
                             if *resp_id == sent_id {
                                 return Ok(WsMessage::text(content));
+                            }
+                        }
+                    }
+                    Ok(IoEvent::Binary { message_id: resp_id, data }) => {
+                        if let Some(ref resp_id) = resp_id {
+                            if *resp_id == sent_id {
+                                return Ok(WsMessage::binary(data));
                             }
                         }
                     }
