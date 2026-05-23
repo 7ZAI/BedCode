@@ -149,4 +149,70 @@ impl WebSocketIo {
 
         sender.broadcast(msg.clone()).await
     }
+
+    /// 发送并等待确认
+    pub async fn send_with_ack(
+        &self,
+        sender: &dyn MessageSender,
+        msg: &WsMessage,
+        timeout: Duration,
+    ) -> Result<WsMessage> {
+        let message_id = msg.message_id().map(|s| s.to_string());
+
+        let sent_id = match message_id {
+            Some(id) => id,
+            None => {
+                return Err(crate::AppError::WebSocket(
+                    "Message has no message_id, cannot wait for response".to_string(),
+                ))
+            }
+        };
+
+        let mut receiver = self.event_tx.subscribe();
+
+        // 发送消息
+        self.send(sender, msg).await?;
+
+        // 等待确认响应
+        let timeout_duration = if timeout.as_millis() == 0 {
+            Duration::from_millis(self.config.default_timeout_ms)
+        } else {
+            timeout
+        };
+
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                match receiver.recv().await {
+                    Ok(IoEvent::Text { message_id: resp_id, content }) => {
+                        if let Some(ref resp_id) = resp_id {
+                            if *resp_id == sent_id {
+                                return Ok(WsMessage::text(content));
+                            }
+                        }
+                    }
+                    Ok(IoEvent::Ack { original_id }) => {
+                        if original_id == sent_id {
+                            return Ok(WsMessage::ack(original_id));
+                        }
+                    }
+                    Ok(IoEvent::Error { message }) => {
+                        return Err(crate::AppError::WebSocket(message));
+                    }
+                    Ok(IoEvent::Close { reason }) => {
+                        return Err(crate::AppError::WebSocket(format!("Connection closed: {}", reason)));
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return Err(crate::AppError::WebSocket("Event channel closed".to_string()));
+                    }
+                }
+            }
+        });
+
+        match result.await {
+            Ok(Ok(msg)) => Ok(msg),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(crate::AppError::WebSocket("Response timeout".to_string())),
+        }
+    }
 }
