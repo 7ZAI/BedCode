@@ -10,9 +10,9 @@ use crate::shared::websocket::server::{
     events::WsServerEvent,
     io::{ServerIo, ServerIoConfig},
 };
+use crate::shared::model::message::Message;
 use crate::shared::websocket::{
-    message::{WsMessage, MessageHandler},
-    traits::ResponseHandler,
+    MessageHandler,
     server::connection_manager::Connection,
 };
 use crate::Result;
@@ -28,10 +28,8 @@ use tracing::{debug, error, info, warn};
 pub struct WsServer {
     /// 配置
     config: WsServerConfig,
-    /// 消息处理器
-    handler: Option<Arc<dyn MessageHandler>>,
-    /// 响应处理器
-    response_handler: Option<Arc<dyn ResponseHandler>>,
+    /// 消息处理器（使用 RwLock 支持动态设置）
+    handler: Arc<RwLock<Option<Arc<dyn MessageHandler>>>>,
     /// 连接管理器（核心功能）
     connection_manager: Arc<ConnectionManager>,
     /// IO 模块（统一发送功能）
@@ -56,9 +54,6 @@ impl WsServer {
     pub fn with_handler(config: WsServerConfig, handler: Option<Arc<dyn MessageHandler>>) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
         let (event_tx, _) = broadcast::channel(1024);
-
-        // 从配置中获取 response_handler
-        let response_handler = config.response_handler.clone();
 
         // 创建 ConnectionManager
         let connection_manager = Arc::new(ConnectionManager::new(&config));
@@ -170,8 +165,7 @@ impl WsServer {
 
         Self {
             config,
-            handler,
-            response_handler,
+            handler: Arc::new(RwLock::new(handler)),
             connection_manager,
             server_io,
             heartbeat_manager,
@@ -179,11 +173,6 @@ impl WsServer {
             event_tx,
             is_running: Arc::new(RwLock::new(false)),
         }
-    }
-
-    /// 设置响应处理器
-    pub fn set_response_handler(&mut self, handler: Option<Arc<dyn ResponseHandler>>) {
-        self.response_handler = handler;
     }
 
     /// 获取配置
@@ -196,15 +185,29 @@ impl WsServer {
         self.event_tx.subscribe()
     }
 
+    /// 设置消息处理器
+    pub async fn set_handler(&self, handler: Arc<dyn MessageHandler>) {
+        let mut h = self.handler.write().await;
+        *h = Some(handler);
+    }
+
     /// 向指定客户端发送消息
     pub async fn send_to(&self, addr: &SocketAddr, message: WsMsg) -> Result<()> {
         match message {
             WsMsg::Text(text) => {
-                let msg = WsMessage::text(&text);
-                self.server_io.send_to(addr, &msg).await
+                // 将文本解析为 Message，或者直接发送原始文本
+                match Message::from_json(&text) {
+                    Ok(msg) => self.server_io.send_to(addr, &msg).await,
+                    Err(_) => {
+                        // 解析失败，发送原始文本作为错误消息
+                        let msg = Message::error("PARSE_ERROR", "Invalid message format");
+                        self.server_io.send_to(addr, &msg).await
+                    }
+                }
             }
             WsMsg::Binary(data) => {
-                let msg = WsMessage::binary(data);
+                // 二进制数据，发送错误响应
+                let msg = Message::error("BINARY_NOT_SUPPORTED", "Binary messages not supported");
                 self.server_io.send_to(addr, &msg).await
             }
             _ => Err(crate::AppError::WebSocket("Unsupported message type".to_string())),
@@ -213,27 +216,34 @@ impl WsServer {
 
     /// 向指定客户端发送文本消息
     pub async fn send_text_to(&self, addr: &SocketAddr, content: &str) -> Result<()> {
-        let msg = WsMessage::text(content);
-        self.server_io.send_to(addr, &msg).await
+        // 将文本解析为 Message
+        match Message::from_json(content) {
+            Ok(msg) => self.server_io.send_to(addr, &msg).await,
+            Err(_) => {
+                // 解析失败，发送原始文本
+                let msg = Message::error("PARSE_ERROR", "Invalid message format");
+                self.server_io.send_to(addr, &msg).await
+            }
+        }
     }
 
     /// 向除指定客户端外的所有客户端广播消息
-    pub async fn broadcast_to_others(&self, exclude_addr: &SocketAddr, message: &WsMessage) -> Result<()> {
+    pub async fn broadcast_to_others(&self, exclude_addr: &SocketAddr, message: &Message) -> Result<()> {
         self.server_io.broadcast_to_others(exclude_addr, message).await
     }
 
     /// 向所有客户端广播消息
-    pub async fn broadcast(&self, message: &WsMessage) -> Result<()> {
+    pub async fn broadcast(&self, message: &Message) -> Result<()> {
         self.server_io.broadcast(message).await
     }
 
     /// 发送并等待确认
-    pub async fn send_with_ack(&self, addr: &SocketAddr, message: &WsMessage, timeout: std::time::Duration) -> Result<WsMessage> {
+    pub async fn send_with_ack(&self, addr: &SocketAddr, message: &Message, timeout: std::time::Duration) -> Result<Message> {
         self.server_io.send_with_ack(addr, message, timeout).await
     }
 
     /// 发送并自动重试
-    pub async fn send_with_retry(&self, addr: &SocketAddr, message: &WsMessage) -> Result<()> {
+    pub async fn send_with_retry(&self, addr: &SocketAddr, message: &Message) -> Result<()> {
         self.server_io.send_with_retry(addr, message).await
     }
 
@@ -338,8 +348,7 @@ impl WsServer {
                     // 为清理阶段创建 clone
                     let connection_manager_for_cleanup = self.connection_manager.clone();
                     let event_tx_for_cleanup = self.event_tx.clone();
-                    let handler = self.handler.clone();
-                    let response_handler = self.response_handler.clone();
+                    let handler = self.handler.read().await.clone();
 
                     tokio::spawn(async move {
                         info!("[WsServer] New connection from {}", addr);
@@ -424,26 +433,10 @@ impl WsServer {
 
                                         debug!("[WsServer] <<< RECV from {}: {}", addr, &text[..text.len().min(200)]);
 
-                                        // 直接调用 handler 处理
+                                        // 调用 handler 处理
                                         let handler = handler_for_recv.clone();
                                         if let Some(h) = handler {
-                                            match h.handle(WsMsg::Text(text), addr, client_id.as_deref()) {
-                                                Ok(Some(response)) => {
-                                                    let resp_json = response.to_json().unwrap_or_default();
-                                                    debug!(
-                                                        "[WsServer] >>> SEND to {}: {}",
-                                                        addr,
-                                                        &resp_json[..resp_json.len().min(200)]
-                                                    );
-                                                    let _ = tx.send(WsMsg::Text(resp_json)).await;
-                                                }
-                                                Ok(None) => {}
-                                                Err(e) => {
-                                                    warn!("[WsServer] Handler error for {}: {}", addr, e);
-                                                    let error_msg = WsMessage::error("HANDLER_ERROR", e);
-                                                    let _ = tx.send(WsMsg::Text(error_msg.to_json().unwrap_or_default())).await;
-                                                }
-                                            }
+                                            h.handle(WsMsg::Text(text), addr, client_id.as_deref(), Some(tx.clone()));
                                         }
                                     }
                                     Ok(WsMsg::Binary(data)) => {
@@ -463,20 +456,10 @@ impl WsServer {
 
                                         debug!("[WsServer] <<< RECV Binary from {}: {} bytes", addr, data.len());
 
-                                        // 直接调用 handler 处理
+                                        // 调用 handler 处理
                                         let handler = handler_for_recv.clone();
                                         if let Some(h) = handler {
-                                            match h.handle(WsMsg::Binary(data), addr, client_id.as_deref()) {
-                                                Ok(Some(response)) => {
-                                                    let resp_json = response.to_json().unwrap_or_default();
-                                                    let _ = tx.send(WsMsg::Text(resp_json)).await;
-                                                }
-                                                Ok(None) => {}
-                                                Err(e) => {
-                                                    let error_msg = WsMessage::error("HANDLER_ERROR", e);
-                                                    let _ = tx.send(WsMsg::Text(error_msg.to_json().unwrap_or_default())).await;
-                                                }
-                                            }
+                                            h.handle(WsMsg::Binary(data), addr, client_id.as_deref(), Some(tx.clone()));
                                         }
                                     }
                                     Ok(WsMsg::Ping(data)) => {
@@ -570,7 +553,7 @@ impl WsServer {
                     });
 
                     // 使用 ServerIo 广播关闭消息
-                    let close_msg = WsMessage::text("");
+                    let close_msg = Message::server_closed("Server shutting down", true);
                     let _ = self.server_io.broadcast(&close_msg).await;
 
                     // 等待客户端接收关闭消息

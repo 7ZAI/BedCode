@@ -209,19 +209,16 @@ pub fn run() {
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
 
-            // 创建异步 PTY 输出监听器，并注册前端输出处理器和移动端订阅处理器
-            let app_handle_for_listener = app_handle.clone();
-            let session_manager_for_setup = session_manager.clone();
-            let subscription_manager = session_manager.subscription_manager();
-            tauri::async_runtime::spawn(async move {
-                let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle_for_listener));
-                let subscription_handler = Arc::new(desktop::pty::GlobalSubscriptionHandler::new(subscription_manager));
-                let async_listener = Arc::new(desktop::pty::AsyncPtyOutputListener::new());
+            // 创建并同步设置 PTY 输出监听器
+            // 必须在 setup 返回前完成，否则会话启动时监听器可能未就绪导致输出丢失
+            let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle.clone()));
+            let async_listener = Arc::new(desktop::pty::AsyncPtyOutputListener::new());
+            // 使用 block_on 同步执行异步初始化，确保监听器在 setup 完成前就绪
+            tauri::async_runtime::block_on(async {
                 async_listener.register(frontend_handler).await;
-                async_listener.register(subscription_handler).await;
-                session_manager_for_setup.set_output_listener(async_listener).await;
-                tracing::info!("PTY output listener configured (frontend + mobile subscription)");
+                session_manager.set_output_listener(async_listener).await;
             });
+            tracing::info!("PTY output listener configured (frontend)");
 
             // 创建会话配置管理器
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
@@ -240,24 +237,11 @@ pub fn run() {
             let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
             app.manage(qr_manager.clone());
 
-            use std::sync::Arc as StdArc;
-
-            // 创建 BusinessMessageHandler 并注入依赖
-            let business_handler = Arc::new(
-                desktop::server::handlers::BusinessMessageHandler::new(
-                    db.clone(),
-                    pairing_service.clone(),
-                    qr_manager.clone(),
-                    Some(session_manager.clone()),
-                    Some(plugin_manager.clone()),
-                    Some(StdArc::new(app_handle.clone())),
-                )
-            );
-
-            // 初始化并启动 WebSocketManager（需要在 async runtime 中）
+            // 初始化并启动 WebSocketManager（路由机制已内置处理器）
             let ws_manager = desktop::websocket_manager::WebSocketManager::global();
+            let db_for_ws = db.clone();
             tauri::async_runtime::spawn(async move {
-                ws_manager.init(Some(business_handler as Arc<dyn desktop::websocket_manager::BusinessHandler>)).await
+                ws_manager.init(db_for_ws).await
                     .expect("Failed to initialize WebSocketManager");
                 tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port);
                 match ws_manager.start(ws_port).await {

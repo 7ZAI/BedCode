@@ -70,6 +70,7 @@ pub async fn handle_input(
     // 返回 Input 确认响应，让 send_and_wait 能收到匹配的 ACK
     Ok(Some(Message::Input {
         message_id: String::new(), // 会被 websocket_manager.rs 替换为原始 message_id
+        expect_response: false,
         session_id: session_id.to_string(),
         timestamp: chrono::Utc::now().timestamp_millis(),
         payload: InputPayload {

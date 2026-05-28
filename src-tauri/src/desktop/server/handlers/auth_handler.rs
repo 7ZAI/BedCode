@@ -3,7 +3,7 @@
 //! 处理 `Message::Auth` 消息，包括配对流程和 JWT 验证
 
 use crate::desktop::server::message::{AuthPayload, Message as BusinessMessage};
-use crate::desktop::server::router::context::RouteContext;
+use crate::shared::websocket::server::context::RouteContext;
 use crate::desktop::server::router::handler::RouteHandler;
 use crate::desktop::server::services::auth_service::{handle_auth, handle_jwt_auth};
 use crate::shared::auth::JwtService;
@@ -14,7 +14,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct AuthHandler {
-    db: Arc<Mutex<crate::shared::db::Database>>,
     pairing_service: Arc<crate::desktop::server::services::PairingService>,
     qr_manager: Arc<crate::shared::auth::QrTokenManager>,
     jwt_service: JwtService,
@@ -22,12 +21,10 @@ pub struct AuthHandler {
 
 impl AuthHandler {
     pub fn new(
-        db: Arc<Mutex<crate::shared::db::Database>>,
         pairing_service: Arc<crate::desktop::server::services::PairingService>,
         qr_manager: Arc<crate::shared::auth::QrTokenManager>,
     ) -> Self {
         Self {
-            db,
             pairing_service,
             qr_manager,
             jwt_service: JwtService::new(),
@@ -45,6 +42,7 @@ impl RouteHandler for AuthHandler {
         let (message_id, session_id, timestamp, payload) = match message {
             BusinessMessage::Auth {
                 message_id,
+                expect_response: _,
                 session_id,
                 timestamp,
                 payload,
@@ -61,7 +59,6 @@ impl RouteHandler for AuthHandler {
                     payload,
                     message_id,
                     ctx.addr,
-                    &self.db,
                     &self.pairing_service,
                     &self.qr_manager,
                     &self.jwt_service,

@@ -95,13 +95,16 @@ import SessionForm from '@/modules/desktop/components/SessionForm.vue'
 import Spinner from '@/modules/shared/components/Spinner.vue'
 import { useKeyboardShortcuts } from '@/modules/shared/composables/useKeyboardShortcuts'
 import { useToast } from '@/modules/shared/composables/useToast'
+import { InvokeTimeoutError } from '@/modules/shared/utils/invoke'
+import { initGlobalTerminalManager, createHiddenTerminal } from '@/modules/desktop/composables/useGlobalTerminal'
 import {
   createSessionConfig,
   listSessionConfigs,
   deleteSessionConfig,
   updateSessionConfig,
   listSessions,
-  startSession as createSession,
+  createSessionNoStart,
+  startExistingSession,
   killSession as stopSession,
   type SessionConfig
 } from '@/modules/desktop/composables/useDesktopCommands'
@@ -163,21 +166,32 @@ async function startSession(configId: string) {
   operatingMessage.value = '正在启动会话...'
 
   try {
-    // 两阶段启动：先创建会话（不启动 PTY）
-    const sessionId = await createSession(configId)
+    // 两阶段启动：
+    // 1. 创建会话（不启动 PTY）
+    const sessionId = await createSessionNoStart(configId)
 
-    // 设置为当前会话（TerminalPreview 会监听并在准备好后启动 PTY）
-    const session = sessions.value.find(s => s.id === sessionId)
-    if (session) {
-      activeSession.value = session
-    }
+    // 2. 创建隐藏的 xterm.js 实例（用于缓存输出）
+    createHiddenTerminal(sessionId)
 
-    toast.success('会话已创建，正在启动终端...')
+    // 3. 初始化全局 PTY 输出监听器（输出会写入对应的 xterm 实例）
+    await initGlobalTerminalManager()
+
+    // 4. xterm 实例和监听器就绪后，启动 PTY
+    await startExistingSession(sessionId)
+
+    // 刷新会话列表
+    sessions.value = await listSessions()
+
+    toast.success('会话已启动')
     // 跳转到会话管理页面
     router.push({ name: 'session-manager' })
   } catch (e: any) {
     console.error('[SessionsView] startSession error:', e)
-    toast.error('启动会话失败: ' + (e?.message || e))
+    if (e instanceof InvokeTimeoutError) {
+      toast.error('启动会话超时，后端可能无响应。请检查应用日志后重试。')
+    } else {
+      toast.error('启动会话失败: ' + (e?.message || e))
+    }
   } finally {
     isOperating.value = false
   }

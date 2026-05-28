@@ -9,8 +9,9 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing;
 use crate::shared::websocket::{
-    ClientMessageHandler, HandlerResult, WsMessage,
+    ClientMessageHandler, HandlerResult,
 };
+use crate::shared::model::message::Message;
 
 /// 输出消息的 payload 数据结构
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -59,8 +60,6 @@ pub enum MobileMessage {
     UnsubscribeResponse {
         session_id: String,
     },
-    /// 心跳
-    Heartbeat,
     /// 错误
     Error {
         message: Option<String>,
@@ -144,7 +143,7 @@ impl MobileHandler {
     }
 
     /// 解析消息载荷为 MobileMessage
-    fn parse_message(message: &WsMessage) -> Option<MobileMessage> {
+    fn parse_message(message: &Message) -> Option<MobileMessage> {
         let json = message.to_json().ok()?;
         serde_json::from_str(&json).ok()
     }
@@ -153,18 +152,17 @@ impl MobileHandler {
 impl ClientMessageHandler for MobileHandler {
     fn handle(
         &self,
-        message: WsMessage,
+        message: Message,
     ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
         let self_clone = self.clone();
         Box::pin(async move {
-            // 从 WsMessage::Text.payload.content 中提取业务消息 JSON
-            let content = match &message {
-                WsMessage::Text { ref payload, .. } => &payload.content,
-                _ => return Ok(None),
+            // 直接使用 Message 类型，通过 to_json 获取 JSON 字符串
+            let json = message.to_json().ok();
+            let mobile_msg: MobileMessage = match json {
+                Some(j) => serde_json::from_str(&j)
+                    .map_err(|e| crate::AppError::Parse(format!("Failed to parse mobile message: {}", e)))?,
+                None => return Ok(None),
             };
-
-            let mobile_msg: MobileMessage = serde_json::from_str(content)
-                .map_err(|e| crate::AppError::Parse(format!("Failed to parse mobile message: {}", e)))?;
 
             match mobile_msg {
                 MobileMessage::Output { session_id, payload } => {

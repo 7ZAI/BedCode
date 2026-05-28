@@ -3,7 +3,7 @@
 //! 处理 `Message::Input` 消息，委托给 input_service
 
 use crate::desktop::server::message::Message as BusinessMessage;
-use crate::desktop::server::router::context::RouteContext;
+use crate::shared::websocket::server::context::RouteContext;
 use crate::desktop::server::router::handler::RouteHandler;
 use crate::desktop::server::services::input_service::handle_input;
 use crate::desktop::session::SessionManager;
@@ -30,10 +30,11 @@ impl RouteHandler for InputHandler {
     ) -> Result<Option<BusinessMessage>> {
         let (session_id, payload, message_id, timestamp) = match message {
             BusinessMessage::Input {
-                session_id,
-                payload,
                 message_id,
+                expect_response: _,
+                session_id,
                 timestamp,
+                payload,
             } => (session_id, payload, message_id, timestamp),
             _ => return Ok(None),
         };

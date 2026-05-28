@@ -21,7 +21,9 @@ use crate::mobile::{
     MobileEvent, get_terminal_manager,
 };
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
-use crate::shared::websocket::WsMessage;
+use crate::shared::model::message::Message;
+use crate::shared::enums::control::SessionControlAction;
+use crate::shared::enums::special_key::SpecialKey;
 
 // ==================== Singleton Managers ====================
 
@@ -310,33 +312,22 @@ pub async fn ws_authenticate_with_qr(app_handle: AppHandle, token: String) -> Re
 /// 加载会话列表（从桌面端拉取真实会话）
 #[tauri::command]
 pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
+    use crate::shared::enums::control::SessionControlAction;
+
     tracing::info!("[ws_load_sessions] Sending ListSessions request");
     let conn = get_connection_manager();
-    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "control",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": {
-            "action": {
-                "type": "list_sessions"
-            }
-        }
-    })).unwrap());
+    let message = Message::session_control(SessionControlAction::ListSessions, None);
 
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(15)).await?;
 
-    if let crate::shared::websocket::WsMessage::Text { payload: text_payload, .. } = &response {
-        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-            if let Some(sessions) = inner.get("payload")
-                .and_then(|p| p.get("action"))
-                .and_then(|a| a.get("sessions"))
-            {
-                let count = sessions.as_array().map(|a| a.len()).unwrap_or(0);
-                tracing::info!("[ws_load_sessions] Response OK, {} sessions", count);
-                if let Ok(list) = serde_json::from_value(sessions.clone()) {
-                    return Ok(list);
-                }
-            }
+    // 解析 SessionControl 响应中的会话列表
+    if let Message::SessionControl { payload, .. } = &response {
+        if let SessionControlAction::SessionList { sessions } = &payload.action {
+            let count = sessions.len();
+            tracing::info!("[ws_load_sessions] Response OK, {} sessions", count);
+            // 转换为 serde_json::Value
+            let list = serde_json::to_value(sessions)?;
+            return Ok(list);
         }
     }
 
@@ -350,15 +341,8 @@ pub async fn ws_join_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_join_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    // 使用新的 Subscribe 消息类型
-    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "subscribe",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        // start_seq 为 None 表示从头接收所有历史消息
-        "start_seq": null
-    })).unwrap());
+    // 使用 Message::Subscribe 消息类型
+    let message = Message::subscribe(&session_id, None);
 
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_join_session] Subscribed to session successfully: {}", session_id);
@@ -372,13 +356,8 @@ pub async fn ws_leave_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_leave_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    // 使用新的 Unsubscribe 消息类型
-    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "unsubscribe",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-    })).unwrap());
+    // 使用 Message::Unsubscribe 消息类型
+    let message = Message::unsubscribe(&session_id);
 
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_leave_session] Unsubscribed from session successfully: {}", session_id);
@@ -396,13 +375,7 @@ pub async fn ws_subscribe_session(session_id: String, start_seq: Option<u64>) ->
     let conn = get_connection_manager();
 
     // 使用 Message::Subscribe，带可选的起始序号
-    let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "subscribe",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "start_seq": start_seq
-    })).unwrap());
+    let message = Message::subscribe(&session_id, start_seq);
 
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_subscribe_session] Subscribed to session with start_seq={:?}: {}", start_seq, session_id);
@@ -445,18 +418,30 @@ pub async fn ws_send_input_async(session_id: String, data: String, special_key: 
         data
     };
 
-    let payload = serde_json::json!({
-        "type": "input",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": {
-            "data": trimmed_data,
-            "special_key": special_key,
-        },
+    // 使用 Message::input 构造输入消息
+    let special_key_enum = special_key.as_ref().and_then(|k| {
+        match k.as_str() {
+            "enter" => Some(SpecialKey::Enter),
+            "ctrl_c" => Some(SpecialKey::CtrlC),
+            "ctrl_d" => Some(SpecialKey::CtrlD),
+            "ctrl_z" => Some(SpecialKey::CtrlZ),
+            "tab" => Some(SpecialKey::Tab),
+            "esc" | "escape" => Some(SpecialKey::Escape),
+            "backspace" => Some(SpecialKey::Backspace),
+            "delete" => Some(SpecialKey::Delete),
+            "up" => Some(SpecialKey::ArrowUp),
+            "down" => Some(SpecialKey::ArrowDown),
+            "left" => Some(SpecialKey::ArrowLeft),
+            "right" => Some(SpecialKey::ArrowRight),
+            "home" => Some(SpecialKey::Home),
+            "end" => Some(SpecialKey::End),
+            "page_up" => Some(SpecialKey::PageUp),
+            "page_down" => Some(SpecialKey::PageDown),
+            _ => None,
+        }
     });
 
-    let message = WsMessage::text(serde_json::to_string(&payload).unwrap());
+    let message = Message::input(&session_id, &trimmed_data, special_key_enum);
 
     // fire-and-forget：只确保发送到缓冲区，不等待服务端 ACK
     // 这样用户体验像真正的终端：输入后立即返回
@@ -467,17 +452,17 @@ pub async fn ws_send_input_async(session_id: String, data: String, special_key: 
 }
 
 /// 发送消息（不等待响应）
+/// 通用接口，接受 JSON 格式的消息
 #[tauri::command]
 pub async fn ws_send_message(message_type: String, payload: serde_json::Value) -> Result<()> {
     let conn = get_connection_manager();
-    let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": message_type,
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": payload,
-    })).unwrap());
 
-    conn.send(&message).await
+    // 尝试将 payload 转换为对应的 Message 类型
+    let result = convert_json_to_message(&message_type, payload);
+    match result {
+        Some(message) => conn.send(&message).await,
+        None => Err(crate::AppError::Parse(format!("Unsupported message type: {}", message_type)))
+    }
 }
 
 /// 发送消息并等待响应
@@ -490,12 +475,11 @@ pub async fn ws_send_and_wait(
     let conn = get_connection_manager();
     let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
 
-    let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": message_type,
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": payload,
-    })).unwrap());
+    // 尝试将 payload 转换为对应的 Message 类型
+    let message = match convert_json_to_message(&message_type, payload) {
+        Some(m) => m,
+        None => return Err(crate::AppError::Parse(format!("Unsupported message type: {}", message_type))),
+    };
 
     let response = conn.send_and_wait(&message, timeout).await?;
     let json_str = response.to_json()?;
@@ -505,6 +489,102 @@ pub async fn ws_send_and_wait(
     Ok(parsed)
 }
 
+/// 将 JSON payload 转换为 Message 类型
+fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Option<Message> {
+    match message_type {
+        "session_control" | "control" => {
+            let action_type = payload.get("action")
+                .and_then(|a| a.get("type"))
+                .and_then(|t| t.as_str())?;
+
+            let action = match action_type {
+                "list_sessions" => SessionControlAction::ListSessions,
+                "start_session" => {
+                    let config_id = payload.get("action")
+                        .and_then(|a| a.get("config_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    SessionControlAction::StartSession { config_id }
+                }
+                "stop_session" => {
+                    let session_id = payload.get("action")
+                        .and_then(|a| a.get("session_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    SessionControlAction::StopSession { session_id }
+                }
+                "remove_session" => {
+                    let session_id = payload.get("action")
+                        .and_then(|a| a.get("session_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    SessionControlAction::RemoveSession { session_id }
+                }
+                "resize_session" => {
+                    let session_id = payload.get("action")
+                        .and_then(|a| a.get("session_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let cols = payload.get("action")
+                        .and_then(|a| a.get("cols"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(80) as u16;
+                    let rows = payload.get("action")
+                        .and_then(|a| a.get("rows"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(24) as u16;
+                    SessionControlAction::ResizeSession { session_id, cols, rows }
+                }
+                _ => return None,
+            };
+            Some(Message::session_control(action, None))
+        }
+        "session_config" => {
+            use crate::shared::enums::control::SessionConfigAction;
+
+            let action_type = payload.get("action")
+                .and_then(|a| a.get("type"))
+                .and_then(|t| t.as_str())?;
+
+            let action = match action_type {
+                "list_session_configs" => SessionConfigAction::ListSessionConfigs,
+                "list_quick_actions" => SessionConfigAction::ListQuickActions,
+                _ => return None,
+            };
+            Some(Message::session_config(action, None))
+        }
+        "input" => {
+            let session_id = payload.get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let data = payload.get("payload")
+                .and_then(|p| p.get("data"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            Some(Message::input(session_id, data, None))
+        }
+        "subscribe" => {
+            let session_id = payload.get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let start_seq = payload.get("start_seq")
+                .and_then(|v| v.as_u64());
+            Some(Message::subscribe(session_id, start_seq))
+        }
+        "unsubscribe" => {
+            let session_id = payload.get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            Some(Message::unsubscribe(session_id))
+        }
+        _ => None,
+    }
+}
+
 /// 调整终端大小
 ///
 /// 将移动端终端的实际尺寸 (cols, rows) 通过 WebSocket 发送到桌面端。
@@ -512,57 +592,40 @@ pub async fn ws_send_and_wait(
 /// 避免因宽度不匹配导致 \r 光标定位错乱、多行输出堆叠等问题。
 #[tauri::command]
 pub async fn ws_resize_terminal(session_id: String, cols: u32, rows: u32) -> Result<()> {
+    use crate::shared::enums::control::SessionControlAction;
+
     tracing::info!("[ws_resize_terminal] session_id={}, cols={}, rows={}", session_id, cols, rows);
     let conn = get_connection_manager();
-    let payload = serde_json::json!({
-        "type": "control",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "session_id": session_id,
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": {
-            "action": {
-                "type": "resize_session",
-                "session_id": session_id,
-                "cols": cols,
-                "rows": rows,
-            }
-        },
-    });
-    let message = crate::shared::websocket::WsMessage::text(
-        serde_json::to_string(&payload).unwrap()
-    );
+
+    let action = SessionControlAction::ResizeSession {
+        session_id: session_id.clone(),
+        cols: cols as u16,
+        rows: rows as u16,
+    };
+    let message = Message::session_control(action, Some(&session_id));
+
     conn.send(&message).await
 }
 
 /// 获取会话配置列表
 #[tauri::command]
 pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
+    use crate::shared::enums::control::SessionConfigAction;
+
     tracing::info!("[ws_load_session_configs] Sending ListSessionConfigs request");
     let conn = get_connection_manager();
 
-    let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
-        "type": "control",
-        "message_id": uuid::Uuid::new_v4().to_string(),
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "payload": {
-            "action": {
-                "type": "list_session_configs"
-            }
-        }
-    })).unwrap());
+    let message = Message::session_config(SessionConfigAction::ListSessionConfigs, None);
 
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-    // 从 WsMessage 的 payload.content 中提取业务响应 JSON
-    if let WsMessage::Text { payload: text_payload, .. } = &response {
-        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-            if let Some(configs) = inner.get("payload").and_then(|p| p.get("action")).and_then(|a| a.get("configs")) {
-                let count = configs.as_array().map(|a| a.len()).unwrap_or(0);
-                tracing::info!("[ws_load_session_configs] Response OK, {} configs", count);
-                if let Ok(configs_vec) = serde_json::from_value(configs.clone()) {
-                    return Ok(configs_vec);
-                }
-            }
+    // 从 Message::SessionConfig 响应中提取会话配置列表
+    if let Message::SessionConfig { payload, .. } = &response {
+        if let SessionConfigAction::SessionConfigList { configs } = &payload.action {
+            let count = configs.len();
+            tracing::info!("[ws_load_session_configs] Response OK, {} configs", count);
+            let configs_vec = serde_json::to_value(configs)?;
+            return Ok(configs_vec);
         }
     }
 

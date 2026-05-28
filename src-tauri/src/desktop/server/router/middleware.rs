@@ -8,7 +8,7 @@
 //! 每个中间件可以在 before（调用 next 前）和 after（next 返回后）插入逻辑。
 
 use crate::desktop::server::message::Message;
-use crate::desktop::server::router::context::RouteContext;
+use crate::shared::websocket::server::context::RouteContext;
 use crate::desktop::server::router::handler::RouteHandler;
 use crate::Result;
 use async_trait::async_trait;

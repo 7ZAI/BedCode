@@ -5,8 +5,8 @@
 pub mod action;
 pub mod config;
 pub mod device;
+pub mod message;
 pub mod notification;
 pub mod parser;
 pub mod session;
 pub mod setting;
-pub mod websocket;

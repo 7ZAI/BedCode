@@ -44,6 +44,7 @@ import { useSessionStore } from '@/modules/shared/stores/session'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 import Button from '@/modules/shared/components/Button.vue'
 import { usePtyOutput } from '@/modules/desktop/composables/usePtyOutput'
+import { getOutputBuffer, clearOutputBuffer, destroyTerminal } from '@/modules/desktop/composables/useGlobalTerminal'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -66,7 +67,6 @@ const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
 // xterm.js 实例
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
-let lastOutputIndex = 0
 
 // 滚动状态追踪
 let isUserScrolling = false
@@ -74,7 +74,8 @@ let scrollTimeout: ReturnType<typeof setTimeout> | null = null
 
 const sessionId = computed(() => props.session?.id || '')
 
-const { output, clearOutput } = usePtyOutput(sessionId)
+// 使用实时监听获取新输出（用于增量更新）
+const { output: realtimeOutput, clearOutput } = usePtyOutput(sessionId)
 
 // 快速键（仅用于 UI 显示，实际功能已集成到 xterm 原生输入）
 const quickKeys = [
@@ -311,20 +312,14 @@ function clearTerminal() {
   if (!terminal) return
   terminal.clear()
   clearOutput()
+  clearOutputBuffer(sessionId.value)
 }
 
-// 监听 PTY 输出，写入 xterm
-watch(output, (newOutput) => {
+// 监听 PTY 输出，写入 xterm（实时输出已在全局管理器中处理）
+// 这里只用于滚动到底部
+watch(realtimeOutput, () => {
   if (!terminal) return
-  // 增量写入：只写入新增的部分
-  const newContent = newOutput.slice(lastOutputIndex)
-  console.log('[TerminalPreview] output changed, lastIndex:', lastOutputIndex, 'newLength:', newOutput.length, 'newContent length:', newContent.length, 'preview:', newContent.slice(0, 50))
-  if (newContent.length > 0) {
-    terminal.write(newContent)
-  }
-  lastOutputIndex = newOutput.length
-
-  // 只有用户不在滚动时才自动滚动到底部
+  // 实时输出已通过全局管理器写入，这里只处理滚动
   if (!isUserScrolling) {
     scrollToBottom()
   }
@@ -359,35 +354,54 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => 
 }, { immediate: true })
 
 // 监听会话变化，重置终端并同步尺寸
+// immediate: true 确保组件挂载时检查会话状态并启动 PTY
 watch(sessionId, async (newId, oldId) => {
+  console.log('[TerminalPreview] sessionId changed:', oldId, '->', newId)
+  console.log('[TerminalPreview] props.session:', props.session)
+  console.log('[TerminalPreview] props.session?.status:', props.session?.status)
+
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
     }
 
     // 新会话激活时
-    if (newId && terminal) {
-      nextTick(() => syncTerminalSize())
+    if (newId) {
+      // 等待 terminal 初始化完成
+      await nextTick()
+
+      if (terminal) {
+        syncTerminalSize()
+      }
 
       // 两阶段启动：如果会话状态是 starting，启动 PTY
       if (props.session?.status === 'starting') {
         console.log('[TerminalPreview] Session is starting, launching PTY...')
         await sessionStore.startSession(newId)
+      } else if (props.session?.status === 'running' || props.session?.status === 'waitingInput') {
+        // 会话已经在运行，无需再次启动
+        console.log('[TerminalPreview] Session is already running, no need to start PTY')
+      } else {
+        // 其他状态（如 stopped, error），尝试重新启动
+        console.log('[TerminalPreview] Session status is:', props.session?.status, ', will try to restart...')
+        // TODO: 考虑是否需要自动重启
       }
     }
   }
-})
+}, { immediate: true })
 
-onMounted(() => {
-  nextTick(() => {
-    initTerminal()
+// 终端初始化完成后的 PTY 启动逻辑
+let ptyStarted = false
 
-    // 添加滚动事件监听
-    const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-    if (viewport) {
-      viewport.addEventListener('scroll', handleScroll)
-    }
-  })
+onMounted(async () => {
+  await nextTick()
+  initTerminal()
+
+  // 添加滚动事件监听
+  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    viewport.addEventListener('scroll', handleScroll)
+  }
 
   // 监听主题变化
   const observer = new MutationObserver(() => {
@@ -399,6 +413,23 @@ onMounted(() => {
     attributes: true,
     attributeFilter: ['class'],
   })
+
+  // 加载缓存的输出（如果在终端窗口打开前已有输出）
+  if (terminal && sessionId.value) {
+    const cachedOutput = getCachedOutputString(sessionId.value)
+    if (cachedOutput) {
+      console.log('[TerminalPreview] Loading cached output, length:', cachedOutput.length)
+      terminal.write(cachedOutput)
+      lastOutputIndex = cachedOutput.length
+      scrollToBottom()
+    }
+  }
+
+  // 注意：PTY 已在创建会话时启动，这里不需要再启动
+  // 如果会话状态是 starting，说明 PTY 还没启动完成，等待即可
+  if (props.session?.status === 'starting') {
+    console.log('[TerminalPreview] Session is starting, waiting for PTY...')
+  }
 })
 
 onUnmounted(() => {

@@ -2,7 +2,7 @@
 //!
 //! 可插拔的消息编解码器，支持 JSON、Protobuf 等格式
 
-use crate::shared::websocket::message::WsMessage;
+use crate::shared::model::message::Message;
 use crate::Result;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
@@ -10,10 +10,10 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 /// 支持自定义编解码格式，如 JSON、MessagePack、Protobuf 等
 pub trait MessageCodec: Send + Sync {
     /// 编码消息为 WebSocket 消息
-    fn encode(&self, msg: &WsMessage) -> Result<WsMsg>;
+    fn encode(&self, msg: &Message) -> Result<WsMsg>;
 
-    /// 解码 WebSocket 消息为 WsMessage
-    fn decode(&self, msg: WsMsg) -> Result<Option<WsMessage>>;
+    /// 解码 WebSocket 消息为 Message
+    fn decode(&self, msg: WsMsg) -> Result<Option<Message>>;
 
     /// 编解码器名称
     fn name(&self) -> &str;
@@ -30,26 +30,26 @@ impl JsonCodec {
 }
 
 impl MessageCodec for JsonCodec {
-    fn encode(&self, msg: &WsMessage) -> Result<WsMsg> {
+    fn encode(&self, msg: &Message) -> Result<WsMsg> {
         let json = msg.to_json()?;
         Ok(WsMsg::Text(json))
     }
 
-    fn decode(&self, msg: WsMsg) -> Result<Option<WsMessage>> {
+    fn decode(&self, msg: WsMsg) -> Result<Option<Message>> {
         match msg {
             WsMsg::Text(text) => {
-                let ws_msg = WsMessage::from_json(&text)?;
-                Ok(Some(ws_msg))
+                let msg = Message::from_json(&text)?;
+                Ok(Some(msg))
             }
             WsMsg::Binary(data) => {
                 // 将二进制数据作为 base64 编码的文本处理
                 let text = String::from_utf8_lossy(&data);
-                let ws_msg = WsMessage::from_json(&text)?;
-                Ok(Some(ws_msg))
+                let msg = Message::from_json(&text)?;
+                Ok(Some(msg))
             }
             WsMsg::Ping(_) | WsMsg::Pong(_) => Ok(None), // 协议层心跳由 tungstenite 自动处理
             WsMsg::Close(reason) => {
-                Ok(Some(WsMessage::close(reason.map(|r| r.to_string()).unwrap_or_default())))
+                Ok(Some(Message::error("close", &reason.map(|r| r.to_string()).unwrap_or_default())))
             }
             WsMsg::Frame(_) => Ok(None),
         }

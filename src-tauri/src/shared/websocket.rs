@@ -8,8 +8,6 @@
 
 pub mod client;
 pub mod codec;
-pub mod message;
-pub mod message_handler;
 pub mod server;
 mod traits;
 
@@ -17,8 +15,9 @@ mod traits;
 pub use client::ws_client::WsClient;
 pub use client::{WsClientConfig, WsClientEvent, ConnectionStatus};
 pub use client::connection::ConnectionManager as ClientConnMgr;
-pub use message::{WsMessage, WsMessageType, WsResponse, TextPayload, BinaryPayload, MessageHandler, HandlerResult};
-pub use message_handler::MessageHandlerDeps;
+pub use traits::HandlerResult;
+pub use traits::MessageHandler;
+pub use traits::ClientMessageHandler;
 pub use server::ws_server::WsServer;
 pub use server::events::WsServerEvent;
 pub use server::server_config::{WsServerConfig, IpFilter};

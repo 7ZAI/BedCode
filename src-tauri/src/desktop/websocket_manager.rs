@@ -4,12 +4,18 @@
 //! 提供移动端远程控制功能的便捷操作 API
 
 use crate::desktop::pty::PtySubscriptionManager;
+use crate::desktop::server::handlers::{
+    AuthHandler, InputHandler, SubscribeHandler,
+    SessionControlHandler, SessionConfigHandler,
+};
 use crate::desktop::server::message::Message as BusinessMessage;
+use crate::shared::model::message::Message;
 use crate::shared::websocket::{
-    MessageHandler,
-    WsMessage, WsServer, WsServerConfig, WsServerEvent,
+    WsServer, WsServerConfig, WsServerEvent,
 };
 use crate::shared::websocket::server::server_config::IpFilter;
+use crate::desktop::server::router::BusinessRouter;
+use crate::shared::websocket::server::DefaultMessageHandler;
 use crate::shared::system::error::AppError;
 use crate::Result;
 use async_trait::async_trait;
@@ -18,84 +24,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use std::result::Result as StdResult;
-use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
-
-// ==================== WsMessageHandler Adapter ====================
-
-/// WsServer 的 MessageHandler 适配器
-///
-/// 将 WsServer 的消息处理器 trait 桥接到 BusinessHandler trait，
-/// 负责解析 WsMessage → BusinessMessage → 调用 handler → 包装返回 WsMessage
-struct WsMessageHandler {
-    inner: Arc<dyn BusinessHandler>,
-}
-
-impl WsMessageHandler {
-    fn new(handler: Arc<dyn BusinessHandler>) -> Self {
-        Self { inner: handler }
-    }
-}
-
-impl MessageHandler for WsMessageHandler {
-    fn handle(
-        &self,
-        message: WsMsg,
-        addr: SocketAddr,
-        client_id: Option<&str>,
-    ) -> StdResult<Option<WsMessage>, String> {
-        // 从原始 WsMsg 中解析出 WsMessage
-        let ws_msg = WsMessage::from_ws_message(message)
-            .map_err(|e| format!("Failed to parse WsMsg: {}", e))?;
-
-        // from_ws_message 返回 None 表示不需要业务处理的消息（如 Frame）
-        let ws_msg = match ws_msg {
-            Some(msg) => msg,
-            None => return Ok(None),
-        };
-
-        // 从 WsMessage::Text.payload.content 中提取业务消息 JSON
-        let content = match &ws_msg {
-            WsMessage::Text { ref payload, .. } => &payload.content,
-            _ => return Ok(None),
-        };
-
-        let business_msg = BusinessMessage::from_json(content)
-            .map_err(|e| format!("Failed to parse business message: {}", e))?;
-
-        // 获取 client_id
-        let client_id = client_id.map(|s| s.to_string()).unwrap_or_else(|| addr.to_string());
-
-        // 获取原始消息的 message_id，用于响应匹配
-        let orig_message_id = ws_msg.message_id().map(|s| s.to_string());
-
-        // 同步调用 async handler
-        let handler = self.inner.clone();
-        let rt = tokio::runtime::Handle::current();
-
-        let result = rt.block_on(async move {
-            handler.handle_message(business_msg, &client_id).await
-        });
-
-        match result {
-            Ok(Some(response)) => {
-                let json = response.to_json()
-                    .map_err(|e| format!("Failed to serialize response: {}", e))?;
-
-                // 复用原始消息的 message_id
-                let mut response_ws_msg = WsMessage::text(json.clone());
-                if let Some(orig_id) = orig_message_id {
-                    if let WsMessage::Text { ref mut message_id, .. } = response_ws_msg {
-                        *message_id = orig_id;
-                    }
-                }
-                Ok(Some(response_ws_msg))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
 
 /// 客户端摘要（对外暴露的信息）
 #[derive(Debug, Clone)]
@@ -112,48 +40,10 @@ pub struct ClientSummary {
     pub connected_at: i64,
 }
 
-/// 业务消息处理器 trait
-#[async_trait]
-pub trait BusinessHandler: Send + Sync {
-    /// 处理收到的消息
-    async fn handle_message(
-        &self,
-        msg: BusinessMessage,
-        client_id: &str,
-    ) -> Result<Option<BusinessMessage>>;
-
-    /// 客户端连接成功（可选实现）
-    fn on_connected(&self, _client_id: &str, _device_name: Option<String>) {}
-
-    /// 客户端认证成功（可选实现）
-    fn on_authenticated(&self, _client_id: &str, _device_name: Option<String>) {}
-
-    /// 客户端断开连接（可选实现）
-    fn on_disconnected(&self, _client_id: &str) {}
-}
-
-/// 空业务处理器
-// TODO: 后续任务将实现实际的 BusinessHandler，届时 NoopBusinessHandler 仅作为默认占位
-#[derive(Debug, Clone, Default)]
-pub struct NoopBusinessHandler;
-
-#[async_trait]
-impl BusinessHandler for NoopBusinessHandler {
-    async fn handle_message(
-        &self,
-        _msg: BusinessMessage,
-        _client_id: &str,
-    ) -> Result<Option<BusinessMessage>> {
-        Ok(None)
-    }
-}
-
 /// WebSocket 管理器内部状态
 struct WsManagerInner {
     /// 底层 WebSocket 服务器
     server: RwLock<Option<Arc<WsServer>>>,
-    /// 业务消息处理器
-    handler: RwLock<Arc<dyn BusinessHandler>>,
     /// PTY 输出订阅管理器
     subscription_manager: Arc<PtySubscriptionManager>,
     /// client_id 到 SocketAddr 的映射
@@ -168,13 +58,14 @@ struct WsManagerInner {
     port: RwLock<Option<u16>>,
     /// 是否已初始化
     initialized: RwLock<bool>,
+    /// 数据库实例（从 lib.rs 传入，避免重复创建）
+    db: RwLock<Option<Arc<tokio::sync::Mutex<crate::shared::db::Database>>>>,
 }
 
 impl WsManagerInner {
     fn new() -> Self {
         Self {
             server: RwLock::new(None),
-            handler: RwLock::new(Arc::new(NoopBusinessHandler)),
             subscription_manager: Arc::new(PtySubscriptionManager::new()),
             client_id_to_addr: RwLock::new(HashMap::new()),
             addr_to_client_id: RwLock::new(HashMap::new()),
@@ -182,6 +73,7 @@ impl WsManagerInner {
             addr_to_connected_at: RwLock::new(HashMap::new()),
             port: RwLock::new(None),
             initialized: RwLock::new(false),
+            db: RwLock::new(None),
         }
     }
 }
@@ -201,20 +93,23 @@ impl WebSocketManager {
         &INSTANCE
     }
 
-    /// 初始化（可选择注入自定义 handler）
-    pub async fn init(&self, handler: Option<Arc<dyn BusinessHandler>>) -> Result<()> {
-        let mut initialized = self.inner.initialized.write().await;
-        if *initialized {
-            tracing::warn!("WebSocketManager already initialized");
-            return Ok(());
+    /// 初始化（接受外部传入的 db 实例，避免重复创建）
+    pub async fn init(&self, db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>) -> Result<()> {
+        {
+            let mut initialized = self.inner.initialized.write().await;
+            if *initialized {
+                tracing::warn!("WebSocketManager already initialized");
+                return Ok(());
+            }
+            *initialized = true;
         }
 
-        if let Some(h) = handler {
-            let mut handler_lock = self.inner.handler.write().await;
-            *handler_lock = h;
+        // 存储 db 实例
+        {
+            let mut db_lock = self.inner.db.write().await;
+            *db_lock = Some(db);
         }
 
-        *initialized = true;
         tracing::info!("WebSocketManager initialized");
         Ok(())
     }
@@ -255,13 +150,49 @@ impl WebSocketManager {
             response_handler: None,
         };
 
-        // 创建 WsServer，注入 handler
-        let handler = self.inner.handler.read().await;
-        let ws_handler: Option<std::sync::Arc<dyn crate::shared::websocket::MessageHandler>> =
-            Some(Arc::new(WsMessageHandler::new(handler.clone())));
-        drop(handler);
+        // 创建 WsServer
+        let server = Arc::new(WsServer::new(config));
 
-        let server = Arc::new(WsServer::with_handler(config, ws_handler));
+        // 创建处理器实例
+        let db = {
+            let db_lock = self.inner.db.read().await;
+            db_lock.clone().ok_or_else(|| AppError::WebSocket(
+                "Database not initialized, call init() first".to_string(),
+            ))?
+        };
+        let pairing_service = Arc::new(crate::desktop::server::services::PairingService::new());
+        let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
+
+        // 创建处理器实例
+        let auth_handler = Arc::new(AuthHandler::new(
+            pairing_service,
+            qr_manager,
+        ));
+        let control_handler = Arc::new(SessionControlHandler::new(
+            None,
+            None,
+        ));
+        let session_config_handler = Arc::new(SessionConfigHandler::new(db.clone()));
+        let input_handler = Arc::new(InputHandler::new(None));
+        let subscribe_handler = Arc::new(SubscribeHandler::new());
+
+        // 创建 BusinessRouter（实现 MessageRouter trait）
+        let (event_tx_sender, _) = broadcast::channel(1024);
+        let router = Arc::new(
+            BusinessRouter::builder()
+                .connection_manager(server.connection_manager().clone())
+                .event_tx(event_tx_sender)
+                .route("Auth", auth_handler)
+                .route("SessionControl", control_handler)
+                .route("SessionConfig", session_config_handler)
+                .route("Input", input_handler)
+                .route("Subscribe", subscribe_handler.clone())
+                .route("Unsubscribe", subscribe_handler)
+                .build()
+        );
+
+        let ws_handler = DefaultMessageHandler::new(None, Some(router));
+        server.set_handler(Arc::new(ws_handler)).await;
 
         // 启动服务器
         let server_clone = server.clone();
@@ -528,9 +459,7 @@ impl WebSocketManager {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
             if let Some(addr) = exclude_addr {
-                let json = message.to_json()?;
-                let ws_msg = crate::shared::websocket::WsMessage::text(&json);
-                s.broadcast_to_others(&addr, &ws_msg).await?;
+                s.broadcast_to_others(&addr, message).await?;
             } else {
                 self.broadcast(message).await?;
             }
@@ -544,9 +473,7 @@ impl WebSocketManager {
     pub async fn broadcast(&self, message: &BusinessMessage) -> Result<()> {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
-            let json = message.to_json()?;
-            let ws_msg = crate::shared::websocket::WsMessage::text(&json);
-            s.broadcast(&ws_msg).await
+            s.broadcast(message).await
         } else {
             Err(AppError::WebSocket("Server not started".to_string()))
         }
@@ -621,27 +548,12 @@ impl WebSocketManager {
                     connected_at.insert(addr, Utc::now().timestamp_millis());
                 }
 
-                // 调用业务处理器
-                let device_name = inner.addr_to_device_name.read().await.get(&addr).cloned();
-                let client_id = client_id.unwrap_or_else(|| addr.to_string());
-                let handler = inner.handler.read().await;
-                handler.on_connected(&client_id, device_name);
-
                 tracing::info!("Client connected: {}", addr);
             }
-            WsServerEvent::ClientDisconnected { addr, client_id, reason: _ } => {
+            WsServerEvent::ClientDisconnected { addr, client_id: _, reason: _ } => {
                 Self::cleanup_client(&inner, &addr).await;
-
-                // 调用业务处理器
-                if let Some(cid) = client_id {
-                    let handler = inner.handler.read().await;
-                    handler.on_disconnected(&cid);
-                }
-
                 tracing::info!("Client disconnected: {}", addr);
             }
-            // 消息已由 WsServer 的 MessageHandler 路径处理，此处不再重复处理
-            // (WsServer 在有 handler 时不 emit TextMessage/BinaryMessage 事件)
             _ => {}
         }
     }

@@ -14,7 +14,7 @@
 //! - config_mapper.rs: 配置映射服务
 //! - status_detector.rs: 状态检测服务
 
-mod session_config;
+pub mod session_config;
 mod session_manager;
 mod storage;
 

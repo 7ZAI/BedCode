@@ -329,7 +329,7 @@ impl PtySession {
 
         // 使用 PtyReader（观察者模式）
         let output_listeners = {
-            let state = self.state.lock().await;
+            let state: tokio::sync::MutexGuard<'_, PtySessionState> = self.state.lock().await;
             state.output_listeners.clone()
         };
 

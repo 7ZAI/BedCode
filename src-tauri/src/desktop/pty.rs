@@ -20,8 +20,6 @@ pub use pty_process::PtySession;
 pub use pty_output_listener::AsyncPtyOutputListener;
 // Re-export FrontendOutputHandler
 pub use frontend_output_handler::FrontendOutputHandler;
-// Re-export PtySubscriptionHandler and GlobalSubscriptionHandler
-pub use pty_subscription_handler::{GlobalSubscriptionHandler, PtySubscriptionHandler};
 
 
 // Re-export from enums
@@ -32,15 +30,15 @@ pub use crate::desktop::enums::{
 // Re-export from model
 pub use crate::desktop::model::PtyOutputEvent;
 
-// Re-export from submodules
+// Re-export from submodules (只导出实际使用到的函数)
 pub use wsl::{
-    execute_command, get_default_distro, is_wsl_available, list_distributions, windows_to_wsl_path,
+    get_default_distro, is_wsl_available, list_distributions, windows_to_wsl_path,
     wsl_to_windows_path, WslDistro,
 };
 pub use tmux::{
-    capture_pane, create_session, create_session_in_dir, get_attach_command, get_tmux_command,
-    get_tmux_version, is_tmux_available, kill_session, list_sessions, send_keys, send_special_key,
-    session_exists, TmuxSession,
+    create_session, get_attach_command, get_tmux_command,
+    is_tmux_available, kill_session, list_sessions, send_special_key,
+    TmuxSession,
 };
 pub use command::build_command;
 pub use pty_reader::PtyReader;

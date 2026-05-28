@@ -10,6 +10,7 @@ pub mod business_pool;
 pub mod auth_interceptor;
 pub mod message_router;
 pub mod default_handler;
+pub mod context;
 
 // Re-exports
 pub use ws_server::WsServer;
@@ -22,3 +23,4 @@ pub use business_pool::{BusinessThreadPool, execute_in_pool, execute_async_in_po
 pub use auth_interceptor::AuthInterceptor;
 pub use message_router::MessageRouter;
 pub use default_handler::DefaultMessageHandler;
+pub use context::RouteContext;

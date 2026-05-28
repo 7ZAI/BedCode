@@ -14,6 +14,7 @@ pub mod io;
 pub mod lifecycle;
 pub mod reconnect;
 pub mod router;
+pub mod default_handler;
 
 // 主客户端
 pub mod ws_client;
@@ -26,6 +27,7 @@ pub use io::{IoEvent, IoManager};
 pub use lifecycle::{ConnectionStatus, LifecycleEvent, LifecycleManager};
 pub use reconnect::{ReconnectConfig, ReconnectEvent, ReconnectManager, ReconnectState};
 pub use router::{MessageRouter, MessageRouterManager, RouterConfig, RouterEvent};
+pub use default_handler::ClientDefaultMessageHandler;
 
 // 客户端事件（对外使用）
 use serde::{Deserialize, Serialize};

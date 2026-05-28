@@ -6,7 +6,7 @@
 use crate::desktop::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::desktop::pty::{
     AsyncPtyOutputListener, PtyOutputEvent, PtySessionHandler, PtyHandler,
-    PtySubscriptionHandler, PtySubscriptionManager,
+    PtySubscriptionManager,
 };
 use crate::desktop::traits::PtyOutputListener;
 use crate::desktop::session::{

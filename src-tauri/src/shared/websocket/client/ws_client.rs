@@ -5,9 +5,10 @@
 use crate::shared::websocket::client::{
     connection::ConnectionManager, heartbeat::HeartbeatManager, io::IoManager,
     lifecycle::LifecycleManager, reconnect::ReconnectManager, router::MessageRouterManager,
-    ConnectionStatus, IoEvent, WsClientConfig, WsClientEvent,
+    ConnectionStatus, IoEvent, WsClientConfig, WsClientEvent, ClientDefaultMessageHandler,
 };
-use crate::shared::websocket::message::WsMessage;
+use crate::shared::model::message::Message;
+use crate::shared::websocket::MessageHandler;
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -24,6 +25,7 @@ pub struct WsClient {
     lifecycle: Arc<LifecycleManager>,
     router: Arc<MessageRouterManager>,
     reconnect: Arc<ReconnectManager>,
+    handler: RwLock<Option<Arc<dyn MessageHandler>>>,
     ws_sender: RwLock<Option<mpsc::Sender<WsMsg>>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     tasks: RwLock<ClientTasks>,
@@ -47,6 +49,9 @@ impl WsClient {
         let router = MessageRouterManager::with_default_config();
         let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
 
+        // 创建默认处理器，注入 router
+        let handler = ClientDefaultMessageHandler::new(Some(router.clone()));
+
         let (event_tx, _) = broadcast::channel(1024);
 
         Arc::new(Self {
@@ -57,6 +62,7 @@ impl WsClient {
             lifecycle,
             router,
             reconnect,
+            handler: RwLock::new(Some(Arc::new(handler))),
             ws_sender: RwLock::new(None),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tasks: RwLock::new(ClientTasks::default()),
@@ -123,6 +129,10 @@ impl WsClient {
         let (tx, rx) = mpsc::channel::<WsMsg>(self.config.message_queue_size);
         *self.ws_sender.write().await = Some(tx);
 
+        // 获取 handler
+        let handler = self.handler.read().await.clone();
+        let ws_sender = self.ws_sender.read().await.clone();
+
         let (write, read) = stream.split();
         let write = Arc::new(Mutex::new(write));
 
@@ -145,22 +155,18 @@ impl WsClient {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
                                     debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(200)]);
-                                    let _ = event_tx.send(WsClientEvent::TextMessage {
-                                        message_id: None,
-                                        content: text,
-                                    });
+                                    // 使用 handler 处理消息，传入 sender 用于发送响应
+                                    if let Some(h) = &handler {
+                                        let sender = ws_sender.clone();
+                                        h.handle(WsMsg::Text(text), "0.0.0.0:0".parse().unwrap(), None, sender);
+                                    }
                                 }
                                 Some(Ok(WsMsg::Binary(data))) => {
-                                    if let Ok(text) = String::from_utf8(data.clone()) {
-                                        let _ = event_tx.send(WsClientEvent::TextMessage {
-                                            message_id: None,
-                                            content: text,
-                                        });
-                                    } else {
-                                        let _ = event_tx.send(WsClientEvent::BinaryMessage {
-                                            message_id: None,
-                                            data,
-                                        });
+                                    debug!("[WsClient] <<< RECV Binary: {} bytes", data.len());
+                                    // 使用 handler 处理消息
+                                    if let Some(h) = &handler {
+                                        let sender = ws_sender.clone();
+                                        h.handle(WsMsg::Binary(data), "0.0.0.0:0".parse().unwrap(), None, sender);
                                     }
                                 }
                                 Some(Ok(WsMsg::Close(reason))) => {
@@ -305,7 +311,7 @@ impl WsClient {
         // consider using a different approach like channels or futures.
     }
 
-    pub async fn send(&self, message: &WsMessage) -> Result<()> {
+    pub async fn send(&self, message: &Message) -> Result<()> {
         if let Some(sender) = self.ws_sender.read().await.as_ref() {
             let json = message.to_json()?;
             tracing::info!("[WsClient] >>> SEND: {}...", &json[..json.len().min(200)]);
@@ -334,9 +340,9 @@ impl WsClient {
 
     pub async fn send_and_wait(
         &self,
-        message: &WsMessage,
+        message: &Message,
         timeout: std::time::Duration,
-    ) -> Result<WsMessage> {
+    ) -> Result<Message> {
         let message_id = message.message_id().map(|s| s.to_string());
 
         let sent_id = match message_id {
@@ -361,13 +367,14 @@ impl WsClient {
                     }) => {
                         if let Some(ref resp_id) = resp_id {
                             if *resp_id == sent_id {
-                                return Ok(WsMessage::text(content));
+                                return Message::from_json(&content).map_err(|e| crate::AppError::WebSocket(e.to_string()));
                             }
                         }
                     }
                     Ok(WsClientEvent::Ack { message_id }) => {
                         if message_id == sent_id {
-                            return Ok(WsMessage::ack(sent_id));
+                            // 返回一个空的 output 消息作为 ack 响应
+                            return Ok(Message::output("", &[], false, 0));
                         }
                     }
                     Ok(WsClientEvent::Error { message }) => {

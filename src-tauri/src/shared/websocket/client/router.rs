@@ -2,7 +2,7 @@
 //!
 //! 职责：接收消息分发，基于消息类型或订阅者模式
 
-use crate::shared::websocket::message::{WsMessage};
+use crate::shared::model::message::Message;
 use crate::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ pub enum RouterEvent {
 #[async_trait]
 pub trait MessageRouter: Send + Sync {
     /// 处理接收到的消息
-    async fn handle(&self, message: WsMessage) -> Result<Option<WsMessage>>;
+    async fn handle(&self, message: Message) -> Result<Option<Message>>;
 
     /// 处理器名称
     fn name(&self) -> &str;
@@ -40,7 +40,7 @@ pub struct DefaultRouter;
 
 #[async_trait]
 impl MessageRouter for DefaultRouter {
-    async fn handle(&self, _message: WsMessage) -> Result<Option<WsMessage>> {
+    async fn handle(&self, _message: Message) -> Result<Option<Message>> {
         Ok(None)
     }
 
@@ -75,7 +75,7 @@ pub struct MessageRouterManager {
     /// 事件广播器
     event_tx: broadcast::Sender<RouterEvent>,
     /// 待响应的回调（message_id -> callback）
-    pending_callbacks: RwLock<std::collections::HashMap<String, Arc<dyn Fn(WsMessage) + Send + Sync + 'static>>>,
+    pending_callbacks: RwLock<std::collections::HashMap<String, Arc<dyn Fn(Message) + Send + Sync + 'static>>>,
 }
 
 impl MessageRouterManager {
@@ -118,13 +118,12 @@ impl MessageRouterManager {
     }
 
     /// 路由消息
-    pub async fn route(&self, message: WsMessage) -> Result<Option<WsMessage>> {
+    pub async fn route(&self, message: Message) -> Result<Option<Message>> {
         let message_id = message.message_id().map(|s| s.to_string());
-        let message_type = message.message_type();
 
-        debug!("[Router] Routing message: type={:?}, id={:?}", message_type, message_id);
+        debug!("[Router] Routing message: id={:?}", message_id);
 
-        // 1. 检查是否有待处理的回调（基于 message_id）
+        // 1. 检查是否有待处���的回调（基于 message_id）
         if let Some(ref msg_id) = message_id {
             let callback = {
                 let mut callbacks = self.pending_callbacks.write().await;
@@ -154,7 +153,7 @@ impl MessageRouterManager {
     pub async fn register_callback(
         &self,
         message_id: String,
-        callback: Arc<dyn Fn(WsMessage) + Send + Sync + 'static>,
+        callback: Arc<dyn Fn(Message) + Send + Sync + 'static>,
     ) {
         let mut callbacks = self.pending_callbacks.write().await;
         callbacks.insert(message_id, callback);
@@ -175,5 +174,16 @@ impl Default for MessageRouterManager {
             event_tx: broadcast::channel(1024).0,
             pending_callbacks: RwLock::new(std::collections::HashMap::new()),
         }
+    }
+}
+
+#[async_trait]
+impl MessageRouter for MessageRouterManager {
+    async fn handle(&self, message: Message) -> Result<Option<Message>> {
+        self.route(message).await
+    }
+
+    fn name(&self) -> &str {
+        "MessageRouterManager"
     }
 }

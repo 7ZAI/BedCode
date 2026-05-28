@@ -3,7 +3,7 @@
 //! 处理 `Message::Subscribe` / `Message::Unsubscribe` 消息
 
 use crate::desktop::server::message::Message as BusinessMessage;
-use crate::desktop::server::router::context::RouteContext;
+use crate::shared::websocket::server::context::RouteContext;
 use crate::desktop::server::router::handler::RouteHandler;
 use crate::desktop::websocket_manager::WebSocketManager;
 use crate::Result;
@@ -28,6 +28,8 @@ impl RouteHandler for SubscribeHandler {
         match message {
             BusinessMessage::Subscribe {
                 message_id,
+                expect_response: _,
+                timestamp: _,
                 session_id,
                 start_seq,
             } => {
@@ -40,6 +42,8 @@ impl RouteHandler for SubscribeHandler {
                         info!("Client subscribed to session: {} (client: {})", session_id, client_id);
                         Ok(Some(BusinessMessage::SubscribeResponse {
                             message_id,
+                            expect_response: false,
+                            timestamp: chrono::Utc::now().timestamp_millis(),
                             session_id,
                             current_max_seq: response.current_max_seq,
                             history_count: response.history_count,
@@ -53,6 +57,8 @@ impl RouteHandler for SubscribeHandler {
             }
             BusinessMessage::Unsubscribe {
                 message_id,
+                expect_response: _,
+                timestamp: _,
                 session_id,
             } => {
                 let ws_manager = WebSocketManager::global();
@@ -64,6 +70,8 @@ impl RouteHandler for SubscribeHandler {
                         info!("Client unsubscribed from session: {} (client: {})", session_id, client_id);
                         Ok(Some(BusinessMessage::UnsubscribeResponse {
                             message_id,
+                            expect_response: false,
+                            timestamp: chrono::Utc::now().timestamp_millis(),
                             session_id,
                         }))
                     }

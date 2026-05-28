@@ -11,6 +11,8 @@ use tracing;
 pub use crate::shared::enums::SessionStatus;
 
 use crate::Result;
+use crate::shared::model::message::Message;
+use crate::shared::enums::control::SessionControlAction;
 
 use super::connection::ConnectionManager;
 
@@ -57,17 +59,10 @@ impl SessionManager {
         tracing::info!("[start_session] config_id={}, session_name={:?}", config_id, session_name);
 
         // 通过 WebSocket 发送 StartSession 控制消息到桌面端
-        let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-            "type": "control",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "action": {
-                    "type": "start_session",
-                    "config_id": config_id
-                }
-            }
-        })).unwrap());
+        let action = SessionControlAction::StartSession {
+            config_id: config_id.to_string(),
+        };
+        let message = Message::session_control(action, None);
 
         let response = self.connection
             .send_and_wait(&message, std::time::Duration::from_secs(30))
@@ -79,34 +74,31 @@ impl SessionManager {
         tracing::info!("[start_session] send_and_wait succeeded");
 
         // 解析响应获取真实 session_id
-        if let crate::shared::websocket::WsMessage::Text { payload: text_payload, .. } = &response {
-            tracing::info!("[start_session] response content: {}", &text_payload.content[..text_payload.content.len().min(200)]);
-            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-                if let Some(session_id) = inner.get("session_id").and_then(|s| s.as_str()) {
-                    let name = session_name
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| {
-                            let short_id = if session_id.len() > 8 { &session_id[..8] } else { session_id };
-                            format!("Session-{}", short_id)
-                        });
-                    let session = SessionInfo {
-                        id: session_id.to_string(),
-                        name,
-                        config_id: config_id.to_string(),
-                        status: SessionStatus::Running,
-                        created_at: chrono::Utc::now().timestamp_millis(),
-                    };
+        if let Message::SessionControl { payload, .. } = &response {
+            if let SessionControlAction::StartSessionResponse { session_id, .. } = &payload.action {
+                let session_id = session_id.as_str().unwrap_or("");
+                let name = session_name
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| {
+                        let short_id = if session_id.len() > 8 { &session_id[..8] } else { session_id };
+                        format!("Session-{}", short_id)
+                    });
+                let session = SessionInfo {
+                    id: session_id.to_string(),
+                    name,
+                    config_id: config_id.to_string(),
+                    status: SessionStatus::Running,
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                };
 
-                    *self.active_session.write().await = Some(session.clone());
-                    self.sessions.write().await.push(session.clone());
-                    tracing::info!("[start_session] Session added to local list, total sessions: {}", self.sessions.read().await.len());
-                    return Ok(session_id.to_string());
-                } else {
-                    tracing::error!("[start_session] No session_id in response: {:?}", inner);
-                }
+                *self.active_session.write().await = Some(session.clone());
+                self.sessions.write().await.push(session.clone());
+                tracing::info!("[start_session] Session added to local list, total sessions: {}", self.sessions.read().await.len());
+                return Ok(session_id.to_string());
             } else {
-                tracing::error!("[start_session] Failed to parse response JSON");
+                tracing::error!("[start_session] Unexpected response action: {:?}", payload.action);
             }
+        }
         } else {
             tracing::error!("[start_session] Unexpected response type: {:?}", response);
         }
@@ -121,17 +113,10 @@ impl SessionManager {
 
         // 通过 WebSocket 发送 StopSession 控制消息到桌面端
         // 让桌面端实际终止 PTY 进程
-        let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-            "type": "control",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "action": {
-                    "type": "stop_session",
-                    "session_id": session_id
-                }
-            }
-        })).unwrap());
+        let action = SessionControlAction::StopSession {
+            session_id: session_id.to_string(),
+        };
+        let message = Message::session_control(action, Some(session_id));
 
         match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
             Ok(_) => {
@@ -165,16 +150,10 @@ impl SessionManager {
 
         // 通过 WebSocket 发送 RemoveSession 控制消息到桌面端
         // 让桌面端实际删除会话
-        let message = crate::shared::websocket::WsMessage::text(serde_json::to_string(&serde_json::json!({
-            "type": "control",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "action": {
-                    "type": "remove_session",
-                    "session_id": session_id
-                }
-            }
+        let action = SessionControlAction::RemoveSession {
+            session_id: session_id.to_string(),
+        };
+        let message = Message::session_control(action, Some(session_id));
         })).unwrap());
 
         match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {

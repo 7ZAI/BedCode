@@ -1,9 +1,9 @@
-//! Control Handler - 控制消息处理器
+//! Session Control Handler - 会话控制消息处理器
 //!
-//! 处理 `Message::Control` 消息，委托给 session_control 服务
+//! 处理 `Message::SessionControl` 消息，委托给 session_control 服务
 
 use crate::desktop::server::message::Message as BusinessMessage;
-use crate::desktop::server::router::context::RouteContext;
+use crate::shared::websocket::server::context::RouteContext;
 use crate::desktop::server::router::handler::RouteHandler;
 use crate::desktop::server::services::session_control::handle_control_message;
 use crate::desktop::session::SessionManager;
@@ -11,38 +11,35 @@ use crate::desktop::plugin::PluginManager;
 use crate::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
-pub struct ControlHandler {
+pub struct SessionControlHandler {
     session_manager: Option<Arc<SessionManager>>,
     plugin_manager: Option<Arc<PluginManager>>,
-    db: Arc<Mutex<crate::shared::db::Database>>,
 }
 
-impl ControlHandler {
+impl SessionControlHandler {
     pub fn new(
         session_manager: Option<Arc<SessionManager>>,
         plugin_manager: Option<Arc<PluginManager>>,
-        db: Arc<Mutex<crate::shared::db::Database>>,
     ) -> Self {
         Self {
             session_manager,
             plugin_manager,
-            db,
         }
     }
 }
 
 #[async_trait]
-impl RouteHandler for ControlHandler {
+impl RouteHandler for SessionControlHandler {
     async fn handle(
         &self,
         message: BusinessMessage,
         ctx: &RouteContext,
     ) -> Result<Option<BusinessMessage>> {
         let (message_id, session_id, timestamp, action) = match message {
-            BusinessMessage::Control {
+            BusinessMessage::SessionControl {
                 message_id,
+                expect_response: _,
                 session_id,
                 timestamp,
                 payload,
@@ -57,7 +54,6 @@ impl RouteHandler for ControlHandler {
             action,
             &self.session_manager,
             &self.plugin_manager,
-            &self.db,
             ctx.addr,
         ).await
     }

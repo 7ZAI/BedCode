@@ -10,8 +10,9 @@ use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::shared::websocket::{
-    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent, WsMessage,
+    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent,
 };
+use crate::shared::model::message::Message;
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
@@ -342,10 +343,10 @@ impl ConnectionManager {
     }
 
     /// 发送消息
-    pub async fn send(&self, message: &WsMessage) -> Result<()> {
+    pub async fn send(&self, message: &Message) -> Result<()> {
         let msg_preview = message.to_json().unwrap_or_default();
         tracing::info!("[ConnectionManager] send() message_type={:?}, preview={}",
-            message.message_type(),
+            "Message",
             &msg_preview[..msg_preview.len().min(200)]);
         if let Some(client) = self.client.read().await.as_ref() {
             let result = client.send(message).await;
@@ -358,7 +359,7 @@ impl ConnectionManager {
     }
 
     /// 发送消息并等待响应
-    pub async fn send_and_wait(&self, message: &WsMessage, timeout: std::time::Duration) -> Result<WsMessage> {
+    pub async fn send_and_wait(&self, message: &Message, timeout: std::time::Duration) -> Result<Message> {
         if let Some(client) = self.client.read().await.as_ref() {
             tracing::info!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
             client.send_and_wait(message, timeout).await

@@ -9,7 +9,7 @@ use std::time::Duration;
 use std::net::SocketAddr;
 
 use crate::Result;
-use crate::shared::websocket::message::WsMessage;
+use crate::shared::model::message::Message;
 use crate::shared::websocket::server::connection_manager::ConnectionManager;
 use tracing::{debug, info, warn};
 
@@ -136,7 +136,7 @@ impl ServerIo {
     }
 
     /// 发送消息到指定地址
-    pub async fn send_to(&self, addr: &SocketAddr, msg: &WsMessage) -> Result<()> {
+    pub async fn send_to(&self, addr: &SocketAddr, msg: &Message) -> Result<()> {
         let json = msg.to_json()?;
         let ws_msg = tokio_tungstenite::tungstenite::Message::Text(json);
 
@@ -165,7 +165,7 @@ impl ServerIo {
     }
 
     /// 广播消息给所有客户端
-    pub async fn broadcast(&self, msg: &WsMessage) -> Result<()> {
+    pub async fn broadcast(&self, msg: &Message) -> Result<()> {
         let json = msg.to_json()?;
         let json_for_log = json.clone();
 
@@ -180,7 +180,7 @@ impl ServerIo {
     }
 
     /// 发送给除指定客户端外的所有客户端
-    pub async fn broadcast_to_others(&self, exclude_addr: &SocketAddr, msg: &WsMessage) -> Result<()> {
+    pub async fn broadcast_to_others(&self, exclude_addr: &SocketAddr, msg: &Message) -> Result<()> {
         let json = msg.to_json()?;
 
         // 获取排除的连接 ID
@@ -200,7 +200,7 @@ impl ServerIo {
     }
 
     /// 按标签组广播
-    pub async fn broadcast_to_tag(&self, tag: &str, msg: &WsMessage) -> Result<()> {
+    pub async fn broadcast_to_tag(&self, tag: &str, msg: &Message) -> Result<()> {
         let json = msg.to_json()?;
         let json_for_log = json.clone();
 
@@ -215,7 +215,7 @@ impl ServerIo {
     }
 
     /// 发送给多个指定客户端
-    pub async fn broadcast_to_ids(&self, ids: &[crate::shared::websocket::server::connection_manager::ConnectionId], msg: &WsMessage) -> Result<()> {
+    pub async fn broadcast_to_ids(&self, ids: &[crate::shared::websocket::server::connection_manager::ConnectionId], msg: &Message) -> Result<()> {
         let json = msg.to_json()?;
         let ws_msg = tokio_tungstenite::tungstenite::Message::Text(json);
 
@@ -230,9 +230,9 @@ impl ServerIo {
     pub async fn send_with_ack(
         &self,
         addr: &SocketAddr,
-        msg: &WsMessage,
+        msg: &Message,
         timeout: Duration,
-    ) -> Result<WsMessage> {
+    ) -> Result<Message> {
         let message_id = msg.message_id().map(|s| s.to_string());
 
         let sent_id = match message_id {
@@ -263,23 +263,31 @@ impl ServerIo {
                         if resp_addr == *addr {
                             if let Some(ref resp_id) = resp_id {
                                 if *resp_id == sent_id {
-                                    return Ok(WsMessage::text(content));
+                                    // 尝试解析为业务消息
+                                    match Message::from_json(&content) {
+                                        Ok(msg) => return Ok(msg),
+                                        Err(_) => {
+                                            // 解析失败，返回错误消息
+                                            return Ok(Message::error("PARSE_ERROR", "Failed to parse response"));
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    Ok(ServerIoEvent::Binary { addr: resp_addr, message_id: resp_id, data }) => {
+                    Ok(ServerIoEvent::Binary { addr: resp_addr, message_id: resp_id, data: _ }) => {
                         if resp_addr == *addr {
                             if let Some(ref resp_id) = resp_id {
                                 if *resp_id == sent_id {
-                                    return Ok(WsMessage::binary(data));
+                                    return Ok(Message::error("BINARY_ERROR", "Binary response not supported"));
                                 }
                             }
                         }
                     }
                     Ok(ServerIoEvent::SendSuccess { addr: success_addr }) => {
                         if success_addr == *addr {
-                            return Ok(WsMessage::ack(sent_id));
+                            // 发送成功但没有匹配的业务响应，继续等待
+                            continue;
                         }
                     }
                     Ok(ServerIoEvent::SendFailure { addr: fail_addr, error }) => {
@@ -308,7 +316,7 @@ impl ServerIo {
     }
 
     /// 发送并自动重试
-    pub async fn send_with_retry(&self, addr: &SocketAddr, msg: &WsMessage) -> Result<()> {
+    pub async fn send_with_retry(&self, addr: &SocketAddr, msg: &Message) -> Result<()> {
         let max_retries = self.config.max_retries;
         let retry_interval = Duration::from_millis(self.config.retry_interval_ms);
 

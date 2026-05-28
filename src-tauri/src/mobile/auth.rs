@@ -6,7 +6,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::websocket::WsMessage;
+use crate::shared::model::message::Message;
+use crate::shared::enums::auth::AuthPayload;
 use crate::Result;
 
 use super::connection::ConnectionManager;
@@ -118,28 +119,26 @@ impl AuthManager {
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
         tracing::info!("[authenticate] Sending JWT re-auth (token length={})", token.len());
-        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
-            "type": "auth",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "stage": "authenticated",
-                "device_id": device_id,
-                "device_fingerprint": fingerprint,
-                "session_token": token,
-            }
-        })).unwrap());
+        let payload = AuthPayload {
+            stage: "authenticated".to_string(),
+            device_id: Some(device_id),
+            device_fingerprint: Some(fingerprint),
+            device_name: None,
+            session_token: Some(token.to_string()),
+            pairing_code: None,
+            qr_token: None,
+            error: None,
+        };
+        let message = Message::auth(None, payload);
 
         match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await { // 15s timeout for re-auth
             Ok(response) => {
-                if let WsMessage::Text { payload: text_payload, .. } = &response {
-                    if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-                        if inner.get("payload").and_then(|p| p.get("stage")) == Some(&serde_json::json!("authenticated")) {
-                            *self.status.write().await = AuthStatus::Authenticated;
-                            self.connection.set_paired().await;
-                            tracing::info!("[authenticate] JWT re-authentication successful");
-                            return Ok(true);
-                        }
+                if let Message::Auth { payload, .. } = &response {
+                    if payload.stage == "authenticated" {
+                        *self.status.write().await = AuthStatus::Authenticated;
+                        self.connection.set_paired().await;
+                        tracing::info!("[authenticate] JWT re-authentication successful");
+                        return Ok(true);
                     }
                 }
                 *self.status.write().await = AuthStatus::Failed("Re-authentication failed".to_string());
@@ -168,20 +167,19 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let inner_msg = serde_json::json!({
-            "type": "auth",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "stage": "request_pairing",
-                "device_id": device_id,
-                "device_name": device_name,
-                "device_fingerprint": fingerprint,
-            }
-        });
-        tracing::info!("[request_pairing] Sending request: {}", serde_json::to_string(&inner_msg).unwrap());
+        let payload = AuthPayload {
+            stage: "request_pairing".to_string(),
+            device_id: Some(device_id),
+            device_name: Some(device_name),
+            device_fingerprint: Some(fingerprint),
+            session_token: None,
+            pairing_code: None,
+            qr_token: None,
+            error: None,
+        };
+        tracing::info!("[request_pairing] Sending request: {:?}", payload);
 
-        let message = WsMessage::text(serde_json::to_string(&inner_msg).unwrap());
+        let message = Message::auth(None, payload);
 
         tracing::info!("[request_pairing] Calling send_and_wait (30s timeout)...");
         let response = match self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await {
@@ -195,16 +193,12 @@ impl AuthManager {
             }
         };
 
-        // 从 WsMessage 的 payload.content 中提取业务响应 JSON
-        if let WsMessage::Text { payload: text_payload, .. } = &response {
-            tracing::info!("[request_pairing] Got response: {}", &text_payload.content[..text_payload.content.len().min(300)]);
-            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-                let stage = inner.get("payload").and_then(|p| p.get("stage"));
-                tracing::info!("[request_pairing] Response stage: {:?}", stage);
-                if stage == Some(&serde_json::json!("verify_code")) {
-                    *self.status.write().await = AuthStatus::WaitingPairingCode;
-                    return Ok(());
-                }
+        // 从 Message::Auth 响应中提取 stage
+        if let Message::Auth { payload, .. } = &response {
+            tracing::info!("[request_pairing] Got response stage: {}", payload.stage);
+            if payload.stage == "verify_code" {
+                *self.status.write().await = AuthStatus::WaitingPairingCode;
+                return Ok(());
             }
         }
 
@@ -222,48 +216,37 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
-            "type": "auth",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "stage": "verify_code",
-                "device_id": device_id,
-                "device_name": device_name,
-                "device_fingerprint": fingerprint,
-                "pairing_code": code,
-            }
-        })).unwrap());
+        let payload = AuthPayload {
+            stage: "verify_code".to_string(),
+            device_id: Some(device_id),
+            device_name: Some(device_name),
+            device_fingerprint: Some(fingerprint),
+            session_token: None,
+            pairing_code: Some(code.to_string()),
+            qr_token: None,
+            error: None,
+        };
+        let message = Message::auth(None, payload);
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-        // 从 WsMessage 的 payload.content 中提取业务响应 JSON
-        if let WsMessage::Text { payload: text_payload, .. } = &response {
-            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-                let stage = inner.get("payload").and_then(|p| p.get("stage"));
-                if stage == Some(&serde_json::json!("authenticated")) {
-                    // 提取凭据
-                    let pairing_id = inner.get("payload")
-                        .and_then(|p| p.get("device_id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let session_token = inner.get("payload")
-                        .and_then(|p| p.get("session_token"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
+        // 从 Message::Auth 响应中提取认证结果
+        if let Message::Auth { payload, .. } = &response {
+            if payload.stage == "authenticated" {
+                // 提取凭据
+                let pairing_id = payload.device_id.clone().unwrap_or_default();
+                let session_token = payload.session_token.clone().unwrap_or_default();
 
-                    let creds = AuthCredentials {
-                        pairing_id: pairing_id.clone(),
-                        fingerprint: fingerprint.clone(),
-                        session_token: session_token.clone(),
-                    };
+                let creds = AuthCredentials {
+                    pairing_id: pairing_id.clone(),
+                    fingerprint: fingerprint.clone(),
+                    session_token: session_token.clone(),
+                };
 
-                    self.set_credentials(creds).await;
-                    *self.status.write().await = AuthStatus::Authenticated;
-                    self.connection.set_paired().await;
-                    return Ok(true);
+                self.set_credentials(creds).await;
+                *self.status.write().await = AuthStatus::Authenticated;
+                self.connection.set_paired().await;
+                return Ok(true);
                 }
             }
         }
@@ -282,47 +265,36 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = WsMessage::text(serde_json::to_string(&serde_json::json!({
-            "type": "auth",
-            "message_id": uuid::Uuid::new_v4().to_string(),
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-            "payload": {
-                "stage": "qr_connect",
-                "device_id": device_id,
-                "device_name": device_name,
-                "device_fingerprint": fingerprint,
-                "qr_token": token,
-            }
-        })).unwrap());
+        let payload = AuthPayload {
+            stage: "qr_connect".to_string(),
+            device_id: Some(device_id),
+            device_name: Some(device_name),
+            device_fingerprint: Some(fingerprint),
+            session_token: None,
+            pairing_code: None,
+            qr_token: Some(token.to_string()),
+            error: None,
+        };
+        let message = Message::auth(None, payload);
 
         let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
-        // 从 WsMessage 的 payload.content 中提取业务响应 JSON
-        if let WsMessage::Text { payload: text_payload, .. } = &response {
-            if let Ok(inner) = serde_json::from_str::<serde_json::Value>(&text_payload.content) {
-                if inner.get("payload").and_then(|p| p.get("stage")) == Some(&serde_json::json!("authenticated")) {
-                    let pairing_id = inner.get("payload")
-                        .and_then(|p| p.get("device_id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let session_token = inner.get("payload")
-                        .and_then(|p| p.get("session_token"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
+        // 从 Message::Auth 响应中提取认证结果
+        if let Message::Auth { payload, .. } = &response {
+            if payload.stage == "authenticated" {
+                let pairing_id = payload.device_id.clone().unwrap_or_default();
+                let session_token = payload.session_token.clone().unwrap_or_default();
 
-                    let creds = AuthCredentials {
-                        pairing_id: pairing_id.clone(),
-                        fingerprint: fingerprint.clone(),
-                        session_token: session_token.clone(),
-                    };
+                let creds = AuthCredentials {
+                    pairing_id: pairing_id.clone(),
+                    fingerprint: fingerprint.clone(),
+                    session_token: session_token.clone(),
+                };
 
-                    self.set_credentials(creds).await;
-                    *self.status.write().await = AuthStatus::Authenticated;
-                    self.connection.set_paired().await;
-                    return Ok(true);
-                }
+                self.set_credentials(creds).await;
+                *self.status.write().await = AuthStatus::Authenticated;
+                self.connection.set_paired().await;
+                return Ok(true);
             }
         }
 

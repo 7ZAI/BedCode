@@ -4,7 +4,7 @@
 
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::websocket_manager::WebSocketManager;
-use crate::shared::enums::message::{Message, OutputPayload};
+use crate::shared::model::message::{Message, OutputPayload};
 use crate::shared::system::error::AppError;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -394,6 +394,7 @@ impl PtySubscriptionManager {
 
             let message = Message::Output {
                 message_id: format!("history-{}-{}", session_id, event.index),
+                expect_response: false,
                 session_id: session_id.to_string(),
                 timestamp: event.timestamp.timestamp_millis(),
                 payload: OutputPayload {
@@ -462,6 +463,7 @@ impl PtySubscriptionManager {
         for event in messages {
             let message = Message::Output {
                 message_id: format!("history-{}-{}", session_id, event.index),
+                expect_response: false,
                 session_id: session_id.to_string(),
                 timestamp: event.timestamp.timestamp_millis(),
                 payload: OutputPayload {

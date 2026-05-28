@@ -8,15 +8,36 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use crate::shared::websocket::message::WsMessage;
+use crate::shared::model::message::Message;
 use crate::Result;
 
 /// 消息处理结果类型
-pub type HandlerResult = Result<Option<WsMessage>>;
+pub type HandlerResult = Result<Option<Message>>;
+
+// ==================== Simple MessageHandler (for non-generic use) ====================
+
+/// 简化的消息处理器 trait（用于 default_handler）
+/// 不需要泛型 ClientInfo，直接处理原始 WebSocket 消息
+pub trait MessageHandler: Send + Sync {
+    /// 处理接收到的 WebSocket 消息
+    ///
+    /// # Arguments
+    /// * `raw_message` - 原始 WebSocket 消息（WsMsg::Text 或 WsMsg::Binary）
+    /// * `addr` - 客户端地址
+    /// * `client_id` - 客户端标识（如果已认证）
+    /// * `sender` - 用于发送响应消息的通道
+    fn handle(
+        &self,
+        raw_message: tokio_tungstenite::tungstenite::protocol::Message,
+        addr: SocketAddr,
+        client_id: Option<&str>,
+        sender: Option<tokio::sync::mpsc::Sender<tokio_tungstenite::tungstenite::protocol::Message>>,
+    );
+}
 
 //// 空实现
 pub trait BedCodeMessage:Send + Sync + Debug + Clone {
-    
+
 }
 
 /// 客户端信息 trait（泛型基础）
@@ -45,11 +66,13 @@ pub trait ClientInfoTrait: Send + Sync + Debug + Clone {
 }
 
 /// 消息处理器 trait（泛型版本，用于服务器端）
-pub trait MessageHandler<C: ClientInfoTrait>: Send + Sync {
+/// 注意：此 trait 目前未使用，保留以备将来需要泛型客户端信息时使用
+#[allow(dead_code)]
+pub trait MessageHandlerWithClientInfo<C: ClientInfoTrait>: Send + Sync {
     /// 处理文本消息（核心方法）
     fn handle_text(
         &self,
-        message: &WsMessage,
+        message: &Message,
         addr: SocketAddr,
         client_info: &C,
     ) -> HandlerResult {
@@ -60,7 +83,7 @@ pub trait MessageHandler<C: ClientInfoTrait>: Send + Sync {
     /// 处理二进制消息
     fn handle_binary(
         &self,
-        message: &WsMessage,
+        message: &Message,
         addr: SocketAddr,
         client_info: &C,
     ) -> HandlerResult {
@@ -88,7 +111,7 @@ pub trait ClientMessageHandler: Send + Sync {
     /// 处理接收到的消息
     fn handle(
         &self,
-        message: WsMessage,
+        message: Message,
     ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>>;
 
     /// 处理器名称
@@ -102,7 +125,7 @@ pub struct NoopHandler;
 impl ClientMessageHandler for NoopHandler {
     fn handle(
         &self,
-        _message: WsMessage,
+        _message: Message,
     ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
         Box::pin(async { Ok(None) })
     }
@@ -120,16 +143,16 @@ pub trait SendStrategy: Send + Sync {
     fn send<'a>(
         &'a self,
         client: &'a crate::shared::websocket::WsClient,
-        message: &'a WsMessage,
+        message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
     /// 发送消息并等待响应
     fn send_and_wait<'a>(
         &'a self,
         client: &'a crate::shared::websocket::WsClient,
-        message: &'a WsMessage,
+        message: &'a Message,
         timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<WsMessage>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>>;
 
     /// 策略名称
     fn name(&self) -> &str;
@@ -143,7 +166,7 @@ impl SendStrategy for DefaultSendStrategy {
     fn send<'a>(
         &'a self,
         client: &'a crate::shared::websocket::WsClient,
-        message: &'a WsMessage,
+        message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(client.send(message))
     }
@@ -151,9 +174,9 @@ impl SendStrategy for DefaultSendStrategy {
     fn send_and_wait<'a>(
         &'a self,
         client: &'a crate::shared::websocket::WsClient,
-        message: &'a WsMessage,
+        message: &'a Message,
         timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<WsMessage>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>> {
         Box::pin(async move {
             client.send_and_wait(message, timeout).await
         })
@@ -184,7 +207,7 @@ impl SendStrategy for RetrySendStrategy {
     fn send<'a>(
         &'a self,
         client: &'a crate::shared::websocket::WsClient,
-        message: &'a WsMessage,
+        message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let client = client.clone();
         let message = message.clone();
@@ -214,9 +237,9 @@ impl SendStrategy for RetrySendStrategy {
     fn send_and_wait<'a>(
         &'a self,
         client: &'a crate::shared::websocket::WsClient,
-        message: &'a WsMessage,
+        message: &'a Message,
         timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<WsMessage>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>> {
         let client = client.clone();
         let message = message.clone();
         let max_retries = self.max_retries;
@@ -252,10 +275,10 @@ impl SendStrategy for RetrySendStrategy {
 /// 发送拦截器 trait - 在发送前后执行自定义逻辑
 pub trait SendInterceptor: Send + Sync {
     /// 发送前调用
-    fn on_before_send(&self, message: &WsMessage) -> Result<()>;
+    fn on_before_send(&self, message: &Message) -> Result<()>;
 
     /// 发送后调用
-    fn on_after_send(&self, message: &WsMessage, result: &Result<()>);
+    fn on_after_send(&self, message: &Message, result: &Result<()>);
 
     /// 拦截器名称
     fn name(&self) -> &str;
@@ -266,15 +289,15 @@ pub trait SendInterceptor: Send + Sync {
 pub struct LoggingInterceptor;
 
 impl SendInterceptor for LoggingInterceptor {
-    fn on_before_send(&self, message: &WsMessage) -> Result<()> {
+    fn on_before_send(&self, message: &Message) -> Result<()> {
         tracing::debug!(
             "[LoggingInterceptor] Sending message: type={}",
-            message.message_type()
+            serde_json::to_string(&message).unwrap_or_default()
         );
         Ok(())
     }
 
-    fn on_after_send(&self, _message: &WsMessage, result: &Result<()>) {
+    fn on_after_send(&self, _message: &Message, result: &Result<()>) {
         match result {
             Ok(()) => tracing::debug!("[LoggingInterceptor] Message sent successfully"),
             Err(e) => tracing::error!("[LoggingInterceptor] Send failed: {}", e),
@@ -312,13 +335,13 @@ impl MetricsInterceptor {
 }
 
 impl SendInterceptor for MetricsInterceptor {
-    fn on_before_send(&self, _message: &WsMessage) -> Result<()> {
+    fn on_before_send(&self, _message: &Message) -> Result<()> {
         self.sent_total
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
-    fn on_after_send(&self, _message: &WsMessage, result: &Result<()>) {
+    fn on_after_send(&self, _message: &Message, result: &Result<()>) {
         match result {
             Ok(()) => self
                 .sent_success
@@ -338,14 +361,11 @@ impl SendInterceptor for MetricsInterceptor {
 /// 用于处理需要响应的 WebSocket 消息
 pub trait ResponseHandler: Send + Sync {
     /// 处理需要响应的消息
-    /// - ws_message: 原始 WebSocket 消息
-    /// - business_message: 解析后的业务消息
-    /// 返回 None 表示使用默认响应，返回 Some(WsResponse) 使用自定义响应
+    /// 返回 None 表示不需要响应，返回 Some(Message) 使用自定义响应
     fn handle_response(
         &self,
-        ws_message: &WsMessage,
-        business_message: &crate::shared::enums::message::Message,
-    ) -> Option<crate::shared::websocket::message::WsResponse>;
+        business_message: &Message,
+    ) -> Option<Message>;
 }
 
 /// 默认响应处理器
@@ -355,10 +375,9 @@ pub struct DefaultResponseHandler;
 impl ResponseHandler for DefaultResponseHandler {
     fn handle_response(
         &self,
-        _ws_message: &WsMessage,
-        _business_message: &crate::shared::enums::message::Message,
-    ) -> Option<crate::shared::websocket::message::WsResponse> {
-        // 默认返回成功响应
-        Some(crate::shared::websocket::message::WsResponse::success())
+        _business_message: &Message,
+    ) -> Option<Message> {
+        // 默认不返回响应，由业务层自行决定是否响应
+        None
     }
 }

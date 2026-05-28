@@ -1,9 +1,11 @@
 //! Route Context - 连接上下文
 //!
-//! 处理器通过此对象与当前连接交互：发送响应、广播、查询连接信息等。
+//! 共享层的路由上下文，用于消息处理器与当前连接交互
 
-use crate::desktop::server::message::Message;
-use crate::shared::websocket::{ConnectionId, ConnectionManager, WsServerEvent};
+use crate::shared::model::message::Message;
+use crate::shared::websocket::server::connection_manager::ConnectionManager;
+use crate::shared::websocket::server::events::WsServerEvent;
+use crate::shared::websocket::ConnectionId;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -11,7 +13,7 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::debug;
 
-/// 消息路由连接上下文
+/// 消息路由连接上下文（共享层）
 ///
 /// 封装当前连接的所有元数据和发送能力，处理器无需关心底层 WebSocket 实现。
 pub struct RouteContext {
@@ -97,7 +99,6 @@ impl RouteContext {
 
     /// 发送服务器事件（用于与外部模块集成）
     pub fn emit_event(&self, event: WsServerEvent) {
-        // 使用 try_send 避免阻塞，事件队列满时丢���
         let _ = self.event_tx.send(event);
     }
 }

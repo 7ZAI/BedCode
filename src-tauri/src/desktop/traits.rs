@@ -2,7 +2,6 @@
 //!
 //! 定义桌面端业务逻辑的 trait 接口
 
-pub mod business_handler;
 pub mod config_mapper;
 pub mod naming_service;
 pub mod output_cache;

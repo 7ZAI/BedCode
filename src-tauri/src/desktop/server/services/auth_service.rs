@@ -8,7 +8,6 @@ use crate::desktop::server::services::pairing_service::PairingService;
 use crate::shared::auth::qr_token::QrTokenManager;
 use crate::desktop::websocket_manager::WebSocketManager;
 use crate::shared::auth::JwtService;
-use crate::shared::db::Database;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,7 +20,6 @@ pub async fn handle_auth(
     payload: AuthPayload,
     request_message_id: String,
     addr: SocketAddr,
-    db: &Arc<Mutex<Database>>,
     pairing_service: &Arc<PairingService>,
     qr_manager: &Arc<QrTokenManager>,
     jwt_service: &JwtService,
@@ -64,6 +62,7 @@ pub async fn handle_auth(
 
             Ok(Some(Message::Auth {
                 message_id: request_message_id,
+                expect_response: false,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 payload: AuthPayload {
@@ -114,6 +113,7 @@ pub async fn handle_auth(
 
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
+                expect_response: false,
                     session_id: None,
                     timestamp: chrono::Utc::now().timestamp_millis(),
                     payload: AuthPayload {
@@ -135,6 +135,7 @@ pub async fn handle_auth(
 
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
+                expect_response: false,
                     session_id: None,
                     timestamp: chrono::Utc::now().timestamp_millis(),
                     payload: AuthPayload {
@@ -179,6 +180,7 @@ pub async fn handle_auth(
 
             Ok(Some(Message::Auth {
                 message_id: request_message_id,
+                expect_response: false,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 payload: AuthPayload {
@@ -224,6 +226,7 @@ pub async fn handle_auth(
 
                     let response = Message::Auth {
                         message_id: request_message_id,
+                expect_response: false,
                         session_id: None,
                         timestamp: chrono::Utc::now().timestamp_millis(),
                         payload: AuthPayload {
@@ -255,6 +258,7 @@ pub async fn handle_auth(
                     };
                     let response = Message::Auth {
                         message_id: request_message_id,
+                expect_response: false,
                         session_id: None,
                         timestamp: chrono::Utc::now().timestamp_millis(),
                         payload: AuthPayload {
@@ -294,6 +298,7 @@ pub async fn handle_jwt_auth(
             // 没有 token，返回认证失败
             return Ok(Some(Message::Auth {
                 message_id: request_message_id,
+                expect_response: false,
                 session_id,
                 timestamp,
                 payload: AuthPayload {
@@ -335,6 +340,7 @@ pub async fn handle_jwt_auth(
             // 返回认证成功响应
             Ok(Some(Message::Auth {
                 message_id: request_message_id,
+                expect_response: false,
                 session_id,
                 timestamp,
                 payload: AuthPayload {
@@ -359,6 +365,7 @@ pub async fn handle_jwt_auth(
 
             Ok(Some(Message::Auth {
                 message_id: request_message_id,
+                expect_response: false,
                 session_id,
                 timestamp,
                 payload: AuthPayload {

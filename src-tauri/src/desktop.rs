@@ -15,6 +15,6 @@ pub mod websocket_manager;
 
 pub use event_forwarder::EventForwarder;
 
-pub use websocket_manager::{BusinessHandler, ClientSummary, WebSocketManager};
+pub use websocket_manager::{ClientSummary, WebSocketManager};
 
 pub use crate::shared::{AppError, Result};

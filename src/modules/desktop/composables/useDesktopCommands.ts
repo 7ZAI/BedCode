@@ -3,6 +3,7 @@
 //! 所有桌面端可用的 Tauri 命令调用
 
 import { invoke } from '@tauri-apps/api/core'
+import { invokeWithTimeout } from '@/modules/shared/utils/invoke'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
@@ -52,25 +53,25 @@ export async function createTmuxSession(name: string, command?: string): Promise
 // ==================== Session Commands ====================
 
 /**
- * 启动会话
+ * 启动会话（含超时，PTY 进程创建可能耗时较长）
  */
 export async function startSession(configId: string): Promise<string> {
-  return await invoke('start_session', { configId })
+  return await invokeWithTimeout('start_session', { configId })
 }
 
 /**
- * 创建会话但不启动 PTY
+ * 创建会话但不启动 PTY（含超时）
  * 返回 sessionId，前端准备好后可调用 startExistingSession 启动
  */
 export async function createSessionNoStart(configId: string): Promise<string> {
-  return await invoke('create_session_no_start', { configId })
+  return await invokeWithTimeout('create_session_no_start', { configId })
 }
 
 /**
- * 启动已存在的会话（用于延迟启动场景）
+ * 启动已存在的会话（含超时，用于延迟启动场景）
  */
 export async function startExistingSession(sessionId: string): Promise<void> {
-  return await invoke('start_existing_session', { sessionId })
+  return await invokeWithTimeout('start_existing_session', { sessionId })
 }
 
 /**

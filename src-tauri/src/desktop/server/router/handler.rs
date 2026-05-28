@@ -3,7 +3,7 @@
 //! 定义业务处理器的标准接口
 
 use crate::desktop::server::message::Message;
-use crate::desktop::server::router::context::RouteContext;
+use crate::shared::websocket::server::context::RouteContext;
 use crate::Result;
 use async_trait::async_trait;
 
