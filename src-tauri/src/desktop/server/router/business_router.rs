@@ -78,20 +78,36 @@ impl MessageRouter for BusinessRouter {
         let message_id = message.message_id().map(|s| s.to_string()).unwrap_or_default();
         let expect_response = message.expect_response();
 
-        // 创建 RouteContext
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            // 获取 connection_id
-            let connection_id = self.connection_manager.get_id_by_addr(&addr).await;
+        // 克隆所需资源用于异步任务
+        let registry = self.registry.clone();
+        let connection_manager = self.connection_manager.clone();
+        let event_tx = self.event_tx.clone();
+        let message = message.clone();
+        let addr = addr.clone();
+        let client_id_str = client_id.map(|s| s.to_string());
 
-            let client_id = client_id.map(|s| s.to_string()).unwrap_or_else(|| addr.to_string());
+        // 使用 tokio::spawn 异步处理，避免 block_on 阻塞当前线程
+        tokio::spawn(async move {
+            // 查找处理器
+            let handler = match registry.get(msg_type) {
+                Some(h) => h,
+                None => {
+                    tracing::warn!("No handler registered for message type: {}", msg_type);
+                    return;
+                }
+            };
+
+            // 获取 connection_id
+            let connection_id = connection_manager.get_id_by_addr(&addr).await;
+
+            let client_id = client_id_str.unwrap_or_else(|| addr.to_string());
 
             let ctx = RouteContext::new(
                 connection_id.unwrap_or_default(),
                 addr,
                 client_id,
-                self.connection_manager.clone(),
-                self.event_tx.clone(),
+                connection_manager,
+                event_tx,
             );
 
             // 调用处理器

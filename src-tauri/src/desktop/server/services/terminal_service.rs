@@ -73,6 +73,6 @@ pub async fn handle_input(
         );
     }
 
-    // 返回 Input 确认响应，让 send_and_wait 能收到匹配的 ACK
-    Ok(Some(Message::input(session_id, "", None)))
+    // 输入消息不需要响应，返回 None 由路由器自动发送 Ack（如果 expect_response=true）
+    Ok(None)
 }

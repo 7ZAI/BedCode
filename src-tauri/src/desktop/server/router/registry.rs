@@ -41,6 +41,7 @@ pub fn type_name_to_key(type_name: &str) -> &'static str {
 /// 处理器注册表
 ///
 /// 使用消息变体名称作为 key，提供类型安全的路由注册和查找。
+#[derive(Clone)]
 pub struct RouteRegistry {
     handlers: HashMap<&'static str, Arc<dyn RouteHandler>>,
     fallback: Option<Arc<dyn RouteHandler>>,
