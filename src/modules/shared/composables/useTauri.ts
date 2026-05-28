@@ -9,6 +9,7 @@ import {
   getQrConnectionInfo,
   getQrTokenTtl,
   setQrTokenTtl,
+  type PairingCodeInfo,
 } from '@/modules/desktop/composables/useDesktopCommands'
 
 // Re-export types from desktop model
@@ -26,6 +27,9 @@ export { usePtyOutput } from '@/modules/desktop/composables/usePtyOutput'
 export { usePairing } from '@/modules/desktop/composables/usePairing'
 export { useNetwork } from '@/modules/desktop/composables/useNetwork'
 export { useConnectedDevices } from '@/modules/desktop/composables/useConnectedDevices'
+
+// 导出配对相关类型
+export type { PairingCodeInfo }
 
 // 重新导出 QR 码 composable
 export { useQrCode } from '@/modules/shared/composables/useQrCode'

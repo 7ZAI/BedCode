@@ -6,12 +6,57 @@
 use crate::shared::model::message::Message;
 use crate::shared::websocket::codec::{JsonCodec, MessageCodec};
 use crate::shared::websocket::MessageHandler;
-use crate::shared::websocket::server::auth_interceptor::AuthInterceptor;
-use crate::shared::websocket::server::message_router::MessageRouter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
+
+// ==================== Trait Definitions ====================
+
+/// 认证拦截器 trait
+///
+/// 业务层可以实现此 trait 来定义自己的认证逻辑
+pub trait AuthInterceptor: Send + Sync {
+    /// 认证检查
+    ///
+    /// # Arguments
+    /// * `message` - 接收到的消息（已解码为 Message）
+    /// * `addr` - 客户端地址
+    ///
+    /// # Returns
+    /// * `Ok(Some(client_id))` - 认证成功，返回客户端ID
+    /// * `Ok(None)` - 认证失败/未认证，返回错误响应由框架处理
+    /// * `Err(e)` - 认证过程中发生错误
+    fn authenticate(&self, message: &Message, addr: SocketAddr) -> Result<Option<String>, String>;
+
+    /// 拦截器名称
+    fn name(&self) -> &str;
+}
+
+/// 消息路由器 trait
+///
+/// 业务层可以实现此 trait 来定义自己的消息路由逻辑
+pub trait MessageRouter: Send + Sync {
+    /// 路由消息到具体处理器
+    ///
+    /// # Arguments
+    /// * `message` - 已解码的业务消息
+    /// * `addr` - 客户端地址
+    /// * `client_id` - 认证后的客户端ID（若已认证）
+    /// * `sender` - 用于发送响应消息的通道
+    fn route(
+        &self,
+        message: &Message,
+        addr: SocketAddr,
+        client_id: Option<&str>,
+        sender: Option<mpsc::Sender<WsMsg>>,
+    );
+
+    /// 路由器名称
+    fn name(&self) -> &str;
+}
+
+// ==================== Default Message Handler ====================
 
 /// 默认消息处理器
 ///
@@ -62,7 +107,11 @@ impl MessageHandler for DefaultMessageHandler {
         match raw_message {
             WsMsg::Binary(data) => {
                 // Binary 类型只记录日志，不做处理
-                tracing::debug!("[DefaultMessageHandler] Binary message received from {}: {} bytes", addr, data.len());
+                tracing::debug!(
+                    "[DefaultMessageHandler] Binary message received from {}: {} bytes",
+                    addr,
+                    data.len()
+                );
                 return;
             }
             WsMsg::Text(text) => {
@@ -75,7 +124,8 @@ impl MessageHandler for DefaultMessageHandler {
                     Err(e) => {
                         let error_msg = Message::error("DECODE_ERROR", &e.to_string());
                         if let Some(sender) = sender {
-                            let _ = sender.try_send(WsMsg::Text(error_msg.to_json().unwrap_or_default()));
+                            let _ = sender
+                                .try_send(WsMsg::Text(error_msg.to_json().unwrap_or_default()));
                         }
                         return;
                     }
@@ -86,16 +136,19 @@ impl MessageHandler for DefaultMessageHandler {
                     match auth.authenticate(&ws_message, addr) {
                         Ok(Some(id)) => Some(id),
                         Ok(None) => {
-                            let error_msg = Message::error("NOT_AUTHENTICATED", "Authentication required");
+                            let error_msg =
+                                Message::error("NOT_AUTHENTICATED", "Authentication required");
                             if let Some(sender) = sender {
-                                let _ = sender.try_send(WsMsg::Text(error_msg.to_json().unwrap_or_default()));
+                                let _ = sender
+                                    .try_send(WsMsg::Text(error_msg.to_json().unwrap_or_default()));
                             }
                             return;
                         }
                         Err(e) => {
                             let error_msg = Message::error("AUTH_ERROR", &e);
                             if let Some(sender) = sender {
-                                let _ = sender.try_send(WsMsg::Text(error_msg.to_json().unwrap_or_default()));
+                                let _ = sender
+                                    .try_send(WsMsg::Text(error_msg.to_json().unwrap_or_default()));
                             }
                             return;
                         }

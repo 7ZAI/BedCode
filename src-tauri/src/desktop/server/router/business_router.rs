@@ -7,7 +7,7 @@ pub use crate::shared::websocket::server::context::RouteContext;
 use crate::desktop::server::router::registry::{message_type_key, RouteRegistry};
 use crate::shared::websocket::server::connection_manager::ConnectionManager;
 use crate::shared::websocket::server::events::WsServerEvent;
-use crate::shared::websocket::server::message_router::MessageRouter;
+use crate::shared::websocket::server::default_handler::MessageRouter;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -61,7 +61,7 @@ impl MessageRouter for BusinessRouter {
         message: &Message,
         addr: SocketAddr,
         client_id: Option<&str>,
-        _sender: Option<mpsc::Sender<WsMsg>>,
+        sender: Option<mpsc::Sender<WsMsg>>,
     ) {
         let msg_type = message_type_key(message);
 
@@ -73,6 +73,10 @@ impl MessageRouter for BusinessRouter {
                 return;
             }
         };
+
+        // 提取消息 ID 和 expect_response 标记
+        let message_id = message.message_id().map(|s| s.to_string()).unwrap_or_default();
+        let expect_response = message.expect_response();
 
         // 创建 RouteContext
         let rt = tokio::runtime::Handle::current();
@@ -91,8 +95,41 @@ impl MessageRouter for BusinessRouter {
             );
 
             // 调用处理器
-            if let Err(e) = handler.handle(message.clone(), &ctx).await {
-                tracing::error!("Handler error: {}", e);
+            let result = handler.handle(message.clone(), &ctx).await;
+
+            // 优先判断 expect_response
+            if !expect_response {
+                // expect_response=false：无论 handler 有无返回值都不响应
+                return;
+            }
+
+            // expect_response=true：需要发送响应
+            let Some(tx) = sender else {
+                tracing::warn!("No sender available for response");
+                return;
+            };
+
+            let response_msg = match result {
+                Ok(Some(msg)) => {
+                    // handler 有具体返回值，设置关联 ID 后发送
+                    msg.with_request_id(&message_id)
+                }
+                Ok(None) => {
+                    // handler 无返回值，发送默认 Ack 响应
+                    Message::ack(&message_id)
+                }
+                Err(e) => {
+                    // 处理出错，发送错误响应
+                    tracing::error!("Handler error: {}", e);
+                    Message::error_with_id(&message_id, "HANDLER_ERROR", &e.to_string())
+                }
+            };
+
+            // 发送响应到客户端
+            if let Ok(ws_msg) = response_msg.to_ws_message() {
+                if let Err(e) = tx.send(ws_msg).await {
+                    tracing::error!("Failed to send response: {}", e);
+                }
             }
         });
     }

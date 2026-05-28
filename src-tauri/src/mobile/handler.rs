@@ -12,64 +12,8 @@ use crate::shared::websocket::{
     ClientMessageHandler, HandlerResult,
 };
 use crate::shared::model::message::Message;
-
-/// 输出消息的 payload 数据结构
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct OutputPayloadData {
-    pub data: String,
-    pub is_waiting: bool,
-    pub index: usize,
-}
-
-/// Mobile 消息类型（与桌面端协商的业务协议）
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MobileMessage {
-    /// 认证相关
-    Auth {
-        stage: String,
-        device_id: Option<String>,
-        device_fingerprint: Option<String>,
-        device_name: Option<String>,
-        session_token: Option<String>,
-        pairing_code: Option<String>,
-        qr_token: Option<String>,
-        error: Option<String>,
-    },
-    /// 控制消息
-    Control {
-        action: serde_json::Value,
-    },
-    /// 输入消息
-    Input {
-        data: String,
-        special_key: Option<String>,
-    },
-    /// 输出消息
-    Output {
-        session_id: String,
-        payload: OutputPayloadData,
-    },
-    /// 订阅响应
-    SubscribeResponse {
-        session_id: String,
-        current_max_seq: u64,
-        history_count: usize,
-    },
-    /// 取消订阅响应
-    UnsubscribeResponse {
-        session_id: String,
-    },
-    /// 错误
-    Error {
-        message: Option<String>,
-        code: Option<String>,
-    },
-    /// 服务器关闭
-    ServerClosed {
-        reason: Option<String>,
-    },
-}
+use crate::shared::enums::{TerminalAction, TerminalPayload};
+use crate::shared::enums::auth::AuthStage;
 
 /// Mobile 业务事件（发送给前端）
 #[derive(Debug, Clone)]
@@ -119,6 +63,10 @@ pub enum MobileEvent {
     ServerClosed {
         reason: String,
     },
+    /// 确认响应（服务端默认响应）
+    Ack {
+        request_id: String,
+    },
 }
 
 /// Mobile 消息处理器
@@ -141,12 +89,6 @@ impl MobileHandler {
     fn send_event(&self, event: MobileEvent) {
         let _ = self.event_tx.send(event);
     }
-
-    /// 解析消息载荷为 MobileMessage
-    fn parse_message(message: &Message) -> Option<MobileMessage> {
-        let json = message.to_json().ok()?;
-        serde_json::from_str(&json).ok()
-    }
 }
 
 impl ClientMessageHandler for MobileHandler {
@@ -156,71 +98,71 @@ impl ClientMessageHandler for MobileHandler {
     ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
         let self_clone = self.clone();
         Box::pin(async move {
-            // 直接使用 Message 类型，通过 to_json 获取 JSON 字符串
-            let json = message.to_json().ok();
-            let mobile_msg: MobileMessage = match json {
-                Some(j) => serde_json::from_str(&j)
-                    .map_err(|e| crate::AppError::Parse(format!("Failed to parse mobile message: {}", e)))?,
-                None => return Ok(None),
-            };
-
-            match mobile_msg {
-                MobileMessage::Output { session_id, payload } => {
-                    let is_waiting = payload.is_waiting;
-                    let data_len = payload.data.len();
-                    let index = payload.index;
-                    tracing::debug!("[MobileHandler] Output received: session_id={}, data_len={}, is_waiting={}, index={}", session_id, data_len, is_waiting, index);
-                    self_clone.send_event(MobileEvent::Output {
-                        session_id: session_id.clone(),
-                        data: payload.data.clone(),
-                        is_waiting,
-                        index,
-                    });
-                    tracing::debug!("[MobileHandler] Output event sent: session_id={}", session_id);
+            // 直接使用 Message 类型处理消息，避免不必要的序列化
+            match message {
+                Message::Terminal { session_id, payload, .. } => {
+                    // 处理终端消息的各种动作
+                    match payload.action {
+                        TerminalAction::Output { data, is_waiting, index } => {
+                            tracing::debug!("[MobileHandler] Output received: session_id={}, data_len={}, is_waiting={}, index={}", session_id, data.len(), is_waiting, index);
+                            self_clone.send_event(MobileEvent::Output {
+                                session_id: session_id.clone(),
+                                data,
+                                is_waiting,
+                                index,
+                            });
+                        }
+                        TerminalAction::SubscribeResponse { current_max_seq, history_count } => {
+                            tracing::debug!("[MobileHandler] SubscribeResponse: session_id={}, current_max_seq={}, history_count={}",
+                                session_id, current_max_seq, history_count);
+                            self_clone.send_event(MobileEvent::SubscribeResponse {
+                                session_id,
+                                current_max_seq,
+                                history_count,
+                            });
+                        }
+                        TerminalAction::UnsubscribeResponse => {
+                            tracing::debug!("[MobileHandler] UnsubscribeResponse: session_id={}", session_id);
+                            self_clone.send_event(MobileEvent::UnsubscribeResponse {
+                                session_id,
+                            });
+                        }
+                        // 其他动作类型（Input, Subscribe, Unsubscribe）在移动端不处理
+                        _ => {}
+                    }
                 }
-                MobileMessage::Auth { stage, device_id, session_token, error, .. } => {
-                    match stage.as_str() {
-                        "authenticated" => {
-                            if let (Some(device_id), Some(session_token)) = (device_id, session_token) {
+                Message::Auth { payload, .. } => {
+                    match payload.stage {
+                        AuthStage::Authenticated => {
+                            if let (Some(device_id), Some(session_token)) = (payload.device_id, payload.session_token) {
                                 self_clone.send_event(MobileEvent::AuthSuccess {
                                     device_id,
                                     session_token,
                                 });
                             }
                         }
-                        "verify_code" => {
+                        AuthStage::VerifyCode => {
                             self_clone.send_event(MobileEvent::PairingVerified);
                         }
-                        "error" => {
-                            let reason = error.unwrap_or_else(|| "Authentication failed".to_string());
+                        AuthStage::Failed => {
+                            let reason = payload.error.unwrap_or_else(|| "Authentication failed".to_string());
                             self_clone.send_event(MobileEvent::AuthFailed { reason });
                         }
                         _ => {}
                     }
                 }
-                MobileMessage::ServerClosed { reason } => {
-                    let reason = reason.unwrap_or_else(|| "Unknown".to_string());
+                Message::ServerClosed { reason, .. } => {
                     self_clone.send_event(MobileEvent::ServerClosed { reason });
                 }
-                MobileMessage::SubscribeResponse { session_id, current_max_seq, history_count } => {
-                    tracing::debug!("[MobileHandler] SubscribeResponse: session_id={}, current_max_seq={}, history_count={}",
-                        session_id, current_max_seq, history_count);
-                    self_clone.send_event(MobileEvent::SubscribeResponse {
-                        session_id,
-                        current_max_seq,
-                        history_count,
-                    });
-                }
-                MobileMessage::UnsubscribeResponse { session_id } => {
-                    tracing::debug!("[MobileHandler] UnsubscribeResponse: session_id={}", session_id);
-                    self_clone.send_event(MobileEvent::UnsubscribeResponse {
-                        session_id,
-                    });
-                }
-                MobileMessage::Error { message, code } => {
-                    let msg = message.or(code).unwrap_or_else(|| "Unknown error".to_string());
+                Message::Error { message, code, .. } => {
+                    let msg = if !message.is_empty() { message } else { code };
                     self_clone.send_event(MobileEvent::Error { message: msg });
                 }
+                Message::Ack { request_id, .. } => {
+                    tracing::debug!("[MobileHandler] Ack received for request_id={}", request_id);
+                    self_clone.send_event(MobileEvent::Ack { request_id });
+                }
+                // 其他消息类型不处理
                 _ => {}
             }
 

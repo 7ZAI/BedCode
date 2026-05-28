@@ -43,6 +43,7 @@ impl RouteHandler for SessionControlHandler {
                 session_id,
                 timestamp,
                 payload,
+                ..
             } => (message_id, session_id, timestamp, payload.action),
             _ => return Ok(None),
         };

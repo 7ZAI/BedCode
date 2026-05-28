@@ -5,7 +5,7 @@
 
 use crate::desktop::pty::PtySubscriptionManager;
 use crate::desktop::server::handlers::{
-    AuthHandler, InputHandler, SubscribeHandler,
+    AuthHandler, TerminalHandler,
     SessionControlHandler, SessionConfigHandler,
 };
 use crate::desktop::server::message::Message as BusinessMessage;
@@ -173,8 +173,7 @@ impl WebSocketManager {
             None,
         ));
         let session_config_handler = Arc::new(SessionConfigHandler::new(db.clone()));
-        let input_handler = Arc::new(InputHandler::new(None));
-        let subscribe_handler = Arc::new(SubscribeHandler::new());
+        let terminal_handler = Arc::new(TerminalHandler::new(None));
 
         // 创建 BusinessRouter（实现 MessageRouter trait）
         let (event_tx_sender, _) = broadcast::channel(1024);
@@ -185,9 +184,7 @@ impl WebSocketManager {
                 .route("Auth", auth_handler)
                 .route("SessionControl", control_handler)
                 .route("SessionConfig", session_config_handler)
-                .route("Input", input_handler)
-                .route("Subscribe", subscribe_handler.clone())
-                .route("Unsubscribe", subscribe_handler)
+                .route("Terminal", terminal_handler)
                 .build()
         );
 

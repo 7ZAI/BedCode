@@ -29,4 +29,13 @@ pub trait TokenStorageTrait: Send + Sync {
     fn store_token(&self, token: &str) -> Result<()>;
     fn get_token(&self) -> Result<Option<String>>;
     fn delete_token(&self) -> Result<()>;
+
+    /// 存储设备 ID
+    fn store_device_id(&self, device_id: &str) -> Result<()>;
+    /// 获取设备 ID
+    fn get_device_id(&self) -> Result<Option<String>>;
+    /// 存储设备指纹
+    fn store_device_fingerprint(&self, fingerprint: &str) -> Result<()>;
+    /// 获取设备指纹
+    fn get_device_fingerprint(&self) -> Result<Option<String>>;
 }

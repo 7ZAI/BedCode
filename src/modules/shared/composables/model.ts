@@ -68,6 +68,8 @@ export interface QrConnectionInfo {
   host: string
   port: number
   token: string
+  /** 剩余有效时间（秒） */
+  remaining_secs: number
 }
 
 // Session Status Events

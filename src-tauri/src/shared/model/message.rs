@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::shared::enums::auth::AuthPayload;
-use crate::shared::enums::control::{SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload};
+use crate::shared::enums::control::{SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
 use crate::shared::enums::special_key::SpecialKey;
 use crate::shared::enums::sumary::SessionSummary;
 
@@ -26,6 +26,11 @@ fn default_false() -> bool {
     false
 }
 
+/// 默认返回空字符串
+fn default_token() -> String {
+    String::new()
+}
+
 /// 统一的 WebSocket 消息类型
 /// 作为 WebSocket 客户端和服务端的业务传输类型
 /// 直接对应 JSON 序列化的结构
@@ -34,10 +39,10 @@ fn default_false() -> bool {
 pub enum Message {
     // ==================== 业务消息类型 ====================
 
-    /// 输出消息 (服务端 → 客户端)
-    /// PTY 输出数据推送到客户端
-    #[serde(rename = "output")]
-    Output {
+    /// 终端消息 (双向)
+    /// 统一的终端操作类型：输出、输入、订阅、取消订阅等
+    #[serde(rename = "terminal")]
+    Terminal {
         /// 唯一消息ID，用于请求-响应跟踪
         #[serde(default = "generate_message_id")]
         message_id: String,
@@ -46,21 +51,13 @@ pub enum Message {
         expect_response: bool,
         /// 时间戳（毫秒）
         timestamp: i64,
+        /// 会话ID（终端操作必须关联会话）
         session_id: String,
-        payload: OutputPayload,
-    },
-
-    /// 输入消息 (客户端 → 服务端)
-    /// 客户端发送输入到 PTY
-    #[serde(rename = "input")]
-    Input {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        session_id: String,
-        payload: InputPayload,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
+        /// 终端载荷
+        payload: TerminalPayload,
     },
 
     /// 认证消息 (双向)
@@ -72,6 +69,9 @@ pub enum Message {
         expect_response: bool,
         timestamp: i64,
         session_id: Option<String>,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
         payload: AuthPayload,
     },
 
@@ -85,6 +85,9 @@ pub enum Message {
         expect_response: bool,
         timestamp: i64,
         session_id: Option<String>,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
         payload: SessionControlPayload,
     },
 
@@ -98,6 +101,9 @@ pub enum Message {
         expect_response: bool,
         timestamp: i64,
         session_id: Option<String>,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
         payload: SessionConfigPayload,
     },
 
@@ -111,6 +117,9 @@ pub enum Message {
         #[serde(default)]
         expect_response: bool,
         timestamp: i64,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
         code: String,
         message: String,
     },
@@ -123,58 +132,9 @@ pub enum Message {
         reason: String,
         /// 是否会重连（目前桌面端退出后不会重连）
         will_reconnect: bool,
-    },
-
-    /// 订阅输出 (客户端 → 服务端)
-    /// 客户端订阅会话输出，实现增量同步
-    #[serde(rename = "subscribe")]
-    Subscribe {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        session_id: String,
-        /// 起始序号，不指定则从头补完
-        #[serde(skip_serializing_if = "Option::is_none")]
-        start_seq: Option<u64>,
-    },
-
-    /// 订阅响应 (服务端 → 客户端)
-    #[serde(rename = "subscribe_response")]
-    SubscribeResponse {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        session_id: String,
-        /// 当前最大序号
-        current_max_seq: u64,
-        /// 历史消息数量
-        history_count: usize,
-    },
-
-    /// 取消订阅 (客户端 → 服务端)
-    #[serde(rename = "unsubscribe")]
-    Unsubscribe {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        session_id: String,
-    },
-
-    /// 取消订阅响应 (服务端 → 客户端)
-    #[serde(rename = "unsubscribe_response")]
-    UnsubscribeResponse {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        session_id: String,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
     },
 
     /// 客户端断开通知 (服务端 → 客户端)
@@ -185,6 +145,9 @@ pub enum Message {
         device_name: String,
         /// 断开原因
         reason: String,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
     },
 
     /// 客户端会话变更通知 (服务端 → 客户端)
@@ -197,60 +160,119 @@ pub enum Message {
         session: SessionSummary,
         /// 触发设备名称
         device_name: String,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
     },
-}
 
-// ==================== Payload 类型 ====================
-
-/// 输出载荷
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputPayload {
-    /// Base64 编码的输出数据
-    pub data: String,
-    /// 是否等待输入
-    pub is_waiting: bool,
-    /// 全局递增索引，用于去重
-    pub index: usize,
-}
-
-/// 输入载荷
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputPayload {
-    /// 输入数据
-    pub data: String,
-    /// 特殊键
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub special_key: Option<SpecialKey>,
+    /// 确认响应 (服务端 → 客户端)
+    /// 当 expect_response=true 但 handler 无具体返回值时的默认响应
+    /// 表示消息已收到并处理成功
+    #[serde(rename = "ack")]
+    Ack {
+        /// 关联的请求消息ID
+        request_id: String,
+        /// 时间戳（毫秒）
+        timestamp: i64,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
+    },
 }
 
 // ==================== 辅助方法 ====================
 
 impl Message {
-    /// 创建输出消息
+    /// 创建终端输出消息
     pub fn output(session_id: &str, data: &[u8], is_waiting: bool, index: usize) -> Self {
-        Message::Output {
+        Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.to_string(),
-            payload: OutputPayload {
-                data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
-                is_waiting,
-                index,
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Output {
+                    data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
+                    is_waiting,
+                    index,
+                },
             },
         }
     }
 
-    /// 创建输入消息
+    /// 创建终端输入消息
     pub fn input(session_id: &str, data: &str, special_key: Option<SpecialKey>) -> Self {
-        Message::Input {
+        Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.to_string(),
-            payload: InputPayload {
-                data: data.to_string(),
-                special_key,
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Input {
+                    data: data.to_string(),
+                    special_key,
+                },
+            },
+        }
+    }
+
+    /// 创建终端订阅消息
+    pub fn subscribe(session_id: &str, start_seq: Option<u64>) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Subscribe { start_seq },
+            },
+        }
+    }
+
+    /// 创建终端订阅响应消息
+    pub fn subscribe_response(session_id: &str, current_max_seq: u64, history_count: usize) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::SubscribeResponse {
+                    current_max_seq,
+                    history_count,
+                },
+            },
+        }
+    }
+
+    /// 创建终端取消订阅消息
+    pub fn unsubscribe(session_id: &str) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Unsubscribe,
+            },
+        }
+    }
+
+    /// 创建终端取消订阅响应消息
+    pub fn unsubscribe_response(session_id: &str) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::UnsubscribeResponse,
             },
         }
     }
@@ -262,6 +284,7 @@ impl Message {
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.map(|s| s.to_string()),
+            token: String::new(),
             payload: SessionControlPayload { action },
         }
     }
@@ -273,6 +296,7 @@ impl Message {
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.map(|s| s.to_string()),
+            token: String::new(),
             payload: SessionConfigPayload { action },
         }
     }
@@ -284,6 +308,7 @@ impl Message {
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id,
+            token: String::new(),
             payload,
         }
     }
@@ -294,6 +319,7 @@ impl Message {
             message_id: None,
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
+            token: String::new(),
             code: code.to_string(),
             message: message.to_string(),
         }
@@ -305,6 +331,7 @@ impl Message {
             message_id: Some(message_id.to_string()),
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
+            token: String::new(),
             code: code.to_string(),
             message: message.to_string(),
         }
@@ -315,39 +342,7 @@ impl Message {
         Message::ServerClosed {
             reason: reason.to_string(),
             will_reconnect,
-        }
-    }
-
-    /// 创建订阅消息
-    pub fn subscribe(session_id: &str, start_seq: Option<u64>) -> Self {
-        Message::Subscribe {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.to_string(),
-            start_seq,
-        }
-    }
-
-    /// 创建订阅响应消息
-    pub fn subscribe_response(session_id: &str, current_max_seq: u64, history_count: usize) -> Self {
-        Message::SubscribeResponse {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.to_string(),
-            current_max_seq,
-            history_count,
-        }
-    }
-
-    /// 创建取消订阅消息
-    pub fn unsubscribe(session_id: &str) -> Self {
-        Message::Unsubscribe {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.to_string(),
+            token: String::new(),
         }
     }
 
@@ -356,6 +351,7 @@ impl Message {
         Message::ClientDisconnected {
             device_name: device_name.to_string(),
             reason: reason.to_string(),
+            token: String::new(),
         }
     }
 
@@ -365,14 +361,24 @@ impl Message {
             event_type: event_type.to_string(),
             session,
             device_name: device_name.to_string(),
+            token: String::new(),
+        }
+    }
+
+    /// 创建确认响应消息
+    /// 当 expect_response=true 但 handler 无具体返回值时使用
+    pub fn ack(request_id: &str) -> Self {
+        Message::Ack {
+            request_id: request_id.to_string(),
+            timestamp: Utc::now().timestamp_millis(),
+            token: String::new(),
         }
     }
 
     /// 获取消息ID
     pub fn message_id(&self) -> Option<&str> {
         match self {
-            Message::Output { message_id, .. } => Some(message_id),
-            Message::Input { message_id, .. } => Some(message_id),
+            Message::Terminal { message_id, .. } => Some(message_id),
             Message::Auth { message_id, .. } => Some(message_id),
             Message::SessionControl { message_id, .. } => Some(message_id),
             Message::SessionConfig { message_id, .. } => Some(message_id),
@@ -380,29 +386,181 @@ impl Message {
             Message::ServerClosed { .. } => None,
             Message::ClientDisconnected { .. } => None,
             Message::SessionEvent { .. } => None,
-            Message::Subscribe { message_id, .. } => Some(message_id),
-            Message::SubscribeResponse { message_id, .. } => Some(message_id),
-            Message::Unsubscribe { message_id, .. } => Some(message_id),
-            Message::UnsubscribeResponse { message_id, .. } => Some(message_id),
+            Message::Ack { .. } => None,
         }
     }
 
     /// 获取 expect_response 标记
     pub fn expect_response(&self) -> bool {
         match self {
-            Message::Output { expect_response, .. } => *expect_response,
-            Message::Input { expect_response, .. } => *expect_response,
+            Message::Terminal { expect_response, .. } => *expect_response,
             Message::Auth { expect_response, .. } => *expect_response,
             Message::SessionControl { expect_response, .. } => *expect_response,
             Message::SessionConfig { expect_response, .. } => *expect_response,
             Message::Error { expect_response, .. } => *expect_response,
-            Message::Subscribe { expect_response, .. } => *expect_response,
-            Message::SubscribeResponse { expect_response, .. } => *expect_response,
-            Message::Unsubscribe { expect_response, .. } => *expect_response,
-            Message::UnsubscribeResponse { expect_response, .. } => *expect_response,
             Message::ServerClosed { .. } => false,
             Message::ClientDisconnected { .. } => false,
             Message::SessionEvent { .. } => false,
+            Message::Ack { .. } => false,
+        }
+    }
+
+    /// 获取 token
+    pub fn token(&self) -> &str {
+        match self {
+            Message::Terminal { token, .. } => token,
+            Message::Auth { token, .. } => token,
+            Message::SessionControl { token, .. } => token,
+            Message::SessionConfig { token, .. } => token,
+            Message::Error { token, .. } => token,
+            Message::ServerClosed { token, .. } => token,
+            Message::ClientDisconnected { token, .. } => token,
+            Message::SessionEvent { token, .. } => token,
+            Message::Ack { token, .. } => token,
+        }
+    }
+
+    /// 设置响应消息的关联 ID（用于请求-响应跟踪）
+    /// 仅对支持响应关联的消息类型有效
+    pub fn with_request_id(self, request_id: &str) -> Self {
+        match self {
+            Message::Terminal { message_id, expect_response, timestamp, session_id, token, payload } => {
+                Message::Terminal {
+                    message_id: request_id.to_string(),
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token,
+                    payload,
+                }
+            }
+            Message::Auth { message_id, expect_response, timestamp, session_id, token, payload } => {
+                Message::Auth {
+                    message_id: request_id.to_string(),
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token,
+                    payload,
+                }
+            }
+            Message::SessionControl { message_id, expect_response, timestamp, session_id, token, payload } => {
+                Message::SessionControl {
+                    message_id: request_id.to_string(),
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token,
+                    payload,
+                }
+            }
+            Message::SessionConfig { message_id, expect_response, timestamp, session_id, token, payload } => {
+                Message::SessionConfig {
+                    message_id: request_id.to_string(),
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token,
+                    payload,
+                }
+            }
+            Message::Error { message_id, expect_response, timestamp, token, code, message } => {
+                Message::Error {
+                    message_id: Some(request_id.to_string()),
+                    expect_response,
+                    timestamp,
+                    token,
+                    code,
+                    message,
+                }
+            }
+            // 其他类型不支持设置 request_id，直接返回
+            other => other,
+        }
+    }
+
+    /// 设置 token
+    pub fn with_token(self, token: &str) -> Self {
+        match self {
+            Message::Terminal { message_id, expect_response, timestamp, session_id, payload, .. } => {
+                Message::Terminal {
+                    message_id,
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token: token.to_string(),
+                    payload,
+                }
+            }
+            Message::Auth { message_id, expect_response, timestamp, session_id, payload, .. } => {
+                Message::Auth {
+                    message_id,
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token: token.to_string(),
+                    payload,
+                }
+            }
+            Message::SessionControl { message_id, expect_response, timestamp, session_id, payload, .. } => {
+                Message::SessionControl {
+                    message_id,
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token: token.to_string(),
+                    payload,
+                }
+            }
+            Message::SessionConfig { message_id, expect_response, timestamp, session_id, payload, .. } => {
+                Message::SessionConfig {
+                    message_id,
+                    expect_response,
+                    timestamp,
+                    session_id,
+                    token: token.to_string(),
+                    payload,
+                }
+            }
+            Message::Error { message_id, expect_response, timestamp, code, message, .. } => {
+                Message::Error {
+                    message_id,
+                    expect_response,
+                    timestamp,
+                    token: token.to_string(),
+                    code,
+                    message,
+                }
+            }
+            Message::ServerClosed { reason, will_reconnect, .. } => {
+                Message::ServerClosed {
+                    reason,
+                    will_reconnect,
+                    token: token.to_string(),
+                }
+            }
+            Message::ClientDisconnected { device_name, reason, .. } => {
+                Message::ClientDisconnected {
+                    device_name,
+                    reason,
+                    token: token.to_string(),
+                }
+            }
+            Message::SessionEvent { event_type, session, device_name, .. } => {
+                Message::SessionEvent {
+                    event_type,
+                    session,
+                    device_name,
+                    token: token.to_string(),
+                }
+            }
+            Message::Ack { request_id, timestamp, .. } => {
+                Message::Ack {
+                    request_id,
+                    timestamp,
+                    token: token.to_string(),
+                }
+            }
         }
     }
 

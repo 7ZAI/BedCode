@@ -135,12 +135,16 @@ impl CertificateStorageTrait for CertificateStorage {
 /// Token 存储 - 移动端实现
 pub struct TokenStorage {
     token: RwLock<Option<String>>,
+    device_id: RwLock<Option<String>>,
+    device_fingerprint: RwLock<Option<String>>,
 }
 
 impl TokenStorage {
     pub fn new() -> Result<Self> {
         Ok(Self {
             token: RwLock::new(None),
+            device_id: RwLock::new(None),
+            device_fingerprint: RwLock::new(None),
         })
     }
 
@@ -171,5 +175,27 @@ impl TokenStorageTrait for TokenStorage {
     }
     fn delete_token(&self) -> Result<()> {
         Self::delete_token(self)
+    }
+
+    fn store_device_id(&self, device_id: &str) -> Result<()> {
+        let mut guard = self.device_id.write().unwrap();
+        *guard = Some(device_id.to_string());
+        Ok(())
+    }
+
+    fn get_device_id(&self) -> Result<Option<String>> {
+        let guard = self.device_id.read().unwrap();
+        Ok(guard.clone())
+    }
+
+    fn store_device_fingerprint(&self, fingerprint: &str) -> Result<()> {
+        let mut guard = self.device_fingerprint.write().unwrap();
+        *guard = Some(fingerprint.to_string());
+        Ok(())
+    }
+
+    fn get_device_fingerprint(&self) -> Result<Option<String>> {
+        let guard = self.device_fingerprint.read().unwrap();
+        Ok(guard.clone())
     }
 }

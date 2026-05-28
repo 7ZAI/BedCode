@@ -11,7 +11,8 @@ use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::subscription::{PtySubscriptionManager, Subscription};
 use crate::desktop::traits::PtyOutputHandler;
 use crate::desktop::websocket_manager::WebSocketManager;
-use crate::shared::model::message::{Message, OutputPayload};
+use crate::shared::enums::{TerminalAction, TerminalPayload};
+use crate::shared::model::message::Message;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -56,15 +57,18 @@ impl PtySubscriptionHandler {
         }
 
         // 构建消息
-        let message = Message::Output {
+        let message = Message::Terminal {
             message_id: format!("realtime-{}-{}", self.session_id, event.index),
             expect_response: false,
-            session_id: self.session_id.clone(),
             timestamp: event.timestamp.timestamp_millis(),
-            payload: OutputPayload {
-                data: event.data.clone(),
-                is_waiting: event.is_waiting,
-                index: event.index,
+            session_id: self.session_id.clone(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Output {
+                    data: event.data.clone(),
+                    is_waiting: event.is_waiting,
+                    index: event.index,
+                },
             },
         };
 
@@ -125,15 +129,18 @@ impl PtySubscriptionHandler {
         );
 
         for event in messages {
-            let message = Message::Output {
+            let message = Message::Terminal {
                 message_id: format!("history-{}-{}", self.session_id, event.index),
                 expect_response: false,
-                session_id: self.session_id.clone(),
                 timestamp: event.timestamp.timestamp_millis(),
-                payload: OutputPayload {
-                    data: event.data,
-                    is_waiting: event.is_waiting,
-                    index: event.index,
+                session_id: self.session_id.clone(),
+                token: String::new(),
+                payload: TerminalPayload {
+                    action: TerminalAction::Output {
+                        data: event.data,
+                        is_waiting: event.is_waiting,
+                        index: event.index,
+                    },
                 },
             };
 

@@ -20,6 +20,7 @@ use crate::mobile::{
     SessionInfo, SessionManager,
     MobileEvent, get_terminal_manager,
 };
+use crate::mobile::connection::{set_global_token, get_global_token, clear_global_token};
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::shared::model::message::Message;
 use crate::shared::enums::control::SessionControlAction;
@@ -55,6 +56,28 @@ fn get_session_manager() -> Arc<SessionManager> {
         let conn = get_connection_manager();
         SessionManager::new(conn)
     }).clone()
+}
+
+// ==================== Token Commands ====================
+
+/// 设置全局 Token（前端启动时从 localStorage 读取并调用）
+#[tauri::command]
+pub fn ws_set_token(token: String) -> Result<()> {
+    set_global_token(&token);
+    Ok(())
+}
+
+/// 获取当前全局 Token
+#[tauri::command]
+pub fn ws_get_token() -> String {
+    get_global_token()
+}
+
+/// 清除全局 Token（登出时调用）
+#[tauri::command]
+pub fn ws_clear_token() -> Result<()> {
+    clear_global_token();
+    Ok(())
 }
 
 // ==================== WebSocket Commands ====================
@@ -316,8 +339,8 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
 
     tracing::info!("[ws_load_sessions] Sending ListSessions request");
     let conn = get_connection_manager();
-    let message = Message::session_control(SessionControlAction::ListSessions, None);
 
+    let message = Message::session_control(SessionControlAction::ListSessions, None);
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(15)).await?;
 
     // 解析 SessionControl 响应中的会话列表
@@ -335,30 +358,28 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
 }
 
 /// 订阅会话，开始接收该会话的输出
-/// 使用桌面端的 Message::Subscribe 消息，支持指定起始序号用于历史回放
+/// 使用 Message::Terminal(Subscribe) 消息，支持指定起始序号用于历史回放
 #[tauri::command]
 pub async fn ws_join_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_join_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    // 使用 Message::Subscribe 消息类型
+    // 使用 Message::Terminal(Subscribe) 消息类型
     let message = Message::subscribe(&session_id, None);
-
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_join_session] Subscribed to session successfully: {}", session_id);
     Ok(())
 }
 
 /// 取消订阅会话，停止接收该会话的输出
-/// 使用桌面端的 Message::Unsubscribe 消息
+/// 使用 Message::Terminal(Unsubscribe) 消息
 #[tauri::command]
 pub async fn ws_leave_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_leave_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    // 使用 Message::Unsubscribe 消息类型
+    // 使用 Message::Terminal(Unsubscribe) 消息类型
     let message = Message::unsubscribe(&session_id);
-
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_leave_session] Unsubscribed from session successfully: {}", session_id);
     Ok(())
@@ -374,9 +395,8 @@ pub async fn ws_subscribe_session(session_id: String, start_seq: Option<u64>) ->
     tracing::info!("[ws_subscribe_session] session_id={}, start_seq={:?}", session_id, start_seq);
     let conn = get_connection_manager();
 
-    // 使用 Message::Subscribe，带可选的起始序号
+    // 使用 Message::Terminal(Subscribe)，带可选的起始序号
     let message = Message::subscribe(&session_id, start_seq);
-
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_subscribe_session] Subscribed to session with start_seq={:?}: {}", start_seq, session_id);
     Ok(())
@@ -616,7 +636,6 @@ pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
     let conn = get_connection_manager();
 
     let message = Message::session_config(SessionConfigAction::ListSessionConfigs, None);
-
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
     // 从 Message::SessionConfig 响应中提取会话配置列表

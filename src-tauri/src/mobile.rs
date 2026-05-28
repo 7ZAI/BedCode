@@ -8,13 +8,15 @@ pub mod connection;
 pub mod handler;
 pub mod pairing_service;
 pub mod session;
+pub mod storage;
 pub mod terminal;
 
 // Re-export public types
 pub use self::auth::{AuthCredentials, AuthManager, AuthStatus};
-pub use self::connection::{ConnectionManager, ConnectionStatus, TargetDevice};
+pub use self::connection::{ConnectionManager, ConnectionStatus, TargetDevice, set_global_token, get_global_token, clear_global_token};
 pub use self::handler::{MobileEvent, MobileHandler, MobileMessage};
 pub use self::session::{SessionInfo, SessionManager, SessionStatus};
+pub use self::storage::TokenStorage;
 pub use self::terminal::{TerminalHistory, TerminalOutputEvent, TerminalIncrementalOutput, TerminalManager, get_terminal_manager};
 
 // Mobile uses crate-level re-exports

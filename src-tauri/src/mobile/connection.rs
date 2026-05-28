@@ -25,6 +25,30 @@ pub use crate::shared::websocket::ConnectionStatus;
 const MAX_RETRY: u32 = 3;
 const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000]; // 指数退避（毫秒）
 
+/// 全局 Token 存储（移动端）
+/// 前端启动时从 localStorage 读取并设置，发送消息时自动注入
+static GLOBAL_TOKEN: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+/// 设置全局 Token
+pub fn set_global_token(token: &str) {
+    let mut guard = GLOBAL_TOKEN.write().unwrap();
+    *guard = token.to_string();
+    tracing::info!("[GlobalToken] Token updated, length={}", token.len());
+}
+
+/// 获取全局 Token
+pub fn get_global_token() -> String {
+    let guard = GLOBAL_TOKEN.read().unwrap();
+    guard.clone()
+}
+
+/// 清除全局 Token
+pub fn clear_global_token() {
+    let mut guard = GLOBAL_TOKEN.write().unwrap();
+    *guard = String::new();
+    tracing::info!("[GlobalToken] Token cleared");
+}
+
 /// 目标设备信息
 #[derive(Debug, Clone)]
 pub struct TargetDevice {
@@ -342,14 +366,21 @@ impl ConnectionManager {
         Err(crate::AppError::WebSocket("Reconnect failed".to_string()))
     }
 
-    /// 发送消息
+    /// 发送消息（自动注入全局 Token）
     pub async fn send(&self, message: &Message) -> Result<()> {
+        let token = get_global_token();
+        let message = if !token.is_empty() {
+            message.clone().with_token(&token)
+        } else {
+            message.clone()
+        };
+
         let msg_preview = message.to_json().unwrap_or_default();
         tracing::info!("[ConnectionManager] send() message_type={:?}, preview={}",
             "Message",
             &msg_preview[..msg_preview.len().min(200)]);
         if let Some(client) = self.client.read().await.as_ref() {
-            let result = client.send(message).await;
+            let result = client.send(&message).await;
             tracing::info!("[ConnectionManager] send() result: {:?}", result.as_ref().map(|_| "OK").unwrap_or(&"ERR"));
             result
         } else {
@@ -358,11 +389,18 @@ impl ConnectionManager {
         }
     }
 
-    /// 发送消息并等待响应
+    /// 发送消息并等待响应（自动注入全局 Token）
     pub async fn send_and_wait(&self, message: &Message, timeout: std::time::Duration) -> Result<Message> {
+        let token = get_global_token();
+        let message = if !token.is_empty() {
+            message.clone().with_token(&token)
+        } else {
+            message.clone()
+        };
+
         if let Some(client) = self.client.read().await.as_ref() {
             tracing::info!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
-            client.send_and_wait(message, timeout).await
+            client.send_and_wait(&message, timeout).await
                 .with_context(|| format!("send_and_wait timeout={}s", timeout.as_secs()))
                 .map_err(|e| crate::AppError::WebSocket(e.to_string()))
         } else {

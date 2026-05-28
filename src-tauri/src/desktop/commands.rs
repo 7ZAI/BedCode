@@ -303,6 +303,8 @@ pub struct QrConnectionInfo {
     pub token: String,
     pub host: String,
     pub port: u16,
+    /// 剩余有效时间（秒）
+    pub remaining_secs: u64,
 }
 
 /// 生成二维码
@@ -345,7 +347,7 @@ pub async fn get_qr_connection_info(
     let active = qr_manager.get_active().await;
     match active {
         None => Ok(None),
-        Some((token, _ttl, _remaining)) => {
+        Some((token, _ttl, remaining)) => {
             let host = host.or_else(|| {
                 crate::shared::system::commands::get_local_ip_addresses()
                     .into_iter()
@@ -359,7 +361,7 @@ pub async fn get_qr_connection_info(
             ).unwrap_or_default();
             let port = config.network.port;
 
-            Ok(Some(QrConnectionInfo { token, host, port }))
+            Ok(Some(QrConnectionInfo { token, host, port, remaining_secs: remaining }))
         }
     }
 }

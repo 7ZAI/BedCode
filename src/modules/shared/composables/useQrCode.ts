@@ -26,6 +26,7 @@ export function useQrCode() {
       remainingSeconds.value--
       if (remainingSeconds.value <= 0) {
         stopCountdown()
+        qrData.value = null
       }
     }, 1000)
   }
@@ -37,18 +38,18 @@ export function useQrCode() {
     }
   }
 
+  /**
+   * 生成新的二维码
+   */
   async function generateQr(host?: string) {
     isLoading.value = true
     try {
       await generateQrCode()
       const info = await getQrConnectionInfo(host)
       if (info) {
-        // 先获取 TTL，再同步设置 qrData 和倒计时
-        // 避免 await 导致的中间状态：qrData 已更新但倒计时未启动，
-        // 此时 hasQr 仍为 false，watch 触发时 canvas 未挂载，导致首次空白
-        const ttl = await getQrTokenTtl()
         qrData.value = info
-        startCountdown(ttl)
+        // 使用后端返回的剩余时间
+        startCountdown(info.remaining_secs)
       } else {
         qrData.value = null
       }
@@ -57,6 +58,26 @@ export function useQrCode() {
       qrData.value = null
     } finally {
       isLoading.value = false
+    }
+  }
+
+  /**
+   * 恢复现有二维码（不重新生成）
+   * 返回 true 表示成功恢复
+   */
+  async function restoreQr(host?: string): Promise<boolean> {
+    try {
+      const info = await getQrConnectionInfo(host)
+      if (info && info.token) {
+        qrData.value = info
+        // 使用后端返回的剩余时间
+        startCountdown(info.remaining_secs)
+        return true
+      }
+      return false
+    } catch (e) {
+      console.error('Failed to restore QR:', e)
+      return false
     }
   }
 
@@ -73,6 +94,7 @@ export function useQrCode() {
     isExpired,
     hasQr,
     generateQr,
+    restoreQr,
     clearQr,
     getQrTokenTtl,
   }

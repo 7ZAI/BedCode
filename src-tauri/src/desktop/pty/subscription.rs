@@ -4,7 +4,8 @@
 
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::websocket_manager::WebSocketManager;
-use crate::shared::model::message::{Message, OutputPayload};
+use crate::shared::enums::{TerminalAction, TerminalPayload};
+use crate::shared::model::message::Message;
 use crate::shared::system::error::AppError;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -392,15 +393,18 @@ impl PtySubscriptionManager {
         for event in messages {
             last_index = Some(event.index);
 
-            let message = Message::Output {
+            let message = Message::Terminal {
                 message_id: format!("history-{}-{}", session_id, event.index),
                 expect_response: false,
-                session_id: session_id.to_string(),
                 timestamp: event.timestamp.timestamp_millis(),
-                payload: OutputPayload {
-                    data: event.data,
-                    is_waiting: event.is_waiting,
-                    index: event.index,
+                session_id: session_id.to_string(),
+                token: String::new(),
+                payload: TerminalPayload {
+                    action: TerminalAction::Output {
+                        data: event.data,
+                        is_waiting: event.is_waiting,
+                        index: event.index,
+                    },
                 },
             };
 
@@ -461,15 +465,18 @@ impl PtySubscriptionManager {
 
         // 通过 WebSocketManager 发送历史消息
         for event in messages {
-            let message = Message::Output {
+            let message = Message::Terminal {
                 message_id: format!("history-{}-{}", session_id, event.index),
                 expect_response: false,
-                session_id: session_id.to_string(),
                 timestamp: event.timestamp.timestamp_millis(),
-                payload: OutputPayload {
-                    data: event.data,
-                    is_waiting: event.is_waiting,
-                    index: event.index,
+                session_id: session_id.to_string(),
+                token: String::new(),
+                payload: TerminalPayload {
+                    action: TerminalAction::Output {
+                        data: event.data,
+                        is_waiting: event.is_waiting,
+                        index: event.index,
+                    },
                 },
             };
 

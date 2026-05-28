@@ -11,6 +11,7 @@ use crate::shared::enums::auth::AuthPayload;
 use crate::Result;
 
 use super::connection::ConnectionManager;
+use super::storage::TokenStorage;
 
 /// 认证凭据
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +44,8 @@ pub enum AuthStatus {
 pub struct AuthManager {
     /// 关联的连接管理器
     connection: Arc<ConnectionManager>,
+    /// Token 存储
+    token_storage: Arc<TokenStorage>,
     /// 认证状态
     status: RwLock<AuthStatus>,
     /// 认证凭据
@@ -58,11 +61,62 @@ pub struct AuthManager {
 impl AuthManager {
     /// 创建新的认证管理器
     pub fn new(connection: Arc<ConnectionManager>) -> Arc<Self> {
-        let device_id = uuid::Uuid::new_v4().to_string();
-        let fingerprint = uuid::Uuid::new_v4().to_string();
+        let token_storage = Arc::new(TokenStorage::new().expect("Failed to create TokenStorage"));
+
+        // 尝试从存储加载设备 ID 和指纹，不存在则生成新的并存储
+        let device_id = token_storage.get_device_id()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                let new_id = uuid::Uuid::new_v4().to_string();
+                let _ = token_storage.store_device_id(&new_id);
+                new_id
+            });
+
+        let fingerprint = token_storage.get_device_fingerprint()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                let new_fp = uuid::Uuid::new_v4().to_string();
+                let _ = token_storage.store_device_fingerprint(&new_fp);
+                new_fp
+            });
 
         Arc::new(Self {
             connection,
+            token_storage,
+            status: RwLock::new(AuthStatus::Unauthenticated),
+            credentials: RwLock::new(None),
+            device_id: RwLock::new(Some(device_id)),
+            device_name: RwLock::new(None),
+            device_fingerprint: RwLock::new(Some(fingerprint)),
+        })
+    }
+
+    /// 使用现有的 TokenStorage 创建认证管理器
+    pub fn with_token_storage(connection: Arc<ConnectionManager>, token_storage: Arc<TokenStorage>) -> Arc<Self> {
+        // 尝试从存储加载设备 ID 和指纹，不存在则生成新的并存储
+        let device_id = token_storage.get_device_id()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                let new_id = uuid::Uuid::new_v4().to_string();
+                let _ = token_storage.store_device_id(&new_id);
+                new_id
+            });
+
+        let fingerprint = token_storage.get_device_fingerprint()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                let new_fp = uuid::Uuid::new_v4().to_string();
+                let _ = token_storage.store_device_fingerprint(&new_fp);
+                new_fp
+            });
+
+        Arc::new(Self {
+            connection,
+            token_storage,
             status: RwLock::new(AuthStatus::Unauthenticated),
             credentials: RwLock::new(None),
             device_id: RwLock::new(Some(device_id)),

@@ -34,6 +34,7 @@ pub async fn list_session_configs(
         expect_response: false,
         session_id: None,
         timestamp: chrono::Utc::now().timestamp_millis(),
+        token: String::new(),
         payload: SessionConfigPayload {
             action: SessionConfigAction::SessionConfigList { configs: summaries },
         },

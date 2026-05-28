@@ -13,16 +13,12 @@ pub fn message_type_key(msg: &Message) -> &'static str {
         Message::Auth { .. } => "Auth",
         Message::SessionControl { .. } => "SessionControl",
         Message::SessionConfig { .. } => "SessionConfig",
-        Message::Input { .. } => "Input",
-        Message::Output { .. } => "Output",
-        Message::Subscribe { .. } => "Subscribe",
-        Message::Unsubscribe { .. } => "Unsubscribe",
+        Message::Terminal { .. } => "Terminal",
         Message::ServerClosed { .. } => "ServerClosed",
         Message::ClientDisconnected { .. } => "ClientDisconnected",
         Message::SessionEvent { .. } => "SessionEvent",
-        Message::SubscribeResponse { .. } => "SubscribeResponse",
-        Message::UnsubscribeResponse { .. } => "UnsubscribeResponse",
         Message::Error { .. } => "Error",
+        Message::Ack { .. } => "Ack",
     }
 }
 
@@ -32,16 +28,12 @@ pub fn type_name_to_key(type_name: &str) -> &'static str {
         "Auth" => "Auth",
         "SessionControl" => "SessionControl",
         "SessionConfig" => "SessionConfig",
-        "Input" => "Input",
-        "Output" => "Output",
-        "Subscribe" => "Subscribe",
-        "Unsubscribe" => "Unsubscribe",
+        "Terminal" => "Terminal",
         "ServerClosed" => "ServerClosed",
         "ClientDisconnected" => "ClientDisconnected",
         "SessionEvent" => "SessionEvent",
-        "SubscribeResponse" => "SubscribeResponse",
-        "UnsubscribeResponse" => "UnsubscribeResponse",
         "Error" => "Error",
+        "Ack" => "Ack",
         _ => "Error", // 默认 fallback
     }
 }

@@ -5,6 +5,7 @@
 use crate::desktop::plugin::PluginManager;
 use crate::desktop::session::SessionManager;
 use crate::desktop::server::message::{SessionControlAction, Message, SessionSummary};
+use crate::shared::enums::{TerminalAction, TerminalPayload};
 use crate::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -61,6 +62,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::SessionList { sessions: all_sessions },
                 },
@@ -74,6 +76,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::StartSession { config_id },
                 },
@@ -96,6 +99,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::StopSession { session_id },
                 },
@@ -118,6 +122,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::RemoveSession { session_id },
                 },
@@ -180,15 +185,18 @@ pub async fn handle_control(
                         &String::from_utf8_lossy(&decoded_data)
                     );
 
-                    let message = Message::Output {
+                    let message = Message::Terminal {
                         message_id: uuid::Uuid::new_v4().to_string(),
                         expect_response: false,
-                        session_id: event.session_id.clone(),
                         timestamp: event.timestamp.timestamp_millis(),
-                        payload: crate::shared::model::message::OutputPayload {
-                            data: event.data.clone(),
-                            is_waiting,
-                            index: event.index,
+                        session_id: event.session_id.clone(),
+                        token: String::new(),
+                        payload: TerminalPayload {
+                            action: TerminalAction::Output {
+                                data: event.data.clone(),
+                                is_waiting,
+                                index: event.index,
+                            },
                         },
                     };
 
@@ -205,6 +213,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::JoinSession { session_id },
                 },
@@ -226,6 +235,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::LeaveSession { session_id },
                 },
@@ -256,6 +266,7 @@ pub async fn handle_control(
                 expect_response: false,
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: crate::desktop::server::message::SessionControlPayload {
                     action: SessionControlAction::RegisteredPluginSession { session_id },
                 },

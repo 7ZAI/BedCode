@@ -69,6 +69,29 @@ export async function wsReconnect(sessionToken?: string): Promise<void> {
   return await invoke('ws_reconnect', { sessionToken: sessionToken || null })
 }
 
+// ==================== Token Commands ====================
+
+/**
+ * 设置全局 Token（前端启动时从 localStorage 读取并调用）
+ */
+export async function wsSetToken(token: string): Promise<void> {
+  return await invoke('ws_set_token', { token })
+}
+
+/**
+ * 获取当前全局 Token
+ */
+export async function wsGetToken(): Promise<string> {
+  return await invoke('ws_get_token')
+}
+
+/**
+ * 清除全局 Token（登出时调用）
+ */
+export async function wsClearToken(): Promise<void> {
+  return await invoke('ws_clear_token')
+}
+
 // ==================== Auth Commands ====================
 
 /**
@@ -377,6 +400,11 @@ export function useMobileCommands() {
     wsDisconnect,
     wsGetStatus,
     wsIsConnected,
+
+    // Token
+    wsSetToken,
+    wsGetToken,
+    wsClearToken,
 
     // Auth
     wsGetAuthStatus,

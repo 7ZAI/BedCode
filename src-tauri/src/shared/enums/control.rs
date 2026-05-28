@@ -1,9 +1,10 @@
 //! Control Types
 //!
-//! 会话控制和会话配置消息类型定义
+//! 会话控制、会话配置和终端消息类型定义
 
 use serde::{Deserialize, Serialize};
 
+use super::special_key::SpecialKey;
 use super::sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 
 // ==================== Session Control ====================
@@ -80,4 +81,71 @@ pub enum SessionConfigAction {
     ListQuickActions,
     /// 快捷指令列表响应
     QuickActionList { actions: Vec<QuickActionSummary> },
+}
+
+// ==================== Terminal ====================
+
+/// 终端载荷
+///
+/// 统一的终端消息类型，包含输出、输入、订阅/取消订阅等操作
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalPayload {
+    /// 终端动作
+    pub action: TerminalAction,
+}
+
+/// 终端动作
+///
+/// 终端相关的所有操作类型：
+/// - Output: PTY 输出数据推送 (服务端 → 客户端)
+/// - Input: 客户端输入发送 (客户端 → 服务端)
+/// - Subscribe: 订阅会话输出 (客户端 → 服务端)
+/// - SubscribeResponse: 订阅响应 (服务端 → 客户端)
+/// - Unsubscribe: 取消订阅 (客户端 → 服务端)
+/// - UnsubscribeResponse: 取消订阅响应 (服务端 → 客户端)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TerminalAction {
+    /// 输出消息 (服务端 → 客户端)
+    /// PTY 输出数据推送到客户端
+    Output {
+        /// Base64 编码的输出数据
+        data: String,
+        /// 是否等待输入
+        is_waiting: bool,
+        /// 全局递增索引，用于去重
+        index: usize,
+    },
+
+    /// 输入消息 (客户端 → 服务端)
+    /// 客户端发送输入到 PTY
+    Input {
+        /// 输入数据
+        data: String,
+        /// 特殊键
+        #[serde(skip_serializing_if = "Option::is_none")]
+        special_key: Option<SpecialKey>,
+    },
+
+    /// 订阅输出 (客户端 → 服务端)
+    /// 客户端订阅会话输出，实现增量同步
+    Subscribe {
+        /// 起始序号，不指定则从头补完
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_seq: Option<u64>,
+    },
+
+    /// 订阅响应 (服务端 → 客户端)
+    SubscribeResponse {
+        /// 当前最大序号
+        current_max_seq: u64,
+        /// 历史消息数量
+        history_count: usize,
+    },
+
+    /// 取消订阅 (客户端 → 服务端)
+    Unsubscribe,
+
+    /// 取消订阅响应 (服务端 → 客户端)
+    UnsubscribeResponse,
 }

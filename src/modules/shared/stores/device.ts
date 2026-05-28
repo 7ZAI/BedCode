@@ -6,6 +6,7 @@ import {
   verifyPairingCode,
   listPairedDevices,
   removePairedDevice,
+  type PairingCodeInfo,
 } from '@/modules/desktop/composables/useDesktopCommands'
 
 export interface PairedDevice {
@@ -19,7 +20,7 @@ export interface PairedDevice {
 
 export const useDeviceStore = defineStore('device', () => {
   const pairedDevices = ref<PairedDevice[]>([])
-  const pairingCode = ref<string | null>(null)
+  const pairingCode = ref<PairingCodeInfo | null>(null)
   const pairingExpiry = ref<number>(0)
 
   async function loadPairedDevices() {
@@ -27,10 +28,10 @@ export const useDeviceStore = defineStore('device', () => {
   }
 
   async function startPairing() {
-    const code = await generatePairingCode()
-    pairingCode.value = code
-    // Default 5 minutes expiry
-    pairingExpiry.value = 300
+    const result = await generatePairingCode()
+    pairingCode.value = result
+    // Use the expires_in from the result
+    pairingExpiry.value = result.expires_in
 
     // Start countdown
     const interval = setInterval(() => {

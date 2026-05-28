@@ -5,9 +5,10 @@
 
 use crate::shared::model::message::Message;
 use crate::shared::websocket::client::router::MessageRouter;
+use crate::shared::websocket::client::WsClientEvent;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
 /// 客户端默认消息处理器
@@ -17,15 +18,22 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 /// 2. 否则通过路由器路由到业务处理器
 pub struct ClientDefaultMessageHandler {
     router: Option<Arc<dyn MessageRouter>>,
+    event_tx: Option<broadcast::Sender<WsClientEvent>>,
 }
 
 impl ClientDefaultMessageHandler {
     pub fn new(router: Option<Arc<dyn MessageRouter>>) -> Self {
-        Self { router }
+        Self { router, event_tx: None }
     }
 
     pub fn with_router(mut self, router: Arc<dyn MessageRouter>) -> Self {
         self.router = Some(router);
+        self
+    }
+
+    /// 设置事件发送器（用于 send_and_wait 响应匹配）
+    pub fn with_event_tx(mut self, event_tx: broadcast::Sender<WsClientEvent>) -> Self {
+        self.event_tx = Some(event_tx);
         self
     }
 }
@@ -57,8 +65,19 @@ impl crate::shared::websocket::MessageHandler for ClientDefaultMessageHandler {
             }
         };
 
+        // 获取 message_id 用于响应匹配
+        let message_id = ws_message.message_id().map(|s| s.to_string());
+
+        // 发送 TextMessage 事件到 event_tx（用于 send_and_wait 响应匹配）
+        if let Some(ref event_tx) = self.event_tx {
+            let _ = event_tx.send(WsClientEvent::TextMessage {
+                message_id: message_id.clone(),
+                content: text.clone(),
+            });
+        }
+
         // 检查是否为响应消息（有 message_id）
-        if ws_message.message_id().is_some() {
+        if message_id.is_some() {
             // 这是一个响应，交给路由器处理回调
             if let Some(router) = &self.router {
                 let router = router.clone();

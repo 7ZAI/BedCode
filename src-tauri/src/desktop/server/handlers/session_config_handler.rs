@@ -36,6 +36,7 @@ impl RouteHandler for SessionConfigHandler {
                 session_id: _,
                 timestamp: _,
                 payload,
+                ..
             } => {
                 match payload.action {
                     SessionConfigAction::SessionConfigList { .. } => {

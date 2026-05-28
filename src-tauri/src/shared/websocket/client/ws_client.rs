@@ -49,10 +49,11 @@ impl WsClient {
         let router = MessageRouterManager::with_default_config();
         let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
 
-        // 创建默认处理器，注入 router
-        let handler = ClientDefaultMessageHandler::new(Some(router.clone()));
-
         let (event_tx, _) = broadcast::channel(1024);
+
+        // 创建默认处理器，注入 router 和 event_tx（用于 send_and_wait 响应匹配）
+        let handler = ClientDefaultMessageHandler::new(Some(router.clone()))
+            .with_event_tx(event_tx.clone());
 
         Arc::new(Self {
             config: config.clone(),

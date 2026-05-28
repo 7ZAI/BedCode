@@ -209,7 +209,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDeviceStore } from '@/modules/shared/stores/device'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
-import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo } from '@/modules/shared/composables/useTauri'
+import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo, type PairingCodeInfo } from '@/modules/shared/composables/useTauri'
 import { useQrCode } from '@/modules/shared/composables/useQrCode'
 import { listen } from '@tauri-apps/api/event'
 import Button from '@/modules/shared/components/Button.vue'
@@ -254,7 +254,7 @@ function isDeviceOnline(deviceId: string): boolean {
 
 const isLoading = ref(false)
 const showIpSelector = ref(false)
-const pairingCode = ref<{ code: string; expiresIn: number } | null>(null)
+const pairingCode = ref<PairingCodeInfo | null>(null)
 const remainingSeconds = ref(0)
 
 const localAddresses = computed(() => network.localAddresses.value)
@@ -318,11 +318,20 @@ onMounted(async () => {
   const ids = new Set<string>(connected.connectedDevices.value.map((d: any) => d.device_id || d.id))
   connectedDeviceIds.value = ids
 
-  // 检查是否有活跃的 QR token，若有则自动恢复显示
-  const ttl = await qr.getQrTokenTtl()
-  if (ttl > 0) {
-    console.log('Restoring active QR token with TTL:', ttl)
-    await qr.generateQr(selectedIp.value || undefined)
+  // 尝试恢复现有二维码（不重新生成）
+  const qrRestored = await qr.restoreQr(selectedIp.value || undefined)
+  if (qrRestored) {
+    console.log('Restored active QR token')
+  }
+
+  // 检查是否有活跃的配对码，若有则自动恢复显示
+  const hasActiveCode = await pairing.checkCurrentCode()
+  if (hasActiveCode && pairing.pairingCode.value) {
+    console.log('Restoring active pairing code:', pairing.pairingCode.value)
+    pairingCode.value = pairing.pairingCode.value
+    // 使用后端返回的剩余时间（expires_in 已是实际剩余时间）
+    remainingSeconds.value = pairing.pairingCode.value.expires_in
+    startCountdown()
   }
 
   // Listen for real-time device connection events
@@ -361,25 +370,11 @@ onMounted(async () => {
       console.log('Received pairing-code-generated event:', event.payload)
       pairingCode.value = {
         code: event.payload.code,
-        expiresIn: event.payload.expires_in,
+        expires_in: event.payload.expires_in,
+        created_at: new Date().toISOString(),
       }
       remainingSeconds.value = event.payload.expires_in
-
-      // 开始倒计时
-      if (countdownInterval) {
-        clearInterval(countdownInterval)
-      }
-      countdownInterval = setInterval(() => {
-        if (remainingSeconds.value > 0) {
-          remainingSeconds.value--
-        } else {
-          pairingCode.value = null
-          if (countdownInterval) {
-            clearInterval(countdownInterval)
-            countdownInterval = null
-          }
-        }
-      }, 1000)
+      startCountdown()
 
       toast.info(`移动端请求配对，请输入配对码: ${event.payload.code}`)
     }
@@ -399,8 +394,29 @@ onUnmounted(() => {
   if (deviceDisconnectedListener) {
     deviceDisconnectedListener()
   }
-  qr.clearQr()
+  // 不清除 QR 码和配对码，保持状态以便下次进入页面时恢复
 })
+
+// 启动配对码倒计时
+function startCountdown() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval)
+    countdownInterval = null
+  }
+  countdownInterval = setInterval(() => {
+    if (remainingSeconds.value > 0) {
+      remainingSeconds.value--
+    } else {
+      // 配对码过期，清除后端状态
+      pairing.clearCode()
+      pairingCode.value = null
+      if (countdownInterval) {
+        clearInterval(countdownInterval)
+        countdownInterval = null
+      }
+    }
+  }, 1000)
+}
 
 async function generateCode() {
   // 清除之前的倒计时
@@ -415,21 +431,8 @@ async function generateCode() {
     pairingCode.value = pairing.pairingCode.value
 
     if (pairingCode.value && pairingCode.value.code) {
-      remainingSeconds.value = pairingCode.value.expiresIn || 60
-
-      countdownInterval = setInterval(() => {
-        if (remainingSeconds.value > 0) {
-          remainingSeconds.value--
-        } else {
-          // 配对码过期，清除后端状态
-          pairing.clearCode()
-          pairingCode.value = null
-          if (countdownInterval) {
-            clearInterval(countdownInterval)
-            countdownInterval = null
-          }
-        }
-      }, 1000)
+      remainingSeconds.value = pairingCode.value.expires_in
+      startCountdown()
     } else {
       toast.error('生成配对码失败：未收到有效配对码')
     }

@@ -313,13 +313,25 @@ function clearTerminal() {
   terminal.clear()
   clearOutput()
   clearOutputBuffer(sessionId.value)
+  lastOutputLength = 0  // 重置增量写入计数器
 }
 
-// 监听 PTY 输出，写入 xterm（实时输出已在全局管理器中处理）
-// 这里只用于滚动到底部
-watch(realtimeOutput, () => {
+// 实时输出内容（用于增量写入）
+let lastOutputLength = 0
+
+// 监听 PTY 输出，增量写入 xterm
+watch(realtimeOutput, (newOutput) => {
   if (!terminal) return
-  // 实时输出已通过全局管理器写入，这里只处理滚动
+
+  // 增量写入：只写入新增的部分
+  const newLength = newOutput.length
+  if (newLength > lastOutputLength) {
+    const newData = newOutput.slice(lastOutputLength)
+    terminal.write(newData)
+    lastOutputLength = newLength
+  }
+
+  // 滚动到底部（如果用户没有在查看历史）
   if (!isUserScrolling) {
     scrollToBottom()
   }
@@ -363,10 +375,13 @@ watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
+      lastOutputLength = 0  // 重置增量写入计数器
     }
 
     // 新会话激活时
     if (newId) {
+      // 重置计数器，准备接收新会话的输出
+      lastOutputLength = 0
       // 等待 terminal 初始化完成
       await nextTick()
 
@@ -414,21 +429,14 @@ onMounted(async () => {
     attributeFilter: ['class'],
   })
 
-  // 加载缓存的输出（如果在终端窗口打开前已有输出）
+  // 从全局缓冲区加载已有输出（终端窗口打开前的输出）
   if (terminal && sessionId.value) {
-    const cachedOutput = getCachedOutputString(sessionId.value)
+    const cachedOutput = getOutputBuffer(sessionId.value)
     if (cachedOutput) {
       console.log('[TerminalPreview] Loading cached output, length:', cachedOutput.length)
       terminal.write(cachedOutput)
-      lastOutputIndex = cachedOutput.length
       scrollToBottom()
     }
-  }
-
-  // 注意：PTY 已在创建会话时启动，这里不需要再启动
-  // 如果会话状态是 starting，说明 PTY 还没启动完成，等待即可
-  if (props.session?.status === 'starting') {
-    console.log('[TerminalPreview] Session is starting, waiting for PTY...')
   }
 })
 

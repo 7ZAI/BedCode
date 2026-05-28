@@ -11,6 +11,17 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent } from './model'
 export type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent }
 
+// ==================== Pairing Types ====================
+
+/**
+ * 配对码信息
+ */
+export interface PairingCodeInfo {
+  code: string
+  created_at: string
+  expires_in: number
+}
+
 // ==================== WSL Commands ====================
 
 /**
@@ -232,15 +243,16 @@ export async function updateSessionConfig(config: {
 
 /**
  * 生成配对码
+ * 返回完整的配对码信息（包含 code、创建时间、有效期）
  */
-export async function generatePairingCode(): Promise<string> {
+export async function generatePairingCode(): Promise<PairingCodeInfo> {
   return await invoke('generate_pairing_code')
 }
 
 /**
  * 获取当前配对码
  */
-export async function getCurrentPairingCode(): Promise<string | null> {
+export async function getCurrentPairingCode(): Promise<PairingCodeInfo | null> {
   return await invoke('get_current_pairing_code')
 }
 

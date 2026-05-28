@@ -46,6 +46,7 @@ impl RouteHandler for AuthHandler {
                 session_id,
                 timestamp,
                 payload,
+                ..
             } => (message_id, session_id, timestamp, payload),
             _ => return Ok(None),
         };
@@ -67,7 +68,7 @@ impl RouteHandler for AuthHandler {
                 ).await
             }
             // JWT 验证
-            AuthStage::Authenticated | _ => {
+            AuthStage::Authenticated => {
                 handle_jwt_auth(
                     message_id,
                     session_id,
@@ -77,6 +78,18 @@ impl RouteHandler for AuthHandler {
                     &self.jwt_service,
                     &None,
                 ).await
+            }
+            // 未知 stage，返回错误
+            _ => {
+                tracing::warn!("[AuthHandler] Unknown auth stage: {:?}", payload.stage);
+                Ok(Some(BusinessMessage::Error {
+                    message_id: Some(message_id),
+                    expect_response: false,
+                    timestamp,
+                    token: String::new(),
+                    code: "INVALID_STAGE".to_string(),
+                    message: format!("Unknown auth stage: {:?}", payload.stage),
+                }))
             }
         }
     }

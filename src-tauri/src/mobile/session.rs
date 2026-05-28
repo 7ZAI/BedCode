@@ -154,7 +154,6 @@ impl SessionManager {
             session_id: session_id.to_string(),
         };
         let message = Message::session_control(action, Some(session_id));
-        })).unwrap());
 
         match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
             Ok(_) => {

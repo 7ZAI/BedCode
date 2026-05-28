@@ -4,14 +4,12 @@
 //! 类型已移至 shared::model::message
 
 // Re-export types from shared model module
-pub use crate::shared::model::message::{
-    Message, OutputPayload, InputPayload,
-};
+pub use crate::shared::model::message::Message;
 
 // Re-export types from shared enums module (payload types)
 pub use crate::shared::enums::{
     AuthPayload, AuthStage, SessionControlAction, SessionControlPayload,
-    SessionConfigAction, SessionConfigPayload,
+    SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload,
     QuickActionSummary, SessionConfigSummary, SessionSummary, SpecialKey,
 };
 

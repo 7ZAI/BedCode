@@ -65,6 +65,7 @@ pub async fn handle_auth(
                 expect_response: false,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: AuthPayload {
                     stage: AuthStage::VerifyCode,
                     device_id: payload.device_id,
@@ -77,7 +78,8 @@ pub async fn handle_auth(
 
         AuthStage::VerifyCode => {
             let code = payload.pairing_code.unwrap_or_default();
-            let is_valid = pairing_service.verify_code(&code).await;
+            // 使用新方法：验证并消耗配对码（单次使用）
+            let is_valid = pairing_service.verify_and_consume_code(&code).await;
 
             if is_valid {
                 let device_name = payload.device_name.clone().unwrap_or_else(|| "Unknown Device".to_string());
@@ -108,7 +110,6 @@ pub async fn handle_auth(
                     });
                 }
 
-                pairing_service.clear_code().await;
                 tracing::info!("Device paired: {} (fingerprint: {}, addr: {})", device_name, fingerprint, address);
 
                 Ok(Some(Message::Auth {
@@ -116,6 +117,7 @@ pub async fn handle_auth(
                 expect_response: false,
                     session_id: None,
                     timestamp: chrono::Utc::now().timestamp_millis(),
+                    token: String::new(),
                     payload: AuthPayload {
                         stage: AuthStage::Authenticated,
                         device_id: Some(device_id),
@@ -138,6 +140,7 @@ pub async fn handle_auth(
                 expect_response: false,
                     session_id: None,
                     timestamp: chrono::Utc::now().timestamp_millis(),
+                    token: String::new(),
                     payload: AuthPayload {
                         stage: AuthStage::Failed,
                         error: Some(error_message.to_string()),
@@ -183,6 +186,7 @@ pub async fn handle_auth(
                 expect_response: false,
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
                 payload: AuthPayload {
                     stage: AuthStage::Authenticated,
                     device_id: Some(claims.sub),
@@ -227,19 +231,20 @@ pub async fn handle_auth(
                     let response = Message::Auth {
                         message_id: request_message_id,
                 expect_response: false,
-                        session_id: None,
-                        timestamp: chrono::Utc::now().timestamp_millis(),
-                        payload: AuthPayload {
-                            stage: AuthStage::Authenticated,
-                            device_id: Some(device_id),
-                            device_fingerprint: Some(device_fingerprint),
-                            session_token: Some(session_token),
-                            device_name: Some(device_name),
-                            pairing_code: None,
-                            error: None,
-                            qr_token: None,
-                        },
-                    };
+                session_id: None,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
+                payload: AuthPayload {
+                    stage: AuthStage::Authenticated,
+                    device_id: Some(device_id),
+                    device_fingerprint: Some(device_fingerprint),
+                    session_token: Some(session_token),
+                    device_name: Some(device_name),
+                    pairing_code: None,
+                    error: None,
+                    qr_token: None,
+                },
+            };
                     Ok(Some(response))
                 }
                 Err(e) => {
@@ -261,6 +266,7 @@ pub async fn handle_auth(
                 expect_response: false,
                         session_id: None,
                         timestamp: chrono::Utc::now().timestamp_millis(),
+                        token: String::new(),
                         payload: AuthPayload {
                             stage: AuthStage::QrFailed,
                             error: Some(user_message),
@@ -301,6 +307,7 @@ pub async fn handle_jwt_auth(
                 expect_response: false,
                 session_id,
                 timestamp,
+                token: String::new(),
                 payload: AuthPayload {
                     stage: AuthStage::Failed,
                     error: Some("No JWT token provided".to_string()),
@@ -343,6 +350,7 @@ pub async fn handle_jwt_auth(
                 expect_response: false,
                 session_id,
                 timestamp,
+                token: String::new(),
                 payload: AuthPayload {
                     stage: AuthStage::Authenticated,
                     device_id: Some(claims.sub),
@@ -368,6 +376,7 @@ pub async fn handle_jwt_auth(
                 expect_response: false,
                 session_id,
                 timestamp,
+                token: String::new(),
                 payload: AuthPayload {
                     stage: AuthStage::Failed,
                     error: Some(error_msg.to_string()),

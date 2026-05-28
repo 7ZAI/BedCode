@@ -9,9 +9,11 @@ pub mod connection_types;
 pub mod services;
 pub mod handlers;
 pub mod router;
+pub mod auth_interceptor;
 
 // 重新导出所有公开类型
 pub use message::*;
 pub use client_info::ClientInfo;
 pub use connection_types::*;
+pub use auth_interceptor::DesktopAuthInterceptor;
 pub use crate::shared::enums::control::SessionControlAction;
