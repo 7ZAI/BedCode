@@ -4,8 +4,8 @@
 
 use crate::shared::websocket::client::{
     connection::ConnectionManager, heartbeat::HeartbeatManager, io::IoManager,
-    lifecycle::LifecycleManager, reconnect::ReconnectManager, router::MessageRouterManager,
-    ConnectionStatus, IoEvent, WsClientConfig, WsClientEvent, ClientDefaultMessageHandler,
+    lifecycle::LifecycleManager, reconnect::ReconnectManager,
+    ConnectionStatus, IoEvent, WsClientConfig, WsClientEvent,
 };
 use crate::shared::model::message::Message;
 use crate::shared::websocket::MessageHandler;
@@ -23,7 +23,6 @@ pub struct WsClient {
     io: Arc<IoManager>,
     heartbeat: Arc<HeartbeatManager>,
     lifecycle: Arc<LifecycleManager>,
-    router: Arc<MessageRouterManager>,
     reconnect: Arc<ReconnectManager>,
     handler: RwLock<Option<Arc<dyn MessageHandler>>>,
     ws_sender: RwLock<Option<mpsc::Sender<WsMsg>>>,
@@ -46,14 +45,9 @@ impl WsClient {
         let connection = ConnectionManager::new(config.clone(), lifecycle.clone());
         let io = IoManager::new();
         let heartbeat = HeartbeatManager::from_client_config(config.heartbeat_interval_secs);
-        let router = MessageRouterManager::with_default_config();
         let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
 
         let (event_tx, _) = broadcast::channel(1024);
-
-        // 创建默认处理器，注入 router 和 event_tx（用于 send_and_wait 响应匹配）
-        let handler = ClientDefaultMessageHandler::new(Some(router.clone()))
-            .with_event_tx(event_tx.clone());
 
         Arc::new(Self {
             config: config.clone(),
@@ -61,9 +55,8 @@ impl WsClient {
             io,
             heartbeat,
             lifecycle,
-            router,
             reconnect,
-            handler: RwLock::new(Some(Arc::new(handler))),
+            handler: RwLock::new(None),
             ws_sender: RwLock::new(None),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tasks: RwLock::new(ClientTasks::default()),
