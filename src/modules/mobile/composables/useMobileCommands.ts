@@ -16,7 +16,6 @@ import type {
   SessionInfo,
   RemoteSession,
   TerminalOutputEvent,
-  TerminalHistory,
   TerminalIncrementalOutput,
 } from './model'
 export type {
@@ -28,7 +27,6 @@ export type {
   SessionInfo,
   RemoteSession,
   TerminalOutputEvent,
-  TerminalHistory,
   TerminalIncrementalOutput,
 }
 
@@ -241,13 +239,6 @@ export async function keepScreenAwake(enabled: boolean): Promise<void> {
 }
 
 // ==================== Terminal Commands ====================
-
-/**
- * 获取会话的完整输出历史（用于首次连接或断线重连后恢复数据）
- */
-export async function wsGetTerminalHistory(sessionId: string): Promise<TerminalHistory> {
-  return await invoke('ws_get_terminal_history', { sessionId })
-}
 
 /**
  * 订阅终端（记录当前索引位置，用于增量获取）
@@ -501,7 +492,6 @@ export function useMobileCommands() {
     wsSendAndWait,
 
     // Terminal (Rust-managed buffer)
-    wsGetTerminalHistory,
     wsSubscribeTerminal,
     wsUnsubscribeTerminal,
     wsGetTerminalIncremental,

@@ -64,12 +64,6 @@ export interface TerminalOutputEvent {
   timestamp: number
 }
 
-export interface TerminalHistory {
-  events: TerminalOutputEvent[]
-  current_index: number
-  total_count: number
-}
-
 export interface TerminalIncrementalOutput {
   events: TerminalOutputEvent[]
   current_index: number
