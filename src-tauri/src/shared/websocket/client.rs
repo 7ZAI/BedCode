@@ -5,7 +5,7 @@
 //! - `io` - IO 收发（读循环、写通道）
 //! - `heartbeat` - 心跳保活
 //! - `lifecycle` - 生命周期状态机
-//! - `router` - 消息路由
+//! - `router` - 消息路由 trait
 //! - `reconnect` - 重连策略
 
 pub mod connection;
@@ -26,7 +26,7 @@ pub use heartbeat::{HeartbeatConfig, HeartbeatEvent, HeartbeatManager};
 pub use io::{IoEvent, IoManager};
 pub use lifecycle::{ConnectionStatus, LifecycleEvent, LifecycleManager};
 pub use reconnect::{ReconnectConfig, ReconnectEvent, ReconnectManager, ReconnectState};
-pub use router::{MessageRouter, MessageRouterManager, RouterConfig, RouterEvent};
+pub use router::MessageRouter;
 pub use default_handler::ClientDefaultMessageHandler;
 
 // 客户端事件（对外使用）
