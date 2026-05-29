@@ -52,6 +52,11 @@ fn default_token() -> String {
     String::new()
 }
 
+/// 默认返回空字符串 JSON 值
+fn default_empty_json_value() -> serde_json::Value {
+    serde_json::Value::String(String::new())
+}
+
 /// 统一的 WebSocket 消息类型
 /// 作为 WebSocket 客户端和服务端的业务传输类型
 /// 直接对应 JSON 序列化的结构
@@ -201,6 +206,9 @@ pub enum Message {
         /// 可选的错误消息，失败时应提供
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        /// 返回数据，支持任意 JSON 值，默认为空字符串
+        #[serde(default = "default_empty_json_value")]
+        data: serde_json::Value,
         /// 认证令牌
         #[serde(default = "default_token")]
         token: String,
@@ -485,6 +493,19 @@ impl Message {
             timestamp: Utc::now().timestamp_millis(),
             code: ACK_CODE_SUCCESS,
             message: None,
+            data: serde_json::Value::String(String::new()),
+            token: String::new(),
+        }
+    }
+
+    /// 创建确认响应消息（成功，带数据）
+    pub fn ack_with_data(request_id: &str, data: serde_json::Value) -> Self {
+        Message::Ack {
+            request_id: request_id.to_string(),
+            timestamp: Utc::now().timestamp_millis(),
+            code: ACK_CODE_SUCCESS,
+            message: None,
+            data,
             token: String::new(),
         }
     }
@@ -496,6 +517,19 @@ impl Message {
             timestamp: Utc::now().timestamp_millis(),
             code,
             message: Some(message.to_string()),
+            data: serde_json::Value::String(String::new()),
+            token: String::new(),
+        }
+    }
+
+    /// 创建确认响应消息（失败，带数据）
+    pub fn ack_failure_with_data(request_id: &str, code: u16, message: &str, data: serde_json::Value) -> Self {
+        Message::Ack {
+            request_id: request_id.to_string(),
+            timestamp: Utc::now().timestamp_millis(),
+            code,
+            message: Some(message.to_string()),
+            data,
             token: String::new(),
         }
     }
@@ -691,12 +725,13 @@ impl Message {
                     token: token.to_string(),
                 }
             }
-            Message::Ack { request_id, timestamp, code, message, .. } => {
+            Message::Ack { request_id, timestamp, code, message, data, .. } => {
                 Message::Ack {
                     request_id,
                     timestamp,
                     code,
                     message,
+                    data,
                     token: token.to_string(),
                 }
             }
