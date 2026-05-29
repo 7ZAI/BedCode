@@ -5,9 +5,11 @@
 pub mod auth;
 pub mod commands;
 pub mod connection;
-pub mod handler;
+pub mod events;
 pub mod output_receiver;
 pub mod pairing_service;
+pub mod request;
+pub mod router;
 pub mod session;
 pub mod storage;
 pub mod terminal;
@@ -15,7 +17,8 @@ pub mod terminal;
 // Re-export public types
 pub use self::auth::{AuthCredentials, AuthManager, AuthStatus};
 pub use self::connection::{ConnectionManager, ConnectionStatus, TargetDevice, set_global_token, get_global_token, clear_global_token};
-pub use self::handler::{MobileEvent, MobileHandler};
+pub use self::router::{MobileEvent, ClientRouteContext, ClientBusinessRouter, ClientRouteRegistry, ClientRouteHandler};
+pub use self::router::{TerminalRouter, AuthRouter, SyncRouter, SystemRouter};
 pub use self::output_receiver::{OutputEvent, OutputReceiver};
 pub use self::session::{SessionInfo, SessionManager, SessionStatus};
 pub use self::storage::TokenStorage;
