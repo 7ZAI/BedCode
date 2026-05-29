@@ -13,6 +13,9 @@
 //! - naming_service.rs: 命名服务
 //! - config_mapper.rs: 配置映射服务
 //! - status_detector.rs: 状态检测服务
+//! - unified_output_queue.rs: 统一输出队列（环形缓冲区）
+//! - session_output_manager.rs: 会话输出管理（订阅者管理）
+//! - global_output_manager.rs: 全局输出管理（单例）
 
 pub mod session_config;
 mod session_manager;
@@ -27,6 +30,11 @@ mod naming_service;
 mod config_mapper;
 mod status_detector;
 
+// 输出管理模块
+mod unified_output_queue;
+mod session_output_manager;
+mod global_output_manager;
+
 // 删除: mod types; (已移动到 model/session_event.rs)
 
 pub use session_config::SessionConfigManager;
@@ -40,6 +48,11 @@ pub use event_bus::{DefaultSessionEventBus, SessionEventBus, SessionEvent};
 pub use naming_service::{DefaultNamingService, NamingService};
 pub use config_mapper::{DefaultConfigMapper, ConfigMapper};
 pub use status_detector::{DefaultStatusDetector, StatusDetector};
+
+// 输出管理模块导出
+pub use unified_output_queue::{OutputEvent, UnifiedOutputQueue};
+pub use session_output_manager::{SessionOutputManager, SubscriberState, SubscribeResponse};
+pub use global_output_manager::GlobalOutputManager;
 
 // 修改：从 desktop::model 导入，而非 types
 pub use crate::desktop::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};

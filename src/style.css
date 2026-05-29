@@ -205,19 +205,21 @@ body {
   min-height: 100dvh;
 }
 
-/* 移动端底部导航需要额外 padding - 使用 env() */
+/* 移动端底部导航需要额外 padding - 使用 env() + fallback */
+/* 大多数 Android 设备导航栏高度 24-48px，iOS 设备使用 safe-area-inset */
 .mobile-nav-safe {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* 使用 max() 确保 minimum 20px padding */
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
 }
 
-/* 通用底部安全区域类 */
+/* 通用底部安全区域类 - 适配更多设备 */
 .pb-safe {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
 }
 
 /* 通用顶部安全区域类 */
 .pt-safe {
-  padding-top: env(safe-area-inset-top, 0px);
+  padding-top: max(env(safe-area-inset-top, 0px), 24px);
 }
 
 /* Scrollbar styles - 浅色模式默认 */

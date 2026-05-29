@@ -376,8 +376,9 @@ impl ServerIo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::websocket::server::connection_manager::ConnectionManager;
+    use crate::shared::websocket::server::server_config::WsServerConfig;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     #[tokio::test]
     async fn test_server_io_config_default() {
@@ -399,14 +400,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_io_new() {
-        let io = ServerIo::new(ServerIoConfig::default());
+        let cm = Arc::new(ConnectionManager::new(&WsServerConfig::default()));
+        let io = ServerIo::new(ServerIoConfig::default(), cm);
         let _receiver = io.subscribe();
         let _config = io.config();
     }
 
     #[tokio::test]
     async fn test_emit_text_event() {
-        let io = ServerIo::new(ServerIoConfig::default());
+        let cm = Arc::new(ConnectionManager::new(&WsServerConfig::default()));
+        let io = ServerIo::new(ServerIoConfig::default(), cm);
         let mut receiver = io.subscribe();
 
         io.emit_text("127.0.0.1:8080".parse().unwrap(), Some("msg1".to_string()), "hello".to_string());

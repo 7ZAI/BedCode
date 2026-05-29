@@ -313,6 +313,21 @@
         </div>
       </template>
     </Modal>
+
+    <!-- 全局遮罩 Loading（配对请求时显示） -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div
+          v-if="showPairingLoading"
+          class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        >
+          <div class="bg-white dark:bg-dark-800 rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]">
+            <div class="w-10 h-10 border-4 border-primary-400 border-t-transparent rounded-full animate-spin" />
+            <p class="text-gray-700 dark:text-dark-200 text-sm font-medium">正在请求配对...</p>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -320,7 +335,7 @@
 import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMobileConnection, type RemoteDevice } from '@/modules/mobile/composables/useMobileConnection'
-import { wsLoadSessions } from '@/modules/mobile/composables/useMobileCommands'
+import { useToast } from '@/modules/shared/composables/useToast'
 import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
 import PairingInput from '@/modules/mobile/components/PairingInput.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
@@ -328,33 +343,14 @@ import Button from '@/modules/shared/components/Button.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
+const toast = useToast()
 
-// 运行中的会话列表
-const activeSessions = ref<any[]>([])
-
-// terminal 接口
-const terminal = {
-  sessions: activeSessions,
-  activeSessionId: connection.activeSessionId,
-  loadSessions: async () => {
-    try {
-      activeSessions.value = await wsLoadSessions()
-    } catch (e) {
-      console.error('[DevicesView] Failed to load sessions:', e)
-    }
-  },
-  startSession: async (_id: string) => '',
-  stopSession: async (id: string) => {
-    try {
-      await connection.stopSession(id)
-      // 从本地列表移除
-      activeSessions.value = activeSessions.value.filter(s => s.id !== id)
-    } catch (e) {
-      console.error('[DevicesView] Failed to stop session:', e)
-    }
-  },
-  enableAutoReconnect: () => {},
-}
+// 使用全局状态
+const activeSessions = connection.activeSessions
+const sessionConfigs = connection.sessionConfigs
+const connectionHistory = connection.connectionHistory
+const isLoadingConfigs = connection.isLoadingConfigs
+const hasLoadedConfigs = connection.hasLoadedConfigs
 
 // 根据配置ID获取运行中的会话
 function getRunningSessionsByConfig(configId: string) {
@@ -389,7 +385,7 @@ async function confirmStop() {
   if (!pendingSession.value) return
   isStopping.value = true
   try {
-    await terminal.stopSession(pendingSession.value.id)
+    await connection.stopSession(pendingSession.value.id)
     showStopConfirm.value = false
     pendingSession.value = null
   } catch (e) {
@@ -401,11 +397,12 @@ async function confirmStop() {
 
 const showManualConnect = ref(false)
 const showPairing = ref(false)
+const showPairingLoading = ref(false)  // 全局遮罩 loading（配对请求时）
 const isPairing = ref(false)
 const pairingError = ref('')
 const connectionError = ref('')
 
-// Session configs from connected desktop
+// Session configs type (for template use)
 interface SessionConfigSummary {
   id: string
   name: string
@@ -414,22 +411,12 @@ interface SessionConfigSummary {
   working_dir: string
   command: string
 }
-const sessionConfigs = ref<SessionConfigSummary[]>([])
-const isLoadingConfigs = ref(false)
-const hasLoadedConfigs = ref(false) // 标记是否已经加载过数据（防止闪烁）
+
 const isRefreshing = ref(false)
 const startingConfigId = ref<string | null>(null)
 
 // 展开的会话配置ID（用于显示运行中的会话）
 const expandedConfigId = ref<string | null>(null)
-
-// Connection history (stored in localStorage)
-interface ConnectionHistoryItem {
-  address: string
-  name: string
-  lastConnected: string
-}
-const connectionHistory = ref<ConnectionHistoryItem[]>([])
 
 // Current device being connected
 const pendingDevice = ref<RemoteDevice | null>(null)
@@ -463,73 +450,23 @@ const connectionStatusText = computed(() => {
   }
 })
 
-// Load connection history from localStorage
-function loadConnectionHistory() {
-  const stored = localStorage.getItem('connection_history')
-  if (stored) {
-    try {
-      connectionHistory.value = JSON.parse(stored)
-    } catch {
-      connectionHistory.value = []
-    }
-  }
-}
-
-function saveConnectionHistory() {
-  localStorage.setItem('connection_history', JSON.stringify(connectionHistory.value))
-}
-
-function addToHistory(address: string, name?: string) {
-  connectionHistory.value = connectionHistory.value.filter(item => item.address !== address)
-  connectionHistory.value.unshift({
-    address,
-    name: name || address.split(':')[0],
-    lastConnected: new Date().toISOString(),
-  })
-  if (connectionHistory.value.length > 10) {
-    connectionHistory.value = connectionHistory.value.slice(0, 10)
-  }
-  saveConnectionHistory()
-}
-
+// 使用全局连接历史方法
 function removeFromHistory(address: string) {
-  connectionHistory.value = connectionHistory.value.filter(item => item.address !== address)
-  saveConnectionHistory()
+  connection.removeFromConnectionHistory(address)
 }
 
 function clearHistory() {
-  connectionHistory.value = []
-  saveConnectionHistory()
+  connection.clearConnectionHistory()
 }
 
-// Load session configs from connected desktop
-async function loadSessionConfigs() {
-  if (!isConnected.value) return
-
-  isLoadingConfigs.value = true
-  try {
-    const configs = await connection.loadSessionConfigs()
-    sessionConfigs.value = configs.map((c: any) => ({
-      id: c.id,
-      name: c.name,
-      environment: c.environment,
-      wsl_distro: c.wsl_distro,
-      working_dir: c.working_dir,
-      command: c.command,
-    }))
-    hasLoadedConfigs.value = true  // 标记已加载过数据
-  } catch (e) {
-    console.error('Failed to load session configs:', e)
-    hasLoadedConfigs.value = true  // 即使失败也标记已尝试加载
-  } finally {
-    isLoadingConfigs.value = false
-  }
-}
-
+// 刷新会话配置
 async function refreshConfigs() {
   isRefreshing.value = true
-  await loadSessionConfigs()
-  isRefreshing.value = false
+  try {
+    await connection.loadSessionConfigs()
+  } finally {
+    isRefreshing.value = false
+  }
 }
 
 // Start session from config
@@ -538,9 +475,18 @@ async function handleStartSession(config: SessionConfigSummary) {
 
   startingConfigId.value = config.id
   try {
-    const sessionId = await connection.startSession(config.id, config.name)
-    if (sessionId) {
-      connection.activeSessionId.value = sessionId
+    const result = await connection.startSession(config.id, config.name)
+    if (result.sessionId) {
+      connection.activeSessionId.value = result.sessionId
+
+      // 如果返回了会话信息，添加到本地列表
+      if (result.session) {
+        activeSessions.value.push(result.session)
+      } else {
+        // 如果没有返回会话信息，手动加载
+        await connection.loadActiveSessions()
+      }
+
       // After starting, navigate to terminal view
       router.push({
         name: 'mobile-terminal',
@@ -548,9 +494,11 @@ async function handleStartSession(config: SessionConfigSummary) {
       })
     } else {
       console.error('Failed to start session: no session_id returned')
+      toast.error('启动会话失败：未返回会话ID')
     }
   } catch (e) {
     console.error('Failed to start session:', e)
+    toast.error(`启动会话失败: ${e}`)
   } finally {
     startingConfigId.value = null
   }
@@ -558,48 +506,26 @@ async function handleStartSession(config: SessionConfigSummary) {
 
 // 从扫描等页面返回时重新加载连接历史
 onActivated(() => {
-  loadConnectionHistory()
-})
-
-// 从其他页面返回时自动刷新会话配置和会话
-onActivated(() => {
-  if (isConnected.value) {
-    loadSessionConfigs()
-    terminal.loadSessions()
-  }
+  connection.loadConnectionHistory()
 })
 
 onMounted(async () => {
-  loadConnectionHistory()
-
-  // 启用自动重连恢复，确保断开后重连能恢复会话配置
-  terminal.enableAutoReconnect()
-
-  // 注册断开连接回调，清除会话状态
-  // connection.addDisconnectCallback(() => {
-  //   terminal.clearAllSessionState()
-  //   hasLoadedConfigs.value = false  // 重置标记，重新连接后显示加载状态
-  // })
-
-  // If already connected, load session configs and active sessions
-  if (isConnected.value) {
-    await loadSessionConfigs()
-    await terminal.loadSessions()
-  }
+  connection.loadConnectionHistory()
 })
 
-// 监听连接状态变化，从扫描页面返回后自动加载配置和会话
-// 同时监听连接和配对状态，确保认证完成后才加载会话列表
+// 监听连接状态变化，只在首次认证完成时加载一次
+let hasAutoLoadedOnConnect = false
 watch([isConnected, connection.connectionStatus], async ([connected, status]) => {
-  // 只有在已连接且已完成认证（paired）时才加载
-  if (connected && status === 'paired') {
-    await loadSessionConfigs()
-    await terminal.loadSessions()
+  // 只有在首次认证完成时才自动加载
+  if (connected && status === 'paired' && !hasAutoLoadedOnConnect) {
+    hasAutoLoadedOnConnect = true
+    await connection.loadSessionConfigs()
+    await connection.loadActiveSessions()
   }
 })
 
 // Connect from history
-async function handleConnectFromHistory(item: ConnectionHistoryItem) {
+async function handleConnectFromHistory(item: any) {
   const [host, portStr] = item.address.split(':')
   const port = portStr ? parseInt(portStr) : 8765
 
@@ -611,7 +537,8 @@ async function handleConnectFromHistory(item: ConnectionHistoryItem) {
     isPaired: false,
   }
 
-  await startConnection(device)
+  // 从历史连接，允许使用已存储的 token 跳过配对
+  await startConnection(device, true)
 }
 
 // Manual address input
@@ -630,11 +557,14 @@ async function handleConnectManual(address: string) {
   // 关闭手动连接弹窗，后续由 PairingInput 接管
   showManualConnect.value = false
 
-  await startConnection(device)
+  // 手动连接，必须走配对流程
+  await startConnection(device, false)
 }
 
 // Start connection flow
-async function startConnection(device: RemoteDevice) {
+// @param skipPairing - 如果为 true，尝试使用已存储的 token 跳过配对流程
+//                       如果为 false，必须走配对流程（手动连接场景）
+async function startConnection(device: RemoteDevice, skipPairing: boolean = false) {
   pendingDevice.value = device
   connectionError.value = ''
   connection.isConnecting.value = true
@@ -647,35 +577,52 @@ async function startConnection(device: RemoteDevice) {
     await connection.connect(device)
     console.log('[DevicesView] startConnection: Step 1 done')
 
-    // Step 2: Try stored JWT token first (重连时免配对)
-    console.log('[DevicesView] startConnection: Step 2 authenticate...')
-    const authenticated = await connection.authenticate()
-    console.log('[DevicesView] startConnection: Step 2 done, authenticated=', authenticated)
-    if (authenticated) {
-      pendingDevice.value = null
-      addToHistory(`${device.address}:${device.port}`, device.name)
-      await loadSessionConfigs()
-      return
+    // Step 2: 如果允许跳过配对，尝试使用已存储的 JWT token
+    if (skipPairing) {
+      console.log('[DevicesView] startConnection: Step 2 authenticate (skipPairing=true)...')
+      const authenticated = await connection.authenticate()
+      console.log('[DevicesView] startConnection: Step 2 done, authenticated=', authenticated)
+      if (authenticated) {
+        pendingDevice.value = null
+        connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+        await connection.loadSessionConfigs()
+        return
+      }
+    } else {
+      console.log('[DevicesView] startConnection: Step 2 skipped (skipPairing=false, must pair)')
     }
 
     // Step 3: Need to pair - 带超时保护，避免卡住
     console.log('[DevicesView] startConnection: Step 3 requestPairing...')
-    const pairingTimeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('配对请求超时，请确保桌面端正在运行')), 10000)
-    )
-    await Promise.race([
-      connection.requestPairing(),
-      pairingTimeout,
-    ])
-    console.log('[DevicesView] startConnection: Step 3 done, showPairing=true')
-    showPairing.value = true
-    addToHistory(`${device.address}:${device.port}`, device.name)
+    showPairingLoading.value = true  // 显示全局遮罩 loading
+    try {
+      const pairingTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('配对请求超时，请确保桌面端正在运行')), 15000)
+      )
+      await Promise.race([
+        connection.requestPairing(),
+        pairingTimeout,
+      ])
+      console.log('[DevicesView] startConnection: Step 3 done, showPairing=true')
+      showPairing.value = true
+      connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+    } catch (pairingError) {
+      // 配对失败或超时时断开连接
+      console.error('[DevicesView] Pairing failed:', pairingError)
+      connectionError.value = String(pairingError)
+      await connection.disconnect()
+    } finally {
+      showPairingLoading.value = false  // 隐藏全局遮罩 loading
+    }
   } catch (error) {
     connectionError.value = String(error)
     console.error('[DevicesView] startConnection failed:', error)
+    // 连接失败时确保状态正确
+    // 后端会发送 ws_error 事件，前端状态会变为 'error'
   } finally {
     console.timeEnd('startConnection')
     connection.isConnecting.value = false
+    showPairingLoading.value = false  // 确保在任何情况下都隐藏 loading
   }
 }
 
@@ -701,9 +648,9 @@ async function handlePairingSubmit(code: string) {
       pendingDevice.value = null
 
       // Load session configs instead of navigating to terminal
-      await loadSessionConfigs()
+      await connection.loadSessionConfigs()
       // Also fetch active sessions for the Sessions tab
-      await terminal.loadSessions()
+      await connection.loadActiveSessions()
     } else {
       pairingError.value = '配对码验证失败，请重试'
     }
@@ -716,7 +663,8 @@ async function handlePairingSubmit(code: string) {
 
 function handleDisconnect() {
   connection.disconnect()
-  sessionConfigs.value = []
+  connection.clearSessionConfigs()
+  connection.clearActiveSessions()
 }
 
 function goToSessions() {
@@ -739,5 +687,15 @@ function goToSessions() {
 .slide-enter-to,
 .slide-leave-from {
   max-height: 200px;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

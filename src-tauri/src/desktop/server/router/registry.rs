@@ -19,6 +19,7 @@ pub fn message_type_key(msg: &Message) -> &'static str {
         Message::SessionEvent { .. } => "SessionEvent",
         Message::Error { .. } => "Error",
         Message::Ack { .. } => "Ack",
+        Message::SyncData { .. } => "SyncData",
     }
 }
 
@@ -34,6 +35,7 @@ pub fn type_name_to_key(type_name: &str) -> &'static str {
         "SessionEvent" => "SessionEvent",
         "Error" => "Error",
         "Ack" => "Ack",
+        "SyncData" => "SyncData",
         _ => "Error", // 默认 fallback
     }
 }

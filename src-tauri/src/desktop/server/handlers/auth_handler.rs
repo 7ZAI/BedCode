@@ -11,23 +11,28 @@ use crate::shared::enums::AuthStage;
 use crate::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 pub struct AuthHandler {
     pairing_service: Arc<crate::desktop::server::services::PairingService>,
     qr_manager: Arc<crate::shared::auth::QrTokenManager>,
     jwt_service: JwtService,
+    /// Tauri AppHandle（用于向前端发送设备连接事件）
+    app_handle: Option<Arc<AppHandle>>,
 }
 
 impl AuthHandler {
     pub fn new(
         pairing_service: Arc<crate::desktop::server::services::PairingService>,
         qr_manager: Arc<crate::shared::auth::QrTokenManager>,
+        app_handle: Option<Arc<AppHandle>>,
     ) -> Self {
         Self {
             pairing_service,
             qr_manager,
             jwt_service: JwtService::new(),
+            app_handle,
         }
     }
 }
@@ -64,7 +69,7 @@ impl RouteHandler for AuthHandler {
                     &self.qr_manager,
                     &self.jwt_service,
                     &ws_manager,
-                    &None, // app_handle 暂不支持
+                    &self.app_handle,
                 ).await
             }
             // JWT 验证
@@ -76,7 +81,7 @@ impl RouteHandler for AuthHandler {
                     payload,
                     ctx.addr,
                     &self.jwt_service,
-                    &None,
+                    &self.app_handle,
                 ).await
             }
             // 未知 stage，返回错误

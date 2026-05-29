@@ -20,6 +20,8 @@ pub struct RouteContext {
     pub connection_id: ConnectionId,
     pub addr: SocketAddr,
     pub client_id: String,
+    /// 设备名称（由客户端在认证时提供）
+    pub device_name: Option<String>,
     pub connection_manager: Arc<ConnectionManager>,
     pub event_tx: broadcast::Sender<WsServerEvent>,
 }
@@ -29,6 +31,7 @@ impl RouteContext {
         connection_id: ConnectionId,
         addr: SocketAddr,
         client_id: String,
+        device_name: Option<String>,
         connection_manager: Arc<ConnectionManager>,
         event_tx: broadcast::Sender<WsServerEvent>,
     ) -> Self {
@@ -36,6 +39,7 @@ impl RouteContext {
             connection_id,
             addr,
             client_id,
+            device_name,
             connection_manager,
             event_tx,
         }

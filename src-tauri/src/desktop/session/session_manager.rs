@@ -3,12 +3,11 @@
 //! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
 //! 重构后只负责流程编排，各职责已拆分到独立模块
 
+use crate::desktop::events::DesktopSyncEvent;
 use crate::desktop::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::desktop::pty::{
     AsyncPtyOutputListener, PtyOutputEvent, PtySessionHandler, PtyHandler,
-    PtySubscriptionManager,
 };
-use crate::desktop::traits::PtyOutputListener;
 use crate::desktop::session::{
     config_mapper::{ConfigMapper, DefaultConfigMapper},
     event_bus::{DefaultSessionEventBus, SessionEventBus},
@@ -17,7 +16,9 @@ use crate::desktop::session::{
     session_info::{DefaultSessionInfoRegistry, SessionInfoRegistry},
     status_detector::{DefaultStatusDetector, StatusDetector},
     storage::{SessionStorage, SessionStore},
+    GlobalOutputManager,
 };
+use crate::desktop::traits::PtyOutputListener;
 use crate::shared::enums::{SessionStatus, SessionType};
 use crate::Result;
 use chrono::Utc;
@@ -50,8 +51,8 @@ pub struct SessionManager {
     running: Arc<AtomicBool>,
     /// PTY 输出事件监听器（可动态添加）
     output_listener: Arc<RwLock<Option<Arc<dyn PtyOutputListener>>>>,
-    /// 订阅管理器（用于移动端 PTY 输出订阅）
-    subscription_manager: Arc<PtySubscriptionManager>,
+    /// 同步事件发送器（用于向客户端广播增量数据）
+    sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
 }
 
 impl SessionManager {
@@ -123,25 +124,46 @@ impl SessionManager {
             storage,
             running,
             output_listener: Arc::new(RwLock::new(None)),
-            subscription_manager: Arc::new(PtySubscriptionManager::new()),
+            sync_tx: RwLock::new(None),
         }
     }
 
-    /// 获取订阅管理器（用于移动端订阅）
-    pub fn subscription_manager(&self) -> Arc<PtySubscriptionManager> {
-        self.subscription_manager.clone()
+    /// 设置同步事件发送器
+    ///
+    /// 在初始化时设置，用于向客户端广播增量数据
+    pub async fn set_sync_tx(&self, sync_tx: broadcast::Sender<DesktopSyncEvent>) {
+        let mut tx = self.sync_tx.write().await;
+        *tx = Some(sync_tx);
     }
 
-    /// 为会话注册订阅处理器
+    /// 发布同步事件
+    ///
+    /// 内部方法，用于发布 DesktopSyncEvent 到事件总线
+    async fn publish_sync_event(&self, event: DesktopSyncEvent) {
+        let tx = self.sync_tx.read().await;
+        if let Some(sender) = &*tx {
+            let _ = sender.send(event);
+        }
+    }
+
+    /// 为会话注册输出管理器
     /// 在创建 PTY session 后调用，启用移动端订阅功能
-    pub fn register_subscription_handler(&self, session_id: &str) {
-        // 注册会话到订阅管理器（创建环形缓冲区）
-        self.subscription_manager.register_session(session_id);
-        tracing::info!("Registered session {} in subscription manager", session_id);
+    pub async fn register_output_manager(&self, session_id: &str) {
+        // 注册会话到全局输出管理器
+        let global_manager = GlobalOutputManager::global();
+        global_manager.register_session(session_id).await;
+        tracing::info!("Registered session {} in GlobalOutputManager", session_id);
     }
 
     /// 从配置创建会话
     pub async fn create_session(&self, config_id: &str) -> Result<String> {
+        self.create_session_with_source(config_id, None).await
+    }
+
+    /// 从配置创建会话（带来源设备）
+    ///
+    /// source_device: 触发操作的设备名称，桌面本地操作为 None
+    pub async fn create_session_with_source(&self, config_id: &str, source_device: Option<String>) -> Result<String> {
         // 从存储加载配置
         let config: crate::db::SessionConfig = self
             .storage
@@ -190,8 +212,14 @@ impl SessionManager {
         self.pty_registry.insert(session_id.clone(), pty_session).await;
         self.session_info.insert(info).await;
 
-        // 注册到订阅管理器（启用移动端订阅功能）
-        self.register_subscription_handler(&session_id);
+        // 注册到全局输出管理器（启用移动端订阅功能）
+        self.register_output_manager(&session_id).await;
+
+        // 发布同步事件：会话创建
+        self.publish_sync_event(DesktopSyncEvent::SessionCreated {
+            session_id: session_id.clone(),
+            source_device,
+        }).await;
 
         tracing::info!("Session created: {} ({})", session_name, session_id);
         Ok(session_id)
@@ -446,6 +474,13 @@ impl SessionManager {
 
     /// 终止会话
     pub async fn kill_session(&self, session_id: &str) -> Result<()> {
+        self.kill_session_with_source(session_id, None).await
+    }
+
+    /// 终止会话（带来源设备）
+    ///
+    /// source_device: 触发操作的设备名称，桌面本地操作为 None
+    pub async fn kill_session_with_source(&self, session_id: &str, source_device: Option<String>) -> Result<()> {
         tracing::info!("kill_session called for: {}", session_id);
 
         // 使用 PTY 注册表终止会话
@@ -473,19 +508,50 @@ impl SessionManager {
             session_name,
         });
 
+        // 发布同步事件：会话停止
+        self.publish_sync_event(DesktopSyncEvent::SessionStopped {
+            session_id: session_id.to_string(),
+            source_device,
+        }).await;
+
         tracing::info!("Session killed: {}", session_id);
         Ok(())
     }
 
     /// 删除会话
     pub async fn remove_session(&self, session_id: &str) -> Result<()> {
+        self.remove_session_with_source(session_id, None).await
+    }
+
+    /// 删除会话（带来源设备）
+    ///
+    /// source_device: 触发操作的设备名称，桌面本地操作为 None
+    pub async fn remove_session_with_source(&self, session_id: &str, source_device: Option<String>) -> Result<()> {
         tracing::info!("remove_session called for: {}", session_id);
+
+        // 从全局输出管理器注销
+        let global_manager = GlobalOutputManager::global();
+        global_manager.unregister_session(session_id).await;
+
+        // 在移除前获取会话名称（用于同步通知）
+        let session_name = self
+            .session_info
+            .get(session_id)
+            .await
+            .map(|i| i.name)
+            .unwrap_or_default();
 
         // 从各注册表移除（PTY 的缓存会随 PTY 一起被清理）
         let _ = self.pty_registry.remove(session_id).await;
         let _ = self.session_info.remove(session_id).await;
 
-        tracing::info!("Session removed: {}", session_id);
+        // 发布同步事件：会话删除
+        self.publish_sync_event(DesktopSyncEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+            source_device,
+        }).await;
+
+        tracing::info!("Session removed: {} ({})", session_id, session_name);
         Ok(())
     }
 

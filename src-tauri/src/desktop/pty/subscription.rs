@@ -117,92 +117,7 @@ impl Default for OutputRingBuffer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
 
-    fn make_event(index: usize) -> PtyOutputEvent {
-        PtyOutputEvent {
-            session_id: "test".to_string(),
-            data: format!("data{}", index),
-            timestamp: Utc::now(),
-            is_waiting: false,
-            index,
-        }
-    }
-
-    #[test]
-    fn test_ring_buffer_push_and_get() {
-        let mut buffer = OutputRingBuffer::new(10);
-
-        for i in 0..5 {
-            buffer.push(make_event(i));
-        }
-
-        let messages = buffer.get_since(0);
-        assert_eq!(messages.len(), 5);
-    }
-
-    #[test]
-    fn test_ring_buffer_wrap_around() {
-        let mut buffer = OutputRingBuffer::new(3);
-
-        for i in 0..5 {
-            buffer.push(make_event(i));
-        }
-
-        // 应该只保留最新的 3 条 (index 2, 3, 4)
-        let messages = buffer.get_since(0);
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages[0].index, 2);
-    }
-
-    #[test]
-    fn test_get_since_start() {
-        let mut buffer = OutputRingBuffer::new(10);
-
-        for i in 0..10 {
-            buffer.push(make_event(i));
-        }
-
-        // 从 index 5 开始获取
-        let messages = buffer.get_since(5);
-        assert_eq!(messages.len(), 5); // 5, 6, 7, 8, 9
-        assert_eq!(messages[0].index, 5);
-    }
-
-    #[test]
-    fn test_empty_buffer() {
-        let buffer = OutputRingBuffer::new(10);
-        assert!(buffer.is_empty());
-        assert_eq!(buffer.get_since(0).len(), 0);
-    }
-
-    #[test]
-    fn test_max_seq() {
-        let mut buffer = OutputRingBuffer::new(10);
-
-        buffer.push(make_event(5));
-        assert_eq!(buffer.max_seq(), 5);
-
-        buffer.push(make_event(10));
-        assert_eq!(buffer.max_seq(), 10);
-    }
-
-    #[test]
-    fn test_total_produced() {
-        let mut buffer = OutputRingBuffer::new(3);
-
-        buffer.push(make_event(0));
-        buffer.push(make_event(1));
-        buffer.push(make_event(2));
-        buffer.push(make_event(3)); // 触发环覆盖
-
-        // total_produced 仍然累加
-        assert_eq!(buffer.total_produced(), 4);
-    }
-}
 
 // ==================== Subscription Manager ====================
 
@@ -549,5 +464,93 @@ impl PtySubscriptionManager {
 impl Default for PtySubscriptionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_event(index: usize) -> PtyOutputEvent {
+        PtyOutputEvent {
+            session_id: "test".to_string(),
+            data: format!("data{}", index),
+            timestamp: Utc::now(),
+            is_waiting: false,
+            index,
+        }
+    }
+
+    #[test]
+    fn test_ring_buffer_push_and_get() {
+        let mut buffer = OutputRingBuffer::new(10);
+
+        for i in 0..5 {
+            buffer.push(make_event(i));
+        }
+
+        let messages = buffer.get_since(0);
+        assert_eq!(messages.len(), 5);
+    }
+
+    #[test]
+    fn test_ring_buffer_wrap_around() {
+        let mut buffer = OutputRingBuffer::new(3);
+
+        for i in 0..5 {
+            buffer.push(make_event(i));
+        }
+
+        // 应该只保留最新的 3 条 (index 2, 3, 4)
+        let messages = buffer.get_since(0);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].index, 2);
+    }
+
+    #[test]
+    fn test_get_since_start() {
+        let mut buffer = OutputRingBuffer::new(10);
+
+        for i in 0..10 {
+            buffer.push(make_event(i));
+        }
+
+        // 从 index 5 开始获取
+        let messages = buffer.get_since(5);
+        assert_eq!(messages.len(), 5); // 5, 6, 7, 8, 9
+        assert_eq!(messages[0].index, 5);
+    }
+
+    #[test]
+    fn test_empty_buffer() {
+        let buffer = OutputRingBuffer::new(10);
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.get_since(0).len(), 0);
+    }
+
+    #[test]
+    fn test_max_seq() {
+        let mut buffer = OutputRingBuffer::new(10);
+
+        buffer.push(make_event(5));
+        assert_eq!(buffer.max_seq(), 5);
+
+        buffer.push(make_event(10));
+        assert_eq!(buffer.max_seq(), 10);
+    }
+
+    #[test]
+    fn test_total_produced() {
+        let mut buffer = OutputRingBuffer::new(3);
+
+        buffer.push(make_event(0));
+        buffer.push(make_event(1));
+        buffer.push(make_event(2));
+        buffer.push(make_event(3)); // 触发环覆盖
+
+        // total_produced 仍然累加
+        assert_eq!(buffer.total_produced(), 4);
     }
 }

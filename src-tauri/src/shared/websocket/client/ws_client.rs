@@ -79,6 +79,11 @@ impl WsClient {
         self.event_tx.subscribe()
     }
 
+    /// 获取事件发送器（用于自定义 handler 发送 WsClientEvent）
+    pub fn event_tx(&self) -> broadcast::Sender<WsClientEvent> {
+        self.event_tx.clone()
+    }
+
     pub async fn get_status(&self) -> ConnectionStatus {
         self.lifecycle.get_status().await
     }
@@ -101,6 +106,11 @@ impl WsClient {
 
     pub async fn is_connected(&self) -> bool {
         self.lifecycle.is_connected().await
+    }
+
+    /// 替换消息处理器
+    pub async fn set_handler(&self, handler: Arc<dyn MessageHandler>) {
+        *self.handler.write().await = Some(handler);
     }
 
     pub async fn connect(self: &Arc<Self>) -> Result<()> {

@@ -5,6 +5,7 @@
 pub mod commands;
 pub mod enums;
 pub mod event_forwarder;
+pub mod events;
 pub mod model;
 pub mod plugin;
 pub mod pty;

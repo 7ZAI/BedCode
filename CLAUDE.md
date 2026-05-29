@@ -15,34 +15,21 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 
 ---
 
-## Project Structure
+## Code Map
 
-```
-bedcode/
-├── src/                      # Vue 3 frontend
-├── src-tauri/
-│   └── src/
-│       ├── shared/           # 共享模块 (desktop + mobile)
-│       │   ├── auth/         # 设备配对与认证
-│       │   ├── config.rs
-│       │   ├── db/           # SQLite 操作
-│       │   ├── error.rs
-│       │   ├── notify/
-│       │   ├── parser/
-│       │   ├── websocket/    # 共享 WebSocket (消息、客户端)
-│       │   └── commands.rs   # 共享 Tauri commands
-│       ├── desktop/          # 桌面端模块
-│       │   ├── pty/
-│       │   ├── session/      # 会话管理
-│       │   ├── websocket/    # WebSocket 服务器
-│       │   ├── plugin/
-│       │   └── commands.rs
-│       ├── mobile/           # 移动端模块
-│       │   ├── websocket/    # 移动端 WebSocket 客户端
-│       │   └── commands.rs
-│       └── lib.rs
-└── docs/
-```
+**完整的项目目录结构和模块索引请参阅 [`docs/code-map.md`](docs/code-map.md)。**
+
+该文档包含：
+- 完整的目录树结构
+- 各模块职责说明
+- 按功能和类型的快速导航索引
+
+**重要：当用户命令包含以下动作时，请先阅读 `docs/code-map.md`：**
+
+- 探索代码 / 查看代码 / 了解代码结构
+- 查找文件 / 定位模块 / 寻找某个功能
+- 理解架构 / 分析项目组成
+- 修改某模块前需要了解上下文
 
 ---
 

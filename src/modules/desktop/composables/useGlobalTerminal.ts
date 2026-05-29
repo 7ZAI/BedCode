@@ -51,11 +51,9 @@ const darkTheme = {
  */
 export async function initGlobalTerminalManager(): Promise<void> {
   if (globalUnlisten) {
-    console.log('[TerminalManager] Already initialized')
     return
   }
 
-  console.log('[TerminalManager] Initializing global listener...')
   globalUnlisten = await onPtyOutput((event: any) => {
     const sessionId = event.sessionId || event.session_id
     if (!sessionId) {
@@ -83,14 +81,8 @@ export async function initGlobalTerminalManager(): Promise<void> {
       instance.terminal.write(decodedData)
       // 同时保存到缓冲区（用于同步到新窗口）
       instance.outputBuffer.push(decodedData)
-
-      console.log('[TerminalManager] Wrote output to terminal:', sessionId)
-    } else {
-      console.warn('[TerminalManager] No terminal instance for session:', sessionId)
     }
   })
-
-  console.log('[TerminalManager] Global listener initialized')
 }
 
 /**
@@ -100,7 +92,6 @@ export function createHiddenTerminal(sessionId: string): Terminal {
   // 如果已存在，直接返回
   const existing = terminalInstances.get(sessionId)
   if (existing) {
-    console.log('[TerminalManager] Terminal already exists for session:', sessionId)
     return existing.terminal
   }
 
@@ -125,7 +116,6 @@ export function createHiddenTerminal(sessionId: string): Terminal {
     outputBuffer: [],
   })
 
-  console.log('[TerminalManager] Created hidden terminal for session:', sessionId)
   return terminal
 }
 
@@ -153,7 +143,6 @@ export function clearOutputBuffer(sessionId: string): void {
   const instance = terminalInstances.get(sessionId)
   if (instance) {
     instance.outputBuffer = []
-    console.log('[TerminalManager] Cleared output buffer for session:', sessionId)
   }
 }
 
@@ -165,7 +154,6 @@ export function destroyTerminal(sessionId: string): void {
   if (instance) {
     instance.terminal.dispose()
     terminalInstances.delete(sessionId)
-    console.log('[TerminalManager] Destroyed terminal for session:', sessionId)
   }
 }
 
@@ -173,16 +161,14 @@ export function destroyTerminal(sessionId: string): void {
  * 清理所有实例
  */
 export function cleanupAllTerminals(): void {
-  for (const [sessionId, instance] of terminalInstances) {
+  for (const [, instance] of terminalInstances) {
     instance.terminal.dispose()
-    console.log('[TerminalManager] Destroyed terminal for session:', sessionId)
   }
   terminalInstances.clear()
 
   if (globalUnlisten) {
     globalUnlisten()
     globalUnlisten = null
-    console.log('[TerminalManager] Global listener cleaned up')
   }
 }
 

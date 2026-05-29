@@ -137,8 +137,10 @@ pub enum TerminalAction {
 
     /// 订阅响应 (服务端 → 客户端)
     SubscribeResponse {
+        /// 最小可用序号（用于判断数据是否被覆盖）
+        min_seq: u64,
         /// 当前最大序号
-        current_max_seq: u64,
+        max_seq: u64,
         /// 历史消息数量
         history_count: usize,
     },

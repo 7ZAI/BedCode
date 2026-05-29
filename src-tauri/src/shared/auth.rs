@@ -11,7 +11,7 @@
 pub mod pairing;
 pub mod qr_token;
 mod jwt;
-mod storage;
+pub mod storage;
 
 // Re-export basic structures
 pub use pairing::*;

@@ -8,6 +8,7 @@ use crate::desktop::server::router::registry::{message_type_key, RouteRegistry};
 use crate::shared::websocket::server::connection_manager::ConnectionManager;
 use crate::shared::websocket::server::events::WsServerEvent;
 use crate::shared::websocket::server::default_handler::MessageRouter;
+use crate::shared::model::message::{ACK_CODE_FAILURE, ACK_CODE_SESSION_NOT_FOUND, ACK_CODE_AUTH_FAILED};
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -102,10 +103,17 @@ impl MessageRouter for BusinessRouter {
 
             let client_id = client_id_str.unwrap_or_else(|| addr.to_string());
 
+            // 获取设备名称（从 WebSocketManager 获取）
+            let device_name = {
+                let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+                ws_manager.get_device_name_by_addr(&addr).await
+            };
+
             let ctx = RouteContext::new(
                 connection_id.unwrap_or_default(),
                 addr,
                 client_id,
+                device_name,
                 connection_manager,
                 event_tx,
             );
@@ -131,18 +139,26 @@ impl MessageRouter for BusinessRouter {
                     msg.with_request_id(&message_id)
                 }
                 Ok(None) => {
-                    // handler 无返回值，发送默认 Ack 响应
+                    // handler 无返回值，发送默认 Ack 成功响应
                     Message::ack(&message_id)
                 }
                 Err(e) => {
-                    // 处理出错，发送错误响应
+                    // 处理出错，发送 Ack 失败响应
                     tracing::error!("Handler error: {}", e);
-                    Message::error_with_id(&message_id, "HANDLER_ERROR", &e.to_string())
+                    // 根据错误类型映射响应代码
+                    let code = match &e {
+                        crate::AppError::Session(_) => ACK_CODE_SESSION_NOT_FOUND,
+                        crate::AppError::NotFound(_) => ACK_CODE_SESSION_NOT_FOUND,
+                        crate::AppError::Auth(_) => ACK_CODE_AUTH_FAILED,
+                        _ => ACK_CODE_FAILURE,
+                    };
+                    Message::ack_failure(&message_id, code, &e.to_string())
                 }
             };
 
             // 发送响应到客户端
             if let Ok(ws_msg) = response_msg.to_ws_message() {
+                tracing::info!("[BusinessRouter] >>> SEND response to {}: {:?}", addr, response_msg);
                 if let Err(e) = tx.send(ws_msg).await {
                     tracing::error!("Failed to send response: {}", e);
                 }

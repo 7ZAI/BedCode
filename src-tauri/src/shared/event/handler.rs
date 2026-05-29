@@ -459,75 +459,573 @@ macro_rules! on_event_filtered {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    #[derive(Debug, Clone)]
-    enum TestEvent {
-        Started { id: u32 },
-        Stopped { id: u32 },
-        Message { content: String },
+    // ==================== 测试事件定义 ====================
+
+    /// 事件类型 A：模拟会话生命周期事件
+    #[derive(Debug, Clone, PartialEq)]
+    enum SessionEvent {
+        Created { id: u32, name: String },
+        Destroyed { id: u32 },
+        Data { id: u32, payload: String },
     }
 
-    impl AppEvent for TestEvent {}
+    impl AppEvent for SessionEvent {}
+
+    /// 事件类型 B：模拟连接事件（与 SessionEvent 完全不同的类型）
+    #[derive(Debug, Clone, PartialEq)]
+    enum ConnectionEvent {
+        Connected { addr: String },
+        Disconnected { addr: String, reason: String },
+        Heartbeat { addr: String },
+    }
+
+    impl AppEvent for ConnectionEvent {}
+
+    /// 事件类型 C：简单结构体事件（验证非 enum 类型也能工作）
+    #[derive(Debug, Clone, PartialEq)]
+    struct NotificationEvent {
+        level: String,
+        message: String,
+    }
+
+    impl AppEvent for NotificationEvent {}
+
+    // ==================== 辅助：结构化 EventHandler 实现 ====================
+
+    /// 收集事件的处理器，方便断言
+    struct Collector<E: AppEvent> {
+        events: Arc<std::sync::Mutex<Vec<E>>>,
+    }
+
+    impl<E: AppEvent> Collector<E> {
+        fn new() -> (Arc<std::sync::Mutex<Vec<E>>>, Self) {
+            let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let collector = Self { events: events.clone() };
+            (events, collector)
+        }
+    }
+
+    impl<E: AppEvent + 'static> EventHandler<E> for Collector<E> {
+        fn handle(&self, event: E) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    // ==================== 1. 事件发送与订阅 ====================
 
     #[tokio::test]
-    async fn test_basic_handler() {
+    async fn test_register_source_and_publish() {
         let matcher = EventMatcher::new();
-        let (tx, _) = broadcast::channel::<TestEvent>(16);
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
 
         // 注册事件源
-        matcher.register_source::<TestEvent>(tx.clone()).await;
+        matcher.register_source::<SessionEvent>(tx).await;
+        assert!(matcher.has_source::<SessionEvent>().await);
+        assert_eq!(matcher.source_count().await, 1);
 
-        // 记录处理结果
-        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let received_clone = received.clone();
+        // 注册处理器以接收事件
+        let (events, collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector)).await;
 
-        // 注册处理器
-        matcher.register_fn::<TestEvent, _>(move |event| {
-            received_clone.lock().unwrap().push(format!("{:?}", event));
-        }).await;
-
-        // 发布事件
-        tx.send(TestEvent::Started { id: 1 }).unwrap();
-        tx.send(TestEvent::Message { content: "hello".into() }).unwrap();
+        // 通过 matcher.publish 发送事件
+        matcher
+            .publish(SessionEvent::Created { id: 1, name: "test".into() })
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let results = received.lock().unwrap();
-        assert_eq!(results.len(), 2);
+        let received = events.lock().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0], SessionEvent::Created { id: 1, name: "test".into() });
     }
 
     #[tokio::test]
-    async fn test_filtered_handler() {
+    async fn test_subscribe_returns_receiver() {
         let matcher = EventMatcher::new();
-        let (tx, _) = broadcast::channel::<TestEvent>(16);
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
 
-        matcher.register_source::<TestEvent>(tx.clone()).await;
+        // 尚未注册事件源，subscribe 返回 None
+        assert!(matcher.subscribe::<SessionEvent>().await.is_none());
 
-        let started_received = Arc::new(std::sync::Mutex::new(false));
-        let stopped_received = Arc::new(std::sync::Mutex::new(false));
+        // 注册事件源后，subscribe 返回 receiver
+        matcher.register_source::<SessionEvent>(tx).await;
+        let rx = matcher.subscribe::<SessionEvent>().await;
+        assert!(rx.is_some());
+    }
 
-        // 只处理 Started 变体
-        let started_clone = started_received.clone();
-        matcher.on_filter::<TestEvent, _, _>(
-            |e| matches!(e, TestEvent::Started { .. }),
-            move |_| *started_clone.lock().unwrap() = true
-        ).await;
+    #[tokio::test]
+    async fn test_publish_without_source_returns_ok() {
+        let matcher = EventMatcher::new();
+        // 未注册事件源时 publish 不 panic，返回 Ok
+        let result = matcher
+            .publish(SessionEvent::Destroyed { id: 99 })
+            .await;
+        assert!(result.is_ok());
+    }
 
-        // 只处理 Stopped 变体
-        let stopped_clone = stopped_received.clone();
-        matcher.on_filter::<TestEvent, _, _>(
-            |e| matches!(e, TestEvent::Stopped { .. }),
-            move |_| *stopped_clone.lock().unwrap() = true
-        ).await;
+    #[tokio::test]
+    async fn test_publish_when_channel_closed() {
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx).await;
 
-        // 发布事件
-        tx.send(TestEvent::Started { id: 1 }).unwrap();
-        tx.send(TestEvent::Message { content: "test".into() }).unwrap();
-        tx.send(TestEvent::Stopped { id: 1 }).unwrap();
+        // 注销事件源后 publish 不 panic
+        matcher.unregister_source::<SessionEvent>().await;
+        let result = matcher
+            .publish(SessionEvent::Destroyed { id: 99 })
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // ==================== 2. 事件处理解耦 ====================
+
+    #[tokio::test]
+    async fn test_source_before_handler() {
+        // 先注册事件源，再注册处理器 — 应自动桥接
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let (events, collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector)).await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "first".into() }).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        assert!(*started_received.lock().unwrap());
-        assert!(*stopped_received.lock().unwrap());
+        let received = events.lock().unwrap();
+        assert_eq!(received.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_handler_before_source() {
+        // 先注册处理器，再注册事件源 — 应自动桥接
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+
+        let (events, collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector)).await;
+
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        tx.send(SessionEvent::Created { id: 2, name: "second".into() }).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let received = events.lock().unwrap();
+        assert_eq!(received.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_handlers_decoupled_from_source() {
+        // 多个处理器独立于事件源，各自接收所有事件
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let (events_a, collector_a) = Collector::new();
+        let (events_b, collector_b) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector_a)).await;
+        matcher.register::<SessionEvent>(Arc::new(collector_b)).await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "a".into() }).unwrap();
+        tx.send(SessionEvent::Destroyed { id: 1 }).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert_eq!(events_a.lock().unwrap().len(), 2);
+        assert_eq!(events_b.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_handlers_stops_processing() {
+        // 注销处理器后，事件源仍可发送但无处理器接收
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let (events, collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector)).await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "before".into() }).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(events.lock().unwrap().len(), 1);
+
+        // 注销处理器
+        matcher.unregister_handlers::<SessionEvent>().await;
+        assert!(!matcher.has_handler::<SessionEvent>().await);
+
+        // 后续事件不会被任何处理器接收
+        tx.send(SessionEvent::Created { id: 2, name: "after".into() }).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_source_stops_delivery() {
+        // 注销事件源后，处理器不再收到事件
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let (events, collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector)).await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "before".into() }).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(events.lock().unwrap().len(), 1);
+
+        matcher.unregister_source::<SessionEvent>().await;
+        assert!(!matcher.has_source::<SessionEvent>().await);
+
+        // 原始 sender 仍然可用但已与 matcher 解耦
+        tx.send(SessionEvent::Created { id: 2, name: "orphan".into() }).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(events.lock().unwrap().len(), 1);
+    }
+
+    // ==================== 3. 多种具体事件类型 ====================
+
+    #[tokio::test]
+    async fn test_multiple_event_types_independent() {
+        // SessionEvent 和 ConnectionEvent 完全独立，互不干扰
+        let matcher = EventMatcher::new();
+        let (tx_session, _) = broadcast::channel::<SessionEvent>(16);
+        let (tx_conn, _) = broadcast::channel::<ConnectionEvent>(16);
+
+        matcher.register_source::<SessionEvent>(tx_session.clone()).await;
+        matcher.register_source::<ConnectionEvent>(tx_conn.clone()).await;
+
+        let (session_events, session_collector) = Collector::new();
+        let (conn_events, conn_collector) = Collector::new();
+
+        matcher.register::<SessionEvent>(Arc::new(session_collector)).await;
+        matcher.register::<ConnectionEvent>(Arc::new(conn_collector)).await;
+
+        // 发送 Session 事件
+        tx_session
+            .send(SessionEvent::Created { id: 1, name: "s1".into() })
+            .unwrap();
+        // 发送 Connection 事件
+        tx_conn
+            .send(ConnectionEvent::Connected { addr: "192.168.1.1".into() })
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 各自只收到自己类型的事件
+        assert_eq!(session_events.lock().unwrap().len(), 1);
+        assert_eq!(conn_events.lock().unwrap().len(), 1);
+
+        assert_eq!(
+            session_events.lock().unwrap()[0],
+            SessionEvent::Created { id: 1, name: "s1".into() }
+        );
+        assert_eq!(
+            conn_events.lock().unwrap()[0],
+            ConnectionEvent::Connected { addr: "192.168.1.1".into() }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_three_event_types_concurrently() {
+        // 三种事件类型同时注册和发送
+        let matcher = EventMatcher::new();
+        let (tx_s, _) = broadcast::channel::<SessionEvent>(16);
+        let (tx_c, _) = broadcast::channel::<ConnectionEvent>(16);
+        let (tx_n, _) = broadcast::channel::<NotificationEvent>(16);
+
+        matcher.register_source::<SessionEvent>(tx_s.clone()).await;
+        matcher.register_source::<ConnectionEvent>(tx_c.clone()).await;
+        matcher.register_source::<NotificationEvent>(tx_n.clone()).await;
+
+        let (s_events, s_collector) = Collector::new();
+        let (c_events, c_collector) = Collector::new();
+        let (n_events, n_collector) = Collector::new();
+
+        matcher.register::<SessionEvent>(Arc::new(s_collector)).await;
+        matcher.register::<ConnectionEvent>(Arc::new(c_collector)).await;
+        matcher.register::<NotificationEvent>(Arc::new(n_collector)).await;
+
+        // 交替发送三种事件
+        tx_s.send(SessionEvent::Created { id: 1, name: "s1".into() }).unwrap();
+        tx_c.send(ConnectionEvent::Connected { addr: "10.0.0.1".into() }).unwrap();
+        tx_n.send(NotificationEvent { level: "info".into(), message: "hello".into() }).unwrap();
+        tx_s.send(SessionEvent::Destroyed { id: 1 }).unwrap();
+        tx_c.send(ConnectionEvent::Disconnected { addr: "10.0.0.1".into(), reason: "timeout".into() }).unwrap();
+        tx_n.send(NotificationEvent { level: "warn".into(), message: "degraded".into() }).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        assert_eq!(s_events.lock().unwrap().len(), 2);
+        assert_eq!(c_events.lock().unwrap().len(), 2);
+        assert_eq!(n_events.lock().unwrap().len(), 2);
+        assert_eq!(matcher.source_count().await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_one_type_does_not_affect_others() {
+        // 注销 SessionEvent 的事件源不影响 ConnectionEvent
+        let matcher = EventMatcher::new();
+        let (tx_s, _) = broadcast::channel::<SessionEvent>(16);
+        let (tx_c, _) = broadcast::channel::<ConnectionEvent>(16);
+
+        matcher.register_source::<SessionEvent>(tx_s.clone()).await;
+        matcher.register_source::<ConnectionEvent>(tx_c.clone()).await;
+
+        let (s_events, s_collector) = Collector::new();
+        let (c_events, c_collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(s_collector)).await;
+        matcher.register::<ConnectionEvent>(Arc::new(c_collector)).await;
+
+        // 注销 Session 事件源
+        matcher.unregister_source::<SessionEvent>().await;
+        assert!(!matcher.has_source::<SessionEvent>().await);
+        assert!(matcher.has_source::<ConnectionEvent>().await);
+
+        // Connection 事件仍然正常
+        tx_c.send(ConnectionEvent::Heartbeat { addr: "10.0.0.1".into() }).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(c_events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_struct_event_type() {
+        // 非 enum 类型（struct）也能正常工作
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<NotificationEvent>(16);
+        matcher.register_source::<NotificationEvent>(tx).await;
+
+        let (events, collector) = Collector::new();
+        matcher.register::<NotificationEvent>(Arc::new(collector)).await;
+
+        matcher
+            .publish(NotificationEvent { level: "error".into(), message: "disk full".into() })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let received = events.lock().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].level, "error");
+        assert_eq!(received[0].message, "disk full");
+    }
+
+    // ==================== 4. 过滤器 ====================
+
+    #[tokio::test]
+    async fn test_filter_only_matches_specific_variants() {
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let created_events: Arc<std::sync::Mutex<Vec<SessionEvent>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let destroyed_count = Arc::new(AtomicU32::new(0));
+
+        // 过滤器：只处理 Created
+        let created_clone = created_events.clone();
+        matcher
+            .on_filter::<SessionEvent, _, _>(
+                |e| matches!(e, SessionEvent::Created { .. }),
+                move |e| created_clone.lock().unwrap().push(e),
+            )
+            .await;
+
+        // 过滤器：只处理 Destroyed
+        let destroyed_clone = destroyed_count.clone();
+        matcher
+            .on_filter::<SessionEvent, _, _>(
+                |e| matches!(e, SessionEvent::Destroyed { .. }),
+                move |_| {
+                    destroyed_clone.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "a".into() }).unwrap();
+        tx.send(SessionEvent::Destroyed { id: 1 }).unwrap();
+        tx.send(SessionEvent::Data { id: 1, payload: "payload".into() }).unwrap();
+        tx.send(SessionEvent::Created { id: 2, name: "b".into() }).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Created 过滤器收到 2 个，Destroyed 过滤器收到 1 个，Data 无处理器
+        assert_eq!(created_events.lock().unwrap().len(), 2);
+        assert_eq!(destroyed_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_filter_with_complex_predicate() {
+        // 过滤器使用复杂谓词（id > 5）
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let high_id_events: Arc<std::sync::Mutex<Vec<u32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let high_clone = high_id_events.clone();
+
+        matcher
+            .on_filter::<SessionEvent, _, _>(
+                |e| matches!(e, SessionEvent::Created { id, .. } if *id > 5),
+                move |e| {
+                    if let SessionEvent::Created { id, .. } = e {
+                        high_clone.lock().unwrap().push(id);
+                    }
+                },
+            )
+            .await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "low".into() }).unwrap();
+        tx.send(SessionEvent::Created { id: 10, name: "high".into() }).unwrap();
+        tx.send(SessionEvent::Created { id: 3, name: "low".into() }).unwrap();
+        tx.send(SessionEvent::Created { id: 99, name: "high".into() }).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let ids = high_id_events.lock().unwrap();
+        assert_eq!(*ids, vec![10, 99]);
+    }
+
+    #[tokio::test]
+    async fn test_mixed_handler_and_filtered_handler() {
+        // 全局处理器 + 过滤处理器共存
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<ConnectionEvent>(16);
+        matcher.register_source::<ConnectionEvent>(tx.clone()).await;
+
+        // 全局处理器：收到所有事件
+        let all_count = Arc::new(AtomicU32::new(0));
+        let all_clone = all_count.clone();
+        matcher
+            .register_fn::<ConnectionEvent, _>(move |_| {
+                all_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+
+        // 过滤处理器：只处理 Connected
+        let connected_count = Arc::new(AtomicU32::new(0));
+        let conn_clone = connected_count.clone();
+        matcher
+            .on_filter::<ConnectionEvent, _, _>(
+                |e| matches!(e, ConnectionEvent::Connected { .. }),
+                move |_| {
+                    conn_clone.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await;
+
+        tx.send(ConnectionEvent::Connected { addr: "a".into() }).unwrap();
+        tx.send(ConnectionEvent::Heartbeat { addr: "a".into() }).unwrap();
+        tx.send(ConnectionEvent::Disconnected { addr: "a".into(), reason: "r".into() }).unwrap();
+        tx.send(ConnectionEvent::Connected { addr: "b".into() }).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 全局处理器收到 4 个，过滤处理器收到 2 个
+        assert_eq!(all_count.load(Ordering::SeqCst), 4);
+        assert_eq!(connected_count.load(Ordering::SeqCst), 2);
+    }
+
+    // ==================== 5. 边界情况与健壮性 ====================
+
+    #[tokio::test]
+    async fn test_no_duplicate_subscription() {
+        // 重复注册事件源不会创建多个订阅任务
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+        // 再次注册同一类型（替换事件源）
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let (events, collector) = Collector::new();
+        matcher.register::<SessionEvent>(Arc::new(collector)).await;
+
+        tx.send(SessionEvent::Created { id: 1, name: "dup".into() }).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 每个事件只被处理一次（不会因重复订阅而重复处理）
+        assert_eq!(events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_handler_count_tracking() {
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(16);
+        matcher.register_source::<SessionEvent>(tx).await;
+
+        assert_eq!(matcher.handler_count().await, 0);
+
+        let (_, c1) = Collector::<SessionEvent>::new();
+        let (_, c2) = Collector::<SessionEvent>::new();
+        matcher.register::<SessionEvent>(Arc::new(c1)).await;
+        assert_eq!(matcher.handler_count().await, 1);
+        matcher.register::<SessionEvent>(Arc::new(c2)).await;
+        assert_eq!(matcher.handler_count().await, 2);
+
+        matcher.unregister_handlers::<SessionEvent>().await;
+        assert_eq!(matcher.handler_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_clear_removes_everything() {
+        let matcher = EventMatcher::new();
+        let (tx_s, _) = broadcast::channel::<SessionEvent>(16);
+        let (tx_c, _) = broadcast::channel::<ConnectionEvent>(16);
+
+        matcher.register_source::<SessionEvent>(tx_s).await;
+        matcher.register_source::<ConnectionEvent>(tx_c).await;
+
+        let (_, sc) = Collector::<SessionEvent>::new();
+        let (_, cc) = Collector::<ConnectionEvent>::new();
+        matcher.register::<SessionEvent>(Arc::new(sc)).await;
+        matcher.register::<ConnectionEvent>(Arc::new(cc)).await;
+
+        assert_eq!(matcher.source_count().await, 2);
+        assert_eq!(matcher.handler_count().await, 2);
+
+        matcher.clear().await;
+
+        assert_eq!(matcher.source_count().await, 0);
+        assert_eq!(matcher.handler_count().await, 0);
+        assert!(!matcher.has_source::<SessionEvent>().await);
+        assert!(!matcher.has_handler::<ConnectionEvent>().await);
+    }
+
+    #[tokio::test]
+    async fn test_high_volume_events() {
+        // 大量事件不丢失（在 channel 容量内）
+        let matcher = EventMatcher::new();
+        let (tx, _) = broadcast::channel::<SessionEvent>(256);
+        matcher.register_source::<SessionEvent>(tx.clone()).await;
+
+        let count = Arc::new(AtomicU32::new(0));
+        let count_clone = count.clone();
+        matcher
+            .register_fn::<SessionEvent, _>(move |_| {
+                count_clone.fetch_add(1, Ordering::Relaxed);
+            })
+            .await;
+
+        for i in 0..100 {
+            tx.send(SessionEvent::Data { id: i, payload: format!("p{}", i) }).unwrap();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let received = count.load(Ordering::SeqCst);
+        assert_eq!(received, 100);
+    }
+
+    #[tokio::test]
+    async fn test_default_trait() {
+        let matcher = EventMatcher::default();
+        assert_eq!(matcher.source_count().await, 0);
+        assert_eq!(matcher.handler_count().await, 0);
     }
 }

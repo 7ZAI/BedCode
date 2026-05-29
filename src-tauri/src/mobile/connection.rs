@@ -176,8 +176,11 @@ impl ConnectionManager {
         let client = WsClient::new(config);
         tracing::debug!("WsClient created");
 
+        // 为 MobileHandler 设置 ws_event_tx（用于 send_and_wait 响应匹配）
+        let handler_with_tx = self.handler.clone().with_ws_event_tx(client.event_tx());
+
         tracing::debug!("Setting handler (async)...");
-        client.set_handler(self.handler.clone()).await;
+        client.set_handler(handler_with_tx).await;
         tracing::debug!("Handler set, now calling client.connect()...");
         tracing::info!("About to call client.connect(), this should show Connection log...");
         match client.connect().await {

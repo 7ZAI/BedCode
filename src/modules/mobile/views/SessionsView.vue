@@ -92,12 +92,14 @@ import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { wsLoadSessions, wsStopSession, wsRemoveSession } from '@/modules/mobile/composables/useMobileCommands'
+import { useToast } from '@/modules/shared/composables/useToast'
 import SessionCard from '@/modules/mobile/components/SessionCard.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
 import Button from '@/modules/shared/components/Button.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
+const toast = useToast()
 
 // 连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
@@ -143,6 +145,7 @@ async function confirmStop() {
     pendingSession.value = null
   } catch (e) {
     console.error('[SessionsView] Failed to stop session:', e)
+    toast.error('停止会话失败')
   } finally {
     isStopping.value = false
   }
@@ -163,6 +166,7 @@ async function confirmDelete() {
     pendingSession.value = null
   } catch (e) {
     console.error('[SessionsView] Failed to delete session:', e)
+    toast.error('删除会话失败')
   } finally {
     isDeleting.value = false
   }
@@ -176,6 +180,7 @@ async function refreshSessions() {
     sessions.value = await wsLoadSessions()
   } catch (e) {
     console.error('[SessionsView] Failed to load sessions:', e)
+    toast.error('加载会话列表失败')
   } finally {
     isLoading.value = false
     isRefreshing.value = false
@@ -183,10 +188,10 @@ async function refreshSessions() {
 }
 
 onActivated(() => {
-  refreshSessions()
+  // 不再自动加载，用户需要手动点击刷新按钮
 })
 
 onMounted(async () => {
-  await refreshSessions()
+  // 不再自动加载，用户需要手动点击刷新按钮
 })
 </script>

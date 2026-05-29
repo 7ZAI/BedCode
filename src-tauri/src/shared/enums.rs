@@ -7,6 +7,7 @@ pub mod control;
 pub mod session;
 pub mod special_key;
 pub mod sumary;
+pub mod sync;
 
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
@@ -14,3 +15,4 @@ pub use control::{SessionControlAction, SessionControlPayload, SessionConfigActi
 pub use session::{SessionStatus, SessionType};
 pub use special_key::SpecialKey;
 pub use sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
+pub use sync::SyncPayload;

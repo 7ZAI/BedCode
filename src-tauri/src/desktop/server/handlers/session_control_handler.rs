@@ -56,6 +56,7 @@ impl RouteHandler for SessionControlHandler {
             &self.session_manager,
             &self.plugin_manager,
             ctx.addr,
+            ctx.device_name.clone(),
         ).await
     }
 }

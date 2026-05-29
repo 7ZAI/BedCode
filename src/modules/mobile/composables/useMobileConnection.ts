@@ -15,6 +15,7 @@ import {
   wsRequestPairing,
   wsVerifyPairingCode,
   wsLoadSessionConfigs,
+  wsLoadSessions,
   wsStartSession,
   wsStopSession,
   wsSendInput,
@@ -53,6 +54,32 @@ const activeSessionId = ref<string | null>(null)
 
 // 最后收到的消息
 const lastMessage = ref<any>(null)
+
+// ==================== Global Session State ====================
+// 会话配置列表（全局状态，切换页面不丢失）
+interface SessionConfigSummary {
+  id: string
+  name: string
+  environment: string
+  wsl_distro?: string
+  working_dir: string
+  command: string
+}
+const sessionConfigs = ref<SessionConfigSummary[]>([])
+const isLoadingConfigs = ref(false)
+const hasLoadedConfigs = ref(false)
+
+// 活跃会话列表（全局状态）
+const activeSessions = ref<any[]>([])
+
+// 连接历史（全局状态）
+interface ConnectionHistoryItem {
+  address: string
+  name: string
+  lastConnected: string
+}
+const connectionHistory = ref<ConnectionHistoryItem[]>([])
+const historyLoaded = ref(false)
 
 // ==================== Computed ====================
 
@@ -143,6 +170,78 @@ async function init() {
       connectionError.value = reason
       isConnecting.value = false
       console.log('[MobileConnection] Server closed:', reason)
+    },
+    // 同步事件回调
+    onSyncConfigCreated: (data) => {
+      console.log('[MobileConnection] SyncConfigCreated:', data.config.id, 'source:', data.source_device)
+      // 添加新配置到列表
+      const newConfig = {
+        id: data.config.id,
+        name: data.config.name,
+        environment: data.config.environment,
+        wsl_distro: data.config.wsl_distro,
+        working_dir: data.config.working_dir,
+        command: data.config.command,
+      }
+      // 避免重复添加
+      if (!sessionConfigs.value.find(c => c.id === newConfig.id)) {
+        sessionConfigs.value.push(newConfig)
+      }
+    },
+    onSyncConfigUpdated: (data) => {
+      console.log('[MobileConnection] SyncConfigUpdated:', data.config.id, 'source:', data.source_device)
+      // 更新现有配置
+      const index = sessionConfigs.value.findIndex(c => c.id === data.config.id)
+      if (index !== -1) {
+        sessionConfigs.value[index] = {
+          id: data.config.id,
+          name: data.config.name,
+          environment: data.config.environment,
+          wsl_distro: data.config.wsl_distro,
+          working_dir: data.config.working_dir,
+          command: data.config.command,
+        }
+      } else {
+        // 如果配置不存在，添加它
+        sessionConfigs.value.push({
+          id: data.config.id,
+          name: data.config.name,
+          environment: data.config.environment,
+          wsl_distro: data.config.wsl_distro,
+          working_dir: data.config.working_dir,
+          command: data.config.command,
+        })
+      }
+    },
+    onSyncConfigRemoved: (data) => {
+      console.log('[MobileConnection] SyncConfigRemoved:', data.config_id, data.config_name)
+      // 从列表移除配置
+      sessionConfigs.value = sessionConfigs.value.filter(c => c.id !== data.config_id)
+    },
+    onSyncSessionCreated: (data) => {
+      console.log('[MobileConnection] SyncSessionCreated:', data.session.id, 'source:', data.source_device)
+      // 添加新会话到列表
+      if (!activeSessions.value.find(s => s.id === data.session.id)) {
+        activeSessions.value.push(data.session)
+      }
+    },
+    onSyncSessionStatusChanged: (data) => {
+      console.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)
+      // 更新会话状态
+      const index = activeSessions.value.findIndex(s => s.id === data.session_id)
+      if (index !== -1) {
+        activeSessions.value[index].status = data.new_status
+      }
+    },
+    onSyncSessionStopped: (data) => {
+      console.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
+      // 从活跃列表移除
+      activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
+    },
+    onSyncSessionRemoved: (data) => {
+      console.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
+      // 从列表移除会话
+      activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
     },
   })
 
@@ -339,14 +438,34 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
  * 加载会话配置列表
  */
 export async function loadSessionConfigs(): Promise<any[]> {
-  return await wsLoadSessionConfigs()
+  const configs = await wsLoadSessionConfigs()
+  sessionConfigs.value = configs.map((c: any) => ({
+    id: c.id,
+    name: c.name,
+    environment: c.environment,
+    wsl_distro: c.wsl_distro,
+    working_dir: c.working_dir,
+    command: c.command,
+  }))
+  hasLoadedConfigs.value = true
+  return configs
 }
 
 /**
- * 启动会话
+ * 加载活跃会话列表
  */
-export async function startSession(configId: string, sessionName?: string): Promise<string> {
-  return await wsStartSession(configId, sessionName)
+export async function loadActiveSessions(): Promise<any[]> {
+  const sessions = await wsLoadSessions()
+  activeSessions.value = sessions
+  return sessions
+}
+
+/**
+ * 启动会话，返回完整会话信息
+ */
+export async function startSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {
+  const result = await wsStartSession(configId, sessionName)
+  return result
 }
 
 /**
@@ -354,6 +473,78 @@ export async function startSession(configId: string, sessionName?: string): Prom
  */
 export async function stopSession(sessionId: string): Promise<void> {
   await wsStopSession(sessionId)
+  // 从本地列表移除
+  activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
+}
+
+/**
+ * 加载连接历史
+ */
+export function loadConnectionHistory(): void {
+  if (historyLoaded.value) return
+  const stored = localStorage.getItem('connection_history')
+  if (stored) {
+    try {
+      connectionHistory.value = JSON.parse(stored)
+    } catch {
+      connectionHistory.value = []
+    }
+  }
+  historyLoaded.value = true
+}
+
+/**
+ * 保存连接历史到 localStorage
+ */
+export function saveConnectionHistory(): void {
+  localStorage.setItem('connection_history', JSON.stringify(connectionHistory.value))
+}
+
+/**
+ * 添加到连接历史
+ */
+export function addToConnectionHistory(address: string, name?: string): void {
+  connectionHistory.value = connectionHistory.value.filter(item => item.address !== address)
+  connectionHistory.value.unshift({
+    address,
+    name: name || address.split(':')[0],
+    lastConnected: new Date().toISOString(),
+  })
+  if (connectionHistory.value.length > 10) {
+    connectionHistory.value = connectionHistory.value.slice(0, 10)
+  }
+  saveConnectionHistory()
+}
+
+/**
+ * 从连接历史移除
+ */
+export function removeFromConnectionHistory(address: string): void {
+  connectionHistory.value = connectionHistory.value.filter(item => item.address !== address)
+  saveConnectionHistory()
+}
+
+/**
+ * 清除连接历史
+ */
+export function clearConnectionHistory(): void {
+  connectionHistory.value = []
+  saveConnectionHistory()
+}
+
+/**
+ * 清除会话配置（断开连接时）
+ */
+export function clearSessionConfigs(): void {
+  sessionConfigs.value = []
+  hasLoadedConfigs.value = false
+}
+
+/**
+ * 清除活跃会话（断开连接时）
+ */
+export function clearActiveSessions(): void {
+  activeSessions.value = []
 }
 
 /**
@@ -398,6 +589,13 @@ export function useMobileConnection() {
     activeSessionId,
     lastMessage,
 
+    // Global Session State
+    sessionConfigs,
+    activeSessions,
+    connectionHistory,
+    isLoadingConfigs,
+    hasLoadedConfigs,
+
     // Computed
     isConnected,
     isPaired,
@@ -410,10 +608,22 @@ export function useMobileConnection() {
     requestPairing,
     verifyPairingCode,
     loadSessionConfigs,
+    loadActiveSessions,
     startSession,
     stopSession,
     sendInput,
     saveCredentials,
     clearCredentials,
+
+    // Connection History Operations
+    loadConnectionHistory,
+    saveConnectionHistory,
+    addToConnectionHistory,
+    removeFromConnectionHistory,
+    clearConnectionHistory,
+
+    // Clear Operations
+    clearSessionConfigs,
+    clearActiveSessions,
   }
 }

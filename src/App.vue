@@ -194,7 +194,8 @@ const isTerminalWindow = computed(() => {
 const isDesktop = computed(() => platformInfo.value.isDesktop)
 
 // 需�?KeepAlive 缓存的移动端组件名称
-const cachedMobileRoutes = ['MobileTerminal']
+// MobileSwipeContainer 包含 4 个子页面（设备、会话、快捷操作、设置），缓存以保持切换后数据
+const cachedMobileRoutes = ['MobileSwipeContainer', 'MobileTerminal']
 // 动态获取缓存最大数�?
 const maxCachedTerminals = computed(() => settingsStore.settings.ui.max_cached_terminals || 10)
 
@@ -218,20 +219,24 @@ const themeClasses = computed(() => {
   }
 })
 
-// 移动端安全区域样�?
+
+// 移动端安全区域样式
 const mobilePaddingStyle = computed(() => {
   if (!platformInfo.value.isMobile) return {}
 
-  // 使用检测到的安全区域，如果没有则使用保守默认�?
-  const top = safeAreaDetected.value ? safeArea.value.top : 24
-  const bottom = safeAreaDetected.value ? safeArea.value.bottom : 0
+  // 使用检测到的安全区域
+  const top = safeArea.value.top || 24
+  // Android 设备通常有导航栏，确保底部有足够空间
+  const bottom = safeArea.value.bottom || safeArea.value.navigationBar || 0
 
-  // 保守估计：状态栏至少 24px，某�?Android 设备可能达到 48px
+  // 保守估计：状态栏至少 24px
   const minStatusBar = 24
+  // 底部导航栏最小保护（防止被系统导航栏遮挡）
+  const minNavBottom = platformInfo.value.isAndroid ? 24 : 0
 
   return {
     paddingTop: `${Math.max(top, minStatusBar)}px`,
-    paddingBottom: `${bottom}px`,
+    paddingBottom: `${Math.max(bottom, minNavBottom)}px`,
   }
 })
 

@@ -155,9 +155,9 @@ export async function wsLeaveSession(sessionId: string): Promise<void> {
 }
 
 /**
- * 启动会话
+ * 启动会话，返回会话 ID 和会话信息
  */
-export async function wsStartSession(configId: string, sessionName?: string): Promise<string> {
+export async function wsStartSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {
   return await invoke('ws_start_session', { configId, sessionName })
 }
 
@@ -306,6 +306,28 @@ let unlistenServerClosed: UnlistenFn | null = null
 let unlistenUnexpectedDisconnect: UnlistenFn | null = null
 let unlistenOutput: UnlistenFn | null = null
 
+// 同步事件监听器
+let unlistenSyncSessionCreated: UnlistenFn | null = null
+let unlistenSyncSessionStatusChanged: UnlistenFn | null = null
+let unlistenSyncSessionStopped: UnlistenFn | null = null
+let unlistenSyncSessionRemoved: UnlistenFn | null = null
+let unlistenSyncConfigCreated: UnlistenFn | null = null
+let unlistenSyncConfigUpdated: UnlistenFn | null = null
+let unlistenSyncConfigRemoved: UnlistenFn | null = null
+
+/**
+ * 同步事件回调接口
+ */
+export interface SyncEventCallbacks {
+  onSyncSessionCreated?: (data: { session: any; source_device: string }) => void
+  onSyncSessionStatusChanged?: (data: { session_id: string; old_status: string; new_status: string; session_name: string }) => void
+  onSyncSessionStopped?: (data: { session_id: string; session_name: string }) => void
+  onSyncSessionRemoved?: (data: { session_id: string; session_name: string }) => void
+  onSyncConfigCreated?: (data: { config: any; source_device: string }) => void
+  onSyncConfigUpdated?: (data: { config: any; source_device: string }) => void
+  onSyncConfigRemoved?: (data: { config_id: string; config_name: string }) => void
+}
+
 /**
  * 初始化事件监听
  */
@@ -322,6 +344,14 @@ export async function initMobileEventListeners(callbacks: {
   onServerClosed?: (reason: string) => void
   onUnexpectedDisconnect?: (reason: string) => void
   onOutput?: (data: any) => void
+  // 同步事件回调
+  onSyncSessionCreated?: (data: { session: any; source_device: string }) => void
+  onSyncSessionStatusChanged?: (data: { session_id: string; old_status: string; new_status: string; session_name: string }) => void
+  onSyncSessionStopped?: (data: { session_id: string; session_name: string }) => void
+  onSyncSessionRemoved?: (data: { session_id: string; session_name: string }) => void
+  onSyncConfigCreated?: (data: { config: any; source_device: string }) => void
+  onSyncConfigUpdated?: (data: { config: any; source_device: string }) => void
+  onSyncConfigRemoved?: (data: { config_id: string; config_name: string }) => void
 }) {
   if (callbacks.onConnecting) {
     unlistenConnecting = await listen('ws_connecting', callbacks.onConnecting)
@@ -367,6 +397,43 @@ export async function initMobileEventListeners(callbacks: {
   if (callbacks.onOutput) {
     unlistenOutput = await listen('ws_output', callbacks.onOutput)
   }
+
+  // 初始化同步事件监听
+  if (callbacks.onSyncSessionCreated) {
+    unlistenSyncSessionCreated = await listen<{ session: any; source_device: string }>('ws_sync_session_created', (event) => {
+      callbacks.onSyncSessionCreated?.(event.payload)
+    })
+  }
+  if (callbacks.onSyncSessionStatusChanged) {
+    unlistenSyncSessionStatusChanged = await listen<{ session_id: string; old_status: string; new_status: string; session_name: string }>('ws_sync_session_status_changed', (event) => {
+      callbacks.onSyncSessionStatusChanged?.(event.payload)
+    })
+  }
+  if (callbacks.onSyncSessionStopped) {
+    unlistenSyncSessionStopped = await listen<{ session_id: string; session_name: string }>('ws_sync_session_stopped', (event) => {
+      callbacks.onSyncSessionStopped?.(event.payload)
+    })
+  }
+  if (callbacks.onSyncSessionRemoved) {
+    unlistenSyncSessionRemoved = await listen<{ session_id: string; session_name: string }>('ws_sync_session_removed', (event) => {
+      callbacks.onSyncSessionRemoved?.(event.payload)
+    })
+  }
+  if (callbacks.onSyncConfigCreated) {
+    unlistenSyncConfigCreated = await listen<{ config: any; source_device: string }>('ws_sync_config_created', (event) => {
+      callbacks.onSyncConfigCreated?.(event.payload)
+    })
+  }
+  if (callbacks.onSyncConfigUpdated) {
+    unlistenSyncConfigUpdated = await listen<{ config: any; source_device: string }>('ws_sync_config_updated', (event) => {
+      callbacks.onSyncConfigUpdated?.(event.payload)
+    })
+  }
+  if (callbacks.onSyncConfigRemoved) {
+    unlistenSyncConfigRemoved = await listen<{ config_id: string; config_name: string }>('ws_sync_config_removed', (event) => {
+      callbacks.onSyncConfigRemoved?.(event.payload)
+    })
+  }
 }
 
 /**
@@ -385,6 +452,14 @@ export function cleanupMobileEventListeners() {
   unlistenServerClosed?.()
   unlistenUnexpectedDisconnect?.()
   unlistenOutput?.()
+  // 清理同步事件监听
+  unlistenSyncSessionCreated?.()
+  unlistenSyncSessionStatusChanged?.()
+  unlistenSyncSessionStopped?.()
+  unlistenSyncSessionRemoved?.()
+  unlistenSyncConfigCreated?.()
+  unlistenSyncConfigUpdated?.()
+  unlistenSyncConfigRemoved?.()
 }
 
 // ==================== Mobile Commands Composable ====================

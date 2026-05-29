@@ -170,19 +170,16 @@ impl PtySession {
 
         writer.write_all(data)?;
         writer.flush()?;
-        tracing::debug!("[PtyProcess] wrote {} bytes to PTY", data.len());
         Ok(())
     }
 
     /// 写入字符串
     pub async fn write_str(&self, text: &str) -> Result<()> {
-        tracing::debug!("[PtyProcess] write_str: len={}, preview={:?}", text.len(), &text[..text.len().min(50)]);
         self.write(text.as_bytes()).await
     }
 
     /// 发送特殊键
     pub async fn send_special_key(&self, key: &str) -> Result<()> {
-        tracing::debug!("[PtyProcess] send_special_key: key={}", key);
         let sequence = match key.to_lowercase().as_str() {
             "enter" => "\r",
             "tab" => "\t",
@@ -207,7 +204,6 @@ impl PtySession {
             },
         };
 
-        tracing::debug!("[PtyProcess] sending special_key {} -> sequence={:?}", key, sequence);
         self.write(sequence.as_bytes()).await
     }
 
@@ -225,7 +221,6 @@ impl PtySession {
         })
         .map_err(|e| crate::AppError::Pty(e.to_string()))?;
 
-        tracing::debug!("PTY resized to {}x{} for session: {}", cols, rows, self.id);
         Ok(())
     }
 
@@ -306,7 +301,6 @@ impl PtySession {
                 let _ = std::process::Command::new("kill")
                     .args(["-9", &pid.to_string()])
                     .output();
-                tracing::debug!("Sent kill -9 to PID {}", pid);
             }
         } else {
             tracing::warn!("No process_id available for session {}", self.id);
@@ -384,11 +378,7 @@ impl Drop for PtySession {
                             .output();
                     }
                     tracing::info!("PTY session killed on drop: {} (pid={})", self.id, pid);
-                } else {
-                    tracing::debug!("PTY session dropped (no pid): {}", self.id);
                 }
-            } else {
-                tracing::debug!("PTY session dropped (lock failed): {}", self.id);
             }
         }
     }

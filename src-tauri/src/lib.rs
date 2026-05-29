@@ -209,6 +209,14 @@ pub fn run() {
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
 
+            // 创建同步事件通道
+            let (sync_tx, _) = tokio::sync::broadcast::channel::<desktop::events::DesktopSyncEvent>(64);
+
+            // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
+            tauri::async_runtime::block_on(async {
+                session_manager.set_sync_tx(sync_tx.clone()).await;
+            });
+
             // 创建并同步设置 PTY 输出监听器
             // 必须在 setup 返回前完成，否则会话启动时监听器可能未就绪导致输出丢失
             let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle.clone()));
@@ -222,6 +230,12 @@ pub fn run() {
 
             // 创建会话配置管理器
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
+
+            // 设置 SessionConfigManager 的同步事件发送器
+            tauri::async_runtime::block_on(async {
+                config_manager.set_sync_tx(sync_tx.clone()).await;
+            });
+
             app.manage(config_manager.clone());
 
             app.manage(session_manager.clone());
@@ -238,11 +252,37 @@ pub fn run() {
             app.manage(qr_manager.clone());
 
             // 初始化并启动 WebSocketManager（路由机制已内置处理器）
+            // 关键：传入所有必要的实例，确保与 Tauri State 共享
             let ws_manager = desktop::websocket_manager::WebSocketManager::global();
             let db_for_ws = db.clone();
+            let qr_manager_for_ws = qr_manager.clone();
+            let app_handle_for_ws = Arc::new(app_handle.clone());
+            let session_manager_for_ws = session_manager.clone();
+            let session_manager_for_handler = session_manager.clone();
+            let plugin_manager_for_ws = plugin_manager.clone();
+            let config_manager_for_sync = config_manager.clone();
+            let sync_tx_for_handler = sync_tx.clone();
             tauri::async_runtime::spawn(async move {
-                ws_manager.init(db_for_ws).await
+                ws_manager.init(db_for_ws, qr_manager_for_ws, app_handle_for_ws, session_manager_for_ws, plugin_manager_for_ws).await
                     .expect("Failed to initialize WebSocketManager");
+
+                // 注册同步事件处理器
+                use crate::shared::event::handler::EventHandler;
+                use crate::shared::event::global_matcher;
+                use crate::desktop::events::{DesktopSyncEvent, SyncEventHandler};
+
+                // 注册事件源
+                global_matcher().register_source::<DesktopSyncEvent>(sync_tx_for_handler).await;
+
+                // 注册处理器
+                let sync_handler = Arc::new(SyncEventHandler::new(
+                    session_manager_for_handler,
+                    config_manager_for_sync,
+                    ws_manager,
+                ));
+                global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
+                tracing::info!("[BedCode] SyncEventHandler registered");
+
                 tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port);
                 match ws_manager.start(ws_port).await {
                     Ok(_) => tracing::info!("[BedCode] WebSocket server started successfully"),

@@ -40,12 +40,6 @@ impl OutputCache for DefaultOutputCache {
             entries.remove(0);
         }
         entries.push(event.clone());
-
-        tracing::debug!(
-            "Cached PTY output for session {}: {} entries",
-            event.session_id,
-            entries.len()
-        );
     }
 
     async fn get(&self, session_id: &str) -> Vec<PtyOutputEvent> {
@@ -56,13 +50,11 @@ impl OutputCache for DefaultOutputCache {
     async fn clear(&self, session_id: &str) {
         let mut cache = self.cache.write().await;
         cache.remove(session_id);
-        tracing::debug!("Cleared PTY output cache for session: {}", session_id);
     }
 
     async fn clear_all(&self) {
         let mut cache = self.cache.write().await;
         cache.clear();
-        tracing::debug!("Cleared all PTY output cache");
     }
 
     async fn len(&self) -> usize {

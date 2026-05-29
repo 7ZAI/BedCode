@@ -121,31 +121,87 @@ pub async fn ws_connect(
         spawn_with_error_boundary("output_forwarder", async move {
             tracing::info!("[OutputForwarder] Started forwarding output events");
             while let Ok(event) = event_rx.recv().await {
-                if let MobileEvent::Output { session_id, data, is_waiting, index: global_index } = event {
-                    tracing::debug!("[MobileCommands] Output event received: session_id={}, data_len={}, global_index={}", session_id, data.len(), global_index);
-                    // 1. 写入 TerminalBuffer（Rust 后端管理缓冲区，负责 Base64 解码和字节限制）
-                    // 注意：这里的 index 应该使用桌面端传来的全局索引，而不是缓冲区自己的索引
-                    terminal_mgr.write_output_with_index(&session_id, data.clone(), is_waiting, global_index).await;
-                    tracing::debug!("[MobileCommands] Written to buffer with global_index={}", global_index);
+                match event {
+                    MobileEvent::Output { session_id, data, is_waiting, index: global_index } => {
+                        tracing::debug!("[MobileCommands] Output event received: session_id={}, data_len={}, global_index={}", session_id, data.len(), global_index);
+                        // 1. 写入 TerminalBuffer（Rust 后端管理缓冲区，负责 Base64 解码和字节限制）
+                        // 注意：这里的 index 应该使用桌面端传来的全局索引，而不是缓冲区自己的索引
+                        terminal_mgr.write_output_with_index(&session_id, data.clone(), is_waiting, global_index).await;
+                        tracing::debug!("[MobileCommands] Written to buffer with global_index={}", global_index);
 
-                    // 2. 转发解码后的数据给前端（前端不再需要 Base64 解码）
-                    let decoded_data = base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &data,
-                    ).unwrap_or_default();
-                    let decoded_str = String::from_utf8_lossy(&decoded_data).to_string();
+                        // 2. 转发解码后的数据给前端（前端不再需要 Base64 解码）
+                        let decoded_data = base64::Engine::decode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &data,
+                        ).unwrap_or_default();
+                        let decoded_str = String::from_utf8_lossy(&decoded_data).to_string();
 
-                    let emit_result = app_clone.emit("ws_output", serde_json::json!({
-                        "session_id": session_id,
-                        "data": decoded_str,
-                        "is_waiting": is_waiting,
-                        "index": global_index,
-                    }));
-                    if let Err(e) = emit_result {
-                        tracing::error!("[MobileCommands] Failed to emit ws_output: {}", e);
-                    } else {
-                        tracing::debug!("[MobileCommands] Emitted ws_output: session_id={}", session_id);
+                        let emit_result = app_clone.emit("ws_output", serde_json::json!({
+                            "session_id": session_id,
+                            "data": decoded_str,
+                            "is_waiting": is_waiting,
+                            "index": global_index,
+                        }));
+                        if let Err(e) = emit_result {
+                            tracing::error!("[MobileCommands] Failed to emit ws_output: {}", e);
+                        } else {
+                            tracing::debug!("[MobileCommands] Emitted ws_output: session_id={}", session_id);
+                        }
                     }
+                    // === 同步数据事件转发到前端 ===
+                    MobileEvent::SyncSessionCreated { session, source_device } => {
+                        tracing::info!("[MobileCommands] SyncSessionCreated: session_id={}, source={}", session.id, source_device);
+                        let _ = app_clone.emit("ws_sync_session_created", serde_json::json!({
+                            "session": session,
+                            "source_device": source_device,
+                        }));
+                    }
+                    MobileEvent::SyncSessionStatusChanged { session_id, old_status, new_status, session_name } => {
+                        tracing::info!("[MobileCommands] SyncSessionStatusChanged: session_id={}, {} -> {}", session_id, old_status, new_status);
+                        let _ = app_clone.emit("ws_sync_session_status_changed", serde_json::json!({
+                            "session_id": session_id,
+                            "old_status": old_status,
+                            "new_status": new_status,
+                            "session_name": session_name,
+                        }));
+                    }
+                    MobileEvent::SyncSessionStopped { session_id, session_name } => {
+                        tracing::info!("[MobileCommands] SyncSessionStopped: session_id={}", session_id);
+                        let _ = app_clone.emit("ws_sync_session_stopped", serde_json::json!({
+                            "session_id": session_id,
+                            "session_name": session_name,
+                        }));
+                    }
+                    MobileEvent::SyncSessionRemoved { session_id, session_name } => {
+                        tracing::info!("[MobileCommands] SyncSessionRemoved: session_id={}", session_id);
+                        let _ = app_clone.emit("ws_sync_session_removed", serde_json::json!({
+                            "session_id": session_id,
+                            "session_name": session_name,
+                        }));
+                    }
+                    MobileEvent::SyncConfigCreated { config, source_device } => {
+                        tracing::info!("[MobileCommands] SyncConfigCreated: config_id={}, source={}", config.id, source_device);
+                        let _ = app_clone.emit("ws_sync_config_created", serde_json::json!({
+                            "config": config,
+                            "source_device": source_device,
+                        }));
+                    }
+                    MobileEvent::SyncConfigUpdated { config, source_device } => {
+                        tracing::info!("[MobileCommands] SyncConfigUpdated: config_id={}, source={}", config.id, source_device);
+                        let _ = app_clone.emit("ws_sync_config_updated", serde_json::json!({
+                            "config": config,
+                            "source_device": source_device,
+                        }));
+                    }
+                    MobileEvent::SyncConfigRemoved { config_id, config_name } => {
+                        tracing::info!("[MobileCommands] SyncConfigRemoved: config_id={}", config_id);
+                        let _ = app_clone.emit("ws_sync_config_removed", serde_json::json!({
+                            "config_id": config_id,
+                            "config_name": config_name,
+                        }));
+                    }
+                    // 其他事件不处理
+                    _ => {}
                 }
             }
             tracing::warn!("[OutputForwarder] Event channel closed");
@@ -298,7 +354,7 @@ pub async fn ws_request_pairing(app_handle: AppHandle) -> Result<()> {
 
 /// 验证配对码，成功后返回凭据（含 JWT token）
 #[tauri::command]
-pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Result<Option<crate::mobile::auth::AuthCredentials>> {
+pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Result<Option<AuthCredentials>> {
     let auth = get_auth_manager();
     let result = auth.verify_pairing_code(&code).await?;
 
@@ -340,7 +396,7 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
     tracing::info!("[ws_load_sessions] Sending ListSessions request");
     let conn = get_connection_manager();
 
-    let message = Message::session_control(SessionControlAction::ListSessions, None);
+    let message = Message::session_control_with_response(SessionControlAction::ListSessions, None);
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(15)).await?;
 
     // 解析 SessionControl 响应中的会话列表
@@ -348,8 +404,9 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
         if let SessionControlAction::SessionList { sessions } = &payload.action {
             let count = sessions.len();
             tracing::info!("[ws_load_sessions] Response OK, {} sessions", count);
-            // 转换为 serde_json::Value
-            let list = serde_json::to_value(sessions)?;
+            // 序列化为 Value 再提取为数组
+            let value = serde_json::to_value(sessions)?;
+            let list = value.as_array().cloned().unwrap_or_default();
             return Ok(list);
         }
     }
@@ -364,8 +421,8 @@ pub async fn ws_join_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_join_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    // 使用 Message::Terminal(Subscribe) 消息类型
-    let message = Message::subscribe(&session_id, None);
+    // 使用 Message::Terminal(Subscribe) 消息类型，expect_response=true
+    let message = Message::subscribe_with_response(&session_id, None);
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_join_session] Subscribed to session successfully: {}", session_id);
     Ok(())
@@ -378,8 +435,8 @@ pub async fn ws_leave_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_leave_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    // 使用 Message::Terminal(Unsubscribe) 消息类型
-    let message = Message::unsubscribe(&session_id);
+    // 使用 Message::Terminal(Unsubscribe) 消息类型，expect_response=true
+    let message = Message::unsubscribe_with_response(&session_id);
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_leave_session] Unsubscribed from session successfully: {}", session_id);
     Ok(())
@@ -395,18 +452,34 @@ pub async fn ws_subscribe_session(session_id: String, start_seq: Option<u64>) ->
     tracing::info!("[ws_subscribe_session] session_id={}, start_seq={:?}", session_id, start_seq);
     let conn = get_connection_manager();
 
-    // 使用 Message::Terminal(Subscribe)，带可选的起始序号
-    let message = Message::subscribe(&session_id, start_seq);
+    // 使用 Message::Terminal(Subscribe)，带可选的起始序号，expect_response=true
+    let message = Message::subscribe_with_response(&session_id, start_seq);
     conn.send_and_wait(&message, std::time::Duration::from_secs(10)).await?;
     tracing::info!("[ws_subscribe_session] Subscribed to session with start_seq={:?}: {}", start_seq, session_id);
     Ok(())
 }
 
+/// 启动会话响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSessionResponse {
+    pub session_id: String,
+    pub session: Option<SessionInfo>,
+}
+
 /// 启动会话
 #[tauri::command]
-pub async fn ws_start_session(config_id: String, session_name: Option<String>) -> Result<String> {
+pub async fn ws_start_session(config_id: String, session_name: Option<String>) -> Result<StartSessionResponse> {
     let session_mgr = get_session_manager();
-    session_mgr.start_session(&config_id, session_name.as_deref()).await
+    let session_id = session_mgr.start_session(&config_id, session_name.as_deref()).await?;
+
+    // 获取刚创建的会话信息
+    let session = session_mgr.get_session_by_id(&session_id).await;
+
+    Ok(StartSessionResponse {
+        session_id,
+        session,
+    })
 }
 
 /// 停止会话
@@ -635,7 +708,7 @@ pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
     tracing::info!("[ws_load_session_configs] Sending ListSessionConfigs request");
     let conn = get_connection_manager();
 
-    let message = Message::session_config(SessionConfigAction::ListSessionConfigs, None);
+    let message = Message::session_config_with_response(SessionConfigAction::ListSessionConfigs, None);
     let response = conn.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
 
     // 从 Message::SessionConfig 响应中提取会话配置列表
@@ -643,7 +716,8 @@ pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
         if let SessionConfigAction::SessionConfigList { configs } = &payload.action {
             let count = configs.len();
             tracing::info!("[ws_load_session_configs] Response OK, {} configs", count);
-            let configs_vec = serde_json::to_value(configs)?;
+            let value = serde_json::to_value(configs)?;
+            let configs_vec = value.as_array().cloned().unwrap_or_default();
             return Ok(configs_vec);
         }
     }

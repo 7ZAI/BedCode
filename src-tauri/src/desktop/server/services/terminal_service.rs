@@ -52,6 +52,11 @@ pub async fn handle_input(
                 ArrowLeft => "\x1b[D",
                 ArrowRight => "\x1b[C",
                 Backspace => "\x7f",
+                Delete => "\x1b[3~",
+                Home => "\x1b[H",
+                End => "\x1b[F",
+                PageUp => "\x1b[5~",
+                PageDown => "\x1b[6~",
             };
             tracing::debug!(
                 "[TerminalService] writing special_key key={:?} bytes={:?}",

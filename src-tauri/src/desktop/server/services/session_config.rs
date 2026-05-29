@@ -41,6 +41,22 @@ pub async fn list_session_configs(
     }))
 }
 
+/// 获取快捷指令列表并构建响应消息
+pub async fn list_quick_actions_response(request_message_id: String) -> Result<Option<Message>> {
+    let actions = list_quick_actions().await?;
+
+    Ok(Some(Message::SessionConfig {
+        message_id: request_message_id,
+        expect_response: false,
+        session_id: None,
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        token: String::new(),
+        payload: SessionConfigPayload {
+            action: SessionConfigAction::QuickActionList { actions },
+        },
+    }))
+}
+
 /// 获取快捷指令列表
 ///
 /// TODO(binblink): 实现从 SessionConfigManager 获取快捷指令列表

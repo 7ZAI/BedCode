@@ -20,7 +20,7 @@ pub async fn handle_control(
     plugin_manager: &Arc<PluginManager>,
     clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::server::ClientInfo>>>,
     addr: SocketAddr,
-    _device_name: Option<String>,
+    device_name: Option<String>,
 ) -> Result<Option<Message>> {
     match action {
         SessionControlAction::ListSessions => {
@@ -70,7 +70,8 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StartSession { config_id } => {
-            let session_id = session_manager.create_session(&config_id).await?;
+            // 传递设备名称作为 source_device，用于同步事件广播时排除操作者
+            let session_id = session_manager.create_session_with_source(&config_id, device_name.clone()).await?;
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
                 expect_response: false,
@@ -84,7 +85,8 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StopSession { session_id } => {
-            session_manager.kill_session(&session_id).await?;
+            // 传递设备名称作为 source_device
+            session_manager.kill_session_with_source(&session_id, device_name.clone()).await?;
 
             // 从客户端订阅列表中移除该会话
             {
@@ -107,7 +109,8 @@ pub async fn handle_control(
         }
 
         SessionControlAction::RemoveSession { session_id } => {
-            session_manager.remove_session(&session_id).await?;
+            // 传递设备名称作为 source_device
+            session_manager.remove_session_with_source(&session_id, device_name.clone()).await?;
 
             // 从客户端订阅列表中移除该会话
             {
@@ -296,6 +299,7 @@ pub async fn handle_control_message(
     session_manager: &Option<Arc<SessionManager>>,
     plugin_manager: &Option<Arc<PluginManager>>,
     addr: SocketAddr,
+    device_name: Option<String>,
 ) -> Result<Option<Message>> {
     match action {
         SessionControlAction::ListSessions
@@ -316,7 +320,7 @@ pub async fn handle_control_message(
                     pm,
                     &Arc::new(RwLock::new(clients)),
                     addr,
-                    None,
+                    device_name,
                 ).await
             } else {
                 tracing::warn!("Session manager not available");

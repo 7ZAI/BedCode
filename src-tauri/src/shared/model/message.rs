@@ -10,6 +10,27 @@ use crate::shared::enums::auth::AuthPayload;
 use crate::shared::enums::control::{SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
 use crate::shared::enums::special_key::SpecialKey;
 use crate::shared::enums::sumary::SessionSummary;
+use crate::shared::enums::SyncPayload;
+
+// ==================== Ack 响应代码常量 ====================
+
+/// Ack 成功响应代码
+pub const ACK_CODE_SUCCESS: u16 = 0;
+
+/// Ack 失败响应代码 - 通用错误
+pub const ACK_CODE_FAILURE: u16 = 1;
+
+/// Ack 失败响应代码 - 认证失败
+pub const ACK_CODE_AUTH_FAILED: u16 = 1001;
+
+/// Ack 失败响应代码 - 会话不存在
+pub const ACK_CODE_SESSION_NOT_FOUND: u16 = 1002;
+
+/// Ack 失败响应代码 - 无效请求
+pub const ACK_CODE_INVALID_REQUEST: u16 = 1003;
+
+/// Ack 失败响应代码 - 操作超时
+pub const ACK_CODE_TIMEOUT: u16 = 1004;
 
 /// 生成唯一消息ID
 pub(crate) fn generate_message_id() -> String {
@@ -167,13 +188,32 @@ pub enum Message {
 
     /// 确认响应 (服务端 → 客户端)
     /// 当 expect_response=true 但 handler 无具体返回值时的默认响应
-    /// 表示消息已收到并处理成功
+    /// 表示消息已收到并处理
     #[serde(rename = "ack")]
     Ack {
         /// 关联的请求消息ID
         request_id: String,
         /// 时间戳（毫秒）
         timestamp: i64,
+        /// 响应代码：0 表示成功，非 0 表示失败
+        /// 使用 ACK_CODE_* 常量
+        code: u16,
+        /// 可选的错误消息，失败时应提供
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
+    },
+
+    /// 数据同步消息 (服务端 → 客户端)
+    /// 用于向客户端推送增量数据变更
+    #[serde(rename = "sync_data")]
+    SyncData {
+        /// 时间戳（毫秒）
+        timestamp: i64,
+        /// 同步载荷
+        payload: SyncPayload,
         /// 认证令牌
         #[serde(default = "default_token")]
         token: String,
@@ -232,8 +272,22 @@ impl Message {
         }
     }
 
+    /// 创建终端订阅消息（带响应期望）
+    pub fn subscribe_with_response(session_id: &str, start_seq: Option<u64>) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: true,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Subscribe { start_seq },
+            },
+        }
+    }
+
     /// 创建终端订阅响应消息
-    pub fn subscribe_response(session_id: &str, current_max_seq: u64, history_count: usize) -> Self {
+    pub fn subscribe_response(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
@@ -242,7 +296,8 @@ impl Message {
             token: String::new(),
             payload: TerminalPayload {
                 action: TerminalAction::SubscribeResponse {
-                    current_max_seq,
+                    min_seq,
+                    max_seq,
                     history_count,
                 },
             },
@@ -254,6 +309,20 @@ impl Message {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Unsubscribe,
+            },
+        }
+    }
+
+    /// 创建终端取消订阅消息（带响应期望）
+    pub fn unsubscribe_with_response(session_id: &str) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: true,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.to_string(),
             token: String::new(),
@@ -289,11 +358,35 @@ impl Message {
         }
     }
 
+    /// 创建会话控制消息（带响应期望）
+    pub fn session_control_with_response(action: SessionControlAction, session_id: Option<&str>) -> Self {
+        Message::SessionControl {
+            message_id: generate_message_id(),
+            expect_response: true,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.map(|s| s.to_string()),
+            token: String::new(),
+            payload: SessionControlPayload { action },
+        }
+    }
+
     /// 创建会话配置消息
     pub fn session_config(action: SessionConfigAction, session_id: Option<&str>) -> Self {
         Message::SessionConfig {
             message_id: generate_message_id(),
             expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.map(|s| s.to_string()),
+            token: String::new(),
+            payload: SessionConfigPayload { action },
+        }
+    }
+
+    /// 创建会话配置消息（带响应期望）
+    pub fn session_config_with_response(action: SessionConfigAction, session_id: Option<&str>) -> Self {
+        Message::SessionConfig {
+            message_id: generate_message_id(),
+            expect_response: true,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.map(|s| s.to_string()),
             token: String::new(),
@@ -365,12 +458,34 @@ impl Message {
         }
     }
 
-    /// 创建确认响应消息
+    /// 创建确认响应消息（成功）
     /// 当 expect_response=true 但 handler 无具体返回值时使用
     pub fn ack(request_id: &str) -> Self {
         Message::Ack {
             request_id: request_id.to_string(),
             timestamp: Utc::now().timestamp_millis(),
+            code: ACK_CODE_SUCCESS,
+            message: None,
+            token: String::new(),
+        }
+    }
+
+    /// 创建确认响应消息（失败）
+    pub fn ack_failure(request_id: &str, code: u16, message: &str) -> Self {
+        Message::Ack {
+            request_id: request_id.to_string(),
+            timestamp: Utc::now().timestamp_millis(),
+            code,
+            message: Some(message.to_string()),
+            token: String::new(),
+        }
+    }
+
+    /// 创建数据同步消息
+    pub fn sync_data(payload: SyncPayload) -> Self {
+        Message::SyncData {
+            timestamp: Utc::now().timestamp_millis(),
+            payload,
             token: String::new(),
         }
     }
@@ -387,6 +502,7 @@ impl Message {
             Message::ClientDisconnected { .. } => None,
             Message::SessionEvent { .. } => None,
             Message::Ack { .. } => None,
+            Message::SyncData { .. } => None,
         }
     }
 
@@ -402,6 +518,7 @@ impl Message {
             Message::ClientDisconnected { .. } => false,
             Message::SessionEvent { .. } => false,
             Message::Ack { .. } => false,
+            Message::SyncData { .. } => false,
         }
     }
 
@@ -417,6 +534,7 @@ impl Message {
             Message::ClientDisconnected { token, .. } => token,
             Message::SessionEvent { token, .. } => token,
             Message::Ack { token, .. } => token,
+            Message::SyncData { token, .. } => token,
         }
     }
 
@@ -554,10 +672,19 @@ impl Message {
                     token: token.to_string(),
                 }
             }
-            Message::Ack { request_id, timestamp, .. } => {
+            Message::Ack { request_id, timestamp, code, message, .. } => {
                 Message::Ack {
                     request_id,
                     timestamp,
+                    code,
+                    message,
+                    token: token.to_string(),
+                }
+            }
+            Message::SyncData { timestamp, payload, .. } => {
+                Message::SyncData {
+                    timestamp,
+                    payload,
                     token: token.to_string(),
                 }
             }

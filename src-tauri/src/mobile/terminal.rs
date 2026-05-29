@@ -15,6 +15,7 @@ use tokio::sync::RwLock;
 
 /// 单个输出事件
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalOutputEvent {
     /// 会话 ID
     pub session_id: String,
@@ -30,10 +31,11 @@ pub struct TerminalOutputEvent {
 
 /// 终端输出历史响应
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalHistory {
     /// 历史事件列表
     pub events: Vec<TerminalOutputEvent>,
-    /// 当前写入��引位置
+    /// 当前写入索引位置
     pub current_index: usize,
     /// 缓冲区总事件数
     pub total_count: usize,
@@ -41,6 +43,7 @@ pub struct TerminalHistory {
 
 /// 终端增量输出（用于增量渲染）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalIncrementalOutput {
     /// 新增的事件列表
     pub events: Vec<TerminalOutputEvent>,
@@ -189,23 +192,17 @@ impl TerminalBuffer {
 }
 
 /// Base64 解码（支持 UTF-8 多字节字符）
+/// 使用 lossy 转换确保即使有非 UTF-8 字节也能正确显示
 fn decode_base64(encoded: &str) -> String {
-    use std::io::Read;
-
     // 使用标准 base64 解码
     let decoded = base64_decode(encoded);
 
-    // 按字节解析为 UTF-8 字符串
-    String::from_utf8(decoded).unwrap_or_else(|_| {
-        // ���果 UTF-8 解析失败，尝试 Latin-1
-        encoded.to_string()
-    })
+    // 使用 lossy 转换，将无效 UTF-8 字节替换为替换字符而不是返回原始 Base64
+    String::from_utf8_lossy(&decoded).to_string()
 }
 
 /// 标准 Base64 解码（使用标准库实现）
 fn base64_decode(input: &str) -> Vec<u8> {
-    use std::io::Read;
-
     // 移除填充字符并添加必要的填充
     let input = input.trim_end_matches('=');
     let mut result = Vec::with_capacity(input.len() * 3 / 4);

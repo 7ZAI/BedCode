@@ -7,7 +7,7 @@ use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::traits::{PtyOutputHandler, PtyOutputListener};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex};
 use tokio::task::JoinSet;
 
 /// Handler 错误处理策略
@@ -68,10 +68,8 @@ impl AsyncPtyOutputListener {
         handler: Arc<dyn PtyOutputHandler>,
         error_policy: HandlerErrorPolicy,
     ) {
-        let handler_name = handler.name().to_string();
         let mut handlers = self.handlers.lock().await;
         handlers.push(HandlerEntry::new(handler, error_policy));
-        tracing::debug!("[AsyncPtyOutputListener] Registered handler: {}, total: {}", handler_name, handlers.len());
     }
 
     /// 注册一个 Handler（使用默认错误策略）
@@ -111,7 +109,6 @@ impl AsyncPtyOutputListener {
     async fn execute_handlers(&self, event: PtyOutputEvent) {
         let handlers = {
             let handlers = self.handlers.lock().await;
-            tracing::debug!("[AsyncPtyOutputListener] execute_handlers called, handler count: {}", handlers.len());
             handlers.clone()
         };
 
@@ -124,27 +121,20 @@ impl AsyncPtyOutputListener {
 
         for entry in handlers {
             let event = event.clone();
-            let name = entry.handler.name().to_string();
             let error_policy = entry.error_policy.clone();
 
-            tracing::debug!("[AsyncPtyOutputListener] Spawning task for handler: {}", name);
             join_set.spawn(async move {
-                tracing::debug!("[AsyncPtyOutputListener] Handler {} handling event", name);
                 if let Err(e) = entry.handler.handle(event).await {
-                    tracing::error!("[AsyncPtyOutputListener] Handler {} error: {}", name, e);
-                } else {
-                    tracing::debug!("[AsyncPtyOutputListener] Handler {} completed successfully", name);
+                    tracing::error!("[AsyncPtyOutputListener] Handler {} error: {}", entry.handler.name(), e);
                 }
             });
         }
 
-        tracing::debug!("[AsyncPtyOutputListener] Waiting for {} handler tasks to complete", join_set.len());
         while let Some(result) = join_set.join_next().await {
             if let Err(e) = result {
                 tracing::error!("[AsyncPtyOutputListener] Task join error: {}", e);
             }
         }
-        tracing::debug!("[AsyncPtyOutputListener] All handlers completed");
     }
 }
 
@@ -167,7 +157,6 @@ impl Clone for AsyncPtyOutputListener {
 #[async_trait]
 impl PtyOutputListener for AsyncPtyOutputListener {
     async fn on_output(&self, event: PtyOutputEvent) {
-        tracing::debug!("[AsyncPtyOutputListener] on_output called for session: {}", event.session_id);
         self.execute_handlers(event).await;
     }
 

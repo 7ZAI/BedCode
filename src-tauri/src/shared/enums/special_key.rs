@@ -20,6 +20,11 @@ pub enum SpecialKey {
     ArrowLeft,
     ArrowRight,
     Backspace,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 }
 
 impl SpecialKey {
@@ -37,6 +42,11 @@ impl SpecialKey {
             SpecialKey::ArrowLeft => "arrow_left",
             SpecialKey::ArrowRight => "arrow_right",
             SpecialKey::Backspace => "backspace",
+            SpecialKey::Delete => "delete",
+            SpecialKey::Home => "home",
+            SpecialKey::End => "end",
+            SpecialKey::PageUp => "pageup",
+            SpecialKey::PageDown => "pagedown",
         }
     }
 

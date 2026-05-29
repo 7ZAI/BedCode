@@ -32,12 +32,8 @@ impl FrontendOutputHandler {
 #[async_trait]
 impl PtyOutputHandler for FrontendOutputHandler {
     async fn handle(&self, event: PtyOutputEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        tracing::debug!("[FrontendOutputHandler] handle called for session: {}", event.session_id);
         match self.app_handle.emit("pty-output", &event) {
-            Ok(()) => {
-                tracing::debug!("[FrontendOutputHandler] Emitted pty-output event for session: {}", event.session_id);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(e) => {
                 tracing::error!("[FrontendOutputHandler] Failed to emit pty-output event: {}", e);
                 Err(Box::new(e))

@@ -30,6 +30,11 @@ import SessionsView from '@/modules/mobile/views/SessionsView.vue'
 import QuickActionsView from '@/modules/mobile/views/QuickActionsView.vue'
 import SettingsView from '@/modules/mobile/views/SettingsView.vue'
 
+// 定义组件名称，用于 keep-alive 缓存
+defineOptions({
+  name: 'MobileSwipeContainer'
+})
+
 const route = useRoute()
 const router = useRouter()
 const containerRef = ref<HTMLElement | null>(null)

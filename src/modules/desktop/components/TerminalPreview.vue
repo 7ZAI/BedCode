@@ -229,7 +229,6 @@ function initTerminal() {
   // 捕获键盘输入，直接发送到 PTY（原生终端体验）
   terminal.onData((data: string) => {
     if (!props.session) return
-    console.log('[Terminal] onData:', JSON.stringify(data))
     sessionStore.writeToSession(props.session.id, data)
   })
 }
@@ -272,8 +271,9 @@ function refreshTerminal() {
   terminal.write('\x1b[2J\x1b[H')
 
   // 重新写入输出缓冲区的内容
-  for (const data of output.value) {
-    terminal.write(data)
+  const cachedOutput = getOutputBuffer(sessionId.value)
+  if (cachedOutput) {
+    terminal.write(cachedOutput)
   }
 
   // 滚动到底部
@@ -368,10 +368,6 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => 
 // 监听会话变化，重置终端并同步尺寸
 // immediate: true 确保组件挂载时检查会话状态并启动 PTY
 watch(sessionId, async (newId, oldId) => {
-  console.log('[TerminalPreview] sessionId changed:', oldId, '->', newId)
-  console.log('[TerminalPreview] props.session:', props.session)
-  console.log('[TerminalPreview] props.session?.status:', props.session?.status)
-
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
@@ -391,16 +387,9 @@ watch(sessionId, async (newId, oldId) => {
 
       // 两阶段启动：如果会话状态是 starting，启动 PTY
       if (props.session?.status === 'starting') {
-        console.log('[TerminalPreview] Session is starting, launching PTY...')
         await sessionStore.startSession(newId)
-      } else if (props.session?.status === 'running' || props.session?.status === 'waitingInput') {
-        // 会话已经在运行，无需再次启动
-        console.log('[TerminalPreview] Session is already running, no need to start PTY')
-      } else {
-        // 其他状态（如 stopped, error），尝试重新启动
-        console.log('[TerminalPreview] Session status is:', props.session?.status, ', will try to restart...')
-        // TODO: 考虑是否需要自动重启
       }
+      // 其他状态（running, waitingInput）无需再次启动
     }
   }
 }, { immediate: true })
@@ -433,7 +422,6 @@ onMounted(async () => {
   if (terminal && sessionId.value) {
     const cachedOutput = getOutputBuffer(sessionId.value)
     if (cachedOutput) {
-      console.log('[TerminalPreview] Loading cached output, length:', cachedOutput.length)
       terminal.write(cachedOutput)
       scrollToBottom()
     }
@@ -462,8 +450,6 @@ onUnmounted(() => {
  */
 async function sendSpecialKey(key: string) {
   if (!props.session) return
-
-  console.log('[Terminal] Sending special key:', key, 'to session:', props.session.id)
   await sessionStore.sendSpecialKey(props.session.id, key)
 }
 </script>

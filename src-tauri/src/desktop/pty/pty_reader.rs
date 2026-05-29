@@ -10,6 +10,7 @@ use std::thread::{self, JoinHandle};
 use crate::desktop::enums::PtySessionStatus;
 use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::next_output_index;
+use crate::desktop::session::{GlobalOutputManager, OutputEvent};
 use crate::desktop::traits::PtyOutputListener;
 
 /// PTY 输出读取器
@@ -46,8 +47,6 @@ impl PtyReader {
                         break;
                     }
                     Ok(n) => {
-                        let data_preview = String::from_utf8_lossy(&buffer[..n]);
-                        tracing::debug!("[PtyReader] Read {} bytes from PTY, preview: {:?}", n, data_preview.chars().take(50).collect::<String>());
                         let event = PtyOutputEvent {
                             session_id: session_id.clone(),
                             data: base64::Engine::encode(
@@ -58,18 +57,23 @@ impl PtyReader {
                             is_waiting: false,
                             index: next_output_index(),
                         };
-                        tracing::debug!("[PtyReader] Created PtyOutputEvent, session_id: {}, data length: {}", event.session_id, event.data.len());
 
-                        // 通知所有监听器（观察者模式）
-                        // 注意：在同步线程中调用 async fn 不会自动执行
-                        // 需要使用 tokio::spawn 在异步 runtime 中执行
-                        tracing::debug!("[PtyReader] Notifying listeners for session: {}", session_id);
+                        // 发送到 GlobalOutputManager（用于移动端订阅）
+                        let global_manager = GlobalOutputManager::global();
+                        let output_event = OutputEvent {
+                            session_id: session_id.clone(),
+                            data: event.data.clone(),
+                            index: event.index as u64,
+                            timestamp: event.timestamp.timestamp_millis(),
+                            is_waiting: event.is_waiting,
+                        };
+                        tauri::async_runtime::spawn(async move {
+                            global_manager.on_output(output_event).await;
+                        });
+
+                        // 通知所有监听器（观察者模式，用于桌面端前端）
                         if let Ok(listeners) = output_listeners.try_lock() {
-                            tracing::debug!("[PtyReader] Number of listeners: {}", listeners.len());
                             for listener in listeners.iter() {
-                                let listener_name = listener.name();
-                                tracing::debug!("[PtyReader] Calling on_output for listener: {}", listener_name);
-
                                 let event_clone = event.clone();
                                 let listener_clone = listener.clone();
 
@@ -92,7 +96,6 @@ impl PtyReader {
 
             // Notify lifecycle subscribers that the process has exited
             let _ = lifecycle_tx.send(exit_status);
-            tracing::debug!("Output reader stopped for session: {} (status: {:?})", session_id, exit_status);
         });
 
         Self {

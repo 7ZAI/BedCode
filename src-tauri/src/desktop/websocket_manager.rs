@@ -9,6 +9,8 @@ use crate::desktop::server::handlers::{
     SessionControlHandler, SessionConfigHandler,
 };
 use crate::desktop::server::message::Message as BusinessMessage;
+use crate::desktop::session::SessionManager;
+use crate::desktop::plugin::PluginManager;
 use crate::shared::model::message::Message;
 use crate::shared::websocket::{
     WsServer, WsServerConfig, WsServerEvent,
@@ -17,12 +19,14 @@ use crate::shared::websocket::server::server_config::IpFilter;
 use crate::desktop::server::router::BusinessRouter;
 use crate::shared::websocket::server::DefaultMessageHandler;
 use crate::shared::system::error::AppError;
+use crate::shared::auth::QrTokenManager;
 use crate::Result;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, RwLock};
 
 /// 客户端摘要（对外暴露的信息）
@@ -60,6 +64,14 @@ struct WsManagerInner {
     initialized: RwLock<bool>,
     /// 数据库实例（从 lib.rs 传入，避免重复创建）
     db: RwLock<Option<Arc<tokio::sync::Mutex<crate::shared::db::Database>>>>,
+    /// QR Token 管理器（从 lib.rs 传入，确保与 Tauri State 共享同一实例）
+    qr_manager: RwLock<Option<Arc<QrTokenManager>>>,
+    /// Tauri AppHandle（用于向前端发送事件）
+    app_handle: RwLock<Option<Arc<AppHandle>>>,
+    /// 会话管理器（用于会话控制请求）
+    session_manager: RwLock<Option<Arc<SessionManager>>>,
+    /// 插件管理器（用于会话控制请求）
+    plugin_manager: RwLock<Option<Arc<PluginManager>>>,
 }
 
 impl WsManagerInner {
@@ -74,6 +86,10 @@ impl WsManagerInner {
             port: RwLock::new(None),
             initialized: RwLock::new(false),
             db: RwLock::new(None),
+            qr_manager: RwLock::new(None),
+            app_handle: RwLock::new(None),
+            session_manager: RwLock::new(None),
+            plugin_manager: RwLock::new(None),
         }
     }
 }
@@ -93,8 +109,15 @@ impl WebSocketManager {
         &INSTANCE
     }
 
-    /// 初始化（接受外部传入的 db 实例，避免重复创建）
-    pub async fn init(&self, db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>) -> Result<()> {
+    /// 初始化（接受外部传入的实例，确保与 Tauri State 共享）
+    pub async fn init(
+        &self,
+        db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>,
+        qr_manager: Arc<QrTokenManager>,
+        app_handle: Arc<AppHandle>,
+        session_manager: Arc<SessionManager>,
+        plugin_manager: Arc<PluginManager>,
+    ) -> Result<()> {
         {
             let mut initialized = self.inner.initialized.write().await;
             if *initialized {
@@ -108,6 +131,30 @@ impl WebSocketManager {
         {
             let mut db_lock = self.inner.db.write().await;
             *db_lock = Some(db);
+        }
+
+        // 存储 qr_manager 实例（关键：确保与前端 generate_qr_code 命令使用同一实例）
+        {
+            let mut qr_lock = self.inner.qr_manager.write().await;
+            *qr_lock = Some(qr_manager);
+        }
+
+        // 存储 app_handle 实例（用于向前端发送设备连接事件）
+        {
+            let mut handle_lock = self.inner.app_handle.write().await;
+            *handle_lock = Some(app_handle);
+        }
+
+        // 存储 session_manager 实例（用于会话控制请求）
+        {
+            let mut sm_lock = self.inner.session_manager.write().await;
+            *sm_lock = Some(session_manager);
+        }
+
+        // 存储 plugin_manager 实例（用于会话控制请求）
+        {
+            let mut pm_lock = self.inner.plugin_manager.write().await;
+            *pm_lock = Some(plugin_manager);
         }
 
         tracing::info!("WebSocketManager initialized");
@@ -153,24 +200,50 @@ impl WebSocketManager {
         // 创建 WsServer
         let server = Arc::new(WsServer::new(config));
 
-        // 创建处理器实例
+        // 获取数据库实例
         let db = {
             let db_lock = self.inner.db.read().await;
             db_lock.clone().ok_or_else(|| AppError::WebSocket(
                 "Database not initialized, call init() first".to_string(),
             ))?
         };
+
+        // 使用 init 时传入的 qr_manager 实例（与 Tauri State 共享）
+        let qr_manager = {
+            let qr_lock = self.inner.qr_manager.read().await;
+            qr_lock.clone().ok_or_else(|| AppError::WebSocket(
+                "QrTokenManager not initialized, call init() first".to_string(),
+            ))?
+        };
+
+        // 获取 session_manager 和 plugin_manager（用于会话控制请求）
+        let session_manager = {
+            let sm_lock = self.inner.session_manager.read().await;
+            sm_lock.clone()
+        };
+        let plugin_manager = {
+            let pm_lock = self.inner.plugin_manager.read().await;
+            pm_lock.clone()
+        };
+
         let pairing_service = Arc::new(crate::desktop::server::services::PairingService::new());
-        let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
+
+        // 获取 app_handle（用于向前端发送事件）
+        let app_handle = {
+            let handle_lock = self.inner.app_handle.read().await;
+            handle_lock.clone()
+        };
 
         // 创建处理器实例
         let auth_handler = Arc::new(AuthHandler::new(
             pairing_service,
             qr_manager,
+            app_handle,
         ));
+        // 传入 session_manager 和 plugin_manager
         let control_handler = Arc::new(SessionControlHandler::new(
-            None,
-            None,
+            session_manager,
+            plugin_manager,
         ));
         let session_config_handler = Arc::new(SessionConfigHandler::new(db.clone()));
         let terminal_handler = Arc::new(TerminalHandler::new(None));
@@ -481,6 +554,37 @@ impl WebSocketManager {
         self.broadcast(message).await
     }
 
+    /// 向除指定设备外的所有已认证客户端广播（基于设备名称）
+    ///
+    /// 用于同步事件广播，排除触发操作的设备
+    pub async fn broadcast_sync_to_others(
+        &self,
+        exclude_device_name: &str,
+        message: &BusinessMessage,
+    ) -> Result<()> {
+        // 查找设备名称对应的地址
+        let exclude_addr = {
+            let addr_to_device_name = self.inner.addr_to_device_name.read().await;
+            addr_to_device_name
+                .iter()
+                .find(|(_, name)| *name == exclude_device_name)
+                .map(|(addr, _)| *addr)
+        };
+
+        let server = self.inner.server.read().await;
+        if let Some(s) = &*server {
+            if let Some(addr) = exclude_addr {
+                s.broadcast_to_others(&addr, message).await?;
+            } else {
+                // 未找到设备，广播给所有客户端
+                self.broadcast(message).await?;
+            }
+            Ok(())
+        } else {
+            Err(AppError::WebSocket("Server not started".to_string()))
+        }
+    }
+
     // ==================== Event Subscription ====================
 
     /// 订阅服务器事件
@@ -504,6 +608,12 @@ impl WebSocketManager {
             let mut addr_to_device_name = self.inner.addr_to_device_name.write().await;
             addr_to_device_name.insert(*addr, name);
         }
+    }
+
+    /// 获取设备名称（通过地址）
+    pub async fn get_device_name_by_addr(&self, addr: &SocketAddr) -> Option<String> {
+        let addr_to_device_name = self.inner.addr_to_device_name.read().await;
+        addr_to_device_name.get(addr).cloned()
     }
 
     /// 更新客户端认证状态

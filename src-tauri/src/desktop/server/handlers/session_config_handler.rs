@@ -39,9 +39,15 @@ impl RouteHandler for SessionConfigHandler {
                 ..
             } => {
                 match payload.action {
-                    SessionConfigAction::SessionConfigList { .. } => {
+                    // 处理请求：列出会话配置
+                    SessionConfigAction::ListSessionConfigs => {
                         session_config::list_session_configs(message_id, &self.db).await
                     }
+                    // 处理请求：列出快捷指令
+                    SessionConfigAction::ListQuickActions => {
+                        session_config::list_quick_actions_response(message_id).await
+                    }
+                    // 响应类型不需要处理
                     _ => Ok(None),
                 }
             }
