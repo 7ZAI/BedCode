@@ -262,6 +262,8 @@ onBeforeUnmount(() => {
   -webkit-user-select: none;
   /* 禁止获取焦点，防止点击触发输入法 */
   -webkit-tap-highlight-color: transparent;
+  /* 允许触摸滚动（与 user-select: none 配合使用） */
+  touch-action: pan-y;
 }
 
 .terminal-wrapper:focus,
@@ -300,6 +302,8 @@ onBeforeUnmount(() => {
   -webkit-overflow-scrolling: touch;
   /* 防止滚动到边界时触发页面整体滚动 */
   overscroll-behavior: contain;
+  /* 允许触摸滚动 */
+  touch-action: pan-y;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar {

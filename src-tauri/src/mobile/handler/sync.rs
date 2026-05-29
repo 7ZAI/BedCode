@@ -1,4 +1,4 @@
-//! Sync Router - 同步数据消息路由处理器
+//! Sync Handler - 同步数据消息处理器
 
 use async_trait::async_trait;
 
@@ -6,25 +6,25 @@ use crate::shared::model::message::Message;
 use crate::shared::enums::SyncPayload;
 use crate::Result;
 
-use super::{ClientRouteContext, ClientRouteHandler, MobileEvent};
+use crate::mobile::router::{ClientRouteContext, MobileEvent, ClientRouteHandler};
 
-/// 同步数据消息路由器
-pub struct SyncRouter;
+/// 同步数据消息处理器
+pub struct SyncHandler;
 
 #[async_trait]
-impl ClientRouteHandler for SyncRouter {
+impl ClientRouteHandler for SyncHandler {
     async fn handle(&self, message: Message, ctx: &ClientRouteContext) -> Result<Option<Message>> {
         if let Message::SyncData { payload, .. } = message {
             match payload {
                 SyncPayload::SessionCreated { session, source_device } => {
-                    tracing::info!("[SyncRouter] SessionCreated: session_id={}, source={}", session.id, source_device);
+                    tracing::info!("[SyncHandler] SessionCreated: session_id={}, source={}", session.id, source_device);
                     ctx.emit(MobileEvent::SyncSessionCreated {
                         session,
                         source_device,
                     });
                 }
                 SyncPayload::SessionStatusChanged { session_id, old_status, new_status, session_name } => {
-                    tracing::info!("[SyncRouter] SessionStatusChanged: session_id={}, {} -> {}", session_id, old_status, new_status);
+                    tracing::info!("[SyncHandler] SessionStatusChanged: session_id={}, {} -> {}", session_id, old_status, new_status);
                     ctx.emit(MobileEvent::SyncSessionStatusChanged {
                         session_id,
                         old_status,
@@ -33,35 +33,35 @@ impl ClientRouteHandler for SyncRouter {
                     });
                 }
                 SyncPayload::SessionStopped { session_id, session_name } => {
-                    tracing::info!("[SyncRouter] SessionStopped: session_id={}", session_id);
+                    tracing::info!("[SyncHandler] SessionStopped: session_id={}", session_id);
                     ctx.emit(MobileEvent::SyncSessionStopped {
                         session_id,
                         session_name,
                     });
                 }
                 SyncPayload::SessionRemoved { session_id, session_name } => {
-                    tracing::info!("[SyncRouter] SessionRemoved: session_id={}", session_id);
+                    tracing::info!("[SyncHandler] SessionRemoved: session_id={}", session_id);
                     ctx.emit(MobileEvent::SyncSessionRemoved {
                         session_id,
                         session_name,
                     });
                 }
                 SyncPayload::ConfigCreated { config, source_device } => {
-                    tracing::info!("[SyncRouter] ConfigCreated: config_id={}, source={}", config.id, source_device);
+                    tracing::info!("[SyncHandler] ConfigCreated: config_id={}, source={}", config.id, source_device);
                     ctx.emit(MobileEvent::SyncConfigCreated {
                         config,
                         source_device,
                     });
                 }
                 SyncPayload::ConfigUpdated { config, source_device } => {
-                    tracing::info!("[SyncRouter] ConfigUpdated: config_id={}, source={}", config.id, source_device);
+                    tracing::info!("[SyncHandler] ConfigUpdated: config_id={}, source={}", config.id, source_device);
                     ctx.emit(MobileEvent::SyncConfigUpdated {
                         config,
                         source_device,
                     });
                 }
                 SyncPayload::ConfigRemoved { config_id, config_name } => {
-                    tracing::info!("[SyncRouter] ConfigRemoved: config_id={}", config_id);
+                    tracing::info!("[SyncHandler] ConfigRemoved: config_id={}", config_id);
                     ctx.emit(MobileEvent::SyncConfigRemoved {
                         config_id,
                         config_name,
@@ -73,11 +73,11 @@ impl ClientRouteHandler for SyncRouter {
     }
 
     fn name(&self) -> &str {
-        "SyncRouter"
+        "SyncHandler"
     }
 }
 
-impl Default for SyncRouter {
+impl Default for SyncHandler {
     fn default() -> Self {
         Self
     }

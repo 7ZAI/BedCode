@@ -11,8 +11,7 @@ use tracing;
 pub use crate::shared::enums::SessionStatus;
 
 use crate::Result;
-use crate::shared::model::message::Message;
-use crate::shared::enums::control::SessionControlAction;
+use crate::mobile::request::{SessionRequest, ResponseParser, timeouts};
 
 use super::connection::ConnectionManager;
 
@@ -59,14 +58,11 @@ impl SessionManager {
     pub async fn start_session(&self, config_id: &str, session_name: Option<&str>) -> Result<String> {
         tracing::info!("[start_session] config_id={}, session_name={:?}", config_id, session_name);
 
-        // 通过 WebSocket 发送 StartSession 控制消息到桌面端，expect_response=true
-        let action = SessionControlAction::StartSession {
-            config_id: config_id.to_string(),
-        };
-        let message = Message::session_control_with_response(action, None);
+        // 通过 WebSocket 发送 StartSession 控制消息到桌面端
+        let message = SessionRequest::start_session(config_id);
 
         let response = self.connection
-            .send_and_wait(&message, std::time::Duration::from_secs(30))
+            .send_and_wait(&message, timeouts::SESSION_CONTROL)
             .await
             .map_err(|e| {
                 tracing::error!("[start_session] send_and_wait failed: {}", e);
@@ -75,33 +71,25 @@ impl SessionManager {
         tracing::info!("[start_session] send_and_wait succeeded");
 
         // 解析响应获取真实 session_id
-        // 桌面端返回 StartSession { config_id }，session_id 在 Message 头部
-        if let Message::SessionControl { session_id, payload, .. } = &response {
-            if let SessionControlAction::StartSession { .. } = &payload.action {
-                let session_id = session_id.as_deref().unwrap_or("");
-                let name = session_name
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| {
-                        let short_id = if session_id.len() > 8 { &session_id[..8] } else { session_id };
-                        format!("Session-{}", short_id)
-                    });
-                let session = SessionInfo {
-                    id: session_id.to_string(),
-                    name,
-                    config_id: config_id.to_string(),
-                    status: SessionStatus::Running,
-                    created_at: chrono::Utc::now().timestamp_millis(),
-                };
+        if let Some(session_id) = ResponseParser::parse_start_session_response(&response) {
+            let name = session_name
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| {
+                    let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+                    format!("Session-{}", short_id)
+                });
+            let session = SessionInfo {
+                id: session_id.clone(),
+                name,
+                config_id: config_id.to_string(),
+                status: SessionStatus::Running,
+                created_at: chrono::Utc::now().timestamp_millis(),
+            };
 
-                *self.active_session.write().await = Some(session.clone());
-                self.sessions.write().await.push(session.clone());
-                tracing::info!("[start_session] Session added to local list, total sessions: {}", self.sessions.read().await.len());
-                return Ok(session_id.to_string());
-            } else {
-                tracing::error!("[start_session] Unexpected response action: {:?}", payload.action);
-            }
-        } else {
-            tracing::error!("[start_session] Unexpected response type: {:?}", response);
+            *self.active_session.write().await = Some(session.clone());
+            self.sessions.write().await.push(session.clone());
+            tracing::info!("[start_session] Session added to local list, total sessions: {}", self.sessions.read().await.len());
+            return Ok(session_id);
         }
 
         tracing::error!("[start_session] Failed to parse StartSession response");
@@ -112,14 +100,10 @@ impl SessionManager {
     pub async fn stop_session(&self, session_id: &str) -> Result<()> {
         tracing::info!("[stop_session] Sending StopSession request for session_id={}", session_id);
 
-        // 通过 WebSocket 发送 StopSession 控制消息到桌面端，expect_response=true
-        // 让桌面端实际终止 PTY 进程
-        let action = SessionControlAction::StopSession {
-            session_id: session_id.to_string(),
-        };
-        let message = Message::session_control_with_response(action, Some(session_id));
+        // 通过 WebSocket 发送 StopSession 控制消息到桌面端
+        let message = SessionRequest::stop_session(session_id);
 
-        match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
+        match self.connection.send_and_wait(&message, timeouts::SESSION_CONTROL).await {
             Ok(_) => {
                 tracing::info!("[stop_session] Desktop confirmed session stopped: {}", session_id);
             }
@@ -149,14 +133,10 @@ impl SessionManager {
     pub async fn remove_session(&self, session_id: &str) -> Result<()> {
         tracing::info!("[remove_session] Sending RemoveSession request for session_id={}", session_id);
 
-        // 通过 WebSocket 发送 RemoveSession 控制消息到桌面端，expect_response=true
-        // 让桌面端实际删除会话
-        let action = SessionControlAction::RemoveSession {
-            session_id: session_id.to_string(),
-        };
-        let message = Message::session_control_with_response(action, Some(session_id));
+        // 通过 WebSocket 发送 RemoveSession 控制消息到桌面端
+        let message = SessionRequest::remove_session(session_id);
 
-        match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
+        match self.connection.send_and_wait(&message, timeouts::SESSION_CONTROL).await {
             Ok(_) => {
                 tracing::info!("[remove_session] Desktop confirmed session removed: {}", session_id);
             }

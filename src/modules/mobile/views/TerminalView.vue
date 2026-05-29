@@ -229,11 +229,13 @@ function onTerminalClear() {
   outputBuffer.value = ''
 }
 
-// KeepAlive 恢复时触发，重置缓冲区避免重复显示
+// KeepAlive 恢复时触发，确保终端实例正确显示
+// 不清空缓冲区，保持现有数据继续接收新输出
 function onTerminalActivated() {
-  console.log('[TerminalView] onTerminalActivated, clearing buffer')
-  outputBuffer.value = ''
-  terminalRef.value?.clear()
+  console.log('[TerminalView] onTerminalActivated, keeping buffer and continuing to receive output')
+  // xterm.js 实例由 KeepAlive 保持，无需重新初始化
+  // 输出缓冲区保持不变，新数据会继续追加
+  // 订阅也保持不变，继续接收实时输出
 }
 
 let unlistenOutput: UnlistenFn | null = null
@@ -289,19 +291,9 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(async () => {
-  unlistenOutput?.()
-  // 取消订阅会话
-  const sessionId = connection.activeSessionId.value
-  if (sessionId) {
-    try {
-      const { wsLeaveSession } = await import('@/modules/mobile/composables/useMobileCommands')
-      await wsLeaveSession(sessionId)
-    } catch (e) {
-      console.error('[TerminalView] wsLeaveSession failed:', e)
-    }
-  }
-})
+// 注意：不使用 onUnmounted 取消订阅
+// KeepAlive 缓存的组件在离开页面时不会真正 unmount
+// 应保持订阅继续接收输出，返回时数据仍在缓冲区中
 
 function goBack() {
   router.push('/mobile/sessions')

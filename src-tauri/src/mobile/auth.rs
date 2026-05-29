@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::shared::model::message::Message;
-use crate::shared::enums::auth::{AuthPayload, AuthStage};
+use crate::shared::enums::auth::AuthStage;
+use crate::mobile::request::{AuthRequest, ResponseParser, timeouts};
 use crate::Result;
 
 use super::connection::ConnectionManager;
@@ -119,30 +120,15 @@ impl AuthManager {
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
         tracing::info!("[authenticate] Sending JWT re-auth (token length={})", token.len());
-        let message = Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::Authenticated,
-                device_id: Some(device_id),
-                device_fingerprint: Some(fingerprint),
-                session_token: Some(token.to_string()),
-                ..Default::default()
-            },
-        };
+        let message = AuthRequest::reauthenticate(&device_id, &fingerprint, token);
 
-        match self.connection.send_and_wait(&message, std::time::Duration::from_secs(15)).await {
+        match self.connection.send_and_wait(&message, timeouts::AUTH).await {
             Ok(response) => {
-                if let Message::Auth { payload, .. } = &response {
-                    if payload.stage == AuthStage::Authenticated {
-                        *self.status.write().await = AuthStatus::Authenticated;
-                        self.connection.set_paired().await;
-                        tracing::info!("[authenticate] JWT re-authentication successful");
-                        return Ok(true);
-                    }
+                if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
+                    *self.status.write().await = AuthStatus::Authenticated;
+                    self.connection.set_paired().await;
+                    tracing::info!("[authenticate] JWT re-authentication successful");
+                    return Ok(true);
                 }
                 *self.status.write().await = AuthStatus::Failed("Re-authentication failed".to_string());
                 Ok(false)
@@ -170,23 +156,10 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::RequestPairing,
-                device_id: Some(device_id),
-                device_name: Some(device_name),
-                device_fingerprint: Some(fingerprint),
-                ..Default::default()
-            },
-        };
+        let message = AuthRequest::request_pairing(&device_id, &device_name, &fingerprint);
 
         tracing::info!("[request_pairing] Calling send_and_wait (30s timeout)...");
-        let response = match self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await {
+        let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
             Ok(r) => {
                 tracing::info!("[request_pairing] send_and_wait returned Ok");
                 r
@@ -198,12 +171,10 @@ impl AuthManager {
         };
 
         // 检查响应
-        if let Message::Auth { payload, .. } = &response {
-            tracing::info!("[request_pairing] Response stage: {:?}", payload.stage);
-            if payload.stage == AuthStage::VerifyCode {
-                *self.status.write().await = AuthStatus::WaitingPairingCode;
-                return Ok(());
-            }
+        if let Some(AuthStage::VerifyCode) = ResponseParser::parse_auth_response(&response) {
+            tracing::info!("[request_pairing] Response stage: VerifyCode");
+            *self.status.write().await = AuthStatus::WaitingPairingCode;
+            return Ok(());
         }
 
         tracing::error!("[request_pairing] Failed - unexpected response format");
@@ -220,42 +191,34 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::VerifyCode,
-                device_id: Some(device_id),
-                device_name: Some(device_name),
-                device_fingerprint: Some(fingerprint.clone()),
-                pairing_code: Some(code.to_string()),
-                ..Default::default()
-            },
-        };
+        let message = AuthRequest::verify_pairing_code(&device_id, &device_name, &fingerprint, code);
 
-        let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
+        let response = self.connection.send_and_wait(&message, timeouts::AUTH).await?;
 
         // 检查响应
-        if let Message::Auth { payload, .. } = &response {
-            if payload.stage == AuthStage::Authenticated {
-                // 提取凭据
-                let pairing_id = payload.device_id.clone().unwrap_or_default();
-                let session_token = payload.session_token.clone().unwrap_or_default();
+        if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
+            // 提取凭据
+            let pairing_id = if let Message::Auth { payload, .. } = &response {
+                payload.device_id.clone().unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let session_token = if let Message::Auth { payload, .. } = &response {
+                payload.session_token.clone().unwrap_or_default()
+            } else {
+                String::new()
+            };
 
-                let creds = AuthCredentials {
-                    pairing_id: pairing_id.clone(),
-                    fingerprint,
-                    session_token: session_token.clone(),
-                };
+            let creds = AuthCredentials {
+                pairing_id: pairing_id.clone(),
+                fingerprint,
+                session_token: session_token.clone(),
+            };
 
-                self.set_credentials(creds).await;
-                *self.status.write().await = AuthStatus::Authenticated;
-                self.connection.set_paired().await;
-                return Ok(true);
-            }
+            self.set_credentials(creds).await;
+            *self.status.write().await = AuthStatus::Authenticated;
+            self.connection.set_paired().await;
+            return Ok(true);
         }
 
         *self.status.write().await = AuthStatus::Failed("Pairing verification failed".to_string());
@@ -272,41 +235,33 @@ impl AuthManager {
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
         let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
 
-        let message = Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::QrConnect,
-                device_id: Some(device_id),
-                device_name: Some(device_name),
-                device_fingerprint: Some(fingerprint.clone()),
-                qr_token: Some(token.to_string()),
-                ..Default::default()
-            },
-        };
+        let message = AuthRequest::authenticate_with_qr(&device_id, &device_name, &fingerprint, token);
 
-        let response = self.connection.send_and_wait(&message, std::time::Duration::from_secs(30)).await?;
+        let response = self.connection.send_and_wait(&message, timeouts::AUTH).await?;
 
         // 检查响应
-        if let Message::Auth { payload, .. } = &response {
-            if payload.stage == AuthStage::Authenticated {
-                let pairing_id = payload.device_id.clone().unwrap_or_default();
-                let session_token = payload.session_token.clone().unwrap_or_default();
+        if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
+            let pairing_id = if let Message::Auth { payload, .. } = &response {
+                payload.device_id.clone().unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let session_token = if let Message::Auth { payload, .. } = &response {
+                payload.session_token.clone().unwrap_or_default()
+            } else {
+                String::new()
+            };
 
-                let creds = AuthCredentials {
-                    pairing_id: pairing_id.clone(),
-                    fingerprint,
-                    session_token: session_token.clone(),
-                };
+            let creds = AuthCredentials {
+                pairing_id: pairing_id.clone(),
+                fingerprint,
+                session_token: session_token.clone(),
+            };
 
-                self.set_credentials(creds).await;
-                *self.status.write().await = AuthStatus::Authenticated;
-                self.connection.set_paired().await;
-                return Ok(true);
-            }
+            self.set_credentials(creds).await;
+            *self.status.write().await = AuthStatus::Authenticated;
+            self.connection.set_paired().await;
+            return Ok(true);
         }
 
         *self.status.write().await = AuthStatus::Failed("QR authentication failed".to_string());

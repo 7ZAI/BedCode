@@ -293,15 +293,27 @@ impl SessionManager {
         let pty_session = self.pty_registry.get(session_id).await
             .ok_or_else(|| crate::AppError::NotFound(format!("PTY session not found: {}", session_id)))?;
 
+        // 注册到全局输出管理器（启用移动端订阅功能）
+        // 必须在启动 PTY 之前注册，否则输出事件会被丢弃
+        self.register_output_manager(session_id).await;
+
         // 启动 PTY
         pty_session.start().await?;
 
         // 更新会话状态为 Running
         let session_name = session_info.name.clone();
+        let old_status = session_info.status.clone();
         let mut updated_info = session_info;
         updated_info.status = SessionStatus::Running;
         updated_info.started_at = Some(Utc::now());
         self.session_info.insert(updated_info).await;
+
+        // 发布同步事件：会话状态变化（通知移动端）
+        self.publish_sync_event(DesktopSyncEvent::SessionStatusChanged {
+            session_id: session_id.to_string(),
+            old_status,
+            new_status: SessionStatus::Running,
+        }).await;
 
         tracing::info!("Session started: {} ({})", session_name, session_id);
         Ok(())

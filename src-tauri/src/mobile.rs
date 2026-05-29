@@ -4,25 +4,41 @@
 
 pub mod auth;
 pub mod commands;
-pub mod connection;
 pub mod events;
-pub mod output_receiver;
-pub mod pairing_service;
-pub mod request;
+pub mod global;
+pub mod handler;
+pub mod remote;
 pub mod router;
 pub mod session;
 pub mod storage;
-pub mod terminal;
 
 // Re-export public types
 pub use self::auth::{AuthCredentials, AuthManager, AuthStatus};
-pub use self::connection::{ConnectionManager, ConnectionStatus, TargetDevice, set_global_token, get_global_token, clear_global_token};
+pub use self::global::{set_global_token, get_global_token, clear_global_token};
+pub use self::remote::{
+    ConnectionManager, ConnectionStatus, TargetDevice,
+    OutputEvent, OutputReceiver,
+};
 pub use self::router::{MobileEvent, ClientRouteContext, ClientBusinessRouter, ClientRouteRegistry, ClientRouteHandler};
-pub use self::router::{TerminalRouter, AuthRouter, SyncRouter, SystemRouter};
-pub use self::output_receiver::{OutputEvent, OutputReceiver};
+pub use self::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
 pub use self::session::{SessionInfo, SessionManager, SessionStatus};
 pub use self::storage::TokenStorage;
-pub use self::terminal::{TerminalHistory, TerminalOutputEvent, TerminalIncrementalOutput, TerminalManager, get_terminal_manager};
+
+// Re-export commands module public items
+pub use self::commands::{
+    // Manager getters
+    get_connection_manager,
+    get_auth_manager,
+    get_session_manager,
+    // All Tauri commands
+    ws_set_token, ws_get_token, ws_clear_token,
+    ws_connect, ws_disconnect, ws_get_status, ws_is_connected, ws_reconnect,
+    ws_get_auth_status, ws_authenticate, ws_request_pairing, ws_verify_pairing_code, ws_authenticate_with_qr,
+    ws_load_sessions, ws_join_session, ws_leave_session, ws_subscribe_session,
+    ws_start_session, ws_stop_session, ws_remove_session, ws_load_session_configs,
+    ws_send_input_async, ws_send_message, ws_send_and_wait, ws_resize_terminal,
+    get_status_bar_height, set_screen_orientation, keep_screen_awake,
+};
 
 // Mobile uses crate-level re-exports
 pub use crate::shared::system::error::{AppError, Result};

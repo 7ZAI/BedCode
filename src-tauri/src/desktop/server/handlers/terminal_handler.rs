@@ -77,11 +77,12 @@ impl RouteHandler for TerminalHandler {
                         let client_id = ctx.client_id.clone();
 
                         // 启动转发任务：将 OutputEvent 转换为 Message 并发送到 WebSocket
+                        // 注意：event.data 已经是 Base64 编码的字符串，使用 output_from_base64 避免重复编码
                         tokio::spawn(async move {
                             while let Some(event) = output_rx.recv().await {
-                                let message = Message::output(
+                                let message = Message::output_from_base64(
                                     &session_id_clone,
-                                    event.data.as_bytes(),
+                                    &event.data,
                                     event.is_waiting,
                                     event.index as usize,
                                 );

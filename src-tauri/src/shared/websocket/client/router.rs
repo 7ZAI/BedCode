@@ -13,13 +13,13 @@ use async_trait::async_trait;
 /// 移动端: ClientBusinessRouter 实现此 trait
 #[async_trait]
 pub trait MessageRouter: Send + Sync {
-    /// 处理接收到的消息
+    /// 路由消息到具体处理器
     ///
     /// # Returns
     /// - `Ok(Some(Message))` - 返回响应消息
     /// - `Ok(None)` - 无需响应
     /// - `Err(e)` - 处理错误
-    async fn handle(&self, message: Message) -> Result<Option<Message>>;
+    async fn route(&self, message: Message) -> Result<Option<Message>>;
 
     /// 路由器名称
     fn name(&self) -> &str;

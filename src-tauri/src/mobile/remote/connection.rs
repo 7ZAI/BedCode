@@ -15,10 +15,11 @@ use crate::shared::websocket::{
 };
 use crate::shared::model::message::Message;
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
+use crate::mobile::global::get_global_token;
 use crate::Result;
 
-use super::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
-use super::router::{TerminalRouter, AuthRouter, SyncRouter, SystemRouter};
+use crate::mobile::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
+use crate::mobile::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
 
 // Re-export ConnectionStatus for public API
 pub use crate::shared::websocket::ConnectionStatus;
@@ -26,30 +27,6 @@ pub use crate::shared::websocket::ConnectionStatus;
 /// 重连配置
 const MAX_RETRY: u32 = 3;
 const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000]; // 指数退避（毫秒）
-
-/// 全局 Token 存储（移动端）
-/// 前端启动时从 localStorage 读取并设置，发送消息时自动注入
-static GLOBAL_TOKEN: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
-
-/// 设置全局 Token
-pub fn set_global_token(token: &str) {
-    let mut guard = GLOBAL_TOKEN.write().unwrap();
-    *guard = token.to_string();
-    tracing::info!("[GlobalToken] Token updated, length={}", token.len());
-}
-
-/// 获取全局 Token
-pub fn get_global_token() -> String {
-    let guard = GLOBAL_TOKEN.read().unwrap();
-    guard.clone()
-}
-
-/// 清除全局 Token
-pub fn clear_global_token() {
-    let mut guard = GLOBAL_TOKEN.write().unwrap();
-    *guard = String::new();
-    tracing::info!("[GlobalToken] Token cleared");
-}
 
 /// 目标设备信息
 #[derive(Debug, Clone)]
@@ -170,17 +147,17 @@ impl ConnectionManager {
         tracing::debug!("WsClient created");
 
         // 创建路由上下文
-        let ctx = ClientRouteContext::new(self.event_tx.clone(), client.event_tx());
+        let ctx = ClientRouteContext::new(self.event_tx.clone());
 
         // 使用 Builder 模式创建路由器
         let router = ClientBusinessRouter::builder()
             .context(ctx)
-            .route("Terminal", Arc::new(TerminalRouter))
-            .route("Auth", Arc::new(AuthRouter))
-            .route("SyncData", Arc::new(SyncRouter))
-            .route("ServerClosed", Arc::new(SystemRouter))
-            .route("Error", Arc::new(SystemRouter))
-            .route("Ack", Arc::new(SystemRouter))
+            .route("Terminal", Arc::new(TerminalHandler))
+            .route("Auth", Arc::new(AuthHandler))
+            .route("SyncData", Arc::new(SyncHandler))
+            .route("ServerClosed", Arc::new(SystemHandler))
+            .route("Error", Arc::new(SystemHandler))
+            .route("Ack", Arc::new(SystemHandler))
             .build()?;
 
         // 设置 handler
@@ -269,17 +246,17 @@ impl ConnectionManager {
         let client = WsClient::new(config);
 
         // 创建路由上下文
-        let ctx = ClientRouteContext::new(self.event_tx.clone(), client.event_tx());
+        let ctx = ClientRouteContext::new(self.event_tx.clone());
 
         // 创建路由器
         let router = ClientBusinessRouter::builder()
             .context(ctx)
-            .route("Terminal", Arc::new(TerminalRouter))
-            .route("Auth", Arc::new(AuthRouter))
-            .route("SyncData", Arc::new(SyncRouter))
-            .route("ServerClosed", Arc::new(SystemRouter))
-            .route("Error", Arc::new(SystemRouter))
-            .route("Ack", Arc::new(SystemRouter))
+            .route("Terminal", Arc::new(TerminalHandler))
+            .route("Auth", Arc::new(AuthHandler))
+            .route("SyncData", Arc::new(SyncHandler))
+            .route("ServerClosed", Arc::new(SystemHandler))
+            .route("Error", Arc::new(SystemHandler))
+            .route("Ack", Arc::new(SystemHandler))
             .build()?;
 
         client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
@@ -357,17 +334,17 @@ impl ConnectionManager {
             let client = WsClient::new(config);
 
             // 创建路由上下文
-            let ctx = ClientRouteContext::new(self.event_tx.clone(), client.event_tx());
+            let ctx = ClientRouteContext::new(self.event_tx.clone());
 
             // 创建路由器
             let router = ClientBusinessRouter::builder()
                 .context(ctx)
-                .route("Terminal", Arc::new(TerminalRouter))
-                .route("Auth", Arc::new(AuthRouter))
-                .route("SyncData", Arc::new(SyncRouter))
-                .route("ServerClosed", Arc::new(SystemRouter))
-                .route("Error", Arc::new(SystemRouter))
-                .route("Ack", Arc::new(SystemRouter))
+                .route("Terminal", Arc::new(TerminalHandler))
+                .route("Auth", Arc::new(AuthHandler))
+                .route("SyncData", Arc::new(SyncHandler))
+                .route("ServerClosed", Arc::new(SystemHandler))
+                .route("Error", Arc::new(SystemHandler))
+                .route("Ack", Arc::new(SystemHandler))
                 .build()?;
 
             client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;

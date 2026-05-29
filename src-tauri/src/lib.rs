@@ -498,29 +498,43 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Mobile Token Commands
+            mobile::commands::ws_set_token,
+            mobile::commands::ws_get_token,
+            mobile::commands::ws_clear_token,
             // Mobile WebSocket Commands
             mobile::commands::ws_connect,
             mobile::commands::ws_disconnect,
             mobile::commands::ws_get_status,
             mobile::commands::ws_is_connected,
             mobile::commands::ws_reconnect,
+            // Mobile Auth Commands
             mobile::commands::ws_get_auth_status,
             mobile::commands::ws_authenticate,
             mobile::commands::ws_request_pairing,
             mobile::commands::ws_verify_pairing_code,
             mobile::commands::ws_authenticate_with_qr,
+            // Mobile Session Commands
             mobile::commands::ws_load_sessions,
+            mobile::commands::ws_join_session,
+            mobile::commands::ws_leave_session,
+            mobile::commands::ws_subscribe_session,
             mobile::commands::ws_start_session,
             mobile::commands::ws_stop_session,
             mobile::commands::ws_remove_session,
+            mobile::commands::ws_load_session_configs,
+            // Mobile Terminal Commands
             mobile::commands::ws_send_input_async,
             mobile::commands::ws_send_message,
             mobile::commands::ws_send_and_wait,
             mobile::commands::ws_resize_terminal,
-            mobile::commands::ws_load_session_configs,
-            mobile::commands::ws_join_session,
-            mobile::commands::ws_leave_session,
-            mobile::commands::ws_subscribe_session,
+            mobile::commands::ws_get_terminal_history,
+            mobile::commands::ws_subscribe_terminal,
+            mobile::commands::ws_unsubscribe_terminal,
+            mobile::commands::ws_get_terminal_incremental,
+            mobile::commands::ws_update_terminal_index,
+            mobile::commands::ws_clear_terminal_buffer,
+            mobile::commands::ws_clear_all_terminal_buffers,
             // Pairing
             shared::system::commands::generate_pairing_code,
             shared::system::commands::get_current_pairing_code,

@@ -35,10 +35,6 @@ pub trait MessageHandler: Send + Sync {
     );
 }
 
-//// 空实现
-pub trait BedCodeMessage:Send + Sync + Debug + Clone {
-
-}
 
 /// 客户端信息 trait（泛型基础）
 /// 让不同业务场景可以定义自己的客户端信息结构

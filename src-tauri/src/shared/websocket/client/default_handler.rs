@@ -1,10 +1,10 @@
 //! Client Default Message Handler
 //!
 //! 客户端默认消息处理器，实现 MessageHandler trait
-//! 解码消息并委托给 MessageRouter 处理
+//! 使用编解码器解码消息，再委托给单个 MessageRouter 处理
 
-use crate::shared::model::message::Message;
 use crate::shared::websocket::client::router::MessageRouter;
+use crate::shared::websocket::codec::{JsonCodec, MessageCodec};
 use crate::shared::websocket::MessageHandler;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,17 +14,29 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 /// 客户端默认消息处理器
 ///
 /// 处理流程：
-/// 1. 解码 JSON 为 Message
-/// 2. 委托给 MessageRouter 处理
+/// 1. 使用 codec 解码 WebSocket 消息为 Message
+/// 2. 委托给单个 MessageRouter 处理
 pub struct ClientDefaultMessageHandler {
+    codec: Arc<dyn MessageCodec>,
     router: Option<Arc<dyn MessageRouter>>,
 }
 
 impl ClientDefaultMessageHandler {
+    /// 创建默认消息处理器（使用 JsonCodec）
     pub fn new() -> Self {
-        Self { router: None }
+        Self {
+            codec: Arc::new(JsonCodec::new()),
+            router: None,
+        }
     }
 
+    /// Builder 风格：设置编解码器
+    pub fn with_codec(mut self, codec: Arc<dyn MessageCodec>) -> Self {
+        self.codec = codec;
+        self
+    }
+
+    /// Builder 风格：设置消息路由器
     pub fn with_router(mut self, router: Arc<dyn MessageRouter>) -> Self {
         self.router = Some(router);
         self
@@ -45,21 +57,15 @@ impl MessageHandler for ClientDefaultMessageHandler {
         _client_id: Option<&str>,
         _sender: Option<mpsc::Sender<WsMsg>>,
     ) {
-        // 只处理 Text 类型
-        let text = match raw_message {
-            WsMsg::Text(text) => text,
-            WsMsg::Binary(data) => {
-                tracing::debug!("[ClientDefaultMessageHandler] Binary received: {} bytes", data.len());
+        // 使用 codec 解码消息
+        let message = match self.codec.decode(raw_message) {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                // 协议层消息（Ping/Pong/Frame）不需要处理
                 return;
             }
-            _ => return,
-        };
-
-        // 解析为 Message
-        let message = match Message::from_json(&text) {
-            Ok(msg) => msg,
             Err(e) => {
-                tracing::warn!("[ClientDefaultMessageHandler] Failed to parse message: {}", e);
+                tracing::warn!("[ClientDefaultMessageHandler] Codec decode error: {}", e);
                 return;
             }
         };
@@ -68,10 +74,12 @@ impl MessageHandler for ClientDefaultMessageHandler {
         if let Some(router) = &self.router {
             let router = router.clone();
             tokio::spawn(async move {
-                if let Err(e) = router.handle(message).await {
+                if let Err(e) = router.route(message).await {
                     tracing::error!("[ClientDefaultMessageHandler] Router error: {}", e);
                 }
             });
+        } else {
+            tracing::debug!("[ClientDefaultMessageHandler] No router configured, message dropped");
         }
     }
 }

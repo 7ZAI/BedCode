@@ -11,13 +11,12 @@
 //! - ws_pairing_request / ws_pairing_verified / ws_paired: 配对流程
 //! - ws_sync_*: 会话同步事件
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
-use crate::mobile::{MobileEvent, get_terminal_manager, get_connection_manager};
+use crate::mobile::{MobileEvent, get_connection_manager};
 
 /// 输出事件转发标志（只启动一次）
 static OUTPUT_FORWARDING_STARTED: AtomicBool = AtomicBool::new(false);
@@ -43,13 +42,12 @@ pub fn start_event_forwarding(app_handle: AppHandle) {
     let conn_fwd = get_connection_manager();
     let mut event_rx = conn_fwd.subscribe();
     let app_clone = app_handle.clone();
-    let terminal_mgr = get_terminal_manager();
 
     spawn_with_error_boundary("output_forwarder", async move {
         tracing::info!("[EventForwarder] Started forwarding output events");
 
         while let Ok(event) = event_rx.recv().await {
-            forward_event(&app_clone, &terminal_mgr, event).await;
+            forward_event(&app_clone, event).await;
         }
 
         tracing::warn!("[EventForwarder] Event channel closed");
@@ -57,23 +55,16 @@ pub fn start_event_forwarding(app_handle: AppHandle) {
 }
 
 /// 转发单个事件到前端
-async fn forward_event(
-    app: &AppHandle,
-    terminal_mgr: &Arc<crate::mobile::terminal::TerminalManager>,
-    event: MobileEvent,
-) {
+async fn forward_event(app: &AppHandle, event: MobileEvent) {
     match event {
-        // 终端输出事件：写入缓冲区 + 发射 ws_output
+        // 终端输出事件：解码 Base64 并发射 ws_output
         MobileEvent::Output { session_id, data, is_waiting, index: global_index } => {
             tracing::debug!(
                 "[EventForwarder] Output: session_id={}, data_len={}, index={}",
                 session_id, data.len(), global_index
             );
 
-            // 1. 写入 TerminalBuffer（Rust 后端管理缓冲区）
-            terminal_mgr.write_output_with_index(&session_id, data.clone(), is_waiting, global_index).await;
-
-            // 2. 解码 Base64 并发射 ws_output
+            // 解码 Base64 并发射 ws_output
             let decoded_data = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
                 &data,

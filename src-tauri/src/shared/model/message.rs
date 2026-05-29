@@ -241,6 +241,25 @@ impl Message {
         }
     }
 
+    /// 创建终端输出消息（使用已编码的 Base64 数据）
+    /// 用于数据已经经过 Base64 编码的场景（如从 PTY 输出缓冲区转发）
+    pub fn output_from_base64(session_id: &str, data_base64: &str, is_waiting: bool, index: usize) -> Self {
+        Message::Terminal {
+            message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            session_id: session_id.to_string(),
+            token: String::new(),
+            payload: TerminalPayload {
+                action: TerminalAction::Output {
+                    data: data_base64.to_string(),
+                    is_waiting,
+                    index,
+                },
+            },
+        }
+    }
+
     /// 创建终端输入消息
     pub fn input(session_id: &str, data: &str, special_key: Option<SpecialKey>) -> Self {
         Message::Terminal {

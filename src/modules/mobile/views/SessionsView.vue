@@ -6,14 +6,11 @@
       <button
         v-if="isConnected"
         class="p-2 rounded-lg active:bg-gray-100 dark:active:bg-dark-700 transition-colors"
-        :class="{ 'opacity-50': isRefreshing }"
-        :disabled="isRefreshing"
         @click="refreshSessions"
         title="刷新会话"
       >
         <svg
           class="w-5 h-5 text-gray- dark:text-dark-400"
-          :class="{ 'animate-spin': isRefreshing }"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -35,11 +32,7 @@
 
       <!-- Sessions list -->
       <div v-else class="p-4 space-y-3">
-        <div v-if="isLoading" class="flex justify-center py-8">
-          <div class="w-8 h-8 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
-        </div>
-
-        <div v-else-if="sessions.length === 0" class="text-center text-gray-400 py-8">
+        <div v-if="sessions.length === 0" class="text-center text-gray-400 py-8">
           暂无运行中的会话
         </div>
 
@@ -91,7 +84,7 @@
 import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
-import { wsLoadSessions, wsStopSession, wsRemoveSession } from '@/modules/mobile/composables/useMobileCommands'
+import { wsStopSession, wsRemoveSession } from '@/modules/mobile/composables/useMobileCommands'
 import { useToast } from '@/modules/shared/composables/useToast'
 import SessionCard from '@/modules/mobile/components/SessionCard.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
@@ -107,10 +100,8 @@ const isConnected = computed(() => connection.connectionStatus.value === 'connec
 // 当前设备名称
 const currentDeviceName = computed(() => connection.currentDevice.value?.name || '已连接')
 
-// 会话列表
-const sessions = ref<any[]>([])
-const isLoading = ref(false)
-const isRefreshing = ref(false)
+// 使用全局会话列表（与同步事件同步）
+const sessions = computed(() => connection.activeSessions.value)
 
 // 停止确认弹窗
 const showStopConfirm = ref(false)
@@ -140,7 +131,7 @@ async function confirmStop() {
   isStopping.value = true
   try {
     await wsStopSession(pendingSession.value.id)
-    sessions.value = sessions.value.filter(s => s.id !== pendingSession.value.id)
+    // 全局状态由同步事件自动更新，无需手动移除
     showStopConfirm.value = false
     pendingSession.value = null
   } catch (e) {
@@ -161,7 +152,7 @@ async function confirmDelete() {
   isDeleting.value = true
   try {
     await wsRemoveSession(pendingSession.value.id)
-    sessions.value = sessions.value.filter(s => s.id !== pendingSession.value.id)
+    // 全局状态由同步事件自动更新，无需手动移除
     showDeleteConfirm.value = false
     pendingSession.value = null
   } catch (e) {
@@ -172,26 +163,22 @@ async function confirmDelete() {
   }
 }
 
+// 刷新会话列表（从桌面端拉取最新数据）
 async function refreshSessions() {
   if (!isConnected.value) return
-  isRefreshing.value = true
-  isLoading.value = true
   try {
-    sessions.value = await wsLoadSessions()
+    await connection.loadActiveSessions()
   } catch (e) {
     console.error('[SessionsView] Failed to load sessions:', e)
     toast.error('加载会话列表失败')
-  } finally {
-    isLoading.value = false
-    isRefreshing.value = false
   }
 }
 
 onActivated(() => {
-  // 不再自动加载，用户需要手动点击刷新按钮
+  // 全局状态由同步事件自动维护，无需手动加载
 })
 
 onMounted(async () => {
-  // 不再自动加载，用户需要手动点击刷新按钮
+  // 全局状态由同步事件自动维护，无需手动加载
 })
 </script>

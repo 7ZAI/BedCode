@@ -195,7 +195,7 @@ const isDesktop = computed(() => platformInfo.value.isDesktop)
 
 // 需�?KeepAlive 缓存的移动端组件名称
 // MobileSwipeContainer 包含 4 个子页面（设备、会话、快捷操作、设置），缓存以保持切换后数据
-const cachedMobileRoutes = ['MobileSwipeContainer', 'MobileTerminal']
+const cachedMobileRoutes = ['TerminalView', 'MobileSwipeContainer']
 // 动态获取缓存最大数�?
 const maxCachedTerminals = computed(() => settingsStore.settings.ui.max_cached_terminals || 10)
 
