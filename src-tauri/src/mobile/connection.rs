@@ -11,12 +11,14 @@ use tracing;
 
 use crate::shared::websocket::{
     ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent,
+    ClientDefaultMessageHandler, MessageRouter,
 };
 use crate::shared::model::message::Message;
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
-use super::handler::{MobileEvent, MobileHandler};
+use super::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
+use super::router::{TerminalRouter, AuthRouter, SyncRouter, SystemRouter};
 
 // Re-export ConnectionStatus for public API
 pub use crate::shared::websocket::ConnectionStatus;
@@ -66,8 +68,6 @@ pub struct ConnectionManager {
     target: Arc<RwLock<Option<TargetDevice>>>,
     /// WebSocket 客户端
     client: Arc<RwLock<Option<Arc<WsClient>>>>,
-    /// 消息处理器
-    handler: Arc<MobileHandler>,
     /// 事件发送器（用于内部业务逻辑监听）
     event_tx: broadcast::Sender<MobileEvent>,
     /// 手动断开标记，用于区分意外断开（true=用户主动断开，不弹通知）
@@ -82,12 +82,10 @@ impl ConnectionManager {
     /// 创建新的连接管理器
     pub fn new() -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(1024);
-        let handler = MobileHandler::new();
 
         Arc::new(Self {
             target: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
-            handler,
             event_tx,
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
@@ -112,11 +110,6 @@ impl ConnectionManager {
     /// 订阅事件
     pub fn subscribe(&self) -> broadcast::Receiver<MobileEvent> {
         self.event_tx.subscribe()
-    }
-
-    /// 获取消息处理器（用于订阅输出事件等）
-    pub fn handler(&self) -> Arc<MobileHandler> {
-        self.handler.clone()
     }
 
     /// 连接到目标设备
@@ -176,11 +169,23 @@ impl ConnectionManager {
         let client = WsClient::new(config);
         tracing::debug!("WsClient created");
 
-        // 为 MobileHandler 设置 ws_event_tx（用于 send_and_wait 响应匹配）
-        let handler_with_tx = self.handler.clone().with_ws_event_tx(client.event_tx());
+        // 创建路由上下文
+        let ctx = ClientRouteContext::new(self.event_tx.clone(), client.event_tx());
 
-        tracing::debug!("Setting handler (async)...");
-        client.set_handler(handler_with_tx).await;
+        // 使用 Builder 模式创建路由器
+        let router = ClientBusinessRouter::builder()
+            .context(ctx)
+            .route("Terminal", Arc::new(TerminalRouter))
+            .route("Auth", Arc::new(AuthRouter))
+            .route("SyncData", Arc::new(SyncRouter))
+            .route("ServerClosed", Arc::new(SystemRouter))
+            .route("Error", Arc::new(SystemRouter))
+            .route("Ack", Arc::new(SystemRouter))
+            .build()?;
+
+        // 设置 handler
+        client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
+
         tracing::debug!("Handler set, now calling client.connect()...");
         tracing::info!("About to call client.connect(), this should show Connection log...");
         match client.connect().await {
@@ -262,7 +267,22 @@ impl ConnectionManager {
         // 创建配置和客户端
         let config = WsClientConfig::new(&address, port);
         let client = WsClient::new(config);
-        client.set_handler(self.handler.clone());
+
+        // 创建路由上下文
+        let ctx = ClientRouteContext::new(self.event_tx.clone(), client.event_tx());
+
+        // 创建路由器
+        let router = ClientBusinessRouter::builder()
+            .context(ctx)
+            .route("Terminal", Arc::new(TerminalRouter))
+            .route("Auth", Arc::new(AuthRouter))
+            .route("SyncData", Arc::new(SyncRouter))
+            .route("ServerClosed", Arc::new(SystemRouter))
+            .route("Error", Arc::new(SystemRouter))
+            .route("Ack", Arc::new(SystemRouter))
+            .build()?;
+
+        client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
 
         // 直接 await 连接
         client.connect().await?;
@@ -295,7 +315,7 @@ impl ConnectionManager {
     }
 
     /// 尝试重连（最多3次，指数退避）
-    pub async fn reconnect(&self, app_handle: AppHandle, token: Option<String>) -> Result<()> {
+    pub async fn reconnect(&self, app_handle: AppHandle, _token: Option<String>) -> Result<()> {
         let mut current_retry: u32 = 0;
 
         while current_retry < MAX_RETRY {
@@ -335,7 +355,22 @@ impl ConnectionManager {
             // 创建新客户端
             let config = WsClientConfig::new(&target.address, target.port);
             let client = WsClient::new(config);
-            client.set_handler(self.handler.clone()).await;
+
+            // 创建路由上下文
+            let ctx = ClientRouteContext::new(self.event_tx.clone(), client.event_tx());
+
+            // 创建路由器
+            let router = ClientBusinessRouter::builder()
+                .context(ctx)
+                .route("Terminal", Arc::new(TerminalRouter))
+                .route("Auth", Arc::new(AuthRouter))
+                .route("SyncData", Arc::new(SyncRouter))
+                .route("ServerClosed", Arc::new(SystemRouter))
+                .route("Error", Arc::new(SystemRouter))
+                .route("Ack", Arc::new(SystemRouter))
+                .build()?;
+
+            client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
 
             match client.connect().await {
                 Ok(_) => {
@@ -429,12 +464,10 @@ impl ConnectionManager {
 impl Default for ConnectionManager {
     fn default() -> Self {
         let (event_tx, _) = broadcast::channel(1024);
-        let handler = MobileHandler::new();
 
         Self {
             target: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
-            handler,
             event_tx,
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
@@ -448,7 +481,6 @@ impl Clone for ConnectionManager {
         Self {
             target: self.target.clone(),
             client: self.client.clone(),
-            handler: self.handler.clone(),
             event_tx: self.event_tx.clone(),
             manual_disconnect: self.manual_disconnect.clone(),
             retry_count: self.retry_count.clone(),
