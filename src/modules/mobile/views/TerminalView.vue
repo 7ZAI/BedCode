@@ -37,7 +37,7 @@
     <div class="flex-1 overflow-hidden min-h-0">
       <MobileTerminal
         ref="terminalRef"
-        :output="outputBuffer"
+        :external-instance="externalTerminal"
         @ready="onTerminalReady"
         @clear="onTerminalClear"
         @resize="handleTerminalResize"
@@ -55,12 +55,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, inject, watch, type Ref } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-
+import { ref, computed, onMounted, inject, watch, type Ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
-import { wsLoadSessions, wsSendInput, wsResizeTerminal, wsJoinSession, wsGetTerminalHistory, wsLeaveSession } from '@/modules/mobile/composables/useMobileCommands'
+import {
+  getTerminal,
+  hasTerminal,
+  createHiddenTerminal,
+  clearTerminal as globalClearTerminal,
+} from '@/modules/mobile/composables/useGlobalTerminal'
+import { wsLoadSessions, wsSendInput, wsResizeTerminal, wsJoinSession } from '@/modules/mobile/composables/useMobileCommands'
 import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
 import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
 
@@ -68,14 +72,6 @@ import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
 defineOptions({
   name: 'TerminalView',
 })
-
-// ws_output 事件的 payload 类型
-interface WsOutputPayload {
-  session_id: string
-  data: string
-  is_waiting: boolean
-  index: number
-}
 
 const router = useRouter()
 const route = useRoute()
@@ -89,99 +85,32 @@ const connection = useMobileConnection()
 // 使用统一的连接状态
 const isConnectedValue = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 
-// 输出缓冲区（无大小限制，由 xterm.js scrollback 控制）
-const outputBuffer = ref<string>('')
-
-// 跟踪已渲染的全局索引，用于去重
-const renderedIndex = ref(0)
-
-// 已知的索引集合（用于快速去重）
-const knownIndices = new Set<number>()
-
-// 加载历史数据并订阅实时输出
-async function loadHistoryAndSubscribe(sessionId: string) {
-  try {
-    // 1. 获取历史数据
-    const history = await wsGetTerminalHistory(sessionId)
-    console.log('[TerminalView] History loaded:', history.events.length, 'events, current_index:', history.current_index)
-
-    // 2. 按索引排序历史事件（确保按顺序追加）
-    const sortedEvents = [...history.events].sort((a, b) => a.index - b.index)
-
-    // 3. 追加历史数据到缓冲区
-    for (const event of sortedEvents) {
-      if (!knownIndices.has(event.index)) {
-        outputBuffer.value += event.data
-        knownIndices.add(event.index)
-      }
-    }
-
-    // 4. 更新已渲染索引
-    renderedIndex.value = history.current_index
-    console.log('[TerminalView] History applied, renderedIndex:', renderedIndex.value, 'known indices:', knownIndices.size)
-
-    // 5. 订阅会话以接收实时输出
-    await wsJoinSession(sessionId)
-    console.log('[TerminalView] Subscribed to session for real-time output')
-  } catch (e) {
-    console.error('[TerminalView] Failed to load history:', e)
-    // 即使加载历史失败，也尝试订阅实时输出
-    await wsJoinSession(sessionId)
-  }
-}
-
-// 追加输出到缓冲区（带索引去重）
-function appendOutput(data: string, index: number) {
-  // 检查是否已存在该索引的数据（避免重复）
-  if (knownIndices.has(index)) {
-    console.log('[TerminalView] Skipping duplicate output, index:', index)
-    return
-  }
-
-  outputBuffer.value += data
-  knownIndices.add(index)
-  renderedIndex.value = index
-  console.log('[TerminalView] Appended output, index:', index, 'total rendered:', renderedIndex.value)
-}
-
 const terminalRef = ref<InstanceType<typeof MobileTerminal> | null>(null)
+
+// 终端实例（从全局管理器获取）
+const externalTerminal = computed(() => {
+  const sessionId = connection.activeSessionId.value
+  if (!sessionId) return null
+  return getTerminal(sessionId)
+})
 
 // 终端操作接口（供 InputAssistant 使用）
 const terminalInstance = computed(() => ({
+  instance: externalTerminal.value,
   sendInput: async (data: string) => {
     const sessionId = connection.activeSessionId.value
-    console.log('[TerminalView] sendInput sessionId=' + sessionId + ', data_len=' + data.length + ' data="' + data.slice(0, 100) + '"')
-    if (!sessionId) { console.warn('[TerminalView] sendInput: no activeSessionId'); return }
-    try {
-      await wsSendInput(sessionId, data)
-      console.log('[TerminalView] sendInput OK')
-    } catch (e) {
-      console.error('[TerminalView] sendInput failed:', e)
-    }
+    if (!sessionId) return
+    await wsSendInput(sessionId, data)
   },
   sendInputWithEnter: async (data: string) => {
     const sessionId = connection.activeSessionId.value
-    console.log('[TerminalView] sendInputWithEnter sessionId=' + sessionId + ', data_len=' + data.length + ' data="' + data.slice(0, 100) + '"')
-    if (!sessionId) { console.warn('[TerminalView] sendInputWithEnter: no activeSessionId'); return }
-    try {
-      // 一次 invoke 同时发送文本和 Enter，避免两次独立 invoke 的竞态条件
-      // 桌面端 Input handler 会先写入 data，再写入 special_key
-      await wsSendInput(sessionId, data, 'enter')
-      console.log('[TerminalView] sendInputWithEnter OK')
-    } catch (e) {
-      console.error('[TerminalView] sendInputWithEnter failed:', e)
-    }
+    if (!sessionId) return
+    await wsSendInput(sessionId, data, 'enter')
   },
   sendSpecialKey: async (key: string) => {
     const sessionId = connection.activeSessionId.value
-    console.log('[TerminalView] sendSpecialKey sessionId=' + sessionId + ', key=' + key)
-    if (!sessionId) { console.warn('[TerminalView] sendSpecialKey: no activeSessionId'); return }
-    try {
-      await wsSendInput(sessionId, '', key)
-      console.log('[TerminalView] sendSpecialKey OK')
-    } catch (e) {
-      console.error('[TerminalView] sendSpecialKey failed:', e)
-    }
+    if (!sessionId) return
+    await wsSendInput(sessionId, '', key)
   },
 }))
 
@@ -200,7 +129,10 @@ const sessionName = computed(() => {
 
 // 清空终端
 function handleClear() {
-  outputBuffer.value = ''
+  const sessionId = connection.activeSessionId.value
+  if (sessionId) {
+    globalClearTerminal(sessionId)
+  }
   terminalRef.value?.clear()
 }
 
@@ -226,74 +158,47 @@ function handleTerminalResize(cols: number, rows: number) {
 
 // Terminal clear handler
 function onTerminalClear() {
-  outputBuffer.value = ''
+  // 清空由全局管理器处理，这里只是响应事件
 }
 
 // KeepAlive 恢复时触发，确保终端实例正确显示
 // 不清空缓冲区，保持现有数据继续接收新输出
 function onTerminalActivated() {
-  console.log('[TerminalView] onTerminalActivated, keeping buffer and continuing to receive output')
-  // xterm.js 实例由 KeepAlive 保持，无需重新初始化
-  // 输出缓冲区保持不变，新数据会继续追加
-  // 订阅也保持不变，继续接收实时输出
+  console.log('[TerminalView] onTerminalActivated, terminal instance preserved by global manager')
 }
 
-let unlistenOutput: UnlistenFn | null = null
-
-// 监听 ws_output 事件，只显示当前活跃会话的输出
-// 注意：后端已经做了 Base64 解码，前端直接接收解码后的字符串
+// 监听连接状态变化
 watch(() => connection.connectionStatus.value, (newStatus, oldStatus) => {
   if ((newStatus === 'connected' || newStatus === 'paired') &&
       (oldStatus === 'disconnected' || oldStatus === 'error' || oldStatus === undefined)) {
-    console.log('[TerminalView] Reconnected, clearing output buffer and reloading history')
-    // 清空缓冲区和索引状态
-    outputBuffer.value = ''
-    knownIndices.clear()
-    renderedIndex.value = 0
-    terminalRef.value?.clear()
-
-    // 重新加载历史数据并订阅实时输出
-    const sessionId = connection.activeSessionId.value
-    if (sessionId) {
-      loadHistoryAndSubscribe(sessionId).catch(e => console.error('[TerminalView] Failed to reload history:', e))
-    }
+    console.log('[TerminalView] Reconnected')
+    // 全局管理器会在 loadActiveSessions 时创建实例
   }
 })
 
 onMounted(async () => {
-  // 从路由获取会话 ID
   const sessionId = route.params.sessionId as string
   if (sessionId) {
     connection.activeSessionId.value = sessionId
-  }
 
-  // 加载会话列表以获取会话名称
-  try {
-    activeSessionsList.value = await wsLoadSessions()
-  } catch (e) {
-    console.error('[TerminalView] Failed to load sessions:', e)
-  }
-
-  // 监听 ws_output 事件，只显示当前活跃会话的输出
-  // 事件 payload 现在包含 index 字段用于去重
-  unlistenOutput = await listen<WsOutputPayload>('ws_output', (event) => {
-    // 只显示当前活跃会话的输出
-    if (connection.activeSessionId.value && event.payload.session_id !== connection.activeSessionId.value) {
-      return
+    // 确保会话有离屏实例（可能已由 loadActiveSessions 创建）
+    if (!hasTerminal(sessionId)) {
+      createHiddenTerminal(sessionId)
     }
-    // 后端已解码，使用索引去重
-    appendOutput(event.payload.data, event.payload.index)
-  })
 
-  // 如果已连接，加载历史数据
-  if (isConnectedValue.value && sessionId) {
-    await loadHistoryAndSubscribe(sessionId)
+    // 加载会话列表以获取会话名称
+    try {
+      activeSessionsList.value = await wsLoadSessions()
+    } catch (e) {
+      console.error('[TerminalView] Failed to load sessions:', e)
+    }
+
+    // 如果已连接，订阅会话
+    if (isConnectedValue.value) {
+      wsJoinSession(sessionId).catch(e => console.error('[TerminalView] wsJoinSession failed:', e))
+    }
   }
 })
-
-// 注意：不使用 onUnmounted 取消订阅
-// KeepAlive 缓存的组件在离开页面时不会真正 unmount
-// 应保持订阅继续接收输出，返回时数据仍在缓冲区中
 
 function goBack() {
   router.push('/mobile/sessions')
