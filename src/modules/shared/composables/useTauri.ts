@@ -16,7 +16,7 @@ import {
 export type { SessionInfo, SessionConfig, DeviceConnectionInfo, WslDistro, TmuxSession } from '@/modules/desktop/composables/model'
 
 // Re-export types from mobile model
-export type { ConnectionStatus, RemoteDevice, AuthCredentials, ConnectionInfo, AuthState, RemoteSession, TerminalOutputEvent, TerminalHistory, TerminalIncrementalOutput } from '@/modules/mobile/composables/model'
+export type { ConnectionStatus, RemoteDevice, AuthCredentials, ConnectionInfo, AuthState, RemoteSession, TerminalOutputEvent, TerminalIncrementalOutput } from '@/modules/mobile/composables/model'
 
 // Re-export types from shared model
 export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, PluginSessionInfo, AnsiRenderOptions, AppError, Shortcut, BufferedOutput, OutputBlock, PairedDevice, Notification } from '@/modules/shared/composables/model'
