@@ -18,10 +18,14 @@ import '@xterm/xterm/css/xterm.css'
 // ==================== Props ====================
 
 interface Props {
-  output: string
+  output?: string  // 保留用于兼容，但可选
+  externalInstance?: Terminal | null  // 外部传入的 xterm.js 实例
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  output: '',
+  externalInstance: null,
+})
 
 // ==================== Emits ====================
 
@@ -100,6 +104,8 @@ const xtermContainerRef = ref<HTMLElement | null>(null)
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+// 标记是否使用外部实例（外部实例由全局管理器管理，不在此 dispose）
+let usingExternalInstance = false
 
 // 当前已渲染的输出长度
 const currentOutputLength = ref(0)
@@ -110,6 +116,57 @@ function initTerminal() {
   if (!xtermContainerRef.value) return
 
   const theme = getTheme()
+
+  // 如果有外部实例，直接使用（全局管理器创建的隐藏实例）
+  if (props.externalInstance) {
+    terminal = props.externalInstance
+    usingExternalInstance = true
+
+    // 检查是否已挂载，移动或首次挂载
+    if (!terminal.element) {
+      // 未挂载，首次打开
+      terminal.open(xtermContainerRef.value)
+    } else {
+      // 已挂载到其他容器，移动到当前容器
+      const oldContainer = terminal.element.parentElement
+      if (oldContainer && oldContainer !== xtermContainerRef.value) {
+        oldContainer.removeChild(terminal.element)
+        xtermContainerRef.value.appendChild(terminal.element)
+      }
+    }
+
+    // 创建新的 FitAddon（每个组件实例需要自己的 addon）
+    fitAddon = new FitAddon()
+    terminal.loadAddon(fitAddon)
+
+    // 更新主题
+    terminal.options.theme = theme
+
+    // Fit 到容器
+    nextTick(() => {
+      fitTerminal()
+      emit('ready')
+    })
+
+    // 监听终端大小变化
+    terminal.onResize(() => {
+      if (terminal) {
+        emit('resize', terminal.cols, terminal.rows)
+      }
+    })
+
+    // 监听窗口大小变化
+    const resizeObserver = new ResizeObserver(() => {
+      fitTerminal()
+    })
+    if (xtermContainerRef.value) {
+      resizeObserver.observe(xtermContainerRef.value)
+    }
+    return
+  }
+
+  // 没有外部实例，创建新的（保留原有逻辑，向后兼容）
+  usingExternalInstance = false
 
   terminal = new Terminal({
     theme,
@@ -174,11 +231,14 @@ function fitTerminal() {
 // ==================== Output Handling ====================
 
 // 监听输出变化，追加新数据
+// 注意：当使用外部实例时，不处理 output prop（由全局管理器处理）
 import { watch } from 'vue'
 
 watch(
   () => props.output,
   (newOutput) => {
+    // 外部实例时跳过，由全局管理器处理输出
+    if (usingExternalInstance) return
     if (!terminal) return
 
     // 获取新数据（从上次渲染的位置开始）
@@ -246,6 +306,18 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // 外部实例由全局管理器管理，这里不 dispose
+  if (usingExternalInstance) {
+    // 仅移除 DOM 元素，不 dispose 终端实例
+    if (terminal?.element?.parentElement) {
+      terminal.element.parentElement.removeChild(terminal.element)
+    }
+    terminal = null
+    fitAddon = null
+    return
+  }
+
+  // 内部创建的实例才 dispose
   if (terminal) {
     terminal.dispose()
     terminal = null
@@ -257,13 +329,13 @@ onBeforeUnmount(() => {
 .terminal-wrapper {
   /* 固定宽度布局 */
   contain: layout style;
+  height: 100%;
   /* 禁止文本选择，避免移动端误触 */
   user-select: none;
   -webkit-user-select: none;
   /* 禁止获取焦点，防止点击触发输入法 */
   -webkit-tap-highlight-color: transparent;
-  /* 允许触摸滚动（与 user-select: none 配合使用） */
-  touch-action: pan-y;
+  /* 不设置 touch-action，让触摸事件穿透到 xterm-viewport */
 }
 
 .terminal-wrapper:focus,
@@ -274,6 +346,8 @@ onBeforeUnmount(() => {
 /* xterm 容器 - 与桌面端一致 */
 .xterm-container {
   height: 100%;
+  /* 允许触摸滚动 */
+  touch-action: pan-y;
 }
 
 :deep(.xterm) {
@@ -302,8 +376,8 @@ onBeforeUnmount(() => {
   -webkit-overflow-scrolling: touch;
   /* 防止滚动到边界时触发页面整体滚动 */
   overscroll-behavior: contain;
-  /* 允许触摸滚动 */
-  touch-action: pan-y;
+  /* 允许触摸滚动 - 这是关键 */
+  touch-action: pan-y !important;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar {
