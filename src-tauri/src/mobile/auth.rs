@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::model::message::Message;
 use crate::shared::enums::auth::AuthStage;
-use crate::mobile::request::{AuthRequest, ResponseParser, timeouts};
+use crate::mobile::remote::request::{AuthRequest, ResponseParser, timeouts};
 use crate::Result;
 
-use super::connection::ConnectionManager;
+use crate::mobile::remote::ConnectionManager;
 
 /// 认证凭据
 #[derive(Debug, Clone, Serialize, Deserialize)]

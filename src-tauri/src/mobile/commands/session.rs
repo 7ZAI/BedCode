@@ -8,7 +8,7 @@ use tauri::AppHandle;
 
 use crate::Result;
 use crate::mobile::{SessionInfo, SessionManager, ConnectionManager};
-use crate::mobile::request::{SessionRequest, ResponseParser, timeouts};
+use crate::mobile::remote::request::{SessionRequest, ResponseParser, timeouts, TerminalRequest, ConfigRequest};
 
 use super::connection::get_connection_manager;
 
@@ -33,12 +33,12 @@ pub struct StartSessionResponse {
 
 /// 加载会话列表（从桌面端拉取真实会话）
 #[tauri::command]
-pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
+pub async fn ws_load_sessions(app_handle: AppHandle) -> Result<Vec<serde_json::Value>> {
     tracing::info!("[ws_load_sessions] Sending ListSessions request");
     let conn = get_connection_manager();
 
     let message = SessionRequest::list_sessions();
-    let response = conn.send_and_wait(&message, timeouts::SESSION_CONTROL).await?;
+    let response = conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::SESSION_CONTROL).await?;
 
     // 解析响应中的会话列表
     let list = ResponseParser::parse_session_list(&response)
@@ -54,12 +54,12 @@ pub async fn ws_load_sessions() -> Result<Vec<serde_json::Value>> {
 /// 订阅会话，开始接收该会话的输出
 /// 使用 Message::Terminal(Subscribe) 消息，支持指定起始序号用于历史回放
 #[tauri::command]
-pub async fn ws_join_session(session_id: String) -> Result<()> {
+pub async fn ws_join_session(app_handle: AppHandle, session_id: String) -> Result<()> {
     tracing::info!("[ws_join_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    let message = crate::mobile::request::TerminalRequest::subscribe(&session_id, None);
-    conn.send_and_wait(&message, timeouts::TERMINAL_SUBSCRIBE).await?;
+    let message = TerminalRequest::subscribe(&session_id, None);
+    conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::TERMINAL_SUBSCRIBE).await?;
     tracing::info!("[ws_join_session] Subscribed to session successfully: {}", session_id);
     Ok(())
 }
@@ -67,12 +67,12 @@ pub async fn ws_join_session(session_id: String) -> Result<()> {
 /// 取消订阅会话，停止接收该会话的输出
 /// 使用 Message::Terminal(Unsubscribe) 消息
 #[tauri::command]
-pub async fn ws_leave_session(session_id: String) -> Result<()> {
+pub async fn ws_leave_session(app_handle: AppHandle, session_id: String) -> Result<()> {
     tracing::info!("[ws_leave_session] session_id={}", session_id);
     let conn = get_connection_manager();
 
-    let message = crate::mobile::request::TerminalRequest::unsubscribe(&session_id);
-    conn.send_and_wait(&message, timeouts::TERMINAL_SUBSCRIBE).await?;
+    let message = TerminalRequest::unsubscribe(&session_id);
+    conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::TERMINAL_SUBSCRIBE).await?;
     tracing::info!("[ws_leave_session] Unsubscribed from session successfully: {}", session_id);
     Ok(())
 }
@@ -83,12 +83,12 @@ pub async fn ws_leave_session(session_id: String) -> Result<()> {
 /// - 断线重连：使用之前记录的最大 index → 从断点继续接收
 /// - 切换会话：使用当前缓冲区最大 index → 避免重复接收
 #[tauri::command]
-pub async fn ws_subscribe_session(session_id: String, start_seq: Option<u64>) -> Result<()> {
+pub async fn ws_subscribe_session(app_handle: AppHandle, session_id: String, start_seq: Option<u64>) -> Result<()> {
     tracing::info!("[ws_subscribe_session] session_id={}, start_seq={:?}", session_id, start_seq);
     let conn = get_connection_manager();
 
-    let message = crate::mobile::request::TerminalRequest::subscribe(&session_id, start_seq);
-    conn.send_and_wait(&message, timeouts::TERMINAL_SUBSCRIBE).await?;
+    let message = TerminalRequest::subscribe(&session_id, start_seq);
+    conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::TERMINAL_SUBSCRIBE).await?;
     tracing::info!("[ws_subscribe_session] Subscribed to session with start_seq={:?}: {}", start_seq, session_id);
     Ok(())
 }
@@ -124,12 +124,12 @@ pub async fn ws_remove_session(session_id: String) -> Result<()> {
 
 /// 获取会话配置列表
 #[tauri::command]
-pub async fn ws_load_session_configs() -> Result<Vec<serde_json::Value>> {
+pub async fn ws_load_session_configs(app_handle: AppHandle) -> Result<Vec<serde_json::Value>> {
     tracing::info!("[ws_load_session_configs] Sending ListSessionConfigs request");
     let conn = get_connection_manager();
 
-    let message = crate::mobile::request::ConfigRequest::list_session_configs();
-    let response = conn.send_and_wait(&message, timeouts::CONFIG).await?;
+    let message = ConfigRequest::list_session_configs();
+    let response = conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::CONFIG).await?;
 
     // 从响应中提取会话配置列表
     let configs = ResponseParser::parse_config_list(&response)

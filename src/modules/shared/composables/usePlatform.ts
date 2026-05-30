@@ -33,6 +33,8 @@ const platformInfo = ref<PlatformInfo>({
   isWindows: false,
   isMacos: false,
   isLinux: false,
+  isAndroid: false,
+  isIos: false,
 })
 
 // 使用 Promise 来同步等待初始化完成
@@ -73,6 +75,8 @@ async function detectFromTauri(): Promise<PlatformInfo | null> {
       isWindows: platformResult === 'windows',
       isMacos: platformResult === 'macos',
       isLinux: platformResult === 'linux',
+      isAndroid: platformResult === 'android',
+      isIos: platformResult === 'ios',
     }
   } catch (e) {
     console.warn('[Platform] Tauri OS plugin not available:', e)
@@ -108,6 +112,8 @@ function simulateForBrowser(): PlatformInfo {
     isWindows: !isMobile,
     isMacos: false,
     isLinux: false,
+    isAndroid: isMobile,
+    isIos: false,
   }
 }
 

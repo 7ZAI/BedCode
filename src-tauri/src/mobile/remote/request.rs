@@ -209,8 +209,9 @@ impl TerminalRequest {
     /// 构建终端输入消息
     ///
     /// 发送用户输入到终端，支持特殊按键
+    /// 使用带响应期望的模式，确保桌面端确认收到
     pub fn input(session_id: &str, data: &str, special_key: Option<SpecialKey>) -> Message {
-        with_token(Message::input(session_id, data, special_key))
+        with_token(Message::input_with_response(session_id, data, special_key))
     }
 
     /// 解析特殊按键字符串

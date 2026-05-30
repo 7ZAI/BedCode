@@ -273,6 +273,7 @@ pub fn run() {
             let plugin_manager_for_ws = plugin_manager.clone();
             let config_manager_for_sync = config_manager.clone();
             let sync_tx_for_handler = sync_tx.clone();
+            let app_handle_for_events = Arc::new(app_handle.clone());
             tauri::async_runtime::spawn(async move {
                 ws_manager.init(db_for_ws, qr_manager_for_ws, app_handle_for_ws, session_manager_for_ws, plugin_manager_for_ws).await
                     .expect("Failed to initialize WebSocketManager");
@@ -294,9 +295,31 @@ pub fn run() {
                 global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
                 tracing::info!("[BedCode] SyncEventHandler registered");
 
+                // 注册 WebSocket 服务器事件处理器
+                use crate::shared::websocket::WsServerEvent;
+                use crate::desktop::events::WsServerEventHandler;
+
+                // 获取 WsServer 的事件发送器并注册为事件源
+                // 注意：WsServer 需要在 start 之后才能获取 subscribe
                 tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port);
                 match ws_manager.start(ws_port).await {
-                    Ok(_) => tracing::info!("[BedCode] WebSocket server started successfully"),
+                    Ok(_) => {
+                        tracing::info!("[BedCode] WebSocket server started successfully");
+
+                        // 注册 WsServerEvent 事件源
+                        if let Some(server) = ws_manager.get_server().await {
+                            global_matcher().register_source::<WsServerEvent>(server.subscribe_sender()).await;
+                            tracing::info!("[BedCode] WsServerEvent source registered");
+                        }
+
+                        // 注册 WsServerEventHandler
+                        let ws_event_handler = Arc::new(WsServerEventHandler::new(
+                            ws_manager,
+                            Some(app_handle_for_events),
+                        ));
+                        global_matcher().register::<WsServerEvent>(ws_event_handler).await;
+                        tracing::info!("[BedCode] WsServerEventHandler registered");
+                    }
                     Err(e) => tracing::error!("[BedCode] WebSocket server failed to start: {}", e),
                 }
             });
@@ -510,42 +533,35 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // Mobile Token Commands
-            mobile::commands::ws_set_token,
-            mobile::commands::ws_get_token,
-            mobile::commands::ws_clear_token,
+            mobile::commands::token::ws_set_token,
+            mobile::commands::token::ws_get_token,
+            mobile::commands::token::ws_clear_token,
             // Mobile WebSocket Commands
-            mobile::commands::ws_connect,
-            mobile::commands::ws_disconnect,
-            mobile::commands::ws_get_status,
-            mobile::commands::ws_is_connected,
-            mobile::commands::ws_reconnect,
+            mobile::commands::connection::ws_connect,
+            mobile::commands::connection::ws_disconnect,
+            mobile::commands::connection::ws_get_status,
+            mobile::commands::connection::ws_is_connected,
+            mobile::commands::connection::ws_reconnect,
             // Mobile Auth Commands
-            mobile::commands::ws_get_auth_status,
-            mobile::commands::ws_authenticate,
-            mobile::commands::ws_request_pairing,
-            mobile::commands::ws_verify_pairing_code,
-            mobile::commands::ws_authenticate_with_qr,
+            mobile::commands::auth::ws_get_auth_status,
+            mobile::commands::auth::ws_authenticate,
+            mobile::commands::auth::ws_request_pairing,
+            mobile::commands::auth::ws_verify_pairing_code,
+            mobile::commands::auth::ws_authenticate_with_qr,
             // Mobile Session Commands
-            mobile::commands::ws_load_sessions,
-            mobile::commands::ws_join_session,
-            mobile::commands::ws_leave_session,
-            mobile::commands::ws_subscribe_session,
-            mobile::commands::ws_start_session,
-            mobile::commands::ws_stop_session,
-            mobile::commands::ws_remove_session,
-            mobile::commands::ws_load_session_configs,
+            mobile::commands::session::ws_load_sessions,
+            mobile::commands::session::ws_join_session,
+            mobile::commands::session::ws_leave_session,
+            mobile::commands::session::ws_subscribe_session,
+            mobile::commands::session::ws_start_session,
+            mobile::commands::session::ws_stop_session,
+            mobile::commands::session::ws_remove_session,
+            mobile::commands::session::ws_load_session_configs,
             // Mobile Terminal Commands
-            mobile::commands::ws_send_input_async,
-            mobile::commands::ws_send_message,
-            mobile::commands::ws_send_and_wait,
-            mobile::commands::ws_resize_terminal,
-            mobile::commands::ws_get_terminal_history,
-            mobile::commands::ws_subscribe_terminal,
-            mobile::commands::ws_unsubscribe_terminal,
-            mobile::commands::ws_get_terminal_incremental,
-            mobile::commands::ws_update_terminal_index,
-            mobile::commands::ws_clear_terminal_buffer,
-            mobile::commands::ws_clear_all_terminal_buffers,
+            mobile::commands::terminal::ws_send_input_async,
+            mobile::commands::terminal::ws_send_message,
+            mobile::commands::terminal::ws_send_and_wait,
+            mobile::commands::terminal::ws_resize_terminal,
             // Pairing
             shared::system::commands::generate_pairing_code,
             shared::system::commands::get_current_pairing_code,
@@ -569,9 +585,9 @@ pub fn run() {
             shared::system::commands::get_app_version,
             shared::system::commands::get_local_ip_addresses,
             // Android Specific
-            mobile::commands::get_status_bar_height,
-            mobile::commands::set_screen_orientation,
-            mobile::commands::keep_screen_awake,
+            mobile::commands::android::get_status_bar_height,
+            mobile::commands::android::set_screen_orientation,
+            mobile::commands::android::keep_screen_awake,
             // Session Config (移动端使用内存存储)
             shared::system::commands::list_session_configs_mobile,
             shared::system::commands::get_session_config_mobile,

@@ -1,9 +1,9 @@
 <template>
   <div
-    class="terminal-input-bar fixed left-0 right-0 z-40 bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700"
+    class="terminal-input-bar fixed left-0 right-0 bottom-0 z-40 bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700"
     :style="containerStyle"
   >
-    <!-- 快捷键面板 - 横屏时默认折叠 -->
+    <!-- 快捷键面板 - 点击按钮后显示 -->
     <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel px-2 pt-2">
       <div class="grid grid-cols-4 gap-1.5">
         <button
@@ -17,11 +17,11 @@
       </div>
     </div>
 
-    <!-- 输入区域 -->
-    <div class="input-area flex items-end gap-2 px-2 py-2">
+    <!-- 输入区域 - AI 对话框样式 -->
+    <div class="input-area flex items-center gap-2 px-3 py-2">
       <!-- 快捷键切换按钮 -->
       <button
-        class="toggle-btn shrink-0 w-8 h-8 flex items-center justify-center rounded-lg"
+        class="toggle-btn shrink-0 w-8 h-8 flex items-center justify-center rounded-full"
         :class="showShortcutsPanel ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600' : 'bg-gray-100 dark:bg-dark-700 text-gray-500 dark:text-dark-400'"
         @click="toggleShortcuts"
       >
@@ -30,35 +30,39 @@
         </svg>
       </button>
 
-      <!-- 输入框 -->
-      <textarea
-        ref="inputRef"
-        v-model="inputText"
-        class="flex-1 min-h-[40px] max-h-[120px] bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-dark-100 placeholder-gray-400 dark:placeholder-dark-400 resize-none focus:outline-none focus:border-primary-500"
-        :class="{ 'min-h-[32px] max-h-[60px]': props.isLandscape }"
-        :placeholder="placeholder"
-        :disabled="disabled"
-        rows="1"
-        @input="autoResize"
-        @keydown.enter.ctrl="handleExecute"
-      ></textarea>
+      <!-- 输入框容器 - 圆角胶囊样式 -->
+      <div class="flex-1 flex items-center bg-gray-100 dark:bg-dark-700 rounded-full px-4 py-2">
+        <input
+          ref="inputRef"
+          v-model="inputText"
+          type="text"
+          class="flex-1 bg-transparent text-sm text-gray-900 dark:text-dark-100 placeholder-gray-400 dark:placeholder-dark-400 focus:outline-none"
+          :placeholder="placeholder"
+          :disabled="disabled"
+          @focus="handleFocus"
+        />
+      </div>
 
       <!-- 发送按钮 -->
       <button
-        class="send-btn shrink-0 h-10 px-3 bg-gray-200 dark:bg-dark-600 text-gray-700 dark:text-dark-200 text-sm rounded-lg disabled:opacity-50"
+        class="send-btn shrink-0 w-10 h-10 flex items-center justify-center bg-gray-200 dark:bg-dark-600 text-gray-700 dark:text-dark-200 rounded-full disabled:opacity-50"
         :disabled="!canSubmit"
         @click="handleSubmit"
       >
-        发送
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+        </svg>
       </button>
 
       <!-- 执行按钮 -->
       <button
-        class="execute-btn shrink-0 h-10 px-3 bg-primary-600 text-white text-sm rounded-lg disabled:opacity-50"
+        class="execute-btn shrink-0 w-10 h-10 flex items-center justify-center bg-primary-600 text-white rounded-full disabled:opacity-50"
         :disabled="!canSubmit"
         @click="handleExecute"
       >
-        执行
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
       </button>
     </div>
   </div>
@@ -78,7 +82,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   disabled: false,
   isConnected: false,
-  showShortcuts: true,
+  showShortcuts: false,  // 默认隐藏快捷键面板
   placeholder: '输入命令...',
   isLandscape: false,
 })
@@ -93,9 +97,9 @@ const emit = defineEmits<{
 
 // ==================== State ====================
 
-const inputRef = ref<HTMLTextAreaElement | null>(null)
+const inputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref('')
-const showShortcutsPanel = ref(props.showShortcuts)
+const showShortcutsPanel = ref(false)  // 默认隐藏
 const keyboardHeight = ref(0)
 
 // ==================== Shortcuts Data ====================
@@ -120,11 +124,23 @@ const canSubmit = computed(() => {
   return inputText.value.trim().length > 0 && !props.disabled
 })
 
-const containerStyle = computed(() => ({
-  // 组件固定在底部，使用 transform 上移来避开键盘
-  transform: `translateY(-${keyboardHeight.value}px) translateZ(0)`,
-  transition: 'transform 0.1s ease-out',
-}))
+// 计算容器样式
+// 1. 底部安全区域：通过 CSS env(safe-area-inset-bottom) 自动获取
+// 2. 键盘弹出时：通过 translateY 向上移动键盘高度
+const containerStyle = computed(() => {
+  const styles: Record<string, string> = {
+    transition: 'transform 0.15s ease-out',
+  }
+
+  // 键盘弹出时向上移动
+  if (keyboardHeight.value > 0) {
+    styles.transform = `translateY(-${keyboardHeight.value}px) translateZ(0)`
+  } else {
+    styles.transform = 'translateY(0) translateZ(0)'
+  }
+
+  return styles
+})
 
 // ==================== Methods ====================
 
@@ -132,20 +148,11 @@ function toggleShortcuts() {
   showShortcutsPanel.value = !showShortcutsPanel.value
 }
 
-function autoResize() {
-  const el = inputRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  const maxHeight = props.isLandscape ? 60 : 120
-  el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px'
-}
-
 function handleSubmit() {
   const text = inputText.value.trim()
   if (!text) return
   emit('submit', text)
   inputText.value = ''
-  autoResize()
 }
 
 function handleExecute() {
@@ -153,71 +160,84 @@ function handleExecute() {
   if (!text) return
   emit('execute', text)
   inputText.value = ''
-  autoResize()
 }
 
 function handleShortcutClick(code: string) {
   emit('specialKey', code)
 }
 
-// ==================== Keyboard Avoidance ====================
-
-function setupVisualViewport() {
-  const vv = window.visualViewport
-  if (!vv) {
-    console.warn('[TerminalInputBar] visualViewport not supported, using fallback')
-    // Fallback: 监听 window resize 事件
-    const handleResize = () => {
-      // Android WebView 可能在键盘弹出时改变 document 高度而非 window.innerHeight
-      const docHeight = document.documentElement.clientHeight
-      const windowHeight = window.innerHeight
-      // 使用 document 高度差作为键盘高度的近似值
-      const estimatedKeyboardHeight = Math.max(0, windowHeight - docHeight)
-      console.log('[TerminalInputBar] Fallback: windowHeight=', windowHeight, 'docHeight=', docHeight, 'keyboard=', estimatedKeyboardHeight)
-      keyboardHeight.value = estimatedKeyboardHeight
+// 处理输入框获得焦点
+// 在 adjustNothing 模式下，需要手动确保输入框可见
+function handleFocus() {
+  // 延迟执行，等待键盘弹出后再滚动
+  setTimeout(() => {
+    if (inputRef.value) {
+      inputRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }
-    window.addEventListener('resize', handleResize)
-    return () => {
-      window.removeEventListener('resize', handleResize)
-    }
-  }
-
-  console.log('[TerminalInputBar] visualViewport supported')
-
-  const handleResize = () => {
-    const height = Math.max(0, window.innerHeight - vv!.height)
-    console.log('[TerminalInputBar] visualViewport resize: window.innerHeight=', window.innerHeight, 'vv.height=', vv!.height, 'keyboard=', height)
-    keyboardHeight.value = height
-  }
-
-  vv.addEventListener('resize', handleResize)
-  vv.addEventListener('scroll', handleResize)
-
-  // 初始调用一次，获取当前状态
-  handleResize()
-
-  // 返回清理函数
-  return () => {
-    vv.removeEventListener('resize', handleResize)
-    vv.removeEventListener('scroll', handleResize)
-  }
+  }, 100)
 }
 
-let cleanupViewport: (() => void) | undefined
+// ==================== Keyboard Avoidance ====================
+
+function setupKeyboardListener() {
+  console.log('[TerminalInputBar] setupKeyboardListener: starting setup')
+
+  // 使用 Visual Viewport API（adjustNothing 模式下最可靠）
+  // 布局视口 - 可视视口 = 键盘高度
+  const vv = window.visualViewport
+  if (vv) {
+    console.log('[TerminalInputBar] Using visualViewport API (adjustNothing mode)')
+
+    const handleViewportChange = () => {
+      // 在 adjustNothing 模式下：
+      // window.innerHeight = 布局视口高度（不变）
+      // visualViewport.height = 实际可见区域高度（键盘弹出时变小）
+      const windowHeight = window.innerHeight
+      const viewportHeight = vv!.height
+      const viewportTop = vv!.offsetTop  // 可视视口顶部距离布局视口顶部的距离
+      const height = Math.max(0, windowHeight - viewportHeight - viewportTop)
+
+      console.log('[TerminalInputBar] visualViewport: layoutHeight=', windowHeight, 'viewportHeight=', viewportHeight, 'viewportTop=', viewportTop, 'keyboardHeight=', height)
+
+      // 防止抖动：只有高度变化超过 2px 才更新
+      if (Math.abs(height - keyboardHeight.value) > 2 || (height === 0 && keyboardHeight.value > 0)) {
+        keyboardHeight.value = height
+      }
+    }
+
+    vv.addEventListener('resize', handleViewportChange)
+    vv.addEventListener('scroll', handleViewportChange)
+
+    // 初始检查
+    handleViewportChange()
+
+    return () => {
+      console.log('[TerminalInputBar] Cleaning up visualViewport listener')
+      vv.removeEventListener('resize', handleViewportChange)
+      vv.removeEventListener('scroll', handleViewportChange)
+    }
+  }
+
+  // visualViewport 不可用的 fallback（极少数情况）
+  console.log('[TerminalInputBar] visualViewport not available, keyboard avoidance disabled')
+  return () => {}
+}
+
+let cleanupKeyboard: (() => void) | undefined
 
 onMounted(() => {
-  cleanupViewport = setupVisualViewport()
+  cleanupKeyboard = setupKeyboardListener()
 })
 
 onUnmounted(() => {
-  cleanupViewport?.()
+  cleanupKeyboard?.()
 })
 </script>
 
 <style scoped>
 .terminal-input-bar {
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
-  /* 使用 padding-bottom 处理底部安全区域，避免被系统导航遮挡 */
+  /* 底部安全区域：避免被系统导航栏遮挡 */
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 

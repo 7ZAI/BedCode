@@ -477,8 +477,6 @@ async function handleStartSession(config: SessionConfigSummary) {
   try {
     const result = await connection.startSession(config.id, config.name)
     if (result.sessionId) {
-      connection.activeSessionId.value = result.sessionId
-
       // 如果返回了会话信息，添加到本地列表
       if (result.session) {
         activeSessions.value.push(result.session)
@@ -487,11 +485,11 @@ async function handleStartSession(config: SessionConfigSummary) {
         await connection.loadActiveSessions()
       }
 
-      // After starting, navigate to terminal view
-      router.push({
-        name: 'mobile-terminal',
-        params: { id: currentDevice.value?.id || 'default' },
-      })
+      // 启动成功，显示 toast 提示
+      toast.success(`会话 "${config.name}" 启动成功`)
+
+      // 跳转到会话列表页面，而不是直接进入终端
+      router.push({ name: 'mobile-sessions' })
     } else {
       console.error('Failed to start session: no session_id returned')
       toast.error('启动会话失败：未返回会话ID')
@@ -513,14 +511,17 @@ onMounted(async () => {
   connection.loadConnectionHistory()
 })
 
-// 监听连接状态变化，只在首次认证完成时加载一次
-let hasAutoLoadedOnConnect = false
-watch([isConnected, connection.connectionStatus], async ([connected, status]) => {
-  // 只有在首次认证完成时才自动加载
-  if (connected && status === 'paired' && !hasAutoLoadedOnConnect) {
-    hasAutoLoadedOnConnect = true
-    await connection.loadSessionConfigs()
-    await connection.loadActiveSessions()
+// 监听连接状态变化，认证完成时加载会话数据
+// 注意：重连场景下，ws_paired 事件会触发 status 变为 paired，此时需要重新加载会话
+watch([isConnected, connection.connectionStatus], async ([connected, status], [oldConnected, oldStatus]) => {
+  // 认证完成时加载会话数据（包括首次连接和重连）
+  if (connected && status === 'paired') {
+    // 如果是从非 paired 状态变为 paired，或者从断开变为连接，都需要加载
+    if (oldStatus !== 'paired' || !oldConnected) {
+      console.log('[DevicesView] Status changed to paired, loading sessions...')
+      await connection.loadSessionConfigs()
+      await connection.loadActiveSessions()
+    }
   }
 })
 

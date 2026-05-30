@@ -97,8 +97,9 @@ export function useSessionWindows() {
 
     // 计算终端窗口位置（紧贴主窗口右侧）
     // 使用 innerSize 确保与主窗口内容区高度一致
+    // 高度减少 100px，避免窗口过高
     const terminalWidth = Math.floor(mainInnerSize.width * 0.4)
-    const terminalHeight = mainInnerSize.height
+    const terminalHeight = mainInnerSize.height - 100
 
     console.log('[useSessionWindows] Terminal window size - width:', terminalWidth, 'height:', terminalHeight)
 

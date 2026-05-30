@@ -141,4 +141,6 @@ export interface PlatformInfo {
   isWindows: boolean
   isMacos: boolean
   isLinux: boolean
+  isAndroid: boolean
+  isIos: boolean
 }

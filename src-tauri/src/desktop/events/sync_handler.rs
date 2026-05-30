@@ -36,6 +36,7 @@ impl SyncEventHandler {
 
     /// 异步处理事件
     async fn process_event(&self, event: DesktopSyncEvent) {
+        tracing::info!("[SyncEventHandler] Processing event: {:?}", event);
         match event {
             DesktopSyncEvent::SessionCreated { session_id, source_device } => {
                 self.handle_session_created(&session_id, source_device).await;

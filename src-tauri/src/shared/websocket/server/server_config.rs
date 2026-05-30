@@ -51,8 +51,8 @@ impl Default for WsServerConfig {
         Self {
             port: 8765,
             max_connections: 0, // 0 表示不限制
-            heartbeat_interval_secs: 30,
-            heartbeat_timeout_secs: 90,
+            heartbeat_interval_secs: 20,  // 每 20 秒检查一次
+            heartbeat_timeout_secs: 60,   // 超时 60 秒判定为僵尸连接
             message_queue_size: 256,
             business_thread_pool_size: 0, // 使用 tokio 默认
             ip_filter: IpFilter::default(),

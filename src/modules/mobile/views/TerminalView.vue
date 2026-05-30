@@ -2,9 +2,8 @@
   <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
     <!-- Header - 横屏时更紧凑 -->
     <header
-      class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-2 flex items-center gap-2 shrink-0"
+      class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-2 flex items-center gap-2 shrink-0 safe-area-top"
       :class="{ 'py-1': isLandscapeValue, 'py-3 pb-3': !isLandscapeValue }"
-      :style="{ paddingTop: isLandscapeValue ? '8px' : '12px' }"
     >
       <button @click="goBack" class="p-2 -ml-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -33,8 +32,8 @@
       </button>
     </header>
 
-    <!-- Terminal Output (使用 flex 填充剩余空间) -->
-    <div class="flex-1 overflow-hidden min-h-0 pb-[140px]">
+    <!-- Terminal Output - 终端区域需要能滚动 -->
+    <div class="flex-1 min-h-0 terminal-output-area">
       <MobileTerminal
         ref="terminalRef"
         :external-instance="externalTerminal"
@@ -52,7 +51,7 @@
       :is-connected="isConnectedValue"
     />
 
-    <!-- 底部输入栏 -->
+    <!-- 底部输入栏 - fixed 定位，不占用布局空间 -->
     <TerminalInputBar
       :is-connected="isConnectedValue"
       :disabled="!isConnectedValue"
@@ -294,5 +293,18 @@ function goBack() {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* 顶部安全区域 */
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* 终端输出区域 - 需要底部间距给输入栏留空间 */
+.terminal-output-area {
+  /* 输入栏高度约 60px + 快捷键面板 52px + 底部安全区域 */
+  padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+  /* 允许内部滚动 */
+  overflow: visible;
 }
 </style>

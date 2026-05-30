@@ -135,24 +135,9 @@ impl MessageRouter for BusinessRouter {
 
             let response_msg = match result {
                 Ok(Some(msg)) => {
-                    // handler 有具体返回值
-                    // 如果已经是 Ack 类型，设置关联 ID 后直接返回
-                    // 如果是其他类型，转换为 Ack 并将原消息放入 data 字段
-                    match &msg {
-                        Message::Ack { .. } => {
-                            // 已经是 Ack 类型，设置关联 ID 后直接返回
-                            msg.with_request_id(&message_id)
-                        }
-                        _ => {
-                            // 其他类型，转换为 Ack 响应
-                            // 将原消息序列化后放入 data 字段
-                            let data = match msg.to_json() {
-                                Ok(json) => serde_json::from_str(&json).unwrap_or(serde_json::Value::String(json)),
-                                Err(_) => serde_json::Value::String(String::new()),
-                            };
-                            Message::ack_with_data(&message_id, data)
-                        }
-                    }
+                    // handler 有具体返回值 设置关联 ID 后直接返回
+                     msg.with_request_id(&message_id)
+                    
                 }
                 Ok(None) => {
                     // handler 无返回值，发送默认 Ack 成功响应

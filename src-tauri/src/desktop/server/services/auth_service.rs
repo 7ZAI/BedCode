@@ -8,6 +8,7 @@ use crate::desktop::server::services::pairing_service::PairingService;
 use crate::shared::auth::qr_token::QrTokenManager;
 use crate::desktop::websocket_manager::WebSocketManager;
 use crate::shared::auth::JwtService;
+use crate::shared::db::Database;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;

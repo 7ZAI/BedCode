@@ -19,6 +19,7 @@ import {
   wsStartSession,
   wsStopSession,
   wsSendInput,
+  wsJoinSession,
   initMobileEventListeners,
   cleanupMobileEventListeners,
   saveAuthCredentials,
@@ -31,6 +32,7 @@ import {
 import {
   initGlobalTerminalManager,
   createHiddenTerminal,
+  hasTerminal,
   destroyTerminal,
   destroyAllTerminals,
 } from './useGlobalTerminal'
@@ -235,6 +237,10 @@ async function init() {
       }
       // 创建离屏 xterm.js 实例
       createHiddenTerminal(data.session.id)
+      // 如果会话状态是 running，立即订阅以接收输出
+      if (data.session.status === 'running') {
+        wsJoinSession(data.session.id).catch(e => console.error('[MobileConnection] Auto subscribe failed:', e))
+      }
     },
     onSyncSessionStatusChanged: (data) => {
       console.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)
@@ -243,17 +249,26 @@ async function init() {
       if (index !== -1) {
         activeSessions.value[index].status = data.new_status
       }
+      // 如果状态变为 running，立即订阅以接收输出
+      if (data.new_status === 'running') {
+        // 确保有离屏实例
+        if (!hasTerminal(data.session_id)) {
+          createHiddenTerminal(data.session_id)
+        }
+        wsJoinSession(data.session_id).catch(e => console.error('[MobileConnection] Auto subscribe on status change failed:', e))
+      }
     },
     onSyncSessionStopped: (data) => {
       console.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
-      // 从活跃列表移除
-      activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
-      // 销毁离屏实例
-      destroyTerminal(data.session_id)
+      // 更新会话状态为 stopped，而不是移除（保留记录显示灰色）
+      const index = activeSessions.value.findIndex(s => s.id === data.session_id)
+      if (index !== -1) {
+        activeSessions.value[index].status = 'stopped'
+      }
     },
     onSyncSessionRemoved: (data) => {
       console.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
-      // 从列表移除会话
+      // 从列表移除会话（删除操作才移除）
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
       // 销毁离屏实例
       destroyTerminal(data.session_id)
@@ -273,6 +288,45 @@ async function init() {
 
     // 触发重连
     handleUnexpectedDisconnect(event.payload.reason)
+  })
+
+  // 监听重连成功事件
+  // 重连成功后重新认证，认证成功后会触发 ws_paired 事件
+  // ws_paired 事件会触发 DevicesView 的 watch，进而调用 loadActiveSessions
+  // loadActiveSessions 会为 running 会话创建终端实例并订阅
+  await listen('ws_reconnected', async () => {
+    console.log('[MobileConnection] Reconnected successfully')
+    connectionStatus.value = 'connected'
+    connectionError.value = null
+    isConnecting.value = false
+
+    // 重连成功后重新认证
+    const creds = loadAuthCredentials()
+    if (creds?.sessionToken) {
+      try {
+        console.log('[MobileConnection] Re-authenticating with token...')
+        const authSuccess = await wsAuthenticate(creds.sessionToken)
+        if (authSuccess) {
+          console.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
+        } else {
+          console.warn('[MobileConnection] Re-auth failed, need to pair again')
+        }
+      } catch (e) {
+        console.error('[MobileConnection] Re-auth error:', e)
+      }
+    } else {
+      console.log('[MobileConnection] No credentials stored, need manual pairing')
+    }
+  })
+
+  // 监听重连失败事件
+  await listen<{ reason: string }>('ws_reconnect_failed', (event) => {
+    console.error('[MobileConnection] Reconnect failed:', event.payload.reason)
+    connectionStatus.value = 'error'
+    connectionError.value = event.payload.reason
+
+    const toast = useToast()
+    toast.error(`重连失败: ${event.payload.reason}`, 5000)
   })
 }
 
@@ -474,9 +528,13 @@ export async function loadSessionConfigs(): Promise<any[]> {
 export async function loadActiveSessions(): Promise<any[]> {
   const sessions = await wsLoadSessions()
   activeSessions.value = sessions
-  // 为所有已存在的会话创建离屏实例
+  // 为所有已存在的会话创建离屏实例并订阅 running 状态的会话
   for (const session of sessions) {
     createHiddenTerminal(session.id)
+    // 如果会话正在运行，立即订阅以接收输出
+    if (session.status === 'running') {
+      wsJoinSession(session.id).catch(e => console.error('[MobileConnection] Auto subscribe failed for session', session.id, e))
+    }
   }
   return sessions
 }
@@ -494,12 +552,28 @@ export async function startSession(configId: string, sessionName?: string): Prom
 }
 
 /**
- * 停止会话
+ * 停止会话（仅更新本地状态为 stopped，不发送 WebSocket 请求）
+ * 调用方应先调用 wsStopSession 发送请求，成功后再调用此方法更新本地状态
+ * 停止后保留会话记录，显示为灰色已停止状态
  */
-export async function stopSession(sessionId: string): Promise<void> {
-  await wsStopSession(sessionId)
+export function stopSession(sessionId: string): void {
+  // 更新会话状态为 stopped，而不是移除
+  const index = activeSessions.value.findIndex(s => s.id === sessionId)
+  if (index !== -1) {
+    activeSessions.value[index].status = 'stopped'
+  }
+}
+
+/**
+ * 删除会话（仅更新本地状态，不发送 WebSocket 请求）
+ * 调用方应先调用 wsRemoveSession 发送请求，成功后再调用此方法更新本地状态
+ * 删除会完全移除会话记录
+ */
+export function removeSession(sessionId: string): void {
   // 从本地列表移除
   activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
+  // 销毁离屏实例
+  destroyTerminal(sessionId)
 }
 
 /**
@@ -636,6 +710,7 @@ export function useMobileConnection() {
     loadActiveSessions,
     startSession,
     stopSession,
+    removeSession,
     sendInput,
     saveCredentials,
     clearCredentials,

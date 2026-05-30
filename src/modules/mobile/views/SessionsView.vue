@@ -117,7 +117,7 @@ function handleSessionClick(session: any) {
 
   router.push({
     name: 'mobile-terminal',
-    params: { id: currentDeviceName.value || 'default' },
+    params: { id: session.id },
   })
 }
 
@@ -131,7 +131,8 @@ async function confirmStop() {
   isStopping.value = true
   try {
     await wsStopSession(pendingSession.value.id)
-    // 全局状态由同步事件自动更新，无需手动移除
+    // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
+    connection.stopSession(pendingSession.value.id)
     showStopConfirm.value = false
     pendingSession.value = null
   } catch (e) {
@@ -152,7 +153,8 @@ async function confirmDelete() {
   isDeleting.value = true
   try {
     await wsRemoveSession(pendingSession.value.id)
-    // 全局状态由同步事件自动更新，无需手动移除
+    // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
+    connection.removeSession(pendingSession.value.id)
     showDeleteConfirm.value = false
     pendingSession.value = null
   } catch (e) {

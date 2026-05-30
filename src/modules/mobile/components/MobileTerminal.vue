@@ -3,8 +3,8 @@
     ref="terminalContainerRef"
     class="h-full w-full terminal-wrapper"
   >
-    <!-- xterm 容器，移动端禁用点击和触摸选择 -->
-    <div ref="xtermContainerRef" class="xterm-container" readonly></div>
+    <!-- xterm 容器 -->
+    <div ref="xtermContainerRef" class="xterm-container"></div>
   </div>
 </template>
 
@@ -113,29 +113,36 @@ const currentOutputLength = ref(0)
 // ==================== Terminal Initialization ====================
 
 function initTerminal() {
-  if (!xtermContainerRef.value) return
+  if (!xtermContainerRef.value) {
+    console.warn('[MobileTerminal] initTerminal: container not ready')
+    return
+  }
 
   const theme = getTheme()
+  console.log('[MobileTerminal] initTerminal: container ready, externalInstance=', !!props.externalInstance)
 
   // 如果有外部实例，直接使用（全局管理器创建的隐藏实例）
   if (props.externalInstance) {
     terminal = props.externalInstance
     usingExternalInstance = true
+    console.log('[MobileTerminal] Using external terminal instance')
 
-    // 检查是否已挂载，移动或首次挂载
+    // 检查是否已挂载
     if (!terminal.element) {
-      // 未挂载，首次打开
+      // 首次挂载：必须先 open，然后才能创建新的 FitAddon
       terminal.open(xtermContainerRef.value)
+      console.log('[MobileTerminal] Terminal opened in container')
     } else {
       // 已挂载到其他容器，移动到当前容器
       const oldContainer = terminal.element.parentElement
       if (oldContainer && oldContainer !== xtermContainerRef.value) {
         oldContainer.removeChild(terminal.element)
         xtermContainerRef.value.appendChild(terminal.element)
+        console.log('[MobileTerminal] Terminal moved to new container')
       }
     }
 
-    // 创建新的 FitAddon（每个组件实例需要自己的 addon）
+    // 每次挂载都创建新的 FitAddon（确保尺寸正确）
     fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
 
@@ -146,6 +153,7 @@ function initTerminal() {
     nextTick(() => {
       fitTerminal()
       emit('ready')
+      checkScrollState()
     })
 
     // 监听终端大小变化
@@ -155,7 +163,7 @@ function initTerminal() {
       }
     })
 
-    // 监听窗口大小变化
+    // 监听容器大小变化
     const resizeObserver = new ResizeObserver(() => {
       fitTerminal()
     })
@@ -165,8 +173,9 @@ function initTerminal() {
     return
   }
 
-  // 没有外部实例，创建新的（保留原有逻辑，向后兼容）
+  // 没有外部实例，创建新的
   usingExternalInstance = false
+  console.log('[MobileTerminal] Creating new terminal instance')
 
   terminal = new Terminal({
     theme,
@@ -176,43 +185,57 @@ function initTerminal() {
     cursorBlink: true,
     cursorStyle: 'block',
     allowProposedApi: true,
-    // 移动端优化
     scrollback: 10000,
     convertEol: true,
   })
 
-  // 添加 Fit addon
+  // 先 open，再加载 FitAddon
+  terminal.open(xtermContainerRef.value)
+
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
 
-  // 添加 Web Links addon
   terminal.loadAddon(new WebLinksAddon())
 
-  // 禁用右键菜单（移动端）
-  terminal.element?.addEventListener('contextmenu', (e) => e.preventDefault())
-
-  // 打开终端
-  terminal.open(xtermContainerRef.value)
-
-  // Fit 到容器
   nextTick(() => {
     fitTerminal()
     emit('ready')
+    checkScrollState()
   })
 
-  // 监听终端大小变化
   terminal.onResize(() => {
     if (terminal) {
       emit('resize', terminal.cols, terminal.rows)
     }
   })
 
-  // 监听窗口大小变化
   const resizeObserver = new ResizeObserver(() => {
     fitTerminal()
   })
   if (xtermContainerRef.value) {
     resizeObserver.observe(xtermContainerRef.value)
+  }
+}
+
+// 检查滚动状态
+function checkScrollState() {
+  if (!terminalContainerRef.value) return
+
+  const viewport = terminalContainerRef.value.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    console.log('[MobileTerminal] Scroll state:', {
+      scrollHeight: viewport.scrollHeight,
+      clientHeight: viewport.clientHeight,
+      scrollTop: viewport.scrollTop,
+      canScroll: viewport.scrollHeight > viewport.clientHeight
+    })
+
+    // 尝试强制设置滚动
+    if (viewport.scrollHeight > viewport.clientHeight) {
+      viewport.style.overflowY = 'auto'
+    }
+  } else {
+    console.warn('[MobileTerminal] xterm-viewport not found')
   }
 }
 
@@ -327,15 +350,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .terminal-wrapper {
-  /* 固定宽度布局 */
-  contain: layout style;
   height: 100%;
-  /* 禁止文本选择，避免移动端误触 */
-  user-select: none;
-  -webkit-user-select: none;
-  /* 禁止获取焦点，防止点击触发输入法 */
-  -webkit-tap-highlight-color: transparent;
-  /* 不设置 touch-action，让触摸事件穿透到 xterm-viewport */
+  width: 100%;
 }
 
 .terminal-wrapper:focus,
@@ -343,11 +359,10 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
-/* xterm 容器 - 与桌面端一致 */
+/* xterm 容器 */
 .xterm-container {
   height: 100%;
-  /* 允许触摸滚动 */
-  touch-action: pan-y;
+  width: 100%;
 }
 
 :deep(.xterm) {
@@ -368,16 +383,14 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
-/* xterm 视口滚动 - 修复移动端无法滚动问题 */
+/* xterm 视口滚动 */
 :deep(.xterm-viewport) {
   overflow-y: auto !important;
-  overflow-x: hidden;
+  overflow-x: hidden !important;
   /* 启用移动端弹性滚动 */
   -webkit-overflow-scrolling: touch;
   /* 防止滚动到边界时触发页面整体滚动 */
   overscroll-behavior: contain;
-  /* 允许触摸滚动 - 这是关键 */
-  touch-action: pan-y !important;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar {

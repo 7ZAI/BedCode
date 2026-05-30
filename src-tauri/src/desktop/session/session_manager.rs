@@ -276,6 +276,12 @@ impl SessionManager {
         self.pty_registry.insert(session_id.clone(), pty_session).await;
         self.session_info.insert(info).await;
 
+        // 发布同步事件：会话创建（状态为 starting）
+        self.publish_sync_event(DesktopSyncEvent::SessionCreated {
+            session_id: session_id.clone(),
+            source_device: None,
+        }).await;
+
         tracing::info!("Session created (not started): {} ({})", session_name, session_id);
         Ok(session_id)
     }

@@ -15,7 +15,6 @@ use crate::shared::model::message::Message;
 use crate::shared::websocket::{
     WsServer, WsServerConfig, WsServerEvent,
 };
-use crate::shared::websocket::server::server_config::IpFilter;
 use crate::desktop::server::router::BusinessRouter;
 use crate::shared::websocket::server::DefaultMessageHandler;
 use crate::shared::system::error::AppError;
@@ -26,7 +25,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::{broadcast, RwLock};
 
 /// 客户端摘要（对外暴露的信息）
@@ -185,16 +184,10 @@ impl WebSocketManager {
             }
         }
 
-        // 创建服务器配置
+        // 创建服务器配置（使用默认的心跳配置）
         let config = WsServerConfig {
             port,
-            max_connections: 0,
-            heartbeat_interval_secs: 30,
-            heartbeat_timeout_secs: 90,
-            message_queue_size: 256,
-            business_thread_pool_size: 0,
-            ip_filter: IpFilter::default(),
-            response_handler: None,
+            ..WsServerConfig::default()
         };
 
         // 创建 WsServer
@@ -240,13 +233,14 @@ impl WebSocketManager {
             qr_manager,
             app_handle,
         ));
-        // 传入 session_manager 和 plugin_manager
+        // 传入 session_manager 和 plugin_manager（用于会话控制请求）
         let control_handler = Arc::new(SessionControlHandler::new(
-            session_manager,
+            session_manager.clone(),
             plugin_manager,
         ));
         let session_config_handler = Arc::new(SessionConfigHandler::new(db.clone()));
-        let terminal_handler = Arc::new(TerminalHandler::new(None));
+        // 传入 session_manager（用于终端输入写入 PTY）
+        let terminal_handler = Arc::new(TerminalHandler::new(session_manager));
 
         // 创建 BusinessRouter（实现 MessageRouter trait）
         let (event_tx_sender, _) = broadcast::channel(1024);
@@ -266,20 +260,8 @@ impl WebSocketManager {
 
         // 启动服务器
         let server_clone = server.clone();
-        let manager = self.inner.clone();
-
-        // 在后台启动事件处理任务
         tokio::spawn(async move {
-            let mut rx = server_clone.subscribe();
-            while let Ok(event) = rx.recv().await {
-                Self::handle_server_event(manager.clone(), event).await;
-            }
-        });
-
-        // 启动服务器
-        let server_clone2 = server.clone();
-        tokio::spawn(async move {
-            if let Err(e) = server_clone2.start().await {
+            if let Err(e) = server_clone.start().await {
                 tracing::error!("WebSocket server error: {}", e);
             }
         });
@@ -299,6 +281,12 @@ impl WebSocketManager {
 
         tracing::info!("WebSocketManager started on port {}", port);
         Ok(())
+    }
+
+    /// 获取服务器实例（用于注册事件源）
+    pub async fn get_server(&self) -> Option<Arc<WsServer>> {
+        let server = self.inner.server.read().await;
+        server.clone()
     }
 
     /// 停止服务器
@@ -641,60 +629,50 @@ impl WebSocketManager {
             false
         }
     }
+
+    /// 清理客户端连接数据（公开方法，供外部事件处理器调用）
+    pub async fn cleanup_client_by_addr(&self, addr: SocketAddr) {
+        // 获取 client_id
+        let client_id = {
+            let addr_to_client_id = self.inner.addr_to_client_id.read().await;
+            addr_to_client_id.get(&addr).cloned()
+        };
+
+        // 清理映射
+        if let Some(cid) = client_id.clone() {
+            let mut client_id_to_addr = self.inner.client_id_to_addr.write().await;
+            client_id_to_addr.remove(&cid);
+        }
+
+        {
+            let mut addr_to_client_id = self.inner.addr_to_client_id.write().await;
+            addr_to_client_id.remove(&addr);
+        }
+
+        {
+            let mut addr_to_device_name = self.inner.addr_to_device_name.write().await;
+            addr_to_device_name.remove(&addr);
+        }
+
+        {
+            let mut addr_to_connected_at = self.inner.addr_to_connected_at.write().await;
+            addr_to_connected_at.remove(&addr);
+        }
+
+        // 清理 GlobalOutputManager 中该客户端的所有订阅
+        // 防止断开后仍尝试向已关闭的通道发送数据
+        if let Some(cid) = client_id {
+            use crate::desktop::session::GlobalOutputManager;
+            let global_manager = GlobalOutputManager::global();
+            global_manager.unsubscribe_all_for_client(&cid).await;
+            tracing::info!("[WebSocketManager] Cleaned up all subscriptions for client {}", cid);
+        }
+    }
 }
 
 // ==================== Private Helper Methods ====================
 
 impl WebSocketManager {
-    /// 处理服务器事件
-    async fn handle_server_event(inner: Arc<WsManagerInner>, event: WsServerEvent) {
-        match event {
-            WsServerEvent::ClientConnected { addr, client_id } => {
-                {
-                    let mut connected_at = inner.addr_to_connected_at.write().await;
-                    connected_at.insert(addr, Utc::now().timestamp_millis());
-                }
-
-                tracing::info!("Client connected: {}", addr);
-            }
-            WsServerEvent::ClientDisconnected { addr, client_id: _, reason: _ } => {
-                Self::cleanup_client(&inner, &addr).await;
-                tracing::info!("Client disconnected: {}", addr);
-            }
-            _ => {}
-        }
-    }
-
-    /// 清理客户端连接数据
-    async fn cleanup_client(inner: &Arc<WsManagerInner>, addr: &SocketAddr) {
-        // 获取 client_id
-        let client_id = {
-            let addr_to_client_id = inner.addr_to_client_id.read().await;
-            addr_to_client_id.get(addr).cloned()
-        };
-
-        // 清理映射
-        if let Some(cid) = client_id {
-            let mut client_id_to_addr = inner.client_id_to_addr.write().await;
-            client_id_to_addr.remove(&cid);
-        }
-
-        {
-            let mut addr_to_client_id = inner.addr_to_client_id.write().await;
-            addr_to_client_id.remove(addr);
-        }
-
-        {
-            let mut addr_to_device_name = inner.addr_to_device_name.write().await;
-            addr_to_device_name.remove(addr);
-        }
-
-        {
-            let mut addr_to_connected_at = inner.addr_to_connected_at.write().await;
-            addr_to_connected_at.remove(addr);
-        }
-    }
-
     /// 向指定地址发送消息
     async fn send_to_addr_internal(
         inner: &Arc<WsManagerInner>,

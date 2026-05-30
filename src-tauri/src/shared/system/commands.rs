@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::desktop::server::services::PairingService;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::mobile::pairing_service::PairingService;
+use crate::mobile::remote::PairingService;
 
 // ==================== Pairing Commands ====================
 

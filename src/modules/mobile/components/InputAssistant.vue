@@ -176,33 +176,99 @@ function doClear()    { console.log('[InputAssistant] doClear'); store.collapse(
 function doInput()    { console.log('[InputAssistant] doInput'); store.collapse(); showInput.value = true }
 function doCtrlC()    {
   console.log('[InputAssistant] doCtrlC, terminalInstance=', !!props.terminalInstance)
-  store.collapse(); props.terminalInstance?.sendSpecialKey?.('ctrl_c')
+  store.collapse()
+  if (!props.isConnected) {
+    console.warn('[InputAssistant] Not connected, skip Ctrl+C')
+    return
+  }
+  props.terminalInstance?.sendSpecialKey?.('ctrl_c')
 }
 function doShortcuts(){ console.log('[InputAssistant] doShortcuts'); store.collapse(); showShortcuts.value = true }
 function doSettings() { store.collapse(); showSettings.value = true }
 
-function onSubmit() {
+async function onSubmit() {
   const text = inputText.value.trim()
-  console.log('[InputAssistant] onSubmit called, text="' + text + '", terminalInstance=', !!props.terminalInstance)
-  if (!text || !props.terminalInstance) return
-  props.terminalInstance.sendInput(text)
-  inputText.value = ''; showInput.value = false
+  console.log('[InputAssistant] onSubmit called')
+  console.log('[InputAssistant]   text="' + text + '"')
+  console.log('[InputAssistant]   terminalInstance=', !!props.terminalInstance)
+  console.log('[InputAssistant]   terminalInstance.sessionId=', props.terminalInstance?.sessionId)
+  console.log('[InputAssistant]   isConnected=', props.isConnected)
+
+  if (!text) {
+    console.warn('[InputAssistant] Empty text, skip submit')
+    return
+  }
+  if (!props.terminalInstance) {
+    console.error('[InputAssistant] terminalInstance is undefined!')
+    return
+  }
+  if (!props.isConnected) {
+    console.warn('[InputAssistant] Not connected, skip submit')
+    return
+  }
+  try {
+    console.log('[InputAssistant] Calling sendInput...')
+    await props.terminalInstance.sendInput(text)
+    console.log('[InputAssistant] sendInput completed successfully')
+  } catch (e) {
+    console.error('[InputAssistant] sendInput failed:', e)
+    // 不清空输入，让用户可以重试
+    return
+  }
+  inputText.value = ''
+  showInput.value = false
 }
 
 async function onExecute() {
   const text = inputText.value.trim()
-  console.log('[InputAssistant] onExecute called, text="' + text + '", terminalInstance=', !!props.terminalInstance)
-  if (!text || !props.terminalInstance) return
-  // 一次发送同时携带文本和 Enter，避免两次 invoke 的竞态条件
-  // 桌面端 Input handler 按 data → special_key 顺序写入 PTY
-  await props.terminalInstance.sendInputWithEnter?.(text)
-  console.log('[InputAssistant] onExecute completed')
-  inputText.value = ''; showInput.value = false
+  console.log('[InputAssistant] onExecute called')
+  console.log('[InputAssistant]   text="' + text + '"')
+  console.log('[InputAssistant]   terminalInstance=', !!props.terminalInstance)
+  console.log('[InputAssistant]   terminalInstance.sessionId=', props.terminalInstance?.sessionId)
+  console.log('[InputAssistant]   isConnected=', props.isConnected)
+
+  if (!text) {
+    console.warn('[InputAssistant] Empty text, skip execute')
+    return
+  }
+  if (!props.terminalInstance) {
+    console.error('[InputAssistant] terminalInstance is undefined!')
+    return
+  }
+  if (!props.isConnected) {
+    console.warn('[InputAssistant] Not connected, skip execute')
+    return
+  }
+  if (!props.terminalInstance.sendInputWithEnter) {
+    console.error('[InputAssistant] sendInputWithEnter method not found!')
+    return
+  }
+  try {
+    console.log('[InputAssistant] Calling sendInputWithEnter...')
+    // 一次发送同时携带文本和 Enter，避免两次 invoke 的竞态条件
+    // 桌面端 Input handler 按 data → special_key 顺序写入 PTY
+    await props.terminalInstance.sendInputWithEnter(text)
+    console.log('[InputAssistant] sendInputWithEnter completed successfully')
+  } catch (e) {
+    console.error('[InputAssistant] sendInputWithEnter failed:', e)
+    // 不清空输入，让用户可以重试
+    return
+  }
+  inputText.value = ''
+  showInput.value = false
 }
 
 async function onShortcut(key: string) {
   console.log('[InputAssistant] onShortcut called, key="' + key + '", terminalInstance=', !!props.terminalInstance)
-  await props.terminalInstance?.sendSpecialKey?.(key)
+  if (!props.isConnected) {
+    console.warn('[InputAssistant] Not connected, skip shortcut')
+    return
+  }
+  try {
+    await props.terminalInstance?.sendSpecialKey?.(key)
+  } catch (e) {
+    console.error('[InputAssistant] sendSpecialKey failed:', e)
+  }
 }
 
 // auto-focus textarea

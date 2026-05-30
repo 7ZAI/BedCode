@@ -3,6 +3,7 @@
 //! 将解析后的 Message 按类型分发给已注册的处理器
 
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use crate::shared::model::message::Message;
 use crate::shared::websocket::client::MessageRouter;
@@ -28,6 +29,7 @@ impl ClientBusinessRouter {
     }
 }
 
+#[async_trait]
 impl MessageRouter for ClientBusinessRouter {
     async fn route(&self, message: Message) -> Result<Option<Message>> {
         // 查找 handler

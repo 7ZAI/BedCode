@@ -2,18 +2,30 @@
 //!
 //! 终端输入命令
 
+use tauri::AppHandle;
+
 use crate::Result;
-use crate::mobile::request::{TerminalRequest, SessionRequest};
+use crate::mobile::remote::request::{TerminalRequest, SessionRequest};
 
 use super::connection::get_connection_manager;
 
-/// 发送输入到会话（异步模式，不等待服务端确认）
-/// 实现真正的终端输入体验：发送后立即返回，不阻塞 UI
+/// 发送输入到会话（带确认模式）
+/// 等待桌面端确认收到输入后再返回，确保消息已被处理
 #[tauri::command]
-pub async fn ws_send_input_async(session_id: String, data: String, special_key: Option<String>) -> Result<()> {
-    tracing::debug!("[ws_send_input_async] session_id={}, data_len={}, has_special_key={}",
-        session_id, data.len(), special_key.is_some());
+pub async fn ws_send_input_async(
+    app_handle: AppHandle,
+    session_id: String,
+    data: String,
+    special_key: Option<String>,
+) -> Result<()> {
+    tracing::info!("[ws_send_input_async] >>> ENTRY: session_id={}, data_len={}, has_special_key={:?}",
+        session_id, data.len(), special_key);
+
     let conn = get_connection_manager();
+
+    // 检查连接状态
+    let status = conn.get_status().await;
+    tracing::info!("[ws_send_input_async] connection status: {:?}", status);
 
     // 裁剪尾部换行
     let trimmed_data = if special_key.as_deref() == Some("enter") {
@@ -24,26 +36,44 @@ pub async fn ws_send_input_async(session_id: String, data: String, special_key: 
 
     // 解析特殊按键
     let special_key_enum = special_key.as_ref().and_then(|k| TerminalRequest::parse_special_key(k));
+    tracing::info!("[ws_send_input_async] special_key_enum: {:?}", special_key_enum);
 
     let message = TerminalRequest::input(&session_id, &trimmed_data, special_key_enum);
 
-    // fire-and-forget：只确保发送到缓冲区，不等待服务端 ACK
-    conn.send(&message).await?;
+    // 记录发送的消息
+    tracing::info!("[ws_send_input_async] message to send: {}", message.to_json().unwrap_or_default());
 
-    tracing::debug!("[ws_send_input_async] sent to buffer (no ACK waiting)");
+    // 使用带断开处理的 send_and_wait
+    // 设置 5 秒超时，终端输入应该快速响应
+    let timeout = std::time::Duration::from_secs(5);
+    match conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeout).await {
+        Ok(response) => {
+            tracing::info!("[ws_send_input_async] send_and_wait returned Ok, response: {:?}", response);
+        }
+        Err(e) => {
+            tracing::error!("[ws_send_input_async] send_and_wait returned Err: {}", e);
+            return Err(e);
+        }
+    }
+
+    tracing::info!("[ws_send_input_async] <<< EXIT: success");
     Ok(())
 }
 
 /// 发送消息（不等待响应）
 /// 通用接口，接受 JSON 格式的消息
 #[tauri::command]
-pub async fn ws_send_message(message_type: String, payload: serde_json::Value) -> Result<()> {
+pub async fn ws_send_message(
+    app_handle: AppHandle,
+    message_type: String,
+    payload: serde_json::Value,
+) -> Result<()> {
     let conn = get_connection_manager();
 
     // 尝试将 payload 转换为对应的 Message 类型
     let result = convert_json_to_message(&message_type, payload);
     match result {
-        Some(message) => conn.send(&message).await,
+        Some(message) => conn.send_with_disconnect_handling(&app_handle, &message).await,
         None => Err(crate::AppError::Parse(format!("Unsupported message type: {}", message_type)))
     }
 }
@@ -51,6 +81,7 @@ pub async fn ws_send_message(message_type: String, payload: serde_json::Value) -
 /// 发送消息并等待响应
 #[tauri::command]
 pub async fn ws_send_and_wait(
+    app_handle: AppHandle,
     message_type: String,
     payload: serde_json::Value,
     timeout_secs: Option<u64>,
@@ -64,7 +95,7 @@ pub async fn ws_send_and_wait(
         None => return Err(crate::AppError::Parse(format!("Unsupported message type: {}", message_type))),
     };
 
-    let response = conn.send_and_wait(&message, timeout).await?;
+    let response = conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeout).await?;
     let json_str = response.to_json()?;
     let parsed: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| crate::AppError::Parse(e.to_string()))?;
@@ -72,7 +103,8 @@ pub async fn ws_send_and_wait(
     Ok(parsed)
 }
 
-/// 将 JSON payload 转换为 Message 类型
+/// 将 JSON payload 转换为 Message 类型（带响应期望）
+/// 用于 ws_send_and_wait，确保所有消息都设置 expect_response: true
 fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Option<crate::shared::model::message::Message> {
     use crate::shared::model::message::Message;
     use crate::shared::enums::control::{SessionControlAction, SessionConfigAction};
@@ -127,7 +159,8 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
                 }
                 _ => return None,
             };
-            Some(Message::session_control(action, None))
+            // 使用 _with_response 版本确保 expect_response: true
+            Some(Message::session_control_with_response(action, None))
         }
         "session_config" => {
             let action_type = payload.get("action")
@@ -139,7 +172,8 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
                 "list_quick_actions" => SessionConfigAction::ListQuickActions,
                 _ => return None,
             };
-            Some(Message::session_config(action, None))
+            // 使用 _with_response 版本确保 expect_response: true
+            Some(Message::session_config_with_response(action, None))
         }
         "input" => {
             let session_id = payload.get("session_id")
@@ -149,6 +183,7 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
                 .and_then(|p| p.get("data"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            // input 不需要响应，保持原样
             Some(Message::input(session_id, data, None))
         }
         "subscribe" => {
@@ -157,13 +192,15 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
                 .unwrap_or("");
             let start_seq = payload.get("start_seq")
                 .and_then(|v| v.as_u64());
-            Some(Message::subscribe(session_id, start_seq))
+            // 使用 _with_response 版本确保 expect_response: true
+            Some(Message::subscribe_with_response(session_id, start_seq))
         }
         "unsubscribe" => {
             let session_id = payload.get("session_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            Some(Message::unsubscribe(session_id))
+            // 使用 _with_response 版本确保 expect_response: true
+            Some(Message::unsubscribe_with_response(session_id))
         }
         _ => None,
     }
@@ -175,11 +212,16 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
 /// 桌面端收到后更新 PTY 尺寸，使输出按移动端屏幕宽度排版，
 /// 避免因宽度不匹配导致 \r 光标定位错乱、多行输出堆叠等问题。
 #[tauri::command]
-pub async fn ws_resize_terminal(session_id: String, cols: u32, rows: u32) -> Result<()> {
+pub async fn ws_resize_terminal(
+    app_handle: AppHandle,
+    session_id: String,
+    cols: u32,
+    rows: u32,
+) -> Result<()> {
     tracing::info!("[ws_resize_terminal] session_id={}, cols={}, rows={}", session_id, cols, rows);
     let conn = get_connection_manager();
 
     let message = SessionRequest::resize_session(&session_id, cols as u16, rows as u16);
 
-    conn.send(&message).await
+    conn.send_with_disconnect_handling(&app_handle, &message).await
 }

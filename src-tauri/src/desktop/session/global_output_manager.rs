@@ -98,6 +98,23 @@ impl GlobalOutputManager {
             false
         }
     }
+
+    /// 取消某客户端在所有会话中的订阅
+    /// 用于客户端断开连接时清理所有订阅
+    pub async fn unsubscribe_all_for_client(&self, client_id: &str) {
+        let sessions = self.sessions.read().await;
+        for (session_id, manager) in sessions.iter() {
+            manager.unsubscribe(client_id).await;
+            tracing::debug!(
+                "[GlobalOutputManager] Unsubscribed client {} from session {}",
+                client_id, session_id
+            );
+        }
+        tracing::info!(
+            "[GlobalOutputManager] Cleaned up subscriptions for client {} across {} sessions",
+            client_id, sessions.len()
+        );
+    }
 }
 
 impl Default for GlobalOutputManager {

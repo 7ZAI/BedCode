@@ -173,9 +173,23 @@ impl ServerIo {
 
         let ws_msg = tokio_tungstenite::tungstenite::Message::Text(json);
         let senders = self.connection_manager.get_all_senders().await;
+        let sender_count = senders.len();
+
+        info!("[ServerIo] Broadcasting to {} client(s)", sender_count);
+
+        let mut success_count = 0;
+        let mut fail_count = 0;
         for sender in senders {
-            let _ = sender.try_send(ws_msg.clone());
+            match sender.try_send(ws_msg.clone()) {
+                Ok(_) => success_count += 1,
+                Err(e) => {
+                    fail_count += 1;
+                    warn!("[ServerIo] Failed to send to client: {}", e);
+                }
+            }
         }
+
+        info!("[ServerIo] Broadcast result: {} success, {} failed", success_count, fail_count);
         Ok(())
     }
 

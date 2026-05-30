@@ -11,9 +11,9 @@ use tracing;
 pub use crate::shared::enums::SessionStatus;
 
 use crate::Result;
-use crate::mobile::request::{SessionRequest, ResponseParser, timeouts};
+use crate::mobile::remote::request::{SessionRequest, ResponseParser, timeouts};
 
-use super::connection::ConnectionManager;
+use crate::mobile::remote::ConnectionManager;
 
 /// 会话信息
 #[derive(Debug, Clone, Serialize, Deserialize)]

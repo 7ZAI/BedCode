@@ -7,6 +7,7 @@
 //! - `lifecycle` - 生命周期状态机
 //! - `router` - 消息路由 trait
 //! - `reconnect` - 重连策略
+//! - `request_response` - 请求-响应管理
 
 pub mod connection;
 pub mod heartbeat;
@@ -15,6 +16,7 @@ pub mod lifecycle;
 pub mod reconnect;
 pub mod router;
 pub mod default_handler;
+pub mod request_response;
 
 // 主客户端
 pub mod ws_client;
@@ -28,6 +30,7 @@ pub use lifecycle::{ConnectionStatus, LifecycleEvent, LifecycleManager};
 pub use reconnect::{ReconnectConfig, ReconnectEvent, ReconnectManager, ReconnectState};
 pub use router::MessageRouter;
 pub use default_handler::ClientDefaultMessageHandler;
+pub use request_response::RequestResponseManager;
 
 // 客户端事件（对外使用）
 use serde::{Deserialize, Serialize};
@@ -37,18 +40,11 @@ use serde::{Deserialize, Serialize};
 pub enum WsClientEvent {
     Connected,
     Disconnected,
-    TextMessage {
-        message_id: Option<String>,
+    /// 收到推送消息（非请求-响应）
+    PushMessage {
         content: String,
     },
-    BinaryMessage {
-        message_id: Option<String>,
-        data: Vec<u8>,
-    },
     HeartbeatResponse,
-    Ack {
-        message_id: String,
-    },
     Error {
         message: String,
     },

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// 连接唯一ID
 pub type ConnectionId = u64;
@@ -193,7 +193,7 @@ impl ConnectionManager {
         // 发送连接事件
         let _ = self.event_tx.send(ConnectionEvent::Connected { id, addr });
 
-        debug!("Connection registered: {} -> {}", id, addr);
+        info!("[ConnectionManager] Connection registered: id={}, addr={}", id, addr);
         Some(id)
     }
 
@@ -376,6 +376,10 @@ impl ConnectionManager {
     /// 获取所有连接的发送通道
     pub async fn get_all_senders(&self) -> Vec<mpsc::Sender<WsMsg>> {
         let connections = self.connections.read().await;
+        let count = connections.len();
+        if count > 0 {
+            info!("[ConnectionManager] get_all_senders: {} connections", count);
+        }
         connections.values().map(|(_, tx, _)| tx.clone()).collect()
     }
 

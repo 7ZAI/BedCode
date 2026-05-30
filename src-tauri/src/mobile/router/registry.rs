@@ -34,6 +34,8 @@ pub fn message_type_key(msg: &Message) -> &'static str {
         Message::Ack { .. } => "Ack",
         Message::SessionControl { .. } => "SessionControl",
         Message::SessionConfig { .. } => "SessionConfig",
+        Message::ClientDisconnected { .. } => "ClientDisconnected",
+        Message::SessionEvent { .. } => "SessionEvent",
     }
 }
 

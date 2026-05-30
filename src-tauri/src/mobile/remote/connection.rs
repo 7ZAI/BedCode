@@ -9,7 +9,7 @@ use tokio::sync::{broadcast, RwLock};
 use tauri::{AppHandle, Emitter};
 use tracing;
 
-use crate::shared::websocket::{
+use crate::shared::websocket::client::{
     ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent,
     ClientDefaultMessageHandler, MessageRouter,
 };
@@ -27,6 +27,25 @@ pub use crate::shared::websocket::ConnectionStatus;
 /// 重连配置
 const MAX_RETRY: u32 = 3;
 const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000]; // 指数退避（毫秒）
+
+/// 判断错误是否表示连接已断开或请求失败（需要通知前端）
+fn is_disconnect_error(error: &crate::AppError) -> bool {
+    match error {
+        crate::AppError::WebSocket(msg) => {
+            // 检查错误消息是否包含断开或超时相关的关键词
+            let msg_lower = msg.to_lowercase();
+            msg_lower.contains("not connected")
+                || msg_lower.contains("disconnected")
+                || msg_lower.contains("connection lost")
+                || msg_lower.contains("connection closed")
+                || msg_lower.contains("failed to send")
+                || msg_lower.contains("channel closed")
+                || msg_lower.contains("timeout")  // 超时也可能是连接问题
+                || msg_lower.contains("response timeout")
+        }
+        _ => false,
+    }
+}
 
 /// 目标设备信息
 #[derive(Debug, Clone)]
@@ -394,9 +413,17 @@ impl ConnectionManager {
         tracing::info!("[ConnectionManager] send() message_type={:?}, preview={}",
             "Message",
             &msg_preview[..msg_preview.len().min(200)]);
+
         if let Some(client) = self.client.read().await.as_ref() {
             let result = client.send(&message).await;
-            tracing::info!("[ConnectionManager] send() result: {:?}", result.as_ref().map(|_| "OK").unwrap_or(&"ERR"));
+            match &result {
+                Ok(_) => {
+                    tracing::info!("[ConnectionManager] send() result: OK");
+                }
+                Err(e) => {
+                    tracing::error!("[ConnectionManager] send() failed: {}", e);
+                }
+            }
             result
         } else {
             tracing::error!("[ConnectionManager] send() client is None!");
@@ -422,6 +449,51 @@ impl ConnectionManager {
             tracing::error!("[ConnectionManager] send_and_wait: client is None!");
             Err(crate::AppError::WebSocket("Not connected".to_string()))
         }
+    }
+
+    /// 发送消息，失败时检查是否为断开错误并发射事件
+    ///
+    /// 此方法用于需要自动处理断开场景的调用方
+    pub async fn send_with_disconnect_handling(
+        &self,
+        app_handle: &AppHandle,
+        message: &Message,
+    ) -> Result<()> {
+        let result = self.send(message).await;
+
+        if let Err(ref e) = result {
+            if is_disconnect_error(e) {
+                tracing::warn!("[ConnectionManager] send_with_disconnect_handling: detected disconnect error: {}", e);
+                let _ = app_handle.emit("ws_unexpected_disconnect", serde_json::json!({
+                    "reason": format!("连接已断开: {}", e)
+                }));
+            }
+        }
+
+        result
+    }
+
+    /// 发送消息并等待响应，失败时检查是否为断开错误并发射事件
+    ///
+    /// 此方法用于需要自动处理断开场景的调用方
+    pub async fn send_and_wait_with_disconnect_handling(
+        &self,
+        app_handle: &AppHandle,
+        message: &Message,
+        timeout: std::time::Duration,
+    ) -> Result<Message> {
+        let result = self.send_and_wait(message, timeout).await;
+
+        if let Err(ref e) = result {
+            if is_disconnect_error(e) {
+                tracing::warn!("[ConnectionManager] send_and_wait_with_disconnect_handling: detected disconnect error: {}", e);
+                let _ = app_handle.emit("ws_unexpected_disconnect", serde_json::json!({
+                    "reason": format!("连接已断开: {}", e)
+                }));
+            }
+        }
+
+        result
     }
 
     /// 检查是否已连接

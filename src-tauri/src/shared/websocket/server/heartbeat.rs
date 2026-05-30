@@ -2,13 +2,15 @@
 //!
 //! 心跳管理模块，负责：
 //! 1. 僵尸连接检测 - 定期检查超时连接
-//! 2. 协议层 Ping/Pong 自动处理（tungstenite 负责）
+//! 2. 主动 Ping 探测 - 在超时前发送 Ping 检测连接存活
+//! 3. 协议层 Ping/Pong 自动处理（tungstenite 负责）
 
 use crate::shared::websocket::server::connection_manager::{ConnectionEvent, ConnectionId, ConnectionManager};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::interval;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, warn};
 
 /// 心跳配置
@@ -18,22 +20,28 @@ pub struct HeartbeatConfig {
     pub check_interval: Duration,
     /// 心跳超时时间
     pub timeout: Duration,
+    /// 主动 Ping 阈值（超过此时间无活动则发送 Ping）
+    pub ping_threshold: Duration,
 }
 
 impl Default for HeartbeatConfig {
     fn default() -> Self {
         Self {
-            check_interval: Duration::from_secs(30),
-            timeout: Duration::from_secs(90),
+            check_interval: Duration::from_secs(20),
+            timeout: Duration::from_secs(60),
+            ping_threshold: Duration::from_secs(30), // 30 秒无活动则发送 Ping
         }
     }
 }
 
 impl HeartbeatConfig {
     pub fn new(interval_secs: u64, timeout_secs: u64) -> Self {
+        // Ping 阈值为超时时间的一半，确保有足够时间等待 Pong
+        let ping_threshold = Duration::from_secs(timeout_secs / 2);
         Self {
             check_interval: Duration::from_secs(interval_secs),
             timeout: Duration::from_secs(timeout_secs),
+            ping_threshold,
         }
     }
 }
@@ -124,6 +132,7 @@ impl HeartbeatManager {
         let is_running = Arc::clone(&self.is_running);
         let timeout = self.config.timeout;
         let check_interval = self.config.check_interval;
+        let ping_threshold = self.config.ping_threshold;
 
         tokio::spawn(async move {
             {
@@ -132,7 +141,10 @@ impl HeartbeatManager {
             }
 
             let mut tick = interval(check_interval);
-            debug!("Heartbeat checker started, timeout: {:?}", timeout);
+            debug!(
+                "Heartbeat checker started: interval={:?}, timeout={:?}, ping_threshold={:?}",
+                check_interval, timeout, ping_threshold
+            );
 
             loop {
                 tokio::select! {
@@ -142,8 +154,14 @@ impl HeartbeatManager {
 
                         for id in all_ids {
                             if let Some(conn) = connection_manager.get(id).await {
-                                if now.duration_since(conn.last_heartbeat) > timeout {
-                                    warn!("Heartbeat timeout for connection: {} ({}), disconnecting", id, conn.addr);
+                                let elapsed = now.duration_since(conn.last_heartbeat);
+
+                                if elapsed > timeout {
+                                    // 心跳超时，断开连接
+                                    warn!(
+                                        "Heartbeat timeout for connection: {} ({}), last activity {:?}s ago, disconnecting",
+                                        id, conn.addr, elapsed.as_secs()
+                                    );
 
                                     // 发送超时事件
                                     let _ = event_tx.send(HeartbeatEvent::Timeout {
@@ -151,8 +169,28 @@ impl HeartbeatManager {
                                         addr: conn.addr,
                                     });
 
-                                    // 更新心跳时间避免重复触发
-                                    connection_manager.update_heartbeat(id).await;
+                                    // 发送断开事件，通知上层清理
+                                    let _ = event_tx.send(HeartbeatEvent::Disconnected {
+                                        id,
+                                        addr: conn.addr,
+                                    });
+
+                                    // 从连接管理器中移除连接，触发实际断开
+                                    connection_manager.unregister(id).await;
+                                } else if elapsed > ping_threshold {
+                                    // 超过 Ping 阈值，主动发送 Ping 探测
+                                    debug!(
+                                        "Sending Ping to connection {} ({}), last activity {:?}s ago",
+                                        id, conn.addr, elapsed.as_secs()
+                                    );
+
+                                    if let Some(sender) = connection_manager.get_sender(id).await {
+                                        // 发送 Ping，携带时间戳作为 payload
+                                        let timestamp = now.elapsed().as_millis().to_be_bytes().to_vec();
+                                        if sender.send(WsMsg::Ping(timestamp)).await.is_err() {
+                                            warn!("Failed to send Ping to connection {}, send channel closed", id);
+                                        }
+                                    }
                                 }
                             }
                         }

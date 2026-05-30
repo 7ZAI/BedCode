@@ -185,6 +185,11 @@ impl WsServer {
         self.event_tx.subscribe()
     }
 
+    /// 获取事件发送器（用于注册到全局事件匹配器）
+    pub fn subscribe_sender(&self) -> broadcast::Sender<WsServerEvent> {
+        self.event_tx.clone()
+    }
+
     /// 设置消息处理器
     pub async fn set_handler(&self, handler: Arc<dyn MessageHandler>) {
         let mut h = self.handler.write().await;
@@ -431,7 +436,7 @@ impl WsServer {
                                             connection_manager_for_recv.update_heartbeat(id).await;
                                         }
 
-                                        debug!("[WsServer] <<< RECV from {}: {}", addr, &text[..text.len().min(200)]);
+                                        debug!("[WsServer] <<< RECV from {}: {}", addr, &text[..text.len().min(1000)]);
 
                                         // 调用 handler 处理
                                         let handler = handler_for_recv.clone();
