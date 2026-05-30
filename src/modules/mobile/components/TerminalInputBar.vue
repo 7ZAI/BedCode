@@ -164,14 +164,37 @@ function handleShortcutClick(code: string) {
 
 function setupVisualViewport() {
   const vv = window.visualViewport
-  if (!vv) return
+  if (!vv) {
+    console.warn('[TerminalInputBar] visualViewport not supported, using fallback')
+    // Fallback: 监听 window resize 事件
+    const handleResize = () => {
+      // Android WebView 可能在键盘弹出时改变 document 高度而非 window.innerHeight
+      const docHeight = document.documentElement.clientHeight
+      const windowHeight = window.innerHeight
+      // 使用 document 高度差作为键盘高度的近似值
+      const estimatedKeyboardHeight = Math.max(0, windowHeight - docHeight)
+      console.log('[TerminalInputBar] Fallback: windowHeight=', windowHeight, 'docHeight=', docHeight, 'keyboard=', estimatedKeyboardHeight)
+      keyboardHeight.value = estimatedKeyboardHeight
+    }
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+    }
+  }
+
+  console.log('[TerminalInputBar] visualViewport supported')
 
   const handleResize = () => {
-    keyboardHeight.value = Math.max(0, window.innerHeight - vv!.height)
+    const height = Math.max(0, window.innerHeight - vv!.height)
+    console.log('[TerminalInputBar] visualViewport resize: window.innerHeight=', window.innerHeight, 'vv.height=', vv!.height, 'keyboard=', height)
+    keyboardHeight.value = height
   }
 
   vv.addEventListener('resize', handleResize)
   vv.addEventListener('scroll', handleResize)
+
+  // 初始调用一次，获取当前状态
+  handleResize()
 
   // 返回清理函数
   return () => {
