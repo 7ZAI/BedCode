@@ -121,9 +121,9 @@ const canSubmit = computed(() => {
 })
 
 const containerStyle = computed(() => ({
-  bottom: `calc(${keyboardHeight.value}px + env(safe-area-inset-bottom, 0px))`,
-  transform: 'translateZ(0)',
-  transition: 'bottom 0.1s ease-out',
+  // 组件固定在底部，使用 transform 上移来避开键盘
+  transform: `translateY(-${keyboardHeight.value}px) translateZ(0)`,
+  transition: 'transform 0.1s ease-out',
 }))
 
 // ==================== Methods ====================
@@ -217,6 +217,8 @@ onUnmounted(() => {
 <style scoped>
 .terminal-input-bar {
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
+  /* 使用 padding-bottom 处理底部安全区域，避免被系统导航遮挡 */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .shortcuts-panel {
