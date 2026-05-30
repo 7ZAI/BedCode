@@ -72,7 +72,7 @@ impl RequestResponseManager {
         // 尝试匹配 message_id 或 request_id（ACK 消息使用 request_id）
         let id = match &message {
             // ACK 消息使用 request_id 关联请求
-            Message::Ack { request_id, .. } => request_id.clone(),
+            Message::Ack { request_id, .. } => Some(request_id.clone()),
             // 其他消息使用 message_id
             _ => message.message_id().map(|s| s.to_string()),
         };
