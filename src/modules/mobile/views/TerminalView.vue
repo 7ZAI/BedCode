@@ -21,10 +21,10 @@
             isConnectedValue ? 'bg-green-500' : 'bg-red-500'
           ]"
         ></div>
-        <span class="text-gray- dark:text-dark-400">{{ isConnectedValue ? '已连接' : '未连接' }}</span>
+        <span class="text-gray-500 dark:text-dark-400">{{ isConnectedValue ? '已连接' : '未连接' }}</span>
       </div>
       <button
-        class="p-2 rounded-lg bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300"
+        class="p-2 rounded-lg bg-gray-100 dark:bg-dark-700 text-gray-500 dark:text-dark-300"
         @click="handleClear"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -34,7 +34,7 @@
     </header>
 
     <!-- Terminal Output (使用 flex 填充剩余空间) -->
-    <div class="flex-1 overflow-hidden min-h-0">
+    <div class="flex-1 overflow-hidden min-h-0 pb-[140px]">
       <MobileTerminal
         ref="terminalRef"
         :external-instance="externalTerminal"
@@ -51,6 +51,16 @@
       :terminal-instance="terminalInstance"
       :is-connected="isConnectedValue"
     />
+
+    <!-- 底部输入栏 -->
+    <TerminalInputBar
+      :is-connected="isConnectedValue"
+      :disabled="!isConnectedValue"
+      :is-landscape="isLandscapeValue"
+      @submit="onSubmit"
+      @execute="onExecute"
+      @special-key="onSpecialKey"
+    />
   </div>
 </template>
 
@@ -64,9 +74,10 @@ import {
   createHiddenTerminal,
   clearTerminal as globalClearTerminal,
 } from '@/modules/mobile/composables/useGlobalTerminal'
-import { wsLoadSessions, wsSendInput, wsResizeTerminal, wsJoinSession } from '@/modules/mobile/composables/useMobileCommands'
+import { wsSendInput, wsResizeTerminal, wsJoinSession } from '@/modules/mobile/composables/useMobileCommands'
 import MobileTerminal from '@/modules/mobile/components/MobileTerminal.vue'
 import InputAssistant from '@/modules/mobile/components/InputAssistant.vue'
+import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
 
 // 定义组件名称，用于 KeepAlive 缓存
 defineOptions({
@@ -95,33 +106,67 @@ const externalTerminal = computed(() => {
 })
 
 // 终端操作接口（供 InputAssistant 使用）
-const terminalInstance = computed(() => ({
-  instance: externalTerminal.value,
-  sendInput: async (data: string) => {
-    const sessionId = connection.activeSessionId.value
-    if (!sessionId) return
-    await wsSendInput(sessionId, data)
-  },
-  sendInputWithEnter: async (data: string) => {
-    const sessionId = connection.activeSessionId.value
-    if (!sessionId) return
-    await wsSendInput(sessionId, data, 'enter')
-  },
-  sendSpecialKey: async (key: string) => {
-    const sessionId = connection.activeSessionId.value
-    if (!sessionId) return
-    await wsSendInput(sessionId, '', key)
-  },
-}))
+const terminalInstance = computed(() => {
+  const sessionId = connection.activeSessionId.value
+  console.log('[TerminalView] terminalInstance computed, sessionId=', sessionId)
 
-// 活跃会话列表（用于获取会话名称）
-const activeSessionsList = ref<any[]>([])
+  return {
+    instance: externalTerminal.value,
+    sessionId, // 暴露 sessionId 供调试
+    sendInput: async (data: string) => {
+      console.log('[TerminalView] sendInput called, sessionId=', sessionId, 'data=', data)
+      if (!sessionId) {
+        console.warn('[TerminalView] No active session, skip sendInput')
+        throw new Error('No active session')
+      }
+      try {
+        console.log('[TerminalView] Calling wsSendInput...')
+        await wsSendInput(sessionId, data)
+        console.log('[TerminalView] wsSendInput completed')
+      } catch (e) {
+        console.error('[TerminalView] sendInput failed:', e)
+        throw e
+      }
+    },
+    sendInputWithEnter: async (data: string) => {
+      console.log('[TerminalView] sendInputWithEnter called, sessionId=', sessionId, 'data=', data)
+      if (!sessionId) {
+        console.warn('[TerminalView] No active session, skip sendInputWithEnter')
+        throw new Error('No active session')
+      }
+      try {
+        console.log('[TerminalView] Calling wsSendInput with enter...')
+        await wsSendInput(sessionId, data, 'enter')
+        console.log('[TerminalView] wsSendInput with enter completed')
+      } catch (e) {
+        console.error('[TerminalView] sendInputWithEnter failed:', e)
+        throw e
+      }
+    },
+    sendSpecialKey: async (key: string) => {
+      console.log('[TerminalView] sendSpecialKey called, sessionId=', sessionId, 'key=', key)
+      if (!sessionId) {
+        console.warn('[TerminalView] No active session, skip sendSpecialKey')
+        throw new Error('No active session')
+      }
+      try {
+        console.log('[TerminalView] Calling wsSendInput for special key...')
+        await wsSendInput(sessionId, '', key)
+        console.log('[TerminalView] wsSendInput for special key completed')
+      } catch (e) {
+        console.error('[TerminalView] sendSpecialKey failed:', e)
+        throw e
+      }
+    },
+  }
+})
 
-// 会话名称 - 从活跃会话中查找
+// 会话名称 - 从全局会话列表中查找
 const sessionName = computed(() => {
   const activeId = connection.activeSessionId.value
   if (activeId) {
-    const found = activeSessionsList.value.find((s: any) => s.id === activeId)
+    // 优先从全局会话列表查找
+    const found = connection.activeSessions.value.find((s: any) => s.id === activeId)
     if (found?.name) return found.name
   }
   return connection.currentDevice.value?.name || '终端'
@@ -167,6 +212,47 @@ function onTerminalActivated() {
   console.log('[TerminalView] onTerminalActivated, terminal instance preserved by global manager')
 }
 
+// ==================== TerminalInputBar Event Handlers ====================
+
+async function onSubmit(text: string) {
+  console.log('[TerminalView] onSubmit:', text)
+  if (!terminalInstance.value) {
+    console.warn('[TerminalView] No terminal instance for submit')
+    return
+  }
+  try {
+    await terminalInstance.value.sendInput(text)
+  } catch (e) {
+    console.error('[TerminalView] onSubmit failed:', e)
+  }
+}
+
+async function onExecute(text: string) {
+  console.log('[TerminalView] onExecute:', text)
+  if (!terminalInstance.value) {
+    console.warn('[TerminalView] No terminal instance for execute')
+    return
+  }
+  try {
+    await terminalInstance.value.sendInputWithEnter(text)
+  } catch (e) {
+    console.error('[TerminalView] onExecute failed:', e)
+  }
+}
+
+async function onSpecialKey(key: string) {
+  console.log('[TerminalView] onSpecialKey:', key)
+  if (!terminalInstance.value) {
+    console.warn('[TerminalView] No terminal instance for special key')
+    return
+  }
+  try {
+    await terminalInstance.value.sendSpecialKey(key)
+  } catch (e) {
+    console.error('[TerminalView] onSpecialKey failed:', e)
+  }
+}
+
 // 监听连接状态变化
 watch(() => connection.connectionStatus.value, (newStatus, oldStatus) => {
   if ((newStatus === 'connected' || newStatus === 'paired') &&
@@ -177,7 +263,8 @@ watch(() => connection.connectionStatus.value, (newStatus, oldStatus) => {
 })
 
 onMounted(async () => {
-  const sessionId = route.params.sessionId as string
+  // 路由参数是 :id，表示会话 ID
+  const sessionId = route.params.id as string
   if (sessionId) {
     connection.activeSessionId.value = sessionId
 
@@ -186,14 +273,7 @@ onMounted(async () => {
       createHiddenTerminal(sessionId)
     }
 
-    // 加载会话列表以获取会话名称
-    try {
-      activeSessionsList.value = await wsLoadSessions()
-    } catch (e) {
-      console.error('[TerminalView] Failed to load sessions:', e)
-    }
-
-    // 如果已连接，订阅会话
+    // 如果已连接，订阅会话以开始接收输出
     if (isConnectedValue.value) {
       wsJoinSession(sessionId).catch(e => console.error('[TerminalView] wsJoinSession failed:', e))
     }
