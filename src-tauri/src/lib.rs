@@ -36,8 +36,10 @@ pub use desktop::plugin;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use desktop::server::services::PairingService;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use desktop::server::port_checker;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-use mobile::pairing_service::PairingService;
+use mobile::remote::PairingService;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use shared::db::Database;
 use std::sync::Arc;
@@ -187,6 +189,15 @@ pub fn run() {
                 crate::shared::system::config::AppConfig::default()
             });
             let ws_port = app_config.network.port;
+
+            // 检查端口可用性
+            let ws_port = match port_checker::check_and_resolve_port(&app_handle, ws_port) {
+                Ok(port) => port,
+                Err(e) => {
+                    tracing::error!("Port check failed: {}", e);
+                    ws_port // 使用原端口，服务器启动会失败并记录日志
+                }
+            };
 
             let db_path = app_handle
                 .path()

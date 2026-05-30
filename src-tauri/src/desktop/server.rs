@@ -10,6 +10,7 @@ pub mod services;
 pub mod handlers;
 pub mod router;
 pub mod auth_interceptor;
+pub mod port_checker;
 
 // 重新导出所有公开类型
 pub use message::*;
