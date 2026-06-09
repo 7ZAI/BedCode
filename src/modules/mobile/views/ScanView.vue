@@ -1,16 +1,16 @@
 <template>
-  <div class="h-full w-full bg-[#0a0a0f] flex flex-col">
+  <div class="h-full w-full bg-[var(--mobile-bg-primary)] flex flex-col">
     <!-- Header -->
-    <header class="bg-[#12121a]/90 backdrop-blur-xl border-b border-cyan-500/10 px-4 pb-3 flex items-center gap-3" style="padding-top: 12px;">
+    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 flex items-center gap-3" style="padding-top: 12px;">
       <button
         class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-cyan-500/10 transition-colors"
         @click="goBack"
       >
-        <svg class="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5 text-[var(--mobile-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
-      <h2 class="text-lg font-semibold text-white">扫描二维码</h2>
+      <h2 class="text-lg font-semibold text-[var(--mobile-text-primary)]">扫描二维码</h2>
     </header>
 
     <!-- Scanner area -->
@@ -37,15 +37,15 @@
         </div>
       </div>
 
-      <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-gray-500 text-sm">
+      <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-[var(--mobile-text-muted)] text-sm">
         将二维码对准框内扫描
       </p>
 
       <!-- Connecting state -->
       <div v-if="isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
-        <div class="animate-spin rounded-full h-12 w-12 border-2 border-cyan-400 border-t-transparent mb-4"></div>
-        <p class="text-gray-300 text-lg mb-2">{{ connectingStep }}</p>
-        <p class="text-gray-500 text-sm">{{ connectingDetail }}</p>
+        <div class="animate-spin rounded-full h-12 w-12 border-2 border-[var(--mobile-accent)] border-t-transparent mb-4"></div>
+        <p class="text-[var(--mobile-text-secondary)] text-lg mb-2">{{ connectingStep }}</p>
+        <p class="text-[var(--mobile-text-muted)] text-sm">{{ connectingDetail }}</p>
       </div>
 
       <!-- Error state -->
@@ -57,13 +57,13 @@
         <p class="text-gray-400 text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
         <div class="flex gap-3">
           <button
-            class="px-4 py-2 bg-[#12121a] border border-cyan-500/20 text-gray-300 rounded-lg hover:border-cyan-500/40 transition-colors"
+            class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-lg hover:border-cyan-500/40 transition-colors"
             @click="goBack"
           >
             返回
           </button>
           <button
-            class="px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 rounded-lg hover:bg-cyan-500/30 transition-colors"
+            class="px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] rounded-lg hover:bg-cyan-500/30 transition-colors"
             @click="retry"
           >
             重新扫描
