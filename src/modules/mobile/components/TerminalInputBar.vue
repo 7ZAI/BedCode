@@ -1,18 +1,69 @@
 <template>
   <div
-    class="terminal-input-bar sticky left-0 right-0 bottom-0 z-40 bg-[#12121a]/95 backdrop-blur-xl border-t border-cyan-500/20"
+    class="terminal-input-bar sticky left-0 right-0 bottom-0 z-40"
   >
     <!-- 快捷键面板 - 点击按钮后显示 -->
-    <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel px-2 pt-2">
-      <div class="grid grid-cols-4 gap-1.5">
-        <button
-          v-for="key in shortcuts"
-          :key="key.code"
-          class="shortcut-btn h-8 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs rounded-lg hover:bg-cyan-500/20 transition-colors"
-          @click="handleShortcutClick(key.code)"
-        >
-          {{ key.label }}
-        </button>
+    <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel">
+      <div class="shortcuts-layout">
+        <!-- 左侧：一般快捷键 -->
+        <div class="shortcuts-left">
+          <div class="shortcuts-grid">
+            <button
+              v-for="key in generalShortcuts"
+              :key="key.code"
+              class="shortcut-btn"
+              @click="handleShortcutClick(key.code)"
+            >
+              {{ key.label }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 右侧：方向键（键盘布局） -->
+        <div class="shortcuts-right">
+          <div class="arrow-keys-layout">
+            <!-- 第一行：上箭头居中 -->
+            <div class="arrow-row">
+              <div class="arrow-placeholder"></div>
+              <button
+                class="arrow-btn"
+                @click="handleShortcutClick('arrow_up')"
+              >
+                <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
+                </svg>
+              </button>
+              <div class="arrow-placeholder"></div>
+            </div>
+            <!-- 第二行：左、下、右 -->
+            <div class="arrow-row">
+              <button
+                class="arrow-btn"
+                @click="handleShortcutClick('arrow_left')"
+              >
+                <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <button
+                class="arrow-btn arrow-down"
+                @click="handleShortcutClick('arrow_down')"
+              >
+                <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              <button
+                class="arrow-btn"
+                @click="handleShortcutClick('arrow_right')"
+              >
+                <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -102,7 +153,8 @@ const showShortcutsPanel = ref(false)  // 默认隐藏
 
 // ==================== Shortcuts Data ====================
 
-const shortcuts = [
+// 一般快捷键（不含方向键）
+const generalShortcuts = [
   { label: 'Tab', code: 'tab' },
   { label: 'Enter', code: 'enter' },
   { label: 'Esc', code: 'escape' },
@@ -110,10 +162,6 @@ const shortcuts = [
   { label: 'Ctrl+C', code: 'ctrl_c' },
   { label: 'Ctrl+Z', code: 'ctrl_z' },
   { label: 'Ctrl+L', code: 'ctrl_l' },
-  { label: '↑', code: 'arrow_up' },
-  { label: '↓', code: 'arrow_down' },
-  { label: '←', code: 'arrow_left' },
-  { label: '→', code: 'arrow_right' },
 ]
 
 // ==================== Computed ====================
@@ -160,9 +208,9 @@ function handleFocus() {
 <style scoped>
 .terminal-input-bar {
   flex-shrink: 0;
-  background: rgba(18, 18, 26, 0.95);
+  background: var(--mobile-bg-secondary);
   backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(0, 212, 255, 0.15);
+  border-top: 1px solid var(--mobile-border);
   padding: 0.5rem 1rem;
 }
 
@@ -186,30 +234,30 @@ function handleFocus() {
 }
 
 .toggle-active {
-  background: rgba(0, 212, 255, 0.2);
-  color: #00d4ff;
-  border-color: rgba(0, 212, 255, 0.3);
+  background: var(--mobile-accent-secondary);
+  color: var(--mobile-accent);
+  border-color: var(--mobile-accent);
 }
 
 .toggle-inactive {
-  background: #1f2937;
-  color: #6b7280;
-  border-color: #374151;
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-muted);
+  border-color: var(--mobile-border);
 }
 
 .input-box {
   flex: 1;
   display: flex;
   align-items: center;
-  background: #0a0a0f;
-  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: var(--mobile-input-bg);
+  border: 1px solid var(--mobile-input-border);
   border-radius: 9999px;
   padding: 0.5rem 1rem;
   transition: border-color 0.2s ease;
 }
 
 .input-box:focus-within {
-  border-color: rgba(0, 212, 255, 0.5);
+  border-color: var(--mobile-accent);
 }
 
 .input-field {
@@ -217,13 +265,13 @@ function handleFocus() {
   background: transparent;
   border: none;
   outline: none;
-  color: #ffffff;
+  color: var(--mobile-text-primary);
   font-size: 0.875rem;
   font-family: inherit;
 }
 
 .input-field::placeholder {
-  color: #4b5563;
+  color: var(--mobile-input-placeholder);
 }
 
 .send-btn,
@@ -241,13 +289,13 @@ function handleFocus() {
 }
 
 .send-btn {
-  background: #1f2937;
-  border-color: #374151;
-  color: #9ca3af;
+  background: var(--mobile-bg-elevated);
+  border-color: var(--mobile-border);
+  color: var(--mobile-text-muted);
 }
 
 .send-btn:hover:not(:disabled) {
-  border-color: rgba(0, 212, 255, 0.3);
+  border-color: var(--mobile-accent);
 }
 
 .send-btn:disabled {
@@ -256,13 +304,13 @@ function handleFocus() {
 }
 
 .execute-btn {
-  background: rgba(0, 212, 255, 0.2);
-  border-color: rgba(0, 212, 255, 0.3);
-  color: #00d4ff;
+  background: var(--mobile-accent-secondary);
+  border-color: var(--mobile-accent);
+  color: var(--mobile-accent);
 }
 
 .execute-btn:hover:not(:disabled) {
-  background: rgba(0, 212, 255, 0.3);
+  background: var(--mobile-accent-muted);
 }
 
 .execute-btn:disabled {
@@ -271,14 +319,101 @@ function handleFocus() {
 }
 
 .shortcuts-panel {
-  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+  border-bottom: 1px solid var(--mobile-border);
+  padding: 0.5rem 0.75rem;
+}
+
+.shortcuts-layout {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* 左侧：一般快捷键 */
+.shortcuts-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.375rem;
 }
 
 .shortcut-btn {
-  transition: background-color 0.15s ease;
+  height: 2.25rem;
+  background: var(--mobile-accent-muted);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-accent);
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shortcut-btn:hover {
+  background: var(--mobile-accent-secondary);
+  border-color: var(--mobile-accent);
 }
 
 .shortcut-btn:active {
   transform: scale(0.95);
+  background: var(--mobile-accent-secondary);
+}
+
+/* 右侧：方向键布局 */
+.shortcuts-right {
+  flex-shrink: 0;
+  width: auto;
+}
+
+.arrow-keys-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.arrow-row {
+  display: flex;
+  gap: 0.25rem;
+  justify-content: center;
+}
+
+.arrow-placeholder {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.arrow-btn {
+  width: 2.25rem;
+  height: 2.25rem;
+  background: var(--mobile-accent-muted);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-accent);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arrow-btn:hover {
+  background: var(--mobile-accent-secondary);
+  border-color: var(--mobile-accent);
+}
+
+.arrow-btn:active {
+  transform: scale(0.9);
+  background: var(--mobile-accent-secondary);
+}
+
+.arrow-icon {
+  width: 1rem;
+  height: 1rem;
 }
 </style>
