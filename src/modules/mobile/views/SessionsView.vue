@@ -1,16 +1,16 @@
 <template>
-  <div class="h-full flex flex-col bg-[#0a0a0f]">
+  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
-    <header class="bg-[#12121a]/90 backdrop-blur-xl border-b border-cyan-500/10 px-4 pb-3 flex items-center justify-between" style="padding-top: 12px;">
-      <h1 class="text-lg font-semibold text-white tracking-wide">会话</h1>
+    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 flex items-center justify-between" style="padding-top: 12px;">
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">会话</h1>
       <button
         v-if="isConnected"
-        class="p-2 rounded-lg hover:bg-cyan-500/10 transition-colors"
+        class="p-2 rounded-lg hover:bg-[var(--mobile-border)] transition-colors"
         @click="refreshSessions"
         title="刷新会话"
       >
         <svg
-          class="w-5 h-5 text-cyan-400"
+          class="w-5 h-5 text-[var(--mobile-accent)]"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -22,25 +22,25 @@
 
     <!-- Content -->
     <div class="flex-1 overflow-auto">
-      <!-- Sessions list - 调试会话始终显示 -->
+      <!-- Sessions list -->
       <div class="p-4 space-y-3">
         <!-- 未连接提示 -->
-        <div v-if="!isConnected" class="text-center text-gray-500 py-4 mb-4 border-b border-gray-800">
-          <p class="text-sm">未连接到桌面端，真实会话不可用</p>
+        <div v-if="!isConnected" class="text-center text-[var(--mobile-text-muted)] py-4 mb-4 border-b border-[var(--mobile-border)]">
+          <p class="text-sm">未连接到桌面端</p>
         </div>
 
-        <!-- 调试会话（始终显示） -->
-        <SessionCard
+        <!-- FIXME: 调试会话暂时注释 -->
+        <!-- <SessionCard
           :session="mockDebugSession"
           @click="handleDebugSessionClick"
           @stop="handleDebugSessionStop"
           @delete="handleDebugSessionDelete"
-        />
+        /> -->
 
-        <!-- 真实会话列表（仅连接时显示） -->
+        <!-- 真实会话列表 -->
         <template v-if="isConnected">
-          <div v-if="realSessions.length === 0" class="text-center text-gray-500 py-4">
-            暂无其他运行中的会话
+          <div v-if="realSessions.length === 0" class="text-center text-[var(--mobile-text-muted)] py-4">
+            暂无运行中的会话
           </div>
 
           <SessionCard
@@ -56,14 +56,14 @@
     </div>
 
     <!-- Connection info -->
-    <div v-if="isConnected" class="px-4 py-2 bg-[#12121a] border-t border-cyan-500/10">
-      <span class="text-gray-500 text-xs font-medium">{{ currentDeviceName }} · {{ realSessions.length }} 个会话</span>
+    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border-t border-[var(--mobile-border)]">
+      <span class="text-[var(--mobile-text-muted)] text-xs font-medium">{{ currentDeviceName }} · {{ realSessions.length }} 个会话</span>
     </div>
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" title="确认停止会话" size="sm">
-      <p class="text-gray-400">
-        确定要停止会话 "<span class="text-white font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
+      <p class="text-[var(--mobile-text-secondary)]">
+        确定要停止会话 "<span class="text-[var(--mobile-text-primary)] font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
       </p>
       <template #footer>
         <div class="flex justify-end gap-3">
@@ -75,8 +75,8 @@
 
     <!-- Delete Confirmation Modal -->
     <Modal v-model="showDeleteConfirm" title="确认删除会话" size="sm">
-      <p class="text-gray-400">
-        确定要删除会话 "<span class="text-white font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？此操作不可恢复。
+      <p class="text-[var(--mobile-text-secondary)]">
+        确定要删除会话 "<span class="text-[var(--mobile-text-primary)] font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？此操作不可恢复。
       </p>
       <template #footer>
         <div class="flex justify-end gap-3">
@@ -108,16 +108,16 @@ const isConnected = computed(() => connection.connectionStatus.value === 'connec
 // 当前设备名称
 const currentDeviceName = computed(() => connection.currentDevice.value?.name || '已连接')
 
-// 调试会话（始终显示）
-const mockDebugSession = {
-  id: 'mock-debug-session',
-  name: '调试会话 (模拟)',
-  status: 'running' as const,
-  created_at: new Date().toISOString(),
-  pty_type: 'bash',
-  config_id: 'mock-config',
-  is_active: true,
-}
+// FIXME: 调试会话暂时注释
+// const mockDebugSession = {
+//   id: 'mock-debug-session',
+//   name: '调试会话 (模拟)',
+//   status: 'running' as const,
+//   created_at: new Date().toISOString(),
+//   pty_type: 'bash',
+//   config_id: 'mock-config',
+//   is_active: true,
+// }
 
 // 真实会话列表（来自桌面端）
 const realSessions = computed(() => connection.activeSessions.value)
@@ -131,22 +131,22 @@ const isStopping = ref(false)
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
 
-// 调试会话专用处理函数
-function handleDebugSessionClick() {
-  connection.activeSessionId.value = mockDebugSession.id
-  router.push({
-    name: 'mobile-terminal',
-    params: { id: mockDebugSession.id },
-  })
-}
+// FIXME: 调试会话处理函数暂时注释
+// function handleDebugSessionClick() {
+//   connection.activeSessionId.value = mockDebugSession.id
+//   router.push({
+//     name: 'mobile-terminal',
+//     params: { id: mockDebugSession.id },
+//   })
+// }
 
-function handleDebugSessionStop() {
-  // 调试会话不可停止，不做任何操作
-}
+// function handleDebugSessionStop() {
+//   // 调试会话不可停止，不做任何操作
+// }
 
-function handleDebugSessionDelete() {
-  // 调试会话不可删除，不做任何操作
-}
+// function handleDebugSessionDelete() {
+//   // 调试会话不可删除，不做任何操作
+// }
 
 // 真实会话处理函数
 function handleSessionClick(session: any) {
