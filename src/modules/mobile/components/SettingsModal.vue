@@ -6,11 +6,11 @@
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-black/50" @click="emit('close')"></div>
-      <div class="relative bg-white dark:bg-dark-800 rounded-xl w-full max-w-sm p-5 shadow-xl">
+      <div class="relative bg-[#12121a] border border-cyan-500/20 rounded-xl w-full max-w-sm p-5 shadow-xl">
         <div class="flex items-center justify-between mb-5">
-          <span class="font-semibold text-gray-900 dark:text-dark-100 text-lg">输入助手设置</span>
+          <span class="font-semibold text-white text-lg">输入助手设置</span>
           <button
-            class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-dark-700"
+            class="p-1.5 rounded-lg hover:bg-cyan-500/10 transition-colors"
             @click="emit('close')"
           >
             <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -22,8 +22,8 @@
         <!-- 大小调节 -->
         <div class="mb-6">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">悬浮球大小</span>
-            <span class="text-sm text-primary-500">{{ localSettings.size }}px</span>
+            <span class="text-sm font-medium text-gray-300">悬浮球大小</span>
+            <span class="text-sm text-cyan-400">{{ localSettings.size }}px</span>
           </div>
           <input
             type="range"
@@ -31,9 +31,9 @@
             min="36"
             max="64"
             step="4"
-            class="w-full h-2 bg-gray-200 dark:bg-dark-600 rounded-lg appearance-none cursor-pointer accent-primary-500"
+            class="w-full h-2 bg-cyan-500/10 rounded-lg appearance-none cursor-pointer accent-cyan-400"
           />
-          <div class="flex justify-between text-xs text-gray-400 mt-1">
+          <div class="flex justify-between text-xs text-gray-600 mt-1">
             <span>36px</span>
             <span>64px</span>
           </div>
@@ -41,14 +41,14 @@
 
         <!-- 手势开关 -->
         <div class="mb-6">
-          <span class="text-sm font-medium text-gray-700 dark:text-dark-200 mb-3 block">手势开关</span>
+          <span class="text-sm font-medium text-gray-300 mb-3 block">手势开关</span>
 
           <div class="space-y-3">
             <div class="flex items-center justify-between">
-              <span class="text-sm text-gray-600 dark:text-dark-300">双击输入</span>
+              <span class="text-sm text-gray-400">双击输入</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.doubleTap ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'"
+                :class="localSettings.gestures.doubleTap ? 'bg-cyan-500' : 'bg-gray-700'"
                 @click="localSettings.gestures.doubleTap = !localSettings.gestures.doubleTap"
               >
                 <span
@@ -59,10 +59,10 @@
             </div>
 
             <div class="flex items-center justify-between">
-              <span class="text-sm text-gray-600 dark:text-dark-300">向下滑动 - 清屏</span>
+              <span class="text-sm text-gray-400">向下滑动 - 清屏</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeDown ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'"
+                :class="localSettings.gestures.swipeDown ? 'bg-cyan-500' : 'bg-gray-700'"
                 @click="localSettings.gestures.swipeDown = !localSettings.gestures.swipeDown"
               >
                 <span
@@ -73,10 +73,10 @@
             </div>
 
             <div class="flex items-center justify-between">
-              <span class="text-sm text-gray-600 dark:text-dark-300">向上滑动 - Ctrl+C</span>
+              <span class="text-sm text-gray-400">向上滑动 - Ctrl+C</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeUp ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'"
+                :class="localSettings.gestures.swipeUp ? 'bg-cyan-500' : 'bg-gray-700'"
                 @click="localSettings.gestures.swipeUp = !localSettings.gestures.swipeUp"
               >
                 <span
@@ -87,10 +87,10 @@
             </div>
 
             <div class="flex items-center justify-between">
-              <span class="text-sm text-gray-600 dark:text-dark-300">向左滑动 - 快捷键</span>
+              <span class="text-sm text-gray-400">向左滑动 - 快捷键</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeLeft ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'"
+                :class="localSettings.gestures.swipeLeft ? 'bg-cyan-500' : 'bg-gray-700'"
                 @click="localSettings.gestures.swipeLeft = !localSettings.gestures.swipeLeft"
               >
                 <span
@@ -101,10 +101,10 @@
             </div>
 
             <div class="flex items-center justify-between">
-              <span class="text-sm text-gray-600 dark:text-dark-300">向右滑动 - 输入</span>
+              <span class="text-sm text-gray-400">向右滑动 - 输入</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeRight ? 'bg-primary-500' : 'bg-gray-300 dark:bg-dark-600'"
+                :class="localSettings.gestures.swipeRight ? 'bg-cyan-500' : 'bg-gray-700'"
                 @click="localSettings.gestures.swipeRight = !localSettings.gestures.swipeRight"
               >
                 <span
@@ -118,7 +118,7 @@
 
         <!-- 恢复默认按钮 -->
         <button
-          class="w-full py-2.5 text-sm text-gray-500 dark:text-dark-400 border border-gray-300 dark:border-dark-600 rounded-lg hover:bg-gray-50 dark:hover:bg-dark-700 transition-colors"
+          class="w-full py-2.5 text-sm text-gray-500 border border-cyan-500/20 rounded-lg hover:bg-cyan-500/10 transition-colors"
           @click="handleReset"
         >
           恢复默认设置
@@ -126,7 +126,7 @@
 
         <!-- 保存按钮 -->
         <button
-          class="w-full mt-3 py-2.5 text-sm font-medium text-white bg-primary-500 rounded-lg hover:bg-primary-600 transition-colors"
+          class="w-full mt-3 py-2.5 text-sm font-medium text-white bg-cyan-500/20 border border-cyan-500/30 rounded-lg hover:bg-cyan-500/30 transition-colors"
           @click="handleSave"
         >
           保存设置

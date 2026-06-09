@@ -164,6 +164,8 @@ impl WsClient {
                 use futures_util::StreamExt;
                 let mut rx = read.fuse();
 
+                info!("[WsClient] Receiver task started, waiting for messages...");
+
                 loop {
                     if !running.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
@@ -173,7 +175,7 @@ impl WsClient {
                         msg = rx.next() => {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
-                                    debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(1000)]);
+                                    info!("[WsClient] <<< RECV: {}...", &text[..text.len().min(1000)]);
 
                                     // 1. 尝试匹配 pending 请求
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {

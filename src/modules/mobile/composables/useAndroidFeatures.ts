@@ -5,7 +5,6 @@
  * - 屏幕旋转锁定
  * - 后台运行状态
  * - 通知权限请求
- * - 状态栏高度获取
  * - 锁屏优化
  */
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -13,15 +12,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { usePlatform } from '../../shared/composables/usePlatform'
 
-
-
 /**
  * Android 设备专用功能
  */
 export function useAndroidFeatures() {
   const { platformInfo } = usePlatform()
   const isAndroid = ref(false)
-  const statusBarHeight = ref(0)
   const isInBackground = ref(false)
   const hasNotificationPermission = ref(false)
 
@@ -35,15 +31,6 @@ export function useAndroidFeatures() {
     isAndroid.value = info.platform === 'android'
 
     if (!isAndroid.value) return
-
-    // 获取状态栏高度
-    try {
-      const height = await invoke<number>('get_status_bar_height')
-      statusBarHeight.value = height
-    } catch {
-      // Fallback: 使用 CSS env(safe-area-inset-top)
-      console.log('[Android] get_status_bar_height not available, using CSS fallback')
-    }
 
     // 检查通知权限
     try {
@@ -171,7 +158,6 @@ export function useAndroidFeatures() {
 
   return {
     isAndroid,
-    statusBarHeight,
     isInBackground,
     hasNotificationPermission,
     requestNotificationPermission,
@@ -179,44 +165,5 @@ export function useAndroidFeatures() {
     sendSessionNotification,    // 新增：带会话信息的通知
     setScreenOrientation,
     keepScreenAwake,
-  }
-}
-
-/**
- * 移动端安全区域信息
- */
-export function useSafeArea() {
-  const { platformInfo } = usePlatform()
-  const safeAreaInsets = ref({
-    top: 0,
-    bottom: 0,
-    left: 0,
-    right: 0,
-  })
-
-  onMounted(() => {
-    // 仅在移动端计算安全区域
-    if (!platformInfo.value.isMobile) return
-
-    // 从 CSS 变量获取值
-    const computeInsets = () => {
-      const style = getComputedStyle(document.documentElement)
-      safeAreaInsets.value = {
-        top: parseInt(style.getPropertyValue('--safe-area-inset-top') || '0'),
-        bottom: parseInt(style.getPropertyValue('--safe-area-inset-bottom') || '0'),
-        left: parseInt(style.getPropertyValue('--safe-area-inset-left') || '0'),
-        right: parseInt(style.getPropertyValue('--safe-area-inset-right') || '0'),
-      }
-    }
-
-    // 立即计算一次
-    computeInsets()
-
-    // 监听窗口大小变化（可能影响安全区域）
-    window.addEventListener('resize', computeInsets)
-  })
-
-  return {
-    safeAreaInsets,
   }
 }

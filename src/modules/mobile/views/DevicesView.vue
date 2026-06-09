@@ -1,17 +1,20 @@
 <template>
-  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
-    <!-- Header with safe area padding -->
-    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
-      <h1 class="text-lg font-semibold">会话配置</h1>
+  <div class="h-full flex flex-col bg-[#0a0a0f]">
+    <!-- Header -->
+    <header class="bg-[#12121a]/90 backdrop-blur-xl border-b border-cyan-500/10 px-4 pb-3 flex items-center justify-between" style="padding-top: 12px;">
+      <h1 class="text-lg font-semibold text-white tracking-wide">会话配置</h1>
     </header>
 
-    <!-- Connection Status Banner (connecting/配对中/错误时显示) -->
-    <div v-if="connectionStatus === 'connecting' || connectionStatus === 'connected' || connectionStatus === 'pairing' || connectionStatus === 'error'" class="px-4 py-3 bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700">
+    <!-- Connection Status Banner -->
+    <div
+      v-if="connectionStatus === 'connecting' || connectionStatus === 'connected' || connectionStatus === 'pairing' || connectionStatus === 'error'"
+      class="px-4 py-3 bg-[#12121a] border-b border-cyan-500/10"
+    >
       <div class="flex items-center gap-3">
         <!-- Connecting spinner -->
-        <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
+        <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
         <!-- Success icon (connected) -->
-        <svg v-else-if="connectionStatus === 'connected'" class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg v-else-if="connectionStatus === 'connected'" class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
         </svg>
         <!-- Error icon -->
@@ -19,40 +22,40 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
         </svg>
         <!-- Pairing icon -->
-        <div v-else-if="connectionStatus === 'pairing'" class="w-5 h-5 bg-primary-400 rounded-full flex items-center justify-center">
-          <span class="text-xs text-gray- dark:text-dark-900 font-bold">?</span>
+        <div v-else-if="connectionStatus === 'pairing'" class="w-5 h-5 bg-cyan-500/20 rounded-full flex items-center justify-center">
+          <span class="text-xs text-cyan-400 font-bold">?</span>
         </div>
 
         <span class="text-sm" :class="{
-          'text-gray- dark:text-dark-300': connectionStatus === 'connecting',
-          'text-green-400': connectionStatus === 'connected',
+          'text-gray-400': connectionStatus === 'connecting',
+          'text-emerald-400': connectionStatus === 'connected',
           'text-red-400': connectionStatus === 'error',
-          'text-primary-400': connectionStatus === 'pairing',
+          'text-cyan-400': connectionStatus === 'pairing',
         }">
           {{ connectionStatusText }}
         </span>
       </div>
     </div>
 
-    <!-- Connected Banner (连接后显示，已认证时用盾牌图标替换绿点) -->
+    <!-- Connected Banner -->
     <div
       v-if="isConnected && currentDevice"
-      class="mx-4 mt-4 p-3 bg-green-900/20 border border-green-800/30 rounded-lg"
+      class="mx-4 mt-4 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl backdrop-blur-sm"
     >
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
           <!-- 已认证显示盾牌图标，未认证显示绿点 -->
-          <svg v-if="connectionStatus === 'paired'" class="w-5 h-5 text-green-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg v-if="connectionStatus === 'paired'" class="w-5 h-5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
           </svg>
-          <div v-else class="w-3 h-3 rounded-full bg-green-500 shrink-0"></div>
+          <div v-else class="w-3 h-3 rounded-full bg-emerald-500 shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
           <div>
-            <p class="text-green-300 text-sm font-medium">{{ currentDevice.name }}</p>
-            <p class="text-green-500/70 text-xs">{{ currentDevice.address }}</p>
+            <p class="text-emerald-300 text-sm font-medium">{{ currentDevice.name }}</p>
+            <p class="text-emerald-500/70 text-xs">{{ currentDevice.address }}</p>
           </div>
         </div>
         <button
-          class="px-3 py-1.5 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-sm rounded-lg"
+          class="px-3 py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg hover:bg-red-500/20 transition-colors"
           @click="handleDisconnect"
         >
           断开
@@ -65,16 +68,16 @@
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-gray- dark:text-dark-400 text-sm font-medium">会话配置</h3>
+          <h3 class="text-cyan-400/80 text-sm font-medium tracking-wider uppercase">会话配置</h3>
           <button
-            class="p-2 rounded-lg active:bg-gray-100 dark:bg-dark-700 transition-colors"
+            class="p-2 rounded-lg hover:bg-cyan-500/10 transition-colors"
             :class="{ 'opacity-50': isRefreshing }"
             :disabled="isRefreshing"
             @click="refreshConfigs"
             title="刷新配置"
           >
             <svg
-              class="w-5 h-5 text-gray- dark:text-dark-400"
+              class="w-5 h-5 text-cyan-400"
               :class="{ 'animate-spin': isRefreshing }"
               fill="none"
               stroke="currentColor"
@@ -87,29 +90,29 @@
 
         <!-- Loading -->
         <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-2">
-          <div v-for="i in 3" :key="i" class="bg-white dark:bg-dark-800 rounded-xl p-4 animate-pulse">
+          <div v-for="i in 3" :key="i" class="bg-[#12121a] border border-cyan-500/10 rounded-xl p-4 animate-pulse">
             <div class="flex items-start justify-between">
               <div class="flex-1">
-                <div class="h-5 w-32 bg-gray-200 dark:bg-dark-700 rounded mb-2"></div>
+                <div class="h-5 w-32 bg-cyan-500/10 rounded mb-2"></div>
                 <div class="flex items-center gap-2">
-                  <div class="h-5 w-16 bg-gray-200 dark:bg-dark-700 rounded-full"></div>
-                  <div class="h-4 w-20 bg-gray-200 dark:bg-dark-700 rounded"></div>
+                  <div class="h-5 w-16 bg-cyan-500/10 rounded-full"></div>
+                  <div class="h-4 w-20 bg-cyan-500/10 rounded"></div>
                 </div>
-                <div class="h-4 w-48 bg-gray-200 dark:bg-dark-700 rounded mt-2"></div>
-                <div class="h-3 w-36 bg-gray-200 dark:bg-dark-700 rounded mt-1"></div>
+                <div class="h-4 w-48 bg-cyan-500/10 rounded mt-2"></div>
+                <div class="h-3 w-36 bg-cyan-500/10 rounded mt-1"></div>
               </div>
-              <div class="h-8 w-16 bg-gray-200 dark:bg-dark-700 rounded-lg"></div>
+              <div class="h-8 w-16 bg-cyan-500/10 rounded-lg"></div>
             </div>
           </div>
         </div>
 
         <!-- Empty -->
         <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-gray- dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-16 h-16 mx-auto text-cyan-500/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <p class="text-gray- dark:text-dark-400">暂无会话配置</p>
-          <p class="text-gray- dark:text-dark-500 text-sm mt-2">请在桌面端创建会话配置</p>
+          <p class="text-gray-500">暂无会话配置</p>
+          <p class="text-gray-600 text-sm mt-2">请在桌面端创建会话配置</p>
         </div>
 
         <!-- Config List -->
@@ -117,36 +120,36 @@
           <div
             v-for="config in sessionConfigs"
             :key="config.id"
-            class="bg-white dark:bg-dark-800 rounded-xl active:bg-gray-100 dark:bg-dark-700 transition-colors overflow-hidden"
+            class="bg-[#12121a] border border-cyan-500/10 rounded-xl overflow-hidden hover:border-cyan-500/30 transition-all duration-300"
           >
             <!-- 主卡片 -->
             <div class="p-4">
               <div class="flex items-start justify-between">
                 <div class="flex-1 min-w-0" @click="goToSessions">
-                  <p class="font-medium">{{ config.name }}</p>
+                  <p class="font-medium text-white">{{ config.name }}</p>
                   <div class="flex items-center gap-2 mt-1.5">
                     <span
                       :class="[
-                        'text-xs px-2 py-0.5 rounded-full',
-                        config.environment === 'wsl2' ? 'bg-purple-900/50 text-purple-400' : 'bg-blue-900/50 text-blue-400'
+                        'text-xs px-2 py-0.5 rounded-full border',
+                        config.environment === 'wsl2' ? 'bg-purple-500/10 border-purple-500/20 text-purple-400' : 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400'
                       ]"
                     >
                       {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
                     </span>
-                    <span v-if="config.wsl_distro" class="text-gray- dark:text-dark-500 text-xs">{{ config.wsl_distro }}</span>
+                    <span v-if="config.wsl_distro" class="text-gray-500 text-xs">{{ config.wsl_distro }}</span>
                   </div>
-                  <p class="text-gray- dark:text-dark-400 text-sm mt-1 truncate">{{ config.command }}</p>
-                  <p class="text-gray- dark:text-dark-500 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
+                  <p class="text-gray-500 text-sm mt-1 truncate">{{ config.command }}</p>
+                  <p class="text-gray-600 text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
                 </div>
                 <button
-                  class="ml-3 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg active:bg-primary-700 flex items-center gap-1.5 shrink-0"
+                  class="ml-3 px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 text-sm font-medium rounded-lg hover:bg-cyan-500/30 transition-all flex items-center gap-1.5 shrink-0"
                   :class="{ 'opacity-50': startingConfigId === config.id }"
                   :disabled="startingConfigId === config.id"
                   @click.stop="handleStartSession(config)"
                 >
                   <div
                     v-if="startingConfigId === config.id"
-                    class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+                    class="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"
                   />
                   <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -159,15 +162,15 @@
               <!-- 展开按钮和运行中的会话数量 -->
               <div
                 v-if="getRunningSessionsByConfig(config.id).length > 0"
-                class="mt-3 pt-3 border-t border-gray-100 dark:border-dark-600 flex items-center justify-between cursor-pointer"
+                class="mt-3 pt-3 border-t border-cyan-500/10 flex items-center justify-between cursor-pointer"
                 @click.stop="toggleConfigExpanded(config.id)"
               >
                 <div class="flex items-center gap-2">
-                  <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                  <span class="text-green-400 text-sm">{{ getRunningSessionsByConfig(config.id).length }} 个运行中</span>
+                  <div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)] animate-pulse"></div>
+                  <span class="text-emerald-400 text-sm">{{ getRunningSessionsByConfig(config.id).length }} 个运行中</span>
                 </div>
                 <svg
-                  class="w-5 h-5 text-gray- dark:text-dark-400 transition-transform duration-200"
+                  class="w-5 h-5 text-gray-500 transition-transform duration-200"
                   :class="{ 'rotate-180': expandedConfigId === config.id }"
                   fill="none"
                   stroke="currentColor"
@@ -180,19 +183,19 @@
 
             <!-- 折叠的运行中会话列表 -->
             <transition name="slide">
-              <div v-if="expandedConfigId === config.id" class="border-t border-gray-100 dark:border-dark-600">
+              <div v-if="expandedConfigId === config.id" class="border-t border-cyan-500/10">
                 <div
                   v-for="session in getRunningSessionsByConfig(config.id)"
                   :key="session.id"
-                  class="px-4 py-3 flex items-center justify-between active:bg-gray-50 dark:active:bg-dark-600"
+                  class="px-4 py-3 flex items-center justify-between hover:bg-cyan-500/5 transition-colors"
                   @click="handleSessionClick(session)"
                 >
                   <div class="flex items-center gap-3 min-w-0">
-                    <div class="w-2 h-2 rounded-full bg-green-500 shrink-0"></div>
-                    <span class="text-sm truncate">{{ session.name }}</span>
+                    <div class="w-2 h-2 rounded-full bg-emerald-500 shrink-0 shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
+                    <span class="text-sm text-gray-300 truncate">{{ session.name }}</span>
                   </div>
                   <button
-                    class="shrink-0 p-1.5 text-gray- dark:text-dark-400 hover:text-red-400"
+                    class="shrink-0 p-1.5 text-gray-500 hover:text-red-400 transition-colors"
                     @click.stop="handleStopSession(session)"
                   >
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -208,11 +211,11 @@
 
       <!-- Connection History (when not connected) -->
       <div v-else>
-        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3 flex items-center justify-between">
+        <h3 class="text-cyan-400/80 text-sm font-medium mb-3 flex items-center justify-between tracking-wider uppercase">
           <span>连接历史</span>
           <button
             v-if="connectionHistory.length > 0"
-            class="text-gray- dark:text-dark-500 text-xs"
+            class="text-gray-500 text-xs hover:text-cyan-400 transition-colors"
             @click="clearHistory"
           >
             清除
@@ -220,29 +223,29 @@
         </h3>
 
         <div v-if="connectionHistory.length === 0" class="text-center py-8">
-          <p class="text-gray- dark:text-dark-500 text-sm">暂无连接历史</p>
+          <p class="text-gray-600 text-sm">暂无连接历史</p>
         </div>
 
         <div v-else class="space-y-2">
           <div
             v-for="item in connectionHistory"
             :key="item.address"
-            class="flex items-center justify-between p-3 bg-white dark:bg-dark-800 rounded-lg"
+            class="flex items-center justify-between p-3 bg-[#12121a] border border-cyan-500/10 rounded-xl hover:border-cyan-500/30 transition-all cursor-pointer"
             @click="handleConnectFromHistory(item)"
           >
             <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-dark-700 flex items-center justify-center">
-                <svg class="w-5 h-5 text-gray- dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div class="w-10 h-10 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
+                <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
               <div>
-                <p class="font-medium text-gray- dark:text-dark-200">{{ item.name || item.address }}</p>
-                <p class="text-gray- dark:text-dark-500 text-xs">{{ item.address }}</p>
+                <p class="font-medium text-gray-200">{{ item.name || item.address }}</p>
+                <p class="text-gray-600 text-xs">{{ item.address }}</p>
               </div>
             </div>
             <button
-              class="p-2 text-gray- dark:text-dark-500 hover:text-red-400"
+              class="p-2 text-gray-600 hover:text-red-400 transition-colors"
               @click.stop="removeFromHistory(item.address)"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -255,10 +258,10 @@
     </div>
 
     <!-- Action Buttons (when not connected) -->
-    <div v-if="!isConnected" class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-3 pb-safe">
+    <div v-if="!isConnected" class="p-4 border-t border-cyan-500/10 space-y-3 pb-safe">
       <!-- Scan QR Code Button -->
       <button
-        class="w-full bg-gray-100 dark:bg-dark-700 text-white py-3 rounded-xl font-medium active:bg-gray-200 dark:bg-dark-600 flex items-center justify-center gap-2"
+        class="w-full bg-[#12121a] border border-cyan-500/20 text-cyan-400 py-3 rounded-xl font-medium hover:bg-cyan-500/10 transition-all flex items-center justify-center gap-2"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="$router.push({ name: 'mobile-scan' })"
@@ -271,7 +274,7 @@
 
       <!-- Manual Connect Button -->
       <button
-        class="w-full bg-primary-600 text-white py-3 rounded-xl font-medium active:bg-primary-700 flex items-center justify-center gap-2"
+        class="w-full bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 py-3 rounded-xl font-medium hover:bg-cyan-500/30 transition-all flex items-center justify-center gap-2"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="showManualConnect = true"
@@ -367,7 +370,7 @@ function handleSessionClick(session: any) {
   connection.activeSessionId.value = session.id
   router.push({
     name: 'mobile-terminal',
-    params: { id: currentDevice.value?.id || 'default' },
+    params: { id: session.id },
   })
 }
 

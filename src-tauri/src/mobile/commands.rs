@@ -36,5 +36,5 @@ pub use terminal::{
     ws_send_input_async, ws_send_message, ws_send_and_wait, ws_resize_terminal,
 };
 pub use android::{
-    get_status_bar_height, set_screen_orientation, keep_screen_awake,
+    set_screen_orientation, keep_screen_awake,
 };

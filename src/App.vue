@@ -29,19 +29,21 @@
     <template v-else>
       <div
         class="flex flex-col h-screen mobile-app mobile-ui"
-        :style="mobilePaddingStyle"
+        :style="mobileContainerStyle"
       >
         <!-- Main Content -->
-        <main class="flex-1 overflow-hidden">
+        <main class="flex-1 min-h-0">
           <router-view v-slot="{ Component, route }">
+            <!-- 终端页面使用 fullPath 作为 key，确保每个会话有独立的缓存实例 -->
+            <!-- 其他 keepAlive 页面使用组件名称缓存 -->
             <keep-alive :include="cachedMobileRoutes" :max="maxCachedTerminals">
-              <component :is="Component" :key="route.fullPath" />
+              <component :is="Component" :key="getKey(route)" />
             </keep-alive>
           </router-view>
         </main>
 
         <!-- Bottom Navigation (hide on terminal view) -->
-        <MobileNav v-if="!isTerminalRoute" class="mobile-nav-safe" />
+        <MobileNav v-if="!isTerminalRoute" />
       </div>
     </template>
 
@@ -58,9 +60,9 @@ import Sidebar from '@/modules/desktop/components/Sidebar.vue'
 import MobileNav from '@/modules/mobile/components/MobileNav.vue'
 import { usePlatform } from '@/modules/shared/composables/usePlatform'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
-import { useSafeAreaDetection } from '@/modules/mobile/composables/useSafeAreaDetection'
 import { useGlobalNotifications } from '@/modules/shared/composables/useGlobalNotifications'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
+import { useEdgeToEdge } from '@/modules/mobile/composables/useEdgeToEdge'
 import { ToastContainer } from '@/modules/shared/composables/useToast'
 
 const route = useRoute()
@@ -69,8 +71,8 @@ const { platformInfo } = usePlatform()
 const settingsStore = useSettingsStore()
 const { isLandscape, orientation } = useOrientation()
 
-// 移动端安全区域检�?
-const { safeArea, isDetected: safeAreaDetected } = useSafeAreaDetection()
+// 移动端 Edge-to-Edge 安全区域
+const { safeArea, keyboardInfo, isReady: edgeToEdgeReady } = useEdgeToEdge()
 
 // 主题管理
 let systemThemeQuery: MediaQueryList | null = null
@@ -85,7 +87,7 @@ function applyTheme(theme: string) {
   const root = document.documentElement
   let isDark = theme === 'dark'
 
-  // system 主题需要检测系统偏�?
+  // system 主题需要检测系统偏好
   if (theme === 'system') {
     isDark = isSystemDark.value
   }
@@ -103,12 +105,12 @@ function applyFontSize(size: number) {
   root.style.setProperty('--font-size-base', `${size}px`, 'important')
   root.style.setProperty('--global-font-size', `${size}px`, 'important')
 
-  // 计算其他字体大小（基于基础大小�?
+  // 计算其他字体大小（基于基础大小）
   const small = Math.max(10, Math.round(size * 0.85))    // 小号字体
-  const medium = size                                     // 中号字体（基础�?
+  const medium = size                                     // 中号字体（基础）
   const large = Math.round(size * 1.15)                  // 大号字体
-  const xl = Math.round(size * 1.3)                      // 特大号字�?
-  const xs = Math.max(9, Math.round(size * 0.75))        // 极小号字�?
+  const xl = Math.round(size * 1.3)                      // 特大号字体
+  const xs = Math.max(9, Math.round(size * 0.75))        // 极小号字体
 
   root.style.setProperty('--font-size-xs', `${xs}px`, 'important')
   root.style.setProperty('--font-size-sm', `${small}px`, 'important')
@@ -120,7 +122,7 @@ function applyFontSize(size: number) {
 function setupTheme() {
   const theme = settingsStore.settings.ui.theme
 
-  // 初始化系统主题检�?
+  // 初始化系统主题检测
   if (theme === 'system') {
     isSystemDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
     systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -136,13 +138,13 @@ function setupFontSize() {
 }
 
 // 初始加载设置后再应用主题
-// 注意：设置已�?main.ts 中预加载，这里直接应�?
+// 注意：设置已经在 main.ts 中预加载，这里直接应用
 onMounted(() => {
   // 设置可能已在 main.ts 中加载完成，直接应用主题
   setupTheme()
   setupFontSize()
 
-  // 启动全局通知监听（桌面端�?
+  // 启动全局通知监听（桌面端）
   if (isDesktop.value) {
     startGlobalNotifications()
   }
@@ -185,7 +187,7 @@ const isTerminalRoute = computed(() => {
   return route.name === 'mobile-terminal'
 })
 
-// 检测是否为终端窗口路由（隐藏侧边栏和标题栏�?
+// 检测是否为终端窗口路由（隐藏侧边栏和标题栏）
 const isTerminalWindow = computed(() => {
   return route.path.startsWith('/terminal-window')
 })
@@ -193,21 +195,31 @@ const isTerminalWindow = computed(() => {
 // Use platform detection for desktop/mobile layout
 const isDesktop = computed(() => platformInfo.value.isDesktop)
 
-// 需�?KeepAlive 缓存的移动端组件名称
+// 需要 KeepAlive 缓存的移动端组件名称
 // MobileSwipeContainer 包含 4 个子页面（设备、会话、快捷操作、设置），缓存以保持切换后数据
 const cachedMobileRoutes = ['TerminalView', 'MobileSwipeContainer']
-// 动态获取缓存最大数�?
+// 动态获取缓存最大数量
 const maxCachedTerminals = computed(() => settingsStore.settings.ui.max_cached_terminals || 10)
+
+// 为 KeepAlive 生成 key
+// 终端页面使用 fullPath（包含会话 ID），确保每个会话有独立实例
+// 其他页面使用组件名称
+function getKey(route: any): string {
+  if (route.name === 'mobile-terminal') {
+    return route.fullPath
+  }
+  return route.name || route.fullPath
+}
 
 // 全局通知监听
 const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } = useGlobalNotifications()
 
-// 主题对应的类�?
+// 主题对应的类名
 const themeClasses = computed(() => {
   const theme = settingsStore.settings.ui.theme
   let isDark = theme === 'dark'
 
-  // system 主题需要检测系统偏�?
+  // system 主题需要检测系统偏好
   if (theme === 'system') {
     isDark = isSystemDark.value
   }
@@ -219,30 +231,25 @@ const themeClasses = computed(() => {
   }
 })
 
-
-// 移动端安全区域样式
-const mobilePaddingStyle = computed(() => {
-  if (!platformInfo.value.isMobile) return {}
-
-  // 使用检测到的安全区域
-  const top = safeArea.value.top || 24
-  // Android 设备通常有导航栏，确保底部有足够空间
-  const bottom = safeArea.value.bottom || safeArea.value.navigationBar || 0
-
-  // 保守估计：状态栏至少 24px
-  const minStatusBar = 24
-  // 底部导航栏最小保护（防止被系统导航栏遮挡）
-  const minNavBottom = platformInfo.value.isAndroid ? 24 : 0
-
-  return {
-    paddingTop: `${Math.max(top, minStatusBar)}px`,
-    paddingBottom: `${Math.max(bottom, minNavBottom)}px`,
-  }
-})
-
 // Provide to child components
 provide('isDesktop', isDesktop)
 provide('platformInfo', platformInfo)
 provide('isLandscape', isLandscape)
 provide('orientation', orientation)
+provide('safeArea', safeArea)
+provide('keyboardInfo', keyboardInfo)
+
+// 移动端容器样式：应用安全区域
+const mobileContainerStyle = computed(() => {
+  if (!platformInfo.value.isMobile) return {}
+
+  const top = safeArea.value.top || 0
+  const bottom = safeArea.value.bottom || 0
+  const keyboardHeight = keyboardInfo.value.keyboardHeight || 0
+
+  return {
+    paddingTop: `${top}px`,
+    paddingBottom: `${bottom + keyboardHeight}px`,
+  }
+})
 </script>

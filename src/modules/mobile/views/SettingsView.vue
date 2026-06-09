@@ -1,107 +1,107 @@
 <template>
-  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
+  <div class="h-full flex flex-col bg-[#0a0a0f]">
     <!-- Header -->
-    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
-      <h1 class="text-lg font-semibold">设置</h1>
+    <header class="bg-[#12121a]/90 backdrop-blur-xl border-b border-cyan-500/10 px-4 pb-3" style="padding-top: 12px;">
+      <h1 class="text-lg font-semibold text-white tracking-wide">设置</h1>
     </header>
 
     <!-- Connection Status -->
-    <div v-if="isConnected" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
+    <div v-if="isConnected" class="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-green-400 text-sm">已连接 {{ currentDeviceName }}</span>
+        <div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
+        <span class="text-emerald-400 text-sm">已连接 {{ currentDeviceName }}</span>
       </div>
     </div>
-    <div v-else class="px-4 py-2 bg-white dark:bg-dark-800/50 border-b border-gray-200 dark:border-dark-700 flex items-center justify-between">
+    <div v-else class="px-4 py-2 bg-[#12121a] border-b border-cyan-500/10 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-dark-500"></div>
-        <span class="text-gray- dark:text-dark-400 text-sm">未连接</span>
+        <div class="w-2 h-2 rounded-full bg-gray-600"></div>
+        <span class="text-gray-500 text-sm">未连接</span>
       </div>
     </div>
 
     <!-- Settings List -->
     <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->
-      <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
-        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">连接设置</h3>
+      <div class="px-4 py-3 border-b border-cyan-500/10">
+        <h3 class="text-cyan-400/80 text-sm font-medium mb-3 tracking-wider uppercase">连接设置</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span>自动重连</span>
+            <span class="text-gray-300">自动重连</span>
             <Toggle v-model="settings.autoReconnect" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>后台保活</span>
+            <span class="text-gray-300">后台保活</span>
             <Toggle v-model="settings.keepAlive" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>重连间隔（秒）</span>
+            <span class="text-gray-300">重连间隔（秒）</span>
             <input
               v-model.number="settings.reconnectInterval"
               type="number"
               min="1"
               max="60"
-              class="w-16 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
+              class="w-16 bg-[#0a0a0f] border border-cyan-500/20 rounded-lg px-2 py-1 text-right text-sm text-white focus:border-cyan-500/50 focus:outline-none transition-colors"
             />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>默认端口</span>
+            <span class="text-gray-300">默认端口</span>
             <input
               v-model.number="settings.defaultPort"
               type="number"
               min="1"
               max="65535"
-              class="w-20 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
+              class="w-20 bg-[#0a0a0f] border border-cyan-500/20 rounded-lg px-2 py-1 text-right text-sm text-white focus:border-cyan-500/50 focus:outline-none transition-colors"
             />
           </div>
         </div>
       </div>
 
       <!-- Notification Settings -->
-      <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
-        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">通知设置</h3>
+      <div class="px-4 py-3 border-b border-cyan-500/10">
+        <h3 class="text-cyan-400/80 text-sm font-medium mb-3 tracking-wider uppercase">通知设置</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span>等待输入提醒</span>
+            <span class="text-gray-300">等待输入提醒</span>
             <Toggle v-model="settings.notifyOnWaiting" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>连接状态提醒</span>
+            <span class="text-gray-300">连接状态提醒</span>
             <Toggle v-model="settings.notifyOnConnection" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>振动反馈</span>
+            <span class="text-gray-300">振动反馈</span>
             <Toggle v-model="settings.vibrate" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>后台通知</span>
+            <span class="text-gray-300">后台通知</span>
             <Toggle v-model="settings.notifyInBackground" />
           </div>
         </div>
       </div>
 
       <!-- Appearance Settings -->
-      <div class="px-4 py-3 border-b border-gray-200 dark:border-dark-800">
-        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">外观设置</h3>
+      <div class="px-4 py-3 border-b border-cyan-500/10">
+        <h3 class="text-cyan-400/80 text-sm font-medium mb-3 tracking-wider uppercase">外观设置</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span>深色模式</span>
+            <span class="text-gray-300">深色模式</span>
             <Toggle v-model="settings.darkMode" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span>字体大小</span>
+            <span class="text-gray-300">字体大小</span>
             <select
               v-model="settings.fontSize"
-              class="bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-1 text-sm"
+              class="bg-[#0a0a0f] border border-cyan-500/20 rounded-lg px-3 py-1 text-sm text-white focus:border-cyan-500/50 focus:outline-none transition-colors"
             >
               <option value="small">小</option>
               <option value="medium">中</option>
@@ -110,13 +110,13 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <span>终端缓存数量</span>
+            <span class="text-gray-300">终端缓存数量</span>
             <input
               v-model.number="settings.maxCachedTerminals"
               type="number"
               min="1"
               max="50"
-              class="w-16 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-2 py-1 text-right text-sm"
+              class="w-16 bg-[#0a0a0f] border border-cyan-500/20 rounded-lg px-2 py-1 text-right text-sm text-white focus:border-cyan-500/50 focus:outline-none transition-colors"
             />
           </div>
         </div>
@@ -124,28 +124,28 @@
 
       <!-- About -->
       <div class="px-4 py-3">
-        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">关于</h3>
+        <h3 class="text-cyan-400/80 text-sm font-medium mb-3 tracking-wider uppercase">关于</h3>
 
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-gray- dark:text-dark-300">版本</span>
-            <span class="text-gray- dark:text-dark-500">0.1.0</span>
+            <span class="text-gray-400">版本</span>
+            <span class="text-gray-600">0.1.0</span>
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-gray- dark:text-dark-300">构建</span>
-            <span class="text-gray- dark:text-dark-500">2026-04-30</span>
+            <span class="text-gray-400">构建</span>
+            <span class="text-gray-600">2026-04-30</span>
           </div>
 
           <button
-            class="w-full text-left text-gray- dark:text-dark-300 py-2"
+            class="w-full text-left text-gray-400 py-2 hover:text-cyan-400 transition-colors"
             @click="openGitHub"
           >
             GitHub 仓库 →
           </button>
 
           <button
-            class="w-full text-left text-gray- dark:text-dark-300 py-2"
+            class="w-full text-left text-gray-400 py-2 hover:text-cyan-400 transition-colors"
             @click="checkUpdate"
           >
             检查更新
@@ -155,15 +155,15 @@
     </div>
 
     <!-- Footer Actions -->
-    <div class="p-4 border-t border-gray-200 dark:border-dark-700 space-y-2 pb-safe">
+    <div class="p-4 border-t border-cyan-500/10 space-y-2 pb-safe">
       <button
-        class="w-full bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-200 py-3 rounded-xl font-medium"
+        class="w-full bg-[#12121a] border border-cyan-500/20 text-gray-300 py-3 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
         @click="resetSettings"
       >
         重置设置
       </button>
       <button
-        class="w-full bg-red-900/50 text-red-400 py-3 rounded-xl font-medium"
+        class="w-full bg-red-500/10 border border-red-500/20 text-red-400 py-3 rounded-xl font-medium hover:bg-red-500/20 transition-colors"
         @click="clearData"
       >
         清除所有数据

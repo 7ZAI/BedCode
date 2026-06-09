@@ -4,26 +4,6 @@
 
 use crate::Result;
 
-/// 获取 Android 状态栏高度（像素）
-/// 通过 JNI 调用 Android API 获取系统状态栏高度
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub fn get_status_bar_height(app_handle: tauri::AppHandle) -> Result<u32> {
-    use tauri::Manager;
-
-    let windows = app_handle.webview_windows();
-    let _window = windows.get("main");
-
-    Ok(0)
-}
-
-/// 非 Android 平台返回 0
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub fn get_status_bar_height() -> Result<u32> {
-    Ok(0)
-}
-
 /// 设置 Android 屏幕方向
 #[cfg(target_os = "android")]
 #[tauri::command]

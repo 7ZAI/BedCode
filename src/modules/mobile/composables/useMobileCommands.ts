@@ -218,13 +218,6 @@ export async function wsSendAndWait(
 // ==================== Android-specific Commands ====================
 
 /**
- * 获取 Android 状态栏高度
- */
-export async function getStatusBarHeight(): Promise<number> {
-  return await invoke('get_status_bar_height')
-}
-
-/**
  * 设置屏幕方向
  */
 export async function setScreenOrientation(orientation: string): Promise<void> {
@@ -500,7 +493,6 @@ export function useMobileCommands() {
     wsClearAllTerminalBuffers,
 
     // Android-specific
-    getStatusBarHeight,
     setScreenOrientation,
     keepScreenAwake,
 

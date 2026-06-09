@@ -1,7 +1,6 @@
 <template>
   <div
-    class="terminal-input-bar fixed left-0 right-0 bottom-0 z-40 bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700"
-    :style="containerStyle"
+    class="terminal-input-bar sticky left-0 right-0 bottom-0 z-40 bg-[#12121a]/95 backdrop-blur-xl border-t border-cyan-500/20"
   >
     <!-- 快捷键面板 - 点击按钮后显示 -->
     <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel px-2 pt-2">
@@ -9,7 +8,7 @@
         <button
           v-for="key in shortcuts"
           :key="key.code"
-          class="shortcut-btn h-8 bg-gray-100 dark:bg-dark-700 text-gray-600 dark:text-dark-300 text-xs rounded-lg active:bg-gray-200 dark:active:bg-dark-600"
+          class="shortcut-btn h-8 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs rounded-lg hover:bg-cyan-500/20 transition-colors"
           @click="handleShortcutClick(key.code)"
         >
           {{ key.label }}
@@ -17,12 +16,12 @@
       </div>
     </div>
 
-    <!-- 输入区域 - AI 对话框样式 -->
-    <div class="input-area flex items-center gap-2 px-3 py-2">
+  <!-- 输入区域 -->
+    <div class="input-area">
       <!-- 快捷键切换按钮 -->
       <button
-        class="toggle-btn shrink-0 w-8 h-8 flex items-center justify-center rounded-full"
-        :class="showShortcutsPanel ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600' : 'bg-gray-100 dark:bg-dark-700 text-gray-500 dark:text-dark-400'"
+        class="toggle-btn"
+        :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
         @click="toggleShortcuts"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -30,13 +29,13 @@
         </svg>
       </button>
 
-      <!-- 输入框容器 - 圆角胶囊样式 -->
-      <div class="flex-1 flex items-center bg-gray-100 dark:bg-dark-700 rounded-full px-4 py-2">
+      <!-- 输入框容器 -->
+      <div class="input-box">
         <input
           ref="inputRef"
           v-model="inputText"
           type="text"
-          class="flex-1 bg-transparent text-sm text-gray-900 dark:text-dark-100 placeholder-gray-400 dark:placeholder-dark-400 focus:outline-none"
+          class="input-field"
           :placeholder="placeholder"
           :disabled="disabled"
           @focus="handleFocus"
@@ -45,7 +44,7 @@
 
       <!-- 发送按钮 -->
       <button
-        class="send-btn shrink-0 w-10 h-10 flex items-center justify-center bg-gray-200 dark:bg-dark-600 text-gray-700 dark:text-dark-200 rounded-full disabled:opacity-50"
+        class="send-btn"
         :disabled="!canSubmit"
         @click="handleSubmit"
       >
@@ -56,7 +55,7 @@
 
       <!-- 执行按钮 -->
       <button
-        class="execute-btn shrink-0 w-10 h-10 flex items-center justify-center bg-primary-600 text-white rounded-full disabled:opacity-50"
+        class="execute-btn"
         :disabled="!canSubmit"
         @click="handleExecute"
       >
@@ -69,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 
 // ==================== Props ====================
 
@@ -100,7 +99,6 @@ const emit = defineEmits<{
 const inputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref('')
 const showShortcutsPanel = ref(false)  // 默认隐藏
-const keyboardHeight = ref(0)
 
 // ==================== Shortcuts Data ====================
 
@@ -122,24 +120,6 @@ const shortcuts = [
 
 const canSubmit = computed(() => {
   return inputText.value.trim().length > 0 && !props.disabled
-})
-
-// 计算容器样式
-// 1. 底部安全区域：通过 CSS env(safe-area-inset-bottom) 自动获取
-// 2. 键盘弹出时：通过 translateY 向上移动键盘高度
-const containerStyle = computed(() => {
-  const styles: Record<string, string> = {
-    transition: 'transform 0.15s ease-out',
-  }
-
-  // 键盘弹出时向上移动
-  if (keyboardHeight.value > 0) {
-    styles.transform = `translateY(-${keyboardHeight.value}px) translateZ(0)`
-  } else {
-    styles.transform = 'translateY(0) translateZ(0)'
-  }
-
-  return styles
 })
 
 // ==================== Methods ====================
@@ -167,7 +147,6 @@ function handleShortcutClick(code: string) {
 }
 
 // 处理输入框获得焦点
-// 在 adjustNothing 模式下，需要手动确保输入框可见
 function handleFocus() {
   // 延迟执行，等待键盘弹出后再滚动
   setTimeout(() => {
@@ -176,77 +155,123 @@ function handleFocus() {
     }
   }, 100)
 }
-
-// ==================== Keyboard Avoidance ====================
-
-function setupKeyboardListener() {
-  console.log('[TerminalInputBar] setupKeyboardListener: starting setup')
-
-  // 使用 Visual Viewport API（adjustNothing 模式下最可靠）
-  // 布局视口 - 可视视口 = 键盘高度
-  const vv = window.visualViewport
-  if (vv) {
-    console.log('[TerminalInputBar] Using visualViewport API (adjustNothing mode)')
-
-    const handleViewportChange = () => {
-      // 在 adjustNothing 模式下：
-      // window.innerHeight = 布局视口高度（不变）
-      // visualViewport.height = 实际可见区域高度（键盘弹出时变小）
-      const windowHeight = window.innerHeight
-      const viewportHeight = vv!.height
-      const viewportTop = vv!.offsetTop  // 可视视口顶部距离布局视口顶部的距离
-      const height = Math.max(0, windowHeight - viewportHeight - viewportTop)
-
-      console.log('[TerminalInputBar] visualViewport: layoutHeight=', windowHeight, 'viewportHeight=', viewportHeight, 'viewportTop=', viewportTop, 'keyboardHeight=', height)
-
-      // 防止抖动：只有高度变化超过 2px 才更新
-      if (Math.abs(height - keyboardHeight.value) > 2 || (height === 0 && keyboardHeight.value > 0)) {
-        keyboardHeight.value = height
-      }
-    }
-
-    vv.addEventListener('resize', handleViewportChange)
-    vv.addEventListener('scroll', handleViewportChange)
-
-    // 初始检查
-    handleViewportChange()
-
-    return () => {
-      console.log('[TerminalInputBar] Cleaning up visualViewport listener')
-      vv.removeEventListener('resize', handleViewportChange)
-      vv.removeEventListener('scroll', handleViewportChange)
-    }
-  }
-
-  // visualViewport 不可用的 fallback（极少数情况）
-  console.log('[TerminalInputBar] visualViewport not available, keyboard avoidance disabled')
-  return () => {}
-}
-
-let cleanupKeyboard: (() => void) | undefined
-
-onMounted(() => {
-  cleanupKeyboard = setupKeyboardListener()
-})
-
-onUnmounted(() => {
-  cleanupKeyboard?.()
-})
 </script>
 
 <style scoped>
 .terminal-input-bar {
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
-  /* 底部安全区域：避免被系统导航栏遮挡 */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  flex-shrink: 0;
+  background: rgba(18, 18, 26, 0.95);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(0, 212, 255, 0.15);
+  padding: 0.5rem 1rem;
+}
+
+.input-area {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.toggle-btn {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.toggle-active {
+  background: rgba(0, 212, 255, 0.2);
+  color: #00d4ff;
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+.toggle-inactive {
+  background: #1f2937;
+  color: #6b7280;
+  border-color: #374151;
+}
+
+.input-box {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: #0a0a0f;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  transition: border-color 0.2s ease;
+}
+
+.input-box:focus-within {
+  border-color: rgba(0, 212, 255, 0.5);
+}
+
+.input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+
+.input-field::placeholder {
+  color: #4b5563;
+}
+
+.send-btn,
+.execute-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.send-btn {
+  background: #1f2937;
+  border-color: #374151;
+  color: #9ca3af;
+}
+
+.send-btn:hover:not(:disabled) {
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.execute-btn {
+  background: rgba(0, 212, 255, 0.2);
+  border-color: rgba(0, 212, 255, 0.3);
+  color: #00d4ff;
+}
+
+.execute-btn:hover:not(:disabled) {
+  background: rgba(0, 212, 255, 0.3);
+}
+
+.execute-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .shortcuts-panel {
-  border-bottom: 1px solid theme('colors.gray.100');
-}
-
-.dark .shortcuts-panel {
-  border-bottom-color: theme('colors.dark.700');
+  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
 }
 
 .shortcut-btn {

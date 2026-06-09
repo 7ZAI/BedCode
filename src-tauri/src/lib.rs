@@ -508,6 +508,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_edge_to_edge::init())
         .setup(|app| {
             // 日志已在 run() 中早期初始化，这里不再重复初始化
             tracing::info!("BedCode setup starting...");
@@ -585,7 +586,6 @@ pub fn run() {
             shared::system::commands::get_app_version,
             shared::system::commands::get_local_ip_addresses,
             // Android Specific
-            mobile::commands::android::get_status_bar_height,
             mobile::commands::android::set_screen_orientation,
             mobile::commands::android::keep_screen_awake,
             // Session Config (移动端使用内存存储)

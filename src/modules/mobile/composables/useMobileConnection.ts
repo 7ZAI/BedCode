@@ -29,13 +29,6 @@ import {
   type RemoteDevice,
   type AuthCredentials,
 } from './useMobileCommands'
-import {
-  initGlobalTerminalManager,
-  createHiddenTerminal,
-  hasTerminal,
-  destroyTerminal,
-  destroyAllTerminals,
-} from './useGlobalTerminal'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -118,9 +111,6 @@ async function init() {
   if (savedCreds) {
     authCredentials.value = savedCreds
   }
-
-  // 初始化全局终端管理器
-  await initGlobalTerminalManager()
 
   // 初始化事件监听 - 状态由后端事件驱动
   await initMobileEventListeners({
@@ -235,12 +225,6 @@ async function init() {
       if (!activeSessions.value.find(s => s.id === data.session.id)) {
         activeSessions.value.push(data.session)
       }
-      // 创建离屏 xterm.js 实例
-      createHiddenTerminal(data.session.id)
-      // 如果会话状态是 running，立即订阅以接收输出
-      if (data.session.status === 'running') {
-        wsJoinSession(data.session.id).catch(e => console.error('[MobileConnection] Auto subscribe failed:', e))
-      }
     },
     onSyncSessionStatusChanged: (data) => {
       console.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)
@@ -248,14 +232,6 @@ async function init() {
       const index = activeSessions.value.findIndex(s => s.id === data.session_id)
       if (index !== -1) {
         activeSessions.value[index].status = data.new_status
-      }
-      // 如果状态变为 running，立即订阅以接收输出
-      if (data.new_status === 'running') {
-        // 确保有离屏实例
-        if (!hasTerminal(data.session_id)) {
-          createHiddenTerminal(data.session_id)
-        }
-        wsJoinSession(data.session_id).catch(e => console.error('[MobileConnection] Auto subscribe on status change failed:', e))
       }
     },
     onSyncSessionStopped: (data) => {
@@ -270,8 +246,6 @@ async function init() {
       console.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
       // 从列表移除会话（删除操作才移除）
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
-      // 销毁离屏实例
-      destroyTerminal(data.session_id)
     },
   })
 
@@ -433,8 +407,6 @@ export async function disconnect(): Promise<void> {
     // 状态由后端 ws_disconnected 事件驱动更新
   } finally {
     currentDevice.value = null
-    // 清理所有离屏实例
-    destroyAllTerminals()
   }
 }
 
@@ -528,14 +500,6 @@ export async function loadSessionConfigs(): Promise<any[]> {
 export async function loadActiveSessions(): Promise<any[]> {
   const sessions = await wsLoadSessions()
   activeSessions.value = sessions
-  // 为所有已存在的会话创建离屏实例并订阅 running 状态的会话
-  for (const session of sessions) {
-    createHiddenTerminal(session.id)
-    // 如果会话正在运行，立即订阅以接收输出
-    if (session.status === 'running') {
-      wsJoinSession(session.id).catch(e => console.error('[MobileConnection] Auto subscribe failed for session', session.id, e))
-    }
-  }
   return sessions
 }
 
@@ -544,10 +508,6 @@ export async function loadActiveSessions(): Promise<any[]> {
  */
 export async function startSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {
   const result = await wsStartSession(configId, sessionName)
-  // 创建离屏 xterm.js 实例
-  if (result.sessionId) {
-    createHiddenTerminal(result.sessionId)
-  }
   return result
 }
 
@@ -572,8 +532,6 @@ export function stopSession(sessionId: string): void {
 export function removeSession(sessionId: string): void {
   // 从本地列表移除
   activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
-  // 销毁离屏实例
-  destroyTerminal(sessionId)
 }
 
 /**

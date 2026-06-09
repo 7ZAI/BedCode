@@ -15,15 +15,15 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* 安全区域 - 默认使用 env()，在不支持的环境会回退到 0 */
-  --safe-area-inset-top: env(safe-area-inset-top, 0px);
-  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-area-inset-left: env(safe-area-inset-left, 0px);
-  --safe-area-inset-right: env(safe-area-inset-right, 0px);
-
-  /* 备用安全区域（用于 Android 刘海屏等特殊设备） */
-  --status-bar-height: 0px;
-  --navigation-bar-height: 0px;
+  /* 安全区域变量 - 由 tauri-plugin-edge-to-edge 自动注入 */
+  --safe-area-inset-top: 0px;
+  --safe-area-inset-bottom: 0px;
+  --safe-area-inset-left: 0px;
+  --safe-area-inset-right: 0px;
+  --safe-area-top: 0px;
+  --safe-area-bottom: 0px;
+  --keyboard-height: 0px;
+  --keyboard-visible: 0;
 }
 
 /* 默认浅色模式 */
@@ -196,30 +196,27 @@ body {
 
 /* 移动端专用样式 */
 .mobile-app {
-  /* 安全区域由 App.vue 通过 JavaScript 动态设置 */
-  /* 保留 CSS env() 作为备用 */
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
   /* 确保移动端全屏显示 */
   min-height: 100vh;
   min-height: 100dvh;
+  /* 安全区域由 App.vue 通过 JavaScript 动态设置 */
 }
 
-/* 移动端底部导航需要额外 padding - 使用 env() + fallback */
-/* 大多数 Android 设备导航栏高度 24-48px，iOS 设备使用 safe-area-inset */
+/* 移动端底部导航安全区域适配 */
 .mobile-nav-safe {
-  /* 使用 max() 确保 minimum 20px padding */
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  padding-bottom: var(--safe-area-bottom, 0px);
 }
 
-/* 通用底部安全区域类 - 适配更多设备 */
-.pb-safe {
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+/* 移动端顶部安全区域适配 */
+.mobile-header-safe {
+  padding-top: var(--safe-area-top, 0px);
 }
 
-/* 通用顶部安全区域类 */
-.pt-safe {
-  padding-top: max(env(safe-area-inset-top, 0px), 24px);
+/* 移动端输入栏键盘避让 */
+.mobile-input-bar {
+  /* 键盘高度由插件动态注入 */
+  transform: translateY(calc(-1 * var(--keyboard-height, 0px)));
+  transition: transform 0.3s ease;
 }
 
 /* Scrollbar styles - 浅色模式默认 */

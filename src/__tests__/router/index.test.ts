@@ -134,7 +134,7 @@ describe('Router Configuration', () => {
 
       // Count includes redirect routes and component routes
       // Desktop: /, /sessions, /devices, /settings
-      // Mobile: /mobile/devices, /mobile/terminal/:id, /mobile/quick-actions, /mobile/history, /mobile/settings
+      // Mobile: /mobile/devices, /mobile/terminal/:id, /mobile/quick-actions, /mobile/settings
       expect(routes.length).toBeGreaterThanOrEqual(9)
     })
   })

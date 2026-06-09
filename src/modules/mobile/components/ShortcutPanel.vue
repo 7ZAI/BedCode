@@ -6,23 +6,23 @@
         class="fixed inset-0 z-[100] flex items-end justify-center"
         @click.self="emit('close')"
       >
-        <div class="absolute inset-0 bg-black/30" @click="emit('close')"></div>
+        <div class="absolute inset-0 bg-black/60" @click="emit('close')"></div>
 
         <!-- 快捷键面板 -->
         <div
-          class="relative bg-white dark:bg-dark-800 rounded-t-2xl w-full max-w-md mx-4 mb-4 shadow-xl"
+          class="relative bg-[#12121a] border-t border-cyan-500/20 rounded-t-2xl w-full max-w-md mx-4 mb-4 shadow-xl"
           :style="{ paddingBottom: 'env(safe-area-inset-bottom, 16px)' }"
         >
           <!-- 拖动条 -->
           <div class="flex justify-center pt-3 pb-1">
-            <div class="w-10 h-1 bg-gray-300 dark:bg-dark-600 rounded-full"></div>
+            <div class="w-10 h-1 bg-cyan-500/30 rounded-full"></div>
           </div>
 
           <!-- Header -->
           <div class="flex items-center justify-between px-4 py-2">
-            <span class="font-medium text-gray-900 dark:text-dark-100">快捷键</span>
+            <span class="font-medium text-white">快捷键</span>
             <button
-              class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-dark-700"
+              class="p-1.5 rounded-lg hover:bg-cyan-500/10 transition-colors"
               @click="emit('close')"
             >
               <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -32,12 +32,12 @@
           </div>
 
           <!-- 高频快捷键 -->
-          <div v-if="topShortcuts.length > 0" class="px-4 py-2 border-b border-gray-100 dark:border-dark-700">
+          <div v-if="topShortcuts.length > 0" class="px-4 py-2 border-b border-cyan-500/10">
             <div class="flex flex-wrap gap-2">
               <button
                 v-for="key in topShortcuts"
                 :key="key"
-                class="px-3 py-1.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium"
+                class="px-3 py-1.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/20 transition-colors"
                 @click="handleShortcutClick(key)"
               >
                 {{ getShortcutLabel(key) }}
@@ -51,11 +51,11 @@
               <button
                 v-for="key in allShortcuts"
                 :key="key.code"
-                class="flex flex-col items-center justify-center p-2.5 bg-gray-100 dark:bg-dark-700 rounded-lg hover:bg-gray-200 dark:hover:bg-dark-600 transition-colors"
+                class="flex flex-col items-center justify-center p-2.5 bg-[#0a0a0f] border border-cyan-500/10 rounded-lg hover:border-cyan-500/30 transition-colors"
                 @click="handleShortcutClick(key.code)"
               >
-                <span class="text-base mb-0.5">{{ key.icon }}</span>
-                <span class="text-[10px] text-gray-600 dark:text-dark-300">{{ key.label }}</span>
+                <span class="text-base mb-0.5 text-cyan-400">{{ key.icon }}</span>
+                <span class="text-[10px] text-gray-500">{{ key.label }}</span>
               </button>
             </div>
           </div>

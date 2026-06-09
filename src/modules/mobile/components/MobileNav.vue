@@ -1,19 +1,27 @@
 <template>
-  <nav class="bg-white dark:bg-dark-800 px-4 py-2 mobile-nav pb-safe">
-    <div class="flex justify-around">
+  <nav class="bg-dark-900/95 backdrop-blur-xl border-t border-cyan-500/20 mobile-nav">
+    <!-- 顶部发光效果 -->
+    <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent"></div>
+
+    <div class="flex justify-around relative">
       <button
         v-for="item in navItems"
         :key="item.path"
-        class="flex flex-col items-center gap-1 px-4 py-2 rounded-lg transition-colors"
+        class="flex flex-col items-center gap-0.5 px-4 pt-1.5 pb-1 rounded-xl transition-all duration-300 relative"
         :class="[
           currentPage === item.pageIndex
-            ? 'text-primary-400'
-            : 'text-gray-500 dark:text-dark-400 hover:text-gray-700 dark:text-dark-200'
+            ? 'text-cyan-400'
+            : 'text-gray-500 hover:text-gray-300'
         ]"
         @click="navigateTo(item)"
       >
-        <component :is="item.icon" class="w-6 h-6" />
-        <span class="text-xs">{{ item.label }}</span>
+        <!-- 活跃指示器 -->
+        <div
+          v-if="currentPage === item.pageIndex"
+          class="absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.5)]"
+        ></div>
+        <component :is="item.icon" class="w-6 h-6 transition-transform duration-200" :class="currentPage === item.pageIndex ? 'scale-110' : ''" />
+        <span class="text-xs font-medium">{{ item.label }}</span>
       </button>
     </div>
   </nav>

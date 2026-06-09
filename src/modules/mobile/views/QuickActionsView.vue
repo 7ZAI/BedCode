@@ -1,30 +1,30 @@
 <template>
-  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
+  <div class="h-full flex flex-col bg-[#0a0a0f]">
     <!-- Header -->
-    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 pb-3" style="padding-top: 12px;">
-      <h1 class="text-lg font-semibold">快捷指令</h1>
+    <header class="bg-[#12121a]/90 backdrop-blur-xl border-b border-cyan-500/10 px-4 pb-3" style="padding-top: 12px;">
+      <h1 class="text-lg font-semibold text-white tracking-wide">快捷指令</h1>
     </header>
 
     <!-- Connection Status -->
-    <div v-if="isConnected" class="px-4 py-2 bg-green-900/20 border-b border-green-800/30 flex items-center justify-between">
+    <div v-if="isConnected" class="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-green-400 text-sm">已连接 {{ currentDeviceName }}</span>
+        <div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
+        <span class="text-emerald-400 text-sm">已连接 {{ currentDeviceName }}</span>
       </div>
       <button
-        class="text-xs text-gray- dark:text-dark-400 hover:text-gray- dark:text-dark-300"
+        class="text-xs text-gray-500 hover:text-cyan-400 transition-colors"
         @click="router.push('/mobile/devices')"
       >
         管理
       </button>
     </div>
-    <div v-else class="px-4 py-2 bg-white dark:bg-dark-800/50 border-b border-gray-200 dark:border-dark-700 flex items-center justify-between">
+    <div v-else class="px-4 py-2 bg-[#12121a] border-b border-cyan-500/10 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-dark-500"></div>
-        <span class="text-gray- dark:text-dark-400 text-sm">未连接</span>
+        <div class="w-2 h-2 rounded-full bg-gray-600"></div>
+        <span class="text-gray-500 text-sm">未连接</span>
       </div>
       <button
-        class="text-xs text-primary-400 hover:text-primary-300"
+        class="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
         @click="router.push('/mobile/devices')"
       >
         连接
@@ -35,7 +35,7 @@
     <div class="flex-1 overflow-auto p-4">
       <!-- Preset Actions Grid -->
       <div class="mb-6">
-        <h3 class="text-gray- dark:text-dark-400 text-sm font-medium mb-3">预设指令</h3>
+        <h3 class="text-cyan-400/80 text-sm font-medium mb-3 tracking-wider uppercase">预设指令</h3>
         <div class="grid grid-cols-2 gap-3">
           <QuickActionButton
             v-for="action in presetActions"
@@ -52,9 +52,9 @@
       <!-- Custom Actions -->
       <div>
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-gray- dark:text-dark-400 text-sm font-medium">自定义指令</h3>
+          <h3 class="text-cyan-400/80 text-sm font-medium tracking-wider uppercase">自定义指令</h3>
           <button
-            class="text-primary-400 text-sm"
+            class="text-cyan-400 text-sm hover:text-cyan-300 transition-colors"
             @click="showAddDialog = true"
           >
             + 添加
@@ -62,28 +62,28 @@
         </div>
 
         <div v-if="customActions.length === 0" class="text-center py-8">
-          <p class="text-gray- dark:text-dark-500 text-sm">暂无自定义指令</p>
+          <p class="text-gray-600 text-sm">暂无自定义指令</p>
         </div>
 
         <div v-else class="space-y-2">
           <div
             v-for="action in customActions"
             :key="action.id"
-            class="bg-white dark:bg-dark-800 rounded-xl p-4 flex items-center gap-3 active:bg-gray-100 dark:bg-dark-700"
+            class="bg-[#12121a] border border-cyan-500/10 rounded-xl p-4 flex items-center gap-3 hover:border-cyan-500/30 transition-all"
           >
             <div
-              class="w-10 h-10 rounded-lg flex items-center justify-center"
-              :style="{ backgroundColor: (action.color || '#6b7280') + '20' }"
+              class="w-10 h-10 rounded-lg flex items-center justify-center border"
+              :style="{ backgroundColor: (action.color || '#6b7280') + '15', borderColor: (action.color || '#6b7280') + '30' }"
             >
               <span class="text-lg">{{ action.icon || '⚡' }}</span>
             </div>
             <div class="flex-1 min-w-0">
-              <p class="font-medium truncate">{{ action.name }}</p>
-              <p class="text-gray- dark:text-dark-400 text-sm truncate">{{ action.content }}</p>
+              <p class="font-medium text-white truncate">{{ action.name }}</p>
+              <p class="text-gray-500 text-sm truncate">{{ action.content }}</p>
             </div>
             <div class="flex gap-2">
               <button
-                class="p-2 text-gray- dark:text-dark-400 hover:text-white"
+                class="p-2 text-gray-500 hover:text-cyan-400 transition-colors"
                 @click="editAction(action)"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -91,7 +91,7 @@
                 </svg>
               </button>
               <button
-                class="p-2 text-gray- dark:text-dark-400 hover:text-red-400"
+                class="p-2 text-gray-500 hover:text-red-400 transition-colors"
                 @click="deleteAction(action.id)"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -108,42 +108,42 @@
     <Teleport to="body">
       <Transition name="fade">
         <div v-if="showAddDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/60" @click="closeDialog"></div>
-          <div class="relative w-full max-w-sm bg-white dark:bg-dark-800 rounded-2xl p-6">
-            <h3 class="text-lg font-semibold mb-4">
+          <div class="absolute inset-0 bg-black/80" @click="closeDialog"></div>
+          <div class="relative w-full max-w-sm bg-[#12121a] border border-cyan-500/20 rounded-2xl p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">
               {{ editingAction ? '编辑指令' : '添加指令' }}
             </h3>
 
             <div class="space-y-4">
               <div>
-                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">名称</label>
+                <label class="text-gray-400 text-sm mb-1 block">名称</label>
                 <input
                   v-model="form.name"
                   type="text"
                   placeholder="指令名称"
-                  class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500"
+                  class="w-full bg-[#0a0a0f] border border-cyan-500/20 rounded-lg px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50 transition-colors"
                 />
               </div>
 
               <div>
-                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">内容</label>
+                <label class="text-gray-400 text-sm mb-1 block">内容</label>
                 <textarea
                   v-model="form.content"
                   placeholder="指令内容"
                   rows="3"
-                  class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500 resize-none"
+                  class="w-full bg-[#0a0a0f] border border-cyan-500/20 rounded-lg px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50 transition-colors resize-none"
                 ></textarea>
               </div>
 
               <div>
-                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">图标</label>
+                <label class="text-gray-400 text-sm mb-1 block">图标</label>
                 <div class="flex gap-2">
                   <button
                     v-for="emoji in iconOptions"
                     :key="emoji"
                     :class="[
-                      'w-10 h-10 rounded-lg text-lg',
-                      form.icon === emoji ? 'bg-primary-600' : 'bg-gray-100 dark:bg-dark-700'
+                      'w-10 h-10 rounded-lg text-lg border transition-colors',
+                      form.icon === emoji ? 'bg-cyan-500/20 border-cyan-500/50' : 'bg-[#0a0a0f] border-cyan-500/10 hover:border-cyan-500/30'
                     ]"
                     @click="form.icon = emoji"
                   >
@@ -153,14 +153,14 @@
               </div>
 
               <div>
-                <label class="text-gray- dark:text-dark-400 text-sm mb-1 block">颜色</label>
+                <label class="text-gray-400 text-sm mb-1 block">颜色</label>
                 <div class="flex gap-2">
                   <button
                     v-for="color in colorOptions"
                     :key="color"
                     :class="[
-                      'w-8 h-8 rounded-full',
-                      form.color === color ? 'ring-2 ring-white ring-offset-2 ring-offset-dark-800' : ''
+                      'w-8 h-8 rounded-full border-2 transition-all',
+                      form.color === color ? 'border-white scale-110' : 'border-transparent hover:scale-105'
                     ]"
                     :style="{ backgroundColor: color }"
                     @click="form.color = color"
@@ -171,13 +171,13 @@
 
             <div class="flex gap-3 mt-6">
               <button
-                class="flex-1 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 py-2.5 rounded-xl font-medium"
+                class="flex-1 bg-[#0a0a0f] border border-cyan-500/20 text-gray-300 py-2.5 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
                 @click="closeDialog"
               >
                 取消
               </button>
               <button
-                class="flex-1 bg-primary-600 text-white py-2.5 rounded-xl font-medium"
+                class="flex-1 bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 py-2.5 rounded-xl font-medium hover:bg-cyan-500/30 transition-colors"
                 :class="{ 'opacity-50': !form.name || !form.content }"
                 :disabled="!form.name || !form.content"
                 @click="saveAction"

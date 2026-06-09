@@ -1,11 +1,10 @@
 <template>
   <div
     class="input-bar bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-2 pt-2"
-    :class="{ 'fixed left-0 right-0 z-50': isKeyboardOpen, 'landscape-mode': isLandscapeMode }"
-    :style="containerStyle"
+    :class="{ 'landscape-mode': isLandscapeMode }"
   >
     <!-- Special keys panel - 默认显示 -->
-    <div v-if="showSpecialKeys && !isKeyboardOpen && !isLandscapeMode" class="mb-2 grid grid-cols-8 gap-1.5">
+    <div v-if="showSpecialKeys && !isLandscapeMode" class="mb-2 grid grid-cols-8 gap-1.5">
       <button
         v-for="key in specialKeys"
         :key="key.code"
@@ -16,8 +15,8 @@
       </button>
     </div>
 
-    <!-- 键盘展开时或横屏时显示的快捷键行 -->
-    <div v-if="isKeyboardOpen || isLandscapeMode" class="mb-1.5 flex flex-wrap gap-1">
+    <!-- 横屏时显示的快捷键行 -->
+    <div v-if="isLandscapeMode" class="mb-1.5 flex flex-wrap gap-1">
       <button
         v-for="key in specialKeys"
         :key="key.code"
@@ -38,9 +37,9 @@
         点击输入命令...
       </button>
 
-      <!-- Special keys toggle - 键盘收起且非横屏时显示 -->
+      <!-- Special keys toggle - 非横屏时显示 -->
       <button
-        v-if="!isKeyboardOpen && !isLandscapeMode"
+        v-if="!isLandscapeMode"
         class="p-2 rounded-xl"
         :class="showSpecialKeys ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-400'"
         @click="toggleSpecialKeys"
@@ -127,7 +126,6 @@ const props = defineProps<{
   placeholder?: string
   isConnected?: boolean
   showStatus?: boolean
-  keyboardHeight?: number
   isLandscape?: boolean
 }>()
 
@@ -144,7 +142,6 @@ const inputRef = ref<HTMLInputElement | null>(null)
 const modalInputRef = ref<HTMLInputElement | null>(null)
 const showSpecialKeys = ref(true) // 默认显示
 const showInputModal = ref(false)
-const isKeyboardOpen = computed(() => (props.keyboardHeight || 0) > 0)
 const isLandscapeMode = computed(() => props.isLandscape || false)
 
 // 弹窗打开时聚焦输入框
@@ -153,23 +150,6 @@ watch(showInputModal, async (show) => {
     inputText.value = ''
     await nextTick()
     modalInputRef.value?.focus()
-  }
-})
-
-// 容器样式：键盘弹出时使用 fixed 定位 + bottom，避免被遮挡
-const containerStyle = computed(() => {
-  const height = props.keyboardHeight || 0
-  const safeAreaBottom = 'env(safe-area-inset-bottom, 0px)'
-
-  if (height > 0) {
-    return {
-      bottom: `calc(${safeAreaBottom} + 8px)`,
-      transition: 'bottom 200ms ease-out'
-    }
-  }
-  return {
-    paddingBottom: `calc(${safeAreaBottom} + 12px)`,
-    transition: 'padding-bottom 200ms ease-out'
   }
 })
 

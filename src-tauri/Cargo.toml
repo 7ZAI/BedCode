@@ -69,6 +69,7 @@ async-trait = "0.1"
 # WebSocket (shared between desktop and mobile)
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+tauri-plugin-edge-to-edge = "0.3.3"
 
 # Android-only dependencies
 [target.'cfg(target_os = "android")'.dependencies]

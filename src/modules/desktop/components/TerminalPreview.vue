@@ -48,6 +48,7 @@ import { getOutputBuffer, clearOutputBuffer, destroyTerminal } from '@/modules/d
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
@@ -67,6 +68,7 @@ const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
 // xterm.js 实例
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+let webglAddon: WebglAddon | null = null
 
 // 滚动状态追踪
 let isUserScrolling = false
@@ -167,6 +169,25 @@ function getTheme() {
   return isDarkMode.value ? darkTheme : lightTheme
 }
 
+// 初始化 WebGL 渲染器，失败时回退到 Canvas
+function initWebGL(terminal: Terminal): boolean {
+  try {
+    webglAddon = new WebglAddon()
+    webglAddon.onContextLoss(() => {
+      console.warn('[TerminalPreview] WebGL context lost, disposing addon')
+      webglAddon?.dispose()
+      webglAddon = null
+    })
+    terminal.loadAddon(webglAddon)
+    console.log('[TerminalPreview] WebGL renderer initialized')
+    return true
+  } catch (e) {
+    console.warn('[TerminalPreview] WebGL not supported, using Canvas fallback:', e)
+    webglAddon = null
+    return false
+  }
+}
+
 // 初始化 xterm.js
 function initTerminal() {
   if (!terminalContainerRef.value) return
@@ -186,6 +207,7 @@ function initTerminal() {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalContainerRef.value)
+  initWebGL(terminal)
   fitAddon.fit()
 
   // 将终端尺寸同步到 PTY，确保 Claude Code 输出格式正确
@@ -441,6 +463,7 @@ onUnmounted(() => {
   if (terminal) {
     terminal.dispose()
     terminal = null
+    webglAddon = null
   }
 })
 

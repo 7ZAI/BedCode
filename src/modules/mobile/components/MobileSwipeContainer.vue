@@ -142,6 +142,7 @@ function handleTouchMove(e: TouchEvent) {
       direction = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical'
 
       if (direction === 'vertical') {
+        // 垂直滑动时不阻止默认行为，让子元素（如终端）可以正常滚动
         isDragging.value = false
         direction = null
         return
@@ -261,5 +262,7 @@ provide('swipeContainer', {
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  /* 允许垂直滚动，但禁止水平方向的默认手势（避免与 swipe 冲突） */
+  touch-action: pan-y;
 }
 </style>

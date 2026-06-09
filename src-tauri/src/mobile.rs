@@ -37,7 +37,7 @@ pub use self::commands::{
     ws_load_sessions, ws_join_session, ws_leave_session, ws_subscribe_session,
     ws_start_session, ws_stop_session, ws_remove_session, ws_load_session_configs,
     ws_send_input_async, ws_send_message, ws_send_and_wait, ws_resize_terminal,
-    get_status_bar_height, set_screen_orientation, keep_screen_awake,
+    set_screen_orientation, keep_screen_awake,
 };
 
 // Mobile uses crate-level re-exports

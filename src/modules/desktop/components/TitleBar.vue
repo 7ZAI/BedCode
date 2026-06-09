@@ -5,7 +5,7 @@
   >
     <!-- Left: App Logo -->
     <div class="flex items-center px-4" data-tauri-drag-region>
-      <img src="/src/assets/logo.svg" alt="BedCode" class="h-5 w-auto" />
+      <img src="/favicon.svg" alt="BedCode" class="h-5 w-auto" />
     </div>
 
     <!-- Right: Window Controls -->
