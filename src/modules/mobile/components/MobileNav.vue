@@ -1,7 +1,7 @@
 <template>
-  <nav class="bg-dark-900/95 backdrop-blur-xl border-t border-cyan-500/20 mobile-nav">
+  <nav class="bg-[var(--mobile-nav-bg)] backdrop-blur-xl border-t border-[var(--mobile-nav-border)]">
     <!-- 顶部发光效果 -->
-    <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent"></div>
+    <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--mobile-accent)]/30 to-transparent"></div>
 
     <div class="flex justify-around relative">
       <button
@@ -10,15 +10,15 @@
         class="flex flex-col items-center gap-0.5 px-4 pt-1.5 pb-1 rounded-xl transition-all duration-300 relative"
         :class="[
           currentPage === item.pageIndex
-            ? 'text-cyan-400'
-            : 'text-gray-500 hover:text-gray-300'
+            ? 'text-[var(--mobile-nav-active)]'
+            : 'text-[var(--mobile-nav-inactive)] hover:text-[var(--mobile-text-secondary)]'
         ]"
         @click="navigateTo(item)"
       >
         <!-- 活跃指示器 -->
         <div
           v-if="currentPage === item.pageIndex"
-          class="absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.5)]"
+          class="absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-[var(--mobile-nav-active)] rounded-full shadow-[0_0_8px_rgba(34,211,238,0.5)]"
         ></div>
         <component :is="item.icon" class="w-6 h-6 transition-transform duration-200" :class="currentPage === item.pageIndex ? 'scale-110' : ''" />
         <span class="text-xs font-medium">{{ item.label }}</span>
