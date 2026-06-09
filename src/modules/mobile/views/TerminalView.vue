@@ -122,23 +122,15 @@ import { useRouter, useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-// import { WebglAddon } from '@xterm/addon-webgl'  // 暂时不使用，可能影响滚动
-import '@xterm/xterm/css/xterm.css'  // 必须引入 xterm 样式
-// FIXME: 真实 WebSocket 命令暂时注释
-// import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import '@xterm/xterm/css/xterm.css'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
-// FIXME: 真实 WebSocket 命令暂时注释
-// import {
-//   wsJoinSession,
-//   wsLeaveSession,
-//   wsSendInput,
-//   wsSubscribeTerminal,
-//   wsUnsubscribeTerminal,
-//   wsGetTerminalIncremental,
-//   wsUpdateTerminalIndex,
-//   wsClearTerminalBuffer,
-//   wsResizeTerminal,
-// } from '@/modules/mobile/composables/useMobileCommands'
+import {
+  wsJoinSession,
+  wsLeaveSession,
+  wsSendInput,
+  wsResizeTerminal,
+} from '@/modules/mobile/composables/useMobileCommands'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useEdgeToEdge } from '@/modules/mobile/composables/useEdgeToEdge'
 import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
@@ -161,11 +153,10 @@ const xtermContainer = ref<HTMLDivElement | null>(null)
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let resizeObserver: ResizeObserver | null = null
-// FIXME: 真实输出监听暂时注释
-// let outputListener: UnlistenFn | null = null
-// let outputPollInterval: ReturnType<typeof setInterval> | null = null
-// let currentIndex = 0
-let mockOutputInterval: ReturnType<typeof setInterval> | null = null
+// 终端输出事件监听器
+let outputListener: UnlistenFn | null = null
+// 输出索引去重
+let lastIndex = -1
 
 // 设置相关状态
 const showSettings = ref(false)
@@ -356,19 +347,15 @@ const isConnected = computed(() =>
   connection.connectionStatus.value === 'paired'
 )
 
-const isDebugSession = computed(() => sessionId.value === 'mock-debug-session')
-
 const session = computed(() =>
   connection.activeSessions.value.find(s => s.id === sessionId.value)
 )
 
 const sessionName = computed(() => {
-  if (isDebugSession.value) return '调试终端 (模拟)'
   return session.value?.name || sessionId.value || '终端'
 })
 
 const sessionStatus = computed(() => {
-  if (isDebugSession.value) return 'running'
   return session.value?.status || 'stopped'
 })
 
@@ -416,14 +403,14 @@ watch(keyboardHeight, () => {
 // ==================== Terminal Setup ====================
 
 async function initTerminal() {
-  console.log('[TerminalView] initTerminal called, xtermContainer:', xtermContainer.value)
+  // console.log('[TerminalView] initTerminal called, xtermContainer:', xtermContainer.value)
 
   if (!xtermContainer.value) {
-    console.error('[TerminalView] xtermContainer is null!')
+    // console.error('[TerminalView] xtermContainer is null!')
     return
   }
 
-  console.log('[TerminalView] Container dimensions:', xtermContainer.value.offsetWidth, 'x', xtermContainer.value.offsetHeight)
+  // console.log('[TerminalView] Container dimensions:', xtermContainer.value.offsetWidth, 'x', xtermContainer.value.offsetHeight)
 
   const theme = TERMINAL_THEMES[terminalSettings.value.theme]
   terminal = new Terminal({
@@ -441,7 +428,7 @@ async function initTerminal() {
   })
 
   terminal.open(xtermContainer.value)
-  console.log('[TerminalView] Terminal opened')
+  // console.log('[TerminalView] Terminal opened')
 
   // Load addons
   fitAddon = new FitAddon()
@@ -454,92 +441,85 @@ async function initTerminal() {
     const webglAddon = new WebglAddon()
     terminal.loadAddon(webglAddon)
     webglAddon.onContextLoss(() => {
-      console.warn('[TerminalView] WebGL context lost')
+      // console.warn('[TerminalView] WebGL context lost')
     })
-    console.log('[TerminalView] WebGL renderer loaded')
+    // console.log('[TerminalView] WebGL renderer loaded')
   } catch (e) {
-    console.warn('[TerminalView] WebGL not supported, using DOM renderer:', e)
+    // console.warn('[TerminalView] WebGL not supported, using DOM renderer:', e)
   }
 
   // Welcome message
-  console.log('[TerminalView] Writing welcome message, isDebugSession:', isDebugSession.value)
-  if (isDebugSession.value) {
-    terminal.write('\x1b[36m[调试终端]\x1b[0m 模拟模式，无真实连接\r\n')
-    terminal.write('输入命令将显示模拟输出\r\n')
-    terminal.write('='.repeat(50) + '\r\n\r\n')
-  } else {
-    terminal.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
-    terminal.write('='.repeat(50) + '\r\n\r\n')
-  }
+  terminal.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
+  terminal.write('='.repeat(50) + '\r\n\r\n')
 
   // Fit terminal - delay to ensure container is rendered
   setTimeout(() => {
-    console.log('[TerminalView] Delayed fit, container dimensions:', xtermContainer.value?.offsetWidth, 'x', xtermContainer.value?.offsetHeight)
+    // console.log('[TerminalView] Delayed fit, container dimensions:', xtermContainer.value?.offsetWidth, 'x', xtermContainer.value?.offsetHeight)
     fitTerminal()
 
     // 调试：检查 xterm 内部结构
     const xtermElement = xtermContainer.value?.querySelector('.xterm') as HTMLElement
     const viewport = xtermContainer.value?.querySelector('.xterm-viewport') as HTMLElement
     const screenElement = xtermContainer.value?.querySelector('.xterm-screen') as HTMLElement
-    const helper = xtermContainer.value?.querySelector('.xterm-helpers') as HTMLElement
+    // const helper = xtermContainer.value?.querySelector('.xterm-helpers') as HTMLElement
 
-    console.log('[TerminalView] xterm structure:', {
-      xterm: !!xtermElement,
-      viewport: !!viewport,
-      screen: !!screenElement,
-      helper: !!helper,
-    })
+    // console.log('[TerminalView] xterm structure:', {
+    //   xterm: !!xtermElement,
+    //   viewport: !!viewport,
+    //   screen: !!screenElement,
+    //   helper: !!helper,
+    // })
 
     if (viewport) {
-      console.log('[TerminalView] Viewport found:', {
-        height: viewport.style.height,
-        overflowY: getComputedStyle(viewport).overflowY,
-        scrollHeight: viewport.scrollHeight,
-        clientHeight: viewport.clientHeight,
-      })
+      // console.log('[TerminalView] Viewport found:', {
+      //   height: viewport.style.height,
+      //   overflowY: getComputedStyle(viewport).overflowY,
+      //   scrollHeight: viewport.scrollHeight,
+      //   clientHeight: viewport.clientHeight,
+      // })
 
       // 关键修复：确保 viewport 支持触摸滚动
       viewport.style.touchAction = 'pan-y'
       viewport.style.overflowY = 'auto'
 
-      // 添加触摸事件监听调试
-      viewport.addEventListener('touchstart', (e) => {
-        console.log('[TerminalView] Touch start on viewport, touches:', e.touches.length)
-      }, { passive: true })
+      // 添加触摸事件监听调试（已注释）
+      // viewport.addEventListener('touchstart', (e) => {
+      //   console.log('[TerminalView] Touch start on viewport, touches:', e.touches.length)
+      // }, { passive: true })
 
-      viewport.addEventListener('touchmove', (e) => {
-        console.log('[TerminalView] Touch move on viewport, deltaY:', e.touches[0]?.clientY)
-      }, { passive: true })
+      // viewport.addEventListener('touchmove', (e) => {
+      //   console.log('[TerminalView] Touch move on viewport, deltaY:', e.touches[0]?.clientY)
+      // }, { passive: true })
 
-      // 添加滚轮事件监听调试
-      viewport.addEventListener('wheel', (e) => {
-        console.log('[TerminalView] Wheel event on viewport:', e.deltaY)
-      }, { passive: true })
+      // 添加滚轮事件监听调试（已注释）
+      // viewport.addEventListener('wheel', (e) => {
+      //   console.log('[TerminalView] Wheel event on viewport:', e.deltaY)
+      // }, { passive: true })
     } else {
-      console.error('[TerminalView] Viewport not found!')
+      // console.error('[TerminalView] Viewport not found!')
     }
 
     // 确保 xterm 主元素不阻止触摸
     if (xtermElement) {
       xtermElement.style.touchAction = 'pan-y'
-      console.log('[TerminalView] Set touch-action on .xterm')
+      // console.log('[TerminalView] Set touch-action on .xterm')
 
-      // 尝试在 xterm 主元素上监听滚轮
-      xtermElement.addEventListener('wheel', (e) => {
-        console.log('[TerminalView] Wheel on .xterm:', e.deltaY)
-        // 尝试手动触发 xterm 滚动
-        if (terminal) {
-          const scrollAmount = Math.round(e.deltaY / 20)
-          terminal.scrollLines(scrollAmount)
-          console.log('[TerminalView] Manually scrolled:', scrollAmount)
-        }
-      }, { passive: true })
+      // 尝试在 xterm 主元素上监听滚轮（已注释）
+      // xtermElement.addEventListener('wheel', (e) => {
+      //   console.log('[TerminalView] Wheel on .xterm:', e.deltaY)
+      //   // 尝试手动触发 xterm 滚动
+      //   if (terminal) {
+      //     const scrollAmount = Math.round(e.deltaY / 20)
+      //     terminal.scrollLines(scrollAmount)
+      //     console.log('[TerminalView] Manually scrolled:', scrollAmount)
+      //   }
+      // }, { passive: true })
     }
 
     // 确保屏幕元素不阻止触摸
     if (screenElement) {
       screenElement.style.touchAction = 'pan-y'
-      console.log('[TerminalView] Set touch-action on .xterm-screen')
+      // console.log('[TerminalView] Set touch-action on .xterm-screen')
     }
   }, 100)
 
@@ -552,14 +532,14 @@ async function initTerminal() {
   // Window resize
   window.addEventListener('resize', handleWindowResize)
 
-  // FIXME: Terminal resize 事件暂时注释
-  // terminal.onResize(({ cols, rows }) => {
-  //   if (isConnected.value && isSessionActive.value && !isDebugSession.value) {
-  //     wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
-  //       console.error('[TerminalView] Resize failed:', e)
-  //     })
-  //   }
-  // })
+  // Terminal resize 事件：通知桌面端调整 PTY 大小
+  terminal.onResize(({ cols, rows }) => {
+    if (isConnected.value && isSessionActive.value) {
+      wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
+        console.warn('[TerminalView] Resize failed:', e)
+      })
+    }
+  })
 }
 
 function fitTerminal() {
@@ -581,264 +561,116 @@ function disposeTerminal() {
     resizeObserver = null
   }
   window.removeEventListener('resize', handleWindowResize)
-  if (mockOutputInterval) {
-    clearInterval(mockOutputInterval)
-    mockOutputInterval = null
+  // 清理输出监听器
+  if (outputListener) {
+    outputListener()
+    outputListener = null
   }
-  // FIXME: 真实输出监听清理暂时注释
-  // if (outputPollInterval) {
-  //   clearInterval(outputPollInterval)
-  //   outputPollInterval = null
-  // }
-  // if (outputListener) {
-  //   outputListener()
-  //   outputListener = null
-  // }
   if (terminal) {
     terminal.dispose()
     terminal = null
     fitAddon = null
   }
+  lastIndex = -1
 }
 
-// ==================== Mock Data ====================
-
-const MOCK_COMMANDS = [
-  'ls -la', 'cd /usr/local/bin', 'cat package.json', 'git status',
-  'npm install', 'docker ps', 'curl -I https://api.example.com',
-  'ps aux | grep node', 'mkdir -p src/components',
-  'echo "Hello, World!"', 'python3 -m http.server 8080',
-  'tail -f /var/log/syslog', 'find . -name "*.ts" -type f',
-  'tar -czf archive.tar.gz ./dist', 'ssh user@remote-host',
-]
-
-const MOCK_OUTPUTS = [
-  'total 128\r\n  drwxr-xr-x  12 user  staff   384 Jun 01 10:23 .\r\n  drwxr-xr-x   5 root   root   160 Jun 01 09:15 ..',
-  '{\r\n  "name": "bedcode-app",\r\n  "version": "1.0.0"\r\n}',
-  'On branch dev\r\n  modified:   src/components/Terminal.vue\r\n  no changes added',
-  'CONTAINER ID   IMAGE          COMMAND\r\n  abc123def456   nginx:latest   "/docker"  2 hours ago',
-  'HTTP/1.1 200 OK\r\n  Content-Type: application/json\r\n  {"status":"ok"}',
-  'PID   USER   TIME   COMMAND\r\n  1234  root   0:05   node server.js',
-  'Server running at http://localhost:8080/\r\n  Serving directory: /home/user/project',
-  'Connection established to remote-host\r\n  Welcome to Ubuntu 22.04.4 LTS',
-]
-
-const MOCK_LOG_MESSAGES = [
-  'Processing request...',
-  'Connection established',
-  'Data received',
-  'Operation completed',
-  'Syncing...',
-  'Heartbeat received',
-  'Task finished',
-]
-
-const MOCK_LEVELS = ['INFO', 'WARN', 'DEBUG', 'ERROR']
-const MOCK_COLORS = ['\x1b[32m', '\x1b[33m', '\x1b[36m', '\x1b[35m', '\x1b[34m', '\x1b[37m']
-
-function getRandomInt(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min
-}
-
-function getRandomItem<T>(arr: T[]): T {
-  return arr[getRandomInt(0, arr.length - 1)]
-}
-
-function getTimestamp() {
-  return new Date().toISOString().slice(11, 19)
-}
-
-// Generate mock output lines
-function generateMockOutput(): string {
-  const lineCount = getRandomInt(5, 10)
-  const lines: string[] = []
-
-  for (let i = 0; i < lineCount; i++) {
-    const type = getRandomInt(0, 3)
-
-    switch (type) {
-      case 0: // Command
-        lines.push('$ ' + getRandomItem(MOCK_COMMANDS))
-        break
-      case 1: // Output
-        lines.push(getRandomItem(MOCK_OUTPUTS))
-        break
-      case 2: { // Colored log
-        const color = getRandomItem(MOCK_COLORS)
-        const level = getRandomItem(MOCK_LEVELS)
-        const msg = getRandomItem(MOCK_LOG_MESSAGES)
-        lines.push(color + '[' + getTimestamp() + '] [' + level + '] ' + msg + '\x1b[0m')
-        break
-      }
-      case 3: { // Progress bar
-        const progress = getRandomInt(5, 30)
-        const remaining = getRandomInt(0, 10)
-        lines.push('[' + '='.repeat(progress) + ' '.repeat(remaining) + '] ' + getRandomInt(10, 100) + '%')
-        break
-      }
-    }
-  }
-
-  return lines.join('\r\n') + '\r\n'
-}
-
-// ==================== Session Subscription ====================
+// ==================== Input Handlers ====================
 
 async function subscribeSession() {
-  console.log('[TerminalView] subscribeSession called, isDebugSession:', isDebugSession.value, 'isConnected:', isConnected.value)
+  if (!isConnected.value) {
+    console.log('[TerminalView] subscribeSession: not connected, skipping')
+    return
+  }
 
-  // FIXME: 真实会话订阅暂时注释，使用模拟输出
-  // if (isDebugSession.value || !isConnected.value) return
+  try {
+    // 加入会话，开始接收输出
+    await wsJoinSession(sessionId.value)
+    console.log('[TerminalView] Joined session:', sessionId.value)
 
-  // try {
-  //   // Join session
-  //   await wsJoinSession(sessionId.value)
-  //   console.log('[TerminalView] Joined session:', sessionId.value)
+    // 监听终端输出事件
+    outputListener = await listen<{
+      session_id: string
+      data: string
+      index: number
+      is_waiting: boolean
+    }>('ws_output', (event) => {
+      // 只处理当前会话的输出
+      if (event.payload.session_id !== sessionId.value) return
 
-  //   // Subscribe terminal buffer
-  //   currentIndex = await wsSubscribeTerminal(sessionId.value)
-  //   console.log('[TerminalView] Subscribed terminal, initial index:', currentIndex)
+      // 索引去重：避免重复输出（重连时可能发生）
+      if (event.payload.index !== undefined && event.payload.index <= lastIndex) {
+        return
+      }
+      lastIndex = event.payload.index
 
-  //   // Start polling for incremental output
-  //   startOutputPoll()
-  // } catch (e) {
-  //   console.error('[TerminalView] Subscribe failed:', e)
-  //   toast.error('订阅终端失败')
-  // }
+      // 写入终端
+      if (terminal) {
+        terminal.write(event.payload.data)
+      }
+    })
 
-  // 使用模拟输出
-  startMockOutput()
+    console.log('[TerminalView] Subscribed to terminal output')
+  } catch (e) {
+    console.error('[TerminalView] Subscribe failed:', e)
+    toast.error('订阅终端失败')
+  }
 }
 
 async function unsubscribeSession() {
-  // 停止模拟输出
-  if (mockOutputInterval) {
-    clearInterval(mockOutputInterval)
-    mockOutputInterval = null
+  // 清理输出监听器
+  if (outputListener) {
+    outputListener()
+    outputListener = null
   }
 
-  // FIXME: 真实会话取消订阅暂时注释
-  // if (isDebugSession.value || !isConnected.value) return
+  if (!isConnected.value) return
 
-  // try {
-  //   if (outputPollInterval) {
-  //     clearInterval(outputPollInterval)
-  //     outputPollInterval = null
-  //   }
-  //   await wsUnsubscribeTerminal(sessionId.value)
-  //   await wsLeaveSession(sessionId.value)
-  //   console.log('[TerminalView] Unsubscribed session:', sessionId.value)
-  // } catch (e) {
-  //   console.error('[TerminalView] Unsubscribe failed:', e)
-  // }
-}
-
-function startMockOutput() {
-  console.log('[TerminalView] startMockOutput called, terminal exists:', !!terminal, 'isSessionActive:', isSessionActive.value)
-
-  // 立即输出一次
-  if (terminal) {
-    const output = generateMockOutput()
-    terminal.write(output)
+  try {
+    await wsLeaveSession(sessionId.value)
+    console.log('[TerminalView] Left session:', sessionId.value)
+  } catch (e) {
+    console.error('[TerminalView] Unsubscribe failed:', e)
   }
-
-  // 每 3 秒生成模拟输出
-  mockOutputInterval = setInterval(() => {
-    if (!terminal) {
-      console.log('[TerminalView] mockOutput interval: terminal is null')
-      return
-    }
-    if (!isSessionActive.value) {
-      console.log('[TerminalView] mockOutput interval: session not active')
-      return
-    }
-
-    const output = generateMockOutput()
-    terminal.write(output)
-  }, 3000)
-
-  console.log('[TerminalView] mockOutputInterval started:', mockOutputInterval)
 }
-
-// function startOutputPoll() {
-//   // Poll every 100ms for incremental output
-//   outputPollInterval = setInterval(async () => {
-//     if (!terminal || !isSessionActive.value) return
-
-//     try {
-//       const result = await wsGetTerminalIncremental(sessionId.value)
-//       if (result && result.events && result.events.length > 0) {
-//         // Write all event data to terminal
-//         for (const event of result.events) {
-//           terminal.write(event.data)
-//         }
-//         currentIndex = result.current_index
-//         await wsUpdateTerminalIndex(sessionId.value, currentIndex)
-//       }
-//     } catch (e) {
-//       console.error('[TerminalView] Get incremental failed:', e)
-//     }
-//   }, 100)
-// }
 
 // ==================== Input Handlers ====================
 
 function handleInputSubmit(text: string) {
   if (!terminal) return
 
-  const term = terminal  // Capture reference for closure
-
-  // 所有输入都显示模拟输出
-  term.write('$ ' + text + '\r\n')
-  setTimeout(() => {
-    const responses = [
-      `Command not found: ${text}\r\n`,
-      `Executing: ${text}\r\n  Done.\r\n`,
-      'Error: Permission denied\r\n',
-      `${text}: command executed successfully\r\n`,
-    ]
-    const randomResponse = responses[Math.floor(Math.random() * responses.length)]
-    term.write(randomResponse)
-  }, 300)
-
-  // FIXME: 真实输入发送暂时注释
-  // if (isConnected.value && isSessionActive.value) {
-  //   wsSendInput(sessionId.value, text + '\n').catch(e => {
-  //     console.error('[TerminalView] Send input failed:', e)
-  //     toast.error('发送命令失败')
-  //   })
-  // }
+  // 发送输入到桌面端（不带换行，仅输入文本）
+  if (isConnected.value && isSessionActive.value) {
+    wsSendInput(sessionId.value, text).catch(e => {
+      console.error('[TerminalView] Send input failed:', e)
+      toast.error('发送命令失败')
+    })
+  }
 }
 
-function handleInputExecute(text: string) {
+async function handleInputExecute(text: string) {
   if (!terminal) return
 
-  const term = terminal  // Capture reference for closure
-
-  // 所有执行都显示模拟结果
-  term.write('$ ' + text + '\r\n')
-  setTimeout(() => {
-    term.write('\x1b[32m[执行结果]\x1b[0m\r\n')
-    term.write('  命令: ' + text + '\r\n')
-    term.write('  状态: \x1b[32m成功\x1b[0m\r\n')
-    term.write('  耗时: ' + (Math.random() * 2).toFixed(3) + 's\r\n\r\n')
-  }, 200)
-
-  // FIXME: 真实输入发送暂时注释
-  // if (isConnected.value && isSessionActive.value) {
-  //   wsSendInput(sessionId.value, text + '\n').catch(e => {
-  //     console.error('[TerminalView] Send input failed:', e)
-  //     toast.error('发送命令失败')
-  //   })
-  // }
+  // 发送输入到桌面端，然后发送 enter 特殊键执行命令
+  if (isConnected.value && isSessionActive.value) {
+    try {
+      // 先发送文本
+      await wsSendInput(sessionId.value, text)
+      // 再发送 enter 特殊键
+      await wsSendInput(sessionId.value, '', 'enter')
+    } catch (e) {
+      console.error('[TerminalView] Send input failed:', e)
+      toast.error('发送命令失败')
+    }
+  }
 }
 
 function handleSpecialKey(key: string) {
-  // FIXME: 真实特殊键发送暂时注释
-  // if (!isConnected.value || !isSessionActive.value || isDebugSession.value) return
-  // wsSendInput(sessionId.value, '', key).catch(e => {
-  //   console.error('[TerminalView] Send special key failed:', e)
-  // })
+  // 发送特殊键到桌面端
+  if (isConnected.value && isSessionActive.value) {
+    wsSendInput(sessionId.value, '', key).catch(e => {
+      console.error('[TerminalView] Send special key failed:', e)
+    })
+  }
 }
 
 // ==================== Clear Terminal ====================
@@ -852,17 +684,6 @@ async function clearTerminal() {
 
   terminal.clear()
   showClearConfirm.value = false
-
-  // FIXME: 真实清屏操作暂时注释
-  // if (!isDebugSession.value && isConnected.value) {
-  //   try {
-  //     await wsClearTerminalBuffer(sessionId.value)
-  //     currentIndex = 0
-  //     await wsUpdateTerminalIndex(sessionId.value, 0)
-  //   } catch (e) {
-  //     console.error('[TerminalView] Clear buffer failed:', e)
-  //   }
-  // }
 }
 
 // ==================== Navigation ====================
@@ -871,17 +692,15 @@ function handleBack() {
   router.back()
 }
 
-// ==================== Touch Debug ====================
+// ==================== Touch Scroll ====================
 
 let lastTouchY = 0
 
 function onViewTouchStart(e: TouchEvent) {
-  console.log('[TerminalView] Touch start on view, target:', (e.target as HTMLElement)?.className)
   lastTouchY = e.touches[0]?.clientY || 0
 }
 
 function onViewTouchMove(e: TouchEvent) {
-  console.log('[TerminalView] Touch move on view')
   // 手动处理触摸滚动
   const currentY = e.touches[0]?.clientY || 0
   const deltaY = lastTouchY - currentY
@@ -894,12 +713,10 @@ function onViewTouchMove(e: TouchEvent) {
 }
 
 function onContainerTouchStart(e: TouchEvent) {
-  // console.log('[TerminalView] Touch start on container, target:', (e.target as HTMLElement)?.className)
   lastTouchY = e.touches[0]?.clientY || 0
 }
 
 function onContainerTouchMove(e: TouchEvent) {
-  // console.log('[TerminalView] Touch move on container')
   // 手动处理触摸滚动
   const currentY = e.touches[0]?.clientY || 0
   const deltaY = lastTouchY - currentY
@@ -914,23 +731,13 @@ function onContainerTouchMove(e: TouchEvent) {
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
-  console.log('[TerminalView] onMounted, sessionId:', sessionId.value, 'isDebugSession:', isDebugSession.value, 'isSessionActive:', isSessionActive.value)
-
   await nextTick()
   initTerminal()
 
-  // 所有会话都启动模拟输出（调试会话始终活动，真实会话检查状态）
-  // 对于调试会话，isSessionActive 应该是 true
-  // 但为了确保模拟输出能工作，我们直接启动
-  startMockOutput()
-
-  // FIXME: 真实输出监听暂时注释
-  // Listen for output events (backup mechanism)
-  // outputListener = await listen<{ session_id: string; data: string }>('ws_output', (event) => {
-  //   if (event.payload.session_id === sessionId.value && terminal) {
-  //     terminal.write(event.payload.data)
-  //   }
-  // })
+  // 会话活跃时订阅输出
+  if (isSessionActive.value && isConnected.value) {
+    await subscribeSession()
+  }
 })
 
 onUnmounted(async () => {
@@ -942,10 +749,10 @@ onUnmounted(async () => {
 watch(isSessionActive, async (active, prevActive) => {
   if (active && !prevActive) {
     // Session became active
-    await subscribeSession()
     if (terminal) {
       terminal.write('\x1b[32m[会话已启动]\x1b[0m\r\n')
     }
+    await subscribeSession()
   } else if (!active && prevActive) {
     // Session stopped
     await unsubscribeSession()
@@ -960,7 +767,7 @@ watch(isConnected, async (connected) => {
   if (!connected && terminal) {
     terminal.write('\x1b[31m[连接已断开]\x1b[0m\r\n')
     await unsubscribeSession()
-  } else if (connected && isSessionActive.value && !isDebugSession.value && terminal) {
+  } else if (connected && isSessionActive.value && terminal) {
     terminal.write('\x1b[32m[连接已恢复]\x1b[0m\r\n')
     await subscribeSession()
   }
@@ -972,7 +779,7 @@ watch(isConnected, async (connected) => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0a0a0f;
+  background: var(--mobile-terminal-bg);
   position: fixed;
   top: 0;
   left: 0;
@@ -991,9 +798,9 @@ watch(isConnected, async (connected) => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background: rgba(18, 18, 26, 0.9);
+  background: var(--mobile-terminal-header);
   backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+  border-bottom: 1px solid var(--mobile-border);
   flex-shrink: 0;
   position: relative;
   z-index: 10;
@@ -1002,7 +809,7 @@ watch(isConnected, async (connected) => {
 .back-btn {
   padding: 0.5rem;
   margin-left: -0.5rem;
-  color: var(--text-secondary, #9ca3af);
+  color: var(--mobile-text-secondary);
   background: none;
   border: none;
   cursor: pointer;
@@ -1024,7 +831,7 @@ watch(isConnected, async (connected) => {
 .header-title {
   font-size: 1rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--mobile-text-primary);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -1058,15 +865,15 @@ watch(isConnected, async (connected) => {
 }
 
 .status-text {
-  color: var(--text-muted, #6b7280);
+  color: var(--mobile-text-muted);
 }
 
 .clear-btn {
   padding: 0.5rem;
   border-radius: 0.5rem;
-  background: #1f2937;
-  border: 1px solid var(--border, #374151);
-  color: var(--text-secondary, #9ca3af);
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
   display: flex;
@@ -1081,9 +888,9 @@ watch(isConnected, async (connected) => {
 .settings-btn {
   padding: 0.5rem;
   border-radius: 0.5rem;
-  background: #1f2937;
-  border: 1px solid var(--border, #374151);
-  color: var(--text-secondary, #9ca3af);
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
   display: flex;
@@ -1111,7 +918,7 @@ watch(isConnected, async (connected) => {
 }
 
 .settings-modal {
-  background: #1a1a2e;
+  background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 100%;
   max-width: 360px;
@@ -1124,13 +931,13 @@ watch(isConnected, async (connected) => {
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--mobile-border);
 }
 
 .settings-header h2 {
   font-size: 1rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--mobile-text-primary);
   margin: 0;
 }
 
@@ -1138,7 +945,7 @@ watch(isConnected, async (connected) => {
   padding: 0.25rem;
   background: none;
   border: none;
-  color: #9ca3af;
+  color: var(--mobile-text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1146,7 +953,7 @@ watch(isConnected, async (connected) => {
 }
 
 .close-btn:hover {
-  color: #ffffff;
+  color: var(--mobile-text-primary);
 }
 
 .settings-content {
@@ -1165,7 +972,7 @@ watch(isConnected, async (connected) => {
   display: block;
   font-size: 0.875rem;
   font-weight: 500;
-  color: #9ca3af;
+  color: var(--mobile-text-muted);
   margin-bottom: 0.75rem;
 }
 
@@ -1179,16 +986,16 @@ watch(isConnected, async (connected) => {
   width: 40px;
   height: 40px;
   border-radius: 0.5rem;
-  background: #2d2d44;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-primary);
   font-size: 1.25rem;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .size-btn:hover:not(:disabled) {
-  background: #3d3d54;
+  background: var(--mobile-bg-hover);
 }
 
 .size-btn:disabled {
@@ -1201,7 +1008,7 @@ watch(isConnected, async (connected) => {
   text-align: center;
   font-size: 1.125rem;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--mobile-text-primary);
 }
 
 .theme-grid {
@@ -1217,14 +1024,14 @@ watch(isConnected, async (connected) => {
   gap: 0.375rem;
   padding: 0.75rem 0.5rem;
   border-radius: 0.5rem;
-  background: #2d2d44;
+  background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .theme-btn:hover {
-  background: #3d3d54;
+  background: var(--mobile-bg-hover);
 }
 
 .theme-btn.active {
@@ -1244,7 +1051,7 @@ watch(isConnected, async (connected) => {
 
 .theme-name {
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: var(--mobile-text-muted);
 }
 
 .theme-btn.active .theme-name {
@@ -1256,7 +1063,7 @@ watch(isConnected, async (connected) => {
   display: flex;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--mobile-border);
 }
 
 .settings-footer-btn {
@@ -1270,14 +1077,14 @@ watch(isConnected, async (connected) => {
 }
 
 .settings-footer-btn.cancel {
-  background: #2d2d44;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #9ca3af;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-muted);
 }
 
 .settings-footer-btn.cancel:hover {
-  background: #3d3d54;
-  color: #ffffff;
+  background: var(--mobile-bg-hover);
+  color: var(--mobile-text-primary);
 }
 
 .settings-footer-btn.confirm {
@@ -1306,7 +1113,7 @@ watch(isConnected, async (connected) => {
 }
 
 .confirm-modal {
-  background: #1a1a2e;
+  background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   padding: 1.5rem;
   width: 100%;
@@ -1316,7 +1123,7 @@ watch(isConnected, async (connected) => {
 
 .confirm-text {
   font-size: 1rem;
-  color: #ffffff;
+  color: var(--mobile-text-primary);
   margin: 0 0 1.25rem;
 }
 
@@ -1336,14 +1143,14 @@ watch(isConnected, async (connected) => {
 }
 
 .confirm-btn.cancel {
-  background: #2d2d44;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #9ca3af;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-muted);
 }
 
 .confirm-btn.cancel:hover {
-  background: #3d3d54;
-  color: #ffffff;
+  background: var(--mobile-bg-hover);
+  color: var(--mobile-text-primary);
 }
 
 .confirm-btn.confirm {
@@ -1387,7 +1194,7 @@ watch(isConnected, async (connected) => {
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background: #0a0a0f;
+  background: var(--mobile-terminal-bg);
   /* 允许子元素触摸滚动 */
   touch-action: pan-y;
 }
