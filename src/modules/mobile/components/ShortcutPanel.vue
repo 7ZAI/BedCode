@@ -10,34 +10,34 @@
 
         <!-- 快捷键面板 -->
         <div
-          class="relative bg-[#12121a] border-t border-cyan-500/20 rounded-t-2xl w-full max-w-md mx-4 mb-4 shadow-xl"
+          class="relative bg-[var(--mobile-bg-card)] border-t border-[var(--mobile-border)] rounded-t-2xl w-full max-w-md mx-4 mb-4 shadow-xl"
           :style="{ paddingBottom: 'env(safe-area-inset-bottom, 16px)' }"
         >
           <!-- 拖动条 -->
           <div class="flex justify-center pt-3 pb-1">
-            <div class="w-10 h-1 bg-cyan-500/30 rounded-full"></div>
+            <div class="w-10 h-1 bg-[var(--mobile-accent-muted)] rounded-full"></div>
           </div>
 
           <!-- Header -->
           <div class="flex items-center justify-between px-4 py-2">
-            <span class="font-medium text-white">快捷键</span>
+            <span class="font-medium text-[var(--mobile-text-primary)]">快捷键</span>
             <button
-              class="p-1.5 rounded-lg hover:bg-cyan-500/10 transition-colors"
+              class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
               @click="emit('close')"
             >
-              <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
 
           <!-- 高频快捷键 -->
-          <div v-if="topShortcuts.length > 0" class="px-4 py-2 border-b border-cyan-500/10">
+          <div v-if="topShortcuts.length > 0" class="px-4 py-2 border-b border-[var(--mobile-border)]">
             <div class="flex flex-wrap gap-2">
               <button
                 v-for="key in topShortcuts"
                 :key="key"
-                class="px-3 py-1.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/20 transition-colors"
+                class="px-3 py-1.5 bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)] text-[var(--mobile-accent)] rounded-lg text-sm font-medium hover:opacity-80 transition-colors"
                 @click="handleShortcutClick(key)"
               >
                 {{ getShortcutLabel(key) }}
@@ -51,11 +51,11 @@
               <button
                 v-for="key in allShortcuts"
                 :key="key.code"
-                class="flex flex-col items-center justify-center p-2.5 bg-[#0a0a0f] border border-cyan-500/10 rounded-lg hover:border-cyan-500/30 transition-colors"
+                class="flex flex-col items-center justify-center p-2.5 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg hover:border-[var(--mobile-accent)] transition-colors"
                 @click="handleShortcutClick(key.code)"
               >
-                <span class="text-base mb-0.5 text-cyan-400">{{ key.icon }}</span>
-                <span class="text-[10px] text-gray-500">{{ key.label }}</span>
+                <span class="text-base mb-0.5 text-[var(--mobile-accent)]">{{ key.icon }}</span>
+                <span class="text-[10px] text-[var(--mobile-text-muted)]">{{ key.label }}</span>
               </button>
             </div>
           </div>

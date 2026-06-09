@@ -6,10 +6,10 @@
         <div class="absolute inset-0 bg-black/60" @click="handleBackdropClick"></div>
 
         <!-- Panel - 居中显示，避免被输入法遮挡 -->
-        <div class="relative w-full max-w-sm bg-white dark:bg-dark-800 rounded-2xl p-6">
+        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] rounded-2xl p-6">
           <!-- Close button (loading时禁用) -->
           <button
-            class="absolute top-4 right-4 p-2 text-gray- dark:text-dark-400 hover:text-white"
+            class="absolute top-4 right-4 p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-text-primary)]"
             :class="{ 'opacity-50 pointer-events-none': loading }"
             :disabled="loading"
             @click="close"
@@ -26,10 +26,10 @@
           <div v-if="loading" class="mb-4">
             <div class="flex items-center justify-center gap-3 py-4">
               <div class="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
-              <span class="text-gray- dark:text-dark-300">正在连接...</span>
+              <span class="text-[var(--mobile-text-secondary)]">正在连接...</span>
             </div>
             <button
-              class="w-full bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 py-3 rounded-xl font-medium"
+              class="w-full bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium"
               @click="handleCancel"
             >
               取消连接
@@ -43,7 +43,7 @@
               v-model="inputValue"
               type="text"
               :placeholder="placeholder"
-              class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-xl px-4 py-3 text-white placeholder-dark-400 focus:outline-none focus:border-primary-500"
+              class="w-full bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-xl px-4 py-3 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-muted)] focus:outline-none focus:border-primary-500"
               @keyup.enter="submit"
             />
           </div>
@@ -51,7 +51,7 @@
           <!-- Actions (hidden when loading) -->
           <div v-if="!loading" class="flex gap-3">
             <button
-              class="flex-1 bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 py-3 rounded-xl font-medium active:bg-gray-200 dark:bg-dark-600"
+              class="flex-1 bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium active:opacity-80"
               @click="close"
             >
               取消

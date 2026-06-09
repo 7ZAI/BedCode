@@ -6,10 +6,10 @@
         <div class="absolute inset-0 bg-black/80"></div>
 
         <!-- Panel - 居中显示，使用自带数字键盘 -->
-        <div class="relative w-full max-w-sm bg-[#12121a] border border-cyan-500/20 rounded-2xl p-6 my-4">
+        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 my-4">
           <!-- Close button -->
           <button
-            class="absolute top-4 right-4 p-2 text-gray-500 hover:text-cyan-400 transition-colors"
+            class="absolute top-4 right-4 p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
             @click="close"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -18,8 +18,8 @@
           </button>
 
           <!-- Title -->
-          <h3 class="text-xl font-semibold text-white text-center mt-2 mb-2">输入配对码</h3>
-          <p class="text-gray-500 text-center text-sm mb-6">
+          <h3 class="text-xl font-semibold text-[var(--mobile-text-primary)] text-center mt-2 mb-2">输入配对码</h3>
+          <p class="text-[var(--mobile-text-muted)] text-center text-sm mb-6">
             请在桌面端查看并输入 6 位数字配对码
           </p>
 
@@ -28,8 +28,8 @@
             <div
               v-for="i in 6"
               :key="i"
-              class="w-12 h-14 bg-[#0a0a0f] border border-cyan-500/20 rounded-lg flex items-center justify-center text-2xl font-bold"
-              :class="code[i-1] ? 'text-cyan-400 border-cyan-500/50 shadow-[0_0_10px_rgba(34,211,238,0.2)]' : 'text-gray-600'"
+              class="w-12 h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg flex items-center justify-center text-2xl font-bold"
+              :class="code[i-1] ? 'text-[var(--mobile-accent)] border-[var(--mobile-accent)] shadow-[0_0_10px_rgba(34,211,238,0.2)]' : 'text-gray-600'"
             >
               {{ code[i-1] || '-' }}
             </div>
@@ -40,28 +40,28 @@
             <button
               v-for="n in 9"
               :key="n"
-              class="h-14 bg-[#0a0a0f] border border-cyan-500/20 rounded-xl text-xl font-medium text-white hover:border-cyan-500/40 transition-colors"
+              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-xl font-medium text-[var(--mobile-text-primary)] hover:border-[var(--mobile-accent)] transition-colors"
               @click="pressKey(n.toString())"
             >
               {{ n }}
             </button>
             <button
-              class="h-14 bg-[#0a0a0f] border border-cyan-500/20 rounded-xl text-sm text-gray-400 hover:border-cyan-500/40 transition-colors"
+              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-sm text-[var(--mobile-text-secondary)] hover:border-[var(--mobile-accent)] transition-colors"
               @click="clearCode"
             >
               清除
             </button>
             <button
-              class="h-14 bg-[#0a0a0f] border border-cyan-500/20 rounded-xl text-xl font-medium text-white hover:border-cyan-500/40 transition-colors"
+              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-xl font-medium text-[var(--mobile-text-primary)] hover:border-[var(--mobile-accent)] transition-colors"
               @click="pressKey('0')"
             >
               0
             </button>
             <button
-              class="h-14 bg-[#0a0a0f] border border-cyan-500/20 rounded-xl hover:border-cyan-500/40 transition-colors"
+              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl hover:border-[var(--mobile-accent)] transition-colors"
               @click="backspace"
             >
-              <svg class="w-6 h-6 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-6 h-6 mx-auto text-[var(--mobile-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 12l6.414 6.414a2 2 0 001.414.586H19a2 2 0 002-2V7a2 2 0 00-2-2h-8.172a2 2 0 00-1.414.586L3 12z" />
               </svg>
             </button>
@@ -74,7 +74,7 @@
 
           <!-- Submit button -->
           <button
-            class="w-full bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 py-3 rounded-xl font-medium hover:bg-cyan-500/30 transition-colors"
+            class="w-full bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:opacity-80 transition-colors"
             :class="{ 'opacity-50': code.length !== 6 || loading }"
             :disabled="code.length !== 6 || loading"
             @click="submit"

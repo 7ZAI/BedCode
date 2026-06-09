@@ -2,7 +2,6 @@
   <div
     v-if="platformInfo.isMobile && showStatusBar"
     class="mobile-status-bar"
-    :class="{ 'dark': isDark }"
   >
     <div class="status-bar-content">
       <!-- 时间 -->
@@ -11,7 +10,7 @@
       <!-- 信号/电池等状态图标 -->
       <div class="status-icons">
         <!-- 电池图标 -->
-        <svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="currentColor">
+        <svg class="w-4 h-4 text-[var(--mobile-accent)]" viewBox="0 0 24 24" fill="currentColor">
           <path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/>
         </svg>
       </div>
@@ -20,23 +19,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { usePlatform } from '@/modules/shared/composables/usePlatform'
-import { useSettingsStore } from '@/modules/shared/stores/settings'
 
 const { platformInfo } = usePlatform()
-const settingsStore = useSettingsStore()
 
 const showStatusBar = ref(true)
 const currentTime = ref('')
-
-const isDark = computed(() => {
-  const theme = settingsStore.settings.ui.theme
-  if (theme === 'system') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-  }
-  return theme === 'dark'
-})
 
 function updateTime() {
   const now = new Date()
@@ -67,7 +56,7 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   height: 24px;
-  background: #0a0a0f;
+  background: var(--mobile-bg-primary);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -75,12 +64,7 @@ onUnmounted(() => {
   padding: 0 16px;
   font-size: 12px;
   font-weight: 500;
-  color: #22d3ee;
-}
-
-.mobile-status-bar.dark {
-  background: #0a0a0f;
-  color: #22d3ee;
+  color: var(--mobile-accent);
 }
 
 .status-bar-content {
