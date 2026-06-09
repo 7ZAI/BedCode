@@ -5,6 +5,7 @@ import App from './App.vue'
 import { initPlatform } from '@/modules/shared/composables/usePlatform'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 import './style.css'
+import './styles/mobile.css'
 
 const app = createApp(App)
 

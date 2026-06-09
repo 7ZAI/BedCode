@@ -1,0 +1,110 @@
+/* ============================================
+   移动端主题变量
+   ============================================ */
+
+/* 深色模式（默认） - 与现有配色一致 */
+:root {
+  /* 背景色 */
+  --mobile-bg-primary: #0a0a0f;
+  --mobile-bg-secondary: #12121a;
+  --mobile-bg-tertiary: #1a1a2e;
+  --mobile-bg-card: #12121a;
+  --mobile-bg-elevated: #1f2937;
+
+  /* 文字色 */
+  --mobile-text-primary: #ffffff;
+  --mobile-text-secondary: #9ca3af;
+  --mobile-text-muted: #6b7280;
+  --mobile-text-disabled: #4b5563;
+
+  /* 边框色 */
+  --mobile-border: rgba(34, 211, 238, 0.1);
+  --mobile-border-hover: rgba(34, 211, 238, 0.2);
+  --mobile-border-active: rgba(34, 211, 238, 0.3);
+
+  /* 强调色 */
+  --mobile-accent: #00d4ff;
+  --mobile-accent-muted: rgba(0, 212, 255, 0.1);
+  --mobile-accent-secondary: rgba(0, 212, 255, 0.2);
+
+  /* 状态色 */
+  --mobile-success: #10b981;
+  --mobile-success-muted: rgba(16, 185, 129, 0.1);
+  --mobile-warning: #f59e0b;
+  --mobile-warning-muted: rgba(245, 158, 11, 0.1);
+  --mobile-error: #ef4444;
+  --mobile-error-muted: rgba(239, 68, 68, 0.1);
+
+  /* 终端色 */
+  --mobile-terminal-bg: #0a0a0f;
+  --mobile-terminal-header: rgba(18, 18, 26, 0.9);
+
+  /* 导航栏 */
+  --mobile-nav-bg: rgba(10, 10, 15, 0.95);
+  --mobile-nav-border: rgba(34, 211, 238, 0.2);
+  --mobile-nav-active: #00d4ff;
+  --mobile-nav-inactive: #6b7280;
+
+  /* 输入框 */
+  --mobile-input-bg: #0a0a0f;
+  --mobile-input-border: rgba(34, 211, 238, 0.2);
+  --mobile-input-focus: rgba(34, 211, 238, 0.5);
+  --mobile-input-placeholder: #4b5563;
+}
+
+/* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效 */
+html:not(.dark) .mobile-ui,
+html:not(.dark) .mobile-app {
+  /* 背景色 */
+  --mobile-bg-primary: #ffffff;
+  --mobile-bg-secondary: #f8fafc;
+  --mobile-bg-tertiary: #f1f5f9;
+  --mobile-bg-card: #ffffff;
+  --mobile-bg-elevated: #ffffff;
+
+  /* 文字色 */
+  --mobile-text-primary: #1e293b;
+  --mobile-text-secondary: #64748b;
+  --mobile-text-muted: #94a3b8;
+  --mobile-text-disabled: #cbd5e1;
+
+  /* 边框色 */
+  --mobile-border: rgba(8, 145, 178, 0.15);
+  --mobile-border-hover: rgba(8, 145, 178, 0.25);
+  --mobile-border-active: rgba(8, 145, 178, 0.35);
+
+  /* 强调色 - 浅色模式使用稍深的 cyan */
+  --mobile-accent: #0891b2;
+  --mobile-accent-muted: rgba(8, 145, 178, 0.08);
+  --mobile-accent-secondary: rgba(8, 145, 178, 0.15);
+
+  /* 状态色 */
+  --mobile-success: #059669;
+  --mobile-success-muted: rgba(5, 150, 105, 0.08);
+  --mobile-warning: #d97706;
+  --mobile-warning-muted: rgba(217, 119, 6, 0.08);
+  --mobile-error: #dc2626;
+  --mobile-error-muted: rgba(220, 38, 38, 0.08);
+
+  /* 终端色 */
+  --mobile-terminal-bg: #ffffff;
+  --mobile-terminal-header: rgba(248, 250, 252, 0.95);
+
+  /* 导航栏 */
+  --mobile-nav-bg: rgba(255, 255, 255, 0.95);
+  --mobile-nav-border: rgba(8, 145, 178, 0.15);
+  --mobile-nav-active: #0891b2;
+  --mobile-nav-inactive: #94a3b8;
+
+  /* 输入框 */
+  --mobile-input-bg: #f8fafc;
+  --mobile-input-border: rgba(8, 145, 178, 0.2);
+  --mobile-input-focus: rgba(8, 145, 178, 0.4);
+  --mobile-input-placeholder: #94a3b8;
+}
+
+/* 主题切换过渡动画 */
+.mobile-ui,
+.mobile-app {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
