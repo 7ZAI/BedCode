@@ -180,16 +180,15 @@ impl SessionOutputManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
 
     fn make_event(index: u64) -> OutputEvent {
-        OutputEvent {
-            session_id: "test-session".to_string(),
-            data: "dGVzdA==".to_string(),
+        OutputEvent::new(
+            "test-session".to_string(),
+            b"test".to_vec(),
             index,
-            timestamp: Utc::now().timestamp_millis(),
-            is_waiting: false,
-        }
+            chrono::Utc::now().timestamp_millis(),
+            false,
+        )
     }
 
     #[tokio::test]

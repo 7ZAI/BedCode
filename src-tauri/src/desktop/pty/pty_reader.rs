@@ -47,26 +47,28 @@ impl PtyReader {
                         break;
                     }
                     Ok(n) => {
-                        let event = PtyOutputEvent {
-                            session_id: session_id.clone(),
-                            data: base64::Engine::encode(
-                                &base64::engine::general_purpose::STANDARD,
-                                &buffer[..n],
-                            ),
-                            timestamp: chrono::Utc::now(),
-                            is_waiting: false,
-                            index: next_output_index(),
-                        };
+                        let timestamp = chrono::Utc::now();
+                        let index = next_output_index();
+                        let raw_bytes = buffer[..n].to_vec();
 
-                        // 发送到 GlobalOutputManager（用于移动端订阅）
+                        // 创建 PtyOutputEvent（包含 Base64 编码，用于桌面端前端）
+                        let event = PtyOutputEvent::from_bytes(
+                            session_id.clone(),
+                            &raw_bytes,
+                            timestamp,
+                            false,
+                            index,
+                        );
+
+                        // 发送到 GlobalOutputManager（存储原始字节，用于移动端订阅）
                         let global_manager = GlobalOutputManager::global();
-                        let output_event = OutputEvent {
-                            session_id: session_id.clone(),
-                            data: event.data.clone(),
-                            index: event.index as u64,
-                            timestamp: event.timestamp.timestamp_millis(),
-                            is_waiting: event.is_waiting,
-                        };
+                        let output_event = OutputEvent::new(
+                            session_id.clone(),
+                            raw_bytes,
+                            index as u64,
+                            timestamp.timestamp_millis(),
+                            false,
+                        );
                         tauri::async_runtime::spawn(async move {
                             global_manager.on_output(output_event).await;
                         });

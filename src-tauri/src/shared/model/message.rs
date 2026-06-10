@@ -543,6 +543,22 @@ impl Message {
         }
     }
 
+    /// 获取消息类型名称（用于调试日志）
+    pub fn message_type(&self) -> Option<&'static str> {
+        match self {
+            Message::Terminal { .. } => Some("terminal"),
+            Message::Auth { .. } => Some("auth"),
+            Message::SessionControl { .. } => Some("session_control"),
+            Message::SessionConfig { .. } => Some("session_config"),
+            Message::Error { .. } => Some("error"),
+            Message::ServerClosed { .. } => Some("server_closed"),
+            Message::ClientDisconnected { .. } => Some("client_disconnected"),
+            Message::SessionEvent { .. } => Some("session_event"),
+            Message::Ack { .. } => Some("ack"),
+            Message::SyncData { .. } => Some("sync_data"),
+        }
+    }
+
     /// 获取 expect_response 标记
     pub fn expect_response(&self) -> bool {
         match self {

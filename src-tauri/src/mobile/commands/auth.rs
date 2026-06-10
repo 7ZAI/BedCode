@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::Result;
-use crate::mobile::{AuthCredentials, AuthManager, AuthStatus, ConnectionManager};
+use crate::mobile::{AuthCredentials, AuthManager, AuthStatus};
 use crate::mobile::events;
 
 use super::connection::get_connection_manager;

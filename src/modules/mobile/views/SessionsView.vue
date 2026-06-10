@@ -187,8 +187,10 @@ function handleDeleteSession(session: any) {
 async function confirmDelete() {
   if (!pendingSession.value) return
   isDeleting.value = true
+  console.log('[SessionsView] confirmDelete: calling wsRemoveSession...')
   try {
     await wsRemoveSession(pendingSession.value.id)
+    console.log('[SessionsView] confirmDelete: wsRemoveSession returned successfully')
     // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
     connection.removeSession(pendingSession.value.id)
     showDeleteConfirm.value = false
@@ -197,6 +199,7 @@ async function confirmDelete() {
     console.error('[SessionsView] Failed to delete session:', e)
     toast.error('删除会话失败')
   } finally {
+    console.log('[SessionsView] confirmDelete: finally block, setting isDeleting=false')
     isDeleting.value = false
   }
 }

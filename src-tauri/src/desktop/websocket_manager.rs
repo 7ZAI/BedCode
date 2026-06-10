@@ -65,6 +65,8 @@ struct WsManagerInner {
     db: RwLock<Option<Arc<tokio::sync::Mutex<crate::shared::db::Database>>>>,
     /// QR Token 管理器（从 lib.rs 传入，确保与 Tauri State 共享同一实例）
     qr_manager: RwLock<Option<Arc<QrTokenManager>>>,
+    /// 配对服务（从 lib.rs 传入，确保与 Tauri State 共享同一实例）
+    pairing_service: RwLock<Option<Arc<crate::desktop::server::services::PairingService>>>,
     /// Tauri AppHandle（用于向前端发送事件）
     app_handle: RwLock<Option<Arc<AppHandle>>>,
     /// 会话管理器（用于会话控制请求）
@@ -86,6 +88,7 @@ impl WsManagerInner {
             initialized: RwLock::new(false),
             db: RwLock::new(None),
             qr_manager: RwLock::new(None),
+            pairing_service: RwLock::new(None),
             app_handle: RwLock::new(None),
             session_manager: RwLock::new(None),
             plugin_manager: RwLock::new(None),
@@ -113,6 +116,7 @@ impl WebSocketManager {
         &self,
         db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>,
         qr_manager: Arc<QrTokenManager>,
+        pairing_service: Arc<crate::desktop::server::services::PairingService>,
         app_handle: Arc<AppHandle>,
         session_manager: Arc<SessionManager>,
         plugin_manager: Arc<PluginManager>,
@@ -136,6 +140,12 @@ impl WebSocketManager {
         {
             let mut qr_lock = self.inner.qr_manager.write().await;
             *qr_lock = Some(qr_manager);
+        }
+
+        // 存储 pairing_service 实例（关键：确保与前端 generate_pairing_code 命令使用同一实例）
+        {
+            let mut ps_lock = self.inner.pairing_service.write().await;
+            *ps_lock = Some(pairing_service);
         }
 
         // 存储 app_handle 实例（用于向前端发送设备连接事件）
@@ -209,6 +219,15 @@ impl WebSocketManager {
             ))?
         };
 
+        // 使用 init 时传入的 pairing_service 实例（与 Tauri State 共享）
+        // 关键：确保与前端 generate_pairing_code 命令使用同一实例
+        let pairing_service = {
+            let ps_lock = self.inner.pairing_service.read().await;
+            ps_lock.clone().ok_or_else(|| AppError::WebSocket(
+                "PairingService not initialized, call init() first".to_string(),
+            ))?
+        };
+
         // 获取 session_manager 和 plugin_manager（用于会话控制请求）
         let session_manager = {
             let sm_lock = self.inner.session_manager.read().await;
@@ -218,8 +237,6 @@ impl WebSocketManager {
             let pm_lock = self.inner.plugin_manager.read().await;
             pm_lock.clone()
         };
-
-        let pairing_service = Arc::new(crate::desktop::server::services::PairingService::new());
 
         // 获取 app_handle（用于向前端发送事件）
         let app_handle = {

@@ -149,7 +149,7 @@ export async function wsJoinSession(sessionId: string): Promise<void> {
  */
 export async function wsLeaveSession(sessionId: string): Promise<void> {
   console.log('[wsLeaveSession] sessionId=' + sessionId)
-  return await invoke('ws_leave_session', { sessionId })
+  return await invoke('ws_leave_session', { session_id: sessionId })
 }
 
 /**

@@ -15,7 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// WebSocket 客户端
 pub struct WsClient {
@@ -150,6 +150,7 @@ impl WsClient {
 
         // 获取 handler 和 request_manager
         let handler = self.handler.read().await.clone();
+        tracing::info!("[WsClient] Handler status: is_some={}", handler.is_some());
         let request_manager = self.request_manager.clone();
         let event_tx = self.event_tx.clone();
 
@@ -181,6 +182,7 @@ impl WsClient {
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {
                                         Some(_) => {
                                             // 未匹配，是推送消息，交给 handler 处理
+                                            info!("[WsClient] Push message, handler is_some: {}", handler.is_some());
                                             let _ = event_tx.send(WsClientEvent::PushMessage {
                                                 content: text.clone(),
                                             });
@@ -192,6 +194,8 @@ impl WsClient {
                                                     None,
                                                     None,
                                                 );
+                                            } else {
+                                                warn!("[WsClient] No handler for push message!");
                                             }
                                         }
                                         None => {

@@ -442,9 +442,11 @@ impl ConnectionManager {
 
         if let Some(client) = self.client.read().await.as_ref() {
             tracing::info!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
-            client.send_and_wait(&message, timeout).await
+            let result = client.send_and_wait(&message, timeout).await
                 .with_context(|| format!("send_and_wait timeout={}s", timeout.as_secs()))
-                .map_err(|e| crate::AppError::WebSocket(e.to_string()))
+                .map_err(|e| crate::AppError::WebSocket(e.to_string()));
+            tracing::info!("[ConnectionManager] send_and_wait: result={:?}", result.as_ref().map(|m| m.message_type().unwrap_or("unknown")));
+            result
         } else {
             tracing::error!("[ConnectionManager] send_and_wait: client is None!");
             Err(crate::AppError::WebSocket("Not connected".to_string()))

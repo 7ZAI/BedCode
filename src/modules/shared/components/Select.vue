@@ -5,29 +5,31 @@
       <span v-if="required" class="text-red-500">*</span>
     </label>
 
-    <select
-      :id="id"
-      :value="modelValue"
-      :disabled="disabled"
-      :required="required"
-      class="w-full border rounded-lg px-4 py-2 text-sm transition-colors outline-none appearance-none cursor-pointer bg-white dark:bg-dark-700 text-gray-900 dark:text-white focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
-      :class="[
-        error ? 'border-red-500' : 'border-gray-300 dark:border-dark-600',
-        { 'opacity-50 cursor-not-allowed': disabled }
-      ]"
-      @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
-    >
-      <option v-if="placeholder" value="" disabled>{{ placeholder }}</option>
-      <option v-for="option in options" :key="option.value" :value="option.value">
-        {{ option.label }}
-      </option>
-    </select>
+    <div class="relative">
+      <select
+        :id="id"
+        :value="modelValue"
+        :disabled="disabled"
+        :required="required"
+        class="w-full border rounded-lg px-4 py-2 text-sm transition-colors outline-none appearance-none cursor-pointer bg-white dark:bg-dark-700 text-gray-900 dark:text-white focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+        :class="[
+          error ? 'border-red-500' : 'border-gray-300 dark:border-dark-600',
+          { 'opacity-50 cursor-not-allowed': disabled }
+        ]"
+        @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
+      >
+        <option v-if="placeholder" value="" disabled>{{ placeholder }}</option>
+        <option v-for="option in options" :key="option.value" :value="option.value">
+          {{ option.label }}
+        </option>
+      </select>
 
-    <!-- Dropdown Icon -->
-    <div class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-dark-400">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-      </svg>
+      <!-- Dropdown Icon -->
+      <div class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-dark-400">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
     </div>
 
     <!-- Error Message -->

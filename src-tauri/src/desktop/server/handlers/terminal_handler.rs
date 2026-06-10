@@ -26,11 +26,10 @@ const MAX_BUFFER_SIZE: usize = 64 * 1024;
 /// 输出缓冲区
 ///
 /// 累积多条 PTY 输出，减少 WebSocket 消息数量
+/// 存储原始字节，flush 时统一编码为 Base64
 struct OutputBuffer {
-    /// 累积的 Base64 数据（直接拼接）
-    data: String,
-    /// 当前累积字节数
-    total_size: usize,
+    /// 累积的原始字节数据
+    data: Vec<u8>,
     /// 起始索引（用于前端去重）
     start_index: u64,
     /// 最后一条的 waiting 状态
@@ -40,8 +39,7 @@ struct OutputBuffer {
 impl OutputBuffer {
     fn new() -> Self {
         Self {
-            data: String::new(),
-            total_size: 0,
+            data: Vec::new(),
             start_index: 0,
             last_is_waiting: false,
         }
@@ -53,8 +51,8 @@ impl OutputBuffer {
         if self.is_empty() {
             self.start_index = event.index;
         }
-        self.data.push_str(&event.data);
-        self.total_size += event.data.len();
+        // 直接拼接原始字节
+        self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
     }
 
@@ -66,8 +64,6 @@ impl OutputBuffer {
     /// 清空缓冲区
     fn clear(&mut self) {
         self.data.clear();
-        self.total_size = 0;
-        // start_index 和 last_is_waiting 会在下次 append 时重新设置
     }
 }
 
@@ -142,7 +138,7 @@ impl RouteHandler for TerminalHandler {
                                     Ok(Some(event)) => {
                                         buffer.append(&event);
                                         // 达到最大缓冲大小，立即 flush
-                                        if buffer.total_size >= MAX_BUFFER_SIZE {
+                                        if buffer.data.len() >= MAX_BUFFER_SIZE {
                                             if flush_buffer(&mut buffer, &sender, &session_id_clone, &client_id).await {
                                                 break;
                                             }
@@ -250,9 +246,15 @@ async fn flush_buffer(
         return false;
     }
 
+    // 将原始字节编码为 Base64
+    let data_base64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &buffer.data,
+    );
+
     let message = Message::output_from_base64(
         session_id,
-        &buffer.data,
+        &data_base64,
         buffer.last_is_waiting,
         buffer.start_index as usize,
     );

@@ -14,10 +14,12 @@ pub struct TerminalHandler;
 #[async_trait]
 impl ClientRouteHandler for TerminalHandler {
     async fn handle(&self, message: Message, ctx: &ClientRouteContext) -> Result<Option<Message>> {
+        tracing::info!("[TerminalHandler] handle() called, message_type={:?}", message.message_type());
         if let Message::Terminal { session_id, payload, .. } = message {
+            tracing::info!("[TerminalHandler] Terminal message received, action_type={:?}", payload.action);
             match payload.action {
                 TerminalAction::Output { data, is_waiting, index } => {
-                    tracing::debug!("[TerminalHandler] Output: session_id={}, data_len={}, is_waiting={}, index={}",
+                    tracing::info!("[TerminalHandler] Output: session_id={}, data_len={}, is_waiting={}, index={}",
                         session_id, data.len(), is_waiting, index);
                     ctx.emit(MobileEvent::Output {
                         session_id,
@@ -25,6 +27,7 @@ impl ClientRouteHandler for TerminalHandler {
                         is_waiting,
                         index,
                     });
+                    tracing::info!("[TerminalHandler] ctx.emit() called");
                 }
                 TerminalAction::SubscribeResponse { min_seq, max_seq, history_count } => {
                     tracing::debug!("[TerminalHandler] SubscribeResponse: session_id={}, min_seq={}, max_seq={}, history_count={}",
@@ -43,8 +46,12 @@ impl ClientRouteHandler for TerminalHandler {
                     });
                 }
                 // 其他动作类型（Input, Subscribe, Unsubscribe）在移动端不处理
-                _ => {}
+                _ => {
+                    tracing::warn!("[TerminalHandler] Unhandled action type: {:?}", payload.action);
+                }
             }
+        } else {
+            tracing::warn!("[TerminalHandler] Message is not Terminal type");
         }
         Ok(None)
     }

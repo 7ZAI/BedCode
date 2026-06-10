@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::Result;
-use crate::mobile::{SessionInfo, SessionManager, ConnectionManager};
+use crate::mobile::{SessionInfo, SessionManager};
 use crate::mobile::remote::request::{SessionRequest, ResponseParser, timeouts, TerminalRequest, ConfigRequest};
 
 use super::connection::get_connection_manager;
@@ -118,8 +118,11 @@ pub async fn ws_stop_session(session_id: String) -> Result<()> {
 /// 删除会话
 #[tauri::command]
 pub async fn ws_remove_session(session_id: String) -> Result<()> {
+    tracing::info!("[ws_remove_session] Entry: session_id={}", session_id);
     let session_mgr = get_session_manager();
-    session_mgr.remove_session(&session_id).await
+    session_mgr.remove_session(&session_id).await?;
+    tracing::info!("[ws_remove_session] Exit: returning Ok(()) for session_id={}", session_id);
+    Ok(())
 }
 
 /// 获取会话配置列表

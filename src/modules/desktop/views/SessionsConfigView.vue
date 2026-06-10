@@ -247,7 +247,6 @@ interface SessionFormData {
   wslDistro: string
   workingDir: string
   command: string
-  tmuxSession: string
   autoStart: boolean
 }
 
@@ -263,7 +262,6 @@ async function handleSaveConfig(form: SessionFormData) {
         working_dir: form.workingDir || '',
         command: form.command || '',
         wsl_distro: form.wslDistro || undefined,
-        tmux_session: form.tmuxSession || undefined,
         auto_start: form.autoStart,
       })
       toast.success('会话配置已更新')
@@ -275,7 +273,6 @@ async function handleSaveConfig(form: SessionFormData) {
         working_dir: form.workingDir || '',
         command: form.command || '',
         wsl_distro: form.wslDistro || undefined,
-        tmux_session: form.tmuxSession || undefined,
       })
       toast.success('会话配置已创建')
     }

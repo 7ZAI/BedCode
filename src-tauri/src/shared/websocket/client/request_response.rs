@@ -64,7 +64,7 @@ impl RequestResponseManager {
             Ok(Some(msg)) => msg,
             Ok(None) => return None,  // 协议消息
             Err(e) => {
-                tracing::debug!("[RequestResponseManager] Failed to decode: {}", e);
+                tracing::warn!("[RequestResponseManager] Failed to decode: {}", e);
                 return None;
             }
         };
@@ -77,12 +77,27 @@ impl RequestResponseManager {
             _ => message.message_id().map(|s| s.to_string()),
         };
 
+        tracing::info!(
+            "[RequestResponseManager] Trying to match message, type={}, id={:?}, pending_count={}",
+            message.message_type().unwrap_or("unknown"),
+            id,
+            self.pending.lock().await.len()
+        );
+
         if let Some(id) = id {
+            let pending_count_before = self.pending.lock().await.len();
             if let Some(pending) = self.pending.lock().await.remove(&id) {
-                tracing::debug!("[RequestResponseManager] Matched pending request for id={}", id);
+                tracing::info!("[RequestResponseManager] ✓ Matched pending request for id={}", id);
                 let _ = pending.tx.send(Ok(message));
                 return None;  // 已匹配，不返回消息
+            } else {
+                tracing::warn!(
+                    "[RequestResponseManager] ✗ No pending request for id={}, pending_count={}",
+                    id, pending_count_before
+                );
             }
+        } else {
+            tracing::warn!("[RequestResponseManager] Message has no id, cannot match");
         }
 
         // 未匹配，返回消息给调用方处理

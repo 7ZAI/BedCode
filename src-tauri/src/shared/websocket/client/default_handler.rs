@@ -57,9 +57,14 @@ impl MessageHandler for ClientDefaultMessageHandler {
         _client_id: Option<&str>,
         _sender: Option<mpsc::Sender<WsMsg>>,
     ) {
+        tracing::info!("[ClientDefaultMessageHandler] handle() called");
+
         // 使用 codec 解码消息
         let message = match self.codec.decode(raw_message) {
-            Ok(Some(msg)) => msg,
+            Ok(Some(msg)) => {
+                tracing::info!("[ClientDefaultMessageHandler] Decoded message: type={:?}", msg.message_type());
+                msg
+            }
             Ok(None) => {
                 // 协议层消息（Ping/Pong/Frame）不需要处理
                 return;
@@ -72,6 +77,7 @@ impl MessageHandler for ClientDefaultMessageHandler {
 
         // 委托给 router 处理
         if let Some(router) = &self.router {
+            tracing::info!("[ClientDefaultMessageHandler] Calling router.route()");
             let router = router.clone();
             tokio::spawn(async move {
                 if let Err(e) = router.route(message).await {
@@ -79,7 +85,7 @@ impl MessageHandler for ClientDefaultMessageHandler {
                 }
             });
         } else {
-            tracing::debug!("[ClientDefaultMessageHandler] No router configured, message dropped");
+            tracing::warn!("[ClientDefaultMessageHandler] No router configured, message dropped");
         }
     }
 }

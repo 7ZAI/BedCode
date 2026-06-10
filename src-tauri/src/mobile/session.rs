@@ -131,12 +131,15 @@ impl SessionManager {
 
     /// 删除会话
     pub async fn remove_session(&self, session_id: &str) -> Result<()> {
-        tracing::info!("[remove_session] Sending RemoveSession request for session_id={}", session_id);
+        tracing::info!("[remove_session] Entry: session_id={}", session_id);
 
         // 通过 WebSocket 发送 RemoveSession 控制消息到桌面端
         let message = SessionRequest::remove_session(session_id);
 
-        match self.connection.send_and_wait(&message, timeouts::SESSION_CONTROL).await {
+        let result = self.connection.send_and_wait(&message, timeouts::SESSION_CONTROL).await;
+        tracing::info!("[remove_session] send_and_wait result: {:?}", result.as_ref().map(|m| m.message_type().unwrap_or("unknown")));
+
+        match result {
             Ok(_) => {
                 tracing::info!("[remove_session] Desktop confirmed session removed: {}", session_id);
             }
@@ -152,13 +155,16 @@ impl SessionManager {
         }
 
         // 如果是活跃会话，也清除
-        if let Some(ref mut session) = *self.active_session.write().await {
-            if session.id == session_id {
-                *self.active_session.write().await = None;
+        {
+            let mut active = self.active_session.write().await;
+            if let Some(ref session) = *active {
+                if session.id == session_id {
+                    *active = None;
+                }
             }
         }
 
-        tracing::info!("[remove_session] Session removed from local list: {}", session_id);
+        tracing::info!("[remove_session] Exit: returning Ok(()) for session_id={}", session_id);
         Ok(())
     }
 

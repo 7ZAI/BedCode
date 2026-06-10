@@ -8,7 +8,6 @@
 
 use std::time::Duration;
 
-use crate::Result;
 use crate::shared::model::message::Message;
 use crate::shared::enums::auth::{AuthPayload, AuthStage};
 use crate::shared::enums::control::{SessionControlAction, SessionConfigAction};

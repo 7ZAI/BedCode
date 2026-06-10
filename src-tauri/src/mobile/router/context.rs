@@ -20,7 +20,7 @@ impl ClientRouteContext {
 
     /// 发送业务事件
     pub fn emit(&self, event: MobileEvent) {
-        tracing::debug!("[ClientRouteContext] emit: {:?}", event);
+        tracing::info!("[ClientRouteContext] emit: {:?}", event);
         if let Err(e) = self.event_tx.send(event) {
             tracing::error!("[ClientRouteContext] Failed to send event: {}", e);
         }

@@ -53,14 +53,6 @@
       help="输入要执行的命令，如 claude、npm run dev 等"
     />
 
-    <!-- Tmux Session -->
-    <Input
-      v-model="form.tmuxSession"
-      label="Tmux 会话 (可选)"
-      placeholder="留空则新建配置"
-      help="输入已存在的 Tmux 会话名，或留空创建新会话"
-    />
-
     <!-- Auto Start -->
     <Toggle
       v-model="form.autoStart"
@@ -93,7 +85,6 @@ interface SessionFormData {
   wslDistro: string
   workingDir: string
   command: string
-  tmuxSession: string
   autoStart: boolean
 }
 
@@ -106,7 +97,6 @@ const form = ref<SessionFormData>({
   wslDistro: '',
   workingDir: '',
   command: 'claude',
-  tmuxSession: '',
   autoStart: false,
 })
 
@@ -125,7 +115,6 @@ watch(() => props.config, (config) => {
       wslDistro: config.wslDistro || config.wsl_distro || '',
       workingDir: config.workingDir || config.working_dir || '',
       command: config.command || '',
-      tmuxSession: config.tmuxSession || config.tmux_session || '',
       autoStart: config.autoStart ?? config.auto_start ?? false,
     }
   } else {
@@ -135,7 +124,6 @@ watch(() => props.config, (config) => {
       wslDistro: settingsStore.settings.session.default_wsl_distro || '',
       workingDir: settingsStore.settings.session.default_working_dir || '',
       command: settingsStore.settings.session.default_command || 'claude',
-      tmuxSession: '',
       autoStart: false,
     }
   }

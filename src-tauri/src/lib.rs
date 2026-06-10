@@ -267,6 +267,7 @@ pub fn run() {
             let ws_manager = desktop::websocket_manager::WebSocketManager::global();
             let db_for_ws = db.clone();
             let qr_manager_for_ws = qr_manager.clone();
+            let pairing_service_for_ws = pairing_service.clone();
             let app_handle_for_ws = Arc::new(app_handle.clone());
             let session_manager_for_ws = session_manager.clone();
             let session_manager_for_handler = session_manager.clone();
@@ -275,7 +276,7 @@ pub fn run() {
             let sync_tx_for_handler = sync_tx.clone();
             let app_handle_for_events = Arc::new(app_handle.clone());
             tauri::async_runtime::spawn(async move {
-                ws_manager.init(db_for_ws, qr_manager_for_ws, app_handle_for_ws, session_manager_for_ws, plugin_manager_for_ws).await
+                ws_manager.init(db_for_ws, qr_manager_for_ws, pairing_service_for_ws, app_handle_for_ws, session_manager_for_ws, plugin_manager_for_ws).await
                     .expect("Failed to initialize WebSocketManager");
 
                 // 注册同步事件处理器

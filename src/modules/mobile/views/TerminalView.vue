@@ -24,6 +24,11 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
       </button>
+      <button class="refresh-btn" @click="refreshTerminal" title="刷新格式">
+        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
       <button class="settings-btn" @click="openSettings" title="设置">
         <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -686,6 +691,19 @@ async function clearTerminal() {
   showClearConfirm.value = false
 }
 
+// ==================== Refresh Terminal Format ====================
+
+function refreshTerminal() {
+  // 刷新格式：重新 fit 终端尺寸并同步到桌面端，不清除内容
+  if (!fitAddon || !terminal) return
+  fitAddon.fit()
+  if (isConnected.value && isSessionActive.value) {
+    wsResizeTerminal(sessionId.value, terminal.cols, terminal.rows).catch((e: Error) => {
+      console.warn('[TerminalView] Refresh resize failed:', e)
+    })
+  }
+}
+
 // ==================== Navigation ====================
 
 function handleBack() {
@@ -750,14 +768,14 @@ watch(isSessionActive, async (active, prevActive) => {
   if (active && !prevActive) {
     // Session became active
     if (terminal) {
-      terminal.write('\x1b[32m[会话已启动]\x1b[0m\r\n')
+      // terminal.write('\x1b[32m[会话已启动]\x1b[0m\r\n')
     }
     await subscribeSession()
   } else if (!active && prevActive) {
     // Session stopped
     await unsubscribeSession()
     if (terminal) {
-      terminal.write('\x1b[33m[会话已停止]\x1b[0m\r\n')
+      // terminal.write('\x1b[33m[会话已停止]\x1b[0m\r\n')
     }
   }
 })
@@ -882,6 +900,23 @@ watch(isConnected, async (connected) => {
 }
 
 .clear-btn:hover {
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+.refresh-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.refresh-btn:hover {
   border-color: rgba(0, 212, 255, 0.3);
 }
 

@@ -8,18 +8,67 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 /// 输出事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 注意：`data` 存储原始字节数据，在发送到 WebSocket 时才进行 Base64 编码
+/// 这样可以避免在缓冲合并时多次编解码
+#[derive(Debug, Clone)]
 pub struct OutputEvent {
     /// 会话 ID
     pub session_id: String,
-    /// Base64 编码的输出数据
-    pub data: String,
+    /// 原始字节数据（未经 Base64 编码）
+    pub data: Vec<u8>,
     /// 全局递增序号
     pub index: u64,
     /// 时间戳（毫秒）
     pub timestamp: i64,
     /// 是否等待输入
     pub is_waiting: bool,
+}
+
+/// 用于 JSON 序列化的临时结构（包含 Base64 编码的数据）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputEventSerialized {
+    pub session_id: String,
+    /// Base64 编码的输出数据
+    pub data: String,
+    pub index: u64,
+    pub timestamp: i64,
+    pub is_waiting: bool,
+}
+
+impl OutputEvent {
+    /// 创建新的输出事件
+    pub fn new(session_id: String, data: Vec<u8>, index: u64, timestamp: i64, is_waiting: bool) -> Self {
+        Self {
+            session_id,
+            data,
+            index,
+            timestamp,
+            is_waiting,
+        }
+    }
+
+    /// 编码为可序列化的结构（用于 WebSocket 发送）
+    pub fn to_serialized(&self) -> OutputEventSerialized {
+        OutputEventSerialized {
+            session_id: self.session_id.clone(),
+            data: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &self.data,
+            ),
+            index: self.index,
+            timestamp: self.timestamp,
+            is_waiting: self.is_waiting,
+        }
+    }
+
+    /// 获取 Base64 编码的数据
+    pub fn data_base64(&self) -> String {
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            &self.data,
+        )
+    }
 }
 
 /// 统一输出队列（环形缓冲区）
@@ -110,13 +159,13 @@ mod tests {
     use chrono::Utc;
 
     fn make_event(index: u64) -> OutputEvent {
-        OutputEvent {
-            session_id: "test".to_string(),
-            data: "dGVzdA==".to_string(), // "test" in base64
+        OutputEvent::new(
+            "test".to_string(),
+            b"test".to_vec(), // 原始字节
             index,
-            timestamp: Utc::now().timestamp_millis(),
-            is_waiting: false,
-        }
+            Utc::now().timestamp_millis(),
+            false,
+        )
     }
 
     #[test]

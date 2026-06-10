@@ -351,7 +351,7 @@ function clearData() {
 }
 
 function openGitHub() {
-  window.open('https://github.com/your-repo/bedcode', '_blank')
+  window.open('https://github.com/7ZAI/BedCode', '_blank')
 }
 
 function checkUpdate() {

@@ -46,8 +46,17 @@ pub fn start_event_forwarding(app_handle: AppHandle) {
     spawn_with_error_boundary("output_forwarder", async move {
         tracing::info!("[EventForwarder] Started forwarding output events");
 
-        while let Ok(event) = event_rx.recv().await {
-            forward_event(&app_clone, event).await;
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => {
+                    tracing::info!("[EventForwarder] Received event: {:?}", event);
+                    forward_event(&app_clone, event).await;
+                }
+                Err(e) => {
+                    tracing::error!("[EventForwarder] Event recv error: {:?}", e);
+                    break;
+                }
+            }
         }
 
         tracing::warn!("[EventForwarder] Event channel closed");
@@ -56,10 +65,11 @@ pub fn start_event_forwarding(app_handle: AppHandle) {
 
 /// 转发单个事件到前端
 async fn forward_event(app: &AppHandle, event: MobileEvent) {
-    match event {
+    tracing::info!("[EventForwarder] forward_event called with: {:?}", std::mem::discriminant(&event));
+    match event.clone() {
         // 终端输出事件：解码 Base64 并发射 ws_output
         MobileEvent::Output { session_id, data, is_waiting, index: global_index } => {
-            tracing::debug!(
+            tracing::info!(
                 "[EventForwarder] Output: session_id={}, data_len={}, index={}",
                 session_id, data.len(), global_index
             );
@@ -80,6 +90,8 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
 
             if let Err(e) = emit_result {
                 tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
+            } else {
+                tracing::info!("[EventForwarder] Successfully emitted ws_output, data_len={}", decoded_str.len());
             }
         }
 
