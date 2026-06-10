@@ -14,7 +14,62 @@ use crate::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
 use tracing::info;
+
+/// 缓冲间隔（毫秒）
+const FLUSH_INTERVAL_MS: u64 = 30;
+
+/// 最大缓冲大小（字节）
+const MAX_BUFFER_SIZE: usize = 64 * 1024;
+
+/// 输出缓冲区
+///
+/// 累积多条 PTY 输出，减少 WebSocket 消息数量
+struct OutputBuffer {
+    /// 累积的 Base64 数据（直接拼接）
+    data: String,
+    /// 当前累积字节数
+    total_size: usize,
+    /// 起始索引（用于前端去重）
+    start_index: u64,
+    /// 最后一条的 waiting 状态
+    last_is_waiting: bool,
+}
+
+impl OutputBuffer {
+    fn new() -> Self {
+        Self {
+            data: String::new(),
+            total_size: 0,
+            start_index: 0,
+            last_is_waiting: false,
+        }
+    }
+
+    /// 追加一条输出事件
+    fn append(&mut self, event: &OutputEvent) {
+        // 第一条事件记录起始索引
+        if self.is_empty() {
+            self.start_index = event.index;
+        }
+        self.data.push_str(&event.data);
+        self.total_size += event.data.len();
+        self.last_is_waiting = event.is_waiting;
+    }
+
+    /// 是否为空
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// 清空缓冲区
+    fn clear(&mut self) {
+        self.data.clear();
+        self.total_size = 0;
+        // start_index 和 last_is_waiting 会在下次 append 时重新设置
+    }
+}
 
 /// 终端消息处理器
 ///
@@ -77,25 +132,36 @@ impl RouteHandler for TerminalHandler {
                         let client_id = ctx.client_id.clone();
 
                         // 启动转发任务：将 OutputEvent 转换为 Message 并发送到 WebSocket
-                        // 注意：event.data 已经是 Base64 编码的字符串，使用 output_from_base64 避免重复编码
+                        // 使用缓冲机制减少 WebSocket 消息数量
                         tokio::spawn(async move {
-                            while let Some(event) = output_rx.recv().await {
-                                let message = Message::output_from_base64(
-                                    &session_id_clone,
-                                    &event.data,
-                                    event.is_waiting,
-                                    event.index as usize,
-                                );
-                                if let Ok(json) = message.to_json() {
-                                    if sender.send(tokio_tungstenite::tungstenite::Message::Text(json))
-                                        .await
-                                        .is_err()
-                                    {
-                                        tracing::warn!(
-                                            "[TerminalHandler] Failed to send output to client {}",
-                                            client_id
-                                        );
+                            let mut buffer = OutputBuffer::new();
+                            let flush_interval = Duration::from_millis(FLUSH_INTERVAL_MS);
+
+                            loop {
+                                match timeout(flush_interval, output_rx.recv()).await {
+                                    Ok(Some(event)) => {
+                                        buffer.append(&event);
+                                        // 达到最大缓冲大小，立即 flush
+                                        if buffer.total_size >= MAX_BUFFER_SIZE {
+                                            if flush_buffer(&mut buffer, &sender, &session_id_clone, &client_id).await {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        // channel 关闭，flush 剩余数据后退出
+                                        if !buffer.is_empty() {
+                                            flush_buffer(&mut buffer, &sender, &session_id_clone, &client_id).await;
+                                        }
                                         break;
+                                    }
+                                    Err(_) => {
+                                        // 超时，flush 缓冲区
+                                        if !buffer.is_empty() {
+                                            if flush_buffer(&mut buffer, &sender, &session_id_clone, &client_id).await {
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -169,4 +235,42 @@ impl RouteHandler for TerminalHandler {
             _ => Ok(None),
         }
     }
+}
+
+/// Flush 缓冲区到 WebSocket
+///
+/// 返回 true 表示发送失败（连接已断开），应退出转发任务
+async fn flush_buffer(
+    buffer: &mut OutputBuffer,
+    sender: &tokio::sync::mpsc::Sender<tokio_tungstenite::tungstenite::Message>,
+    session_id: &str,
+    client_id: &str,
+) -> bool {
+    if buffer.is_empty() {
+        return false;
+    }
+
+    let message = Message::output_from_base64(
+        session_id,
+        &buffer.data,
+        buffer.last_is_waiting,
+        buffer.start_index as usize,
+    );
+
+    if let Ok(json) = message.to_json() {
+        if sender
+            .send(tokio_tungstenite::tungstenite::Message::Text(json))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "[TerminalHandler] Failed to send output to client {}",
+                client_id
+            );
+            return true;
+        }
+    }
+
+    buffer.clear();
+    false
 }
