@@ -588,6 +588,9 @@ pub fn run() {
             // Android Specific
             mobile::commands::android::set_screen_orientation,
             mobile::commands::android::keep_screen_awake,
+            mobile::commands::android::start_foreground_service,
+            mobile::commands::android::stop_foreground_service,
+            mobile::commands::android::update_foreground_notification,
             // Session Config (移动端使用内存存储)
             shared::system::commands::list_session_configs_mobile,
             shared::system::commands::get_session_config_mobile,
