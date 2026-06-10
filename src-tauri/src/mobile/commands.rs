@@ -37,4 +37,5 @@ pub use terminal::{
 };
 pub use android::{
     set_screen_orientation, keep_screen_awake,
+    start_foreground_service, stop_foreground_service, update_foreground_notification,
 };
