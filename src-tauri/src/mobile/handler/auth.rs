@@ -17,10 +17,9 @@ impl ClientRouteHandler for AuthHandler {
         if let Message::Auth { payload, .. } = message {
             match payload.stage {
                 AuthStage::Authenticated => {
-                    if let (Some(device_id), Some(session_token)) = (payload.device_id, payload.session_token) {
-                        tracing::info!("[AuthHandler] Authenticated: device_id={}", device_id);
+                    if let Some(session_token) = payload.session_token {
+                        tracing::info!("[AuthHandler] Authenticated");
                         ctx.emit(MobileEvent::AuthSuccess {
-                            device_id,
                             session_token,
                         });
                     }

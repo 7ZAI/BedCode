@@ -16,7 +16,8 @@ use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
-use crate::mobile::{MobileEvent, get_connection_manager};
+use crate::mobile::get_connection_manager;
+use crate::mobile::router::event::MobileEvent;
 
 /// 输出事件转发标志（只启动一次）
 static OUTPUT_FORWARDING_STARTED: AtomicBool = AtomicBool::new(false);

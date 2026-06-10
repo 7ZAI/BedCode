@@ -178,16 +178,18 @@
     </div>
 
     <!-- Browser Confirm Modal -->
-    <div v-if="showBrowserConfirm" class="confirm-modal-overlay" @click.self="cancelOpenBrowser">
-      <div class="confirm-modal">
-        <p class="confirm-text">是否使用系统浏览器打开此链接？</p>
-        <p class="confirm-url text-xs text-[var(--mobile-text-muted)] mt-1 mb-4 break-all">{{ pendingUrl }}</p>
-        <div class="confirm-buttons">
-          <button class="confirm-btn cancel" @click="cancelOpenBrowser">取消</button>
-          <button class="confirm-btn confirm" @click="confirmOpenBrowser">打开</button>
+    <Teleport to="body">
+      <div v-if="showBrowserConfirm" class="confirm-modal-overlay" @click.self="cancelOpenBrowser">
+        <div class="confirm-modal">
+          <p class="confirm-text">是否使用系统浏览器打开此链接？</p>
+          <p class="confirm-url text-xs text-[var(--mobile-text-muted)] mt-1 mb-4 break-all">{{ pendingUrl }}</p>
+          <div class="confirm-buttons">
+            <button class="confirm-btn cancel" @click="cancelOpenBrowser">取消</button>
+            <button class="confirm-btn confirm" @click="confirmOpenBrowser">打开</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 

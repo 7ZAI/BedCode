@@ -19,7 +19,8 @@ pub use self::remote::{
     ConnectionManager, ConnectionStatus, TargetDevice,
     OutputEvent, OutputReceiver,
 };
-pub use self::router::{MobileEvent, ClientRouteContext, ClientBusinessRouter, ClientRouteRegistry, ClientRouteHandler};
+pub use self::router::{ClientRouteContext, ClientBusinessRouter, ClientRouteRegistry, ClientRouteHandler};
+pub use self::router::event::MobileEvent;
 pub use self::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
 pub use self::session::{SessionInfo, SessionManager, SessionStatus};
 pub use self::storage::TokenStorage;

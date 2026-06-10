@@ -14,9 +14,103 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 use tracing;
+use serde::{Deserialize, Serialize};
 
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
-use crate::mobile::{MobileEvent, get_connection_manager};
+use crate::mobile::get_connection_manager;
+
+// ==================== MobileEvent Definition ====================
+
+/// 移动端业务事件
+///
+/// 用于路由层向事件转发层传递业务事件
+/// 最终由 event.rs 转换为 Tauri 前端事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MobileEvent {
+    // === 终端事件 ===
+    /// 终端输出事件
+    Output {
+        session_id: String,
+        data: String,
+        is_waiting: bool,
+        index: u64,
+    },
+
+    // === 认证事件 ===
+    /// 认证成功
+    AuthSuccess {
+        session_token: String,
+    },
+    /// 认证失败
+    AuthFailed {
+        reason: String,
+    },
+    /// 配对请求（桌面端显示配对码）
+    PairingRequest,
+    /// 配对验证成功
+    PairingVerified,
+    /// 配对完成（认证成功）
+    Paired,
+
+    // === 系统事件 ===
+    /// 服务器关闭
+    ServerClosed {
+        reason: String,
+    },
+    /// 错误事件
+    Error {
+        message: String,
+    },
+    /// ACK 响应
+    Ack {
+        request_id: String,
+    },
+
+    // === 会话同步事件 ===
+    /// 会话创建
+    SyncSessionCreated {
+        session: crate::shared::enums::SessionSummary,
+        source_device: String,
+    },
+    /// 会话状态变化
+    SyncSessionStatusChanged {
+        session_id: String,
+        old_status: String,
+        new_status: String,
+        session_name: String,
+    },
+    /// 会话停止
+    SyncSessionStopped {
+        session_id: String,
+        session_name: String,
+    },
+    /// 会话删除
+    SyncSessionRemoved {
+        session_id: String,
+        session_name: String,
+    },
+
+    // === 配置同步事件 ===
+    /// 配置创建
+    SyncConfigCreated {
+        config: crate::shared::enums::SessionConfigSummary,
+        source_device: String,
+    },
+    /// 配置更新
+    SyncConfigUpdated {
+        config: crate::shared::enums::SessionConfigSummary,
+        source_device: String,
+    },
+    /// 配置删除
+    SyncConfigRemoved {
+        config_id: String,
+        config_name: String,
+    },
+}
+
+impl crate::shared::event::AppEvent for MobileEvent {}
+
+// ==================== Event Forwarding ====================
 
 /// 输出事件转发标志（只启动一次）
 static OUTPUT_FORWARDING_STARTED: AtomicBool = AtomicBool::new(false);

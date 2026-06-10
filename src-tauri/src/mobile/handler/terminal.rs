@@ -22,7 +22,7 @@ impl ClientRouteHandler for TerminalHandler {
                         session_id,
                         data,
                         is_waiting,
-                        index,
+                        index: index as u64,
                     });
                 }
                 TerminalAction::SubscribeResponse { min_seq, max_seq, history_count } => {
@@ -30,18 +30,11 @@ impl ClientRouteHandler for TerminalHandler {
                         "[TerminalHandler] SubscribeResponse: session_id={}, seq_range={}-{}, history={}",
                         session_id, min_seq, max_seq, history_count
                     );
-                    ctx.emit(MobileEvent::SubscribeResponse {
-                        session_id,
-                        min_seq,
-                        max_seq,
-                        history_count,
-                    });
+                    // SubscribeResponse 不转发到前端，仅记录日志
                 }
                 TerminalAction::UnsubscribeResponse => {
                     tracing::debug!("[TerminalHandler] UnsubscribeResponse: session_id={}", session_id);
-                    ctx.emit(MobileEvent::UnsubscribeResponse {
-                        session_id,
-                    });
+                    // UnsubscribeResponse 不转发到前端，仅记录日志
                 }
                 // 其他动作类型（Input, Subscribe, Unsubscribe）在移动端不处理
                 _ => {
