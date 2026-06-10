@@ -188,6 +188,10 @@ pub fn run() {
                 tracing::warn!("Failed to load config, using defaults: {}", e);
                 crate::shared::system::config::AppConfig::default()
             });
+
+            // 初始化全局配置单例
+            crate::shared::system::config::AppConfig::init(app_config.clone());
+
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
@@ -592,6 +596,7 @@ pub fn run() {
             mobile::commands::android::start_foreground_service,
             mobile::commands::android::stop_foreground_service,
             mobile::commands::android::update_foreground_notification,
+            mobile::commands::android::open_url_in_browser,
             // Session Config (移动端使用内存存储)
             shared::system::commands::list_session_configs_mobile,
             shared::system::commands::get_session_config_mobile,

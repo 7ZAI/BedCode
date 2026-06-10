@@ -131,7 +131,7 @@ mod tests {
     fn make_event(session_id: &str, index: u64) -> OutputEvent {
         OutputEvent {
             session_id: session_id.to_string(),
-            data: "dGVzdA==".to_string(),
+            data: b"test".to_vec(),
             index,
             timestamp: Utc::now().timestamp_millis(),
             is_waiting: false,

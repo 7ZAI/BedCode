@@ -6,6 +6,7 @@ use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::websocket_manager::WebSocketManager;
 use crate::shared::enums::{TerminalAction, TerminalPayload};
 use crate::shared::model::message::Message;
+use crate::shared::system::config::AppConfig;
 use crate::shared::system::error::AppError;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -113,7 +114,8 @@ impl OutputRingBuffer {
 
 impl Default for OutputRingBuffer {
     fn default() -> Self {
-        Self::new(10000)
+        let config = AppConfig::global();
+        Self::new(config.output_history.ring_buffer_capacity)
     }
 }
 
@@ -180,8 +182,9 @@ impl PtySubscriptionManager {
         &self,
         session_id: &str,
     ) -> (Arc<RwLock<OutputRingBuffer>>, broadcast::Sender<PtyOutputEvent>) {
-        let ring_buffer = Arc::new(RwLock::new(OutputRingBuffer::new(10000)));
-        let (broadcast_tx, _) = broadcast::channel(1024);
+        let config = AppConfig::global();
+        let ring_buffer = Arc::new(RwLock::new(OutputRingBuffer::new(config.output_history.ring_buffer_capacity)));
+        let (broadcast_tx, _) = broadcast::channel(config.channels.pty_subscription_capacity);
 
         let session = Arc::new(PtySessionSubscriptions {
             session_id: session_id.to_string(),

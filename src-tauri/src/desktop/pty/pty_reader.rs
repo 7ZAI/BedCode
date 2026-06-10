@@ -12,6 +12,7 @@ use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::next_output_index;
 use crate::desktop::session::{GlobalOutputManager, OutputEvent};
 use crate::desktop::traits::PtyOutputListener;
+use crate::shared::system::config::AppConfig;
 
 /// PTY 输出读取器
 pub struct PtyReader {
@@ -34,9 +35,10 @@ impl PtyReader {
         running: Arc<AtomicBool>,
     ) -> Self {
         let mut buf_reader = BufReader::new(reader);
+        let read_buffer_size = AppConfig::global().terminal.read_buffer_size;
 
         let handle = thread::spawn(move || {
-            let mut buffer = [0u8; 4096];
+            let mut buffer = vec![0u8; read_buffer_size];
             let mut exit_status = PtySessionStatus::Stopped;
 
             while running.load(Ordering::SeqCst) {

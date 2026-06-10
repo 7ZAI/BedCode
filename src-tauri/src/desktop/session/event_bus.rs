@@ -4,6 +4,7 @@
 
 use crate::desktop::model::{SessionRestartEvent, SessionStatusEvent};
 use crate::desktop::pty::PtyOutputEvent;
+use crate::shared::system::config::AppConfig;
 use tokio::sync::broadcast;
 
 /// 会话事件类型
@@ -33,10 +34,11 @@ pub struct DefaultSessionEventBus {
 
 impl DefaultSessionEventBus {
     pub fn new() -> Self {
-        let (output_tx, _) = broadcast::channel(2048);
-        let (status_tx, _) = broadcast::channel(64);
-        let (restart_tx, _) = broadcast::channel(64);
-        let (event_tx, _) = broadcast::channel(256);
+        let config = AppConfig::global();
+        let (output_tx, _) = broadcast::channel(config.channels.output_broadcast_capacity);
+        let (status_tx, _) = broadcast::channel(config.channels.status_broadcast_capacity);
+        let (restart_tx, _) = broadcast::channel(config.channels.restart_broadcast_capacity);
+        let (event_tx, _) = broadcast::channel(config.channels.event_broadcast_capacity);
 
         Self {
             output_tx,

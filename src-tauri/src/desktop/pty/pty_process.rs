@@ -8,6 +8,7 @@ use crate::desktop::model::PtyOutputEvent;
 use crate::desktop::pty::command::build_command;
 use crate::desktop::pty::pty_reader::PtyReader;
 use crate::desktop::traits::PtyOutputListener;
+use crate::shared::system::config::AppConfig;
 use crate::Result;
 
 use portable_pty::{native_pty_system, PtyPair, PtySize};
@@ -89,7 +90,7 @@ impl PtySession {
 
         let writer = pair.master.take_writer()
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
-        let (lifecycle_tx, _) = broadcast::channel(16);
+        let (lifecycle_tx, _) = broadcast::channel(AppConfig::global().channels.lifecycle_capacity);
 
         let running = Arc::new(AtomicBool::new(true));
 

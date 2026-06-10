@@ -12,6 +12,7 @@ use crate::desktop::server::message::Message as BusinessMessage;
 use crate::desktop::session::SessionManager;
 use crate::desktop::plugin::PluginManager;
 use crate::shared::model::message::Message;
+use crate::shared::system::config::AppConfig;
 use crate::shared::websocket::{
     WsServer, WsServerConfig, WsServerEvent,
 };
@@ -248,19 +249,21 @@ impl WebSocketManager {
         let auth_handler = Arc::new(AuthHandler::new(
             pairing_service,
             qr_manager,
-            app_handle,
+            app_handle.clone(),
         ));
         // 传入 session_manager 和 plugin_manager（用于会话控制请求）
+        // 同时传入 app_handle（用于发送刷新事件到桌面端前端）
         let control_handler = Arc::new(SessionControlHandler::new(
             session_manager.clone(),
             plugin_manager,
+            app_handle.clone(),
         ));
         let session_config_handler = Arc::new(SessionConfigHandler::new(db.clone()));
         // 传入 session_manager（用于终端输入写入 PTY）
         let terminal_handler = Arc::new(TerminalHandler::new(session_manager));
 
         // 创建 BusinessRouter（实现 MessageRouter trait）
-        let (event_tx_sender, _) = broadcast::channel(1024);
+        let (event_tx_sender, _) = broadcast::channel(AppConfig::global().channels.ws_event_capacity);
         let router = Arc::new(
             BusinessRouter::builder()
                 .connection_manager(server.connection_manager().clone())

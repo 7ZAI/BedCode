@@ -10,6 +10,7 @@
 use super::jsonl;
 
 use crate::shared::db::Database;
+use crate::shared::system::config::AppConfig;
 use crate::desktop::pty::PtyOutputEvent;
 use crate::Result;
 use base64::Engine;
@@ -224,7 +225,8 @@ impl PluginManager {
             .unwrap_or(0);
 
         // 创建 notify 监听器
-        // 使用 500ms 轮询间隔平衡响应速度和 CPU 占用
+        // 从配置读取轮询间隔，平衡响应速度和 CPU 占用
+        let poll_interval = Duration::from_millis(AppConfig::global().plugin.file_poll_interval_ms);
         let mut watcher = {
             let sessions = sessions.clone();
             let output_tx = output_tx.clone();
@@ -249,7 +251,7 @@ impl PluginManager {
                         }
                     }
                 },
-                Config::default().with_poll_interval(Duration::from_millis(500)),
+                Config::default().with_poll_interval(poll_interval),
             )?
         };
 
@@ -330,7 +332,7 @@ impl PluginManager {
 
     /// 处理来自插件的心跳消息
     ///
-    /// 插件每 30 秒发送一次心跳，若 90 秒内未收到心跳则认为连接断开
+    /// 心跳超时时间从配置读取
     pub async fn handle_heartbeat(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         if let Some(state) = sessions.get_mut(session_id) {
@@ -442,14 +444,14 @@ impl PluginManager {
 
     /// 检查超时并返回断开连接的会话 ID
     ///
-    /// 心跳超时时间：90 秒
+    /// 心跳超时时间从配置读取
     /// 建议每分钟调用一次此函数进行清理
     ///
     /// # Returns
     /// 断开连接的会话 ID 列表
     pub async fn check_timeouts(&self) -> Vec<String> {
         let now = Instant::now();
-        let timeout = Duration::from_secs(90);
+        let timeout = Duration::from_secs(AppConfig::global().plugin.heartbeat_timeout_secs);
         let mut disconnected = vec![];
 
         let sessions = self.sessions.write().await;

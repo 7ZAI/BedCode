@@ -9,6 +9,7 @@ use crate::desktop::server::services::terminal_service::handle_input;
 use crate::desktop::session::{GlobalOutputManager, OutputEvent, SessionManager};
 use crate::shared::enums::{TerminalAction as SharedTerminalAction, TerminalPayload as SharedTerminalPayload};
 use crate::shared::model::message::Message;
+use crate::shared::system::config::AppConfig;
 use crate::shared::websocket::server::context::RouteContext;
 use crate::Result;
 use async_trait::async_trait;
@@ -16,12 +17,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 use tracing::info;
-
-/// 缓冲间隔（毫秒）
-const FLUSH_INTERVAL_MS: u64 = 30;
-
-/// 最大缓冲大小（字节）
-const MAX_BUFFER_SIZE: usize = 64 * 1024;
 
 /// 输出缓冲区
 ///
@@ -127,18 +122,22 @@ impl RouteHandler for TerminalHandler {
                         let session_id_clone = session_id.clone();
                         let client_id = ctx.client_id.clone();
 
+                        // 从配置读取缓冲参数
+                        let config = AppConfig::global();
+                        let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
+                        let max_buffer_size = config.terminal.max_buffer_size;
+
                         // 启动转发任务：将 OutputEvent 转换为 Message 并发送到 WebSocket
                         // 使用缓冲机制减少 WebSocket 消息数量
                         tokio::spawn(async move {
                             let mut buffer = OutputBuffer::new();
-                            let flush_interval = Duration::from_millis(FLUSH_INTERVAL_MS);
 
                             loop {
                                 match timeout(flush_interval, output_rx.recv()).await {
                                     Ok(Some(event)) => {
                                         buffer.append(&event);
                                         // 达到最大缓冲大小，立即 flush
-                                        if buffer.data.len() >= MAX_BUFFER_SIZE {
+                                        if buffer.data.len() >= max_buffer_size {
                                             if flush_buffer(&mut buffer, &sender, &session_id_clone, &client_id).await {
                                                 break;
                                             }

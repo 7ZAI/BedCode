@@ -2,6 +2,7 @@
 //!
 //! 执行环境和 Shell 类型定义
 
+use crate::shared::system::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -64,8 +65,13 @@ pub struct SessionLaunchConfig {
     pub rows: u16,
 }
 
-fn default_cols() -> u16 { 120 }
-fn default_rows() -> u16 { 40 }
+fn default_cols() -> u16 {
+    AppConfig::global().terminal.default_cols
+}
+
+fn default_rows() -> u16 {
+    AppConfig::global().terminal.default_rows
+}
 
 impl SessionLaunchConfig {
     /// 创建新的启动配置

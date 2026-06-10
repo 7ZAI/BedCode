@@ -2,19 +2,32 @@
 //!
 //! Parses Claude Code's JSONL conversation log and formats for terminal display
 
+use crate::shared::system::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use tracing::{debug, warn};
 
-/// Maximum read size to prevent unbounded memory allocation (1MB)
-const MAX_READ_SIZE: u64 = 1024 * 1024;
+/// 获取最大读取大小（从配置读取）
+fn max_read_size() -> u64 {
+    AppConfig::global().display.max_read_size
+}
 
-/// Maximum text display limits
-const MAX_TOOL_INPUT_DISPLAY: usize = 200;
-const MAX_TOOL_RESULT_DISPLAY: usize = 500;
-const MAX_THINKING_DISPLAY: usize = 300;
+/// 获取工具输入显示限制（从配置读取）
+fn max_tool_input_display() -> usize {
+    AppConfig::global().display.max_tool_input_display
+}
+
+/// 获取工具结果显示限制（从配置读取）
+fn max_tool_result_display() -> usize {
+    AppConfig::global().display.max_tool_result_display
+}
+
+/// 获取思考过程显示限制（从配置读取）
+fn max_thinking_display() -> usize {
+    AppConfig::global().display.max_thinking_display
+}
 
 /// Root entry types from Claude Code JSONL
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -563,11 +576,12 @@ impl ClaudeEntry {
 
             "thinking" => {
                 let thinking = block.thinking.clone().unwrap_or_default();
+                let max_display = max_thinking_display();
                 if thinking.is_empty() {
                     None
                 } else {
-                    let truncated = truncate(&thinking, MAX_THINKING_DISPLAY);
-                    let display = if thinking.chars().count() > MAX_THINKING_DISPLAY {
+                    let truncated = truncate(&thinking, max_display);
+                    let display = if thinking.chars().count() > max_display {
                         format!("{}...", truncated)
                     } else {
                         truncated
@@ -583,8 +597,9 @@ impl ClaudeEntry {
             "tool_use" => {
                 let name = block.name.clone().unwrap_or_else(|| "Unknown".to_string());
                 let input = block.input.as_ref().map(|i| serde_json::to_string(i).unwrap_or_default()).unwrap_or_default();
-                let truncated = truncate(&input, MAX_TOOL_INPUT_DISPLAY);
-                let display = if input.chars().count() > MAX_TOOL_INPUT_DISPLAY {
+                let max_display = max_tool_input_display();
+                let truncated = truncate(&input, max_display);
+                let display = if input.chars().count() > max_display {
                     format!("{}...", truncated)
                 } else {
                     truncated
@@ -599,8 +614,9 @@ impl ClaudeEntry {
 
             "tool_result" => {
                 let content = block.content.clone().unwrap_or_default();
-                let truncated = truncate(&content, MAX_TOOL_RESULT_DISPLAY);
-                let display = if content.chars().count() > MAX_TOOL_RESULT_DISPLAY {
+                let max_display = max_tool_result_display();
+                let truncated = truncate(&content, max_display);
+                let display = if content.chars().count() > max_display {
                     format!("{}...", truncated)
                 } else {
                     truncated
@@ -699,7 +715,7 @@ pub fn read_new_lines(path: &Path, last_pos: u64) -> std::io::Result<(Vec<String
 
     file.seek(SeekFrom::Start(last_pos))?;
 
-    let read_size = std::cmp::min(file_size - last_pos, MAX_READ_SIZE);
+    let read_size = std::cmp::min(file_size - last_pos, max_read_size());
     if read_size == 0 {
         return Ok((vec![], last_pos));
     }

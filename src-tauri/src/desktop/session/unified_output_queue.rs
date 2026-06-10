@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
+use crate::shared::system::config::AppConfig;
 
 /// 输出事件
 ///
@@ -149,7 +150,8 @@ impl UnifiedOutputQueue {
 
 impl Default for UnifiedOutputQueue {
     fn default() -> Self {
-        Self::new(50000)
+        let config = AppConfig::global();
+        Self::new(config.channels.global_queue_capacity)
     }
 }
 
