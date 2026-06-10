@@ -374,6 +374,18 @@ function clearConnectionTimeout() {
 async function handleUnexpectedDisconnect(reason: string) {
   console.log('[MobileConnection] Handling unexpected disconnect, reason:', reason)
 
+  // 读取用户设置
+  const savedSettings = localStorage.getItem('mobile-settings')
+  const settings = savedSettings
+    ? JSON.parse(savedSettings)
+    : { autoReconnect: true, reconnectInterval: 5 }
+
+  // 检查是否启用自动重连
+  if (!settings.autoReconnect) {
+    console.log('[MobileConnection] Auto-reconnect disabled by user setting')
+    return
+  }
+
   // 从 localStorage 读取凭据
   const creds = loadAuthCredentials()
   if (!creds) {
@@ -390,6 +402,11 @@ async function handleUnexpectedDisconnect(reason: string) {
   console.log('[MobileConnection] Starting reconnect with token, length:', creds.sessionToken.length)
 
   try {
+    // 使用用户设置的重连间隔（后端会处理指数退避）
+    // 首次重连延迟使用用户设置的间隔
+    if (settings.reconnectInterval > 0) {
+      await new Promise(resolve => setTimeout(resolve, settings.reconnectInterval * 1000))
+    }
     await wsReconnect(creds.sessionToken)
     console.log('[MobileConnection] Reconnect initiated successfully')
   } catch (error) {
