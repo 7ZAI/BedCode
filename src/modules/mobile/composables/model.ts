@@ -14,6 +14,7 @@ export interface RemoteDevice {
   address: string
   port: number
   isPaired: boolean
+  fingerprint?: string  // 设备指纹，用于识别同一设备
 }
 
 export interface AuthCredentials {

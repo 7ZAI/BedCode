@@ -3,6 +3,21 @@
 //! Android 平台专用命令
 
 use crate::Result;
+use tauri_plugin_shell::ShellExt;
+
+/// 使用系统浏览器打开 URL
+#[tauri::command]
+pub async fn open_url_in_browser(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> Result<()> {
+    tracing::info!("Opening URL in browser: {}", url);
+    app_handle
+        .shell()
+        .open(&url, None)
+        .map_err(|e| crate::shared::system::error::AppError::Internal(e.to_string()))?;
+    Ok(())
+}
 
 /// 设置 Android 屏幕方向
 #[cfg(target_os = "android")]

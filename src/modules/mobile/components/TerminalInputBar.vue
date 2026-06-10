@@ -234,9 +234,9 @@ function handleFocus() {
 }
 
 .toggle-active {
-  background: var(--mobile-accent-secondary);
-  color: var(--mobile-accent);
-  border-color: var(--mobile-accent);
+  background: rgba(139, 233, 253, 0.15);
+  color: #8be9fd;
+  border-color: rgba(139, 233, 253, 0.5);
 }
 
 .toggle-inactive {
@@ -289,13 +289,14 @@ function handleFocus() {
 }
 
 .send-btn {
-  background: var(--mobile-bg-elevated);
-  border-color: var(--mobile-border);
-  color: var(--mobile-text-muted);
+  background: linear-gradient(135deg, rgba(80, 250, 123, 0.15), rgba(80, 250, 123, 0.08));
+  border-color: rgba(80, 250, 123, 0.4);
+  color: #50fa7b;
 }
 
 .send-btn:hover:not(:disabled) {
-  border-color: var(--mobile-accent);
+  background: linear-gradient(135deg, rgba(80, 250, 123, 0.25), rgba(80, 250, 123, 0.15));
+  border-color: rgba(80, 250, 123, 0.6);
 }
 
 .send-btn:disabled {
@@ -304,13 +305,14 @@ function handleFocus() {
 }
 
 .execute-btn {
-  background: var(--mobile-accent-secondary);
-  border-color: var(--mobile-accent);
-  color: var(--mobile-accent);
+  background: linear-gradient(135deg, rgba(255, 184, 108, 0.2), rgba(255, 121, 198, 0.15));
+  border-color: rgba(255, 184, 108, 0.5);
+  color: #ffb86c;
 }
 
 .execute-btn:hover:not(:disabled) {
-  background: var(--mobile-accent-muted);
+  background: linear-gradient(135deg, rgba(255, 184, 108, 0.35), rgba(255, 121, 198, 0.25));
+  border-color: rgba(255, 184, 108, 0.7);
 }
 
 .execute-btn:disabled {
@@ -342,9 +344,9 @@ function handleFocus() {
 
 .shortcut-btn {
   height: 2.25rem;
-  background: var(--mobile-accent-muted);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-accent);
+  background: linear-gradient(135deg, rgba(189, 147, 249, 0.12), rgba(189, 147, 249, 0.06));
+  border: 1px solid rgba(189, 147, 249, 0.35);
+  color: #bd93f9;
   font-size: 0.75rem;
   font-weight: 500;
   border-radius: 0.5rem;
@@ -356,13 +358,13 @@ function handleFocus() {
 }
 
 .shortcut-btn:hover {
-  background: var(--mobile-accent-secondary);
-  border-color: var(--mobile-accent);
+  background: linear-gradient(135deg, rgba(189, 147, 249, 0.22), rgba(189, 147, 249, 0.12));
+  border-color: rgba(189, 147, 249, 0.55);
 }
 
 .shortcut-btn:active {
   transform: scale(0.95);
-  background: var(--mobile-accent-secondary);
+  background: linear-gradient(135deg, rgba(189, 147, 249, 0.28), rgba(189, 147, 249, 0.16));
 }
 
 /* 右侧：方向键布局 */
@@ -391,9 +393,9 @@ function handleFocus() {
 .arrow-btn {
   width: 2.25rem;
   height: 2.25rem;
-  background: var(--mobile-accent-muted);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-accent);
+  background: linear-gradient(135deg, rgba(241, 250, 140, 0.12), rgba(241, 250, 140, 0.06));
+  border: 1px solid rgba(241, 250, 140, 0.35);
+  color: #f1fa8c;
   border-radius: 0.5rem;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -403,13 +405,13 @@ function handleFocus() {
 }
 
 .arrow-btn:hover {
-  background: var(--mobile-accent-secondary);
-  border-color: var(--mobile-accent);
+  background: linear-gradient(135deg, rgba(241, 250, 140, 0.22), rgba(241, 250, 140, 0.12));
+  border-color: rgba(241, 250, 140, 0.55);
 }
 
 .arrow-btn:active {
   transform: scale(0.9);
-  background: var(--mobile-accent-secondary);
+  background: linear-gradient(135deg, rgba(241, 250, 140, 0.28), rgba(241, 250, 140, 0.16));
 }
 
 .arrow-icon {

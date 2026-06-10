@@ -18,14 +18,7 @@ pub async fn ws_send_input_async(
     data: String,
     special_key: Option<String>,
 ) -> Result<()> {
-    tracing::info!("[ws_send_input_async] >>> ENTRY: session_id={}, data_len={}, has_special_key={:?}",
-        session_id, data.len(), special_key);
-
     let conn = get_connection_manager();
-
-    // 检查连接状态
-    let status = conn.get_status().await;
-    tracing::info!("[ws_send_input_async] connection status: {:?}", status);
 
     // 裁剪尾部换行
     let trimmed_data = if special_key.as_deref() == Some("enter") {
@@ -36,27 +29,14 @@ pub async fn ws_send_input_async(
 
     // 解析特殊按键
     let special_key_enum = special_key.as_ref().and_then(|k| TerminalRequest::parse_special_key(k));
-    tracing::info!("[ws_send_input_async] special_key_enum: {:?}", special_key_enum);
 
     let message = TerminalRequest::input(&session_id, &trimmed_data, special_key_enum);
-
-    // 记录发送的消息
-    tracing::info!("[ws_send_input_async] message to send: {}", message.to_json().unwrap_or_default());
 
     // 使用带断开处理的 send_and_wait
     // 设置 5 秒超时，终端输入应该快速响应
     let timeout = std::time::Duration::from_secs(5);
-    match conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeout).await {
-        Ok(response) => {
-            tracing::info!("[ws_send_input_async] send_and_wait returned Ok, response: {:?}", response);
-        }
-        Err(e) => {
-            tracing::error!("[ws_send_input_async] send_and_wait returned Err: {}", e);
-            return Err(e);
-        }
-    }
+    conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeout).await?;
 
-    tracing::info!("[ws_send_input_async] <<< EXIT: success");
     Ok(())
 }
 
@@ -218,7 +198,7 @@ pub async fn ws_resize_terminal(
     cols: u32,
     rows: u32,
 ) -> Result<()> {
-    tracing::info!("[ws_resize_terminal] session_id={}, cols={}, rows={}", session_id, cols, rows);
+    tracing::debug!("[ws_resize_terminal] session_id={}, cols={}, rows={}", session_id, cols, rows);
     let conn = get_connection_manager();
 
     let message = SessionRequest::resize_session(&session_id, cols as u16, rows as u16);

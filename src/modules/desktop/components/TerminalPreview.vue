@@ -562,29 +562,39 @@ onUnmounted(() => {
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar-track {
   background: transparent;
-  margin: 4px 0;
+  margin: 8px 2px;
+  border-radius: 3px;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.3);
-  border-radius: 4px;
-  transition: background 0.2s ease;
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 3px;
+  transition: background 0.2s ease, width 0.2s ease;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.6);
+  background: rgba(128, 128, 128, 0.5);
+}
+
+:deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
 }
 
 .dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
 }
 
 .dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.dark :deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>

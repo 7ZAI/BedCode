@@ -7,6 +7,7 @@ export type { SessionStatusEvent, SessionRestartEvent }
 
 let unlistenStatusChange: (() => void) | null = null
 let unlistenRestart: (() => void) | null = null
+let unlistenRefresh: (() => void) | null = null
 
 /**
  * 监听会话状态变化事件
@@ -38,6 +39,19 @@ export function useSessionStatusListener() {
       // 刷新会话列表
       await sessionStore.loadSessions()
     })
+
+    // 监听移动端触发的会话刷新事件
+    unlistenRefresh = await listen<{ refreshType: string; source: string }>('sessions-refresh', async (event) => {
+      const { refreshType, source } = event.payload
+      console.log('[SessionStatusListener] Sessions refresh event:', { refreshType, source })
+
+      // 刷新会话列表
+      await sessionStore.loadSessions()
+      // 同时刷新配置列表（如果需要）
+      if (refreshType === 'configs' || refreshType === 'all') {
+        await sessionStore.loadConfigs()
+      }
+    })
   }
 
   /**
@@ -51,6 +65,10 @@ export function useSessionStatusListener() {
     if (unlistenRestart) {
       unlistenRestart()
       unlistenRestart = null
+    }
+    if (unlistenRefresh) {
+      unlistenRefresh()
+      unlistenRefresh = null
     }
   }
 

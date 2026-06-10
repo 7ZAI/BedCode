@@ -45,11 +45,11 @@
   --mobile-nav-active: #00d4ff;
   --mobile-nav-inactive: #6b7280;
 
-  /* 输入框 */
-  --mobile-input-bg: #0a0a0f;
-  --mobile-input-border: rgba(34, 211, 238, 0.2);
-  --mobile-input-focus: rgba(34, 211, 238, 0.5);
-  --mobile-input-placeholder: #4b5563;
+  /* 输入框 - 终端输入区专属配色，比终端输出区稍亮 */
+  --mobile-input-bg: #16161e;
+  --mobile-input-border: rgba(139, 233, 253, 0.25);
+  --mobile-input-focus: rgba(139, 233, 253, 0.45);
+  --mobile-input-placeholder: #5c5c6d;
 }
 
 /* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效 */

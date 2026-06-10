@@ -1,7 +1,7 @@
 <template>
   <div class="h-full w-full bg-[var(--mobile-bg-primary)] flex flex-col">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 flex items-center gap-3" style="padding-top: 12px;">
+    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center gap-3">
       <button
         class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-cyan-500/10 transition-colors"
         @click="goBack"

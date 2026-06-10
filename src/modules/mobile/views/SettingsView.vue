@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3" style="padding-top: 12px;">
+    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3">
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">设置</h1>
     </header>
 
@@ -175,6 +175,18 @@
       >
         清除所有数据
       </button>
+    </div>
+
+    <!-- Browser Confirm Modal -->
+    <div v-if="showBrowserConfirm" class="confirm-modal-overlay" @click.self="cancelOpenBrowser">
+      <div class="confirm-modal">
+        <p class="confirm-text">是否使用系统浏览器打开此链接？</p>
+        <p class="confirm-url text-xs text-[var(--mobile-text-muted)] mt-1 mb-4 break-all">{{ pendingUrl }}</p>
+        <div class="confirm-buttons">
+          <button class="confirm-btn cancel" @click="cancelOpenBrowser">取消</button>
+          <button class="confirm-btn confirm" @click="confirmOpenBrowser">打开</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -350,8 +362,30 @@ function clearData() {
   }
 }
 
+// 系统浏览器打开链接的确认弹窗状态
+const showBrowserConfirm = ref(false)
+const pendingUrl = ref('')
+
 function openGitHub() {
-  window.open('https://github.com/7ZAI/BedCode', '_blank')
+  pendingUrl.value = 'https://github.com/7ZAI/BedCode'
+  showBrowserConfirm.value = true
+}
+
+async function confirmOpenBrowser() {
+  if (pendingUrl.value) {
+    try {
+      await invoke('open_url_in_browser', { url: pendingUrl.value })
+    } catch (e) {
+      console.error('Failed to open URL:', e)
+    }
+  }
+  showBrowserConfirm.value = false
+  pendingUrl.value = ''
+}
+
+function cancelOpenBrowser() {
+  showBrowserConfirm.value = false
+  pendingUrl.value = ''
 }
 
 function checkUpdate() {
@@ -362,3 +396,75 @@ function checkUpdate() {
 // Auto-save settings
 watch(settings, saveSettings, { deep: true })
 </script>
+
+<style scoped>
+.confirm-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.confirm-modal {
+  background: var(--mobile-bg-secondary);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 320px;
+  text-align: center;
+}
+
+.confirm-text {
+  font-size: 1rem;
+  color: var(--mobile-text-primary);
+  margin: 0;
+}
+
+.confirm-url {
+  color: var(--mobile-accent);
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.confirm-btn {
+  flex: 1;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.confirm-btn.cancel {
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-muted);
+}
+
+.confirm-btn.cancel:hover {
+  background: var(--mobile-bg-hover);
+  color: var(--mobile-text-primary);
+}
+
+.confirm-btn.confirm {
+  background: var(--mobile-accent);
+  border: none;
+  color: #0a0a0f;
+}
+
+.confirm-btn.confirm:hover {
+  opacity: 0.9;
+}
+</style>

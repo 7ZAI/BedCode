@@ -11,20 +11,24 @@ use crate::desktop::plugin::PluginManager;
 use crate::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
+use tauri::AppHandle;
 
 pub struct SessionControlHandler {
     session_manager: Option<Arc<SessionManager>>,
     plugin_manager: Option<Arc<PluginManager>>,
+    app_handle: Option<Arc<AppHandle>>,
 }
 
 impl SessionControlHandler {
     pub fn new(
         session_manager: Option<Arc<SessionManager>>,
         plugin_manager: Option<Arc<PluginManager>>,
+        app_handle: Option<Arc<AppHandle>>,
     ) -> Self {
         Self {
             session_manager,
             plugin_manager,
+            app_handle,
         }
     }
 }
@@ -57,6 +61,7 @@ impl RouteHandler for SessionControlHandler {
             &self.plugin_manager,
             ctx.addr,
             ctx.device_name.clone(),
+            self.app_handle.clone(),
         ).await
     }
 }

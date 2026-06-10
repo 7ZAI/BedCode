@@ -82,6 +82,20 @@ interface ConnectionHistoryItem {
 const connectionHistory = ref<ConnectionHistoryItem[]>([])
 const historyLoaded = ref(false)
 
+// 已配对设备列表（全局状态，认证成功后记录）
+// 与连接历史不同：连接历史记录所有尝试连接的设备，已配对设备只记录成功认证的设备
+export interface PairedDevice {
+  address: string
+  port: number
+  name: string
+  fingerprint: string  // 设备指纹，用于识别同一设备
+  pairedAt: string     // 配对时间
+  lastConnected: string // 最后连接时间
+  connectCount: number  // 连接次数统计
+}
+const pairedDevices = ref<PairedDevice[]>([])
+const pairedDevicesLoaded = ref(false)
+
 // ==================== Computed ====================
 
 export const isConnected = computed(() =>
@@ -112,6 +126,9 @@ async function init() {
     authCredentials.value = savedCreds
   }
 
+  // 加载已配对设备列表
+  loadPairedDevices()
+
   // 初始化事件监听 - 状态由后端事件驱动
   await initMobileEventListeners({
     onConnecting: () => {
@@ -138,6 +155,22 @@ async function init() {
       connectionStatus.value = 'paired'
       isConnecting.value = false
       console.log('[MobileConnection] Paired')
+
+      // 认证成功时更新已配对设备信息
+      // 当前设备和凭据都存在时才更新（首次配对或 token 重连）
+      console.log('[MobileConnection] onPaired - currentDevice:', currentDevice.value)
+      console.log('[MobileConnection] onPaired - authCredentials:', authCredentials.value ? { fingerprint: authCredentials.value.fingerprint } : null)
+
+      if (currentDevice.value && authCredentials.value) {
+        addPairedDevice({
+          address: currentDevice.value.address,
+          port: currentDevice.value.port,
+          name: currentDevice.value.name,
+          fingerprint: authCredentials.value.fingerprint,
+        })
+      } else {
+        console.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
+      }
     },
     onAuthSuccess: () => {
       // ws_paired 会触发 onPaired
@@ -484,6 +517,7 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
     if (creds) {
       // 成功时后端会 emit ws_pairing_verified 和 ws_paired 事件
       // 保存 JWT 凭据到 localStorage，后续请求携带此 token
+      // onPaired 回调会保存已配对设备信息
       saveCredentials(creds)
       return true
     }
@@ -606,6 +640,100 @@ export function clearConnectionHistory(): void {
   saveConnectionHistory()
 }
 
+// ==================== Paired Devices Management ====================
+
+/**
+ * 加载已配对设备列表
+ */
+export function loadPairedDevices(): void {
+  if (pairedDevicesLoaded.value) return
+  const stored = localStorage.getItem('paired_devices')
+  if (stored) {
+    try {
+      pairedDevices.value = JSON.parse(stored)
+    } catch {
+      pairedDevices.value = []
+    }
+  }
+  pairedDevicesLoaded.value = true
+}
+
+/**
+ * 保存已配对设备列表到 localStorage
+ */
+function savePairedDevices(): void {
+  localStorage.setItem('paired_devices', JSON.stringify(pairedDevices.value))
+}
+
+/**
+ * 添加或更新已配对设备
+ * 使用设备指纹作为唯一标识，同一设备只记录一次
+ */
+export function addPairedDevice(device: { address: string; port: number; name: string; fingerprint: string }): void {
+  const fullAddress = `${device.address}:${device.port}`
+  const now = new Date().toISOString()
+
+  // 查找是否已存在相同指纹的设备（同一设备）
+  const existingIndex = pairedDevices.value.findIndex(d => d.fingerprint === device.fingerprint)
+
+  if (existingIndex !== -1) {
+    // 已存在，更新信息并增加连接次数
+    const existing = pairedDevices.value[existingIndex]
+    pairedDevices.value[existingIndex] = {
+      ...existing,
+      address: device.address,
+      port: device.port,
+      name: device.name,
+      lastConnected: now,
+      connectCount: existing.connectCount + 1,
+    }
+    console.log('[MobileConnection] Updated paired device:', device.fingerprint,
+      'new address:', fullAddress, 'connectCount:', existing.connectCount + 1)
+  } else {
+    // 新设备，添加到列表开头，初始连接次数为 1
+    pairedDevices.value.unshift({
+      address: device.address,
+      port: device.port,
+      name: device.name,
+      fingerprint: device.fingerprint,
+      pairedAt: now,
+      lastConnected: now,
+      connectCount: 1,
+    })
+    console.log('[MobileConnection] Added new paired device:', device.fingerprint, 'address:', fullAddress)
+  }
+
+  // 限制最多保存 10 个设备
+  if (pairedDevices.value.length > 10) {
+    pairedDevices.value = pairedDevices.value.slice(0, 10)
+  }
+
+  savePairedDevices()
+}
+
+/**
+ * 从已配对设备列表移除
+ */
+export function removePairedDevice(fingerprint: string): void {
+  pairedDevices.value = pairedDevices.value.filter(d => d.fingerprint !== fingerprint)
+  savePairedDevices()
+}
+
+/**
+ * 清除所有已配对设备
+ */
+export function clearPairedDevices(): void {
+  pairedDevices.value = []
+  savePairedDevices()
+}
+
+/**
+ * 根据指纹查找已配对设备
+ */
+export function findPairedDeviceByFingerprint(fingerprint: string): PairedDevice | undefined {
+  return pairedDevices.value.find(d => d.fingerprint === fingerprint)
+}
+
 /**
  * 清除会话配置（断开连接时）
  */
@@ -667,6 +795,7 @@ export function useMobileConnection() {
     sessionConfigs,
     activeSessions,
     connectionHistory,
+    pairedDevices,
     isLoadingConfigs,
     hasLoadedConfigs,
 
@@ -696,6 +825,13 @@ export function useMobileConnection() {
     addToConnectionHistory,
     removeFromConnectionHistory,
     clearConnectionHistory,
+
+    // Paired Devices Operations
+    loadPairedDevices,
+    addPairedDevice,
+    removePairedDevice,
+    clearPairedDevices,
+    findPairedDeviceByFingerprint,
 
     // Clear Operations
     clearSessionConfigs,

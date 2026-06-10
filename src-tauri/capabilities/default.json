@@ -31,6 +31,7 @@
     "notification:default",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
-    "os:default"
+    "os:default",
+    "shell:allow-open"
   ]
 }

@@ -261,7 +261,47 @@ onUnmounted(() => {
   height: 100%;
   padding: 8px;
 }
+
 :deep(.xterm-viewport) {
   border-radius: 0;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar {
+  width: 6px;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 8px 2px;
+  border-radius: 3px;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
+
+:deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.5);
+}
+
+:deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+}
+
+.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.dark :deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>

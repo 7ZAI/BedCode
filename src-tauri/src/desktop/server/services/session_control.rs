@@ -11,6 +11,15 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+use tauri::{AppHandle, Emitter};
+
+/// 刷新事件类型
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshEvent {
+    pub refresh_type: String,
+    pub source: String,
+}
 
 /// 处理控制消息
 pub async fn handle_control(
@@ -300,6 +309,7 @@ pub async fn handle_control_message(
     plugin_manager: &Option<Arc<PluginManager>>,
     addr: SocketAddr,
     device_name: Option<String>,
+    app_handle: Option<Arc<AppHandle>>,
 ) -> Result<Option<Message>> {
     match action {
         SessionControlAction::ListSessions
@@ -313,15 +323,48 @@ pub async fn handle_control_message(
                 let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
                 let clients = HashMap::<SocketAddr, crate::desktop::server::ClientInfo>::new();
 
-                handle_control(
-                    action,
+                let result = handle_control(
+                    action.clone(),
                     message_id,
                     sm,
                     pm,
                     &Arc::new(RwLock::new(clients)),
                     addr,
-                    device_name,
-                ).await
+                    device_name.clone(),
+                ).await?;
+
+                // 移动端操作成功后，发送刷新事件通知桌面端前端
+                // 仅在 StopSession 和 RemoveSession 时发送（会话刷新）
+                // StartSession 也会触发刷新（会话列表新增）
+                if let Some(handle) = app_handle {
+                    let source = device_name.unwrap_or_else(|| "mobile".to_string());
+                    match &action {
+                        SessionControlAction::StopSession { .. }
+                        | SessionControlAction::RemoveSession { .. } => {
+                            // 发送会话列表刷新事件
+                            if let Err(e) = handle.emit("sessions-refresh", RefreshEvent {
+                                refresh_type: "sessions".to_string(),
+                                source: source.clone(),
+                            }) {
+                                tracing::error!("Failed to emit sessions-refresh event: {}", e);
+                            }
+                            tracing::info!("[SessionControl] Emitted sessions-refresh event from {}", source);
+                        }
+                        SessionControlAction::StartSession { .. } => {
+                            // 发送会话列表刷新事件（新增会话）
+                            if let Err(e) = handle.emit("sessions-refresh", RefreshEvent {
+                                refresh_type: "sessions".to_string(),
+                                source: source.clone(),
+                            }) {
+                                tracing::error!("Failed to emit sessions-refresh event: {}", e);
+                            }
+                            tracing::info!("[SessionControl] Emitted sessions-refresh event from {}", source);
+                        }
+                        _ => {}
+                    }
+                }
+
+                Ok(result)
             } else {
                 tracing::warn!("Session manager not available");
                 Ok(None)

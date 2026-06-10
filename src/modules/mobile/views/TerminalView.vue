@@ -783,10 +783,10 @@ watch(isSessionActive, async (active, prevActive) => {
 // Watch connection status changes
 watch(isConnected, async (connected) => {
   if (!connected && terminal) {
-    terminal.write('\x1b[31m[连接已断开]\x1b[0m\r\n')
+    // terminal.write('\x1b[31m[连接已断开]\x1b[0m\r\n')
     await unsubscribeSession()
   } else if (connected && isSessionActive.value && terminal) {
-    terminal.write('\x1b[32m[连接已恢复]\x1b[0m\r\n')
+    // terminal.write('\x1b[32m[连接已恢复]\x1b[0m\r\n')
     await subscribeSession()
   }
 })

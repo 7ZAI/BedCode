@@ -14,24 +14,22 @@ pub struct TerminalHandler;
 #[async_trait]
 impl ClientRouteHandler for TerminalHandler {
     async fn handle(&self, message: Message, ctx: &ClientRouteContext) -> Result<Option<Message>> {
-        tracing::info!("[TerminalHandler] handle() called, message_type={:?}", message.message_type());
         if let Message::Terminal { session_id, payload, .. } = message {
-            tracing::info!("[TerminalHandler] Terminal message received, action_type={:?}", payload.action);
             match payload.action {
                 TerminalAction::Output { data, is_waiting, index } => {
-                    tracing::info!("[TerminalHandler] Output: session_id={}, data_len={}, is_waiting={}, index={}",
-                        session_id, data.len(), is_waiting, index);
+                    // 输出事件：直接转发，高频操作不记录详细日志
                     ctx.emit(MobileEvent::Output {
                         session_id,
                         data,
                         is_waiting,
                         index,
                     });
-                    tracing::info!("[TerminalHandler] ctx.emit() called");
                 }
                 TerminalAction::SubscribeResponse { min_seq, max_seq, history_count } => {
-                    tracing::debug!("[TerminalHandler] SubscribeResponse: session_id={}, min_seq={}, max_seq={}, history_count={}",
-                        session_id, min_seq, max_seq, history_count);
+                    tracing::info!(
+                        "[TerminalHandler] SubscribeResponse: session_id={}, seq_range={}-{}, history={}",
+                        session_id, min_seq, max_seq, history_count
+                    );
                     ctx.emit(MobileEvent::SubscribeResponse {
                         session_id,
                         min_seq,
