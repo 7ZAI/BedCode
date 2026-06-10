@@ -182,12 +182,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
+import { useForegroundService } from '@/modules/mobile/composables/useForegroundService'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 import Toggle from '@/modules/shared/components/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
 
 const connection = useMobileConnection()
 const settingsStore = useSettingsStore()
+const { startService, stopService, updateNotification } = useForegroundService()
 
 // 使用统一的连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
@@ -275,6 +277,35 @@ onMounted(async () => {
 
   // 同步到 settingsStore（使设置生效）
   syncToSettingsStore()
+})
+
+// ==================== Foreground Service Integration ====================
+
+// keepAlive 开关监听 - 控制前台服务
+watch(() => settings.value.keepAlive, async (enabled) => {
+  if (enabled && isConnected.value) {
+    await startService()
+  } else {
+    await stopService()
+  }
+})
+
+// 连接状态变化时更新通知
+watch(
+  [() => connection.connectionStatus.value, () => connection.activeSessions.value],
+  () => {
+    if (settings.value.keepAlive) {
+      updateNotification()
+    }
+  },
+  { deep: true }
+)
+
+// 连接成功时启动服务（如果 keepAlive 开启）
+watch(isConnected, async (connected) => {
+  if (connected && settings.value.keepAlive) {
+    await startService()
+  }
 })
 
 // 将移动端设置同步到全局 settingsStore

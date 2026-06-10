@@ -13,7 +13,8 @@ export function useForegroundService() {
     isConnected,
     connectionStatus,
     activeSessions,
-    currentDevice
+    currentDevice,
+    isConnecting,
   } = useMobileConnection()
 
   /**
@@ -88,7 +89,7 @@ export function useForegroundService() {
    * 构建通知内容
    *
    * 格式规则：
-   * - 重连中: "正在重连..."
+   * - 重连中（连接中但有错误）: "正在重连..."
    * - 已连接 + 有会话: "3 个会话运行中 · 已连接 Desktop-X"
    * - 已连接 + 无会话: "已连接 Desktop-X"
    * - 未连接: "后台运行中"
@@ -100,8 +101,8 @@ export function useForegroundService() {
     const sessionCount = runningSessions.length
     const deviceName = currentDevice.value?.name || ''
 
-    // 重连中
-    if (connectionStatus.value === 'reconnecting') {
+    // 重连中（正在连接但之前有错误或设备信息）
+    if (isConnecting.value && currentDevice.value) {
       return '正在重连...'
     }
 
