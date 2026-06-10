@@ -221,14 +221,16 @@ impl TerminalRequest {
             "ctrl_c" => Some(SpecialKey::CtrlC),
             "ctrl_d" => Some(SpecialKey::CtrlD),
             "ctrl_z" => Some(SpecialKey::CtrlZ),
+            "ctrl_l" => Some(SpecialKey::CtrlL),
             "tab" => Some(SpecialKey::Tab),
             "esc" | "escape" => Some(SpecialKey::Escape),
-            "backspace" => Some(SpecialKey::Backspace),
+            "backspace" | "del" => Some(SpecialKey::Backspace),
             "delete" => Some(SpecialKey::Delete),
-            "up" => Some(SpecialKey::ArrowUp),
-            "down" => Some(SpecialKey::ArrowDown),
-            "left" => Some(SpecialKey::ArrowLeft),
-            "right" => Some(SpecialKey::ArrowRight),
+            // 支持两种格式：up/arrow_up, down/arrow_down 等
+            "up" | "arrow_up" => Some(SpecialKey::ArrowUp),
+            "down" | "arrow_down" => Some(SpecialKey::ArrowDown),
+            "left" | "arrow_left" => Some(SpecialKey::ArrowLeft),
+            "right" | "arrow_right" => Some(SpecialKey::ArrowRight),
             "home" => Some(SpecialKey::Home),
             "end" => Some(SpecialKey::End),
             "page_up" => Some(SpecialKey::PageUp),
@@ -361,6 +363,13 @@ mod tests {
     fn test_terminal_parse_special_key() {
         assert_eq!(TerminalRequest::parse_special_key("enter"), Some(SpecialKey::Enter));
         assert_eq!(TerminalRequest::parse_special_key("ctrl_c"), Some(SpecialKey::CtrlC));
+        assert_eq!(TerminalRequest::parse_special_key("ctrl_l"), Some(SpecialKey::CtrlL));
+        // 支持两种格式
+        assert_eq!(TerminalRequest::parse_special_key("up"), Some(SpecialKey::ArrowUp));
+        assert_eq!(TerminalRequest::parse_special_key("arrow_up"), Some(SpecialKey::ArrowUp));
+        assert_eq!(TerminalRequest::parse_special_key("arrow_down"), Some(SpecialKey::ArrowDown));
+        assert_eq!(TerminalRequest::parse_special_key("arrow_left"), Some(SpecialKey::ArrowLeft));
+        assert_eq!(TerminalRequest::parse_special_key("arrow_right"), Some(SpecialKey::ArrowRight));
         assert_eq!(TerminalRequest::parse_special_key("unknown"), None);
     }
 }

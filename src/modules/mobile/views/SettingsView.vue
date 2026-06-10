@@ -6,7 +6,7 @@
     </header>
 
     <!-- Connection Status -->
-    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-success-muted)] border-b border-[var(--mobile-success)]/20 flex items-center justify-between">
+    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-success-muted)] border-b border-[var(--mobile-success-muted)] flex items-center justify-between">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-[var(--mobile-success)] shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
         <span class="text-[var(--mobile-success)] text-sm">已连接 {{ currentDeviceName }}</span>
@@ -170,7 +170,7 @@
         重置设置
       </button>
       <button
-        class="w-full bg-[var(--mobile-error)]/10 border border-[var(--mobile-error)]/20 text-[var(--mobile-error)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
+        class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
         @click="clearData"
       >
         清除所有数据

@@ -48,11 +48,11 @@
               <span class="text-sm text-[var(--mobile-text-secondary)]">双击输入</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.doubleTap ? 'bg-[var(--mobile-accent)]' : 'bg-gray-700'"
+                :class="localSettings.gestures.doubleTap ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.doubleTap = !localSettings.gestures.doubleTap"
               >
                 <span
-                  class="block w-5 h-5 bg-white rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
                   :class="localSettings.gestures.doubleTap ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -62,11 +62,11 @@
               <span class="text-sm text-[var(--mobile-text-secondary)]">向下滑动 - 清屏</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeDown ? 'bg-[var(--mobile-accent)]' : 'bg-gray-700'"
+                :class="localSettings.gestures.swipeDown ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeDown = !localSettings.gestures.swipeDown"
               >
                 <span
-                  class="block w-5 h-5 bg-white rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
                   :class="localSettings.gestures.swipeDown ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -76,11 +76,11 @@
               <span class="text-sm text-[var(--mobile-text-secondary)]">向上滑动 - Ctrl+C</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeUp ? 'bg-[var(--mobile-accent)]' : 'bg-gray-700'"
+                :class="localSettings.gestures.swipeUp ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeUp = !localSettings.gestures.swipeUp"
               >
                 <span
-                  class="block w-5 h-5 bg-white rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
                   :class="localSettings.gestures.swipeUp ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -90,11 +90,11 @@
               <span class="text-sm text-[var(--mobile-text-secondary)]">向左滑动 - 快捷键</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeLeft ? 'bg-[var(--mobile-accent)]' : 'bg-gray-700'"
+                :class="localSettings.gestures.swipeLeft ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeLeft = !localSettings.gestures.swipeLeft"
               >
                 <span
-                  class="block w-5 h-5 bg-white rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
                   :class="localSettings.gestures.swipeLeft ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -104,11 +104,11 @@
               <span class="text-sm text-[var(--mobile-text-secondary)]">向右滑动 - 输入</span>
               <button
                 class="w-11 h-6 rounded-full transition-colors"
-                :class="localSettings.gestures.swipeRight ? 'bg-[var(--mobile-accent)]' : 'bg-gray-700'"
+                :class="localSettings.gestures.swipeRight ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeRight = !localSettings.gestures.swipeRight"
               >
                 <span
-                  class="block w-5 h-5 bg-white rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
                   :class="localSettings.gestures.swipeRight ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>

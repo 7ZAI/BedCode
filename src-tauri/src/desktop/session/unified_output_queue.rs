@@ -100,7 +100,7 @@ impl UnifiedOutputQueue {
 
 impl Default for UnifiedOutputQueue {
     fn default() -> Self {
-        Self::new(10000)
+        Self::new(50000)
     }
 }
 

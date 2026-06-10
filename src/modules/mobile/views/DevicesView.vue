@@ -40,7 +40,7 @@
     <!-- Connected Banner -->
     <div
       v-if="isConnected && currentDevice"
-      class="mx-4 mt-4 p-3 bg-[var(--mobile-success-muted)] border border-[var(--mobile-success)]/20 rounded-xl backdrop-blur-sm"
+      class="mx-4 mt-4 p-3 bg-[var(--mobile-success-muted)] border border-[var(--mobile-success-muted)] rounded-xl backdrop-blur-sm"
     >
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -55,7 +55,7 @@
           </div>
         </div>
         <button
-          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border border-[var(--mobile-error)]/20 text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
+          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
           @click="handleDisconnect"
         >
           断开
@@ -324,9 +324,9 @@
           v-if="showPairingLoading"
           class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
         >
-          <div class="bg-white dark:bg-dark-800 rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]">
-            <div class="w-10 h-10 border-4 border-primary-400 border-t-transparent rounded-full animate-spin" />
-            <p class="text-[var(--mobile-text-secondary)] dark:text-dark-200 text-sm font-medium">正在请求配对...</p>
+          <div class="bg-[var(--mobile-bg-card)] rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]">
+            <div class="w-10 h-10 border-4 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
+            <p class="text-[var(--mobile-text-secondary)] text-sm font-medium">正在请求配对...</p>
           </div>
         </div>
       </Transition>

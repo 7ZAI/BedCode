@@ -94,6 +94,7 @@ import Spinner from '@/modules/shared/components/Spinner.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
 import { useSessionWindows } from '@/modules/shared/composables/useSessionWindows'
 import { useSessionStatusListener } from '@/modules/shared/composables/useSessionStatusListener'
+import { destroySessionCache } from '@/modules/desktop/composables/useGlobalTerminal'
 
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -180,6 +181,8 @@ async function confirmStop() {
 
   try {
     await sessionStore.killSession(sessionId)
+    // 销毁会话历史缓存
+    destroySessionCache(sessionId)
     toast.info('会话已停止')
 
     // 立即关闭终端窗口
@@ -238,6 +241,8 @@ async function confirmDelete() {
     // 如果会话还在运行，先停止
     if (isRunning) {
       await sessionStore.killSession(sessionId)
+      // 销毁会话历史缓存
+      destroySessionCache(sessionId)
     }
     // 然后删除
     await sessionStore.deleteSession(sessionId)

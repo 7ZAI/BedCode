@@ -13,10 +13,22 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <!-- Theme Switch -->
+        <select
+          v-model="terminalTheme"
+          class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
+          title="终端主题"
+        >
+          <option v-for="(name, key) in themeNames" :key="key" :value="key">
+            {{ name }}
+          </option>
+        </select>
+
         <!-- Font Size -->
         <select
           v-model="fontSize"
           class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
+          title="字体大小"
         >
           <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
             {{ size }}px
@@ -24,7 +36,7 @@
         </select>
 
         <!-- Clear Button -->
-        <Button variant="ghost" size="sm" @click="clearTerminal">
+        <Button variant="ghost" size="sm" @click="clearTerminal" title="清屏">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
@@ -32,7 +44,7 @@
       </div>
     </header>
 
-    <!-- Terminal Container (xterm.js) - 原生键盘输入 -->
+    <!-- Terminal Container (xterm.js) -->
     <div ref="terminalContainerRef" class="flex-1 overflow-hidden"></div>
   </div>
 </template>
@@ -44,7 +56,11 @@ import { useSessionStore } from '@/modules/shared/stores/session'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 import Button from '@/modules/shared/components/Button.vue'
 import { usePtyOutput } from '@/modules/desktop/composables/usePtyOutput'
-import { getOutputBuffer, clearOutputBuffer, destroyTerminal } from '@/modules/desktop/composables/useGlobalTerminal'
+import {
+  useTerminalHistory,
+  initSessionCache,
+  destroySessionCache
+} from '@/modules/desktop/composables/useGlobalTerminal'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -64,11 +80,13 @@ const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
+const terminalTheme = ref<string>('dracula')
 
-// xterm.js 实例
+// xterm.js 实例（组件内）
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let webglAddon: WebglAddon | null = null
+let resizeObserver: ResizeObserver | null = null
 
 // 滚动状态追踪
 let isUserScrolling = false
@@ -76,19 +94,11 @@ let scrollTimeout: ReturnType<typeof setTimeout> | null = null
 
 const sessionId = computed(() => props.session?.id || '')
 
-// 使用实时监听获取新输出（用于增量更新）
+// PTY 输出监听（组件内）
 const { output: realtimeOutput, clearOutput } = usePtyOutput(sessionId)
 
-// 快速键（仅用于 UI 显示，实际功能已集成到 xterm 原生输入）
-const quickKeys = [
-  { label: 'Tab', value: 'tab' },
-  { label: 'Enter', value: 'enter' },
-  { label: 'Esc', value: 'escape' },
-  { label: 'Ctrl+C', value: 'ctrl_c' },
-  { label: 'Ctrl+D', value: 'ctrl_d' },
-  { label: '↑', value: 'arrow_up' },
-  { label: '↓', value: 'arrow_down' },
-]
+// 终端历史缓存
+const terminalHistory = useTerminalHistory(sessionId.value)
 
 const statusColor = computed(() => {
   if (!props.session) return 'bg-gray-400 dark:bg-dark-500'
@@ -109,86 +119,178 @@ const statusColor = computed(() => {
   }
 })
 
-// 检测当前是否为深色模式
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
-
-// 浅色主题
-const lightTheme = {
-  background: '#ffffff',
-  foreground: '#333333',
-  cursor: '#000000',
-  cursorAccent: '#ffffff',
-  selectionBackground: '#b4d7ff',
-  black: '#000000',
-  red: '#cd3131',
-  green: '#0dbc79',
-  yellow: '#e5e510',
-  blue: '#2472c8',
-  magenta: '#bc3fbc',
-  cyan: '#11a8cd',
-  white: '#e5e5e5',
-  brightBlack: '#666666',
-  brightRed: '#f14c4c',
-  brightGreen: '#23d18b',
-  brightYellow: '#f5f543',
-  brightBlue: '#3b8eea',
-  brightMagenta: '#d670d6',
-  brightCyan: '#29b8db',
-  brightWhite: '#ffffff',
+// 终端主题集合
+const terminalThemes: Record<string, object> = {
+  default: {
+    background: '#000000',
+    foreground: '#ffffff',
+    cursor: '#ffffff',
+    cursorAccent: '#000000',
+    selectionBackground: '#4d4d4d',
+    black: '#000000',
+    red: '#cd0000',
+    green: '#00cd00',
+    yellow: '#cdcd00',
+    blue: '#0000ee',
+    magenta: '#cd00cd',
+    cyan: '#00cdcd',
+    white: '#e5e5e5',
+    brightBlack: '#7f7f7f',
+    brightRed: '#ff0000',
+    brightGreen: '#00ff00',
+    brightYellow: '#ffff00',
+    brightBlue: '#5c5cff',
+    brightMagenta: '#ff00ff',
+    brightCyan: '#00ffff',
+    brightWhite: '#ffffff',
+  },
+  dracula: {
+    background: '#1e1e2e',
+    foreground: '#f8f8f2',
+    cursor: '#f8f8f2',
+    cursorAccent: '#1e1e2e',
+    selectionBackground: '#44475a',
+    black: '#000000',
+    red: '#ff5555',
+    green: '#50fa7b',
+    yellow: '#f1fa8c',
+    blue: '#bd93f9',
+    magenta: '#ff79c6',
+    cyan: '#8be9fd',
+    white: '#bbbbbb',
+    brightBlack: '#555555',
+    brightRed: '#ff5555',
+    brightGreen: '#50fa7b',
+    brightYellow: '#f1fa8c',
+    brightBlue: '#bd93f9',
+    brightMagenta: '#ff79c6',
+    brightCyan: '#8be9fd',
+    brightWhite: '#ffffff',
+  },
+  oneDark: {
+    background: '#282c34',
+    foreground: '#abb2bf',
+    cursor: '#528bff',
+    cursorAccent: '#282c34',
+    selectionBackground: '#3e4451',
+    black: '#282c34',
+    red: '#e06c75',
+    green: '#98c379',
+    yellow: '#e5c07b',
+    blue: '#61afef',
+    magenta: '#c678dd',
+    cyan: '#56b6c2',
+    white: '#abb2bf',
+    brightBlack: '#545862',
+    brightRed: '#e06c75',
+    brightGreen: '#98c379',
+    brightYellow: '#e5c07b',
+    brightBlue: '#61afef',
+    brightMagenta: '#c678dd',
+    brightCyan: '#56b6c2',
+    brightWhite: '#ffffff',
+  },
+  solarizedDark: {
+    background: '#002b36',
+    foreground: '#839496',
+    cursor: '#839496',
+    cursorAccent: '#002b36',
+    selectionBackground: '#073642',
+    black: '#073642',
+    red: '#dc322f',
+    green: '#859900',
+    yellow: '#b58900',
+    blue: '#268bd2',
+    magenta: '#d33682',
+    cyan: '#2aa198',
+    white: '#eee8d5',
+    brightBlack: '#002b36',
+    brightRed: '#cb4b16',
+    brightGreen: '#586e75',
+    brightYellow: '#657b83',
+    brightBlue: '#839496',
+    brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1',
+    brightWhite: '#fdf6e3',
+  },
+  solarizedLight: {
+    background: '#fdf6e3',
+    foreground: '#657b83',
+    cursor: '#657b83',
+    cursorAccent: '#fdf6e3',
+    selectionBackground: '#eee8d5',
+    black: '#073642',
+    red: '#dc322f',
+    green: '#859900',
+    yellow: '#b58900',
+    blue: '#268bd2',
+    magenta: '#d33682',
+    cyan: '#2aa198',
+    white: '#eee8d5',
+    brightBlack: '#002b36',
+    brightRed: '#cb4b16',
+    brightGreen: '#586e75',
+    brightYellow: '#657b83',
+    brightBlue: '#839496',
+    brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1',
+    brightWhite: '#fdf6e3',
+  },
+  ubuntu: {
+    background: '#300a24',
+    foreground: '#cccccc',
+    cursor: '#cccccc',
+    cursorAccent: '#300a24',
+    selectionBackground: '#5a3a72',
+    black: '#300a24',
+    red: '#e95420',
+    green: '#3eb33f',
+    yellow: '#ffb73b',
+    blue: '#77216f',
+    magenta: '#c748ba',
+    cyan: '#23c7c7',
+    white: '#cccccc',
+    brightBlack: '#300a24',
+    brightRed: '#e95420',
+    brightGreen: '#3eb33f',
+    brightYellow: '#ffb73b',
+    brightBlue: '#77216f',
+    brightMagenta: '#c748ba',
+    brightCyan: '#23c7c7',
+    brightWhite: '#ffffff',
+  },
 }
 
-// 深色主题
-const darkTheme = {
-  background: '#1a1a2e',
-  foreground: '#e0e0e0',
-  cursor: '#ffffff',
-  cursorAccent: '#1a1a2e',
-  selectionBackground: '#4a4a6a',
-  black: '#000000',
-  red: '#ff5555',
-  green: '#50fa7b',
-  yellow: '#f1fa8c',
-  blue: '#bd93f9',
-  magenta: '#ff79c6',
-  cyan: '#8be9fd',
-  white: '#bbbbbb',
-  brightBlack: '#555555',
-  brightRed: '#ff5555',
-  brightGreen: '#50fa7b',
-  brightYellow: '#f1fa8c',
-  brightBlue: '#bd93f9',
-  brightMagenta: '#ff79c6',
-  brightCyan: '#8be9fd',
-  brightWhite: '#ffffff',
+const themeNames: Record<string, string> = {
+  default: 'Default',
+  dracula: 'Dracula',
+  oneDark: 'One Dark',
+  solarizedDark: 'Solarized Dark',
+  solarizedLight: 'Solarized Light',
+  ubuntu: 'Ubuntu',
 }
 
-// 根据当前主题返回对应的 xterm 主题
 function getTheme() {
-  return isDarkMode.value ? darkTheme : lightTheme
+  return terminalThemes[terminalTheme.value] || terminalThemes.default
 }
 
-// 初始化 WebGL 渲染器，失败时回退到 Canvas
 function initWebGL(terminal: Terminal): boolean {
   try {
     webglAddon = new WebglAddon()
     webglAddon.onContextLoss(() => {
-      console.warn('[TerminalPreview] WebGL context lost, disposing addon')
+      console.warn('[TerminalPreview] WebGL context lost')
       webglAddon?.dispose()
       webglAddon = null
     })
     terminal.loadAddon(webglAddon)
-    console.log('[TerminalPreview] WebGL renderer initialized')
     return true
   } catch (e) {
-    console.warn('[TerminalPreview] WebGL not supported, using Canvas fallback:', e)
+    console.warn('[TerminalPreview] WebGL not supported:', e)
     webglAddon = null
     return false
   }
 }
 
-// 初始化 xterm.js
 function initTerminal() {
   if (!terminalContainerRef.value) return
 
@@ -199,7 +301,7 @@ function initTerminal() {
     cursorBlink: false,
     cursorStyle: 'block',
     cursorWidth: 1,
-    scrollback: 50000, // 桌面端实时预览保留 50000 行历史
+    scrollback: 50000,
     allowProposedApi: true,
   })
 
@@ -210,52 +312,61 @@ function initTerminal() {
   initWebGL(terminal)
   fitAddon.fit()
 
-  // 将终端尺寸同步到 PTY，确保 Claude Code 输出格式正确
   syncTerminalSize()
 
-  // 监听终端尺寸变化，同步到 PTY
   terminal.onResize(({ cols, rows }) => {
     if (props.session) {
       sessionStore.resizeSession(props.session.id, cols, rows)
     }
   })
 
-  // 监听窗口大小变化
+  // ResizeObserver
   let lastCols = 0
   let lastRows = 0
-  const resizeObserver = new ResizeObserver(() => {
-    if (fitAddon && terminal) {
-      fitAddon.fit()
-      const newCols = terminal.cols
-      const newRows = terminal.rows
+  let lastContainerWidth = 0
+  let lastContainerHeight = 0
+  resizeObserver = new ResizeObserver((entries) => {
+    if (!fitAddon || !terminal) return
 
-      // 检查终端尺寸是否发生显著变化（列宽变化超过 10% 或行高变化超过 5 行）
-      // 这种情况下需要刷新终端内容，因为已输出的文本是按旧尺寸换行的
-      const colsChanged = Math.abs(newCols - lastCols) > lastCols * 0.1
-      const rowsChanged = Math.abs(newRows - lastRows) > 5
+    const entry = entries[0]
+    if (!entry) return
 
-      if ((colsChanged || rowsChanged) && lastCols > 0 && lastRows > 0) {
-        // 尺寸发生显著变化，重新同步 PTY 大小并刷新终端内容
-        syncTerminalSize()
-        refreshTerminal()
-      } else {
-        syncTerminalSize()
-      }
+    const newWidth = Math.round(entry.contentRect.width)
+    const newHeight = Math.round(entry.contentRect.height)
 
-      lastCols = newCols
-      lastRows = newRows
+    if (newWidth === lastContainerWidth && newHeight === lastContainerHeight) {
+      return
     }
+
+    lastContainerWidth = newWidth
+    lastContainerHeight = newHeight
+
+    fitAddon.fit()
+    const newCols = terminal.cols
+    const newRows = terminal.rows
+
+    const colsChanged = Math.abs(newCols - lastCols) > lastCols * 0.1
+    const rowsChanged = Math.abs(newRows - lastRows) > 5
+
+    if ((colsChanged || rowsChanged) && lastCols > 0 && lastRows > 0) {
+      syncTerminalSize()
+      refreshTerminal()
+    } else {
+      syncTerminalSize()
+    }
+
+    lastCols = newCols
+    lastRows = newRows
   })
   resizeObserver.observe(terminalContainerRef.value)
 
-  // 捕获键盘输入，直接发送到 PTY（原生终端体验）
+  // 键盘输入
   terminal.onData((data: string) => {
     if (!props.session) return
     sessionStore.writeToSession(props.session.id, data)
   })
 }
 
-/** 将当前终端尺寸同步到 PTY */
 function syncTerminalSize() {
   if (!terminal || !props.session) return
   const cols = terminal.cols
@@ -265,44 +376,13 @@ function syncTerminalSize() {
   }
 }
 
-// 写入输出到终端
-function writeToTerminal(data: string) {
-  if (!terminal) return
-  terminal.write(data)
-}
-
-/** 刷新终端显示 - 当窗口尺寸发生显著变化时调用
- *
- * 原因：已输出的内容是按照旧的终端宽度换行的
- * 当窗口变宽/变窄时，这些换行符位置不变，导致显示错乱
- * 解决方案：
- * 1. 清空终端显示
- * 2. 发送清屏 + 光标归位序列，触发应用程序重新绘制
- * 3. 重新写入输出缓冲区的内容（作为后备）
- */
 function refreshTerminal() {
   if (!terminal || !props.session) return
-
-  // 清空终端显示
   terminal.clear()
-
-  // 发送终端刷新序列：
-  // - \x1b[2J: 清屏（保持光标位置）
-  // - \x1b[H: 光标归位到左上角
-  // 这会触发大多数终端应用程序重新绘制当前屏幕
   terminal.write('\x1b[2J\x1b[H')
-
-  // 重新写入输出缓冲区的内容
-  const cachedOutput = getOutputBuffer(sessionId.value)
-  if (cachedOutput) {
-    terminal.write(cachedOutput)
-  }
-
-  // 滚动到底部
   scrollToBottom()
 }
 
-/** 滚动到底部 */
 function scrollToBottom() {
   if (!terminal) return
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
@@ -311,56 +391,50 @@ function scrollToBottom() {
   }
 }
 
-/** 滚动事件处理 - 检测用户是否在滚动 */
 function handleScroll() {
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
   if (!viewport) return
 
-  // 检测是否在底部（允许 50px 误差）
   const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
-
-  // 用户不在底部 = 正在向上滚动查看历史
   isUserScrolling = !isAtBottom
 
-  // 滚动停止后清除状态（300ms 防抖）
   if (scrollTimeout) clearTimeout(scrollTimeout)
   scrollTimeout = setTimeout(() => {
     isUserScrolling = false
   }, 300)
 }
 
-// 清空终端
 function clearTerminal() {
   if (!terminal) return
   terminal.clear()
   clearOutput()
-  clearOutputBuffer(sessionId.value)
-  lastOutputLength = 0  // 重置增量写入计数器
+  terminalHistory.clear()
 }
 
-// 实时输出内容（用于增量写入）
+// 增量写入计数器
 let lastOutputLength = 0
 
-// 监听 PTY 输出，增量写入 xterm
+// 监听 PTY 输出：写入组件 xterm + 同步到全局缓存
 watch(realtimeOutput, (newOutput) => {
   if (!terminal) return
 
-  // 增量写入：只写入新增的部分
   const newLength = newOutput.length
   if (newLength > lastOutputLength) {
     const newData = newOutput.slice(lastOutputLength)
+    // 写入组件 xterm
     terminal.write(newData)
+    // 同步到全局缓存
+    terminalHistory.append(newData)
     lastOutputLength = newLength
   }
 
-  // 滚动到底部（如果用户没有在查看历史）
   if (!isUserScrolling) {
     scrollToBottom()
   }
 }, { deep: true })
 
+// 字体大小变化
 let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
-// 监听本地 fontSize 变化并更新终端
 watch(fontSize, (newSize) => {
   if (!terminal) return
   terminal.options.fontSize = newSize
@@ -375,8 +449,8 @@ watch(fontSize, (newSize) => {
     })
   }, 300)
 })
-// 监听设置中的字体大小变化（从设置页面加载时）
-watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => {
+
+watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
   if (fontSize.value !== newSize) {
     fontSize.value = newSize
     if (terminal) {
@@ -387,40 +461,37 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize, oldSize) => 
   }
 }, { immediate: true })
 
-// 监听会话变化，重置终端并同步尺寸
-// immediate: true 确保组件挂载时检查会话状态并启动 PTY
+// 会话变化
 watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
-      lastOutputLength = 0  // 重置增量写入计数器
+      lastOutputLength = 0
     }
 
-    // 新会话激活时
     if (newId) {
-      // 重置计数器，准备接收新会话的输出
       lastOutputLength = 0
-      // 等待 terminal 初始化完成
       await nextTick()
 
       if (terminal) {
         syncTerminalSize()
       }
 
-      // 两阶段启动：如果会话状态是 starting，启动 PTY
       if (props.session?.status === 'starting') {
         await sessionStore.startSession(newId)
       }
-      // 其他状态（running, waitingInput）无需再次启动
     }
   }
 }, { immediate: true })
 
-// 终端初始化完成后的 PTY 启动逻辑
-let ptyStarted = false
-
 onMounted(async () => {
   await nextTick()
+
+  // 确保会话缓存已初始化
+  if (sessionId.value) {
+    initSessionCache(sessionId.value)
+  }
+
   initTerminal()
 
   // 添加滚动事件监听
@@ -429,29 +500,27 @@ onMounted(async () => {
     viewport.addEventListener('scroll', handleScroll)
   }
 
-  // 监听主题变化
-  const observer = new MutationObserver(() => {
-    if (terminal) {
-      terminal.options.theme = getTheme()
-    }
-  })
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['class'],
-  })
-
-  // 从全局缓冲区加载已有输出（终端窗口打开前的输出）
+  // 从全局缓存恢复历史
   if (terminal && sessionId.value) {
-    const cachedOutput = getOutputBuffer(sessionId.value)
-    if (cachedOutput) {
-      terminal.write(cachedOutput)
+    const history = terminalHistory.getHistory()
+    if (history) {
+      terminal.write(history)
+      // 更新计数器，避免重复写入
+      lastOutputLength = history.length
       scrollToBottom()
     }
+  }
+
+  terminal?.focus()
+})
+
+watch(terminalTheme, () => {
+  if (terminal) {
+    terminal.options.theme = getTheme()
   }
 })
 
 onUnmounted(() => {
-  // 清理滚动事件监听器
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
   if (viewport) {
     viewport.removeEventListener('scroll', handleScroll)
@@ -460,25 +529,20 @@ onUnmounted(() => {
     clearTimeout(scrollTimeout)
   }
 
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+
   if (terminal) {
     terminal.dispose()
     terminal = null
     webglAddon = null
   }
 })
-
-/**
- * 发送特殊键（通过快速键按钮触发）
- * 注意：xterm.js 的 onData 已处理普通键盘输入，此方法仅用于 UI 按钮
- */
-async function sendSpecialKey(key: string) {
-  if (!props.session) return
-  await sessionStore.sendSpecialKey(props.session.id, key)
-}
 </script>
 
 <style scoped>
-/* xterm.js 容器样式 */
 :deep(.xterm) {
   height: 100%;
   padding: 8px;
@@ -490,21 +554,30 @@ async function sendSpecialKey(key: string) {
   overflow-x: hidden;
 }
 
-/* 确保滚动条始终可见 */
 :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 10px;
+  width: 8px;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar-track {
   background: transparent;
+  margin: 4px 0;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: #666;
-  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.3);
+  border-radius: 4px;
+  transition: background 0.2s ease;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: #888;
+  background: rgba(128, 128, 128, 0.6);
+}
+
+.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
 }
 </style>

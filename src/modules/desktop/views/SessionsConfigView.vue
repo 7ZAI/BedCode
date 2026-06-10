@@ -96,7 +96,7 @@ import Spinner from '@/modules/shared/components/Spinner.vue'
 import { useKeyboardShortcuts } from '@/modules/shared/composables/useKeyboardShortcuts'
 import { useToast } from '@/modules/shared/composables/useToast'
 import { InvokeTimeoutError } from '@/modules/shared/utils/invoke'
-import { initGlobalTerminalManager, createHiddenTerminal } from '@/modules/desktop/composables/useGlobalTerminal'
+import { initSessionCache, destroySessionCache } from '@/modules/desktop/composables/useGlobalTerminal'
 import {
   createSessionConfig,
   listSessionConfigs,
@@ -170,13 +170,10 @@ async function startSession(configId: string) {
     // 1. 创建会话（不启动 PTY）
     const sessionId = await createSessionNoStart(configId)
 
-    // 2. 创建隐藏的 xterm.js 实例（用于缓存输出）
-    createHiddenTerminal(sessionId)
+    // 2. 初始化会话历史缓存（用于存储终端输出）
+    initSessionCache(sessionId)
 
-    // 3. 初始化全局 PTY 输出监听器（输出会写入对应的 xterm 实例）
-    await initGlobalTerminalManager()
-
-    // 4. xterm 实例和监听器就绪后，启动 PTY
+    // 3. 启动 PTY
     await startExistingSession(sessionId)
 
     // 刷新会话列表
@@ -222,6 +219,8 @@ async function killSession(sessionId: string) {
 
   try {
     await stopSession(sessionId)
+    // 销毁会话历史缓存
+    destroySessionCache(sessionId)
     sessions.value = await listSessions()
     toast.info('会话已终止')
   } catch (e: any) {

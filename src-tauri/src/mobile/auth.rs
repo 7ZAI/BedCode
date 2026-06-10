@@ -196,32 +196,48 @@ impl AuthManager {
         let response = self.connection.send_and_wait(&message, timeouts::AUTH).await?;
 
         // 检查响应
-        if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
-            // 提取凭据
-            let pairing_id = if let Message::Auth { payload, .. } = &response {
-                payload.device_id.clone().unwrap_or_default()
-            } else {
-                String::new()
-            };
-            let session_token = if let Message::Auth { payload, .. } = &response {
-                payload.session_token.clone().unwrap_or_default()
-            } else {
-                String::new()
-            };
+        match ResponseParser::parse_auth_response(&response) {
+            Some(AuthStage::Authenticated) => {
+                // 提取凭据
+                let pairing_id = if let Message::Auth { payload, .. } = &response {
+                    payload.device_id.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let session_token = if let Message::Auth { payload, .. } = &response {
+                    payload.session_token.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                };
 
-            let creds = AuthCredentials {
-                pairing_id: pairing_id.clone(),
-                fingerprint,
-                session_token: session_token.clone(),
-            };
+                let creds = AuthCredentials {
+                    pairing_id: pairing_id.clone(),
+                    fingerprint,
+                    session_token: session_token.clone(),
+                };
 
-            self.set_credentials(creds).await;
-            *self.status.write().await = AuthStatus::Authenticated;
-            self.connection.set_paired().await;
-            return Ok(true);
+                self.set_credentials(creds).await;
+                *self.status.write().await = AuthStatus::Authenticated;
+                self.connection.set_paired().await;
+                return Ok(true);
+            }
+            Some(AuthStage::Failed) => {
+                // 提取错误信息
+                let error_msg = if let Message::Auth { payload, .. } = &response {
+                    payload.error.clone().unwrap_or_else(|| "Pairing verification failed".to_string())
+                } else {
+                    "Pairing verification failed".to_string()
+                };
+                tracing::warn!("[verify_pairing_code] Failed: {}", error_msg);
+                *self.status.write().await = AuthStatus::Failed(error_msg);
+                return Ok(false);
+            }
+            _ => {
+                tracing::warn!("[verify_pairing_code] Unexpected response stage");
+                *self.status.write().await = AuthStatus::Failed("Unexpected response".to_string());
+                return Ok(false);
+            }
         }
-
-        *self.status.write().await = AuthStatus::Failed("Pairing verification failed".to_string());
         Ok(false)
     }
 

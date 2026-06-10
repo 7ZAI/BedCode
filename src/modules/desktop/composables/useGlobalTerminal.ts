@@ -1,32 +1,29 @@
 /**
- * 全局 xterm.js 实例管理器
+ * 全局终端历史缓存管理器
  *
- * 在会话创建时提前创建隐藏的 xterm.js 实例
- * PTY 输出直接写入对应的 xterm 实例
- * 用户打开终端窗口时直接显示，无需额外缓存层
+ * 不监听 PTY 输出，只存储历史数据
+ * 组件负责同步写入全局缓存
  */
 
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { onPtyOutput } from '@/modules/desktop/composables/useDesktopCommands'
 import '@xterm/xterm/css/xterm.css'
 
-// xterm 实例存储：sessionId -> { terminal, outputEntries }
-const terminalInstances = new Map<string, {
-  terminal: Terminal
-  fitAddon: FitAddon
-  outputBuffer: string[]  // 原始输出数据，用于同步到新窗口
-}>()
+// 会话历史缓存：sessionId -> 原始输出数据
+const sessionHistoryCache = new Map<string, string[]>()
 
-// 全局监听器
-let globalUnlisten: (() => void) | null = null
+// 隐藏的 xterm 实例（用于解析 ANSI 序列和计算行数）
+const hiddenTerminals = new Map<string, Terminal>()
+
+// 行数限制
+const MAX_HISTORY_LINES = 50000
 
 // 深色主题
 const darkTheme = {
-  background: '#1a1a2e',
+  background: '#1a1e2e',
   foreground: '#e0e0e0',
   cursor: '#ffffff',
-  cursorAccent: '#1a1a2e',
+  cursorAccent: '#1a1e2e',
   selectionBackground: '#4a4a6a',
   black: '#000000',
   red: '#ff5555',
@@ -47,140 +44,149 @@ const darkTheme = {
 }
 
 /**
- * 初始化全局 PTY 输出监听器
+ * 初始化会话的历史缓存（创建隐藏 xterm 实例）
  */
-export async function initGlobalTerminalManager(): Promise<void> {
-  if (globalUnlisten) {
+export function initSessionCache(sessionId: string): void {
+  if (sessionHistoryCache.has(sessionId)) {
     return
   }
 
-  globalUnlisten = await onPtyOutput((event: any) => {
-    const sessionId = event.sessionId || event.session_id
-    if (!sessionId) {
-      console.warn('[TerminalManager] Event without sessionId:', event)
-      return
-    }
+  sessionHistoryCache.set(sessionId, [])
 
-    const instance = terminalInstances.get(sessionId)
-    if (instance) {
-      // 解码 base64 数据
-      let decodedData: string
-      try {
-        const binaryString = atob(event.data)
-        const bytes = new Uint8Array(binaryString.length)
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i)
-        }
-        decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-      } catch (e) {
-        console.error('[TerminalManager] Failed to decode base64:', e)
-        decodedData = event.data
-      }
-
-      // 写入 xterm 实例
-      instance.terminal.write(decodedData)
-      // 同时保存到缓冲区（用于同步到新窗口）
-      instance.outputBuffer.push(decodedData)
-    }
-  })
-}
-
-/**
- * 为会话创建隐藏的 xterm.js 实例
- */
-export function createHiddenTerminal(sessionId: string): Terminal {
-  // 如果已存在，直接返回
-  const existing = terminalInstances.get(sessionId)
-  if (existing) {
-    return existing.terminal
-  }
-
-  // 创建新的 xterm 实例
+  // 创建隐藏的 xterm 实例用于追踪行数
   const terminal = new Terminal({
     fontSize: 14,
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
     theme: darkTheme,
     cursorBlink: false,
-    cursorStyle: 'block',
-    cursorWidth: 1,
-    scrollback: 50000,  // 缓存 50000 行历史
+    scrollback: MAX_HISTORY_LINES,
     allowProposedApi: true,
   })
 
-  const fitAddon = new FitAddon()
-  terminal.loadAddon(fitAddon)
+  // 隐藏容器（不显示在 DOM 中）
+  const hiddenContainer = document.createElement('div')
+  hiddenContainer.style.position = 'absolute'
+  hiddenContainer.style.left = '-9999px'
+  hiddenContainer.style.width = '100%'
+  hiddenContainer.style.height = '100%'
+  document.body.appendChild(hiddenContainer)
+  terminal.open(hiddenContainer)
 
-  terminalInstances.set(sessionId, {
-    terminal,
-    fitAddon,
-    outputBuffer: [],
-  })
-
-  return terminal
+  hiddenTerminals.set(sessionId, terminal)
 }
 
 /**
- * 获取会话的 xterm 实例
+ * 追加输出数据到历史缓存
+ * 同时写入隐藏的 xterm 实例以追踪行数
  */
-export function getTerminal(sessionId: string): Terminal | null {
-  const instance = terminalInstances.get(sessionId)
-  return instance?.terminal || null
-}
+export function appendOutput(sessionId: string, data: string): void {
+  const cache = sessionHistoryCache.get(sessionId)
+  const terminal = hiddenTerminals.get(sessionId)
 
-/**
- * 获取会话的输出缓冲区（用于同步到新窗口）
- */
-export function getOutputBuffer(sessionId: string): string {
-  const instance = terminalInstances.get(sessionId)
-  if (!instance) return ''
-  return instance.outputBuffer.join('')
-}
+  if (!cache) {
+    console.warn('[TerminalCache] Session cache not initialized:', sessionId)
+    return
+  }
 
-/**
- * 清除输出缓冲区（释放内存）
- */
-export function clearOutputBuffer(sessionId: string): void {
-  const instance = terminalInstances.get(sessionId)
-  if (instance) {
-    instance.outputBuffer = []
+  // 写入隐藏 xterm 实例
+  if (terminal) {
+    terminal.write(data)
+  }
+
+  // 追加到缓存
+  cache.push(data)
+
+  // 行数限制：检查是否超出
+  if (terminal) {
+    const buffer = terminal.buffer.active
+    const totalLines = buffer.length
+
+    if (totalLines > MAX_HISTORY_LINES) {
+      // 丢弃旧的缓存数据
+      // 计算需要丢弃的行数
+      const linesToRemove = totalLines - MAX_HISTORY_LINES
+
+      // 估算：每行约 80 字符，丢弃相应数量的缓存条目
+      // 实际上这里简化处理，因为 xterm 已经处理了 scrollback
+      // 我们只需要确保缓存不会无限增长
+      let removedCount = 0
+      while (cache.length > 1 && removedCount < linesToRemove) {
+        const removed = cache.shift()
+        if (removed) {
+          removedCount += (removed.match(/\n/g) || []).length || 1
+        }
+      }
+    }
   }
 }
 
 /**
- * 销毁会话的 xterm 实例
+ * 获取会话的历史输出（用于恢复终端显示）
  */
-export function destroyTerminal(sessionId: string): void {
-  const instance = terminalInstances.get(sessionId)
-  if (instance) {
-    instance.terminal.dispose()
-    terminalInstances.delete(sessionId)
+export function getHistoryOutput(sessionId: string): string {
+  const cache = sessionHistoryCache.get(sessionId)
+  if (!cache) {
+    return ''
+  }
+  return cache.join('')
+}
+
+/**
+ * 清除会话的历史缓存
+ */
+export function clearHistoryCache(sessionId: string): void {
+  const cache = sessionHistoryCache.get(sessionId)
+  if (cache) {
+    cache.length = 0
+  }
+
+  const terminal = hiddenTerminals.get(sessionId)
+  if (terminal) {
+    terminal.clear()
   }
 }
 
 /**
- * 清理所有实例
+ * 销毁会话的历史缓存（停止会话时调用）
  */
-export function cleanupAllTerminals(): void {
-  for (const [, instance] of terminalInstances) {
-    instance.terminal.dispose()
-  }
-  terminalInstances.clear()
+export function destroySessionCache(sessionId: string): void {
+  sessionHistoryCache.delete(sessionId)
 
-  if (globalUnlisten) {
-    globalUnlisten()
-    globalUnlisten = null
+  const terminal = hiddenTerminals.get(sessionId)
+  if (terminal) {
+    terminal.dispose()
+    hiddenTerminals.delete(sessionId)
   }
 }
 
 /**
- * Composable: 使用全局终端管理器
+ * 检查会话是否有历史缓存
  */
-export function useGlobalTerminal(sessionId: string) {
+export function hasSessionCache(sessionId: string): boolean {
+  return sessionHistoryCache.has(sessionId)
+}
+
+/**
+ * 清理所有缓存
+ */
+export function cleanupAllCaches(): void {
+  for (const terminal of hiddenTerminals.values()) {
+    terminal.dispose()
+  }
+  hiddenTerminals.clear()
+  sessionHistoryCache.clear()
+}
+
+/**
+ * Composable: 使用终端历史缓存
+ */
+export function useTerminalHistory(sessionId: string) {
   return {
-    terminal: getTerminal(sessionId),
-    outputBuffer: getOutputBuffer(sessionId),
-    create: () => createHiddenTerminal(sessionId),
-    clearBuffer: () => clearOutputBuffer(sessionId),
-    destroy: () => destroyTerminal(sessionId),
+    init: () => initSessionCache(sessionId),
+    append: (data: string) => appendOutput(sessionId, data),
+    getHistory: () => getHistoryOutput(sessionId),
+    clear: () => clearHistoryCache(sessionId),
+    destroy: () => destroySessionCache(sessionId),
+    hasCache: () => hasSessionCache(sessionId),
   }
 }

@@ -1,6 +1,6 @@
 <template>
   <div
-    class="input-bar bg-white dark:bg-dark-800 border-t border-gray-200 dark:border-dark-700 px-2 pt-2"
+    class="input-bar bg-[var(--mobile-bg-secondary)] border-t border-[var(--mobile-border)] px-2 pt-2"
     :class="{ 'landscape-mode': isLandscapeMode }"
   >
     <!-- Special keys panel - 默认显示 -->
@@ -8,7 +8,7 @@
       <button
         v-for="key in specialKeys"
         :key="key.code"
-        class="bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-xs py-2 rounded-lg active:bg-gray-200 dark:bg-dark-600"
+        class="bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-secondary)] text-xs py-2 rounded-lg active:bg-[var(--mobile-accent-muted)]"
         @click="sendSpecialKey(key.code)"
       >
         {{ key.label }}
@@ -20,7 +20,7 @@
       <button
         v-for="key in specialKeys"
         :key="key.code"
-        class="bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-300 text-xs py-1 px-1.5 rounded active:bg-gray-200"
+        class="bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-secondary)] text-xs py-1 px-1.5 rounded active:bg-[var(--mobile-accent-muted)]"
         @click="sendSpecialKey(key.code)"
       >
         {{ key.label }}
@@ -31,7 +31,7 @@
     <div class="flex items-center gap-2 pb-1">
       <!-- 输入按钮 -->
       <button
-        class="flex-1 bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-600 dark:text-dark-300 text-left"
+        class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg px-3 py-2 text-sm text-[var(--mobile-text-muted)] text-left"
         @click="showInputModal = true"
       >
         点击输入命令...
@@ -41,7 +41,7 @@
       <button
         v-if="!isLandscapeMode"
         class="p-2 rounded-xl"
-        :class="showSpecialKeys ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-dark-700 text-gray- dark:text-dark-400'"
+        :class="showSpecialKeys ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-primary)]' : 'bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-muted)]'"
         @click="toggleSpecialKeys"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -55,10 +55,10 @@
       <div
         :class="[
           'w-2 h-2 rounded-full',
-          isConnected ? 'bg-green-500' : 'bg-red-500'
+          isConnected ? 'bg-[var(--mobile-success)]' : 'bg-[var(--mobile-error)]'
         ]"
       ></div>
-      <span class="text-xs text-gray- dark:text-dark-400">
+      <span class="text-xs text-[var(--mobile-text-muted)]">
         {{ isConnected ? '已连接' : '未连接' }}
       </span>
     </div>
@@ -74,15 +74,15 @@
         <div class="absolute inset-0 bg-black/50" @click="showInputModal = false"></div>
 
         <!-- 弹窗内容 -->
-        <div class="relative bg-white dark:bg-dark-800 rounded-xl w-full max-w-md p-4 shadow-xl">
-          <div class="text-sm font-medium text-gray-700 dark:text-dark-200 mb-3">
+        <div class="relative bg-[var(--mobile-bg-card)] rounded-xl w-full max-w-md p-4 shadow-xl">
+          <div class="text-sm font-medium text-[var(--mobile-text-secondary)] mb-3">
             输入命令
           </div>
 
           <textarea
             ref="modalInputRef"
             v-model="inputText"
-            class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-dark-100 placeholder-dark-400 focus:outline-none focus:border-primary-500 resize-none"
+            class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg px-3 py-2 text-sm text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)] resize-none"
             placeholder="输入命令..."
             rows="4"
             @keydown.enter.ctrl="submitText"
@@ -90,21 +90,21 @@
 
           <div class="flex justify-between gap-2 mt-4">
             <button
-              class="px-4 py-2 text-sm text-gray-600 dark:text-dark-300"
+              class="px-4 py-2 text-sm text-[var(--mobile-text-muted)]"
               @click="showInputModal = false"
             >
               取消
             </button>
             <div class="flex gap-2">
               <button
-                class="px-4 py-2 text-sm bg-gray-200 dark:bg-dark-600 text-gray-700 dark:text-dark-200 rounded-lg"
+                class="px-4 py-2 text-sm bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-secondary)] rounded-lg"
                 :disabled="!inputText.trim()"
                 @click="submitText"
               >
                 发送
               </button>
               <button
-                class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg"
+                class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-[var(--mobile-text-primary)] rounded-lg"
                 :disabled="!inputText.trim()"
                 @click="executeText"
               >

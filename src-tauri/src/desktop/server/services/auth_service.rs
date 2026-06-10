@@ -30,17 +30,9 @@ pub async fn handle_auth(
     tracing::info!("handle_auth called with stage: {:?}", payload.stage);
     match payload.stage {
         AuthStage::RequestPairing => {
-            let existing_code = pairing_service.get_current_code().await;
-            let code = if let Some(ref existing) = existing_code {
-                if !existing.is_expired() {
-                    tracing::info!("Reusing existing pairing code: {} for device {:?}", existing.code, payload.device_name);
-                    existing.clone()
-                } else {
-                    pairing_service.generate_code().await
-                }
-            } else {
-                pairing_service.generate_code().await
-            };
+            // 每次配对请求都生成新的配对码，不复用现有的
+            // 原因：确保用户有足够时间输入，避免复用过期码导致混乱
+            let code = pairing_service.generate_code().await;
 
             tracing::info!("Pairing requested by device {:?} ({:?}), code: {}", payload.device_id, payload.device_name, code.code);
             tracing::info!("app_handle is_some={}", app_handle.is_some());
@@ -48,7 +40,7 @@ pub async fn handle_auth(
             if let Some(handle) = app_handle {
                 let event = PairingCodeGeneratedEvent {
                     code: code.code.clone(),
-                    expires_in: code.expires_in,
+                    expires_in: code.remaining_seconds(),  // 使用剩余时间，而不是原始 TTL
                     device_name: payload.device_name.clone(),
                 };
                 tracing::info!("Emitting pairing-code-generated event: code={}", event.code);
