@@ -42,7 +42,7 @@ const isConnecting = ref(false)
 
 // 连接超时控制
 let connectionTimeout: ReturnType<typeof setTimeout> | null = null
-const CONNECTION_TIMEOUT_MS = 15000 // 15秒超时
+const CONNECTION_TIMEOUT_MS = 12000 // 12秒超时（比 Rust 端 10 秒稍长作为兜底）
 
 // 意外断开监听器
 let unlistenUnexpectedDisconnect: UnlistenFn | null = null
@@ -351,15 +351,25 @@ export async function connect(device: RemoteDevice): Promise<void> {
   connectionError.value = null
   isConnecting.value = true
 
-  // 设置连接超时
+  // 设置连接超时（12秒，比 Rust 端 10 秒稍长作为兜底）
   clearConnectionTimeout()
-  connectionTimeout = setTimeout(() => {
+  connectionTimeout = setTimeout(async () => {
     if (isConnecting.value) {
       console.warn('[MobileConnection] Connection timeout, disconnecting...')
-      connectionError.value = '连接超时 (15秒)'
+      connectionError.value = '连接超时，请确保桌面端正在运行'
       connectionStatus.value = 'error'
       isConnecting.value = false
-      disconnect()
+
+      // 显示 Toast 提示
+      const toast = useToast()
+      toast.error('连接超时，请确保桌面端正在运行并监听正确端口')
+
+      // 尝试断开连接
+      try {
+        await wsDisconnect()
+      } catch (e) {
+        console.warn('[MobileConnection] Failed to disconnect after timeout:', e)
+      }
     }
   }, CONNECTION_TIMEOUT_MS)
 

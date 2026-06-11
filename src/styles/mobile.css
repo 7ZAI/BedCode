@@ -62,11 +62,11 @@ html:not(.dark) .mobile-app {
   --mobile-bg-card: #ffffff;
   --mobile-bg-elevated: #ffffff;
 
-  /* 文字色 */
-  --mobile-text-primary: #1e293b;
-  --mobile-text-secondary: #64748b;
-  --mobile-text-muted: #94a3b8;
-  --mobile-text-disabled: #cbd5e1;
+  /* 文字色 - 优化对比度以满足 WCAG AA 标准 */
+  --mobile-text-primary: #1e293b;    /* slate-800, 对比度 10.7:1 */
+  --mobile-text-secondary: #475569;  /* slate-600, 对比度 7.1:1 */
+  --mobile-text-muted: #64748b;      /* slate-500, 对比度 4.5:1 */
+  --mobile-text-disabled: #94a3b8;   /* slate-400, 禁用状态语义色 */
 
   /* 边框色 */
   --mobile-border: rgba(8, 145, 178, 0.15);

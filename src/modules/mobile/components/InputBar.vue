@@ -28,20 +28,50 @@
     </div>
 
     <!-- Main input row -->
-    <div class="flex items-center gap-2 pb-1">
-      <!-- 输入按钮 -->
+    <div class="input-row">
+      <!-- 输入框容器 -->
+      <div class="input-box">
+        <textarea
+          ref="inputRef"
+          v-model="inputText"
+          class="input-field"
+          :placeholder="placeholder"
+          :disabled="disabled"
+          rows="1"
+          @focus="handleFocus"
+          @blur="handleBlur"
+          @input="adjustTextareaHeight"
+          @keydown.enter.ctrl="submitText"
+        ></textarea>
+      </div>
+
+      <!-- 发送按钮 -->
       <button
-        class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg px-3 py-2 text-sm text-[var(--mobile-text-muted)] text-left"
-        @click="showInputModal = true"
+        class="action-btn send-btn"
+        :disabled="!canSubmit"
+        @click="submitText"
       >
-        点击输入命令...
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+        </svg>
+      </button>
+
+      <!-- 执行按钮 -->
+      <button
+        class="action-btn execute-btn"
+        :disabled="!canSubmit"
+        @click="executeText"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
       </button>
 
       <!-- Special keys toggle - 非横屏时显示 -->
       <button
         v-if="!isLandscapeMode"
-        class="p-2 rounded-xl"
-        :class="showSpecialKeys ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-primary)]' : 'bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-muted)]'"
+        class="action-btn toggle-btn"
+        :class="showSpecialKeys ? 'toggle-active' : 'toggle-inactive'"
         @click="toggleSpecialKeys"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -62,64 +92,11 @@
         {{ isConnected ? '已连接' : '未连接' }}
       </span>
     </div>
-
-    <!-- 输入弹窗 -->
-    <Teleport to="body">
-      <div
-        v-if="showInputModal"
-        class="fixed inset-0 z-[100] flex items-center justify-center p-4"
-        @click.self="showInputModal = false"
-      >
-        <!-- 弹窗背景 -->
-        <div class="absolute inset-0 bg-black/50" @click="showInputModal = false"></div>
-
-        <!-- 弹窗内容 -->
-        <div class="relative bg-[var(--mobile-bg-card)] rounded-xl w-full max-w-md p-4 shadow-xl">
-          <div class="text-sm font-medium text-[var(--mobile-text-secondary)] mb-3">
-            输入命令
-          </div>
-
-          <textarea
-            ref="modalInputRef"
-            v-model="inputText"
-            class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg px-3 py-2 text-sm text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)] resize-none"
-            placeholder="输入命令..."
-            rows="4"
-            @keydown.enter.ctrl="submitText"
-          ></textarea>
-
-          <div class="flex justify-between gap-2 mt-4">
-            <button
-              class="px-4 py-2 text-sm text-[var(--mobile-text-muted)]"
-              @click="showInputModal = false"
-            >
-              取消
-            </button>
-            <div class="flex gap-2">
-              <button
-                class="px-4 py-2 text-sm bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-secondary)] rounded-lg"
-                :disabled="!inputText.trim()"
-                @click="submitText"
-              >
-                发送
-              </button>
-              <button
-                class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-[var(--mobile-text-primary)] rounded-lg"
-                :disabled="!inputText.trim()"
-                @click="executeText"
-              >
-                执行
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed } from 'vue'
 
 const props = defineProps<{
   disabled?: boolean
@@ -138,19 +115,12 @@ const emit = defineEmits<{
 }>()
 
 const inputText = ref('')
-const inputRef = ref<HTMLInputElement | null>(null)
-const modalInputRef = ref<HTMLInputElement | null>(null)
-const showSpecialKeys = ref(true) // 默认显示
-const showInputModal = ref(false)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
+const showSpecialKeys = ref(true)
 const isLandscapeMode = computed(() => props.isLandscape || false)
 
-// 弹窗打开时聚焦输入框
-watch(showInputModal, async (show) => {
-  if (show) {
-    inputText.value = ''
-    await nextTick()
-    modalInputRef.value?.focus()
-  }
+const canSubmit = computed(() => {
+  return inputText.value.trim().length > 0 && !props.disabled
 })
 
 function handleFocus() {
@@ -159,6 +129,15 @@ function handleFocus() {
 
 function handleBlur() {
   emit('blur')
+}
+
+function adjustTextareaHeight() {
+  const textarea = inputRef.value
+  if (!textarea) return
+
+  textarea.style.height = 'auto'
+  const newHeight = Math.min(textarea.scrollHeight, 120)
+  textarea.style.height = `${newHeight}px`
 }
 
 const specialKeys = [
@@ -179,7 +158,10 @@ function submitText() {
   if (inputText.value.trim()) {
     emit('submit', inputText.value)
     inputText.value = ''
-    showInputModal.value = false
+    // 重置 textarea 高度
+    if (inputRef.value) {
+      inputRef.value.style.height = 'auto'
+    }
   }
 }
 
@@ -187,7 +169,10 @@ function executeText() {
   if (inputText.value.trim()) {
     emit('execute', inputText.value)
     inputText.value = ''
-    showInputModal.value = false
+    // 重置 textarea 高度
+    if (inputRef.value) {
+      inputRef.value.style.height = 'auto'
+    }
   }
 }
 
@@ -200,8 +185,123 @@ function toggleSpecialKeys() {
 }
 
 function focus() {
-  showInputModal.value = true
+  inputRef.value?.focus()
 }
 
 defineExpose({ focus })
 </script>
+
+<style scoped>
+.input-bar {
+  flex-shrink: 0;
+}
+
+.input-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+}
+
+.input-box {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  background: var(--mobile-input-bg, var(--mobile-bg-primary));
+  border: 1px solid var(--mobile-input-border, var(--mobile-border));
+  border-radius: 1rem;
+  padding: 0.5rem 1rem;
+  transition: border-color 0.2s ease;
+  min-height: 2.5rem;
+}
+
+.input-box:focus-within {
+  border-color: var(--mobile-accent);
+}
+
+.input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--mobile-text-primary);
+  font-size: 0.875rem;
+  font-family: inherit;
+  resize: none;
+  max-height: 120px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+.input-field::placeholder {
+  color: var(--mobile-input-placeholder, var(--mobile-text-muted));
+}
+
+.input-field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.send-btn {
+  background: linear-gradient(135deg, rgba(80, 250, 123, 0.15), rgba(80, 250, 123, 0.08));
+  border-color: rgba(80, 250, 123, 0.4);
+  color: #50fa7b;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(80, 250, 123, 0.25), rgba(80, 250, 123, 0.15));
+  border-color: rgba(80, 250, 123, 0.6);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.execute-btn {
+  background: linear-gradient(135deg, rgba(255, 184, 108, 0.2), rgba(255, 121, 198, 0.15));
+  border-color: rgba(255, 184, 108, 0.5);
+  color: #ffb86c;
+}
+
+.execute-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255, 184, 108, 0.35), rgba(255, 121, 198, 0.25));
+  border-color: rgba(255, 184, 108, 0.7);
+}
+
+.execute-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-btn {
+  background: var(--mobile-bg-elevated);
+  border-color: var(--mobile-border);
+  color: var(--mobile-text-muted);
+}
+
+.toggle-active {
+  background: rgba(139, 233, 253, 0.15);
+  color: #8be9fd;
+  border-color: rgba(139, 233, 253, 0.5);
+}
+
+.toggle-inactive {
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-muted);
+  border-color: var(--mobile-border);
+}
+</style>

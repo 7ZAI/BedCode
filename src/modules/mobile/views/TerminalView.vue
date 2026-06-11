@@ -122,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -153,15 +153,18 @@ const { safeArea, keyboardInfo } = useEdgeToEdge()
 const sessionId = computed(() => route.params.id as string)
 
 // ==================== State ====================
+// 注意：使用 ref 确保每个组件实例有独立的状态
+// 在 <script setup> 中，顶层 let 声明的变量是模块级共享的
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
-let terminal: Terminal | null = null
-let fitAddon: FitAddon | null = null
-let resizeObserver: ResizeObserver | null = null
-// 终端输出事件监听器
-let outputListener: UnlistenFn | null = null
-// 输出索引去重
-let lastIndex = -1
+// 终端实例 - 使用 ref 确保组件隔离
+const terminalRef = ref<Terminal | null>(null)
+const fitAddonRef = ref<FitAddon | null>(null)
+const resizeObserverRef = ref<ResizeObserver | null>(null)
+// 终端输出事件监听器 - 使用 ref 确保组件隔离
+const outputListenerRef = ref<UnlistenFn | null>(null)
+// 输出索引去重 - 使用 ref 确保组件隔离
+const lastIndexRef = ref(-1)
 
 // 设置相关状态
 const showSettings = ref(false)
@@ -333,13 +336,13 @@ function confirmSettings() {
 }
 
 function applySettings() {
-  if (!terminal) return
+  if (!terminalRef.value) return
 
   const theme = TERMINAL_THEMES[terminalSettings.value.theme]
 
   // 单独设置每个属性，避免覆盖整个 options 对象
-  terminal.options.theme = theme
-  terminal.options.fontSize = terminalSettings.value.fontSize
+  terminalRef.value.options.theme = theme
+  terminalRef.value.options.fontSize = terminalSettings.value.fontSize
 
   // 重新 fit 终端
   setTimeout(() => fitTerminal(), 50)
@@ -418,7 +421,7 @@ async function initTerminal() {
   // console.log('[TerminalView] Container dimensions:', xtermContainer.value.offsetWidth, 'x', xtermContainer.value.offsetHeight)
 
   const theme = TERMINAL_THEMES[terminalSettings.value.theme]
-  terminal = new Terminal({
+  const term = new Terminal({
     theme: theme,
     fontFamily: '"Courier New", Courier, "Lucida Console", monospace',
     fontSize: terminalSettings.value.fontSize,
@@ -432,19 +435,21 @@ async function initTerminal() {
     disableStdin: true,
   })
 
-  terminal.open(xtermContainer.value)
+  terminalRef.value = term
+  term.open(xtermContainer.value)
   // console.log('[TerminalView] Terminal opened')
 
   // Load addons
-  fitAddon = new FitAddon()
-  terminal.loadAddon(fitAddon)
-  terminal.loadAddon(new WebLinksAddon())
+  const addon = new FitAddon()
+  fitAddonRef.value = addon
+  term.loadAddon(addon)
+  term.loadAddon(new WebLinksAddon())
 
   // WebGL renderer - 提升渲染性能
   try {
     const { WebglAddon } = await import('@xterm/addon-webgl')
     const webglAddon = new WebglAddon()
-    terminal.loadAddon(webglAddon)
+    term.loadAddon(webglAddon)
     webglAddon.onContextLoss(() => {
       // console.warn('[TerminalView] WebGL context lost')
     })
@@ -454,8 +459,8 @@ async function initTerminal() {
   }
 
   // Welcome message
-  terminal.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
-  terminal.write('='.repeat(50) + '\r\n\r\n')
+  term.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
+  term.write('='.repeat(50) + '\r\n\r\n')
 
   // Fit terminal - delay to ensure container is rendered
   setTimeout(() => {
@@ -529,18 +534,21 @@ async function initTerminal() {
   }, 100)
 
   // Resize observer
-  resizeObserver = new ResizeObserver(() => {
+  const observer = new ResizeObserver(() => {
     requestAnimationFrame(fitTerminal)
   })
-  resizeObserver.observe(xtermContainer.value)
+  resizeObserverRef.value = observer
+  observer.observe(xtermContainer.value)
 
   // Window resize
   window.addEventListener('resize', handleWindowResize)
 
   // Terminal resize 事件：通知桌面端调整 PTY 大小
-  terminal.onResize(({ cols, rows }) => {
+  // 注意：捕获当前 sessionId，避免路由切换后读取错误的会话 ID
+  const currentSessionIdForResize = sessionId.value
+  term.onResize(({ cols, rows }) => {
     if (isConnected.value && isSessionActive.value) {
-      wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
+      wsResizeTerminal(currentSessionIdForResize, cols, rows).catch((e: Error) => {
         console.warn('[TerminalView] Resize failed:', e)
       })
     }
@@ -548,9 +556,9 @@ async function initTerminal() {
 }
 
 function fitTerminal() {
-  if (!fitAddon || !terminal) return
+  if (!fitAddonRef.value || !terminalRef.value) return
   try {
-    fitAddon.fit()
+    fitAddonRef.value.fit()
   } catch (e) {
     console.warn('[TerminalView] fit failed:', e)
   }
@@ -561,22 +569,22 @@ function handleWindowResize() {
 }
 
 function disposeTerminal() {
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
+  if (resizeObserverRef.value) {
+    resizeObserverRef.value.disconnect()
+    resizeObserverRef.value = null
   }
   window.removeEventListener('resize', handleWindowResize)
   // 清理输出监听器
-  if (outputListener) {
-    outputListener()
-    outputListener = null
+  if (outputListenerRef.value) {
+    outputListenerRef.value()
+    outputListenerRef.value = null
   }
-  if (terminal) {
-    terminal.dispose()
-    terminal = null
-    fitAddon = null
+  if (terminalRef.value) {
+    terminalRef.value.dispose()
+    terminalRef.value = null
+    fitAddonRef.value = null
   }
-  lastIndex = -1
+  lastIndexRef.value = -1
 }
 
 // ==================== Input Handlers ====================
@@ -592,25 +600,26 @@ async function subscribeSession() {
     await wsJoinSession(sessionId.value)
     console.log('[TerminalView] Joined session:', sessionId.value)
 
-    // 监听终端输出事件
-    outputListener = await listen<{
+    // 监听终端输出事件 - 捕获当前 sessionId 确保闭包正确
+    const currentSessionId = sessionId.value
+    outputListenerRef.value = await listen<{
       session_id: string
       data: string
       index: number
       is_waiting: boolean
     }>('ws_output', (event) => {
       // 只处理当前会话的输出
-      if (event.payload.session_id !== sessionId.value) return
+      if (event.payload.session_id !== currentSessionId) return
 
       // 索引去重：避免重复输出（重连时可能发生）
-      if (event.payload.index !== undefined && event.payload.index <= lastIndex) {
+      if (event.payload.index !== undefined && event.payload.index <= lastIndexRef.value) {
         return
       }
-      lastIndex = event.payload.index
+      lastIndexRef.value = event.payload.index
 
       // 写入终端
-      if (terminal) {
-        terminal.write(event.payload.data)
+      if (terminalRef.value) {
+        terminalRef.value.write(event.payload.data)
       }
     })
 
@@ -623,9 +632,9 @@ async function subscribeSession() {
 
 async function unsubscribeSession() {
   // 清理输出监听器
-  if (outputListener) {
-    outputListener()
-    outputListener = null
+  if (outputListenerRef.value) {
+    outputListenerRef.value()
+    outputListenerRef.value = null
   }
 
   if (!isConnected.value) return
@@ -641,7 +650,7 @@ async function unsubscribeSession() {
 // ==================== Input Handlers ====================
 
 function handleInputSubmit(text: string) {
-  if (!terminal) return
+  if (!terminalRef.value) return
 
   // 发送输入到桌面端（不带换行，仅输入文本）
   if (isConnected.value && isSessionActive.value) {
@@ -653,7 +662,7 @@ function handleInputSubmit(text: string) {
 }
 
 async function handleInputExecute(text: string) {
-  if (!terminal) return
+  if (!terminalRef.value) return
 
   // 发送输入到桌面端，然后发送 enter 特殊键执行命令
   if (isConnected.value && isSessionActive.value) {
@@ -685,9 +694,9 @@ function confirmClear() {
 }
 
 async function clearTerminal() {
-  if (!terminal) return
+  if (!terminalRef.value) return
 
-  terminal.clear()
+  terminalRef.value.clear()
   showClearConfirm.value = false
 }
 
@@ -695,10 +704,14 @@ async function clearTerminal() {
 
 function refreshTerminal() {
   // 刷新格式：重新 fit 终端尺寸并同步到桌面端，不清除内容
-  if (!fitAddon || !terminal) return
-  fitAddon.fit()
+  if (!fitAddonRef.value || !terminalRef.value) return
+
+  // 捕获当前 sessionId，避免路由切换后读取错误的会话 ID
+  const currentSessionId = sessionId.value
+
+  fitAddonRef.value.fit()
   if (isConnected.value && isSessionActive.value) {
-    wsResizeTerminal(sessionId.value, terminal.cols, terminal.rows).catch((e: Error) => {
+    wsResizeTerminal(currentSessionId, terminalRef.value.cols, terminalRef.value.rows).catch((e: Error) => {
       console.warn('[TerminalView] Refresh resize failed:', e)
     })
   }
@@ -712,6 +725,7 @@ function handleBack() {
 
 // ==================== Touch Scroll ====================
 
+// lastTouchY 是触摸滚动用的，保持模块级即可（无状态共享问题）
 let lastTouchY = 0
 
 function onViewTouchStart(e: TouchEvent) {
@@ -724,9 +738,9 @@ function onViewTouchMove(e: TouchEvent) {
   const deltaY = lastTouchY - currentY
   lastTouchY = currentY
 
-  if (terminal && Math.abs(deltaY) > 1) {
+  if (terminalRef.value && Math.abs(deltaY) > 1) {
     const scrollAmount = Math.round(deltaY / 10)
-    terminal.scrollLines(scrollAmount)
+    terminalRef.value.scrollLines(scrollAmount)
   }
 }
 
@@ -740,9 +754,9 @@ function onContainerTouchMove(e: TouchEvent) {
   const deltaY = lastTouchY - currentY
   lastTouchY = currentY
 
-  if (terminal && Math.abs(deltaY) > 1) {
+  if (terminalRef.value && Math.abs(deltaY) > 1) {
     const scrollAmount = Math.round(deltaY / 10)
-    terminal.scrollLines(scrollAmount)
+    terminalRef.value.scrollLines(scrollAmount)
   }
 }
 
@@ -763,30 +777,45 @@ onUnmounted(async () => {
   disposeTerminal()
 })
 
+// keep-alive 生命周期：组件被激活时重新订阅
+onActivated(async () => {
+  // 组件从缓存恢复时，检查是否需要重新订阅
+  // 只有在已连接且会话活跃但没有监听器时才订阅
+  if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {
+    await subscribeSession()
+  }
+})
+
+// keep-alive 生命周期：组件被停用时取消订阅
+onDeactivated(async () => {
+  // 组件进入缓存时，清理监听器以避免多个终端同时接收事件
+  await unsubscribeSession()
+})
+
 // Watch session status changes
 watch(isSessionActive, async (active, prevActive) => {
   if (active && !prevActive) {
     // Session became active
-    if (terminal) {
-      // terminal.write('\x1b[32m[会话已启动]\x1b[0m\r\n')
-    }
+    // if (terminalRef.value) {
+    //   terminalRef.value.write('\x1b[32m[会话已启动]\x1b[0m\r\n')
+    // }
     await subscribeSession()
   } else if (!active && prevActive) {
     // Session stopped
     await unsubscribeSession()
-    if (terminal) {
-      // terminal.write('\x1b[33m[会话已停止]\x1b[0m\r\n')
-    }
+    // if (terminalRef.value) {
+    //   terminalRef.value.write('\x1b[33m[会话已停止]\x1b[0m\r\n')
+    // }
   }
 })
 
 // Watch connection status changes
 watch(isConnected, async (connected) => {
-  if (!connected && terminal) {
-    // terminal.write('\x1b[31m[连接已断开]\x1b[0m\r\n')
+  if (!connected && terminalRef.value) {
+    // terminalRef.value.write('\x1b[31m[连接已断开]\x1b[0m\r\n')
     await unsubscribeSession()
-  } else if (connected && isSessionActive.value && terminal) {
-    // terminal.write('\x1b[32m[连接已恢复]\x1b[0m\r\n')
+  } else if (connected && isSessionActive.value && terminalRef.value) {
+    // terminalRef.value.write('\x1b[32m[连接已恢复]\x1b[0m\r\n')
     await subscribeSession()
   }
 })
@@ -808,6 +837,9 @@ watch(isConnected, async (connected) => {
   overflow: hidden;
   /* 关键：允许子元素的触摸滚动传递 */
   touch-action: pan-y;
+  /* 平滑过渡动画 - 避免键盘弹出时闪现 */
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              padding-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Header */

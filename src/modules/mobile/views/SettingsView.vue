@@ -130,7 +130,7 @@
       </div>
 
       <!-- About -->
-      <div class="px-4 py-3">
+      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
         <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">关于</h3>
 
         <div class="space-y-3">
@@ -159,22 +159,22 @@
           </button>
         </div>
       </div>
-    </div>
 
-    <!-- Footer Actions -->
-    <div class="p-4 border-t border-[var(--mobile-border)] space-y-2 pb-safe">
-      <button
-        class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
-        @click="resetSettings"
-      >
-        重置设置
-      </button>
-      <button
-        class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
-        @click="clearData"
-      >
-        清除所有数据
-      </button>
+      <!-- Footer Actions - 放在滚动区域内 -->
+      <div class="px-4 py-4 space-y-2">
+        <button
+          class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
+          @click="resetSettings"
+        >
+          重置设置
+        </button>
+        <button
+          class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
+          @click="clearData"
+        >
+          清除所有数据
+        </button>
+      </div>
     </div>
 
     <!-- Browser Confirm Modal -->

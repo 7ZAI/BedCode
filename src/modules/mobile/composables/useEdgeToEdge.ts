@@ -231,25 +231,99 @@ export function useEdgeToEdge() {
     }
   }
 
+  /**
+   * 使用 Tauri 事件系统监听安全区域变化
+   */
+  async function setupEventListener() {
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      const unlisten = await listen<{
+        top: number
+        right: number
+        bottom: number
+        left: number
+        keyboardHeight: number
+        keyboardVisible: boolean
+      }>('safeAreaChanged', (event) => {
+        const { top, right, bottom, left, keyboardHeight, keyboardVisible } = event.payload
+
+        safeArea.value = {
+          top,
+          right,
+          bottom,
+          left,
+          statusBar: top,
+          navigationBar: bottom,
+        }
+
+        keyboardInfo.value = {
+          keyboardHeight,
+          isVisible: keyboardVisible,
+        }
+
+        console.log('[EdgeToEdge] Safe area changed via Tauri event:', safeArea.value)
+      })
+
+      return unlisten
+    } catch (e) {
+      console.warn('[EdgeToEdge] Failed to setup Tauri event listener:', e)
+      return null
+    }
+  }
+
   onMounted(async () => {
     if (!platformInfo.value.isMobile) {
       isReady.value = true
       return
     }
 
-    // 监听安全区域变化事件
-    window.addEventListener('safeAreaChanged', handleSafeAreaChange)
+    // 设置 Tauri 事件监听（推荐方式）
+    const unlisten = await setupEventListener()
+    if (unlisten) {
+      // 保存清理函数
+      cleanupFunctions.push(unlisten)
+    }
 
-    // 初始获取一次
+    // 同时监听 DOM 自定义事件（fallback）
+    window.addEventListener('safeAreaChanged', handleSafeAreaChange as EventListener)
+
+    // 先等待一小段时间，让插件有机会注入 CSS 变量
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    // 初始获取一次安全区域
     await getSafeAreaInsets()
     await getKeyboardInfo()
+
+    // 如果安全区域值为 0，再次尝试从 CSS 变量读取（延迟重试）
+    if (safeArea.value.top === 0 && safeArea.value.bottom === 0) {
+      console.log('[EdgeToEdge] Safe area is 0, retrying after delay...')
+      await new Promise(resolve => setTimeout(resolve, 200))
+      const cssValues = readFromCSSVariables()
+      if (cssValues.top || cssValues.bottom) {
+        safeArea.value = {
+          top: cssValues.top || 0,
+          right: cssValues.right || 0,
+          bottom: cssValues.bottom || 0,
+          left: cssValues.left || 0,
+          statusBar: cssValues.statusBar || cssValues.top || 0,
+          navigationBar: cssValues.navigationBar || cssValues.bottom || 0,
+        }
+        console.log('[EdgeToEdge] Got safe area from CSS variables:', safeArea.value)
+      }
+    }
 
     isReady.value = true
     console.log('[EdgeToEdge] Initialized:', safeArea.value)
   })
 
+  // 清理函数列表
+  const cleanupFunctions: Array<() => void> = []
+
   onUnmounted(() => {
-    window.removeEventListener('safeAreaChanged', handleSafeAreaChange)
+    window.removeEventListener('safeAreaChanged', handleSafeAreaChange as EventListener)
+    // 清理所有监听器
+    cleanupFunctions.forEach(fn => fn())
+    cleanupFunctions.length = 0
   })
 
   // 计算属性：是否有安全区域

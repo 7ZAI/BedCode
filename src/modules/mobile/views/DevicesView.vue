@@ -209,55 +209,8 @@
         </div>
       </div>
 
-      <!-- Paired Devices & Connection History (when not connected) -->
+      <!-- Connection History (when not connected) -->
       <div v-else>
-        <!-- Paired Devices Section -->
-        <div v-if="pairedDevices.length > 0">
-          <h3 class="text-[var(--mobile-success)]/80 text-sm font-medium mb-3 flex items-center justify-between tracking-wider uppercase">
-            <span>已配对设备</span>
-            <button
-              class="text-[var(--mobile-text-muted)] text-xs hover:text-[var(--mobile-accent)] transition-colors"
-              @click="clearPairedDevices"
-            >
-              清除
-            </button>
-          </h3>
-
-          <div class="space-y-2 mb-6">
-            <div
-              v-for="device in pairedDevices"
-              :key="device.fingerprint"
-              class="flex items-center justify-between p-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-success-muted)] rounded-xl hover:border-[var(--mobile-success)] transition-all cursor-pointer"
-              @click="handleConnectFromPairedDevice(device)"
-            >
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-full bg-[var(--mobile-success-muted)] border border-[var(--mobile-success)]/30 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-[var(--mobile-success)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                  </svg>
-                </div>
-                <div>
-                  <p class="font-medium text-[var(--mobile-text-primary)]">{{ device.name }}</p>
-                  <div class="flex items-center gap-2 mt-0.5">
-                    <p class="text-[var(--mobile-text-muted)] text-xs">{{ device.address }}:{{ device.port }}</p>
-                    <span class="text-[var(--mobile-success)]/60 text-xs">· 连接 {{ device.connectCount }} 次</span>
-                  </div>
-                </div>
-              </div>
-              <div class="flex items-center gap-2">
-                <button
-                  class="p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-error)] transition-colors"
-                  @click.stop="removePairedDevice(device.fingerprint)"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- Connection History Section -->
         <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 flex items-center justify-between tracking-wider uppercase">
           <span>连接历史</span>
@@ -400,7 +353,6 @@ const toast = useToast()
 const activeSessions = connection.activeSessions
 const sessionConfigs = connection.sessionConfigs
 const connectionHistory = connection.connectionHistory
-const pairedDevices = connection.pairedDevices
 const isLoadingConfigs = connection.isLoadingConfigs
 const hasLoadedConfigs = connection.hasLoadedConfigs
 
@@ -511,15 +463,6 @@ function clearHistory() {
   connection.clearConnectionHistory()
 }
 
-// 已配对设备操作
-function removePairedDevice(fingerprint: string) {
-  connection.removePairedDevice(fingerprint)
-}
-
-function clearPairedDevices() {
-  connection.clearPairedDevices()
-}
-
 // 刷新会话配置
 async function refreshConfigs() {
   isRefreshing.value = true
@@ -603,21 +546,6 @@ async function handleConnectFromHistory(item: any) {
   await startConnection(device, true)
 }
 
-// Connect from paired device
-async function handleConnectFromPairedDevice(device: any) {
-  const remoteDevice: RemoteDevice = {
-    id: `${device.address}:${device.port}`,
-    name: device.name,
-    address: device.address,
-    port: device.port,
-    isPaired: true,
-    fingerprint: device.fingerprint,
-  }
-
-  // 从已配对设备连接，允许使用已存储的 token 跳过配对
-  await startConnection(remoteDevice, true)
-}
-
 // Manual address input
 async function handleConnectManual(address: string) {
   const [host, portStr] = address.split(':')
@@ -650,8 +578,16 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
   console.time('startConnection')
 
   try {
-    // Step 1: Connect to device - 状态由后端事件驱动
-    await connection.connect(device)
+    // Step 1: Connect to device - 带前端超时保护
+    // Rust 端有 10 秒超时，前端额外设置 12 秒超时作为兜底
+    const connectTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('连接超时，请确保桌面端正在运行并监听正确端口')), 12000)
+    )
+
+    await Promise.race([
+      connection.connect(device),
+      connectTimeout,
+    ])
     console.log('[DevicesView] startConnection: Step 1 done')
 
     // Step 2: 如果允许跳过配对，尝试使用已存储的 JWT token
@@ -687,6 +623,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
       // 配对失败或超时时断开连接
       console.error('[DevicesView] Pairing failed:', pairingError)
       connectionError.value = String(pairingError)
+      toast.error(String(pairingError))
       await connection.disconnect()
     } finally {
       showPairingLoading.value = false  // 隐藏全局遮罩 loading
@@ -694,6 +631,19 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
   } catch (error) {
     connectionError.value = String(error)
     console.error('[DevicesView] startConnection failed:', error)
+
+    // 显示友好的错误提示
+    const errorMsg = String(error)
+    if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
+      toast.error('连接超时，请确保桌面端正在运行')
+    } else if (errorMsg.includes('refused') || errorMsg.includes('rejected')) {
+      toast.error('连接被拒绝，请检查桌面端地址和端口')
+    } else if (errorMsg.includes('unreachable') || errorMsg.includes('network')) {
+      toast.error('网络不可达，请检查网络连接')
+    } else {
+      toast.error(`连接失败: ${errorMsg}`)
+    }
+
     // 连接失败时确保状态正确
     // 后端会发送 ws_error 事件，前端状态会变为 'error'
   } finally {

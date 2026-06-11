@@ -82,15 +82,16 @@
 
       <!-- 输入框容器 -->
       <div class="input-box">
-        <input
+        <textarea
           ref="inputRef"
           v-model="inputText"
-          type="text"
           class="input-field"
           :placeholder="placeholder"
           :disabled="disabled"
+          rows="1"
           @focus="handleFocus"
-        />
+          @input="adjustTextareaHeight"
+        ></textarea>
       </div>
 
       <!-- 发送按钮 -->
@@ -147,7 +148,7 @@ const emit = defineEmits<{
 
 // ==================== State ====================
 
-const inputRef = ref<HTMLInputElement | null>(null)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
 const inputText = ref('')
 const showShortcutsPanel = ref(false)  // 默认隐藏
 
@@ -181,6 +182,10 @@ function handleSubmit() {
   if (!text) return
   emit('submit', text)
   inputText.value = ''
+  // 重置 textarea 高度
+  if (inputRef.value) {
+    inputRef.value.style.height = 'auto'
+  }
 }
 
 function handleExecute() {
@@ -188,6 +193,10 @@ function handleExecute() {
   if (!text) return
   emit('execute', text)
   inputText.value = ''
+  // 重置 textarea 高度
+  if (inputRef.value) {
+    inputRef.value.style.height = 'auto'
+  }
 }
 
 function handleShortcutClick(code: string) {
@@ -202,6 +211,18 @@ function handleFocus() {
       inputRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }
   }, 100)
+}
+
+// 自动调整 textarea 高度
+function adjustTextareaHeight() {
+  const textarea = inputRef.value
+  if (!textarea) return
+
+  // 先重置高度以获取正确的 scrollHeight
+  textarea.style.height = 'auto'
+  // 设置为新高度，但不超过最大高度
+  const newHeight = Math.min(textarea.scrollHeight, 120)
+  textarea.style.height = `${newHeight}px`
 }
 </script>
 
@@ -248,12 +269,13 @@ function handleFocus() {
 .input-box {
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   background: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
-  border-radius: 9999px;
+  border-radius: 1rem;
   padding: 0.5rem 1rem;
   transition: border-color 0.2s ease;
+  min-height: 2.5rem;
 }
 
 .input-box:focus-within {
@@ -268,6 +290,10 @@ function handleFocus() {
   color: var(--mobile-text-primary);
   font-size: 0.875rem;
   font-family: inherit;
+  resize: none;
+  max-height: 120px;
+  overflow-y: auto;
+  line-height: 1.5;
 }
 
 .input-field::placeholder {

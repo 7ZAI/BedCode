@@ -453,11 +453,13 @@ impl SessionManager {
 
     /// 向会话写入输入
     pub async fn write_input(&self, session_id: &str, data: &str) -> Result<()> {
+        // 使用 chars() 确保 UTF-8 安全截断，避免在多字节字符中间切割
+        let preview: String = data.chars().take(50).collect();
         tracing::info!(
             "[SessionManager] write_input session_id={}, data_len={}, data={:?}",
             session_id,
             data.len(),
-            &data[..data.len().min(50)]
+            preview
         );
 
         self.pty_registry.write_input(session_id, data).await?;

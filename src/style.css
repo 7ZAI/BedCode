@@ -16,12 +16,13 @@
   -moz-osx-font-smoothing: grayscale;
 
   /* 安全区域变量 - 由 tauri-plugin-edge-to-edge 自动注入 */
-  --safe-area-inset-top: 0px;
-  --safe-area-inset-bottom: 0px;
-  --safe-area-inset-left: 0px;
-  --safe-area-inset-right: 0px;
-  --safe-area-top: 0px;
-  --safe-area-bottom: 0px;
+  /* 同时设置 CSS 环境变量 fallback，确保插件初始化延迟时也能正确获取 */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --keyboard-height: 0px;
   --keyboard-visible: 0;
 }
@@ -200,6 +201,9 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   /* 安全区域由 App.vue 通过 JavaScript 动态设置 */
+  /* 平滑过渡动画 - 避免键盘弹出时闪现 */
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              padding-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* 移动端底部导航安全区域适配 */
@@ -212,11 +216,12 @@ body {
   padding-top: var(--safe-area-top, 0px);
 }
 
-/* 移动端输入栏键盘避让 */
+/* 移动端输入栏键盘避让 - 使用 margin 而非 transform 避免闪现 */
 .mobile-input-bar {
-  /* 键盘高度由插件动态注入 */
-  transform: translateY(calc(-1 * var(--keyboard-height, 0px)));
-  transition: transform 0.3s ease;
+  /* 键盘高度由插件动态注入，使用 margin-bottom 配合 CSS env 实现平滑过渡 */
+  margin-bottom: env(keyboard-inset-bottom, 0px);
+  /* 过渡动画：使用较长时间避免突兀 */
+  transition: margin-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Scrollbar styles - 浅色模式默认 */

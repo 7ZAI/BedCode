@@ -1,5 +1,8 @@
 <template>
-  <nav class="bg-[var(--mobile-nav-bg)] backdrop-blur-xl border-t border-[var(--mobile-nav-border)]">
+  <nav
+    class="bg-[var(--mobile-nav-bg)] backdrop-blur-xl border-t border-[var(--mobile-nav-border)]"
+    :style="navStyle"
+  >
     <!-- 顶部发光效果 -->
     <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--mobile-accent)]/30 to-transparent"></div>
 
@@ -28,8 +31,17 @@
 </template>
 
 <script setup lang="ts">
-import { h, computed } from 'vue'
+import { h, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import type { Ref } from 'vue'
+
+// 注入安全区域
+const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')
+
+// 导航栏样式：底部安全区域
+const navStyle = computed(() => ({
+  paddingBottom: `${safeArea?.value?.bottom || 0}px`,
+}))
 
 const route = useRoute()
 const router = useRouter()
