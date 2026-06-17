@@ -196,8 +196,14 @@ impl WebSocketManager {
         }
 
         // 创建服务器配置（使用默认的心跳配置）
+        // 创建 HTTP 路由器（暂无 handler，后续添加 Plugin API 等）
+        let http_router = Arc::new(
+            crate::shared::websocket::server::http_router::HttpRouter::new()
+        );
+
         let config = WsServerConfig {
             port,
+            http_router: Some(http_router),
             ..WsServerConfig::default()
         };
 

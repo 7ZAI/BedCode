@@ -44,6 +44,8 @@ pub struct WsServerConfig {
     pub ip_filter: IpFilter,
     /// 响应处理器（处理需要响应的消息）
     pub response_handler: Option<Arc<dyn ResponseHandler>>,
+    /// HTTP 路由器（处理非 WebSocket 的 HTTP 请求）
+    pub http_router: Option<Arc<crate::shared::websocket::server::http_router::HttpRouter>>,
 }
 
 impl Default for WsServerConfig {
@@ -57,6 +59,7 @@ impl Default for WsServerConfig {
             business_thread_pool_size: 0, // 使用 tokio 默认
             ip_filter: IpFilter::default(),
             response_handler: None,
+            http_router: None,
         }
     }
 }
@@ -72,6 +75,7 @@ impl std::fmt::Debug for WsServerConfig {
             .field("business_thread_pool_size", &self.business_thread_pool_size)
             .field("ip_filter", &self.ip_filter)
             .field("response_handler", &"...")
+            .field("http_router", &if self.http_router.is_some() { "Some" } else { "None" })
             .finish()
     }
 }

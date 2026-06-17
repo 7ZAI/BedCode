@@ -9,6 +9,7 @@ pub mod io;
 pub mod business_pool;
 pub mod default_handler;
 pub mod context;
+pub mod http_router;
 
 // Re-exports
 pub use ws_server::WsServer;
@@ -20,3 +21,4 @@ pub use io::{ServerIo, ServerIoConfig, ServerIoEvent};
 pub use business_pool::{BusinessThreadPool, execute_in_pool, execute_async_in_pool};
 pub use default_handler::{AuthInterceptor, DefaultMessageHandler, MessageRouter};
 pub use context::RouteContext;
+pub use http_router::{HttpRouter, HttpRouteHandler, HttpRequestContext, ApiResponse, HttpBody, build_json_response, build_cors_preflight_response};

@@ -17,6 +17,8 @@ use crate::shared::websocket::{
 };
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
+use http_body_util::BodyExt;
+use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -42,6 +44,15 @@ pub struct WsServer {
     event_tx: broadcast::Sender<WsServerEvent>,
     /// 服务器是否运行中
     is_running: Arc<RwLock<bool>>,
+}
+
+/// 通过 peek 数据判断 TCP 流是否为 WebSocket 升级请求
+///
+/// WebSocket 连接以 HTTP GET 请求开始，请求头包含 `Upgrade: websocket`
+/// peek 不会消费数据，所以后续 accept_async 或 hyper 都能读到完整数据
+fn is_ws_upgrade_from_peek(buf: &[u8]) -> bool {
+    let header = String::from_utf8_lossy(buf);
+    header.lines().any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
 }
 
 impl WsServer {
@@ -343,20 +354,27 @@ impl WsServer {
             tokio::select! {
                 accept_result = listener.accept() => {
                     let (stream, addr) = accept_result?;
-                    debug!("[WsServer] Received accept request from {}", addr);
+                    debug!("[WsServer] Received connection from {}", addr);
 
-                    let connection_manager = self.connection_manager.clone();
-                    let mut shutdown_rx_inner = self.shutdown_tx.subscribe();
-                    let event_tx_clone = self.event_tx.clone();
-                    let config = self.config.clone();
+                    // 通过 peek 判断是 WS 升级还是普通 HTTP（peek 不消费数据）
+                    let mut peek_buf = [0u8; 4096];
+                    let is_ws = match stream.peek(&mut peek_buf).await {
+                        Ok(n) if n > 0 => is_ws_upgrade_from_peek(&peek_buf[..n]),
+                        _ => false,
+                    };
 
-                    // 为清理阶段创建 clone
-                    let connection_manager_for_cleanup = self.connection_manager.clone();
-                    let event_tx_for_cleanup = self.event_tx.clone();
-                    let handler = self.handler.read().await.clone();
+                    if is_ws {
+                        // === WebSocket 连接：走原有逻辑 ===
+                        let connection_manager = self.connection_manager.clone();
+                        let mut shutdown_rx_inner = self.shutdown_tx.subscribe();
+                        let event_tx_clone = self.event_tx.clone();
+                        let config = self.config.clone();
+                        let connection_manager_for_cleanup = self.connection_manager.clone();
+                        let event_tx_for_cleanup = self.event_tx.clone();
+                        let handler = self.handler.read().await.clone();
 
-                    tokio::spawn(async move {
-                        info!("[WsServer] New connection from {}", addr);
+                        tokio::spawn(async move {
+                            info!("[WsServer] New WS connection from {}", addr);
 
                         let ws_stream = match tokio_tungstenite::accept_async(stream).await {
                             Ok(ws) => {
@@ -541,7 +559,67 @@ impl WsServer {
                         });
 
                         info!("Client {} disconnected", addr);
-                    });
+                        });
+                    } else {
+                        // === HTTP 请求：走 hyper 处理 ===
+                        let http_router = self.config.http_router.clone();
+                        tokio::spawn(async move {
+                            info!("[WsServer] New HTTP connection from {}", addr);
+                            let io = TokioIo::new(stream);
+                            let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                                let http_router = http_router.clone();
+                                async move {
+                                    let method = req.method().clone();
+                                    let path = req.uri().path().to_string();
+
+                                    // CORS 预检
+                                    if method == hyper::Method::OPTIONS {
+                                        return Ok::<_, hyper::Error>(crate::shared::websocket::server::http_router::build_cors_preflight_response());
+                                    }
+
+                                    // 读取请求体
+                                    let body_bytes = req.into_body()
+                                        .collect()
+                                        .await
+                                        .map(|b| b.to_bytes())
+                                        .unwrap_or_default();
+                                    let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+                                    let ctx = crate::shared::websocket::server::http_router::HttpRequestContext {
+                                        method,
+                                        path,
+                                        body,
+                                    };
+
+                                    tracing::debug!("[WsServer] HTTP request: {} {}", ctx.method, ctx.path);
+
+                                    let (status, json_body) = match http_router {
+                                        Some(ref router) => match router.dispatch(&ctx).await {
+                                            Ok(json) => (hyper::StatusCode::OK, json),
+                                            Err(e) => {
+                                                tracing::error!("[WsServer] HTTP handler error: {}", e);
+                                                let resp = crate::shared::websocket::server::http_router::ApiResponse::<()>::error(500, &e.to_string());
+                                                (hyper::StatusCode::INTERNAL_SERVER_ERROR, serde_json::to_string(&resp).unwrap_or_default())
+                                            }
+                                        },
+                                        None => {
+                                            let resp = crate::shared::websocket::server::http_router::ApiResponse::<()>::error(404, "No HTTP router configured");
+                                            (hyper::StatusCode::NOT_FOUND, serde_json::to_string(&resp).unwrap_or_default())
+                                        }
+                                    };
+
+                                    Ok(crate::shared::websocket::server::http_router::build_json_response(status, &json_body))
+                                }
+                            });
+
+                            if let Err(e) = hyper::server::conn::http1::Builder::new()
+                                .serve_connection(io, service)
+                                .await
+                            {
+                                tracing::debug!("[WsServer] HTTP connection error: {}", e);
+                            }
+                        });
+                    }
                 }
 
                 _ = shutdown_rx.recv() => {
