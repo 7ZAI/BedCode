@@ -389,6 +389,9 @@ impl ConnectionManager {
                     // 保存新客户端
                     *self.client.write().await = Some(client);
 
+                    // 同步 HTTP 客户端的 base_url
+                    self.http_client.update_base_url(&target.address, target.port).await;
+
                     // 重连成功，重置状态
                     self.is_reconnecting.store(false, Ordering::SeqCst);
                     self.retry_count.store(0, Ordering::SeqCst);
