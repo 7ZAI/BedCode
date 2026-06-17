@@ -63,6 +63,9 @@ regex = "1"
 # Network utilities
 local-ip-address = "0.6"
 
+# HTTP client (mobile → desktop HTTP API)
+reqwest = { version = "0.12", features = ["json"] }
+
 # Async trait for dyn compatibility
 async-trait = "0.1"
 
