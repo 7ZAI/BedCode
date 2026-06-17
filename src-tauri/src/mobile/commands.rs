@@ -16,6 +16,7 @@ pub mod auth;
 pub mod session;
 pub mod terminal;
 pub mod android;
+pub mod http;
 
 // Re-export all commands for easy registration
 pub use token::{ws_set_token, ws_get_token, ws_clear_token};
@@ -40,3 +41,4 @@ pub use android::{
     start_foreground_service, stop_foreground_service, update_foreground_notification,
     open_url_in_browser,
 };
+pub use http::http_get_file_tree;

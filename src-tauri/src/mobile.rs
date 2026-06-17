@@ -38,6 +38,8 @@ pub use self::commands::{
     ws_load_sessions, ws_join_session, ws_leave_session, ws_subscribe_session,
     ws_start_session, ws_stop_session, ws_remove_session, ws_load_session_configs,
     ws_send_input_async, ws_send_message, ws_send_and_wait, ws_resize_terminal,
+    // HTTP API Commands
+    http_get_file_tree,
     set_screen_orientation, keep_screen_awake,
 };
 
