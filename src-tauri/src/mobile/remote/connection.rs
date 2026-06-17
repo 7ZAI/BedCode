@@ -16,6 +16,7 @@ use crate::shared::websocket::client::{
 use crate::shared::model::message::Message;
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
 use crate::mobile::global::get_global_token;
+use crate::mobile::remote::http_client::HttpClient;
 use crate::Result;
 
 use crate::mobile::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
@@ -72,12 +73,15 @@ pub struct ConnectionManager {
     retry_count: Arc<AtomicU32>,
     /// 重连中标记
     is_reconnecting: Arc<AtomicBool>,
+    /// HTTP 客户端（与 WS 共享目标地址）
+    http_client: Arc<HttpClient>,
 }
 
 impl ConnectionManager {
     /// 创建新的连接管理器
     pub fn new() -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(1024);
+        let http_client = HttpClient::new();
 
         Arc::new(Self {
             target: Arc::new(RwLock::new(None)),
@@ -86,6 +90,7 @@ impl ConnectionManager {
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
             is_reconnecting: Arc::new(AtomicBool::new(false)),
+            http_client,
         })
     }
 
@@ -235,6 +240,9 @@ impl ConnectionManager {
         // 保存客户端引用
         *self.client.write().await = Some(client);
 
+        // 同步 HTTP 客户端的 base_url
+        self.http_client.update_base_url(&address, port).await;
+
         // 短暂等待连接稳定
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -286,6 +294,9 @@ impl ConnectionManager {
         // 保存客户端引用
         *self.client.write().await = Some(client);
 
+        // 同步 HTTP 客户端的 base_url
+        self.http_client.update_base_url(&address, port).await;
+
         // 短暂等待连接稳定
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -305,6 +316,9 @@ impl ConnectionManager {
 
         // 清除客户端
         *self.client.write().await = None;
+
+        // 清除 HTTP 客户端 base_url
+        self.http_client.clear_base_url().await;
 
         // 清除目标
         *self.target.write().await = None;
@@ -510,11 +524,17 @@ impl ConnectionManager {
             client.set_status(WsConnStatus::Paired).await;
         }
     }
+
+    /// 获取 HTTP 客户端引用
+    pub fn http_client(&self) -> &Arc<HttpClient> {
+        &self.http_client
+    }
 }
 
 impl Default for ConnectionManager {
     fn default() -> Self {
         let (event_tx, _) = broadcast::channel(1024);
+        let http_client = HttpClient::new();
 
         Self {
             target: Arc::new(RwLock::new(None)),
@@ -523,6 +543,7 @@ impl Default for ConnectionManager {
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
             is_reconnecting: Arc::new(AtomicBool::new(false)),
+            http_client,
         }
     }
 }
@@ -536,6 +557,7 @@ impl Clone for ConnectionManager {
             manual_disconnect: self.manual_disconnect.clone(),
             retry_count: self.retry_count.clone(),
             is_reconnecting: self.is_reconnecting.clone(),
+            http_client: self.http_client.clone(),
         }
     }
 }

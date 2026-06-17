@@ -258,6 +258,22 @@ impl SessionConfigManager {
         Ok(())
     }
 
+    /// 根据 session_id 获取会话配置
+    ///
+    /// 先通过 SessionManager 查找 SessionInfo 获取 config_id，
+    /// 再根据 config_id 加载完整配置
+    pub async fn get_config_by_session_id(
+        &self,
+        session_id: &str,
+        session_manager: &crate::desktop::session::SessionManager,
+    ) -> Result<SessionConfig> {
+        let info = session_manager.get_session_info(session_id).await?;
+        self.get_config(&info.config_id).await?
+            .ok_or_else(|| crate::AppError::NotFound(format!(
+                "Config not found: {} (session: {})", info.config_id, session_id
+            )))
+    }
+
     /// 验证配置参数
     pub fn validate_config(
         name: &str,

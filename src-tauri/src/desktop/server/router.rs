@@ -7,7 +7,9 @@ pub mod business_router;
 pub mod handler;
 pub mod middleware;
 pub mod registry;
+pub mod http_router_config;
 
 pub use business_router::{BusinessRouter, BusinessRouterBuilder};
 pub use handler::BoxedHandler;
 pub use middleware::BusinessMiddleware;
+pub use http_router_config::HttpRouterConfig;

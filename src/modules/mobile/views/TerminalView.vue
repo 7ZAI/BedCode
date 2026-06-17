@@ -35,17 +35,32 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
       </button>
+      <button class="folder-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" title="文件">
+        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+      </button>
     </header>
 
-    <!-- Terminal Output Area - 禁止输入焦点 -->
-    <div class="terminal-output-area" @click.prevent.stop>
-      <div
-        ref="xtermContainer"
-        class="xterm-container"
-        @touchstart="onContainerTouchStart"
-        @touchmove="onContainerTouchMove"
-        @click.prevent.stop
-      ></div>
+    <!-- Main Content: Terminal + Sidebar overlay -->
+    <div class="main-content">
+      <div class="terminal-output-area" @click.prevent.stop>
+        <div
+          ref="xtermContainer"
+          class="xterm-container"
+          @touchstart="onContainerTouchStart"
+          @touchmove="onContainerTouchMove"
+          @click.prevent.stop
+        ></div>
+      </div>
+
+      <!-- File Sidebar - 覆盖层，不影响终端宽高 -->
+      <transition name="sidebar-slide">
+        <FileSidebar v-if="showSidebar" class="sidebar-overlay" />
+      </transition>
+
+      <!-- 点击侧边栏外部关闭 -->
+      <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
     </div>
 
     <!-- Input Bar -->
@@ -138,6 +153,7 @@ import {
 } from '@/modules/mobile/composables/useMobileCommands'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
+import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
 
 // ==================== Props & Route ====================
@@ -172,6 +188,7 @@ const subscribedSessionIdRef = ref<string | null>(null)
 // 设置相关状态
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
+const showSidebar = ref(false)
 const terminalSettings = ref({
   fontSize: 14,
   theme: 'dark',
@@ -1047,6 +1064,65 @@ watch(isConnected, async (connected) => {
   border-color: rgba(0, 212, 255, 0.3);
 }
 
+/* Main Content Area */
+.main-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Sidebar overlay - 浮动在终端上方，不影响终端宽高 */
+.sidebar-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
+}
+
+.sidebar-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+}
+
+/* Folder Button */
+.folder-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.folder-btn:hover {
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+.folder-btn.active {
+  color: var(--mobile-accent);
+  border-color: var(--mobile-border-active);
+  background: var(--mobile-accent-muted);
+}
+
+/* Sidebar Slide Transition */
+.sidebar-slide-enter-active,
+.sidebar-slide-leave-active {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-slide-enter-from,
+.sidebar-slide-leave-to {
+  transform: translateX(100%);
+}
+
 /* Settings Modal */
 .settings-modal-overlay {
   position: fixed;
@@ -1333,12 +1409,11 @@ watch(isConnected, async (connected) => {
   transform: scale(0.95);
 }
 
-/* Terminal Area */
+/* Terminal Area - 始终占满 main-content，不被 sidebar 挤压 */
 .terminal-output-area {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  position: relative;
   background: var(--mobile-terminal-bg);
   /* 允许子元素触摸滚动 */
   touch-action: pan-y;

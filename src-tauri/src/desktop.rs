@@ -2,6 +2,7 @@
 //!
 //! 桌面端专用模块
 
+pub mod app_context;
 pub mod commands;
 pub mod enums;
 pub mod event_forwarder;
@@ -15,6 +16,7 @@ pub mod traits;
 pub mod websocket_manager;
 
 pub use event_forwarder::EventForwarder;
+pub use app_context::AppContext;
 
 pub use websocket_manager::{ClientSummary, WebSocketManager};
 

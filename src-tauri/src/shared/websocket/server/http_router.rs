@@ -12,6 +12,42 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// ==================== File Tree Types ====================
+
+/// 文件树节点 — 与前端 FileTreeNode 一一对应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeNode {
+    pub name: String,
+    pub node_type: FileType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<FileTreeNode>>,
+    /// 仅 folder 有效，前端控制展开/折叠
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expanded: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileType {
+    File,
+    Folder,
+}
+
+/// POST /api/file-tree 请求体
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeRequest {
+    /// 会话配置 ID，用于查找 working_dir
+    pub session_id: String,
+    /// 需要过滤的目录名列表
+    /// - 纯名称（如 "node_modules"）：匹配所有层级的该目录
+    /// - 带父级路径（如 "src/node_modules"）：仅在父级路径下匹配
+    pub exclude_dirs: Vec<String>,
+}
+
+// ==================== HTTP Router Core ====================
+
 /// HTTP 响应体类型
 pub type HttpBody = Full<Bytes>;
 
@@ -79,6 +115,11 @@ impl HttpRouter {
     pub fn route(mut self, method: Method, path: &str, handler: Arc<dyn HttpRouteHandler>) -> Self {
         self.routes.insert(RouteKey { method, path: path.to_string() }, handler);
         self
+    }
+
+    /// 注册路由（&mut 风格，用于创建后动态添加）
+    pub fn register(&mut self, method: Method, path: &str, handler: Arc<dyn HttpRouteHandler>) {
+        self.routes.insert(RouteKey { method, path: path.to_string() }, handler);
     }
 
     /// 分发请求到对应处理器，未匹配返回 404

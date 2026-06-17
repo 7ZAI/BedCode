@@ -446,6 +446,12 @@ impl SessionManager {
         self.session_info.get(session_id).await
     }
 
+    /// 获取会话信息，未找到时返回错误
+    pub async fn get_session_info(&self, session_id: &str) -> Result<SessionInfo> {
+        self.session_info.get(session_id).await
+            .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))
+    }
+
     /// 列出所有会话
     pub async fn list_sessions(&self) -> Vec<SessionInfo> {
         self.session_info.list().await

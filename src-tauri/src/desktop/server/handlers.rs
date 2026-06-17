@@ -7,8 +7,10 @@ pub mod auth_handler;
 pub mod terminal_handler;
 pub mod session_control_handler;
 pub mod session_config_handler;
+pub mod file_tree_handler;
 
 pub use auth_handler::AuthHandler;
 pub use terminal_handler::TerminalHandler;
 pub use session_control_handler::SessionControlHandler;
 pub use session_config_handler::SessionConfigHandler;
+pub use file_tree_handler::FileTreeHandler;

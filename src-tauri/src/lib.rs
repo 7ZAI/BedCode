@@ -260,11 +260,19 @@ pub fn run() {
             insert_default_quick_actions(&db)?;
 
             let db = Arc::new(Mutex::new(db));
-            app.manage(db.clone());
 
-            // 创建会话存储（通过 trait）
+            // ==================== 创建所有全局单实例 ====================
+
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
+            let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
+            let plugin_manager = Arc::new(desktop::plugin::PluginManager::new(
+                session_manager.output_tx(),
+                db.clone(),
+            ));
+            let pairing_service = Arc::new(PairingService::new());
+            let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
+            let app_handle_arc = Arc::new(app_handle.clone());
 
             // 创建同步事件通道
             let (sync_tx, _) = tokio::sync::broadcast::channel::<desktop::events::DesktopSyncEvent>(64);
@@ -272,57 +280,52 @@ pub fn run() {
             // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
             tauri::async_runtime::block_on(async {
                 session_manager.set_sync_tx(sync_tx.clone()).await;
+                config_manager.set_sync_tx(sync_tx.clone()).await;
             });
 
             // 创建并同步设置 PTY 输出监听器
             // 必须在 setup 返回前完成，否则会话启动时监听器可能未就绪导致输出丢失
             let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle.clone()));
             let async_listener = Arc::new(desktop::pty::AsyncPtyOutputListener::new());
-            // 使用 block_on 同步执行异步初始化，确保监听器在 setup 完成前就绪
             tauri::async_runtime::block_on(async {
                 async_listener.register(frontend_handler).await;
                 session_manager.set_output_listener(async_listener).await;
             });
             tracing::info!("PTY output listener configured (frontend)");
 
-            // 创建会话配置管理器
-            let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
+            // ==================== 注册到 AppContext 全局容器 ====================
 
-            // 设置 SessionConfigManager 的同步事件发送器
-            tauri::async_runtime::block_on(async {
-                config_manager.set_sync_tx(sync_tx.clone()).await;
-            });
+            let ctx = desktop::app_context::AppContextBuilder::new()
+                .db(db.clone())
+                .session_manager(session_manager.clone())
+                .config_manager(config_manager.clone())
+                .plugin_manager(plugin_manager.clone())
+                .pairing_service(pairing_service.clone())
+                .qr_manager(qr_manager.clone())
+                .app_handle(app_handle_arc.clone())
+                .sync_tx(sync_tx.clone())
+                .build_and_init();
 
+            // 同时注册到 Tauri State（前端 invoke 可用）
+            app.manage(db.clone());
             app.manage(config_manager.clone());
-
             app.manage(session_manager.clone());
-
-            let plugin_manager = Arc::new(desktop::plugin::PluginManager::new(
-                session_manager.output_tx(),
-                db.clone(),
-            ));
-
-            let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service.clone());
-
-            let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
             app.manage(qr_manager.clone());
 
-            // 初始化并启动 WebSocketManager（路由机制已内置处理器）
-            // 关键：传入所有必要的实例，确保与 Tauri State 共享
+            // ==================== 启动 WebSocket 服务 ====================
+
             let ws_manager = desktop::websocket_manager::WebSocketManager::global();
-            let db_for_ws = db.clone();
-            let qr_manager_for_ws = qr_manager.clone();
-            let pairing_service_for_ws = pairing_service.clone();
-            let app_handle_for_ws = Arc::new(app_handle.clone());
-            let session_manager_for_ws = session_manager.clone();
-            let session_manager_for_handler = session_manager.clone();
-            let plugin_manager_for_ws = plugin_manager.clone();
-            let config_manager_for_sync = config_manager.clone();
-            let sync_tx_for_handler = sync_tx.clone();
-            let app_handle_for_events = Arc::new(app_handle.clone());
+            let ws_port_for_spawn = ws_port;
             tauri::async_runtime::spawn(async move {
-                ws_manager.init(db_for_ws, qr_manager_for_ws, pairing_service_for_ws, app_handle_for_ws, session_manager_for_ws, plugin_manager_for_ws).await
+                ws_manager.init(
+                    ctx.db().clone(),
+                    ctx.qr_manager().clone(),
+                    ctx.pairing_service().clone(),
+                    ctx.app_handle().clone(),
+                    ctx.session_manager().clone(),
+                    ctx.plugin_manager().clone(),
+                ).await
                     .expect("Failed to initialize WebSocketManager");
 
                 // 注册同步事件处理器
@@ -331,12 +334,12 @@ pub fn run() {
                 use crate::desktop::events::{DesktopSyncEvent, SyncEventHandler};
 
                 // 注册事件源
-                global_matcher().register_source::<DesktopSyncEvent>(sync_tx_for_handler).await;
+                global_matcher().register_source::<DesktopSyncEvent>(ctx.sync_tx().clone()).await;
 
                 // 注册处理器
                 let sync_handler = Arc::new(SyncEventHandler::new(
-                    session_manager_for_handler,
-                    config_manager_for_sync,
+                    ctx.session_manager().clone(),
+                    ctx.config_manager().clone(),
                     ws_manager,
                 ));
                 global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
@@ -346,10 +349,8 @@ pub fn run() {
                 use crate::shared::websocket::WsServerEvent;
                 use crate::desktop::events::WsServerEventHandler;
 
-                // 获取 WsServer 的事件发送器并注册为事件源
-                // 注意：WsServer 需要在 start 之后才能获取 subscribe
-                tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port);
-                match ws_manager.start(ws_port).await {
+                tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port_for_spawn);
+                match ws_manager.start(ws_port_for_spawn).await {
                     Ok(_) => {
                         tracing::info!("[BedCode] WebSocket server started successfully");
 
@@ -362,7 +363,7 @@ pub fn run() {
                         // 注册 WsServerEventHandler
                         let ws_event_handler = Arc::new(WsServerEventHandler::new(
                             ws_manager,
-                            Some(app_handle_for_events),
+                            Some(ctx.app_handle().clone()),
                         ));
                         global_matcher().register::<WsServerEvent>(ws_event_handler).await;
                         tracing::info!("[BedCode] WsServerEventHandler registered");
@@ -371,6 +372,7 @@ pub fn run() {
                 }
             });
 
+            // 写入端口文件
             let app_handle_clone = app_handle.clone();
             let ws_port_copy = ws_port;
             tauri::async_runtime::spawn(async move {
@@ -391,8 +393,6 @@ pub fn run() {
                     }
                 }
             });
-
-          
 
             // 启动事件转发器：将 SessionManager 的事件转发到前端
             let event_forwarder = desktop::EventForwarder::new(

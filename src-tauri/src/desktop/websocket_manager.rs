@@ -13,10 +13,9 @@ use crate::desktop::session::SessionManager;
 use crate::desktop::plugin::PluginManager;
 use crate::shared::model::message::Message;
 use crate::shared::system::config::AppConfig;
-use crate::shared::websocket::{
-    WsServer, WsServerConfig, WsServerEvent,
-};
+use crate::shared::websocket::server::{WsServer, WsServerConfig, WsServerEvent};
 use crate::desktop::server::router::BusinessRouter;
+use crate::desktop::server::router::HttpRouterConfig;
 use crate::shared::websocket::server::DefaultMessageHandler;
 use crate::shared::system::error::AppError;
 use crate::shared::auth::QrTokenManager;
@@ -195,10 +194,27 @@ impl WebSocketManager {
             }
         }
 
-        // 创建服务器配置（使用默认的心跳配置）
-        // 创建 HTTP 路由器（暂无 handler，后续添加 Plugin API 等）
+        // 获取数据库实例
+        let db = {
+            let db_lock = self.inner.db.read().await;
+            db_lock.clone().ok_or_else(|| AppError::WebSocket(
+                "Database not initialized, call init() first".to_string(),
+            ))?
+        };
+
+        // 获取 session_manager 实例
+        let session_manager = {
+            let sm_lock = self.inner.session_manager.read().await;
+            sm_lock.clone().ok_or_else(|| AppError::WebSocket(
+                "SessionManager not initialized, call init() first".to_string(),
+            ))?
+        };
+
+        // 通过 HttpRouterConfig 配置 HTTP API 路由
         let http_router = Arc::new(
-            crate::shared::websocket::server::http_router::HttpRouter::new()
+            HttpRouterConfig::new()
+                .register_file_tree()
+                .build()
         );
 
         let config = WsServerConfig {
@@ -209,14 +225,6 @@ impl WebSocketManager {
 
         // 创建 WsServer
         let server = Arc::new(WsServer::new(config));
-
-        // 获取数据库实例
-        let db = {
-            let db_lock = self.inner.db.read().await;
-            db_lock.clone().ok_or_else(|| AppError::WebSocket(
-                "Database not initialized, call init() first".to_string(),
-            ))?
-        };
 
         // 使用 init 时传入的 qr_manager 实例（与 Tauri State 共享）
         let qr_manager = {
@@ -235,11 +243,7 @@ impl WebSocketManager {
             ))?
         };
 
-        // 获取 session_manager 和 plugin_manager（用于会话控制请求）
-        let session_manager = {
-            let sm_lock = self.inner.session_manager.read().await;
-            sm_lock.clone()
-        };
+        // 获取 plugin_manager（用于会话控制请求）
         let plugin_manager = {
             let pm_lock = self.inner.plugin_manager.read().await;
             pm_lock.clone()
@@ -260,13 +264,13 @@ impl WebSocketManager {
         // 传入 session_manager 和 plugin_manager（用于会话控制请求）
         // 同时传入 app_handle（用于发送刷新事件到桌面端前端）
         let control_handler = Arc::new(SessionControlHandler::new(
-            session_manager.clone(),
+            Some(session_manager.clone()),
             plugin_manager,
             app_handle.clone(),
         ));
         let session_config_handler = Arc::new(SessionConfigHandler::new(db.clone()));
         // 传入 session_manager（用于终端输入写入 PTY）
-        let terminal_handler = Arc::new(TerminalHandler::new(session_manager));
+        let terminal_handler = Arc::new(TerminalHandler::new(Some(session_manager)));
 
         // 创建 BusinessRouter（实现 MessageRouter trait）
         let (event_tx_sender, _) = broadcast::channel(AppConfig::global().channels.ws_event_capacity);
@@ -430,7 +434,8 @@ impl WebSocketManager {
     pub async fn get_client_by_addr(&self, addr: &SocketAddr) -> Option<ClientSummary> {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
-            let client_info = s.get_client(addr).await?;
+            let client_info = s.connection_manager().get_id_by_addr(addr).await?;
+            let conn = s.connection_manager().get(client_info).await?;
             let client_id = self.inner.addr_to_client_id.read().await
                 .get(addr)
                 .cloned()
@@ -447,7 +452,7 @@ impl WebSocketManager {
                 client_id,
                 device_name,
                 addr: addr.to_string(),
-                authenticated: client_info.authenticated,
+                authenticated: conn.authenticated,
                 connected_at,
             })
         } else {
@@ -459,7 +464,7 @@ impl WebSocketManager {
     pub async fn client_count(&self) -> usize {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
-            s.client_count().await
+            s.connection_manager().count().await
         } else {
             0
         }
@@ -469,7 +474,7 @@ impl WebSocketManager {
     pub async fn authenticated_count(&self) -> usize {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
-            s.authenticated_count().await
+            s.connection_manager().authenticated_count().await
         } else {
             0
         }
@@ -543,7 +548,7 @@ impl WebSocketManager {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
             if let Some(addr) = exclude_addr {
-                s.broadcast_to_others(&addr, message).await?;
+                s.server_io().broadcast_to_others(&addr, message).await?;
             } else {
                 self.broadcast(message).await?;
             }
@@ -557,7 +562,7 @@ impl WebSocketManager {
     pub async fn broadcast(&self, message: &BusinessMessage) -> Result<()> {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
-            s.broadcast(message).await
+            s.server_io().broadcast(message).await
         } else {
             Err(AppError::WebSocket("Server not started".to_string()))
         }
@@ -588,7 +593,7 @@ impl WebSocketManager {
         let server = self.inner.server.read().await;
         if let Some(s) = &*server {
             if let Some(addr) = exclude_addr {
-                s.broadcast_to_others(&addr, message).await?;
+                s.server_io().broadcast_to_others(&addr, message).await?;
             } else {
                 // 未找到设备，广播给所有客户端
                 self.broadcast(message).await?;

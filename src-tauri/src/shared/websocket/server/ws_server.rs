@@ -243,26 +243,6 @@ impl WsServer {
         }
     }
 
-    /// 向除指定客户端外的所有客户端广播消息
-    pub async fn broadcast_to_others(&self, exclude_addr: &SocketAddr, message: &Message) -> Result<()> {
-        self.server_io.broadcast_to_others(exclude_addr, message).await
-    }
-
-    /// 向所有客户端广播消息
-    pub async fn broadcast(&self, message: &Message) -> Result<()> {
-        self.server_io.broadcast(message).await
-    }
-
-    /// 发送并等待确认
-    pub async fn send_with_ack(&self, addr: &SocketAddr, message: &Message, timeout: std::time::Duration) -> Result<Message> {
-        self.server_io.send_with_ack(addr, message, timeout).await
-    }
-
-    /// 发送并自动重试
-    pub async fn send_with_retry(&self, addr: &SocketAddr, message: &Message) -> Result<()> {
-        self.server_io.send_with_retry(addr, message).await
-    }
-
     /// 获取 ServerIo 引用
     pub fn server_io(&self) -> &Arc<ServerIo> {
         &self.server_io
@@ -281,34 +261,6 @@ impl WsServer {
                 });
             }
         }
-    }
-
-    /// 获取已连接客户端数
-    pub async fn client_count(&self) -> usize {
-        self.connection_manager.count().await
-    }
-
-    /// 获取已认证客户端数
-    pub async fn authenticated_count(&self) -> usize {
-        self.connection_manager.authenticated_count().await
-    }
-
-    /// 获取客户端信息（返回 Connection）
-    pub async fn get_client(&self, addr: &SocketAddr) -> Option<Connection> {
-        let id = self.connection_manager.get_id_by_addr(addr).await?;
-        self.connection_manager.get(id).await
-    }
-
-    /// 获取所有已认证客户端地址
-    pub async fn get_authenticated_clients(&self) -> Vec<SocketAddr> {
-        let ids = self.connection_manager.authenticated_ids().await;
-        let mut addrs = Vec::new();
-        for id in ids {
-            if let Some(conn) = self.connection_manager.get(id).await {
-                addrs.push(conn.addr);
-            }
-        }
-        addrs
     }
 
     /// 获取连接管理器引用（用于外部 handler）
