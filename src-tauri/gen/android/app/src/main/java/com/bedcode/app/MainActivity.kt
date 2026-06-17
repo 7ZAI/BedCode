@@ -11,7 +11,9 @@ class MainActivity : TauriActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // 启用 WebView 远程调试（仅 debug 构建）
-        WebView.setWebContentsDebuggingEnabled(true)
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
 
         android.util.Log.d(TAG, "onCreate: enabling edge-to-edge mode")
         enableEdgeToEdge()

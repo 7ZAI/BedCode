@@ -297,6 +297,7 @@ watch(
 
 let deviceConnectedListener: (() => void) | null = null
 let deviceDisconnectedListener: (() => void) | null = null
+let qrTokenConsumedListener: (() => void) | null = null
 
 onMounted(async () => {
   await settingsStore.loadSettings()
@@ -339,12 +340,6 @@ onMounted(async () => {
     const deviceId = event.payload.device_id
     connectedDeviceIds.value = new Set([...connectedDeviceIds.value, deviceId])
 
-    // 当有设备连接成功后，自动刷新二维码（token 已被消费）
-    if (qr.hasQr.value) {
-      console.log('Device connected, refreshing QR code...')
-      qr.generateQr(selectedIp.value || undefined)
-    }
-
     // 当有设备连接成功后，清除已使用的配对码并刷新显示
     if (pairingCode.value) {
       console.log('Device connected, clearing pairing code...')
@@ -356,6 +351,13 @@ onMounted(async () => {
         countdownInterval = null
       }
     }
+  })
+
+  // 监听 QR token 被消耗事件，自动重新生成二维码
+  qrTokenConsumedListener = await listen('qr-token-consumed', () => {
+    console.log('QR token consumed, regenerating QR code...')
+    qr.generateQr(selectedIp.value || undefined)
+    toast.success('设备已通过二维码连接')
   })
   deviceDisconnectedListener = await listen<DeviceConnectionInfo>('device-disconnected', (event) => {
     const newSet = new Set(connectedDeviceIds.value)
@@ -393,6 +395,9 @@ onUnmounted(() => {
   }
   if (deviceDisconnectedListener) {
     deviceDisconnectedListener()
+  }
+  if (qrTokenConsumedListener) {
+    qrTokenConsumedListener()
   }
   // 不清除 QR 码和配对码，保持状态以便下次进入页面时恢复
 })

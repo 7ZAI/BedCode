@@ -54,7 +54,7 @@ impl QrTokenManager {
     }
 
     /// 验证 token：存在、未过期、未使用
-    /// 验证通过后标记为已使用（一次性）
+    /// 验证通过后清除 token（一次性，需重新生成）
     pub async fn verify(&self, input: &str) -> crate::Result<()> {
         let mut guard = self.current_token.lock().await;
 
@@ -75,19 +75,21 @@ impl QrTokenManager {
                 } else if token.token != input {
                     Err(crate::AppError::Auth("Invalid QR token".to_string()))
                 } else {
-                    token.used = true;
-                    tracing::info!("QR token verified successfully");
+                    // 消费 token：清除而非仅标记 used
+                    // 前端需收到事件后重新生成新二维码
+                    *guard = None;
+                    tracing::info!("QR token consumed and cleared");
                     Ok(())
                 }
             }
         }
     }
 
-    /// 获取当前活跃 token 信息
+    /// 获取当前活跃 token 信息（排除已过期和已使用的）
     pub async fn get_active(&self) -> Option<(String, u64, u64)> {
         let guard = self.current_token.lock().await;
         guard.as_ref().and_then(|token| {
-            if token.is_expired() {
+            if token.is_expired() || token.used {
                 None
             } else {
                 let elapsed = token.created_at.elapsed().as_secs();
@@ -115,7 +117,10 @@ mod tests {
 
         assert!(manager.verify(&token).await.is_ok());
 
-        // 重复使用应失败
+        // 验证后 token 被消耗，get_active 返回 None
+        assert!(manager.get_active().await.is_none());
+
+        // 重复使用应失败（token 已被清除）
         assert!(manager.verify(&token).await.is_err());
     }
 

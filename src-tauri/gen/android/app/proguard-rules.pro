@@ -19,3 +19,37 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# ==================== BedCode Custom Rules ====================
+
+# Preserve debugging info for crash reports
+-keepattributes SourceFile,LineNumberTable
+-keepattributes *Annotation*
+
+# Keep all generated Tauri classes
+-keep class com.bedcode.app.generated.** { *; }
+
+# Keep custom classes (ForegroundService, etc.)
+-keep class com.bedcode.app.ForegroundService { *; }
+-keep class com.bedcode.app.ForegroundServicePlugin { *; }
+
+# Keep JavaScript interface methods
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
+# OkHttp (used by Tauri networking)
+-dontwarn okhttp3.**
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+
+# Preserve Kotlin metadata for reflection
+-keep class kotlin.Metadata { *; }
+-keepclassmembers class **$WhenMappings {
+    <fields>;
+}
+
+# Rust JNI native methods
+-keepclasseswithmembernames class * {
+    native <methods>;
+}

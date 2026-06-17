@@ -196,6 +196,11 @@ pub async fn handle_auth(
 
             match qr_manager.verify(qr_token).await {
                 Ok(()) => {
+                    // QR token 已消耗，通知桌面前端重新生成
+                    if let Some(handle) = app_handle {
+                        let _ = handle.emit("qr-token-consumed", ());
+                    }
+
                     let device_fingerprint = payload.device_fingerprint.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                     let device_name = payload.device_name.clone().unwrap_or_else(|| "QR Device".to_string());
                     let device_id = payload.device_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());

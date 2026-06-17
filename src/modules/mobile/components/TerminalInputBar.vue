@@ -1,6 +1,7 @@
 <template>
   <div
     class="terminal-input-bar sticky left-0 right-0 bottom-0 z-40"
+    :style="inputBarStyle"
   >
     <!-- 快捷键面板 - 点击按钮后显示 -->
     <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel">
@@ -94,25 +95,25 @@
         ></textarea>
       </div>
 
-      <!-- 发送按钮 -->
+      <!-- 发送按钮 - 蓝色向上箭头 -->
       <button
         class="send-btn"
         :disabled="!canSubmit"
         @click="handleSubmit"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
         </svg>
       </button>
 
-      <!-- 执行按钮 -->
+      <!-- 执行按钮 - Telegram 风格纸飞机 -->
       <button
         class="execute-btn"
         :disabled="!canSubmit"
         @click="handleExecute"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
         </svg>
       </button>
     </div>
@@ -120,7 +121,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, inject } from 'vue'
+import type { Ref } from 'vue'
 
 // ==================== Props ====================
 
@@ -145,6 +147,20 @@ const emit = defineEmits<{
   execute: [text: string]
   specialKey: [key: string]
 }>()
+
+// ==================== Safe Area ====================
+
+const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar: number }>>('safeArea')
+
+// 输入栏样式：底部安全区由 paddingBottom 承担
+// 使用 max() 确保 JS 值和 CSS env() 取较大值
+// JS 初始化延迟时 CSS env() 也能立即生效
+const inputBarStyle = computed(() => {
+  const jsBottom = safeArea?.value?.navigationBar || safeArea?.value?.bottom || 0
+  return {
+    paddingBottom: jsBottom > 0 ? `${jsBottom}px` : 'env(safe-area-inset-bottom, 0px)',
+  }
+})
 
 // ==================== State ====================
 
@@ -315,14 +331,14 @@ function adjustTextareaHeight() {
 }
 
 .send-btn {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.15), rgba(80, 250, 123, 0.08));
-  border-color: rgba(80, 250, 123, 0.4);
-  color: #50fa7b;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.08));
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #3b82f6;
 }
 
 .send-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.25), rgba(80, 250, 123, 0.15));
-  border-color: rgba(80, 250, 123, 0.6);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(59, 130, 246, 0.15));
+  border-color: rgba(59, 130, 246, 0.6);
 }
 
 .send-btn:disabled {

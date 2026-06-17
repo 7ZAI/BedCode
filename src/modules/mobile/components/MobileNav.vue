@@ -36,12 +36,17 @@ import { useRoute, useRouter } from 'vue-router'
 import type { Ref } from 'vue'
 
 // 注入安全区域
-const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')
+const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar: number }>>('safeArea')
 
 // 导航栏样式：底部安全区域
-const navStyle = computed(() => ({
-  paddingBottom: `${safeArea?.value?.bottom || 0}px`,
-}))
+// 使用 max() 确保 JS 值和 CSS env() 取较大值
+// JS 初始化延迟时 CSS env() 也能立即生效
+const navStyle = computed(() => {
+  const jsBottom = safeArea?.value?.navigationBar || safeArea?.value?.bottom || 0
+  return {
+    paddingBottom: jsBottom > 0 ? `${jsBottom}px` : 'env(safe-area-inset-bottom, 0px)',
+  }
+})
 
 const route = useRoute()
 const router = useRouter()

@@ -149,14 +149,14 @@ export async function wsJoinSession(sessionId: string): Promise<void> {
  */
 export async function wsLeaveSession(sessionId: string): Promise<void> {
   console.log('[wsLeaveSession] sessionId=' + sessionId)
-  return await invoke('ws_leave_session', { session_id: sessionId })
+  return await invoke('ws_leave_session', { sessionId })
 }
 
 /**
  * 启动会话，返回会话 ID 和会话信息
  */
 export async function wsStartSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {
-  return await invoke('ws_start_session', { configId, sessionName })
+  return await invoke('ws_start_session', { configId: configId, sessionName: sessionName })
 }
 
 /**
@@ -178,7 +178,7 @@ export async function wsRemoveSession(sessionId: string): Promise<void> {
  */
 export async function wsSendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
   console.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
-  return await invoke('ws_send_input_async', { sessionId, data, specialKey })
+  return await invoke('ws_send_input_async', { sessionId, data, specialKey: specialKey })
 }
 
 /**

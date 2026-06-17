@@ -122,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { ref, computed, inject, type Ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -137,7 +137,6 @@ import {
   wsResizeTerminal,
 } from '@/modules/mobile/composables/useMobileCommands'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
-import { useEdgeToEdge } from '@/modules/mobile/composables/useEdgeToEdge'
 import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
 
@@ -148,7 +147,9 @@ const route = useRoute()
 const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
-const { safeArea, keyboardInfo } = useEdgeToEdge()
+// 安全区域从 App.vue inject，不独立初始化 useEdgeToEdge
+const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
+const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>('keyboardInfo')!
 
 const sessionId = computed(() => route.params.id as string)
 
@@ -165,6 +166,8 @@ const resizeObserverRef = ref<ResizeObserver | null>(null)
 const outputListenerRef = ref<UnlistenFn | null>(null)
 // 输出索引去重 - 使用 ref 确保组件隔离
 const lastIndexRef = ref(-1)
+// 当前订阅的会话 ID - 用于取消订阅时使用（避免路由变化后 sessionId 变成 undefined）
+const subscribedSessionIdRef = ref<string | null>(null)
 
 // 设置相关状态
 const showSettings = ref(false)
@@ -389,22 +392,20 @@ const inputPlaceholder = computed(() => {
   return '输入命令...'
 })
 
-// 键盘高度（用于避让）
-const keyboardHeight = computed(() => keyboardInfo.value.keyboardHeight || 0)
-const isKeyboardVisible = computed(() => keyboardInfo.value.isVisible)
-
 // 安全区域
 const safeAreaTop = computed(() => safeArea.value.top || 0)
-const safeAreaBottom = computed(() => safeArea.value.bottom || 0)
+const keyboardHeight = computed(() => keyboardInfo.value.keyboardHeight || 0)
 
-// 终端视图样式：应用安全区域和键盘避让
+// 终端视图样式：顶部安全区 + 键盘避让
+// 底部安全区由 TerminalInputBar 的 paddingBottom 承担，这里只处理键盘避让
+// CSS env() 作为 safeArea 的 fallback
 const terminalViewStyle = computed(() => ({
-  paddingTop: `${safeAreaTop.value}px`,
-  paddingBottom: isKeyboardVisible.value ? `${keyboardHeight.value}px` : `${safeAreaBottom.value}px`,
+  paddingTop: safeAreaTop.value > 0 ? `${safeAreaTop.value}px` : 'env(safe-area-inset-top, 0px)',
+  paddingBottom: keyboardHeight.value > 0 ? `${keyboardHeight.value}px` : '0px',
 }))
 
 // 监听键盘变化，重新 fit 终端
-watch(keyboardHeight, () => {
+watch(() => keyboardInfo.value.keyboardHeight, () => {
   setTimeout(() => fitTerminal(), 100)
 })
 
@@ -437,7 +438,6 @@ async function initTerminal() {
 
   terminalRef.value = term
   term.open(xtermContainer.value)
-  // console.log('[TerminalView] Terminal opened')
 
   // Load addons
   const addon = new FitAddon()
@@ -585,31 +585,33 @@ function disposeTerminal() {
     fitAddonRef.value = null
   }
   lastIndexRef.value = -1
+  subscribedSessionIdRef.value = null
 }
 
-// ==================== Input Handlers ====================
+/// 创建前端事件监听器（不调用后端订阅）
+/// 用于 onActivated 时恢复前端监听，后端订阅已保持活跃
+async function createFrontendListener() {
+  if (outputListenerRef.value) {
+    outputListenerRef.value()
+    outputListenerRef.value = null
+  }
 
-async function subscribeSession() {
-  if (!isConnected.value) {
-    console.log('[TerminalView] subscribeSession: not connected, skipping')
+  const currentSessionId = sessionId.value
+  if (!currentSessionId) {
     return
   }
 
   try {
-    // 加入会话，开始接收输出
-    await wsJoinSession(sessionId.value)
-    console.log('[TerminalView] Joined session:', sessionId.value)
-
-    // 监听终端输出事件 - 捕获当前 sessionId 确保闭包正确
-    const currentSessionId = sessionId.value
     outputListenerRef.value = await listen<{
       session_id: string
       data: string
       index: number
       is_waiting: boolean
     }>('ws_output', (event) => {
-      // 只处理当前会话的输出
-      if (event.payload.session_id !== currentSessionId) return
+      // 只处理当前会话的输出（前端过滤）
+      if (event.payload.session_id !== currentSessionId) {
+        return
+      }
 
       // 索引去重：避免重复输出（重连时可能发生）
       if (event.payload.index !== undefined && event.payload.index <= lastIndexRef.value) {
@@ -622,26 +624,93 @@ async function subscribeSession() {
         terminalRef.value.write(event.payload.data)
       }
     })
+  } catch (e) {
+    console.error('[TerminalView] Failed to create frontend listener:', e)
+  }
+}
 
-    console.log('[TerminalView] Subscribed to terminal output')
+// ==================== Input Handlers ====================
+
+async function subscribeSession() {
+  if (!isConnected.value) {
+    return
+  }
+
+  // 先清理可能存在的旧监听器，避免重复订阅
+  if (outputListenerRef.value) {
+    outputListenerRef.value()
+    outputListenerRef.value = null
+  }
+
+  try {
+    // 加入会话，开始接收输出（后端订阅）
+    await wsJoinSession(sessionId.value)
+
+    // 监听终端输出事件 - 捕获当前 sessionId 确保闭包正确
+    const currentSessionId = sessionId.value
+    // 保存订阅的会话 ID，用于取消订阅时使用
+    subscribedSessionIdRef.value = currentSessionId
+    outputListenerRef.value = await listen<{
+      session_id: string
+      data: string
+      index: number
+      is_waiting: boolean
+    }>('ws_output', (event) => {
+      // 只处理当前会话的输出（前端过滤）
+      if (event.payload.session_id !== currentSessionId) {
+        return
+      }
+
+      // 索引去重：避免重复输出（重连时可能发生）
+      if (event.payload.index !== undefined && event.payload.index <= lastIndexRef.value) {
+        return
+      }
+      lastIndexRef.value = event.payload.index
+
+      // 写入终端
+      if (terminalRef.value) {
+        terminalRef.value.write(event.payload.data)
+      }
+    })
   } catch (e) {
     console.error('[TerminalView] Subscribe failed:', e)
     toast.error('订阅终端失败')
   }
 }
 
+/// 清理前端事件监听器（不取消后端订阅）
+/// 用于组件停用时清理，保持后端订阅以持续接收输出
+function clearFrontendListener() {
+  if (outputListenerRef.value) {
+    outputListenerRef.value()
+    outputListenerRef.value = null
+  }
+}
+
+/// 取消订阅会话（包括后端订阅）
+/// 用于会话停止、删除或组件销毁时
 async function unsubscribeSession() {
+  // 使用保存的会话 ID（避免路由变化后 sessionId 变成 undefined）
+  const sessionToLeave = subscribedSessionIdRef.value
+
   // 清理输出监听器
   if (outputListenerRef.value) {
     outputListenerRef.value()
     outputListenerRef.value = null
   }
 
-  if (!isConnected.value) return
+  // 清理保存的会话 ID
+  subscribedSessionIdRef.value = null
+
+  // 清理去重索引
+  lastIndexRef.value = -1
+
+  if (!isConnected.value || !sessionToLeave) {
+    return
+  }
 
   try {
-    await wsLeaveSession(sessionId.value)
-    console.log('[TerminalView] Left session:', sessionId.value)
+    await wsLeaveSession(sessionToLeave)
   } catch (e) {
     console.error('[TerminalView] Unsubscribe failed:', e)
   }
@@ -766,56 +835,65 @@ onMounted(async () => {
   await nextTick()
   initTerminal()
 
-  // 会话活跃时订阅输出
+  // 首次进入时订阅输出（后端订阅 + 前端监听）
   if (isSessionActive.value && isConnected.value) {
     await subscribeSession()
   }
 })
 
 onUnmounted(async () => {
+  // 组件销毁时完全取消订阅（包括后端）
+  // 注意：keep-alive 缓存的组件不会触发 onUnmounted
   await unsubscribeSession()
   disposeTerminal()
 })
 
-// keep-alive 生命周期：组件被激活时重新订阅
+// keep-alive 生命周期：组件被激活时检查订阅状态
+// 多终端同时存活模式下，不需要清理监听器
 onActivated(async () => {
-  // 组件从缓存恢复时，检查是否需要重新订阅
-  // 只有在已连接且会话活跃但没有监听器时才订阅
+  // 如果没有监听器且会话活跃，创建监听器
+  // 正常情况下监听器应该已经存在（onMounted 创建的）
   if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {
-    await subscribeSession()
+    await createFrontendListener()
   }
 })
 
-// keep-alive 生命周期：组件被停用时取消订阅
-onDeactivated(async () => {
-  // 组件进入缓存时，清理监听器以避免多个终端同时接收事件
-  await unsubscribeSession()
+// keep-alive 生命周期：组件被停用时不做任何操作
+// 保持前端监听器活跃，让所有终端实时接收输出
+onDeactivated(() => {
+  // 不清理监听器，保持实时接收输出
 })
 
 // Watch session status changes
+// 注意：只在组件处于活跃状态且路由正确时才响应状态变化
 watch(isSessionActive, async (active, prevActive) => {
+  // 如果 sessionId 不存在（路由已离开），忽略状态变化
+  if (!sessionId.value) {
+    return
+  }
+
   if (active && !prevActive) {
-    // Session became active
-    // if (terminalRef.value) {
-    //   terminalRef.value.write('\x1b[32m[会话已启动]\x1b[0m\r\n')
-    // }
+    // Session became active - 需要完整订阅（后端 + 前端）
     await subscribeSession()
   } else if (!active && prevActive) {
-    // Session stopped
+    // Session stopped - 完全取消订阅
     await unsubscribeSession()
-    // if (terminalRef.value) {
-    //   terminalRef.value.write('\x1b[33m[会话已停止]\x1b[0m\r\n')
-    // }
   }
 })
 
 // Watch connection status changes
 watch(isConnected, async (connected) => {
-  if (!connected && terminalRef.value) {
-    // terminalRef.value.write('\x1b[31m[连接已断开]\x1b[0m\r\n')
-    await unsubscribeSession()
-  } else if (connected && isSessionActive.value && terminalRef.value) {
-    // terminalRef.value.write('\x1b[32m[连接已恢复]\x1b[0m\r\n')
+  // 如果 sessionId 不存在（路由已离开），忽略连接变化
+  if (!sessionId.value) {
+    return
+  }
+
+  if (!connected) {
+    // 连接断开 - 清理前端监听器，后端订阅会自动失效
+    clearFrontendListener()
+    subscribedSessionIdRef.value = null
+  } else if (connected && isSessionActive.value) {
+    // 连接恢复 - 需要完整订阅（后端 + 前端）
     await subscribeSession()
   }
 })
