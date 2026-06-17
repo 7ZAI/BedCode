@@ -10,7 +10,7 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 - **Desktop**: Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS
 - **Backend**: Rust (Tokio async runtime)
 - **Database**: SQLite
-- **Communication**: WebSocket + mDNS discovery
+- **Communication**: WebSocket 
 - **State Management**: Pinia
 
 ---

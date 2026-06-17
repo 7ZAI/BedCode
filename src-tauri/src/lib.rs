@@ -207,6 +207,25 @@ pub fn run() {
                 .expect("Failed to get app data dir")
                 .join("config.json");
 
+            // 首次启动时从打包资源复制默认配置到 AppData
+            // 后续启动直接使用 AppData 中的配置，用户修改不会丢失
+            if !config_path.exists() {
+                if let Ok(resource_path) = app_handle
+                    .path()
+                    .resolve("resources/config.json", tauri::path::BaseDirectory::Resource)
+                {
+                    if resource_path.exists() {
+                        if let Some(parent) = config_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        match std::fs::copy(&resource_path, &config_path) {
+                            Ok(_) => tracing::info!("Default config copied from resource to {:?}", config_path),
+                            Err(e) => tracing::warn!("Failed to copy default config: {}, using built-in defaults", e),
+                        }
+                    }
+                }
+            }
+
             let app_config = crate::shared::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
                 tracing::warn!("Failed to load config, using defaults: {}", e);
                 crate::shared::system::config::AppConfig::default()
