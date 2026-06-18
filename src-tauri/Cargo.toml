@@ -85,6 +85,11 @@ android_logger = "0.14"
 
 # Desktop-only dependencies
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Actix Web (desktop HTTP + WS server)
+actix-web = "4"
+actix-web-actors = "4"
+actix-rt = "2"
+actix-cors = "0.7"
 # PTY management
 portable-pty = "0.8"
 # Secure storage
