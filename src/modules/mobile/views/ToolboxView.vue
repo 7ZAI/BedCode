@@ -31,11 +31,12 @@
       </button>
     </div>
 
-    <!-- Quick Actions -->
-    <div class="flex-1 overflow-auto p-4">
-      <!-- Preset Actions Grid -->
-      <div class="mb-6">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">预设指令</h3>
+    <!-- Toolbox Sections -->
+    <div class="flex-1 overflow-auto p-4 space-y-5">
+
+      <!-- Section: 预设任务 -->
+      <section>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">预设任务</h3>
         <div class="grid grid-cols-2 gap-3">
           <QuickActionButton
             v-for="action in presetActions"
@@ -47,61 +48,141 @@
             @click="sendQuickAction(action)"
           />
         </div>
-      </div>
 
-      <!-- Custom Actions -->
-      <div>
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">自定义指令</h3>
-          <button
-            class="text-[var(--mobile-accent)] text-sm hover:text-cyan-300 transition-colors"
-            @click="showAddDialog = true"
-          >
-            + 添加
-          </button>
-        </div>
-
-        <div v-if="customActions.length === 0" class="text-center py-8">
-          <p class="text-[var(--mobile-text-disabled)] text-sm">暂无自定义指令</p>
-        </div>
-
-        <div v-else class="space-y-2">
-          <div
-            v-for="action in customActions"
-            :key="action.id"
-            class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 flex items-center gap-3 hover:border-cyan-500/30 transition-all"
-          >
-            <div
-              class="w-10 h-10 rounded-lg flex items-center justify-center border"
-              :style="{ backgroundColor: (action.color || '#6b7280') + '15', borderColor: (action.color || '#6b7280') + '30' }"
+        <!-- 自定义指令 -->
+        <div class="mt-4">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-[var(--mobile-text-muted)] text-sm font-medium">自定义指令</h4>
+            <button
+              class="text-[var(--mobile-accent)] text-sm hover:text-cyan-300 transition-colors"
+              @click="showAddDialog = true"
             >
-              <span class="text-lg">{{ action.icon || '⚡' }}</span>
-            </div>
-            <div class="flex-1 min-w-0">
-              <p class="font-medium text-[var(--mobile-text-primary)] truncate">{{ action.name }}</p>
-              <p class="text-[var(--mobile-text-muted)] text-sm truncate">{{ action.content }}</p>
-            </div>
-            <div class="flex gap-2">
-              <button
-                class="p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-                @click="editAction(action)"
+              + 添加
+            </button>
+          </div>
+
+          <div v-if="customActions.length === 0" class="text-center py-4">
+            <p class="text-[var(--mobile-text-disabled)] text-sm">暂无自定义指令</p>
+          </div>
+
+          <div v-else class="space-y-2">
+            <div
+              v-for="action in customActions"
+              :key="action.id"
+              class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-3 flex items-center gap-3 hover:border-cyan-500/30 transition-all"
+            >
+              <div
+                class="w-9 h-9 rounded-lg flex items-center justify-center border"
+                :style="{ backgroundColor: (action.color || '#6b7280') + '15', borderColor: (action.color || '#6b7280') + '30' }"
               >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                <span class="text-base">{{ action.icon || '⚡' }}</span>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-[var(--mobile-text-primary)] text-sm truncate">{{ action.name }}</p>
+                <p class="text-[var(--mobile-text-muted)] text-xs truncate">{{ action.content }}</p>
+              </div>
+              <div class="flex gap-1">
+                <button
+                  class="p-1.5 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
+                  @click="editAction(action)"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+                <button
+                  class="p-1.5 text-[var(--mobile-text-muted)] hover:text-red-400 transition-colors"
+                  @click="deleteAction(action.id)"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: 项目文件 -->
+      <section>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">项目文件</h3>
+        <div
+          v-if="!activeSessionId"
+          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
+        >
+          <p class="text-[var(--mobile-text-disabled)] text-sm">连接设备后查看项目文件</p>
+        </div>
+        <div v-else class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl overflow-hidden">
+          <!-- 文件树工具栏 -->
+          <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--mobile-border)]">
+            <span class="text-xs text-[var(--mobile-text-muted)]">文件目录</span>
+            <div class="flex gap-1">
+              <button
+                class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
+                title="刷新"
+                @click="handleFileRefresh"
+              >
+                <svg class="w-3.5 h-3.5" :class="{ 'animate-spin': fileLoading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               </button>
               <button
-                class="p-2 text-[var(--mobile-text-muted)] hover:text-red-400 transition-colors"
-                @click="deleteAction(action.id)"
+                class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
+                title="全部折叠"
+                @click="fileCollapseAll"
               >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              <button
+                class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
+                title="全部展开"
+                @click="fileExpandAll"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
                 </svg>
               </button>
             </div>
           </div>
+
+          <!-- 文件树内容 -->
+          <div class="max-h-64 overflow-y-auto p-1">
+            <div v-if="fileLoading" class="flex items-center justify-center py-6">
+              <svg class="w-4 h-4 animate-spin text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </div>
+            <div v-else-if="fileError" class="text-center py-4">
+              <p class="text-xs text-red-400">{{ fileError }}</p>
+              <button class="text-xs text-[var(--mobile-accent)] mt-1" @click="handleFileRefresh">重试</button>
+            </div>
+            <div v-else-if="fileTree.length === 0" class="text-center py-4">
+              <p class="text-xs text-[var(--mobile-text-disabled)]">暂无文件</p>
+            </div>
+            <template v-else>
+              <FileTreeItem
+                v-for="(node, index) in fileTree"
+                :key="index"
+                :node="node"
+                :depth="0"
+                @file-click="handleFileClick"
+              />
+            </template>
+          </div>
         </div>
-      </div>
+      </section>
+
+      <!-- Section: 插件（预留） -->
+      <section>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">插件</h3>
+        <div class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center">
+          <p class="text-[var(--mobile-text-disabled)] text-sm">即将推出</p>
+        </div>
+      </section>
+
     </div>
 
     <!-- Add/Edit Dialog -->
@@ -189,6 +270,13 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- File Viewer Modal -->
+    <FileViewerModal
+      :visible="showFileViewer"
+      :filename="selectedFile"
+      @update:visible="showFileViewer = $event"
+    />
   </div>
 </template>
 
@@ -197,7 +285,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { wsSendInput } from '@/modules/mobile/composables/useMobileCommands'
+import { useFileTree } from '@/modules/mobile/composables/useFileTree'
 import QuickActionButton from '@/modules/mobile/components/QuickActionButton.vue'
+import FileTreeItem from '@/modules/mobile/components/FileTreeItem.vue'
+import FileViewerModal from '@/modules/mobile/components/FileViewerModal.vue'
 import { invoke } from '@tauri-apps/api/core'
 
 interface QuickAction {
@@ -211,11 +302,11 @@ interface QuickAction {
 const router = useRouter()
 const connection = useMobileConnection()
 
-// 使用统一的连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
-
-// 当前设备名称
 const currentDeviceName = computed(() => connection.currentDevice.value?.name || '')
+const activeSessionId = computed(() => connection.activeSessionId.value || '')
+
+// ==================== 预设任务 ====================
 
 const presetActions = ref<QuickAction[]>([
   { id: '1', name: '继续', content: '请继续', icon: '▶️', color: '#22c55e' },
@@ -245,7 +336,6 @@ onMounted(async () => {
 async function loadQuickActions() {
   try {
     const actions = await invoke<QuickAction[]>('list_quick_actions_mobile')
-    // Filter out preset actions (first 4)
     customActions.value = actions.slice(4)
   } catch (error) {
     console.error('Failed to load quick actions:', error)
@@ -253,18 +343,15 @@ async function loadQuickActions() {
 }
 
 async function sendQuickAction(action: QuickAction) {
-  // 通过 WebSocket 直接发送到当前活跃会话
   const sessionId = connection.activeSessionId.value
   if (sessionId) {
     try {
       await wsSendInput(sessionId, action.content)
-      console.log('Quick action sent:', action.name)
     } catch (e) {
       console.error('Failed to send quick action:', e)
       router.push('/mobile/devices')
     }
   } else {
-    // 无活跃会话，跳转到设备页
     router.push('/mobile/devices')
   }
 }
@@ -282,7 +369,6 @@ function editAction(action: QuickAction) {
 
 async function deleteAction(id: string) {
   customActions.value = customActions.value.filter(a => a.id !== id)
-  // In real app, call backend to delete
 }
 
 function closeDialog() {
@@ -303,18 +389,32 @@ async function saveAction() {
   }
 
   if (editingAction.value) {
-    // Update existing
     const index = customActions.value.findIndex(a => a.id === action.id)
     if (index >= 0) {
       customActions.value[index] = action
     }
   } else {
-    // Add new
     customActions.value.push(action)
   }
 
-  // In real app, save to backend
   closeDialog()
+}
+
+// ==================== 项目文件 ====================
+
+const sessionIdRef = computed(() => activeSessionId.value || '')
+const { tree: fileTree, loading: fileLoading, error: fileError, expandAll: fileExpandAll, collapseAll: fileCollapseAll, refresh: fileRefresh } = useFileTree(sessionIdRef)
+
+const showFileViewer = ref(false)
+const selectedFile = ref('')
+
+async function handleFileRefresh() {
+  await fileRefresh()
+}
+
+function handleFileClick(name: string) {
+  selectedFile.value = name
+  showFileViewer.value = true
 }
 </script>
 
