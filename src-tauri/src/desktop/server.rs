@@ -1,6 +1,6 @@
 //! Desktop Server Module
 //!
-//! 提供移动端远程控制功能的 WebSocket 服务
+//! 提供移动端远程控制功能的 WebSocket/HTTP 服务
 
 // 模块声明 - 使用目录名.rs模式
 pub mod message;
@@ -11,6 +11,12 @@ pub mod handlers;
 pub mod router;
 pub mod auth_interceptor;
 pub mod port_checker;
+
+// Actix Web 模块
+pub mod app;
+pub mod controllers;
+pub mod dtos;
+pub mod middleware;
 
 // 重新导出所有公开类型
 pub use message::*;

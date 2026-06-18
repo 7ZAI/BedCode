@@ -10,7 +10,7 @@
 
 pub mod pairing;
 pub mod qr_token;
-mod jwt;
+pub mod jwt;
 pub mod storage;
 
 // Re-export basic structures

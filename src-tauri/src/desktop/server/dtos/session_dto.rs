@@ -1,0 +1,45 @@
+//! Session DTOs
+
+use serde::{Deserialize, Serialize};
+
+/// GET /api/sessions response data
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListResponseData {
+    pub sessions: Vec<SessionItem>,
+}
+
+/// Single session item in list response
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionItem {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub session_type: Option<String>,
+    pub config_id: Option<String>,
+}
+
+/// POST /api/sessions/start request
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSessionRequest {
+    pub config_id: String,
+}
+
+/// POST /api/sessions/start response data
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSessionResponseData {
+    pub session_id: String,
+    pub status: String,
+}
+
+/// POST /api/sessions/{id}/resize request
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResizeSessionRequest {
+    pub cols: u16,
+    pub rows: u16,
+}
