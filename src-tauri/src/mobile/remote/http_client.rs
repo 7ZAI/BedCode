@@ -41,8 +41,11 @@ impl HttpClient {
     }
 
     /// 更新桌面端地址（WS 连接成功时调用）
+    ///
+    /// Actix Web HTTP API 运行在 port+1（与旧 WsServer 共存阶段）
+    /// TODO(Task 15): 移除旧 WsServer 后改为 port
     pub async fn update_base_url(&self, address: &str, port: u16) {
-        let url = format!("http://{}:{}", address, port);
+        let url = format!("http://{}:{}", address, port + 1);
         let mut guard = self.base_url.write().await;
         tracing::info!("[HttpClient] base_url updated: {}", url);
         *guard = url;
@@ -186,7 +189,7 @@ mod tests {
         let client = HttpClient::new();
         client.update_base_url("192.168.1.100", 8080).await;
         let url = client.get_base_url().await.unwrap();
-        assert_eq!(url, "http://192.168.1.100:8080");
+        assert_eq!(url, "http://192.168.1.100:8081");
 
         client.clear_base_url().await;
         let result = client.get_base_url().await;

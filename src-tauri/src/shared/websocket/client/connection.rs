@@ -16,6 +16,8 @@ pub struct WsClientConfig {
     pub address: String,
     /// 服务器端口
     pub port: u16,
+    /// WebSocket 路径（默认 "/"）
+    pub path: String,
     /// 心跳间隔（秒）
     pub heartbeat_interval_secs: u64,
     /// 消息队列大小
@@ -30,15 +32,22 @@ impl WsClientConfig {
         Self {
             address: address.into(),
             port,
+            path: "/".to_string(),
             heartbeat_interval_secs: 30,
             message_queue_size: 256,
             connect_timeout_ms: 10000,
         }
     }
 
+    /// 设置 WS 路径
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = path.into();
+        self
+    }
+
     /// 获取 WebSocket URL
     pub fn url(&self) -> String {
-        format!("ws://{}:{}", self.address, self.port)
+        format!("ws://{}:{}{}", self.address, self.port, self.path)
     }
 }
 
@@ -47,6 +56,7 @@ impl Default for WsClientConfig {
         Self {
             address: "127.0.0.1".to_string(),
             port: 8765,
+            path: "/".to_string(),
             heartbeat_interval_secs: 30,
             message_queue_size: 256,
             connect_timeout_ms: 10000,

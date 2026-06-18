@@ -163,7 +163,7 @@ impl ConnectionManager {
 
         // 创建配置和客户端
         tracing::debug!("Creating WsClientConfig with address: {}, port: {}", address, port);
-        let config = WsClientConfig::new(&address, port);
+        let config = WsClientConfig::new(&address, port).with_path("/ws/terminal");
         tracing::debug!("WsClientConfig created, url: {}", config.url());
 
         tracing::debug!("Creating WsClient...");
@@ -269,7 +269,7 @@ impl ConnectionManager {
         });
 
         // 创建配置和客户端
-        let config = WsClientConfig::new(&address, port);
+        let config = WsClientConfig::new(&address, port).with_path("/ws/terminal");
         let client = WsClient::new(config);
 
         // 创建路由上下文
@@ -363,7 +363,7 @@ impl ConnectionManager {
             *self.client.write().await = None;
 
             // 创建新客户端
-            let config = WsClientConfig::new(&target.address, target.port);
+            let config = WsClientConfig::new(&target.address, target.port).with_path("/ws/terminal");
             let client = WsClient::new(config);
 
             // 创建路由上下文
