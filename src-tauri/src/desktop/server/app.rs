@@ -1,16 +1,29 @@
 //! Actix Web Application Configuration
 //!
 //! 配置路由、中间件和服务器启动
+//! HTTP REST API + WebSocket 终端在同一端口上运行
 
-use actix_web::{web, App, HttpServer};
+use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Error};
 use actix_cors::Cors;
+use actix_web_actors::ws as actix_ws;
 
 use crate::desktop::server::controllers::{
     auth_controller, session_controller, config_controller, file_controller,
 };
+use crate::desktop::server::ws::terminal_ws::TerminalWs;
+
+/// WS 握手端点 — 升级为 WebSocket 连接处理终端 I/O
+async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
+    let addr = req.peer_addr().unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+    let ws_actor = TerminalWs::new(addr);
+    actix_ws::start(ws_actor, &req, stream)
+}
 
 /// 构建路由配置
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    // WebSocket 终端端点
+    cfg.route("/ws/terminal", web::get().to(terminal_ws));
+
     // 公开路由（无需 JWT）
     cfg.service(
         web::scope("/api/auth")
@@ -34,9 +47,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     );
 }
 
-/// 启动 Actix Web HTTP 服务器
+/// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）
 pub async fn start_http_server(port: u16) -> std::io::Result<()> {
-    tracing::info!("Starting Actix Web HTTP server on port {}", port);
+    tracing::info!("Starting Actix Web server (HTTP + WS) on port {}", port);
 
     HttpServer::new(|| {
         let cors = Cors::default()
