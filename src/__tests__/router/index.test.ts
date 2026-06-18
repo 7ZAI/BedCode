@@ -51,11 +51,11 @@ describe('Router Configuration', () => {
       expect(route?.name).toBe('mobile-terminal')
     })
 
-    it('should have mobile quick-actions route', () => {
-      const route = router.getRoutes().find((r) => r.path === '/mobile/quick-actions')
+    it('should have mobile toolbox route', () => {
+      const route = router.getRoutes().find((r) => r.path === '/mobile/toolbox')
 
       expect(route).toBeDefined()
-      expect(route?.name).toBe('mobile-quick-actions')
+      expect(route?.name).toBe('mobile-toolbox')
     })
 
     it('should have mobile settings route', () => {
@@ -74,7 +74,7 @@ describe('Router Configuration', () => {
         'settings',
         'mobile-devices',
         'mobile-terminal',
-        'mobile-quick-actions',
+        'mobile-toolbox',
         'mobile-settings',
       ]
 
@@ -98,7 +98,7 @@ describe('Router Configuration', () => {
       const mobilePaths = [
         '/mobile/devices',
         '/mobile/terminal/:id',
-        '/mobile/quick-actions',
+        '/mobile/toolbox',
         '/mobile/settings',
       ]
 
@@ -134,7 +134,7 @@ describe('Router Configuration', () => {
 
       // Count includes redirect routes and component routes
       // Desktop: /, /sessions, /devices, /settings
-      // Mobile: /mobile/devices, /mobile/terminal/:id, /mobile/quick-actions, /mobile/settings
+      // Mobile: /mobile/devices, /mobile/terminal/:id, /mobile/toolbox, /mobile/settings
       expect(routes.length).toBeGreaterThanOrEqual(9)
     })
   })

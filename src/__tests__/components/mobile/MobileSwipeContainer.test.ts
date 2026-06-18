@@ -20,7 +20,7 @@ describe('MobileSwipeContainer', () => {
     const pages = [
       { name: 'mobile-devices', component: 'DevicesView' },
       { name: 'mobile-sessions', component: 'SessionsView' },
-      { name: 'mobile-quick-actions', component: 'QuickActionsView' },
+      { name: 'mobile-toolbox', component: 'ToolboxView' },
       { name: 'mobile-settings', component: 'SettingsView' }
     ]
 
