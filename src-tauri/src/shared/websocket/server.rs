@@ -10,6 +10,7 @@ pub mod business_pool;
 pub mod default_handler;
 pub mod context;
 pub mod http_router;
+pub mod http_controller;
 
 // Re-exports
 pub use ws_server::WsServer;
@@ -22,3 +23,4 @@ pub use business_pool::{BusinessThreadPool, execute_in_pool, execute_async_in_po
 pub use default_handler::{AuthInterceptor, DefaultMessageHandler, MessageRouter};
 pub use context::RouteContext;
 pub use http_router::{HttpRouter, HttpRouteHandler, HttpRequestContext, ApiResponse, HttpBody, FileTreeNode, FileType, FileTreeRequest, build_json_response, build_cors_preflight_response};
+pub use http_controller::{MethodHandler, HttpController, method_handler};

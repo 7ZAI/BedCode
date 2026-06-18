@@ -1,20 +1,33 @@
-//! File Tree Handler
+//! File Controller
 //!
-//! POST /api/file-tree — 根据会话配置扫描目录，生成文件树结构
+//! 文件相关 HTTP API 的 Controller
+//! 使用方法级路由，每个 URL 绑定到具体处理方法
+//!
+//! Routes:
+//! - POST /api/file-tree — 获取文件树结构
 
 use crate::desktop::app_context::AppContext;
 use crate::shared::websocket::server::http_router::{
-    ApiResponse, FileTreeNode, FileTreeRequest, FileType, HttpRouteHandler, HttpRequestContext,
+    ApiResponse, FileTreeNode, FileTreeRequest, FileType, HttpRequestContext,
 };
+use crate::shared::websocket::server::http_controller::{HttpController, method_handler};
+use crate::shared::websocket::server::http_router::HttpRouter;
 use crate::Result;
 use async_trait::async_trait;
+use hyper::Method;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-pub struct FileTreeHandler;
+/// 文件 Controller
+///
+/// 处理文件相关的 HTTP API 请求
+pub struct FileController;
 
-#[async_trait]
-impl HttpRouteHandler for FileTreeHandler {
-    async fn handle(&self, ctx: &HttpRequestContext) -> Result<String> {
+impl FileController {
+    /// POST /api/file-tree
+    ///
+    /// 根据会话配置扫描目录，生成文件树结构
+    pub async fn get_tree(ctx: &HttpRequestContext) -> Result<String> {
         let req: FileTreeRequest = serde_json::from_str(&ctx.body).map_err(|e| {
             crate::shared::system::error::AppError::Internal(format!(
                 "Invalid request body: {}",
@@ -57,6 +70,18 @@ impl HttpRouteHandler for FileTreeHandler {
 
         let resp = ApiResponse::ok_with_data(tree);
         Ok(serde_json::to_string(&resp)?)
+    }
+}
+
+#[async_trait]
+impl HttpController for FileController {
+    fn register_routes(self: Arc<Self>, router: &mut HttpRouter) {
+        // POST /api/file-tree - 使用 Box::pin 包装 Future
+        router.register(
+            Method::POST,
+            "/api/file-tree",
+            Arc::new(method_handler(|ctx| Box::pin(FileController::get_tree(ctx)))),
+        );
     }
 }
 

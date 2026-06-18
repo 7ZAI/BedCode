@@ -64,7 +64,8 @@ regex = "1"
 local-ip-address = "0.6"
 
 # HTTP client (mobile → desktop HTTP API)
-reqwest = { version = "0.12", features = ["json"] }
+# 使用 rustls 替代 OpenSSL，避免 Android 交叉编译问题
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # Async trait for dyn compatibility
 async-trait = "0.1"

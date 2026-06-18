@@ -4,6 +4,7 @@
 //! 使用 Builder 模式注册 HTTP 路由，将路由组装逻辑从 WebSocketManager 中解耦
 
 use crate::shared::websocket::server::http_router::{HttpRouter, HttpRouteHandler};
+use crate::shared::websocket::server::http_controller::HttpController;
 use hyper::Method;
 use std::sync::Arc;
 
@@ -22,16 +23,16 @@ impl HttpRouterConfig {
         }
     }
 
-    /// 注册文件树 API (POST /api/file-tree)
-    pub fn register_file_tree(mut self) -> Self {
-        let handler = Arc::new(
-            crate::desktop::server::handlers::FileTreeHandler,
-        );
-        self.router.register(Method::POST, "/api/file-tree", handler);
+    /// 注册文件 Controller (POST /api/file-tree)
+    ///
+    /// 使用 Controller 模式注册，支持方法级路由
+    pub fn register_file_controller(mut self) -> Self {
+        let controller = Arc::new(crate::desktop::server::handlers::FileController);
+        controller.register_routes(&mut self.router);
         self
     }
 
-    /// 注册自定义路由
+    /// 注册自定义路由（兼容旧方式）
     pub fn register(
         mut self,
         method: Method,

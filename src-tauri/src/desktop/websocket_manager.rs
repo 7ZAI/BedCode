@@ -213,7 +213,7 @@ impl WebSocketManager {
         // 通过 HttpRouterConfig 配置 HTTP API 路由
         let http_router = Arc::new(
             HttpRouterConfig::new()
-                .register_file_tree()
+                .register_file_controller()
                 .build()
         );
 

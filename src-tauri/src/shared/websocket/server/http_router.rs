@@ -35,7 +35,7 @@ pub enum FileType {
 }
 
 /// POST /api/file-tree 请求体
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeRequest {
     /// 会话配置 ID，用于查找 working_dir
