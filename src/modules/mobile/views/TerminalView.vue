@@ -56,7 +56,7 @@
 
       <!-- File Sidebar - 覆盖层，不影响终端宽高 -->
       <transition name="sidebar-slide">
-        <FileSidebar v-if="showSidebar" class="sidebar-overlay" />
+        <FileSidebar v-if="showSidebar" class="sidebar-overlay" :session-id="sessionId" />
       </transition>
 
       <!-- 点击侧边栏外部关闭 -->
