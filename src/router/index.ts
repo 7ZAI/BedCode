@@ -58,9 +58,9 @@ const router = createRouter({
       meta: { platform: 'mobile', keepAlive: true },
     },
     {
-      path: '/mobile/quick-actions',
-      name: 'mobile-quick-actions',
-      component: () => import('@/modules/mobile/views/QuickActionsView.vue'),
+      path: '/mobile/toolbox',
+      name: 'mobile-toolbox',
+      component: () => import('@/modules/mobile/views/ToolboxView.vue'),
       meta: { platform: 'mobile', standAlone: true },
     },
     {
