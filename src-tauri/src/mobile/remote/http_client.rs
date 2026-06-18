@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::shared::websocket::server::http_router::ApiResponse;
+use crate::desktop::server::dtos::common::ApiResponse;
 use crate::mobile::global::get_global_token;
 use crate::Result;
 use crate::AppError;
@@ -42,10 +42,9 @@ impl HttpClient {
 
     /// 更新桌面端地址（WS 连接成功时调用）
     ///
-    /// Actix Web HTTP API 运行在 port+1（与旧 WsServer 共存阶段）
-    /// TODO(Task 15): 移除旧 WsServer 后改为 port
+    /// Actix Web HTTP API 运行在同一端口（与 WS 共享）
     pub async fn update_base_url(&self, address: &str, port: u16) {
-        let url = format!("http://{}:{}", address, port + 1);
+        let url = format!("http://{}:{}", address, port);
         let mut guard = self.base_url.write().await;
         tracing::info!("[HttpClient] base_url updated: {}", url);
         *guard = url;
@@ -147,7 +146,7 @@ impl HttpClient {
 
 // ==================== File Tree API ====================
 
-use crate::shared::websocket::server::http_router::{FileTreeRequest, FileTreeNode};
+use crate::desktop::server::dtos::config_dto::{FileTreeRequest, FileTreeNode};
 
 /// 文件树业务 API
 pub struct FileTreeApi;
@@ -189,7 +188,7 @@ mod tests {
         let client = HttpClient::new();
         client.update_base_url("192.168.1.100", 8080).await;
         let url = client.get_base_url().await.unwrap();
-        assert_eq!(url, "http://192.168.1.100:8081");
+        assert_eq!(url, "http://192.168.1.100:8080");
 
         client.clear_base_url().await;
         let result = client.get_base_url().await;

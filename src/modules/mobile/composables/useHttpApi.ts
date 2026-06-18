@@ -143,8 +143,8 @@ export async function httpGetFileTree(sessionId: string, excludeDirs: string[] =
 // ==================== Setup ====================
 
 export function setApiBaseUrl(address: string, port: number) {
-  // Actix Web HTTP server runs on port+1 during Phase 1
-  API_BASE_URL.value = `${address}:${port + 1}`
+  // Actix Web HTTP + WS server runs on the same port
+  API_BASE_URL.value = `${address}:${port}`
 }
 
 export function useHttpApi() {

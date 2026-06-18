@@ -40,7 +40,7 @@ pub struct QuickActionItem {
 }
 
 /// POST /api/file-tree request
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeRequest {
     pub session_id: String,
@@ -55,7 +55,7 @@ pub struct FileTreeResponseData {
 }
 
 /// File tree node
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeNode {
     pub name: String,

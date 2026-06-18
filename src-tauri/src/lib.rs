@@ -345,28 +345,15 @@ pub fn run() {
                 global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
                 tracing::info!("[BedCode] SyncEventHandler registered");
 
-                // 注册 WebSocket 服务器事件处理器
-                use crate::shared::websocket::WsServerEvent;
-                use crate::desktop::events::WsServerEventHandler;
+                // 注册 WebSocket 服务器事件处理器（已移至 Actix WS actor 内部）
 
                 tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port_for_spawn);
                 match ws_manager.start(ws_port_for_spawn).await {
                     Ok(_) => {
                         tracing::info!("[BedCode] WebSocket server started successfully");
 
-                        // 注册 WsServerEvent 事件源
-                        if let Some(server) = ws_manager.get_server().await {
-                            global_matcher().register_source::<WsServerEvent>(server.subscribe_sender()).await;
-                            tracing::info!("[BedCode] WsServerEvent source registered");
-                        }
-
-                        // 注册 WsServerEventHandler
-                        let ws_event_handler = Arc::new(WsServerEventHandler::new(
-                            ws_manager,
-                            Some(ctx.app_handle().clone()),
-                        ));
-                        global_matcher().register::<WsServerEvent>(ws_event_handler).await;
-                        tracing::info!("[BedCode] WsServerEventHandler registered");
+                        // Actix Web server 已启动（HTTP + WS 统一端口）
+                        tracing::info!("[BedCode] Actix Web server started");
                     }
                     Err(e) => tracing::error!("[BedCode] WebSocket server failed to start: {}", e),
                 }
