@@ -58,7 +58,7 @@ impl SessionConfigManager {
         working_dir: String,
         command: String,
     ) -> Result<SessionConfig> {
-        self.create_config_with_source(name, environment, None, working_dir, command, None, false, None).await
+        self.create_config_with_source(name, environment, None, working_dir, command, false, None).await
     }
 
     /// 创建新配置（带来源设备）
@@ -69,7 +69,6 @@ impl SessionConfigManager {
         wsl_distro: Option<String>,
         working_dir: String,
         command: String,
-        tmux_session: Option<String>,
         auto_start: bool,
         source_device: Option<String>,
     ) -> Result<SessionConfig> {
@@ -79,7 +78,6 @@ impl SessionConfigManager {
             wsl_distro,
             working_dir,
             command,
-            tmux_session,
             auto_start,
         ).await?;
 
@@ -100,7 +98,6 @@ impl SessionConfigManager {
         wsl_distro: Option<String>,
         working_dir: String,
         command: String,
-        tmux_session: Option<String>,
         auto_start: bool,
     ) -> Result<SessionConfig> {
         let config = SessionConfig::new(name, environment, working_dir, command);
@@ -128,10 +125,9 @@ impl SessionConfigManager {
         wsl_distro: Option<String>,
         working_dir: String,
         command: String,
-        tmux_session: Option<String>,
         auto_start: bool,
     ) -> Result<SessionConfig> {
-        self.create_config_with_source(name, environment, wsl_distro, working_dir, command, tmux_session, auto_start, None).await
+        self.create_config_with_source(name, environment, wsl_distro, working_dir, command, auto_start, None).await
     }
 
     /// 获取配置
@@ -168,10 +164,9 @@ impl SessionConfigManager {
         wsl_distro: Option<String>,
         working_dir: Option<String>,
         command: Option<String>,
-        tmux_session: Option<String>,
         auto_start: Option<bool>,
     ) -> Result<SessionConfig> {
-        self.update_config_with_source(config_id, name, environment, wsl_distro, working_dir, command, tmux_session, auto_start, None).await
+        self.update_config_with_source(config_id, name, environment, wsl_distro, working_dir, command, auto_start, None).await
     }
 
     /// 更新配置（带来源设备）
@@ -183,7 +178,6 @@ impl SessionConfigManager {
         wsl_distro: Option<String>,
         working_dir: Option<String>,
         command: Option<String>,
-        tmux_session: Option<String>,
         auto_start: Option<bool>,
         source_device: Option<String>,
     ) -> Result<SessionConfig> {
@@ -198,7 +192,6 @@ impl SessionConfigManager {
             wsl_distro: wsl_distro.or(existing.wsl_distro),
             working_dir: working_dir.unwrap_or(existing.working_dir),
             command: command.unwrap_or(existing.command),
-            tmux_session: tmux_session.or(existing.tmux_session),
             auto_start: auto_start.unwrap_or(existing.auto_start),
             created_at: existing.created_at,
             updated_at: Utc::now(),

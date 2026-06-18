@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::desktop::server::dtos::common::ApiResponse;
+use crate::shared::model::api_dto::ApiResponse;
 use crate::mobile::global::get_global_token;
 use crate::Result;
 use crate::AppError;
@@ -146,7 +146,7 @@ impl HttpClient {
 
 // ==================== File Tree API ====================
 
-use crate::desktop::server::dtos::config_dto::{FileTreeRequest, FileTreeNode};
+use crate::shared::model::api_dto::{FileTreeRequest, FileTreeNode};
 
 /// 文件树业务 API
 pub struct FileTreeApi;

@@ -9,7 +9,7 @@ use tokio::sync::{broadcast, RwLock};
 use tauri::{AppHandle, Emitter};
 use tracing;
 
-use crate::shared::websocket::client::{
+use crate::mobile::websocket_client::{
     ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent,
     ClientDefaultMessageHandler, MessageRouter,
 };
@@ -23,7 +23,7 @@ use crate::mobile::router::{ClientBusinessRouter, ClientRouteContext, MobileEven
 use crate::mobile::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
 
 // Re-export ConnectionStatus for public API
-pub use crate::shared::websocket::ConnectionStatus;
+pub use crate::mobile::websocket_client::ConnectionStatus;
 
 /// 重连配置
 const MAX_RETRY: u32 = 3;
@@ -46,6 +46,20 @@ fn is_disconnect_error(error: &crate::AppError) -> bool {
         }
         _ => false,
     }
+}
+
+/// 构建业务路由器（connect / reconnect 共用）
+fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusinessRouter> {
+    let ctx = ClientRouteContext::new(event_tx);
+    ClientBusinessRouter::builder()
+        .context(ctx)
+        .route("Terminal", Arc::new(TerminalHandler))
+        .route("Auth", Arc::new(AuthHandler))
+        .route("SyncData", Arc::new(SyncHandler))
+        .route("ServerClosed", Arc::new(SystemHandler))
+        .route("Error", Arc::new(SystemHandler))
+        .route("Ack", Arc::new(SystemHandler))
+        .build()
 }
 
 /// 目标设备信息
@@ -170,19 +184,8 @@ impl ConnectionManager {
         let client = WsClient::new(config);
         tracing::debug!("WsClient created");
 
-        // 创建路由上下文
-        let ctx = ClientRouteContext::new(self.event_tx.clone());
-
-        // 使用 Builder 模式创建路由器
-        let router = ClientBusinessRouter::builder()
-            .context(ctx)
-            .route("Terminal", Arc::new(TerminalHandler))
-            .route("Auth", Arc::new(AuthHandler))
-            .route("SyncData", Arc::new(SyncHandler))
-            .route("ServerClosed", Arc::new(SystemHandler))
-            .route("Error", Arc::new(SystemHandler))
-            .route("Ack", Arc::new(SystemHandler))
-            .build()?;
+        // 构建路由器
+        let router = build_router(self.event_tx.clone())?;
 
         // 设置 handler
         client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
@@ -272,19 +275,8 @@ impl ConnectionManager {
         let config = WsClientConfig::new(&address, port).with_path("/ws/terminal");
         let client = WsClient::new(config);
 
-        // 创建路由上下文
-        let ctx = ClientRouteContext::new(self.event_tx.clone());
-
-        // 创建路由器
-        let router = ClientBusinessRouter::builder()
-            .context(ctx)
-            .route("Terminal", Arc::new(TerminalHandler))
-            .route("Auth", Arc::new(AuthHandler))
-            .route("SyncData", Arc::new(SyncHandler))
-            .route("ServerClosed", Arc::new(SystemHandler))
-            .route("Error", Arc::new(SystemHandler))
-            .route("Ack", Arc::new(SystemHandler))
-            .build()?;
+        // 构建路由器
+        let router = build_router(self.event_tx.clone())?;
 
         client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
 
@@ -366,19 +358,8 @@ impl ConnectionManager {
             let config = WsClientConfig::new(&target.address, target.port).with_path("/ws/terminal");
             let client = WsClient::new(config);
 
-            // 创建路由上下文
-            let ctx = ClientRouteContext::new(self.event_tx.clone());
-
-            // 创建路由器
-            let router = ClientBusinessRouter::builder()
-                .context(ctx)
-                .route("Terminal", Arc::new(TerminalHandler))
-                .route("Auth", Arc::new(AuthHandler))
-                .route("SyncData", Arc::new(SyncHandler))
-                .route("ServerClosed", Arc::new(SystemHandler))
-                .route("Error", Arc::new(SystemHandler))
-                .route("Ack", Arc::new(SystemHandler))
-                .build()?;
+            // 构建路由器
+            let router = build_router(self.event_tx.clone())?;
 
             client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
 

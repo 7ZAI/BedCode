@@ -10,10 +10,10 @@
 use actix_web::{web, HttpResponse};
 use tauri::Emitter;
 use crate::desktop::app_context::AppContext;
-use crate::desktop::server::dtos::common::ApiResponse;
+use crate::shared::model::api_dto::ApiResponse;
 use crate::desktop::server::dtos::auth_dto::*;
-use crate::shared::auth::jwt::JwtService;
-use crate::shared::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
+use crate::desktop::auth::jwt::JwtService;
+use crate::desktop::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
 
 /// POST /api/auth/pairing
 ///
@@ -183,7 +183,7 @@ pub async fn reauthenticate(
         }
         Err(e) => {
             let msg = match e {
-                crate::shared::auth::jwt::JwtError::TokenExpired => "Token expired",
+                crate::desktop::auth::jwt::JwtError::TokenExpired => "Token expired",
                 _ => "Invalid token",
             };
             HttpResponse::Ok().json(ApiResponse::<()>::error(1001, msg))

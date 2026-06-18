@@ -5,10 +5,7 @@
 pub mod command;
 pub mod pty_process;
 pub mod pty_reader;
-pub mod subscription;
-pub mod pty_subscription_handler;
 pub mod wsl;
-pub mod tmux;
 mod pty_handler;
 mod pty_output_listener;
 pub mod frontend_output_handler;
@@ -35,14 +32,8 @@ pub use wsl::{
     get_default_distro, is_wsl_available, list_distributions, windows_to_wsl_path,
     wsl_to_windows_path, WslDistro,
 };
-pub use tmux::{
-    create_session, get_attach_command, get_tmux_command,
-    is_tmux_available, kill_session, list_sessions, send_special_key,
-    TmuxSession,
-};
 pub use command::build_command;
 pub use pty_reader::PtyReader;
-pub use subscription::{OutputRingBuffer, PtySubscriptionManager, SubscribeResponse, Subscription};
 
 /// 全局 PTY 输出索引计数器（跨所有会话）
 static OUTPUT_INDEX_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

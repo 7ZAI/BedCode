@@ -2,21 +2,13 @@
 //!
 //! WebSocket 连接管理命令
 
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::Result;
 use crate::mobile::ConnectionManager;
-use crate::mobile::events;
-
-/// 全局连接管理器单例
-static CONNECTION_MANAGER: std::sync::OnceLock<Arc<ConnectionManager>> = std::sync::OnceLock::new();
-
-/// 获取连接管理器
-pub fn get_connection_manager() -> Arc<ConnectionManager> {
-    CONNECTION_MANAGER.get_or_init(|| ConnectionManager::new()).clone()
-}
+use crate::mobile::router::event;
+use crate::mobile::managers::{get_connection_manager, get_session_manager};
 
 /// 连接信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,10 +30,10 @@ pub async fn ws_connect(
     tracing::info!("WebSocket connecting to {}:{}", address, port);
 
     // 发射连接开始事件
-    events::emit_connecting(&app_handle, &address, port);
+    event::emit_connecting(&app_handle, &address, port);
 
     // 启动事件转发任务（仅一次）
-    events::start_event_forwarding(app_handle.clone());
+    event::start_event_forwarding(app_handle.clone());
 
     let conn = get_connection_manager();
     tracing::info!("Calling conn.connect()...");
@@ -52,7 +44,7 @@ pub async fn ws_connect(
         }
         Err(e) => {
             tracing::error!("conn.connect() returned error: {}", e);
-            events::emit_error(&app_handle, &format!("Connection failed: {}", e));
+            event::emit_error(&app_handle, &format!("Connection failed: {}", e));
             return Err(e);
         }
     }
@@ -76,10 +68,10 @@ pub async fn ws_disconnect(app_handle: AppHandle) -> Result<()> {
     conn.disconnect().await;
 
     // 发射断开连接事件
-    events::emit_disconnected(&app_handle, "User initiated disconnect");
+    event::emit_disconnected(&app_handle, "User initiated disconnect");
 
-    // 清除会话状态 - 使用公共方法
-    let session_mgr = crate::mobile::commands::session::get_session_manager();
+    // 清除会话状态
+    let session_mgr = get_session_manager();
     // 停止活跃会话
     if let Some(session) = session_mgr.get_active_session().await {
         let _ = session_mgr.stop_session(&session.id).await;

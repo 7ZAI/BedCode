@@ -111,8 +111,8 @@ impl Database {
 
     pub fn create_session_config(&self, config: &SessionConfig) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO session_configs (id, name, environment, wsl_distro, working_dir, command, tmux_session, auto_start, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO session_configs (id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 config.id,
                 config.name,
@@ -120,7 +120,6 @@ impl Database {
                 config.wsl_distro,
                 config.working_dir,
                 config.command,
-                config.tmux_session,
                 config.auto_start as i32,
                 config.created_at.to_rfc3339(),
                 config.updated_at.to_rfc3339(),
@@ -131,7 +130,7 @@ impl Database {
 
     pub fn get_session_configs(&self) -> Result<Vec<SessionConfig>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, name, environment, wsl_distro, working_dir, command, tmux_session, auto_start, created_at, updated_at
+            "SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
              FROM session_configs ORDER BY name"
         )?;
 
@@ -143,10 +142,9 @@ impl Database {
                 wsl_distro: row.get(3)?,
                 working_dir: row.get(4)?,
                 command: row.get(5)?,
-                tmux_session: row.get(6)?,
-                auto_start: row.get::<_, i32>(7)? == 1,
-                created_at: parse_datetime_sql(&row.get::<_, String>(8)?, "created_at")?,
-                updated_at: parse_datetime_sql(&row.get::<_, String>(9)?, "updated_at")?,
+                auto_start: row.get::<_, i32>(6)? == 1,
+                created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
+                updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
             })
         })?.collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -155,7 +153,7 @@ impl Database {
 
     pub fn get_session_config(&self, id: &str) -> Result<Option<SessionConfig>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, name, environment, wsl_distro, working_dir, command, tmux_session, auto_start, created_at, updated_at
+            "SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
              FROM session_configs WHERE id = ?1"
         )?;
 
@@ -167,10 +165,9 @@ impl Database {
                 wsl_distro: row.get(3)?,
                 working_dir: row.get(4)?,
                 command: row.get(5)?,
-                tmux_session: row.get(6)?,
-                auto_start: row.get::<_, i32>(7)? == 1,
-                created_at: parse_datetime_sql(&row.get::<_, String>(8)?, "created_at")?,
-                updated_at: parse_datetime_sql(&row.get::<_, String>(9)?, "updated_at")?,
+                auto_start: row.get::<_, i32>(6)? == 1,
+                created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
+                updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
             })
         }).ok();
 
@@ -194,17 +191,15 @@ impl Database {
                 wsl_distro = ?3,
                 working_dir = ?4,
                 command = ?5,
-                tmux_session = ?6,
-                auto_start = ?7,
-                updated_at = ?8
-             WHERE id = ?9",
+                auto_start = ?6,
+                updated_at = ?7
+             WHERE id = ?8",
             rusqlite::params![
                 config.name,
                 config.environment,
                 config.wsl_distro,
                 config.working_dir,
                 config.command,
-                config.tmux_session,
                 config.auto_start as i32,
                 now,
                 config.id,

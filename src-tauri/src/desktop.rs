@@ -3,11 +3,14 @@
 //! 桌面端专用模块
 
 pub mod app_context;
+pub mod auth;
 pub mod commands;
 pub mod enums;
 pub mod event_forwarder;
 pub mod events;
 pub mod model;
+pub mod notify;
+pub mod parser;
 pub mod plugin;
 pub mod pty;
 pub mod session;

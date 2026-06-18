@@ -18,7 +18,6 @@ pub async fn create_session_config(
     working_dir: String,
     command: String,
     wsl_distro: Option<String>,
-    tmux_session: Option<String>,
 ) -> Result<crate::shared::db::SessionConfig> {
     tracing::info!("create_session_config called: name={}, environment={}", name, environment);
 
@@ -29,7 +28,6 @@ pub async fn create_session_config(
             wsl_distro,
             working_dir,
             command,
-            tmux_session,
             false,
         )
         .await;
@@ -78,7 +76,6 @@ pub async fn update_session_config(
     working_dir: String,
     command: String,
     wsl_distro: Option<String>,
-    tmux_session: Option<String>,
     auto_start: Option<bool>,
 ) -> Result<crate::shared::db::SessionConfig> {
     config_manager
@@ -89,7 +86,6 @@ pub async fn update_session_config(
             wsl_distro,
             Some(working_dir),
             Some(command),
-            tmux_session,
             auto_start,
         )
         .await
@@ -107,26 +103,6 @@ pub async fn list_wsl_distributions() -> Result<Vec<crate::desktop::pty::WslDist
 #[tauri::command]
 pub fn is_wsl_available() -> bool {
     crate::desktop::pty::is_wsl_available()
-}
-
-// ==================== Tmux Commands ====================
-
-/// 获取 Tmux 会话列表
-#[tauri::command]
-pub async fn list_tmux_sessions() -> Result<Vec<crate::desktop::pty::TmuxSession>> {
-    crate::desktop::pty::list_sessions()
-}
-
-/// 检查 Tmux 是否可用
-#[tauri::command]
-pub fn is_tmux_available() -> bool {
-    crate::desktop::pty::is_tmux_available()
-}
-
-/// 创建 Tmux 会话
-#[tauri::command]
-pub async fn create_tmux_session(name: String, command: Option<String>) -> Result<()> {
-    crate::desktop::pty::create_session(&name, command.as_deref())
 }
 
 // ==================== Session Commands ====================
@@ -310,7 +286,7 @@ pub struct QrConnectionInfo {
 /// 生成二维码
 #[tauri::command]
 pub async fn generate_qr_code(
-    qr_manager: tauri::State<'_, Arc<crate::shared::auth::QrTokenManager>>,
+    qr_manager: tauri::State<'_, Arc<crate::desktop::auth::QrTokenManager>>,
     db: tauri::State<'_, Arc<tokio::sync::Mutex<crate::shared::db::Database>>>,
 ) -> Result<String> {
     let ttl = {
@@ -330,7 +306,7 @@ pub async fn generate_qr_code(
 /// 清除二维码
 #[tauri::command]
 pub async fn clear_qr_code(
-    qr_manager: tauri::State<'_, Arc<crate::shared::auth::QrTokenManager>>,
+    qr_manager: tauri::State<'_, Arc<crate::desktop::auth::QrTokenManager>>,
 ) -> Result<()> {
     qr_manager.clear().await;
     tracing::info!("QR code cleared");
@@ -340,7 +316,7 @@ pub async fn clear_qr_code(
 /// 获取二维码连接信息
 #[tauri::command]
 pub async fn get_qr_connection_info(
-    qr_manager: tauri::State<'_, Arc<crate::shared::auth::QrTokenManager>>,
+    qr_manager: tauri::State<'_, Arc<crate::desktop::auth::QrTokenManager>>,
     app_handle: tauri::AppHandle,
     host: Option<String>,
 ) -> Result<Option<QrConnectionInfo>> {

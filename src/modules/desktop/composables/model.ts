@@ -5,11 +5,6 @@ export interface WslDistro {
   state: string
 }
 
-export interface TmuxSession {
-  name: string
-  windows: number
-}
-
 export interface SessionInfo {
   id: string
   name: string
@@ -33,8 +28,6 @@ export interface SessionConfig {
   working_dir?: string
   workingDir?: string
   command?: string
-  tmux_session?: string
-  tmuxSession?: string
   auto_start?: boolean
   autoStart?: boolean
 }

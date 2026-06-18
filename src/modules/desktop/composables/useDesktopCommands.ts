@@ -8,8 +8,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
 
-import type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent } from './model'
-export type { WslDistro, TmuxSession, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent }
+import type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent } from './model'
+export type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent }
 
 // ==================== Pairing Types ====================
 
@@ -36,29 +36,6 @@ export async function listWslDistributions(): Promise<WslDistro[]> {
  */
 export async function isWslAvailable(): Promise<boolean> {
   return await invoke('is_wsl_available')
-}
-
-// ==================== Tmux Commands ====================
-
-/**
- * 获取 Tmux 会话列表
- */
-export async function listTmuxSessions(): Promise<TmuxSession[]> {
-  return await invoke('list_tmux_sessions')
-}
-
-/**
- * 检查 Tmux 是否可用
- */
-export async function isTmuxAvailable(): Promise<boolean> {
-  return await invoke('is_tmux_available')
-}
-
-/**
- * 创建 Tmux 会话
- */
-export async function createTmuxSession(name: string, command?: string): Promise<void> {
-  return await invoke('create_tmux_session', { name, command })
 }
 
 // ==================== Session Commands ====================
@@ -168,7 +145,6 @@ export async function createSessionConfig(config: {
   working_dir?: string
   command?: string
   wsl_distro?: string
-  tmux_session?: string
 }): Promise<SessionConfig> {
   console.log('[createSessionConfig] calling backend with:', {
     name: config.name,
@@ -176,7 +152,6 @@ export async function createSessionConfig(config: {
     working_dir: config.working_dir || '',
     command: config.command || '',
     wsl_distro: config.wsl_distro,
-    tmux_session: config.tmux_session,
   })
 
   const result = await invoke('create_session_config', {
@@ -185,7 +160,6 @@ export async function createSessionConfig(config: {
     working_dir: config.working_dir || '',
     command: config.command || '',
     wsl_distro: config.wsl_distro,
-    tmux_session: config.tmux_session,
   })
 
   console.log('[createSessionConfig] backend returned:', result)
@@ -223,7 +197,6 @@ export async function updateSessionConfig(config: {
   working_dir: string
   command: string
   wsl_distro?: string
-  tmux_session?: string
   auto_start?: boolean
 }): Promise<void> {
   console.log('[updateSessionConfig] calling with:', config)
@@ -234,7 +207,6 @@ export async function updateSessionConfig(config: {
     working_dir: config.working_dir,
     command: config.command,
     wsl_distro: config.wsl_distro,
-    tmux_session: config.tmux_session,
     auto_start: config.auto_start,
   })
 }
@@ -463,11 +435,6 @@ export function useDesktopCommands() {
     // WSL
     listWslDistributions,
     isWslAvailable,
-
-    // Tmux
-    listTmuxSessions,
-    isTmuxAvailable,
-    createTmuxSession,
 
     // Session
     startSession,

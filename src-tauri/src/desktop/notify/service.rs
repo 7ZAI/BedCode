@@ -1,6 +1,6 @@
 //! Notification Service
 //!
-//! 通知服务实现 - 跨平台共享
+//! 通知服务实现 - 桌面端专用
 
 use std::sync::Arc;
 use tokio::sync::Mutex;

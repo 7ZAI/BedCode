@@ -24,6 +24,6 @@ impl Default for DefaultStatusDetector {
 
 impl StatusDetector for DefaultStatusDetector {
     fn detect_waiting_input(&self, output: &str) -> bool {
-        crate::shared::parser::detect_waiting_input(output)
+        crate::desktop::parser::detect_waiting_input(output)
     }
 }

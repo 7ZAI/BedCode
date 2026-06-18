@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
 use crate::shared::model::message::Message;
-use crate::shared::websocket::codec::{JsonCodec, MessageCodec};
+use crate::mobile::websocket_client::codec::{JsonCodec, MessageCodec};
 use crate::Result;
 
 /// 等待中的请求

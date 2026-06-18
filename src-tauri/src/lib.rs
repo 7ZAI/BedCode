@@ -18,10 +18,7 @@ pub use shared::{AppError, Result};
 pub use shared::auth;
 pub use shared::config;
 pub use shared::db;
-pub use shared::parser;
-pub use shared::notify;
 pub use shared::system;
-pub use shared::websocket;
 
 // Re-export desktop modules for testing
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -50,7 +47,9 @@ use tokio::sync::Mutex;
 use android_logger::Config;
 #[cfg(target_os = "android")]
 use log::LevelFilter;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tracing_subscriber::Layer;
+#[cfg(not(target_os = "android"))]
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 初始化日志系统
 #[allow(unused_variables)]
@@ -271,7 +270,7 @@ pub fn run() {
                 db.clone(),
             ));
             let pairing_service = Arc::new(PairingService::new());
-            let qr_manager = Arc::new(crate::shared::auth::QrTokenManager::new());
+            let qr_manager = Arc::new(crate::desktop::auth::QrTokenManager::new());
             let app_handle_arc = Arc::new(app_handle.clone());
 
             // 创建同步事件通道
@@ -405,10 +404,6 @@ pub fn run() {
             // WSL
             desktop::commands::list_wsl_distributions,
             desktop::commands::is_wsl_available,
-            // Tmux
-            desktop::commands::list_tmux_sessions,
-            desktop::commands::is_tmux_available,
-            desktop::commands::create_tmux_session,
             // Session Config
             desktop::commands::create_session_config,
             desktop::commands::list_session_configs,
@@ -523,7 +518,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn run() {
-    use crate::shared::system::settings::SettingsManager;
+    use crate::mobile::system::settings::SettingsManager;
 
     // 尽可能早地初始化日志
     // tracing 的 "log" feature 将 tracing:: 宏自动转发到 log crate

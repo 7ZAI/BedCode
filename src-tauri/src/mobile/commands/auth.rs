@@ -2,26 +2,13 @@
 //!
 //! 认证和配对相关命令
 
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::Result;
-use crate::mobile::{AuthCredentials, AuthManager, AuthStatus};
-use crate::mobile::events;
-
-use super::connection::get_connection_manager;
-
-/// 全局认证管理器单例
-static AUTH_MANAGER: std::sync::OnceLock<Arc<AuthManager>> = std::sync::OnceLock::new();
-
-/// 获取认证管理器
-pub fn get_auth_manager() -> Arc<AuthManager> {
-    AUTH_MANAGER.get_or_init(|| {
-        let conn = get_connection_manager();
-        AuthManager::new(conn)
-    }).clone()
-}
+use crate::mobile::{AuthCredentials, AuthStatus};
+use crate::mobile::router::event;
+use crate::mobile::managers::get_auth_manager;
 
 /// 认证状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,8 +38,8 @@ pub async fn ws_authenticate(app_handle: AppHandle, session_token: String) -> Re
     let result = auth.authenticate_with_token(&session_token).await?;
 
     if result {
-        events::emit_auth_success(&app_handle);
-        events::emit_paired(&app_handle);
+        event::emit_auth_success(&app_handle);
+        event::emit_paired(&app_handle);
     }
 
     Ok(result)
@@ -69,7 +56,7 @@ pub async fn ws_request_pairing(app_handle: AppHandle) -> Result<()> {
     match auth.request_pairing().await {
         Ok(()) => {
             tracing::info!("[ws_request_pairing] request_pairing OK, emitting event");
-            events::emit_pairing_request(&app_handle);
+            event::emit_pairing_request(&app_handle);
             Ok(())
         }
         Err(e) => {
@@ -86,12 +73,12 @@ pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Resu
     let result = auth.verify_pairing_code(&code).await?;
 
     if result {
-        events::emit_pairing_verified(&app_handle);
-        events::emit_paired(&app_handle);
+        event::emit_pairing_verified(&app_handle);
+        event::emit_paired(&app_handle);
         // 返回存储的凭据，前端持久化到 localStorage
         Ok(auth.get_credentials().await)
     } else {
-        events::emit_auth_failed(&app_handle, "Pairing verification failed");
+        event::emit_auth_failed(&app_handle, "Pairing verification failed");
         Ok(None)
     }
 }
@@ -103,8 +90,8 @@ pub async fn ws_authenticate_with_qr(app_handle: AppHandle, token: String) -> Re
     let result = auth.authenticate_with_qr(&token).await?;
 
     if result {
-        events::emit_pairing_verified(&app_handle);
-        events::emit_paired(&app_handle);
+        event::emit_pairing_verified(&app_handle);
+        event::emit_paired(&app_handle);
         return Ok(auth.get_credentials().await);
     }
 

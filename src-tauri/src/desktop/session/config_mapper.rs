@@ -43,7 +43,6 @@ impl ConfigMapper for DefaultConfigMapper {
             working_dir: config.working_dir.clone(),
             command: config.command.clone(),
             env_vars: std::collections::HashMap::new(),
-            tmux_session: config.tmux_session.clone(),
             cols: 120,
             rows: 40,
         })

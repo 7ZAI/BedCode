@@ -17,7 +17,7 @@ use tracing;
 use serde::{Deserialize, Serialize};
 
 use crate::shared::system::error_boundary::spawn_with_error_boundary;
-use crate::mobile::get_connection_manager;
+use crate::mobile::managers::get_connection_manager;
 
 // ==================== MobileEvent Definition ====================
 

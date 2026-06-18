@@ -21,15 +21,12 @@ pub mod http;
 // Re-export all commands for easy registration
 pub use token::{ws_set_token, ws_get_token, ws_clear_token};
 pub use connection::{
-    get_connection_manager,
     ws_connect, ws_disconnect, ws_get_status, ws_is_connected, ws_reconnect,
 };
 pub use auth::{
-    get_auth_manager,
     ws_get_auth_status, ws_authenticate, ws_request_pairing, ws_verify_pairing_code, ws_authenticate_with_qr,
 };
 pub use session::{
-    get_session_manager,
     ws_load_sessions, ws_join_session, ws_leave_session, ws_subscribe_session,
     ws_start_session, ws_stop_session, ws_remove_session, ws_load_session_configs,
 };

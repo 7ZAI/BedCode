@@ -3,7 +3,7 @@
 //! 职责：管理 WebSocket 连接建立、断开、重连逻辑
 //! 与 IO 模块分离：只负责 TCP/TLS 握手，不处理消息收发
 
-use crate::shared::websocket::client::lifecycle::{ConnectionStatus, LifecycleManager};
+use crate::mobile::websocket_client::lifecycle::{ConnectionStatus, LifecycleManager};
 use crate::Result;
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;

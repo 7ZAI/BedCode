@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::shared::model::message::Message;
-use crate::shared::websocket::client::MessageRouter;
+use crate::mobile::websocket_client::MessageRouter;
 use crate::Result;
 
 use super::{ClientRouteContext, ClientRouteRegistry, message_type_key};

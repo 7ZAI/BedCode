@@ -6,7 +6,7 @@
 use crate::desktop::plugin::PluginManager;
 use crate::desktop::server::services::PairingService;
 use crate::desktop::session::{SessionConfigManager, SessionManager};
-use crate::shared::auth::QrTokenManager;
+use crate::desktop::auth::QrTokenManager;
 use crate::shared::db::Database;
 use std::sync::Arc;
 use tauri::AppHandle;

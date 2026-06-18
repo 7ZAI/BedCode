@@ -55,8 +55,6 @@ pub struct SessionLaunchConfig {
     /// 环境变量
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
-    /// Tmux 会话名（可选）
-    pub tmux_session: Option<String>,
     /// 终端列数
     #[serde(default = "default_cols")]
     pub cols: u16,
@@ -84,7 +82,6 @@ impl SessionLaunchConfig {
                 .unwrap_or_else(|_| ".".to_string()),
             command: command.into(),
             env_vars: HashMap::new(),
-            tmux_session: None,
             cols: default_cols(),
             rows: default_rows(),
         }
@@ -99,12 +96,6 @@ impl SessionLaunchConfig {
     /// 设置工作目录
     pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
         self.working_dir = dir.into();
-        self
-    }
-
-    /// 设置 Tmux 会话
-    pub fn with_tmux_session(mut self, session: impl Into<String>) -> Self {
-        self.tmux_session = Some(session.into());
         self
     }
 }

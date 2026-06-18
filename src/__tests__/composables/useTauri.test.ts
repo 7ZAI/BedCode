@@ -3,7 +3,6 @@ import { mount } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
 import {
   useWsl,
-  useTmux,
   useSessionConfig,
   useSession,
   useQuickActions,
@@ -107,52 +106,6 @@ describe('useTauri Composables', () => {
     })
   })
 
-  describe('useTmux', () => {
-    it('should initialize with empty sessions', () => {
-      const { result, wrapper } = withComposable(() => useTmux())
-
-      expect(result.sessions.value).toEqual([])
-      expect(result.isAvailable.value).toBe(false)
-
-      wrapper.unmount()
-    })
-
-    it('should load tmux sessions when available', async () => {
-      mockInvoke
-        .mockResolvedValueOnce(true) // is_tmux_available
-        .mockResolvedValueOnce([
-          { name: 'main', windows: 2, isAttached: true },
-          { name: 'dev', windows: 1, isAttached: false },
-        ])
-
-      const { result, wrapper } = withComposable(() => useTmux())
-      await result.loadSessions()
-
-      expect(result.sessions.value).toHaveLength(2)
-      expect(result.sessions.value[0].name).toBe('main')
-      expect(result.isAvailable.value).toBe(true)
-
-      wrapper.unmount()
-    })
-
-    it('should create a new tmux session', async () => {
-      mockInvoke
-        .mockResolvedValueOnce(undefined) // create_tmux_session
-        .mockResolvedValueOnce(true) // is_tmux_available (for loadSessions)
-        .mockResolvedValueOnce([{ name: 'new-session', windows: 1, isAttached: false }])
-
-      const { result, wrapper } = withComposable(() => useTmux())
-      await result.createSession('new-session', 'vim')
-
-      expect(mockInvoke).toHaveBeenCalledWith('create_tmux_session', {
-        name: 'new-session',
-        command: 'vim',
-      })
-
-      wrapper.unmount()
-    })
-  })
-
   describe('useSessionConfig', () => {
     it('should initialize with empty configs', () => {
       const { result, wrapper } = withComposable(() => useSessionConfig())
@@ -203,7 +156,6 @@ describe('useTauri Composables', () => {
         workingDir: '/home',
         command: 'claude',
         wslDistro: undefined,
-        tmuxSession: undefined,
       })
 
       wrapper.unmount()

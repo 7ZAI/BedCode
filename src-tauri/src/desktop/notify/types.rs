@@ -1,6 +1,6 @@
 //! Notification Types
 //!
-//! 通知相关类型定义 - 跨平台共享
+//! 通知相关类型定义 - 桌面端专用
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

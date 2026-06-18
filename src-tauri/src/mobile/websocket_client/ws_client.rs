@@ -3,13 +3,13 @@
 //! 整合所有子模块的主客户端，提供统一的 API
 //! 使用 RequestResponseManager 实现请求-响应模式
 
-use crate::shared::websocket::client::{
+use crate::mobile::websocket_client::{
     connection::ConnectionManager, heartbeat::HeartbeatManager, io::IoManager,
     lifecycle::LifecycleManager, reconnect::ReconnectManager,
     ConnectionStatus, IoEvent, WsClientConfig, WsClientEvent, RequestResponseManager,
 };
 use crate::shared::model::message::Message;
-use crate::shared::websocket::MessageHandler;
+use crate::mobile::websocket_client::MessageHandler;
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -331,7 +331,7 @@ impl WsClient {
                     }
                     event = lifecycle_rx.recv() => {
                         match event {
-                            Ok(crate::shared::websocket::client::lifecycle::LifecycleEvent::Disconnected) => {
+                            Ok(crate::mobile::websocket_client::lifecycle::LifecycleEvent::Disconnected) => {
                                 let _ = event_tx.send(WsClientEvent::Disconnected);
                             }
                             _ => {}

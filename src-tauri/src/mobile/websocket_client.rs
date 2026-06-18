@@ -1,28 +1,23 @@
 //! WebSocket Client Module
 //!
-//! 模块化重构后的 WebSocket 客户端，按职责分为：
-//! - `connection` - 连接建立与断开
-//! - `io` - IO 收发（读循环、写通道）
-//! - `heartbeat` - 心跳保活
-//! - `lifecycle` - 生命周期状态机
-//! - `router` - 消息路由 trait
-//! - `reconnect` - 重连策略
-//! - `request_response` - 请求-响应管理
+//! 移动端专用 WebSocket 客户端
 
+pub mod codec;
 pub mod connection;
+pub mod default_handler;
 pub mod heartbeat;
 pub mod io;
 pub mod lifecycle;
 pub mod reconnect;
-pub mod router;
-pub mod default_handler;
 pub mod request_response;
-
-// 主客户端
+pub mod router;
+pub mod traits;
 pub mod ws_client;
-pub use ws_client::WsClient;
+
+use serde::{Deserialize, Serialize};
 
 // Re-exports
+pub use ws_client::WsClient;
 pub use connection::{ConnectionManager, WsClientConfig};
 pub use heartbeat::{HeartbeatConfig, HeartbeatEvent, HeartbeatManager};
 pub use io::{IoEvent, IoManager};
@@ -31,9 +26,13 @@ pub use reconnect::{ReconnectConfig, ReconnectEvent, ReconnectManager, Reconnect
 pub use router::MessageRouter;
 pub use default_handler::ClientDefaultMessageHandler;
 pub use request_response::RequestResponseManager;
-
-// 客户端事件（对外使用）
-use serde::{Deserialize, Serialize};
+pub use codec::{JsonCodec, MessageCodec};
+pub use traits::{MessageHandler, ClientMessageHandler, HandlerResult};
+pub use traits::{
+    ClientInfoTrait,
+    SendStrategy, DefaultSendStrategy, RetrySendStrategy,
+    ResponseHandler, DefaultResponseHandler,
+};
 
 /// WebSocket 客户端事件（对外暴露的事件）
 #[derive(Debug, Clone, Serialize, Deserialize)]

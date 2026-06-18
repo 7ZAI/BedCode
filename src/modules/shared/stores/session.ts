@@ -97,8 +97,7 @@ export const useSessionStore = defineStore('session', () => {
     environment: string,
     workingDir: string,
     command: string,
-    wslDistro?: string,
-    tmuxSession?: string
+    wslDistro?: string
   ) {
     console.log('[session store] createConfig called:', { name, environment, workingDir, command })
     try {
@@ -108,7 +107,6 @@ export const useSessionStore = defineStore('session', () => {
         working_dir: workingDir,
         command,
         wsl_distro: wslDistro,
-        tmux_session: tmuxSession,
       })
       console.log('[session store] createSessionConfig returned:', result)
       configs.value = await listSessionConfigs()
@@ -133,7 +131,6 @@ export const useSessionStore = defineStore('session', () => {
     workingDir: string,
     command: string,
     wslDistro?: string,
-    tmuxSession?: string,
     autoStart?: boolean
   ) {
     await updateSessionConfig({
@@ -143,7 +140,6 @@ export const useSessionStore = defineStore('session', () => {
       working_dir: workingDir || '',
       command: command || '',
       wsl_distro: wslDistro,
-      tmux_session: tmuxSession,
       auto_start: autoStart,
     })
     configs.value = await listSessionConfigs()

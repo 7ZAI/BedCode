@@ -6,8 +6,7 @@ use tauri::AppHandle;
 
 use crate::Result;
 use crate::mobile::remote::request::{TerminalRequest, SessionRequest};
-
-use super::connection::get_connection_manager;
+use crate::mobile::managers::get_connection_manager;
 
 /// 发送输入到会话（带确认模式）
 /// 等待桌面端确认收到输入后再返回，确保消息已被处理

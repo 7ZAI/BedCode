@@ -14,7 +14,7 @@ use crate::desktop::server::ws::session::WsSession;
 use crate::desktop::server::message::Message;
 use crate::desktop::app_context::AppContext;
 use crate::desktop::session::GlobalOutputManager;
-use crate::shared::auth::jwt::JwtService;
+use crate::desktop::auth::jwt::JwtService;
 use crate::shared::enums::TerminalPayload;
 use crate::shared::system::config::AppConfig;
 
@@ -44,6 +44,13 @@ struct UnsubscribeResult {
 #[rtype(result = "()")]
 struct TerminalOutput {
     text: String,
+}
+
+/// 外部推送消息（用于广播/定向发送，由 WsSessionRegistry 调用）
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SendTextMessage {
+    pub text: String,
 }
 
 /// Terminal WebSocket Actor
@@ -79,15 +86,29 @@ impl Actor for TerminalWs {
     fn started(&mut self, ctx: &mut Self::Context) {
         tracing::info!("Terminal WS connected: {}", self.session.addr);
         self.start_heartbeat(ctx);
+
+        // 注册到 WsSessionRegistry
+        let client_id = self.session.addr.to_string();
+        let addr = ctx.address();
+        let socket_addr = self.session.addr;
+        actix::spawn(async move {
+            use crate::desktop::server::ws::registry::WsSessionRegistry;
+            let registry = WsSessionRegistry::global();
+            registry.register(client_id, socket_addr, addr).await;
+        });
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("Terminal WS disconnected: {}", self.session.addr);
 
-        // 在独立 Actix 任务中取消所有订阅
+        // 注销 WsSessionRegistry + 取消所有订阅
         let client_id = self.session.addr.to_string();
         let sessions: Vec<String> = self.session.subscribed_sessions.iter().cloned().collect();
         actix::spawn(async move {
+            use crate::desktop::server::ws::registry::WsSessionRegistry;
+            let registry = WsSessionRegistry::global();
+            registry.unregister(&client_id).await;
+
             let global_manager = GlobalOutputManager::global();
             for session_id in sessions {
                 global_manager.unsubscribe(&session_id, &client_id).await;
@@ -187,6 +208,15 @@ impl TerminalWs {
                 self.session.device_id = Some(claims.sub.clone());
                 self.session.device_name = claims.device_name.clone();
 
+                // 注册认证状态到 WsSessionRegistry
+                let client_id = self.session.addr.to_string();
+                let device_name = claims.device_name.clone();
+                actix::spawn(async move {
+                    use crate::desktop::server::ws::registry::WsSessionRegistry;
+                    let registry = WsSessionRegistry::global();
+                    registry.set_authenticated(&client_id, device_name).await;
+                });
+
                 // 通知桌面端
                 let app_ctx = AppContext::global();
                 let _ = app_ctx.app_handle().emit("device-connected", &crate::desktop::server::connection_types::DeviceConnectionEvent {
@@ -216,7 +246,7 @@ impl TerminalWs {
             }
             Err(e) => {
                 let msg = match e {
-                    crate::shared::auth::jwt::JwtError::TokenExpired => "Token expired",
+                    crate::desktop::auth::jwt::JwtError::TokenExpired => "Token expired",
                     _ => "Invalid token",
                 };
                 let error = Message::error_with_id(&message_id, "AUTH_FAILED", msg);
@@ -383,6 +413,15 @@ impl Handler<TerminalOutput> for TerminalWs {
     type Result = ();
 
     fn handle(&mut self, msg: TerminalOutput, ctx: &mut Self::Context) {
+        ctx.text(msg.text);
+    }
+}
+
+/// 处理外部推送消息（广播/定向发送）
+impl Handler<SendTextMessage> for TerminalWs {
+    type Result = ();
+
+    fn handle(&mut self, msg: SendTextMessage, ctx: &mut Self::Context) {
         ctx.text(msg.text);
     }
 }

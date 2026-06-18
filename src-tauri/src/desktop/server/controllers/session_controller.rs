@@ -11,7 +11,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
 use crate::desktop::app_context::AppContext;
-use crate::desktop::server::dtos::common::ApiResponse;
+use crate::shared::model::api_dto::ApiResponse;
 use crate::desktop::server::dtos::session_dto::*;
 use crate::desktop::server::middleware::jwt_auth::get_claims_from_request;
 

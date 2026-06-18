@@ -7,10 +7,7 @@ pub mod db;
 pub mod enums;
 pub mod event;
 pub mod model;
-pub mod notify;
-pub mod parser;
 pub mod system;
-pub mod websocket;
 
 pub use system::error::{AppError, Result};
 pub use system::config;

@@ -13,7 +13,7 @@ import {
 } from '@/modules/desktop/composables/useDesktopCommands'
 
 // Re-export types from desktop model
-export type { SessionInfo, SessionConfig, DeviceConnectionInfo, WslDistro, TmuxSession } from '@/modules/desktop/composables/model'
+export type { SessionInfo, SessionConfig, DeviceConnectionInfo, WslDistro } from '@/modules/desktop/composables/model'
 
 // Re-export types from mobile model
 export type { ConnectionStatus, RemoteDevice, AuthCredentials, ConnectionInfo, AuthState, RemoteSession, TerminalOutputEvent, TerminalIncrementalOutput } from '@/modules/mobile/composables/model'

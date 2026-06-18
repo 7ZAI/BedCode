@@ -4,33 +4,29 @@
 
 pub mod auth;
 pub mod commands;
-pub mod events;
 pub mod global;
 pub mod handler;
+pub mod managers;
 pub mod remote;
 pub mod router;
 pub mod session;
-pub mod storage;
+pub mod system;
+pub mod websocket_client;
 
 // Re-export public types
 pub use self::auth::{AuthCredentials, AuthManager, AuthStatus};
 pub use self::global::{set_global_token, get_global_token, clear_global_token};
+pub use self::managers::{get_connection_manager, get_auth_manager, get_session_manager};
 pub use self::remote::{
     ConnectionManager, ConnectionStatus, TargetDevice,
-    OutputEvent, OutputReceiver,
 };
 pub use self::router::{ClientRouteContext, ClientBusinessRouter, ClientRouteRegistry, ClientRouteHandler};
 pub use self::router::event::MobileEvent;
 pub use self::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
 pub use self::session::{SessionInfo, SessionManager, SessionStatus};
-pub use self::storage::TokenStorage;
 
 // Re-export commands module public items
 pub use self::commands::{
-    // Manager getters
-    get_connection_manager,
-    get_auth_manager,
-    get_session_manager,
     // All Tauri commands
     ws_set_token, ws_get_token, ws_clear_token,
     ws_connect, ws_disconnect, ws_get_status, ws_is_connected, ws_reconnect,

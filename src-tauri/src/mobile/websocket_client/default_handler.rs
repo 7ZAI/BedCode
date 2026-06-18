@@ -3,9 +3,9 @@
 //! 客户端默认消息处理器，实现 MessageHandler trait
 //! 使用编解码器解码消息，再委托给单个 MessageRouter 处理
 
-use crate::shared::websocket::client::router::MessageRouter;
-use crate::shared::websocket::codec::{JsonCodec, MessageCodec};
-use crate::shared::websocket::MessageHandler;
+use crate::mobile::websocket_client::router::MessageRouter;
+use crate::mobile::websocket_client::codec::{JsonCodec, MessageCodec};
+use crate::mobile::websocket_client::MessageHandler;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;

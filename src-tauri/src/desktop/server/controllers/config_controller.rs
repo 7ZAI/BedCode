@@ -6,7 +6,7 @@
 
 use actix_web::HttpResponse;
 use crate::desktop::app_context::AppContext;
-use crate::desktop::server::dtos::common::ApiResponse;
+use crate::shared::model::api_dto::ApiResponse;
 use crate::desktop::server::dtos::config_dto::*;
 use crate::desktop::session::SessionConfigManager;
 

@@ -7,21 +7,9 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::Result;
-use crate::mobile::{SessionInfo, SessionManager};
+use crate::mobile::SessionInfo;
 use crate::mobile::remote::request::{SessionRequest, ResponseParser, timeouts, TerminalRequest, ConfigRequest};
-
-use super::connection::get_connection_manager;
-
-/// 全局会话管理器单例
-static SESSION_MANAGER: std::sync::OnceLock<Arc<SessionManager>> = std::sync::OnceLock::new();
-
-/// 获取会话管理器
-pub fn get_session_manager() -> Arc<SessionManager> {
-    SESSION_MANAGER.get_or_init(|| {
-        let conn = get_connection_manager();
-        SessionManager::new(conn)
-    }).clone()
-}
+use crate::mobile::managers::{get_connection_manager, get_session_manager};
 
 /// 启动会话响应
 #[derive(Debug, Clone, Serialize, Deserialize)]

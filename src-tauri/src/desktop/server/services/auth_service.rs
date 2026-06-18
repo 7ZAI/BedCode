@@ -5,9 +5,9 @@
 use crate::desktop::server::connection_types::{AuthPayload, AuthStage, DeviceConnectionEvent, PairingCodeGeneratedEvent};
 use crate::desktop::server::message::Message;
 use crate::desktop::server::services::pairing_service::PairingService;
-use crate::shared::auth::qr_token::QrTokenManager;
+use crate::desktop::auth::qr_token::QrTokenManager;
 use crate::desktop::websocket_manager::WebSocketManager;
-use crate::shared::auth::JwtService;
+use crate::desktop::auth::JwtService;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -364,7 +364,7 @@ pub async fn handle_jwt_auth(
 
             // 返回认证失败响应
             let error_msg = match e {
-                crate::shared::auth::JwtError::TokenExpired => "JWT token expired, please re-authenticate",
+                crate::desktop::auth::JwtError::TokenExpired => "JWT token expired, please re-authenticate",
                 _ => "Invalid JWT token",
             };
 

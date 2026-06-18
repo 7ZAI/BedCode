@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS session_configs (
     wsl_distro TEXT,
     working_dir TEXT NOT NULL,
     command TEXT NOT NULL,
-    tmux_session TEXT,
     auto_start INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

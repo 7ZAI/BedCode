@@ -138,14 +138,14 @@ pub trait SendStrategy: Send + Sync {
     /// 发送消息（异步，不等待响应）
     fn send<'a>(
         &'a self,
-        client: &'a crate::shared::websocket::WsClient,
+        client: &'a crate::mobile::websocket_client::WsClient,
         message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
     /// 发送消息并等待响应
     fn send_and_wait<'a>(
         &'a self,
-        client: &'a crate::shared::websocket::WsClient,
+        client: &'a crate::mobile::websocket_client::WsClient,
         message: &'a Message,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>>;
@@ -161,7 +161,7 @@ pub struct DefaultSendStrategy;
 impl SendStrategy for DefaultSendStrategy {
     fn send<'a>(
         &'a self,
-        client: &'a crate::shared::websocket::WsClient,
+        client: &'a crate::mobile::websocket_client::WsClient,
         message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(client.send(message))
@@ -169,7 +169,7 @@ impl SendStrategy for DefaultSendStrategy {
 
     fn send_and_wait<'a>(
         &'a self,
-        client: &'a crate::shared::websocket::WsClient,
+        client: &'a crate::mobile::websocket_client::WsClient,
         message: &'a Message,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>> {
@@ -202,7 +202,7 @@ impl Default for RetrySendStrategy {
 impl SendStrategy for RetrySendStrategy {
     fn send<'a>(
         &'a self,
-        client: &'a crate::shared::websocket::WsClient,
+        client: &'a crate::mobile::websocket_client::WsClient,
         message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let client = client.clone();
@@ -232,7 +232,7 @@ impl SendStrategy for RetrySendStrategy {
 
     fn send_and_wait<'a>(
         &'a self,
-        client: &'a crate::shared::websocket::WsClient,
+        client: &'a crate::mobile::websocket_client::WsClient,
         message: &'a Message,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>> {

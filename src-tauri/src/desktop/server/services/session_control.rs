@@ -193,7 +193,7 @@ pub async fn handle_control(
                         &base64::engine::general_purpose::STANDARD,
                         &event.data,
                     ).unwrap_or_default();
-                    let is_waiting = crate::shared::parser::detect_waiting_input(
+                    let is_waiting = crate::desktop::parser::detect_waiting_input(
                         &String::from_utf8_lossy(&decoded_data)
                     );
 

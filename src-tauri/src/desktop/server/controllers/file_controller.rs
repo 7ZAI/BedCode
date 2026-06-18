@@ -5,8 +5,8 @@
 
 use actix_web::{web, HttpResponse};
 use crate::desktop::app_context::AppContext;
-use crate::desktop::server::dtos::common::ApiResponse;
-use crate::desktop::server::dtos::config_dto::*;
+use crate::shared::model::api_dto::ApiResponse;
+use crate::shared::model::api_dto::*;
 use std::path::PathBuf;
 
 const MAX_DEPTH: usize = 20;
