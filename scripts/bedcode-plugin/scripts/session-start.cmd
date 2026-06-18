@@ -1,23 +1,50 @@
 @echo off
 REM BedCode Session Start Hook (Windows)
-REM Records the JSONL log path for remote monitoring
+REM Records session creation event to JSONL file
 
 setlocal enabledelayedexpansion
 
-REM CLAUDE_MESSAGE_LOG is set by Claude Code when it starts a session
-if defined CLAUDE_MESSAGE_LOG (
-    set "SESSION_FILE=%CLAUDE_PROJECT_DIR%\.claude\bedcode-session.json"
+REM Read stdin into variable
+set "INPUT="
+for /f "delims=" %%A in ('more') do set "INPUT=!INPUT!%%A"
 
-    REM Extract session ID from the path (last component of projects directory)
-    for %%A in ("%CLAUDE_MESSAGE_LOG%") do set "SESSION_PATH=%%~dpA"
-    for %%A in ("%SESSION_PATH:~0,-1%") do set "SESSION_ID=%%~nxA"
-
-    REM Write session info
-    echo {"jsonl_path": "%CLAUDE_MESSAGE_LOG%", "session_id": "%SESSION_ID%", "project_path": "%CLAUDE_PROJECT_DIR%"} > "%SESSION_FILE%"
-
-    echo {"status": "recorded", "jsonl_path": "%CLAUDE_MESSAGE_LOG%"}
-) else (
-    echo {"status": "no_env", "message": "CLAUDE_MESSAGE_LOG not set"}
+REM Extract session_id
+for /f "tokens=2 delims=:," %%A in ('echo !INPUT! ^| findstr "session_id"') do (
+    set "SESSION_ID=%%~A"
+    set "SESSION_ID=!SESSION_ID:"=!"
+    goto :got_session
 )
+:got_session
+
+REM Extract cwd
+for /f "tokens=2 delims=:," %%A in ('echo !INPUT! ^| findstr /C:"cwd"') do (
+    set "CWD=%%~A"
+    set "CWD=!CWD:"=!"
+    goto :got_cwd
+)
+:got_cwd
+
+REM Extract transcript_path
+for /f "tokens=2 delims=:," %%A in ('echo !INPUT! ^| findstr "transcript_path"') do (
+    set "TRANSCRIPT_PATH=%%~A"
+    set "TRANSCRIPT_PATH=!TRANSCRIPT_PATH:"=!"
+    goto :got_transcript
+)
+:got_transcript
+
+REM Generate timestamp
+for /f "tokens=1-3 delims=/ " %%A in ('date /t') do set "DATE=%%C-%%A-%%B"
+for /f "tokens=1-3 delims=:." %%A in ('time /t') do set "TIME=%%A:%%B:00"
+set "TIMESTAMP=!DATE!T!TIME!Z"
+
+REM Ensure output directory exists
+set "OUTPUT_FILE=%CLAUDE_PROJECT_DIR%\.claude\bedcode-events.jsonl"
+if not exist "%CLAUDE_PROJECT_DIR%\.claude" mkdir "%CLAUDE_PROJECT_DIR%\.claude"
+
+REM Write session_start event to JSONL file
+echo {"event":"session_start","session_id":"!SESSION_ID!","project_path":"!CWD!","transcript_path":"!TRANSCRIPT_PATH!","timestamp":"!TIMESTAMP!"} >> "%OUTPUT_FILE%"
+
+REM Output success
+echo {"status":"recorded","session_id":"!SESSION_ID!","file":"!OUTPUT_FILE!"}
 
 endlocal
