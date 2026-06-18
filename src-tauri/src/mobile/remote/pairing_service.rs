@@ -40,7 +40,29 @@ impl PairingService {
         current.as_ref().filter(|c| !c.is_expired()).cloned()
     }
 
-    /// 验证配对码
+    /// 验证配对码并消耗（单次使用）
+    /// 验证成功后自动清除配对码，防止重复使用
+    pub async fn verify_and_consume_code(&self, input: &str) -> bool {
+        let mut current = self.current_code.lock().await;
+        if let Some(code) = current.as_ref() {
+            let valid = code.verify(input);
+            if valid {
+                tracing::info!("Pairing code verified and consumed");
+                *current = None;
+            } else if code.is_expired() {
+                tracing::warn!("Pairing code expired");
+                *current = None;
+            } else {
+                tracing::warn!("Invalid pairing code");
+            }
+            valid
+        } else {
+            tracing::warn!("No pairing code available");
+            false
+        }
+    }
+
+    /// 验证配对码（不消耗）
     pub async fn verify_code(&self, input: &str) -> bool {
         let current = self.current_code.lock().await;
         if let Some(code) = current.as_ref() {

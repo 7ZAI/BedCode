@@ -35,19 +35,20 @@ pub struct AppContext {
     sync_tx: broadcast::Sender<crate::desktop::events::DesktopSyncEvent>,
 }
 
+/// 全局单实例存储 — init() 和 global() 必须引用同一个 static
+static APP_CONTEXT: std::sync::OnceLock<AppContext> = std::sync::OnceLock::new();
+
 impl AppContext {
     /// 获取全局单例引用
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::OnceLock<AppContext> = std::sync::OnceLock::new();
-        INSTANCE.get().expect("AppContext not initialized, call AppContext::init() first")
+        APP_CONTEXT.get().expect("AppContext not initialized, call AppContext::init() first")
     }
 
     /// 初始化全局容器（仅在 lib.rs run() 中调用一次）
     ///
     /// 返回 &'static Self，后续通过 global() 获取同一实例
     pub fn init(ctx: AppContext) -> &'static Self {
-        static INSTANCE: std::sync::OnceLock<AppContext> = std::sync::OnceLock::new();
-        INSTANCE.get_or_init(|| ctx)
+        APP_CONTEXT.get_or_init(|| ctx)
     }
 
     // ==================== Accessors ====================

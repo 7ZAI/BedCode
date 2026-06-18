@@ -1,6 +1,7 @@
 //! Event Bus
 //!
 //! 统一事件广播 - 整合 output/status/restart 三个独立广播通道
+//! SessionEventBus trait 已内联到此文件
 
 use crate::desktop::model::{SessionRestartEvent, SessionStatusEvent};
 use crate::desktop::pty::PtyOutputEvent;
@@ -15,7 +16,7 @@ pub enum SessionEvent {
     Restarted(SessionRestartEvent),
 }
 
-/// 会话事件总线 trait
+/// 会话事件总线
 pub trait SessionEventBus: Send + Sync {
     fn publish(&self, event: SessionEvent);
     fn subscribe(&self) -> broadcast::Receiver<SessionEvent>;

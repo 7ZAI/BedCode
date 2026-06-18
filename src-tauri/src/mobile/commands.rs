@@ -17,6 +17,7 @@ pub mod session;
 pub mod terminal;
 pub mod android;
 pub mod http;
+pub mod mobile_commands;
 
 // Re-export all commands for easy registration
 pub use token::{ws_set_token, ws_get_token, ws_clear_token};
@@ -39,3 +40,8 @@ pub use android::{
     open_url_in_browser,
 };
 pub use http::http_get_file_tree;
+pub use mobile_commands::{
+    list_quick_actions_mobile, create_quick_action_mobile, update_quick_action_mobile,
+    delete_quick_action_mobile, get_all_db_settings_mobile, set_db_setting_mobile,
+    list_session_configs_mobile, get_session_config_mobile,
+};

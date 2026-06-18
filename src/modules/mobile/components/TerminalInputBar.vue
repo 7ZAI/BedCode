@@ -258,7 +258,7 @@ const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar: number
 const inputBarStyle = computed(() => {
   const jsBottom = safeArea?.value?.navigationBar || safeArea?.value?.bottom || 0
   return {
-    paddingBottom: jsBottom > 0 ? `${jsBottom}px` : 'env(safe-area-inset-bottom, 0px)',
+    paddingBottom: `${jsBottom}px`,
   }
 })
 

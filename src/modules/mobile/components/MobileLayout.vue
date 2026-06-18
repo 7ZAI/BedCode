@@ -1,5 +1,6 @@
 <template>
   <div
+    v-if="safeAreaReady"
     class="flex flex-col h-screen mobile-app mobile-ui"
     :style="mobileContainerStyle"
   >
@@ -17,6 +18,8 @@
     <!-- Bottom Navigation (hide on terminal view) -->
     <MobileNav v-if="!isTerminalRoute" />
   </div>
+  <!-- 安全区域初始化前的占位，避免内容在状态栏下闪现 -->
+  <div v-else class="h-screen mobile-app mobile-ui bg-[var(--mobile-bg)]" />
 </template>
 
 <script setup lang="ts">
@@ -49,19 +52,20 @@ function getKey(route: any): string {
 
 // 从 App.vue inject 的安全区域信息
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
+const safeAreaReady = inject<Ref<boolean>>('safeAreaReady')!
 const platformInfo = inject<Ref<{ isMobile: boolean }>>('platformInfo')!
 
 // 移动端容器样式：顶部安全区由容器 padding 处理
 // 底部安全区由各底部元素（MobileNav、TerminalInputBar）的 paddingBottom 承担
-// 这样 app 内容可以占满屏幕底部，避免底部出现空白
-// CSS env() 作为 fallback，确保 JS 初始化延迟期间也生效
+// 注意：Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
+// 通过 safeAreaReady 守卫确保 safeArea 初始化后才渲染内容
 const mobileContainerStyle = computed(() => {
   if (!platformInfo.value.isMobile) return {}
 
   const top = safeArea.value.top || 0
 
   return {
-    paddingTop: top > 0 ? `${top}px` : 'env(safe-area-inset-top, 0px)',
+    paddingTop: `${top}px`,
   }
 })
 </script>

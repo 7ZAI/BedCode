@@ -142,7 +142,7 @@ pub async fn handle_auth(
             }
         }
 
-        AuthStage::Authenticated => {
+        AuthStage::Authenticated | AuthStage::Reauthenticate => {
             let device_id = payload.device_id.unwrap_or_default();
             let fingerprint = payload.device_fingerprint.unwrap_or_default();
             let token = payload.session_token.unwrap_or_default();

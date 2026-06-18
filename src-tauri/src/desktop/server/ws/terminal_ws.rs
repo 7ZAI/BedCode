@@ -46,6 +46,20 @@ struct TerminalOutput {
     text: String,
 }
 
+/// 认证响应消息（从异步 auth_service 传回）
+#[derive(Message)]
+#[rtype(result = "()")]
+struct AuthResponse {
+    /// 是否将客户端标记为已认证
+    authenticated: bool,
+    /// 设备 ID（认证成功时设置）
+    device_id: Option<String>,
+    /// 设备名称（认证成功时设置）
+    device_name: Option<String>,
+    /// 响应 JSON 文本
+    response_json: Option<String>,
+}
+
 /// 外部推送消息（用于广播/定向发送，由 WsSessionRegistry 调用）
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -185,8 +199,113 @@ impl TerminalWs {
         }
     }
 
-    /// 处理认证消息 — JWT 验证
+    /// 处理认证消息 — 根据阶段路由到不同处理器
+    ///
+    /// - RequestPairing / VerifyCode / QrConnect → auth_service::handle_auth（配对流程）
+    /// - Authenticated（JWT re-auth）→ 内联 JWT 验证（快速路径，无需异步）
     fn handle_auth(
+        &mut self,
+        payload: crate::shared::enums::AuthPayload,
+        message_id: String,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        match payload.stage {
+            // 配对流程：需要异步调用 auth_service（涉及 PairingService、QrTokenManager 等）
+            crate::shared::enums::AuthStage::RequestPairing
+            | crate::shared::enums::AuthStage::VerifyCode
+            | crate::shared::enums::AuthStage::QrConnect => {
+                self.handle_auth_pairing(payload, message_id, ctx);
+            }
+            // JWT 重新认证：同步路径，直接验证 JWT token
+            crate::shared::enums::AuthStage::Authenticated
+            | crate::shared::enums::AuthStage::Reauthenticate => {
+                self.handle_auth_jwt(payload, message_id, ctx);
+            }
+            _ => {
+                let error = Message::error_with_id(&message_id, "INVALID_AUTH_STAGE", "Unsupported auth stage");
+                if let Ok(json) = error.to_json() { ctx.text(json); }
+            }
+        }
+    }
+
+    /// 处理配对认证（RequestPairing / VerifyCode / QrConnect）
+    ///
+    /// 通过 actix::spawn 桥接异步 auth_service::handle_auth 调用
+    fn handle_auth_pairing(
+        &mut self,
+        payload: crate::shared::enums::AuthPayload,
+        message_id: String,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        let addr = self.session.addr;
+        let actor_addr = ctx.address();
+
+        actix::spawn(async move {
+            let app_ctx = AppContext::global();
+            let pairing_service = app_ctx.pairing_service().clone();
+            let qr_manager = app_ctx.qr_manager().clone();
+            let app_handle: Option<std::sync::Arc<tauri::AppHandle>> = Some(app_ctx.app_handle().clone());
+            let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
+            let jwt_service = JwtService::new();
+
+            let result = crate::desktop::server::services::auth_service::handle_auth(
+                payload,
+                message_id,
+                addr,
+                &pairing_service,
+                &qr_manager,
+                &jwt_service,
+                ws_manager,
+                &app_handle,
+            ).await;
+
+            let auth_response = match result {
+                Ok(Some(response_msg)) => {
+                    // 从响应中提取认证状态
+                    let (authenticated, device_id, device_name) = if let Message::Auth { payload, .. } = &response_msg {
+                        match payload.stage {
+                            crate::shared::enums::AuthStage::Authenticated => (
+                                true,
+                                payload.device_id.clone(),
+                                payload.device_name.clone(),
+                            ),
+                            _ => (false, None, None),
+                        }
+                    } else {
+                        (false, None, None)
+                    };
+
+                    AuthResponse {
+                        authenticated,
+                        device_id,
+                        device_name,
+                        response_json: response_msg.to_json().ok(),
+                    }
+                }
+                Ok(None) => AuthResponse {
+                    authenticated: false,
+                    device_id: None,
+                    device_name: None,
+                    response_json: None,
+                },
+                Err(e) => {
+                    tracing::error!("Auth service error: {}", e);
+                    let error = Message::error("AUTH_ERROR", &e.to_string());
+                    AuthResponse {
+                        authenticated: false,
+                        device_id: None,
+                        device_name: None,
+                        response_json: error.to_json().ok(),
+                    }
+                }
+            };
+
+            let _ = actor_addr.send(auth_response).await;
+        });
+    }
+
+    /// 处理 JWT 重新认证（快速同步路径）
+    fn handle_auth_jwt(
         &mut self,
         payload: crate::shared::enums::AuthPayload,
         message_id: String,
@@ -276,8 +395,8 @@ impl TerminalWs {
                     }
                 });
             }
-            crate::shared::enums::TerminalAction::Subscribe { start_seq: _ } => {
-                self.handle_subscribe(session_id, ctx);
+            crate::shared::enums::TerminalAction::Subscribe { start_seq } => {
+                self.handle_subscribe(session_id, start_seq, ctx);
             }
             crate::shared::enums::TerminalAction::Unsubscribe => {
                 self.handle_unsubscribe(session_id, ctx);
@@ -287,9 +406,13 @@ impl TerminalWs {
     }
 
     /// 订阅会话输出 — 使用 actix::spawn 桥接异步调用
+    ///
+    /// - `start_seq = None` 或 `0`：从头补完所有历史
+    /// - `start_seq = N (N > 0)`：从断点继续（用于断线重连）
     fn handle_subscribe(
         &mut self,
         session_id: String,
+        start_seq: Option<u64>,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         let global_manager = GlobalOutputManager::global();
@@ -304,7 +427,7 @@ impl TerminalWs {
 
         // 在 Actix 运行时中执行异步订阅
         actix::spawn(async move {
-            let result = global_manager.subscribe(&session_id_for_sub, &client_id, output_tx).await;
+            let result = global_manager.subscribe(&session_id_for_sub, &client_id, output_tx, start_seq).await;
             let _ = addr.send(SubscribeResult {
                 session_id: session_id_for_sub.clone(),
                 result,
@@ -414,6 +537,34 @@ impl Handler<TerminalOutput> for TerminalWs {
 
     fn handle(&mut self, msg: TerminalOutput, ctx: &mut Self::Context) {
         ctx.text(msg.text);
+    }
+}
+
+/// 处理认证响应（从 auth_service 异步调用返回）
+impl Handler<AuthResponse> for TerminalWs {
+    type Result = ();
+
+    fn handle(&mut self, msg: AuthResponse, ctx: &mut Self::Context) {
+        // 更新会话认证状态
+        if msg.authenticated {
+            self.session.authenticated = true;
+            self.session.device_id = msg.device_id.clone();
+            self.session.device_name = msg.device_name.clone();
+
+            // 注册到 WsSessionRegistry
+            let client_id = self.session.addr.to_string();
+            let device_name = msg.device_name.clone();
+            actix::spawn(async move {
+                use crate::desktop::server::ws::registry::WsSessionRegistry;
+                let registry = WsSessionRegistry::global();
+                registry.set_authenticated(&client_id, device_name).await;
+            });
+        }
+
+        // 发送响应给客户端
+        if let Some(json) = msg.response_json {
+            ctx.text(json);
+        }
     }
 }
 

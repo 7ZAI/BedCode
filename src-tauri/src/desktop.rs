@@ -9,7 +9,6 @@ pub mod enums;
 pub mod event_forwarder;
 pub mod events;
 pub mod model;
-pub mod notify;
 pub mod parser;
 pub mod plugin;
 pub mod pty;

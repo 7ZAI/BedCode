@@ -1,7 +1,11 @@
 //! Mobile Authentication
 //!
 //! 认证和配对业务逻辑
+//!
+//! 设备身份 (device_id, fingerprint) 持久化到文件，
+//! 确保重启后 JWT 重连认证仍能使用相同的身份
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
@@ -12,6 +16,16 @@ use crate::mobile::remote::request::{AuthRequest, ResponseParser, timeouts};
 use crate::Result;
 
 use crate::mobile::remote::ConnectionManager;
+
+/// 持久化的设备身份
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeviceIdentity {
+    device_id: String,
+    fingerprint: String,
+}
+
+/// 设备身份文件名
+const IDENTITY_FILE: &str = "device_identity.json";
 
 /// 认证凭据
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,37 +62,100 @@ pub struct AuthManager {
     status: RwLock<AuthStatus>,
     /// 认证凭据
     credentials: RwLock<Option<AuthCredentials>>,
-    /// 设备 ID
-    device_id: RwLock<Option<String>>,
+    /// 设备 ID（持久化，重启后保持一致）
+    device_id: RwLock<String>,
     /// 设备名称
     device_name: RwLock<Option<String>>,
-    /// 设备指纹
-    device_fingerprint: RwLock<Option<String>>,
+    /// 设备指纹（持久化，重启后保持一致）
+    device_fingerprint: RwLock<String>,
+    /// 身份文件路径（用于持久化 device_id 和 fingerprint）
+    identity_path: RwLock<Option<PathBuf>>,
 }
 
 impl AuthManager {
     /// 创建新的认证管理器
+    ///
+    /// 优先从文件加载已持久化的 device_id 和 fingerprint，
+    /// 不存在则生成新的并保存，确保重启后身份一致
     pub fn new(connection: Arc<ConnectionManager>) -> Arc<Self> {
-        let device_id = uuid::Uuid::new_v4().to_string();
-        let fingerprint = uuid::Uuid::new_v4().to_string();
-
         Arc::new(Self {
             connection,
             status: RwLock::new(AuthStatus::Unauthenticated),
             credentials: RwLock::new(None),
-            device_id: RwLock::new(Some(device_id)),
+            // 临时值，init_identity() 会覆盖为持久化值
+            device_id: RwLock::new(uuid::Uuid::new_v4().to_string()),
             device_name: RwLock::new(None),
-            device_fingerprint: RwLock::new(Some(fingerprint)),
+            device_fingerprint: RwLock::new(uuid::Uuid::new_v4().to_string()),
+            identity_path: RwLock::new(None),
         })
     }
 
+    /// 从文件加载持久化的设备身份
+    ///
+    /// 首次调用时传入 app 数据目录，后续调用无效果（OnceLock 保证）
+    /// 如果文件不存在则生成新身份并保存
+    pub async fn init_identity(&self, app_data_dir: PathBuf) {
+        let path = app_data_dir.join(IDENTITY_FILE);
+        *self.identity_path.write().await = Some(path.clone());
+
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    if let Ok(identity) = serde_json::from_str::<DeviceIdentity>(&content) {
+                        tracing::info!("Loaded persisted device identity: device_id={}", identity.device_id);
+                        *self.device_id.write().await = identity.device_id;
+                        *self.device_fingerprint.write().await = identity.fingerprint;
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read device identity file: {}", e);
+                }
+            }
+        }
+
+        // 文件不存在或读取失败，保存当前身份
+        self.save_identity().await;
+    }
+
+    /// 保存设备身份到文件
+    async fn save_identity(&self) {
+        let path = self.identity_path.read().await.clone();
+        let Some(path) = path else { return };
+
+        let identity = DeviceIdentity {
+            device_id: self.device_id.read().await.clone(),
+            fingerprint: self.device_fingerprint.read().await.clone(),
+        };
+
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("Failed to create identity dir: {}", e);
+                return;
+            }
+        }
+
+        match serde_json::to_string_pretty(&identity) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&path, content) {
+                    tracing::warn!("Failed to save device identity: {}", e);
+                } else {
+                    tracing::info!("Saved device identity to {:?}", path);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize device identity: {}", e);
+            }
+        }
+    }
+
     /// 获取设备 ID
-    pub async fn get_device_id(&self) -> Option<String> {
+    pub async fn get_device_id(&self) -> String {
         self.device_id.read().await.clone()
     }
 
     /// 获取设备指纹
-    pub async fn get_device_fingerprint(&self) -> Option<String> {
+    pub async fn get_device_fingerprint(&self) -> String {
         self.device_fingerprint.read().await.clone()
     }
 
@@ -116,8 +193,8 @@ impl AuthManager {
 
         *self.status.write().await = AuthStatus::Authenticating;
 
-        let device_id = self.device_id.read().await.clone().unwrap_or_default();
-        let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
+        let device_id = self.device_id.read().await.clone();
+        let fingerprint = self.device_fingerprint.read().await.clone();
 
         tracing::info!("[authenticate] Sending JWT re-auth (token length={})", token.len());
         let message = AuthRequest::reauthenticate(&device_id, &fingerprint, token);
@@ -152,9 +229,9 @@ impl AuthManager {
 
         *self.status.write().await = AuthStatus::Authenticating;
 
-        let device_id = self.device_id.read().await.clone().unwrap_or_default();
+        let device_id = self.device_id.read().await.clone();
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
-        let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
+        let fingerprint = self.device_fingerprint.read().await.clone();
 
         let message = AuthRequest::request_pairing(&device_id, &device_name, &fingerprint);
 
@@ -187,9 +264,9 @@ impl AuthManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let device_id = self.device_id.read().await.clone().unwrap_or_default();
+        let device_id = self.device_id.read().await.clone();
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
-        let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
+        let fingerprint = self.device_fingerprint.read().await.clone();
 
         let message = AuthRequest::verify_pairing_code(&device_id, &device_name, &fingerprint, code);
 
@@ -247,9 +324,9 @@ impl AuthManager {
             return Err(crate::AppError::WebSocket("Not connected".to_string()));
         }
 
-        let device_id = self.device_id.read().await.clone().unwrap_or_default();
+        let device_id = self.device_id.read().await.clone();
         let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
-        let fingerprint = self.device_fingerprint.read().await.clone().unwrap_or_default();
+        let fingerprint = self.device_fingerprint.read().await.clone();
 
         let message = AuthRequest::authenticate_with_qr(&device_id, &device_name, &fingerprint, token);
 

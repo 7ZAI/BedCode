@@ -113,7 +113,7 @@ impl AuthRequest {
             session_id: None,
             token: String::new(),
             payload: AuthPayload {
-                stage: AuthStage::Authenticated,
+                stage: AuthStage::Reauthenticate,
                 device_id: Some(device_id.to_string()),
                 device_fingerprint: Some(fingerprint.to_string()),
                 session_token: Some(session_token.to_string()),

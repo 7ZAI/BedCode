@@ -415,9 +415,9 @@ const keyboardHeight = computed(() => keyboardInfo.value.keyboardHeight || 0)
 
 // 终端视图样式：顶部安全区 + 键盘避让
 // 底部安全区由 TerminalInputBar 的 paddingBottom 承担，这里只处理键盘避让
-// CSS env() 作为 safeArea 的 fallback
+// Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
 const terminalViewStyle = computed(() => ({
-  paddingTop: safeAreaTop.value > 0 ? `${safeAreaTop.value}px` : 'env(safe-area-inset-top, 0px)',
+  paddingTop: `${safeAreaTop.value}px`,
   paddingBottom: keyboardHeight.value > 0 ? `${keyboardHeight.value}px` : '0px',
 }))
 

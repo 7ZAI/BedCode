@@ -39,12 +39,12 @@ import type { Ref } from 'vue'
 const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar: number }>>('safeArea')
 
 // 导航栏样式：底部安全区域
-// 使用 max() 确保 JS 值和 CSS env() 取较大值
-// JS 初始化延迟时 CSS env() 也能立即生效
+// Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
+// 父组件 MobileLayout 会在 safeAreaReady 后才渲染
 const navStyle = computed(() => {
   const jsBottom = safeArea?.value?.navigationBar || safeArea?.value?.bottom || 0
   return {
-    paddingBottom: jsBottom > 0 ? `${jsBottom}px` : 'env(safe-area-inset-bottom, 0px)',
+    paddingBottom: `${jsBottom}px`,
   }
 })
 

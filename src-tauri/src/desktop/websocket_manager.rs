@@ -3,17 +3,16 @@
 //! 单例模式的服务器管理器
 //! 使用 Actix Web 提供 HTTP REST API + WebSocket 终端
 //! 客户端跟踪和消息广播通过 WsSessionRegistry 实现
+//!
+//! 服务依赖通过 AppContext::global() 获取，不再重复存储
 
 use crate::desktop::server::message::Message as BusinessMessage;
 use crate::desktop::server::ws::registry::WsSessionRegistry;
-use crate::desktop::session::SessionManager;
-use crate::desktop::plugin::PluginManager;
+use crate::desktop::session::GlobalOutputManager;
 use crate::shared::system::error::AppError;
-use crate::desktop::auth::QrTokenManager;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tauri::AppHandle;
 use tokio::sync::RwLock;
 
 /// 客户端摘要（对外暴露的信息）
@@ -32,18 +31,6 @@ struct WsManagerInner {
     port: RwLock<Option<u16>>,
     /// 是否已初始化
     initialized: RwLock<bool>,
-    /// 数据库实例
-    db: RwLock<Option<Arc<tokio::sync::Mutex<crate::shared::db::Database>>>>,
-    /// QR Token 管理器
-    qr_manager: RwLock<Option<Arc<QrTokenManager>>>,
-    /// 配对服务
-    pairing_service: RwLock<Option<Arc<crate::desktop::server::services::PairingService>>>,
-    /// Tauri AppHandle
-    app_handle: RwLock<Option<Arc<AppHandle>>>,
-    /// 会话管理器
-    session_manager: RwLock<Option<Arc<SessionManager>>>,
-    /// 插件管理器
-    plugin_manager: RwLock<Option<Arc<PluginManager>>>,
 }
 
 impl WsManagerInner {
@@ -51,12 +38,6 @@ impl WsManagerInner {
         Self {
             port: RwLock::new(None),
             initialized: RwLock::new(false),
-            db: RwLock::new(None),
-            qr_manager: RwLock::new(None),
-            pairing_service: RwLock::new(None),
-            app_handle: RwLock::new(None),
-            session_manager: RwLock::new(None),
-            plugin_manager: RwLock::new(None),
         }
     }
 }
@@ -76,48 +57,13 @@ impl WebSocketManager {
     }
 
     /// 初始化
-    pub async fn init(
-        &self,
-        db: Arc<tokio::sync::Mutex<crate::shared::db::Database>>,
-        qr_manager: Arc<QrTokenManager>,
-        pairing_service: Arc<crate::desktop::server::services::PairingService>,
-        app_handle: Arc<AppHandle>,
-        session_manager: Arc<SessionManager>,
-        plugin_manager: Arc<PluginManager>,
-    ) -> Result<()> {
-        {
-            let mut initialized = self.inner.initialized.write().await;
-            if *initialized {
-                tracing::warn!("WebSocketManager already initialized");
-                return Ok(());
-            }
-            *initialized = true;
+    pub async fn init(&self) -> Result<()> {
+        let mut initialized = self.inner.initialized.write().await;
+        if *initialized {
+            tracing::warn!("WebSocketManager already initialized");
+            return Ok(());
         }
-
-        {
-            let mut db_lock = self.inner.db.write().await;
-            *db_lock = Some(db);
-        }
-        {
-            let mut qr_lock = self.inner.qr_manager.write().await;
-            *qr_lock = Some(qr_manager);
-        }
-        {
-            let mut ps_lock = self.inner.pairing_service.write().await;
-            *ps_lock = Some(pairing_service);
-        }
-        {
-            let mut handle_lock = self.inner.app_handle.write().await;
-            *handle_lock = Some(app_handle);
-        }
-        {
-            let mut sm_lock = self.inner.session_manager.write().await;
-            *sm_lock = Some(session_manager);
-        }
-        {
-            let mut pm_lock = self.inner.plugin_manager.write().await;
-            *pm_lock = Some(plugin_manager);
-        }
+        *initialized = true;
 
         tracing::info!("WebSocketManager initialized");
         Ok(())
@@ -319,7 +265,6 @@ impl WebSocketManager {
     pub async fn set_device_name(&self, addr: &SocketAddr, device_name: Option<String>) {
         if let Some(name) = device_name {
             let registry = WsSessionRegistry::global();
-            // 通过 addr 查找 client_id，再设置 device_name
             if let Some(summary) = registry.get_client_by_addr(addr).await {
                 registry.set_device_name(&summary.client_id, Some(name)).await;
             }
@@ -337,7 +282,6 @@ impl WebSocketManager {
         // 此方法保留用于 auth_service 等外部调用者的兼容性
         if let Some(cid) = client_id {
             let registry = WsSessionRegistry::global();
-            // 如果 registry 中没有该 client_id 的设备名称，仅标记 authenticated
             let current_name = registry.get_device_name(&cid).await;
             registry.set_authenticated(&cid, current_name).await;
         }
@@ -353,37 +297,10 @@ impl WebSocketManager {
         let registry = WsSessionRegistry::global();
 
         if let Some(client_id) = registry.unregister_by_addr(&addr).await {
-            use crate::desktop::session::GlobalOutputManager;
             let global_manager = GlobalOutputManager::global();
             global_manager.unsubscribe_all_for_client(&client_id).await;
             tracing::info!("[WebSocketManager] Cleaned up all subscriptions for client {}", client_id);
         }
-    }
-
-    // ==================== Getters ====================
-
-    pub async fn db(&self) -> Option<Arc<tokio::sync::Mutex<crate::shared::db::Database>>> {
-        self.inner.db.read().await.clone()
-    }
-
-    pub async fn qr_manager(&self) -> Option<Arc<QrTokenManager>> {
-        self.inner.qr_manager.read().await.clone()
-    }
-
-    pub async fn pairing_service(&self) -> Option<Arc<crate::desktop::server::services::PairingService>> {
-        self.inner.pairing_service.read().await.clone()
-    }
-
-    pub async fn app_handle(&self) -> Option<Arc<AppHandle>> {
-        self.inner.app_handle.read().await.clone()
-    }
-
-    pub async fn session_manager(&self) -> Option<Arc<SessionManager>> {
-        self.inner.session_manager.read().await.clone()
-    }
-
-    pub async fn plugin_manager(&self) -> Option<Arc<PluginManager>> {
-        self.inner.plugin_manager.read().await.clone()
     }
 }
 

@@ -11,7 +11,7 @@
         <!-- 快捷键面板 -->
         <div
           class="relative bg-[var(--mobile-bg-card)] border-t border-[var(--mobile-border)] rounded-t-2xl w-full max-w-md mx-4 mb-4 shadow-xl"
-          :style="{ paddingBottom: 'env(safe-area-inset-bottom, 16px)' }"
+          :style="{ paddingBottom: `${safeAreaBottom}px` }"
         >
           <!-- 拖动条 -->
           <div class="flex justify-center pt-3 pb-1">
@@ -66,7 +66,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
+import type { Ref } from 'vue'
 import { useInputAssistantStore } from '@/modules/shared/stores/inputAssistant'
 
 const props = defineProps<{
@@ -77,6 +78,9 @@ const emit = defineEmits<{
   close: []
   select: [key: string]
 }>()
+
+const safeArea = inject<Ref<{ bottom: number; navigationBar: number }>>('safeArea')
+const safeAreaBottom = computed(() => safeArea?.value?.navigationBar || safeArea?.value?.bottom || 16)
 
 const store = useInputAssistantStore()
 

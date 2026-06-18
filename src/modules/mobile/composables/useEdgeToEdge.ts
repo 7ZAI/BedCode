@@ -8,13 +8,10 @@
  * - 获取键盘高度和可见状态
  * - 监听安全区域变化事件
  *
- * CSS 变量（自动注入）：
- * - --safe-area-inset-top
- * - --safe-area-inset-bottom
- * - --safe-area-inset-left
- * - --safe-area-inset-right
- * - --keyboard-height
- * - --keyboard-visible
+ * 初始化策略：
+ * - 在 composable 创建时立即启动异步初始化（不等 onMounted）
+ * - 首次渲染时 safeArea 为全 0，由 isReady 控制内容显示时机
+ * - Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
@@ -53,42 +50,8 @@ export function useEdgeToEdge() {
 
   const isReady = ref(false)
 
-  /**
-   * 从 CSS 变量读取安全区域值
-   */
-  function readFromCSSVariables(): Partial<SafeAreaInsets> {
-    if (typeof document === 'undefined') return {}
-
-    const html = document.documentElement
-    const computedStyle = getComputedStyle(html)
-
-    return {
-      top: parseFloat(computedStyle.getPropertyValue('--safe-area-inset-top') || '0'),
-      bottom: parseFloat(computedStyle.getPropertyValue('--safe-area-inset-bottom') || '0'),
-      left: parseFloat(computedStyle.getPropertyValue('--safe-area-inset-left') || '0'),
-      right: parseFloat(computedStyle.getPropertyValue('--safe-area-inset-right') || '0'),
-      statusBar: parseFloat(computedStyle.getPropertyValue('--safe-area-inset-top') || '0'),
-      navigationBar: parseFloat(computedStyle.getPropertyValue('--safe-area-inset-bottom') || '0'),
-    }
-  }
-
-  /**
-   * 从 CSS 变量读取键盘信息
-   */
-  function readKeyboardFromCSSVariables(): KeyboardInfo {
-    if (typeof document === 'undefined') return { keyboardHeight: 0, isVisible: false }
-
-    const html = document.documentElement
-    const computedStyle = getComputedStyle(html)
-
-    const height = parseFloat(computedStyle.getPropertyValue('--keyboard-height') || '0')
-    const visible = computedStyle.getPropertyValue('--keyboard-visible') === '1'
-
-    return {
-      keyboardHeight: height,
-      isVisible: visible,
-    }
-  }
+  // 清理函数列表
+  const cleanupFunctions: Array<() => void> = []
 
   /**
    * 处理安全区域变化事件
@@ -143,16 +106,6 @@ export function useEdgeToEdge() {
       return result
     } catch (e) {
       console.warn('[EdgeToEdge] Failed to get safe area insets:', e)
-      // Fallback to CSS variables
-      const cssValues = readFromCSSVariables()
-      safeArea.value = {
-        top: cssValues.top || 0,
-        right: cssValues.right || 0,
-        bottom: cssValues.bottom || 0,
-        left: cssValues.left || 0,
-        statusBar: cssValues.statusBar || 0,
-        navigationBar: cssValues.navigationBar || 0,
-      }
       return safeArea.value
     }
   }
@@ -171,63 +124,7 @@ export function useEdgeToEdge() {
       return result
     } catch (e) {
       console.warn('[EdgeToEdge] Failed to get keyboard info:', e)
-      // Fallback to CSS variables
-      keyboardInfo.value = readKeyboardFromCSSVariables()
       return keyboardInfo.value
-    }
-  }
-
-  /**
-   * 启用 Edge-to-Edge 模式
-   */
-  async function enable(): Promise<void> {
-    if (!platformInfo.value.isMobile) return
-
-    try {
-      await invoke('plugin:edge-to-edge|enable')
-      console.log('[EdgeToEdge] Enabled')
-    } catch (e) {
-      console.warn('[EdgeToEdge] Failed to enable:', e)
-    }
-  }
-
-  /**
-   * 禁用 Edge-to-Edge 模式
-   */
-  async function disable(): Promise<void> {
-    if (!platformInfo.value.isMobile) return
-
-    try {
-      await invoke('plugin:edge-to-edge|disable')
-      console.log('[EdgeToEdge] Disabled')
-    } catch (e) {
-      console.warn('[EdgeToEdge] Failed to disable:', e)
-    }
-  }
-
-  /**
-   * 显示键盘
-   */
-  async function showKeyboard(): Promise<void> {
-    if (!platformInfo.value.isMobile) return
-
-    try {
-      await invoke('plugin:edge-to-edge|show_keyboard')
-    } catch (e) {
-      console.warn('[EdgeToEdge] Failed to show keyboard:', e)
-    }
-  }
-
-  /**
-   * 隐藏键盘
-   */
-  async function hideKeyboard(): Promise<void> {
-    if (!platformInfo.value.isMobile) return
-
-    try {
-      await invoke('plugin:edge-to-edge|hide_keyboard')
-    } catch (e) {
-      console.warn('[EdgeToEdge] Failed to hide keyboard:', e)
     }
   }
 
@@ -271,7 +168,13 @@ export function useEdgeToEdge() {
     }
   }
 
-  onMounted(async () => {
+  /**
+   * 核心初始化逻辑 — 立即执行，不依赖 onMounted
+   *
+   * 提前启动异步初始化，使 safeArea 值在首次渲染前就可能就绪
+   * onMounted 仅负责注册 DOM 事件监听和清理
+   */
+  async function initialize() {
     if (!platformInfo.value.isMobile) {
       isReady.value = true
       return
@@ -280,48 +183,30 @@ export function useEdgeToEdge() {
     // 设置 Tauri 事件监听（推荐方式）
     const unlisten = await setupEventListener()
     if (unlisten) {
-      // 保存清理函数
       cleanupFunctions.push(unlisten)
     }
 
-    // 同时监听 DOM 自定义事件（fallback）
-    window.addEventListener('safeAreaChanged', handleSafeAreaChange as EventListener)
-
-    // 先等待一小段时间，让插件有机会注入 CSS 变量
-    await new Promise(resolve => setTimeout(resolve, 50))
-
-    // 初始获取一次安全区域
+    // 初始获取安全区域
     await getSafeAreaInsets()
     await getKeyboardInfo()
 
-    // 如果安全区域值为 0，再次尝试从 CSS 变量读取（延迟重试）
-    if (safeArea.value.top === 0 && safeArea.value.bottom === 0) {
-      console.log('[EdgeToEdge] Safe area is 0, retrying after delay...')
-      await new Promise(resolve => setTimeout(resolve, 200))
-      const cssValues = readFromCSSVariables()
-      if (cssValues.top || cssValues.bottom) {
-        safeArea.value = {
-          top: cssValues.top || 0,
-          right: cssValues.right || 0,
-          bottom: cssValues.bottom || 0,
-          left: cssValues.left || 0,
-          statusBar: cssValues.statusBar || cssValues.top || 0,
-          navigationBar: cssValues.navigationBar || cssValues.bottom || 0,
-        }
-        console.log('[EdgeToEdge] Got safe area from CSS variables:', safeArea.value)
-      }
-    }
-
     isReady.value = true
     console.log('[EdgeToEdge] Initialized:', safeArea.value)
-  })
+  }
 
-  // 清理函数列表
-  const cleanupFunctions: Array<() => void> = []
+  // 立即启动初始化，不等待 onMounted
+  // 桌面端会同步设 isReady = true，移动端异步获取后设置
+  initialize()
+
+  onMounted(() => {
+    // DOM 事件监听（fallback）
+    if (platformInfo.value.isMobile) {
+      window.addEventListener('safeAreaChanged', handleSafeAreaChange as EventListener)
+    }
+  })
 
   onUnmounted(() => {
     window.removeEventListener('safeAreaChanged', handleSafeAreaChange as EventListener)
-    // 清理所有监听器
     cleanupFunctions.forEach(fn => fn())
     cleanupFunctions.length = 0
   })
@@ -350,9 +235,39 @@ export function useEdgeToEdge() {
     totalBottomInset,
     getSafeAreaInsets,
     getKeyboardInfo,
-    enable,
-    disable,
-    showKeyboard,
-    hideKeyboard,
+    enable: async () => {
+      if (!platformInfo.value.isMobile) return
+      try {
+        await invoke('plugin:edge-to-edge|enable')
+        console.log('[EdgeToEdge] Enabled')
+      } catch (e) {
+        console.warn('[EdgeToEdge] Failed to enable:', e)
+      }
+    },
+    disable: async () => {
+      if (!platformInfo.value.isMobile) return
+      try {
+        await invoke('plugin:edge-to-edge|disable')
+        console.log('[EdgeToEdge] Disabled')
+      } catch (e) {
+        console.warn('[EdgeToEdge] Failed to disable:', e)
+      }
+    },
+    showKeyboard: async () => {
+      if (!platformInfo.value.isMobile) return
+      try {
+        await invoke('plugin:edge-to-edge|show_keyboard')
+      } catch (e) {
+        console.warn('[EdgeToEdge] Failed to show keyboard:', e)
+      }
+    },
+    hideKeyboard: async () => {
+      if (!platformInfo.value.isMobile) return
+      try {
+        await invoke('plugin:edge-to-edge|hide_keyboard')
+      } catch (e) {
+        console.warn('[EdgeToEdge] Failed to hide keyboard:', e)
+      }
+    },
   }
 }

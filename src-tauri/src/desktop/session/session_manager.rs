@@ -9,14 +9,16 @@ use crate::desktop::pty::{
     AsyncPtyOutputListener, PtyOutputEvent, PtySessionHandler, PtyHandler,
 };
 use crate::desktop::session::{
-    config_mapper::{ConfigMapper, DefaultConfigMapper},
+    session_components::{
+        ConfigMapper, DefaultConfigMapper,
+        DefaultNamingService, NamingService,
+        DefaultPtyRegistry, PtyRegistry,
+        DefaultSessionInfoRegistry, SessionInfoRegistry,
+        DefaultStatusDetector, StatusDetector,
+    },
     event_bus::{DefaultSessionEventBus, SessionEventBus},
-    naming_service::{DefaultNamingService, NamingService},
-    pty_registry::{DefaultPtyRegistry, PtyRegistry},
-    session_info::{DefaultSessionInfoRegistry, SessionInfoRegistry},
-    status_detector::{DefaultStatusDetector, StatusDetector},
+    session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
-    GlobalOutputManager,
 };
 use crate::desktop::traits::PtyOutputListener;
 use crate::shared::enums::{SessionStatus, SessionType};

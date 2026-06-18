@@ -15,8 +15,8 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* 安全区域变量 - 由 tauri-plugin-edge-to-edge 自动注入 */
-  /* 同时设置 CSS 环境变量 fallback，确保插件初始化延迟时也能正确获取 */
+  /* 安全区域变量 - 由 tauri-plugin-edge-to-edge 通过 JS 设置 */
+  /* Android WebView 不支持 CSS env(safe-area-inset-*)，这些变量仅作 iOS 兼容 */
   --safe-area-inset-top: env(safe-area-inset-top, 0px);
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-inset-left: env(safe-area-inset-left, 0px);

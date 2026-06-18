@@ -16,6 +16,8 @@ pub enum AuthStage {
     ExchangeCertificate,
     /// 认证成功
     Authenticated,
+    /// JWT 重新认证（移动端发送，携带 session_token）
+    Reauthenticate,
     /// 认证失败
     Failed,
     /// QR 码连接

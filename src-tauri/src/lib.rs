@@ -317,14 +317,7 @@ pub fn run() {
             let ws_manager = desktop::websocket_manager::WebSocketManager::global();
             let ws_port_for_spawn = ws_port;
             tauri::async_runtime::spawn(async move {
-                ws_manager.init(
-                    ctx.db().clone(),
-                    ctx.qr_manager().clone(),
-                    ctx.pairing_service().clone(),
-                    ctx.app_handle().clone(),
-                    ctx.session_manager().clone(),
-                    ctx.plugin_manager().clone(),
-                ).await
+                ws_manager.init().await
                     .expect("Failed to initialize WebSocketManager");
 
                 // 注册同步事件处理器
@@ -402,28 +395,28 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // WSL
-            desktop::commands::list_wsl_distributions,
-            desktop::commands::is_wsl_available,
+            desktop::commands::wsl::list_wsl_distributions,
+            desktop::commands::wsl::is_wsl_available,
             // Session Config
-            desktop::commands::create_session_config,
-            desktop::commands::list_session_configs,
-            desktop::commands::get_session_config,
-            desktop::commands::delete_session_config,
-            desktop::commands::update_session_config,
+            desktop::commands::session_config::create_session_config,
+            desktop::commands::session_config::list_session_configs,
+            desktop::commands::session_config::get_session_config,
+            desktop::commands::session_config::delete_session_config,
+            desktop::commands::session_config::update_session_config,
             // Session
-            desktop::commands::start_session,
-            desktop::commands::create_session_no_start,
-            desktop::commands::start_existing_session,
-            desktop::commands::list_sessions,
-            desktop::commands::get_session,
-            desktop::commands::kill_session,
-            desktop::commands::delete_session,
-            desktop::commands::restart_session,
-            desktop::commands::resize_session,
-            desktop::commands::get_session_output_history,
+            desktop::commands::session::start_session,
+            desktop::commands::session::create_session_no_start,
+            desktop::commands::session::start_existing_session,
+            desktop::commands::session::list_sessions,
+            desktop::commands::session::get_session,
+            desktop::commands::session::kill_session,
+            desktop::commands::session::delete_session,
+            desktop::commands::session::restart_session,
+            desktop::commands::session::resize_session,
+            desktop::commands::session::get_session_output_history,
             // PTY Input
-            desktop::commands::write_to_session,
-            desktop::commands::send_special_key,
+            desktop::commands::pty_input::write_to_session,
+            desktop::commands::pty_input::send_special_key,
             // Pairing
             shared::system::commands::generate_pairing_code,
             shared::system::commands::get_current_pairing_code,
@@ -432,18 +425,18 @@ pub fn run() {
             shared::system::commands::list_paired_devices,
             shared::system::commands::remove_paired_device,
             // QR Code
-            desktop::commands::generate_qr_code,
-            desktop::commands::clear_qr_code,
-            desktop::commands::get_qr_connection_info,
-            desktop::commands::get_qr_token_ttl,
-            desktop::commands::set_qr_token_ttl,
+            desktop::commands::qr::generate_qr_code,
+            desktop::commands::qr::clear_qr_code,
+            desktop::commands::qr::get_qr_connection_info,
+            desktop::commands::qr::get_qr_token_ttl,
+            desktop::commands::qr::set_qr_token_ttl,
             // Quick Actions
-            desktop::commands::list_quick_actions,
-            desktop::commands::create_quick_action,
-            desktop::commands::update_quick_action,
-            desktop::commands::delete_quick_action,
-            desktop::commands::get_all_db_settings,
-            desktop::commands::set_db_setting,
+            desktop::commands::quick_actions::list_quick_actions,
+            desktop::commands::quick_actions::create_quick_action,
+            desktop::commands::quick_actions::update_quick_action,
+            desktop::commands::quick_actions::delete_quick_action,
+            desktop::commands::settings::get_all_db_settings,
+            desktop::commands::settings::set_db_setting,
             // Settings
             shared::system::commands::get_app_settings,
             shared::system::commands::save_app_settings,
@@ -452,7 +445,7 @@ pub fn run() {
             shared::system::commands::get_app_version,
             shared::system::commands::get_startup_time,
             shared::system::commands::get_local_ip_addresses,
-            desktop::commands::get_connected_devices,
+            desktop::commands::devices::get_connected_devices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -600,13 +593,13 @@ pub fn run() {
             shared::system::commands::list_paired_devices,
             shared::system::commands::remove_paired_device,
             // Quick Actions (移动端使用内存存储)
-            shared::system::commands::list_quick_actions_mobile,
-            shared::system::commands::create_quick_action_mobile,
-            shared::system::commands::update_quick_action_mobile,
-            shared::system::commands::delete_quick_action_mobile,
+            mobile::commands::mobile_commands::list_quick_actions_mobile,
+            mobile::commands::mobile_commands::create_quick_action_mobile,
+            mobile::commands::mobile_commands::update_quick_action_mobile,
+            mobile::commands::mobile_commands::delete_quick_action_mobile,
             // Settings (移动端使用 JSON 文件)
-            shared::system::commands::get_all_db_settings_mobile,
-            shared::system::commands::set_db_setting_mobile,
+            mobile::commands::mobile_commands::get_all_db_settings_mobile,
+            mobile::commands::mobile_commands::set_db_setting_mobile,
             // App Settings
             shared::system::commands::get_app_settings,
             shared::system::commands::save_app_settings,
@@ -624,8 +617,8 @@ pub fn run() {
             // Mobile HTTP API Commands
             mobile::commands::http::http_get_file_tree,
             // Session Config (移动端使用内存存储)
-            shared::system::commands::list_session_configs_mobile,
-            shared::system::commands::get_session_config_mobile,
+            mobile::commands::mobile_commands::list_session_configs_mobile,
+            mobile::commands::mobile_commands::get_session_config_mobile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

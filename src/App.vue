@@ -26,7 +26,7 @@ import { useKeyboardShortcuts } from '@/modules/shared/composables/useKeyboardSh
 const router = useRouter()
 const { platformInfo } = usePlatform()
 const { isLandscape, orientation } = useOrientation()
-const { safeArea, keyboardInfo } = useEdgeToEdge()
+const { safeArea, keyboardInfo, isReady } = useEdgeToEdge()
 
 const isDesktop = computed(() => platformInfo.value.isDesktop)
 
@@ -65,4 +65,5 @@ provide('isLandscape', isLandscape)
 provide('orientation', orientation)
 provide('safeArea', safeArea)
 provide('keyboardInfo', keyboardInfo)
+provide('safeAreaReady', isReady)
 </script>

@@ -196,7 +196,51 @@ const { platformInfo } = usePlatform()
 
 ## Code Comment Standards
 
-核心逻辑**必须**添加注释，解释"为什么"而非"是什么"。
+### 核心原则
+
+**注释解释"为什么"而非"是什么"。** 代码本身已经说明了做了什么，注释的价值在于补充代码无法表达的信息。
+
+### Rust 注释规范
+
+#### 1. 模块级文档 (`//!`)
+
+每个模块文件**必须**有模块级文档，说明模块职责和核心设计：
+
+```rust
+//! Session Manager
+//!
+//! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
+//! 重构后只负责流程编排，各职责已拆分到独立模块
+```
+
+#### 2. 公开项文档 (`///`)
+
+所有 `pub` 的 struct、enum、trait、函数/方法**必须**有 `///` 文档注释：
+
+```rust
+/// 从配置创建会话（带来源设备）
+///
+/// # Arguments
+/// * `config_id` - 会话配置 ID
+/// * `source_device` - 触发操作的设备名称，桌面本地操作为 None
+///
+/// # Errors
+/// 配置不存在时返回 `AppError::NotFound`
+pub async fn create_session_with_source(&self, config_id: &str, source_device: Option<String>) -> Result<String> {
+```
+
+**简单 accessor 可省略多行文档**，但必须有单行 `///`：
+
+```rust
+/// 获取会话状态变化广播发送器
+pub fn status_tx(&self) -> broadcast::Sender<SessionStatusEvent> {
+```
+
+**纯 getter（`fn db(&self)`）** 可以不加 `///`，因为签名已足够清晰。
+
+#### 3. 内联注释 (`//`)
+
+关键逻辑**必须**添加内联注释：
 
 | 场景 | 说明 |
 |------|------|
@@ -205,8 +249,7 @@ const { platformInfo } = usePlatform()
 | 异常处理 | 为什么捕获这个错误 |
 | 并发控制 | 锁的获取顺序、死锁避免策略 |
 | 性能优化 | 为什么这样优化 |
-
-**示例：**
+| 非显而易见的选择 | 为什么用这种方式而非更直觉的方式 |
 
 ```rust
 // ❌ 不好：描述代码做什么
@@ -214,17 +257,138 @@ const { platformInfo } = usePlatform()
 for session in sessions.iter() { }
 
 // ✅ 好：解释为什么这样做
-// 遍历所有会话，清理已停止超过 24 小时的会话
-// 避免会话列表无限增长占用内存
+// 清理已停止超过 24 小时的会话，避免会话列表无限增长占用内存
 for session in sessions.iter() { }
 ```
 
-使用 TODO/FIXME 标记待办：
+#### 4. 分隔注释
+
+使用 `// ======` 风格分隔逻辑区块（Tauri commands 文件中按领域分组）：
+
+```rust
+// ==================== Session Commands ====================
+```
+
+#### 5. TODO / FIXME 标记
 
 ```rust
 // TODO(username): 添加断线重连逻辑
 // FIXME: 并发访问时可能 panic，需要加锁
 ```
+
+#### 6. 文档中的代码块和示例
+
+对于复杂 API，在 `///` 文档中添加 `# Examples`：
+
+```rust
+/// 连接到目标设备
+///
+/// # Examples
+/// ```no_run
+/// let manager = ConnectionManager::new();
+/// manager.connect(app_handle, "192.168.1.1".to_string(), 8080, None).await?;
+/// ```
+pub async fn connect(&self, ...) -> Result<()> {
+```
+
+---
+
+### TypeScript / Vue 注释规范
+
+#### 1. 文件头注释
+
+composable / 工具文件**必须**有文件头注释：
+
+```typescript
+/**
+ * Desktop Commands - Rust 后端命令封装
+ *
+ * 所有桌面端可用的 Tauri 命令调用
+ */
+```
+
+#### 2. 导出函数文档 (`/** */`)
+
+所有 `export` 的函数、interface、type、class **必须**有 JSDoc 注释：
+
+```typescript
+/**
+ * 连接到目标设备
+ *
+ * @param device - 远程设备信息
+ * @throws 连接失败时抛出错误
+ */
+export async function connect(device: RemoteDevice): Promise<void> {
+```
+
+**简单 Tauri invoke 包装**可省略参数文档，但必须有单行描述：
+
+```typescript
+/** 获取会话列表 */
+export async function listSessions(): Promise<SessionInfo[]> {
+```
+
+#### 3. Vue 组件文档
+
+组件 `<script setup>` 顶部添加组件说明：
+
+```vue
+<script setup lang="ts">
+/**
+ * 终端视图 - 显示 PTY 输出和输入栏
+ * 支持多会话切换和 ANSI 渲染
+ */
+```
+
+#### 4. Interface / Type 文档
+
+导出的 interface 和 type **必须**有文档，字段使用行内注释：
+
+```typescript
+/** 已配对设备信息 */
+export interface PairedDevice {
+  address: string       // 设备 IP 地址
+  port: number          // WebSocket 端口
+  name: string          // 设备显示名称
+  fingerprint: string   // 设备指纹，用于识别同一设备
+  pairedAt: string      // 配对时间 (ISO 8601)
+  connectCount: number  // 连接次数统计
+}
+```
+
+#### 5. 内联注释
+
+与 Rust 相同原则：解释"为什么"而非"是什么"。
+
+```typescript
+// ❌ 不好
+// 设置状态为 connecting
+connectionStatus.value = 'connecting'
+
+// ✅ 好
+// 后端事件驱动更新状态，此值供前端 UI 响应式渲染
+connectionStatus.value = 'connecting'
+```
+
+#### 6. 分隔注释
+
+与 Rust 统一风格：
+
+```typescript
+// ==================== State ====================
+// ==================== Operations ====================
+// ==================== Composable ====================
+```
+
+---
+
+### 通用规则（所有语言）
+
+1. **语言**：注释使用中文，技术术语保留英文（如 PTY、WebSocket、JWT）
+2. **注释必须与代码同步**：修改代码时必须更新相关注释，过时注释比没有注释更危险
+3. **避免冗余注释**：不要注释代码显而易见的行为
+4. **禁止注释掉的代码**：使用版本控制而非注释保留旧代码，除非有明确 TODO 说明保留原因
+5. **私有方法**：复杂私有方法仍需注释，简单私有方法可省略
 
 ---
 

@@ -3,12 +3,12 @@
 //! WebSocket 连接管理命令
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::Result;
 use crate::mobile::ConnectionManager;
 use crate::mobile::router::event;
-use crate::mobile::managers::{get_connection_manager, get_session_manager};
+use crate::mobile::managers::{get_connection_manager, get_session_manager, get_auth_manager};
 
 /// 连接信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +28,14 @@ pub async fn ws_connect(
 ) -> Result<ConnectionInfo> {
     eprintln!("[ws_connect] START - address={}, port={}, name={:?}", address, port, name);
     tracing::info!("WebSocket connecting to {}:{}", address, port);
+
+    // 初始化设备身份（首次调用时从文件加载或生成新身份）
+    {
+        let auth = get_auth_manager();
+        let app_data_dir = app_handle.path().app_data_dir()
+            .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?;
+        auth.init_identity(app_data_dir).await;
+    }
 
     // 发射连接开始事件
     event::emit_connecting(&app_handle, &address, port);
