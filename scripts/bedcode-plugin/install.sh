@@ -1,31 +1,32 @@
 #!/bin/bash
 # BedCode Plugin Installer
-# Copy this plugin to ~/.claude/plugins/bedcode/
 
-PLUGIN_SOURCE="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_TARGET="$HOME/.claude/plugins/bedcode"
+set -e
 
-echo "BedCode Plugin Installer"
-echo "========================"
-echo ""
-echo "Source: $PLUGIN_SOURCE"
-echo "Target: $PLUGIN_TARGET"
-echo ""
+PLUGIN_DIR="$HOME/.claude/plugins/bedcode"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Create target directory
-mkdir -p "$PLUGIN_TARGET"
+echo "Installing BedCode plugin..."
 
-# Copy files
-cp -r "$PLUGIN_SOURCE/." "$PLUGIN_TARGET/"
+# Remove old installation
+if [ -d "$PLUGIN_DIR" ]; then
+    echo "Removing old installation..."
+    rm -rf "$PLUGIN_DIR"
+fi
+
+# Create plugin directory
+mkdir -p "$PLUGIN_DIR"
+
+# Copy plugin files
+cp -r "$SCRIPT_DIR/.claude-plugin" "$PLUGIN_DIR/"
+cp -r "$SCRIPT_DIR/hooks" "$PLUGIN_DIR/"
+cp -r "$SCRIPT_DIR/scripts" "$PLUGIN_DIR/"
+cp -r "$SCRIPT_DIR/commands" "$PLUGIN_DIR/"
 
 # Make scripts executable
-chmod +x "$PLUGIN_TARGET/scripts/"*.sh
+chmod +x "$PLUGIN_DIR/scripts/"*.sh 2>/dev/null || true
 
-echo "Plugin installed successfully!"
+echo "Plugin installed to: $PLUGIN_DIR"
 echo ""
-echo "Next steps:"
-echo "1. Make sure BedCode desktop app is running"
-echo "2. In Claude Code, run: /bedcode on"
-echo ""
-echo "To uninstall, run:"
-echo "   rm -rf $PLUGIN_TARGET"
+echo "Restart Claude Code to load the plugin."
+echo "Use /bedcode status to view session events."
