@@ -76,13 +76,35 @@
 
     <!-- 文件树 -->
     <div class="sidebar-body">
-      <FileTreeItem
-        v-for="(node, index) in tree"
-        :key="index"
-        :node="node"
-        :depth="0"
-        @file-click="handleFileClick"
-      />
+      <!-- 加载状态 -->
+      <div v-if="loading" class="sidebar-state">
+        <svg class="spinning-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span class="state-text">加载中...</span>
+      </div>
+
+      <!-- 错误状态 -->
+      <div v-else-if="error" class="sidebar-state error-state">
+        <span class="state-text">{{ error }}</span>
+        <button class="retry-btn" @click="handleRefresh">重试</button>
+      </div>
+
+      <!-- 空状态 -->
+      <div v-else-if="tree.length === 0" class="sidebar-state">
+        <span class="state-text">暂无文件</span>
+      </div>
+
+      <!-- 文件树列表 -->
+      <template v-else>
+        <FileTreeItem
+          v-for="(node, index) in tree"
+          :key="index"
+          :node="node"
+          :depth="0"
+          @file-click="handleFileClick"
+        />
+      </template>
     </div>
 
     <!-- 文件查看弹窗 -->
@@ -95,14 +117,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, toRef } from 'vue'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useFileTree, type SidebarSettings } from '@/modules/mobile/composables/useFileTree'
 import FileTreeItem from './FileTreeItem.vue'
 import FileViewerModal from './FileViewerModal.vue'
+import { useToast } from '@/modules/shared/composables/useToast'
+
+const props = defineProps<{
+  sessionId: string
+}>()
 
 const { isLandscape } = useOrientation()
-const { tree, expandAll, collapseAll, refresh, settings, updateSettings } = useFileTree()
+const toast = useToast()
+const { tree, loading, error, expandAll, collapseAll, refresh, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
 
 const isRefreshing = ref(false)
 const showSettingsPanel = ref(false)
@@ -118,9 +146,12 @@ const sidebarStyle = computed(() => {
   return { width: widthPercent }
 })
 
-function handleRefresh() {
+async function handleRefresh() {
   isRefreshing.value = true
-  refresh()
+  await refresh()
+  if (error.value) {
+    toast.error(error.value)
+  }
   setTimeout(() => {
     isRefreshing.value = false
   }, 500)
@@ -393,5 +424,50 @@ function handleFileClick(name: string) {
 
 .sidebar-body::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 212, 255, 0.4);
+}
+
+/* Sidebar States */
+.sidebar-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  gap: 0.5rem;
+}
+
+.state-text {
+  font-size: 0.8125rem;
+  color: var(--mobile-text-muted);
+}
+
+.spinning-icon {
+  animation: spin 1s linear infinite;
+  color: var(--mobile-text-muted);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.error-state .state-text {
+  color: var(--error, #ef4444);
+}
+
+.retry-btn {
+  padding: 0.375rem 1rem;
+  border-radius: 0.375rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.retry-btn:hover {
+  border-color: var(--mobile-accent);
+  color: var(--mobile-accent);
 }
 </style>
