@@ -14,10 +14,6 @@ import {
   wsAuthenticate,
   wsRequestPairing,
   wsVerifyPairingCode,
-  wsLoadSessionConfigs,
-  wsLoadSessions,
-  wsStartSession,
-  wsStopSession,
   wsSendInput,
   wsJoinSession,
   initMobileEventListeners,
@@ -29,6 +25,7 @@ import {
   type RemoteDevice,
   type AuthCredentials,
 } from './useMobileCommands'
+import { useHttpApi } from './useHttpApi'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -374,6 +371,10 @@ export async function connect(device: RemoteDevice): Promise<void> {
   }, CONNECTION_TIMEOUT_MS)
 
   try {
+    // 设置 HTTP API 基础 URL
+    const { setApiBaseUrl } = useHttpApi()
+    setApiBaseUrl(device.address, device.port)
+
     // 调用后端连接，状态由后端事件驱动更新
     const result = await wsConnect(device.address, device.port, device.name)
     console.log('[MobileConnection] wsConnect returned:', result)
@@ -542,57 +543,78 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
  * 加载会话配置列表
  */
 export async function loadSessionConfigs(): Promise<any[]> {
-  const configs = await wsLoadSessionConfigs()
-  sessionConfigs.value = configs.map((c: any) => ({
-    id: c.id,
-    name: c.name,
-    environment: c.environment,
-    wsl_distro: c.wsl_distro,
-    working_dir: c.working_dir,
-    command: c.command,
-  }))
-  hasLoadedConfigs.value = true
-  return configs
+  const { httpListConfigs } = useHttpApi()
+  const result = await httpListConfigs()
+  if (result.code === 0 && result.data) {
+    const configs = result.data.configs || []
+    sessionConfigs.value = configs.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      environment: c.environment,
+      wsl_distro: c.wslDistro,
+      working_dir: c.workingDir,
+      command: c.command,
+    }))
+    hasLoadedConfigs.value = true
+    return configs
+  }
+  console.warn('[MobileConnection] Failed to load session configs via HTTP:', result.message)
+  return []
 }
 
 /**
  * 加载活跃会话列表
  */
 export async function loadActiveSessions(): Promise<any[]> {
-  const sessions = await wsLoadSessions()
-  activeSessions.value = sessions
-  return sessions
+  const { httpListSessions } = useHttpApi()
+  const result = await httpListSessions()
+  if (result.code === 0 && result.data) {
+    activeSessions.value = result.data.sessions || []
+    return result.data.sessions
+  }
+  console.warn('[MobileConnection] Failed to load sessions via HTTP:', result.message)
+  return []
 }
 
 /**
  * 启动会话，返回完整会话信息
  */
 export async function startSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {
-  const result = await wsStartSession(configId, sessionName)
-  return result
+  const { httpStartSession } = useHttpApi()
+  const result = await httpStartSession(configId)
+  if (result.code === 0 && result.data) {
+    return { sessionId: result.data.sessionId, session: undefined }
+  }
+  throw new Error(result.message || 'Failed to start session')
 }
 
 /**
- * 停止会话（仅更新本地状态为 stopped，不发送 WebSocket 请求）
- * 调用方应先调用 wsStopSession 发送请求，成功后再调用此方法更新本地状态
- * 停止后保留会话记录，显示为灰色已停止状态
+ * 停止会话：通过 HTTP API 发送停止请求，成功后更新本地状态
  */
-export function stopSession(sessionId: string): void {
-  // 更新会话状态为 stopped，而不是移除
-  const index = activeSessions.value.findIndex(s => s.id === sessionId)
-  if (index !== -1) {
-    activeSessions.value[index].status = 'stopped'
+export async function stopSession(sessionId: string): Promise<void> {
+  const { httpStopSession } = useHttpApi()
+  const result = await httpStopSession(sessionId)
+  if (result.code === 0) {
+    const index = activeSessions.value.findIndex(s => s.id === sessionId)
+    if (index !== -1) {
+      activeSessions.value[index].status = 'stopped'
+    }
+  } else {
+    throw new Error(result.message || 'Failed to stop session')
   }
 }
 
 /**
- * 删除会话（仅更新本地状态，不发送 WebSocket 请求）
- * 调用方应先调用 wsRemoveSession 发送请求，成功后再调用此方法更新本地状态
- * 删除会完全移除会话记录
+ * 删除会话：通过 HTTP API 发送删除请求，成功后更新本地状态
  */
-export function removeSession(sessionId: string): void {
-  // 从本地列表移除
-  activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
+export async function removeSession(sessionId: string): Promise<void> {
+  const { httpRemoveSession } = useHttpApi()
+  const result = await httpRemoveSession(sessionId)
+  if (result.code === 0) {
+    activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
+  } else {
+    throw new Error(result.message || 'Failed to remove session')
+  }
 }
 
 /**
