@@ -1,6 +1,6 @@
 # BedCode Claude Code Plugin
 
-Remote monitoring and control for BedCode desktop app.
+Monitor Claude Code sessions through the BedCode desktop app.
 
 ## Installation
 
@@ -19,41 +19,31 @@ Remote monitoring and control for BedCode desktop app.
 
 ## Usage
 
-### Enable Monitoring
-```
-/bedcode on
-```
-
-### Disable Monitoring
-```
-/bedcode off
-```
-
-### Check Status
+### Check Session Status
 ```
 /bedcode status
 ```
 
 ## How It Works
 
-1. **Session Start**: When Claude Code starts a new session, the `SessionStart` hook automatically records the JSONL log path to `.claude/bedcode-session.json`
+1. **Session Start**: When Claude Code starts a new session, the `SessionStart` hook records the session info to `.claude/bedcode-events.jsonl`
 
-2. **Enable Monitoring**: Running `/bedcode on` reads the session file and connects to BedCode desktop app via WebSocket to register the session
+2. **Task Monitoring**: `Stop` and `SubagentStop` hooks analyze task status using LLM-based prompt hooks, writing events like:
+   - `completed` - Task finished
+   - `in_progress` - Task ongoing
+   - `asking` - Waiting for user input
+   - `interrupted` - Task interrupted
 
-3. **Remote Monitoring**: BedCode monitors the JSONL file and streams output to connected mobile devices
+3. **Event Log**: All events are written to `.claude/bedcode-events.jsonl` in JSONL format for the BedCode desktop app to consume
 
-4. **Input**: Mobile devices can send input which is written to `.claude/bedcode-pending-input.txt`, read by the Stop hook
+## Event Format
 
-## Requirements
+Events are written to `.claude/bedcode-events.jsonl`:
 
-- BedCode desktop app running
-- WebSocket client (socat, nc, or curl) for sending messages
-
-## Platform-Specific
-
-- **Windows**: Port file at `%APPDATA%\com.bedcode.app\bedcode-port.txt`
-- **macOS**: Port file at `~/Library/Application Support/com.bedcode.app/bedcode-port.txt`
-- **Linux**: Port file at `~/.config/com.bedcode.app/bedcode-port.txt`
+```jsonl
+{"event":"session_start","session_id":"abc123","project_path":"/path","timestamp":"2026-06-18T10:00:00Z"}
+{"event":"stop","session_id":"abc123","status":"completed","reason":"Task done","timestamp":"2026-06-18T10:30:00Z"}
+```
 
 ## Files
 
@@ -64,8 +54,15 @@ bedcode/
 ├── commands/
 │   └── bedcode.md           # /bedcode command
 ├── hooks/
-│   └── hooks.json           # SessionStart hook config
+│   └── hooks.json           # Hook configuration
 └── scripts/
-    ├── lib.sh               # WebSocket utilities
-    └── session-start.sh     # Session start hook
+    ├── session-start.sh     # Session start hook (Unix)
+    ├── session-start.cmd    # Session start hook (Windows)
+    ├── write-event.sh       # Write event script (Unix)
+    └── write-event.cmd      # Write event script (Windows)
 ```
+
+## Requirements
+
+- BedCode desktop app running
+- `jq` for JSON parsing (Unix only, Windows uses built-in commands)
