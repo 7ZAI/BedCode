@@ -6,7 +6,42 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.cmd"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Analyze the current task status and return JSON.\n\n**Status types:**\n- \"completed\": Task finished successfully\n- \"in_progress\": Task is ongoing\n- \"asking\": Waiting for user input (Claude asked a question)\n- \"interrupted\": Task interrupted or error occurred\n\n**Judgment criteria:**\n1. Check the 'reason' field from hook input\n2. Look for questions or \"waiting for\" markers in context\n\n**Return format (JSON only, no markdown):**\n{\"status\": \"<status>\", \"reason\": \"<brief explanation>\"}",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/write-event.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Analyze the subagent task status and return JSON.\n\n**Status types:**\n- \"completed\": Subagent task finished\n- \"in_progress\": Subagent task ongoing\n- \"asking\": Waiting for user input\n- \"interrupted\": Subagent task interrupted\n\n**Return format (JSON only, no markdown):**\n{\"status\": \"<status>\", \"reason\": \"<brief explanation>\"}",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/write-event.sh",
+            "timeout": 5
           }
         ]
       }
