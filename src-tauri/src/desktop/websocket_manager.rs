@@ -310,6 +310,20 @@ impl WebSocketManager {
         }
 
         tracing::info!("WebSocketManager started on port {}", port);
+
+        // 启动 Actix Web HTTP 服务器（Phase 1: 独立端口 port+1）
+        // Actix Web 使用自己的运行时，需要在独立 OS 线程中启动
+        let http_port = port + 1;
+        std::thread::spawn(move || {
+            let rt = actix_rt::Runtime::new().expect("Failed to create Actix runtime");
+            rt.block_on(async move {
+                if let Err(e) = crate::desktop::server::app::start_http_server(http_port).await {
+                    tracing::error!("Actix Web HTTP server error: {}", e);
+                }
+            });
+        });
+        tracing::info!("Actix Web HTTP server started on port {}", http_port);
+
         Ok(())
     }
 
