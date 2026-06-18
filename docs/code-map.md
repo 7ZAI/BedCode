@@ -180,16 +180,6 @@ bedcode/
 │       │       │   ├── request_response.rs # 请求响应
 │       │       │   ├── router.rs     # 客户端路由
 │       │       │   └ default_handler.rs # 默认消息处理
-│       │       ├── server/       # WebSocket 服务器 (桌面端)
-│       │       │   ├── ws_server.rs  # 服务器主实现
-│       │       │   ├── connection_manager.rs # 连接管理
-│       │       │   ├── heartbeat.rs  # 心跳机制
-│       │       │   ├── io.rs         # I/O 操作
-│       │       │   ├── business_pool.rs # 业务线程池
-│       │       │   ├── context.rs    # 服务器上下文
-│       │       │   ├── server_config.rs # 服务器配置
-│       │       │   ├── default_handler.rs # 默认消息处理
-│       │       │   └ events.rs     # 服务器事件
 │       │       ├── codec.rs      # 消息编解码
 │       │       └ traits.rs     # WebSocket traits
 │       │
@@ -219,17 +209,23 @@ bedcode/
 │       │   │   ├── pty_subscription_handler.rs # 订阅处理
 │       │   │   ├── tmux.rs       # Tmux 支持
 │       │   │   └ wsl.rs        # WSL 支持
-│       │   ├── server/           # WebSocket 服务器
-│       │   │   ├── handlers/     # 消息处理器
-│       │   │   │   ├── auth_handler.rs
-│       │   │   │   ├── session_config_handler.rs
-│       │   │   │   ├── session_control_handler.rs
-│       │   │   │   └ terminal_handler.rs
-│       │   │   ├── router/       # 消息路由
-│       │   │   │   ├── business_router.rs
-│       │   │   │   ├── handler.rs
-│       │   │   │   ├── middleware.rs
-│       │   │   │   └ registry.rs
+│       │   ├── server/           # Actix Web HTTP + WS 服务器
+│       │   │   ├── controllers/  # HTTP REST 控制器
+│       │   │   │   ├── auth_controller.rs
+│       │   │   │   ├── session_controller.rs
+│       │   │   │   ├── config_controller.rs
+│       │   │   │   └ file_controller.rs
+│       │   │   ├── dtos/         # 请求/响应 DTO
+│       │   │   │   ├── common.rs
+│       │   │   │   ├── auth_dto.rs
+│       │   │   │   ├── session_dto.rs
+│       │   │   │   └ config_dto.rs
+│       │   │   ├── middleware/    # Actix 中间件
+│       │   │   │   ├── jwt_auth.rs
+│       │   │   │   └ cors.rs
+│       │   │   ├── ws/           # WebSocket 终端
+│       │   │   │   ├── terminal_ws.rs  # WS actor
+│       │   │   │   └ session.rs       # WS 会话状态
 │       │   │   ├── services/     # 业务服务
 │       │   │   │   ├── auth_service.rs
 │       │   │   │   ├── pairing_service.rs
@@ -237,7 +233,7 @@ bedcode/
 │       │   │   │   ├── session_control.rs
 │       │   │   │   ├── session_sub.rs
 │       │   │   │   └ terminal_service.rs
-│       │   │   ├── auth_interceptor.rs
+│       │   │   ├── app.rs        # Actix 路由配置和服务器启动
 │       │   │   ├── client_info.rs
 │       │   │   ├── connection_types.rs
 │       │   │   ├── message.rs        # 服务器消息
@@ -267,7 +263,7 @@ bedcode/
 │       │   │   ├── session_event_bus.rs
 │       │   │   └ session_info_registry.rs
 │       │   ├── event_forwarder.rs # 事件转发
-│       │   └ websocket_manager.rs # WebSocket 管理器
+│       │   └ websocket_manager.rs # 服务器管理器 (Actix Web)
 │       │
 │       ├── mobile/               # 移动端模块
 │       │   ├── commands/         # 移动端 Tauri commands
