@@ -17,6 +17,7 @@ pub mod app;
 pub mod controllers;
 pub mod dtos;
 pub mod middleware;
+pub mod ws;
 
 // 重新导出所有公开类型
 pub use message::*;

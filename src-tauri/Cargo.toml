@@ -87,6 +87,7 @@ android_logger = "0.14"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # Actix Web (desktop HTTP + WS server)
 actix-web = "4"
+actix = "0.13"
 actix-web-actors = "4"
 actix-rt = "2"
 actix-cors = "0.7"
