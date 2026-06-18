@@ -1,21 +1,35 @@
 #!/bin/bash
 # BedCode Session Start Hook
-# Records the JSONL log path for remote monitoring
+# Records session creation event to JSONL file
 
-SESSION_FILE="$CLAUDE_PROJECT_DIR/.claude/bedcode-session.json"
+set -euo pipefail
 
-# CLAUDE_MESSAGE_LOG is set by Claude Code when it starts a session
-# It contains the path to the message log file
+# Read hook input from stdin
+INPUT=$(cat)
 
-if [ -n "$CLAUDE_MESSAGE_LOG" ]; then
-    # Extract session ID from the path (last component of projects directory)
-    SESSION_ID=$(basename "$(dirname "$CLAUDE_MESSAGE_LOG")")
+# Extract fields
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
+PERMISSION_MODE=$(echo "$INPUT" | jq -r '.permission_mode // empty')
 
-    # Write session info
-    echo "{\"jsonl_path\": \"$CLAUDE_MESSAGE_LOG\", \"session_id\": \"$SESSION_ID\", \"project_path\": \"$CLAUDE_PROJECT_DIR\"}" > "$SESSION_FILE"
-
-    echo "{\"status\": \"recorded\", \"jsonl_path\": \"$CLAUDE_MESSAGE_LOG\"}"
-else
-    # Claude Code may not set this in all versions
-    echo "{\"status\": \"no_env\", \"message\": \"CLAUDE_MESSAGE_LOG not set\"}"
+# Validate session_id
+if [ -z "$SESSION_ID" ]; then
+  echo '{"error": "missing session_id"}' >&2
+  exit 2
 fi
+
+# Generate timestamp
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Ensure output directory exists
+OUTPUT_FILE="${CLAUDE_PROJECT_DIR}/.claude/bedcode-events.jsonl"
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+
+# Write session_start event to JSONL file
+# Using printf for safe JSON escaping
+printf '{"event":"session_start","session_id":"%s","project_path":"%s","transcript_path":"%s","permission_mode":"%s","timestamp":"%s"}\n' \
+  "$SESSION_ID" "$CWD" "$TRANSCRIPT_PATH" "$PERMISSION_MODE" "$TIMESTAMP" >> "$OUTPUT_FILE"
+
+# Output success for debugging
+echo "{\"status\":\"recorded\",\"session_id\":\"$SESSION_ID\",\"file\":\"$OUTPUT_FILE\"}"
