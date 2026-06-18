@@ -13,7 +13,7 @@
         <SessionsView />
       </div>
       <div class="swipe-page">
-        <QuickActionsView />
+        <ToolboxView />
       </div>
       <div class="swipe-page">
         <SettingsView />
@@ -27,7 +27,7 @@ import { ref, computed, onMounted, onUnmounted, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DevicesView from '@/modules/mobile/views/DevicesView.vue'
 import SessionsView from '@/modules/mobile/views/SessionsView.vue'
-import QuickActionsView from '@/modules/mobile/views/QuickActionsView.vue'
+import ToolboxView from '@/modules/mobile/views/ToolboxView.vue'
 import SettingsView from '@/modules/mobile/views/SettingsView.vue'
 
 // 定义组件名称，用于 keep-alive 缓存
@@ -44,7 +44,7 @@ const trackRef = ref<HTMLElement | null>(null)
 const pages = [
   { name: 'mobile-devices', component: DevicesView },
   { name: 'mobile-sessions', component: SessionsView },
-  { name: 'mobile-quick-actions', component: QuickActionsView },
+  { name: 'mobile-toolbox', component: ToolboxView },
   { name: 'mobile-settings', component: SettingsView }
 ]
 
