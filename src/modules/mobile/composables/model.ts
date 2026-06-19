@@ -55,6 +55,10 @@ export interface RemoteSession {
   startedAt?: string
   stoppedAt?: string
   is_active: boolean
+  /** 任务执行状态（Plugin 会话使用） */
+  taskStatus?: string
+  /** 任务状态原因 */
+  taskReason?: string
 }
 
 export interface TerminalOutputEvent {
@@ -69,5 +73,22 @@ export interface TerminalIncrementalOutput {
   events: TerminalOutputEvent[]
   current_index: number
   is_initial: boolean
+}
+
+/** 预设任务类型 */
+export type PresetTaskType = 'once' | 'template'
+
+/** 一次性任务状态 */
+export type OnceTaskStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+/** 预设任务 */
+export interface PresetTask {
+  id: string
+  title: string
+  content: string
+  type: PresetTaskType
+  status: OnceTaskStatus | null
+  createdAt: string
+  updatedAt: string
 }
 
