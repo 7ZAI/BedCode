@@ -54,71 +54,51 @@
       <!-- Section: 项目文件 -->
       <section>
         <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">项目文件</h3>
+
+        <!-- 未连接空状态 -->
         <div
-          v-if="!activeSessionId"
+          v-if="!isConnected"
           class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
         >
           <p class="text-[var(--mobile-text-disabled)] text-sm">连接设备后查看项目文件</p>
         </div>
-        <div v-else class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl overflow-hidden">
-          <!-- 文件树工具栏 -->
-          <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--mobile-border)]">
-            <span class="text-xs text-[var(--mobile-text-muted)]">文件目录</span>
-            <div class="flex gap-1">
-              <button
-                class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-                title="刷新"
-                @click="handleFileRefresh"
-              >
-                <svg class="w-3.5 h-3.5" :class="{ 'animate-spin': fileLoading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
-              <button
-                class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-                title="全部折叠"
-                @click="fileCollapseAll"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              <button
-                class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-                title="全部展开"
-                @click="fileExpandAll"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
-                </svg>
-              </button>
-            </div>
-          </div>
 
-          <!-- 文件树内容 -->
-          <div class="max-h-64 overflow-y-auto p-1">
-            <div v-if="fileLoading" class="flex items-center justify-center py-6">
-              <svg class="w-4 h-4 animate-spin text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        <!-- 已连接但无配置 -->
+        <div
+          v-else-if="projectCards.length === 0"
+          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
+        >
+          <p class="text-[var(--mobile-text-disabled)] text-sm">暂无会话配置</p>
+        </div>
+
+        <!-- 目录卡片列表 -->
+        <div v-else class="space-y-2.5">
+          <button
+            v-for="card in projectCards"
+            :key="card.configId"
+            class="w-full text-left bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-3.5 transition-colors"
+            :class="card.isRunning
+              ? 'hover:border-cyan-500/30 active:bg-[var(--mobile-bg-elevated)]'
+              : 'opacity-50'"
+            @click="handleProjectCardClick(card)"
+          >
+            <div class="flex items-center gap-2.5">
+              <!-- 文件夹图标 -->
+              <svg class="w-5 h-5 text-amber-400/80 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
               </svg>
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-[var(--mobile-text-primary)] truncate">{{ card.name }}</p>
+                <p class="text-xs text-[var(--mobile-text-muted)] truncate mt-0.5">{{ card.workingDir }}</p>
+              </div>
+              <!-- 运行状态指示 -->
+              <div
+                v-if="card.isRunning"
+                class="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0"
+                title="运行中"
+              ></div>
             </div>
-            <div v-else-if="fileError" class="text-center py-4">
-              <p class="text-xs text-red-400">{{ fileError }}</p>
-              <button class="text-xs text-[var(--mobile-accent)] mt-1" @click="handleFileRefresh">重试</button>
-            </div>
-            <div v-else-if="fileTree.length === 0" class="text-center py-4">
-              <p class="text-xs text-[var(--mobile-text-disabled)]">暂无文件</p>
-            </div>
-            <template v-else>
-              <FileTreeItem
-                v-for="(node, index) in fileTree"
-                :key="index"
-                :node="node"
-                :depth="0"
-                @file-click="handleFileClick"
-              />
-            </template>
-          </div>
+          </button>
         </div>
       </section>
 
@@ -277,12 +257,6 @@
       </Transition>
     </Teleport>
 
-    <!-- File Viewer Modal -->
-    <FileViewerModal
-      :visible="showFileViewer"
-      :filename="selectedFile"
-      @update:visible="showFileViewer = $event"
-    />
   </div>
 </template>
 
@@ -296,12 +270,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
-import { useFileTree } from '@/modules/mobile/composables/useFileTree'
 import { usePresetTasks } from '@/modules/mobile/composables/usePresetTasks'
 import { useToast } from '@/modules/shared/composables/useToast'
 import PresetTaskCard from '@/modules/mobile/components/PresetTaskCard.vue'
-import FileTreeItem from '@/modules/mobile/components/FileTreeItem.vue'
-import FileViewerModal from '@/modules/mobile/components/FileViewerModal.vue'
 import type { PresetTask, PresetTaskType } from '@/modules/mobile/composables/model'
 
 const router = useRouter()
@@ -427,19 +398,34 @@ async function doExecute() {
 
 // ==================== 项目文件 ====================
 
-const sessionIdRef = computed(() => activeSessionId.value || '')
-const { tree: fileTree, loading: fileLoading, error: fileError, expandAll: fileExpandAll, collapseAll: fileCollapseAll, refresh: fileRefresh } = useFileTree(sessionIdRef)
+/** 项目目录卡片：将会话配置关联到活跃会话 */
+const projectCards = computed(() => {
+  return connection.sessionConfigs.value.map(config => {
+    const session = connection.activeSessions.value.find(
+      (s: any) => s.config_id === config.id || s.configId === config.id
+    )
+    const isRunning = session?.status === 'running'
+    return {
+      configId: config.id,
+      name: config.name,
+      workingDir: config.working_dir,
+      sessionId: session?.id || null,
+      isRunning,
+    }
+  })
+})
 
-const showFileViewer = ref(false)
-const selectedFile = ref('')
-
-async function handleFileRefresh() {
-  await fileRefresh()
-}
-
-function handleFileClick(name: string) {
-  selectedFile.value = name
-  showFileViewer.value = true
+function handleProjectCardClick(card: { name: string; sessionId: string | null; isRunning: boolean }) {
+  if (!isConnected.value) {
+    toast.warning('请先连接设备')
+    router.push('/mobile/devices')
+    return
+  }
+  if (!card.isRunning || !card.sessionId) {
+    toast.warning('该会话未运行，无法浏览文件')
+    return
+  }
+  router.push({ name: 'mobile-files', params: { id: card.sessionId } })
 }
 </script>
 
