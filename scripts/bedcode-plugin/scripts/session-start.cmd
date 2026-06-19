@@ -47,4 +47,10 @@ echo {"event":"session_start","session_id":"!SESSION_ID!","project_path":"!CWD!"
 REM Output success
 echo {"status":"recorded","session_id":"!SESSION_ID!","file":"!OUTPUT_FILE!"}
 
+REM Push initial idle status to BedCode desktop HTTP API
+if not defined BEDCODE_PORT set "BEDCODE_PORT=8080"
+if defined BEDCODE_TOKEN (
+    start /b curl -s -X POST "http://localhost:!BEDCODE_PORT!/api/plugin/task-status" -H "Content-Type: application/json" -d "{\"session_id\":\"!SESSION_ID!\",\"status\":\"idle\",\"reason\":\"Session started\",\"token\":\"!BEDCODE_TOKEN!\"}" > NUL 2>&1
+)
+
 endlocal

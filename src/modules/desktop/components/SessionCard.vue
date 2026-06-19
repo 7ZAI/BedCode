@@ -112,6 +112,15 @@
             >
               {{ session.sessionType === 'plugin' ? 'Plugin' : 'PTY' }}
             </span>
+            <span
+              v-if="session.taskStatus"
+              :class="[
+                'text-xs px-2 py-0.5 rounded',
+                taskStatusBadgeClass(session.taskStatus)
+              ]"
+            >
+              {{ taskStatusText(session.taskStatus) }}
+            </span>
           </div>
           <div class="flex items-center gap-2">
             <span class="text-gray-500 dark:text-dark-400 text-sm">{{ getSessionTime(session) }}</span>
@@ -160,6 +169,28 @@ const hasRunningSessions = computed(() => runningSessions.value.length > 0)
 
 function toggleExpand() {
   isExpanded.value = !isExpanded.value
+}
+
+function taskStatusText(status: string): string {
+  switch (status) {
+    case 'idle': return '空闲'
+    case 'in_progress': return '执行中'
+    case 'asking': return '等待输入'
+    case 'completed': return '已完成'
+    case 'interrupted': return '已中断'
+    default: return status
+  }
+}
+
+function taskStatusBadgeClass(status: string): string {
+  switch (status) {
+    case 'idle': return 'bg-gray-500/20 text-gray-400'
+    case 'in_progress': return 'bg-blue-500/20 text-blue-400'
+    case 'asking': return 'bg-yellow-500/20 text-yellow-400'
+    case 'completed': return 'bg-green-500/20 text-green-400'
+    case 'interrupted': return 'bg-red-500/20 text-red-400'
+    default: return 'bg-gray-500/20 text-gray-400'
+  }
 }
 
 function getSessionTime(session: SessionInfo): string {

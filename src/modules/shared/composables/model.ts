@@ -86,12 +86,16 @@ export interface SessionRestartEvent {
   sessionName: string
 }
 
-// Device Store
+// Device Store — 已废弃，请使用 @/modules/shared/stores/device 中的 PairedDevice
+/** @deprecated Use PairedDevice from @/modules/shared/stores/device instead */
 export interface PairedDevice {
   id: string
-  name: string
+  deviceName: string
+  deviceFingerprint: string
   address: string
-  port: number
+  pairedAt: string
+  lastSeen?: string
+  connectCount: number
 }
 
 // Notification

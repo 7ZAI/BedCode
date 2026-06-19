@@ -211,6 +211,7 @@ watch(
 
 .viewer-body::-webkit-scrollbar {
   width: 4px;
+  height: 4px;
 }
 
 .viewer-body::-webkit-scrollbar-track {
@@ -222,47 +223,65 @@ watch(
   border-radius: 2px;
 }
 
+/* ==================== VS Code 风格代码区域 ==================== */
+
 .viewer-code {
   margin: 0;
-  padding: 1rem;
+  padding: 0;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 0.8;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  counter-reset: line-number;
+  tab-size: 4;
 }
 
-/* Shiki 产出的 pre/code 样式覆盖 */
+/* Shiki 产出的 pre — 重置为容器角色 */
 .viewer-code :deep(pre) {
   margin: 0;
   padding: 0;
   background: transparent !important;
 }
 
+/* Shiki 产出的 code — 整体布局 */
 .viewer-code :deep(code) {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
   display: block;
+  padding: 0;
 }
 
-/* 行号样式：使用 CSS counter + data-line 属性 */
-.viewer-code :deep(.code-line) {
+/* ==================== 行布局：gutter + 代码 ==================== */
+
+.viewer-code :deep(.line) {
   display: block;
   position: relative;
   padding-left: 3.5em;
-  min-height: 1em;
+  white-space: pre;
 }
 
-.viewer-code :deep(.code-line::before) {
+/* 行号区 (gutter) — VS Code 风格：独立背景 + 右侧分隔线 */
+.viewer-code :deep(.line::before) {
   content: attr(data-line);
   position: absolute;
   left: 0;
-  width: 2.8em;
-  text-align: right;
-  color: rgba(100, 100, 120, 0.4);
+  top: 0;
+  bottom: 0;
+  width: 3.2em;
+  padding-right: 0.8em;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: rgba(100, 100, 120, 0.45);
   font-size: 0.85em;
   user-select: none;
   pointer-events: none;
+  background: rgba(0, 0, 0, 0.18);
+  border-right: 1px solid rgba(100, 100, 120, 0.12);
+}
+
+/* 空行保持行高 */
+.viewer-code :deep(.line:empty::after) {
+  content: '\00a0';
 }
 
 .viewer-loading,

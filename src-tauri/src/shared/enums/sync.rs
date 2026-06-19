@@ -55,4 +55,12 @@ pub enum SyncPayload {
         config_id: String,
         config_name: String,
     },
+
+    // === 任务状态同步 ===
+    /// Plugin 任务状态变更
+    TaskStatusChanged {
+        session_id: String,
+        task_status: String,
+        task_reason: Option<String>,
+    },
 }

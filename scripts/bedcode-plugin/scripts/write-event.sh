@@ -76,3 +76,13 @@ echo "{\"event\":\"$EVENT_TYPE\",\"session_id\":\"$SESSION_ID\",\"status\":\"$ST
 
 # Output success for debugging
 echo "{\"event\":\"$EVENT_TYPE\",\"status\":\"$STATUS\",\"written\":true}"
+
+# 推送状态到 BedCode 桌面端 HTTP API
+BEDCODE_PORT="${BEDCODE_PORT:-8080}"
+if [ -n "$BEDCODE_TOKEN" ]; then
+  REASON_ESCAPED=$(echo "$STATUS_REASON" | sed 's/"/\\"/g')
+  curl -s -X POST "http://localhost:${BEDCODE_PORT}/api/plugin/task-status" \
+    -H "Content-Type: application/json" \
+    -d "{\"session_id\":\"$SESSION_ID\",\"status\":\"$STATUS\",\"reason\":\"$REASON_ESCAPED\",\"token\":\"$BEDCODE_TOKEN\"}" \
+    > /dev/null 2>&1 &
+fi

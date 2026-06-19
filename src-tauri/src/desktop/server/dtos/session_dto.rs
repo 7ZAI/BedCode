@@ -20,6 +20,12 @@ pub struct SessionItem {
     pub started_at: Option<String>,
     pub session_type: Option<String>,
     pub config_id: Option<String>,
+    /// 任务执行状态
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+    /// 任务状态原因
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_reason: Option<String>,
 }
 
 /// POST /api/sessions/start request

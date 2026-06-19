@@ -17,6 +17,10 @@ export interface SessionInfo {
   createdAt?: string
   startedAt?: string
   stoppedAt?: string
+  /** 任务执行状态（Plugin 会话使用） */
+  taskStatus?: string
+  /** 任务状态原因 */
+  taskReason?: string
 }
 
 export interface SessionConfig {

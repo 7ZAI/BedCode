@@ -277,6 +277,15 @@ async function init() {
       // 从列表移除会话（删除操作才移除）
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
     },
+    onSyncTaskStatusChanged: (data) => {
+      console.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
+      // 更新对应会话的任务状态
+      const index = activeSessions.value.findIndex(s => s.id === data.session_id)
+      if (index !== -1) {
+        activeSessions.value[index].taskStatus = data.task_status
+        activeSessions.value[index].taskReason = data.task_reason ?? null
+      }
+    },
   })
 
   // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射）

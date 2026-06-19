@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 /// Paired device
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Pairing {
     pub id: String,
     pub device_name: String,
@@ -15,6 +16,7 @@ pub struct Pairing {
     pub session_token: Option<String>,
     pub paired_at: DateTime<Utc>,
     pub last_seen: Option<DateTime<Utc>>,
+    pub connect_count: i32,
     pub is_active: bool,
 }
 

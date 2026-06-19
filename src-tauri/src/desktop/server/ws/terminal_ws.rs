@@ -11,11 +11,12 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use crate::desktop::server::ws::session::WsSession;
+use crate::desktop::server::ws::registry::WsSessionRegistry;
 use crate::desktop::server::message::Message;
 use crate::desktop::app_context::AppContext;
 use crate::desktop::session::GlobalOutputManager;
 use crate::desktop::auth::jwt::JwtService;
-use crate::shared::enums::TerminalPayload;
+use crate::shared::enums::{SessionControlPayload, TerminalPayload};
 use crate::shared::system::config::AppConfig;
 
 /// 心跳间隔
@@ -197,6 +198,14 @@ impl TerminalWs {
                 }
                 self.handle_terminal(session_id, payload, message_id, expect_response, ctx);
             }
+            Message::SessionControl { payload, message_id, expect_response, .. } => {
+                if !self.session.authenticated {
+                    let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
+                    if let Ok(json) = error.to_json() { ctx.text(json); }
+                    return;
+                }
+                self.handle_session_control(payload, message_id, expect_response, ctx);
+            }
             _ => {
                 tracing::debug!("Unsupported WS message type from {}", self.session.addr);
             }
@@ -251,6 +260,7 @@ impl TerminalWs {
             let app_handle: Option<std::sync::Arc<tauri::AppHandle>> = Some(app_ctx.app_handle().clone());
             let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
             let jwt_service = JwtService::new();
+            let db = app_ctx.db().clone();
 
             let result = crate::desktop::server::services::auth_service::handle_auth(
                 payload,
@@ -261,6 +271,7 @@ impl TerminalWs {
                 &jwt_service,
                 ws_manager,
                 &app_handle,
+                &db,
             ).await;
 
             let auth_response = match result {
@@ -338,6 +349,19 @@ impl TerminalWs {
                     use crate::desktop::server::ws::registry::WsSessionRegistry;
                     let registry = WsSessionRegistry::global();
                     registry.set_authenticated(&client_id, device_name).await;
+                });
+
+                // 更新配对设备的 last_seen 和 connect_count
+                let fingerprint = claims.fingerprint.clone();
+                actix::spawn(async move {
+                    if let Some(fp) = fingerprint {
+                        let app_ctx = AppContext::global();
+                        let db = app_ctx.db().clone();
+                        let db_guard = db.lock().await;
+                        if let Err(e) = db_guard.update_pairing_last_seen(&fp) {
+                            tracing::warn!("Failed to update pairing last_seen for {}: {}", fp, e);
+                        }
+                    }
                 });
 
                 // 通知桌面端
@@ -506,6 +530,62 @@ impl TerminalWs {
                 request_id,
                 success,
             }).await;
+        });
+    }
+
+    /// 处理会话控制消息 — 路由到 session_control service
+    fn handle_session_control(
+        &mut self,
+        payload: SessionControlPayload,
+        message_id: String,
+        expect_response: bool,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        let addr = self.session.addr;
+        let device_name = self.session.device_name.clone();
+        let actor_addr = ctx.address();
+        let app_handle = AppContext::global().app_handle().clone();
+
+        actix::spawn(async move {
+            let app_ctx = AppContext::global();
+            let session_manager = Some(app_ctx.session_manager().clone());
+            let plugin_manager = Some(app_ctx.plugin_manager().clone());
+
+            let result = crate::desktop::server::services::session_control::handle_control_message(
+                message_id.clone(),
+                None, // session_id
+                chrono::Utc::now().timestamp_millis(),
+                payload.action,
+                &session_manager,
+                &plugin_manager,
+                addr,
+                device_name,
+                Some(app_handle),
+            ).await;
+
+            match result {
+                Ok(Some(response_msg)) => {
+                    if let Ok(json) = response_msg.to_json() {
+                        let _ = actor_addr.send(SendTextMessage { text: json }).await;
+                    }
+                }
+                Ok(None) => {
+                    // 无响应消息（如 fire-and-forget 的 ResizeSession）
+                    if expect_response {
+                        let ack = Message::ack(&message_id);
+                        if let Ok(json) = ack.to_json() {
+                            let _ = actor_addr.send(SendTextMessage { text: json }).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("[TerminalWs] Session control error: {}", e);
+                    let error = Message::error_with_id(&message_id, "SESSION_CONTROL_ERROR", &e.to_string());
+                    if let Ok(json) = error.to_json() {
+                        let _ = actor_addr.send(SendTextMessage { text: json }).await;
+                    }
+                }
+            }
         });
     }
 }

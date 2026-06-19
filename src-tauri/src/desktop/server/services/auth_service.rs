@@ -8,11 +8,13 @@ use crate::desktop::server::services::pairing_service::PairingService;
 use crate::desktop::auth::qr_token::QrTokenManager;
 use crate::desktop::websocket_manager::WebSocketManager;
 use crate::desktop::auth::JwtService;
+use crate::shared::db::Database;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::AppHandle;
+use tokio::sync::Mutex;
 
 
 /// 处理认证消息
@@ -25,6 +27,7 @@ pub async fn handle_auth(
     jwt_service: &JwtService,
     ws_manager: &WebSocketManager,
     app_handle: &Option<Arc<AppHandle>>,
+    db: &Arc<Mutex<Database>>,
 ) -> Result<Option<Message>> {
     tracing::info!("handle_auth called with stage: {:?}", payload.stage);
     match payload.stage {
@@ -76,7 +79,7 @@ pub async fn handle_auth(
             if is_valid {
                 let device_name = payload.device_name.clone().unwrap_or_else(|| "Unknown Device".to_string());
                 let device_name_for_client = payload.device_name.clone();
-                let fingerprint = payload.device_fingerprint.unwrap_or_default();
+                let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
                 let address = format!("{}", addr);
                 let device_id = payload.device_id.clone().unwrap_or_else(|| addr.to_string());
 
@@ -91,6 +94,15 @@ pub async fn handle_auth(
                 ws_manager.set_authenticated(&addr, Some(device_id.clone())).await;
                 if let Some(ref name) = device_name_for_client {
                     ws_manager.set_device_name(&addr, Some(name.clone())).await;
+                }
+
+                // 记录/更新配对设备到数据库
+                let display_name = format_device_display_name(&device_name, &address);
+                {
+                    let db_guard = db.lock().await;
+                    if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address)) {
+                        tracing::warn!("Failed to record pairing for {}: {}", device_name, e);
+                    }
                 }
 
                 if let Some(handle) = app_handle {
@@ -144,7 +156,7 @@ pub async fn handle_auth(
 
         AuthStage::Authenticated | AuthStage::Reauthenticate => {
             let device_id = payload.device_id.unwrap_or_default();
-            let fingerprint = payload.device_fingerprint.unwrap_or_default();
+            let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
             let token = payload.session_token.unwrap_or_default();
 
             // 直接验证 JWT token，不使用数据库
@@ -162,6 +174,14 @@ pub async fn handle_auth(
             ws_manager.set_authenticated(&addr, Some(claims.sub.clone())).await;
             if let Some(name) = &payload.device_name {
                 ws_manager.set_device_name(&addr, Some(name.clone())).await;
+            }
+
+            // 更新配对设备的 last_seen 和 connect_count
+            if !fingerprint.is_empty() {
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.update_pairing_last_seen(&fingerprint) {
+                    tracing::warn!("Failed to update pairing last_seen for {}: {}", fingerprint, e);
+                }
             }
 
             if let Some(handle) = app_handle {
@@ -204,6 +224,7 @@ pub async fn handle_auth(
                     let device_fingerprint = payload.device_fingerprint.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                     let device_name = payload.device_name.clone().unwrap_or_else(|| "QR Device".to_string());
                     let device_id = payload.device_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    let address = format!("{}", addr);
 
                     // 生成 JWT token（使用真实的设备 ID）
                     let session_token = jwt_service.generate_token(
@@ -215,6 +236,15 @@ pub async fn handle_auth(
                     // 使用 WebSocketManager 设置真正的客户端认证状态
                     ws_manager.set_authenticated(&addr, Some(device_id.clone())).await;
                     ws_manager.set_device_name(&addr, Some(device_name.clone())).await;
+
+                    // 记录/更新配对设备到数据库
+                    let display_name = format_device_display_name(&device_name, &address);
+                    {
+                        let db_guard = db.lock().await;
+                        if let Err(e) = db_guard.add_pairing(&display_name, &device_fingerprint, "", Some(&address)) {
+                            tracing::warn!("Failed to record pairing for {}: {}", device_name, e);
+                        }
+                    }
 
                     if let Some(handle) = app_handle {
                         let _ = handle.emit("device-connected", &DeviceConnectionEvent {
@@ -382,4 +412,11 @@ pub async fn handle_jwt_auth(
             }))
         }
     }
+}
+
+/// 格式化设备显示名称：名称 + 首次连接 IP
+pub fn format_device_display_name(device_name: &str, address: &str) -> String {
+    // address 格式为 "IP:PORT"，提取 IP 部分
+    let ip = address.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(address);
+    format!("{} ({})", device_name, ip)
 }

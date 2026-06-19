@@ -23,6 +23,7 @@ export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, PluginS
 
 // 重新导出桌面端 composables
 export { useWsl } from '@/modules/desktop/composables/useWsl'
+export { useWslStore } from '@/modules/desktop/stores/wsl'
 export { usePtyOutput } from '@/modules/desktop/composables/usePtyOutput'
 export { usePairing } from '@/modules/desktop/composables/usePairing'
 export { useNetwork } from '@/modules/desktop/composables/useNetwork'

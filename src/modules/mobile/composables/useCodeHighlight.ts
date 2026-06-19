@@ -2,6 +2,20 @@ import { ref, shallowRef } from 'vue'
 import { createHighlighterCore } from 'shiki/core'
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
 
+/**
+ * 自定义 transformer：为每行 .line 添加 data-line 属性
+ *
+ * Shiki 默认输出的 <span class="line"> 不含行号信息，
+ * 此 transformer 注入 data-line="N" 以配合 CSS ::before 伪元素显示行号
+ */
+const addLineNumbers = () => ({
+  name: 'add-line-numbers',
+  line(node: any, line: number) {
+    node.properties = node.properties || {}
+    node.properties['data-line'] = String(line)
+  },
+})
+
 // ==================== Language Map ====================
 
 const EXT_LANG_MAP: Record<string, string> = {
@@ -168,18 +182,6 @@ async function ensureHighlighter(): Promise<NonNullable<typeof highlighterInstan
   return highlighterInstance!
 }
 
-// ==================== Line Number Transformer ====================
-
-/** 自定义 Shiki transformer：为每行注入行号 */
-function transformerLineNumbers() {
-  return {
-    line(node: any, line: number) {
-      node.properties['data-line'] = line
-      node.properties.className = [...(node.properties.className || []), 'code-line']
-    },
-  }
-}
-
 // ==================== Composable ====================
 
 export function useCodeHighlight() {
@@ -202,7 +204,7 @@ export function useCodeHighlight() {
       const html = highlighter.codeToHtml(code, {
         lang,
         theme: THEME,
-        transformers: [transformerLineNumbers()],
+        transformers: [addLineNumbers()],
       })
       highlightedHtml.value = html
     } catch (e) {

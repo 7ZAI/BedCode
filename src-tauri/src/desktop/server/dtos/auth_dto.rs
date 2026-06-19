@@ -27,6 +27,7 @@ pub struct VerifyPairingRequest {
     pub device_name: String,
     pub fingerprint: String,
     pub pairing_code: String,
+    pub address: String,
 }
 
 /// Auth token response (shared by verify, qr-connect, reauth)
@@ -45,6 +46,7 @@ pub struct QrConnectRequest {
     pub device_name: String,
     pub fingerprint: String,
     pub qr_token: String,
+    pub address: String,
 }
 
 /// POST /api/auth/reauth request

@@ -17,14 +17,35 @@
     />
 
     <!-- WSL Distribution -->
-    <Select
-      v-if="form.environment === 'wsl2'"
-      v-model="form.wslDistro"
-      label="WSL 发行版"
-      :options="wslDistroOptions"
-      placeholder="选择发行版"
-      required
-    />
+    <div v-if="form.environment === 'wsl2'">
+      <Select
+        v-if="!wslStore.isLoading"
+        v-model="form.wslDistro"
+        label="WSL 发行版"
+        :options="wslDistroOptions"
+        placeholder="选择发行版"
+        :disabled="wslDistroOptions.length === 0"
+        required
+      />
+      <!-- WSL 初始化中的加载提示 -->
+      <div v-else class="form-group">
+        <label class="block text-sm mb-2 text-gray-700 dark:text-dark-300">
+          WSL 发行版
+          <span class="text-red-500">*</span>
+        </label>
+        <div class="flex items-center gap-2 border rounded-lg px-4 py-2 border-gray-300 dark:border-dark-600 bg-white dark:bg-dark-700 text-gray-500 dark:text-dark-400">
+          <Spinner size="sm" color="primary" />
+          <span class="text-sm">WSL 初始化中...</span>
+        </div>
+      </div>
+      <!-- WSL 不可用或加载失败的提示 -->
+      <p v-if="!wslStore.isLoading && !wslStore.isAvailable" class="mt-1 text-sm text-yellow-500">
+        未检测到 WSL，请确认已安装 WSL2
+      </p>
+      <p v-else-if="wslStore.error" class="mt-1 text-sm text-red-500">
+        WSL 检测失败: {{ wslStore.error }}
+      </p>
+    </div>
 
     <!-- Working Directory -->
     <Input
@@ -62,12 +83,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+/**
+ * SessionForm - 会话配置表单
+ *
+ * 使用 WSL Store 读取缓存的 WSL 信息，避免每次打开弹窗时重复执行 wsl 命令
+ */
+import { ref, computed, watch } from 'vue'
 import type { SessionConfig } from '@/modules/shared/stores/session'
 import Input from '@/modules/shared/components/Input.vue'
 import Select from '@/modules/shared/components/Select.vue'
 import Toggle from '@/modules/shared/components/Toggle.vue'
-import { useWsl } from '@/modules/desktop/composables/useWsl'
+import Spinner from '@/modules/shared/components/Spinner.vue'
+import { useWslStore } from '@/modules/desktop/stores/wsl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
 
@@ -88,7 +115,7 @@ interface SessionFormData {
   autoStart: boolean
 }
 
-const { distros, loadDistros, isAvailable } = useWsl()
+const wslStore = useWslStore()
 const settingsStore = useSettingsStore()
 
 const form = ref<SessionFormData>({
@@ -105,7 +132,12 @@ const environmentOptions = [
   { value: 'wsl2', label: 'WSL2' },
 ]
 
-const wslDistroOptions = ref<Array<{ value: string; label: string }>>([])
+const wslDistroOptions = computed(() =>
+  wslStore.distros.map(d => ({
+    value: d.name,
+    label: d.name,
+  }))
+)
 
 watch(() => props.config, (config) => {
   if (config) {
@@ -128,24 +160,6 @@ watch(() => props.config, (config) => {
     }
   }
 }, { immediate: true })
-
-watch(() => form.value.environment, async (env) => {
-  if (env === 'wsl2' && isAvailable.value && distros.value.length === 0) {
-    await loadDistros()
-    wslDistroOptions.value = distros.value.map(d => ({
-      value: d.name,
-      label: d.name,
-    }))
-  }
-})
-
-onMounted(async () => {
-  await loadDistros()
-  wslDistroOptions.value = distros.value.map(d => ({
-    value: d.name,
-    label: d.name,
-  }))
-})
 
 async function browseDir() {
   try {

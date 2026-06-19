@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::shared::enums::{SessionStatus, SessionType};
+use crate::shared::enums::{SessionStatus, SessionType, TaskStatus};
 
 /// 会话信息（从 session/types.rs 移出）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,15 @@ pub struct SessionInfo {
     pub started_at: Option<DateTime<Utc>>,
     pub stopped_at: Option<DateTime<Utc>>,
     pub session_type: SessionType,
+    /// 任务执行状态（Plugin 会话使用，PTY 会话始终为 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<TaskStatus>,
+    /// 任务状态原因（简短描述）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_reason: Option<String>,
+    /// 任务状态更新时间
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_updated_at: Option<DateTime<Utc>>,
 }
 
 impl SessionInfo {
@@ -33,6 +42,9 @@ impl SessionInfo {
             started_at: None,
             stopped_at: None,
             session_type: SessionType::Pty,
+            task_status: None,
+            task_reason: None,
+            task_updated_at: None,
         }
     }
 
@@ -46,6 +58,9 @@ impl SessionInfo {
             started_at: None,
             stopped_at: None,
             session_type: SessionType::Plugin,
+            task_status: Some(TaskStatus::Idle),
+            task_reason: Some("Session started".to_string()),
+            task_updated_at: Some(Utc::now()),
         }
     }
 }
@@ -67,4 +82,25 @@ pub struct SessionRestartEvent {
     pub old_session_id: String,
     pub new_session_id: String,
     pub session_name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_info_pty_no_task_status() {
+        let info = SessionInfo::new("config-1", "test");
+        assert!(info.task_status.is_none());
+        assert!(info.task_reason.is_none());
+        assert!(info.task_updated_at.is_none());
+    }
+
+    #[test]
+    fn test_session_info_plugin_has_task_status() {
+        let info = SessionInfo::new_plugin("my-project", "/path");
+        assert_eq!(info.task_status, Some(TaskStatus::Idle));
+        assert_eq!(info.task_reason, Some("Session started".to_string()));
+        assert!(info.task_updated_at.is_some());
+    }
 }

@@ -184,6 +184,8 @@ const outputListenerRef = ref<UnlistenFn | null>(null)
 const lastIndexRef = ref(-1)
 // 当前订阅的会话 ID - 用于取消订阅时使用（避免路由变化后 sessionId 变成 undefined）
 const subscribedSessionIdRef = ref<string | null>(null)
+// 订阅进行中标志 - 防止 onActivated 在 subscribeSession 的 await 期间创建重复监听器
+const isSubscribing = ref(false)
 
 // 设置相关状态
 const showSettings = ref(false)
@@ -603,11 +605,13 @@ function disposeTerminal() {
   }
   lastIndexRef.value = -1
   subscribedSessionIdRef.value = null
+  isSubscribing.value = false
 }
 
 /// 创建前端事件监听器（不调用后端订阅）
-/// 用于 onActivated 时恢复前端监听，后端订阅已保持活跃
-async function createFrontendListener() {
+/// 内部方法：统一创建 ws_output 监听器，确保不会重复创建
+async function createOutputListener() {
+  // 防御性清理：确保不会重复创建
   if (outputListenerRef.value) {
     outputListenerRef.value()
     outputListenerRef.value = null
@@ -642,7 +646,7 @@ async function createFrontendListener() {
       }
     })
   } catch (e) {
-    console.error('[TerminalView] Failed to create frontend listener:', e)
+    console.error('[TerminalView] Failed to create output listener:', e)
   }
 }
 
@@ -653,46 +657,29 @@ async function subscribeSession() {
     return
   }
 
-  // 先清理可能存在的旧监听器，避免重复订阅
-  if (outputListenerRef.value) {
-    outputListenerRef.value()
-    outputListenerRef.value = null
-  }
+  // 标记订阅进行中，防止 onActivated 创建重复监听器
+  isSubscribing.value = true
 
   try {
     // 加入会话，开始接收输出（后端订阅）
     await wsJoinSession(sessionId.value)
 
-    // 监听终端输出事件 - 捕获当前 sessionId 确保闭包正确
-    const currentSessionId = sessionId.value
+    // 后端订阅成功后，创建前端监听器
     // 保存订阅的会话 ID，用于取消订阅时使用
-    subscribedSessionIdRef.value = currentSessionId
-    outputListenerRef.value = await listen<{
-      session_id: string
-      data: string
-      index: number
-      is_waiting: boolean
-    }>('ws_output', (event) => {
-      // 只处理当前会话的输出（前端过滤）
-      if (event.payload.session_id !== currentSessionId) {
-        return
-      }
-
-      // 索引去重：避免重复输出（重连时可能发生）
-      if (event.payload.index !== undefined && event.payload.index <= lastIndexRef.value) {
-        return
-      }
-      lastIndexRef.value = event.payload.index
-
-      // 写入终端
-      if (terminalRef.value) {
-        terminalRef.value.write(event.payload.data)
-      }
-    })
+    subscribedSessionIdRef.value = sessionId.value
+    await createOutputListener()
   } catch (e) {
     console.error('[TerminalView] Subscribe failed:', e)
     toast.error('订阅终端失败')
+  } finally {
+    isSubscribing.value = false
   }
+}
+
+/// 创建前端事件监听器（不调用后端订阅）
+/// 用于 onActivated 时恢复前端监听，后端订阅已保持活跃
+async function createFrontendListener() {
+  await createOutputListener()
 }
 
 /// 清理前端事件监听器（不取消后端订阅）
@@ -868,6 +855,11 @@ onUnmounted(async () => {
 // keep-alive 生命周期：组件被激活时检查订阅状态
 // 多终端同时存活模式下，不需要清理监听器
 onActivated(async () => {
+  // 如果正在订阅中（subscribeSession 的 await 期间），跳过
+  // 避免在 outputListenerRef 为 null 的竞态窗口中创建重复监听器
+  if (isSubscribing.value) {
+    return
+  }
   // 如果没有监听器且会话活跃，创建监听器
   // 正常情况下监听器应该已经存在（onMounted 创建的）
   if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {

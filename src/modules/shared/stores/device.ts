@@ -9,13 +9,15 @@ import {
   type PairingCodeInfo,
 } from '@/modules/desktop/composables/useDesktopCommands'
 
+/** 已配对设备信息 */
 export interface PairedDevice {
   id: string
-  name: string
-  deviceName?: string
+  deviceName: string
+  deviceFingerprint: string
   address: string
-  port: number
-  pairedAt?: string
+  pairedAt: string
+  lastSeen?: string
+  connectCount: number
 }
 
 export const useDeviceStore = defineStore('device', () => {

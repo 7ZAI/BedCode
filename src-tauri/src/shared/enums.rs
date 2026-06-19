@@ -12,7 +12,7 @@ pub mod sync;
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
 pub use control::{SessionControlAction, SessionControlPayload, SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload};
-pub use session::{SessionStatus, SessionType};
+pub use session::{SessionStatus, SessionType, TaskStatus};
 pub use special_key::SpecialKey;
 pub use sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 pub use sync::SyncPayload;

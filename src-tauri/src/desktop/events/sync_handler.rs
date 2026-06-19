@@ -59,6 +59,9 @@ impl SyncEventHandler {
             DesktopSyncEvent::ConfigRemoved { config_id, config_name, source_device } => {
                 self.handle_config_removed(&config_id, &config_name, source_device).await;
             }
+            DesktopSyncEvent::TaskStatusChanged { session_id, task_status, task_reason } => {
+                self.handle_task_status_changed(&session_id, &task_status, task_reason.as_deref()).await;
+            }
         }
     }
 
@@ -79,6 +82,8 @@ impl SyncEventHandler {
             started_at: session_info.started_at.map(|t| t.to_rfc3339()),
             session_type: Some(format!("{:?}", session_info.session_type).to_lowercase()),
             config_id: Some(session_info.config_id),
+            task_status: session_info.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
+            task_reason: session_info.task_reason,
         };
 
         // 提取 source_device 值
@@ -222,6 +227,18 @@ impl SyncEventHandler {
 
         // 广播消息
         self.broadcast_sync_data(payload, source_device.as_deref()).await;
+    }
+
+    /// 处理任务状态变更事件
+    async fn handle_task_status_changed(&self, session_id: &str, task_status: &str, task_reason: Option<&str>) {
+        let payload = SyncPayload::TaskStatusChanged {
+            session_id: session_id.to_string(),
+            task_status: task_status.to_string(),
+            task_reason: task_reason.map(|s| s.to_string()),
+        };
+
+        // 任务状态变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
     }
 
     /// 广播同步数据消息

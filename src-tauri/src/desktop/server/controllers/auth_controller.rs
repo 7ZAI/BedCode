@@ -14,6 +14,7 @@ use crate::shared::model::api_dto::ApiResponse;
 use crate::desktop::server::dtos::auth_dto::*;
 use crate::desktop::auth::jwt::JwtService;
 use crate::desktop::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
+use crate::desktop::server::services::auth_service::format_device_display_name;
 
 /// POST /api/auth/pairing
 ///
@@ -77,10 +78,20 @@ pub async fn verify_pairing_code(
         }
     };
 
+    // 记录/更新配对设备到数据库
+    let display_name = format_device_display_name(&body.device_name, &body.address);
+    {
+        let db = ctx.db();
+        let db_guard = db.lock().await;
+        if let Err(e) = db_guard.add_pairing(&display_name, &body.fingerprint, "", Some(&body.address)) {
+            tracing::warn!("Failed to record pairing for {}: {}", body.device_name, e);
+        }
+    }
+
     // 通知桌面端有设备连接
     let app_handle = ctx.app_handle();
     let _ = app_handle.emit("device-connected", &crate::desktop::server::connection_types::DeviceConnectionEvent {
-        addr: String::new(),
+        addr: body.address.clone(),
         device_id: body.device_id.clone(),
         device_name: Some(body.device_name.clone()),
         event: "authenticated".to_string(),
@@ -110,6 +121,7 @@ pub async fn qr_connect(
             let device_id = body.device_id.clone();
             let device_name = body.device_name.clone();
             let fingerprint = body.fingerprint.clone();
+            let address = body.address.clone();
 
             let jwt_service = JwtService::new();
             let token = match jwt_service.generate_token(
@@ -124,8 +136,18 @@ pub async fn qr_connect(
                 }
             };
 
+            // 记录/更新配对设备到数据库
+            let display_name = format_device_display_name(&device_name, &address);
+            {
+                let db = ctx.db();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address)) {
+                    tracing::warn!("Failed to record pairing for {}: {}", device_name, e);
+                }
+            }
+
             let _ = app_handle.emit("device-connected", &crate::desktop::server::connection_types::DeviceConnectionEvent {
-                addr: String::new(),
+                addr: address,
                 device_id,
                 device_name: Some(device_name),
                 event: "authenticated".to_string(),
@@ -163,6 +185,16 @@ pub async fn reauthenticate(
 
     match jwt_service.verify_token_with_expiry(&body.session_token) {
         Ok(claims) => {
+            // 更新配对设备的 last_seen 和 connect_count
+            if let Some(ref fp) = claims.fingerprint {
+                let ctx = AppContext::global();
+                let db = ctx.db();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.update_pairing_last_seen(fp) {
+                    tracing::warn!("Failed to update pairing last_seen for {}: {}", fp, e);
+                }
+            }
+
             let new_token = match jwt_service.generate_token(
                 claims.sub.clone(),
                 claims.device_name.clone(),

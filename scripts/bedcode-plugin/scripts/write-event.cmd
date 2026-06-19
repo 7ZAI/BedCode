@@ -4,6 +4,9 @@ REM Writes stop/subagent_stop events to JSONL file after prompt analysis
 
 setlocal enabledelayedexpansion
 
+REM Default port
+if not defined BEDCODE_PORT set "BEDCODE_PORT=8080"
+
 REM Read stdin into variable
 set "INPUT="
 for /f "delims=" %%A in ('more') do set "INPUT=!INPUT!%%A"
@@ -106,5 +109,10 @@ echo {"event":"!EVENT_TYPE!","session_id":"!SESSION_ID!","status":"!STATUS!","re
 
 REM Output success for debugging
 echo {"event":"!EVENT_TYPE!","status":"!STATUS!","written":true}
+
+REM Push status to BedCode desktop HTTP API
+if defined BEDCODE_TOKEN (
+    start /b curl -s -X POST "http://localhost:!BEDCODE_PORT!/api/plugin/task-status" -H "Content-Type: application/json" -d "{\"session_id\":\"!SESSION_ID!\",\"status\":\"!STATUS!\",\"reason\":\"!STATUS_REASON!\",\"token\":\"!BEDCODE_TOKEN!\"}" > NUL 2>&1
+)
 
 endlocal

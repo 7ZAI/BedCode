@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS pairings (
     session_token TEXT,
     paired_at TEXT NOT NULL,
     last_seen TEXT,
+    connect_count INTEGER DEFAULT 1,
     is_active INTEGER DEFAULT 1
 );
 

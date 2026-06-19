@@ -106,6 +106,14 @@ pub enum MobileEvent {
         config_id: String,
         config_name: String,
     },
+
+    // === 任务状态同步事件 ===
+    /// 任务状态变更
+    SyncTaskStatusChanged {
+        session_id: String,
+        task_status: String,
+        task_reason: Option<String>,
+    },
 }
 
 impl crate::shared::event::AppEvent for MobileEvent {}
@@ -247,6 +255,18 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
             let _ = app.emit("ws_sync_config_removed", serde_json::json!({
                 "config_id": config_id,
                 "config_name": config_name,
+            }));
+        }
+
+        MobileEvent::SyncTaskStatusChanged { session_id, task_status, task_reason } => {
+            tracing::info!(
+                "[EventForwarder] SyncTaskStatusChanged: session_id={}, status={}",
+                session_id, task_status
+            );
+            let _ = app.emit("ws_sync_task_status_changed", serde_json::json!({
+                "session_id": session_id,
+                "task_status": task_status,
+                "task_reason": task_reason,
             }));
         }
 

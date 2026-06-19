@@ -158,16 +158,20 @@
               <!-- Status Indicator (live WebSocket status) -->
               <div
                 :class="[
-                  'w-3 h-3 rounded-full',
+                  'w-3 h-3 rounded-full shrink-0',
                   isDeviceOnline(device.id) ? 'bg-green-500 animate-pulse' : 'bg-dark-500'
                 ]"
               ></div>
 
               <div>
                 <p class="font-medium">{{ device.deviceName }}</p>
-                <p class="text-gray- dark:text-dark-400 text-sm">
-                  配对于 {{ formatDate(device.pairedAt || '') }}
-                </p>
+                <div class="flex items-center gap-3 text-gray- dark:text-dark-400 text-xs mt-1">
+                  <span>配对于 {{ formatDate(device.pairedAt) }}</span>
+                  <span v-if="device.lastSeen" class="text-gray- dark:text-dark-500">|</span>
+                  <span v-if="device.lastSeen">上次连接 {{ formatDate(device.lastSeen) }}</span>
+                  <span class="text-gray- dark:text-dark-500">|</span>
+                  <span>连接 {{ device.connectCount }} 次</span>
+                </div>
               </div>
             </div>
 
@@ -336,9 +340,12 @@ onMounted(async () => {
   }
 
   // Listen for real-time device connection events
-  deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', (event) => {
+  deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', async (event) => {
     const deviceId = event.payload.device_id
     connectedDeviceIds.value = new Set([...connectedDeviceIds.value, deviceId])
+
+    // 刷新配对设备列表（认证成功后后端已写入数据库）
+    await deviceStore.loadPairedDevices()
 
     // 当有设备连接成功后，清除已使用的配对码并刷新显示
     if (pairingCode.value) {

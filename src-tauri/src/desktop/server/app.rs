@@ -9,6 +9,7 @@ use actix_web_actors::ws as actix_ws;
 
 use crate::desktop::server::controllers::{
     auth_controller, session_controller, config_controller, file_controller,
+    plugin_controller,
 };
 use crate::desktop::server::ws::terminal_ws::TerminalWs;
 
@@ -47,6 +48,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/file-content", web::post().to(file_controller::get_file_content))
             .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
     );
+
+    // 插件专用路由（token 认证，非 JWT）
+    cfg.route("/plugin/task-status", web::post().to(plugin_controller::update_task_status));
 }
 
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）

@@ -59,6 +59,14 @@ pub enum DesktopSyncEvent {
         /// 触发操作的设备名称（桌面本地操作为 None）
         source_device: Option<String>,
     },
+
+    // === 任务状态相关 ===
+    /// Plugin 任务状态变更
+    TaskStatusChanged {
+        session_id: String,
+        task_status: String,
+        task_reason: Option<String>,
+    },
 }
 
 impl AppEvent for DesktopSyncEvent {}

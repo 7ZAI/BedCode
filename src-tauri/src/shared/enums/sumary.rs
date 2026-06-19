@@ -18,6 +18,12 @@ pub struct SessionSummary {
     /// 对应的会话配置 ID
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_id: Option<String>,
+    /// 任务执行状态（Plugin 会话使用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+    /// 任务状态原因
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_reason: Option<String>,
 }
 
 /// 会话配置摘要

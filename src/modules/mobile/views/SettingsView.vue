@@ -5,20 +5,6 @@
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">设置</h1>
     </header>
 
-    <!-- Connection Status -->
-    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-success-muted)] border-b border-[var(--mobile-success-muted)] flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-[var(--mobile-success)] shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
-        <span class="text-[var(--mobile-success)] text-sm">已连接 {{ currentDeviceName }}</span>
-      </div>
-    </div>
-    <div v-else class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border-b border-[var(--mobile-border)] flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-[var(--mobile-text-disabled)]"></div>
-        <span class="text-[var(--mobile-text-muted)] text-sm">未连接</span>
-      </div>
-    </div>
-
     <!-- Settings List -->
     <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->

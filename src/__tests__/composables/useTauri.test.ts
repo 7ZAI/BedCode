@@ -93,15 +93,11 @@ describe('useTauri Composables', () => {
     })
 
     it('should handle load error gracefully', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       mockInvoke.mockRejectedValueOnce(new Error('WSL check failed'))
 
       const { result, wrapper } = withComposable(() => useWsl())
-      await result.loadDistros()
+      await expect(result.loadDistros()).rejects.toThrow('WSL check failed')
 
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to load WSL distros:', expect.any(Error))
-
-      consoleSpy.mockRestore()
       wrapper.unmount()
     })
   })

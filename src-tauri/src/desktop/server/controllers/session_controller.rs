@@ -37,6 +37,8 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
             started_at: s.started_at.map(|t| t.to_rfc3339()),
             session_type: Some("pty".to_string()),
             config_id: Some(s.config_id),
+            task_status: s.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
+            task_reason: s.task_reason,
         });
     }
 
@@ -51,6 +53,8 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
             started_at: s.started_at.map(|t| t.to_rfc3339()),
             session_type: Some("plugin".to_string()),
             config_id: Some(s.config_id),
+            task_status: s.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
+            task_reason: s.task_reason,
         });
     }
 

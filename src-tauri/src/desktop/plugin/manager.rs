@@ -11,6 +11,7 @@ use super::jsonl;
 
 use crate::shared::db::Database;
 use crate::shared::system::config::AppConfig;
+use crate::shared::enums::TaskStatus;
 use crate::desktop::pty::PtyOutputEvent;
 use crate::Result;
 use base64::Engine;
@@ -502,6 +503,45 @@ impl PluginManager {
             crate::desktop::session::SessionStatus::Idle => PluginSessionStatus::Starting,
             crate::desktop::session::SessionStatus::Stopping => PluginSessionStatus::Stopped,
         })
+    }
+
+    /// 更新插件会话的任务状态
+    ///
+    /// 由 HTTP API POST /api/plugin/task-status 调用
+    /// 更新 SessionInfo 的 task_status/task_reason/task_updated_at
+    /// 并通过 DesktopSyncEvent broadcast 通道广播变更到所有 WebSocket 客户端
+    pub async fn update_task_status(
+        &self,
+        session_id: &str,
+        task_status: TaskStatus,
+        task_reason: Option<String>,
+    ) -> Result<()> {
+        // 更新 session_info 中的任务状态
+        {
+            let mut info_map = self.session_info.write().await;
+            let info = info_map
+                .get_mut(session_id)
+                .ok_or_else(|| crate::AppError::NotFound(format!("Plugin session not found: {}", session_id)))?;
+
+            info.task_status = Some(task_status.clone());
+            info.task_reason = task_reason.clone();
+            info.task_updated_at = Some(chrono::Utc::now());
+        }
+
+        // 通过 AppContext 获取 sync_tx 广播 DesktopSyncEvent
+        {
+            use crate::desktop::events::sync_event::DesktopSyncEvent;
+            let ctx = crate::desktop::app_context::AppContext::global();
+            let sync_tx = ctx.sync_tx();
+            let event = DesktopSyncEvent::TaskStatusChanged {
+                session_id: session_id.to_string(),
+                task_status: format!("{:?}", task_status).to_lowercase(),
+                task_reason,
+            };
+            let _ = sync_tx.send(event);
+        }
+
+        Ok(())
     }
 }
 

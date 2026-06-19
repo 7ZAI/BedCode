@@ -28,19 +28,21 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
+        // UPSERT：新设备插入 connect_count=1，已有设备更新 last_seen + connect_count+1
         self.conn().execute(
-            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, paired_at, is_active)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, paired_at, last_seen, connect_count, is_active)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 1)
              ON CONFLICT(device_fingerprint) DO UPDATE SET
                 device_name = excluded.device_name,
                 public_key = excluded.public_key,
                 address = excluded.address,
-                paired_at = excluded.paired_at,
+                last_seen = excluded.last_seen,
+                connect_count = connect_count + 1,
                 is_active = 1",
-            rusqlite::params![id, device_name, fingerprint, public_key, address, now],
+            rusqlite::params![id, device_name, fingerprint, public_key, address, now, now],
         )?;
 
-        // Return the existing id on conflict
+        // 返回实际记录 id（冲突时取已有 id）
         let existing_id: String = self.conn().query_row(
             "SELECT id FROM pairings WHERE device_fingerprint = ?1",
             rusqlite::params![fingerprint],
@@ -48,6 +50,17 @@ impl Database {
         ).unwrap_or(id);
 
         Ok(existing_id)
+    }
+
+    /// 更新已配对设备的 last_seen 和 connect_count（JWT 重连时调用）
+    pub fn update_pairing_last_seen(&self, fingerprint: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn().execute(
+            "UPDATE pairings SET last_seen = ?1, connect_count = connect_count + 1
+             WHERE device_fingerprint = ?2 AND is_active = 1",
+            rusqlite::params![now, fingerprint],
+        )?;
+        Ok(())
     }
 
     pub fn update_pairing_token(&self, pairing_id: &str, token: &str) -> Result<()> {
@@ -69,7 +82,7 @@ impl Database {
 
     pub fn get_pairings(&self) -> Result<Vec<Pairing>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, paired_at, last_seen, is_active
+            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, paired_at, last_seen, connect_count, is_active
              FROM pairings WHERE is_active = 1 ORDER BY paired_at DESC"
         )?;
 
@@ -83,7 +96,8 @@ impl Database {
                 session_token: row.get(5)?,
                 paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
                 last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
-                is_active: row.get::<_, i32>(8)? == 1,
+                connect_count: row.get(8)?,
+                is_active: row.get::<_, i32>(9)? == 1,
             })
         })?.collect::<std::result::Result<Vec<_>, _>>()?;
 

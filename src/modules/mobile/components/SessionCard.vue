@@ -52,6 +52,18 @@
             </svg>
             <span class="text-xs">{{ sessionType }}</span>
           </div>
+
+          <!-- Task Status (Plugin sessions) -->
+          <div v-if="taskStatusLabel" class="flex items-center gap-1.5">
+            <span
+              :class="[
+                'text-xs px-2 py-0.5 rounded-full font-medium',
+                taskStatusBadgeClass
+              ]"
+            >
+              {{ taskStatusLabel }}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -150,5 +162,31 @@ const statusConfig = computed(() => {
 const sessionType = computed(() => {
   const type = props.session.sessionType
   return type === 'plugin' ? 'Plugin' : type === 'pty' ? 'PTY' : null
+})
+
+const taskStatusLabel = computed(() => {
+  const status = props.session.taskStatus
+  if (!status) return null
+  switch (status) {
+    case 'idle': return '空闲'
+    case 'in_progress': return '执行中'
+    case 'asking': return '等待输入'
+    case 'completed': return '已完成'
+    case 'interrupted': return '已中断'
+    default: return status
+  }
+})
+
+const taskStatusBadgeClass = computed(() => {
+  const status = props.session.taskStatus
+  if (!status) return ''
+  switch (status) {
+    case 'idle': return 'bg-gray-500/20 text-gray-400'
+    case 'in_progress': return 'bg-blue-500/20 text-blue-400'
+    case 'asking': return 'bg-yellow-500/20 text-yellow-400'
+    case 'completed': return 'bg-green-500/20 text-green-400'
+    case 'interrupted': return 'bg-red-500/20 text-red-400'
+    default: return 'bg-gray-500/20 text-gray-400'
+  }
 })
 </script>

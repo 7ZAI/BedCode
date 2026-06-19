@@ -208,6 +208,9 @@ impl SessionManager {
             started_at: Some(Utc::now()),
             stopped_at: None,
             session_type: SessionType::Pty,
+            task_status: None,
+            task_reason: None,
+            task_updated_at: None,
         };
 
         // 保存到各服务
@@ -272,6 +275,9 @@ impl SessionManager {
             started_at: None,
             stopped_at: None,
             session_type: SessionType::Pty,
+            task_status: None,
+            task_reason: None,
+            task_updated_at: None,
         };
 
         // 保存到各服务
@@ -423,6 +429,9 @@ impl SessionManager {
             started_at: Some(chrono::Utc::now()),
             stopped_at: None,
             session_type: SessionType::Pty,
+            task_status: None,
+            task_reason: None,
+            task_updated_at: None,
         };
 
         // 保存到各服务

@@ -304,7 +304,7 @@ function initTerminal() {
   terminal = new Terminal({
     fontSize: fontSize.value,
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
-    theme: getTheme(),
+    theme: { ...getTheme(), cursor: 'transparent' },
     cursorBlink: false,
     cursorStyle: 'block',
     cursorWidth: 1,
@@ -523,7 +523,7 @@ onMounted(async () => {
 
 watch(terminalTheme, () => {
   if (terminal) {
-    terminal.options.theme = getTheme()
+    terminal.options.theme = { ...getTheme(), cursor: 'transparent' }
   }
 })
 

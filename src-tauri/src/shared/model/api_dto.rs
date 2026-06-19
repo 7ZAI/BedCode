@@ -40,6 +40,7 @@ pub const CODE_INVALID_REQUEST: u16 = 1003;
 pub const CODE_TIMEOUT: u16 = 1004;
 pub const CODE_PAIRING_FAILED: u16 = 1005;
 pub const CODE_QR_FAILED: u16 = 1006;
+pub const CODE_PLUGIN_AUTH_FAILED: u16 = 1007;
 
 // ==================== File Tree DTOs ====================
 

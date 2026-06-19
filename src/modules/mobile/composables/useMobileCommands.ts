@@ -298,6 +298,7 @@ let unlistenSyncSessionRemoved: UnlistenFn | null = null
 let unlistenSyncConfigCreated: UnlistenFn | null = null
 let unlistenSyncConfigUpdated: UnlistenFn | null = null
 let unlistenSyncConfigRemoved: UnlistenFn | null = null
+let unlistenSyncTaskStatusChanged: UnlistenFn | null = null
 
 /**
  * 同步事件回调接口
@@ -310,6 +311,7 @@ export interface SyncEventCallbacks {
   onSyncConfigCreated?: (data: { config: any; source_device: string }) => void
   onSyncConfigUpdated?: (data: { config: any; source_device: string }) => void
   onSyncConfigRemoved?: (data: { config_id: string; config_name: string }) => void
+  onSyncTaskStatusChanged?: (data: { session_id: string; task_status: string; task_reason?: string }) => void
 }
 
 /**
@@ -336,6 +338,7 @@ export async function initMobileEventListeners(callbacks: {
   onSyncConfigCreated?: (data: { config: any; source_device: string }) => void
   onSyncConfigUpdated?: (data: { config: any; source_device: string }) => void
   onSyncConfigRemoved?: (data: { config_id: string; config_name: string }) => void
+  onSyncTaskStatusChanged?: (data: { session_id: string; task_status: string; task_reason?: string }) => void
 }) {
   if (callbacks.onConnecting) {
     unlistenConnecting = await listen('ws_connecting', callbacks.onConnecting)
@@ -418,6 +421,11 @@ export async function initMobileEventListeners(callbacks: {
       callbacks.onSyncConfigRemoved?.(event.payload)
     })
   }
+  if (callbacks.onSyncTaskStatusChanged) {
+    unlistenSyncTaskStatusChanged = await listen<{ session_id: string; task_status: string; task_reason?: string }>('ws_sync_task_status_changed', (event) => {
+      callbacks.onSyncTaskStatusChanged?.(event.payload)
+    })
+  }
 }
 
 /**
@@ -444,6 +452,7 @@ export function cleanupMobileEventListeners() {
   unlistenSyncConfigCreated?.()
   unlistenSyncConfigUpdated?.()
   unlistenSyncConfigRemoved?.()
+  unlistenSyncTaskStatusChanged?.()
 }
 
 // ==================== Mobile Commands Composable ====================
