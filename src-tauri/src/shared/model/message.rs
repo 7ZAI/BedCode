@@ -325,8 +325,15 @@ impl Message {
 
     /// 创建终端订阅响应消息
     pub fn subscribe_response(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize) -> Self {
+        Self::subscribe_response_with_request_id(session_id, min_seq, max_seq, history_count, &generate_message_id())
+    }
+
+    /// 创建终端订阅响应消息（携带原始 request_id）
+    ///
+    /// 用于回复 `expect_response=true` 的订阅请求，使客户端能匹配 pending 请求
+    pub fn subscribe_response_with_request_id(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize, request_id: &str) -> Self {
         Message::Terminal {
-            message_id: generate_message_id(),
+            message_id: request_id.to_string(),
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.to_string(),
@@ -371,8 +378,15 @@ impl Message {
 
     /// 创建终端取消订阅响应消息
     pub fn unsubscribe_response(session_id: &str) -> Self {
+        Self::unsubscribe_response_with_request_id(session_id, &generate_message_id())
+    }
+
+    /// 创建终端取消订阅响应消息（携带原始 request_id）
+    ///
+    /// 用于回复 `expect_response=true` 的取消订阅请求，使客户端能匹配 pending 请求
+    pub fn unsubscribe_response_with_request_id(session_id: &str, request_id: &str) -> Self {
         Message::Terminal {
-            message_id: generate_message_id(),
+            message_id: request_id.to_string(),
             expect_response: false,
             timestamp: Utc::now().timestamp_millis(),
             session_id: session_id.to_string(),

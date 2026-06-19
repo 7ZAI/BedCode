@@ -46,10 +46,6 @@ pub enum AppError {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[error("PTY error: {0}")]
     Pty(String),
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[error("Keyring error: {0}")]
-    Keyring(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -73,13 +69,6 @@ impl From<tauri::Error> for AppError {
 impl From<notify::Error> for AppError {
     fn from(e: notify::Error) -> Self {
         AppError::Internal(format!("File watcher error: {}", e))
-    }
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-impl From<keyring::Error> for AppError {
-    fn from(e: keyring::Error) -> Self {
-        AppError::Keyring(e.to_string())
     }
 }
 

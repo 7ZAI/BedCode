@@ -38,7 +38,7 @@ android {
     }
 
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
         applicationId = "com.bedcode.app"
         minSdk = 24
         targetSdk = 35

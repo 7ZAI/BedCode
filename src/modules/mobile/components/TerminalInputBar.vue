@@ -4,7 +4,8 @@
     :style="inputBarStyle"
   >
     <!-- 快捷键面板 - 覆盖层，不影响终端高度 -->
-    <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel">
+    <transition name="shortcuts-slide">
+      <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel">
       <!-- 轮播容器 -->
       <div
         ref="carouselRef"
@@ -142,6 +143,7 @@
         ></div>
       </div>
     </div>
+    </transition>
 
     <!-- 添加自定义命令弹窗 -->
     <Teleport to="body">
@@ -594,6 +596,25 @@ onMounted(() => {
   background: var(--mobile-bg-secondary);
   backdrop-filter: blur(20px);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* 快捷键面板滑动动画 - 从下往上展开/收起 */
+.shortcuts-slide-enter-active,
+.shortcuts-slide-leave-active {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.2s ease;
+}
+
+.shortcuts-slide-enter-from,
+.shortcuts-slide-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}
+
+.shortcuts-slide-enter-to,
+.shortcuts-slide-leave-from {
+  transform: translateY(0);
+  opacity: 1;
 }
 
 .carousel-container {

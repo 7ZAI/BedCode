@@ -544,22 +544,27 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
  */
 export async function loadSessionConfigs(): Promise<any[]> {
   const { httpListConfigs } = useHttpApi()
-  const result = await httpListConfigs()
-  if (result.code === 0 && result.data) {
-    const configs = result.data.configs || []
-    sessionConfigs.value = configs.map((c: any) => ({
-      id: c.id,
-      name: c.name,
-      environment: c.environment,
-      wsl_distro: c.wslDistro,
-      working_dir: c.workingDir,
-      command: c.command,
-    }))
-    hasLoadedConfigs.value = true
-    return configs
+  try {
+    const result = await httpListConfigs()
+    if (result.code === 0 && result.data) {
+      const configs = result.data.configs || []
+      sessionConfigs.value = configs.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        environment: c.environment,
+        wsl_distro: c.wslDistro,
+        working_dir: c.workingDir,
+        command: c.command,
+      }))
+      hasLoadedConfigs.value = true
+      return configs
+    }
+    console.warn('[MobileConnection] Failed to load session configs via HTTP:', result.message)
+    return []
+  } catch (e: any) {
+    console.error('[MobileConnection] loadSessionConfigs error:', e?.message || e)
+    return []
   }
-  console.warn('[MobileConnection] Failed to load session configs via HTTP:', result.message)
-  return []
 }
 
 /**

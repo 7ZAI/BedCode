@@ -52,7 +52,7 @@ pub struct FileTreeRequest {
 }
 
 /// POST /api/file-tree response data
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeResponseData {
     pub tree: Vec<FileTreeNode>,
@@ -64,6 +64,39 @@ pub struct FileTreeResponseData {
 pub struct FileTreeNode {
     pub name: String,
     pub node_type: String,
+    /// 相对于工作目录的路径（如 "src/main.rs"）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileTreeNode>>,
+}
+
+// ==================== File Content DTOs ====================
+
+/// POST /api/file-content request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContentRequest {
+    pub session_id: String,
+    pub file_path: String,
+}
+
+/// POST /api/file-content response data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContentResponseData {
+    pub content: String,
+    pub file_name: String,
+}
+
+// ==================== Diff Tree DTOs ====================
+
+/// POST /api/diff-tree request
+///
+/// 与 FileTreeRequest 相同参数，返回仅包含 git 改动文件的树
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffTreeRequest {
+    pub session_id: String,
+    pub exclude_dirs: Vec<String>,
 }

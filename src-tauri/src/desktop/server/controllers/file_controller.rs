@@ -2,14 +2,19 @@
 //!
 //! Routes:
 //! - POST /api/file-tree
+//! - POST /api/file-content
+//! - POST /api/diff-tree
 
 use actix_web::{web, HttpResponse};
 use crate::desktop::app_context::AppContext;
 use crate::shared::model::api_dto::ApiResponse;
 use crate::shared::model::api_dto::*;
 use std::path::PathBuf;
+use std::collections::HashSet;
 
 const MAX_DEPTH: usize = 20;
+/// 文件内容读取上限 2MB，防止传输过大文件
+const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
 
 /// POST /api/file-tree
 pub async fn get_file_tree(body: web::Json<FileTreeRequest>) -> HttpResponse {
@@ -105,16 +110,29 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
             let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
             if should_exclude(&relative, &file_name, filters) { continue; }
             let child_dir = dir.join(&file_name);
+            let node_path = if relative.is_empty() {
+                file_name.clone()
+            } else {
+                format!("{}/{}", relative, file_name)
+            };
             let children = scan_dir(root, &child_dir, filters, depth + 1)?;
             folders.push(FileTreeNode {
                 name: file_name,
                 node_type: "folder".to_string(),
+                path: Some(node_path),
                 children: Some(children),
             });
         } else if file_type.is_file() {
+            let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
+            let node_path = if relative.is_empty() {
+                file_name.clone()
+            } else {
+                format!("{}/{}", relative, file_name)
+            };
             files.push(FileTreeNode {
                 name: file_name,
                 node_type: "file".to_string(),
+                path: Some(node_path),
                 children: None,
             });
         }
@@ -125,4 +143,338 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
     let mut entries = folders;
     entries.extend(files);
     Ok(entries)
+}
+
+/// POST /api/file-content
+///
+/// 根据 session_id 定位工作目录，读取 file_path 指定的文件内容
+/// file_path 可以是相对路径（相对于工作目录）或绝对路径
+pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpResponse {
+    let ctx = AppContext::global();
+
+    let working_dir = match ctx
+        .config_manager()
+        .get_config_by_session_id(&body.session_id, ctx.session_manager())
+        .await
+    {
+        Ok(config) => config.working_dir,
+        Err(e) => {
+            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
+        }
+    };
+
+    // 构建文件绝对路径：相对路径基于 working_dir 解析
+    let file_path = PathBuf::from(&body.file_path);
+    let abs_path = if file_path.is_absolute() {
+        file_path
+    } else {
+        PathBuf::from(&working_dir).join(&file_path)
+    };
+
+    // 安全检查：路径必须在 working_dir 下，防止目录遍历
+    let canonical_working = match PathBuf::from(&working_dir).canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("Failed to resolve working dir: {}", e),
+            ));
+        }
+    };
+
+    // 文件不存在时 canonicalize 会失败，先检查
+    if !abs_path.exists() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            404,
+            &format!("File not found: {}", body.file_path),
+        ));
+    }
+
+    let canonical_path = match std::path::Path::canonicalize(&abs_path) {
+        Ok(p) => p,
+        Err(e) => {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("Failed to resolve file path: {}", e),
+            ));
+        }
+    };
+
+    if !canonical_path.starts_with(&canonical_working) {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            403,
+            "Access denied: file is outside working directory",
+        ));
+    }
+
+    if !canonical_path.is_file() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            400,
+            "Path is not a file",
+        ));
+    }
+
+    // 检查文件大小
+    let file_size = match std::fs::metadata(&canonical_path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("Failed to read file metadata: {}", e),
+            ));
+        }
+    };
+
+    if file_size > MAX_FILE_SIZE {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            413,
+            &format!("File too large ({} bytes, max {} bytes)", file_size, MAX_FILE_SIZE),
+        ));
+    }
+
+    // 读取文件内容
+    let path_for_read = canonical_path.clone();
+    let read_result = tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(&path_for_read)
+    }).await;
+
+    match read_result {
+        Ok(Ok(content)) => {
+            let file_name = canonical_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let data = FileContentResponseData { content, file_name };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
+        }
+        Ok(Err(e)) => {
+            // 二进制文件等无法用 UTF-8 解码的情况
+            HttpResponse::Ok().json(ApiResponse::<()>::error(
+                415,
+                &format!("Failed to read file (possibly binary): {}", e),
+            ))
+        }
+        Err(e) => {
+            HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("File read task failed: {}", e),
+            ))
+        }
+    }
+}
+
+/// POST /api/diff-tree
+///
+/// 获取 git 改动文件构成的文件树
+/// 在工作目录下执行 `git diff --name-only` 和 `git diff --cached --name-only`，合并去重
+/// 应用 exclude_dirs 过滤后，将改动路径组装成目录树结构返回
+pub async fn get_diff_tree(body: web::Json<DiffTreeRequest>) -> HttpResponse {
+    let ctx = AppContext::global();
+
+    let working_dir = match ctx
+        .config_manager()
+        .get_config_by_session_id(&body.session_id, ctx.session_manager())
+        .await
+    {
+        Ok(config) => config.working_dir,
+        Err(e) => {
+            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
+        }
+    };
+
+    let root = PathBuf::from(&working_dir);
+    if !root.is_dir() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            400,
+            &format!("Working dir is not a directory: {}", working_dir),
+        ));
+    }
+
+    // 检查是否为 git 仓库
+    let git_dir = root.join(".git");
+    if !git_dir.exists() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            400,
+            "Not a git repository",
+        ));
+    }
+
+    let filters = build_exclude_filters(&body.exclude_dirs);
+    let working_dir_clone = working_dir.clone();
+    let filters_clone = filters.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        get_diff_file_tree(&working_dir_clone, &filters_clone)
+    }).await;
+
+    match result {
+        Ok(Ok(tree)) => {
+            let data = FileTreeResponseData { tree };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
+        }
+        Ok(Err(e)) => {
+            HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
+        }
+        Err(e) => {
+            HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("Diff tree task failed: {}", e),
+            ))
+        }
+    }
+}
+
+/// 执行 git diff 获取改动文件列表，过滤后构建树
+fn get_diff_file_tree(working_dir: &str, filters: &[ExcludeFilter]) -> crate::Result<Vec<FileTreeNode>> {
+    // 获取未暂存的改动（工作区 vs 暂存区）
+    let unstaged = run_git_command(working_dir, &["diff", "--name-only"])?;
+    // 获取已暂存但未提交的改动（暂存区 vs HEAD）
+    let staged = run_git_command(working_dir, &["diff", "--cached", "--name-only"])?;
+    // 获取未跟踪的文件
+    let untracked = run_git_command(working_dir, &["ls-files", "--others", "--exclude-standard"])?;
+
+    // 合并去重
+    let mut all_paths: HashSet<String> = HashSet::new();
+    for path in unstaged.iter().chain(staged.iter()).chain(untracked.iter()) {
+        all_paths.insert(path.clone());
+    }
+
+    // 过滤掉被排除规则匹配的路径中的目录组件
+    let filtered_paths: Vec<String> = all_paths
+        .into_iter()
+        .filter(|path| {
+            // 检查路径中的每个目录组件是否被排除
+            let parts: Vec<&str> = path.split('/').collect();
+            for (i, part) in parts.iter().enumerate() {
+                let parent = parts[..i].join("/");
+                if should_exclude(&parent, part, filters) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    if filtered_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 将扁平路径列表构建为嵌套树结构
+    Ok(build_tree_from_paths(&filtered_paths))
+}
+
+/// 执行 git 命令并解析输出为路径列表
+fn run_git_command(working_dir: &str, args: &[&str]) -> crate::Result<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| crate::AppError::Internal(format!("Failed to execute git: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::AppError::Internal(format!("git command failed: {}", stderr)));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let paths: Vec<String> = stdout
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect();
+
+    Ok(paths)
+}
+
+/// 将扁平路径列表构建为嵌套树结构
+///
+/// 输入: ["src/main.rs", "src/lib/mod.rs", "Cargo.toml"]
+/// 输出:
+///   folder "src"
+///     file "main.rs"
+///     folder "lib"
+///       file "mod.rs"
+///   file "Cargo.toml"
+fn build_tree_from_paths(paths: &[String]) -> Vec<FileTreeNode> {
+    // 用嵌套 HashMap 收集路径，再转换为 Vec<FileTreeNode>
+    use std::collections::BTreeMap;
+
+    enum Entry {
+        File,
+        Dir(BTreeMap<String, Entry>),
+    }
+
+    let mut root: BTreeMap<String, Entry> = BTreeMap::new();
+
+    for path in paths {
+        let parts: Vec<&str> = path.split('/').collect();
+        let mut current = &mut root;
+
+        for (i, part) in parts.iter().enumerate() {
+            let is_last = i == parts.len() - 1;
+            if is_last {
+                // 文件节点
+                current.insert(part.to_string(), Entry::File);
+            } else {
+                // 目录节点
+                let entry = current
+                    .entry(part.to_string())
+                    .or_insert_with(|| Entry::Dir(BTreeMap::new()));
+                match entry {
+                    Entry::Dir(children) => {
+                        current = children;
+                    }
+                    Entry::File => {
+                        // 路径冲突（同一路径既是文件又是目录），忽略
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn map_to_tree(map: &BTreeMap<String, Entry>, parent_path: &str) -> Vec<FileTreeNode> {
+        let mut nodes = Vec::new();
+        for (name, entry) in map {
+            let node_path = if parent_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{}", parent_path, name)
+            };
+            match entry {
+                Entry::File => {
+                    nodes.push(FileTreeNode {
+                        name: name.clone(),
+                        node_type: "file".to_string(),
+                        path: Some(node_path),
+                        children: None,
+                    });
+                }
+                Entry::Dir(children) => {
+                    let child_nodes = map_to_tree(children, &node_path);
+                    nodes.push(FileTreeNode {
+                        name: name.clone(),
+                        node_type: "folder".to_string(),
+                        path: Some(node_path),
+                        children: Some(child_nodes),
+                    });
+                }
+            }
+        }
+        // 文件夹在前，文件在后
+        let mut folders: Vec<FileTreeNode> = nodes.iter()
+            .filter(|n| n.node_type == "folder")
+            .cloned()
+            .collect();
+        let files: Vec<FileTreeNode> = nodes.iter()
+            .filter(|n| n.node_type == "file")
+            .cloned()
+            .collect();
+        folders.extend(files);
+        folders
+    }
+
+    map_to_tree(&root, "")
 }

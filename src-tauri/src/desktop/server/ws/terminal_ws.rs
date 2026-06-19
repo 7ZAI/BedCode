@@ -28,6 +28,8 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 #[rtype(result = "()")]
 struct SubscribeResult {
     session_id: String,
+    /// 原始请求的 message_id，用于匹配客户端的 pending 请求
+    request_id: String,
     result: Option<crate::desktop::session::SubscribeResponse>,
 }
 
@@ -36,6 +38,8 @@ struct SubscribeResult {
 #[rtype(result = "()")]
 struct UnsubscribeResult {
     session_id: String,
+    /// 原始请求的 message_id，用于匹配客户端的 pending 请求
+    request_id: String,
     success: bool,
 }
 
@@ -185,13 +189,13 @@ impl TerminalWs {
             Message::Auth { payload, message_id, .. } => {
                 self.handle_auth(payload, message_id, ctx);
             }
-            Message::Terminal { session_id, payload, message_id, .. } => {
+            Message::Terminal { session_id, payload, message_id, expect_response, .. } => {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() { ctx.text(json); }
                     return;
                 }
-                self.handle_terminal(session_id, payload, ctx);
+                self.handle_terminal(session_id, payload, message_id, expect_response, ctx);
             }
             _ => {
                 tracing::debug!("Unsupported WS message type from {}", self.session.addr);
@@ -379,6 +383,8 @@ impl TerminalWs {
         &mut self,
         session_id: String,
         payload: TerminalPayload,
+        message_id: String,
+        expect_response: bool,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         match payload.action {
@@ -394,12 +400,18 @@ impl TerminalWs {
                         tracing::error!("Terminal input error: {}", e);
                     }
                 });
+
+                // 输入消息需要立即回复 Ack，避免移动端 send_and_wait 超时断开
+                if expect_response {
+                    let ack = Message::ack(&message_id);
+                    if let Ok(json) = ack.to_json() { ctx.text(json); }
+                }
             }
             crate::shared::enums::TerminalAction::Subscribe { start_seq } => {
-                self.handle_subscribe(session_id, start_seq, ctx);
+                self.handle_subscribe(session_id, start_seq, message_id, ctx);
             }
             crate::shared::enums::TerminalAction::Unsubscribe => {
-                self.handle_unsubscribe(session_id, ctx);
+                self.handle_unsubscribe(session_id, message_id, ctx);
             }
             _ => {}
         }
@@ -413,6 +425,7 @@ impl TerminalWs {
         &mut self,
         session_id: String,
         start_seq: Option<u64>,
+        message_id: String,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         let global_manager = GlobalOutputManager::global();
@@ -424,12 +437,14 @@ impl TerminalWs {
 
         let session_id_for_sub = session_id.clone();
         let session_id_for_fwd = session_id.clone();
+        let request_id = message_id.clone();
 
         // 在 Actix 运行时中执行异步订阅
         actix::spawn(async move {
             let result = global_manager.subscribe(&session_id_for_sub, &client_id, output_tx, start_seq).await;
             let _ = addr.send(SubscribeResult {
                 session_id: session_id_for_sub.clone(),
+                request_id,
                 result,
             }).await;
         });
@@ -476,16 +491,19 @@ impl TerminalWs {
     fn handle_unsubscribe(
         &mut self,
         session_id: String,
+        message_id: String,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         let global_manager = GlobalOutputManager::global();
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
+        let request_id = message_id;
 
         actix::spawn(async move {
             let success = global_manager.unsubscribe(&session_id, &client_id).await;
             let _ = addr.send(UnsubscribeResult {
                 session_id,
+                request_id,
                 success,
             }).await;
         });
@@ -502,16 +520,17 @@ impl Handler<SubscribeResult> for TerminalWs {
         match msg.result {
             Some(response) => {
                 self.session.subscribed_sessions.insert(msg.session_id.clone());
-                let ws_msg = Message::subscribe_response(
+                let ws_msg = Message::subscribe_response_with_request_id(
                     &msg.session_id,
                     response.min_seq,
                     response.max_seq,
                     response.history_count,
+                    &msg.request_id,
                 );
                 if let Ok(json) = ws_msg.to_json() { ctx.text(json); }
             }
             None => {
-                let error = Message::error("SESSION_NOT_FOUND", &format!("Session {} not found", msg.session_id));
+                let error = Message::error_with_id(&msg.request_id, "SESSION_NOT_FOUND", &format!("Session {} not found", msg.session_id));
                 if let Ok(json) = error.to_json() { ctx.text(json); }
             }
         }
@@ -525,7 +544,7 @@ impl Handler<UnsubscribeResult> for TerminalWs {
     fn handle(&mut self, msg: UnsubscribeResult, ctx: &mut Self::Context) {
         if msg.success {
             self.session.subscribed_sessions.remove(&msg.session_id);
-            let ws_msg = Message::unsubscribe_response(&msg.session_id);
+            let ws_msg = Message::unsubscribe_response_with_request_id(&msg.session_id, &msg.request_id);
             if let Ok(json) = ws_msg.to_json() { ctx.text(json); }
         }
     }

@@ -1,6 +1,6 @@
 <template>
   <transition name="modal-fade">
-    <div v-if="visible" class="viewer-overlay" @click.self="handleClose">
+    <div v-if="visible" class="viewer-overlay" @click.self="handleClose" @touchstart.stop @touchmove.stop>
       <div class="viewer-modal" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
         <!-- Header -->
         <div class="viewer-header">
@@ -27,8 +27,9 @@
 
         <!-- Code Area -->
         <div class="viewer-body">
-          <div v-if="isLoading" class="viewer-loading">加载中...</div>
+          <div v-if="loading" class="viewer-loading">加载中...</div>
           <div v-else-if="error" class="viewer-error">{{ error }}</div>
+          <div v-else-if="!code" class="viewer-loading">选择文件查看内容</div>
           <div v-else class="viewer-code" v-html="highlightedHtml"></div>
         </div>
 
@@ -45,12 +46,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composables/useCodeHighlight'
-import { TEST_FILE_CONTENTS } from '@/modules/mobile/composables/useFileTree'
 
 const props = defineProps<{
   visible: boolean
   filename: string
   code?: string
+  loading?: boolean
+  error?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -65,7 +67,7 @@ const isFullscreen = ref(false)
 const displayLang = computed(() => getLangByFilename(props.filename))
 
 const lineCount = computed(() => {
-  const content = props.code ?? TEST_FILE_CONTENTS[props.filename] ?? ''
+  const content = props.code ?? ''
   if (!content) return 0
   return content.split('\n').length
 })
@@ -91,12 +93,11 @@ function handleClose() {
 
 // 当文件变化时重新高亮
 watch(
-  () => [props.visible, props.filename] as const,
-  async ([visible, filename]) => {
-    if (visible && filename) {
-      const content = props.code ?? TEST_FILE_CONTENTS[filename] ?? ''
+  () => [props.visible, props.filename, props.code] as const,
+  async ([visible, filename, code]) => {
+    if (visible && filename && code) {
       const lang = getLangByFilename(filename)
-      await highlight(content, lang)
+      await highlight(code, lang)
     }
   },
   { immediate: true },
@@ -227,6 +228,7 @@ watch(
   font-size: 13px;
   line-height: 1.6;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  counter-reset: line-number;
 }
 
 /* Shiki 产出的 pre/code 样式覆盖 */
@@ -240,6 +242,27 @@ watch(
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
+  display: block;
+}
+
+/* 行号样式：使用 CSS counter + data-line 属性 */
+.viewer-code :deep(.code-line) {
+  display: block;
+  position: relative;
+  padding-left: 3.5em;
+  min-height: 1em;
+}
+
+.viewer-code :deep(.code-line::before) {
+  content: attr(data-line);
+  position: absolute;
+  left: 0;
+  width: 2.8em;
+  text-align: right;
+  color: rgba(100, 100, 120, 0.4);
+  font-size: 0.85em;
+  user-select: none;
+  pointer-events: none;
 }
 
 .viewer-loading,

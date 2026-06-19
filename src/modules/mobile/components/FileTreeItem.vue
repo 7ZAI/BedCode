@@ -2,7 +2,7 @@
   <div class="tree-item">
     <div
       class="tree-item-row"
-      :style="{ paddingLeft: `${depth * 16 + 8}px` }"
+      :style="rowStyle"
       @click="handleClick"
     >
       <!-- 文件夹展开/折叠箭头 -->
@@ -10,23 +10,23 @@
         v-if="node.type === 'folder'"
         class="chevron"
         :class="{ expanded: node.expanded }"
-        width="16"
-        height="16"
+        :width="iconSize"
+        :height="iconSize"
         viewBox="0 0 16 16"
         fill="currentColor"
       >
         <path d="M6 4l4 4-4 4" />
       </svg>
       <!-- 文件占位，保持对齐 -->
-      <span v-else class="chevron-placeholder"></span>
+      <span v-else class="chevron-placeholder" :style="{ width: `${iconSize}px` }"></span>
 
       <!-- 图标 -->
-      <FolderOpenIcon v-if="node.type === 'folder' && node.expanded" class="item-icon" />
-      <FolderClosedIcon v-else-if="node.type === 'folder'" class="item-icon" />
-      <FileIcon v-else class="item-icon" :color="fileColor" />
+      <FolderOpenIcon v-if="node.type === 'folder' && node.expanded" class="item-icon" :style="iconStyle" />
+      <FolderClosedIcon v-else-if="node.type === 'folder'" class="item-icon" :style="iconStyle" />
+      <FileIcon v-else class="item-icon" :style="iconStyle" :color="fileColor" />
 
       <!-- 名称 -->
-      <span class="item-name">{{ node.name }}</span>
+      <span class="item-name" :style="{ fontSize: `${fontSize}px` }">{{ node.name }}</span>
     </div>
 
     <!-- 子节点 -->
@@ -36,7 +36,8 @@
         :key="index"
         :node="child"
         :depth="depth + 1"
-        @file-click="(name) => emit('file-click', name)"
+        :font-size="fontSize"
+        @file-click="(name, path) => emit('file-click', name, path)"
       />
     </div>
   </div>
@@ -49,14 +50,35 @@ import FolderOpenIcon from './icons/FolderOpenIcon.vue'
 import FolderClosedIcon from './icons/FolderClosedIcon.vue'
 import FileIcon from './icons/FileIcon.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   node: FileTreeNode
   depth: number
-}>()
+  fontSize?: number
+}>(), {
+  fontSize: 13,
+})
 
 const emit = defineEmits<{
-  'file-click': [name: string]
+  'file-click': [name: string, path: string]
 }>()
+
+// 基于 fontSize 的比例缩放因子（以 13px 为基准）
+const scale = computed(() => props.fontSize / 13)
+
+// 缩放后的尺寸
+const iconSize = computed(() => Math.round(16 * scale.value))
+const indentUnit = computed(() => Math.round(16 * scale.value))
+
+const rowStyle = computed(() => ({
+  paddingLeft: `${props.depth * indentUnit.value + Math.round(8 * scale.value)}px`,
+  height: `${Math.round(32 * scale.value)}px`,
+  gap: `${Math.round(4 * scale.value)}px`,
+}))
+
+const iconStyle = computed(() => ({
+  width: `${iconSize.value}px`,
+  height: `${iconSize.value}px`,
+}))
 
 // 文件扩展名对应的图标颜色
 const EXTENSION_COLORS: Record<string, string> = {
@@ -81,7 +103,7 @@ function handleClick() {
   if (props.node.type === 'folder') {
     props.node.expanded = !props.node.expanded
   } else {
-    emit('file-click', props.node.name)
+    emit('file-click', props.node.name, props.node.path ?? props.node.name)
   }
 }
 </script>
@@ -90,12 +112,10 @@ function handleClick() {
 .tree-item-row {
   display: flex;
   align-items: center;
-  height: 32px;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   transition: background-color 0.15s ease;
-  gap: 4px;
 }
 
 .tree-item-row:active {
@@ -115,17 +135,13 @@ function handleClick() {
 
 .chevron-placeholder {
   flex-shrink: 0;
-  width: 16px;
 }
 
 .item-icon {
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
 }
 
 .item-name {
-  font-size: 13px;
   color: var(--mobile-text-primary);
   white-space: nowrap;
   overflow: hidden;

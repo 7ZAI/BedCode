@@ -2,7 +2,7 @@
 name = "bedcode"
 version = "0.1.0"
 description = "Remote control for Claude Code via mobile devices"
-authors = ["you"]
+authors = ["binblink"]
 edition = "2021"
 
 [lib]
@@ -27,7 +27,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Security
 rand = "0.8"
-sha2 = "0.10"
 jsonwebtoken = "9"
 
 # Encoding
@@ -87,15 +86,9 @@ actix-rt = "2"
 actix-cors = "0.7"
 # PTY management
 portable-pty = "0.8"
-# Secure storage
-keyring = "3"
 
 [dev-dependencies]
 # Testing
-tokio-test = "0.4"
-pretty_assertions = "1"
-tempfile = "3"
-mockall = "0.12"
 criterion = { version = "0.5", features = ["async_tokio"] }
 
 # Benchmark targets

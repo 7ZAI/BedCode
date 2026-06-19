@@ -39,20 +39,111 @@ export function getLangByFilename(filename: string): string {
   return EXT_LANG_MAP[ext] || 'plaintext'
 }
 
+// ==================== Static Language Imports ====================
+// 使用 @shikijs/langs 的静态 import，确保 Vite 在构建时打包
+// 动态 import('shiki/langs/xxx.mjs') 在 Tauri WebView 中无法解析
+
+import langRust from '@shikijs/langs/rust'
+import langTypescript from '@shikijs/langs/typescript'
+import langTsx from '@shikijs/langs/tsx'
+import langJavascript from '@shikijs/langs/javascript'
+import langJsx from '@shikijs/langs/jsx'
+import langPython from '@shikijs/langs/python'
+import langJava from '@shikijs/langs/java'
+import langGo from '@shikijs/langs/go'
+import langC from '@shikijs/langs/c'
+import langCpp from '@shikijs/langs/cpp'
+import langCsharp from '@shikijs/langs/csharp'
+import langRuby from '@shikijs/langs/ruby'
+import langPhp from '@shikijs/langs/php'
+import langSwift from '@shikijs/langs/swift'
+import langKotlin from '@shikijs/langs/kotlin'
+import langScala from '@shikijs/langs/scala'
+import langDart from '@shikijs/langs/dart'
+import langLua from '@shikijs/langs/lua'
+import langR from '@shikijs/langs/r'
+import langVue from '@shikijs/langs/vue'
+import langCss from '@shikijs/langs/css'
+import langScss from '@shikijs/langs/scss'
+import langHtml from '@shikijs/langs/html'
+import langJson from '@shikijs/langs/json'
+import langToml from '@shikijs/langs/toml'
+import langYaml from '@shikijs/langs/yaml'
+import langXml from '@shikijs/langs/xml'
+import langIni from '@shikijs/langs/ini'
+import langShellscript from '@shikijs/langs/shellscript'
+import langPowershell from '@shikijs/langs/powershell'
+import langMarkdown from '@shikijs/langs/markdown'
+import langMdx from '@shikijs/langs/mdx'
+import langSql from '@shikijs/langs/sql'
+import langGraphql from '@shikijs/langs/graphql'
+import langDockerfile from '@shikijs/langs/dockerfile'
+import langMakefile from '@shikijs/langs/makefile'
+import langCmake from '@shikijs/langs/cmake'
+import langNix from '@shikijs/langs/nix'
+import langZig from '@shikijs/langs/zig'
+import langAsm from '@shikijs/langs/asm'
+import langElixir from '@shikijs/langs/elixir'
+import langHaskell from '@shikijs/langs/haskell'
+import langErlang from '@shikijs/langs/erlang'
+import langClojure from '@shikijs/langs/clojure'
+import langSvelte from '@shikijs/langs/svelte'
+import langLess from '@shikijs/langs/less'
+import themeVitesseDark from '@shikijs/themes/vitesse-dark'
+
+/** 语言模块映射：语言 ID → 模块默认导出 */
+const LANG_MODULES: Record<string, any> = {
+  rust: langRust,
+  typescript: langTypescript,
+  tsx: langTsx,
+  javascript: langJavascript,
+  jsx: langJsx,
+  python: langPython,
+  java: langJava,
+  go: langGo,
+  c: langC,
+  cpp: langCpp,
+  csharp: langCsharp,
+  ruby: langRuby,
+  php: langPhp,
+  swift: langSwift,
+  kotlin: langKotlin,
+  scala: langScala,
+  dart: langDart,
+  lua: langLua,
+  r: langR,
+  vue: langVue,
+  css: langCss,
+  scss: langScss,
+  html: langHtml,
+  json: langJson,
+  toml: langToml,
+  yaml: langYaml,
+  xml: langXml,
+  ini: langIni,
+  shellscript: langShellscript,
+  powershell: langPowershell,
+  markdown: langMarkdown,
+  mdx: langMdx,
+  sql: langSql,
+  graphql: langGraphql,
+  dockerfile: langDockerfile,
+  makefile: langMakefile,
+  cmake: langCmake,
+  nix: langNix,
+  zig: langZig,
+  asm: langAsm,
+  elixir: langElixir,
+  haskell: langHaskell,
+  erlang: langErlang,
+  clojure: langClojure,
+  svelte: langSvelte,
+  less: langLess,
+}
+
 // ==================== Highlighter Singleton ====================
 
 const THEME = 'vitesse-dark'
-
-// 常用语言列表，初始化时预加载
-const PRELOAD_LANGS = [
-  'rust', 'typescript', 'javascript', 'python', 'java', 'go',
-  'c', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin',
-  'scala', 'dart', 'lua', 'r', 'vue', 'css', 'scss', 'html',
-  'json', 'toml', 'yaml', 'xml', 'ini', 'shellscript', 'powershell',
-  'markdown', 'mdx', 'sql', 'graphql', 'dockerfile', 'makefile',
-  'cmake', 'nix', 'zig', 'asm', 'elixir', 'haskell', 'erlang',
-  'clojure', 'plaintext', 'tsx', 'jsx', 'svelte', 'less',
-]
 
 let highlighterInstance: Awaited<ReturnType<typeof createHighlighterCore>> | null = null
 let initPromise: Promise<void> | null = null
@@ -62,9 +153,12 @@ async function ensureHighlighter(): Promise<NonNullable<typeof highlighterInstan
 
   if (!initPromise) {
     initPromise = (async () => {
+      // 将所有语言模块的 default export 展开为数组
+      const langImports = Object.values(LANG_MODULES).map(mod => mod.default ?? mod)
+
       highlighterInstance = await createHighlighterCore({
-        themes: [import('shiki/themes/vitesse-dark.mjs')],
-        langs: PRELOAD_LANGS.map(lang => import(`shiki/langs/${lang}.mjs`)),
+        themes: [themeVitesseDark],
+        langs: langImports,
         engine: createOnigurumaEngine(import('shiki/wasm')),
       })
     })()
@@ -72,6 +166,18 @@ async function ensureHighlighter(): Promise<NonNullable<typeof highlighterInstan
 
   await initPromise
   return highlighterInstance!
+}
+
+// ==================== Line Number Transformer ====================
+
+/** 自定义 Shiki transformer：为每行注入行号 */
+function transformerLineNumbers() {
+  return {
+    line(node: any, line: number) {
+      node.properties['data-line'] = line
+      node.properties.className = [...(node.properties.className || []), 'code-line']
+    },
+  }
 }
 
 // ==================== Composable ====================
@@ -88,16 +194,16 @@ export function useCodeHighlight() {
     try {
       const highlighter = await ensureHighlighter()
 
-      // 动态加载未预加载的语言
+      // 语言已在初始化时全部加载，不支持的语言降级为 plaintext
       if (!highlighter.getLoadedLanguages().includes(lang)) {
-        try {
-          await highlighter.loadLanguage(await import(`shiki/langs/${lang}.mjs`))
-        } catch {
-          lang = 'plaintext'
-        }
+        lang = 'plaintext'
       }
 
-      const html = highlighter.codeToHtml(code, { lang, theme: THEME })
+      const html = highlighter.codeToHtml(code, {
+        lang,
+        theme: THEME,
+        transformers: [transformerLineNumbers()],
+      })
       highlightedHtml.value = html
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)

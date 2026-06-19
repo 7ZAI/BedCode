@@ -92,7 +92,7 @@
 import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
-import { wsStopSession, wsRemoveSession } from '@/modules/mobile/composables/useMobileCommands'
+import { httpStopSession, httpRemoveSession } from '@/modules/mobile/composables/useHttpApi'
 import { useToast } from '@/modules/shared/composables/useToast'
 import SessionCard from '@/modules/mobile/components/SessionCard.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
@@ -166,7 +166,11 @@ async function confirmStop() {
   if (!pendingSession.value) return
   isStopping.value = true
   try {
-    await wsStopSession(pendingSession.value.id)
+    const result = await httpStopSession(pendingSession.value.id)
+    if (result.code !== 0) {
+      toast.error(result.message || '停止会话失败')
+      return
+    }
     // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
     connection.stopSession(pendingSession.value.id)
     showStopConfirm.value = false
@@ -187,10 +191,12 @@ function handleDeleteSession(session: any) {
 async function confirmDelete() {
   if (!pendingSession.value) return
   isDeleting.value = true
-  console.log('[SessionsView] confirmDelete: calling wsRemoveSession...')
   try {
-    await wsRemoveSession(pendingSession.value.id)
-    console.log('[SessionsView] confirmDelete: wsRemoveSession returned successfully')
+    const result = await httpRemoveSession(pendingSession.value.id)
+    if (result.code !== 0) {
+      toast.error(result.message || '删除会话失败')
+      return
+    }
     // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
     connection.removeSession(pendingSession.value.id)
     showDeleteConfirm.value = false
@@ -199,7 +205,6 @@ async function confirmDelete() {
     console.error('[SessionsView] Failed to delete session:', e)
     toast.error('删除会话失败')
   } finally {
-    console.log('[SessionsView] confirmDelete: finally block, setting isDeleting=false')
     isDeleting.value = false
   }
 }

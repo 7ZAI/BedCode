@@ -476,8 +476,8 @@ async function initTerminal() {
   }
 
   // Welcome message
-  term.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
-  term.write('='.repeat(50) + '\r\n\r\n')
+  // term.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
+  // term.write('='.repeat(50) + '\r\n\r\n')
 
   // Fit terminal - delay to ensure container is rendered
   setTimeout(() => {
