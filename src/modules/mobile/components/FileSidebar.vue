@@ -134,8 +134,9 @@
       </template>
     </div>
 
-    <!-- 文件查看弹窗 -->
+    <!-- 文件查看弹窗（仅 standalone 模式） -->
     <FileViewerModal
+      v-if="mode === 'standalone'"
       :visible="showFileViewer"
       :filename="selectedFile"
       :code="fileContent"
@@ -155,8 +156,15 @@ import FileTreeItem from './FileTreeItem.vue'
 import FileViewerModal from './FileViewerModal.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sessionId: string
+  mode?: 'standalone' | 'emit'
+}>(), {
+  mode: 'standalone',
+})
+
+const emit = defineEmits<{
+  'file-select': [name: string, path: string]
 }>()
 
 const { isLandscape } = useOrientation()
@@ -288,13 +296,18 @@ function confirmSettingsPanel() {
 }
 
 async function handleFileClick(name: string, path: string) {
+  if (props.mode === 'emit') {
+    emit('file-select', name, path)
+    return
+  }
+
+  // standalone 模式：原有逻辑不变
   selectedFile.value = name
   selectedFilePath.value = path
   fileContent.value = ''
   fileError.value = null
   showFileViewer.value = true
 
-  // 通过 HTTP 请求获取文件内容
   fileLoading.value = true
   try {
     const { httpGetFileContent } = useHttpApi()
