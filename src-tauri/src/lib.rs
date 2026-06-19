@@ -531,6 +531,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
+        .plugin(tauri_plugin_http::init())
         .setup(|app| {
             // 日志已在 run() 中早期初始化，这里不再重复初始化
             tracing::info!("BedCode setup starting...");
@@ -616,6 +617,8 @@ pub fn run() {
             mobile::commands::android::open_url_in_browser,
             // Mobile HTTP API Commands
             mobile::commands::http::http_get_file_tree,
+            mobile::commands::http::http_get_file_content,
+            mobile::commands::http::http_get_diff_tree,
             // Session Config (移动端使用内存存储)
             mobile::commands::mobile_commands::list_session_configs_mobile,
             mobile::commands::mobile_commands::get_session_config_mobile,

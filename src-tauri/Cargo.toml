@@ -63,10 +63,6 @@ regex = "1"
 # Network utilities
 local-ip-address = "0.6"
 
-# HTTP client (mobile → desktop HTTP API)
-# 使用 rustls 替代 OpenSSL，避免 Android 交叉编译问题
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-
 # Async trait for dyn compatibility
 async-trait = "0.1"
 
@@ -74,6 +70,7 @@ async-trait = "0.1"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 tauri-plugin-edge-to-edge = "0.3.3"
+tauri-plugin-http = "2"
 
 # Android-only dependencies
 [target.'cfg(target_os = "android")'.dependencies]
