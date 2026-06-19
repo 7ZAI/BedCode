@@ -1,11 +1,12 @@
 import { ref, watch, type Ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { useHttpApi } from './useHttpApi'
 
 // ==================== Types ====================
 
 export interface FileTreeNode {
   name: string
   type: 'file' | 'folder'
+  path?: string // 相对于工作目录的路径
   children?: FileTreeNode[]
   expanded?: boolean // folder only
 }
@@ -15,13 +16,20 @@ export interface FileTreeNode {
 export interface SidebarSettings {
   defaultExpanded: boolean
   filterPatterns: string[]
+  fontSize: number // 文件树字体大小 (px)，范围 10-20
 }
 
 const SETTINGS_KEY = 'bedcode:sidebar-settings'
 
+/** 文件树字体大小范围 */
+export const FONT_SIZE_MIN = 10
+export const FONT_SIZE_MAX = 20
+export const FONT_SIZE_DEFAULT = 13
+
 const DEFAULT_SETTINGS: SidebarSettings = {
   defaultExpanded: false,
   filterPatterns: ['node_modules', 'target', '.git', 'dist', 'build'],
+  fontSize: FONT_SIZE_DEFAULT,
 }
 
 function loadSettings(): SidebarSettings {
@@ -34,39 +42,6 @@ function loadSettings(): SidebarSettings {
 
 function saveSettings(settings: SidebarSettings): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
-}
-
-// ==================== Test File Contents (for FileViewerModal) ====================
-
-export const TEST_FILE_CONTENTS: Record<string, string> = {
-  'main.rs': `use std::io;
-
-fn main() {
-    println!("Hello, BedCode!");
-
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read line");
-
-    println!("You entered: {}", input.trim());
-}
-
-struct Session {
-    id: String,
-    name: String,
-    active: bool,
-}
-
-impl Session {
-    fn new(id: &str, name: &str) -> Self {
-        Session {
-            id: id.to_string(),
-            name: name.to_string(),
-            active: true,
-        }
-    }
-}`,
 }
 
 // ==================== Utility Functions ====================
@@ -105,6 +80,7 @@ function transformApiNode(node: any): FileTreeNode {
   return {
     name: node.name,
     type: node.nodeType === 'folder' ? 'folder' : 'file',
+    path: node.path ?? undefined,
     children: node.children ? node.children.map(transformApiNode) : undefined,
     expanded: node.nodeType === 'folder' ? false : undefined,
   }
@@ -126,44 +102,60 @@ export function useFileTree(sessionId: Ref<string>) {
   const tree = ref<FileTreeNode[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const isDiffMode = ref(false)
 
   async function fetchTree() {
     const id = sessionId.value
     if (!id) return
 
-    // 有缓存则使用缓存
-    const cached = treeCache.get(id)
-    if (cached) {
-      const filtered = filterTree(cached.tree, settings.value.filterPatterns)
-      if (settings.value.defaultExpanded) {
-        setAllExpanded(filtered, true)
+    // 有缓存则使用缓存（非 diff 模式）
+    if (!isDiffMode.value) {
+      const cached = treeCache.get(id)
+      if (cached) {
+        const filtered = filterTree(cached.tree, settings.value.filterPatterns)
+        if (settings.value.defaultExpanded) {
+          setAllExpanded(filtered, true)
+        }
+        tree.value = filtered
+        return
       }
-      tree.value = filtered
-      return
     }
 
     loading.value = true
     error.value = null
 
     try {
-      const rawNodes = await invoke<unknown[]>('http_get_file_tree', {
-        sessionId: id,
-        excludeDirs: settings.value.filterPatterns,
-      })
+      const { httpGetFileTree, httpGetDiffTree } = useHttpApi()
 
-      const transformed = rawNodes.map(transformApiNode)
+      if (isDiffMode.value) {
+        const result = await httpGetDiffTree(id, settings.value.filterPatterns)
+        if (result.code !== 0 || !result.data) {
+          throw new Error(result.message || '获取 Diff 文件树失败')
+        }
+        const transformed = result.data.tree.map(transformApiNode)
+        if (settings.value.defaultExpanded) {
+          setAllExpanded(transformed, true)
+        }
+        tree.value = transformed
+      } else {
+        const result = await httpGetFileTree(id, settings.value.filterPatterns)
+        if (result.code !== 0 || !result.data) {
+          throw new Error(result.message || '获取文件树失败')
+        }
+        const transformed = result.data.tree.map(transformApiNode)
 
-      // 写入缓存
-      treeCache.set(id, { tree: transformed, timestamp: Date.now() })
+        // 写入缓存
+        treeCache.set(id, { tree: transformed, timestamp: Date.now() })
 
-      // 应用过滤和展开设置
-      const filtered = filterTree(transformed, settings.value.filterPatterns)
-      if (settings.value.defaultExpanded) {
-        setAllExpanded(filtered, true)
+        // 应用过滤和展开设置
+        const filtered = filterTree(transformed, settings.value.filterPatterns)
+        if (settings.value.defaultExpanded) {
+          setAllExpanded(filtered, true)
+        }
+        tree.value = filtered
       }
-      tree.value = filtered
     } catch (e: any) {
-      error.value = e?.toString() || '获取文件树失败'
+      error.value = e?.toString() || (isDiffMode.value ? '获取 Diff 文件树失败' : '获取文件树失败')
       tree.value = []
     } finally {
       loading.value = false
@@ -197,6 +189,11 @@ export function useFileTree(sessionId: Ref<string>) {
     fetchTree()
   }
 
+  /** 切换 diff 模式（仅切换标志，不触发 fetchTree，由调用方决定刷新策略） */
+  function toggleDiffMode() {
+    isDiffMode.value = !isDiffMode.value
+  }
+
   // 监听 sessionId 变化，自动获取文件树
   watch(sessionId, (newId) => {
     if (newId) {
@@ -208,9 +205,11 @@ export function useFileTree(sessionId: Ref<string>) {
     tree,
     loading,
     error,
+    isDiffMode,
     expandAll,
     collapseAll,
     refresh,
+    toggleDiffMode,
     settings,
     updateSettings,
   }
