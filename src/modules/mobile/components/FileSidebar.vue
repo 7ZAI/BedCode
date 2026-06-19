@@ -1,8 +1,8 @@
 <template>
-  <div class="file-sidebar" :style="sidebarStyle">
+  <div class="file-sidebar" :style="sidebarStyle" @touchstart.stop @touchmove.stop>
     <!-- 工具栏 -->
     <div class="sidebar-header">
-      <span class="sidebar-title">文件</span>
+      <span class="sidebar-title">{{ isDiffMode ? 'Diff' : '文件' }}</span>
       <div class="sidebar-actions">
         <button class="action-btn" title="刷新" @click="handleRefresh">
           <svg
@@ -27,7 +27,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
           </svg>
         </button>
-        <button class="action-btn" title="Diff" @click="handleDiff">
+        <button class="action-btn" :class="{ active: isDiffMode }" title="Diff" @click="handleDiff">
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8m-8 5h8m-4-9v14M4 4h16a1 1 0 011 1v14a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" />
           </svg>
@@ -54,6 +54,32 @@
             >
               <span class="toggle-knob"></span>
             </button>
+          </div>
+        </div>
+        <div class="settings-panel-section">
+          <div class="settings-panel-row">
+            <span class="settings-panel-label">树形大小</span>
+            <span class="font-size-value">{{ tempFontSize }}px</span>
+          </div>
+          <div
+            ref="sliderTrackRef"
+            class="slider-track"
+            @pointerdown="onSliderPointerDown"
+          >
+            <div class="slider-fill" :style="sliderFillStyle"></div>
+            <div class="slider-thumb" :style="sliderThumbStyle"></div>
+            <div class="slider-dots">
+              <span
+                v-for="dot in sliderDots"
+                :key="dot"
+                class="slider-dot"
+                :class="{ active: dot <= tempFontSize }"
+              ></span>
+            </div>
+          </div>
+          <div class="slider-range-labels">
+            <span>{{ FONT_SIZE_MIN }}px</span>
+            <span>{{ FONT_SIZE_MAX }}px</span>
           </div>
         </div>
         <div class="settings-panel-section">
@@ -92,7 +118,7 @@
 
       <!-- 空状态 -->
       <div v-else-if="tree.length === 0" class="sidebar-state">
-        <span class="state-text">暂无文件</span>
+        <span class="state-text">{{ isDiffMode ? '没有改动文件' : '暂无文件' }}</span>
       </div>
 
       <!-- 文件树列表 -->
@@ -102,6 +128,7 @@
           :key="index"
           :node="node"
           :depth="0"
+          :font-size="settings.fontSize"
           @file-click="handleFileClick"
         />
       </template>
@@ -111,6 +138,9 @@
     <FileViewerModal
       :visible="showFileViewer"
       :filename="selectedFile"
+      :code="fileContent"
+      :loading="fileLoading"
+      :error="fileError"
       @update:visible="showFileViewer = $event"
     />
   </div>
@@ -118,8 +148,9 @@
 
 <script setup lang="ts">
 import { ref, computed, toRef } from 'vue'
+import { useHttpApi } from '../composables/useHttpApi'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
-import { useFileTree, type SidebarSettings } from '@/modules/mobile/composables/useFileTree'
+import { useFileTree, type SidebarSettings, FONT_SIZE_MIN, FONT_SIZE_MAX } from '@/modules/mobile/composables/useFileTree'
 import FileTreeItem from './FileTreeItem.vue'
 import FileViewerModal from './FileViewerModal.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
@@ -130,16 +161,77 @@ const props = defineProps<{
 
 const { isLandscape } = useOrientation()
 const toast = useToast()
-const { tree, loading, error, expandAll, collapseAll, refresh, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
+const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggleDiffMode, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
 
 const isRefreshing = ref(false)
 const showSettingsPanel = ref(false)
 const showFileViewer = ref(false)
 const selectedFile = ref('')
+const selectedFilePath = ref('')
+const fileContent = ref('')
+const fileLoading = ref(false)
+const fileError = ref<string | null>(null)
 
 // 临时设置状态
 const tempDefaultExpanded = ref(false)
 const tempFilterText = ref('')
+const tempFontSize = ref(FONT_SIZE_MIN)
+
+// 滑块拖动
+const sliderTrackRef = ref<HTMLElement | null>(null)
+const isDragging = ref(false)
+
+/** 滑块上的刻度点（每 2px 一个点） */
+const sliderDots = computed(() => {
+  const dots: number[] = []
+  for (let i = FONT_SIZE_MIN; i <= FONT_SIZE_MAX; i += 2) {
+    dots.push(i)
+  }
+  return dots
+})
+
+/** 字体大小对应的滑块百分比位置 */
+const fontSizePercent = computed(() => {
+  return ((tempFontSize.value - FONT_SIZE_MIN) / (FONT_SIZE_MAX - FONT_SIZE_MIN)) * 100
+})
+
+const sliderFillStyle = computed(() => ({
+  width: `${fontSizePercent.value}%`,
+}))
+
+const sliderThumbStyle = computed(() => ({
+  left: `${fontSizePercent.value}%`,
+}))
+
+/** 根据指针在轨道上的位置计算字体大小 */
+function fontSizeFromPointer(clientX: number) {
+  const track = sliderTrackRef.value
+  if (!track) return
+  const rect = track.getBoundingClientRect()
+  const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+  const raw = FONT_SIZE_MIN + ratio * (FONT_SIZE_MAX - FONT_SIZE_MIN)
+  // 吸附到整数
+  tempFontSize.value = Math.round(Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, raw)))
+}
+
+function onSliderPointerDown(e: PointerEvent) {
+  isDragging.value = true
+  fontSizeFromPointer(e.clientX)
+  const track = sliderTrackRef.value
+  if (track) track.setPointerCapture(e.pointerId)
+
+  const onMove = (ev: PointerEvent) => {
+    if (!isDragging.value) return
+    fontSizeFromPointer(ev.clientX)
+  }
+  const onUp = () => {
+    isDragging.value = false
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+  }
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp)
+}
 
 const sidebarStyle = computed(() => {
   const widthPercent = isLandscape.value ? '30%' : '40%'
@@ -157,8 +249,13 @@ async function handleRefresh() {
   }, 500)
 }
 
-function handleDiff() {
-  // TODO: 实现 diff 功能
+async function handleDiff() {
+  toggleDiffMode()
+  // 切换模式后统一通过 refresh 获取数据（清除缓存 + fetchTree）
+  await refresh()
+  if (isDiffMode.value && tree.value.length === 0 && !error.value) {
+    toast.info('没有改动文件')
+  }
 }
 
 function toggleSettings() {
@@ -168,6 +265,7 @@ function toggleSettings() {
     // 用当前设置初始化临时状态
     tempDefaultExpanded.value = settings.value.defaultExpanded
     tempFilterText.value = settings.value.filterPatterns.join(', ')
+    tempFontSize.value = settings.value.fontSize
     showSettingsPanel.value = true
   }
 }
@@ -183,14 +281,33 @@ function confirmSettingsPanel() {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean),
+    fontSize: tempFontSize.value,
   }
   updateSettings(newSettings)
   showSettingsPanel.value = false
 }
 
-function handleFileClick(name: string) {
+async function handleFileClick(name: string, path: string) {
   selectedFile.value = name
+  selectedFilePath.value = path
+  fileContent.value = ''
+  fileError.value = null
   showFileViewer.value = true
+
+  // 通过 HTTP 请求获取文件内容
+  fileLoading.value = true
+  try {
+    const { httpGetFileContent } = useHttpApi()
+    const result = await httpGetFileContent(props.sessionId, path)
+    if (result.code !== 0 || !result.data) {
+      throw new Error(result.message || '获取文件内容失败')
+    }
+    fileContent.value = result.data.content
+  } catch (e: any) {
+    fileError.value = e?.toString() || '获取文件内容失败'
+  } finally {
+    fileLoading.value = false
+  }
 }
 </script>
 
@@ -339,6 +456,97 @@ function handleFileClick(name: string) {
 }
 
 .settings-panel-input::placeholder {
+  color: var(--mobile-text-disabled);
+}
+
+/* Font Size Slider */
+.font-size-value {
+  font-size: 0.75rem;
+  color: var(--mobile-accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.slider-track {
+  position: relative;
+  height: 28px;
+  margin-top: 0.5rem;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.slider-fill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: 4px;
+  transform: translateY(-50%);
+  background: var(--mobile-accent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.slider-track::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 4px;
+  transform: translateY(-50%);
+  background: var(--mobile-bg-elevated);
+  border-radius: 2px;
+}
+
+.slider-thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--mobile-accent);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.2);
+  transition: box-shadow 0.15s ease;
+  z-index: 2;
+}
+
+.slider-thumb:hover {
+  box-shadow: 0 0 0 5px rgba(0, 212, 255, 0.3);
+}
+
+.slider-dots {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  display: flex;
+  justify-content: space-between;
+  padding: 0 1px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.slider-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--mobile-border);
+  transition: background 0.15s ease;
+}
+
+.slider-dot.active {
+  background: var(--mobile-accent);
+}
+
+.slider-range-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  font-size: 0.6875rem;
   color: var(--mobile-text-disabled);
 }
 
