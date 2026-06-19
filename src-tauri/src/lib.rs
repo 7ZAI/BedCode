@@ -233,6 +233,20 @@ pub fn run() {
             // 初始化全局配置单例
             crate::shared::system::config::AppConfig::init(app_config.clone());
 
+            // 插件自动配置：检查 token、安装插件、注入环境变量
+            let resource_dir = app_handle
+                .path()
+                .resource_dir()
+                .expect("Failed to get resource dir");
+            let mut app_config = app_config;
+            let plugin_result = crate::desktop::plugin::setup::setup_plugin(
+                &mut app_config,
+                &config_path,
+                &resource_dir,
+            );
+            // 配置可能修改了 token，重新初始化全局配置
+            crate::shared::system::config::AppConfig::init(app_config.clone());
+
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
@@ -391,6 +405,15 @@ pub fn run() {
 
             let init_elapsed = start.elapsed();
             tracing::info!("BedCode (Desktop) initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
+
+            // 发送插件配置结果到前端
+            let app_handle_for_plugin = app_handle_arc.clone();
+            tauri::async_runtime::spawn(async move {
+                // 延迟 500ms 发送，确保前端已加载完成
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let _ = app_handle_for_plugin.emit("plugin-setup-result", &plugin_result);
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
