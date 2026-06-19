@@ -615,10 +615,6 @@ pub fn run() {
             mobile::commands::android::stop_foreground_service,
             mobile::commands::android::update_foreground_notification,
             mobile::commands::android::open_url_in_browser,
-            // Mobile HTTP API Commands
-            mobile::commands::http::http_get_file_tree,
-            mobile::commands::http::http_get_file_content,
-            mobile::commands::http::http_get_diff_tree,
             // Session Config (移动端使用内存存储)
             mobile::commands::mobile_commands::list_session_configs_mobile,
             mobile::commands::mobile_commands::get_session_config_mobile,
