@@ -70,6 +70,7 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 tauri-plugin-edge-to-edge = "0.3.3"
 tauri-plugin-http = "2"
+dirs = "6.0.0"
 
 # Android-only dependencies
 [target.'cfg(target_os = "android")'.dependencies]
