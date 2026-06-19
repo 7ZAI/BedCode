@@ -5,102 +5,49 @@
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">工具箱</h1>
     </header>
 
-    <!-- Connection Status -->
-    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-success-muted)] border-b border-emerald-500/20 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
-        <span class="text-[var(--mobile-success)] text-sm">已连接 {{ currentDeviceName }}</span>
-      </div>
-      <button
-        class="text-xs text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-        @click="router.push('/mobile/devices')"
-      >
-        管理
-      </button>
-    </div>
-    <div v-else class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border-b border-[var(--mobile-border)] flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-gray-600"></div>
-        <span class="text-[var(--mobile-text-muted)] text-sm">未连接</span>
-      </div>
-      <button
-        class="text-xs text-[var(--mobile-accent)] hover:text-cyan-300 transition-colors"
-        @click="router.push('/mobile/devices')"
-      >
-        连接
-      </button>
-    </div>
-
     <!-- Toolbox Sections -->
     <div class="flex-1 overflow-auto p-4 space-y-5">
 
       <!-- Section: 预设任务 -->
       <section>
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">预设任务</h3>
-        <div class="grid grid-cols-2 gap-3">
-          <QuickActionButton
-            v-for="action in presetActions"
-            :key="action.id"
-            :name="action.name"
-            :content="action.content"
-            :icon="action.icon"
-            :color="action.color"
-            @click="sendQuickAction(action)"
-          />
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">预设任务</h3>
+          <button
+            class="text-xs text-[var(--mobile-accent)] hover:text-cyan-300 transition-colors flex items-center gap-1"
+            @click="openAddDialog"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            添加
+          </button>
         </div>
 
-        <!-- 自定义指令 -->
-        <div class="mt-4">
-          <div class="flex items-center justify-between mb-3">
-            <h4 class="text-[var(--mobile-text-muted)] text-sm font-medium">自定义指令</h4>
-            <button
-              class="text-[var(--mobile-accent)] text-sm hover:text-cyan-300 transition-colors"
-              @click="showAddDialog = true"
-            >
-              + 添加
-            </button>
-          </div>
+        <!-- Empty state -->
+        <div
+          v-if="tasks.length === 0"
+          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
+        >
+          <p class="text-[var(--mobile-text-disabled)] text-sm">暂无预设任务</p>
+          <button
+            class="mt-2 text-xs text-[var(--mobile-accent)] hover:text-cyan-300 transition-colors"
+            @click="openAddDialog"
+          >
+            + 添加任务
+          </button>
+        </div>
 
-          <div v-if="customActions.length === 0" class="text-center py-4">
-            <p class="text-[var(--mobile-text-disabled)] text-sm">暂无自定义指令</p>
-          </div>
-
-          <div v-else class="space-y-2">
-            <div
-              v-for="action in customActions"
-              :key="action.id"
-              class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-3 flex items-center gap-3 hover:border-cyan-500/30 transition-all"
-            >
-              <div
-                class="w-9 h-9 rounded-lg flex items-center justify-center border"
-                :style="{ backgroundColor: (action.color || '#6b7280') + '15', borderColor: (action.color || '#6b7280') + '30' }"
-              >
-                <span class="text-base">{{ action.icon || '⚡' }}</span>
-              </div>
-              <div class="flex-1 min-w-0">
-                <p class="font-medium text-[var(--mobile-text-primary)] text-sm truncate">{{ action.name }}</p>
-                <p class="text-[var(--mobile-text-muted)] text-xs truncate">{{ action.content }}</p>
-              </div>
-              <div class="flex gap-1">
-                <button
-                  class="p-1.5 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-                  @click="editAction(action)"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-                <button
-                  class="p-1.5 text-[var(--mobile-text-muted)] hover:text-red-400 transition-colors"
-                  @click="deleteAction(action.id)"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
+        <!-- Card list -->
+        <div v-else class="space-y-2.5">
+          <PresetTaskCard
+            v-for="task in tasks"
+            :key="task.id"
+            :task="task"
+            @tap="handleTaskTap(task)"
+            @execute="handleTaskExecute(task)"
+            @edit="openEditDialog($event)"
+            @delete="handleDeleteTask($event)"
+          />
         </div>
       </section>
 
@@ -188,65 +135,60 @@
     <!-- Add/Edit Dialog -->
     <Teleport to="body">
       <Transition name="fade">
-        <div v-if="showAddDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div v-if="showDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/80" @click="closeDialog"></div>
           <div class="relative w-full max-w-sm bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] rounded-2xl p-6">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">
-              {{ editingAction ? '编辑指令' : '添加指令' }}
+              {{ editingTask ? '编辑预设任务' : '添加预设任务' }}
             </h3>
 
             <div class="space-y-4">
               <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">名称</label>
+                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">任务标题</label>
                 <input
-                  v-model="form.name"
+                  v-model="dialogForm.title"
                   type="text"
-                  placeholder="指令名称"
+                  placeholder="任务标题"
                   class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-cyan-500/50 transition-colors"
                 />
               </div>
 
               <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">内容</label>
+                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">任务内容</label>
                 <textarea
-                  v-model="form.content"
-                  placeholder="指令内容"
+                  v-model="dialogForm.content"
+                  placeholder="发送到终端的指令内容"
                   rows="3"
                   class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-cyan-500/50 transition-colors resize-none"
                 ></textarea>
               </div>
 
+              <!-- 任务类型 radio toggle（编辑时禁用） -->
               <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">图标</label>
-                <div class="flex gap-2">
+                <label class="text-[var(--mobile-text-muted)] text-sm mb-2 block">任务类型</label>
+                <div class="flex gap-3">
                   <button
-                    v-for="emoji in iconOptions"
-                    :key="emoji"
-                    :class="[
-                      'w-10 h-10 rounded-lg text-lg border transition-colors',
-                      form.icon === emoji ? 'bg-cyan-500/20 border-cyan-500/50' : 'bg-[var(--mobile-bg-primary)] border-[var(--mobile-border)] hover:border-cyan-500/30'
-                    ]"
-                    @click="form.icon = emoji"
+                    class="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+                    :class="dialogForm.type === 'once'
+                      ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                      : 'bg-[var(--mobile-bg-primary)] border-[var(--mobile-border)] text-[var(--mobile-text-muted)]'"
+                    :disabled="!!editingTask"
+                    @click="dialogForm.type = 'once'"
                   >
-                    {{ emoji }}
+                    一次性
+                  </button>
+                  <button
+                    class="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+                    :class="dialogForm.type === 'template'
+                      ? 'bg-cyan-500/15 border-cyan-500/30 text-cyan-400'
+                      : 'bg-[var(--mobile-bg-primary)] border-[var(--mobile-border)] text-[var(--mobile-text-muted)]'"
+                    :disabled="!!editingTask"
+                    @click="dialogForm.type = 'template'"
+                  >
+                    模板
                   </button>
                 </div>
-              </div>
-
-              <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">颜色</label>
-                <div class="flex gap-2">
-                  <button
-                    v-for="color in colorOptions"
-                    :key="color"
-                    :class="[
-                      'w-8 h-8 rounded-full border-2 transition-all',
-                      form.color === color ? 'border-white scale-110' : 'border-transparent hover:scale-105'
-                    ]"
-                    :style="{ backgroundColor: color }"
-                    @click="form.color = color"
-                  ></button>
-                </div>
+                <p v-if="editingTask" class="text-[10px] text-[var(--mobile-text-disabled)] mt-1">创建后类型不可更改</p>
               </div>
             </div>
 
@@ -259,11 +201,75 @@
               </button>
               <button
                 class="flex-1 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-cyan-500/30 transition-colors"
-                :class="{ 'opacity-50': !form.name || !form.content }"
-                :disabled="!form.name || !form.content"
-                @click="saveAction"
+                :class="{ 'opacity-50': !dialogForm.title || !dialogForm.content }"
+                :disabled="!dialogForm.title || !dialogForm.content"
+                @click="saveTask"
               >
                 保存
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Session Picker Dialog -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/80" @click="showSessionPicker = false"></div>
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] rounded-2xl p-6">
+            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">选择会话</h3>
+
+            <div v-if="activeSessions.length === 0" class="text-center py-4">
+              <p class="text-[var(--mobile-text-disabled)] text-sm">暂无活跃会话</p>
+            </div>
+
+            <div v-else class="space-y-2 max-h-60 overflow-y-auto">
+              <button
+                v-for="session in activeSessions"
+                :key="session.id"
+                class="w-full text-left px-4 py-3 rounded-xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-primary)] hover:border-cyan-500/30 transition-colors"
+                @click="confirmExecute(session.id)"
+              >
+                <p class="text-sm font-medium text-[var(--mobile-text-primary)]">{{ session.name }}</p>
+                <p class="text-xs text-[var(--mobile-text-muted)] mt-0.5">{{ session.id.slice(0, 8) }}</p>
+              </button>
+            </div>
+
+            <button
+              class="w-full mt-4 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
+              @click="showSessionPicker = false"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Confirm Execute Dialog -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/80" @click="showConfirmDialog = false"></div>
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] rounded-2xl p-6">
+            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-2">确认执行</h3>
+            <p class="text-sm text-[var(--mobile-text-muted)] mb-1">将发送到终端：</p>
+            <p class="text-sm text-[var(--mobile-text-primary)] bg-[var(--mobile-bg-primary)] rounded-lg p-3 mb-4 line-clamp-3">{{ pendingTask?.content }}</p>
+
+            <div class="flex gap-3">
+              <button
+                class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
+                @click="showConfirmDialog = false"
+              >
+                取消
+              </button>
+              <button
+                class="flex-1 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-cyan-500/30 transition-colors"
+                @click="doExecute"
+              >
+                执行
               </button>
             </div>
           </div>
@@ -281,123 +287,142 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * ToolboxView - 工具箱页面
+ *
+ * 预设任务管理 + 项目文件浏览 + 插件（预留）
+ */
+
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
-import { wsSendInput } from '@/modules/mobile/composables/useMobileCommands'
 import { useFileTree } from '@/modules/mobile/composables/useFileTree'
-import QuickActionButton from '@/modules/mobile/components/QuickActionButton.vue'
+import { usePresetTasks } from '@/modules/mobile/composables/usePresetTasks'
+import { useToast } from '@/modules/shared/composables/useToast'
+import PresetTaskCard from '@/modules/mobile/components/PresetTaskCard.vue'
 import FileTreeItem from '@/modules/mobile/components/FileTreeItem.vue'
 import FileViewerModal from '@/modules/mobile/components/FileViewerModal.vue'
-import { invoke } from '@tauri-apps/api/core'
-
-interface QuickAction {
-  id: string
-  name: string
-  content: string
-  icon?: string
-  color?: string
-}
+import type { PresetTask, PresetTaskType } from '@/modules/mobile/composables/model'
 
 const router = useRouter()
 const connection = useMobileConnection()
+const toast = useToast()
+const { tasks, load, addTask, updateTask, deleteTask, executeTask } = usePresetTasks()
 
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
-const currentDeviceName = computed(() => connection.currentDevice.value?.name || '')
 const activeSessionId = computed(() => connection.activeSessionId.value || '')
+const activeSessions = computed(() => connection.activeSessions.value || [])
 
 // ==================== 预设任务 ====================
 
-const presetActions = ref<QuickAction[]>([
-  { id: '1', name: '继续', content: '请继续', icon: '▶️', color: '#22c55e' },
-  { id: '2', name: '解释代码', content: '请解释这段代码的作用', icon: '📝', color: '#3b82f6' },
-  { id: '3', name: '修复 Bug', content: '请帮我修复这个 Bug', icon: '🔧', color: '#a855f7' },
-  { id: '4', name: '提交代码', content: '请帮我提交代码', icon: '📤', color: '#f97316' },
-])
-
-const customActions = ref<QuickAction[]>([])
-const showAddDialog = ref(false)
-const editingAction = ref<QuickAction | null>(null)
-
-const form = ref({
-  name: '',
+const showDialog = ref(false)
+const editingTask = ref<PresetTask | null>(null)
+const dialogForm = ref<{ title: string; content: string; type: PresetTaskType }>({
+  title: '',
   content: '',
-  icon: '⚡',
-  color: '#3b82f6'
+  type: 'once',
 })
 
-const iconOptions = ['⚡', '📝', '🔧', '📤', '🎯', '💡', '🚀', '⭐']
-const colorOptions = ['#3b82f6', '#22c55e', '#a855f7', '#f97316', '#ef4444', '#ec4899']
+// Session picker & confirm
+const showSessionPicker = ref(false)
+const showConfirmDialog = ref(false)
+const pendingTask = ref<PresetTask | null>(null)
+const pendingSessionId = ref('')
 
 onMounted(async () => {
-  await loadQuickActions()
+  await load()
 })
 
-async function loadQuickActions() {
-  try {
-    const actions = await invoke<QuickAction[]>('list_quick_actions_mobile')
-    customActions.value = actions.slice(4)
-  } catch (error) {
-    console.error('Failed to load quick actions:', error)
-  }
+function openAddDialog() {
+  editingTask.value = null
+  dialogForm.value = { title: '', content: '', type: 'once' }
+  showDialog.value = true
 }
 
-async function sendQuickAction(action: QuickAction) {
-  const sessionId = connection.activeSessionId.value
-  if (sessionId) {
-    try {
-      await wsSendInput(sessionId, action.content)
-    } catch (e) {
-      console.error('Failed to send quick action:', e)
-      router.push('/mobile/devices')
-    }
-  } else {
-    router.push('/mobile/devices')
-  }
-}
-
-function editAction(action: QuickAction) {
-  editingAction.value = action
-  form.value = {
-    name: action.name,
-    content: action.content,
-    icon: action.icon || '⚡',
-    color: action.color || '#3b82f6'
-  }
-  showAddDialog.value = true
-}
-
-async function deleteAction(id: string) {
-  customActions.value = customActions.value.filter(a => a.id !== id)
+function openEditDialog(task: PresetTask) {
+  editingTask.value = task
+  dialogForm.value = { title: task.title, content: task.content, type: task.type }
+  showDialog.value = true
 }
 
 function closeDialog() {
-  showAddDialog.value = false
-  editingAction.value = null
-  form.value = { name: '', content: '', icon: '⚡', color: '#3b82f6' }
+  showDialog.value = false
+  editingTask.value = null
 }
 
-async function saveAction() {
-  if (!form.value.name || !form.value.content) return
+async function saveTask() {
+  if (!dialogForm.value.title || !dialogForm.value.content) return
 
-  const action: QuickAction = {
-    id: editingAction.value?.id || Date.now().toString(),
-    name: form.value.name,
-    content: form.value.content,
-    icon: form.value.icon,
-    color: form.value.color
-  }
-
-  if (editingAction.value) {
-    const index = customActions.value.findIndex(a => a.id === action.id)
-    if (index >= 0) {
-      customActions.value[index] = action
-    }
+  if (editingTask.value) {
+    await updateTask({
+      ...editingTask.value,
+      title: dialogForm.value.title,
+      content: dialogForm.value.content,
+    })
   } else {
-    customActions.value.push(action)
+    await addTask({
+      title: dialogForm.value.title,
+      content: dialogForm.value.content,
+      type: dialogForm.value.type,
+    })
   }
 
   closeDialog()
+}
+
+async function handleDeleteTask(id: string) {
+  await deleteTask(id)
+}
+
+/** 点击卡片主体 → session picker flow */
+function handleTaskTap(task: PresetTask) {
+  pendingTask.value = task
+  const sessionId = activeSessionId.value
+
+  if (!isConnected.value || !sessionId) {
+    toast.warning('请先连接设备')
+    router.push('/mobile/devices')
+    return
+  }
+
+  // 仅一个活跃会话时跳过 picker
+  const sessions = activeSessions.value
+  if (sessions.length <= 1) {
+    pendingSessionId.value = sessionId
+    showConfirmDialog.value = true
+    return
+  }
+
+  showSessionPicker.value = true
+}
+
+/** 从菜单执行 → 同样走 session picker */
+function handleTaskExecute(task: PresetTask) {
+  handleTaskTap(task)
+}
+
+/** Session picker 选择后 → 显示确认 */
+function confirmExecute(sessionId: string) {
+  showSessionPicker.value = false
+  pendingSessionId.value = sessionId
+  showConfirmDialog.value = true
+}
+
+/** 确认执行 */
+async function doExecute() {
+  if (!pendingTask.value || !pendingSessionId.value) return
+
+  showConfirmDialog.value = false
+
+  try {
+    await executeTask(pendingTask.value, pendingSessionId.value)
+    toast.success('已发送到终端')
+  } catch {
+    toast.error('发送失败')
+  }
+
+  pendingTask.value = null
+  pendingSessionId.value = ''
 }
 
 // ==================== 项目文件 ====================
