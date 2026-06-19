@@ -1,25 +1,51 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { listen } from '@tauri-apps/api/event'
 import router from './router'
 import App from './App.vue'
 import { initPlatform } from '@/modules/shared/composables/usePlatform'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
+import { useWslStore } from '@/modules/desktop/stores/wsl'
+import { useToast } from '@/modules/shared/composables/useToast'
 import './style.css'
 import './styles/mobile.css'
+
+interface PluginSetupResult {
+  success: boolean
+  message: string
+  token_generated: boolean
+}
 
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
 
-// 预初始化：并行执行平台检测和设置加载
-// 这样可以避免路由守卫中的阻塞等待
+// 预初始化：并行执行平台检测、设置加载和 WSL 信息缓存
+// WSL 命令执行较慢（可能触发虚拟机启动），提前加载避免弹窗卡顿
 const settingsStore = useSettingsStore()
+const wslStore = useWslStore()
 Promise.all([
   initPlatform(),
   settingsStore.loadSettings(),
+  wslStore.loadWslInfo(),
 ]).then(() => {
-  console.log('[Init] Platform and settings pre-loaded')
+  console.log('[Init] Platform, settings and WSL info pre-loaded')
+})
+
+// 监听插件配置结果事件
+listen<PluginSetupResult>('plugin-setup-result', (event) => {
+  const toast = useToast()
+  const result = event.payload
+
+  if (result.success) {
+    toast.success(result.message)
+    if (result.token_generated) {
+      setTimeout(() => toast.info('认证令牌已更新'), 1000)
+    }
+  } else {
+    toast.error(result.message, 5000)
+  }
 })
 
 app.mount('#app')
