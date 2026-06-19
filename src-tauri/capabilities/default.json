@@ -32,6 +32,13 @@
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "os:default",
-    "shell:allow-open"
+    "shell:allow-open",
+    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "http://**" }
+      ]
+    }
   ]
 }
