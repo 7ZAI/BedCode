@@ -2,10 +2,12 @@
  * HTTP API Client Composable
  *
  * 移动端直接调用桌面端 HTTP REST API
+ * 使用 @tauri-apps/plugin-http 替代浏览器 fetch，绕过 CORS 和网络限制
  * JWT token 自动注入到 Authorization header
  */
 
 import { ref } from 'vue'
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { useMobileConnection } from './useMobileConnection'
 
 // ==================== Config ====================
@@ -27,6 +29,14 @@ async function request<T = any>(
   const { authCredentials } = useMobileConnection()
   const baseUrl = API_BASE_URL.value
 
+  if (!baseUrl) {
+    console.error('[HttpApi] No base URL set, cannot make request to', path)
+    return { code: -1, message: 'Not connected: no base URL set' }
+  }
+
+  const url = `http://${baseUrl}${path}`
+  console.log('[HttpApi] Request:', options.method || 'GET', url)
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -37,12 +47,26 @@ async function request<T = any>(
     headers['Authorization'] = `Bearer ${authCredentials.value.sessionToken}`
   }
 
-  const response = await fetch(`http://${baseUrl}${path}`, {
-    ...options,
-    headers,
-  })
+  try {
+    const response = await tauriFetch(url, {
+      ...options,
+      headers,
+      connectTimeout: 30000,
+    })
 
-  return response.json()
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      console.error('[HttpApi] HTTP error:', response.status, response.statusText, text)
+      return { code: response.status, message: `HTTP ${response.status}: ${response.statusText}` }
+    }
+
+    const result = await response.json()
+    console.log('[HttpApi] Response OK:', path, 'code=', result.code)
+    return result
+  } catch (e: any) {
+    console.error('[HttpApi] Fetch failed:', path, e?.message || e)
+    return { code: -1, message: e?.message || String(e) }
+  }
 }
 
 // ==================== Auth API ====================
@@ -140,10 +164,23 @@ export async function httpGetFileTree(sessionId: string, excludeDirs: string[] =
   )
 }
 
+export async function httpGetFileContent(sessionId: string, filePath: string) {
+  return request<{ content: string; fileName: string }>(
+    '/api/file-content',
+    { method: 'POST', body: JSON.stringify({ sessionId, filePath }) }
+  )
+}
+
+export async function httpGetDiffTree(sessionId: string, excludeDirs: string[] = []) {
+  return request<{ tree: any[] }>(
+    '/api/diff-tree',
+    { method: 'POST', body: JSON.stringify({ sessionId, excludeDirs }) }
+  )
+}
+
 // ==================== Setup ====================
 
 export function setApiBaseUrl(address: string, port: number) {
-  // Actix Web HTTP + WS server runs on the same port
   API_BASE_URL.value = `${address}:${port}`
 }
 
@@ -166,5 +203,7 @@ export function useHttpApi() {
     httpListQuickActions,
     // File
     httpGetFileTree,
+    httpGetFileContent,
+    httpGetDiffTree,
   }
 }
