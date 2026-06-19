@@ -64,6 +64,12 @@ const router = createRouter({
       meta: { platform: 'mobile', standAlone: true },
     },
     {
+      path: '/mobile/files/:id',
+      name: 'mobile-files',
+      component: () => import('@/modules/mobile/views/CodeExplorerView.vue'),
+      meta: { platform: 'mobile', standAlone: true },
+    },
+    {
       path: '/mobile/settings',
       name: 'mobile-settings',
       component: () => import('@/modules/mobile/views/SettingsView.vue'),
