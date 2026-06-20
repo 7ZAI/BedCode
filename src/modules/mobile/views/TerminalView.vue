@@ -47,7 +47,9 @@
         <div
           ref="scrollContainer"
           class="terminal-scroll-container"
-          @scroll="handleScroll"
+          @touchstart.passive="onTouchStart"
+          @touchmove.passive="onTouchMove"
+          @touchend="onTouchEnd"
         >
           <div
             ref="scrollContent"
@@ -508,19 +510,8 @@ async function initTerminal() {
   setTimeout(() => {
     fitTerminal()
 
-    // 配置 viewport 原生触摸滚动
+    // 配置伪滚动容器
     setupViewportScroll()
-
-    // 确保 xterm 主元素不阻止触摸
-    const xtermElement = xtermContainer.value?.querySelector('.xterm') as HTMLElement
-    if (xtermElement) {
-      xtermElement.style.touchAction = 'pan-y'
-    }
-
-    const screenElement = xtermContainer.value?.querySelector('.xterm-screen') as HTMLElement
-    if (screenElement) {
-      screenElement.style.touchAction = 'pan-y'
-    }
   }, 100)
 
   // Resize observer
@@ -577,6 +568,14 @@ function disposeTerminal() {
   lastIndexRef.value = -1
   subscribedSessionIdRef.value = null
   isSubscribing.value = false
+  // 清理伪滚动容器状态
+  isUserScrolling.value = false
+  if (scrollRafId.value) {
+    cancelAnimationFrame(scrollRafId.value)
+    scrollRafId.value = 0
+  }
+  lastScrollTop.value = 0
+  cellHeight.value = 0
 }
 
 /// 创建前端事件监听器（不调用后端订阅）
@@ -1488,30 +1487,12 @@ watch(isConnected, async (connected) => {
   background: var(--mobile-terminal-bg);
 }
 
-.xterm-container {
-  height: 100%;
-  width: 100%;
+/* 伪滚动容器：提供原生触摸滚动 */
+.terminal-scroll-container {
   position: relative;
-  overflow: hidden;
-}
-
-/* xterm 核心样式 - 允许触摸事件传递到 viewport */
-:deep(.xterm) {
-  touch-action: pan-y;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-:deep(.xterm-screen) {
-  touch-action: pan-y;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* xterm-viewport 原生触摸滚动 + 现代滚动条 */
-:deep(.xterm-viewport) {
-  overflow-y: auto !important;
-  touch-action: pan-y !important;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   /* Firefox 现代细滚动条 */
@@ -1520,20 +1501,56 @@ watch(isConnected, async (connected) => {
 }
 
 /* Webkit 现代细圆角滚动条 */
-:deep(.xterm-viewport::-webkit-scrollbar) {
+.terminal-scroll-container::-webkit-scrollbar {
   width: 4px;
 }
 
-:deep(.xterm-viewport::-webkit-scrollbar-track) {
+.terminal-scroll-container::-webkit-scrollbar-track {
   background: transparent;
 }
 
-:deep(.xterm-viewport::-webkit-scrollbar-thumb) {
+.terminal-scroll-container::-webkit-scrollbar-thumb {
   background: rgba(120, 120, 140, 0.25);
   border-radius: 2px;
 }
 
-:deep(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
+.terminal-scroll-container::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 212, 255, 0.35);
+}
+
+/* 伪滚动内容撑开高度，让容器可以滚动 */
+.terminal-scroll-content {
+  pointer-events: none;
+}
+
+/* xterm 容器：固定在滚动容器内，不随内容滚动 */
+.xterm-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* xterm 核心样式 - 禁止触摸拖动（由外层滚动容器接管），但允许点击事件（链接等） */
+:deep(.xterm) {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+:deep(.xterm-screen) {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 禁用 xterm-viewport 原生滚动，由外层伪滚动容器接管 */
+:deep(.xterm-viewport) {
+  overflow-y: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
 }
 </style>

@@ -120,31 +120,13 @@ html:not(.dark) .mobile-app {
 }
 
 /* ============================================
-   xterm 终端滚动条全局样式
-   Android WebView 对 ::-webkit-scrollbar 支持有限，
-   通过全局样式确保滚动条始终为现代细圆角样式
+   xterm 终端滚动 - 全局禁用 viewport 原生滚动
+   移动端使用外层伪滚动容器 + scrollToLine 方案
+   xterm-viewport 的滚动由外层容器接管
    ============================================ */
 
 .xterm-viewport {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(120, 120, 140, 0.25) transparent;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-}
-
-.xterm-viewport::-webkit-scrollbar {
-  width: 4px;
-}
-
-.xterm-viewport::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(120, 120, 140, 0.25);
-  border-radius: 2px;
-}
-
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 212, 255, 0.35);
+  overflow-y: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
 }
