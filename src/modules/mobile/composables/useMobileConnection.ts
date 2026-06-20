@@ -26,6 +26,7 @@ import {
   type AuthCredentials,
 } from './useMobileCommands'
 import { useHttpApi } from './useHttpApi'
+import { useForegroundService } from './useForegroundService'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -130,22 +131,22 @@ async function init() {
   await initMobileEventListeners({
     onConnecting: () => {
       connectionStatus.value = 'connecting'
-      isConnecting.value = true
       connectionError.value = null
       console.log('[MobileConnection] Connecting...')
     },
     onConnected: () => {
       clearConnectionTimeout()
       connectionStatus.value = 'connected'
-      isConnecting.value = false
       connectionError.value = null
       console.log('[MobileConnection] Connected')
+      autoStartForegroundService()
     },
     onDisconnected: () => {
       clearConnectionTimeout()
       connectionStatus.value = 'disconnected'
       isConnecting.value = false
       console.log('[MobileConnection] Disconnected')
+      autoStopForegroundService()
     },
     onPaired: () => {
       clearConnectionTimeout()
@@ -154,7 +155,6 @@ async function init() {
       console.log('[MobileConnection] Paired')
 
       // 认证成功时更新已配对设备信息
-      // 当前设备和凭据都存在时才更新（首次配对或 token 重连）
       console.log('[MobileConnection] onPaired - currentDevice:', currentDevice.value)
       console.log('[MobileConnection] onPaired - authCredentials:', authCredentials.value ? { fingerprint: authCredentials.value.fingerprint } : null)
 
@@ -168,15 +168,15 @@ async function init() {
       } else {
         console.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
       }
+      autoStartForegroundService()
     },
     onAuthSuccess: () => {
-      // ws_paired 会触发 onPaired
       console.log('[MobileConnection] Auth success')
     },
     onAuthFailed: (reason) => {
       connectionStatus.value = 'error'
       connectionError.value = reason
-      isConnecting.value = false
+      // 认证失败不断开 isConnecting，startConnection 流程可能继续请求配对
       console.log('[MobileConnection] Auth failed:', reason)
     },
     onPairingRequest: () => {
@@ -185,7 +185,6 @@ async function init() {
       console.log('[MobileConnection] Pairing requested')
     },
     onPairingVerified: () => {
-      // 等待 ws_paired 事件
       console.log('[MobileConnection] Pairing verified')
     },
     onError: (message) => {
@@ -194,6 +193,7 @@ async function init() {
       connectionStatus.value = 'error'
       isConnecting.value = false
       console.error('[MobileConnection] Error:', message)
+      autoStopForegroundService()
     },
     onServerClosed: (reason) => {
       clearConnectionTimeout()
@@ -201,6 +201,7 @@ async function init() {
       connectionError.value = reason
       isConnecting.value = false
       console.log('[MobileConnection] Server closed:', reason)
+      autoStopForegroundService()
     },
     // 同步事件回调
     onSyncConfigCreated: (data) => {
@@ -299,19 +300,33 @@ async function init() {
     const toast = useToast()
     toast.error(`连接已断开: ${event.payload.reason}`, 5000)
 
+    // 更新前台服务通知为断连状态
+    const { updateNotification } = useForegroundService()
+    updateNotification()
+
     // 触发重连
     handleUnexpectedDisconnect(event.payload.reason)
+  })
+
+  // 监听重连开始事件
+  await listen<{ retry: number; max_retry: number }>('ws_reconnecting', async (event) => {
+    console.log('[MobileConnection] Reconnecting:', event.payload)
+    connectionStatus.value = 'connecting'
+
+    // 更新前台服务通知为重连状态
+    const { updateNotification } = useForegroundService()
+    await updateNotification()
   })
 
   // 监听重连成功事件
   // 重连成功后重新认证，认证成功后会触发 ws_paired 事件
   // ws_paired 事件会触发 DevicesView 的 watch，进而调用 loadActiveSessions
-  // loadActiveSessions 会为 running 会话创建终端实例并订阅
   await listen('ws_reconnected', async () => {
     console.log('[MobileConnection] Reconnected successfully')
     connectionStatus.value = 'connected'
     connectionError.value = null
-    isConnecting.value = false
+    // 重连成功后需要重新认证，isConnecting 保持 true 直到认证完成
+    isConnecting.value = true
 
     // 重连成功后重新认证
     const creds = loadAuthCredentials()
@@ -323,12 +338,15 @@ async function init() {
           console.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
         } else {
           console.warn('[MobileConnection] Re-auth failed, need to pair again')
+          isConnecting.value = false
         }
       } catch (e) {
         console.error('[MobileConnection] Re-auth error:', e)
+        isConnecting.value = false
       }
     } else {
       console.log('[MobileConnection] No credentials stored, need manual pairing')
+      isConnecting.value = false
     }
   })
 
@@ -337,6 +355,10 @@ async function init() {
     console.error('[MobileConnection] Reconnect failed:', event.payload.reason)
     connectionStatus.value = 'error'
     connectionError.value = event.payload.reason
+    isConnecting.value = false
+
+    // 重连失败时停止前台服务
+    autoStopForegroundService()
 
     const toast = useToast()
     toast.error(`重连失败: ${event.payload.reason}`, 5000)
@@ -358,24 +380,17 @@ export async function connect(device: RemoteDevice): Promise<void> {
   isConnecting.value = true
 
   // 设置连接超时（12秒，比 Rust 端 10 秒稍长作为兜底）
+  // 超时后仅设置错误状态，不主动断开（由 DevicesView.startConnection 的 Promise.race 兜底）
   clearConnectionTimeout()
   connectionTimeout = setTimeout(async () => {
-    if (isConnecting.value) {
-      console.warn('[MobileConnection] Connection timeout, disconnecting...')
+    if (isConnecting.value && connectionStatus.value === 'connecting') {
+      console.warn('[MobileConnection] Connection timeout')
       connectionError.value = '连接超时，请确保桌面端正在运行'
       connectionStatus.value = 'error'
       isConnecting.value = false
 
-      // 显示 Toast 提示
       const toast = useToast()
       toast.error('连接超时，请确保桌面端正在运行并监听正确端口')
-
-      // 尝试断开连接
-      try {
-        await wsDisconnect()
-      } catch (e) {
-        console.warn('[MobileConnection] Failed to disconnect after timeout:', e)
-      }
     }
   }, CONNECTION_TIMEOUT_MS)
 
@@ -390,8 +405,6 @@ export async function connect(device: RemoteDevice): Promise<void> {
   } catch (error) {
     clearConnectionTimeout()
     console.error('[MobileConnection] wsConnect failed:', error)
-    // 如果命令本身失败（如地址无效），抛出错误
-    // 状态由后端事件驱动更新，不需要手动设置
     isConnecting.value = false
     throw error
   }
@@ -419,6 +432,26 @@ function clearConnectionTimeout() {
     clearTimeout(connectionTimeout)
     connectionTimeout = null
   }
+}
+
+/**
+ * 读取 keepAlive 设置，如果开启则启动前台服务
+ */
+async function autoStartForegroundService() {
+  const savedSettings = localStorage.getItem('mobile-settings')
+  const settings = savedSettings ? JSON.parse(savedSettings) : {}
+  if (settings.keepAlive) {
+    const { startService } = useForegroundService()
+    await startService()
+  }
+}
+
+/**
+ * 停止前台服务
+ */
+async function autoStopForegroundService() {
+  const { stopService } = useForegroundService()
+  await stopService()
 }
 
 /**
@@ -453,10 +486,11 @@ async function handleUnexpectedDisconnect(reason: string) {
   }
 
   console.log('[MobileConnection] Starting reconnect with token, length:', creds.sessionToken.length)
+  isConnecting.value = true
+  connectionStatus.value = 'connecting'
 
   try {
     // 使用用户设置的重连间隔（后端会处理指数退避）
-    // 首次重连延迟使用用户设置的间隔
     if (settings.reconnectInterval > 0) {
       await new Promise(resolve => setTimeout(resolve, settings.reconnectInterval * 1000))
     }
@@ -465,6 +499,7 @@ async function handleUnexpectedDisconnect(reason: string) {
   } catch (error) {
     console.error('[MobileConnection] Reconnect failed:', error)
     connectionError.value = `重连失败: ${error}`
+    isConnecting.value = false
   }
 }
 
@@ -498,22 +533,18 @@ export async function authenticate(): Promise<boolean> {
 
   console.log('[MobileConnection] Attempting JWT re-auth, token length:', authCredentials.value.sessionToken.length)
   try {
-    const result = await Promise.race([
-      wsAuthenticate(authCredentials.value.sessionToken),
-      new Promise<boolean>((_, reject) =>
-        setTimeout(() => reject(new Error('Auth timeout')), 5000)
-      ),
-    ])
+    const result = await wsAuthenticate(authCredentials.value.sessionToken)
     console.log('[MobileConnection] Auth result:', result)
     if (!result) {
+      // 服务端明确拒绝（JWT 过期或无效），清除凭据需要重新配对
       clearAuthCredentials()
       authCredentials.value = null
     }
     return result
   } catch (error) {
-    console.error('[MobileConnection] Auth failed/timeout:', error)
-    clearAuthCredentials()
-    authCredentials.value = null
+    // 网络错误/超时，不删除 token — Rust 端有 30 秒超时兜底
+    // 下次重连仍可复用，避免因临时网络问题导致必须重新配对
+    console.error('[MobileConnection] Auth error (not clearing token):', error)
     return false
   }
 }
@@ -633,9 +664,10 @@ export async function removeSession(sessionId: string): Promise<void> {
 
 /**
  * 加载连接历史
+ * @param force - 强制从 localStorage 重新读取（页面切换回来时需要，因为其他页面可能直接修改了 localStorage）
  */
-export function loadConnectionHistory(): void {
-  if (historyLoaded.value) return
+export function loadConnectionHistory(force: boolean = false): void {
+  if (historyLoaded.value && !force) return
   const stored = localStorage.getItem('connection_history')
   if (stored) {
     try {

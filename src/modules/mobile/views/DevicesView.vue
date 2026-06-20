@@ -506,9 +506,9 @@ async function handleStartSession(config: SessionConfigSummary) {
   }
 }
 
-// 从扫描等页面返回时重新加载连接历史
+// 从扫描等页面返回时重新加载连接历史（force=true，因为 ScanView 可能更新了 localStorage）
 onActivated(() => {
-  connection.loadConnectionHistory()
+  connection.loadConnectionHistory(true)
 })
 
 onMounted(async () => {
@@ -688,8 +688,8 @@ async function handlePairingSubmit(code: string) {
   }
 }
 
-function handleDisconnect() {
-  connection.disconnect()
+async function handleDisconnect() {
+  await connection.disconnect()
   connection.clearSessionConfigs()
   connection.clearActiveSessions()
 }

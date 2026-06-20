@@ -143,6 +143,7 @@ async function handleQrScan(decodedText: string) {
   } catch {
     errorMessage.value = '无法连接到桌面端，请确保在同一网络下'
     isConnecting.value = false
+    connection.isConnecting.value = false
     return
   }
 
@@ -156,6 +157,7 @@ async function handleQrScan(decodedText: string) {
     if (Date.now() - startTime > maxWaitTime) {
       errorMessage.value = '连接超时，请重试'
       isConnecting.value = false
+      connection.isConnecting.value = false
       return
     }
     await new Promise(resolve => setTimeout(resolve, checkInterval))
@@ -171,6 +173,7 @@ async function handleQrScan(decodedText: string) {
       console.error('[Scan] QR token failed')
       errorMessage.value = 'QR 码已过期或已使用，请在桌面端重新生成'
       isConnecting.value = false
+      connection.isConnecting.value = false
       return
     }
     // 保存 JWT 凭据到 localStorage
@@ -179,36 +182,13 @@ async function handleQrScan(decodedText: string) {
     console.error('[Scan] QR token error:', e)
     errorMessage.value = '配对验证失败，请重试: ' + String(e)
     isConnecting.value = false
+    connection.isConnecting.value = false
     return
   }
 
-  // 成功 - 返回连接页面
-  // 保存连接历史
+  // 成功 - 通过 composable 保存连接历史（确保内存缓存同步）
   const address = `${qrData.host}:${qrData.port}`
-  const stored = localStorage.getItem('connection_history')
-  let history: Array<{ address: string; name: string; lastConnected: string }> = []
-  if (stored) {
-    try {
-      history = JSON.parse(stored)
-    } catch {
-      history = []
-    }
-  }
-
-  // 添加新连接历史
-  history = history.filter(h => h.address !== address)
-  history.unshift({
-    address,
-    name: 'Desktop',
-    lastConnected: new Date().toISOString(),
-  })
-
-  // 只保留最近 10 条
-  if (history.length > 10) {
-    history = history.slice(0, 10)
-  }
-
-  localStorage.setItem('connection_history', JSON.stringify(history))
+  connection.addToConnectionHistory(address, 'Desktop')
 
   // 返回上一页
   router.back()
