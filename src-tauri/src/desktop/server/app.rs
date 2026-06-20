@@ -47,6 +47,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/file-tree", web::post().to(file_controller::get_file_tree))
             .route("/file-content", web::post().to(file_controller::get_file_content))
             .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
+            .route("/file-diff", web::post().to(file_controller::get_file_diff))
     );
 
     // 插件专用路由（token 认证，非 JWT）
