@@ -140,6 +140,7 @@
       :visible="showFileViewer"
       :filename="selectedFile"
       :code="fileContent"
+      :diff-lines="diffLines"
       :loading="fileLoading"
       :error="fileError"
       @update:visible="showFileViewer = $event"
@@ -150,6 +151,7 @@
 <script setup lang="ts">
 import { ref, computed, toRef } from 'vue'
 import { useHttpApi } from '../composables/useHttpApi'
+import type { FileDiffLine } from '../composables/useHttpApi'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useFileTree, type SidebarSettings, FONT_SIZE_MIN, FONT_SIZE_MAX } from '@/modules/mobile/composables/useFileTree'
 import FileTreeItem from './FileTreeItem.vue'
@@ -164,7 +166,7 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  'file-select': [name: string, path: string]
+  'file-select': [name: string, path: string, isDiff: boolean]
 }>()
 
 const { isLandscape } = useOrientation()
@@ -179,6 +181,7 @@ const selectedFilePath = ref('')
 const fileContent = ref('')
 const fileLoading = ref(false)
 const fileError = ref<string | null>(null)
+const diffLines = ref<FileDiffLine[] | undefined>(undefined)
 
 // 临时设置状态
 const tempDefaultExpanded = ref(false)
@@ -297,11 +300,11 @@ function confirmSettingsPanel() {
 
 async function handleFileClick(name: string, path: string) {
   if (props.mode === 'emit') {
-    emit('file-select', name, path)
+    emit('file-select', name, path, isDiffMode.value)
     return
   }
 
-  // standalone 模式：原有逻辑不变
+  // standalone 模式
   selectedFile.value = name
   selectedFilePath.value = path
   fileContent.value = ''
@@ -310,12 +313,22 @@ async function handleFileClick(name: string, path: string) {
 
   fileLoading.value = true
   try {
-    const { httpGetFileContent } = useHttpApi()
-    const result = await httpGetFileContent(props.sessionId, path)
-    if (result.code !== 0 || !result.data) {
-      throw new Error(result.message || '获取文件内容失败')
+    if (isDiffMode.value) {
+      const { httpGetFileDiff } = useHttpApi()
+      const result = await httpGetFileDiff(props.sessionId, path)
+      if (result.code !== 0 || !result.data) {
+        throw new Error(result.message || '获取文件 Diff 失败')
+      }
+      diffLines.value = result.data.lines
+    } else {
+      const { httpGetFileContent } = useHttpApi()
+      const result = await httpGetFileContent(props.sessionId, path)
+      if (result.code !== 0 || !result.data) {
+        throw new Error(result.message || '获取文件内容失败')
+      }
+      fileContent.value = result.data.content
+      diffLines.value = undefined
     }
-    fileContent.value = result.data.content
   } catch (e: any) {
     fileError.value = e?.toString() || '获取文件内容失败'
   } finally {
