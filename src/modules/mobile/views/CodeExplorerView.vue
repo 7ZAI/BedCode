@@ -75,7 +75,7 @@ import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
 const router = useRouter()
 const route = useRoute()
 const connection = useMobileConnection()
-const { highlightedHtml, highlight } = useCodeHighlight()
+const { highlightedHtml, highlight, highlightDiff } = useCodeHighlight()
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 
 const sessionId = computed(() => route.params.id as string)
@@ -115,10 +115,14 @@ const explorerStyle = computed(() => ({
 
 // ==================== File Operations ====================
 
-async function handleFileSelect(name: string, path: string) {
+async function handleFileSelect(name: string, path: string, isDiff: boolean) {
   selectedFile.value = name
   selectedFilePath.value = path
-  await loadFileContent(path)
+  if (isDiff) {
+    await loadFileDiff(path)
+  } else {
+    await loadFileContent(path)
+  }
 }
 
 async function loadFileContent(path: string) {
@@ -138,6 +142,27 @@ async function loadFileContent(path: string) {
     await highlight(result.data.content, lang)
   } catch (e: any) {
     fileError.value = e?.toString() || '获取文件内容失败'
+  } finally {
+    fileLoading.value = false
+  }
+}
+
+async function loadFileDiff(path: string) {
+  fileLoading.value = true
+  fileError.value = null
+  fileContent.value = ''
+
+  try {
+    const { httpGetFileDiff } = useHttpApi()
+    const result = await httpGetFileDiff(sessionId.value, path)
+    if (result.code !== 0 || !result.data) {
+      throw new Error(result.message || '获取文件 Diff 失败')
+    }
+
+    const lang = getLangByFilename(selectedFile.value)
+    await highlightDiff(result.data.lines, lang)
+  } catch (e: any) {
+    fileError.value = e?.toString() || '获取文件 Diff 失败'
   } finally {
     fileLoading.value = false
   }
