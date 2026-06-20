@@ -25,8 +25,8 @@ use crate::mobile::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHan
 pub use crate::mobile::websocket_client::ConnectionStatus;
 
 /// 重连配置
-const MAX_RETRY: u32 = 3;
-const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000]; // 指数退避（毫秒）
+const MAX_RETRY: u32 = 5;
+const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000, 8000, 16000]; // 指数退避（毫秒）
 
 /// 判断错误是否表示连接已断开或请求失败（需要通知前端）
 fn is_disconnect_error(error: &crate::AppError) -> bool {
@@ -159,7 +159,11 @@ impl ConnectionManager {
         tracing::info!("WebSocket connecting to {}:{}", address, port);
 
         // 清除上一次连接的客户端（如果有）
-        *self.client.write().await = None;
+        // 先断开旧客户端，确保其 IO 任务停止，避免与新建连接冲突
+        if let Some(old_client) = self.client.write().await.take() {
+            tracing::debug!("Disconnecting previous client before creating new one");
+            let _ = old_client.disconnect().await;
+        }
 
         // 保存目标设备
         tracing::debug!("Saving target device...");
@@ -337,8 +341,11 @@ impl ConnectionManager {
                 break;
             };
 
-            // 清除旧客户端
-            *self.client.write().await = None;
+            // 断开并清除旧客户端
+            if let Some(old_client) = self.client.write().await.take() {
+                tracing::debug!("Disconnecting old client before reconnect attempt");
+                let _ = old_client.disconnect().await;
+            }
 
             // 创建新客户端
             let config = WsClientConfig::new(&target.address, target.port).with_path("/ws/terminal");

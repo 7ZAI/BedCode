@@ -44,6 +44,7 @@ struct ClientTasks {
     receiver: Option<Arc<tokio::task::JoinHandle<()>>>,
     sender: Option<Arc<tokio::task::JoinHandle<()>>>,
     event_forwarder: Option<Arc<tokio::task::JoinHandle<()>>>,
+    heartbeat: Option<Arc<tokio::task::JoinHandle<()>>>,
 }
 
 impl WsClient {
@@ -131,6 +132,7 @@ impl WsClient {
 
         self.spawn_io_tasks(stream, sender).await;
         self.start_event_forwarder().await;
+        self.start_heartbeat_task().await;
 
         let _ = self.event_tx.send(WsClientEvent::Connected);
 
@@ -153,6 +155,7 @@ impl WsClient {
         tracing::info!("[WsClient] Handler status: is_some={}", handler.is_some());
         let request_manager = self.request_manager.clone();
         let event_tx = self.event_tx.clone();
+        let heartbeat = self.heartbeat.clone();
 
         let (write, read) = stream.split();
         let write = Arc::new(Mutex::new(write));
@@ -235,6 +238,7 @@ impl WsClient {
                                 }
                                 Some(Ok(WsMsg::Pong(_))) => {
                                     debug!("[WsClient] Received pong");
+                                    heartbeat.on_pong_received();
                                     let _ = event_tx.send(WsClientEvent::HeartbeatResponse);
                                 }
                                 Some(Err(e)) => {
@@ -346,10 +350,85 @@ impl WsClient {
         tasks.event_forwarder = Some(Arc::new(handle));
     }
 
+    /// 启动心跳保活任务
+    ///
+    /// 定期发送 WebSocket Ping 帧，检测连接是否仍然活跃。
+    /// 连续超时 max_timeouts 次后发送 Error 事件，触发断连通知。
+    async fn start_heartbeat_task(&self) {
+        let running = self.running.clone();
+        let ws_sender = self.ws_sender.read().await.clone();
+        let heartbeat = self.heartbeat.clone();
+        let event_tx = self.event_tx.clone();
+
+        let interval = heartbeat.config().interval;
+        let max_timeouts = heartbeat.config().max_timeouts;
+
+        let handle = tokio::spawn(async move {
+            let mut interval_timer = tokio::time::interval(interval);
+            interval_timer.tick().await;
+
+            loop {
+                if !running.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+
+                interval_timer.tick().await;
+
+                if !running.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+
+                // 发送 Ping
+                if let Some(sender) = ws_sender.as_ref() {
+                    match sender.send(WsMsg::Ping(vec![])).await {
+                        Ok(_) => {
+                            debug!("[Heartbeat] Ping sent");
+                        }
+                        Err(e) => {
+                            warn!("[Heartbeat] Failed to send ping: {}", e);
+                            let consecutive = heartbeat.increment_timeout().await;
+                            if consecutive >= max_timeouts {
+                                warn!("[Heartbeat] Max timeouts reached ({}), connection lost", consecutive);
+                                let _ = event_tx.send(WsClientEvent::Error {
+                                    message: format!("Heartbeat timeout after {} consecutive misses", consecutive),
+                                });
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    warn!("[Heartbeat] No ws_sender, stopping heartbeat");
+                    break;
+                }
+
+                // 检查心跳超时
+                if heartbeat.is_connection_lost().await {
+                    let consecutive = heartbeat.increment_timeout().await;
+                    warn!("[Heartbeat] Heartbeat timeout (consecutive: {})", consecutive);
+                    if consecutive >= max_timeouts {
+                        warn!("[Heartbeat] Max timeouts reached, connection lost");
+                        let _ = event_tx.send(WsClientEvent::Error {
+                            message: format!("Heartbeat timeout after {} consecutive misses", consecutive),
+                        });
+                        break;
+                    }
+                }
+            }
+
+            heartbeat.stop().await;
+            debug!("[Heartbeat] Task stopped");
+        });
+
+        let mut tasks = self.tasks.write().await;
+        tasks.heartbeat = Some(Arc::new(handle));
+    }
+
     pub async fn disconnect(&self) {
         info!("[WsClient] Disconnecting...");
 
         self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.heartbeat.stop().await;
         *self.ws_sender.write().await = None;
 
         // 通知所有 pending 请求
