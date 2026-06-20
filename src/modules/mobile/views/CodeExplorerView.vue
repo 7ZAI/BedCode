@@ -12,6 +12,11 @@
         <span v-if="selectedFile" class="header-lang-badge">{{ displayLang }}</span>
       </div>
       <div class="header-meta">
+        <button class="sidebar-toggle-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" title="文件树">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+        </button>
         <span v-if="selectedFile" class="header-line-count">{{ lineCount }} 行</span>
       </div>
     </header>
@@ -19,12 +24,15 @@
     <!-- Main: Sidebar + Code Area -->
     <div class="explorer-body">
       <!-- 左侧文件树侧边栏 -->
-      <FileSidebar
-        class="explorer-sidebar"
-        :session-id="sessionId"
-        mode="emit"
-        @file-select="handleFileSelect"
-      />
+      <transition name="sidebar-slide">
+        <FileSidebar
+          v-if="showSidebar"
+          class="explorer-sidebar"
+          :session-id="sessionId"
+          mode="emit"
+          @file-select="handleFileSelect"
+        />
+      </transition>
 
       <!-- 右侧代码显示区 -->
       <div class="explorer-code-area">
@@ -79,6 +87,7 @@ const { highlightedHtml, highlight, highlightDiff } = useCodeHighlight()
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 
 const sessionId = computed(() => route.params.id as string)
+const showSidebar = ref(true)
 
 // ==================== Config Info ====================
 
@@ -254,6 +263,26 @@ function handleBack() {
 
 .header-meta {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sidebar-toggle-btn {
+  padding: 0.375rem;
+  border-radius: 0.375rem;
+  background: none;
+  border: none;
+  color: var(--mobile-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+}
+
+.sidebar-toggle-btn.active {
+  color: var(--mobile-accent);
 }
 
 .header-line-count {
@@ -363,12 +392,12 @@ function handleBack() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  color: rgba(100, 100, 120, 0.45);
+  color: var(--mobile-code-gutter-color);
   font-size: 0.85em;
   user-select: none;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.18);
-  border-right: 1px solid rgba(100, 100, 120, 0.12);
+  background: var(--mobile-code-gutter-bg);
+  border-right: 1px solid var(--mobile-code-gutter-border);
 }
 
 .code-content :deep(.line:empty::after) {
@@ -397,8 +426,8 @@ function handleBack() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.18);
-  border-right: 1px solid rgba(100, 100, 120, 0.12);
+  background: var(--mobile-code-gutter-bg);
+  border-right: 1px solid var(--mobile-code-gutter-border);
 }
 
 .code-content :deep(.diff-old-no) {
@@ -447,6 +476,20 @@ function handleBack() {
 }
 
 .code-content :deep(.diff-context .diff-line-no) {
-  color: rgba(100, 100, 120, 0.45);
+  color: var(--mobile-code-gutter-color);
+}
+
+/* ==================== Sidebar Slide Transition ==================== */
+
+.sidebar-slide-enter-active,
+.sidebar-slide-leave-active {
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+  overflow: hidden;
+}
+
+.sidebar-slide-enter-from,
+.sidebar-slide-leave-to {
+  width: 0;
+  opacity: 0;
 }
 </style>
