@@ -289,6 +289,81 @@ watch(
   content: '\00a0';
 }
 
+/* ==================== Diff 行样式 ==================== */
+
+.viewer-code :deep(.diff-line) {
+  display: flex;
+  align-items: stretch;
+  min-height: 1.4em;
+  line-height: 1.4;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 13px;
+  white-space: pre;
+}
+
+.viewer-code :deep(.diff-line-no) {
+  width: 3.2em;
+  padding: 0 0.5em;
+  text-align: right;
+  font-size: 0.85em;
+  user-select: none;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.18);
+  border-right: 1px solid rgba(100, 100, 120, 0.12);
+}
+
+.viewer-code :deep(.diff-old-no) {
+  color: rgba(248, 81, 73, 0.6);
+}
+
+.viewer-code :deep(.diff-new-no) {
+  color: rgba(63, 185, 80, 0.6);
+}
+
+.viewer-code :deep(.diff-marker) {
+  width: 1.2em;
+  text-align: center;
+  font-size: 0.85em;
+  user-select: none;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-code :deep(.diff-content) {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0.5em;
+}
+
+.viewer-code :deep(.diff-removed) {
+  background: rgba(248, 81, 73, 0.15);
+}
+.viewer-code :deep(.diff-removed .diff-marker) {
+  color: rgba(248, 81, 73, 0.8);
+}
+.viewer-code :deep(.diff-removed .diff-new-no) {
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.viewer-code :deep(.diff-added) {
+  background: rgba(63, 185, 80, 0.15);
+}
+.viewer-code :deep(.diff-added .diff-marker) {
+  color: rgba(63, 185, 80, 0.8);
+}
+.viewer-code :deep(.diff-added .diff-old-no) {
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.viewer-code :deep(.diff-context .diff-line-no) {
+  color: rgba(100, 100, 120, 0.45);
+}
+
 .viewer-loading,
 .viewer-error {
   display: flex;
