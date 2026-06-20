@@ -16,17 +16,38 @@ const MAX_DEPTH: usize = 20;
 /// 文件内容读取上限 2MB，防止传输过大文件
 const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
 
+/// 解析 working_dir：id 可以是 session_id 或 config_id
+///
+/// 优先按 session_id 查找（通过 SessionManager → ConfigManager），失败后按 config_id 查找
+/// 这样即使会话未运行，也可以通过 config_id 直接浏览文件
+async fn resolve_working_dir(id: &str, ctx: &AppContext) -> crate::Result<String> {
+    // 优先按 session_id 查找
+    match ctx
+        .config_manager()
+        .get_config_by_session_id(id, ctx.session_manager())
+        .await
+    {
+        Ok(config) => Ok(config.working_dir),
+        Err(_) => {
+            // 回退：按 config_id 直接查找
+            ctx.config_manager()
+                .get_config(id)
+                .await?
+                .map(|config| config.working_dir)
+                .ok_or_else(|| crate::AppError::NotFound(format!(
+                    "Session/Config not found: {}", id
+                )))
+        }
+    }
+}
+
 /// POST /api/file-tree
 pub async fn get_file_tree(body: web::Json<FileTreeRequest>) -> HttpResponse {
     let ctx = AppContext::global();
 
-    // 根据 session_id 查找 working_dir
-    let working_dir = match ctx
-        .config_manager()
-        .get_config_by_session_id(&body.session_id, ctx.session_manager())
-        .await
-    {
-        Ok(config) => config.working_dir,
+    // session_id 可以是会话 ID 或配置 ID，优先按会话 ID 查找
+    let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
+        Ok(dir) => dir,
         Err(e) => {
             let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
@@ -149,15 +170,12 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
 ///
 /// 根据 session_id 定位工作目录，读取 file_path 指定的文件内容
 /// file_path 可以是相对路径（相对于工作目录）或绝对路径
+/// session_id 可以是会话 ID 或配置 ID
 pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpResponse {
     let ctx = AppContext::global();
 
-    let working_dir = match ctx
-        .config_manager()
-        .get_config_by_session_id(&body.session_id, ctx.session_manager())
-        .await
-    {
-        Ok(config) => config.working_dir,
+    let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
+        Ok(dir) => dir,
         Err(e) => {
             let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
@@ -267,17 +285,12 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
 /// POST /api/diff-tree
 ///
 /// 获取 git 改动文件构成的文件树
-/// 在工作目录下执行 `git diff --name-only` 和 `git diff --cached --name-only`，合并去重
-/// 应用 exclude_dirs 过滤后，将改动路径组装成目录树结构返回
+/// session_id 可以是会话 ID 或配置 ID
 pub async fn get_diff_tree(body: web::Json<DiffTreeRequest>) -> HttpResponse {
     let ctx = AppContext::global();
 
-    let working_dir = match ctx
-        .config_manager()
-        .get_config_by_session_id(&body.session_id, ctx.session_manager())
-        .await
-    {
-        Ok(config) => config.working_dir,
+    let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
+        Ok(dir) => dir,
         Err(e) => {
             let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
@@ -482,16 +495,12 @@ fn build_tree_from_paths(paths: &[String]) -> Vec<FileTreeNode> {
 /// POST /api/file-diff
 ///
 /// 获取指定文件的 git diff 内容，解析为结构化行数据
-/// 执行 `git diff -- <file_path>` 获取工作区 vs 暂存区的改动
+/// session_id 可以是会话 ID 或配置 ID
 pub async fn get_file_diff(body: web::Json<FileDiffRequest>) -> HttpResponse {
     let ctx = AppContext::global();
 
-    let working_dir = match ctx
-        .config_manager()
-        .get_config_by_session_id(&body.session_id, ctx.session_manager())
-        .await
-    {
-        Ok(config) => config.working_dir,
+    let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
+        Ok(dir) => dir,
         Err(e) => {
             let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));

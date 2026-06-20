@@ -48,6 +48,7 @@ pub const CODE_PLUGIN_AUTH_FAILED: u16 = 1007;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTreeRequest {
+    /// 会话 ID（优先使用）或配置 ID（会话未运行时使用）
     pub session_id: String,
     pub exclude_dirs: Vec<String>,
 }
@@ -78,6 +79,7 @@ pub struct FileTreeNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileContentRequest {
+    /// 会话 ID（优先使用）或配置 ID（会话未运行时使用）
     pub session_id: String,
     pub file_path: String,
 }
@@ -98,6 +100,7 @@ pub struct FileContentResponseData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffTreeRequest {
+    /// 会话 ID（优先使用）或配置 ID（会话未运行时使用）
     pub session_id: String,
     pub exclude_dirs: Vec<String>,
 }
@@ -108,6 +111,7 @@ pub struct DiffTreeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileDiffRequest {
+    /// 会话 ID（优先使用）或配置 ID（会话未运行时使用）
     pub session_id: String,
     pub file_path: String,
 }
