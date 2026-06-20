@@ -37,7 +37,7 @@ export function useForegroundService() {
     console.log('[ForegroundService] Starting service:', content)
 
     try {
-      await invoke('start_foreground_service', {
+      await invoke('startForegroundService', {
         title: 'BedCode',
         content,
       })
@@ -58,7 +58,7 @@ export function useForegroundService() {
     console.log('[ForegroundService] Stopping service')
 
     try {
-      await invoke('stop_foreground_service')
+      await invoke('stopForegroundService')
       console.log('[ForegroundService] Service stopped')
     } catch (e) {
       console.error('[ForegroundService] Failed to stop service:', e)
@@ -76,7 +76,7 @@ export function useForegroundService() {
     const content = buildNotificationContent()
 
     try {
-      await invoke('update_foreground_notification', {
+      await invoke('updateForegroundNotification', {
         title: 'BedCode',
         content,
       })

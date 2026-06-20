@@ -8,17 +8,22 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
 /**
  * Android 前台服务
  *
  * 用于在后台保持 WebSocket 连接，防止系统杀死进程
+ * 同时持有 PARTIAL_WAKE_LOCK 防止 CPU 休眠导致心跳中断
  */
 class ForegroundService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "bedcode_foreground"
+
+        // WakeLock 引用，静态持有以确保跨 Service 实例复用
+        private var wakeLock: PowerManager.WakeLock? = null
 
         /**
          * 启动前台服务
@@ -55,6 +60,7 @@ class ForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,7 +79,43 @@ class ForegroundService : Service() {
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        releaseWakeLock()
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * 获取 PARTIAL_WAKE_LOCK
+     *
+     * 保持 CPU 运行但允许屏幕关闭，确保 WebSocket 心跳和 IO 在息屏后继续工作
+     */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "BedCode:WebSocketKeepAlive"
+        ).apply {
+            acquire()
+        }
+        android.util.Log.d("ForegroundService", "WakeLock acquired")
+    }
+
+    /**
+     * 释放 WakeLock
+     */
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+                android.util.Log.d("ForegroundService", "WakeLock released")
+            }
+        }
+        wakeLock = null
+    }
 
     /**
      * 创建通知渠道 (Android 8.0+)
