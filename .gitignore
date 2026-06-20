@@ -14,6 +14,7 @@ docs/
 src-tauri/target/
 src-tauri/Cargo.lock
 src-tauri/bedcode.db
+src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb
 
 # IDE and editors

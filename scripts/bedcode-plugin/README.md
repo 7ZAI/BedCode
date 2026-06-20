@@ -2,6 +2,11 @@
 
 Monitor Claude Code sessions through the BedCode desktop app.
 
+## Requirements
+
+- Python 3.6+（系统自带，零额外依赖）
+- BedCode desktop app running（可选，用于状态推送）
+
 ## Installation
 
 1. Copy this directory to `~/.claude/plugins/bedcode/`:
@@ -9,10 +14,9 @@ Monitor Claude Code sessions through the BedCode desktop app.
    cp -r scripts/bedcode-plugin ~/.claude/plugins/bedcode
    ```
 
-2. Or run the installer:
+2. Or load locally for testing:
    ```bash
-   cd scripts/bedcode-plugin
-   ./install.sh
+   claude --plugin-dir ./scripts/bedcode-plugin
    ```
 
 3. Restart Claude Code to load the plugin
@@ -26,24 +30,26 @@ Monitor Claude Code sessions through the BedCode desktop app.
 
 ## How It Works
 
-1. **Session Start**: When Claude Code starts a new session, the `SessionStart` hook records the session info to `.claude/bedcode-events.jsonl`
+1. **SessionStart**: When Claude Code starts a new session, the hook records session info and pushes `idle` status to the BedCode desktop app
 
-2. **Task Monitoring**: `Stop` and `SubagentStop` hooks analyze task status using LLM-based prompt hooks, writing events like:
+2. **Task Monitoring**: `Stop` and `SubagentStop` hooks analyze task status using LLM-based prompt hooks, detecting:
    - `completed` - Task finished
    - `in_progress` - Task ongoing
    - `asking` - Waiting for user input
    - `interrupted` - Task interrupted
 
-3. **Event Log**: All events are written to `.claude/bedcode-events.jsonl` in JSONL format for the BedCode desktop app to consume
+3. **Logging**: All hook events and HTTP requests are logged to `.claude/bedcode-plugin.log` with daily rotation (7-day retention)
 
-## Event Format
+4. **HTTP Push**: Task status changes are pushed to `POST /api/plugin/task-status` when `BEDCODE_TOKEN` is set
 
-Events are written to `.claude/bedcode-events.jsonl`:
+## Environment Variables
 
-```jsonl
-{"event":"session_start","session_id":"abc123","project_path":"/path","timestamp":"2026-06-18T10:00:00Z"}
-{"event":"stop","session_id":"abc123","status":"completed","reason":"Task done","timestamp":"2026-06-18T10:30:00Z"}
-```
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CLAUDE_PROJECT_DIR` | Auto | - | Project root (set by Claude Code) |
+| `CLAUDE_PLUGIN_ROOT` | Auto | - | Plugin root (set by Claude Code) |
+| `BEDCODE_TOKEN` | Optional | - | Auth token for HTTP push |
+| `BEDCODE_PORT` | Optional | `8765` | HTTP API port |
 
 ## Files
 
@@ -56,13 +62,16 @@ bedcode/
 ├── hooks/
 │   └── hooks.json           # Hook configuration
 └── scripts/
-    ├── session-start.sh     # Session start hook (Unix)
-    ├── session-start.cmd    # Session start hook (Windows)
-    ├── write-event.sh       # Write event script (Unix)
-    └── write-event.cmd      # Write event script (Windows)
+    └── bedcode_hook.py      # Unified hook script (Python)
 ```
 
-## Requirements
+## Event Log
 
-- BedCode desktop app running
-- `jq` for JSON parsing (Unix only, Windows uses built-in commands)
+Events are logged to `.claude/bedcode-plugin.log`:
+
+```
+[2026-06-20T10:00:00Z] [INFO] HOOK session_start: session_id=abc123 project=/path source=startup permission=default
+[2026-06-20T10:00:00Z] [INFO] HTTP POST http://localhost:8765/api/plugin/task-status session_id=abc123 status=idle
+[2026-06-20T10:00:00Z] [INFO] HTTP response: 200 {"code":0,"data":null}
+[2026-06-20T10:30:00Z] [INFO] HOOK stop: session_id=abc123 status=completed reason=Task done
+```

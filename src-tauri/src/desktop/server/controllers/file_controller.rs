@@ -9,6 +9,7 @@ use actix_web::{web, HttpResponse};
 use crate::desktop::app_context::AppContext;
 use crate::shared::model::api_dto::ApiResponse;
 use crate::shared::model::api_dto::*;
+use crate::shared::system::process::create_command;
 use std::path::PathBuf;
 use std::collections::HashSet;
 
@@ -380,7 +381,7 @@ fn get_diff_file_tree(working_dir: &str, filters: &[ExcludeFilter]) -> crate::Re
 
 /// 执行 git 命令并解析输出为路径列表
 fn run_git_command(working_dir: &str, args: &[&str]) -> crate::Result<Vec<String>> {
-    let output = std::process::Command::new("git")
+    let output = create_command("git")
         .args(args)
         .current_dir(working_dir)
         .output()
@@ -550,7 +551,7 @@ pub async fn get_file_diff(body: web::Json<FileDiffRequest>) -> HttpResponse {
 
 /// 执行 git diff 并解析 unified diff 输出为结构化行数据
 fn parse_git_diff(working_dir: &str, file_path: &str) -> crate::Result<(String, Vec<FileDiffLine>)> {
-    let output = std::process::Command::new("git")
+    let output = create_command("git")
         .args(["diff", "--", file_path])
         .current_dir(working_dir)
         .output()

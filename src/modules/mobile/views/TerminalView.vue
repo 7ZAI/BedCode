@@ -43,22 +43,23 @@
     <!-- Main Content: Terminal + Sidebar overlay -->
     <div class="main-content">
       <div class="terminal-output-area">
-        <!-- 伪滚动容器：高度 = buffer总行数 × 行高，提供原生触摸滚动 -->
+        <!-- 触摸滚动容器：接管触摸事件驱动终端滚动 -->
         <div
           ref="scrollContainer"
           class="terminal-scroll-container"
-          @touchstart.passive="onTouchStart"
-          @touchmove.passive="onTouchMove"
-          @touchend="onTouchEnd"
         >
-          <div
-            ref="scrollContent"
-            class="terminal-scroll-content"
-          ></div>
           <div
             ref="xtermContainer"
             class="xterm-container"
           ></div>
+          <!-- 自定义滚动条指示器 -->
+          <div class="scrollbar-track">
+            <div
+              class="scrollbar-thumb"
+              :class="{ visible: scrollbarVisible }"
+              :style="scrollbarThumbStyle"
+            ></div>
+          </div>
         </div>
       </div>
 
@@ -116,7 +117,7 @@
                 :class="{ active: tempTheme === name }"
                 @click.stop="tempTheme = name"
               >
-                <span class="theme-preview" :style="{ background: theme.background, color: theme.foreground }">Aa</span>
+                <span class="theme-preview" :style="getThemePreviewStyle(name)">Aa</span>
                 <span class="theme-name">{{ theme.label }}</span>
               </button>
             </div>
@@ -151,7 +152,7 @@
  */
 defineOptions({ name: 'TerminalView' })
 
-import { ref, computed, inject, type Ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { ref, reactive, computed, inject, type Ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -166,6 +167,7 @@ import {
   wsResizeTerminal,
 } from '@/modules/mobile/composables/useMobileCommands'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
+import { useTheme } from '@/modules/shared/composables/useTheme'
 import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
 import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
@@ -177,11 +179,13 @@ const route = useRoute()
 const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
+const { isSystemDark } = useTheme()
+const sessionId = computed(() => route.params.id as string)
+
 // 安全区域从 App.vue inject，不独立初始化 useEdgeToEdge
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>('keyboardInfo')!
 
-const sessionId = computed(() => route.params.id as string)
 
 // ==================== State ====================
 // 注意：使用 ref 确保每个组件实例有独立的状态
@@ -189,7 +193,6 @@ const sessionId = computed(() => route.params.id as string)
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
-const scrollContent = ref<HTMLDivElement | null>(null)
 // 终端实例 - 使用 ref 确保组件隔离
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
@@ -205,23 +208,36 @@ const isSubscribing = ref(false)
 
 // 伪滚动容器相关状态
 const isUserScrolling = ref(false)
-const scrollRafId = ref(0)
-const lastScrollTop = ref(0)
+const currentLine = ref(0)
 const cellHeight = ref(0)
+// 滚动条可见状态：触摸滚动时显示，停止后淡出
+const scrollbarVisible = ref(false)
+// 触摸滚动状态（reactive 确保每个组件实例独立，避免 script setup 模块级共享）
+const touchState = reactive({
+  hideTimer: null as ReturnType<typeof setTimeout> | null,
+  inertiaRafId: 0,
+  startY: 0,
+  startLine: 0,
+  lastY: 0,
+  lastTime: 0,
+  velocity: 0,
+})
 
 // 设置相关状态
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
-// 终端主题初始值跟随系统主题偏好
+// 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
+// isThemeUserSet = false 时跟随系统主题变化，true 时保持用户选择
 const terminalSettings = ref({
   fontSize: 14,
-  theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+  theme: isSystemDark.value ? 'dark' : 'light',
+  isThemeUserSet: false,
 })
 
 // 临时设置（用于编辑中的状态）
 const tempFontSize = ref(14)
-const tempTheme = ref(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+const tempTheme = ref(isSystemDark.value ? 'dark' : 'light')
 
 // 弹窗安全区域样式
 const settingsModalStyle = computed(() => ({
@@ -237,6 +253,12 @@ const confirmModalStyle = computed(() => ({
 // ==================== Terminal Themes ====================
 
 const TERMINAL_THEMES: Record<string, any> = {
+  system: {
+    label: '跟随系统',
+    // 动态解析，此处仅为占位
+    background: 'var(--mobile-terminal-bg)',
+    foreground: 'var(--mobile-text-primary)',
+  },
   dark: {
     label: '深色',
     background: '#0a0a0f',
@@ -361,10 +383,24 @@ const TERMINAL_THEMES: Record<string, any> = {
 
 // ==================== Settings Functions ====================
 
+/// 获取主题预览样式：'system' 主题根据当前系统状态映射为 dark/light 的颜色
+function getThemePreviewStyle(themeName: string): { background: string; color: string } {
+  if (themeName === 'system') {
+    const resolved = isSystemDark.value ? 'dark' : 'light'
+    const t = TERMINAL_THEMES[resolved]
+    return { background: t.background, color: t.foreground }
+  }
+  const t = TERMINAL_THEMES[themeName]
+  return { background: t.background, color: t.foreground }
+}
+
 function openSettings() {
   // 打开设置时，用当前设置初始化临时状态
   tempFontSize.value = terminalSettings.value.fontSize
-  tempTheme.value = terminalSettings.value.theme
+  // 如果未手动指定主题，显示 'system'；否则显示实际主题名
+  tempTheme.value = terminalSettings.value.isThemeUserSet
+    ? terminalSettings.value.theme
+    : 'system'
   showSettings.value = true
 }
 
@@ -375,7 +411,14 @@ function cancelSettings() {
 function confirmSettings() {
   // 确认时才应用设置
   terminalSettings.value.fontSize = tempFontSize.value
-  terminalSettings.value.theme = tempTheme.value
+  // 'system' 解析为当前系统主题，并标记为非用户手动指定
+  if (tempTheme.value === 'system') {
+    terminalSettings.value.theme = isSystemDark.value ? 'dark' : 'light'
+    terminalSettings.value.isThemeUserSet = false
+  } else {
+    terminalSettings.value.theme = tempTheme.value
+    terminalSettings.value.isThemeUserSet = true
+  }
   applySettings()
   showSettings.value = false
 }
@@ -447,8 +490,17 @@ const terminalViewStyle = computed(() => ({
 }))
 
 // 监听键盘变化，重新 fit 终端
+// 延迟 300ms 等待系统键盘动画完成后再 resize，避免动画期间重排导致卡顿
 watch(() => keyboardInfo.value.keyboardHeight, () => {
-  setTimeout(() => fitTerminal(), 100)
+  setTimeout(() => fitTerminal(), 300)
+})
+
+// 监听系统主题变化：用户未手动指定主题时，终端主题跟随系统
+watch(isSystemDark, () => {
+  if (terminalSettings.value.isThemeUserSet) return
+  // 更新终端主题为系统当前主题
+  terminalSettings.value.theme = isSystemDark.value ? 'dark' : 'light'
+  applySettings()
 })
 
 // ==================== Terminal Setup ====================
@@ -525,11 +577,10 @@ async function initTerminal() {
   window.addEventListener('resize', handleWindowResize)
 
   // Terminal resize 事件：通知桌面端调整 PTY 大小
-  // 注意：捕获当前 sessionId，避免路由切换后读取错误的会话 ID
-  const currentSessionIdForResize = sessionId.value
+  // 直接读取 sessionId.value（响应式），不闭包捕获，确保路由切换后使用正确的会话 ID
   term.onResize(({ cols, rows }) => {
-    if (isConnected.value && isSessionActive.value) {
-      wsResizeTerminal(currentSessionIdForResize, cols, rows).catch((e: Error) => {
+    if (isConnected.value && isSessionActive.value && sessionId.value) {
+      wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
         console.warn('[TerminalView] Resize failed:', e)
       })
     }
@@ -570,11 +621,22 @@ function disposeTerminal() {
   isSubscribing.value = false
   // 清理伪滚动容器状态
   isUserScrolling.value = false
-  if (scrollRafId.value) {
-    cancelAnimationFrame(scrollRafId.value)
-    scrollRafId.value = 0
+  scrollbarVisible.value = false
+  if (touchState.hideTimer) {
+    clearTimeout(touchState.hideTimer)
+    touchState.hideTimer = null
   }
-  lastScrollTop.value = 0
+  if (touchState.inertiaRafId) {
+    cancelAnimationFrame(touchState.inertiaRafId)
+    touchState.inertiaRafId = 0
+  }
+  // 清理触摸事件监听器
+  if (scrollContainer.value) {
+    scrollContainer.value.removeEventListener('touchstart', onTouchStart, { capture: true } as EventListenerOptions)
+    scrollContainer.value.removeEventListener('touchmove', onTouchMove, { capture: true } as EventListenerOptions)
+    scrollContainer.value.removeEventListener('touchend', onTouchEnd, { capture: true } as EventListenerOptions)
+  }
+  currentLine.value = 0
   cellHeight.value = 0
 }
 
@@ -587,8 +649,7 @@ async function createOutputListener() {
     outputListenerRef.value = null
   }
 
-  const currentSessionId = sessionId.value
-  if (!currentSessionId) {
+  if (!sessionId.value) {
     return
   }
 
@@ -599,6 +660,11 @@ async function createOutputListener() {
       index: number
       is_waiting: boolean
     }>('ws_output', (event) => {
+      // 直接读取 sessionId.value（响应式），不闭包捕获
+      // 避免路由切换后闭包中仍是旧会话 ID，导致新会话输出被过滤
+      const currentSessionId = sessionId.value
+      if (!currentSessionId) return
+
       // 只处理当前会话的输出（前端过滤）
       if (event.payload.session_id !== currentSessionId) {
         return
@@ -742,6 +808,9 @@ async function clearTerminal() {
   if (!terminalRef.value) return
 
   terminalRef.value.clear()
+  // 清屏后重置滚动状态
+  currentLine.value = 0
+  isUserScrolling.value = false
   showClearConfirm.value = false
 }
 
@@ -773,12 +842,7 @@ function handleBack() {
 /// 计算单行高度（从 xterm DOM 元素获取）
 function computeCellHeight(): number {
   if (!terminalRef.value?.element) return 0
-  const rowsEl = terminalRef.value.element.querySelector('.xterm-rows') as HTMLElement
-  if (rowsEl) {
-    const lineHeight = parseFloat(getComputedStyle(rowsEl).lineHeight)
-    if (lineHeight > 0) return lineHeight
-  }
-  // 回退：viewport 高度 / 可见行数
+  // 最可靠的方式：viewport 高度 / 可见行数
   const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
   if (viewport && terminalRef.value.rows > 0) {
     return viewport.clientHeight / terminalRef.value.rows
@@ -786,113 +850,214 @@ function computeCellHeight(): number {
   return 0
 }
 
-/// 更新伪滚动容器的内容高度，使其与 buffer 行数匹配
-function updateScrollContentHeight() {
-  if (!scrollContent.value || !terminalRef.value) return
-
-  const term = terminalRef.value
-  const bufferLength = term.buffer.active.length
-  const ch = cellHeight.value || computeCellHeight()
-
-  if (ch > 0) {
-    cellHeight.value = ch
-    // 内容高度 = 总行数 × 行高（包含 viewport 可见区域）
-    scrollContent.value.style.height = `${bufferLength * ch}px`
-  }
-}
-
-/// 处理伪滚动容器的 scroll 事件
-/// 通过 scrollTop 计算目标行号，调用 term.scrollToLine 实现同步
-function handleScroll() {
-  if (!terminalRef.value || cellHeight.value <= 0) return
-
-  // 用 RAF 节流，避免高频 scroll 事件导致过度调用 scrollToLine
-  if (scrollRafId.value) return
-
-  scrollRafId.value = requestAnimationFrame(() => {
-    scrollRafId.value = 0
-    if (!scrollContainer.value || !terminalRef.value) return
-
-    const scrollTop = scrollContainer.value.scrollTop
-    const targetLine = Math.floor(scrollTop / cellHeight.value)
-
-    // 标记用户正在手动滚动，防止新输出时自动跳底
-    const isAtBottom = isScrolledToBottom()
-    if (!isAtBottom) {
-      isUserScrolling.value = true
-    } else {
-      isUserScrolling.value = false
-    }
-
-    terminalRef.value.scrollToLine(targetLine)
-    lastScrollTop.value = scrollTop
-  })
-}
-
 /// 判断是否滚动到底部
 function isScrolledToBottom(): boolean {
-  if (!scrollContainer.value) return true
-  const el = scrollContainer.value
-  // 5px 容差，避免浮点精度问题
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 5
-}
-
-/// 同步伪滚动容器到 xterm 当前 viewport 位置
-/// 用于新输出自动滚底、初始化等场景
-function syncScrollToTerminal() {
-  if (!scrollContainer.value || !terminalRef.value || cellHeight.value <= 0) return
-
-  const viewportY = terminalRef.value.buffer.active.viewportY
-  const targetScrollTop = viewportY * cellHeight.value
-
-  // 避免不必要的 scrollTop 更新触发 scroll 事件
-  if (Math.abs(scrollContainer.value.scrollTop - targetScrollTop) > 1) {
-    scrollContainer.value.scrollTop = targetScrollTop
-  }
+  if (!scrollContainer.value || !terminalRef.value) return true
+  const maxLine = terminalRef.value.buffer.active.length - terminalRef.value.rows
+  // 允许 2 行容差
+  return currentLine.value >= maxLine - 2
 }
 
 /// 滚动到底部
 function scrollToBottom() {
-  if (!scrollContainer.value || !terminalRef.value) return
+  if (!terminalRef.value) return
 
   const bufferLength = terminalRef.value.buffer.active.length
   const rows = terminalRef.value.rows
-  const maxScrollTop = Math.max(0, (bufferLength - rows) * cellHeight.value)
+  const targetLine = Math.max(0, bufferLength - rows)
 
-  scrollContainer.value.scrollTop = maxScrollTop
-  terminalRef.value.scrollToBottom()
+  currentLine.value = targetLine
+  terminalRef.value.scrollToLine(targetLine)
   isUserScrolling.value = false
+  // 新输出自动滚底时不显示滚动条
 }
 
-/// 配置伪滚动容器：禁用 xterm-viewport 原生滚动，初始化高度
+/// 同步滚动位置到 xterm viewport
+function syncViewportToLine(line: number) {
+  if (!terminalRef.value) return
+
+  const bufferLength = terminalRef.value.buffer.active.length
+  const rows = terminalRef.value.rows
+  const maxLine = Math.max(0, bufferLength - rows)
+
+  // 限制范围
+  const clampedLine = Math.max(0, Math.min(line, maxLine))
+  currentLine.value = clampedLine
+  terminalRef.value.scrollToLine(clampedLine)
+
+  // 显示滚动条
+  showScrollbar()
+}
+
+/// 显示滚动条，并在停止滚动后自动淡出
+function showScrollbar() {
+  scrollbarVisible.value = true
+  if (touchState.hideTimer) {
+    clearTimeout(touchState.hideTimer)
+  }
+  touchState.hideTimer = setTimeout(() => {
+    scrollbarVisible.value = false
+  }, 1200)
+}
+
+/// 滚动条 thumb 样式：根据 currentLine / bufferLength 计算位置和高度
+const scrollbarThumbStyle = computed(() => {
+  if (!terminalRef.value) return { top: '0%', height: '0%' }
+
+  const bufferLength = terminalRef.value.buffer.active.length
+  const rows = terminalRef.value.rows
+  if (bufferLength <= 0 || rows <= 0) return { top: '0%', height: '100%' }
+
+  const scrollableLines = bufferLength - rows
+  if (scrollableLines <= 0) return { top: '0%', height: '100%' }
+
+  // thumb 高度 = 可见行 / 总行数（最小 20px 对应的百分比，最大 80%）
+  const thumbRatio = rows / bufferLength
+  const thumbHeight = Math.max(0.08, Math.min(0.8, thumbRatio))
+
+  // thumb 位置 = 当前行 / 可滚动行数 × 可滚动区域
+  const scrollRatio = currentLine.value / scrollableLines
+  const top = scrollRatio * (1 - thumbHeight)
+
+  return {
+    top: `${(top * 100).toFixed(1)}%`,
+    height: `${(thumbHeight * 100).toFixed(1)}%`,
+  }
+})
+
+// ==================== Touch Scroll Handler ====================
+
+function onTouchStart(e: TouchEvent) {
+  // 取消惯性滚动
+  if (touchState.inertiaRafId) {
+    cancelAnimationFrame(touchState.inertiaRafId)
+    touchState.inertiaRafId = 0
+  }
+
+  const touch = e.touches[0]
+  touchState.startY = touch.clientY
+  touchState.startLine = currentLine.value
+  touchState.lastY = touch.clientY
+  touchState.lastTime = Date.now()
+  touchState.velocity = 0
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (!terminalRef.value || cellHeight.value <= 0) return
+
+  const touch = e.touches[0]
+  const deltaY = touch.clientY - touchState.lastY
+  const deltaTime = Date.now() - touchState.lastTime
+
+  // 计算瞬时速度（像素/毫秒）
+  if (deltaTime > 0) {
+    touchState.velocity = deltaY / deltaTime
+  }
+
+  touchState.lastY = touch.clientY
+  touchState.lastTime = Date.now()
+
+  // 将像素距离转换为行数
+  const linesDelta = Math.round(-deltaY / cellHeight.value)
+  if (linesDelta === 0) return
+
+  const newLine = currentLine.value + linesDelta
+
+  // 标记用户正在滚动
+  isUserScrolling.value = true
+
+  syncViewportToLine(newLine)
+}
+
+function onTouchEnd() {
+  if (!terminalRef.value || cellHeight.value <= 0) return
+
+  // 启动惯性滚动
+  startInertia()
+}
+
+/// 惯性滚动：根据松手时的速度逐帧减速
+function startInertia() {
+  // 速度阈值：太慢则不启动惯性
+  if (Math.abs(touchState.velocity) < 0.05) {
+    // 惯性结束，检查是否在底部
+    if (isScrolledToBottom()) {
+      isUserScrolling.value = false
+    }
+    return
+  }
+
+  const friction = 0.95 // 摩擦系数
+
+  function step() {
+    if (!terminalRef.value || cellHeight.value <= 0) {
+      touchState.inertiaRafId = 0
+      return
+    }
+
+    touchState.velocity *= friction
+    // 速度衰减到阈值以下时停止
+    if (Math.abs(touchState.velocity) < 0.01) {
+      touchState.inertiaRafId = 0
+      if (isScrolledToBottom()) {
+        isUserScrolling.value = false
+      }
+      return
+    }
+
+    // 速度单位是 像素/毫秒，每帧约 16ms
+    const pixelsPerFrame = touchState.velocity * 16
+    const linesPerFrame = Math.round(-pixelsPerFrame / cellHeight.value)
+
+    if (linesPerFrame !== 0) {
+      syncViewportToLine(currentLine.value + linesPerFrame)
+    }
+
+    touchState.inertiaRafId = requestAnimationFrame(step)
+  }
+
+  touchState.inertiaRafId = requestAnimationFrame(step)
+}
+
+/// 配置触摸滚动：禁用 xterm-viewport 原生滚动，初始化行高
 function setupViewportScroll() {
   if (!terminalRef.value?.element) return
 
-  // 禁用 xterm-viewport 的原生滚动，防止双重滚动
+  // 禁用 xterm-viewport 的原生滚动
   const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
   if (viewport) {
     viewport.style.overflowY = 'hidden'
     viewport.style.touchAction = 'none'
+    viewport.style.pointerEvents = 'none'
   }
 
-  // 计算行高并初始化滚动内容高度
+  // 计算行高
   cellHeight.value = computeCellHeight()
-  updateScrollContentHeight()
 
-  // 监听新行输出，更新滚动内容高度
+  // 在滚动容器上用捕获阶段监听触摸事件，确保即使 xterm 内部 stopPropagation 也能接收到
+  if (scrollContainer.value) {
+    scrollContainer.value.addEventListener('touchstart', onTouchStart, { passive: true, capture: true })
+    scrollContainer.value.addEventListener('touchmove', onTouchMove, { passive: true, capture: true })
+    scrollContainer.value.addEventListener('touchend', onTouchEnd, { capture: true })
+  }
+
+  // 监听新行输出
   terminalRef.value.onLineFeed(() => {
-    updateScrollContentHeight()
-
     // 用户未手动向上滚动时，自动滚到底部
     if (!isUserScrolling.value) {
       nextTick(() => scrollToBottom())
     }
   })
 
-  // 监听 buffer 变化（如清屏操作），更新高度
+  // 监听 xterm 内部滚动事件，同步 currentLine
+  // 当 scrollToLine / scrollToBottom 被调用时，xterm 会触发 onScroll
+  terminalRef.value.onScroll((viewportY: number) => {
+    currentLine.value = viewportY
+  })
+
+  // 监听 resize，更新行高
   terminalRef.value.onResize(() => {
     cellHeight.value = computeCellHeight()
-    updateScrollContentHeight()
   })
 
   // 初始滚到底部
@@ -928,24 +1093,16 @@ onActivated(async () => {
   if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {
     await subscribeSession()
   }
-  // WebGL 渲染器在 DOM 不可见时不会重绘，激活后需要手动刷新
-  nextTick(() => {
-    fitTerminal()
-    // 通知桌面端 PTY 尺寸变化，确保行宽正确
-    if (terminalRef.value && isConnected.value && isSessionActive.value) {
-      wsResizeTerminal(sessionId.value, terminalRef.value.cols, terminalRef.value.rows).catch((e: Error) => {
-        console.warn('[TerminalView] onActivated resize failed:', e)
-      })
-    }
-    // 强制刷新渲染：重绘整个 buffer
+  // 延迟执行恢复操作：等 DOM 从 keep-alive 缓存中恢复并完成布局计算
+  // 然后自动执行 refreshTerminal 确保终端尺寸和显示正确
+  setTimeout(() => {
+    // 清除 WebGL 纹理缓存（keep-alive 恢复后纹理可能损坏）
     if (terminalRef.value) {
-      const buf = terminalRef.value.buffer.active
-      const len = buf.length
-      if (len > 0) {
-        terminalRef.value.refresh(0, len - 1)
-      }
+      terminalRef.value.clearTextureAtlas()
     }
-  })
+    // 直接调用 refreshTerminal：重新 fit 尺寸并同步到桌面端
+    refreshTerminal()
+  }, 150)
 })
 
 // keep-alive 生命周期：组件被停用时不做任何操作
@@ -987,6 +1144,35 @@ watch(isConnected, async (connected) => {
     await subscribeSession()
   }
 })
+
+// Watch sessionId 变化 — keep-alive 可能复用组件实例
+// 路由从 /terminal/aaa 切到 /terminal/bbb 时，同一个 TerminalView 实例被复用
+// sessionId 变了但 xterm Terminal 和 outputListener 还是旧的
+// 需要完整重建：dispose 旧终端、创建新终端、订阅新会话
+watch(sessionId, async (newId, oldId) => {
+  if (!newId || newId === oldId) return
+
+  // 取消旧会话的后端订阅
+  if (oldId && isConnected.value) {
+    try {
+      await wsLeaveSession(oldId)
+    } catch (e) {
+      console.warn('[TerminalView] Leave old session failed:', e)
+    }
+  }
+
+  // 清理旧终端（dispose xterm + outputListener）
+  disposeTerminal()
+
+  // 重建新终端
+  await nextTick()
+  initTerminal()
+
+  // 订阅新会话
+  if (isSessionActive.value && isConnected.value) {
+    await subscribeSession()
+  }
+})
 </script>
 
 <style scoped>
@@ -1002,9 +1188,10 @@ watch(isConnected, async (connected) => {
   bottom: 0;
   z-index: 1;
   overflow: hidden;
-  /* 平滑过渡动画 - 避免键盘弹出时闪现 */
-  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-              padding-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 不对 padding 做过渡动画：
+   * keyboardHeight 是键盘动画结束后的终值（离散跳变），
+   * CSS transition 叠加动画会与 Android 系统键盘动画冲突导致卡顿。
+   * padding 只做即时响应，由系统键盘动画驱动视觉平滑。 */
 }
 
 /* Header */
@@ -1487,50 +1674,52 @@ watch(isConnected, async (connected) => {
   background: var(--mobile-terminal-bg);
 }
 
-/* 伪滚动容器：提供原生触摸滚动 */
+/* 伪滚动容器：触摸事件驱动滚动，不需要原生滚动条 */
 .terminal-scroll-container {
   position: relative;
   width: 100%;
   height: 100%;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-  /* Firefox 现代细滚动条 */
-  scrollbar-width: thin;
-  scrollbar-color: rgba(120, 120, 140, 0.25) transparent;
+  overflow: hidden;
+  touch-action: none;
 }
 
-/* Webkit 现代细圆角滚动条 */
-.terminal-scroll-container::-webkit-scrollbar {
+/* 自定义滚动条轨道 */
+.scrollbar-track {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 4px;
   width: 4px;
-}
-
-.terminal-scroll-container::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.terminal-scroll-container::-webkit-scrollbar-thumb {
-  background: rgba(120, 120, 140, 0.25);
-  border-radius: 2px;
-}
-
-.terminal-scroll-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 212, 255, 0.35);
-}
-
-/* 伪滚动内容撑开高度，让容器可以滚动 */
-.terminal-scroll-content {
+  z-index: 5;
   pointer-events: none;
 }
 
-/* xterm 容器：固定在滚动容器内，不随内容滚动 */
+/* 自定义滚动条滑块 - 默认隐藏，滚动时淡入 */
+.scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 20px;
+  border-radius: 2px;
+  background: rgba(160, 160, 180, 0.3);
+  opacity: 0;
+  transition: opacity 0.25s ease, background 0.15s ease;
+  pointer-events: none;
+}
+
+/* 滚动时显示 */
+.scrollbar-thumb.visible {
+  opacity: 1;
+  background: rgba(0, 212, 255, 0.4);
+}
+
+/* xterm 容器：占满滚动容器 */
 .xterm-container {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  height: 100%;
-  width: 100%;
+  bottom: 0;
   overflow: hidden;
 }
 
@@ -1539,12 +1728,24 @@ watch(isConnected, async (connected) => {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  scrollbar-width: none;
+}
+
+:deep(.xterm::-webkit-scrollbar) {
+  display: none;
+  width: 0;
 }
 
 :deep(.xterm-screen) {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  scrollbar-width: none;
+}
+
+:deep(.xterm-screen::-webkit-scrollbar) {
+  display: none;
+  width: 0;
 }
 
 /* 禁用 xterm-viewport 原生滚动，由外层伪滚动容器接管 */
@@ -1552,5 +1753,21 @@ watch(isConnected, async (connected) => {
   overflow-y: hidden !important;
   touch-action: none !important;
   pointer-events: none !important;
+  scrollbar-width: none !important;
+}
+
+:deep(.xterm-viewport::-webkit-scrollbar) {
+  display: none !important;
+  width: 0 !important;
+}
+
+/* 禁用 xterm-scroll-area 滚动条 */
+:deep(.xterm-scroll-area) {
+  scrollbar-width: none;
+}
+
+:deep(.xterm-scroll-area::-webkit-scrollbar) {
+  display: none;
+  width: 0;
 }
 </style>

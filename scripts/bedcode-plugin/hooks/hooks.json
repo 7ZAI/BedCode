@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/bedcode_hook.py\" session-start",
             "timeout": 5
           }
         ]
@@ -23,7 +23,7 @@
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/write-event.sh",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/bedcode_hook.py\" write-event",
             "timeout": 5
           }
         ]
@@ -40,7 +40,7 @@
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/write-event.sh",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/bedcode_hook.py\" write-event",
             "timeout": 5
           }
         ]

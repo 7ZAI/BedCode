@@ -5,7 +5,7 @@ allowed-tools: Read
 
 # BedCode Session Status
 
-View the current Claude Code session status and recent events.
+View the current Claude Code session status and recent plugin events.
 
 ## Usage
 
@@ -15,10 +15,10 @@ View the current Claude Code session status and recent events.
 
 ### For /bedcode status:
 
-1. Read the events file: `cat .claude/bedcode-events.jsonl 2>/dev/null || echo "No events file"`
-2. If file exists, show the last 10 events
-3. Display current session_id from the most recent session_start event
-4. Show the latest task status from the most recent stop event
+1. Read the plugin log file: `.claude/bedcode-plugin.log`
+2. If file exists, show the last 20 lines
+3. Display current session_id from the most recent session_start log entry
+4. Show the latest task status from the most recent stop/subagent_stop log entry
 
 Example output format:
 ```
@@ -26,6 +26,7 @@ Session: abc123
 Project: /path/to/project
 
 Recent events:
-- session_start (10:00:00)
-- stop (completed, 10:30:00)
+[10:00:00] session_start: session_id=abc123 project=/path
+[10:00:00] HTTP POST → idle
+[10:30:00] stop: session_id=abc123 status=completed
 ```

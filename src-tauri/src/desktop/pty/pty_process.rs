@@ -9,6 +9,7 @@ use crate::desktop::pty::command::build_command;
 use crate::desktop::pty::pty_reader::PtyReader;
 use crate::desktop::traits::PtyOutputListener;
 use crate::shared::system::config::AppConfig;
+use crate::shared::system::process::create_command;
 use crate::Result;
 
 use portable_pty::{native_pty_system, PtyPair, PtySize};
@@ -288,7 +289,7 @@ impl PtySession {
             #[cfg(target_os = "windows")]
             {
                 tracing::info!("Executing taskkill for PID {}", pid);
-                let output = std::process::Command::new("cmd")
+                let output = create_command("cmd")
                     .args(["/C", &format!("taskkill /F /T /PID {}", pid)])
                     .output();
                 match output {
@@ -368,7 +369,7 @@ impl Drop for PtySession {
                 if let Some(pid) = state.process_id {
                     #[cfg(target_os = "windows")]
                     {
-                        let _ = std::process::Command::new("cmd")
+                        let _ = create_command("cmd")
                             .args(["/C", &format!("taskkill /F /T /PID {}", pid)])
                             .output();
                     }

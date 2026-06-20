@@ -51,48 +51,6 @@
         </div>
       </section>
 
-      <!-- Section: 项目文件 -->
-      <section>
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">项目文件</h3>
-
-        <!-- 未连接空状态 -->
-        <div
-          v-if="!isConnected"
-          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
-        >
-          <p class="text-[var(--mobile-text-disabled)] text-sm">连接设备后查看项目文件</p>
-        </div>
-
-        <!-- 已连接但无配置 -->
-        <div
-          v-else-if="projectCards.length === 0"
-          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
-        >
-          <p class="text-[var(--mobile-text-disabled)] text-sm">暂无会话配置</p>
-        </div>
-
-        <!-- 目录卡片列表 -->
-        <div v-else class="space-y-2.5">
-          <button
-            v-for="card in projectCards"
-            :key="card.configId"
-            class="w-full text-left bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-3.5 transition-colors hover:border-cyan-500/30 active:bg-[var(--mobile-bg-elevated)]"
-            @click="handleProjectCardClick(card)"
-          >
-            <div class="flex items-center gap-2.5">
-              <!-- 文件夹图标 -->
-              <svg class="w-5 h-5 text-amber-400/80 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <div class="min-w-0 flex-1">
-                <p class="text-sm font-medium text-[var(--mobile-text-primary)] truncate">{{ card.name }}</p>
-                <p class="text-xs text-[var(--mobile-text-muted)] truncate mt-0.5">{{ card.workingDir }}</p>
-              </div>
-            </div>
-          </button>
-        </div>
-      </section>
-
       <!-- Section: 插件（预留） -->
       <section>
         <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">插件</h3>
@@ -255,7 +213,7 @@
 /**
  * ToolboxView - 工具箱页面
  *
- * 预设任务管理 + 项目文件浏览 + 插件（预留）
+ * 预设任务管理 + 插件（预留）
  */
 
 import { ref, computed, onMounted } from 'vue'
@@ -387,33 +345,6 @@ async function doExecute() {
   pendingSessionId.value = ''
 }
 
-// ==================== 项目文件 ====================
-
-/** 项目目录卡片：将会话配置关联到活跃会话 */
-const projectCards = computed(() => {
-  return connection.sessionConfigs.value.map(config => {
-    const session = connection.activeSessions.value.find(
-      (s: any) => s.config_id === config.id || s.configId === config.id
-    )
-    return {
-      configId: config.id,
-      name: config.name,
-      workingDir: config.working_dir,
-      sessionId: session?.id || null,
-    }
-  })
-})
-
-function handleProjectCardClick(card: { configId: string; name: string; sessionId: string | null }) {
-  if (!isConnected.value) {
-    toast.warning('请先连接设备')
-    router.push('/mobile/devices')
-    return
-  }
-  // 优先使用 sessionId，否则使用 configId（后端支持 configId 直接查找 working_dir）
-  const id = card.sessionId || card.configId
-  router.push({ name: 'mobile-files', params: { id } })
-}
 </script>
 
 <style scoped>

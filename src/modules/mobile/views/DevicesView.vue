@@ -117,95 +117,17 @@
 
         <!-- Config List -->
         <div v-else class="space-y-2">
-          <div
+          <SessionConfigCard
             v-for="config in sessionConfigs"
             :key="config.id"
-            class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl overflow-hidden hover:border-[var(--mobile-border-active)] transition-all duration-300"
-          >
-            <!-- 主卡片 -->
-            <div class="p-4">
-              <div class="flex items-start justify-between">
-                <div class="flex-1 min-w-0" @click="goToSessions">
-                  <p class="font-medium text-[var(--mobile-text-primary)]">{{ config.name }}</p>
-                  <div class="flex items-center gap-2 mt-1.5">
-                    <span
-                      :class="[
-                        'text-xs px-2 py-0.5 rounded-full border',
-                        config.environment === 'wsl2' ? 'bg-purple-500/10 border-purple-500/30 text-purple-400' : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
-                      ]"
-                    >
-                      {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
-                    </span>
-                    <span v-if="config.wsl_distro" class="text-[var(--mobile-text-muted)] text-xs">{{ config.wsl_distro }}</span>
-                  </div>
-                  <p class="text-[var(--mobile-text-muted)] text-sm mt-1 truncate">{{ config.command }}</p>
-                  <p class="text-[var(--mobile-text-disabled)] text-xs mt-0.5 truncate">{{ config.working_dir }}</p>
-                </div>
-                <button
-                  class="ml-3 px-4 py-2 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] text-sm font-medium rounded-lg hover:bg-[var(--mobile-accent)]/30 transition-all flex items-center gap-1.5 shrink-0"
-                  :class="{ 'opacity-50': startingConfigId === config.id }"
-                  :disabled="startingConfigId === config.id"
-                  @click.stop="handleStartSession(config)"
-                >
-                  <div
-                    v-if="startingConfigId === config.id"
-                    class="w-4 h-4 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin"
-                  />
-                  <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  启动
-                </button>
-              </div>
-
-              <!-- 展开按钮和运行中的会话数量 -->
-              <div
-                v-if="getRunningSessionsByConfig(config.id).length > 0"
-                class="mt-3 pt-3 border-t border-[var(--mobile-border)] flex items-center justify-between cursor-pointer"
-                @click.stop="toggleConfigExpanded(config.id)"
-              >
-                <div class="flex items-center gap-2">
-                  <div class="w-2 h-2 rounded-full bg-[var(--mobile-success)] shadow-[0_0_6px_rgba(16,185,129,0.5)] animate-pulse"></div>
-                  <span class="text-[var(--mobile-success)] text-sm">{{ getRunningSessionsByConfig(config.id).length }} 个运行中</span>
-                </div>
-                <svg
-                  class="w-5 h-5 text-[var(--mobile-text-muted)] transition-transform duration-200"
-                  :class="{ 'rotate-180': expandedConfigId === config.id }"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </div>
-            </div>
-
-            <!-- 折叠的运行中会话列表 -->
-            <transition name="slide">
-              <div v-if="expandedConfigId === config.id" class="border-t border-[var(--mobile-border)]">
-                <div
-                  v-for="session in getRunningSessionsByConfig(config.id)"
-                  :key="session.id"
-                  class="px-4 py-3 flex items-center justify-between hover:bg-[var(--mobile-accent)]/5 transition-colors"
-                  @click="handleSessionClick(session)"
-                >
-                  <div class="flex items-center gap-3 min-w-0">
-                    <div class="w-2 h-2 rounded-full bg-[var(--mobile-success)] shrink-0 shadow-[0_0_6px_rgba(16,185,129,0.5)]"></div>
-                    <span class="text-sm text-[var(--mobile-text-secondary)] truncate">{{ session.name }}</span>
-                  </div>
-                  <button
-                    class="shrink-0 p-1.5 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-error)] transition-colors"
-                    @click.stop="handleStopSession(session)"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </transition>
-          </div>
+            :config="config"
+            :active-sessions="activeSessions"
+            :is-starting="startingConfigId === config.id"
+            @start="handleStartSession"
+            @navigate-to-files="handleNavigateToFiles"
+            @session-click="handleSessionClick"
+            @stop-session="handleStopSession"
+          />
         </div>
       </div>
 
@@ -344,6 +266,7 @@ import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
 import PairingInput from '@/modules/mobile/components/PairingInput.vue'
 import Modal from '@/modules/shared/components/Modal.vue'
 import Button from '@/modules/shared/components/Button.vue'
+import SessionConfigCard, { type SessionConfigSummary } from '@/modules/mobile/components/SessionConfigCard.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
@@ -355,16 +278,6 @@ const sessionConfigs = connection.sessionConfigs
 const connectionHistory = connection.connectionHistory
 const isLoadingConfigs = connection.isLoadingConfigs
 const hasLoadedConfigs = connection.hasLoadedConfigs
-
-// 根据配置ID获取运行中的会话
-function getRunningSessionsByConfig(configId: string) {
-  return activeSessions.value.filter(s => s.config_id === configId && (s.status === 'running' || s.status === 'waiting_input'))
-}
-
-// 展开/折叠配置
-function toggleConfigExpanded(configId: string) {
-  expandedConfigId.value = expandedConfigId.value === configId ? null : configId
-}
 
 // 点击会话跳转到终端
 function handleSessionClick(session: any) {
@@ -406,21 +319,8 @@ const isPairing = ref(false)
 const pairingError = ref('')
 const connectionError = ref('')
 
-// Session configs type (for template use)
-interface SessionConfigSummary {
-  id: string
-  name: string
-  environment: string
-  wsl_distro?: string
-  working_dir: string
-  command: string
-}
-
 const isRefreshing = ref(false)
 const startingConfigId = ref<string | null>(null)
-
-// 展开的会话配置ID（用于显示运行中的会话）
-const expandedConfigId = ref<string | null>(null)
 
 // Current device being connected
 const pendingDevice = ref<RemoteDevice | null>(null)
@@ -694,28 +594,17 @@ async function handleDisconnect() {
   connection.clearActiveSessions()
 }
 
-function goToSessions() {
-  router.push({ name: 'mobile-sessions' })
+// 工程目录导航：优先使用 sessionId，否则使用 configId
+function handleNavigateToFiles(config: SessionConfigSummary) {
+  const session = activeSessions.value.find(
+    (s: any) => s.config_id === config.id || s.configId === config.id
+  )
+  const id = session?.id || config.id
+  router.push({ name: 'mobile-files', params: { id } })
 }
 </script>
 
 <style scoped>
-.slide-enter-active,
-.slide-leave-active {
-  transition: all 0.2s ease;
-}
-
-.slide-enter-from,
-.slide-leave-to {
-  opacity: 0;
-  max-height: 0;
-}
-
-.slide-enter-to,
-.slide-leave-from {
-  max-height: 200px;
-}
-
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease;

@@ -3,8 +3,8 @@
 //! 提供 WSL2 环境下的命令执行和路径转换功能
 
 use crate::Result;
+use crate::shared::system::process::create_command;
 use encoding_rs::UTF_16LE;
-use std::process::Command;
 
 /// WSL 发行版信息
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -18,7 +18,7 @@ pub struct WslDistro {
 /// 列出已安装的 WSL 发行版
 pub fn list_distributions() -> Result<Vec<WslDistro>> {
     // 尝试使用 UTF-8 编码，如果失败则使用系统默认编码
-    let output = Command::new("cmd.exe")
+    let output = create_command("cmd.exe")
         .args(["/c", "chcp 65001 >nul 2>&1 && wsl --list --verbose"])
         .output()?;
 
@@ -100,7 +100,7 @@ pub fn execute_command(
     args.push("-c".to_string());
     args.push(command.to_string());
 
-    let output = Command::new("wsl.exe").args(&args).output()?;
+    let output = create_command("wsl.exe").args(&args).output()?;
 
     Ok(output)
 }
@@ -168,7 +168,7 @@ pub fn wsl_to_windows_path(path: &str, distro: Option<&str>) -> String {
 
 /// 检查 WSL 是否可用
 pub fn is_wsl_available() -> bool {
-    Command::new("cmd.exe")
+    create_command("cmd.exe")
         .args(["/c", "chcp 65001 >nul && wsl --version"])
         .output()
         .map(|o| o.status.success())
