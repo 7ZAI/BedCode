@@ -29,8 +29,8 @@
         <div class="viewer-body">
           <div v-if="loading" class="viewer-loading">加载中...</div>
           <div v-else-if="error" class="viewer-error">{{ error }}</div>
-          <div v-else-if="!code" class="viewer-loading">选择文件查看内容</div>
-          <div v-else class="viewer-code" v-html="highlightedHtml"></div>
+          <div v-else-if="!code && !diffLines?.length" class="viewer-loading">选择文件查看内容</div>
+          <div v-else-if="highlightedHtml" class="viewer-code" v-html="highlightedHtml"></div>
         </div>
 
         <!-- Footer -->
@@ -69,6 +69,7 @@ const isFullscreen = ref(false)
 const displayLang = computed(() => getLangByFilename(props.filename))
 
 const lineCount = computed(() => {
+  if (props.diffLines?.length) return props.diffLines.length
   const content = props.code ?? ''
   if (!content) return 0
   return content.split('\n').length
@@ -276,12 +277,12 @@ watch(
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  color: rgba(100, 100, 120, 0.45);
+  color: var(--mobile-code-gutter-color);
   font-size: 0.85em;
   user-select: none;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.18);
-  border-right: 1px solid rgba(100, 100, 120, 0.12);
+  background: var(--mobile-code-gutter-bg);
+  border-right: 1px solid var(--mobile-code-gutter-border);
 }
 
 /* 空行保持行高 */
@@ -311,8 +312,8 @@ watch(
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.18);
-  border-right: 1px solid rgba(100, 100, 120, 0.12);
+  background: var(--mobile-code-gutter-bg);
+  border-right: 1px solid var(--mobile-code-gutter-border);
 }
 
 .viewer-code :deep(.diff-old-no) {
@@ -361,7 +362,7 @@ watch(
 }
 
 .viewer-code :deep(.diff-context .diff-line-no) {
-  color: rgba(100, 100, 120, 0.45);
+  color: var(--mobile-code-gutter-color);
 }
 
 .viewer-loading,

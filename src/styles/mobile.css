@@ -50,6 +50,11 @@
   --mobile-input-border: rgba(139, 233, 253, 0.25);
   --mobile-input-focus: rgba(139, 233, 253, 0.45);
   --mobile-input-placeholder: #5c5c6d;
+
+  /* 代码查看器 */
+  --mobile-code-gutter-bg: rgba(255, 255, 255, 0.04);
+  --mobile-code-gutter-border: rgba(100, 100, 120, 0.12);
+  --mobile-code-gutter-color: rgba(100, 100, 120, 0.45);
 }
 
 /* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效 */
@@ -101,10 +106,45 @@ html:not(.dark) .mobile-app {
   --mobile-input-border: rgba(8, 145, 178, 0.2);
   --mobile-input-focus: rgba(8, 145, 178, 0.4);
   --mobile-input-placeholder: #94a3b8;
+
+  /* 代码查看器 */
+  --mobile-code-gutter-bg: rgba(0, 0, 0, 0.04);
+  --mobile-code-gutter-border: rgba(0, 0, 0, 0.08);
+  --mobile-code-gutter-color: rgba(100, 116, 139, 0.5);
 }
 
 /* 主题切换过渡动画 */
 .mobile-ui,
 .mobile-app {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+/* ============================================
+   xterm 终端滚动条全局样式
+   Android WebView 对 ::-webkit-scrollbar 支持有限，
+   通过全局样式确保滚动条始终为现代细圆角样式
+   ============================================ */
+
+.xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 140, 0.25) transparent;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 4px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 140, 0.25);
+  border-radius: 2px;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.35);
 }
