@@ -16,7 +16,15 @@ const API_BASE_URL = ref<string>('')
 
 // ==================== Core HTTP Client ====================
 
-interface ApiResult<T = any> {
+/** Git diff 行数据 */
+export interface FileDiffLine {
+  type: 'context' | 'added' | 'removed'
+  content: string
+  oldLineNo: number | null
+  newLineNo: number | null
+}
+
+export interface ApiResult<T = any> {
   code: number
   message: string
   data?: T
@@ -178,6 +186,13 @@ export async function httpGetDiffTree(sessionId: string, excludeDirs: string[] =
   )
 }
 
+export async function httpGetFileDiff(sessionId: string, filePath: string) {
+  return request<{ fileName: string; lines: FileDiffLine[] }>(
+    '/api/file-diff',
+    { method: 'POST', body: JSON.stringify({ sessionId, filePath }) }
+  )
+}
+
 // ==================== Setup ====================
 
 export function setApiBaseUrl(address: string, port: number) {
@@ -205,5 +220,6 @@ export function useHttpApi() {
     httpGetFileTree,
     httpGetFileContent,
     httpGetDiffTree,
+    httpGetFileDiff,
   }
 }
