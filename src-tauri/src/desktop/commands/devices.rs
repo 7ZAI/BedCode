@@ -11,6 +11,7 @@ pub async fn get_connected_devices() -> Result<Vec<crate::desktop::server::Devic
         .map(|c| crate::desktop::server::DeviceConnectionInfo {
             addr: c.addr,
             device_id: c.client_id,
+            fingerprint: c.fingerprint,
             session_count: 0,
         })
         .collect();

@@ -39,6 +39,8 @@ export interface SessionConfig {
 export interface DeviceConnectionInfo {
   addr: string
   device_id: string
+  /** 设备指纹，用于与数据库 pairings 记录关联匹配 */
+  fingerprint?: string
   session_count: number
 }
 

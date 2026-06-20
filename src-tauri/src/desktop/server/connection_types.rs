@@ -18,6 +18,8 @@ pub struct DeviceConnectionEvent {
     pub addr: String,
     pub device_id: String,
     pub device_name: Option<String>,
+    /// 设备指纹，用于与数据库 pairings 记录关联匹配
+    pub fingerprint: Option<String>,
     pub event: String, // "connected", "disconnected", "authenticated"
 }
 
@@ -26,6 +28,8 @@ pub struct DeviceConnectionEvent {
 pub struct DeviceConnectionInfo {
     pub addr: String,
     pub device_id: String,
+    /// 设备指纹，用于与数据库 pairings 记录关联匹配
+    pub fingerprint: Option<String>,
     pub session_count: usize,
 }
 

@@ -159,7 +159,7 @@
               <div
                 :class="[
                   'w-3 h-3 rounded-full shrink-0',
-                  isDeviceOnline(device.id) ? 'bg-green-500 animate-pulse' : 'bg-dark-500'
+                  isDeviceOnline(device) ? 'bg-green-500 animate-pulse' : 'bg-dark-500'
                 ]"
               ></div>
 
@@ -179,10 +179,10 @@
               <span
                 :class="[
                   'text-xs px-2 py-1 rounded',
-                  isDeviceOnline(device.id) ? 'bg-green-900/50 text-green-300' : 'bg-gray-200 dark:bg-dark-600 text-gray- dark:text-dark-400'
+                  isDeviceOnline(device) ? 'bg-green-900/50 text-green-300' : 'bg-gray-200 dark:bg-dark-600 text-gray- dark:text-dark-400'
                 ]"
               >
-                {{ isDeviceOnline(device.id) ? '已连接' : '离线' }}
+                {{ isDeviceOnline(device) ? '已连接' : '离线' }}
               </span>
 
               <Button variant="ghost" size="sm" @click="removeDevice(device.id)">
@@ -248,12 +248,12 @@ async function selectIp(ip: string) {
   })
 }
 
-// Real-time connected device IDs (from WebSocket events)
-const connectedDeviceIds = ref<Set<string>>(new Set())
+// Real-time connected device fingerprints (from WebSocket events)
+const connectedFingerprints = ref<Set<string>>(new Set())
 
-// 检查设备是否实时在线
-function isDeviceOnline(deviceId: string): boolean {
-  return connectedDeviceIds.value.has(deviceId)
+// 检查设备是否实时在线（通过 fingerprint 匹配数据库 pairings 记录）
+function isDeviceOnline(device: PairedDevice): boolean {
+  return connectedFingerprints.value.has(device.deviceFingerprint)
 }
 
 const isLoading = ref(false)
@@ -320,8 +320,12 @@ onMounted(async () => {
 
   // Load initial connected device list
   await connected.loadConnectedDevices()
-  const ids = new Set<string>(connected.connectedDevices.value.map((d: any) => d.device_id || d.id))
-  connectedDeviceIds.value = ids
+  const fingerprints = new Set<string>(
+    connected.connectedDevices.value
+      .map((d: any) => d.fingerprint)
+      .filter((fp: string | undefined): fp is string => !!fp)
+  )
+  connectedFingerprints.value = fingerprints
 
   // 尝试恢复现有二维码（不重新生成）
   const qrRestored = await qr.restoreQr(selectedIp.value || undefined)
@@ -341,8 +345,11 @@ onMounted(async () => {
 
   // Listen for real-time device connection events
   deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', async (event) => {
-    const deviceId = event.payload.device_id
-    connectedDeviceIds.value = new Set([...connectedDeviceIds.value, deviceId])
+    // 通过 fingerprint 追踪在线设备，而非 device_id
+    const fp = (event.payload as any).fingerprint
+    if (fp) {
+      connectedFingerprints.value = new Set([...connectedFingerprints.value, fp])
+    }
 
     // 刷新配对设备列表（认证成功后后端已写入数据库）
     await deviceStore.loadPairedDevices()
@@ -367,9 +374,12 @@ onMounted(async () => {
     toast.success('设备已通过二维码连接')
   })
   deviceDisconnectedListener = await listen<DeviceConnectionInfo>('device-disconnected', (event) => {
-    const newSet = new Set(connectedDeviceIds.value)
-    newSet.delete(event.payload.device_id)
-    connectedDeviceIds.value = newSet
+    const fp = (event.payload as any).fingerprint
+    if (fp) {
+      const newSet = new Set(connectedFingerprints.value)
+      newSet.delete(fp)
+      connectedFingerprints.value = newSet
+    }
   })
 
   // 监听配对码自动生成事件

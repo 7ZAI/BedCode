@@ -94,6 +94,7 @@ pub async fn verify_pairing_code(
         addr: body.address.clone(),
         device_id: body.device_id.clone(),
         device_name: Some(body.device_name.clone()),
+        fingerprint: Some(body.fingerprint.clone()),
         event: "authenticated".to_string(),
     });
 
@@ -150,6 +151,7 @@ pub async fn qr_connect(
                 addr: address,
                 device_id,
                 device_name: Some(device_name),
+                fingerprint: Some(fingerprint),
                 event: "authenticated".to_string(),
             });
 

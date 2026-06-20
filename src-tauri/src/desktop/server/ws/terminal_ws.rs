@@ -61,6 +61,8 @@ struct AuthResponse {
     device_id: Option<String>,
     /// 设备名称（认证成功时设置）
     device_name: Option<String>,
+    /// 设备指纹（认证成功时设置）
+    fingerprint: Option<String>,
     /// 响应 JSON 文本
     response_json: Option<String>,
 }
@@ -277,23 +279,25 @@ impl TerminalWs {
             let auth_response = match result {
                 Ok(Some(response_msg)) => {
                     // 从响应中提取认证状态
-                    let (authenticated, device_id, device_name) = if let Message::Auth { payload, .. } = &response_msg {
+                    let (authenticated, device_id, device_name, fingerprint) = if let Message::Auth { payload, .. } = &response_msg {
                         match payload.stage {
                             crate::shared::enums::AuthStage::Authenticated => (
                                 true,
                                 payload.device_id.clone(),
                                 payload.device_name.clone(),
+                                payload.device_fingerprint.clone(),
                             ),
-                            _ => (false, None, None),
+                            _ => (false, None, None, None),
                         }
                     } else {
-                        (false, None, None)
+                        (false, None, None, None)
                     };
 
                     AuthResponse {
                         authenticated,
                         device_id,
                         device_name,
+                        fingerprint,
                         response_json: response_msg.to_json().ok(),
                     }
                 }
@@ -301,6 +305,7 @@ impl TerminalWs {
                     authenticated: false,
                     device_id: None,
                     device_name: None,
+                    fingerprint: None,
                     response_json: None,
                 },
                 Err(e) => {
@@ -310,6 +315,7 @@ impl TerminalWs {
                         authenticated: false,
                         device_id: None,
                         device_name: None,
+                        fingerprint: None,
                         response_json: error.to_json().ok(),
                     }
                 }
@@ -341,14 +347,16 @@ impl TerminalWs {
                 self.session.authenticated = true;
                 self.session.device_id = Some(claims.sub.clone());
                 self.session.device_name = claims.device_name.clone();
+                self.session.fingerprint = claims.fingerprint.clone();
 
                 // 注册认证状态到 WsSessionRegistry
                 let client_id = self.session.addr.to_string();
                 let device_name = claims.device_name.clone();
+                let fp = claims.fingerprint.clone();
                 actix::spawn(async move {
                     use crate::desktop::server::ws::registry::WsSessionRegistry;
                     let registry = WsSessionRegistry::global();
-                    registry.set_authenticated(&client_id, device_name).await;
+                    registry.set_authenticated(&client_id, device_name, fp).await;
                 });
 
                 // 更新配对设备的 last_seen 和 connect_count
@@ -369,7 +377,8 @@ impl TerminalWs {
                 let _ = app_ctx.app_handle().emit("device-connected", &crate::desktop::server::connection_types::DeviceConnectionEvent {
                     addr: self.session.addr.to_string(),
                     device_id: claims.sub,
-                    device_name: claims.device_name,
+                    device_name: self.session.device_name.clone(),
+                    fingerprint: self.session.fingerprint.clone(),
                     event: "authenticated".to_string(),
                 });
 
@@ -649,14 +658,16 @@ impl Handler<AuthResponse> for TerminalWs {
             self.session.authenticated = true;
             self.session.device_id = msg.device_id.clone();
             self.session.device_name = msg.device_name.clone();
+            self.session.fingerprint = msg.fingerprint.clone();
 
             // 注册到 WsSessionRegistry
             let client_id = self.session.addr.to_string();
             let device_name = msg.device_name.clone();
+            let fingerprint = msg.fingerprint.clone();
             actix::spawn(async move {
                 use crate::desktop::server::ws::registry::WsSessionRegistry;
                 let registry = WsSessionRegistry::global();
-                registry.set_authenticated(&client_id, device_name).await;
+                registry.set_authenticated(&client_id, device_name, fingerprint).await;
             });
         }
 

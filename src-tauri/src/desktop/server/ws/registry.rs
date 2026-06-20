@@ -15,6 +15,8 @@ struct WsSessionEntry {
     actor_addr: Addr<TerminalWs>,
     socket_addr: SocketAddr,
     device_name: Option<String>,
+    /// 设备指纹，认证时设置，用于与数据库 pairings 记录关联
+    fingerprint: Option<String>,
     authenticated: bool,
     connected_at: i64,
 }
@@ -58,6 +60,7 @@ impl WsSessionRegistry {
                 actor_addr,
                 socket_addr,
                 device_name: None,
+                fingerprint: None,
                 authenticated: false,
                 connected_at,
             });
@@ -99,11 +102,12 @@ impl WsSessionRegistry {
     }
 
     /// 设置客户端认证状态
-    pub async fn set_authenticated(&self, client_id: &str, device_name: Option<String>) {
+    pub async fn set_authenticated(&self, client_id: &str, device_name: Option<String>, fingerprint: Option<String>) {
         let mut sessions = self.sessions.write().await;
         if let Some(entry) = sessions.get_mut(client_id) {
             entry.authenticated = true;
             entry.device_name = device_name;
+            entry.fingerprint = fingerprint;
         }
     }
 
@@ -200,6 +204,7 @@ impl WsSessionRegistry {
             .map(|(client_id, entry)| ClientSummary {
                 client_id: client_id.clone(),
                 device_name: entry.device_name.clone(),
+                fingerprint: entry.fingerprint.clone(),
                 addr: entry.socket_addr.to_string(),
                 authenticated: entry.authenticated,
                 connected_at: entry.connected_at,
@@ -213,6 +218,7 @@ impl WsSessionRegistry {
         sessions.get(client_id).map(|entry| ClientSummary {
             client_id: client_id.to_string(),
             device_name: entry.device_name.clone(),
+            fingerprint: entry.fingerprint.clone(),
             addr: entry.socket_addr.to_string(),
             authenticated: entry.authenticated,
             connected_at: entry.connected_at,
@@ -268,6 +274,8 @@ impl WsSessionRegistry {
 pub struct ClientSummary {
     pub client_id: String,
     pub device_name: Option<String>,
+    /// 设备指纹，用于与数据库 pairings 记录关联
+    pub fingerprint: Option<String>,
     pub addr: String,
     pub authenticated: bool,
     pub connected_at: i64,

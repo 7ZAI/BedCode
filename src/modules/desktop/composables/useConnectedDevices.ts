@@ -6,6 +6,8 @@ export interface ConnectedDeviceInfo {
   name: string
   address: string
   port: number
+  /** 设备指纹，用于与数据库 pairings 记录关联匹配 */
+  fingerprint?: string
   connected_at?: string
 }
 
@@ -23,6 +25,7 @@ export function useConnectedDevices() {
       name: d.device_id || 'Unknown',
       address: d.addr || '',
       port: 0,
+      fingerprint: d.fingerprint,
     }))
   }
 

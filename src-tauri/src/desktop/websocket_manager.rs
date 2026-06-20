@@ -20,6 +20,7 @@ use tokio::sync::RwLock;
 pub struct ClientSummary {
     pub client_id: String,
     pub device_name: Option<String>,
+    pub fingerprint: Option<String>,
     pub addr: String,
     pub authenticated: bool,
     pub connected_at: i64,
@@ -134,6 +135,7 @@ impl WebSocketManager {
         summaries.into_iter().map(|s| ClientSummary {
             client_id: s.client_id,
             device_name: s.device_name,
+            fingerprint: s.fingerprint,
             addr: s.addr,
             authenticated: s.authenticated,
             connected_at: s.connected_at,
@@ -151,6 +153,7 @@ impl WebSocketManager {
         registry.get_client(client_id).await.map(|s| ClientSummary {
             client_id: s.client_id,
             device_name: s.device_name,
+            fingerprint: s.fingerprint,
             addr: s.addr,
             authenticated: s.authenticated,
             connected_at: s.connected_at,
@@ -163,6 +166,7 @@ impl WebSocketManager {
         registry.get_client_by_addr(addr).await.map(|s| ClientSummary {
             client_id: s.client_id,
             device_name: s.device_name,
+            fingerprint: s.fingerprint,
             addr: s.addr,
             authenticated: s.authenticated,
             connected_at: s.connected_at,
@@ -277,13 +281,13 @@ impl WebSocketManager {
     }
 
     /// 更新客户端认证状态
-    pub async fn set_authenticated(&self, _addr: &SocketAddr, client_id: Option<String>) {
+    pub async fn set_authenticated(&self, _addr: &SocketAddr, client_id: Option<String>, fingerprint: Option<String>) {
         // TerminalWs actor 认证时已通过 WsSessionRegistry 更新
         // 此方法保留用于 auth_service 等外部调用者的兼容性
         if let Some(cid) = client_id {
             let registry = WsSessionRegistry::global();
             let current_name = registry.get_device_name(&cid).await;
-            registry.set_authenticated(&cid, current_name).await;
+            registry.set_authenticated(&cid, current_name, fingerprint).await;
         }
     }
 

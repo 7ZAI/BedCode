@@ -91,7 +91,7 @@ pub async fn handle_auth(
                 ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
 
                 // 使用 WebSocketManager 设置真正的客户端认证状态
-                ws_manager.set_authenticated(&addr, Some(device_id.clone())).await;
+                ws_manager.set_authenticated(&addr, Some(device_id.clone()), Some(fingerprint.clone())).await;
                 if let Some(ref name) = device_name_for_client {
                     ws_manager.set_device_name(&addr, Some(name.clone())).await;
                 }
@@ -110,6 +110,7 @@ pub async fn handle_auth(
                         addr: addr.to_string(),
                         device_id: device_id.clone(),
                         device_name: payload.device_name.clone(),
+                        fingerprint: Some(fingerprint.clone()),
                         event: "authenticated".to_string(),
                     });
                 }
@@ -171,7 +172,7 @@ pub async fn handle_auth(
             tracing::info!("Device re-authenticated: {} (sub: {})", addr, claims.sub);
 
             // 使用 WebSocketManager 设置真正的客户端认证状态
-            ws_manager.set_authenticated(&addr, Some(claims.sub.clone())).await;
+            ws_manager.set_authenticated(&addr, Some(claims.sub.clone()), Some(fingerprint.clone())).await;
             if let Some(name) = &payload.device_name {
                 ws_manager.set_device_name(&addr, Some(name.clone())).await;
             }
@@ -189,6 +190,7 @@ pub async fn handle_auth(
                     addr: addr.to_string(),
                     device_id: claims.sub.clone(),
                     device_name: payload.device_name.clone(),
+                    fingerprint: Some(fingerprint.clone()),
                     event: "authenticated".to_string(),
                 });
             }
@@ -234,7 +236,7 @@ pub async fn handle_auth(
                     ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
 
                     // 使用 WebSocketManager 设置真正的客户端认证状态
-                    ws_manager.set_authenticated(&addr, Some(device_id.clone())).await;
+                    ws_manager.set_authenticated(&addr, Some(device_id.clone()), Some(device_fingerprint.clone())).await;
                     ws_manager.set_device_name(&addr, Some(device_name.clone())).await;
 
                     // 记录/更新配对设备到数据库
@@ -251,6 +253,7 @@ pub async fn handle_auth(
                             addr: addr.to_string(),
                             device_id: device_id.clone(),
                             device_name: Some(device_name.clone()),
+                            fingerprint: Some(device_fingerprint.clone()),
                             event: "authenticated".to_string(),
                         });
                     }
@@ -349,7 +352,7 @@ pub async fn handle_jwt_auth(
         Ok(claims) => {
             // JWT 验证成功，使用 WebSocketManager 设置客户端为已认证
             let ws_manager = WebSocketManager::global();
-            ws_manager.set_authenticated(&addr, Some(claims.sub.clone())).await;
+            ws_manager.set_authenticated(&addr, Some(claims.sub.clone()), claims.fingerprint.clone()).await;
             if let Some(name) = &claims.device_name {
                 ws_manager.set_device_name(&addr, Some(name.clone())).await;
             }
@@ -360,6 +363,7 @@ pub async fn handle_jwt_auth(
                     addr: addr.to_string(),
                     device_id: claims.sub.clone(),
                     device_name: claims.device_name.clone(),
+                    fingerprint: claims.fingerprint.clone(),
                     event: "authenticated".to_string(),
                 };
                 let _ = handle.emit("device-connected", &event);

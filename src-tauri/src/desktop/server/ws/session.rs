@@ -13,6 +13,8 @@ pub struct WsSession {
     pub device_id: Option<String>,
     /// 设备名称
     pub device_name: Option<String>,
+    /// 设备指纹，用于与数据库 pairings 记录关联
+    pub fingerprint: Option<String>,
     /// 是否已认证
     pub authenticated: bool,
     /// 订阅的会话列表
@@ -25,6 +27,7 @@ impl WsSession {
             addr,
             device_id: None,
             device_name: None,
+            fingerprint: None,
             authenticated: false,
             subscribed_sessions: HashSet::new(),
         }
