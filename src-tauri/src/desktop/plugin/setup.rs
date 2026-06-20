@@ -38,6 +38,8 @@ pub fn setup_plugin(
     config_path: &PathBuf,
     resource_dir: &PathBuf,
 ) -> PluginSetupResult {
+    tracing::info!("setup_plugin called, resource_dir={}", resource_dir.display());
+
     // 1. 校验/生成 token
     let token_generated = config.ensure_valid_token();
     if token_generated {
@@ -62,7 +64,9 @@ pub fn setup_plugin(
     };
 
     // 3. 从 bundle resource 复制插件文件
-    let plugin_resource = resource_dir.join("scripts").join("bedcode-plugin");
+    // Tauri 2.x 将 ../ 路径映射为 _up_ 子目录，资源实际位于 resource_dir/_up_/scripts/bedcode-plugin/
+    let plugin_resource = resource_dir.join("_up_").join("scripts").join("bedcode-plugin");
+    tracing::info!("Looking for plugin resources at: {}", plugin_resource.display());
     if !plugin_resource.exists() {
         return PluginSetupResult {
             success: false,

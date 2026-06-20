@@ -76,10 +76,7 @@
           <button
             v-for="card in projectCards"
             :key="card.configId"
-            class="w-full text-left bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-3.5 transition-colors"
-            :class="card.isRunning
-              ? 'hover:border-cyan-500/30 active:bg-[var(--mobile-bg-elevated)]'
-              : 'opacity-50'"
+            class="w-full text-left bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-3.5 transition-colors hover:border-cyan-500/30 active:bg-[var(--mobile-bg-elevated)]"
             @click="handleProjectCardClick(card)"
           >
             <div class="flex items-center gap-2.5">
@@ -91,12 +88,6 @@
                 <p class="text-sm font-medium text-[var(--mobile-text-primary)] truncate">{{ card.name }}</p>
                 <p class="text-xs text-[var(--mobile-text-muted)] truncate mt-0.5">{{ card.workingDir }}</p>
               </div>
-              <!-- 运行状态指示 -->
-              <div
-                v-if="card.isRunning"
-                class="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0"
-                title="运行中"
-              ></div>
             </div>
           </button>
         </div>
@@ -404,28 +395,24 @@ const projectCards = computed(() => {
     const session = connection.activeSessions.value.find(
       (s: any) => s.config_id === config.id || s.configId === config.id
     )
-    const isRunning = session?.status === 'running'
     return {
       configId: config.id,
       name: config.name,
       workingDir: config.working_dir,
       sessionId: session?.id || null,
-      isRunning,
     }
   })
 })
 
-function handleProjectCardClick(card: { name: string; sessionId: string | null; isRunning: boolean }) {
+function handleProjectCardClick(card: { configId: string; name: string; sessionId: string | null }) {
   if (!isConnected.value) {
     toast.warning('请先连接设备')
     router.push('/mobile/devices')
     return
   }
-  if (!card.isRunning || !card.sessionId) {
-    toast.warning('该会话未运行，无法浏览文件')
-    return
-  }
-  router.push({ name: 'mobile-files', params: { id: card.sessionId } })
+  // 优先使用 sessionId，否则使用 configId（后端支持 configId 直接查找 working_dir）
+  const id = card.sessionId || card.configId
+  router.push({ name: 'mobile-files', params: { id } })
 }
 </script>
 

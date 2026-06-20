@@ -253,7 +253,7 @@ export async function listPairedDevices(): Promise<any[]> {
  * 移除已配对设备
  */
 export async function removePairedDevice(deviceId: string): Promise<void> {
-  return await invoke('remove_paired_device', { deviceId })
+  return await invoke('remove_paired_device', { id: deviceId })
 }
 
 // ==================== QR Commands ====================
