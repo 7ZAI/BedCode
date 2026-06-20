@@ -46,11 +46,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composables/useCodeHighlight'
+import type { FileDiffLine } from '@/modules/mobile/composables/useHttpApi'
 
 const props = defineProps<{
   visible: boolean
   filename: string
   code?: string
+  diffLines?: FileDiffLine[]
   loading?: boolean
   error?: string | null
 }>()
@@ -60,7 +62,7 @@ const emit = defineEmits<{
 }>()
 
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
-const { highlightedHtml, isLoading, error, highlight } = useCodeHighlight()
+const { highlightedHtml, isLoading, error, highlight, highlightDiff } = useCodeHighlight()
 
 const isFullscreen = ref(false)
 
@@ -93,10 +95,13 @@ function handleClose() {
 
 // 当文件变化时重新高亮
 watch(
-  () => [props.visible, props.filename, props.code] as const,
-  async ([visible, filename, code]) => {
-    if (visible && filename && code) {
-      const lang = getLangByFilename(filename)
+  () => [props.visible, props.filename, props.code, props.diffLines] as const,
+  async ([visible, filename, code, diffLines]) => {
+    if (!visible || !filename) return
+    const lang = getLangByFilename(filename)
+    if (diffLines && diffLines.length > 0) {
+      await highlightDiff(diffLines, lang)
+    } else if (code) {
       await highlight(code, lang)
     }
   },
