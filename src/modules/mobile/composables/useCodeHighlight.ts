@@ -1,6 +1,16 @@
 import { ref, shallowRef } from 'vue'
 import { createHighlighterCore } from 'shiki/core'
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
+import type { FileDiffLine } from './useHttpApi'
+
+/** HTML 转义（降级时使用） */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
 
 /**
  * 自定义 transformer：为每行 .line 添加 data-line 属性
@@ -215,5 +225,55 @@ export function useCodeHighlight() {
     }
   }
 
-  return { highlightedHtml, isLoading, error, highlight }
+  async function highlightDiff(lines: FileDiffLine[], lang: string): Promise<void> {
+    isLoading.value = true
+    error.value = null
+
+    try {
+      const highlighter = await ensureHighlighter()
+
+      if (!highlighter.getLoadedLanguages().includes(lang)) {
+        lang = 'plaintext'
+      }
+
+      // 将所有行内容拼接为完整代码段，整体高亮以保留语法上下文
+      const fullCode = lines.map(l => l.content).join('\n')
+      const html = highlighter.codeToHtml(fullCode, {
+        lang,
+        theme: THEME,
+        transformers: [addLineNumbers()],
+      })
+
+      // 解析高亮后的 HTML，按行拆分并包裹 diff 结构
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(html, 'text/html')
+      const codeEl = doc.querySelector('code')
+      const highlightedLines = codeEl
+        ? Array.from(codeEl.querySelectorAll('.line')).map(el => el.innerHTML)
+        : lines.map(l => escapeHtml(l.content))
+
+      // 构建 diff HTML
+      const diffHtml = lines.map((line, i) => {
+        const highlighted = highlightedLines[i] || escapeHtml(line.content)
+        const oldNo = line.oldLineNo != null ? String(line.oldLineNo) : ''
+        const newNo = line.newLineNo != null ? String(line.newLineNo) : ''
+        const marker = line.type === 'removed' ? '-' : line.type === 'added' ? '+' : ' '
+        return `<div class="diff-line diff-${line.type}" data-old-line="${oldNo}" data-new-line="${newNo}">` +
+          `<span class="diff-line-no diff-old-no">${oldNo}</span>` +
+          `<span class="diff-line-no diff-new-no">${newNo}</span>` +
+          `<span class="diff-marker">${marker}</span>` +
+          `<span class="diff-content">${highlighted}</span>` +
+          `</div>`
+      }).join('\n')
+
+      highlightedHtml.value = diffHtml
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      highlightedHtml.value = ''
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  return { highlightedHtml, isLoading, error, highlight, highlightDiff }
 }
