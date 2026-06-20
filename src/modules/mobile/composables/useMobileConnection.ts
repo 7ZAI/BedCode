@@ -27,6 +27,7 @@ import {
 } from './useMobileCommands'
 import { useHttpApi } from './useHttpApi'
 import { useForegroundService } from './useForegroundService'
+import { useTaskNotification } from './useTaskNotification'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -41,6 +42,10 @@ const isConnecting = ref(false)
 // 连接超时控制
 let connectionTimeout: ReturnType<typeof setTimeout> | null = null
 const CONNECTION_TIMEOUT_MS = 12000 // 12秒超时（比 Rust 端 10 秒稍长作为兜底）
+
+// 重连控制
+const MAX_AUTO_RECONNECT_ATTEMPTS = 3
+let autoReconnectAttemptCount = 0
 
 // 意外断开监听器
 let unlistenUnexpectedDisconnect: UnlistenFn | null = null
@@ -127,6 +132,9 @@ async function init() {
   // 加载已配对设备列表
   loadPairedDevices()
 
+  // 初始化任务通知
+  const { showTaskNotification, cancelTaskNotification, cancelAllTaskNotifications } = useTaskNotification()
+
   // 初始化事件监听 - 状态由后端事件驱动
   await initMobileEventListeners({
     onConnecting: () => {
@@ -152,6 +160,8 @@ async function init() {
       clearConnectionTimeout()
       connectionStatus.value = 'paired'
       isConnecting.value = false
+      // 配对/认证成功，重置自动重连计数
+      autoReconnectAttemptCount = 0
       console.log('[MobileConnection] Paired')
 
       // 认证成功时更新已配对设备信息
@@ -256,6 +266,16 @@ async function init() {
       if (!activeSessions.value.find(s => s.id === data.session.id)) {
         activeSessions.value.push(data.session)
       }
+      // Plugin 类型会话创建时显示初始通知
+      const sessionType = data.session.session_type || data.session.sessionType
+      if (sessionType === 'plugin') {
+        showTaskNotification({
+          sessionId: data.session.id,
+          sessionName: data.session.name,
+          taskStatus: data.session.taskStatus || data.session.task_status || 'idle',
+          taskReason: data.session.taskReason ?? data.session.task_reason ?? undefined,
+        })
+      }
     },
     onSyncSessionStatusChanged: (data) => {
       console.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)
@@ -272,11 +292,15 @@ async function init() {
       if (index !== -1) {
         activeSessions.value[index].status = 'stopped'
       }
+      // 取消该会话的任务通知
+      cancelTaskNotification(data.session_id)
     },
     onSyncSessionRemoved: (data) => {
       console.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
       // 从列表移除会话（删除操作才移除）
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
+      // 取消该会话的任务通知
+      cancelTaskNotification(data.session_id)
     },
     onSyncTaskStatusChanged: (data) => {
       console.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
@@ -286,6 +310,14 @@ async function init() {
         activeSessions.value[index].taskStatus = data.task_status
         activeSessions.value[index].taskReason = data.task_reason ?? null
       }
+      // 发送任务通知
+      const session = activeSessions.value.find(s => s.id === data.session_id)
+      showTaskNotification({
+        sessionId: data.session_id,
+        sessionName: session?.name || data.session_id.slice(0, 8),
+        taskStatus: data.task_status,
+        taskReason: data.task_reason ?? undefined,
+      })
     },
   })
 
@@ -295,6 +327,7 @@ async function init() {
     connectionStatus.value = 'disconnected'
     connectionError.value = event.payload.reason
     isConnecting.value = false
+    clearConnectionTimeout()
 
     // 弹出 Toast 通知（手动断开不会触发此事件）
     const toast = useToast()
@@ -304,7 +337,10 @@ async function init() {
     const { updateNotification } = useForegroundService()
     updateNotification()
 
-    // 触发重连
+    // 取消所有任务通知
+    cancelAllTaskNotifications()
+
+    // 异步触发重连（不在监听回调中直接 await，避免阻塞事件循环）
     handleUnexpectedDisconnect(event.payload.reason)
   })
 
@@ -328,6 +364,9 @@ async function init() {
     // 重连成功后需要重新认证，isConnecting 保持 true 直到认证完成
     isConnecting.value = true
 
+    // 重连成功，重置自动重连计数（认证成功时 onPaired 也会重置）
+    autoReconnectAttemptCount = 0
+
     // 重连成功后重新认证
     const creds = loadAuthCredentials()
     if (creds?.sessionToken) {
@@ -339,29 +378,36 @@ async function init() {
         } else {
           console.warn('[MobileConnection] Re-auth failed, need to pair again')
           isConnecting.value = false
+          connectionStatus.value = 'disconnected'
+          connectionError.value = '重连后认证失败，请手动重新连接'
         }
       } catch (e) {
         console.error('[MobileConnection] Re-auth error:', e)
         isConnecting.value = false
+        connectionStatus.value = 'disconnected'
+        connectionError.value = '重连后认证异常，请手动重新连接'
       }
     } else {
       console.log('[MobileConnection] No credentials stored, need manual pairing')
       isConnecting.value = false
+      connectionStatus.value = 'disconnected'
+      connectionError.value = '无认证凭据，请手动重新连接'
     }
   })
 
   // 监听重连失败事件
   await listen<{ reason: string }>('ws_reconnect_failed', (event) => {
     console.error('[MobileConnection] Reconnect failed:', event.payload.reason)
-    connectionStatus.value = 'error'
+    connectionStatus.value = 'disconnected'
     connectionError.value = event.payload.reason
     isConnecting.value = false
+    autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS // 标记重连已耗尽
 
     // 重连失败时停止前台服务
     autoStopForegroundService()
 
     const toast = useToast()
-    toast.error(`重连失败: ${event.payload.reason}`, 5000)
+    toast.error(`重连失败: ${event.payload.reason}，请手动重新连接`, 5000)
   })
 }
 
@@ -379,8 +425,8 @@ export async function connect(device: RemoteDevice): Promise<void> {
   connectionError.value = null
   isConnecting.value = true
 
-  // 设置连接超时（12秒，比 Rust 端 10 秒稍长作为兜底）
-  // 超时后仅设置错误状态，不主动断开（由 DevicesView.startConnection 的 Promise.race 兜底）
+  // 新的主动连接，重置自动重连计数
+  autoReconnectAttemptCount = 0
   clearConnectionTimeout()
   connectionTimeout = setTimeout(async () => {
     if (isConnecting.value && connectionStatus.value === 'connecting') {
@@ -456,9 +502,10 @@ async function autoStopForegroundService() {
 
 /**
  * 处理意外断开，尝试重连
+ * 最多自动重连 MAX_AUTO_RECONNECT_ATTEMPTS 次，超出后放弃并保持 disconnected 状态
  */
 async function handleUnexpectedDisconnect(reason: string) {
-  console.log('[MobileConnection] Handling unexpected disconnect, reason:', reason)
+  console.log('[MobileConnection] Handling unexpected disconnect, reason:', reason, 'attempt:', autoReconnectAttemptCount + 1, '/', MAX_AUTO_RECONNECT_ATTEMPTS)
 
   // 读取用户设置
   const savedSettings = localStorage.getItem('mobile-settings')
@@ -469,6 +516,16 @@ async function handleUnexpectedDisconnect(reason: string) {
   // 检查是否启用自动重连
   if (!settings.autoReconnect) {
     console.log('[MobileConnection] Auto-reconnect disabled by user setting')
+    return
+  }
+
+  // 检查重连次数限制
+  if (autoReconnectAttemptCount >= MAX_AUTO_RECONNECT_ATTEMPTS) {
+    console.warn('[MobileConnection] Max auto-reconnect attempts reached, giving up')
+    connectionStatus.value = 'disconnected'
+    connectionError.value = `自动重连失败（已尝试 ${MAX_AUTO_RECONNECT_ATTEMPTS} 次），请手动重新连接`
+    const toast = useToast()
+    toast.error('自动重连已放弃，请手动重新连接', 5000)
     return
   }
 
@@ -485,12 +542,14 @@ async function handleUnexpectedDisconnect(reason: string) {
     return
   }
 
-  console.log('[MobileConnection] Starting reconnect with token, length:', creds.sessionToken.length)
+  autoReconnectAttemptCount++
+  console.log('[MobileConnection] Starting reconnect attempt', autoReconnectAttemptCount, 'token length:', creds.sessionToken.length)
   isConnecting.value = true
   connectionStatus.value = 'connecting'
+  connectionError.value = null
 
   try {
-    // 使用用户设置的重连间隔（后端会处理指数退避）
+    // 使用用户设置的重连间隔
     if (settings.reconnectInterval > 0) {
       await new Promise(resolve => setTimeout(resolve, settings.reconnectInterval * 1000))
     }
@@ -498,8 +557,14 @@ async function handleUnexpectedDisconnect(reason: string) {
     console.log('[MobileConnection] Reconnect initiated successfully')
   } catch (error) {
     console.error('[MobileConnection] Reconnect failed:', error)
+    connectionStatus.value = 'disconnected'
     connectionError.value = `重连失败: ${error}`
     isConnecting.value = false
+
+    // 重连失败后，如果还有重试次数，继续尝试
+    if (autoReconnectAttemptCount < MAX_AUTO_RECONNECT_ATTEMPTS) {
+      handleUnexpectedDisconnect(reason)
+    }
   }
 }
 
@@ -507,8 +572,14 @@ async function handleUnexpectedDisconnect(reason: string) {
  * 断开连接
  */
 export async function disconnect(): Promise<void> {
+  // 重置自动重连计数，防止断开后继续重连
+  autoReconnectAttemptCount = 0
+  clearConnectionTimeout()
   try {
     await wsDisconnect()
+    // 断开连接时取消所有任务通知
+    const { cancelAllTaskNotifications } = useTaskNotification()
+    await cancelAllTaskNotifications()
     // 状态由后端 ws_disconnected 事件驱动更新
   } finally {
     currentDevice.value = null

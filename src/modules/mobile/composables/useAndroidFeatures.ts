@@ -32,10 +32,15 @@ export function useAndroidFeatures() {
 
     if (!isAndroid.value) return
 
-    // 检查通知权限
+    // 检查通知权限，未授予时自动请求
     try {
-      const { isPermissionGranted } = await import('@tauri-apps/plugin-notification')
+      const { isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification')
       hasNotificationPermission.value = await isPermissionGranted()
+      if (!hasNotificationPermission.value) {
+        const result = await requestPermission()
+        hasNotificationPermission.value = result === 'granted'
+        console.log('[Android] Notification permission request result:', result)
+      }
     } catch {
       console.log('[Android] Notification plugin not available')
     }

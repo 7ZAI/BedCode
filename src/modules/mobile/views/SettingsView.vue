@@ -70,6 +70,11 @@
             <span class="text-[var(--mobile-text-secondary)]">后台通知</span>
             <Toggle v-model="settings.notifyInBackground" />
           </div>
+
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--mobile-text-secondary)]">任务完成声音</span>
+            <Toggle v-model="settings.soundOnTaskComplete" />
+          </div>
         </div>
       </div>
 
@@ -207,6 +212,7 @@ interface MobileSettings {
   notifyOnConnection: boolean
   notifyInBackground: boolean
   vibrate: boolean
+  soundOnTaskComplete: boolean
   fontSize: 'small' | 'medium' | 'large'
   maxCachedTerminals: number
 }
@@ -220,6 +226,7 @@ const defaultMobileSettings: MobileSettings = {
   notifyOnConnection: true,
   notifyInBackground: true,
   vibrate: true,
+  soundOnTaskComplete: true,
   fontSize: 'medium',
   maxCachedTerminals: 10,
 }

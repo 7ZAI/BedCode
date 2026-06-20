@@ -7,6 +7,7 @@
 import { ref, computed, watch, type Ref } from 'vue'
 import type { PresetTask, PresetTaskType } from './model'
 import { useMobileConnection } from './useMobileConnection'
+import { useTaskNotification } from './useTaskNotification'
 
 /** 队列中的任务 */
 export interface QueuedTask {
@@ -61,6 +62,9 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     currentTask.value = state.currentTask
     retryCount.value = state.retryCount
     isPaused.value = state.isPaused
+    // 同步加载的模式到通知系统
+    const { setSessionMode } = useTaskNotification()
+    setSessionMode(sid, state.mode)
   }
 
   /** 持久化当前状态到 Map */
@@ -79,6 +83,9 @@ export function useAutoExecutor(sessionId: Ref<string>) {
   function setMode(newMode: 'manual' | 'auto') {
     mode.value = newMode
     saveState()
+    // 同步模式到通知系统
+    const { setSessionMode } = useTaskNotification()
+    setSessionMode(sessionId.value, newMode)
   }
 
   /** 添加任务到队列 */
