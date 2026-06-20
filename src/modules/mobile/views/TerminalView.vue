@@ -2,8 +2,6 @@
   <div
     class="terminal-view"
     :style="terminalViewStyle"
-    @touchstart="onViewTouchStart"
-    @touchmove="onViewTouchMove"
   >
     <!-- Header -->
     <header class="header">
@@ -44,14 +42,22 @@
 
     <!-- Main Content: Terminal + Sidebar overlay -->
     <div class="main-content">
-      <div class="terminal-output-area" @click.prevent.stop>
+      <div class="terminal-output-area">
+        <!-- 伪滚动容器：高度 = buffer总行数 × 行高，提供原生触摸滚动 -->
         <div
-          ref="xtermContainer"
-          class="xterm-container"
-          @touchstart="onContainerTouchStart"
-          @touchmove="onContainerTouchMove"
-          @click.prevent.stop
-        ></div>
+          ref="scrollContainer"
+          class="terminal-scroll-container"
+          @scroll="handleScroll"
+        >
+          <div
+            ref="scrollContent"
+            class="terminal-scroll-content"
+          ></div>
+          <div
+            ref="xtermContainer"
+            class="xterm-container"
+          ></div>
+        </div>
       </div>
 
       <!-- File Sidebar - 覆盖层，不影响终端宽高 -->
@@ -137,6 +143,12 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 终端视图 - 显示 PTY 输出和输入栏
+ * 支持多会话切换和 ANSI 渲染
+ */
+defineOptions({ name: 'TerminalView' })
+
 import { ref, computed, inject, type Ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
@@ -174,6 +186,8 @@ const sessionId = computed(() => route.params.id as string)
 // 在 <script setup> 中，顶层 let 声明的变量是模块级共享的
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
+const scrollContainer = ref<HTMLDivElement | null>(null)
+const scrollContent = ref<HTMLDivElement | null>(null)
 // 终端实例 - 使用 ref 确保组件隔离
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
@@ -187,18 +201,25 @@ const subscribedSessionIdRef = ref<string | null>(null)
 // 订阅进行中标志 - 防止 onActivated 在 subscribeSession 的 await 期间创建重复监听器
 const isSubscribing = ref(false)
 
+// 伪滚动容器相关状态
+const isUserScrolling = ref(false)
+const scrollRafId = ref(0)
+const lastScrollTop = ref(0)
+const cellHeight = ref(0)
+
 // 设置相关状态
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
+// 终端主题初始值跟随系统主题偏好
 const terminalSettings = ref({
   fontSize: 14,
-  theme: 'dark',
+  theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
 })
 
 // 临时设置（用于编辑中的状态）
 const tempFontSize = ref(14)
-const tempTheme = ref('dark')
+const tempTheme = ref(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
 
 // 弹窗安全区域样式
 const settingsModalStyle = computed(() => ({
@@ -453,6 +474,8 @@ async function initTerminal() {
     convertEol: true,
     // 移动端禁用内置输入，避免弹出输入法
     disableStdin: true,
+    // 移动端滚动灵敏度，降低以获得更平滑的触摸滚动
+    scrollSensitivity: 0.8,
   })
 
   terminalRef.value = term
@@ -483,72 +506,20 @@ async function initTerminal() {
 
   // Fit terminal - delay to ensure container is rendered
   setTimeout(() => {
-    // console.log('[TerminalView] Delayed fit, container dimensions:', xtermContainer.value?.offsetWidth, 'x', xtermContainer.value?.offsetHeight)
     fitTerminal()
 
-    // 调试：检查 xterm 内部结构
-    const xtermElement = xtermContainer.value?.querySelector('.xterm') as HTMLElement
-    const viewport = xtermContainer.value?.querySelector('.xterm-viewport') as HTMLElement
-    const screenElement = xtermContainer.value?.querySelector('.xterm-screen') as HTMLElement
-    // const helper = xtermContainer.value?.querySelector('.xterm-helpers') as HTMLElement
-
-    // console.log('[TerminalView] xterm structure:', {
-    //   xterm: !!xtermElement,
-    //   viewport: !!viewport,
-    //   screen: !!screenElement,
-    //   helper: !!helper,
-    // })
-
-    if (viewport) {
-      // console.log('[TerminalView] Viewport found:', {
-      //   height: viewport.style.height,
-      //   overflowY: getComputedStyle(viewport).overflowY,
-      //   scrollHeight: viewport.scrollHeight,
-      //   clientHeight: viewport.clientHeight,
-      // })
-
-      // 关键修复：确保 viewport 支持触摸滚动
-      viewport.style.touchAction = 'pan-y'
-      viewport.style.overflowY = 'auto'
-
-      // 添加触摸事件监听调试（已注释）
-      // viewport.addEventListener('touchstart', (e) => {
-      //   console.log('[TerminalView] Touch start on viewport, touches:', e.touches.length)
-      // }, { passive: true })
-
-      // viewport.addEventListener('touchmove', (e) => {
-      //   console.log('[TerminalView] Touch move on viewport, deltaY:', e.touches[0]?.clientY)
-      // }, { passive: true })
-
-      // 添加滚轮事件监听调试（已注释）
-      // viewport.addEventListener('wheel', (e) => {
-      //   console.log('[TerminalView] Wheel event on viewport:', e.deltaY)
-      // }, { passive: true })
-    } else {
-      // console.error('[TerminalView] Viewport not found!')
-    }
+    // 配置 viewport 原生触摸滚动
+    setupViewportScroll()
 
     // 确保 xterm 主元素不阻止触摸
+    const xtermElement = xtermContainer.value?.querySelector('.xterm') as HTMLElement
     if (xtermElement) {
       xtermElement.style.touchAction = 'pan-y'
-      // console.log('[TerminalView] Set touch-action on .xterm')
-
-      // 尝试在 xterm 主元素上监听滚轮（已注释）
-      // xtermElement.addEventListener('wheel', (e) => {
-      //   console.log('[TerminalView] Wheel on .xterm:', e.deltaY)
-      //   // 尝试手动触发 xterm 滚动
-      //   if (terminal) {
-      //     const scrollAmount = Math.round(e.deltaY / 20)
-      //     terminal.scrollLines(scrollAmount)
-      //     console.log('[TerminalView] Manually scrolled:', scrollAmount)
-      //   }
-      // }, { passive: true })
     }
 
-    // 确保屏幕元素不阻止触摸
+    const screenElement = xtermContainer.value?.querySelector('.xterm-screen') as HTMLElement
     if (screenElement) {
       screenElement.style.touchAction = 'pan-y'
-      // console.log('[TerminalView] Set touch-action on .xterm-screen')
     }
   }, 100)
 
@@ -661,13 +632,15 @@ async function subscribeSession() {
   isSubscribing.value = true
 
   try {
+    // 先创建前端监听器，再调用后端订阅
+    // 后端订阅成功后会立即发送历史输出，如果监听器尚未就绪会丢失
+    await createOutputListener()
+
     // 加入会话，开始接收输出（后端订阅）
     await wsJoinSession(sessionId.value)
 
-    // 后端订阅成功后，创建前端监听器
     // 保存订阅的会话 ID，用于取消订阅时使用
     subscribedSessionIdRef.value = sessionId.value
-    await createOutputListener()
   } catch (e) {
     console.error('[TerminalView] Subscribe failed:', e)
     toast.error('订阅终端失败')
@@ -796,41 +769,135 @@ function handleBack() {
   router.back()
 }
 
-// ==================== Touch Scroll ====================
+// ==================== Terminal Viewport Scroll Setup ====================
 
-// lastTouchY 是触摸滚动用的，保持模块级即可（无状态共享问题）
-let lastTouchY = 0
-
-function onViewTouchStart(e: TouchEvent) {
-  lastTouchY = e.touches[0]?.clientY || 0
+/// 计算单行高度（从 xterm DOM 元素获取）
+function computeCellHeight(): number {
+  if (!terminalRef.value?.element) return 0
+  const rowsEl = terminalRef.value.element.querySelector('.xterm-rows') as HTMLElement
+  if (rowsEl) {
+    const lineHeight = parseFloat(getComputedStyle(rowsEl).lineHeight)
+    if (lineHeight > 0) return lineHeight
+  }
+  // 回退：viewport 高度 / 可见行数
+  const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport && terminalRef.value.rows > 0) {
+    return viewport.clientHeight / terminalRef.value.rows
+  }
+  return 0
 }
 
-function onViewTouchMove(e: TouchEvent) {
-  // 手动处理触摸滚动
-  const currentY = e.touches[0]?.clientY || 0
-  const deltaY = lastTouchY - currentY
-  lastTouchY = currentY
+/// 更新伪滚动容器的内容高度，使其与 buffer 行数匹配
+function updateScrollContentHeight() {
+  if (!scrollContent.value || !terminalRef.value) return
 
-  if (terminalRef.value && Math.abs(deltaY) > 1) {
-    const scrollAmount = Math.round(deltaY / 10)
-    terminalRef.value.scrollLines(scrollAmount)
+  const term = terminalRef.value
+  const bufferLength = term.buffer.active.length
+  const ch = cellHeight.value || computeCellHeight()
+
+  if (ch > 0) {
+    cellHeight.value = ch
+    // 内容高度 = 总行数 × 行高（包含 viewport 可见区域）
+    scrollContent.value.style.height = `${bufferLength * ch}px`
   }
 }
 
-function onContainerTouchStart(e: TouchEvent) {
-  lastTouchY = e.touches[0]?.clientY || 0
+/// 处理伪滚动容器的 scroll 事件
+/// 通过 scrollTop 计算目标行号，调用 term.scrollToLine 实现同步
+function handleScroll() {
+  if (!terminalRef.value || cellHeight.value <= 0) return
+
+  // 用 RAF 节流，避免高频 scroll 事件导致过度调用 scrollToLine
+  if (scrollRafId.value) return
+
+  scrollRafId.value = requestAnimationFrame(() => {
+    scrollRafId.value = 0
+    if (!scrollContainer.value || !terminalRef.value) return
+
+    const scrollTop = scrollContainer.value.scrollTop
+    const targetLine = Math.floor(scrollTop / cellHeight.value)
+
+    // 标记用户正在手动滚动，防止新输出时自动跳底
+    const isAtBottom = isScrolledToBottom()
+    if (!isAtBottom) {
+      isUserScrolling.value = true
+    } else {
+      isUserScrolling.value = false
+    }
+
+    terminalRef.value.scrollToLine(targetLine)
+    lastScrollTop.value = scrollTop
+  })
 }
 
-function onContainerTouchMove(e: TouchEvent) {
-  // 手动处理触摸滚动
-  const currentY = e.touches[0]?.clientY || 0
-  const deltaY = lastTouchY - currentY
-  lastTouchY = currentY
+/// 判断是否滚动到底部
+function isScrolledToBottom(): boolean {
+  if (!scrollContainer.value) return true
+  const el = scrollContainer.value
+  // 5px 容差，避免浮点精度问题
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 5
+}
 
-  if (terminalRef.value && Math.abs(deltaY) > 1) {
-    const scrollAmount = Math.round(deltaY / 10)
-    terminalRef.value.scrollLines(scrollAmount)
+/// 同步伪滚动容器到 xterm 当前 viewport 位置
+/// 用于新输出自动滚底、初始化等场景
+function syncScrollToTerminal() {
+  if (!scrollContainer.value || !terminalRef.value || cellHeight.value <= 0) return
+
+  const viewportY = terminalRef.value.buffer.active.viewportY
+  const targetScrollTop = viewportY * cellHeight.value
+
+  // 避免不必要的 scrollTop 更新触发 scroll 事件
+  if (Math.abs(scrollContainer.value.scrollTop - targetScrollTop) > 1) {
+    scrollContainer.value.scrollTop = targetScrollTop
   }
+}
+
+/// 滚动到底部
+function scrollToBottom() {
+  if (!scrollContainer.value || !terminalRef.value) return
+
+  const bufferLength = terminalRef.value.buffer.active.length
+  const rows = terminalRef.value.rows
+  const maxScrollTop = Math.max(0, (bufferLength - rows) * cellHeight.value)
+
+  scrollContainer.value.scrollTop = maxScrollTop
+  terminalRef.value.scrollToBottom()
+  isUserScrolling.value = false
+}
+
+/// 配置伪滚动容器：禁用 xterm-viewport 原生滚动，初始化高度
+function setupViewportScroll() {
+  if (!terminalRef.value?.element) return
+
+  // 禁用 xterm-viewport 的原生滚动，防止双重滚动
+  const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
+  if (viewport) {
+    viewport.style.overflowY = 'hidden'
+    viewport.style.touchAction = 'none'
+  }
+
+  // 计算行高并初始化滚动内容高度
+  cellHeight.value = computeCellHeight()
+  updateScrollContentHeight()
+
+  // 监听新行输出，更新滚动内容高度
+  terminalRef.value.onLineFeed(() => {
+    updateScrollContentHeight()
+
+    // 用户未手动向上滚动时，自动滚到底部
+    if (!isUserScrolling.value) {
+      nextTick(() => scrollToBottom())
+    }
+  })
+
+  // 监听 buffer 变化（如清屏操作），更新高度
+  terminalRef.value.onResize(() => {
+    cellHeight.value = computeCellHeight()
+    updateScrollContentHeight()
+  })
+
+  // 初始滚到底部
+  nextTick(() => scrollToBottom())
 }
 
 // ==================== Lifecycle ====================
@@ -852,25 +919,40 @@ onUnmounted(async () => {
   disposeTerminal()
 })
 
-// keep-alive 生命周期：组件被激活时检查订阅状态
-// 多终端同时存活模式下，不需要清理监听器
+// keep-alive 生命周期：组件被激活时恢复显示
 onActivated(async () => {
   // 如果正在订阅中（subscribeSession 的 await 期间），跳过
-  // 避免在 outputListenerRef 为 null 的竞态窗口中创建重复监听器
   if (isSubscribing.value) {
     return
   }
-  // 如果没有监听器且会话活跃，创建监听器
-  // 正常情况下监听器应该已经存在（onMounted 创建的）
+  // 如果没有监听器且会话活跃，重新订阅
   if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {
-    await createFrontendListener()
+    await subscribeSession()
   }
+  // WebGL 渲染器在 DOM 不可见时不会重绘，激活后需要手动刷新
+  nextTick(() => {
+    fitTerminal()
+    // 通知桌面端 PTY 尺寸变化，确保行宽正确
+    if (terminalRef.value && isConnected.value && isSessionActive.value) {
+      wsResizeTerminal(sessionId.value, terminalRef.value.cols, terminalRef.value.rows).catch((e: Error) => {
+        console.warn('[TerminalView] onActivated resize failed:', e)
+      })
+    }
+    // 强制刷新渲染：重绘整个 buffer
+    if (terminalRef.value) {
+      const buf = terminalRef.value.buffer.active
+      const len = buf.length
+      if (len > 0) {
+        terminalRef.value.refresh(0, len - 1)
+      }
+    }
+  })
 })
 
 // keep-alive 生命周期：组件被停用时不做任何操作
-// 保持前端监听器活跃，让所有终端实时接收输出
+// 保持前端监听器和后端订阅活跃，让所有终端持续接收输出
 onDeactivated(() => {
-  // 不清理监听器，保持实时接收输出
+  // 不取消订阅，不清理监听器
 })
 
 // Watch session status changes
@@ -920,10 +1002,7 @@ watch(isConnected, async (connected) => {
   right: 0;
   bottom: 0;
   z-index: 1;
-  /* 禁止页面整体滚动，但允许子元素滚动 */
   overflow: hidden;
-  /* 关键：允许子元素的触摸滚动传递 */
-  touch-action: pan-y;
   /* 平滑过渡动画 - 避免键盘弹出时闪现 */
   transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1),
               padding-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1407,50 +1486,42 @@ watch(isConnected, async (connected) => {
   inset: 0;
   overflow: hidden;
   background: var(--mobile-terminal-bg);
-  /* 允许子元素触摸滚动 */
-  touch-action: pan-y;
 }
 
 .xterm-container {
   height: 100%;
   width: 100%;
-  position: relative;   /* 关键：让 xterm viewport 定位正确 */
-  overflow: hidden;     /* 防止外部出现多余滚动条 */
-  /* 允许子元素触摸滚动 */
-  touch-action: pan-y;
+  position: relative;
+  overflow: hidden;
 }
 
-/* xterm 滚动条样式 - 设置滚动条外观和触摸滚动 */
+/* xterm 核心样式 - 允许触摸事件传递到 viewport */
 :deep(.xterm) {
-  /* 确保 xterm 主容器不阻止触摸事件 */
   touch-action: pan-y;
-  /* 禁止输入焦点 */
   user-select: none;
   -webkit-user-select: none;
 }
 
 :deep(.xterm-screen) {
-  /* 屏幕元素不阻止触摸 */
   touch-action: pan-y;
-  /* 禁止选择文本 */
   user-select: none;
   -webkit-user-select: none;
 }
 
+/* xterm-viewport 原生触摸滚动 + 现代滚动条 */
 :deep(.xterm-viewport) {
-  /* 启用触摸滚动 - 关键修复 */
   overflow-y: auto !important;
   touch-action: pan-y !important;
   -webkit-overflow-scrolling: touch;
-
-  /* Firefox 滚动条样式 */
+  overscroll-behavior: contain;
+  /* Firefox 现代细滚动条 */
   scrollbar-width: thin;
-  scrollbar-color: rgba(100, 100, 120, 0.3) transparent;
+  scrollbar-color: rgba(120, 120, 140, 0.25) transparent;
 }
 
-/* Webkit 滚动条样式 */
+/* Webkit 现代细圆角滚动条 */
 :deep(.xterm-viewport::-webkit-scrollbar) {
-  width: 6px;
+  width: 4px;
 }
 
 :deep(.xterm-viewport::-webkit-scrollbar-track) {
@@ -1458,12 +1529,11 @@ watch(isConnected, async (connected) => {
 }
 
 :deep(.xterm-viewport::-webkit-scrollbar-thumb) {
-  background: rgba(100, 100, 120, 0.3);
-  border-radius: 3px;
-  transition: background 0.2s ease;
+  background: rgba(120, 120, 140, 0.25);
+  border-radius: 2px;
 }
 
 :deep(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
-  background: rgba(0, 212, 255, 0.4);
+  background: rgba(0, 212, 255, 0.35);
 }
 </style>
