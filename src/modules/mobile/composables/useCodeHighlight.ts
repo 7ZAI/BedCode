@@ -114,6 +114,10 @@ import langClojure from '@shikijs/langs/clojure'
 import langSvelte from '@shikijs/langs/svelte'
 import langLess from '@shikijs/langs/less'
 import themeVitesseDark from '@shikijs/themes/vitesse-dark'
+import themeOneDarkPro from '@shikijs/themes/one-dark-pro'
+import themeNord from '@shikijs/themes/nord'
+import themeGithubDark from '@shikijs/themes/github-dark'
+import themeMonokai from '@shikijs/themes/monokai'
 
 /** 语言模块映射：语言 ID → 模块默认导出 */
 const LANG_MODULES: Record<string, any> = {
@@ -169,6 +173,14 @@ const LANG_MODULES: Record<string, any> = {
 
 const THEME = 'vitesse-dark'
 
+const THEME_MODULES = [
+  themeVitesseDark,
+  themeOneDarkPro,
+  themeNord,
+  themeGithubDark,
+  themeMonokai,
+]
+
 let highlighterInstance: Awaited<ReturnType<typeof createHighlighterCore>> | null = null
 let initPromise: Promise<void> | null = null
 
@@ -181,7 +193,7 @@ async function ensureHighlighter(): Promise<NonNullable<typeof highlighterInstan
       const langImports = Object.values(LANG_MODULES).map(mod => mod.default ?? mod)
 
       highlighterInstance = await createHighlighterCore({
-        themes: [themeVitesseDark],
+        themes: THEME_MODULES,
         langs: langImports,
         engine: createOnigurumaEngine(import('shiki/wasm')),
       })
@@ -199,7 +211,7 @@ export function useCodeHighlight() {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
-  async function highlight(code: string, lang: string): Promise<void> {
+  async function highlight(code: string, lang: string, theme?: string): Promise<void> {
     isLoading.value = true
     error.value = null
 
@@ -211,9 +223,11 @@ export function useCodeHighlight() {
         lang = 'plaintext'
       }
 
+      const resolvedTheme = theme || THEME
+
       const html = highlighter.codeToHtml(code, {
         lang,
-        theme: THEME,
+        theme: resolvedTheme,
         transformers: [addLineNumbers()],
       })
       highlightedHtml.value = html
@@ -225,7 +239,7 @@ export function useCodeHighlight() {
     }
   }
 
-  async function highlightDiff(lines: FileDiffLine[], lang: string): Promise<void> {
+  async function highlightDiff(lines: FileDiffLine[], lang: string, theme?: string): Promise<void> {
     isLoading.value = true
     error.value = null
 
@@ -236,11 +250,13 @@ export function useCodeHighlight() {
         lang = 'plaintext'
       }
 
+      const resolvedTheme = theme || THEME
+
       // 将所有行内容拼接为完整代码段，整体高亮以保留语法上下文
       const fullCode = lines.map(l => l.content).join('\n')
       const html = highlighter.codeToHtml(fullCode, {
         lang,
-        theme: THEME,
+        theme: resolvedTheme,
         transformers: [addLineNumbers()],
       })
 
