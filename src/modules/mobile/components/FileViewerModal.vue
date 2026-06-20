@@ -9,6 +9,12 @@
             <span class="viewer-lang-badge">{{ displayLang }}</span>
           </div>
           <div class="viewer-actions">
+            <button class="viewer-action-btn" title="设置" @click="showSettings = true">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
             <button class="viewer-action-btn" :title="isFullscreen ? '退出全屏' : '全屏'" @click="toggleFullscreen">
               <svg v-if="!isFullscreen" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
@@ -30,7 +36,13 @@
           <div v-if="loading" class="viewer-loading">加载中...</div>
           <div v-else-if="error" class="viewer-error">{{ error }}</div>
           <div v-else-if="!code && !diffLines?.length" class="viewer-loading">选择文件查看内容</div>
-          <div v-else-if="highlightedHtml" class="viewer-code" v-html="highlightedHtml"></div>
+          <div
+            v-else-if="highlightedHtml"
+            class="viewer-code"
+            :class="{ 'hide-line-numbers': !codeViewerStore.settings.showLineNumbers }"
+            :style="codeStyle"
+            v-html="highlightedHtml"
+          ></div>
         </div>
 
         <!-- Footer -->
@@ -41,12 +53,21 @@
       </div>
     </div>
   </transition>
+
+  <!-- Settings Modal -->
+  <CodeViewerSettingsModal
+    :visible="showSettings"
+    @close="showSettings = false"
+    @confirm="showSettings = false"
+  />
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composables/useCodeHighlight'
 import type { FileDiffLine } from '@/modules/mobile/composables/useHttpApi'
+import { useCodeViewerStore } from '@/modules/shared/stores/codeViewer'
+import CodeViewerSettingsModal from '@/modules/mobile/components/CodeViewerSettingsModal.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -65,8 +86,15 @@ const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 const { highlightedHtml, isLoading, error, highlight, highlightDiff } = useCodeHighlight()
 
 const isFullscreen = ref(false)
+const codeViewerStore = useCodeViewerStore()
+const showSettings = ref(false)
 
 const displayLang = computed(() => getLangByFilename(props.filename))
+
+const codeStyle = computed(() => ({
+  '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
+  '--code-tab-size': codeViewerStore.settings.tabSize,
+}))
 
 const lineCount = computed(() => {
   if (props.diffLines?.length) return props.diffLines.length
@@ -101,12 +129,26 @@ watch(
     if (!visible || !filename) return
     const lang = getLangByFilename(filename)
     if (diffLines && diffLines.length > 0) {
-      await highlightDiff(diffLines, lang)
+      await highlightDiff(diffLines, lang, codeViewerStore.settings.theme)
     } else if (code) {
-      await highlight(code, lang)
+      await highlight(code, lang, codeViewerStore.settings.theme)
     }
   },
   { immediate: true },
+)
+
+// 监听主题变化，重新高亮
+watch(
+  () => codeViewerStore.settings.theme,
+  () => {
+    if (!props.visible || !props.filename) return
+    const lang = getLangByFilename(props.filename)
+    if (props.diffLines && props.diffLines.length > 0) {
+      highlightDiff(props.diffLines, lang, codeViewerStore.settings.theme)
+    } else if (props.code) {
+      highlight(props.code, lang, codeViewerStore.settings.theme)
+    }
+  },
 )
 </script>
 
@@ -234,10 +276,10 @@ watch(
 .viewer-code {
   margin: 0;
   padding: 0;
-  font-size: 13px;
+  font-size: var(--code-font-size, 13px);
   line-height: 0.8;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  tab-size: 4;
+  tab-size: var(--code-tab-size, 4);
 }
 
 /* Shiki 产出的 pre — 重置为容器角色 */
@@ -298,7 +340,7 @@ watch(
   min-height: 1.4em;
   line-height: 1.4;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 13px;
+  font-size: var(--code-font-size, 13px);
   white-space: pre;
 }
 
@@ -363,6 +405,19 @@ watch(
 
 .viewer-code :deep(.diff-context .diff-line-no) {
   color: var(--mobile-code-gutter-color);
+}
+
+/* 行号隐藏 */
+.viewer-code.hide-line-numbers :deep(.line) {
+  padding-left: 0.5em;
+}
+
+.viewer-code.hide-line-numbers :deep(.line::before) {
+  content: none;
+}
+
+.viewer-code.hide-line-numbers :deep(.diff-line-no) {
+  display: none;
 }
 
 .viewer-loading,
