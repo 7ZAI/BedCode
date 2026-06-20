@@ -478,3 +478,190 @@ fn build_tree_from_paths(paths: &[String]) -> Vec<FileTreeNode> {
 
     map_to_tree(&root, "")
 }
+
+/// POST /api/file-diff
+///
+/// 获取指定文件的 git diff 内容，解析为结构化行数据
+/// 执行 `git diff -- <file_path>` 获取工作区 vs 暂存区的改动
+pub async fn get_file_diff(body: web::Json<FileDiffRequest>) -> HttpResponse {
+    let ctx = AppContext::global();
+
+    let working_dir = match ctx
+        .config_manager()
+        .get_config_by_session_id(&body.session_id, ctx.session_manager())
+        .await
+    {
+        Ok(config) => config.working_dir,
+        Err(e) => {
+            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
+        }
+    };
+
+    let root = PathBuf::from(&working_dir);
+    if !root.is_dir() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            400,
+            &format!("Working dir is not a directory: {}", working_dir),
+        ));
+    }
+
+    // 检查是否为 git 仓库
+    let git_dir = root.join(".git");
+    if !git_dir.exists() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            400,
+            "Not a git repository",
+        ));
+    }
+
+    let file_path = body.file_path.clone();
+    let working_dir_clone = working_dir.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        parse_git_diff(&working_dir_clone, &file_path)
+    }).await;
+
+    match result {
+        Ok(Ok((file_name, lines))) => {
+            let data = FileDiffResponseData { file_name, lines };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
+        }
+        Ok(Err(e)) => {
+            HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
+        }
+        Err(e) => {
+            HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("File diff task failed: {}", e),
+            ))
+        }
+    }
+}
+
+/// 执行 git diff 并解析 unified diff 输出为结构化行数据
+fn parse_git_diff(working_dir: &str, file_path: &str) -> crate::Result<(String, Vec<FileDiffLine>)> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--", file_path])
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| crate::AppError::Internal(format!("Failed to execute git diff: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::AppError::Internal(format!("git diff failed: {}", stderr)));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // 无改动时返回空
+    if stdout.is_empty() {
+        let file_name = PathBuf::from(file_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        return Ok((file_name, Vec::new()));
+    }
+
+    let file_name = PathBuf::from(file_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let lines = parse_unified_diff(&stdout);
+    Ok((file_name, lines))
+}
+
+/// 解析 unified diff 文本为 FileDiffLine 列表
+fn parse_unified_diff(diff_text: &str) -> Vec<FileDiffLine> {
+    let mut result = Vec::new();
+    let mut old_line: u32 = 0;
+    let mut new_line: u32 = 0;
+    let mut in_hunk = false;
+
+    for line in diff_text.lines() {
+        // 跳过 diff header 行
+        if line.starts_with("diff --git") || line.starts_with("index ") {
+            continue;
+        }
+        // 跳过 --- a/ 和 +++ b/ 行
+        if line.starts_with("--- ") || line.starts_with("+++ ") {
+            continue;
+        }
+
+        // 解析 hunk header: @@ -old_start[,old_count] +new_start[,new_count] @@
+        if line.starts_with("@@") {
+            if let Some(hunk_info) = parse_hunk_header(line) {
+                old_line = hunk_info.0;
+                new_line = hunk_info.1;
+                in_hunk = true;
+            }
+            continue;
+        }
+
+        if !in_hunk {
+            continue;
+        }
+
+        // 解析 diff 行
+        if let Some(content) = line.strip_prefix('-') {
+            result.push(FileDiffLine {
+                line_type: "removed".to_string(),
+                content: content.to_string(),
+                old_line_no: Some(old_line),
+                new_line_no: None,
+            });
+            old_line += 1;
+        } else if let Some(content) = line.strip_prefix('+') {
+            result.push(FileDiffLine {
+                line_type: "added".to_string(),
+                content: content.to_string(),
+                old_line_no: None,
+                new_line_no: Some(new_line),
+            });
+            new_line += 1;
+        } else if let Some(content) = line.strip_prefix(' ') {
+            result.push(FileDiffLine {
+                line_type: "context".to_string(),
+                content: content.to_string(),
+                old_line_no: Some(old_line),
+                new_line_no: Some(new_line),
+            });
+            old_line += 1;
+            new_line += 1;
+        } else if line.starts_with('\\') {
+            // "\ No newline at end of file" — 忽略
+            continue;
+        }
+    }
+
+    result
+}
+
+/// 解析 hunk header `@@ -a,b +c,d @@` 提取起始行号
+fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
+    // 格式: @@ -old_start[,old_count] +new_start[,new_count] @@
+    let text = line.trim_start_matches('@').trim_start();
+    let text = text.split('@').next()?;
+
+    let parts: Vec<&str> = text.trim().split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let old_start: u32 = parts[0]
+        .trim_start_matches('-')
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+
+    let new_start: u32 = parts[1]
+        .trim_start_matches('+')
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+
+    Some((old_start, new_start))
+}
