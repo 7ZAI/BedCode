@@ -101,3 +101,38 @@ pub struct DiffTreeRequest {
     pub session_id: String,
     pub exclude_dirs: Vec<String>,
 }
+
+// ==================== File Diff DTOs ====================
+
+/// POST /api/file-diff request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiffRequest {
+    pub session_id: String,
+    pub file_path: String,
+}
+
+/// Diff 行类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiffLine {
+    /// "context" | "added" | "removed"
+    #[serde(rename = "type")]
+    pub line_type: String,
+    /// 行内容（不含 +/- 前缀）
+    pub content: String,
+    /// 旧文件行号（removed 和 context 有值，added 为 null）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_line_no: Option<u32>,
+    /// 新文件行号（added 和 context 有值，removed 为 null）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_line_no: Option<u32>,
+}
+
+/// POST /api/file-diff response data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiffResponseData {
+    pub file_name: String,
+    pub lines: Vec<FileDiffLine>,
+}
