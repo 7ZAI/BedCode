@@ -17,6 +17,18 @@
       <div class="header-title-area">
         <h1 class="header-title">{{ sessionName }}</h1>
       </div>
+      <button class="mode-btn" :class="{ active: autoMode === 'auto' }" @click="toggleMode" :title="autoMode === 'auto' ? '切换为手动模式' : '切换为自动模式'">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path v-if="autoMode === 'auto'" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+          <path v-else d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/>
+        </svg>
+      </button>
+      <button class="task-btn" @click="showTaskPicker = true" title="待办任务">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
+        </svg>
+        <span v-if="hasQueuedTasks" class="task-badge">{{ pendingCount }}</span>
+      </button>
       <button class="clear-btn" @click="confirmClear" title="清屏">
         <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -43,6 +55,14 @@
     <!-- Main Content: Terminal + Sidebar overlay -->
     <div class="main-content">
       <div class="terminal-output-area">
+        <!-- 自动执行状态条 -->
+        <AutoExecuteBar
+          :current-task="autoCurrentTask"
+          :is-paused="autoIsPaused"
+          :mode="autoMode"
+          @pause="autoPause"
+          @resume="autoResume"
+        />
         <!-- 触摸滚动容器：接管触摸事件驱动终端滚动 -->
         <div
           ref="scrollContainer"
@@ -143,6 +163,14 @@
       </div>
     </div>
   </div>
+
+  <!-- 任务选择弹窗 -->
+  <TaskPickerModal
+    v-if="showTaskPicker"
+    :tasks="presetTasks"
+    @confirm="onTaskConfirm"
+    @close="showTaskPicker = false"
+  />
 </template>
 
 <script setup lang="ts">
@@ -170,7 +198,12 @@ import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useTheme } from '@/modules/shared/composables/useTheme'
 import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
 import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
+import AutoExecuteBar from '@/modules/mobile/components/AutoExecuteBar.vue'
+import TaskPickerModal from '@/modules/mobile/components/TaskPickerModal.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
+import { useAutoExecutor } from '@/modules/mobile/composables/useAutoExecutor'
+import { usePresetTasks } from '@/modules/mobile/composables/usePresetTasks'
+import type { PresetTask } from '@/modules/mobile/composables/model'
 
 // ==================== Props & Route ====================
 
@@ -181,6 +214,45 @@ const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
 const sessionId = computed(() => route.params.id as string)
+
+// ==================== Auto Executor ====================
+
+const {
+  mode: autoMode,
+  currentTask: autoCurrentTask,
+  isPaused: autoIsPaused,
+  hasQueuedTasks,
+  pendingTasks: autoPendingTasks,
+  setMode: autoSetMode,
+  addToQueue,
+  pause: autoPause,
+  resume: autoResume,
+  startNext: autoStartNext,
+  handleTaskStatusChanged,
+  cleanup: autoCleanup,
+} = useAutoExecutor(sessionId)
+const { tasks: presetTasks } = usePresetTasks()
+
+const showTaskPicker = ref(false)
+const pendingCount = computed(() => autoPendingTasks.value.length)
+
+/** 任务选择确认 */
+function onTaskConfirm(tasks: PresetTask[]) {
+  addToQueue(tasks)
+  showTaskPicker.value = false
+  if (autoMode.value === 'auto') {
+    autoStartNext()
+  }
+}
+
+/** 切换自动/手动模式 */
+function toggleMode() {
+  const newMode = autoMode.value === 'manual' ? 'auto' : 'manual'
+  autoSetMode(newMode)
+  if (newMode === 'auto' && hasQueuedTasks.value) {
+    autoStartNext()
+  }
+}
 
 // 安全区域从 App.vue inject，不独立初始化 useEdgeToEdge
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
@@ -227,6 +299,8 @@ const touchState = reactive({
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
+// 自动执行：监听任务状态变更的 Tauri 事件监听器
+const taskStatusListenerRef = ref<UnlistenFn | null>(null)
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
 // isThemeUserSet = false 时跟随系统主题变化，true 时保持用户选择
 const terminalSettings = ref({
@@ -1074,6 +1148,13 @@ onMounted(async () => {
   if (isSessionActive.value && isConnected.value) {
     await subscribeSession()
   }
+
+  // 监听桌面端推送的任务状态变更事件
+  taskStatusListenerRef.value = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; options: Array<{ label: string }> }> }>('ws_sync_task_status_changed', (event) => {
+    // 仅处理当前会话的任务状态
+    if (event.payload.session_id !== sessionId.value) return
+    handleTaskStatusChanged(event.payload.task_status, event.payload.task_questions)
+  })
 })
 
 onUnmounted(async () => {
@@ -1081,6 +1162,12 @@ onUnmounted(async () => {
   // 注意：keep-alive 缓存的组件不会触发 onUnmounted
   await unsubscribeSession()
   disposeTerminal()
+  // 清理任务状态监听器
+  if (taskStatusListenerRef.value) {
+    taskStatusListenerRef.value()
+    taskStatusListenerRef.value = null
+  }
+  autoCleanup()
 })
 
 // keep-alive 生命周期：组件被激活时恢复显示
@@ -1319,6 +1406,66 @@ watch(sessionId, async (newId, oldId) => {
 
 .settings-btn:hover {
   border-color: rgba(0, 212, 255, 0.3);
+}
+
+/* Mode Toggle Button */
+.mode-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mode-btn:hover {
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+.mode-btn.active {
+  color: var(--mobile-accent);
+  border-color: var(--mobile-border-active);
+  background: var(--mobile-accent-muted);
+}
+
+/* Task Button */
+.task-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.task-btn:hover {
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+.task-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--mobile-error, #ef4444);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
 }
 
 /* Main Content Area */
