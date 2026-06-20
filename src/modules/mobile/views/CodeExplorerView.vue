@@ -12,6 +12,12 @@
         <span v-if="selectedFile" class="header-lang-badge">{{ displayLang }}</span>
       </div>
       <div class="header-meta">
+        <button class="settings-btn" @click="showSettings = true" title="设置">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
         <button class="sidebar-toggle-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" title="文件树">
           <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
@@ -30,7 +36,9 @@
           class="explorer-sidebar"
           :session-id="sessionId"
           mode="emit"
+          resize-side="right"
           @file-select="handleFileSelect"
+          @long-press="handleLongPress"
         />
       </transition>
 
@@ -59,9 +67,22 @@
         </div>
 
         <!-- 代码内容 -->
-        <div v-else-if="highlightedHtml" class="code-content" v-html="highlightedHtml"></div>
+        <div
+          v-else-if="highlightedHtml"
+          class="code-content"
+          :class="{ 'hide-line-numbers': !codeViewerStore.settings.showLineNumbers }"
+          :style="codeStyle"
+          v-html="highlightedHtml"
+        ></div>
       </div>
     </div>
+
+    <!-- Settings Modal -->
+    <CodeViewerSettingsModal
+      :visible="showSettings"
+      @close="showSettings = false"
+      @confirm="onSettingsConfirm"
+    />
   </div>
 </template>
 
@@ -73,16 +94,22 @@
  * 复用 FileSidebar (emit 模式) + useCodeHighlight
  */
 
-import { ref, computed, inject, type Ref } from 'vue'
+import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composables/useCodeHighlight'
 import { useHttpApi } from '@/modules/mobile/composables/useHttpApi'
 import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
+import { useToast } from '@/modules/shared/composables/useToast'
+import { useCodeViewerStore } from '@/modules/shared/stores/codeViewer'
+import CodeViewerSettingsModal from '@/modules/mobile/components/CodeViewerSettingsModal.vue'
 
 const router = useRouter()
 const route = useRoute()
 const connection = useMobileConnection()
+const toast = useToast()
+const codeViewerStore = useCodeViewerStore()
+const showSettings = ref(false)
 const { highlightedHtml, highlight, highlightDiff } = useCodeHighlight()
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 
@@ -148,7 +175,7 @@ async function loadFileContent(path: string) {
     fileContent.value = result.data.content
 
     const lang = getLangByFilename(selectedFile.value)
-    await highlight(result.data.content, lang)
+    await highlight(result.data.content, lang, codeViewerStore.settings.theme)
   } catch (e: any) {
     fileError.value = e?.toString() || '获取文件内容失败'
   } finally {
@@ -169,7 +196,7 @@ async function loadFileDiff(path: string) {
     }
 
     const lang = getLangByFilename(selectedFile.value)
-    await highlightDiff(result.data.lines, lang)
+    await highlightDiff(result.data.lines, lang, codeViewerStore.settings.theme)
   } catch (e: any) {
     fileError.value = e?.toString() || '获取文件 Diff 失败'
   } finally {
@@ -183,10 +210,44 @@ async function retryLoadFile() {
   }
 }
 
+// ==================== Long Press Copy Path ====================
+
+async function handleLongPress(name: string, path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+    toast.success(`已复制: ${path}`)
+  } catch {
+    toast.error('复制失败')
+  }
+}
+
+// ==================== Code Style ====================
+
+const codeStyle = computed(() => ({
+  '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
+  '--code-tab-size': codeViewerStore.settings.tabSize,
+}))
+
+// 监听主题变化，重新高亮代码
+watch(
+  () => codeViewerStore.settings.theme,
+  () => {
+    if (selectedFile.value && fileContent.value) {
+      const lang = getLangByFilename(selectedFile.value)
+      highlight(fileContent.value, lang, codeViewerStore.settings.theme)
+    }
+  },
+)
+
 // ==================== Navigation ====================
 
 function handleBack() {
   router.back()
+}
+
+async function onSettingsConfirm() {
+  // 主题变化时重新高亮（watch 已处理）
+  // 字体大小、tab 缩进、行号通过 CSS 变量实时生效，无需额外操作
 }
 </script>
 
@@ -354,10 +415,10 @@ function handleBack() {
 .code-content {
   margin: 0;
   padding: 0;
-  font-size: 13px;
+  font-size: var(--code-font-size, 13px);
   line-height: 0.8;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  tab-size: 4;
+  tab-size: var(--code-tab-size, 4);
 }
 
 .code-content :deep(pre) {
@@ -404,6 +465,19 @@ function handleBack() {
   content: '\00a0';
 }
 
+/* 行号隐藏 */
+.code-content.hide-line-numbers :deep(.line) {
+  padding-left: 0.5em;
+}
+
+.code-content.hide-line-numbers :deep(.line::before) {
+  content: none;
+}
+
+.code-content.hide-line-numbers :deep(.diff-line-no) {
+  display: none;
+}
+
 /* ==================== Diff 行样式 ==================== */
 
 .code-content :deep(.diff-line) {
@@ -412,7 +486,7 @@ function handleBack() {
   min-height: 1.4em;
   line-height: 1.4;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 13px;
+  font-size: var(--code-font-size, 13px);
   white-space: pre;
 }
 
@@ -477,6 +551,25 @@ function handleBack() {
 
 .code-content :deep(.diff-context .diff-line-no) {
   color: var(--mobile-code-gutter-color);
+}
+
+/* ==================== Settings Button ==================== */
+
+.settings-btn {
+  padding: 0.375rem;
+  border-radius: 0.375rem;
+  background: none;
+  border: none;
+  color: var(--mobile-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+}
+
+.settings-btn:active {
+  color: var(--mobile-accent);
 }
 
 /* ==================== Sidebar Slide Transition ==================== */
