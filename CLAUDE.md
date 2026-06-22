@@ -10,7 +10,8 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 - **Desktop**: Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS
 - **Backend**: Rust (Tokio async runtime)
 - **Database**: SQLite
-- **Communication**: WebSocket 
+- **Communication**: WebSocket
+- **I18n**: vue-i18n@9 (zh-CN / en)
 - **State Management**: Pinia
 
 ---
@@ -436,6 +437,160 @@ cargo test
 ## Android Build Setup
 
 See `docs/android-setup.md` for detailed instructions.
+
+---
+
+## Internationalization (i18n)
+
+使用 vue-i18n@9 Composition API 模式，支持 zh-CN（默认）和 en 两种语言。
+
+### 目录结构
+
+```
+src/locales/
+├── index.ts          # createI18n 实例，legacy: false
+├── errorCodes.ts     # 后端错误码 → i18n key 映射
+├── zh-CN/
+│   ├── index.ts      # 合并所有域的中文翻译
+│   ├── common.ts     # 通用：按钮、状态、时间、错误码、通知
+│   ├── settings.ts   # 设置页各分区
+│   ├── desktop.ts    # 桌面端：侧边栏、会话、表单、设备、终端
+│   └── mobile.ts     # 移动端：导航、连接、扫描、会话、终端等
+└── en/
+    ├── index.ts
+    ├── common.ts
+    ├── settings.ts
+    ├── desktop.ts
+    └── mobile.ts
+```
+
+### 翻译 key 命名规范
+
+按域分层，用点号分隔：`{domain}.{section}.{key}`
+
+| 域 | 示例 | 用途 |
+|----|------|------|
+| `common.button.*` | `common.button.cancel` | 通用按钮 |
+| `common.status.*` | `common.status.running` | 通用状态 |
+| `common.time.*` | `common.time.minutesSecondsAgo` | 时间格式 |
+| `common.errorCode.*` | `common.errorCode.authError` | 错误码翻译 |
+| `common.notification.*` | `common.notification.deviceConnected` | 全局通知 |
+| `common.misc.*` | `common.misc.lineCount` | 杂项 |
+| `settings.*` | `settings.appearance.theme` | 设置页 |
+| `desktop.session.*` | `desktop.session.confirmStop` | 桌面端会话 |
+| `desktop.form.*` | `desktop.form.name` | 桌面端表单 |
+| `desktop.device.*` | `desktop.device.title` | 桌面端设备配对 |
+| `desktop.terminal.*` | `desktop.terminal.clearScreen` | 桌面端终端 |
+| `mobile.connection.*` | `mobile.connection.timeout` | 移动端连接 |
+| `mobile.scan.*` | `mobile.scan.title` | 移动端扫描 |
+| `mobile.session.*` | `mobile.session.noSessions` | 移动端会话 |
+| `mobile.terminal.*` | `mobile.terminal.autoMode` | 移动端终端 |
+| `mobile.file.*` | `mobile.file.fetchTreeFailed` | 移动端文件 |
+| `mobile.toolbox.*` | `mobile.toolbox.sendFailed` | 移动端工具箱 |
+
+**新增 key 时必须同时添加到 zh-CN 和 en 两个文件，否则 TypeScript 会报错。**
+
+### Vue 组件中使用
+
+```vue
+<template>
+  <!-- 模板中用 $t() -->
+  <h1>{{ $t('mobile.connection.title') }}</h1>
+  <button :title="$t('desktop.terminal.clearScreen')">×</button>
+
+  <!-- 带参数的翻译 -->
+  <p>{{ $t('desktop.session.runTime', { time: runTime }) }}</p>
+</template>
+
+<script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
+
+// 脚本中用 t()
+toast.success(t('desktop.session.sessionStarted'))
+
+// 响应式标签数组必须用 computed
+const items = computed(() => [
+  { label: t('mobile.terminal.autoMode'), value: 'auto' },
+  { label: t('mobile.terminal.manualMode'), value: 'manual' },
+])
+</script>
+```
+
+### Composable 中使用（模块级代码）
+
+Composable 是模块级代码，**不能使用 `useI18n()`**（需要组件上下文）。使用 `i18n.global.t()`：
+
+```typescript
+import i18n from '@/locales'
+
+// ✅ 正确：模块级代码用 i18n.global.t()
+toast.error(i18n.global.t('common.notification.connectionDisconnected', { reason }))
+
+// ❌ 错误：模块级代码不能用 useI18n()
+const { t } = useI18n() // 会报错
+```
+
+### 错误码机制
+
+**核心原则：composable 中不包含任何中文硬编码字符串。**
+
+1. **状态变量存 i18n key**，模板用 `$t()` 翻译：
+
+```typescript
+// composable 中
+connectionError.value = 'mobile.connection.reauthFailed'  // 存 i18n key
+
+// Vue 模板中
+<p>{{ $t(connectionError) }}</p>
+```
+
+2. **后端错误码** 通过 `errorCodes.ts` 映射翻译：
+
+```typescript
+import { ERROR_CODE_I18N_KEY } from '@/locales/errorCodes'
+
+function getErrorMessage(code: string): string {
+  const i18nKey = ERROR_CODE_I18N_KEY[code]
+  return i18nKey ? i18n.global.t(i18nKey) : i18n.global.t('common.errorCode.unknownError')
+}
+```
+
+3. **throw new Error** 中使用 i18n key 作为 fallback：
+
+```typescript
+// ✅ composable 中 throw i18n key
+throw new Error(result.message || 'mobile.file.fetchTreeFailed')
+
+// ❌ 禁止 throw 中文
+throw new Error(result.message || '获取文件树失败')
+```
+
+### 语言切换与持久化
+
+通过 `useI18nStore` Pinia store 管理：
+
+```typescript
+import { useI18nStore } from '@/modules/shared/stores/i18n'
+const i18nStore = useI18nStore()
+
+// 切换语言（自动持久化到 Settings.ui.language）
+await i18nStore.setLanguage('en')
+
+// 应用启动时恢复语言偏好（在 main.ts 中调用）
+await i18nStore.initLanguage()
+```
+
+语言偏好存储在 `Settings.ui.language` 字段，默认值 `'zh-CN'`。
+
+### 不翻译的内容
+
+以下内容**不翻译**，保持原样：
+- 代码注释（中文注释保留中文）
+- `console.log/error` 等调试字符串
+- 发送给 Claude Code 的终端输入（如 `'继续'`）
+- 语言选项的显示名称（`<option value="zh-CN">中文</option>`）
+- 品牌名称（如 `BedCode`）
 
 ---
 
