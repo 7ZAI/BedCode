@@ -33,6 +33,7 @@
 <script setup lang="ts">
 import { h, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import type { Ref } from 'vue'
 
 // 注入安全区域
@@ -50,6 +51,7 @@ const navStyle = computed(() => {
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 // 路由名称到页面索引的映射
 const pageRouteNames: Record<string, number> = {
@@ -84,7 +86,7 @@ const navItems = [
   {
     path: '/mobile',
     pageIndex: 0,
-    label: '连接',
+    label: computed(() => t('mobile.nav.connection')),
     isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
@@ -100,7 +102,7 @@ const navItems = [
   {
     path: '/mobile',
     pageIndex: 1,
-    label: '会话',
+    label: computed(() => t('mobile.nav.sessions')),
     isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
@@ -116,7 +118,7 @@ const navItems = [
   {
     path: '/mobile',
     pageIndex: 2,
-    label: '工具箱',
+    label: computed(() => t('mobile.nav.toolbox')),
     isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
@@ -132,7 +134,7 @@ const navItems = [
   {
     path: '/mobile',
     pageIndex: 3,
-    label: '设置',
+    label: computed(() => t('mobile.nav.settings')),
     isSwipe: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [

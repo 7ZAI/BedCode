@@ -3,7 +3,7 @@
     <div class="flex flex-col items-center gap-4">
       <!-- Logo or spinner -->
       <div class="w-12 h-12 rounded-full bg-primary-400 animate-pulse" />
-      <span class="text-gray-600 dark:text-dark-300 text-sm">加载中...</span>
+      <span class="text-gray-600 dark:text-dark-300 text-sm">{{ $t('common.status.loading') }}</span>
     </div>
   </div>
 </template>
