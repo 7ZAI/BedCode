@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """BedCode Claude Code Plugin - Hook 脚本
 
-统一入口脚本，处理 SessionStart / Stop / SubagentStop 事件。
+统一入口脚本，处理 SessionStart / PreToolUse / Stop / SubagentStop 事件。
 跨平台（Windows/macOS/Linux），零外部依赖（仅标准库）。
 
 用法:
-    python3 bedcode_hook.py session-start   # SessionStart hook
-    python3 bedcode_hook.py write-event     # Stop / SubagentStop hook
+    python3 bedcode_hook.py session-start       # SessionStart hook
+    python3 bedcode_hook.py pre-tool-use        # PreToolUse hook (权限请求 + AskUserQuestion)
+    python3 bedcode_hook.py write-event         # Stop / SubagentStop hook
 
 环境变量:
     CLAUDE_PROJECT_DIR  - 项目根目录（Claude Code 自动设置）
     CLAUDE_PLUGIN_ROOT  - 插件根目录（Claude Code 自动设置）
     BEDCODE_TOKEN       - HTTP API 认证 token（存在时才推送状态）
-    BEDCODE_PORT        - HTTP API 端口（默认 8080）
+    BEDCODE_PORT        - HTTP API 端口（默认 8765）
 """
 
 import json
@@ -76,10 +77,10 @@ def setup_logging():
     return logger
 
 
-# ==================== HTTP Push ====================
+# ==================== HTTP Helpers ====================
 
 
-def push_task_status(session_id, status, reason, logger):
+def push_task_status(session_id, status, reason, logger, questions=None):
     """推送任务状态到 BedCode 桌面端 HTTP API。
 
     仅在 BEDCODE_TOKEN 环境变量存在时推送。
@@ -93,12 +94,16 @@ def push_task_status(session_id, status, reason, logger):
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
     url = "http://localhost:{}/api/plugin/task-status".format(port)
 
-    payload = json.dumps({
+    payload_dict = {
         "session_id": session_id,
         "status": status,
         "reason": reason or "",
         "token": token,
-    }).encode("utf-8")
+    }
+    if questions:
+        payload_dict["questions"] = questions
+
+    payload = json.dumps(payload_dict).encode("utf-8")
 
     logger.info("HTTP POST {} session_id={} status={}".format(url, session_id, status))
 
@@ -114,6 +119,40 @@ def push_task_status(session_id, status, reason, logger):
             logger.info("HTTP response: {} {}".format(resp.status, body[:200]))
     except (URLError, OSError) as e:
         logger.warning("HTTP push failed: {}".format(e))
+
+
+def query_session_mode(session_id, logger):
+    """查询会话自动授权模式。
+
+    通过 HTTP GET /api/plugin/session-mode 查询。
+    返回 True 表示自动授权模式，False 表示手动模式。
+    查询失败默认返回 False（手动模式，安全优先）。
+    """
+    token = os.environ.get("BEDCODE_TOKEN", "")
+    if not token:
+        logger.debug("BEDCODE_TOKEN not set, skip session mode query")
+        return False
+
+    port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
+    url = "http://localhost:{}/api/plugin/session-mode?session_id={}&token={}".format(
+        port, session_id, token
+    )
+
+    logger.info("HTTP GET {} session_id={}".format(url, session_id))
+
+    try:
+        req = Request(url, method="GET")
+        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
+            body = resp.read().decode("utf-8")
+            logger.info("HTTP response: {} {}".format(resp.status, body[:200]))
+            result = json.loads(body)
+            # 解析响应：ApiResponse { code: 0, data: { session_id, auto_approve } }
+            if result.get("code") == 0 and result.get("data"):
+                return result["data"].get("auto_approve", False)
+            return False
+    except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
+        logger.warning("HTTP session mode query failed: {}".format(e))
+        return False
 
 
 # ==================== Status Parsing ====================
@@ -201,6 +240,94 @@ def handle_session_start(data, logger):
     print(json.dumps(output))
 
 
+def handle_pre_tool_use(data, logger):
+    """处理 PreToolUse 事件。
+
+    检查会话是否开启自动授权模式：
+    - 自动模式 + AskUserQuestion：自动选择推荐选项并返回 permissionDecision: "allow"
+    - 自动模式 + 其他工具：直接返回 permissionDecision: "allow"
+    - 手动模式：不干预，走 Claude Code 原生交互流程
+    """
+    session_id = data.get("session_id", "")
+    tool_name = data.get("tool_name", "")
+
+    if not session_id:
+        logger.error("pre_tool_use: missing session_id")
+        return
+
+    logger.info(
+        "HOOK pre_tool_use: session_id={} tool_name={}".format(session_id, tool_name)
+    )
+
+    # 查询会话自动授权模式
+    auto_approve = query_session_mode(session_id, logger)
+
+    if not auto_approve:
+        # 手动模式：不输出任何内容，走 Claude Code 原生交互
+        logger.info("pre_tool_use: manual mode, no auto-approve")
+        return
+
+    # 自动授权模式
+    if tool_name == "AskUserQuestion":
+        # AskUserQuestion：构造 answers，选推荐选项（第一个选项）
+        tool_input = data.get("tool_input", {})
+        questions = tool_input.get("questions", [])
+        answers = {}
+
+        for q in questions:
+            header = q.get("header", "")
+            options = q.get("options", [])
+            if options:
+                # 选择第一个选项（Claude Code 推荐项）
+                answers[header] = options[0].get("label", "")
+
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {
+                    **tool_input,
+                    "answers": answers,
+                },
+            }
+        }
+        logger.info(
+            "pre_tool_use: auto-approve AskUserQuestion, answers={}".format(answers)
+        )
+        print(json.dumps(output))
+
+        # 同时推送 asking 状态到桌面端（保留任务状态通知链路）
+        reason = "Auto-answered by BedCode"
+        questions_data = []
+        for q in questions:
+            question = {
+                "question": q.get("question", ""),
+                "header": q.get("header", ""),
+                "multi_select": q.get("multiSelect", False),
+                "options": [],
+            }
+            for opt in q.get("options", []):
+                question["options"].append({
+                    "label": opt.get("label", ""),
+                    "description": opt.get("description", ""),
+                })
+            questions_data.append(question)
+        push_task_status(session_id, "asking", reason, logger, questions=questions_data)
+    else:
+        # 其他工具：直接允许
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "BedCode auto-approve mode",
+            }
+        }
+        logger.info(
+            "pre_tool_use: auto-approve tool={}".format(tool_name)
+        )
+        print(json.dumps(output))
+
+
 def handle_write_event(data, logger):
     """处理 Stop / SubagentStop 事件。
 
@@ -241,12 +368,12 @@ def handle_write_event(data, logger):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 bedcode_hook.py <session-start|write-event>", file=sys.stderr)
+        print("Usage: python3 bedcode_hook.py <session-start|pre-tool-use|write-event>", file=sys.stderr)
         sys.exit(1)
 
     command = sys.argv[1]
-    if command not in ("session-start", "write-event"):
-        print("Unknown command: {}. Use session-start or write-event".format(command), file=sys.stderr)
+    if command not in ("session-start", "pre-tool-use", "write-event"):
+        print("Unknown command: {}. Use session-start, pre-tool-use, or write-event".format(command), file=sys.stderr)
         sys.exit(1)
 
     # 从 stdin 读取 hook 输入
@@ -261,6 +388,8 @@ def main():
 
     if command == "session-start":
         handle_session_start(data, logger)
+    elif command == "pre-tool-use":
+        handle_pre_tool_use(data, logger)
     elif command == "write-event":
         handle_write_event(data, logger)
 

@@ -2,7 +2,6 @@
 //!
 //! 处理会话启动/停止/缩放等控制逻辑
 
-use crate::desktop::plugin::PluginManager;
 use crate::desktop::session::SessionManager;
 use crate::desktop::server::message::{SessionControlAction, Message, SessionSummary};
 use crate::shared::enums::{TerminalAction, TerminalPayload};
@@ -26,49 +25,35 @@ pub async fn handle_control(
     action: SessionControlAction,
     request_message_id: String,
     session_manager: &Arc<SessionManager>,
-    plugin_manager: &Arc<PluginManager>,
     clients: &Arc<RwLock<HashMap<SocketAddr, crate::desktop::server::ClientInfo>>>,
     addr: SocketAddr,
     device_name: Option<String>,
 ) -> Result<Option<Message>> {
     match action {
         SessionControlAction::ListSessions => {
-            // 合并 PTY 会话和 Plugin 会话
-            let pty_sessions = session_manager.list_sessions().await;
-            let plugin_sessions = plugin_manager.list_sessions().await;
+            let sessions = session_manager.list_sessions().await;
 
-            // 收集所有会话（PTY 优先）
-            let mut all_sessions = Vec::new();
-
-            // 添加 PTY 会话
-            for s in pty_sessions {
-                all_sessions.push(SessionSummary {
+            let all_sessions: Vec<SessionSummary> = sessions
+                .into_iter()
+                .map(|s| SessionSummary {
                     id: s.id,
                     name: s.name,
-                    status: serde_json::to_value(&s.status).and_then(|v| serde_json::from_value::<String>(v)).unwrap_or_else(|_| format!("{:?}", s.status)),
+                    status: serde_json::to_value(&s.status)
+                        .and_then(|v| serde_json::from_value::<String>(v))
+                        .unwrap_or_else(|_| format!("{:?}", s.status)),
                     created_at: s.created_at.to_rfc3339(),
                     started_at: s.started_at.map(|t| t.to_rfc3339()),
                     session_type: Some("pty".to_string()),
                     config_id: Some(s.config_id),
-                    task_status: s.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
+                    task_status: s.task_status.map(|ts| {
+                        serde_json::to_string(&ts)
+                            .unwrap_or_default()
+                            .trim_matches('"')
+                            .to_string()
+                    }),
                     task_reason: s.task_reason,
-                });
-            }
-
-            // 添加 Plugin 会话
-            for s in plugin_sessions {
-                all_sessions.push(SessionSummary {
-                    id: s.id,
-                    name: s.name,
-                    status: serde_json::to_value(&s.status).and_then(|v| serde_json::from_value::<String>(v)).unwrap_or_else(|_| format!("{:?}", s.status)),
-                    created_at: s.created_at.to_rfc3339(),
-                    started_at: s.started_at.map(|t| t.to_rfc3339()),
-                    session_type: Some("plugin".to_string()),
-                    config_id: Some(s.config_id),
-                    task_status: s.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
-                    task_reason: s.task_reason,
-                });
-            }
+                })
+                .collect();
 
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
@@ -258,47 +243,6 @@ pub async fn handle_control(
             }))
         }
 
-        // === Plugin 会话相关 ===
-        SessionControlAction::RegisterPluginSession {
-            project_name,
-            project_path,
-            jsonl_path,
-        } => {
-            use uuid::Uuid;
-
-            let session_id = Uuid::new_v4().to_string();
-
-            plugin_manager
-                .register_session(
-                    session_id.clone(),
-                    project_name,
-                    project_path,
-                    jsonl_path,
-                )
-                .await?;
-
-            Ok(Some(Message::SessionControl {
-                message_id: request_message_id,
-                expect_response: false,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                token: String::new(),
-                payload: crate::desktop::server::message::SessionControlPayload {
-                    action: SessionControlAction::RegisteredPluginSession { session_id },
-                },
-            }))
-        }
-
-        SessionControlAction::UnregisterPluginSession { session_id } => {
-            plugin_manager.unregister_session(&session_id).await?;
-            Ok(None)
-        }
-
-        SessionControlAction::PluginHeartbeat { session_id } => {
-            plugin_manager.handle_heartbeat(&session_id).await?;
-            Ok(None)
-        }
-
         _ => Ok(None),
     }
 }
@@ -310,7 +254,6 @@ pub async fn handle_control_message(
     _timestamp: i64,
     action: SessionControlAction,
     session_manager: &Option<Arc<SessionManager>>,
-    plugin_manager: &Option<Arc<PluginManager>>,
     addr: SocketAddr,
     device_name: Option<String>,
     app_handle: Option<Arc<AppHandle>>,
@@ -323,7 +266,7 @@ pub async fn handle_control_message(
         | SessionControlAction::JoinSession { .. }
         | SessionControlAction::LeaveSession { .. }
         | SessionControlAction::RemoveSession { .. } => {
-            if let (Some(sm), Some(pm)) = (session_manager, plugin_manager) {
+            if let Some(sm) = session_manager {
                 let ws_manager = crate::desktop::websocket_manager::WebSocketManager::global();
                 let clients = HashMap::<SocketAddr, crate::desktop::server::ClientInfo>::new();
 
@@ -331,7 +274,6 @@ pub async fn handle_control_message(
                     action.clone(),
                     message_id,
                     sm,
-                    pm,
                     &Arc::new(RwLock::new(clients)),
                     addr,
                     device_name.clone(),

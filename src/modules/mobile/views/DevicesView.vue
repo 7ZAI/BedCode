@@ -2,7 +2,7 @@
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">会话配置</h1>
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">连接与配置</h1>
     </header>
 
     <!-- Connection Status Banner -->
@@ -40,7 +40,7 @@
     <!-- Connected Banner -->
     <div
       v-if="isConnected && currentDevice"
-      class="mx-4 mt-4 p-3 bg-[var(--mobile-success-muted)] border border-[var(--mobile-success-muted)] rounded-xl backdrop-blur-sm"
+      class="mx-4 mt-4 p-3 bg-[var(--mobile-success-connected-bg)] border border-[var(--mobile-success-connected-border)] rounded-xl backdrop-blur-sm shadow-[var(--mobile-card-shadow-connected)]"
     >
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -55,7 +55,7 @@
           </div>
         </div>
         <button
-          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
+          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border border-[var(--mobile-error)]/20 text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
           @click="handleDisconnect"
         >
           断开
@@ -153,7 +153,7 @@
           <div
             v-for="item in connectionHistory"
             :key="item.address"
-            class="flex items-center justify-between p-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl hover:border-[var(--mobile-border-active)] transition-all cursor-pointer"
+            class="flex items-center justify-between p-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-active)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-all cursor-pointer"
             @click="handleConnectFromHistory(item)"
           >
             <div class="flex items-center gap-3">
@@ -442,6 +442,14 @@ async function handleConnectFromHistory(item: any) {
     isPaired: false,
   }
 
+  // 如果当前有残留连接（被动断开后状态未清理），先断开再重连
+  if (connection.connectionStatus.value !== 'disconnected') {
+    console.log('[DevicesView] Clearing stale connection before reconnect')
+    await connection.disconnect()
+    connection.clearSessionConfigs()
+    connection.clearActiveSessions()
+  }
+
   // 从历史连接，允许使用已存储的 token 跳过配对
   await startConnection(device, true)
 }
@@ -461,6 +469,14 @@ async function handleConnectManual(address: string) {
 
   // 关闭手动连接弹窗，后续由 PairingInput 接管
   showManualConnect.value = false
+
+  // 如果当前有残留连接（被动断开后状态未清理），先断开再重连
+  if (connection.connectionStatus.value !== 'disconnected') {
+    console.log('[DevicesView] Clearing stale connection before manual reconnect')
+    await connection.disconnect()
+    connection.clearSessionConfigs()
+    connection.clearActiveSessions()
+  }
 
   // 手动连接，必须走配对流程
   await startConnection(device, false)

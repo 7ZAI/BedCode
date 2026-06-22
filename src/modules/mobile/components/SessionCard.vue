@@ -1,6 +1,6 @@
 <template>
   <div
-    class="group bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-4 transition-all duration-300 hover:border-cyan-500/30 hover:shadow-[0_0_20px_rgba(34,211,238,0.1)] active:scale-[0.98] cursor-pointer"
+    class="group bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-4 shadow-[var(--mobile-card-shadow)] transition-all duration-300 hover:border-cyan-500/30 hover:shadow-[var(--mobile-card-shadow-hover)] active:scale-[0.98] cursor-pointer"
     :class="[
       session.status === 'stopped' ? 'opacity-60' : '',
       isHovered ? 'shadow-[0_0_15px_rgba(34,211,238,0.08)] border-cyan-500/20' : ''

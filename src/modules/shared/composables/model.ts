@@ -52,16 +52,6 @@ export interface OutputBlock {
   timestamp: number
 }
 
-// Plugin Session
-export interface PluginSessionInfo {
-  id: string
-  name: string
-  config_id: string
-  status: string
-  session_type: string
-  created_at: string
-}
-
 // QR Code
 export interface QrConnectionInfo {
   url: string

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::shared::enums::{SessionStatus, SessionType, TaskStatus};
+use crate::shared::enums::PluginQuestion;
 
 /// 会话信息（从 session/types.rs 移出）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,9 @@ pub struct SessionInfo {
     /// 任务状态更新时间
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_updated_at: Option<DateTime<Utc>>,
+    /// Claude 提问的问题列表（AskUserQuestion 时携带）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_questions: Option<Vec<PluginQuestion>>,
 }
 
 impl SessionInfo {
@@ -45,22 +49,7 @@ impl SessionInfo {
             task_status: None,
             task_reason: None,
             task_updated_at: None,
-        }
-    }
-
-    pub fn new_plugin(project_name: &str, _project_path: &str) -> Self {
-        Self {
-            id: Uuid::new_v4().to_string(),
-            config_id: String::new(),
-            name: project_name.to_string(),
-            status: SessionStatus::Starting,
-            created_at: Utc::now(),
-            started_at: None,
-            stopped_at: None,
-            session_type: SessionType::Plugin,
-            task_status: Some(TaskStatus::Idle),
-            task_reason: Some("Session started".to_string()),
-            task_updated_at: Some(Utc::now()),
+            task_questions: None,
         }
     }
 }
@@ -94,13 +83,5 @@ mod tests {
         assert!(info.task_status.is_none());
         assert!(info.task_reason.is_none());
         assert!(info.task_updated_at.is_none());
-    }
-
-    #[test]
-    fn test_session_info_plugin_has_task_status() {
-        let info = SessionInfo::new_plugin("my-project", "/path");
-        assert_eq!(info.task_status, Some(TaskStatus::Idle));
-        assert_eq!(info.task_reason, Some("Session started".to_string()));
-        assert!(info.task_updated_at.is_some());
     }
 }

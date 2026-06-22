@@ -10,7 +10,7 @@ pub use crate::shared::model::message::Message;
 pub use crate::shared::enums::{
     AuthPayload, AuthStage, SessionControlAction, SessionControlPayload,
     SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload,
-    QuickActionSummary, SessionConfigSummary, SessionSummary, SpecialKey,
+    QuickActionSummary, SessionConfigSummary, SessionSummary, KeyCombo,
 };
 
 // Re-export types from connection_types module

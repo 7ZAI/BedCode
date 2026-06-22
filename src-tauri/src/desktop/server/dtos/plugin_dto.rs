@@ -2,7 +2,9 @@
 //!
 //! 插件 HTTP API 请求/响应类型
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+use crate::shared::enums::PluginQuestion;
 
 /// POST /api/plugin/task-status request
 #[derive(Debug, Clone, Deserialize)]
@@ -15,6 +17,21 @@ pub struct TaskStatusRequest {
     /// 状态原因
     #[serde(default)]
     pub reason: Option<String>,
+    /// 认证 token
+    pub token: String,
+    /// Claude 提问的问题列表（AskUserQuestion 工具调用时携带）
+    #[serde(default)]
+    pub questions: Option<Vec<PluginQuestion>>,
+}
+
+/// POST /api/plugin/session-mode request
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionModeRequest {
+    /// Claude Code 会话 ID
+    pub session_id: String,
+    /// 是否自动授权
+    pub auto_approve: bool,
     /// 认证 token
     pub token: String,
 }

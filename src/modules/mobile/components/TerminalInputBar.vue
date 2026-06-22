@@ -5,7 +5,7 @@
   >
     <!-- 快捷键面板 - 覆盖层，不影响终端高度 -->
     <transition name="shortcuts-slide">
-      <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-panel">
+      <div v-if="showShortcutsPanel && !props.isLandscape" ref="shortcutsPanelRef" class="shortcuts-panel" @mousedown.prevent>
       <!-- 轮播容器 -->
       <div
         ref="carouselRef"
@@ -165,54 +165,69 @@
       </div>
     </Teleport>
 
+    <!-- 快捷键条 - 常驻显示最常用的快捷键和自定义命令 -->
+    <div v-if="quickBarItems.length > 0" class="quick-bar" @mousedown.prevent>
+      <button
+        v-for="item in quickBarItems"
+        :key="item.type + '-' + item.key"
+        class="quick-bar-btn"
+        :class="item.type === 'custom' ? 'quick-bar-custom' : 'quick-bar-shortcut'"
+        @click="handleQuickBarClick(item)"
+      >
+        {{ item.label }}
+      </button>
+    </div>
+
     <!-- 输入区域 -->
     <div class="input-area">
-      <!-- 快捷键切换按钮 -->
-      <button
-        class="toggle-btn"
-        :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
-        @click="toggleShortcuts"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-        </svg>
-      </button>
-
       <!-- 输入框容器 -->
-      <div class="input-box">
+      <div class="input-box" :class="{ 'input-box--expanded': isInputFocused }">
         <textarea
           ref="inputRef"
           v-model="inputText"
           class="input-field"
+          :class="{ 'input-field--expanded': isInputFocused }"
           :placeholder="placeholder"
           :disabled="disabled"
           rows="1"
           @focus="handleFocus"
+          @blur="handleBlur"
           @input="adjustTextareaHeight"
         ></textarea>
+
+        <!-- 快捷键切换按钮 -->
+        <button
+          class="inline-btn toggle-btn"
+          :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
+          @mousedown.prevent="toggleShortcuts"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+        </button>
+
+        <!-- 发送按钮 -->
+        <button
+          class="inline-btn send-btn"
+          :disabled="!canSubmit"
+          @click="handleSubmit"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+          </svg>
+        </button>
+
+        <!-- 执行按钮 -->
+        <button
+          class="inline-btn execute-btn"
+          :disabled="!canSubmit"
+          @click="handleExecute"
+        >
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+          </svg>
+        </button>
       </div>
-
-      <!-- 发送按钮 - 蓝色向上箭头 -->
-      <button
-        class="send-btn"
-        :disabled="!canSubmit"
-        @click="handleSubmit"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
-        </svg>
-      </button>
-
-      <!-- 执行按钮 - Telegram 风格纸飞机 -->
-      <button
-        class="execute-btn"
-        :disabled="!canSubmit"
-        @click="handleExecute"
-      >
-        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-        </svg>
-      </button>
     </div>
   </div>
 </template>
@@ -221,6 +236,8 @@
 import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
 import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useInputAssistantStore } from '@/modules/shared/stores/inputAssistant'
+import type { QuickBarItem } from '@/modules/shared/stores/inputAssistant'
 
 // ==================== Types ====================
 
@@ -251,6 +268,8 @@ const emit = defineEmits<{
   submit: [text: string]
   execute: [text: string]
   specialKey: [key: string]
+  /** 快捷键面板展开/收起时通知终端，传入面板高度用于偏移 */
+  shortcutsPanelToggle: [height: number]
 }>()
 
 // ==================== Safe Area ====================
@@ -266,9 +285,12 @@ const inputBarStyle = computed(() => {
 
 // ==================== State ====================
 
+const assistStore = useInputAssistantStore()
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const shortcutsPanelRef = ref<HTMLElement | null>(null)
 const inputText = ref('')
 const showShortcutsPanel = ref(false)
+const isInputFocused = ref(false)
 const showAddDialog = ref(false)
 const newCommand = ref('')
 const cmdInputRef = ref<HTMLInputElement | null>(null)
@@ -333,6 +355,7 @@ function addCustomCommand() {
 function handleCustomCommandClick(cmd: CustomCommand) {
   // 编辑模式下点击不执行命令
   if (isEditingCommands.value) return
+  assistStore.recordCustomCommand(cmd.id)
   emit('execute', cmd.command)
 }
 
@@ -352,9 +375,14 @@ const generalShortcuts = [
   { label: 'Enter', code: 'enter' },
   { label: 'Esc', code: 'escape' },
   { label: 'Del', code: 'backspace' },
-  { label: 'Ctrl+C', code: 'ctrl_c' },
-  { label: 'Ctrl+Z', code: 'ctrl_z' },
-  { label: 'Ctrl+L', code: 'ctrl_l' },
+  { label: 'Ctrl+C', code: 'ctrl+c' },
+  { label: 'Ctrl+D', code: 'ctrl+d' },
+  { label: 'Ctrl+Z', code: 'ctrl+z' },
+  { label: 'Ctrl+L', code: 'ctrl+l' },
+  { label: 'Ctrl+A', code: 'ctrl+a' },
+  { label: 'Ctrl+E', code: 'ctrl+e' },
+  { label: 'Ctrl+K', code: 'ctrl+k' },
+  { label: 'Ctrl+U', code: 'ctrl+u' },
 ]
 
 // ==================== Carousel Methods ====================
@@ -405,6 +433,15 @@ const canSubmit = computed(() => {
 
 function toggleShortcuts() {
   showShortcutsPanel.value = !showShortcutsPanel.value
+  if (showShortcutsPanel.value) {
+    // 面板渲染后测量高度并通知终端
+    nextTick(() => {
+      const h = shortcutsPanelRef.value?.offsetHeight || 0
+      emit('shortcutsPanelToggle', h)
+    })
+  } else {
+    emit('shortcutsPanelToggle', 0)
+  }
 }
 
 function handleSubmit() {
@@ -428,22 +465,58 @@ function handleExecute() {
 }
 
 function handleShortcutClick(code: string) {
+  assistStore.recordShortcut(code)
   emit('specialKey', code)
 }
 
+// ==================== Quick Bar ====================
+
+/// 快捷键条项目：合并快捷键和自定义命令，按使用频次排序
+const quickBarItems = computed(() => assistStore.getQuickBarItems(customCommands.value))
+
+/// 快捷键条按钮点击处理
+function handleQuickBarClick(item: QuickBarItem) {
+  if (item.type === 'shortcut') {
+    assistStore.recordShortcut(item.key)
+    emit('specialKey', item.key)
+  } else {
+    // 自定义命令：找到对应命令文本，执行（文本+Enter）
+    const cmd = customCommands.value.find(c => c.id === item.key)
+    if (cmd) {
+      assistStore.recordCustomCommand(cmd.id)
+      emit('execute', cmd.command)
+    }
+  }
+}
+
 function handleFocus() {
+  isInputFocused.value = true
+  // 延迟调整高度，等键盘弹出后再计算
   setTimeout(() => {
+    adjustTextareaHeight()
     if (inputRef.value) {
       inputRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }
   }, 100)
 }
 
+function handleBlur() {
+  isInputFocused.value = false
+  // 失焦时如果内容为空，收缩回 1 行
+  if (!inputText.value.trim() && inputRef.value) {
+    inputRef.value.style.height = 'auto'
+  }
+}
+
 function adjustTextareaHeight() {
   const textarea = inputRef.value
   if (!textarea) return
   textarea.style.height = 'auto'
-  const newHeight = Math.min(textarea.scrollHeight, 120)
+  // 聚焦时最小 3 行高度，失焦时最小 1 行
+  const minLines = isInputFocused.value ? 3 : 1
+  const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 21
+  const minHeight = lineHeight * minLines
+  const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, 120))
   textarea.style.height = `${newHeight}px`
 }
 
@@ -473,13 +546,93 @@ onMounted(() => {
   position: relative;
 }
 
-.input-area {
+/* ==================== Quick Bar ==================== */
+
+.quick-bar {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  gap: 0.375rem;
+  padding-bottom: 0.375rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  /* 右对齐：最常用的快捷键在右侧，方便右手拇指操作 */
+  justify-content: flex-end;
 }
 
-.toggle-btn {
+.quick-bar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.quick-bar-btn {
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+}
+
+.quick-bar-shortcut {
+  background: var(--mobile-shortcut-bg);
+  border-color: var(--mobile-shortcut-border);
+  color: var(--mobile-shortcut-color);
+}
+
+.quick-bar-shortcut:active {
+  transform: scale(0.93);
+  background: var(--mobile-shortcut-active-bg);
+}
+
+.quick-bar-custom {
+  background: var(--mobile-custom-cmd-bg);
+  border-color: var(--mobile-custom-cmd-border);
+  color: var(--mobile-custom-cmd-color);
+}
+
+.quick-bar-custom:active {
+  transform: scale(0.93);
+  background: var(--mobile-custom-cmd-active-bg);
+}
+
+.input-area {
+  display: flex;
+  align-items: flex-end;
+}
+
+.input-box {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.375rem;
+  background: var(--mobile-input-bg);
+  border: 1px solid var(--mobile-input-border);
+  border-radius: 1.25rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  min-height: 2.5rem;
+}
+
+.input-box:focus-within {
+  border-color: var(--mobile-accent);
+  box-shadow: 0 0 0 2px var(--mobile-accent-muted);
+}
+
+/* 聚焦时输入框微扩张，配合 textarea 展开更协调 */
+.input-box--expanded {
+  border-radius: 1rem;
+}
+
+/* 输入框内的内联按钮（快捷键切换、发送、执行） */
+.inline-btn {
   width: 2rem;
   height: 2rem;
   display: flex;
@@ -492,32 +645,23 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
+.toggle-btn {
+  background: transparent;
+  border-color: transparent;
+  color: var(--mobile-text-muted);
+  padding: 0;
+}
+
+.toggle-btn:active {
+  transform: scale(0.9);
+}
+
 .toggle-active {
-  background: rgba(139, 233, 253, 0.15);
-  color: #8be9fd;
-  border-color: rgba(139, 233, 253, 0.5);
+  color: var(--mobile-toggle-active-color);
 }
 
 .toggle-inactive {
-  background: var(--mobile-bg-elevated);
   color: var(--mobile-text-muted);
-  border-color: var(--mobile-border);
-}
-
-.input-box {
-  flex: 1;
-  display: flex;
-  align-items: flex-start;
-  background: var(--mobile-input-bg);
-  border: 1px solid var(--mobile-input-border);
-  border-radius: 1rem;
-  padding: 0.5rem 1rem;
-  transition: border-color 0.2s ease;
-  min-height: 2.5rem;
-}
-
-.input-box:focus-within {
-  border-color: var(--mobile-accent);
 }
 
 .input-field {
@@ -532,55 +676,47 @@ onMounted(() => {
   max-height: 120px;
   overflow-y: auto;
   line-height: 1.5;
+  min-height: 1.5rem;
+}
+
+/* 聚焦时 textarea 展开到 3 行高度 */
+.input-field--expanded {
+  min-height: 4.5rem;
 }
 
 .input-field::placeholder {
   color: var(--mobile-input-placeholder);
 }
 
-.send-btn,
-.execute-btn {
-  width: 2.5rem;
-  height: 2.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  border: 1px solid;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
-}
-
 .send-btn {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.08));
-  border-color: rgba(59, 130, 246, 0.4);
-  color: #3b82f6;
+  background: var(--mobile-send-bg);
+  border-color: var(--mobile-send-border);
+  color: var(--mobile-send-color);
 }
 
-.send-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(59, 130, 246, 0.15));
-  border-color: rgba(59, 130, 246, 0.6);
+.send-btn:active:not(:disabled) {
+  transform: scale(0.9);
+  background: var(--mobile-send-active-bg);
 }
 
 .send-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 .execute-btn {
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.2), rgba(255, 121, 198, 0.15));
-  border-color: rgba(255, 184, 108, 0.5);
-  color: #ffb86c;
+  background: var(--mobile-execute-bg);
+  border-color: var(--mobile-execute-border);
+  color: var(--mobile-execute-color);
 }
 
-.execute-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.35), rgba(255, 121, 198, 0.25));
-  border-color: rgba(255, 184, 108, 0.7);
+.execute-btn:active:not(:disabled) {
+  transform: scale(0.9);
+  background: var(--mobile-execute-active-bg);
 }
 
 .execute-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -595,7 +731,8 @@ onMounted(() => {
   padding: 0.5rem 0.75rem 0.375rem;
   background: var(--mobile-bg-secondary);
   backdrop-filter: blur(20px);
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  z-index: 50;
 }
 
 /* 快捷键面板滑动动画 - 从下往上展开/收起 */
@@ -662,6 +799,16 @@ onMounted(() => {
 .shortcuts-left {
   flex: 1;
   min-width: 0;
+  /* 两行高度：2 * 2.25rem + 1 * 0.375rem = 4.875rem */
+  max-height: 4.875rem;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shortcuts-left::-webkit-scrollbar {
+  display: none;
+  width: 0;
 }
 
 .shortcuts-grid {
@@ -672,9 +819,9 @@ onMounted(() => {
 
 .shortcut-btn {
   height: 2.25rem;
-  background: linear-gradient(135deg, rgba(189, 147, 249, 0.12), rgba(189, 147, 249, 0.06));
-  border: 1px solid rgba(189, 147, 249, 0.35);
-  color: #bd93f9;
+  background: var(--mobile-shortcut-bg);
+  border: 1px solid var(--mobile-shortcut-border);
+  color: var(--mobile-shortcut-color);
   font-size: 0.75rem;
   font-weight: 500;
   border-radius: 0.5rem;
@@ -685,14 +832,9 @@ onMounted(() => {
   justify-content: center;
 }
 
-.shortcut-btn:hover {
-  background: linear-gradient(135deg, rgba(189, 147, 249, 0.22), rgba(189, 147, 249, 0.12));
-  border-color: rgba(189, 147, 249, 0.55);
-}
-
 .shortcut-btn:active {
   transform: scale(0.95);
-  background: linear-gradient(135deg, rgba(189, 147, 249, 0.28), rgba(189, 147, 249, 0.16));
+  background: var(--mobile-shortcut-active-bg);
 }
 
 .shortcuts-right {
@@ -720,9 +862,9 @@ onMounted(() => {
 .arrow-btn {
   width: 2.25rem;
   height: 2.25rem;
-  background: linear-gradient(135deg, rgba(241, 250, 140, 0.12), rgba(241, 250, 140, 0.06));
-  border: 1px solid rgba(241, 250, 140, 0.35);
-  color: #f1fa8c;
+  background: var(--mobile-arrow-bg);
+  border: 1px solid var(--mobile-arrow-border);
+  color: var(--mobile-arrow-color);
   border-radius: 0.5rem;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -731,14 +873,9 @@ onMounted(() => {
   justify-content: center;
 }
 
-.arrow-btn:hover {
-  background: linear-gradient(135deg, rgba(241, 250, 140, 0.22), rgba(241, 250, 140, 0.12));
-  border-color: rgba(241, 250, 140, 0.55);
-}
-
 .arrow-btn:active {
   transform: scale(0.9);
-  background: linear-gradient(135deg, rgba(241, 250, 140, 0.28), rgba(241, 250, 140, 0.16));
+  background: var(--mobile-arrow-active-bg);
 }
 
 .arrow-icon {
@@ -760,9 +897,9 @@ onMounted(() => {
 
 .custom-cmd-btn {
   height: 2.25rem;
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.12), rgba(80, 250, 123, 0.06));
-  border: 1px solid rgba(80, 250, 123, 0.35);
-  color: #50fa7b;
+  background: var(--mobile-custom-cmd-bg);
+  border: 1px solid var(--mobile-custom-cmd-border);
+  color: var(--mobile-custom-cmd-color);
   font-size: 0.75rem;
   font-weight: 500;
   border-radius: 0.5rem;
@@ -776,14 +913,9 @@ onMounted(() => {
   padding: 0 0.25rem;
 }
 
-.custom-cmd-btn:hover {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.22), rgba(80, 250, 123, 0.12));
-  border-color: rgba(80, 250, 123, 0.55);
-}
-
 .custom-cmd-btn:active {
   transform: scale(0.95);
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.28), rgba(80, 250, 123, 0.16));
+  background: var(--mobile-custom-cmd-active-bg);
 }
 
 .cmd-label {
@@ -796,9 +928,9 @@ onMounted(() => {
 /* 编辑模式下按钮抖动提示 */
 .custom-cmd-btn.editing {
   animation: wiggle 0.3s ease-in-out;
-  border-color: rgba(255, 85, 85, 0.5);
-  background: linear-gradient(135deg, rgba(255, 85, 85, 0.12), rgba(255, 85, 85, 0.06));
-  color: #ff5555;
+  border-color: var(--mobile-danger-border);
+  background: var(--mobile-danger-bg);
+  color: var(--mobile-danger-color);
 }
 
 @keyframes wiggle {
@@ -813,7 +945,7 @@ onMounted(() => {
   right: -0.25rem;
   width: 1rem;
   height: 1rem;
-  background: rgba(255, 85, 85, 0.9);
+  background: var(--mobile-danger-solid-bg);
   border: none;
   border-radius: 9999px;
   color: white;
@@ -822,7 +954,7 @@ onMounted(() => {
   justify-content: center;
   cursor: pointer;
   padding: 0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 /* 删除徽章过渡动画 */
@@ -840,36 +972,26 @@ onMounted(() => {
 
 /* 编辑切换按钮 */
 .edit-toggle-btn {
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.12), rgba(255, 184, 108, 0.06));
-  border: 1px solid rgba(255, 184, 108, 0.35);
-  color: #ffb86c;
-}
-
-.edit-toggle-btn:hover {
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.22), rgba(255, 184, 108, 0.12));
-  border-color: rgba(255, 184, 108, 0.55);
+  background: var(--mobile-edit-cmd-bg);
+  border: 1px solid var(--mobile-edit-cmd-border);
+  color: var(--mobile-edit-cmd-color);
 }
 
 .edit-toggle-btn:active {
   transform: scale(0.95);
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.28), rgba(255, 184, 108, 0.16));
+  background: var(--mobile-edit-cmd-active-bg);
 }
 
 /* 添加按钮 */
 .add-cmd-btn {
-  background: linear-gradient(135deg, rgba(139, 233, 253, 0.12), rgba(139, 233, 253, 0.06));
-  border: 1px dashed rgba(139, 233, 253, 0.5);
-  color: #8be9fd;
-}
-
-.add-cmd-btn:hover {
-  background: linear-gradient(135deg, rgba(139, 233, 253, 0.22), rgba(139, 233, 253, 0.12));
-  border-color: rgba(139, 233, 253, 0.7);
+  background: var(--mobile-add-cmd-bg);
+  border: 1px dashed var(--mobile-add-cmd-border);
+  color: var(--mobile-add-cmd-color);
 }
 
 .add-cmd-btn:active {
   transform: scale(0.95);
-  background: linear-gradient(135deg, rgba(139, 233, 253, 0.28), rgba(139, 233, 253, 0.16));
+  background: var(--mobile-add-cmd-active-bg);
 }
 
 /* ==================== Add Dialog ==================== */
@@ -877,7 +999,7 @@ onMounted(() => {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -952,14 +1074,9 @@ onMounted(() => {
 }
 
 .dialog-btn.confirm {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.2), rgba(80, 250, 123, 0.1));
-  border-color: rgba(80, 250, 123, 0.5);
-  color: #50fa7b;
-}
-
-.dialog-btn.confirm:hover {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.3), rgba(80, 250, 123, 0.15));
-  border-color: rgba(80, 250, 123, 0.7);
+  background: var(--mobile-confirm-bg);
+  border-color: var(--mobile-confirm-border);
+  color: var(--mobile-confirm-color);
 }
 
 .dialog-btn.confirm:disabled {

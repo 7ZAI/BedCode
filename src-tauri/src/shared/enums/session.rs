@@ -35,7 +35,6 @@ impl Default for SessionStatus {
 #[serde(rename_all = "camelCase")]
 pub enum SessionType {
     Pty,
-    Plugin,
 }
 
 /// 会话任务状态

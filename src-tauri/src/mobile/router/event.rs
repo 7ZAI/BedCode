@@ -113,6 +113,14 @@ pub enum MobileEvent {
         session_id: String,
         task_status: String,
         task_reason: Option<String>,
+        task_questions: Option<Vec<crate::shared::enums::plugin::PluginQuestion>>,
+    },
+
+    // === 会话模式同步事件 ===
+    /// 会话自动授权模式变更
+    SyncSessionModeChanged {
+        session_id: String,
+        auto_approve: bool,
     },
 }
 
@@ -258,7 +266,7 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
             }));
         }
 
-        MobileEvent::SyncTaskStatusChanged { session_id, task_status, task_reason } => {
+        MobileEvent::SyncTaskStatusChanged { session_id, task_status, task_reason, task_questions } => {
             tracing::info!(
                 "[EventForwarder] SyncTaskStatusChanged: session_id={}, status={}",
                 session_id, task_status
@@ -267,6 +275,18 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
                 "session_id": session_id,
                 "task_status": task_status,
                 "task_reason": task_reason,
+                "task_questions": task_questions,
+            }));
+        }
+
+        MobileEvent::SyncSessionModeChanged { session_id, auto_approve } => {
+            tracing::info!(
+                "[EventForwarder] SyncSessionModeChanged: session_id={}, auto_approve={}",
+                session_id, auto_approve
+            );
+            let _ = app.emit("ws_sync_session_mode_changed", serde_json::json!({
+                "session_id": session_id,
+                "auto_approve": auto_approve,
             }));
         }
 

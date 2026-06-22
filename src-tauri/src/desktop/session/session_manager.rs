@@ -211,6 +211,7 @@ impl SessionManager {
             task_status: None,
             task_reason: None,
             task_updated_at: None,
+            task_questions: None,
         };
 
         // 保存到各服务
@@ -278,6 +279,7 @@ impl SessionManager {
             task_status: None,
             task_reason: None,
             task_updated_at: None,
+            task_questions: None,
         };
 
         // 保存到各服务
@@ -432,6 +434,7 @@ impl SessionManager {
             task_status: None,
             task_reason: None,
             task_updated_at: None,
+            task_questions: None,
         };
 
         // 保存到各服务

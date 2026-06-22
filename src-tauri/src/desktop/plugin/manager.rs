@@ -1,531 +1,74 @@
-//! Plugin Session Management
+//! Plugin Task Status Manager
 //!
-//! 提供插件会话管理功能
+//! 管理插件推送的任务执行状态，并通过事件总线广播变更。
+//! 同时管理会话级自动授权模式，供 Python PreToolUse hook 通过 HTTP API 查询。
 //!
-//! 注意：Plugin 会话通过文件系统监控 Claude Code 日志文件，
-//! 将 JSONL 日志内容转换为 PTY 输出事件转发到客户端
+//! 插件（bedcode-plugin）通过 HTTP API 推送任务状态变更，
+//! 本模块负责接收状态、内存存储、以及通过 DesktopSyncEvent 广播到所有客户端。
 //!
-//! 输入数据通过写入 `.claude/bedcode-pending-input.txt` 文件由插件读取
+//! 自动授权模式：移动端/终端切换自动模式时，通过 HTTP API 通知桌面端，
+//! PluginManager 在内存中维护模式状态，Python hook 通过 GET /api/plugin/session-mode 查询。
 
-use super::jsonl;
-
-use crate::shared::db::Database;
-use crate::shared::system::config::AppConfig;
+use crate::shared::enums::PluginQuestion;
 use crate::shared::enums::TaskStatus;
-use crate::desktop::pty::PtyOutputEvent;
-use crate::Result;
-use base64::Engine;
-use chrono::Utc;
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::RwLock;
 
-/// 插件会话状态
-#[derive(Debug)]
-pub struct PluginSessionState {
-    pub session_id: String,
-    pub project_name: String,
-    pub project_path: PathBuf,
-    pub jsonl_path: PathBuf,
-    pub watcher: Option<RecommendedWatcher>,
-    pub last_heartbeat: Instant,
-    pub file_position: u64,
+/// 任务状态条目
+#[derive(Debug, Clone)]
+struct TaskStateEntry {
+    task_status: TaskStatus,
+    task_reason: Option<String>,
+    task_questions: Option<Vec<PluginQuestion>>,
+    updated_at: DateTime<Utc>,
 }
 
-impl Clone for PluginSessionState {
-    fn clone(&self) -> Self {
-        Self {
-            session_id: self.session_id.clone(),
-            project_name: self.project_name.clone(),
-            project_path: self.project_path.clone(),
-            jsonl_path: self.jsonl_path.clone(),
-            watcher: None, // 监听器不可克隆，新实例初始化为 None
-            last_heartbeat: self.last_heartbeat,
-            file_position: self.file_position,
-        }
-    }
-}
-
-/// 插件会话状态枚举（用于状态和显示）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginSessionStatus {
-    Starting,
-    Running,
-    Disconnected,
-    Stopped,
-}
-
-impl Default for PluginSessionStatus {
-    fn default() -> Self {
-        Self::Starting
-    }
-}
-
-/// 插件管理器
+/// 插件任务状态管理器
 ///
-/// 管理多个插件会话，每个会话对应一个独立的项目
-/// 通过文件系统监听和心跳机制监控会话健康状态
+/// 管理插件推送的任务执行状态和会话级自动授权模式。
+/// 自动授权模式仅存储在内存中，Python hook 通过 HTTP API 查询。
 pub struct PluginManager {
-    /// 活动会话状态（ID → 状态）
-    sessions: Arc<RwLock<HashMap<String, PluginSessionState>>>,
-    /// 会话信息（与 session 模块兼容）
-    session_info: Arc<RwLock<HashMap<String, crate::desktop::session::SessionInfo>>>,
-    /// 输出事件广播
-    output_tx: broadcast::Sender<PtyOutputEvent>,
-    /// 数据库连接
-    db: Arc<Mutex<Database>>,
+    task_states: Arc<RwLock<HashMap<String, TaskStateEntry>>>,
+    /// 会话级自动授权模式：session_id → auto_approve
+    auto_modes: Arc<RwLock<HashMap<String, bool>>>,
 }
 
 impl PluginManager {
     /// 创建新的 PluginManager
-    ///
-    /// # Arguments
-    /// * `output_tx` - 全局输出事件发送器，用于向下游客户端转发消息
-    /// * `db` - 数据库连接（可选，用于持久化会话信息）
-    ///
-    /// # Returns
-    /// 新创建的 PluginManager 实例
-    pub fn new(output_tx: broadcast::Sender<PtyOutputEvent>, db: Arc<Mutex<Database>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            session_info: Arc::new(RwLock::new(HashMap::new())),
-            output_tx,
-            db,
+            task_states: Arc::new(RwLock::new(HashMap::new())),
+            auto_modes: Arc::new(RwLock::new(HashMap::new())),
         }
     }
+}
 
-    /// 从数据库创建 PluginManager
-    pub fn from_database(db: Database, output_tx: broadcast::Sender<PtyOutputEvent>) -> Self {
-        Self::new(output_tx, Arc::new(Mutex::new(db)))
-    }
-
-    /// 注册新的插件会话
+impl PluginManager {
+    /// 更新插件推送的任务状态
     ///
-    /// 当 Claude Code 插件首次连接时调用，注册项目路径和日志文件
-    ///
-    /// # Arguments
-    /// * `session_id` - 会话 UUID（由插件生成）
-    /// * `project_name` - 项目名称
-    /// * `project_path` - 项目根目录
-    /// * `jsonl_path` - Claude Code 消息日志文件路径
-    ///
-    /// # Returns
-    /// Ok(()) 注册成功，Err 注册失败
-    pub async fn register_session(
-        &self,
-        session_id: String,
-        project_name: String,
-        project_path: String,
-        jsonl_path: String,
-    ) -> Result<()> {
-        let jsonl_path = PathBuf::from(&jsonl_path);
-        let project_path = PathBuf::from(&project_path);
-
-        // 验证文件路径存在且可读
-        if !jsonl_path.exists() {
-            tracing::warn!("JSONL file not found: {}", jsonl_path.display());
-        }
-
-        // 创建 SessionInfo（可与 PTY 会话共存）
-        let mut info =
-            crate::desktop::session::SessionInfo::new_plugin(&project_name, &project_path.to_string_lossy());
-        info.id = session_id.clone();
-        info.status = crate::desktop::session::SessionStatus::Running;
-
-        // 保存会话信息到内存
-        {
-            let mut info_map = self.session_info.write().await;
-            info_map.insert(session_id.clone(), info);
-        }
-
-        // 创建插件会话状态
-        let state = PluginSessionState {
-            session_id: session_id.clone(),
-            project_name,
-            project_path,
-            jsonl_path: jsonl_path.clone(),
-            watcher: None,
-            last_heartbeat: Instant::now(),
-            file_position: 0,
-        };
-
-        // 保存会话状态
-        {
-            let mut sessions = self.sessions.write().await;
-            sessions.insert(session_id.clone(), state);
-        }
-
-        // 启动文件监听器读取日志更新
-        // 返回监听器和初始位置，然后在 async 上下文中更新会话状态
-        let (watcher, initial_pos) = self
-            .start_file_watcher(session_id.clone(), jsonl_path.clone())
-            .await?;
-
-        // 更新会话状态，写入文件位置和监听器
-        {
-            let mut sessions = self.sessions.write().await;
-            if let Some(state) = sessions.get_mut(&session_id) {
-                state.file_position = initial_pos;
-                state.watcher = Some(watcher);
-
-                // 读取并转发初始位置到结尾的内容
-                if let Ok((lines, new_pos)) = jsonl::read_new_lines(&jsonl_path, initial_pos)
-                {
-                    state.file_position = new_pos;
-                    for line in lines {
-                        if line.trim().is_empty() {
-                            continue;
-                        }
-                        if let Some(output) = jsonl::ClaudeEntry::parse_line(&line) {
-                            if !output.text.is_empty() {
-                                let event = PtyOutputEvent {
-                                    session_id: session_id.clone(),
-                                    data: Engine::encode(
-                                        &base64::engine::general_purpose::STANDARD,
-                                        output.text.as_bytes(),
-                                    ),
-                                    timestamp: chrono::Utc::now(),
-                                    is_waiting: output.is_waiting,
-                                    index: crate::desktop::pty::next_output_index(),
-                                };
-                                let _ = self.output_tx.send(event);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        tracing::info!(
-            "Plugin session registered: {} (jsonl: {})",
-            session_id,
-            jsonl_path.display()
-        );
-        Ok(())
-    }
-
-    /// 启动文件监听进程
-    ///
-    /// 使用 notify 库监听 JSONL 文件的修改事件，当文件更新时
-    /// 读取新内容并转发到输出通道
-    async fn start_file_watcher(
-        &self,
-        session_id: String,
-        jsonl_path: PathBuf,
-    ) -> Result<(RecommendedWatcher, u64)> {
-        let sessions = self.sessions.clone();
-        let output_tx = self.output_tx.clone();
-
-        // 获取初始文件位置（从文件结尾开始，忽略历史内容）
-        let initial_pos = tokio::fs::metadata(&jsonl_path)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
-
-        // 创建 notify 监听器
-        // 从配置读取轮询间隔，平衡响应速度和 CPU 占用
-        let poll_interval = Duration::from_millis(AppConfig::global().plugin.file_poll_interval_ms);
-        let mut watcher = {
-            let sessions = sessions.clone();
-            let output_tx = output_tx.clone();
-            let session_id = session_id.clone();
-
-            RecommendedWatcher::new(
-                move |res: std::result::Result<notify::Event, notify::Error>| {
-                    if let Ok(event) = res {
-                        if event.kind.is_modify() {
-                            // 使用 tokio::spawn 调用 async 方法处理文件更新
-                            // 将同步的 notify 回调与异步的 JSONL 处理解耦
-                            let sessions = sessions.clone();
-                            let output_tx = output_tx.clone();
-                            let session_id = session_id.clone();
-                            tokio::spawn(async move {
-                                Self::read_jsonl_updates(
-                                    &sessions,
-                                    &output_tx,
-                                    &session_id,
-                                ).await;
-                            });
-                        }
-                    }
-                },
-                Config::default().with_poll_interval(poll_interval),
-            )?
-        };
-
-        // 开始监听（非递归，仅监听单个文件）
-        watcher.watch(&jsonl_path, RecursiveMode::NonRecursive)?;
-
-        // 返回监听器和初始文件位置，由 register_session 负责异步写入会话状态
-        Ok((watcher, initial_pos))
-    }
-
-    /// 读取并处理 JSONL 文件更新
-    ///
-    /// 从文件中读取新行（从上次读取位置开始），解析后转发为 PTY 输出事件
-    ///
-    /// # Arguments
-    /// * `sessions` - 会话状态映射
-    /// * `output_tx` - 输出事件发送器
-    /// * `session_id` - 目标会话 ID
-    async fn read_jsonl_updates(
-        sessions: &Arc<RwLock<HashMap<String, PluginSessionState>>>,
-        output_tx: &broadcast::Sender<PtyOutputEvent>,
-        session_id: &str,
-    ) {
-        // 获取当前文件路径和读取位置
-        let (jsonl_path, last_pos) = {
-            let sessions = sessions.read().await;
-            match sessions.get(session_id) {
-                Some(s) => (s.jsonl_path.clone(), s.file_position),
-                None => {
-                    tracing::warn!("Session not found: {}", session_id);
-                    return;
-                }
-            }
-        };
-
-        // 读取新行
-        let (lines, new_pos) = match jsonl::read_new_lines(&jsonl_path, last_pos) {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!("Failed to read JSONL file: {}", e);
-                return;
-            }
-        };
-
-        // 更新读取位置
-        {
-            let mut sessions = sessions.write().await;
-            if let Some(state) = sessions.get_mut(session_id) {
-                state.file_position = new_pos;
-            }
-        }
-
-        // 解析并转发每行
-        for line in lines {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Some(output) = jsonl::ClaudeEntry::parse_line(&line) {
-                if output.text.is_empty() {
-                    continue;
-                }
-
-                let event = PtyOutputEvent {
-                    session_id: session_id.to_string(),
-                    data: base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        output.text.as_bytes(),
-                    ),
-                    timestamp: chrono::Utc::now(),
-                    is_waiting: output.is_waiting,
-                    index: crate::desktop::pty::next_output_index(),
-                };
-
-                let _ = output_tx.send(event);
-            }
-        }
-    }
-
-    /// 处理来自插件的心跳消息
-    ///
-    /// 心跳超时时间从配置读取
-    pub async fn handle_heartbeat(&self, session_id: &str) -> Result<()> {
-        let mut sessions = self.sessions.write().await;
-        if let Some(state) = sessions.get_mut(session_id) {
-            state.last_heartbeat = Instant::now();
-            tracing::debug!("Heartbeat received for plugin session: {}", session_id);
-        } else {
-            tracing::warn!(
-                "Heartbeat received for unknown session: {}",
-                session_id
-            );
-        }
-        Ok(())
-    }
-
-    /// 注销插件会话
-    ///
-    /// 当 Claude Code 退出或用户手动断开时调用
-    /// 停止文件监听并清理会话资源
-    pub async fn unregister_session(&self, session_id: &str) -> Result<()> {
-        // 停止文件监听并清理会话状态
-        {
-            let mut sessions = self.sessions.write().await;
-            if let Some(mut state) = sessions.remove(session_id) {
-                // 释放监听器（drop watcher）
-                state.watcher = None;
-                tracing::debug!("File watcher stopped for session: {}", session_id);
-            }
-        }
-
-        // 更新会话信息，标记为已停止
-        {
-            let mut info_map = self.session_info.write().await;
-            if let Some(info) = info_map.get_mut(session_id) {
-                info.status = crate::desktop::session::SessionStatus::Stopped;
-                info.stopped_at = Some(Utc::now());
-            }
-        }
-
-        tracing::info!("Plugin session unregistered: {}", session_id);
-        Ok(())
-    }
-
-    /// 写入用户输入到等待文件
-    ///
-    /// 插件通过轮询 `.claude/bedcode-pending-input.txt` 文件获取用户输入
-    ///
-    /// # Arguments
-    /// * `session_id` - 目标会话 ID
-    /// * `data` - 用户输入内容（通常是单条消息）
-    pub async fn write_input(&self, session_id: &str, data: &str) -> Result<()> {
-        // 获取项目路径
-        let project_path = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .get(session_id)
-                .map(|s| s.project_path.clone())
-                .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?
-        };
-
-        let pending_file = project_path.join(".claude").join("bedcode-pending-input.txt");
-
-        // 确保 .claude 目录存在
-        if let Some(parent) = pending_file.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        // 写入输入内容
-        tokio::fs::write(&pending_file, data).await?;
-
-        tracing::info!("Input written to pending file: {}", pending_file.display());
-        Ok(())
-    }
-
-    /// 获取会话信息
-    pub async fn get_session(&self, session_id: &str) -> Option<crate::desktop::session::SessionInfo> {
-        let info_map = self.session_info.read().await;
-        info_map.get(session_id).cloned()
-    }
-
-    /// 列出所有会话
-    pub async fn list_sessions(&self) -> Vec<crate::desktop::session::SessionInfo> {
-        let info_map = self.session_info.read().await;
-        info_map.values().cloned().collect()
-    }
-
-    /// 完全删除会话
-    ///
-    /// 从所有数据结构移除此会话，与 SessionManager 接口一致
-    pub async fn remove_session(&self, session_id: &str) -> Result<()> {
-        // 检查会话是否存在
-        let sessions = self.sessions.read().await;
-        let exists = sessions.contains_key(session_id);
-        drop(sessions);
-
-        if exists {
-            // 先注销
-            self.unregister_session(session_id).await?;
-        }
-
-        // 从会话信息映射中完全移除
-        {
-            let mut info_map = self.session_info.write().await;
-            info_map.remove(session_id);
-        }
-
-        tracing::info!("Plugin session fully removed: {}", session_id);
-        Ok(())
-    }
-
-    /// 检查超时并返回断开连接的会话 ID
-    ///
-    /// 心跳超时时间从配置读取
-    /// 建议每分钟调用一次此函数进行清理
-    ///
-    /// # Returns
-    /// 断开连接的会话 ID 列表
-    pub async fn check_timeouts(&self) -> Vec<String> {
-        let now = Instant::now();
-        let timeout = Duration::from_secs(AppConfig::global().plugin.heartbeat_timeout_secs);
-        let mut disconnected = vec![];
-
-        let sessions = self.sessions.write().await;
-        for (id, state) in sessions.iter() {
-            if now.duration_since(state.last_heartbeat) > timeout {
-                disconnected.push(id.clone());
-            }
-        }
-        drop(sessions);
-
-        // 更新断开连接会话的状态
-        {
-            let mut info_map = self.session_info.write().await;
-            for id in &disconnected {
-                if let Some(info) = info_map.get_mut(id) {
-                    info.status = crate::desktop::session::SessionStatus::Error(None);
-                }
-            }
-        }
-
-        // 清理掉断开连接的会话状态
-        if !disconnected.is_empty() {
-            let mut sessions = self.sessions.write().await;
-            for id in &disconnected {
-                // 这里只移除会话，不更新 info_map（因为上面已经更新了）
-                if let Some(mut state) = sessions.remove(id) {
-                    state.watcher = None;
-                }
-            }
-        }
-
-        if !disconnected.is_empty() {
-            tracing::info!("Detected {} disconnected plugin sessions", disconnected.len());
-        }
-
-        disconnected
-    }
-
-    /// 获取会话状态
-    pub async fn get_session_status(&self, session_id: &str) -> Option<PluginSessionStatus> {
-        let info_map = self.session_info.read().await;
-        info_map.get(session_id).map(|session| match session.status {
-            crate::desktop::session::SessionStatus::Running => PluginSessionStatus::Running,
-            crate::desktop::session::SessionStatus::Starting => PluginSessionStatus::Starting,
-            crate::desktop::session::SessionStatus::Stopped => PluginSessionStatus::Stopped,
-            crate::desktop::session::SessionStatus::Error(_) => PluginSessionStatus::Disconnected,
-            crate::desktop::session::SessionStatus::WaitingInput => PluginSessionStatus::Running,
-            crate::desktop::session::SessionStatus::Idle => PluginSessionStatus::Starting,
-            crate::desktop::session::SessionStatus::Stopping => PluginSessionStatus::Stopped,
-        })
-    }
-
-    /// 更新插件会话的任务状态
-    ///
-    /// 由 HTTP API POST /api/plugin/task-status 调用
-    /// 更新 SessionInfo 的 task_status/task_reason/task_updated_at
-    /// 并通过 DesktopSyncEvent broadcast 通道广播变更到所有 WebSocket 客户端
+    /// 由 HTTP API `POST /api/plugin/task-status` 调用。
+    /// 更新内存中的任务状态，并通过 DesktopSyncEvent 广播变更到所有 WebSocket 客户端。
     pub async fn update_task_status(
         &self,
         session_id: &str,
         task_status: TaskStatus,
         task_reason: Option<String>,
-    ) -> Result<()> {
-        // 更新 session_info 中的任务状态
+        task_questions: Option<Vec<PluginQuestion>>,
+    ) -> Result<(), crate::AppError> {
+        // 更新内存状态
         {
-            let mut info_map = self.session_info.write().await;
-            let info = info_map
-                .get_mut(session_id)
-                .ok_or_else(|| crate::AppError::NotFound(format!("Plugin session not found: {}", session_id)))?;
-
-            info.task_status = Some(task_status.clone());
-            info.task_reason = task_reason.clone();
-            info.task_updated_at = Some(chrono::Utc::now());
+            let mut states = self.task_states.write().await;
+            states.insert(
+                session_id.to_string(),
+                TaskStateEntry {
+                    task_status: task_status.clone(),
+                    task_reason: task_reason.clone(),
+                    task_questions: task_questions.clone(),
+                    updated_at: Utc::now(),
+                },
+            );
         }
 
         // 通过 AppContext 获取 sync_tx 广播 DesktopSyncEvent
@@ -535,13 +78,89 @@ impl PluginManager {
             let sync_tx = ctx.sync_tx();
             let event = DesktopSyncEvent::TaskStatusChanged {
                 session_id: session_id.to_string(),
-                task_status: format!("{:?}", task_status).to_lowercase(),
+                // 使用 serde 序列化确保输出 snake_case（如 "in_progress"），
+                // 而非 Debug 格式（如 "InProgress" -> to_lowercase -> "inprogress"）
+                task_status: serde_json::to_string(&task_status)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string(),
                 task_reason,
+                task_questions,
             };
             let _ = sync_tx.send(event);
         }
 
         Ok(())
+    }
+
+    /// 获取指定会话的任务状态
+    pub async fn get_task_status(&self, session_id: &str) -> Option<TaskStatus> {
+        let states = self.task_states.read().await;
+        states.get(session_id).map(|e| e.task_status.clone())
+    }
+
+    /// 获取指定会话的任务状态原因
+    pub async fn get_task_reason(&self, session_id: &str) -> Option<String> {
+        let states = self.task_states.read().await;
+        states.get(session_id).and_then(|e| e.task_reason.clone())
+    }
+
+    /// 移除指定会话的任务状态
+    pub async fn remove_task_status(&self, session_id: &str) {
+        let mut states = self.task_states.write().await;
+        states.remove(session_id);
+    }
+
+    // ==================== 会话自动授权模式 ====================
+
+    /// 设置会话自动授权模式
+    ///
+    /// 由 HTTP API `POST /api/plugin/session-mode` 调用。
+    /// 更新内存状态，并通过 DesktopSyncEvent 广播变更到所有 WebSocket 客户端。
+    pub async fn set_auto_mode(&self, session_id: &str, auto_approve: bool) {
+        {
+            let mut modes = self.auto_modes.write().await;
+            modes.insert(session_id.to_string(), auto_approve);
+        }
+
+        // 广播模式变更
+        {
+            use crate::desktop::events::sync_event::DesktopSyncEvent;
+            let ctx = crate::desktop::app_context::AppContext::global();
+            let sync_tx = ctx.sync_tx();
+            let event = DesktopSyncEvent::SessionModeChanged {
+                session_id: session_id.to_string(),
+                auto_approve,
+            };
+            let _ = sync_tx.send(event);
+        }
+
+        tracing::info!(
+            "[PluginManager] Session mode set: session_id={}, auto_approve={}",
+            session_id,
+            auto_approve
+        );
+    }
+
+    /// 查询会话自动授权模式
+    ///
+    /// 由 HTTP API `GET /api/plugin/session-mode` 调用。
+    /// Python PreToolUse hook 通过此接口查询是否自动授权。
+    pub async fn get_auto_mode(&self, session_id: &str) -> bool {
+        let modes = self.auto_modes.read().await;
+        modes.get(session_id).copied().unwrap_or(false)
+    }
+
+    /// 移除会话自动授权模式（会话结束时清理）
+    pub async fn remove_auto_mode(&self, session_id: &str) {
+        let mut modes = self.auto_modes.write().await;
+        modes.remove(session_id);
+    }
+}
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -549,22 +168,68 @@ impl PluginManager {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn test_task_states_store() {
+        let manager = PluginManager::new();
+
+        // 初始状态为空
+        assert!(manager.get_task_status("session-1").await.is_none());
+
+        // 直接写入内部状态（不触发广播，避免 AppContext 依赖）
+        {
+            let mut states = manager.task_states.write().await;
+            states.insert(
+                "session-1".to_string(),
+                TaskStateEntry {
+                    task_status: TaskStatus::InProgress,
+                    task_reason: Some("Working".to_string()),
+                    task_questions: None,
+                    updated_at: Utc::now(),
+                },
+            );
+        }
+
+        assert_eq!(manager.get_task_status("session-1").await, Some(TaskStatus::InProgress));
+        assert_eq!(
+            manager.get_task_reason("session-1").await,
+            Some("Working".to_string())
+        );
+
+        // 移除
+        manager.remove_task_status("session-1").await;
+        assert!(manager.get_task_status("session-1").await.is_none());
+    }
+
     #[test]
-    fn test_plugin_session_status_default() {
-        let status: PluginSessionStatus = Default::default();
-        assert_eq!(status, PluginSessionStatus::Starting);
+    fn test_task_status_serde_format() {
+        // 验证 serde 序列化输出 snake_case
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::InProgress).unwrap().trim_matches('"'),
+            "in_progress"
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Idle).unwrap().trim_matches('"'),
+            "idle"
+        );
     }
 
     #[tokio::test]
-    async fn test_plugin_manager_list_sessions_empty() {
-        let (tx, _rx) = broadcast::channel(100);
-        let db = Database::new(std::path::Path::new(":memory:")).unwrap();
-        db.init_schema().unwrap();
+    async fn test_auto_modes() {
+        let manager = PluginManager::new();
 
-        let manager = PluginManager::from_database(db, tx);
-        let sessions = manager.list_sessions().await;
-        assert!(sessions.is_empty());
+        // 默认为手动模式
+        assert!(!manager.get_auto_mode("session-1").await);
+
+        // 直接写入内部状态（不触发广播，避免 AppContext 依赖）
+        {
+            let mut modes = manager.auto_modes.write().await;
+            modes.insert("session-1".to_string(), true);
+        }
+
+        assert!(manager.get_auto_mode("session-1").await);
+
+        // 移除
+        manager.remove_auto_mode("session-1").await;
+        assert!(!manager.get_auto_mode("session-1").await);
     }
-
-    // 注意：完整测试需要模拟文件系统，建议在实际项目路径上手动测试
 }

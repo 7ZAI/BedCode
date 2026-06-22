@@ -1,6 +1,6 @@
 <template>
   <div
-    class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl overflow-hidden hover:border-[var(--mobile-border-active)] transition-all duration-300"
+    class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl overflow-hidden shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-active)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-all duration-300"
   >
     <!-- 折叠头部 -->
     <div

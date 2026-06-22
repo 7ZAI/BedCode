@@ -5,6 +5,7 @@
 
 use crate::shared::enums::SessionStatus;
 use crate::shared::event::events::AppEvent;
+use crate::shared::enums::PluginQuestion;
 
 /// 桌面端数据变更事件
 ///
@@ -66,6 +67,14 @@ pub enum DesktopSyncEvent {
         session_id: String,
         task_status: String,
         task_reason: Option<String>,
+        task_questions: Option<Vec<PluginQuestion>>,
+    },
+
+    // === 会话模式相关 ===
+    /// 会话自动授权模式变更
+    SessionModeChanged {
+        session_id: String,
+        auto_approve: bool,
     },
 }
 

@@ -1,6 +1,6 @@
 <template>
   <div
-    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-3.5 active:scale-[0.98] transition-all duration-150"
+    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-3.5 shadow-[var(--mobile-card-shadow)] active:scale-[0.98] transition-all duration-150"
     @click="$emit('tap')"
   >
     <!-- Row 1: Title + Type badge -->

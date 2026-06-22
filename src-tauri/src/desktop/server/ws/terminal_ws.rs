@@ -558,7 +558,6 @@ impl TerminalWs {
         actix::spawn(async move {
             let app_ctx = AppContext::global();
             let session_manager = Some(app_ctx.session_manager().clone());
-            let plugin_manager = Some(app_ctx.plugin_manager().clone());
 
             let result = crate::desktop::server::services::session_control::handle_control_message(
                 message_id.clone(),
@@ -566,7 +565,6 @@ impl TerminalWs {
                 chrono::Utc::now().timestamp_millis(),
                 payload.action,
                 &session_manager,
-                &plugin_manager,
                 addr,
                 device_name,
                 Some(app_handle),

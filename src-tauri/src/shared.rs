@@ -8,6 +8,7 @@ pub mod enums;
 pub mod event;
 pub mod model;
 pub mod system;
+pub mod utils;
 
 pub use system::error::{AppError, Result};
 pub use system::config;

@@ -59,8 +59,11 @@ impl SyncEventHandler {
             DesktopSyncEvent::ConfigRemoved { config_id, config_name, source_device } => {
                 self.handle_config_removed(&config_id, &config_name, source_device).await;
             }
-            DesktopSyncEvent::TaskStatusChanged { session_id, task_status, task_reason } => {
-                self.handle_task_status_changed(&session_id, &task_status, task_reason.as_deref()).await;
+            DesktopSyncEvent::TaskStatusChanged { session_id, task_status, task_reason, task_questions } => {
+                self.handle_task_status_changed(&session_id, &task_status, task_reason.as_deref(), task_questions.as_deref()).await;
+            }
+            DesktopSyncEvent::SessionModeChanged { session_id, auto_approve } => {
+                self.handle_session_mode_changed(&session_id, auto_approve).await;
             }
         }
     }
@@ -230,14 +233,32 @@ impl SyncEventHandler {
     }
 
     /// 处理任务状态变更事件
-    async fn handle_task_status_changed(&self, session_id: &str, task_status: &str, task_reason: Option<&str>) {
+    async fn handle_task_status_changed(
+        &self,
+        session_id: &str,
+        task_status: &str,
+        task_reason: Option<&str>,
+        task_questions: Option<&[crate::shared::enums::PluginQuestion]>,
+    ) {
         let payload = SyncPayload::TaskStatusChanged {
             session_id: session_id.to_string(),
             task_status: task_status.to_string(),
             task_reason: task_reason.map(|s| s.to_string()),
+            task_questions: task_questions.map(|qs| qs.to_vec()),
         };
 
         // 任务状态变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理会话模式变更事件
+    async fn handle_session_mode_changed(&self, session_id: &str, auto_approve: bool) {
+        let payload = SyncPayload::SessionModeChanged {
+            session_id: session_id.to_string(),
+            auto_approve,
+        };
+
+        // 模式变更广播给所有客户端
         self.broadcast_sync_data(payload, None).await;
     }
 

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::special_key::SpecialKey;
+use super::special_key::KeyCombo;
 use super::sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 
 // ==================== Session Control ====================
@@ -38,26 +38,6 @@ pub enum SessionControlAction {
     LeaveSession { session_id: String },
     /// 会话变更通知 (created/stopped/removed)
     SessionChanged { change_type: String, session: SessionSummary },
-
-    // === Plugin 会话相关 ===
-    /// 注册 Plugin 会话
-    RegisterPluginSession {
-        project_name: String,
-        project_path: String,
-        jsonl_path: String,
-    },
-    /// 注册响应
-    RegisteredPluginSession {
-        session_id: String,
-    },
-    /// 注销 Plugin 会话
-    UnregisterPluginSession {
-        session_id: String,
-    },
-    /// Plugin 心跳
-    PluginHeartbeat {
-        session_id: String,
-    },
 }
 
 // ==================== Session Config ====================
@@ -124,7 +104,7 @@ pub enum TerminalAction {
         data: String,
         /// 特殊键
         #[serde(skip_serializing_if = "Option::is_none")]
-        special_key: Option<SpecialKey>,
+        special_key: Option<KeyCombo>,
     },
 
     /// 订阅输出 (客户端 → 服务端)

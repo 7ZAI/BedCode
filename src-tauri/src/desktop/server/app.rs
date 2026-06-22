@@ -52,6 +52,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
     // 插件专用路由（token 认证，非 JWT）
     cfg.route("/plugin/task-status", web::post().to(plugin_controller::update_task_status));
+    cfg.route("/plugin/session-mode", web::post().to(plugin_controller::set_session_mode));
+    cfg.route("/plugin/session-mode", web::get().to(plugin_controller::get_session_mode));
 }
 
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）

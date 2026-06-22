@@ -10,17 +10,21 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
-      <div class="status-area">
+      <!-- <div class="status-area">
         <div class="status-dot" :class="statusClass"></div>
         <span class="status-text">{{ statusText }}</span>
-      </div>
+      </div> -->
       <div class="header-title-area">
         <h1 class="header-title">{{ sessionName }}</h1>
       </div>
       <button class="mode-btn" :class="{ active: autoMode === 'auto' }" @click="toggleMode" :title="autoMode === 'auto' ? '切换为手动模式' : '切换为自动模式'">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-          <path v-if="autoMode === 'auto'" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-          <path v-else d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/>
+        <!-- 自动模式：闪电+勾选，表示自动批准执行 -->
+        <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
+        </svg>
+        <!-- 手动模式：手指/人形，表示需要手动确认 -->
+        <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/>
         </svg>
       </button>
       <button class="task-btn" @click="showTaskPicker = true" title="待办任务">
@@ -71,6 +75,7 @@
           <div
             ref="xtermContainer"
             class="xterm-container"
+            :style="xtermContainerStyle"
           ></div>
           <!-- 自定义滚动条指示器 -->
           <div class="scrollbar-track">
@@ -85,7 +90,7 @@
 
       <!-- File Sidebar - 覆盖层，不影响终端宽高 -->
       <transition name="sidebar-slide">
-        <FileSidebar v-if="showSidebar" class="sidebar-overlay" :session-id="sessionId" />
+        <FileSidebar v-if="showSidebar" class="sidebar-overlay" :session-id="sessionId" @long-press="handleLongPress" />
       </transition>
 
       <!-- 点击侧边栏外部关闭 -->
@@ -101,6 +106,7 @@
       @submit="handleInputSubmit"
       @execute="handleInputExecute"
       @special-key="handleSpecialKey"
+      @shortcuts-panel-toggle="handleShortcutsPanelToggle"
     />
 
     <!-- Settings Modal -->
@@ -140,6 +146,16 @@
                 <span class="theme-preview" :style="getThemePreviewStyle(name)">Aa</span>
                 <span class="theme-name">{{ theme.label }}</span>
               </button>
+            </div>
+          </div>
+
+          <!-- Quick Bar Count -->
+          <div class="settings-section">
+            <label class="settings-label">快捷键数量</label>
+            <div class="font-size-control">
+              <button class="size-btn" @click.stop="tempQuickBarCount--" :disabled="tempQuickBarCount <= 3">-</button>
+              <span class="size-value">{{ tempQuickBarCount }}</span>
+              <button class="size-btn" @click.stop="tempQuickBarCount++" :disabled="tempQuickBarCount >= 10">+</button>
             </div>
           </div>
         </div>
@@ -196,6 +212,8 @@ import {
 } from '@/modules/mobile/composables/useMobileCommands'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useTheme } from '@/modules/shared/composables/useTheme'
+import { useSettingsStore } from '@/modules/shared/stores/settings'
+import { useInputAssistantStore } from '@/modules/shared/stores/inputAssistant'
 import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
 import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
 import AutoExecuteBar from '@/modules/mobile/components/AutoExecuteBar.vue'
@@ -213,6 +231,8 @@ const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
+const settingsStore = useSettingsStore()
+const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
 
 // ==================== Auto Executor ====================
@@ -229,6 +249,7 @@ const {
   resume: autoResume,
   startNext: autoStartNext,
   handleTaskStatusChanged,
+  handleSessionModeChanged,
   cleanup: autoCleanup,
 } = useAutoExecutor(sessionId)
 const { tasks: presetTasks } = usePresetTasks()
@@ -293,6 +314,8 @@ const touchState = reactive({
   lastY: 0,
   lastTime: 0,
   velocity: 0,
+  // 亚像素累积：保留小数部分，避免 Math.round 丢失微小位移导致滚动不灵敏
+  fractionalLine: 0,
 })
 
 // 设置相关状态
@@ -301,17 +324,22 @@ const showClearConfirm = ref(false)
 const showSidebar = ref(false)
 // 自动执行：监听任务状态变更的 Tauri 事件监听器
 const taskStatusListenerRef = ref<UnlistenFn | null>(null)
+// 监听会话模式变更的 Tauri 事件监听器
+const sessionModeListenerRef = ref<UnlistenFn | null>(null)
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
 // isThemeUserSet = false 时跟随系统主题变化，true 时保持用户选择
 const terminalSettings = ref({
-  fontSize: 14,
-  theme: isSystemDark.value ? 'dark' : 'light',
+  fontSize: 12,
+  theme: (settingsStore.settings.ui.theme === 'system'
+    ? (isSystemDark.value ? 'dark' : 'light')
+    : settingsStore.settings.ui.theme) as string,
   isThemeUserSet: false,
 })
 
 // 临时设置（用于编辑中的状态）
-const tempFontSize = ref(14)
-const tempTheme = ref(isSystemDark.value ? 'dark' : 'light')
+const tempFontSize = ref(12)
+const tempTheme = ref<string>(terminalSettings.value.theme)
+const tempQuickBarCount = ref(assistStore.settings.quickBarCount)
 
 // 弹窗安全区域样式
 const settingsModalStyle = computed(() => ({
@@ -475,6 +503,7 @@ function openSettings() {
   tempTheme.value = terminalSettings.value.isThemeUserSet
     ? terminalSettings.value.theme
     : 'system'
+  tempQuickBarCount.value = assistStore.settings.quickBarCount
   showSettings.value = true
 }
 
@@ -493,6 +522,10 @@ function confirmSettings() {
     terminalSettings.value.theme = tempTheme.value
     terminalSettings.value.isThemeUserSet = true
   }
+  // 保存快捷键条设置
+  assistStore.saveSettings({
+    quickBarCount: tempQuickBarCount.value,
+  })
   applySettings()
   showSettings.value = false
 }
@@ -555,13 +588,28 @@ const inputPlaceholder = computed(() => {
 const safeAreaTop = computed(() => safeArea.value.top || 0)
 const keyboardHeight = computed(() => keyboardInfo.value.keyboardHeight || 0)
 
+// 快捷键面板偏移：面板展开且终端在底部时，xterm 向上偏移面板高度
+const shortcutsPanelHeight = ref(0)
+
 // 终端视图样式：顶部安全区 + 键盘避让
 // 底部安全区由 TerminalInputBar 的 paddingBottom 承担，这里只处理键盘避让
 // Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
-const terminalViewStyle = computed(() => ({
-  paddingTop: `${safeAreaTop.value}px`,
-  paddingBottom: keyboardHeight.value > 0 ? `${keyboardHeight.value}px` : '0px',
-}))
+const terminalViewStyle = computed(() => {
+  const bottomOffset = keyboardHeight.value
+  return {
+    paddingTop: `${safeAreaTop.value}px`,
+    paddingBottom: bottomOffset > 0 ? `${bottomOffset}px` : '0px',
+  }
+})
+
+// xterm 容器偏移样式：快捷键面板展开时向上偏移，避免遮挡底部输出
+const xtermContainerStyle = computed(() => {
+  if (shortcutsPanelHeight.value <= 0) return {}
+  return {
+    transform: `translateY(-${shortcutsPanelHeight.value}px)`,
+    transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+  }
+})
 
 // 监听键盘变化，重新 fit 终端
 // 延迟 300ms 等待系统键盘动画完成后再 resize，避免动画期间重排导致卡顿
@@ -569,10 +617,23 @@ watch(() => keyboardInfo.value.keyboardHeight, () => {
   setTimeout(() => fitTerminal(), 300)
 })
 
-// 监听系统主题变化：用户未手动指定主题时，终端主题跟随系统
+// 监听外观设置中的主题变化：用户未手动指定终端主题时，跟随外观设置
+// 外观设置可选 dark/light/system，终端主题映射为 dark/light
+watch(() => settingsStore.settings.ui.theme, (uiTheme) => {
+  if (terminalSettings.value.isThemeUserSet) return
+  const resolved = uiTheme === 'system'
+    ? (isSystemDark.value ? 'dark' : 'light')
+    : uiTheme
+  if (terminalSettings.value.theme !== resolved) {
+    terminalSettings.value.theme = resolved as string
+    applySettings()
+  }
+})
+
+// 监听系统暗色模式变化：仅当外观设置为 system 时才响应
 watch(isSystemDark, () => {
   if (terminalSettings.value.isThemeUserSet) return
-  // 更新终端主题为系统当前主题
+  if (settingsStore.settings.ui.theme !== 'system') return
   terminalSettings.value.theme = isSystemDark.value ? 'dark' : 'light'
   applySettings()
 })
@@ -872,6 +933,20 @@ function handleSpecialKey(key: string) {
   }
 }
 
+// ==================== Shortcuts Panel ====================
+
+/** 快捷键面板展开/收起时，若终端在底部则向上偏移面板高度，避免遮挡最新输出 */
+function handleShortcutsPanelToggle(height: number) {
+  if (height > 0) {
+    // 仅当终端在底部时才偏移，否则用户已向上滚动，面板不会遮挡关注区域
+    if (isScrolledToBottom()) {
+      shortcutsPanelHeight.value = height
+    }
+  } else {
+    shortcutsPanelHeight.value = 0
+  }
+}
+
 // ==================== Clear Terminal ====================
 
 function confirmClear() {
@@ -902,6 +977,17 @@ function refreshTerminal() {
     wsResizeTerminal(currentSessionId, terminalRef.value.cols, terminalRef.value.rows).catch((e: Error) => {
       console.warn('[TerminalView] Refresh resize failed:', e)
     })
+  }
+}
+
+// ==================== Long Press Copy Path ====================
+
+async function handleLongPress(name: string, path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+    toast.success(`已复制: ${path}`)
+  } catch {
+    toast.error('复制失败')
   }
 }
 
@@ -1014,6 +1100,7 @@ function onTouchStart(e: TouchEvent) {
   touchState.lastY = touch.clientY
   touchState.lastTime = Date.now()
   touchState.velocity = 0
+  touchState.fractionalLine = 0
 }
 
 function onTouchMove(e: TouchEvent) {
@@ -1031,9 +1118,19 @@ function onTouchMove(e: TouchEvent) {
   touchState.lastY = touch.clientY
   touchState.lastTime = Date.now()
 
-  // 将像素距离转换为行数
-  const linesDelta = Math.round(-deltaY / cellHeight.value)
-  if (linesDelta === 0) return
+  // 将像素距离转换为行数（保留小数，累积小数部分）
+  const rawLines = -deltaY / cellHeight.value
+  const totalLines = rawLines + touchState.fractionalLine
+  const linesDelta = Math.trunc(totalLines)
+
+  if (linesDelta === 0) {
+    // 保留累积的小数部分，下次 move 时继续累积
+    touchState.fractionalLine = totalLines
+    return
+  }
+
+  // 消耗整数行后，保留剩余小数
+  touchState.fractionalLine = totalLines - linesDelta
 
   const newLine = currentLine.value + linesDelta
 
@@ -1053,7 +1150,7 @@ function onTouchEnd() {
 /// 惯性滚动：根据松手时的速度逐帧减速
 function startInertia() {
   // 速度阈值：太慢则不启动惯性
-  if (Math.abs(touchState.velocity) < 0.05) {
+  if (Math.abs(touchState.velocity) < 0.02) {
     // 惯性结束，检查是否在底部
     if (isScrolledToBottom()) {
       isUserScrolling.value = false
@@ -1061,7 +1158,7 @@ function startInertia() {
     return
   }
 
-  const friction = 0.95 // 摩擦系数
+  const friction = 0.97 // 摩擦系数，值越大惯性持续越久
 
   function step() {
     if (!terminalRef.value || cellHeight.value <= 0) {
@@ -1071,8 +1168,9 @@ function startInertia() {
 
     touchState.velocity *= friction
     // 速度衰减到阈值以下时停止
-    if (Math.abs(touchState.velocity) < 0.01) {
+    if (Math.abs(touchState.velocity) < 0.005) {
       touchState.inertiaRafId = 0
+      touchState.fractionalLine = 0
       if (isScrolledToBottom()) {
         isUserScrolling.value = false
       }
@@ -1081,10 +1179,15 @@ function startInertia() {
 
     // 速度单位是 像素/毫秒，每帧约 16ms
     const pixelsPerFrame = touchState.velocity * 16
-    const linesPerFrame = Math.round(-pixelsPerFrame / cellHeight.value)
+    const rawLines = -pixelsPerFrame / cellHeight.value
+    const totalLines = rawLines + touchState.fractionalLine
+    const linesPerFrame = Math.trunc(totalLines)
 
     if (linesPerFrame !== 0) {
+      touchState.fractionalLine = totalLines - linesPerFrame
       syncViewportToLine(currentLine.value + linesPerFrame)
+    } else {
+      touchState.fractionalLine = totalLines
     }
 
     touchState.inertiaRafId = requestAnimationFrame(step)
@@ -1155,6 +1258,12 @@ onMounted(async () => {
     if (event.payload.session_id !== sessionId.value) return
     handleTaskStatusChanged(event.payload.task_status, event.payload.task_questions)
   })
+
+  // 监听桌面端推送的会话模式变更事件（由 /bedcode auto/manual 触发）
+  sessionModeListenerRef.value = await listen<{ session_id: string; auto_approve: boolean }>('ws_sync_session_mode_changed', (event) => {
+    if (event.payload.session_id !== sessionId.value) return
+    handleSessionModeChanged(event.payload.auto_approve)
+  })
 })
 
 onUnmounted(async () => {
@@ -1166,6 +1275,11 @@ onUnmounted(async () => {
   if (taskStatusListenerRef.value) {
     taskStatusListenerRef.value()
     taskStatusListenerRef.value = null
+  }
+  // 清理会话模式监听器
+  if (sessionModeListenerRef.value) {
+    sessionModeListenerRef.value()
+    sessionModeListenerRef.value = null
   }
   autoCleanup()
 })
@@ -1423,7 +1537,7 @@ watch(sessionId, async (newId, oldId) => {
 }
 
 .mode-btn:hover {
-  border-color: rgba(0, 212, 255, 0.3);
+  border-color: var(--mobile-border-hover);
 }
 
 .mode-btn.active {
@@ -1634,6 +1748,49 @@ watch(sessionId, async (newId, oldId) => {
   font-size: 1.125rem;
   font-weight: 500;
   color: var(--mobile-text-primary);
+}
+
+.toggle-control {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.toggle-switch {
+  width: 2.75rem;
+  height: 1.5rem;
+  border-radius: 0.75rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  padding: 0;
+}
+
+.toggle-switch.active {
+  background: var(--mobile-accent);
+  border-color: var(--mobile-accent);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  background: var(--mobile-text-primary);
+  transition: transform 0.2s ease;
+}
+
+.toggle-switch.active .toggle-knob {
+  transform: translateX(1.25rem);
+}
+
+.toggle-label {
+  font-size: 0.875rem;
+  color: var(--mobile-text-muted);
 }
 
 .theme-grid {

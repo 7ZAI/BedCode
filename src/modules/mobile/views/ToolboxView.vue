@@ -26,7 +26,7 @@
         <!-- Empty state -->
         <div
           v-if="tasks.length === 0"
-          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center"
+          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center shadow-[var(--mobile-card-shadow)]"
         >
           <p class="text-[var(--mobile-text-disabled)] text-sm">暂无预设任务</p>
           <button

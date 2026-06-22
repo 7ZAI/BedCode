@@ -81,11 +81,11 @@ export function useAutoExecutor(sessionId: Ref<string>) {
 
   /** 切换模式 */
   function setMode(newMode: 'manual' | 'auto') {
-    mode.value = newMode
-    saveState()
-    // 同步模式到通知系统
-    const { setSessionMode } = useTaskNotification()
-    setSessionMode(sessionId.value, newMode)
+    // 通过 /bedcode 命令切换，桌面端拦截后设置模式并广播 SessionModeChanged
+    // 移动端通过 ws_sync_session_mode_changed 事件同步状态
+    const cmd = newMode === 'auto' ? '/bedcode auto' : '/bedcode manual'
+    sendInput(sessionId.value, cmd)
+    sendInput(sessionId.value, '', 'enter')
   }
 
   /** 添加任务到队列 */
@@ -151,11 +151,14 @@ export function useAutoExecutor(sessionId: Ref<string>) {
           ['yes', 'agree', 'allow', 'confirm', '是', '同意', '允许'].some(kw => o.label.toLowerCase().includes(kw))
         )
         const choice = agreeOption || question.options[0]
+        // 发送选项文本 + Enter 确认提交
         sendInput(sessionId.value, choice.label)
+        sendInput(sessionId.value, '', 'enter')
       } else {
         // 选择类：选第一个选项（Claude Code 推荐项）
         const choice = question.options[0]
         sendInput(sessionId.value, choice.label)
+        sendInput(sessionId.value, '', 'enter')
       }
     }
   }
@@ -176,8 +179,9 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     retryCount.value = 0
     saveState()
 
-    // 发送任务内容到终端
+    // 发送任务内容到终端 + Enter 提交执行
     sendInput(sessionId.value, next.content)
+    sendInput(sessionId.value, '', 'enter')
   }
 
   /** 处理任务完成 */
@@ -187,13 +191,10 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     }
     saveState()
 
-    // 执行 /clear 清空上下文后开始下一个任务
+    // 执行 /clear + Enter 清空上下文，等待 Claude Code 回到 idle 后自动开始下一个任务
+    // 下一次 handleTaskStatusChanged('idle') 会触发 startNext()
     sendInput(sessionId.value, '/clear')
-
-    // 延迟后开始下一个任务，给 /clear 执行时间
-    setTimeout(() => {
-      startNext()
-    }, 1500)
+    sendInput(sessionId.value, '', 'enter')
   }
 
   /** 处理任务中断 */
@@ -204,8 +205,9 @@ export function useAutoExecutor(sessionId: Ref<string>) {
       retryCount.value++
       currentTask.value.status = 'retrying'
       saveState()
-      // 发送继续执行
+      // 发送继续执行 + Enter 提交
       sendInput(sessionId.value, '继续')
+      sendInput(sessionId.value, '', 'enter')
     } else {
       currentTask.value.status = 'failed'
       saveState()
@@ -250,6 +252,16 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     }
   }
 
+  /** 处理桌面端推送的会话模式变更事件 */
+  function handleSessionModeChanged(autoApprove: boolean) {
+    const newMode = autoApprove ? 'auto' as const : 'manual' as const
+    mode.value = newMode
+    saveState()
+    // 同步模式到通知系统
+    const { setSessionMode } = useTaskNotification()
+    setSessionMode(sessionId.value, newMode)
+  }
+
   /** 清空指定会话的状态（会话停止时调用） */
   function cleanup() {
     executorStates.delete(sessionId.value)
@@ -280,6 +292,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     resume,
     startNext,
     handleTaskStatusChanged,
+    handleSessionModeChanged,
     cleanup,
   }
 }

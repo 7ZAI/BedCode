@@ -213,7 +213,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDeviceStore } from '@/modules/shared/stores/device'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
-import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo, type PairingCodeInfo } from '@/modules/shared/composables/useTauri'
+import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo, type PairingCodeInfo, type PairedDevice } from '@/modules/shared/composables/useTauri'
 import { useQrCode } from '@/modules/shared/composables/useQrCode'
 import { listen } from '@tauri-apps/api/event'
 import Button from '@/modules/shared/components/Button.vue'

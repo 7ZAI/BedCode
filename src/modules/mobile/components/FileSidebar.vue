@@ -1,5 +1,11 @@
 <template>
   <div class="file-sidebar" :style="sidebarStyle" @touchstart.stop @touchmove.stop>
+    <!-- 拖动调整宽度的手柄 -->
+    <div
+      class="resize-handle"
+      :class="[`resize-handle--${resizeSide}`]"
+      @pointerdown="onResizePointerDown"
+    ></div>
     <!-- 工具栏 -->
     <div class="sidebar-header">
       <span class="sidebar-title">{{ isDiffMode ? 'Diff' : '文件' }}</span>
@@ -130,6 +136,7 @@
           :depth="0"
           :font-size="settings.fontSize"
           @file-click="handleFileClick"
+          @long-press="handleLongPress"
         />
       </template>
     </div>
@@ -161,8 +168,10 @@ import { useToast } from '@/modules/shared/composables/useToast'
 const props = withDefaults(defineProps<{
   sessionId: string
   mode?: 'standalone' | 'emit'
+  resizeSide?: 'left' | 'right'
 }>(), {
   mode: 'standalone',
+  resizeSide: 'left',
 })
 
 const emit = defineEmits<{
@@ -182,6 +191,9 @@ const fileContent = ref('')
 const fileLoading = ref(false)
 const fileError = ref<string | null>(null)
 const diffLines = ref<FileDiffLine[] | undefined>(undefined)
+
+// 侧边栏宽度（像素），null 表示使用默认百分比
+const sidebarWidth = ref<number | null>(null)
 
 // 临时设置状态
 const tempDefaultExpanded = ref(false)
@@ -245,6 +257,9 @@ function onSliderPointerDown(e: PointerEvent) {
 }
 
 const sidebarStyle = computed(() => {
+  if (sidebarWidth.value !== null) {
+    return { width: `${sidebarWidth.value}px` }
+  }
   const widthPercent = isLandscape.value ? '30%' : '40%'
   return { width: widthPercent }
 })
@@ -335,6 +350,51 @@ async function handleFileClick(name: string, path: string) {
     fileLoading.value = false
   }
 }
+
+// ==================== Resize Handle ====================
+
+const MIN_SIDEBAR_WIDTH = 150
+const MAX_SIDEBAR_RATIO = 0.7
+
+function onResizePointerDown(e: PointerEvent) {
+  const startPointerX = e.clientX
+  const startWidth = (e.currentTarget as HTMLElement).closest('.file-sidebar')!.getBoundingClientRect().width
+  const maxWidth = window.innerWidth * MAX_SIDEBAR_RATIO
+
+  const sidebarEl = (e.currentTarget as HTMLElement).closest('.file-sidebar') as HTMLElement
+  sidebarEl.setPointerCapture(e.pointerId)
+
+  const isLeftSide = props.resizeSide === 'left'
+
+  const onMove = (ev: PointerEvent) => {
+    let newWidth: number
+    if (isLeftSide) {
+      // 左侧手柄：左移 = 宽度增大
+      newWidth = startWidth - (ev.clientX - startPointerX)
+    } else {
+      // 右侧手柄：右移 = 宽度增大
+      newWidth = startWidth + (ev.clientX - startPointerX)
+    }
+    sidebarWidth.value = Math.round(Math.max(MIN_SIDEBAR_WIDTH, Math.min(maxWidth, newWidth)))
+  }
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+  }
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp)
+}
+
+// ==================== Long Press Copy Path ====================
+
+async function handleLongPress(name: string, path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+    toast.success(`已复制: ${path}`)
+  } catch {
+    toast.error('复制失败')
+  }
+}
 </script>
 
 <style scoped>
@@ -345,6 +405,34 @@ async function handleFileClick(name: string, path: string) {
   border-left: 1px solid var(--mobile-border);
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
+}
+
+/* 拖动调整宽度手柄 */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 10;
+  transition: border-color 0.2s ease;
+}
+
+.resize-handle--left {
+  left: 0;
+  border-left: 2px solid transparent;
+}
+
+.resize-handle--right {
+  right: 0;
+  border-right: 2px solid transparent;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  border-color: var(--mobile-accent);
 }
 
 .sidebar-header {

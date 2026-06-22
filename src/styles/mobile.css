@@ -11,6 +11,11 @@
   --mobile-bg-card: #12121a;
   --mobile-bg-elevated: #1f2937;
 
+  /* 卡片阴影 */
+  --mobile-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --mobile-card-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --mobile-card-shadow-connected: 0 2px 12px rgba(16, 185, 129, 0.15), 0 1px 3px rgba(0, 0, 0, 0.2);
+
   /* 文字色 */
   --mobile-text-primary: #ffffff;
   --mobile-text-secondary: #9ca3af;
@@ -30,6 +35,8 @@
   /* 状态色 */
   --mobile-success: #10b981;
   --mobile-success-muted: rgba(16, 185, 129, 0.1);
+  --mobile-success-connected-bg: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 95, 70, 0.18));
+  --mobile-success-connected-border: rgba(16, 185, 129, 0.2);
   --mobile-warning: #f59e0b;
   --mobile-warning-muted: rgba(245, 158, 11, 0.1);
   --mobile-error: #ef4444;
@@ -55,6 +62,44 @@
   --mobile-code-gutter-bg: rgba(255, 255, 255, 0.04);
   --mobile-code-gutter-border: rgba(100, 100, 120, 0.12);
   --mobile-code-gutter-color: rgba(100, 100, 120, 0.45);
+
+  /* 快捷键面板功能色 */
+  --mobile-shortcut-color: #bd93f9;
+  --mobile-shortcut-bg: linear-gradient(135deg, rgba(189, 147, 249, 0.12), rgba(189, 147, 249, 0.06));
+  --mobile-shortcut-border: rgba(189, 147, 249, 0.35);
+  --mobile-shortcut-active-bg: linear-gradient(135deg, rgba(189, 147, 249, 0.28), rgba(189, 147, 249, 0.16));
+  --mobile-custom-cmd-color: #50fa7b;
+  --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.12), rgba(80, 250, 123, 0.06));
+  --mobile-custom-cmd-border: rgba(80, 250, 123, 0.35);
+  --mobile-custom-cmd-active-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.28), rgba(80, 250, 123, 0.16));
+  --mobile-arrow-color: #f1fa8c;
+  --mobile-arrow-bg: linear-gradient(135deg, rgba(241, 250, 140, 0.12), rgba(241, 250, 140, 0.06));
+  --mobile-arrow-border: rgba(241, 250, 140, 0.35);
+  --mobile-arrow-active-bg: linear-gradient(135deg, rgba(241, 250, 140, 0.28), rgba(241, 250, 140, 0.16));
+  --mobile-send-color: #3b82f6;
+  --mobile-send-bg: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.08));
+  --mobile-send-border: rgba(59, 130, 246, 0.3);
+  --mobile-send-active-bg: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(59, 130, 246, 0.15));
+  --mobile-execute-color: #ffb86c;
+  --mobile-execute-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.2), rgba(255, 121, 198, 0.15));
+  --mobile-execute-border: rgba(255, 184, 108, 0.4);
+  --mobile-execute-active-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.35), rgba(255, 121, 198, 0.25));
+  --mobile-toggle-active-color: #8be9fd;
+  --mobile-add-cmd-color: #8be9fd;
+  --mobile-add-cmd-bg: linear-gradient(135deg, rgba(139, 233, 253, 0.12), rgba(139, 233, 253, 0.06));
+  --mobile-add-cmd-border: rgba(139, 233, 253, 0.5);
+  --mobile-add-cmd-active-bg: linear-gradient(135deg, rgba(139, 233, 253, 0.28), rgba(139, 233, 253, 0.16));
+  --mobile-edit-cmd-color: #ffb86c;
+  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.12), rgba(255, 184, 108, 0.06));
+  --mobile-edit-cmd-border: rgba(255, 184, 108, 0.35);
+  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.28), rgba(255, 184, 108, 0.16));
+  --mobile-danger-color: #ff5555;
+  --mobile-danger-bg: linear-gradient(135deg, rgba(255, 85, 85, 0.12), rgba(255, 85, 85, 0.06));
+  --mobile-danger-border: rgba(255, 85, 85, 0.5);
+  --mobile-danger-solid-bg: rgba(255, 85, 85, 0.9);
+  --mobile-confirm-color: #50fa7b;
+  --mobile-confirm-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.2), rgba(80, 250, 123, 0.1));
+  --mobile-confirm-border: rgba(80, 250, 123, 0.5);
 }
 
 /* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效 */
@@ -66,6 +111,11 @@ html:not(.dark) .mobile-app {
   --mobile-bg-tertiary: #f1f5f9;
   --mobile-bg-card: #ffffff;
   --mobile-bg-elevated: #ffffff;
+
+  /* 卡片阴影 */
+  --mobile-card-shadow: 0 1px 4px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --mobile-card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.08);
+  --mobile-card-shadow-connected: 0 2px 8px rgba(5, 150, 105, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
 
   /* 文字色 - 优化对比度以满足 WCAG AA 标准 */
   --mobile-text-primary: #1e293b;    /* slate-800, 对比度 10.7:1 */
@@ -86,6 +136,8 @@ html:not(.dark) .mobile-app {
   /* 状态色 */
   --mobile-success: #059669;
   --mobile-success-muted: rgba(5, 150, 105, 0.08);
+  --mobile-success-connected-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(6, 95, 70, 0.14));
+  --mobile-success-connected-border: rgba(5, 150, 105, 0.2);
   --mobile-warning: #d97706;
   --mobile-warning-muted: rgba(217, 119, 6, 0.08);
   --mobile-error: #dc2626;
@@ -111,6 +163,44 @@ html:not(.dark) .mobile-app {
   --mobile-code-gutter-bg: rgba(0, 0, 0, 0.04);
   --mobile-code-gutter-border: rgba(0, 0, 0, 0.08);
   --mobile-code-gutter-color: rgba(100, 116, 139, 0.5);
+
+  /* 快捷键面板功能色 - 浅色模式使用饱和度适中的配色 */
+  --mobile-shortcut-color: #7c3aed;
+  --mobile-shortcut-bg: linear-gradient(135deg, rgba(124, 58, 237, 0.1), rgba(124, 58, 237, 0.05));
+  --mobile-shortcut-border: rgba(124, 58, 237, 0.3);
+  --mobile-shortcut-active-bg: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(124, 58, 237, 0.12));
+  --mobile-custom-cmd-color: #059669;
+  --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(5, 150, 105, 0.05));
+  --mobile-custom-cmd-border: rgba(5, 150, 105, 0.3);
+  --mobile-custom-cmd-active-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.2), rgba(5, 150, 105, 0.12));
+  --mobile-arrow-color: #a16207;
+  --mobile-arrow-bg: linear-gradient(135deg, rgba(161, 98, 7, 0.1), rgba(161, 98, 7, 0.05));
+  --mobile-arrow-border: rgba(161, 98, 7, 0.3);
+  --mobile-arrow-active-bg: linear-gradient(135deg, rgba(161, 98, 7, 0.2), rgba(161, 98, 7, 0.12));
+  --mobile-send-color: #2563eb;
+  --mobile-send-bg: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0.05));
+  --mobile-send-border: rgba(37, 99, 235, 0.3);
+  --mobile-send-active-bg: linear-gradient(135deg, rgba(37, 99, 235, 0.2), rgba(37, 99, 235, 0.12));
+  --mobile-execute-color: #c2410c;
+  --mobile-execute-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.1), rgba(219, 39, 119, 0.08));
+  --mobile-execute-border: rgba(194, 65, 12, 0.3);
+  --mobile-execute-active-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.2), rgba(219, 39, 119, 0.15));
+  --mobile-toggle-active-color: #0891b2;
+  --mobile-add-cmd-color: #0891b2;
+  --mobile-add-cmd-bg: linear-gradient(135deg, rgba(8, 145, 178, 0.1), rgba(8, 145, 178, 0.05));
+  --mobile-add-cmd-border: rgba(8, 145, 178, 0.4);
+  --mobile-add-cmd-active-bg: linear-gradient(135deg, rgba(8, 145, 178, 0.2), rgba(8, 145, 178, 0.12));
+  --mobile-edit-cmd-color: #c2410c;
+  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.1), rgba(194, 65, 12, 0.05));
+  --mobile-edit-cmd-border: rgba(194, 65, 12, 0.3);
+  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.2), rgba(194, 65, 12, 0.12));
+  --mobile-danger-color: #dc2626;
+  --mobile-danger-bg: linear-gradient(135deg, rgba(220, 38, 38, 0.1), rgba(220, 38, 38, 0.05));
+  --mobile-danger-border: rgba(220, 38, 38, 0.4);
+  --mobile-danger-solid-bg: rgba(220, 38, 38, 0.85);
+  --mobile-confirm-color: #059669;
+  --mobile-confirm-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.15), rgba(5, 150, 105, 0.08));
+  --mobile-confirm-border: rgba(5, 150, 105, 0.4);
 }
 
 /* 主题切换过渡动画 */

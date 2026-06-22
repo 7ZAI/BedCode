@@ -266,16 +266,6 @@ async function init() {
       if (!activeSessions.value.find(s => s.id === data.session.id)) {
         activeSessions.value.push(data.session)
       }
-      // Plugin 类型会话创建时显示初始通知
-      const sessionType = data.session.session_type || data.session.sessionType
-      if (sessionType === 'plugin') {
-        showTaskNotification({
-          sessionId: data.session.id,
-          sessionName: data.session.name,
-          taskStatus: data.session.taskStatus || data.session.task_status || 'idle',
-          taskReason: data.session.taskReason ?? data.session.task_reason ?? undefined,
-        })
-      }
     },
     onSyncSessionStatusChanged: (data) => {
       console.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)

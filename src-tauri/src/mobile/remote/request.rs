@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::shared::model::message::Message;
 use crate::shared::enums::auth::{AuthPayload, AuthStage};
 use crate::shared::enums::control::{SessionControlAction, SessionConfigAction};
-use crate::shared::enums::special_key::SpecialKey;
+use crate::shared::enums::special_key::KeyCombo;
 use crate::mobile::global::get_global_token;
 
 /// 获取当前全局 Token 并应用到消息
@@ -209,33 +209,13 @@ impl TerminalRequest {
     ///
     /// 发送用户输入到终端，支持特殊按键
     /// 使用带响应期望的模式，确保桌面端确认收到
-    pub fn input(session_id: &str, data: &str, special_key: Option<SpecialKey>) -> Message {
+    pub fn input(session_id: &str, data: &str, special_key: Option<KeyCombo>) -> Message {
         with_token(Message::input_with_response(session_id, data, special_key))
     }
 
     /// 解析特殊按键字符串
-    pub fn parse_special_key(key: &str) -> Option<SpecialKey> {
-        match key {
-            "enter" => Some(SpecialKey::Enter),
-            "ctrl_c" => Some(SpecialKey::CtrlC),
-            "ctrl_d" => Some(SpecialKey::CtrlD),
-            "ctrl_z" => Some(SpecialKey::CtrlZ),
-            "ctrl_l" => Some(SpecialKey::CtrlL),
-            "tab" => Some(SpecialKey::Tab),
-            "esc" | "escape" => Some(SpecialKey::Escape),
-            "backspace" | "del" => Some(SpecialKey::Backspace),
-            "delete" => Some(SpecialKey::Delete),
-            // 支持两种格式：up/arrow_up, down/arrow_down 等
-            "up" | "arrow_up" => Some(SpecialKey::ArrowUp),
-            "down" | "arrow_down" => Some(SpecialKey::ArrowDown),
-            "left" | "arrow_left" => Some(SpecialKey::ArrowLeft),
-            "right" | "arrow_right" => Some(SpecialKey::ArrowRight),
-            "home" => Some(SpecialKey::Home),
-            "end" => Some(SpecialKey::End),
-            "page_up" => Some(SpecialKey::PageUp),
-            "page_down" => Some(SpecialKey::PageDown),
-            _ => None,
-        }
+    pub fn parse_special_key(key: &str) -> Option<KeyCombo> {
+        KeyCombo::parse(key)
     }
 }
 
@@ -360,15 +340,31 @@ mod tests {
 
     #[test]
     fn test_terminal_parse_special_key() {
-        assert_eq!(TerminalRequest::parse_special_key("enter"), Some(SpecialKey::Enter));
-        assert_eq!(TerminalRequest::parse_special_key("ctrl_c"), Some(SpecialKey::CtrlC));
-        assert_eq!(TerminalRequest::parse_special_key("ctrl_l"), Some(SpecialKey::CtrlL));
-        // 支持两种格式
-        assert_eq!(TerminalRequest::parse_special_key("up"), Some(SpecialKey::ArrowUp));
-        assert_eq!(TerminalRequest::parse_special_key("arrow_up"), Some(SpecialKey::ArrowUp));
-        assert_eq!(TerminalRequest::parse_special_key("arrow_down"), Some(SpecialKey::ArrowDown));
-        assert_eq!(TerminalRequest::parse_special_key("arrow_left"), Some(SpecialKey::ArrowLeft));
-        assert_eq!(TerminalRequest::parse_special_key("arrow_right"), Some(SpecialKey::ArrowRight));
-        assert_eq!(TerminalRequest::parse_special_key("unknown"), None);
+        use crate::shared::enums::special_key::KeyCode;
+        let combo = TerminalRequest::parse_special_key("enter").unwrap();
+        assert_eq!(combo.key, KeyCode::Enter);
+
+        let combo = TerminalRequest::parse_special_key("ctrl_c").unwrap();
+        assert!(combo.ctrl());
+        assert_eq!(combo.key, KeyCode::Char('c'));
+
+        let combo = TerminalRequest::parse_special_key("ctrl_l").unwrap();
+        assert!(combo.ctrl());
+        assert_eq!(combo.key, KeyCode::Char('l'));
+
+        // 新格式
+        let combo = TerminalRequest::parse_special_key("ctrl+a").unwrap();
+        assert!(combo.ctrl());
+        assert_eq!(combo.key, KeyCode::Char('a'));
+
+        // 方向键
+        let combo = TerminalRequest::parse_special_key("up").unwrap();
+        assert_eq!(combo.key, KeyCode::Up);
+
+        let combo = TerminalRequest::parse_special_key("arrow_up").unwrap();
+        assert_eq!(combo.key, KeyCode::Up);
+
+        // 无效键
+        assert!(TerminalRequest::parse_special_key("unknown").is_none());
     }
 }

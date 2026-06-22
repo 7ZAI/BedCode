@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::sumary::{SessionConfigSummary, SessionSummary};
+use super::plugin::PluginQuestion;
 
 /// 同步载荷 - 支持多种数据类型的增量同步
 ///
@@ -62,5 +63,13 @@ pub enum SyncPayload {
         session_id: String,
         task_status: String,
         task_reason: Option<String>,
+        task_questions: Option<Vec<PluginQuestion>>,
+    },
+
+    // === 会话模式同步 ===
+    /// 会话自动授权模式变更
+    SessionModeChanged {
+        session_id: String,
+        auto_approve: bool,
     },
 }

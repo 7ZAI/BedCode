@@ -19,7 +19,7 @@ export type { SessionInfo, SessionConfig, DeviceConnectionInfo, WslDistro } from
 export type { ConnectionStatus, RemoteDevice, AuthCredentials, ConnectionInfo, AuthState, RemoteSession, TerminalOutputEvent, TerminalIncrementalOutput } from '@/modules/mobile/composables/model'
 
 // Re-export types from shared model
-export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, PluginSessionInfo, AnsiRenderOptions, AppError, Shortcut, BufferedOutput, OutputBlock, PairedDevice, Notification } from '@/modules/shared/composables/model'
+export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, AnsiRenderOptions, AppError, Shortcut, BufferedOutput, OutputBlock, PairedDevice, Notification } from '@/modules/shared/composables/model'
 
 // 重新导出桌面端 composables
 export { useWsl } from '@/modules/desktop/composables/useWsl'

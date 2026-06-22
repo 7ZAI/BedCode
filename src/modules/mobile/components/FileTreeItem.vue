@@ -4,6 +4,10 @@
       class="tree-item-row"
       :style="rowStyle"
       @click="handleClick"
+      @touchstart="onTouchStart"
+      @touchend="onTouchEnd"
+      @touchmove="onTouchCancel"
+      @contextmenu.prevent="onContextMenu"
     >
       <!-- 文件夹展开/折叠箭头 -->
       <svg
@@ -38,6 +42,7 @@
         :depth="depth + 1"
         :font-size="fontSize"
         @file-click="(name, path) => emit('file-click', name, path)"
+        @long-press="(name, path) => emit('long-press', name, path)"
       />
     </div>
   </div>
@@ -60,6 +65,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'file-click': [name: string, path: string]
+  'long-press': [name: string, path: string]
 }>()
 
 // 基于 fontSize 的比例缩放因子（以 13px 为基准）
@@ -99,7 +105,50 @@ const fileColor = computed(() => {
   return EXTENSION_COLORS[ext] || 'var(--mobile-text-muted)'
 })
 
+// 长按检测
+const LONG_PRESS_DURATION = 500
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+let longPressTriggered = false
+
+function onTouchStart(e: TouchEvent) {
+  longPressTriggered = false
+  longPressTimer = setTimeout(() => {
+    longPressTriggered = true
+    // 触觉反馈
+    if (navigator.vibrate) {
+      navigator.vibrate(30)
+    }
+    emit('long-press', props.node.name, props.node.path ?? props.node.name)
+  }, LONG_PRESS_DURATION)
+}
+
+function onTouchEnd() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function onTouchCancel() {
+  // 手指移动时取消长按
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function onContextMenu(e: Event) {
+  // 桌面端右键菜单也触发长按
+  e.preventDefault()
+  emit('long-press', props.node.name, props.node.path ?? props.node.name)
+}
+
 function handleClick() {
+  // 长按触发后忽略 click
+  if (longPressTriggered) {
+    longPressTriggered = false
+    return
+  }
   if (props.node.type === 'folder') {
     props.node.expanded = !props.node.expanded
   } else {

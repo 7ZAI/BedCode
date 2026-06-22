@@ -279,10 +279,7 @@ pub fn run() {
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
-            let plugin_manager = Arc::new(desktop::plugin::PluginManager::new(
-                session_manager.output_tx(),
-                db.clone(),
-            ));
+            let plugin_manager = Arc::new(desktop::plugin::PluginManager::new());
             let pairing_service = Arc::new(PairingService::new());
             let qr_manager = Arc::new(crate::desktop::auth::QrTokenManager::new());
             let app_handle_arc = Arc::new(app_handle.clone());

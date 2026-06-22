@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::shared::enums::auth::AuthPayload;
 use crate::shared::enums::control::{SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
-use crate::shared::enums::special_key::SpecialKey;
+use crate::shared::enums::special_key::KeyCombo;
 use crate::shared::enums::sumary::SessionSummary;
 use crate::shared::enums::SyncPayload;
 
@@ -261,7 +261,7 @@ impl Message {
     }
 
     /// 创建终端输入消息
-    pub fn input(session_id: &str, data: &str, special_key: Option<SpecialKey>) -> Self {
+    pub fn input(session_id: &str, data: &str, special_key: Option<KeyCombo>) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
@@ -279,7 +279,7 @@ impl Message {
 
     /// 创建终端输入消息（带响应期望）
     /// 用于需要确认输入已被处理的场景
-    pub fn input_with_response(session_id: &str, data: &str, special_key: Option<SpecialKey>) -> Self {
+    pub fn input_with_response(session_id: &str, data: &str, special_key: Option<KeyCombo>) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: true,

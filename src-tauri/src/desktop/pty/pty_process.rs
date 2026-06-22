@@ -182,31 +182,13 @@ impl PtySession {
 
     /// 发送特殊键
     pub async fn send_special_key(&self, key: &str) -> Result<()> {
-        let sequence = match key.to_lowercase().as_str() {
-            "enter" => "\r",
-            "tab" => "\t",
-            "escape" | "esc" => "\x1b",
-            "ctrl_c" | "ctrlc" => "\x03",
-            "ctrl_d" | "ctrld" => "\x04",
-            "ctrl_z" | "ctrlz" => "\x1a",
-            "ctrl_a" | "ctrla" => "\x01",
-            "ctrl_e" | "ctrle" => "\x05",
-            "ctrl_k" | "ctrlk" => "\x0b",
-            "ctrl_l" | "ctrll" => "\x0c",
-            "ctrl_u" | "ctrlu" => "\x15",
-            "ctrl_p" | "ctrlp" => "\x10",
-            "backspace" => "\x7f",
-            "arrow_up" | "up" => "\x1b[A",
-            "arrow_down" | "down" => "\x1b[B",
-            "arrow_right" | "right" => "\x1b[C",
-            "arrow_left" | "left" => "\x1b[D",
-            _ => {
-                tracing::error!("[PtyProcess] unknown special key: {}", key);
-                return Err(crate::AppError::InvalidInput(format!("Unknown special key: {}", key)))
-            },
-        };
+        let combo = crate::shared::enums::KeyCombo::parse(key)
+            .ok_or_else(|| crate::AppError::InvalidInput(format!("Unknown special key: {}", key)))?;
 
-        self.write(sequence.as_bytes()).await
+        let bytes = combo.to_pty_bytes()
+            .ok_or_else(|| crate::AppError::InvalidInput(format!("Unsupported key combo: {}", key)))?;
+
+        self.write(&bytes).await
     }
 
     /// 调整终端大小

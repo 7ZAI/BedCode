@@ -19,15 +19,12 @@ use crate::desktop::server::middleware::jwt_auth::get_claims_from_request;
 pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
-    let plugin_manager = ctx.plugin_manager();
 
-    let pty_sessions = session_manager.list_sessions().await;
-    let plugin_sessions = plugin_manager.list_sessions().await;
-
-    let mut sessions = Vec::new();
-
-    for s in pty_sessions {
-        sessions.push(SessionItem {
+    let sessions: Vec<SessionItem> = session_manager
+        .list_sessions()
+        .await
+        .into_iter()
+        .map(|s| SessionItem {
             id: s.id,
             name: s.name,
             status: serde_json::to_value(&s.status)
@@ -37,26 +34,15 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
             started_at: s.started_at.map(|t| t.to_rfc3339()),
             session_type: Some("pty".to_string()),
             config_id: Some(s.config_id),
-            task_status: s.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
+            task_status: s.task_status.map(|ts| {
+                serde_json::to_string(&ts)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string()
+            }),
             task_reason: s.task_reason,
-        });
-    }
-
-    for s in plugin_sessions {
-        sessions.push(SessionItem {
-            id: s.id,
-            name: s.name,
-            status: serde_json::to_value(&s.status)
-                .and_then(|v| serde_json::from_value::<String>(v))
-                .unwrap_or_else(|_| format!("{:?}", s.status)),
-            created_at: s.created_at.to_rfc3339(),
-            started_at: s.started_at.map(|t| t.to_rfc3339()),
-            session_type: Some("plugin".to_string()),
-            config_id: Some(s.config_id),
-            task_status: s.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
-            task_reason: s.task_reason,
-        });
-    }
+        })
+        .collect();
 
     let data = SessionListResponseData { sessions };
     HttpResponse::Ok().json(ApiResponse::ok_with_data(data))

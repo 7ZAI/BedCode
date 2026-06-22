@@ -32,12 +32,9 @@
       <!-- Session Type Badge -->
       <span
         v-if="session.sessionType"
-        :class="[
-          'flex-shrink-0 text-xs px-2 py-0.5 rounded',
-          session.sessionType === 'plugin' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
-        ]"
+        class="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-400"
       >
-        {{ session.sessionType === 'plugin' ? 'Plugin' : 'PTY' }}
+        PTY
       </span>
 
       <!-- Right: Actions -->
