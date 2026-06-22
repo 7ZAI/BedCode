@@ -12,18 +12,18 @@
         <span v-if="selectedFile" class="header-lang-badge">{{ displayLang }}</span>
       </div>
       <div class="header-meta">
-        <button class="settings-btn" @click="showSettings = true" title="设置">
+        <button class="settings-btn" @click="showSettings = true" :title="t('mobile.codeViewer.settingsTitle')">
           <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
-        <button class="sidebar-toggle-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" title="文件树">
+        <button class="sidebar-toggle-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" :title="t('mobile.file.title')">
           <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
           </svg>
         </button>
-        <span v-if="selectedFile" class="header-line-count">{{ lineCount }} 行</span>
+        <span v-if="selectedFile" class="header-line-count">{{ t('common.misc.lineCount', { count: lineCount }) }}</span>
       </div>
     </header>
 
@@ -49,7 +49,7 @@
           <svg class="w-8 h-8 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
           </svg>
-          <p class="text-[var(--mobile-text-disabled)] text-sm mt-2">选择文件查看内容</p>
+          <p class="text-[var(--mobile-text-disabled)] text-sm mt-2">{{ t('mobile.codeViewer.selectFile') }}</p>
         </div>
 
         <!-- 加载中 -->
@@ -57,13 +57,13 @@
           <svg class="w-5 h-5 animate-spin text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          <span class="text-[var(--mobile-text-muted)] text-sm">加载中...</span>
+          <span class="text-[var(--mobile-text-muted)] text-sm">{{ t('mobile.codeViewer.loading') }}</span>
         </div>
 
         <!-- 错误 -->
         <div v-else-if="fileError" class="code-state">
           <p class="text-red-400 text-sm">{{ fileError }}</p>
-          <button class="text-xs text-[var(--mobile-accent)] mt-2" @click="retryLoadFile">重试</button>
+          <button class="text-xs text-[var(--mobile-accent)] mt-2" @click="retryLoadFile">{{ t('mobile.codeViewer.retry') }}</button>
         </div>
 
         <!-- 代码内容 -->
@@ -96,6 +96,7 @@
 
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composables/useCodeHighlight'
 import { useHttpApi } from '@/modules/mobile/composables/useHttpApi'
@@ -108,6 +109,7 @@ const router = useRouter()
 const route = useRoute()
 const connection = useMobileConnection()
 const toast = useToast()
+const { t } = useI18n()
 const codeViewerStore = useCodeViewerStore()
 const showSettings = ref(false)
 const { highlightedHtml, highlight, highlightDiff } = useCodeHighlight()
@@ -122,10 +124,10 @@ const configName = computed(() => {
   const session = connection.activeSessions.value.find(
     (s: any) => s.id === sessionId.value
   )
-  if (!session) return '代码查看'
+  if (!session) return t('mobile.codeViewer.title')
   const configId = session.config_id || session.configId
   const config = connection.sessionConfigs.value.find(c => c.id === configId)
-  return config?.name || '代码查看'
+  return config?.name || t('mobile.codeViewer.title')
 })
 
 // ==================== File State ====================
@@ -170,14 +172,14 @@ async function loadFileContent(path: string) {
     const { httpGetFileContent } = useHttpApi()
     const result = await httpGetFileContent(sessionId.value, path)
     if (result.code !== 0 || !result.data) {
-      throw new Error(result.message || '获取文件内容失败')
+      throw new Error(result.message || 'mobile.codeViewer.fetchContentFailed')
     }
     fileContent.value = result.data.content
 
     const lang = getLangByFilename(selectedFile.value)
     await highlight(result.data.content, lang, codeViewerStore.settings.theme)
   } catch (e: any) {
-    fileError.value = e?.toString() || '获取文件内容失败'
+    fileError.value = e?.toString() || 'mobile.codeViewer.fetchContentFailed'
   } finally {
     fileLoading.value = false
   }
@@ -192,13 +194,13 @@ async function loadFileDiff(path: string) {
     const { httpGetFileDiff } = useHttpApi()
     const result = await httpGetFileDiff(sessionId.value, path)
     if (result.code !== 0 || !result.data) {
-      throw new Error(result.message || '获取文件 Diff 失败')
+      throw new Error(result.message || 'mobile.codeViewer.fetchDiffFailed')
     }
 
     const lang = getLangByFilename(selectedFile.value)
     await highlightDiff(result.data.lines, lang, codeViewerStore.settings.theme)
   } catch (e: any) {
-    fileError.value = e?.toString() || '获取文件 Diff 失败'
+    fileError.value = e?.toString() || 'mobile.codeViewer.fetchDiffFailed'
   } finally {
     fileLoading.value = false
   }
@@ -215,9 +217,9 @@ async function retryLoadFile() {
 async function handleLongPress(name: string, path: string) {
   try {
     await navigator.clipboard.writeText(path)
-    toast.success(`已复制: ${path}`)
+    toast.success(t('mobile.codeViewer.copied', { path }))
   } catch {
-    toast.error('复制失败')
+    toast.error(t('mobile.codeViewer.copyFailed'))
   }
 }
 

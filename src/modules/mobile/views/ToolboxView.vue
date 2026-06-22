@@ -2,7 +2,7 @@
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">工具箱</h1>
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.toolbox.title') }}</h1>
     </header>
 
     <!-- Toolbox Sections -->
@@ -11,7 +11,7 @@
       <!-- Section: 预设任务 -->
       <section>
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">预设任务</h3>
+          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">{{ t('mobile.toolbox.presetTasks') }}</h3>
           <button
             class="text-xs text-[var(--mobile-accent)] hover:text-cyan-300 transition-colors flex items-center gap-1"
             @click="openAddDialog"
@@ -19,7 +19,7 @@
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
             </svg>
-            添加
+            {{ t('mobile.toolbox.add') }}
           </button>
         </div>
 
@@ -28,12 +28,12 @@
           v-if="tasks.length === 0"
           class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center shadow-[var(--mobile-card-shadow)]"
         >
-          <p class="text-[var(--mobile-text-disabled)] text-sm">暂无预设任务</p>
+          <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.toolbox.noTasks') }}</p>
           <button
             class="mt-2 text-xs text-[var(--mobile-accent)] hover:text-cyan-300 transition-colors"
             @click="openAddDialog"
           >
-            + 添加任务
+            {{ t('mobile.toolbox.addTask') }}
           </button>
         </div>
 
@@ -53,9 +53,9 @@
 
       <!-- Section: 插件（预留） -->
       <section>
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">插件</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ t('mobile.toolbox.plugins') }}</h3>
         <div class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 text-center">
-          <p class="text-[var(--mobile-text-disabled)] text-sm">即将推出</p>
+          <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.toolbox.comingSoon') }}</p>
         </div>
       </section>
 
@@ -68,25 +68,25 @@
           <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="closeDialog"></div>
           <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">
-              {{ editingTask ? '编辑预设任务' : '添加预设任务' }}
+              {{ editingTask ? t('mobile.toolbox.editTask') : t('mobile.toolbox.addTaskTitle') }}
             </h3>
 
             <div class="space-y-4">
               <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">任务标题</label>
+                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">{{ t('mobile.toolbox.taskTitle') }}</label>
                 <input
                   v-model="dialogForm.title"
                   type="text"
-                  placeholder="任务标题"
+                  :placeholder="t('mobile.toolbox.taskTitlePlaceholder')"
                   class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors"
                 />
               </div>
 
               <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">任务内容</label>
+                <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">{{ t('mobile.toolbox.taskContent') }}</label>
                 <textarea
                   v-model="dialogForm.content"
-                  placeholder="发送到终端的指令内容"
+                  :placeholder="t('mobile.toolbox.taskContentPlaceholder')"
                   rows="3"
                   class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors resize-none"
                 ></textarea>
@@ -94,7 +94,7 @@
 
               <!-- 任务类型 radio toggle（编辑时禁用） -->
               <div>
-                <label class="text-[var(--mobile-text-muted)] text-sm mb-2 block">任务类型</label>
+                <label class="text-[var(--mobile-text-muted)] text-sm mb-2 block">{{ t('mobile.toolbox.taskType') }}</label>
                 <div class="flex gap-3">
                   <button
                     class="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
@@ -104,7 +104,7 @@
                     :disabled="!!editingTask"
                     @click="dialogForm.type = 'once'"
                   >
-                    一次性
+                    {{ t('mobile.presetTask.once') }}
                   </button>
                   <button
                     class="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
@@ -114,10 +114,10 @@
                     :disabled="!!editingTask"
                     @click="dialogForm.type = 'template'"
                   >
-                    模板
+                    {{ t('mobile.presetTask.template') }}
                   </button>
                 </div>
-                <p v-if="editingTask" class="text-[10px] text-[var(--mobile-text-disabled)] mt-1">创建后类型不可更改</p>
+                <p v-if="editingTask" class="text-[10px] text-[var(--mobile-text-disabled)] mt-1">{{ t('mobile.toolbox.typeCannotChange') }}</p>
               </div>
             </div>
 
@@ -126,7 +126,7 @@
                 class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
                 @click="closeDialog"
               >
-                取消
+                {{ t('common.button.cancel') }}
               </button>
               <button
                 class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-colors"
@@ -134,7 +134,7 @@
                 :disabled="!dialogForm.title || !dialogForm.content"
                 @click="saveTask"
               >
-                保存
+                {{ t('common.button.save') }}
               </button>
             </div>
           </div>
@@ -148,10 +148,10 @@
         <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
           <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
           <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
-            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">选择会话</h3>
+            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">{{ t('mobile.toolbox.selectSession') }}</h3>
 
             <div v-if="activeSessions.length === 0" class="text-center py-4">
-              <p class="text-[var(--mobile-text-disabled)] text-sm">暂无活跃会话</p>
+              <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.toolbox.noActiveSessions') }}</p>
             </div>
 
             <div v-else class="space-y-2 max-h-60 overflow-y-auto">
@@ -170,7 +170,7 @@
               class="w-full mt-4 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
               @click="showSessionPicker = false"
             >
-              取消
+              {{ t('common.button.cancel') }}
             </button>
           </div>
         </div>
@@ -183,8 +183,8 @@
         <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
           <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
           <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
-            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-2">确认执行</h3>
-            <p class="text-sm text-[var(--mobile-text-muted)] mb-1">将发送到终端：</p>
+            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-2">{{ t('mobile.toolbox.confirmExecute') }}</h3>
+            <p class="text-sm text-[var(--mobile-text-muted)] mb-1">{{ t('mobile.toolbox.willSendToTerminal') }}</p>
             <p class="text-sm text-[var(--mobile-text-primary)] bg-[var(--mobile-bg-primary)] rounded-lg p-3 mb-4 line-clamp-3">{{ pendingTask?.content }}</p>
 
             <div class="flex gap-3">
@@ -192,13 +192,13 @@
                 class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
                 @click="showConfirmDialog = false"
               >
-                取消
+                {{ t('common.button.cancel') }}
               </button>
               <button
                 class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-colors"
                 @click="doExecute"
               >
-                执行
+                {{ t('mobile.toolbox.execute') }}
               </button>
             </div>
           </div>
@@ -302,7 +302,7 @@ function handleTaskTap(task: PresetTask) {
   const sessionId = activeSessionId.value
 
   if (!isConnected.value || !sessionId) {
-    toast.warning('请先连接设备')
+    toast.warning(t('mobile.toolbox.connectFirst'))
     router.push('/mobile/devices')
     return
   }
@@ -338,9 +338,9 @@ async function doExecute() {
 
   try {
     await executeTask(pendingTask.value, pendingSessionId.value)
-    toast.success('已发送到终端')
+    toast.success(t('mobile.toolbox.sentToTerminal'))
   } catch {
-    toast.error('发送失败')
+    toast.error(t('mobile.toolbox.sendFailed'))
   }
 
   pendingTask.value = null
