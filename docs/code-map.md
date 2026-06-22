@@ -358,7 +358,7 @@ bedcode/
 | `session/` | 会话管理：配置、状态、输出缓存、统一输出队列 |
 | `events/` | 同步事件、同步事件处理 |
 | `parser/` | 后端状态检测（ANSI/Markdown 解析，前端渲染用前端 composables） |
-| `plugin/` | 插件系统：JSONL 日志等 |
+| `plugin/` | 插件系统：任务状态管理器（内存存储 + 事件广播）、会话自动授权模式 |
 | `traits/` | 需要多态的 trait（PtyHandler, PtyOutputHandler, PtyOutputListener） |
 
 ### Mobile 前端模块详解
@@ -430,6 +430,101 @@ bedcode/
 | 文件浏览 | `mobile/remote/http_client.rs`, `mobile/commands/http.rs` |
 | 移动端设置 | `mobile/system/settings.rs` |
 | HTTP API | `shared/model/api_dto.rs` |
+| 插件系统 | `desktop/plugin/manager.rs` |
+
+### 自动化任务执行机制
+
+BedCode 通过 Claude Code 自定义插件 + HTTP API + WebSocket 事件链路实现移动端远程自动执行多个任务。
+
+#### 整体架构
+
+```
+Claude Code Hook (Python)
+    ↓ HTTP POST
+Rust HTTP API (plugin_controller.rs)
+    ↓ DesktopSyncEvent
+SyncEventHandler → WebSocket broadcast
+    ↓ ws_sync_task_status_changed / ws_sync_session_mode_changed
+Mobile Tauri Event → useAutoExecutor (状态机)
+    ↓ sendInput / HTTP API
+Claude Code (PTY)
+```
+
+#### 链路详解
+
+**1. Claude Code 插件** (`scripts/bedcode-plugin/`)
+
+Hook 脚本 (`scripts/bedcode_hook.py`) 注册 4 个事件：
+
+| Hook 事件 | 触发时机 | 处理逻辑 |
+|-----------|---------|---------|
+| SessionStart | Claude Code 会话启动 | 推送 `idle` 状态到桌面端 |
+| PreToolUse | Claude Code 调用工具前 | 查询会话模式：自动模式→auto-approve；手动模式→仍推送 asking 状态但不做 auto-approve |
+| Stop | Claude Code 停止响应 | 解析任务状态（completed/in_progress/asking/interrupted）并推送 |
+| SubagentStop | 子代理停止 | 同 Stop，解析并推送状态 |
+
+**2. HTTP API** (`desktop/server/controllers/plugin_controller.rs`)
+
+| 路由 | 方法 | 用途 |
+|------|------|------|
+| `/api/plugin/task-status` | POST | 接收插件推送的任务状态变更 |
+| `/api/plugin/session-mode` | POST | 移动端设置会话自动/手动模式 |
+| `/api/plugin/session-mode` | GET | Python PreToolUse hook 查询会话模式 |
+
+**3. PluginManager** (`desktop/plugin/manager.rs`)
+
+内存存储两个 HashMap：
+- `task_states: HashMap<session_id, TaskStateEntry>` — 任务状态 + reason + questions
+- `auto_modes: HashMap<session_id, bool>` — 会话级自动授权模式
+
+每次更新都通过 `DesktopSyncEvent` 广播到所有 WebSocket 客户端。
+
+**4. 移动端自动执行引擎** (`composables/useAutoExecutor.ts`)
+
+按 sessionId 隔离的状态机，核心逻辑：
+
+| 收到状态 | 自动模式行为 | 手动模式行为 |
+|---------|-------------|-------------|
+| `idle` | 如果有待执行任务则 `startNext()` | 不处理 |
+| `in_progress` | 标记当前任务 running | 不处理 |
+| `asking` | `handleAsking()` 更新 UI（Python hook 已自动回答） | 不处理（用户在 Claude Code 原生界面操作） |
+| `completed` | 标记完成 → `/clear` → 等下次 idle 开始下一个 | 不处理 |
+| `interrupted` | 发送"继续"利用上下文从中断点恢复，最多 3 次，超过则标记 failed，开始下一个 | 不处理 |
+
+**5. 模式切换流程**
+
+移动端通过 HTTP 请求切换模式，不经过 PTY：
+```
+Mobile → POST /api/plugin/session-mode (JWT 认证) → PluginManager 内存更新
+    → DesktopSyncEvent::SessionModeChanged → WebSocket broadcast
+    → Mobile 收到 ws_sync_session_mode_changed → 同步 UI 状态
+```
+
+`POST /api/plugin/session-mode` 支持双认证：Python hook 用 plugin token，移动端用 JWT（`useHttpApi` 自动注入 `Authorization: Bearer <token>` header）。
+
+同时 Python PreToolUse hook 每次被触发时通过 `GET /api/plugin/session-mode` 查询当前模式，
+自动模式时返回 `permissionDecision: "allow"` + AskUserQuestion 自动选择推荐项。
+
+#### 关键文件索引
+
+| 层 | 文件 | 职责 |
+|----|------|------|
+| Plugin | `scripts/bedcode-plugin/scripts/bedcode_hook.py` | Hook 脚本：状态推送 + 模式查询 + auto-approve |
+| Plugin | `scripts/bedcode-plugin/hooks.json` | Hook 事件注册 |
+| Plugin | `scripts/bedcode-plugin/.claude-plugin/plugin.json` | 插件元数据 |
+| Rust HTTP | `desktop/server/controllers/plugin_controller.rs` | HTTP API 路由处理 |
+| Rust DTO | `desktop/server/dtos/plugin_dto.rs` | 请求/响应类型 |
+| Rust Core | `desktop/plugin/manager.rs` | 任务状态 + 模式内存存储、事件广播 |
+| Rust Event | `desktop/events/sync_event.rs` | DesktopSyncEvent 定义 |
+| Rust Handler | `desktop/events/sync_handler.rs` | 事件→WebSocket 消息转换 |
+| Rust Forward | `mobile/router/event.rs` | WebSocket→Tauri 前端事件转发 |
+| Mobile Cmd | `mobile/composables/useMobileCommands.ts` | 事件监听注册 |
+| Mobile Conn | `mobile/composables/useMobileConnection.ts` | 同步事件回调处理 |
+| Mobile HTTP | `mobile/composables/useHttpApi.ts` | HTTP API 封装（含 httpSetSessionMode） |
+| Mobile Engine | `mobile/composables/useAutoExecutor.ts` | 自动执行状态机 |
+| Mobile UI | `mobile/components/AutoExecuteBar.vue` | 自动执行状态条 |
+| Mobile UI | `mobile/components/TaskPickerModal.vue` | 任务选择弹窗 |
+| Mobile View | `mobile/views/TerminalView.vue` | 终端视图（整合 AutoExecutor） |
 
 ### 按类型查找
 
@@ -450,5 +545,6 @@ bedcode/
 
 ## 最近更新
 
+- 2026-06-23: 自动化任务执行机制文档 — 新增"自动化任务执行机制"章节，记录 Plugin→HTTP→Rust→WebSocket→Mobile 完整链路；模式切换改为 HTTP 直接修改桌面端内存，移除 PTY 输入拦截 /bedcode 命令；手动模式下 PreToolUse 仍推送 asking 状态同步
 - 2026-06-19: 大幅重构更新 — WebSocket 客户端从 shared 迁移至 mobile/websocket_client/，JWT/QR Token 从 shared 迁移至 desktop/auth/，notify/parser 从 shared 迁移至 desktop/，新增 app_context (DI 容器)、mobile/system (设置管理)、mobile/commands/http (HTTP API)、mobile/commands/mobile_commands (移动端特有命令)、mobile/remote/http_client (文件浏览)，前端新增文件浏览组件 (FileSidebar/FileTreeItem/FileViewerModal/icons/)、ToolboxView 替代 QuickActionsView、新增 useCodeHighlight/useFileTree/useForegroundService/useHttpApi/useFontSize/useTheme
 - 2026-06-10: 同步项目当前结构，新增 events/、remote/、router/ 等目录，更新 stores 位置

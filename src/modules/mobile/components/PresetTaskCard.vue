@@ -50,8 +50,8 @@
     <!-- Dropdown menu -->
     <Teleport to="body">
       <Transition name="fade">
-        <div v-if="showMenu" class="fixed inset-0 z-50" @click="showMenu = false">
-          <div class="absolute inset-0 bg-black/40"></div>
+        <div v-if="showMenu" class="fixed inset-0 z-50 mobile-ui" @click="showMenu = false">
+          <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]"></div>
           <div
             class="absolute right-4 bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl shadow-xl overflow-hidden min-w-[140px]"
             :style="{ top: menuTop + 'px' }"

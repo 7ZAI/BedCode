@@ -243,10 +243,10 @@ def handle_session_start(data, logger):
 def handle_pre_tool_use(data, logger):
     """处理 PreToolUse 事件。
 
-    检查会话是否开启自动授权模式：
+    查询会话自动授权模式：
     - 自动模式 + AskUserQuestion：自动选择推荐选项并返回 permissionDecision: "allow"
     - 自动模式 + 其他工具：直接返回 permissionDecision: "allow"
-    - 手动模式：不干预，走 Claude Code 原生交互流程
+    - 手动模式：不干预工具调用，但仍推送 asking 状态到桌面端同步任务进度
     """
     session_id = data.get("session_id", "")
     tool_name = data.get("tool_name", "")
@@ -262,23 +262,40 @@ def handle_pre_tool_use(data, logger):
     # 查询会话自动授权模式
     auto_approve = query_session_mode(session_id, logger)
 
-    if not auto_approve:
-        # 手动模式：不输出任何内容，走 Claude Code 原生交互
-        logger.info("pre_tool_use: manual mode, no auto-approve")
-        return
-
-    # 自动授权模式
+    # AskUserQuestion 时始终推送 asking 状态到桌面端（无论手动/自动模式）
     if tool_name == "AskUserQuestion":
-        # AskUserQuestion：构造 answers，选推荐选项（第一个选项）
         tool_input = data.get("tool_input", {})
         questions = tool_input.get("questions", [])
-        answers = {}
 
+        # 推送 asking 状态到桌面端
+        reason = "Auto-answered by BedCode" if auto_approve else "Waiting for user input"
+        questions_data = []
+        for q in questions:
+            question = {
+                "question": q.get("question", ""),
+                "header": q.get("header", ""),
+                "multi_select": q.get("multiSelect", False),
+                "options": [],
+            }
+            for opt in q.get("options", []):
+                question["options"].append({
+                    "label": opt.get("label", ""),
+                    "description": opt.get("description", ""),
+                })
+            questions_data.append(question)
+        push_task_status(session_id, "asking", reason, logger, questions=questions_data)
+
+        if not auto_approve:
+            # 手动模式：不干预，走 Claude Code 原生交互
+            logger.info("pre_tool_use: manual mode, pushed asking status, no auto-approve")
+            return
+
+        # 自动模式：构造 answers，选推荐选项
+        answers = {}
         for q in questions:
             header = q.get("header", "")
             options = q.get("options", [])
             if options:
-                # 选择第一个选项（Claude Code 推荐项）
                 answers[header] = options[0].get("label", "")
 
         output = {
@@ -295,26 +312,14 @@ def handle_pre_tool_use(data, logger):
             "pre_tool_use: auto-approve AskUserQuestion, answers={}".format(answers)
         )
         print(json.dumps(output))
-
-        # 同时推送 asking 状态到桌面端（保留任务状态通知链路）
-        reason = "Auto-answered by BedCode"
-        questions_data = []
-        for q in questions:
-            question = {
-                "question": q.get("question", ""),
-                "header": q.get("header", ""),
-                "multi_select": q.get("multiSelect", False),
-                "options": [],
-            }
-            for opt in q.get("options", []):
-                question["options"].append({
-                    "label": opt.get("label", ""),
-                    "description": opt.get("description", ""),
-                })
-            questions_data.append(question)
-        push_task_status(session_id, "asking", reason, logger, questions=questions_data)
     else:
-        # 其他工具：直接允许
+        # 非 AskUserQuestion 工具
+        if not auto_approve:
+            # 手动模式：不干预，走 Claude Code 原生交互
+            logger.info("pre_tool_use: manual mode, tool={}, no auto-approve".format(tool_name))
+            return
+
+        # 自动模式：直接允许
         output = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

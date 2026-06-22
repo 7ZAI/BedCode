@@ -42,21 +42,21 @@
   <SettingsModal :visible="showSettings" @close="showSettings = false" />
 
   <Teleport to="body">
-    <div v-if="showInput" class="fixed inset-0 z-[100] flex items-center justify-center p-4" @click.self="showInput = false">
-      <div class="absolute inset-0 bg-black/50" @click="showInput = false"></div>
-      <div class="relative bg-[var(--mobile-bg-card)] rounded-xl w-full max-w-md p-4 shadow-xl">
+    <div v-if="showInput" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui" @click.self="showInput = false">
+      <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="showInput = false"></div>
+      <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-md p-4 shadow-xl">
         <div class="text-sm font-medium mb-3 text-[var(--mobile-text-primary)]">输入命令</div>
         <textarea
           ref="inputRef"
           v-model="inputText"
-          class="w-full bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:border-primary-500"
+          class="w-full bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:border-[var(--mobile-input-focus)]"
           placeholder="输入命令..." rows="4"
         ></textarea>
         <div class="flex justify-between gap-2 mt-4">
           <button class="px-4 py-2 text-sm text-[var(--mobile-text-secondary)]" @click="showInput = false">取消</button>
           <div class="flex gap-2">
             <button class="px-4 py-2 text-sm bg-[var(--mobile-input-bg)] rounded-lg" :disabled="!inputText.trim()" @click="onSubmit">发送</button>
-            <button class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg" :disabled="!inputText.trim()" @click="onExecute">执行</button>
+            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-white rounded-lg" :disabled="!inputText.trim()" @click="onExecute">执行</button>
           </div>
         </div>
       </div>

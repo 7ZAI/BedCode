@@ -29,9 +29,13 @@
 # Keep all generated Tauri classes
 -keep class com.bedcode.app.generated.** { *; }
 
-# Keep custom classes (ForegroundService, etc.)
+# Keep custom classes (ForegroundService, TaskNotification, etc.)
 -keep class com.bedcode.app.ForegroundService { *; }
 -keep class com.bedcode.app.ForegroundServicePlugin { *; }
+-keep class com.bedcode.app.TaskNotificationPlugin { *; }
+-keep class com.bedcode.app.TaskNotificationManager { *; }
+-keep class com.bedcode.app.TaskNotificationArgs { *; }
+-keep class com.bedcode.app.CancelTaskNotificationArgs { *; }
 
 # Keep JavaScript interface methods
 -keepclassmembers class * {

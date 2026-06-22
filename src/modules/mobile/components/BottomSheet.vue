@@ -1,12 +1,12 @@
 <template>
   <Teleport to="body">
     <Transition name="fade">
-      <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
         <!-- Backdrop -->
-        <div class="absolute inset-0 bg-black/60" @click="handleBackdropClick"></div>
+        <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="handleBackdropClick"></div>
 
         <!-- Panel - 居中显示，避免被输入法遮挡 -->
-        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] rounded-2xl p-6">
+        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
           <!-- Close button (loading时禁用) -->
           <button
             class="absolute top-4 right-4 p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-text-primary)]"
@@ -20,19 +20,19 @@
           </button>
 
           <!-- Title -->
-          <h3 class="text-lg font-semibold mt-2 mb-6">{{ title }}</h3>
+          <h3 class="text-lg font-semibold mt-2 mb-6 text-[var(--mobile-text-primary)]">{{ title }}</h3>
 
           <!-- Loading state: show spinner and cancel button -->
           <div v-if="loading" class="mb-4">
             <div class="flex items-center justify-center gap-3 py-4">
-              <div class="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
-              <span class="text-[var(--mobile-text-secondary)]">正在连接...</span>
+              <div class="w-6 h-6 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin"></div>
+              <span class="text-[var(--mobile-text-secondary)]">{{ t('mobile.bottomSheet.connecting') }}</span>
             </div>
             <button
               class="w-full bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium"
               @click="handleCancel"
             >
-              取消连接
+              {{ t('mobile.bottomSheet.cancelConnect') }}
             </button>
           </div>
 
@@ -43,7 +43,7 @@
               v-model="inputValue"
               type="text"
               :placeholder="placeholder"
-              class="w-full bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-xl px-4 py-3 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-muted)] focus:outline-none focus:border-primary-500"
+              class="w-full bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-xl px-4 py-3 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-muted)] focus:outline-none focus:border-[var(--mobile-input-focus)]"
               @keyup.enter="submit"
             />
           </div>
@@ -54,15 +54,15 @@
               class="flex-1 bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium active:opacity-80"
               @click="close"
             >
-              取消
+              {{ t('common.button.cancel') }}
             </button>
             <button
-              class="flex-1 bg-primary-600 text-white py-3 rounded-xl font-medium active:bg-primary-500"
+              class="flex-1 bg-[var(--mobile-accent)] text-white py-3 rounded-xl font-medium active:opacity-80"
               :class="{ 'opacity-50': !inputValue }"
               :disabled="!inputValue"
               @click="submit"
             >
-              确定
+              {{ t('common.button.confirm') }}
             </button>
           </div>
         </div>
@@ -73,6 +73,9 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: boolean

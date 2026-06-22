@@ -693,7 +693,7 @@ async function handleLongPress(name: string, path: string) {
 .settings-panel-btn.confirm {
   background: var(--mobile-accent);
   border: none;
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
 }
 
 .settings-panel-btn.confirm:hover {

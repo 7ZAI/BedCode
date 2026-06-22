@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="visible"
-    class="settings-modal-overlay"
+    class="settings-modal-overlay mobile-ui"
     @click.self="emit('close')"
   >
     <div class="settings-modal" :style="modalStyle">
@@ -133,7 +133,7 @@ function handleConfirm() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--mobile-overlay-heavy);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -263,7 +263,7 @@ function handleConfirm() {
 .theme-btn.active {
   border-color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
-  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
+  box-shadow: 0 0 12px var(--mobile-accent-muted);
 }
 
 .theme-preview {
@@ -347,7 +347,7 @@ function handleConfirm() {
   height: 1.25rem;
   border-radius: 50%;
   background: var(--mobile-text-primary);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  box-shadow: 0 1px 3px var(--mobile-overlay-light);
   transition: transform 0.2s ease;
 }
 
@@ -387,7 +387,7 @@ function handleConfirm() {
 .settings-footer-btn.confirm {
   background: var(--mobile-accent);
   border: none;
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
 }
 
 .settings-footer-btn.confirm:hover {

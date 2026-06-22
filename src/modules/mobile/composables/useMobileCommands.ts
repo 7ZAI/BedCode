@@ -311,7 +311,7 @@ export interface SyncEventCallbacks {
   onSyncConfigCreated?: (data: { config: any; source_device: string }) => void
   onSyncConfigUpdated?: (data: { config: any; source_device: string }) => void
   onSyncConfigRemoved?: (data: { config_id: string; config_name: string }) => void
-  onSyncTaskStatusChanged?: (data: { session_id: string; task_status: string; task_reason?: string }) => void
+  onSyncTaskStatusChanged?: (data: { session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; question: string; multi_select: boolean; options: Array<{ label: string; description: string }> }> }) => void
 }
 
 /**
@@ -338,7 +338,7 @@ export async function initMobileEventListeners(callbacks: {
   onSyncConfigCreated?: (data: { config: any; source_device: string }) => void
   onSyncConfigUpdated?: (data: { config: any; source_device: string }) => void
   onSyncConfigRemoved?: (data: { config_id: string; config_name: string }) => void
-  onSyncTaskStatusChanged?: (data: { session_id: string; task_status: string; task_reason?: string }) => void
+  onSyncTaskStatusChanged?: (data: { session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; question: string; multi_select: boolean; options: Array<{ label: string; description: string }> }> }) => void
 }) {
   if (callbacks.onConnecting) {
     unlistenConnecting = await listen('ws_connecting', callbacks.onConnecting)
@@ -422,7 +422,7 @@ export async function initMobileEventListeners(callbacks: {
     })
   }
   if (callbacks.onSyncTaskStatusChanged) {
-    unlistenSyncTaskStatusChanged = await listen<{ session_id: string; task_status: string; task_reason?: string }>('ws_sync_task_status_changed', (event) => {
+    unlistenSyncTaskStatusChanged = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; question: string; multi_select: boolean; options: Array<{ label: string; description: string }> }> }>('ws_sync_task_status_changed', (event) => {
       callbacks.onSyncTaskStatusChanged?.(event.payload)
     })
   }

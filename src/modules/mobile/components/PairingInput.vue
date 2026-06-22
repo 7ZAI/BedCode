@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
     <Transition name="fade">
-      <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto mobile-ui">
         <!-- Backdrop -->
-        <div class="absolute inset-0 bg-black/80"></div>
+        <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]"></div>
 
         <!-- Panel - 居中显示，使用自带数字键盘 -->
         <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 my-4">
@@ -18,9 +18,9 @@
           </button>
 
           <!-- Title -->
-          <h3 class="text-xl font-semibold text-[var(--mobile-text-primary)] text-center mt-2 mb-2">输入配对码</h3>
+          <h3 class="text-xl font-semibold text-[var(--mobile-text-primary)] text-center mt-2 mb-2">{{ t('mobile.pairing.title') }}</h3>
           <p class="text-[var(--mobile-text-muted)] text-center text-sm mb-6">
-            请在桌面端查看并输入 6 位数字配对码
+            {{ t('mobile.pairing.hint') }}
           </p>
 
           <!-- Code input display -->
@@ -29,7 +29,7 @@
               v-for="i in 6"
               :key="i"
               class="w-12 h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg flex items-center justify-center text-2xl font-bold"
-              :class="code[i-1] ? 'text-[var(--mobile-accent)] border-[var(--mobile-accent)] shadow-[0_0_10px_rgba(34,211,238,0.2)]' : 'text-gray-600'"
+              :class="code[i-1] ? 'text-[var(--mobile-accent)] border-[var(--mobile-accent)] shadow-[0_0_10px_var(--mobile-accent-muted)]' : 'text-[var(--mobile-text-disabled)]'"
             >
               {{ code[i-1] || '-' }}
             </div>
@@ -49,7 +49,7 @@
               class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-sm text-[var(--mobile-text-secondary)] hover:border-[var(--mobile-accent)] transition-colors"
               @click="clearCode"
             >
-              清除
+              {{ t('mobile.pairing.clear') }}
             </button>
             <button
               class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-xl font-medium text-[var(--mobile-text-primary)] hover:border-[var(--mobile-accent)] transition-colors"
@@ -68,7 +68,7 @@
           </div>
 
           <!-- Error message -->
-          <p v-if="error" class="text-red-400 text-center text-sm mb-4">
+          <p v-if="error" class="text-[var(--mobile-error)] text-center text-sm mb-4">
             {{ error }}
           </p>
 
@@ -79,7 +79,7 @@
             :disabled="code.length !== 6 || loading"
             @click="submit"
           >
-            {{ loading ? '验证中...' : '确认配对' }}
+            {{ loading ? t('mobile.pairing.verifying') : t('mobile.pairing.confirm') }}
           </button>
         </div>
       </div>
@@ -89,6 +89,9 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: boolean

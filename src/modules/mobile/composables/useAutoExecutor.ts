@@ -7,6 +7,7 @@
 import { ref, computed, watch, type Ref } from 'vue'
 import type { PresetTask, PresetTaskType } from './model'
 import { useMobileConnection } from './useMobileConnection'
+import { useHttpApi } from './useHttpApi'
 import { useTaskNotification } from './useTaskNotification'
 
 /** 队列中的任务 */
@@ -79,13 +80,11 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     })
   }
 
-  /** 切换模式 */
-  function setMode(newMode: 'manual' | 'auto') {
-    // 通过 /bedcode 命令切换，桌面端拦截后设置模式并广播 SessionModeChanged
-    // 移动端通过 ws_sync_session_mode_changed 事件同步状态
-    const cmd = newMode === 'auto' ? '/bedcode auto' : '/bedcode manual'
-    sendInput(sessionId.value, cmd)
-    sendInput(sessionId.value, '', 'enter')
+  /** 切换模式：通过 HTTP API 设置，桌面端内存更新后广播 SessionModeChanged 同步到移动端 */
+  async function setMode(newMode: 'manual' | 'auto') {
+    const { httpSetSessionMode } = useHttpApi()
+    const autoApprove = newMode === 'auto'
+    await httpSetSessionMode(sessionId.value, autoApprove)
   }
 
   /** 添加任务到队列 */
@@ -131,36 +130,19 @@ export function useAutoExecutor(sessionId: Ref<string>) {
 
   const { sendInput } = useMobileConnection()
 
-  /** 授权类问题关键词 */
-  const AUTH_KEYWORDS = ['allow', 'permit', 'approve', 'confirm', '授权', '允许', '同意']
-
-  /** 判断问题是否为授权类 */
-  function isAuthQuestion(header: string): boolean {
-    const lower = header.toLowerCase()
-    return AUTH_KEYWORDS.some(kw => lower.includes(kw))
-  }
-
-  /** 处理 asking 状态：自动回复问题 */
-  function handleAsking(questions: Array<{ header: string; options: Array<{ label: string }> }>) {
-    if (!questions.length || !currentTask.value) return
-
-    for (const question of questions) {
-      if (isAuthQuestion(question.header)) {
-        // 授权类：选择同意/yes 选项
-        const agreeOption = question.options.find(o =>
-          ['yes', 'agree', 'allow', 'confirm', '是', '同意', '允许'].some(kw => o.label.toLowerCase().includes(kw))
-        )
-        const choice = agreeOption || question.options[0]
-        // 发送选项文本 + Enter 确认提交
-        sendInput(sessionId.value, choice.label)
-        sendInput(sessionId.value, '', 'enter')
-      } else {
-        // 选择类：选第一个选项（Claude Code 推荐项）
-        const choice = question.options[0]
-        sendInput(sessionId.value, choice.label)
-        sendInput(sessionId.value, '', 'enter')
-      }
+  /** 处理 asking 状态：仅更新 UI 状态，不通过 sendInput 回答
+   *  自动模式下 Python PreToolUse hook 已通过 permissionDecision: "allow" 自动回答
+   *  手动模式下用户在 Claude Code 原生界面操作
+   *  移动端只需感知 asking 状态更新 UI 即可
+   */
+  function handleAsking(questions?: Array<{ header: string; options: Array<{ label: string }> }>) {
+    if (currentTask.value) {
+      currentTask.value.status = 'running'
+      saveState()
     }
+    // questions 数据可用于 UI 展示（如显示问题内容），但不通过 sendInput 回答
+    // 自动模式由 Python hook 处理，手动模式由用户在 Claude Code 中操作
+    void questions
   }
 
   /** 开始执行下一个 pending 任务 */
@@ -205,7 +187,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
       retryCount.value++
       currentTask.value.status = 'retrying'
       saveState()
-      // 发送继续执行 + Enter 提交
+      // 发送"继续"利用 Claude Code 上下文机制从中断点恢复
       sendInput(sessionId.value, '继续')
       sendInput(sessionId.value, '', 'enter')
     } else {
@@ -235,13 +217,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
         }
         break
       case 'asking':
-        if (currentTask.value) {
-          currentTask.value.status = 'running'
-          saveState()
-        }
-        if (questions) {
-          handleAsking(questions)
-        }
+        handleAsking(questions)
         break
       case 'completed':
         handleTaskCompleted()

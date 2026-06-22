@@ -29,6 +29,8 @@ export interface InputAssistantSettings {
   quickBarCount: number
   /** 悬浮球启用开关 */
   floatingBall: boolean
+  /** 终端 Header 常驻工具按钮 key 列表（其余收入溢出菜单） */
+  headerToolbarItems: string[]
 }
 
 const DEFAULT_SETTINGS: InputAssistantSettings = {
@@ -42,6 +44,7 @@ const DEFAULT_SETTINGS: InputAssistantSettings = {
   },
   quickBarCount: 6,
   floatingBall: false,
+  headerToolbarItems: ['folder'],
 }
 
 const STORAGE_KEY_STATS = 'terminal_shortcut_stats'

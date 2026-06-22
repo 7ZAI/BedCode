@@ -193,6 +193,16 @@ export async function httpGetFileDiff(sessionId: string, filePath: string) {
   )
 }
 
+// ==================== Plugin API ====================
+
+/** 设置会话自动授权模式 */
+export async function httpSetSessionMode(sessionId: string, autoApprove: boolean) {
+  return request('/api/plugin/session-mode', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, auto_approve: autoApprove, token: '' }),
+  })
+}
+
 // ==================== Setup ====================
 
 export function setApiBaseUrl(address: string, port: number) {
@@ -221,5 +231,7 @@ export function useHttpApi() {
     httpGetFileContent,
     httpGetDiffTree,
     httpGetFileDiff,
+    // Plugin
+    httpSetSessionMode,
   }
 }

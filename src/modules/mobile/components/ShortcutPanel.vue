@@ -3,10 +3,10 @@
     <transition name="fade">
       <div
         v-if="visible"
-        class="fixed inset-0 z-[100] flex items-end justify-center"
+        class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui"
         @click.self="emit('close')"
       >
-        <div class="absolute inset-0 bg-black/60" @click="emit('close')"></div>
+        <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="emit('close')"></div>
 
         <!-- 快捷键面板 -->
         <div

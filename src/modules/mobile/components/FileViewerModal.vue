@@ -1,6 +1,6 @@
 <template>
   <transition name="modal-fade">
-    <div v-if="visible" class="viewer-overlay" @click.self="handleClose" @touchstart.stop @touchmove.stop>
+    <div v-if="visible" class="viewer-overlay mobile-ui" @click.self="handleClose" @touchstart.stop @touchmove.stop>
       <div class="viewer-modal" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
         <!-- Header -->
         <div class="viewer-header">
@@ -156,7 +156,7 @@ watch(
 .viewer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--mobile-overlay-heavy);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -254,7 +254,7 @@ watch(
   padding: 0;
 
   scrollbar-width: thin;
-  scrollbar-color: rgba(100, 100, 120, 0.3) transparent;
+  scrollbar-color: var(--mobile-border) transparent;
 }
 
 .viewer-body::-webkit-scrollbar {
@@ -267,7 +267,7 @@ watch(
 }
 
 .viewer-body::-webkit-scrollbar-thumb {
-  background: rgba(100, 100, 120, 0.3);
+  background: var(--mobile-border);
   border-radius: 2px;
 }
 

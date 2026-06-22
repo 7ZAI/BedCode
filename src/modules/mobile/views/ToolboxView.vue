@@ -64,9 +64,9 @@
     <!-- Add/Edit Dialog -->
     <Teleport to="body">
       <Transition name="fade">
-        <div v-if="showDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/80" @click="closeDialog"></div>
-          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] rounded-2xl p-6">
+        <div v-if="showDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+          <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="closeDialog"></div>
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">
               {{ editingTask ? '编辑预设任务' : '添加预设任务' }}
             </h3>
@@ -78,7 +78,7 @@
                   v-model="dialogForm.title"
                   type="text"
                   placeholder="任务标题"
-                  class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-cyan-500/50 transition-colors"
+                  class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors"
                 />
               </div>
 
@@ -88,7 +88,7 @@
                   v-model="dialogForm.content"
                   placeholder="发送到终端的指令内容"
                   rows="3"
-                  class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-cyan-500/50 transition-colors resize-none"
+                  class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors resize-none"
                 ></textarea>
               </div>
 
@@ -99,7 +99,7 @@
                   <button
                     class="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
                     :class="dialogForm.type === 'once'
-                      ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                      ? 'bg-[var(--mobile-warning-muted)] border-[var(--mobile-warning)]/30 text-[var(--mobile-warning)]'
                       : 'bg-[var(--mobile-bg-primary)] border-[var(--mobile-border)] text-[var(--mobile-text-muted)]'"
                     :disabled="!!editingTask"
                     @click="dialogForm.type = 'once'"
@@ -109,7 +109,7 @@
                   <button
                     class="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
                     :class="dialogForm.type === 'template'
-                      ? 'bg-cyan-500/15 border-cyan-500/30 text-cyan-400'
+                      ? 'bg-[var(--mobile-accent-muted)] border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)]'
                       : 'bg-[var(--mobile-bg-primary)] border-[var(--mobile-border)] text-[var(--mobile-text-muted)]'"
                     :disabled="!!editingTask"
                     @click="dialogForm.type = 'template'"
@@ -123,13 +123,13 @@
 
             <div class="flex gap-3 mt-6">
               <button
-                class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
+                class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
                 @click="closeDialog"
               >
                 取消
               </button>
               <button
-                class="flex-1 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-cyan-500/30 transition-colors"
+                class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-colors"
                 :class="{ 'opacity-50': !dialogForm.title || !dialogForm.content }"
                 :disabled="!dialogForm.title || !dialogForm.content"
                 @click="saveTask"
@@ -145,9 +145,9 @@
     <!-- Session Picker Dialog -->
     <Teleport to="body">
       <Transition name="fade">
-        <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/80" @click="showSessionPicker = false"></div>
-          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] rounded-2xl p-6">
+        <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+          <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">选择会话</h3>
 
             <div v-if="activeSessions.length === 0" class="text-center py-4">
@@ -158,7 +158,7 @@
               <button
                 v-for="session in activeSessions"
                 :key="session.id"
-                class="w-full text-left px-4 py-3 rounded-xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-primary)] hover:border-cyan-500/30 transition-colors"
+                class="w-full text-left px-4 py-3 rounded-xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-primary)] hover:border-[var(--mobile-accent)]/30 transition-colors"
                 @click="confirmExecute(session.id)"
               >
                 <p class="text-sm font-medium text-[var(--mobile-text-primary)]">{{ session.name }}</p>
@@ -167,7 +167,7 @@
             </div>
 
             <button
-              class="w-full mt-4 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
+              class="w-full mt-4 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
               @click="showSessionPicker = false"
             >
               取消
@@ -180,22 +180,22 @@
     <!-- Confirm Execute Dialog -->
     <Teleport to="body">
       <Transition name="fade">
-        <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/80" @click="showConfirmDialog = false"></div>
-          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] rounded-2xl p-6">
+        <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+          <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-2">确认执行</h3>
             <p class="text-sm text-[var(--mobile-text-muted)] mb-1">将发送到终端：</p>
             <p class="text-sm text-[var(--mobile-text-primary)] bg-[var(--mobile-bg-primary)] rounded-lg p-3 mb-4 line-clamp-3">{{ pendingTask?.content }}</p>
 
             <div class="flex gap-3">
               <button
-                class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-cyan-500/40 transition-colors"
+                class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
                 @click="showConfirmDialog = false"
               >
                 取消
               </button>
               <button
-                class="flex-1 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-cyan-500/30 transition-colors"
+                class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-colors"
                 @click="doExecute"
               >
                 执行

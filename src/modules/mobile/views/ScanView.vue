@@ -42,19 +42,19 @@
       </p>
 
       <!-- Connecting state -->
-      <div v-if="isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+      <div v-if="isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-[var(--mobile-overlay-heavy)]">
         <div class="animate-spin rounded-full h-12 w-12 border-2 border-[var(--mobile-accent)] border-t-transparent mb-4"></div>
         <p class="text-[var(--mobile-text-secondary)] text-lg mb-2">{{ connectingStep }}</p>
         <p class="text-[var(--mobile-text-muted)] text-sm">{{ connectingDetail }}</p>
       </div>
 
       <!-- Error state -->
-      <div v-if="errorMessage && !isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
-        <svg class="w-16 h-16 text-red-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div v-if="errorMessage && !isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-[var(--mobile-overlay-heavy)]">
+        <svg class="w-16 h-16 text-[var(--mobile-error)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
         </svg>
-        <p class="text-red-400 text-lg mb-2">连接失败</p>
-        <p class="text-gray-400 text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
+        <p class="text-[var(--mobile-error)] text-lg mb-2">连接失败</p>
+        <p class="text-[var(--mobile-text-muted)] text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
         <div class="flex gap-3">
           <button
             class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-lg hover:border-cyan-500/40 transition-colors"

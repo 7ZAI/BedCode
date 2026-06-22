@@ -1,17 +1,12 @@
 //! Terminal Service
 //!
 //! 处理终端相关消息（输入、输出等）
-//! 拦截 /bedcode 自定义命令用于控制会话模式
 
-use crate::desktop::app_context::AppContext;
 use crate::desktop::session::SessionManager;
 use crate::desktop::server::message::Message;
-use crate::shared::enums::{TerminalAction, TerminalPayload, KeyCombo};
+use crate::shared::enums::{TerminalAction, TerminalPayload};
 use crate::Result;
 use std::sync::Arc;
-
-/// BedCode 自定义命令前缀
-const BEDCODE_CMD_PREFIX: &str = "/bedcode ";
 
 /// 处理终端输入消息
 pub async fn handle_input(
@@ -24,13 +19,6 @@ pub async fn handle_input(
         TerminalAction::Input { data, special_key } => (data, special_key),
         _ => return Ok(None),
     };
-
-    // 拦截 /bedcode 自定义命令
-    if !data.is_empty() && data.starts_with(BEDCODE_CMD_PREFIX) {
-        if let Some(result) = handle_bedcode_command(session_id, &data).await {
-            return Ok(result);
-        }
-    }
 
     if let Some(ref sm) = session_manager {
         // 处理普通数据输入
@@ -83,46 +71,4 @@ pub async fn handle_input(
 
     // 输入消息不需要响应，返回 None 由路由器自动发送 Ack（如果 expect_response=true）
     Ok(None)
-}
-
-/// 处理 /bedcode 自定义命令
-///
-/// 支持的命令：
-/// - `/bedcode auto` — 开启自动授权模式
-/// - `/bedcode manual` — 关闭自动授权模式
-///
-/// 命令被拦截后不传递到 PTY，直接返回操作结果
-async fn handle_bedcode_command(session_id: &str, data: &str) -> Option<Option<Message>> {
-    let arg = data[BEDCODE_CMD_PREFIX.len()..].trim();
-
-    let ctx = AppContext::global();
-    let plugin_manager = ctx.plugin_manager();
-
-    match arg {
-        "auto" => {
-            plugin_manager.set_auto_mode(session_id, true).await;
-            tracing::info!(
-                "[TerminalService] /bedcode auto: session_id={} auto_approve enabled",
-                session_id
-            );
-            // 命令已处理，不传递到 PTY
-            Some(None)
-        }
-        "manual" => {
-            plugin_manager.set_auto_mode(session_id, false).await;
-            tracing::info!(
-                "[TerminalService] /bedcode manual: session_id={} auto_approve disabled",
-                session_id
-            );
-            Some(None)
-        }
-        _ => {
-            // 未知 /bedcode 子命令，不拦截，传递到 PTY
-            tracing::debug!(
-                "[TerminalService] Unknown /bedcode command: {}, passing through",
-                arg
-            );
-            None
-        }
-    }
 }

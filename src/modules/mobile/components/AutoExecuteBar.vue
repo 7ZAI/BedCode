@@ -81,7 +81,7 @@ const show = computed(() => props.mode === 'auto' && props.currentTask)
   border-radius: 4px;
   font-size: 11px;
   background: var(--mobile-accent);
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
 }
 
 .bar-action {

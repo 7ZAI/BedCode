@@ -83,7 +83,7 @@ async function handleCreate() {
 
 <template>
   <Teleport to="body">
-    <div class="modal-overlay" @click.self="emit('close')">
+    <div class="modal-overlay mobile-ui" @click.self="emit('close')">
       <div class="modal-content">
         <div class="modal-header">
           <h3>待办任务</h3>
@@ -154,7 +154,7 @@ async function handleCreate() {
     </div>
 
     <!-- 新建任务弹窗 -->
-    <div v-if="showCreateModal" class="create-overlay" @click.self="showCreateModal = false">
+    <div v-if="showCreateModal" class="create-overlay mobile-ui" @click.self="showCreateModal = false">
       <div class="create-modal">
         <div class="create-header">
           <h3>新建任务</h3>
@@ -228,7 +228,7 @@ async function handleCreate() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--mobile-overlay);
   padding: 1rem;
 }
 
@@ -291,7 +291,7 @@ async function handleCreate() {
 
 .add-btn:active {
   background: var(--mobile-accent);
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
 }
 
 .close-btn {
@@ -438,7 +438,7 @@ async function handleCreate() {
   height: 20px;
   border-radius: 50%;
   background: var(--mobile-accent);
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -509,7 +509,7 @@ async function handleCreate() {
   border: none;
   border-radius: 8px;
   background: var(--mobile-accent);
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -528,7 +528,7 @@ async function handleCreate() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--mobile-overlay);
   padding: 1rem;
 }
 

@@ -229,7 +229,7 @@
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" title="确认停止会话" size="sm">
-      <p class="text-[var(--mobile-text-disabled)] dark:text-dark-300">
+      <p class="text-[var(--mobile-text-disabled)]">
         确定要停止会话 "<span class="text-[var(--mobile-text-primary)] font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
       </p>
       <template #footer>
@@ -245,7 +245,7 @@
       <Transition name="fade">
         <div
           v-if="showPairingLoading"
-          class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          class="fixed inset-0 z-[9999] flex items-center justify-center bg-[var(--mobile-overlay)] backdrop-blur-sm mobile-ui"
         >
           <div class="bg-[var(--mobile-bg-card)] rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]">
             <div class="w-10 h-10 border-4 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
