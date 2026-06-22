@@ -2,28 +2,28 @@
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">设置</h1>
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('settings.title') }}</h1>
     </header>
 
     <!-- Settings List -->
     <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">连接设置</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.connection.title') }}</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">自动重连</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.autoReconnect') }}</span>
             <Toggle v-model="settings.autoReconnect" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">后台保活</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.keepAlive') }}</span>
             <Toggle v-model="settings.keepAlive" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">重连间隔（秒）</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.reconnectInterval') }}</span>
             <input
               v-model.number="settings.reconnectInterval"
               type="number"
@@ -34,7 +34,7 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">默认端口</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.defaultPort') }}</span>
             <input
               v-model.number="settings.defaultPort"
               type="number"
@@ -48,31 +48,31 @@
 
       <!-- Notification Settings -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">通知设置</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.notification.title') }}</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">等待输入提醒</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnWaiting') }}</span>
             <Toggle v-model="settings.notifyOnWaiting" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">连接状态提醒</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnConnection') }}</span>
             <Toggle v-model="settings.notifyOnConnection" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">振动反馈</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.vibrate') }}</span>
             <Toggle v-model="settings.vibrate" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">后台通知</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyInBackground') }}</span>
             <Toggle v-model="settings.notifyInBackground" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">任务完成声音</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.soundOnTaskComplete') }}</span>
             <Toggle v-model="settings.soundOnTaskComplete" />
           </div>
         </div>
@@ -80,35 +80,46 @@
 
       <!-- Appearance Settings -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">外观设置</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.appearance.title') }}</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">主题</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.theme') }}</span>
             <select
               v-model="themeMode"
               class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1.5 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
             >
-              <option value="dark">深色模式</option>
-              <option value="light">浅色模式</option>
-              <option value="system">跟随系统</option>
+              <option value="dark">{{ $t('settings.appearance.darkMode') }}</option>
+              <option value="light">{{ $t('settings.appearance.lightMode') }}</option>
+              <option value="system">{{ $t('settings.appearance.followSystem') }}</option>
             </select>
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">字体大小</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.language') }}</span>
+            <select
+              v-model="currentLanguage"
+              class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1.5 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
+            >
+              <option value="zh-CN">中文</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.fontSize') }}</span>
             <select
               v-model="settings.fontSize"
               class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
             >
-              <option value="small">小</option>
-              <option value="medium">中</option>
-              <option value="large">大</option>
+              <option value="small">{{ $t('settings.appearance.fontSmall') }}</option>
+              <option value="medium">{{ $t('settings.appearance.fontMedium') }}</option>
+              <option value="large">{{ $t('settings.appearance.fontLarge') }}</option>
             </select>
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">终端缓存数量</span>
+            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.terminalCacheCount') }}</span>
             <input
               v-model.number="settings.maxCachedTerminals"
               type="number"
@@ -122,16 +133,16 @@
 
       <!-- About -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">关于</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.about.title') }}</h3>
 
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-muted)]">版本</span>
+            <span class="text-[var(--mobile-text-muted)]">{{ $t('common.misc.version') }}</span>
             <span class="text-[var(--mobile-text-disabled)]">0.1.0</span>
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-muted)]">构建</span>
+            <span class="text-[var(--mobile-text-muted)]">{{ $t('common.misc.build') }}</span>
             <span class="text-[var(--mobile-text-disabled)]">2026-04-30</span>
           </div>
 
@@ -139,44 +150,44 @@
             class="w-full text-left text-[var(--mobile-text-muted)] py-2 hover:text-[var(--mobile-accent)] transition-colors"
             @click="openGitHub"
           >
-            GitHub 仓库 →
+            {{ $t('settings.about.githubRepo') }}
           </button>
 
           <button
             class="w-full text-left text-[var(--mobile-text-muted)] py-2 hover:text-[var(--mobile-accent)] transition-colors"
             @click="checkUpdate"
           >
-            检查更新
+            {{ $t('settings.about.checkUpdate') }}
           </button>
         </div>
       </div>
 
-      <!-- Footer Actions - 放在滚动区域内 -->
+      <!-- Footer Actions -->
       <div class="px-4 py-4 space-y-2">
         <button
           class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
           @click="resetSettings"
         >
-          重置设置
+          {{ $t('settings.actions.resetSettings') }}
         </button>
         <button
           class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
           @click="clearData"
         >
-          清除所有数据
+          {{ $t('settings.actions.clearAllData') }}
         </button>
       </div>
     </div>
 
     <!-- Browser Confirm Modal -->
     <Teleport to="body">
-      <div v-if="showBrowserConfirm" class="confirm-modal-overlay" @click.self="cancelOpenBrowser">
+      <div v-if="showBrowserConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelOpenBrowser">
         <div class="confirm-modal">
-          <p class="confirm-text">是否使用系统浏览器打开此链接？</p>
+          <p class="confirm-text">{{ $t('settings.browser.confirmOpen') }}</p>
           <p class="confirm-url text-xs text-[var(--mobile-text-muted)] mt-1 mb-4 break-all">{{ pendingUrl }}</p>
           <div class="confirm-buttons">
-            <button class="confirm-btn cancel" @click="cancelOpenBrowser">取消</button>
-            <button class="confirm-btn confirm" @click="confirmOpenBrowser">打开</button>
+            <button class="confirm-btn cancel" @click="cancelOpenBrowser">{{ $t('common.button.cancel') }}</button>
+            <button class="confirm-btn confirm" @click="confirmOpenBrowser">{{ $t('common.button.open') }}</button>
           </div>
         </div>
       </div>
@@ -185,16 +196,29 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 设置视图 - 移动端设置页面
+ * 支持连接、通知、外观等设置，以及语言切换
+ */
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { useForegroundService } from '@/modules/mobile/composables/useForegroundService'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
+import { useI18nStore } from '@/modules/shared/stores/i18n'
 import Toggle from '@/modules/shared/components/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
 
+const { t } = useI18n()
 const connection = useMobileConnection()
 const settingsStore = useSettingsStore()
+const i18nStore = useI18nStore()
 const { startService, stopService, updateNotification } = useForegroundService()
+
+const currentLanguage = computed({
+  get: () => settingsStore.settings.ui.language || 'zh-CN',
+  set: (value: string) => i18nStore.setLanguage(value),
+})
 
 // 使用统一的连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
@@ -350,7 +374,7 @@ function resetSettings() {
 }
 
 function clearData() {
-  if (confirm('确定要清除所有数据吗？这将删除所有配对设备、快捷指令和历史记录。')) {
+  if (confirm(t('settings.actions.clearDataConfirm'))) {
     localStorage.clear()
     // In real app, also clear database
     location.reload()
@@ -385,7 +409,7 @@ function cancelOpenBrowser() {
 
 function checkUpdate() {
   // In real app, check for updates
-  alert('已是最新版本')
+  alert(t('settings.about.alreadyLatest'))
 }
 
 // Auto-save settings
@@ -456,7 +480,7 @@ watch(settings, saveSettings, { deep: true })
 .confirm-btn.confirm {
   background: var(--mobile-accent);
   border: none;
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
 }
 
 .confirm-btn.confirm:hover {

@@ -2,17 +2,17 @@
   <div class="h-full flex flex-col">
     <!-- Header -->
     <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-6 py-3 h-12 flex items-center">
-      <h2 class="text-lg font-semibold">设置</h2>
+      <h2 class="text-lg font-semibold">{{ $t('settings.title') }}</h2>
     </header>
 
     <div class="flex-1 overflow-auto p-6">
       <div class="max-w-2xl mx-auto space-y-6">
         <!-- Network Settings -->
         <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
-          <h3 class="text-lg font-medium mb-4">网络设置</h3>
+          <h3 class="text-lg font-medium mb-4">{{ $t('settings.network.title') }}</h3>
           <div class="space-y-4">
             <div>
-              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">WebSocket 端口</label>
+              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">{{ $t('settings.network.websocketPort') }}</label>
               <input
                 v-model.number="settingsStore.settings.network.port"
                 type="number"
@@ -24,20 +24,20 @@
 
         <!-- Session Defaults -->
         <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
-          <h3 class="text-lg font-medium mb-4">会话默认设置</h3>
+          <h3 class="text-lg font-medium mb-4">{{ $t('settings.session.title') }}</h3>
           <div class="space-y-4">
             <div>
-              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">默认执行环境</label>
+              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">{{ $t('settings.session.defaultEnvironment') }}</label>
               <select
                 v-model="settingsStore.settings.session.default_environment"
                 class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-4 py-2 text-gray-900 dark:text-white focus:border-primary-500 outline-none"
               >
-                <option value="windows">Windows 原生</option>
+                <option value="windows">{{ $t('desktop.form.windowsNative') }}</option>
                 <option value="wsl2">WSL2</option>
               </select>
             </div>
             <div>
-              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">默认启动命令</label>
+              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">{{ $t('settings.session.defaultCommand') }}</label>
               <input
                 v-model="settingsStore.settings.session.default_command"
                 type="text"
@@ -49,11 +49,11 @@
 
         <!-- QR Code Settings -->
         <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
-          <h3 class="text-lg font-medium mb-4">QR 码设置</h3>
+          <h3 class="text-lg font-medium mb-4">{{ $t('settings.qr.title') }}</h3>
           <div class="flex items-center justify-between">
             <div>
-              <span class="text-gray- dark:text-dark-200">有效期（秒）</span>
-              <p class="text-gray- dark:text-dark-500 text-sm mt-1">QR 码配对令牌的有效期（60-3600 秒）</p>
+              <span class="text-gray- dark:text-dark-200">{{ $t('settings.qr.validity') }}</span>
+              <p class="text-gray- dark:text-dark-500 text-sm mt-1">{{ $t('settings.qr.validityDesc') }}</p>
             </div>
             <input
               v-model.number="qrTokenTtl"
@@ -68,21 +68,31 @@
 
         <!-- UI Settings -->
         <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
-          <h3 class="text-lg font-medium mb-4">界面设置</h3>
+          <h3 class="text-lg font-medium mb-4">{{ $t('settings.ui.title') }}</h3>
           <div class="space-y-4">
             <div>
-              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">主题</label>
+              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">{{ $t('settings.appearance.theme') }}</label>
               <select
                 v-model="settingsStore.settings.ui.theme"
                 class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-4 py-2 text-gray-900 dark:text-white focus:border-primary-500 outline-none"
               >
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
-                <option value="system">跟随系统</option>
+                <option value="light">{{ $t('settings.appearance.lightMode') }}</option>
+                <option value="dark">{{ $t('settings.appearance.darkMode') }}</option>
+                <option value="system">{{ $t('settings.appearance.followSystem') }}</option>
               </select>
             </div>
             <div>
-              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">终端字体大小</label>
+              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">{{ $t('settings.appearance.language') }}</label>
+              <select
+                v-model="currentLanguage"
+                class="w-full bg-gray-100 dark:bg-dark-700 border border-gray-300 dark:border-dark-600 rounded-lg px-4 py-2 text-gray-900 dark:text-white focus:border-primary-500 outline-none"
+              >
+                <option value="zh-CN">中文</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-gray- dark:text-dark-300 text-sm mb-2">{{ $t('settings.ui.terminalFontSize') }}</label>
               <div class="flex items-center gap-3">
                 <button
                   @click="decrementFontSize"
@@ -119,10 +129,10 @@
 
         <!-- About -->
         <div class="bg-white dark:bg-dark-800 rounded-lg border border-gray-200 dark:border-dark-700 p-6">
-          <h3 class="text-lg font-medium mb-4">关于</h3>
+          <h3 class="text-lg font-medium mb-4">{{ $t('settings.about.title') }}</h3>
           <div class="text-gray- dark:text-dark-300">
             <p>BedCode</p>
-            <p class="text-gray- dark:text-dark-400 text-sm">版本 0.1.0</p>
+            <p class="text-gray- dark:text-dark-400 text-sm">{{ $t('common.misc.version') }} 0.1.0</p>
           </div>
         </div>
       </div>
@@ -131,12 +141,23 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+/**
+ * 设置视图 - 桌面端设置页面
+ * 支持网络、会话、QR码、界面等设置，以及语言切换
+ */
+import { onMounted, ref, watch, computed } from 'vue'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
+import { useI18nStore } from '@/modules/shared/stores/i18n'
 import { useQrCodeApi } from '@/modules/shared/composables/useTauri'
 
 const settingsStore = useSettingsStore()
+const i18nStore = useI18nStore()
 const qrApi = useQrCodeApi()
+
+const currentLanguage = computed({
+  get: () => settingsStore.settings.ui.language || 'zh-CN',
+  set: (value: string) => i18nStore.setLanguage(value),
+})
 
 const qrTokenTtl = ref(300)
 
