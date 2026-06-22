@@ -147,19 +147,19 @@
 
     <!-- 添加自定义命令弹窗 -->
     <Teleport to="body">
-      <div v-if="showAddDialog" class="dialog-overlay" @click.self="showAddDialog = false">
+      <div v-if="showAddDialog" class="dialog-overlay mobile-ui" @click.self="showAddDialog = false">
         <div class="dialog-box">
-          <div class="dialog-title">添加自定义命令</div>
+          <div class="dialog-title">{{ t('mobile.input.commandTitle') }}</div>
           <input
             ref="cmdInputRef"
             v-model="newCommand"
             class="dialog-input"
-            placeholder="输入命令，如 /clear"
+            :placeholder="t('mobile.input.commandPlaceholder')"
             @keyup.enter="addCustomCommand"
           />
           <div class="dialog-actions">
-            <button class="dialog-btn cancel" @click="showAddDialog = false">取消</button>
-            <button class="dialog-btn confirm" :disabled="!newCommand.trim()" @click="addCustomCommand">确定</button>
+            <button class="dialog-btn cancel" @click="showAddDialog = false">{{ t('common.button.cancel') }}</button>
+            <button class="dialog-btn confirm" :disabled="!newCommand.trim()" @click="addCustomCommand">{{ t('common.button.confirm') }}</button>
           </div>
         </div>
       </div>
@@ -234,6 +234,7 @@
 
 <script setup lang="ts">
 import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useInputAssistantStore } from '@/modules/shared/stores/inputAssistant'
@@ -258,7 +259,7 @@ const props = withDefaults(defineProps<{
   disabled: false,
   isConnected: false,
   showShortcuts: false,
-  placeholder: '输入命令...',
+  placeholder: '',
   isLandscape: false,
 })
 
@@ -286,6 +287,7 @@ const inputBarStyle = computed(() => {
 // ==================== State ====================
 
 const assistStore = useInputAssistantStore()
+const { t } = useI18n()
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const shortcutsPanelRef = ref<HTMLElement | null>(null)
 const inputText = ref('')

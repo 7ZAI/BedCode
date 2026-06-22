@@ -17,43 +17,85 @@
       <div class="header-title-area">
         <h1 class="header-title">{{ sessionName }}</h1>
       </div>
-      <button class="mode-btn" :class="{ active: autoMode === 'auto' }" @click="toggleMode" :title="autoMode === 'auto' ? '切换为手动模式' : '切换为自动模式'">
-        <!-- 自动模式：闪电+勾选，表示自动批准执行 -->
-        <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-          <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
-        </svg>
-        <!-- 手动模式：手指/人形，表示需要手动确认 -->
-        <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/>
-        </svg>
-      </button>
-      <button class="task-btn" @click="showTaskPicker = true" title="待办任务">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
-        </svg>
-        <span v-if="hasQueuedTasks" class="task-badge">{{ pendingCount }}</span>
-      </button>
-      <button class="clear-btn" @click="confirmClear" title="清屏">
-        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-        </svg>
-      </button>
-      <button class="refresh-btn" @click="refreshTerminal" title="刷新格式">
-        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
-      <button class="settings-btn" @click="openSettings" title="设置">
-        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-      </button>
-      <button class="folder-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" title="文件">
-        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-        </svg>
-      </button>
+      <!-- 常驻工具按钮：根据配置决定哪些按钮直接显示 -->
+      <template v-for="item in visibleToolbarItems" :key="item.key">
+        <button v-if="item.key === 'mode'" class="mode-btn" :class="{ active: autoMode === 'auto' }" @click="toggleMode" :title="autoMode === 'auto' ? t('mobile.terminal.switchToManual') : t('mobile.terminal.switchToAuto')">
+          <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/>
+          </svg>
+        </button>
+        <button v-else-if="item.key === 'task'" class="task-btn" @click="showTaskPicker = true" :title="t('mobile.terminal.pendingTasks')">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
+          </svg>
+          <span v-if="hasQueuedTasks" class="task-badge">{{ pendingCount }}</span>
+        </button>
+        <button v-else-if="item.key === 'clear'" class="tool-btn" @click="confirmClear" :title="t('mobile.terminal.clearScreen')">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+        </button>
+        <button v-else-if="item.key === 'refresh'" class="tool-btn" @click="refreshTerminal" :title="t('mobile.terminal.refreshFormat')">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+        <button v-else-if="item.key === 'settings'" class="tool-btn" @click="openSettings" :title="t('mobile.terminal.settings')">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+        <button v-else-if="item.key === 'folder'" class="folder-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" :title="t('mobile.terminal.files')">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+        </button>
+      </template>
+      <!-- 溢出菜单按钮：仅当有非常驻工具时显示 -->
+      <div v-if="overflowToolbarItems.length > 0" class="overflow-menu-wrapper">
+        <button class="overflow-btn" :class="{ active: showOverflowMenu }" @click.stop="showOverflowMenu = !showOverflowMenu" :title="t('mobile.terminal.moreTools')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
+          </svg>
+        </button>
+        <transition name="overflow-menu">
+          <div v-if="showOverflowMenu" class="overflow-menu" @click.stop>
+            <button v-if="isOverflowItem('mode')" class="overflow-menu-item" :class="{ active: autoMode === 'auto' }" @click="toggleMode(); closeOverflowMenu()">
+              <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+              <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/></svg>
+              <span>{{ autoMode === 'auto' ? t('mobile.terminal.autoMode') : t('mobile.terminal.manualMode') }}</span>
+              <span class="overflow-item-status">{{ autoMode === 'auto' ? 'ON' : 'OFF' }}</span>
+            </button>
+            <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true; closeOverflowMenu()">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/></svg>
+              <span>{{ t('mobile.terminal.pendingTasks') }}</span>
+              <span v-if="hasQueuedTasks" class="overflow-item-badge">{{ pendingCount }}</span>
+            </button>
+            <button v-if="isOverflowItem('clear')" class="overflow-menu-item" @click="confirmClear(); closeOverflowMenu()">
+              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              <span>{{ t('mobile.terminal.clearScreen') }}</span>
+            </button>
+            <button v-if="isOverflowItem('refresh')" class="overflow-menu-item" @click="refreshTerminal(); closeOverflowMenu()">
+              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <span>{{ t('mobile.terminal.refreshFormat') }}</span>
+            </button>
+            <button v-if="isOverflowItem('settings')" class="overflow-menu-item" @click="openSettings(); closeOverflowMenu()">
+              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              <span>{{ t('mobile.terminal.settings') }}</span>
+            </button>
+            <button v-if="isOverflowItem('folder')" class="overflow-menu-item" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar; closeOverflowMenu()">
+              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+              <span>{{ t('mobile.terminal.files') }}</span>
+            </button>
+          </div>
+        </transition>
+      </div>
+      <!-- 点击溢出菜单外部关闭 -->
+      <div v-if="showOverflowMenu" class="overflow-backdrop" @click="closeOverflowMenu"></div>
     </header>
 
     <!-- Main Content: Terminal + Sidebar overlay -->
@@ -110,10 +152,10 @@
     />
 
     <!-- Settings Modal -->
-    <div v-if="showSettings" class="settings-modal-overlay" @click.self="cancelSettings">
+    <div v-if="showSettings" class="settings-modal-overlay mobile-ui" @click.self="cancelSettings">
       <div class="settings-modal" :style="settingsModalStyle">
         <div class="settings-header">
-          <h2>终端设置</h2>
+          <h2>{{ t('mobile.terminal.terminalSettings') }}</h2>
           <button class="close-btn" @click.stop="cancelSettings">
             <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -124,7 +166,7 @@
         <div class="settings-content">
           <!-- Font Size -->
           <div class="settings-section">
-            <label class="settings-label">字体大小</label>
+            <label class="settings-label">{{ t('mobile.terminal.fontSize') }}</label>
             <div class="font-size-control">
               <button class="size-btn" @click.stop="tempFontSize--" :disabled="tempFontSize <= 10">-</button>
               <span class="size-value">{{ tempFontSize }}px</span>
@@ -134,7 +176,7 @@
 
           <!-- Theme -->
           <div class="settings-section">
-            <label class="settings-label">主题</label>
+            <label class="settings-label">{{ t('mobile.terminal.theme') }}</label>
             <div class="theme-grid">
               <button
                 v-for="(theme, name) in TERMINAL_THEMES"
@@ -151,30 +193,47 @@
 
           <!-- Quick Bar Count -->
           <div class="settings-section">
-            <label class="settings-label">快捷键数量</label>
+            <label class="settings-label">{{ t('mobile.terminal.shortcutCount') }}</label>
             <div class="font-size-control">
               <button class="size-btn" @click.stop="tempQuickBarCount--" :disabled="tempQuickBarCount <= 3">-</button>
               <span class="size-value">{{ tempQuickBarCount }}</span>
               <button class="size-btn" @click.stop="tempQuickBarCount++" :disabled="tempQuickBarCount >= 10">+</button>
             </div>
           </div>
+
+          <!-- Header Toolbar Items -->
+          <div class="settings-section">
+            <label class="settings-label">{{ t('mobile.terminal.persistentToolbar') }}</label>
+            <p class="settings-hint">{{ t('mobile.terminal.persistentToolbar') }}</p>
+            <div class="toolbar-toggle-grid">
+              <button
+                v-for="item in ALL_TOOLBAR_ITEMS"
+                :key="item.key"
+                class="toolbar-toggle-btn"
+                :class="{ active: tempToolbarItems.includes(item.key) }"
+                @click.stop="toggleToolbarItem(item.key)"
+              >
+                <span>{{ item.label }}</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Settings Footer -->
         <div class="settings-footer">
-          <button class="settings-footer-btn cancel" @click.stop="cancelSettings">取消</button>
-          <button class="settings-footer-btn confirm" @click.stop="confirmSettings">确认</button>
+          <button class="settings-footer-btn cancel" @click.stop="cancelSettings">{{ t('common.button.cancel') }}</button>
+          <button class="settings-footer-btn confirm" @click.stop="confirmSettings">{{ t('common.button.confirm') }}</button>
         </div>
       </div>
     </div>
 
     <!-- Clear Confirm Modal -->
-    <div v-if="showClearConfirm" class="confirm-modal-overlay" @click.self="showClearConfirm = false">
+    <div v-if="showClearConfirm" class="confirm-modal-overlay mobile-ui" @click.self="showClearConfirm = false">
       <div class="confirm-modal" :style="confirmModalStyle">
-        <p class="confirm-text">确定要清空终端内容吗？</p>
+        <p class="confirm-text">{{ t('mobile.terminal.clearScreen') }}?</p>
         <div class="confirm-buttons">
-          <button class="confirm-btn cancel" @click.stop="showClearConfirm = false">取消</button>
-          <button class="confirm-btn confirm" @click.stop="clearTerminal">确定</button>
+          <button class="confirm-btn cancel" @click.stop="showClearConfirm = false">{{ t('common.button.cancel') }}</button>
+          <button class="confirm-btn confirm" @click.stop="clearTerminal">{{ t('common.button.confirm') }}</button>
         </div>
       </div>
     </div>
@@ -198,6 +257,7 @@ defineOptions({ name: 'TerminalView' })
 
 import { ref, reactive, computed, inject, type Ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -227,6 +287,7 @@ import type { PresetTask } from '@/modules/mobile/composables/model'
 
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
@@ -255,7 +316,52 @@ const {
 const { tasks: presetTasks } = usePresetTasks()
 
 const showTaskPicker = ref(false)
+const showOverflowMenu = ref(false)
 const pendingCount = computed(() => autoPendingTasks.value.length)
+
+// ==================== Header Toolbar Config ====================
+
+/** 所有可用的 Header 工具项定义 */
+const ALL_TOOLBAR_ITEMS = [
+  { key: 'mode', label: computed(() => t('mobile.terminal.autoMode')), icon: 'mode' },
+  { key: 'task', label: computed(() => t('mobile.terminal.pendingTasks')), icon: 'task' },
+  { key: 'clear', label: computed(() => t('mobile.terminal.clearScreen')), icon: 'clear' },
+  { key: 'refresh', label: computed(() => t('mobile.terminal.refreshFormat')), icon: 'refresh' },
+  { key: 'settings', label: computed(() => t('mobile.terminal.settings')), icon: 'settings' },
+  { key: 'folder', label: computed(() => t('mobile.terminal.files')), icon: 'folder' },
+] as const
+
+/** 常驻显示的工具项（根据配置） */
+const visibleToolbarItems = computed(() => {
+  const items = assistStore.settings.headerToolbarItems || ['folder']
+  return ALL_TOOLBAR_ITEMS.filter(item => items.includes(item.key))
+})
+
+/** 收入溢出菜单的工具项 */
+const overflowToolbarItems = computed(() => {
+  const items = assistStore.settings.headerToolbarItems || ['folder']
+  return ALL_TOOLBAR_ITEMS.filter(item => !items.includes(item.key))
+})
+
+/** 判断某个工具项是否在溢出菜单中 */
+function isOverflowItem(key: string): boolean {
+  return overflowToolbarItems.value.some(item => item.key === key)
+}
+
+/** 关闭溢出菜单 */
+function closeOverflowMenu() {
+  showOverflowMenu.value = false
+}
+
+/** 切换工具栏常驻项（设置弹窗中使用） */
+function toggleToolbarItem(key: string) {
+  const idx = tempToolbarItems.value.indexOf(key)
+  if (idx >= 0) {
+    tempToolbarItems.value.splice(idx, 1)
+  } else {
+    tempToolbarItems.value.push(key)
+  }
+}
 
 /** 任务选择确认 */
 function onTaskConfirm(tasks: PresetTask[]) {
@@ -340,6 +446,7 @@ const terminalSettings = ref({
 const tempFontSize = ref(12)
 const tempTheme = ref<string>(terminalSettings.value.theme)
 const tempQuickBarCount = ref(assistStore.settings.quickBarCount)
+const tempToolbarItems = ref<string[]>([...(assistStore.settings.headerToolbarItems || ['folder'])])
 
 // 弹窗安全区域样式
 const settingsModalStyle = computed(() => ({
@@ -356,13 +463,13 @@ const confirmModalStyle = computed(() => ({
 
 const TERMINAL_THEMES: Record<string, any> = {
   system: {
-    label: '跟随系统',
+    label: t('settings.appearance.followSystem'),
     // 动态解析，此处仅为占位
     background: 'var(--mobile-terminal-bg)',
     foreground: 'var(--mobile-text-primary)',
   },
   dark: {
-    label: '深色',
+    label: t('settings.appearance.darkMode'),
     background: '#0a0a0f',
     foreground: '#e0e0e0',
     cursor: '#00d4ff',
@@ -386,7 +493,7 @@ const TERMINAL_THEMES: Record<string, any> = {
     brightWhite: '#ffffff',
   },
   light: {
-    label: '浅色',
+    label: t('settings.appearance.lightMode'),
     background: '#ffffff',
     foreground: '#1a1a1a',
     cursor: '#0066cc',
@@ -504,6 +611,7 @@ function openSettings() {
     ? terminalSettings.value.theme
     : 'system'
   tempQuickBarCount.value = assistStore.settings.quickBarCount
+  tempToolbarItems.value = [...(assistStore.settings.headerToolbarItems || ['folder'])]
   showSettings.value = true
 }
 
@@ -525,6 +633,7 @@ function confirmSettings() {
   // 保存快捷键条设置
   assistStore.saveSettings({
     quickBarCount: tempQuickBarCount.value,
+    headerToolbarItems: tempToolbarItems.value,
   })
   applySettings()
   showSettings.value = false
@@ -555,7 +664,7 @@ const session = computed(() =>
 )
 
 const sessionName = computed(() => {
-  return session.value?.name || sessionId.value || '终端'
+  return session.value?.name || sessionId.value || t('desktop.terminal.title')
 })
 
 const sessionStatus = computed(() => {
@@ -573,15 +682,15 @@ const statusClass = computed(() => {
 })
 
 const statusText = computed(() => {
-  if (sessionStatus.value === 'running') return '运行中'
-  if (sessionStatus.value === 'stopped') return '已停止'
-  return '未知'
+  if (sessionStatus.value === 'running') return t('common.status.running')
+  if (sessionStatus.value === 'stopped') return t('common.status.stopped')
+  return t('common.status.unknown')
 })
 
 const inputPlaceholder = computed(() => {
-  if (!isConnected.value) return '未连接...'
-  if (!isSessionActive.value) return '会话已停止'
-  return '输入命令...'
+  if (!isConnected.value) return t('mobile.input.disconnected') + '...'
+  if (!isSessionActive.value) return t('mobile.connection.connectFailed')
+  return t('mobile.input.commandPlaceholder')
 })
 
 // 安全区域
@@ -843,7 +952,7 @@ async function subscribeSession() {
     subscribedSessionIdRef.value = sessionId.value
   } catch (e) {
     console.error('[TerminalView] Subscribe failed:', e)
-    toast.error('订阅终端失败')
+    toast.error(t('mobile.connection.connectFailed'))
   } finally {
     isSubscribing.value = false
   }
@@ -902,7 +1011,7 @@ function handleInputSubmit(text: string) {
   if (isConnected.value && isSessionActive.value) {
     wsSendInput(sessionId.value, text).catch(e => {
       console.error('[TerminalView] Send input failed:', e)
-      toast.error('发送命令失败')
+      toast.error(t('mobile.connection.connectFailed'))
     })
   }
 }
@@ -919,7 +1028,7 @@ async function handleInputExecute(text: string) {
       await wsSendInput(sessionId.value, '', 'enter')
     } catch (e) {
       console.error('[TerminalView] Send input failed:', e)
-      toast.error('发送命令失败')
+      toast.error(t('mobile.connection.connectFailed'))
     }
   }
 }
@@ -985,9 +1094,9 @@ function refreshTerminal() {
 async function handleLongPress(name: string, path: string) {
   try {
     await navigator.clipboard.writeText(path)
-    toast.success(`已复制: ${path}`)
+    toast.success(t('mobile.file.copied', { path }))
   } catch {
-    toast.error('复制失败')
+    toast.error(t('mobile.file.copyFailed'))
   }
 }
 
@@ -1471,7 +1580,12 @@ watch(sessionId, async (newId, oldId) => {
   color: var(--mobile-text-muted);
 }
 
-.clear-btn {
+/* 通用工具按钮样式（常驻 + 溢出菜单项） */
+.tool-btn,
+.mode-btn,
+.task-btn,
+.folder-btn,
+.overflow-btn {
   padding: 0.5rem;
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
@@ -1484,60 +1598,12 @@ watch(sessionId, async (newId, oldId) => {
   justify-content: center;
 }
 
-.clear-btn:hover {
+.tool-btn:hover,
+.mode-btn:hover,
+.task-btn:hover,
+.folder-btn:hover,
+.overflow-btn:hover {
   border-color: rgba(0, 212, 255, 0.3);
-}
-
-.refresh-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.refresh-btn:hover {
-  border-color: rgba(0, 212, 255, 0.3);
-}
-
-.settings-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.settings-btn:hover {
-  border-color: rgba(0, 212, 255, 0.3);
-}
-
-/* Mode Toggle Button */
-.mode-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.mode-btn:hover {
-  border-color: var(--mobile-border-hover);
 }
 
 .mode-btn.active {
@@ -1546,23 +1612,8 @@ watch(sessionId, async (newId, oldId) => {
   background: var(--mobile-accent-muted);
 }
 
-/* Task Button */
 .task-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   position: relative;
-}
-
-.task-btn:hover {
-  border-color: rgba(0, 212, 255, 0.3);
 }
 
 .task-badge {
@@ -1580,6 +1631,104 @@ watch(sessionId, async (newId, oldId) => {
   align-items: center;
   justify-content: center;
   padding: 0 4px;
+}
+
+.folder-btn.active {
+  color: var(--mobile-accent);
+  border-color: var(--mobile-border-active);
+  background: var(--mobile-accent-muted);
+}
+
+/* Overflow Menu */
+.overflow-menu-wrapper {
+  position: relative;
+}
+
+.overflow-btn.active {
+  color: var(--mobile-accent);
+  border-color: var(--mobile-border-active);
+  background: var(--mobile-accent-muted);
+}
+
+.overflow-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  background: var(--mobile-bg-secondary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  padding: 0.375rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--mobile-text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  text-align: left;
+}
+
+.overflow-menu-item:hover {
+  background: var(--mobile-bg-hover);
+}
+
+.overflow-menu-item.active {
+  color: var(--mobile-accent);
+}
+
+.overflow-item-status {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--mobile-text-muted);
+}
+
+.overflow-menu-item.active .overflow-item-status {
+  color: var(--mobile-accent);
+}
+
+.overflow-item-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--mobile-error, #ef4444);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.overflow-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+/* Overflow menu transition */
+.overflow-menu-enter-active,
+.overflow-menu-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.overflow-menu-enter-from,
+.overflow-menu-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.95);
 }
 
 /* Main Content Area */
@@ -1606,30 +1755,6 @@ watch(sessionId, async (newId, oldId) => {
   z-index: 15;
 }
 
-/* Folder Button */
-.folder-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.folder-btn:hover {
-  border-color: rgba(0, 212, 255, 0.3);
-}
-
-.folder-btn.active {
-  color: var(--mobile-accent);
-  border-color: var(--mobile-border-active);
-  background: var(--mobile-accent-muted);
-}
-
 /* Sidebar Slide Transition */
 .sidebar-slide-enter-active,
 .sidebar-slide-leave-active {
@@ -1648,7 +1773,7 @@ watch(sessionId, async (newId, oldId) => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--mobile-overlay-heavy);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1817,8 +1942,8 @@ watch(sessionId, async (newId, oldId) => {
 }
 
 .theme-btn.active {
-  border-color: #00d4ff;
-  background: rgba(0, 212, 255, 0.15);
+  border-color: var(--mobile-accent);
+  background: var(--mobile-accent-muted);
   box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
 }
 
@@ -1837,7 +1962,42 @@ watch(sessionId, async (newId, oldId) => {
 }
 
 .theme-btn.active .theme-name {
-  color: #00d4ff;
+  color: var(--mobile-accent);
+  font-weight: 600;
+}
+
+.settings-hint {
+  font-size: 0.75rem;
+  color: var(--mobile-text-muted);
+  margin: 0 0 0.75rem;
+}
+
+.toolbar-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.toolbar-toggle-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-elevated);
+  border: 2px solid transparent;
+  color: var(--mobile-text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.toolbar-toggle-btn:hover {
+  background: var(--mobile-bg-hover);
+}
+
+.toolbar-toggle-btn.active {
+  border-color: var(--mobile-accent);
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
   font-weight: 600;
 }
 
@@ -1870,9 +2030,9 @@ watch(sessionId, async (newId, oldId) => {
 }
 
 .settings-footer-btn.confirm {
-  background: #00d4ff;
+  background: var(--mobile-accent);
   border: none;
-  color: #0a0a0f;
+  color: var(--mobile-text-on-accent);
 }
 
 .settings-footer-btn.confirm:hover {
@@ -1886,7 +2046,7 @@ watch(sessionId, async (newId, oldId) => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--mobile-overlay-heavy);
   display: flex;
   align-items: center;
   justify-content: center;
