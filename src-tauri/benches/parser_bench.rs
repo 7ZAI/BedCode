@@ -1,7 +1,7 @@
 //! Benchmarks for parser modules
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, black_box, Throughput};
-use bedcode_lib::parser::{AnsiParser, MarkdownParser, OutputParser};
+use bedcode_lib::desktop::parser::{AnsiParser, MarkdownParser, OutputParser};
 
 fn ansi_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("ansi_parser");

@@ -97,6 +97,13 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 name = "parser_bench"
 harness = false
 
+[profile.bench]
+panic = "unwind"
+inherits = "release"
+opt-level = 3
+lto = false
+strip = false
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
