@@ -52,7 +52,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </template>
-          启动
+          {{ $t('common.button.start') }}
         </Button>
         <Button variant="ghost" size="sm" @click.stop="$emit('edit')">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -81,7 +81,7 @@
         >
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
         </svg>
-        <span>运行中的会话 ({{ runningSessions.length }})</span>
+        <span>{{ $t('desktop.session.runningSessions', { count: runningSessions.length }) }}</span>
       </div>
 
       <!-- Running Sessions List -->
@@ -136,8 +136,11 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { SessionConfig, SessionInfo } from '@/modules/shared/stores/session'
 import Button from '@/modules/shared/components/Button.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   config: SessionConfig
@@ -170,11 +173,11 @@ function toggleExpand() {
 
 function taskStatusText(status: string): string {
   switch (status) {
-    case 'idle': return '空闲'
-    case 'in_progress': return '执行中'
-    case 'asking': return '等待输入'
-    case 'completed': return '已完成'
-    case 'interrupted': return '已中断'
+    case 'idle': return t('common.status.idle')
+    case 'in_progress': return t('common.status.inProgress')
+    case 'asking': return t('common.status.asking')
+    case 'completed': return t('common.status.completed')
+    case 'interrupted': return t('common.status.interrupted')
     default: return status
   }
 }
@@ -198,10 +201,10 @@ function getSessionTime(session: SessionInfo): string {
   const now = Date.now()
   const diff = Math.floor((now - startTime) / 1000)
 
-  if (diff < 60) return `${diff}秒`
-  if (diff < 3600) return `${Math.floor(diff / 60)}分${diff % 60}秒`
+  if (diff < 60) return t('common.time.secondsAgo', { n: diff })
+  if (diff < 3600) return t('common.time.minutesSecondsAgo', { m: Math.floor(diff / 60), s: diff % 60 })
   const hours = Math.floor(diff / 3600)
   const minutes = Math.floor((diff % 3600) / 60)
-  return `${hours}小时${minutes}分`
+  return t('common.time.hoursMinutesAgo', { h: hours, m: minutes })
 }
 </script>

@@ -9,7 +9,7 @@
             statusColor
           ]"
         ></div>
-        <h3 class="font-medium text-gray-900 dark:text-white">{{ session?.name || '终端' }}</h3>
+        <h3 class="font-medium text-gray-900 dark:text-white">{{ session?.name || $t('desktop.terminal.defaultName') }}</h3>
       </div>
 
       <div class="flex items-center gap-2">
@@ -17,7 +17,7 @@
         <select
           v-model="terminalTheme"
           class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
-          title="终端主题"
+          :title="$t('desktop.terminal.theme')"
         >
           <option v-for="(name, key) in themeNames" :key="key" :value="key">
             {{ name }}
@@ -28,7 +28,7 @@
         <select
           v-model="fontSize"
           class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
-          title="字体大小"
+          :title="$t('desktop.terminal.fontSize')"
         >
           <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
             {{ size }}px
@@ -36,14 +36,14 @@
         </select>
 
         <!-- Clear Button -->
-        <Button variant="ghost" size="sm" @click="clearTerminal" title="清屏">
+        <Button variant="ghost" size="sm" @click="clearTerminal" :title="$t('desktop.terminal.clearScreen')">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
         </Button>
 
         <!-- Refresh Format Button -->
-        <Button variant="ghost" size="sm" @click="refreshTerminal" title="刷新格式">
+        <Button variant="ghost" size="sm" @click="refreshTerminal" :title="$t('desktop.terminal.refreshFormat')">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>

@@ -266,7 +266,7 @@ async function handleSaveConfig(form: SessionFormData) {
         wsl_distro: form.wslDistro || undefined,
         auto_start: form.autoStart,
       })
-      toast.success('会话配置已更新')
+      toast.success(t('desktop.session.configUpdated'))
     } else {
       console.log('[SessionsView] create mode, calling createSessionConfig')
       await createSessionConfig({
@@ -276,7 +276,7 @@ async function handleSaveConfig(form: SessionFormData) {
         command: form.command || '',
         wsl_distro: form.wslDistro || undefined,
       })
-      toast.success('会话配置已创建')
+      toast.success(t('desktop.session.configCreated'))
     }
     configs.value = await listSessionConfigs()
     showCreateDialog.value = false
@@ -284,7 +284,7 @@ async function handleSaveConfig(form: SessionFormData) {
   } catch (e: any) {
     console.error('[SessionsView] handleSaveConfig error:', e)
     console.error('[SessionsView] error message:', e?.message)
-    toast.error('保存失败: ' + (e?.message || e))
+    toast.error(t('desktop.session.saveFailed', { error: e?.message || e }))
   }
 }
 </script>
