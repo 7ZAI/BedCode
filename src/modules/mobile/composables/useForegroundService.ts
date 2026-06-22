@@ -4,6 +4,7 @@
  * 用于保持 WebSocket 连接在后台不被系统杀死
  */
 import { invoke } from '@tauri-apps/api/core'
+import i18n from '@/locales'
 import { useMobileConnection } from './useMobileConnection'
 import { usePlatform } from '@/modules/shared/composables/usePlatform'
 
@@ -103,21 +104,21 @@ export function useForegroundService() {
 
     // 重连中（正在连接但之前有错误或设备信息）
     if (isConnecting.value && currentDevice.value) {
-      return '正在重连...'
+      return i18n.global.t('mobile.connection.foregroundReconnecting')
     }
 
     // 已连接且有运行中的会话
     if (isConnected.value && sessionCount > 0) {
-      return `${sessionCount} 个会话运行中 · 已连接 ${deviceName}`
+      return i18n.global.t('mobile.connection.foregroundSessions', { count: sessionCount, name: deviceName })
     }
 
     // 已连接无会话
     if (isConnected.value) {
-      return `已连接 ${deviceName}`
+      return i18n.global.t('mobile.connection.foregroundConnected', { name: deviceName })
     }
 
     // 未连接
-    return '后台运行中'
+    return i18n.global.t('mobile.connection.foregroundIdle')
   }
 
   return {

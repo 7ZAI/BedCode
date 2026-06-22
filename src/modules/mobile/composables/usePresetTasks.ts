@@ -94,7 +94,7 @@ export async function executeTask(task: PresetTask, sessionId: string) {
         tasks.value[index].updatedAt = new Date().toISOString()
         saveToStorage()
       }
-      throw new Error('发送失败')
+      throw new Error('mobile.toolbox.sendFailed')
     }
   } else {
     // 模板任务：直接发送，不改变状态

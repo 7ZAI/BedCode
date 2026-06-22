@@ -1,4 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
+import i18n from '@/locales'
 import { useToast } from './useToast'
 import { useSessionStore } from '@/modules/shared/stores/session'
 
@@ -27,27 +28,27 @@ export function useGlobalNotifications() {
     // 设备连接事件
     if (!unlistenDeviceConnected) {
       unlistenDeviceConnected = await listen<DeviceEventPayload>('device-connected', (event) => {
-        const deviceName = event.payload.device_name || '移动设备'
-        toast.info(`"${deviceName}" 已连接`)
+        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileDevice')
+        toast.info(i18n.global.t('common.notification.deviceConnected', { name: deviceName }))
       })
     }
 
     // 设备断开事件
     if (!unlistenDeviceDisconnected) {
       unlistenDeviceDisconnected = await listen<DeviceEventPayload>('device-disconnected', (event) => {
-        const deviceName = event.payload.device_name || '移动设备'
-        toast.warning(`"${deviceName}" 已断开连接`)
+        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileDevice')
+        toast.warning(i18n.global.t('common.notification.deviceDisconnected', { name: deviceName }))
       })
     }
 
     // 移动端创建的会话
     if (!unlistenSessionCreated) {
       unlistenSessionCreated = await listen<SessionEventPayload>('session-created-from-mobile', (event) => {
-        const deviceName = event.payload.device_name || '移动端'
+        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileClient')
         const sessionName = event.payload.session?.name || ''
         const msg = sessionName
-          ? `"${deviceName}" 创建了会话 "${sessionName}"`
-          : `"${deviceName}" 创建了新会话`
+          ? i18n.global.t('common.notification.sessionCreated', { device: deviceName, name: sessionName })
+          : i18n.global.t('common.notification.sessionCreatedNoName', { device: deviceName })
         toast.success(msg)
         sessionStore.loadSessions()
       })
@@ -56,11 +57,11 @@ export function useGlobalNotifications() {
     // 移动端停止的会话
     if (!unlistenSessionStopped) {
       unlistenSessionStopped = await listen<SessionEventPayload>('session-stopped-from-mobile', (event) => {
-        const deviceName = event.payload.device_name || '移动端'
+        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileClient')
         const sessionName = event.payload.session?.name || ''
         const msg = sessionName
-          ? `"${deviceName}" 停止了会话 "${sessionName}"`
-          : `"${deviceName}" 停止了会话`
+          ? i18n.global.t('common.notification.sessionStoppedByDevice', { device: deviceName, name: sessionName })
+          : i18n.global.t('common.notification.sessionStoppedNoName', { device: deviceName })
         toast.info(msg)
         sessionStore.loadSessions()
       })

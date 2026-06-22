@@ -23,7 +23,7 @@
           {{ device.address }}:{{ device.port }}
         </template>
         <template v-else>
-          {{ device.isOnline ? '在线' : '离线' }}
+          {{ device.isOnline ? t('mobile.deviceCard.online') : t('mobile.deviceCard.offline') }}
         </template>
       </p>
     </div>
@@ -46,6 +46,10 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
+
 defineProps<{
   device: {
     id?: string

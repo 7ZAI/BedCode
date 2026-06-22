@@ -9,7 +9,7 @@ const DEFAULT_TIMEOUT_MS = 30_000
 /** 超时专用错误类，便于前端区分超时与其他错误 */
 export class InvokeTimeoutError extends Error {
   constructor(cmd: string, timeoutMs: number) {
-    super(`IPC 调用超时 (${timeoutMs / 1000}s): ${cmd}`)
+    super(`common.errorCode.ipcTimeout`)
     this.name = 'InvokeTimeoutError'
   }
 }

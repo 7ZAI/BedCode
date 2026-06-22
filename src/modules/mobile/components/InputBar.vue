@@ -89,7 +89,7 @@
         ]"
       ></div>
       <span class="text-xs text-[var(--mobile-text-muted)]">
-        {{ isConnected ? '已连接' : '未连接' }}
+        {{ isConnected ? t('mobile.input.connected') : t('mobile.input.disconnected') }}
       </span>
     </div>
   </div>
@@ -97,6 +97,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   disabled?: boolean

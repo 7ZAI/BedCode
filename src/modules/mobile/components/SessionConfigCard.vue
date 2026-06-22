@@ -43,7 +43,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        启动
+        {{ t('mobile.sessionConfig.start') }}
       </button>
 
       <!-- 折叠箭头 -->
@@ -71,7 +71,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
           </svg>
           <div class="min-w-0 flex-1 text-left">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">工程目录</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ t('mobile.sessionConfig.projectDir') }}</span>
             <p class="text-xs text-[var(--mobile-text-disabled)] truncate mt-0.5">{{ config.working_dir }}</p>
           </div>
         </button>
@@ -79,7 +79,7 @@
         <!-- 运行中会话列表 -->
         <template v-if="runningSessions.length > 0">
           <div class="px-4 py-2 border-t border-[var(--mobile-border)] bg-[var(--mobile-bg-primary)]/50">
-            <span class="text-xs text-[var(--mobile-success)] font-medium">{{ runningSessions.length }} 个运行中</span>
+            <span class="text-xs text-[var(--mobile-success)] font-medium">{{ t('mobile.sessionConfig.runningCount', { count: runningSessions.length }) }}</span>
           </div>
           <div
             v-for="session in runningSessions"
@@ -127,6 +127,9 @@ export interface SessionConfigSummary {
  */
 
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   config: SessionConfigSummary

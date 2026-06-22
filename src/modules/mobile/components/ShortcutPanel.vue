@@ -20,7 +20,7 @@
 
           <!-- Header -->
           <div class="flex items-center justify-between px-4 py-2">
-            <span class="font-medium text-[var(--mobile-text-primary)]">快捷键</span>
+            <span class="font-medium text-[var(--mobile-text-primary)]">{{ t('mobile.shortcut.title') }}</span>
             <button
               class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
               @click="emit('close')"
@@ -68,7 +68,10 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
 import type { Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useInputAssistantStore } from '@/modules/shared/stores/inputAssistant'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   visible: boolean

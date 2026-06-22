@@ -3,6 +3,7 @@
 //! 移动端连接管理 - 基于 useMobileCommands 的高级封装
 
 import { ref, computed, readonly } from 'vue'
+import i18n from '@/locales'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useToast } from '@/modules/shared/composables/useToast'
 import {
@@ -315,13 +316,13 @@ async function init() {
   unlistenUnexpectedDisconnect = await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
     console.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
     connectionStatus.value = 'disconnected'
-    connectionError.value = event.payload.reason
+    connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
     clearConnectionTimeout()
 
     // 弹出 Toast 通知（手动断开不会触发此事件）
     const toast = useToast()
-    toast.error(`连接已断开: ${event.payload.reason}`, 5000)
+    toast.error(i18n.global.t('common.notification.connectionDisconnected', { reason: event.payload.reason }), 5000)
 
     // 更新前台服务通知为断连状态
     const { updateNotification } = useForegroundService()
@@ -369,19 +370,19 @@ async function init() {
           console.warn('[MobileConnection] Re-auth failed, need to pair again')
           isConnecting.value = false
           connectionStatus.value = 'disconnected'
-          connectionError.value = '重连后认证失败，请手动重新连接'
+          connectionError.value = 'mobile.connection.reauthFailed'
         }
       } catch (e) {
         console.error('[MobileConnection] Re-auth error:', e)
         isConnecting.value = false
         connectionStatus.value = 'disconnected'
-        connectionError.value = '重连后认证异常，请手动重新连接'
+        connectionError.value = 'mobile.connection.reauthError'
       }
     } else {
       console.log('[MobileConnection] No credentials stored, need manual pairing')
       isConnecting.value = false
       connectionStatus.value = 'disconnected'
-      connectionError.value = '无认证凭据，请手动重新连接'
+      connectionError.value = 'mobile.connection.noCredentials'
     }
   })
 
@@ -389,7 +390,7 @@ async function init() {
   await listen<{ reason: string }>('ws_reconnect_failed', (event) => {
     console.error('[MobileConnection] Reconnect failed:', event.payload.reason)
     connectionStatus.value = 'disconnected'
-    connectionError.value = event.payload.reason
+    connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
     autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS // 标记重连已耗尽
 
@@ -397,7 +398,7 @@ async function init() {
     autoStopForegroundService()
 
     const toast = useToast()
-    toast.error(`重连失败: ${event.payload.reason}，请手动重新连接`, 5000)
+    toast.error(i18n.global.t('common.notification.reconnectFailed', { reason: event.payload.reason }), 5000)
   })
 }
 
@@ -421,12 +422,12 @@ export async function connect(device: RemoteDevice): Promise<void> {
   connectionTimeout = setTimeout(async () => {
     if (isConnecting.value && connectionStatus.value === 'connecting') {
       console.warn('[MobileConnection] Connection timeout')
-      connectionError.value = '连接超时，请确保桌面端正在运行'
+      connectionError.value = 'mobile.connection.timeoutToast'
       connectionStatus.value = 'error'
       isConnecting.value = false
 
       const toast = useToast()
-      toast.error('连接超时，请确保桌面端正在运行并监听正确端口')
+      toast.error(i18n.global.t('mobile.connection.timeout'))
     }
   }, CONNECTION_TIMEOUT_MS)
 
@@ -453,7 +454,7 @@ export async function cancelConnection(): Promise<void> {
   clearConnectionTimeout()
   if (isConnecting.value) {
     console.log('[MobileConnection] Cancelling connection...')
-    connectionError.value = '用户取消连接'
+    connectionError.value = 'mobile.connection.userCancelled'
     connectionStatus.value = 'disconnected'
     isConnecting.value = false
     await disconnect()
@@ -513,9 +514,9 @@ async function handleUnexpectedDisconnect(reason: string) {
   if (autoReconnectAttemptCount >= MAX_AUTO_RECONNECT_ATTEMPTS) {
     console.warn('[MobileConnection] Max auto-reconnect attempts reached, giving up')
     connectionStatus.value = 'disconnected'
-    connectionError.value = `自动重连失败（已尝试 ${MAX_AUTO_RECONNECT_ATTEMPTS} 次），请手动重新连接`
+    connectionError.value = 'common.notification.reconnectAbandoned'
     const toast = useToast()
-    toast.error('自动重连已放弃，请手动重新连接', 5000)
+    toast.error(i18n.global.t('common.notification.reconnectAbandoned'), 5000)
     return
   }
 
@@ -548,7 +549,7 @@ async function handleUnexpectedDisconnect(reason: string) {
   } catch (error) {
     console.error('[MobileConnection] Reconnect failed:', error)
     connectionStatus.value = 'disconnected'
-    connectionError.value = `重连失败: ${error}`
+    connectionError.value = 'mobile.connection.reconnectFailedMsg'
     isConnecting.value = false
 
     // 重连失败后，如果还有重试次数，继续尝试

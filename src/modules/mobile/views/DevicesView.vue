@@ -2,7 +2,7 @@
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">连接与配置</h1>
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.connection.title') }}</h1>
     </header>
 
     <!-- Connection Status Banner -->
@@ -58,7 +58,7 @@
           class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border border-[var(--mobile-error)]/20 text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
           @click="handleDisconnect"
         >
-          断开
+          {{ t('mobile.connection.disconnect') }}
         </button>
       </div>
     </div>
@@ -68,13 +68,13 @@
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">会话配置</h3>
+          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">{{ t('mobile.connection.sessionConfig') }}</h3>
           <button
             class="p-2 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
             :class="{ 'opacity-50': isRefreshing }"
             :disabled="isRefreshing"
             @click="refreshConfigs"
-            title="刷新配置"
+            :title="t('mobile.connection.refreshConfig')"
           >
             <svg
               class="w-5 h-5 text-[var(--mobile-accent)]"
@@ -111,8 +111,8 @@
           <svg class="w-16 h-16 mx-auto text-[var(--mobile-accent)]/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <p class="text-[var(--mobile-text-muted)]">暂无会话配置</p>
-          <p class="text-[var(--mobile-text-disabled)] text-sm mt-2">请在桌面端创建会话配置</p>
+          <p class="text-[var(--mobile-text-muted)]">{{ t('mobile.connection.noConfig') }}</p>
+          <p class="text-[var(--mobile-text-disabled)] text-sm mt-2">{{ t('mobile.connection.noConfigHint') }}</p>
         </div>
 
         <!-- Config List -->
@@ -135,18 +135,18 @@
       <div v-else>
         <!-- Connection History Section -->
         <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 flex items-center justify-between tracking-wider uppercase">
-          <span>连接历史</span>
+          <span>{{ t('mobile.connection.connectionHistory') }}</span>
           <button
             v-if="connectionHistory.length > 0"
             class="text-[var(--mobile-text-muted)] text-xs hover:text-[var(--mobile-accent)] transition-colors"
             @click="clearHistory"
           >
-            清除
+            {{ t('mobile.connection.clearHistory') }}
           </button>
         </h3>
 
         <div v-if="connectionHistory.length === 0" class="text-center py-8">
-          <p class="text-[var(--mobile-text-disabled)] text-sm">暂无连接历史</p>
+          <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.connection.noHistory') }}</p>
         </div>
 
         <div v-else class="space-y-2">
@@ -192,7 +192,7 @@
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
         </svg>
-        扫描连接
+        {{ t('mobile.connection.scanConnect') }}
       </button>
 
       <!-- Manual Connect Button -->
@@ -205,15 +205,15 @@
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
         </svg>
-        手动连接
+        {{ t('mobile.connection.manualConnect') }}
       </button>
     </div>
 
     <!-- Manual Connect Dialog -->
     <BottomSheet
       v-model="showManualConnect"
-      title="连接新设备"
-      placeholder="输入设备地址 (如: 10.186.131.120)"
+      :title="t('mobile.connection.connectNewDevice')"
+      :placeholder="t('mobile.connection.addressPlaceholder')"
       :loading="connection.isConnecting.value"
       @submit="handleConnectManual"
       @cancel="handleCancelConnection"
@@ -228,14 +228,14 @@
     />
 
     <!-- Stop Confirmation Modal -->
-    <Modal v-model="showStopConfirm" title="确认停止会话" size="sm">
+    <Modal v-model="showStopConfirm" :title="t('mobile.connection.confirmStop')" size="sm">
       <p class="text-[var(--mobile-text-disabled)]">
-        确定要停止会话 "<span class="text-[var(--mobile-text-primary)] font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
+        {{ t('mobile.connection.confirmStopMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showStopConfirm = false">取消</Button>
-          <Button variant="danger" :loading="isStopping" @click="confirmStop">停止</Button>
+          <Button variant="ghost" @click="showStopConfirm = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" :loading="isStopping" @click="confirmStop">{{ t('common.button.stop') }}</Button>
         </div>
       </template>
     </Modal>
@@ -249,7 +249,7 @@
         >
           <div class="bg-[var(--mobile-bg-card)] rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]">
             <div class="w-10 h-10 border-4 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
-            <p class="text-[var(--mobile-text-secondary)] text-sm font-medium">正在请求配对...</p>
+            <p class="text-[var(--mobile-text-secondary)] text-sm font-medium">{{ t('mobile.connection.pairingRequest') }}</p>
           </div>
         </div>
       </Transition>
@@ -260,6 +260,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/modules/mobile/composables/useMobileConnection'
 import { useToast } from '@/modules/shared/composables/useToast'
 import BottomSheet from '@/modules/mobile/components/BottomSheet.vue'
@@ -271,6 +272,7 @@ import SessionConfigCard, { type SessionConfigSummary } from '@/modules/mobile/c
 const router = useRouter()
 const connection = useMobileConnection()
 const toast = useToast()
+const { t } = useI18n()
 
 // 使用全局状态
 const activeSessions = connection.activeSessions
@@ -340,17 +342,17 @@ const activeSessionId = computed(() => connection.activeSessionId.value)
 const connectionStatusText = computed(() => {
   switch (connection.connectionStatus.value) {
     case 'connecting':
-      return `正在连接 ${pendingDevice.value?.name || '连接'}...`
+      return t('mobile.connection.connecting', { name: pendingDevice.value?.name || t('mobile.nav.connection') })
     case 'connected':
-      return '已连接，正在请求配对...'
+      return t('mobile.connection.pairing')
     case 'pairing':
-      return '请在桌面端查看 6 位配对码并输入'
+      return t('mobile.connection.enterCode')
     case 'paired':
-      return '已认证，连接正常'
+      return t('mobile.connection.authenticated')
     case 'error':
-      return connectionError.value || '连接失败'
+      return connectionError.value || t('mobile.connection.connectFailed')
     default:
-      return connection.connectionStatus.value === 'disconnected' ? '未连接' : ''
+      return connection.connectionStatus.value === 'disconnected' ? t('mobile.connection.notConnected') : ''
   }
 })
 
@@ -390,17 +392,17 @@ async function handleStartSession(config: SessionConfigSummary) {
       }
 
       // 启动成功，显示 toast 提示
-      toast.success(`会话 "${config.name}" 启动成功`)
+      toast.success(t('mobile.connection.sessionStarted', { name: config.name }))
 
       // 跳转到会话列表页面，而不是直接进入终端
       router.push({ name: 'mobile-sessions' })
     } else {
       console.error('Failed to start session: no session_id returned')
-      toast.error('启动会话失败：未返回会话ID')
+      toast.error(t('mobile.connection.startFailedNoId'))
     }
   } catch (e) {
     console.error('Failed to start session:', e)
-    toast.error(`启动会话失败: ${e}`)
+    toast.error(t('mobile.connection.startFailed', { error: String(e) }))
   } finally {
     startingConfigId.value = null
   }
@@ -497,7 +499,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     // Step 1: Connect to device - 带前端超时保护
     // Rust 端有 10 秒超时，前端额外设置 12 秒超时作为兜底
     const connectTimeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('连接超时，请确保桌面端正在运行并监听正确端口')), 12000)
+      setTimeout(() => reject(new Error(t('mobile.connection.timeout'))), 12000)
     )
 
     await Promise.race([
@@ -526,7 +528,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     showPairingLoading.value = true  // 显示全局遮罩 loading
     try {
       const pairingTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('配对请求超时，请确保桌面端正在运行')), 15000)
+        setTimeout(() => reject(new Error(t('mobile.connection.pairingTimeout'))), 15000)
       )
       await Promise.race([
         connection.requestPairing(),
@@ -551,13 +553,13 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     // 显示友好的错误提示
     const errorMsg = String(error)
     if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
-      toast.error('连接超时，请确保桌面端正在运行')
+      toast.error(t('mobile.connection.timeoutToast'))
     } else if (errorMsg.includes('refused') || errorMsg.includes('rejected')) {
-      toast.error('连接被拒绝，请检查桌面端地址和端口')
+      toast.error(t('mobile.connection.refusedToast'))
     } else if (errorMsg.includes('unreachable') || errorMsg.includes('network')) {
-      toast.error('网络不可达，请检查网络连接')
+      toast.error(t('mobile.connection.unreachableToast'))
     } else {
-      toast.error(`连接失败: ${errorMsg}`)
+      toast.error(t('mobile.connection.connectFailedToast', { error: errorMsg }))
     }
 
     // 连接失败时确保状态正确
@@ -573,7 +575,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
 async function handleCancelConnection() {
   await connection.cancelConnection()
   connection.isConnecting.value = false
-  connectionError.value = '用户取消连接'
+  connectionError.value = t('mobile.connection.userCancelled')
 }
 
 // Verify pairing code
@@ -595,7 +597,7 @@ async function handlePairingSubmit(code: string) {
       // Also fetch active sessions for the Sessions tab
       await connection.loadActiveSessions()
     } else {
-      pairingError.value = '配对码验证失败，请重试'
+      pairingError.value = t('mobile.connection.codeVerifyFailed')
     }
   } catch (error) {
     pairingError.value = String(error)

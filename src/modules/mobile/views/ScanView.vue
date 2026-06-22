@@ -10,7 +10,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
-      <h2 class="text-lg font-semibold text-[var(--mobile-text-primary)]">扫描二维码</h2>
+      <h2 class="text-lg font-semibold text-[var(--mobile-text-primary)]">{{ t('mobile.scan.title') }}</h2>
     </header>
 
     <!-- Scanner area -->
@@ -38,7 +38,7 @@
       </div>
 
       <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-[var(--mobile-text-muted)] text-sm">
-        将二维码对准框内扫描
+        {{ t('mobile.scan.scanHint') }}
       </p>
 
       <!-- Connecting state -->
@@ -53,20 +53,20 @@
         <svg class="w-16 h-16 text-[var(--mobile-error)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
         </svg>
-        <p class="text-[var(--mobile-error)] text-lg mb-2">连接失败</p>
+        <p class="text-[var(--mobile-error)] text-lg mb-2">{{ t('mobile.scan.connectFailed') }}</p>
         <p class="text-[var(--mobile-text-muted)] text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
         <div class="flex gap-3">
           <button
             class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-lg hover:border-cyan-500/40 transition-colors"
             @click="goBack"
           >
-            返回
+            {{ t('mobile.scan.back') }}
           </button>
           <button
             class="px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] rounded-lg hover:bg-cyan-500/30 transition-colors"
             @click="retry"
           >
-            重新扫描
+            {{ t('mobile.scan.rescan') }}
           </button>
         </div>
       </div>
@@ -77,6 +77,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Html5Qrcode } from 'html5-qrcode'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { wsAuthenticateWithQr } from '@/modules/mobile/composables/useMobileCommands'
@@ -89,6 +90,7 @@ interface QrConnectData {
 
 const router = useRouter()
 const connection = useMobileConnection()
+const { t } = useI18n()
 
 const readerRef = ref<HTMLElement | null>(null)
 const isConnecting = ref(false)
@@ -119,17 +121,17 @@ async function handleQrScan(decodedText: string) {
   try {
     qrData = JSON.parse(decodedText)
   } catch {
-    errorMessage.value = '无效的二维码'
+    errorMessage.value = t('mobile.scan.invalidQr')
     return
   }
 
   if (!qrData.host || !qrData.port || !qrData.token) {
-    errorMessage.value = '无效的二维码数据'
+    errorMessage.value = t('mobile.scan.invalidQrData')
     return
   }
 
   // Step 1: WebSocket 连接
-  connectingStep.value = '正在连接...'
+  connectingStep.value = t('mobile.scan.connecting')
   connectingDetail.value = `${qrData.host}:${qrData.port}`
 
   try {
@@ -141,21 +143,21 @@ async function handleQrScan(decodedText: string) {
       isPaired: false,
     })
   } catch {
-    errorMessage.value = '无法连接到桌面端，请确保在同一网络下'
+    errorMessage.value = t('mobile.scan.cannotConnect')
     isConnecting.value = false
     connection.isConnecting.value = false
     return
   }
 
   // 等待连接建立完成（解决竞态问题）
-  connectingStep.value = '等待连接...'
+  connectingStep.value = t('mobile.scan.waiting')
   const maxWaitTime = 10000 // 最多等待 10 秒
   const checkInterval = 200 // 每 200ms 检查一次
   const startTime = Date.now()
 
   while (!connection.isConnected.value) {
     if (Date.now() - startTime > maxWaitTime) {
-      errorMessage.value = '连接超时，请重试'
+      errorMessage.value = t('mobile.scan.timeout')
       isConnecting.value = false
       connection.isConnecting.value = false
       return
@@ -164,14 +166,14 @@ async function handleQrScan(decodedText: string) {
   }
 
   // Step 2: 发送 QR token 认证
-  connectingStep.value = '正在配对...'
+  connectingStep.value = t('mobile.scan.pairing')
   console.log('[Scan] QR data:', qrData)
 
   try {
     const creds = await wsAuthenticateWithQr(qrData.token)
     if (!creds) {
       console.error('[Scan] QR token failed')
-      errorMessage.value = 'QR 码已过期或已使用，请在桌面端重新生成'
+      errorMessage.value = t('mobile.scan.qrExpired')
       isConnecting.value = false
       connection.isConnecting.value = false
       return
@@ -180,7 +182,7 @@ async function handleQrScan(decodedText: string) {
     connection.saveCredentials(creds)
   } catch (e) {
     console.error('[Scan] QR token error:', e)
-    errorMessage.value = '配对验证失败，请重试: ' + String(e)
+    errorMessage.value = t('mobile.scan.pairingFailed', { error: String(e) })
     isConnecting.value = false
     connection.isConnecting.value = false
     return
@@ -210,7 +212,7 @@ async function startScanner() {
     )
   } catch (e) {
     console.error('Failed to start scanner:', e)
-    errorMessage.value = '无法启动摄像头'
+    errorMessage.value = t('mobile.scan.cameraFailed')
   }
 }
 

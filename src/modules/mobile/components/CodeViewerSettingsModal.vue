@@ -6,7 +6,7 @@
   >
     <div class="settings-modal" :style="modalStyle">
       <div class="settings-header">
-        <h2>代码查看设置</h2>
+        <h2>{{ t('mobile.codeViewer.settingsTitle') }}</h2>
         <button class="close-btn" @click.stop="emit('close')">
           <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -17,7 +17,7 @@
       <div class="settings-content">
         <!-- 字体大小 -->
         <div class="settings-section">
-          <label class="settings-label">字体大小</label>
+          <label class="settings-label">{{ t('mobile.codeViewer.fontSize') }}</label>
           <div class="font-size-control">
             <button class="size-btn" @click.stop="localSettings.fontSize--" :disabled="localSettings.fontSize <= 10">-</button>
             <span class="size-value">{{ localSettings.fontSize }}px</span>
@@ -27,7 +27,7 @@
 
         <!-- 代码主题 -->
         <div class="settings-section">
-          <label class="settings-label">代码主题</label>
+          <label class="settings-label">{{ t('mobile.codeViewer.codeTheme') }}</label>
           <div class="theme-grid">
             <button
               v-for="(config, id) in CODE_THEMES"
@@ -44,7 +44,7 @@
 
         <!-- Tab 缩进 -->
         <div class="settings-section">
-          <label class="settings-label">Tab 缩进</label>
+          <label class="settings-label">{{ t('mobile.codeViewer.tabIndent') }}</label>
           <div class="tab-size-group">
             <button
               v-for="size in [2, 4, 8]"
@@ -59,7 +59,7 @@
         <!-- 行号显示 -->
         <div class="settings-section">
           <div class="toggle-row">
-            <span class="settings-label" style="margin-bottom:0">行号显示</span>
+            <span class="settings-label" style="margin-bottom:0">{{ t('mobile.codeViewer.lineNumbers') }}</span>
             <button
               class="toggle-btn"
               :class="{ active: localSettings.showLineNumbers }"
@@ -76,8 +76,8 @@
 
       <!-- Footer -->
       <div class="settings-footer">
-        <button class="settings-footer-btn cancel" @click.stop="emit('close')">取消</button>
-        <button class="settings-footer-btn confirm" @click.stop="handleConfirm">确认</button>
+        <button class="settings-footer-btn cancel" @click.stop="emit('close')">{{ t('common.button.cancel') }}</button>
+        <button class="settings-footer-btn confirm" @click.stop="handleConfirm">{{ t('common.button.confirm') }}</button>
       </div>
     </div>
   </div>
@@ -91,7 +91,10 @@
  * 编辑中修改临时变量，确认后保存到 store
  */
 import { ref, computed, watch, inject, type Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useCodeViewerStore, CODE_THEMES, type CodeViewerSettings } from '@/modules/shared/stores/codeViewer'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   visible: boolean

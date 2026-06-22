@@ -1,4 +1,5 @@
 import { shallowRef } from 'vue'
+import i18n from '@/locales'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -120,7 +121,7 @@ export function useSessionWindows() {
     // 创建终端窗口 - 使用独立的 terminal.html 页面
     const terminalWindow = new WebviewWindow(`terminal-${session.id}`, {
       url: `/terminal-window/${session.id}`,
-      title: `终端 - ${session.name}`,
+      title: i18n.global.t('common.misc.terminalTitle', { name: session.name }),
       width: terminalWidth,
       height: terminalHeight,
       x: terminalX,

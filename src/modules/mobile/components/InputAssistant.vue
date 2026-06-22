@@ -45,18 +45,18 @@
     <div v-if="showInput" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui" @click.self="showInput = false">
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="showInput = false"></div>
       <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-md p-4 shadow-xl">
-        <div class="text-sm font-medium mb-3 text-[var(--mobile-text-primary)]">输入命令</div>
+        <div class="text-sm font-medium mb-3 text-[var(--mobile-text-primary)]">{{ t('mobile.input.commandTitle') }}</div>
         <textarea
           ref="inputRef"
           v-model="inputText"
           class="w-full bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:border-[var(--mobile-input-focus)]"
-          placeholder="输入命令..." rows="4"
+          :placeholder="t('mobile.input.commandPlaceholder')" rows="4"
         ></textarea>
         <div class="flex justify-between gap-2 mt-4">
-          <button class="px-4 py-2 text-sm text-[var(--mobile-text-secondary)]" @click="showInput = false">取消</button>
+          <button class="px-4 py-2 text-sm text-[var(--mobile-text-secondary)]" @click="showInput = false">{{ t('common.button.cancel') }}</button>
           <div class="flex gap-2">
-            <button class="px-4 py-2 text-sm bg-[var(--mobile-input-bg)] rounded-lg" :disabled="!inputText.trim()" @click="onSubmit">发送</button>
-            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-white rounded-lg" :disabled="!inputText.trim()" @click="onExecute">执行</button>
+            <button class="px-4 py-2 text-sm bg-[var(--mobile-input-bg)] rounded-lg" :disabled="!inputText.trim()" @click="onSubmit">{{ t('common.button.send') }}</button>
+            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-white rounded-lg" :disabled="!inputText.trim()" @click="onExecute">{{ t('common.button.execute') }}</button>
           </div>
         </div>
       </div>
@@ -66,21 +66,24 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useInputAssistantStore } from '@/modules/shared/stores/inputAssistant'
 import ShortcutPanel from './ShortcutPanel.vue'
 import SettingsModal from './SettingsModal.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{ terminalRef: any; terminalInstance: any; isConnected: boolean }>()
 const store = useInputAssistantStore()
 
 // ---------- radial menu items ----------
-const items = [
-  { label: '清屏',    path: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',                         cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doClear },
-  { label: '输入',    path: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',           cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doInput },
-  { label: 'Ctrl+C',  path: 'M13 10V3L4 14h7v7l9-11h-7z',                                                                                                      cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-amber-500',           action: doCtrlC },
-  { label: '快捷键',  path: 'M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z',                     cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doShortcuts },
-  { label: '设置',    path: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z', cls: 'bg-[var(--mobile-input-bg)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doSettings },
-]
+const items = computed(() => [
+  { label: t('mobile.input.clearScreen'), path: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',                         cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doClear },
+  { label: t('mobile.input.input'),       path: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',           cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doInput },
+  { label: 'Ctrl+C',                      path: 'M13 10V3L4 14h7v7l9-11h-7z',                                                                                                      cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-amber-500',           action: doCtrlC },
+  { label: t('mobile.input.shortcuts'),   path: 'M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z',                     cls: 'bg-[var(--mobile-bg-card)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doShortcuts },
+  { label: t('mobile.terminal.settings'), path: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z', cls: 'bg-[var(--mobile-input-bg)]', iconCls: 'text-[var(--mobile-text-secondary)]', action: doSettings },
+])
 
 // ---------- state ----------
 const btnRef = ref<HTMLElement>()

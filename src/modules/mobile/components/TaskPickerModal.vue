@@ -5,8 +5,11 @@
  * 居中弹窗展示可选的 PresetTask 列表，支持勾选、排序和新建任务
  */
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PresetTask, PresetTaskType } from '../composables/model'
 import { usePresetTasks } from '../composables/usePresetTasks'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   tasks: PresetTask[]
@@ -86,9 +89,9 @@ async function handleCreate() {
     <div class="modal-overlay mobile-ui" @click.self="emit('close')">
       <div class="modal-content">
         <div class="modal-header">
-          <h3>待办任务</h3>
+          <h3>{{ t('mobile.taskPicker.title') }}</h3>
           <div class="header-actions">
-            <button class="add-btn" @click="openCreateModal" title="新建任务">
+            <button class="add-btn" @click="openCreateModal" :title="t('mobile.taskPicker.newTask')">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/>
               </svg>
@@ -100,8 +103,8 @@ async function handleCreate() {
         <div class="modal-body">
           <!-- 可选任务列表 -->
           <div v-if="availableTasks.length === 0" class="empty-hint">
-            <p>暂无可选任务</p>
-            <button class="empty-add-btn" @click="openCreateModal">创建新任务</button>
+            <p>{{ t('mobile.taskPicker.noTasks') }}</p>
+            <button class="empty-add-btn" @click="openCreateModal">{{ t('mobile.taskPicker.createTask') }}</button>
           </div>
           <div v-else class="task-list">
             <div
@@ -118,14 +121,14 @@ async function handleCreate() {
               </div>
               <div class="task-info">
                 <span class="task-title">{{ task.title }}</span>
-                <span class="task-type-badge">{{ task.type === 'template' ? '模板' : '一次性' }}</span>
+                <span class="task-type-badge">{{ task.type === 'template' ? t('mobile.presetTask.template') : t('mobile.presetTask.once') }}</span>
               </div>
             </div>
           </div>
 
           <!-- 已选任务排序 -->
           <div v-if="orderedSelection.length > 0" class="selected-section">
-            <div class="section-title">执行顺序</div>
+            <div class="section-title">{{ t('mobile.taskPicker.executionOrder') }}</div>
             <div class="selected-list">
               <div v-for="(task, index) in orderedSelection" :key="task.id" class="selected-item">
                 <span class="order-number">{{ index + 1 }}</span>
@@ -141,13 +144,13 @@ async function handleCreate() {
         </div>
 
         <div class="modal-footer">
-          <button class="btn-cancel" @click="emit('close')">取消</button>
+          <button class="btn-cancel" @click="emit('close')">{{ t('common.button.cancel') }}</button>
           <button
             class="btn-confirm"
             :disabled="orderedSelection.length === 0"
             @click="handleConfirm"
           >
-            确认添加 ({{ orderedSelection.length }})
+            {{ t('mobile.taskPicker.confirmAdd', { count: orderedSelection.length }) }}
           </button>
         </div>
       </div>
@@ -157,61 +160,61 @@ async function handleCreate() {
     <div v-if="showCreateModal" class="create-overlay mobile-ui" @click.self="showCreateModal = false">
       <div class="create-modal">
         <div class="create-header">
-          <h3>新建任务</h3>
+          <h3>{{ t('mobile.taskPicker.newTask') }}</h3>
           <button class="close-btn" @click="showCreateModal = false">&times;</button>
         </div>
 
         <div class="create-body">
           <div class="form-group">
-            <label class="form-label">任务名称</label>
+            <label class="form-label">{{ t('mobile.taskPicker.taskName') }}</label>
             <input
               v-model="newTitle"
               class="form-input"
-              placeholder="输入任务名称"
+              :placeholder="t('mobile.taskPicker.taskNamePlaceholder')"
               maxlength="50"
             />
           </div>
 
           <div class="form-group">
-            <label class="form-label">任务内容</label>
+            <label class="form-label">{{ t('mobile.taskPicker.taskContent') }}</label>
             <textarea
               v-model="newContent"
               class="form-textarea"
-              placeholder="输入发送到终端的命令内容"
+              :placeholder="t('mobile.taskPicker.taskContentPlaceholder')"
               rows="4"
             ></textarea>
           </div>
 
           <div class="form-group">
-            <label class="form-label">任务类型</label>
+            <label class="form-label">{{ t('mobile.taskPicker.taskType') }}</label>
             <div class="type-selector">
               <button
                 class="type-btn"
                 :class="{ active: newType === 'template' }"
                 @click="newType = 'template'"
               >
-                模板
+                {{ t('mobile.presetTask.template') }}
               </button>
               <button
                 class="type-btn"
                 :class="{ active: newType === 'once' }"
                 @click="newType = 'once'"
               >
-                一次性
+                {{ t('mobile.presetTask.once') }}
               </button>
             </div>
-            <p class="type-hint">{{ newType === 'template' ? '可重复执行，不改变状态' : '执行后标记为已完成，不可重复' }}</p>
+            <p class="type-hint">{{ newType === 'template' ? t('mobile.taskPicker.templateHint') : t('mobile.taskPicker.onceHint') }}</p>
           </div>
         </div>
 
         <div class="create-footer">
-          <button class="btn-cancel" @click="showCreateModal = false">取消</button>
+          <button class="btn-cancel" @click="showCreateModal = false">{{ t('common.button.cancel') }}</button>
           <button
             class="btn-confirm"
             :disabled="!newTitle.trim() || !newContent.trim()"
             @click="handleCreate"
           >
-            创建
+            {{ t('common.button.create') }}
           </button>
         </div>
       </div>

@@ -2,12 +2,12 @@
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">会话</h1>
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.session.title') }}</h1>
       <button
         v-if="isConnected"
         class="p-2 rounded-lg hover:bg-[var(--mobile-border)] transition-colors"
         @click="refreshSessions"
-        title="刷新会话"
+        :title="t('mobile.session.refresh')"
       >
         <svg
           class="w-5 h-5 text-[var(--mobile-accent)]"
@@ -26,7 +26,7 @@
       <div class="p-4 space-y-3">
         <!-- 未连接提示 -->
         <div v-if="!isConnected" class="text-center text-[var(--mobile-text-muted)] py-4 mb-4 border-b border-[var(--mobile-border)]">
-          <p class="text-sm">未连接到桌面端</p>
+          <p class="text-sm">{{ t('mobile.session.notConnected') }}</p>
         </div>
 
         <!-- FIXME: 调试会话暂时注释 -->
@@ -40,7 +40,7 @@
         <!-- 真实会话列表 -->
         <template v-if="isConnected">
           <div v-if="realSessions.length === 0" class="text-center text-[var(--mobile-text-muted)] py-4">
-            暂无运行中的会话
+            {{ t('mobile.session.noSessions') }}
           </div>
 
           <SessionCard
@@ -57,31 +57,31 @@
 
     <!-- Connection info -->
     <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border-t border-[var(--mobile-border)]">
-      <span class="text-[var(--mobile-text-muted)] text-xs font-medium">{{ currentDeviceName }} · {{ realSessions.length }} 个会话</span>
+      <span class="text-[var(--mobile-text-muted)] text-xs font-medium">{{ t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length }) }}</span>
     </div>
 
     <!-- Stop Confirmation Modal -->
-    <Modal v-model="showStopConfirm" title="确认停止会话" size="sm">
+    <Modal v-model="showStopConfirm" :title="t('mobile.session.confirmStop')" size="sm">
       <p class="text-[var(--mobile-text-secondary)]">
-        确定要停止会话 "<span class="text-[var(--mobile-text-primary)] font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？
+        {{ t('mobile.session.confirmStopMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showStopConfirm = false">取消</Button>
-          <Button variant="danger" :loading="isStopping" @click="confirmStop">停止</Button>
+          <Button variant="ghost" @click="showStopConfirm = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" :loading="isStopping" @click="confirmStop">{{ t('common.button.stop') }}</Button>
         </div>
       </template>
     </Modal>
 
     <!-- Delete Confirmation Modal -->
-    <Modal v-model="showDeleteConfirm" title="确认删除会话" size="sm">
+    <Modal v-model="showDeleteConfirm" :title="t('mobile.session.confirmDelete')" size="sm">
       <p class="text-[var(--mobile-text-secondary)]">
-        确定要删除会话 "<span class="text-[var(--mobile-text-primary)] font-medium">{{ pendingSession?.name || pendingSession?.id }}</span>" 吗？此操作不可恢复。
+        {{ t('mobile.session.confirmDeleteMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showDeleteConfirm = false">取消</Button>
-          <Button variant="danger" :loading="isDeleting" @click="confirmDelete">删除</Button>
+          <Button variant="ghost" @click="showDeleteConfirm = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" :loading="isDeleting" @click="confirmDelete">{{ t('common.button.delete') }}</Button>
         </div>
       </template>
     </Modal>
@@ -91,6 +91,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { httpStopSession, httpRemoveSession } from '@/modules/mobile/composables/useHttpApi'
 import { useToast } from '@/modules/shared/composables/useToast'
@@ -101,12 +102,13 @@ import Button from '@/modules/shared/components/Button.vue'
 const router = useRouter()
 const connection = useMobileConnection()
 const toast = useToast()
+const { t } = useI18n()
 
 // 连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 
 // 当前设备名称
-const currentDeviceName = computed(() => connection.currentDevice.value?.name || '已连接')
+const currentDeviceName = computed(() => connection.currentDevice.value?.name || t('mobile.session.connected'))
 
 // FIXME: 调试会话暂时注释
 // const mockDebugSession = {
@@ -168,7 +170,7 @@ async function confirmStop() {
   try {
     const result = await httpStopSession(pendingSession.value.id)
     if (result.code !== 0) {
-      toast.error(result.message || '停止会话失败')
+      toast.error(result.message || t('mobile.session.stopFailed'))
       return
     }
     // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
@@ -177,7 +179,7 @@ async function confirmStop() {
     pendingSession.value = null
   } catch (e) {
     console.error('[SessionsView] Failed to stop session:', e)
-    toast.error('停止会话失败')
+    toast.error(t('mobile.session.stopFailed'))
   } finally {
     isStopping.value = false
   }
@@ -194,7 +196,7 @@ async function confirmDelete() {
   try {
     const result = await httpRemoveSession(pendingSession.value.id)
     if (result.code !== 0) {
-      toast.error(result.message || '删除会话失败')
+      toast.error(result.message || t('mobile.session.deleteFailed'))
       return
     }
     // 立即更新本地状态（同步事件会排除操作者，所以需要手动更新）
@@ -203,7 +205,7 @@ async function confirmDelete() {
     pendingSession.value = null
   } catch (e) {
     console.error('[SessionsView] Failed to delete session:', e)
-    toast.error('删除会话失败')
+    toast.error(t('mobile.session.deleteFailed'))
   } finally {
     isDeleting.value = false
   }
@@ -216,7 +218,7 @@ async function refreshSessions() {
     await connection.loadActiveSessions()
   } catch (e) {
     console.error('[SessionsView] Failed to load sessions:', e)
-    toast.error('加载会话列表失败')
+    toast.error(t('mobile.session.loadFailed'))
   }
 }
 

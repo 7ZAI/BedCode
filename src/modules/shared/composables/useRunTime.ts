@@ -1,4 +1,5 @@
 import { ref, onMounted, onUnmounted, type Ref, type ComputedRef } from 'vue'
+import i18n from '@/locales'
 
 /**
  * 运行时间 Composable
@@ -22,15 +23,15 @@ export function useRunTime(
     const diff = Math.floor((Date.now() - new Date(start).getTime()) / 1000)
 
     if (diff < 60) {
-      runTime.value = `${diff}秒`
+      runTime.value = i18n.global.t('common.time.secondsAgo', { n: diff })
     } else if (diff < 3600) {
       const minutes = Math.floor(diff / 60)
       const seconds = diff % 60
-      runTime.value = `${minutes}分${seconds}秒`
+      runTime.value = i18n.global.t('common.time.minutesSecondsAgo', { m: minutes, s: seconds })
     } else {
       const hours = Math.floor(diff / 3600)
       const minutes = Math.floor((diff % 3600) / 60)
-      runTime.value = `${hours}小时${minutes}分`
+      runTime.value = i18n.global.t('common.time.hoursMinutesAgo', { h: hours, m: minutes })
     }
   }
 

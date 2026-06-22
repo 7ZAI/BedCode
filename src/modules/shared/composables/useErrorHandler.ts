@@ -3,6 +3,8 @@
 //! 统一的错误处理和用户通知
 
 import { ref, readonly } from 'vue'
+import i18n from '@/locales'
+import { ERROR_CODE_I18N_KEY } from '@/locales/errorCodes'
 
 // Re-export from model
 import type { AppError } from './model'
@@ -19,32 +21,6 @@ interface ErrorOptions {
 // 全局错误状态
 const errors = ref<AppError[]>([])
 const lastError = ref<AppError | null>(null)
-
-// 错误码映射
-const ERROR_MESSAGES: Record<string, string> = {
-  // 后端错误码
-  'PTY_ERROR': '终端进程错误',
-  'SESSION_ERROR': '会话错误',
-  'DATABASE_ERROR': '数据库错误',
-  'IO_ERROR': '文件操作错误',
-  'SERIALIZATION_ERROR': '数据序列化错误',
-  'WEBSOCKET_ERROR': 'WebSocket 连接错误',
-  'AUTH_ERROR': '认证错误',
-  'DISCOVERY_ERROR': '设备发现错误',
-  'CONFIG_ERROR': '配置错误',
-  'PARSE_ERROR': '解析错误',
-  'NOTIFICATION_ERROR': '通知错误',
-  'KEYRING_ERROR': '密钥存储错误',
-  'NOT_FOUND': '资源未找到',
-  'INVALID_INPUT': '输入无效',
-  'INTERNAL_ERROR': '内部错误',
-
-  // 前端错误码
-  'NETWORK_ERROR': '网络连接失败',
-  'TIMEOUT_ERROR': '操作超时',
-  'PERMISSION_ERROR': '权限不足',
-  'UNKNOWN_ERROR': '未知错误',
-}
 
 /**
  * 解析后端错误
@@ -88,8 +64,9 @@ function parseBackendError(error: unknown): AppError {
  * 获取用户友好的错误消息
  */
 function getErrorMessage(code: string, originalMessage: string): string {
-  const friendlyMessage = ERROR_MESSAGES[code]
-  return friendlyMessage ? `${friendlyMessage}: ${originalMessage}` : originalMessage
+  const i18nKey = ERROR_CODE_I18N_KEY[code]
+  const friendlyMessage = i18nKey ? i18n.global.t(i18nKey) : i18n.global.t('common.errorCode.unknownError')
+  return `${friendlyMessage}: ${originalMessage}`
 }
 
 /**

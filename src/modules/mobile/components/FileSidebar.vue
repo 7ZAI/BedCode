@@ -8,9 +8,9 @@
     ></div>
     <!-- 工具栏 -->
     <div class="sidebar-header">
-      <span class="sidebar-title">{{ isDiffMode ? 'Diff' : '文件' }}</span>
+      <span class="sidebar-title">{{ isDiffMode ? 'Diff' : t('mobile.file.title') }}</span>
       <div class="sidebar-actions">
-        <button class="action-btn" title="刷新" @click="handleRefresh">
+        <button class="action-btn" :title="t('mobile.file.refresh')" @click="handleRefresh">
           <svg
             class="refresh-icon"
             :class="{ spinning: isRefreshing }"
@@ -23,12 +23,12 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </button>
-        <button class="action-btn" title="全部折叠" @click="collapseAll">
+        <button class="action-btn" :title="t('mobile.file.collapseAll')" @click="collapseAll">
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-        <button class="action-btn" title="全部展开" @click="expandAll">
+        <button class="action-btn" :title="t('mobile.file.expandAll')" @click="expandAll">
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
           </svg>
@@ -38,7 +38,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8m-8 5h8m-4-9v14M4 4h16a1 1 0 011 1v14a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" />
           </svg>
         </button>
-        <button class="action-btn" title="设置" @click="toggleSettings">
+        <button class="action-btn" :title="t('mobile.file.settings')" @click="toggleSettings">
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -52,7 +52,7 @@
       <div v-if="showSettingsPanel" class="settings-panel" @click.stop>
         <div class="settings-panel-section">
           <div class="settings-panel-row">
-            <span class="settings-panel-label">默认展开</span>
+            <span class="settings-panel-label">{{ t('mobile.file.defaultExpand') }}</span>
             <button
               class="toggle-switch"
               :class="{ active: tempDefaultExpanded }"
@@ -64,7 +64,7 @@
         </div>
         <div class="settings-panel-section">
           <div class="settings-panel-row">
-            <span class="settings-panel-label">树形大小</span>
+            <span class="settings-panel-label">{{ t('mobile.file.treeSize') }}</span>
             <span class="font-size-value">{{ tempFontSize }}px</span>
           </div>
           <div
@@ -89,7 +89,7 @@
           </div>
         </div>
         <div class="settings-panel-section">
-          <label class="settings-panel-label">过滤目录</label>
+          <label class="settings-panel-label">{{ t('mobile.file.filterDirs') }}</label>
           <input
             v-model="tempFilterText"
             class="settings-panel-input"
@@ -97,8 +97,8 @@
           />
         </div>
         <div class="settings-panel-actions">
-          <button class="settings-panel-btn cancel" @click="cancelSettingsPanel">取消</button>
-          <button class="settings-panel-btn confirm" @click="confirmSettingsPanel">确认</button>
+          <button class="settings-panel-btn cancel" @click="cancelSettingsPanel">{{ t('common.button.cancel') }}</button>
+          <button class="settings-panel-btn confirm" @click="confirmSettingsPanel">{{ t('common.button.confirm') }}</button>
         </div>
       </div>
     </transition>
@@ -113,18 +113,18 @@
         <svg class="spinning-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
-        <span class="state-text">加载中...</span>
+        <span class="state-text">{{ t('mobile.file.loading') }}</span>
       </div>
 
       <!-- 错误状态 -->
       <div v-else-if="error" class="sidebar-state error-state">
         <span class="state-text">{{ error }}</span>
-        <button class="retry-btn" @click="handleRefresh">重试</button>
+        <button class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
       </div>
 
       <!-- 空状态 -->
       <div v-else-if="tree.length === 0" class="sidebar-state">
-        <span class="state-text">{{ isDiffMode ? '没有改动文件' : '暂无文件' }}</span>
+        <span class="state-text">{{ isDiffMode ? t('mobile.file.noDiffFiles') : t('mobile.file.noFiles') }}</span>
       </div>
 
       <!-- 文件树列表 -->
@@ -157,6 +157,7 @@
 
 <script setup lang="ts">
 import { ref, computed, toRef } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useHttpApi } from '../composables/useHttpApi'
 import type { FileDiffLine } from '../composables/useHttpApi'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
@@ -178,6 +179,7 @@ const emit = defineEmits<{
   'file-select': [name: string, path: string, isDiff: boolean]
 }>()
 
+const { t } = useI18n()
 const { isLandscape } = useOrientation()
 const toast = useToast()
 const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggleDiffMode, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
@@ -280,7 +282,7 @@ async function handleDiff() {
   // 切换模式后统一通过 refresh 获取数据（清除缓存 + fetchTree）
   await refresh()
   if (isDiffMode.value && tree.value.length === 0 && !error.value) {
-    toast.info('没有改动文件')
+    toast.info(t('mobile.file.noDiffFilesToast'))
   }
 }
 
@@ -332,20 +334,20 @@ async function handleFileClick(name: string, path: string) {
       const { httpGetFileDiff } = useHttpApi()
       const result = await httpGetFileDiff(props.sessionId, path)
       if (result.code !== 0 || !result.data) {
-        throw new Error(result.message || '获取文件 Diff 失败')
+        throw new Error(result.message || t('mobile.file.fetchDiffFailed'))
       }
       diffLines.value = result.data.lines
     } else {
       const { httpGetFileContent } = useHttpApi()
       const result = await httpGetFileContent(props.sessionId, path)
       if (result.code !== 0 || !result.data) {
-        throw new Error(result.message || '获取文件内容失败')
+        throw new Error(result.message || t('mobile.file.fetchContentFailed'))
       }
       fileContent.value = result.data.content
       diffLines.value = undefined
     }
   } catch (e: any) {
-    fileError.value = e?.toString() || '获取文件内容失败'
+    fileError.value = e?.toString() || t('mobile.file.fetchContentFailed')
   } finally {
     fileLoading.value = false
   }
@@ -390,9 +392,9 @@ function onResizePointerDown(e: PointerEvent) {
 async function handleLongPress(name: string, path: string) {
   try {
     await navigator.clipboard.writeText(path)
-    toast.success(`已复制: ${path}`)
+    toast.success(t('mobile.file.copied', { path }))
   } catch {
-    toast.error('复制失败')
+    toast.error(t('mobile.file.copyFailed'))
   }
 }
 </script>

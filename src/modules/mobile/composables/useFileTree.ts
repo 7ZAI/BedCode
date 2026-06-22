@@ -130,7 +130,7 @@ export function useFileTree(sessionId: Ref<string>) {
       if (isDiffMode.value) {
         const result = await httpGetDiffTree(id, settings.value.filterPatterns)
         if (result.code !== 0 || !result.data) {
-          throw new Error(result.message || '获取 Diff 文件树失败')
+          throw new Error(result.message || 'mobile.file.fetchDiffTreeFailed')
         }
         const transformed = result.data.tree.map(transformApiNode)
         if (settings.value.defaultExpanded) {
@@ -140,7 +140,7 @@ export function useFileTree(sessionId: Ref<string>) {
       } else {
         const result = await httpGetFileTree(id, settings.value.filterPatterns)
         if (result.code !== 0 || !result.data) {
-          throw new Error(result.message || '获取文件树失败')
+          throw new Error(result.message || 'mobile.file.fetchTreeFailed')
         }
         const transformed = result.data.tree.map(transformApiNode)
 
@@ -155,7 +155,7 @@ export function useFileTree(sessionId: Ref<string>) {
         tree.value = filtered
       }
     } catch (e: any) {
-      error.value = e?.toString() || (isDiffMode.value ? '获取 Diff 文件树失败' : '获取文件树失败')
+      error.value = e?.toString() || (isDiffMode.value ? 'mobile.file.fetchDiffTreeFailed' : 'mobile.file.fetchTreeFailed')
       tree.value = []
     } finally {
       loading.value = false

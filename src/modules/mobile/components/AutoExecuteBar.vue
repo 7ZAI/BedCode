@@ -6,6 +6,7 @@
  * 展示当前任务名和状态，支持暂停/继续
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { QueuedTask } from '../composables/useAutoExecutor'
 
 const props = defineProps<{
@@ -19,14 +20,16 @@ const emit = defineEmits<{
   resume: []
 }>()
 
+const { t } = useI18n()
+
 const statusText = computed(() => {
   if (!props.currentTask) return ''
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '执行中',
-    completed: '已完成',
-    failed: '失败',
-    retrying: '重试中',
+    pending: t('mobile.autoExecute.pending'),
+    running: t('mobile.autoExecute.running'),
+    completed: t('mobile.autoExecute.completed'),
+    failed: t('mobile.autoExecute.failed'),
+    retrying: t('mobile.autoExecute.retrying'),
   }
   return map[props.currentTask.status] || ''
 })
@@ -44,7 +47,7 @@ const show = computed(() => props.mode === 'auto' && props.currentTask)
       class="bar-action"
       @click="isPaused ? emit('resume') : emit('pause')"
     >
-      {{ isPaused ? '继续' : '暂停' }}
+      {{ isPaused ? t('mobile.autoExecute.resume') : t('mobile.autoExecute.pause') }}
     </button>
   </div>
 </template>

@@ -3,14 +3,14 @@
     <!-- Header -->
     <header class="px-6 py-3 h-12 flex items-center border-b border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800">
       <div class="flex items-center justify-between w-full">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">会话配置</h2>
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('desktop.sidebar.sessionConfig') }}</h2>
         <Button variant="primary" @click="showCreateDialog = true">
           <template #icon>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
             </svg>
           </template>
-          新建配置
+          {{ t('desktop.session.newConfig') }}
         </Button>
       </div>
     </header>
@@ -20,7 +20,7 @@
       <!-- Loading State -->
       <div v-if="isLoading" class="text-center py-12">
         <Spinner size="xl" color="primary" class="mb-4" />
-        <p class="text-gray-500 dark:text-dark-400">加载中...</p>
+        <p class="text-gray-500 dark:text-dark-400">{{ t('common.status.loading') }}</p>
       </div>
 
       <!-- Empty State -->
@@ -28,8 +28,8 @@
         <svg class="w-16 h-16 mx-auto text-gray-400 dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <p class="text-gray-600 dark:text-dark-400">暂无会话配置</p>
-        <p class="text-gray-500 dark:text-dark-500 text-sm mt-2">点击"新建配置"创建第一个配置</p>
+        <p class="text-gray-600 dark:text-dark-400">{{ t('desktop.session.noConfig') }}</p>
+        <p class="text-gray-500 dark:text-dark-500 text-sm mt-2">{{ t('desktop.session.noConfigHint') }}</p>
       </div>
 
       <!-- Config Cards (Long Card Mode) -->
@@ -49,7 +49,7 @@
     </div>
 
     <!-- Create/Edit Dialog -->
-    <Modal v-model="showCreateDialog" :title="editingConfig ? '编辑配置' : '新建配置'" size="lg">
+    <Modal v-model="showCreateDialog" :title="editingConfig ? t('desktop.session.editConfig') : t('desktop.session.newConfig')" size="lg">
       <SessionForm
         ref="sessionFormRef"
         :config="editingConfig"
@@ -57,19 +57,19 @@
       />
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="secondary" @click="showCreateDialog = false">取消</Button>
-          <Button variant="primary" @click="submitForm">{{ editingConfig ? '保存' : '创建' }}</Button>
+          <Button variant="secondary" @click="showCreateDialog = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="primary" @click="submitForm">{{ editingConfig ? t('common.button.save') : t('common.button.create') }}</Button>
         </div>
       </template>
     </Modal>
 
     <!-- Delete Confirm Dialog -->
-    <Modal v-model="showDeleteConfirmDialog" title="确认删除" size="sm">
-      <p class="text-gray-700 dark:text-dark-300">确定要删除此会话配置吗？此操作无法撤销。</p>
+    <Modal v-model="showDeleteConfirmDialog" :title="t('desktop.session.confirmDelete')" size="sm">
+      <p class="text-gray-700 dark:text-dark-300">{{ t('desktop.session.confirmDeleteMsg') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showDeleteConfirmDialog = false">取消</Button>
-          <Button variant="danger" @click="confirmDelete">删除</Button>
+          <Button variant="ghost" @click="showDeleteConfirmDialog = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" @click="confirmDelete">{{ t('common.button.delete') }}</Button>
         </div>
       </template>
     </Modal>
@@ -86,6 +86,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import Button from '@/modules/shared/components/Button.vue'
@@ -110,6 +111,7 @@ import {
 } from '@/modules/desktop/composables/useDesktopCommands'
 
 const router = useRouter()
+const { t } = useI18n()
 const toast = useToast()
 
 const configs = ref<SessionConfig[]>([])
@@ -124,7 +126,7 @@ const sessionFormRef = ref<InstanceType<typeof SessionForm> | null>(null)
 
 // 操作中的 loading 状态
 const isOperating = ref(false)
-const operatingMessage = ref('处理中...')
+const operatingMessage = ref(t('desktop.session.processing'))
 
 // Page-level keyboard shortcuts
 useKeyboardShortcuts([
@@ -163,7 +165,7 @@ onMounted(async () => {
 
 async function startSession(configId: string) {
   isOperating.value = true
-  operatingMessage.value = '正在启动会话...'
+  operatingMessage.value = t('desktop.session.starting')
 
   try {
     // 两阶段启动：
@@ -179,15 +181,15 @@ async function startSession(configId: string) {
     // 刷新会话列表
     sessions.value = await listSessions()
 
-    toast.success('会话已启动')
+    toast.success(t('desktop.session.sessionStarted'))
     // 跳转到会话管理页面
     router.push({ name: 'session-manager' })
   } catch (e: any) {
     console.error('[SessionsView] startSession error:', e)
     if (e instanceof InvokeTimeoutError) {
-      toast.error('启动会话超时，后端可能无响应。请检查应用日志后重试。')
+      toast.error(t('desktop.session.startTimeout'))
     } else {
-      toast.error('启动会话失败: ' + (e?.message || e))
+      toast.error(t('desktop.session.startFailed', { error: e?.message || e }))
     }
   } finally {
     isOperating.value = false
@@ -208,24 +210,24 @@ async function confirmDelete() {
   if (!pendingDeleteConfigId.value) return
   await deleteSessionConfig(pendingDeleteConfigId.value)
   configs.value = await listSessionConfigs()
-  toast.success('会话配置已删除')
+  toast.success(t('desktop.session.configDeleted'))
   showDeleteConfirmDialog.value = false
   pendingDeleteConfigId.value = null
 }
 
 async function killSession(sessionId: string) {
   isOperating.value = true
-  operatingMessage.value = '正在停止会话...'
+  operatingMessage.value = t('desktop.session.stopping')
 
   try {
     await stopSession(sessionId)
     // 销毁会话历史缓存
     destroySessionCache(sessionId)
     sessions.value = await listSessions()
-    toast.info('会话已终止')
+    toast.info(t('desktop.session.sessionTerminated'))
   } catch (e: any) {
     console.error('[SessionsView] killSession error:', e)
-    toast.error('终止会话失败: ' + (e?.message || e))
+    toast.error(t('desktop.session.terminateFailed', { error: e?.message || e }))
   } finally {
     isOperating.value = false
   }

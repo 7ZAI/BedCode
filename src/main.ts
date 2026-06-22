@@ -41,7 +41,7 @@ listen<PluginSetupResult>('plugin-setup-result', (event) => {
   if (result.success) {
     toast.success(result.message)
     if (result.token_generated) {
-      setTimeout(() => toast.info('认证令牌已更新'), 1000)
+      setTimeout(() => toast.info(i18n.global.t('common.notification.tokenUpdated')), 1000)
     }
   } else {
     toast.error(result.message, 5000)

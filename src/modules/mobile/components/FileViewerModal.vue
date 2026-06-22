@@ -9,13 +9,13 @@
             <span class="viewer-lang-badge">{{ displayLang }}</span>
           </div>
           <div class="viewer-actions">
-            <button class="viewer-action-btn" title="设置" @click="showSettings = true">
+            <button class="viewer-action-btn" :title="t('mobile.file.settingsTitle')" @click="showSettings = true">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-            <button class="viewer-action-btn" :title="isFullscreen ? '退出全屏' : '全屏'" @click="toggleFullscreen">
+            <button class="viewer-action-btn" :title="isFullscreen ? t('mobile.file.exitFullscreen') : t('mobile.file.fullscreen')" @click="toggleFullscreen">
               <svg v-if="!isFullscreen" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
               </svg>
@@ -23,7 +23,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
               </svg>
             </button>
-            <button class="viewer-action-btn" title="关闭" @click="handleClose">
+            <button class="viewer-action-btn" :title="t('mobile.file.close')" @click="handleClose">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -33,9 +33,9 @@
 
         <!-- Code Area -->
         <div class="viewer-body">
-          <div v-if="loading" class="viewer-loading">加载中...</div>
+          <div v-if="loading" class="viewer-loading">{{ t('mobile.file.loading') }}</div>
           <div v-else-if="error" class="viewer-error">{{ error }}</div>
-          <div v-else-if="!code && !diffLines?.length" class="viewer-loading">选择文件查看内容</div>
+          <div v-else-if="!code && !diffLines?.length" class="viewer-loading">{{ t('mobile.file.selectFile') }}</div>
           <div
             v-else-if="highlightedHtml"
             class="viewer-code"
@@ -48,7 +48,7 @@
         <!-- Footer -->
         <div class="viewer-footer">
           <span class="viewer-lang-label">{{ displayLang }}</span>
-          <span class="viewer-line-count">{{ lineCount }} 行</span>
+          <span class="viewer-line-count">{{ t('mobile.file.lineCount', { count: lineCount }) }}</span>
         </div>
       </div>
     </div>
@@ -64,10 +64,13 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, inject, type Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composables/useCodeHighlight'
 import type { FileDiffLine } from '@/modules/mobile/composables/useHttpApi'
 import { useCodeViewerStore } from '@/modules/shared/stores/codeViewer'
 import CodeViewerSettingsModal from '@/modules/mobile/components/CodeViewerSettingsModal.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   visible: boolean

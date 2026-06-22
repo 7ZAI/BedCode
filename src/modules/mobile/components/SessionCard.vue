@@ -75,7 +75,7 @@
           session.status === 'running' ? 'text-red-400' : 'text-yellow-400'
         ]"
         @click.stop="$emit('stop')"
-        title="停止会话"
+        :title="t('mobile.sessionCard.stopSession')"
       >
         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
           <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -85,7 +85,7 @@
         v-else-if="session.status === 'stopped'"
         class="w-9 h-9 rounded-xl bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] flex items-center justify-center transition-all hover:bg-[var(--mobile-accent-muted)] hover:border-[var(--mobile-accent)] active:scale-90 text-[var(--mobile-text-muted)]"
         @click.stop="$emit('delete')"
-        title="删除会话"
+        :title="t('mobile.sessionCard.deleteSession')"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -97,8 +97,11 @@
 
 <script setup lang="ts">
 import { computed, ref, h } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { RemoteSession } from '@/modules/mobile/composables/useMobileCommands'
 import { useRunTime } from '@/modules/shared/composables/useRunTime'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   session: RemoteSession
@@ -130,7 +133,7 @@ const statusConfig = computed(() => {
         bgClass: 'bg-[var(--mobile-success-muted)] border border-[var(--mobile-success-muted)]',
         iconClass: 'text-[var(--mobile-success)]',
         badgeClass: 'bg-[var(--mobile-success-muted)] border border-[var(--mobile-success-muted)] text-[var(--mobile-success)]',
-        label: '运行中',
+        label: t('mobile.sessionCard.running'),
         icon: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
           h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z' }),
           h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M21 12a9 9 0 11-18 0 9 9 0 0118 0z' })
@@ -141,7 +144,7 @@ const statusConfig = computed(() => {
         bgClass: 'bg-[var(--mobile-warning-muted)] border border-[var(--mobile-warning-muted)]',
         iconClass: 'text-[var(--mobile-warning)]',
         badgeClass: 'bg-[var(--mobile-warning-muted)] border border-[var(--mobile-warning-muted)] text-[var(--mobile-warning)]',
-        label: '等待输入',
+        label: t('mobile.sessionCard.waitingInput'),
         icon: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
           h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' })
         ])
@@ -151,7 +154,7 @@ const statusConfig = computed(() => {
         bgClass: 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)]',
         iconClass: 'text-[var(--mobile-text-muted)]',
         badgeClass: 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] text-[var(--mobile-text-muted)]',
-        label: '已停止',
+        label: t('mobile.sessionCard.stopped'),
         icon: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
           h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636' })
         ])
@@ -168,11 +171,11 @@ const taskStatusLabel = computed(() => {
   const status = props.session.taskStatus
   if (!status) return null
   switch (status) {
-    case 'idle': return '空闲'
-    case 'in_progress': return '执行中'
-    case 'asking': return '等待输入'
-    case 'completed': return '已完成'
-    case 'interrupted': return '已中断'
+    case 'idle': return t('mobile.sessionCard.taskIdle')
+    case 'in_progress': return t('mobile.sessionCard.taskInProgress')
+    case 'asking': return t('mobile.sessionCard.taskAsking')
+    case 'completed': return t('mobile.sessionCard.taskCompleted')
+    case 'interrupted': return t('mobile.sessionCard.taskInterrupted')
     default: return status
   }
 })

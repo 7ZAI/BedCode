@@ -218,6 +218,7 @@
 
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
 import { usePresetTasks } from '@/modules/mobile/composables/usePresetTasks'
 import { useToast } from '@/modules/shared/composables/useToast'
@@ -227,6 +228,7 @@ import type { PresetTask, PresetTaskType } from '@/modules/mobile/composables/mo
 const router = useRouter()
 const connection = useMobileConnection()
 const toast = useToast()
+const { t } = useI18n()
 const { tasks, load, addTask, updateTask, deleteTask, executeTask } = usePresetTasks()
 
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
