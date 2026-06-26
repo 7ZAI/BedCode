@@ -20,6 +20,8 @@ export interface Settings {
     terminal_font_size: number
     terminal_font_family: string
     show_preview: boolean
+    // 语言偏好
+    language?: string
     // 移动端终端页面缓存最大数量
     max_cached_terminals?: number
     // 是否在后台时发送通知
@@ -43,6 +45,7 @@ const defaultSettings: Settings = {
     terminal_font_size: 14,
     terminal_font_family: 'Consolas',
     show_preview: true,
+    language: 'zh-CN',
     max_cached_terminals: 10,
     notify_in_background: true,
   },
