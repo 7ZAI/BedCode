@@ -31,8 +31,10 @@ struct TaskStateEntry {
 /// 自动授权模式仅存储在内存中，Python hook 通过 HTTP API 查询。
 pub struct PluginManager {
     task_states: Arc<RwLock<HashMap<String, TaskStateEntry>>>,
-    /// 会话级自动授权模式：session_id → auto_approve
+    /// 会话级自动授权模式：bedcode_session_id → auto_approve
     auto_modes: Arc<RwLock<HashMap<String, bool>>>,
+    /// Claude Code session_id → BedCode PTY session_id 映射
+    session_id_map: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl PluginManager {
@@ -41,11 +43,36 @@ impl PluginManager {
         Self {
             task_states: Arc::new(RwLock::new(HashMap::new())),
             auto_modes: Arc::new(RwLock::new(HashMap::new())),
+            session_id_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
 
 impl PluginManager {
+    /// 注册 Claude Code session_id → BedCode PTY session_id 映射
+    ///
+    /// 由 SessionStart hook 通过 HTTP API 调用，携带 bedcode_session_id 时自动注册。
+    pub async fn register_session_mapping(&self, claude_session_id: &str, bedcode_session_id: &str) {
+        let mut map = self.session_id_map.write().await;
+        map.insert(claude_session_id.to_string(), bedcode_session_id.to_string());
+        tracing::info!(
+            "Session mapping registered: claude_sid={} → bedcode_sid={}",
+            claude_session_id,
+            bedcode_session_id
+        );
+    }
+
+    /// 将 Claude Code session_id 解析为 BedCode PTY session_id
+    ///
+    /// 如果存在映射则返回 BedCode session ID，否则返回原始值。
+    pub async fn resolve_session_id(&self, claude_session_id: &str) -> String {
+        let map = self.session_id_map.read().await;
+        match map.get(claude_session_id) {
+            Some(bedcode_id) => bedcode_id.clone(),
+            None => claude_session_id.to_string(),
+        }
+    }
+
     /// 更新插件推送的任务状态
     ///
     /// 由 HTTP API `POST /api/plugin/task-status` 调用。

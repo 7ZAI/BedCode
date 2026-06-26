@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BedCode Claude Code Plugin - Hook 脚本
+"""BedCode Claude Code Hooks - Hook 脚本
 
 统一入口脚本，处理 SessionStart / PreToolUse / Stop / SubagentStop 事件。
 跨平台（Windows/macOS/Linux），零外部依赖（仅标准库）。
@@ -11,7 +11,6 @@
 
 环境变量:
     CLAUDE_PROJECT_DIR  - 项目根目录（Claude Code 自动设置）
-    CLAUDE_PLUGIN_ROOT  - 插件根目录（Claude Code 自动设置）
     BEDCODE_TOKEN       - HTTP API 认证 token（存在时才推送状态）
     BEDCODE_PORT        - HTTP API 端口（默认 8765）
 """
@@ -44,12 +43,7 @@ def setup_logging():
     """
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if not project_dir:
-        # fallback: 尝试从插件根目录推断
-        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-        if plugin_root:
-            project_dir = str(Path(plugin_root).parent.parent)
-        else:
-            project_dir = str(Path.home())
+        project_dir = str(Path.home())
 
     log_dir = Path(project_dir) / ".claude"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -80,7 +74,7 @@ def setup_logging():
 # ==================== HTTP Helpers ====================
 
 
-def push_task_status(session_id, status, reason, logger, questions=None):
+def push_task_status(session_id, status, reason, logger, questions=None, bedcode_session_id=None):
     """推送任务状态到 BedCode 桌面端 HTTP API。
 
     仅在 BEDCODE_TOKEN 环境变量存在时推送。
@@ -92,7 +86,7 @@ def push_task_status(session_id, status, reason, logger, questions=None):
         return
 
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}/api/plugin/task-status".format(port)
+    url = "http://localhost:{}/plugin/task-status".format(port)
 
     payload_dict = {
         "session_id": session_id,
@@ -100,6 +94,9 @@ def push_task_status(session_id, status, reason, logger, questions=None):
         "reason": reason or "",
         "token": token,
     }
+    # BedCode PTY 会话 ID：用于关联 Claude Code session 和 BedCode PTY session
+    if bedcode_session_id:
+        payload_dict["bedcode_session_id"] = bedcode_session_id
     if questions:
         payload_dict["questions"] = questions
 
@@ -134,7 +131,7 @@ def query_session_mode(session_id, logger):
         return False
 
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}/api/plugin/session-mode?session_id={}&token={}".format(
+    url = "http://localhost:{}/plugin/session-mode?session_id={}&token={}".format(
         port, session_id, token
     )
 
@@ -158,49 +155,23 @@ def query_session_mode(session_id, logger):
 # ==================== Status Parsing ====================
 
 
-def parse_status_from_prompt_result(tool_result):
-    """从 prompt hook 返回的 tool_result 中提取 status。
-
-    prompt hook 返回格式如: {"status": "completed", "reason": "Task done"}
-    可能被 markdown 代码块包裹，需要提取 JSON 部分。
-    """
-    if not tool_result or not isinstance(tool_result, str):
-        return None, None
-
-    # 尝试提取 JSON（可能被 ```json ... ``` 包裹）
-    json_match = re.search(r'\{[^}]*"status"[^}]*\}', tool_result)
-    if not json_match:
-        return None, None
-
-    try:
-        parsed = json.loads(json_match.group(0))
-        status = parsed.get("status", "")
-        reason = parsed.get("reason", "")
-        if status in VALID_STATUSES:
-            return status, reason
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    return None, None
-
-
 def infer_status_from_reason(reason):
     """根据 Claude Code 的 reason 字段推断任务状态。
 
     Claude Code Stop hook 的 reason 字段取值:
     - "complete" / ":complete" → 任务完成
     - "tool_use" → 工具调用中
-    - 其他 → 默认 in_progress
+    - 其他 → 默认 completed（Stop 事件触发时通常任务已结束）
     """
     if not reason:
-        return "in_progress", "Unknown reason"
+        return "completed", "Task stopped"
 
     if reason in ("complete", ":complete"):
         return "completed", "Task completed"
     if reason == "tool_use":
         return "in_progress", "Tool use in progress"
 
-    return "in_progress", reason
+    return "completed", reason
 
 
 # ==================== Hook Handlers ====================
@@ -210,6 +181,7 @@ def handle_session_start(data, logger):
     """处理 SessionStart 事件。
 
     记录会话启动信息，推送 idle 状态到桌面端。
+    同时读取 BEDCODE_SESSION_ID 环境变量建立 Claude Code session 与 BedCode PTY session 的映射。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -220,14 +192,17 @@ def handle_session_start(data, logger):
     source = data.get("source", "")
     permission_mode = data.get("permission_mode", "")
 
+    # 读取 BedCode PTY 会话 ID（由 pty_process.rs 启动时注入）
+    bedcode_session_id = os.environ.get("BEDCODE_SESSION_ID", "")
+
     logger.info(
-        "HOOK session_start: session_id={} project={} source={} permission={}".format(
-            session_id, cwd, source, permission_mode
+        "HOOK session_start: session_id={} bedcode_sid={} project={} source={} permission={}".format(
+            session_id, bedcode_session_id or "N/A", cwd, source, permission_mode
         )
     )
 
-    # SessionStart 时推送 idle 状态
-    push_task_status(session_id, "idle", "Session started", logger)
+    # SessionStart 时推送 idle 状态，携带 BedCode PTY 会话 ID
+    push_task_status(session_id, "idle", "Session started", logger, bedcode_session_id=bedcode_session_id or None)
 
     # SessionStart hook 可返回 JSON 提供额外上下文
     output = {
@@ -337,7 +312,7 @@ def handle_write_event(data, logger):
     """处理 Stop / SubagentStop 事件。
 
     解析任务状态并推送到桌面端。
-    优先使用 prompt hook 的分析结果，fallback 到 reason 字段推断。
+    从 reason 字段和 last_assistant_message 推断状态。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -346,17 +321,18 @@ def handle_write_event(data, logger):
 
     hook_event = data.get("hook_event_name", "Stop")
     reason = data.get("reason", "")
-    tool_result = data.get("tool_result", "")
+    stop_hook_active = data.get("stop_hook_active", False)
 
     # 确定事件类型
     event_type = "subagent_stop" if hook_event == "SubagentStop" else "stop"
 
-    # 优先从 prompt hook 结果解析状态
-    status, status_reason = parse_status_from_prompt_result(tool_result)
+    # 从 reason 字段推断状态
+    status, status_reason = infer_status_from_reason(reason)
 
-    # Fallback: 从 reason 字段推断
-    if not status:
-        status, status_reason = infer_status_from_reason(reason)
+    # stop_hook_active=true 表示 hook 已触发过续行，说明任务仍在进行
+    if stop_hook_active:
+        status = "in_progress"
+        status_reason = "Stop hook triggered continuation"
 
     logger.info(
         "HOOK {}: session_id={} status={} reason={}".format(
@@ -381,15 +357,18 @@ def main():
         print("Unknown command: {}. Use session-start, pre-tool-use, or write-event".format(command), file=sys.stderr)
         sys.exit(1)
 
+    # 先初始化日志，确保异常处理中可用
+    logger = setup_logging()
+
     # 从 stdin 读取 hook 输入
     try:
         raw_input = sys.stdin.read()
         data = json.loads(raw_input) if raw_input.strip() else {}
     except json.JSONDecodeError as e:
-        print("Invalid JSON input: {}".format(e), file=sys.stderr)
-        sys.exit(2)
-
-    logger = setup_logging()
+        # Stop/SubagentStop 的 stdin 可能包含超长 transcript 导致解析失败
+        # 降级为空数据，仅从 reason 环境变量推断状态
+        logger.error("JSON parse error: {}, input length={}".format(e, len(raw_input) if raw_input else 0))
+        data = {}
 
     if command == "session-start":
         handle_session_start(data, logger)

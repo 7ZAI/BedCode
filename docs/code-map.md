@@ -190,7 +190,8 @@ bedcode/
 │       │   │   └── types.rs      # 解析类型
 │       │   ├── plugin/           # 插件系统
 │       │   │   ├── jsonl.rs      # JSONL 插件
-│       │   │   └── manager.rs    # 插件管理器
+│       │   │   ├── manager.rs    # 插件管理器（任务状态 + 会话映射 + 自动授权模式）
+│       │   │   └── setup.rs      # 全局 hooks 自动配置
 │       │   ├── pty/              # PTY 进程管理
 │       │   │   ├── command.rs    # 命令构建
 │       │   │   ├── pty_process.rs # 进程管理
@@ -204,12 +205,14 @@ bedcode/
 │       │   │   │   ├── auth_controller.rs
 │       │   │   │   ├── session_controller.rs
 │       │   │   │   ├── config_controller.rs
-│       │   │   │   └── file_controller.rs
+│       │   │   │   ├── file_controller.rs
+│       │   │   │   └── plugin_controller.rs
 │       │   │   ├── dtos/         # 请求/响应 DTO
 │       │   │   │   ├── common.rs
 │       │   │   │   ├── auth_dto.rs
 │       │   │   │   ├── session_dto.rs
-│       │   │   │   └── config_dto.rs
+│       │   │   │   ├── config_dto.rs
+│       │   │   │   └── plugin_dto.rs
 │       │   │   ├── middleware/    # Actix 中间件
 │       │   │   │   ├── jwt_auth.rs
 │       │   │   │   └── cors.rs
@@ -430,7 +433,7 @@ bedcode/
 | 文件浏览 | `mobile/remote/http_client.rs`, `mobile/commands/http.rs` |
 | 移动端设置 | `mobile/system/settings.rs` |
 | HTTP API | `shared/model/api_dto.rs` |
-| 插件系统 | `desktop/plugin/manager.rs` |
+| 插件系统 | `desktop/plugin/manager.rs`, `desktop/plugin/setup.rs` |
 
 ### 自动化任务执行机制
 
@@ -467,15 +470,16 @@ Hook 脚本 (`scripts/bedcode_hook.py`) 注册 4 个事件：
 
 | 路由 | 方法 | 用途 |
 |------|------|------|
-| `/api/plugin/task-status` | POST | 接收插件推送的任务状态变更 |
-| `/api/plugin/session-mode` | POST | 移动端设置会话自动/手动模式 |
-| `/api/plugin/session-mode` | GET | Python PreToolUse hook 查询会话模式 |
+| `/plugin/task-status` | POST | 接收插件推送的任务状态变更（含 bedcode_session_id 映射） |
+| `/plugin/session-mode` | POST | 移动端设置会话自动/手动模式 |
+| `/plugin/session-mode` | GET | Python PreToolUse hook 查询会话模式 |
 
 **3. PluginManager** (`desktop/plugin/manager.rs`)
 
-内存存储两个 HashMap：
-- `task_states: HashMap<session_id, TaskStateEntry>` — 任务状态 + reason + questions
-- `auto_modes: HashMap<session_id, bool>` — 会话级自动授权模式
+内存存储三个 HashMap：
+- `task_states: HashMap<bedcode_session_id, TaskStateEntry>` — 任务状态 + reason + questions
+- `auto_modes: HashMap<bedcode_session_id, bool>` — 会话级自动授权模式
+- `session_id_map: HashMap<claude_session_id, bedcode_session_id>` — Claude Code ↔ BedCode 会话 ID 映射
 
 每次更新都通过 `DesktopSyncEvent` 广播到所有 WebSocket 客户端。
 
@@ -505,16 +509,67 @@ Mobile → POST /api/plugin/session-mode (JWT 认证) → PluginManager 内存�
 同时 Python PreToolUse hook 每次被触发时通过 `GET /api/plugin/session-mode` 查询当前模式，
 自动模式时返回 `permissionDecision: "allow"` + AskUserQuestion 自动选择推荐项。
 
+**6. 会话 ID 绑定机制**
+
+Claude Code 和 BedCode 各自有独立的 session ID 体系，同一 cwd 下可运行多个 Claude Code 实例，
+因此不能通过目录绑定。BedCode 通过进程环境变量实现绑定：
+
+```
+BedCode 桌面端启动 PTY 会话
+  ↓ pty_process.rs: start()
+  ↓ cmd.env("BEDCODE_SESSION_ID", &self.id)
+  ↓
+Shell 进程继承环境变量 → Claude Code 子进程继承
+  ↓
+SessionStart hook 触发
+  ↓ bedcode_hook.py 读取 os.environ["BEDCODE_SESSION_ID"]
+  ↓
+POST /plugin/task-status
+  ↓ { session_id: "claude-xxx", bedcode_session_id: "pty-uuid", ... }
+  ↓
+PluginManager.register_session_mapping("claude-xxx" → "pty-uuid")
+  ↓
+后续所有状态推送和模式查询通过映射关联
+```
+
+**无竞态风险**：每个 PTY 进程有独立环境变量空间，多会话互不影响：
+
+```
+PTY Session A (PID 1000) → BEDCODE_SESSION_ID=uuid-aaa
+PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
+```
+
+**映射使用场景**：
+
+| 场景 | 输入 | 解析 | 查询 key |
+|------|------|------|----------|
+| task-status 推送 | `claude_session_id` + `bedcode_session_id` | 有 bedcode_sid 时直接用它 | `bedcode_session_id` |
+| session-mode 查询 (GET) | `claude_session_id` | `resolve_session_id()` 查映射 | 解析后的 `bedcode_session_id` |
+| session-mode 设置 (POST) | `bedcode_session_id`（移动端已知） | 无需解析 | `bedcode_session_id` |
+
+**7. 全局 Hooks 自动配置** (`desktop/plugin/setup.rs`)
+
+应用启动时自动完成以下配置，对用户完全无感：
+
+1. 校验/生成 plugin token
+2. 将 `bedcode_hook.py` 复制到 `~/.claude/` 目录
+3. 在全局 `~/.claude/settings.json` 中注入 hooks 配置（不覆盖已有配置）
+4. 注入 `BEDCODE_PORT` 和 `BEDCODE_TOKEN` 环境变量到 hook 命令
+5. 验证 hooks 配置是否生效
+
+合并策略：保留用户已有的非 BedCode hooks 和其他顶层字段（如 `permissions`、`env`），
+只替换/更新 BedCode 相关的 hook 条目（识别标准：command 字段包含 `bedcode_hook.py`）。
+
 #### 关键文件索引
 
 | 层 | 文件 | 职责 |
 |----|------|------|
-| Plugin | `scripts/bedcode-plugin/scripts/bedcode_hook.py` | Hook 脚本：状态推送 + 模式查询 + auto-approve |
-| Plugin | `scripts/bedcode-plugin/hooks.json` | Hook 事件注册 |
-| Plugin | `scripts/bedcode-plugin/.claude-plugin/plugin.json` | 插件元数据 |
-| Rust HTTP | `desktop/server/controllers/plugin_controller.rs` | HTTP API 路由处理 |
-| Rust DTO | `desktop/server/dtos/plugin_dto.rs` | 请求/响应类型 |
-| Rust Core | `desktop/plugin/manager.rs` | 任务状态 + 模式内存存储、事件广播 |
+| Plugin | `scripts/bedcode_hook.py` | Hook 脚本：状态推送 + 模式查询 + auto-approve + session ID 映射 |
+| Rust Setup | `desktop/plugin/setup.rs` | 全局 hooks 自动配置（~/.claude/settings.json 注入） |
+| Rust HTTP | `desktop/server/controllers/plugin_controller.rs` | HTTP API 路由处理（含 session ID 解析） |
+| Rust DTO | `desktop/server/dtos/plugin_dto.rs` | 请求类型（含 bedcode_session_id 字段） |
+| Rust Core | `desktop/plugin/manager.rs` | 任务状态 + 会话映射 + 自动授权模式内存存储、事件广播 |
+| Rust PTY | `desktop/pty/pty_process.rs` | PTY 启动时注入 BEDCODE_SESSION_ID 环境变量 |
 | Rust Event | `desktop/events/sync_event.rs` | DesktopSyncEvent 定义 |
 | Rust Handler | `desktop/events/sync_handler.rs` | 事件→WebSocket 消息转换 |
 | Rust Forward | `mobile/router/event.rs` | WebSocket→Tauri 前端事件转发 |
@@ -545,6 +600,7 @@ Mobile → POST /api/plugin/session-mode (JWT 认证) → PluginManager 内存�
 
 ## 最近更新
 
+- 2026-06-26: Hooks 全局化 + 会话 ID 绑定 — hooks 配置从项目级 `.claude/settings.json` 改为全局 `~/.claude/settings.json`；hook 脚本从 `${CLAUDE_PROJECT_DIR}/scripts/` 改为 `~/.claude/bedcode_hook.py`（启动时自动复制）；新增 `BEDCODE_SESSION_ID` 环境变量注入实现 Claude Code session 与 BedCode PTY session 绑定；PluginManager 新增 `session_id_map` 映射和 `resolve_session_id()` 解析；去掉 Stop/SubagentStop 的 prompt hook（避免终端可见输出）；HTTP 路由修正为 `/plugin/*`（不含 `/api` 前缀）；新增 `desktop/plugin/setup.rs` 和 `plugin_controller.rs` 到目录树和索引
 - 2026-06-23: 自动化任务执行机制文档 — 新增"自动化任务执行机制"章节，记录 Plugin→HTTP→Rust→WebSocket→Mobile 完整链路；模式切换改为 HTTP 直接修改桌面端内存，移除 PTY 输入拦截 /bedcode 命令；手动模式下 PreToolUse 仍推送 asking 状态同步
 - 2026-06-19: 大幅重构更新 — WebSocket 客户端从 shared 迁移至 mobile/websocket_client/，JWT/QR Token 从 shared 迁移至 desktop/auth/，notify/parser 从 shared 迁移至 desktop/，新增 app_context (DI 容器)、mobile/system (设置管理)、mobile/commands/http (HTTP API)、mobile/commands/mobile_commands (移动端特有命令)、mobile/remote/http_client (文件浏览)，前端新增文件浏览组件 (FileSidebar/FileTreeItem/FileViewerModal/icons/)、ToolboxView 替代 QuickActionsView、新增 useCodeHighlight/useFileTree/useForegroundService/useHttpApi/useFontSize/useTheme
 - 2026-06-10: 同步项目当前结构，新增 events/、remote/、router/ 等目录，更新 stores 位置

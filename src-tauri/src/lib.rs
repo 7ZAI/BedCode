@@ -233,7 +233,7 @@ pub fn run() {
             // 初始化全局配置单例
             crate::shared::system::config::AppConfig::init(app_config.clone());
 
-            // 插件自动配置：检查 token、安装插件、注入环境变量
+            // Hooks 自动配置：检查 token、在 settings.json 中注入 hooks
             let resource_dir = app_handle
                 .path()
                 .resource_dir()

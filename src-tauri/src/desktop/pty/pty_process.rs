@@ -131,7 +131,11 @@ impl PtySession {
     pub async fn start(&self) -> Result<()> {
         let (cmd, pair) = {
             let mut state = self.state.lock().await;
-            let cmd = build_command(&state.config)?;
+            let mut cmd = build_command(&state.config)?;
+
+            // 注入 BedCode session ID 到进程环境变量，
+            // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
+            cmd.env("BEDCODE_SESSION_ID", &self.id);
 
             // 从 state 中取出 pair
             let pair = state.pair.take()

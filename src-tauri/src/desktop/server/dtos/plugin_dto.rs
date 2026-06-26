@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::shared::enums::PluginQuestion;
 
-/// POST /api/plugin/task-status request
+/// POST /plugin/task-status request
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TaskStatusRequest {
@@ -22,6 +22,9 @@ pub struct TaskStatusRequest {
     /// Claude 提问的问题列表（AskUserQuestion 工具调用时携带）
     #[serde(default)]
     pub questions: Option<Vec<PluginQuestion>>,
+    /// BedCode PTY 会话 ID（由 pty_process.rs 启动时注入到进程环境变量）
+    #[serde(default)]
+    pub bedcode_session_id: Option<String>,
 }
 
 /// POST /api/plugin/session-mode request
