@@ -60,6 +60,14 @@
       <span class="text-[var(--mobile-text-muted)] text-xs font-medium">{{ t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length }) }}</span>
     </div>
 
+    <!-- Loading Overlay: 跳转终端期间显示 -->
+    <transition name="loading-fade">
+      <div v-if="isNavigating" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">{{ t('mobile.terminal.preparing') }}</p>
+      </div>
+    </transition>
+
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" :title="t('mobile.session.confirmStop')" size="sm">
       <p class="text-[var(--mobile-text-secondary)]">
@@ -151,7 +159,11 @@ const isDeleting = ref(false)
 // }
 
 // 真实会话处理函数
+const isNavigating = ref(false)
+
 function handleSessionClick(session: any) {
+  if (isNavigating.value) return
+  isNavigating.value = true
   connection.activeSessionId.value = session.id
   router.push({
     name: 'mobile-terminal',
@@ -223,10 +235,56 @@ async function refreshSessions() {
 }
 
 onActivated(() => {
-  // 全局状态由同步事件自动维护，无需手动加载
+  // 从终端返回时重置导航状态
+  isNavigating.value = false
 })
 
 onMounted(async () => {
   // 全局状态由同步事件自动维护，无需手动加载
 })
 </script>
+
+<style scoped>
+/* Loading Overlay */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--mobile-bg-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--mobile-border);
+  border-top-color: var(--mobile-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 0.875rem;
+  color: var(--mobile-text-muted);
+  margin: 0;
+}
+
+/* Loading fade transition */
+.loading-fade-enter-active,
+.loading-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.loading-fade-enter-from,
+.loading-fade-leave-to {
+  opacity: 0;
+}
+</style>

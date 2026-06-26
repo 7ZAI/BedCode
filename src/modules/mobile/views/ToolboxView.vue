@@ -299,17 +299,31 @@ async function handleDeleteTask(id: string) {
 /** 点击卡片主体 → session picker flow */
 function handleTaskTap(task: PresetTask) {
   pendingTask.value = task
-  const sessionId = activeSessionId.value
 
-  if (!isConnected.value || !sessionId) {
+  if (!isConnected.value) {
     toast.warning(t('mobile.toolbox.connectFirst'))
     router.push('/mobile/devices')
     return
   }
 
-  // 仅一个活跃会话时跳过 picker
   const sessions = activeSessions.value
-  if (sessions.length <= 1) {
+
+  // 没有活跃会话
+  if (sessions.length === 0) {
+    toast.warning(t('mobile.toolbox.noActiveSessions'))
+    return
+  }
+
+  // 优先使用用户手动选择的会话，否则取唯一活跃会话
+  const sessionId = activeSessionId.value || (sessions.length === 1 ? sessions[0].id : '')
+
+  if (!sessionId) {
+    showSessionPicker.value = true
+    return
+  }
+
+  // 仅一个活跃会话或已有选中会话时跳过 picker
+  if (sessions.length <= 1 || activeSessionId.value) {
     pendingSessionId.value = sessionId
     showConfirmDialog.value = true
     return

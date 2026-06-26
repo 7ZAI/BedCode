@@ -3,6 +3,14 @@
     class="terminal-view"
     :style="terminalViewStyle"
   >
+    <!-- Loading Overlay: 终端初始化期间显示 -->
+    <transition name="loading-fade">
+      <div v-if="!isTerminalReady" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">{{ t('mobile.terminal.preparing') }}</p>
+      </div>
+    </transition>
+
     <!-- Header -->
     <header class="header">
       <button class="back-btn" @click="handleBack">
@@ -32,6 +40,11 @@
             <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
           </svg>
           <span v-if="hasQueuedTasks" class="task-badge">{{ pendingCount }}</span>
+        </button>
+        <button v-else-if="item.key === 'shortcut'" class="tool-btn" @click="showShortcutConfig = true" :title="t('mobile.shortcutConfig.title')">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
         </button>
         <button v-else-if="item.key === 'clear'" class="tool-btn" @click="confirmClear" :title="t('mobile.terminal.clearScreen')">
           <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -64,30 +77,34 @@
         </button>
         <transition name="overflow-menu">
           <div v-if="showOverflowMenu" class="overflow-menu" @click.stop>
-            <button v-if="isOverflowItem('mode')" class="overflow-menu-item" :class="{ active: autoMode === 'auto' }" @click="toggleMode(); closeOverflowMenu()">
+            <button v-if="isOverflowItem('mode')" class="overflow-menu-item" :class="{ active: autoMode === 'auto' }" @click="toggleMode()">
               <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
               <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/></svg>
               <span>{{ autoMode === 'auto' ? t('mobile.terminal.autoMode') : t('mobile.terminal.manualMode') }}</span>
               <span class="overflow-item-status">{{ autoMode === 'auto' ? 'ON' : 'OFF' }}</span>
             </button>
-            <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true; closeOverflowMenu()">
+            <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/></svg>
               <span>{{ t('mobile.terminal.pendingTasks') }}</span>
               <span v-if="hasQueuedTasks" class="overflow-item-badge">{{ pendingCount }}</span>
             </button>
-            <button v-if="isOverflowItem('clear')" class="overflow-menu-item" @click="confirmClear(); closeOverflowMenu()">
+            <button v-if="isOverflowItem('shortcut')" class="overflow-menu-item" @click="showShortcutConfig = true; closeOverflowMenu()">
+              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+              <span>{{ t('mobile.shortcutConfig.title') }}</span>
+            </button>
+            <button v-if="isOverflowItem('clear')" class="overflow-menu-item" @click="confirmClear()">
               <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
               <span>{{ t('mobile.terminal.clearScreen') }}</span>
             </button>
-            <button v-if="isOverflowItem('refresh')" class="overflow-menu-item" @click="refreshTerminal(); closeOverflowMenu()">
+            <button v-if="isOverflowItem('refresh')" class="overflow-menu-item" @click="refreshTerminal()">
               <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
               <span>{{ t('mobile.terminal.refreshFormat') }}</span>
             </button>
-            <button v-if="isOverflowItem('settings')" class="overflow-menu-item" @click="openSettings(); closeOverflowMenu()">
+            <button v-if="isOverflowItem('settings')" class="overflow-menu-item" @click="openSettings()">
               <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
               <span>{{ t('mobile.terminal.settings') }}</span>
             </button>
-            <button v-if="isOverflowItem('folder')" class="overflow-menu-item" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar; closeOverflowMenu()">
+            <button v-if="isOverflowItem('folder')" class="overflow-menu-item" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar">
               <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
               <span>{{ t('mobile.terminal.files') }}</span>
             </button>
@@ -246,6 +263,9 @@
     @confirm="onTaskConfirm"
     @close="showTaskPicker = false"
   />
+
+  <!-- 快捷键配置弹窗 -->
+  <ShortcutConfigModal :visible="showShortcutConfig" @close="showShortcutConfig = false" />
 </template>
 
 <script setup lang="ts">
@@ -278,7 +298,9 @@ import TerminalInputBar from '@/modules/mobile/components/TerminalInputBar.vue'
 import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
 import AutoExecuteBar from '@/modules/mobile/components/AutoExecuteBar.vue'
 import TaskPickerModal from '@/modules/mobile/components/TaskPickerModal.vue'
+import ShortcutConfigModal from '@/modules/mobile/components/ShortcutConfigModal.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
+import { writeClipboardText } from '@/modules/shared/utils/clipboard'
 import { useAutoExecutor } from '@/modules/mobile/composables/useAutoExecutor'
 import { usePresetTasks } from '@/modules/mobile/composables/usePresetTasks'
 import type { PresetTask } from '@/modules/mobile/composables/model'
@@ -325,6 +347,7 @@ const pendingCount = computed(() => autoPendingTasks.value.length)
 const ALL_TOOLBAR_ITEMS = [
   { key: 'mode', label: computed(() => t('mobile.terminal.autoMode')), icon: 'mode' },
   { key: 'task', label: computed(() => t('mobile.terminal.pendingTasks')), icon: 'task' },
+  { key: 'shortcut', label: computed(() => t('mobile.shortcutConfig.title')), icon: 'shortcut' },
   { key: 'clear', label: computed(() => t('mobile.terminal.clearScreen')), icon: 'clear' },
   { key: 'refresh', label: computed(() => t('mobile.terminal.refreshFormat')), icon: 'refresh' },
   { key: 'settings', label: computed(() => t('mobile.terminal.settings')), icon: 'settings' },
@@ -392,6 +415,8 @@ const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
+// 终端是否准备就绪（初始化 + 订阅完成）
+const isTerminalReady = ref(false)
 // 终端实例 - 使用 ref 确保组件隔离
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
@@ -428,6 +453,7 @@ const touchState = reactive({
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
+const showShortcutConfig = ref(false)
 // 自动执行：监听任务状态变更的 Tauri 事件监听器
 const taskStatusListenerRef = ref<UnlistenFn | null>(null)
 // 监听会话模式变更的 Tauri 事件监听器
@@ -863,6 +889,7 @@ function disposeTerminal() {
   lastIndexRef.value = -1
   subscribedSessionIdRef.value = null
   isSubscribing.value = false
+  isTerminalReady.value = false
   // 清理伪滚动容器状态
   isUserScrolling.value = false
   scrollbarVisible.value = false
@@ -1093,7 +1120,7 @@ function refreshTerminal() {
 
 async function handleLongPress(name: string, path: string) {
   try {
-    await navigator.clipboard.writeText(path)
+    await writeClipboardText(path)
     toast.success(t('mobile.file.copied', { path }))
   } catch {
     toast.error(t('mobile.file.copyFailed'))
@@ -1361,6 +1388,8 @@ onMounted(async () => {
     await subscribeSession()
   }
 
+  isTerminalReady.value = true
+
   // 监听桌面端推送的任务状态变更事件
   taskStatusListenerRef.value = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; options: Array<{ label: string }> }> }>('ws_sync_task_status_changed', (event) => {
     // 仅处理当前会话的任务状态
@@ -1462,6 +1491,8 @@ watch(isConnected, async (connected) => {
 watch(sessionId, async (newId, oldId) => {
   if (!newId || newId === oldId) return
 
+  isTerminalReady.value = false
+
   // 取消旧会话的后端订阅
   if (oldId && isConnected.value) {
     try {
@@ -1482,6 +1513,8 @@ watch(sessionId, async (newId, oldId) => {
   if (isSessionActive.value && isConnected.value) {
     await subscribeSession()
   }
+
+  isTerminalReady.value = true
 })
 </script>
 
@@ -1502,6 +1535,49 @@ watch(sessionId, async (newId, oldId) => {
    * keyboardHeight 是键盘动画结束后的终值（离散跳变），
    * CSS transition 叠加动画会与 Android 系统键盘动画冲突导致卡顿。
    * padding 只做即时响应，由系统键盘动画驱动视觉平滑。 */
+}
+
+/* Loading Overlay */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: var(--mobile-terminal-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--mobile-border);
+  border-top-color: var(--mobile-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 0.875rem;
+  color: var(--mobile-text-muted);
+  margin: 0;
+}
+
+/* Loading fade transition */
+.loading-fade-enter-active,
+.loading-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.loading-fade-enter-from,
+.loading-fade-leave-to {
+  opacity: 0;
 }
 
 /* Header */

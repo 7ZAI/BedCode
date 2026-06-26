@@ -102,6 +102,7 @@ import { useCodeHighlight, getLangByFilename } from '@/modules/mobile/composable
 import { useHttpApi } from '@/modules/mobile/composables/useHttpApi'
 import FileSidebar from '@/modules/mobile/components/FileSidebar.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
+import { writeClipboardText } from '@/modules/shared/utils/clipboard'
 import { useCodeViewerStore } from '@/modules/shared/stores/codeViewer'
 import CodeViewerSettingsModal from '@/modules/mobile/components/CodeViewerSettingsModal.vue'
 
@@ -216,7 +217,7 @@ async function retryLoadFile() {
 
 async function handleLongPress(name: string, path: string) {
   try {
-    await navigator.clipboard.writeText(path)
+    await writeClipboardText(path)
     toast.success(t('mobile.codeViewer.copied', { path }))
   } catch {
     toast.error(t('mobile.codeViewer.copyFailed'))
