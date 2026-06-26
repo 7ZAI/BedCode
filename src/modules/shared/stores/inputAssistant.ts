@@ -5,6 +5,17 @@ export interface ShortcutStats {
   [key: string]: number
 }
 
+export interface ShortcutItem {
+  /** 键码，如 'ctrl+c'、'enter'、'shift+up' */
+  code: string
+  /** 显示标签，如 'Ctrl+C'、'Enter' */
+  label: string
+  /** 是否在面板中显示 */
+  visible: boolean
+  /** 是否为默认快捷键（不可删除，只能隐藏） */
+  builtin: boolean
+}
+
 /** 快捷键条项：快捷键或自定义命令 */
 export interface QuickBarItem {
   type: 'shortcut' | 'custom'
@@ -51,6 +62,23 @@ const STORAGE_KEY_STATS = 'terminal_shortcut_stats'
 const STORAGE_KEY_POSITION = 'input_assistant_position'
 const STORAGE_KEY_SETTINGS = 'input_assistant_settings'
 const STORAGE_KEY_CUSTOM_CMD_STATS = 'terminal_custom_cmd_stats'
+const STORAGE_KEY_SHORTCUT_CONFIG = 'terminal_shortcut_config'
+
+/** 默认快捷键列表（builtin，不可删除） */
+const DEFAULT_SHORTCUTS: ShortcutItem[] = [
+  { code: 'tab', label: 'Tab', visible: true, builtin: true },
+  { code: 'enter', label: 'Enter', visible: true, builtin: true },
+  { code: 'escape', label: 'Esc', visible: true, builtin: true },
+  { code: 'backspace', label: 'Del', visible: true, builtin: true },
+  { code: 'ctrl+c', label: 'Ctrl+C', visible: true, builtin: true },
+  { code: 'ctrl+d', label: 'Ctrl+D', visible: true, builtin: true },
+  { code: 'ctrl+z', label: 'Ctrl+Z', visible: true, builtin: true },
+  { code: 'ctrl+l', label: 'Ctrl+L', visible: true, builtin: true },
+  { code: 'ctrl+a', label: 'Ctrl+A', visible: true, builtin: true },
+  { code: 'ctrl+e', label: 'Ctrl+E', visible: true, builtin: true },
+  { code: 'ctrl+k', label: 'Ctrl+K', visible: true, builtin: true },
+  { code: 'ctrl+u', label: 'Ctrl+U', visible: true, builtin: true },
+]
 
 /** 快捷键 code → 显示标签映射 */
 const SHORTCUT_LABELS: Record<string, string> = {
@@ -96,6 +124,9 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
   // 设置配置
   const settings = ref<InputAssistantSettings>({ ...DEFAULT_SETTINGS })
 
+  // 快捷键配置
+  const shortcutConfig = ref<ShortcutItem[]>(DEFAULT_SHORTCUTS.map(s => ({ ...s })))
+
   // 从 localStorage 加载数据
   function loadFromStorage() {
     try {
@@ -122,6 +153,9 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
       if (savedSettings) {
         settings.value = { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) }
       }
+
+      // 加载快捷键配置
+      loadShortcutConfig()
     } catch (e) {
       console.error('Failed to load input assistant storage:', e)
     }
@@ -157,6 +191,69 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
   function resetSettings() {
     settings.value = { ...DEFAULT_SETTINGS }
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings.value))
+  }
+
+  // ==================== Shortcut Config ====================
+
+  /** 从 localStorage 加载快捷键配置，合并新增的默认快捷键 */
+  function loadShortcutConfig() {
+    const saved = localStorage.getItem(STORAGE_KEY_SHORTCUT_CONFIG)
+    if (saved) {
+      try {
+        const parsed: ShortcutItem[] = JSON.parse(saved)
+        // 合并策略：保留用户的 visible 设置和自定义快捷键，补充新增的默认快捷键
+        const existingCodes = new Set(parsed.map(s => s.code))
+        const merged = [...parsed]
+        for (const def of DEFAULT_SHORTCUTS) {
+          if (!existingCodes.has(def.code)) {
+            merged.push({ ...def })
+          }
+        }
+        shortcutConfig.value = merged
+      } catch {
+        shortcutConfig.value = DEFAULT_SHORTCUTS.map(s => ({ ...s }))
+      }
+    }
+  }
+
+  /** 持久化快捷键配置到 localStorage */
+  function saveShortcutConfig() {
+    localStorage.setItem(STORAGE_KEY_SHORTCUT_CONFIG, JSON.stringify(shortcutConfig.value))
+  }
+
+  /** 添加自定义快捷键 */
+  function addShortcut(code: string, label: string) {
+    if (shortcutConfig.value.some(s => s.code === code)) return
+    shortcutConfig.value.push({ code, label, visible: true, builtin: false })
+    saveShortcutConfig()
+  }
+
+  /** 删除自定义快捷键（builtin 不可删除） */
+  function removeShortcut(code: string) {
+    const idx = shortcutConfig.value.findIndex(s => s.code === code)
+    if (idx === -1 || shortcutConfig.value[idx].builtin) return
+    shortcutConfig.value.splice(idx, 1)
+    saveShortcutConfig()
+  }
+
+  /** 切换快捷键显示/隐藏 */
+  function toggleShortcutVisibility(code: string) {
+    const item = shortcutConfig.value.find(s => s.code === code)
+    if (item) {
+      item.visible = !item.visible
+      saveShortcutConfig()
+    }
+  }
+
+  /** 获取面板中可见的快捷键（不含 Enter/Del，它们由中间区域独立渲染） */
+  const visiblePanelShortcuts = computed(() =>
+    shortcutConfig.value.filter(s => s.visible && s.code !== 'enter' && s.code !== 'backspace')
+  )
+
+  /** 重置快捷键配置为默认 */
+  function resetShortcutConfig() {
+    shortcutConfig.value = DEFAULT_SHORTCUTS.map(s => ({ ...s }))
+    saveShortcutConfig()
   }
 
   // 获取高频快捷键（top 3，兼容旧用法）
@@ -241,5 +338,11 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
     saveSettings,
     resetSettings,
     getQuickBarItems,
+    shortcutConfig,
+    visiblePanelShortcuts,
+    addShortcut,
+    removeShortcut,
+    toggleShortcutVisibility,
+    resetShortcutConfig,
   }
 })

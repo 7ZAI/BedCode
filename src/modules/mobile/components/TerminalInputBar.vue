@@ -15,19 +15,85 @@
         @touchend="onTouchEnd"
       >
         <div class="carousel-track" :style="trackStyle">
-          <!-- 第一页：快捷键 + 方向键 -->
+          <!-- 循环轮播：[-1]=最后一页克隆, [0]=第一页, [1]=第二页, [2]=第一页克隆 -->
+          <!-- 位置 -1：最后一页（自定义命令）的克隆，用于从第一页右滑循环 -->
+          <div class="carousel-slide">
+            <div class="custom-commands-layout">
+              <div class="custom-commands-grid">
+                <button
+                  v-for="cmd in customCommands"
+                  :key="'clone-end-' + cmd.id"
+                  class="custom-cmd-btn"
+                  :class="{ 'editing': isEditingCommands }"
+                  @click="handleCustomCommandClick(cmd)"
+                >
+                  <span class="cmd-label">{{ cmd.command }}</span>
+                  <transition name="delete-badge">
+                    <button
+                      v-if="isEditingCommands"
+                      class="cmd-delete-btn"
+                      @click.stop="deleteCustomCommand(cmd.id)"
+                    >
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </transition>
+                </button>
+                <button
+                  v-if="customCommands.length > 0"
+                  class="custom-cmd-btn edit-toggle-btn"
+                  @click="isEditingCommands = !isEditingCommands"
+                >
+                  <svg v-if="!isEditingCommands" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                  <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+                <button class="custom-cmd-btn add-cmd-btn" @click="isEditingCommands = false; showAddDialog = true">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 位置 0：第一页（快捷键 + 方向键） -->
           <div class="carousel-slide">
             <div class="shortcuts-layout">
-              <!-- 左侧：一般快捷键 -->
+              <!-- 左侧：一般快捷键（不含 Enter/Del） -->
               <div class="shortcuts-left">
                 <div class="shortcuts-grid">
                   <button
-                    v-for="key in generalShortcuts"
+                    v-for="key in leftShortcuts"
                     :key="key.code"
                     class="shortcut-btn"
                     @click="handleShortcutClick(key.code)"
                   >
                     {{ key.label }}
+                  </button>
+                </div>
+              </div>
+
+              <!-- 中间：Enter/Del（右手拇指高频操作，靠近方向键） -->
+              <div v-if="isEnterVisible || isDelVisible" class="shortcuts-center">
+                <div class="action-keys-layout">
+                  <button
+                    v-if="isEnterVisible"
+                    class="action-btn action-btn--enter"
+                    @click="handleShortcutClick('enter')"
+                  >
+                    Enter
+                  </button>
+                  <button
+                    v-if="isDelVisible"
+                    class="action-btn action-btn--del"
+                    @click="handleShortcutClick('backspace')"
+                  >
+                    Del
                   </button>
                 </div>
               </div>
@@ -78,7 +144,7 @@
             </div>
           </div>
 
-          <!-- 第二页：自定义命令 -->
+          <!-- 位置 1：第二页（自定义命令） -->
           <div class="carousel-slide">
             <div class="custom-commands-layout">
               <div class="custom-commands-grid">
@@ -126,6 +192,84 @@
               </div>
             </div>
           </div>
+
+          <!-- 位置 2：第一页（快捷键 + 方向键）的克隆，用于从最后一页左滑循环 -->
+          <div class="carousel-slide">
+            <div class="shortcuts-layout">
+              <div class="shortcuts-left">
+                <div class="shortcuts-grid">
+                  <button
+                    v-for="key in leftShortcuts"
+                    :key="'clone-start-' + key.code"
+                    class="shortcut-btn"
+                    @click="handleShortcutClick(key.code)"
+                  >
+                    {{ key.label }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="isEnterVisible || isDelVisible" class="shortcuts-center">
+                <div class="action-keys-layout">
+                  <button
+                    v-if="isEnterVisible"
+                    class="action-btn action-btn--enter"
+                    @click="handleShortcutClick('enter')"
+                  >
+                    Enter
+                  </button>
+                  <button
+                    v-if="isDelVisible"
+                    class="action-btn action-btn--del"
+                    @click="handleShortcutClick('backspace')"
+                  >
+                    Del
+                  </button>
+                </div>
+              </div>
+              <div class="shortcuts-right">
+                <div class="arrow-keys-layout">
+                  <div class="arrow-row">
+                    <div class="arrow-placeholder"></div>
+                    <button
+                      class="arrow-btn"
+                      @click="handleShortcutClick('arrow_up')"
+                    >
+                      <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
+                      </svg>
+                    </button>
+                    <div class="arrow-placeholder"></div>
+                  </div>
+                  <div class="arrow-row">
+                    <button
+                      class="arrow-btn"
+                      @click="handleShortcutClick('arrow_left')"
+                    >
+                      <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                    <button
+                      class="arrow-btn arrow-down"
+                      @click="handleShortcutClick('arrow_down')"
+                    >
+                      <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    <button
+                      class="arrow-btn"
+                      @click="handleShortcutClick('arrow_right')"
+                    >
+                      <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -133,12 +277,12 @@
       <div class="carousel-dots">
         <div
           class="dot"
-          :class="{ active: currentSlide === 0 }"
+          :class="{ active: displaySlide === 0 }"
           @click="goToSlide(0)"
         ></div>
         <div
           class="dot"
-          :class="{ active: currentSlide === 1 }"
+          :class="{ active: displaySlide === 1 }"
           @click="goToSlide(1)"
         ></div>
       </div>
@@ -299,16 +443,26 @@ const cmdInputRef = ref<HTMLInputElement | null>(null)
 
 // ==================== Carousel State ====================
 
+const TOTAL_SLIDES = 2
 const carouselRef = ref<HTMLElement | null>(null)
 const currentSlide = ref(0)
 const touchStartX = ref(0)
 const touchStartY = ref(0)
 const touchDeltaX = ref(0)
 const isSwiping = ref(false)
+// 循环跳转中间状态：跳转时临时禁用 transition，跳转完成后恢复
+const isLooping = ref(false)
 
+/** 用于点指示器的规范化 slide 索引（将循环过渡中的 -1/2 映射回真实范围） */
+const displaySlide = computed(() => {
+  return ((currentSlide.value % TOTAL_SLIDES) + TOTAL_SLIDES) % TOTAL_SLIDES
+})
+
+// 轨道布局：[克隆末页][-1] [第一页][0] [第二页][1] [克隆首页][2]
+// 真实 slide 从偏移 1 开始，需要 +1 补偿
 const trackStyle = computed(() => ({
-  transform: `translateX(${-currentSlide.value * 100 + touchDeltaX.value}%)`,
-  transition: isSwiping.value ? 'none' : 'transform 0.3s ease',
+  transform: `translateX(${-(currentSlide.value + 1) * 100 + touchDeltaX.value}%)`,
+  transition: isSwiping.value || isLooping.value ? 'none' : 'transform 0.3s ease',
 }))
 
 // ==================== Custom Commands ====================
@@ -372,25 +526,17 @@ function deleteCustomCommand(id: string) {
 
 // ==================== Shortcuts Data ====================
 
-const generalShortcuts = [
-  { label: 'Tab', code: 'tab' },
-  { label: 'Enter', code: 'enter' },
-  { label: 'Esc', code: 'escape' },
-  { label: 'Del', code: 'backspace' },
-  { label: 'Ctrl+C', code: 'ctrl+c' },
-  { label: 'Ctrl+D', code: 'ctrl+d' },
-  { label: 'Ctrl+Z', code: 'ctrl+z' },
-  { label: 'Ctrl+L', code: 'ctrl+l' },
-  { label: 'Ctrl+A', code: 'ctrl+a' },
-  { label: 'Ctrl+E', code: 'ctrl+e' },
-  { label: 'Ctrl+K', code: 'ctrl+k' },
-  { label: 'Ctrl+U', code: 'ctrl+u' },
-]
+// 从 store 读取动态快捷键列表（不含 Enter/Del，它们由中间区域独立渲染）
+const leftShortcuts = computed(() => assistStore.visiblePanelShortcuts)
+
+// Enter/Del 可见性：由配置控制，默认显示
+const isEnterVisible = computed(() => assistStore.shortcutConfig.find(s => s.code === 'enter')?.visible ?? true)
+const isDelVisible = computed(() => assistStore.shortcutConfig.find(s => s.code === 'backspace')?.visible ?? true)
 
 // ==================== Carousel Methods ====================
 
 function goToSlide(index: number) {
-  currentSlide.value = Math.max(0, Math.min(index, 1))
+  currentSlide.value = ((index % TOTAL_SLIDES) + TOTAL_SLIDES) % TOTAL_SLIDES
 }
 
 function onTouchStart(e: TouchEvent) {
@@ -407,22 +553,65 @@ function onTouchMove(e: TouchEvent) {
   // 水平滑动距离大于垂直时才处理，避免影响页面滚动
   if (Math.abs(deltaX) > Math.abs(deltaY) && carouselRef.value) {
     const width = carouselRef.value.offsetWidth
-    // 将像素偏移转为百分比
     touchDeltaX.value = (deltaX / width) * 100
   }
 }
 
 function onTouchEnd() {
   isSwiping.value = false
-  const threshold = 20 // 滑动超过 20% 切换页面
+  const threshold = 20
 
-  if (touchDeltaX.value < -threshold && currentSlide.value < 1) {
-    currentSlide.value = 1
-  } else if (touchDeltaX.value > threshold && currentSlide.value > 0) {
-    currentSlide.value = 0
+  if (touchDeltaX.value < -threshold) {
+    // 左滑 → 下一页（末尾循环到第一页）
+    slideToNext()
+  } else if (touchDeltaX.value > threshold) {
+    // 右滑 → 上一页（开头循环到最后一页）
+    slideToPrev()
+  } else {
+    touchDeltaX.value = 0
   }
+}
 
-  touchDeltaX.value = 0
+/** 左滑切换到下一页，末尾循环到第一页 */
+function slideToNext() {
+  if (currentSlide.value < TOTAL_SLIDES - 1) {
+    currentSlide.value++
+    touchDeltaX.value = 0
+  } else {
+    // 已在最后一页：动画滑到位置 2（首页克隆），然后无动画跳回位置 0
+    currentSlide.value = TOTAL_SLIDES
+    touchDeltaX.value = 0
+    nextTick(() => {
+      isLooping.value = true
+      currentSlide.value = 0
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          isLooping.value = false
+        })
+      })
+    })
+  }
+}
+
+/** 右滑切换到上一页，开头循环到最后一页 */
+function slideToPrev() {
+  if (currentSlide.value > 0) {
+    currentSlide.value--
+    touchDeltaX.value = 0
+  } else {
+    // 已在第一页：动画滑到位置 -1（末页克隆），然后无动画跳回位置 1
+    currentSlide.value = -1
+    touchDeltaX.value = 0
+    nextTick(() => {
+      isLooping.value = true
+      currentSlide.value = TOTAL_SLIDES - 1
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          isLooping.value = false
+        })
+      })
+    })
+  }
 }
 
 // ==================== Computed ====================
@@ -795,7 +984,7 @@ onMounted(() => {
 
 .shortcuts-layout {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .shortcuts-left {
@@ -837,6 +1026,55 @@ onMounted(() => {
 .shortcut-btn:active {
   transform: scale(0.95);
   background: var(--mobile-shortcut-active-bg);
+}
+
+/* 中间：Enter/Del 高频操作键 */
+.shortcuts-center {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.action-keys-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.action-btn {
+  width: 3.25rem;
+  height: 2.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+}
+
+.action-btn--enter {
+  background: var(--mobile-confirm-bg);
+  border-color: var(--mobile-confirm-border);
+  color: var(--mobile-confirm-color);
+}
+
+.action-btn--enter:active {
+  transform: scale(0.95);
+  filter: brightness(1.2);
+}
+
+.action-btn--del {
+  background: var(--mobile-danger-bg);
+  border-color: var(--mobile-danger-border);
+  color: var(--mobile-danger-color);
+}
+
+.action-btn--del:active {
+  transform: scale(0.95);
+  filter: brightness(1.2);
 }
 
 .shortcuts-right {
