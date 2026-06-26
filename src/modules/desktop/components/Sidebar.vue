@@ -5,6 +5,22 @@
       <ul class="space-y-2">
         <li>
           <router-link
+            to="/devices"
+            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            :class="[
+              $route.path === '/devices'
+                ? 'bg-primary-600 text-white'
+                : 'text-gray-600 dark:text-dark-300 hover:bg-gray-100 dark:hover:bg-dark-700 hover:text-gray-900 dark:hover:text-white'
+            ]"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+            </svg>
+            {{ $t('desktop.sidebar.devicePairing') }}
+          </router-link>
+        </li>
+        <li>
+          <router-link
             to="/sessions"
             class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
             :class="[
@@ -36,22 +52,7 @@
             {{ $t('desktop.sidebar.sessionManager') }}
           </router-link>
         </li>
-        <li>
-          <router-link
-            to="/devices"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
-            :class="[
-              $route.path === '/devices'
-                ? 'bg-primary-600 text-white'
-                : 'text-gray-600 dark:text-dark-300 hover:bg-gray-100 dark:hover:bg-dark-700 hover:text-gray-900 dark:hover:text-white'
-            ]"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
-            {{ $t('desktop.sidebar.devicePairing') }}
-          </router-link>
-        </li>
+    
         <li>
           <router-link
             to="/settings"
