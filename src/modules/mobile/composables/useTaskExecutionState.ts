@@ -5,9 +5,8 @@
  * 与 useAutoExecutor 集成，在关键节点同步状态
  * 当自动执行完成一次性任务时，同步更新 PresetTask 状态
  */
-import { ref, computed, watch, type Ref } from 'vue'
+import { ref, watch, type Ref } from 'vue'
 import { usePresetTasks } from './usePresetTasks'
-import type { PresetTaskType } from './model'
 
 /** 会话级任务执行状态 */
 export interface TaskExecutionState {
