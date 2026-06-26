@@ -24,7 +24,7 @@ function loadFromStorage(): PresetTask[] {
 }
 
 /** 写入 localStorage */
-function saveToStorage() {
+export function saveToStorage() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.value))
 }
 
@@ -121,5 +121,6 @@ export function usePresetTasks() {
     deleteTask,
     executeTask,
     resetTaskStatus,
+    saveToStorage,
   }
 }
