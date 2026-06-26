@@ -9,6 +9,7 @@ import type { PresetTask, PresetTaskType } from './model'
 import { useMobileConnection } from './useMobileConnection'
 import { useHttpApi } from './useHttpApi'
 import { useTaskNotification } from './useTaskNotification'
+import { useTaskExecutionState } from './useTaskExecutionState'
 
 /** 队列中的任务 */
 export interface QueuedTask {
@@ -51,6 +52,13 @@ export function useAutoExecutor(sessionId: Ref<string>) {
   const pendingTasks = computed(() => queue.value.filter(t => t.status === 'pending'))
   const hasQueuedTasks = computed(() => pendingTasks.value.length > 0)
 
+  const {
+    setCurrentTask: setExecutionCurrentTask,
+    setMode: setExecutionMode,
+    handleTaskStatusChanged: handleExecutionTaskStatusChanged,
+    cleanup: executionStateCleanup,
+  } = useTaskExecutionState(sessionId)
+
   /** 加载指定会话的状态 */
   function loadState(sid: string) {
     let state = executorStates.get(sid)
@@ -80,11 +88,33 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     })
   }
 
-  /** 切换模式：通过 HTTP API 设置，桌面端内存更新后广播 SessionModeChanged 同步到移动端 */
+  /** 切换模式：乐观更新本地状态，同时通过 HTTP API 通知桌面端
+   *  本地先更新 mode.value，桌面端确认后广播 SessionModeChanged 再次同步
+   *  避免因网络延迟或事件丢失导致 UI 不响应切换操作
+   */
   async function setMode(newMode: 'manual' | 'auto') {
+    // 乐观更新：立即反映到 UI
+    mode.value = newMode
+    saveState()
+    // 同步模式到通知系统
+    const { setSessionMode } = useTaskNotification()
+    setSessionMode(sessionId.value, newMode)
+    // 同步模式到任务执行状态
+    setExecutionMode(newMode)
+
+    // 通知桌面端更新内存状态，桌面端会广播 SessionModeChanged 事件
     const { httpSetSessionMode } = useHttpApi()
     const autoApprove = newMode === 'auto'
-    await httpSetSessionMode(sessionId.value, autoApprove)
+    try {
+      await httpSetSessionMode(sessionId.value, autoApprove)
+    } catch {
+      // API 失败时回滚到原模式
+      const rollbackMode = newMode === 'auto' ? 'manual' : 'auto'
+      mode.value = rollbackMode
+      saveState()
+      setSessionMode(sessionId.value, rollbackMode)
+      setExecutionMode(rollbackMode)
+    }
   }
 
   /** 添加任务到队列 */
@@ -152,6 +182,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     const next = pendingTasks.value[0]
     if (!next) {
       currentTask.value = null
+      setExecutionCurrentTask(null)
       saveState()
       return
     }
@@ -160,6 +191,8 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     next.status = 'running'
     retryCount.value = 0
     saveState()
+    // 同步当前任务 ID 到执行状态
+    setExecutionCurrentTask(next.id)
 
     // 发送任务内容到终端 + Enter 提交执行
     sendInput(sessionId.value, next.content)
@@ -171,6 +204,8 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     if (currentTask.value) {
       currentTask.value.status = 'completed'
     }
+    // 通过执行状态管理器同步 PresetTask 状态
+    handleExecutionTaskStatusChanged('completed')
     saveState()
 
     // 执行 /clear + Enter 清空上下文，等待 Claude Code 回到 idle 后自动开始下一个任务
@@ -192,6 +227,8 @@ export function useAutoExecutor(sessionId: Ref<string>) {
       sendInput(sessionId.value, '', 'enter')
     } else {
       currentTask.value.status = 'failed'
+      // 超过重试次数，清除当前任务 ID
+      setExecutionCurrentTask(null)
       saveState()
       // 超过重试次数，执行下一个任务
       startNext()
@@ -236,11 +273,14 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     // 同步模式到通知系统
     const { setSessionMode } = useTaskNotification()
     setSessionMode(sessionId.value, newMode)
+    // 同步模式到任务执行状态
+    setExecutionMode(newMode)
   }
 
   /** 清空指定会话的状态（会话停止时调用） */
   function cleanup() {
     executorStates.delete(sessionId.value)
+    executionStateCleanup()
     clearQueue()
   }
 
