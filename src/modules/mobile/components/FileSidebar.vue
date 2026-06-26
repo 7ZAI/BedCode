@@ -165,6 +165,7 @@ import { useFileTree, type SidebarSettings, FONT_SIZE_MIN, FONT_SIZE_MAX } from 
 import FileTreeItem from './FileTreeItem.vue'
 import FileViewerModal from './FileViewerModal.vue'
 import { useToast } from '@/modules/shared/composables/useToast'
+import { writeClipboardText } from '@/modules/shared/utils/clipboard'
 
 const props = withDefaults(defineProps<{
   sessionId: string
@@ -391,7 +392,7 @@ function onResizePointerDown(e: PointerEvent) {
 
 async function handleLongPress(name: string, path: string) {
   try {
-    await navigator.clipboard.writeText(path)
+    await writeClipboardText(path)
     toast.success(t('mobile.file.copied', { path }))
   } catch {
     toast.error(t('mobile.file.copyFailed'))

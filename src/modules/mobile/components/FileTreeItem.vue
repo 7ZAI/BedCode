@@ -6,7 +6,7 @@
       @click="handleClick"
       @touchstart="onTouchStart"
       @touchend="onTouchEnd"
-      @touchmove="onTouchCancel"
+      @touchmove="onTouchMove"
       @contextmenu.prevent="onContextMenu"
     >
       <!-- 文件夹展开/折叠箭头 -->
@@ -107,11 +107,16 @@ const fileColor = computed(() => {
 
 // 长按检测
 const LONG_PRESS_DURATION = 500
+const LONG_PRESS_MOVE_THRESHOLD = 10
 let longPressTimer: ReturnType<typeof setTimeout> | null = null
 let longPressTriggered = false
+let touchStartX = 0
+let touchStartY = 0
 
 function onTouchStart(e: TouchEvent) {
   longPressTriggered = false
+  touchStartX = e.touches[0].clientX
+  touchStartY = e.touches[0].clientY
   longPressTimer = setTimeout(() => {
     longPressTriggered = true
     // 触觉反馈
@@ -129,11 +134,15 @@ function onTouchEnd() {
   }
 }
 
-function onTouchCancel() {
-  // 手指移动时取消长按
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
+function onTouchMove(e: TouchEvent) {
+  // 手指移动超过阈值时才取消长按，避免触摸抖动误取消
+  const dx = e.touches[0].clientX - touchStartX
+  const dy = e.touches[0].clientY - touchStartY
+  if (Math.abs(dx) > LONG_PRESS_MOVE_THRESHOLD || Math.abs(dy) > LONG_PRESS_MOVE_THRESHOLD) {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer)
+      longPressTimer = null
+    }
   }
 }
 

@@ -23,7 +23,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, provide } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DevicesView from '@/modules/mobile/views/DevicesView.vue'
 import SessionsView from '@/modules/mobile/views/SessionsView.vue'
@@ -116,6 +116,15 @@ function goToPage(page: number, animate = true) {
   setTimeout(() => {
     isAnimating.value = false
   }, animate ? CONFIG.animationDuration : 0)
+}
+
+/** 重置触摸状态，确保从终端返回后滑动功能正常 */
+function resetTouchState() {
+  isDragging.value = false
+  isAnimating.value = false
+  direction = null
+  // 修正 translateX 与当前页面同步（窗口大小可能在停用期间变化）
+  translateX.value = -currentPage.value * window.innerWidth
 }
 
 // 触摸事件处理
@@ -227,6 +236,13 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
+// keep-alive 激活时重置触摸状态，确保从终端返回后滑动功能正常
+// 停用期间窗口大小可能变化（键盘弹出/收起、旋转等），translateX 需要重新同步
+// 触摸状态也可能残留（如导航离开时触摸序列未完成），需要清除
+onActivated(() => {
+  resetTouchState()
+})
+
 // 暴露给导航组件使用
 defineExpose({
   goToPage,
@@ -246,6 +262,9 @@ provide('swipeContainer', {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  /* 允许浏览器垂直滚动，但水平手势由 JS 处理
+   * 确保浏览器不会消费水平滑动用于 overscroll 效果 */
+  touch-action: pan-y;
 }
 
 .swipe-track {
@@ -264,5 +283,8 @@ provide('swipeContainer', {
   -webkit-overflow-scrolling: touch;
   /* 允许垂直滚动，但禁止水平方向的默认手势（避免与 swipe 冲突） */
   touch-action: pan-y;
+  /* 禁止 overscroll 效果（橡皮筋/发光），防止浏览器劫持水平滑动手势
+   * 不加此属性时，在子页面滚动到边界后水平滑动会被浏览器吞掉 */
+  overscroll-behavior: none;
 }
 </style>

@@ -24,6 +24,7 @@ const { addTask } = usePresetTasks()
 
 const selectedIds = ref<Set<string>>(new Set())
 const orderedSelection = ref<PresetTask[]>([])
+const expandedTaskId = ref<string | null>(null)
 
 // 新建任务弹窗状态
 const showCreateModal = ref(false)
@@ -43,6 +44,10 @@ function toggleTask(task: PresetTask) {
     selectedIds.value.add(task.id)
     orderedSelection.value.push(task)
   }
+}
+
+function toggleExpand(taskId: string) {
+  expandedTaskId.value = expandedTaskId.value === taskId ? null : taskId
 }
 
 function moveUp(index: number) {
@@ -111,18 +116,32 @@ async function handleCreate() {
               v-for="task in availableTasks"
               :key="task.id"
               class="task-item"
-              :class="{ selected: selectedIds.has(task.id) }"
-              @click="toggleTask(task)"
+              :class="{ selected: selectedIds.has(task.id), expanded: expandedTaskId === task.id }"
             >
-              <div class="task-checkbox">
-                <svg v-if="selectedIds.has(task.id)" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                </svg>
+              <div class="task-item-main" @click="toggleTask(task)">
+                <div class="task-checkbox">
+                  <svg v-if="selectedIds.has(task.id)" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                  </svg>
+                </div>
+                <div class="task-info">
+                  <div class="task-info-top">
+                    <span class="task-title">{{ task.title }}</span>
+                    <span class="task-type-badge">{{ task.type === 'template' ? t('mobile.presetTask.template') : t('mobile.presetTask.once') }}</span>
+                  </div>
+                  <span class="task-content-preview">{{ task.content }}</span>
+                </div>
+                <button class="expand-btn" :class="{ rotated: expandedTaskId === task.id }" @click.stop="toggleExpand(task.id)">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M7 10l5 5 5-5z"/>
+                  </svg>
+                </button>
               </div>
-              <div class="task-info">
-                <span class="task-title">{{ task.title }}</span>
-                <span class="task-type-badge">{{ task.type === 'template' ? t('mobile.presetTask.template') : t('mobile.presetTask.once') }}</span>
-              </div>
+              <transition name="content-expand">
+                <div v-if="expandedTaskId === task.id" class="task-content-full">
+                  <pre class="task-content-text">{{ task.content }}</pre>
+                </div>
+              </transition>
             </div>
           </div>
 
@@ -132,7 +151,10 @@ async function handleCreate() {
             <div class="selected-list">
               <div v-for="(task, index) in orderedSelection" :key="task.id" class="selected-item">
                 <span class="order-number">{{ index + 1 }}</span>
-                <span class="selected-title">{{ task.title }}</span>
+                <div class="selected-info">
+                  <span class="selected-title">{{ task.title }}</span>
+                  <span class="selected-content-preview">{{ task.content }}</span>
+                </div>
                 <div class="order-actions">
                   <button class="order-btn" :disabled="index === 0" @click.stop="moveUp(index)">↑</button>
                   <button class="order-btn" :disabled="index === orderedSelection.length - 1" @click.stop="moveDown(index)">↓</button>
@@ -348,23 +370,29 @@ async function handleCreate() {
 
 .task-item {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  flex-direction: column;
   border-radius: 8px;
   border: 1px solid var(--mobile-border);
   background: var(--mobile-bg-elevated);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.task-item:active {
-  background: var(--mobile-bg-hover);
+  overflow: hidden;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .task-item.selected {
   border-color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
+}
+
+.task-item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.task-item-main:active {
+  background: var(--mobile-bg-hover);
 }
 
 .task-checkbox {
@@ -385,11 +413,17 @@ async function handleCreate() {
 
 .task-info {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 3px;
   overflow: hidden;
   flex: 1;
   min-width: 0;
+}
+
+.task-info-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .task-title {
@@ -398,6 +432,76 @@ async function handleCreate() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-content-preview {
+  font-size: 12px;
+  color: var(--mobile-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expand-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--mobile-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: transform 0.2s ease, color 0.15s;
+}
+
+.expand-btn:active {
+  background: var(--mobile-bg-hover);
+}
+
+.expand-btn.rotated {
+  transform: rotate(180deg);
+}
+
+.task-content-full {
+  padding: 0 12px 10px;
+}
+
+.task-content-text {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--mobile-bg-secondary);
+  color: var(--mobile-text-secondary);
+  font-size: 12px;
+  font-family: 'Courier New', Courier, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* 展开动画 */
+.content-expand-enter-active,
+.content-expand-leave-active {
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.content-expand-enter-from,
+.content-expand-leave-to {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.content-expand-enter-to,
+.content-expand-leave-from {
+  opacity: 1;
+  max-height: 220px;
 }
 
 .task-type-badge {
@@ -436,6 +540,15 @@ async function handleCreate() {
   background: var(--mobile-bg-secondary);
 }
 
+.selected-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
 .order-number {
   width: 20px;
   height: 20px;
@@ -451,9 +564,16 @@ async function handleCreate() {
 }
 
 .selected-title {
-  flex: 1;
   font-size: 13px;
   color: var(--mobile-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-content-preview {
+  font-size: 11px;
+  color: var(--mobile-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

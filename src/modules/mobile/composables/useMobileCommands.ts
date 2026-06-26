@@ -388,41 +388,49 @@ export async function initMobileEventListeners(callbacks: {
   // 初始化同步事件监听
   if (callbacks.onSyncSessionCreated) {
     unlistenSyncSessionCreated = await listen<{ session: any; source_device: string }>('ws_sync_session_created', (event) => {
+      console.debug('[MobileCommands] ws_sync_session_created:', event.payload.session.id, 'source:', event.payload.source_device)
       callbacks.onSyncSessionCreated?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionStatusChanged) {
     unlistenSyncSessionStatusChanged = await listen<{ session_id: string; old_status: string; new_status: string; session_name: string }>('ws_sync_session_status_changed', (event) => {
+      console.debug('[MobileCommands] ws_sync_session_status_changed:', event.payload.session_id, event.payload.old_status, '->', event.payload.new_status)
       callbacks.onSyncSessionStatusChanged?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionStopped) {
     unlistenSyncSessionStopped = await listen<{ session_id: string; session_name: string }>('ws_sync_session_stopped', (event) => {
+      console.debug('[MobileCommands] ws_sync_session_stopped:', event.payload.session_id, event.payload.session_name)
       callbacks.onSyncSessionStopped?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionRemoved) {
     unlistenSyncSessionRemoved = await listen<{ session_id: string; session_name: string }>('ws_sync_session_removed', (event) => {
+      console.debug('[MobileCommands] ws_sync_session_removed:', event.payload.session_id, event.payload.session_name)
       callbacks.onSyncSessionRemoved?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigCreated) {
     unlistenSyncConfigCreated = await listen<{ config: any; source_device: string }>('ws_sync_config_created', (event) => {
+      console.debug('[MobileCommands] ws_sync_config_created:', event.payload.config.id, 'source:', event.payload.source_device)
       callbacks.onSyncConfigCreated?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigUpdated) {
     unlistenSyncConfigUpdated = await listen<{ config: any; source_device: string }>('ws_sync_config_updated', (event) => {
+      console.debug('[MobileCommands] ws_sync_config_updated:', event.payload.config.id, 'source:', event.payload.source_device)
       callbacks.onSyncConfigUpdated?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigRemoved) {
     unlistenSyncConfigRemoved = await listen<{ config_id: string; config_name: string }>('ws_sync_config_removed', (event) => {
+      console.debug('[MobileCommands] ws_sync_config_removed:', event.payload.config_id, event.payload.config_name)
       callbacks.onSyncConfigRemoved?.(event.payload)
     })
   }
   if (callbacks.onSyncTaskStatusChanged) {
     unlistenSyncTaskStatusChanged = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; question: string; multi_select: boolean; options: Array<{ label: string; description: string }> }> }>('ws_sync_task_status_changed', (event) => {
+      console.debug('[MobileCommands] ws_sync_task_status_changed:', event.payload.session_id, 'status:', event.payload.task_status, 'reason:', event.payload.task_reason ?? 'none')
       callbacks.onSyncTaskStatusChanged?.(event.payload)
     })
   }
