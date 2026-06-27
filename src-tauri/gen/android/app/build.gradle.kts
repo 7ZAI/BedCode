@@ -44,6 +44,9 @@ android {
         targetSdk = 35
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+
+        // APK 命名：BedCode-v1.0.0-release.apk
+        setProperty("archivesBaseName", "BedCode-v${versionName}")
     }
     buildTypes {
         getByName("debug") {
