@@ -1,7 +1,7 @@
 <template>
-  <div class="h-full flex flex-col bg-gray-100 dark:bg-dark-900">
+  <div class="h-full flex flex-col bg-slate-100 dark:bg-dark-900">
     <!-- Header -->
-    <header class="px-4 py-3 flex items-center justify-between border-b border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800">
+    <header class="px-4 py-3 flex items-center justify-between border-b border-slate-200 dark:border-dark-700 bg-white dark:bg-dark-800">
       <div class="flex items-center gap-3">
         <div
           :class="[
@@ -9,14 +9,14 @@
             statusColor
           ]"
         ></div>
-        <h3 class="font-medium text-gray-900 dark:text-white">{{ session?.name || $t('desktop.terminal.defaultName') }}</h3>
+        <h3 class="font-medium text-slate-900 dark:text-white">{{ session?.name || $t('desktop.terminal.defaultName') }}</h3>
       </div>
 
       <div class="flex items-center gap-2">
         <!-- Theme Switch -->
         <select
           v-model="terminalTheme"
-          class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
+          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
           :title="$t('desktop.terminal.theme')"
         >
           <option v-for="(name, key) in themeNames" :key="key" :value="key">
@@ -27,7 +27,7 @@
         <!-- Font Size -->
         <select
           v-model="fontSize"
-          class="bg-gray-100 dark:bg-dark-700 border border-gray-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-gray-700 dark:text-white"
+          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
           :title="$t('desktop.terminal.fontSize')"
         >
           <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
@@ -66,7 +66,8 @@ import { usePtyOutput } from '@/modules/desktop/composables/usePtyOutput'
 import {
   useTerminalHistory,
   initSessionCache,
-  destroySessionCache
+  destroySessionCache,
+  resizeHiddenTerminal
 } from '@/modules/desktop/composables/useGlobalTerminal'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -108,7 +109,7 @@ const { output: realtimeOutput, clearOutput } = usePtyOutput(sessionId)
 const terminalHistory = useTerminalHistory(sessionId.value)
 
 const statusColor = computed(() => {
-  if (!props.session) return 'bg-gray-400 dark:bg-dark-500'
+  if (!props.session) return 'bg-slate-400 dark:bg-dark-500'
 
   switch (props.session.status) {
     case 'running':
@@ -118,11 +119,11 @@ const statusColor = computed(() => {
     case 'error':
       return 'bg-red-500'
     case 'stopped':
-      return 'bg-gray-400 dark:bg-dark-500'
+      return 'bg-slate-400 dark:bg-dark-500'
     case 'starting':
       return 'bg-blue-500 animate-pulse'
     default:
-      return 'bg-gray-400 dark:bg-dark-500'
+      return 'bg-slate-400 dark:bg-dark-500'
   }
 })
 
@@ -304,9 +305,9 @@ function initTerminal() {
   terminal = new Terminal({
     fontSize: fontSize.value,
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
-    theme: { ...getTheme(), cursor: 'transparent' },
+    theme: getTheme(),
     cursorBlink: false,
-    cursorStyle: 'block',
+    cursorStyle: 'bar',
     cursorWidth: 1,
     scrollback: 50000,
     allowProposedApi: true,
@@ -317,6 +318,10 @@ function initTerminal() {
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalContainerRef.value)
   initWebGL(terminal)
+
+  // 隐藏光标：DOM 层和 WebGL 层都不显示光标，避免双光标问题
+  terminal.element?.classList.add('xterm-hidden-cursor')
+
   fitAddon.fit()
 
   syncTerminalSize()
@@ -324,6 +329,8 @@ function initTerminal() {
   terminal.onResize(({ cols, rows }) => {
     if (props.session) {
       sessionStore.resizeSession(props.session.id, cols, rows)
+      // 同步隐藏终端尺寸，确保行数计算一致
+      resizeHiddenTerminal(props.session.id, cols, rows)
     }
   })
 
@@ -494,12 +501,17 @@ watch(sessionId, async (newId, oldId) => {
 onMounted(async () => {
   await nextTick()
 
-  // 确保会话缓存已初始化
+  // 确保会话缓存已初始化（如果已存在则跳过）
   if (sessionId.value) {
     initSessionCache(sessionId.value)
   }
 
   initTerminal()
+
+  // 显示终端 fit 后，同步隐藏终端尺寸
+  if (terminal && sessionId.value) {
+    resizeHiddenTerminal(sessionId.value, terminal.cols, terminal.rows)
+  }
 
   // 添加滚动事件监听
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
@@ -523,7 +535,7 @@ onMounted(async () => {
 
 watch(terminalTheme, () => {
   if (terminal) {
-    terminal.options.theme = { ...getTheme(), cursor: 'transparent' }
+    terminal.options.theme = getTheme()
   }
 })
 
@@ -596,5 +608,14 @@ onUnmounted(() => {
 
 .dark :deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* 隐藏 DOM 层光标，配合 WebGL 层一起消除双光标 */
+:deep(.xterm-hidden-cursor .xterm-cursor) {
+  display: none !important;
+}
+
+:deep(.xterm-hidden-cursor .xterm-cursor-layer) {
+  opacity: 0 !important;
 }
 </style>

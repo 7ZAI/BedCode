@@ -43,6 +43,9 @@ export default {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['Consolas', 'Monaco', 'monospace'],
       },
+      boxShadow: {
+        'xs': '0 1px 2px 0 rgb(0 0 0 / 0.04)',
+      },
     },
   },
   plugins: [],

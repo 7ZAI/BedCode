@@ -225,23 +225,23 @@ body {
   transition: margin-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Scrollbar styles - 浅色模式默认 */
+/* Scrollbar styles - 浅色模式 (Modern Clean) */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #e5e7eb;
+  background: #f1f5f9;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #9ca3af;
+  background: #94a3b8;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #6b7280;
+  background: #64748b;
 }
 
 /* Scrollbar styles - 深色模式 */

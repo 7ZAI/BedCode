@@ -70,7 +70,7 @@ const typeClass = computed(() => {
     case 'warning':
       return 'bg-yellow-500 border-yellow-600 text-white'
     default:
-      return 'bg-white dark:bg-dark-800 border-gray-200 dark:border-dark-600 text-gray-900 dark:text-dark-100'
+      return 'bg-white dark:bg-dark-800 border-slate-200 dark:border-dark-600 text-slate-900 dark:text-dark-100'
   }
 })
 

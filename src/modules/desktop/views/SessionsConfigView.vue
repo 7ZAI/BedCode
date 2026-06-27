@@ -1,9 +1,9 @@
 <template>
-  <div class="h-full flex flex-col bg-gray-50 dark:bg-dark-900">
+  <div class="h-full flex flex-col bg-slate-50 dark:bg-dark-900">
     <!-- Header -->
-    <header class="px-6 py-3 h-12 flex items-center border-b border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-800">
+    <header class="px-6 py-3 h-12 flex items-center border-b border-slate-200 dark:border-dark-700 bg-white dark:bg-dark-800 shadow-sm dark:shadow-none">
       <div class="flex items-center justify-between w-full">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('desktop.sidebar.sessionConfig') }}</h2>
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ t('desktop.sidebar.sessionConfig') }}</h2>
         <Button variant="primary" @click="showCreateDialog = true">
           <template #icon>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -20,16 +20,16 @@
       <!-- Loading State -->
       <div v-if="isLoading" class="text-center py-12">
         <Spinner size="xl" color="primary" class="mb-4" />
-        <p class="text-gray-500 dark:text-dark-400">{{ t('common.status.loading') }}</p>
+        <p class="text-slate-500 dark:text-dark-400">{{ t('common.status.loading') }}</p>
       </div>
 
       <!-- Empty State -->
       <div v-else-if="configs.length === 0" class="text-center py-12">
-        <svg class="w-16 h-16 mx-auto text-gray-400 dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-16 h-16 mx-auto text-slate-300 dark:text-dark-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <p class="text-gray-600 dark:text-dark-400">{{ t('desktop.session.noConfig') }}</p>
-        <p class="text-gray-500 dark:text-dark-500 text-sm mt-2">{{ t('desktop.session.noConfigHint') }}</p>
+        <p class="text-slate-600 dark:text-dark-400">{{ t('desktop.session.noConfig') }}</p>
+        <p class="text-slate-500 dark:text-dark-500 text-sm mt-2">{{ t('desktop.session.noConfigHint') }}</p>
       </div>
 
       <!-- Config Cards (Long Card Mode) -->
@@ -65,7 +65,7 @@
 
     <!-- Delete Confirm Dialog -->
     <Modal v-model="showDeleteConfirmDialog" :title="t('desktop.session.confirmDelete')" size="sm">
-      <p class="text-gray-700 dark:text-dark-300">{{ t('desktop.session.confirmDeleteMsg') }}</p>
+      <p class="text-slate-700 dark:text-dark-300">{{ t('desktop.session.confirmDeleteMsg') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <Button variant="ghost" @click="showDeleteConfirmDialog = false">{{ t('common.button.cancel') }}</Button>
@@ -78,7 +78,7 @@
     <div v-if="isOperating" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div class="bg-white dark:bg-dark-800 rounded-lg p-6 flex flex-col items-center gap-4 min-w-[200px]">
         <Spinner size="lg" color="primary" />
-        <p class="text-gray- dark:text-dark-300">{{ operatingMessage }}</p>
+        <p class="text-slate-700 dark:text-dark-300">{{ operatingMessage }}</p>
       </div>
     </div>
   </div>

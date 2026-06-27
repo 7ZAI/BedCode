@@ -42,7 +42,7 @@ const defaultSettings: Settings = {
   },
   ui: {
     theme: 'system',
-    terminal_font_size: 14,
+    terminal_font_size: 12,
     terminal_font_family: 'Consolas',
     show_preview: true,
     language: 'zh-CN',

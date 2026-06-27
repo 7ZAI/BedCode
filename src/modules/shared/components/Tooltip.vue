@@ -9,13 +9,13 @@
         <div
           v-if="visible"
           ref="tooltipRef"
-          class="fixed z-50 px-3 py-1.5 text-sm rounded-lg shadow-lg border whitespace-nowrap bg-white dark:bg-dark-700 text-gray-900 dark:text-dark-100 border-gray-200 dark:border-dark-600"
+          class="fixed z-50 px-3 py-1.5 text-sm rounded-lg shadow-lg border whitespace-nowrap bg-white dark:bg-dark-700 text-slate-900 dark:text-dark-100 border-slate-200 dark:border-dark-600"
           :style="positionStyle"
         >
           {{ content }}
           <!-- Arrow -->
           <div
-            class="absolute w-2 h-2 bg-white dark:bg-dark-700 border-gray-200 dark:border-dark-600 rotate-45"
+            class="absolute w-2 h-2 bg-white dark:bg-dark-700 border-slate-200 dark:border-dark-600 rotate-45"
             :class="arrowClass"
           ></div>
         </div>

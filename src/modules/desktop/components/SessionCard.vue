@@ -1,10 +1,10 @@
 <template>
-  <div :class="['rounded-lg border overflow-hidden', { 'border-primary-500': hasRunningSessions }, 'bg-white dark:bg-dark-800 border-gray-200 dark:border-dark-700']">
+  <div :class="['rounded-lg border overflow-hidden shadow-sm dark:shadow-none', { 'border-primary-500': hasRunningSessions }, 'bg-white dark:bg-dark-800 border-slate-200 dark:border-dark-700']">
     <!-- Config Header (always visible) -->
     <div
       :class="[
         'flex items-center gap-4 px-4 py-3 cursor-pointer transition-colors',
-        hasRunningSessions ? 'bg-gray-50 dark:bg-dark-750' : 'hover:bg-gray-50 dark:hover:bg-dark-750'
+        hasRunningSessions ? 'bg-slate-50 dark:bg-dark-750' : 'hover:bg-slate-50 dark:hover:bg-dark-750'
       ]"
       @click="$emit('edit')"
     >
@@ -22,12 +22,12 @@
 
       <!-- Center: Config Info -->
       <div class="flex-1 min-w-0">
-        <h3 class="font-medium text-gray-900 dark:text-white truncate">{{ config.name }}</h3>
-        <p class="text-gray-500 dark:text-dark-400 text-sm truncate">{{ config.workingDir }}</p>
+        <h3 class="font-medium text-slate-900 dark:text-white truncate">{{ config.name }}</h3>
+        <p class="text-slate-500 dark:text-dark-400 text-sm truncate">{{ config.workingDir }}</p>
       </div>
 
       <!-- Command (always visible on desktop) -->
-      <div class="flex items-center gap-2 text-gray-500 dark:text-dark-400 text-sm flex-shrink-0">
+      <div class="flex items-center gap-2 text-slate-500 dark:text-dark-400 text-sm flex-shrink-0">
         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
@@ -68,9 +68,9 @@
     </div>
 
     <!-- Expandable Running Sessions -->
-    <div v-if="runningSessions.length > 0" class="border-t border-gray-200 dark:border-dark-700">
+    <div v-if="runningSessions.length > 0" class="border-t border-slate-200 dark:border-dark-700">
       <div
-        class="flex items-center gap-2 px-4 py-2 cursor-pointer text-gray-600 dark:text-dark-400 text-sm hover:bg-gray-50 dark:hover:bg-dark-800"
+        class="flex items-center gap-2 px-4 py-2 cursor-pointer text-slate-600 dark:text-dark-400 text-sm hover:bg-slate-50 dark:hover:bg-dark-800"
         @click.stop="toggleExpand"
       >
         <svg
@@ -85,11 +85,11 @@
       </div>
 
       <!-- Running Sessions List -->
-      <div v-if="isExpanded" class="bg-gray-50 dark:bg-dark-900">
+      <div v-if="isExpanded" class="bg-slate-50 dark:bg-dark-900">
         <div
           v-for="session in runningSessions"
           :key="session.id"
-          class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-dark-700 last:border-b-0 hover:bg-gray-100 dark:hover:bg-dark-800 cursor-pointer"
+          class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-dark-700 last:border-b-0 hover:bg-slate-100 dark:hover:bg-dark-800 cursor-pointer"
           @click="$emit('viewSession', session)"
         >
           <div class="flex items-center gap-3">
@@ -99,10 +99,10 @@
                 'w-2 h-2 rounded-full',
                 session.status === 'running' ? 'bg-green-500' :
                 session.status === 'waitingInput' ? 'bg-yellow-500' :
-                session.status === 'error' ? 'bg-red-500' : 'bg-gray-400 dark:bg-dark-500'
+                session.status === 'error' ? 'bg-red-500' : 'bg-slate-400 dark:bg-dark-500'
               ]"
             ></div>
-            <span class="text-gray-900 dark:text-white">{{ session.name }}</span>
+            <span class="text-slate-900 dark:text-white">{{ session.name }}</span>
             <span
               v-if="session.sessionType"
               class="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-400"
@@ -120,7 +120,7 @@
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="text-gray-500 dark:text-dark-400 text-sm">{{ getSessionTime(session) }}</span>
+            <span class="text-slate-500 dark:text-dark-400 text-sm">{{ getSessionTime(session) }}</span>
             <Button variant="ghost" size="sm" @click.stop="$emit('stopSession', session.id)">
               <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

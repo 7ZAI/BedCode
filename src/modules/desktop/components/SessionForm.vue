@@ -29,11 +29,11 @@
       />
       <!-- WSL 初始化中的加载提示 -->
       <div v-else class="form-group">
-        <label class="block text-sm mb-2 text-gray-700 dark:text-dark-300">
+        <label class="block text-sm mb-2 text-slate-700 dark:text-dark-300">
           {{ $t('desktop.form.wslDistro') }}
           <span class="text-red-500">*</span>
         </label>
-        <div class="flex items-center gap-2 border rounded-lg px-4 py-2 border-gray-300 dark:border-dark-600 bg-white dark:bg-dark-700 text-gray-500 dark:text-dark-400">
+        <div class="flex items-center gap-2 border rounded-lg px-4 py-2 border-slate-300 dark:border-dark-600 bg-white dark:bg-dark-700 text-slate-500 dark:text-dark-400">
           <Spinner size="sm" color="primary" />
           <span class="text-sm">{{ $t('desktop.form.wslInitializing') }}</span>
         </div>

@@ -57,8 +57,8 @@ export function useTheme() {
 
     return {
       container: isDark
-        ? 'min-h-screen bg-gray-50 dark:bg-dark-900 text-gray-900 dark:text-dark-100'
-        : 'min-h-screen bg-gray-50 text-gray-900'
+        ? 'min-h-screen bg-slate-50 dark:bg-dark-900 text-slate-900 dark:text-dark-100'
+        : 'min-h-screen bg-slate-50 text-slate-900'
     }
   })
 

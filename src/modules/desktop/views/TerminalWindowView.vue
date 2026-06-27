@@ -1,24 +1,24 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-100 dark:bg-dark-900">
+  <div class="h-screen flex flex-col bg-slate-100 dark:bg-dark-900">
     <!-- Header with title and window controls -->
-    <header class="bg-white dark:bg-dark-800 border-b border-gray-200 dark:border-dark-700 px-4 py-2 flex items-center justify-between h-10 shrink-0" data-tauri-drag-region>
-      <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-dark-300">
+    <header class="bg-white dark:bg-dark-800 border-b border-slate-200 dark:border-dark-700 px-4 py-2 flex items-center justify-between h-10 shrink-0" data-tauri-drag-region>
+      <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-dark-300">
         <span class="font-medium">{{ sessionName }}</span>
       </div>
       <div class="flex items-center gap-1">
-        <button @click="minimizeWindow" class="p-1.5 hover:bg-gray-100 dark:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.minimize')">
-          <svg class="w-4 h-4 text-gray-600 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="minimizeWindow" class="p-1.5 hover:bg-slate-100 dark:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.minimize')">
+          <svg class="w-4 h-4 text-slate-600 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
           </svg>
         </button>
-        <button @click="toggleMaximize" class="p-1.5 hover:bg-gray-100 dark:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.maximize')">
-          <svg class="w-4 h-4 text-gray-600 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="toggleMaximize" class="p-1.5 hover:bg-slate-100 dark:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.maximize')">
+          <svg class="w-4 h-4 text-slate-600 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path v-if="!isMaximized" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h4" />
             <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5 5m5-5l5-5m-5 5v-4.5m0 4.5h4.5" />
           </svg>
         </button>
         <button @click="closeWindow" class="p-1.5 hover:bg-red-600 rounded transition-colors" :title="t('desktop.terminal.close')">
-          <svg class="w-4 h-4 text-gray-600 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 text-slate-600 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -32,7 +32,7 @@
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
-        <p class="text-gray- dark:text-dark-400 text-sm">{{ t('desktop.terminal.loadingSession') }}</p>
+        <p class="text-slate-500 dark:text-dark-400 text-sm">{{ t('desktop.terminal.loadingSession') }}</p>
       </div>
     </div>
 

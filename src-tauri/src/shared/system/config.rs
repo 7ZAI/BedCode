@@ -99,7 +99,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: "system".to_string(),
-            terminal_font_size: 14,
+            terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
             show_preview: true,
         }

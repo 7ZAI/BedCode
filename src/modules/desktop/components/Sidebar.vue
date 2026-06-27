@@ -1,5 +1,5 @@
 <template>
-  <aside class="w-64 bg-white dark:bg-dark-800 border-r border-gray-200 dark:border-dark-700 flex flex-col">
+  <aside class="w-64 bg-white dark:bg-dark-800 border-r border-slate-200 dark:border-dark-700 flex flex-col">
     <!-- Navigation -->
     <nav class="flex-1 p-4">
       <ul class="space-y-2">
@@ -10,7 +10,7 @@
             :class="[
               $route.path === '/devices'
                 ? 'bg-primary-600 text-white'
-                : 'text-gray-600 dark:text-dark-300 hover:bg-gray-100 dark:hover:bg-dark-700 hover:text-gray-900 dark:hover:text-white'
+                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -26,7 +26,7 @@
             :class="[
               $route.path === '/sessions'
                 ? 'bg-primary-600 text-white'
-                : 'text-gray-600 dark:text-dark-300 hover:bg-gray-100 dark:hover:bg-dark-700 hover:text-gray-900 dark:hover:text-white'
+                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -43,7 +43,7 @@
             :class="[
               $route.path === '/session-manager'
                 ? 'bg-primary-600 text-white'
-                : 'text-gray-600 dark:text-dark-300 hover:bg-gray-100 dark:hover:bg-dark-700 hover:text-gray-900 dark:hover:text-white'
+                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -60,7 +60,7 @@
             :class="[
               $route.path === '/settings'
                 ? 'bg-primary-600 text-white'
-                : 'text-gray-600 dark:text-dark-300 hover:bg-gray-100 dark:hover:bg-dark-700 hover:text-gray-900 dark:hover:text-white'
+                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -74,10 +74,10 @@
     </nav>
 
     <!-- Status Bar -->
-    <div class="p-4 border-t border-gray-200 dark:border-dark-700">
+    <div class="p-4 border-t border-slate-200 dark:border-dark-700">
       <div class="flex items-center gap-2 text-sm">
         <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-gray-500 dark:text-dark-400">{{ $t('desktop.sidebar.serviceRunning') }}</span>
+        <span class="text-slate-500 dark:text-dark-400">{{ $t('desktop.sidebar.serviceRunning') }}</span>
       </div>
     </div>
   </aside>

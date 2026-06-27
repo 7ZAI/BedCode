@@ -6,7 +6,6 @@
  */
 
 import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
 // 会话历史缓存：sessionId -> 原始输出数据
@@ -17,6 +16,9 @@ const hiddenTerminals = new Map<string, Terminal>()
 
 // 行数限制
 const MAX_HISTORY_LINES = 50000
+
+// 默认列数（与 Rust 端 TerminalConfig.default_cols 一致）
+const DEFAULT_COLS = 120
 
 // 深色主题
 const darkTheme = {
@@ -45,13 +47,18 @@ const darkTheme = {
 
 /**
  * 初始化会话的历史缓存（创建隐藏 xterm 实例）
+ *
+ * @param sessionId - 会话 ID
+ * @param cols - 终端列数，应与显示实例一致，避免行数计算偏差导致缓存过早截断
  */
-export function initSessionCache(sessionId: string): void {
+export function initSessionCache(sessionId: string, cols?: number): void {
   if (sessionHistoryCache.has(sessionId)) {
     return
   }
 
   sessionHistoryCache.set(sessionId, [])
+
+  const effectiveCols = cols || DEFAULT_COLS
 
   // 创建隐藏的 xterm 实例用于追踪行数
   const terminal = new Terminal({
@@ -60,6 +67,8 @@ export function initSessionCache(sessionId: string): void {
     theme: darkTheme,
     cursorBlink: false,
     scrollback: MAX_HISTORY_LINES,
+    cols: effectiveCols,
+    rows: 40,
     allowProposedApi: true,
   })
 
@@ -73,6 +82,19 @@ export function initSessionCache(sessionId: string): void {
   terminal.open(hiddenContainer)
 
   hiddenTerminals.set(sessionId, terminal)
+}
+
+/**
+ * 同步隐藏 xterm 实例的列数与显示实例一致
+ *
+ * 显示终端 resize 时必须调用，否则隐藏实例仍按旧列数计算行数，
+ * 导致缓存截断时机与显示实例不一致
+ */
+export function resizeHiddenTerminal(sessionId: string, cols: number, rows: number): void {
+  const terminal = hiddenTerminals.get(sessionId)
+  if (terminal && cols > 0 && rows > 0) {
+    terminal.resize(cols, rows)
+  }
 }
 
 /**
@@ -182,11 +204,12 @@ export function cleanupAllCaches(): void {
  */
 export function useTerminalHistory(sessionId: string) {
   return {
-    init: () => initSessionCache(sessionId),
+    init: (cols?: number) => initSessionCache(sessionId, cols),
     append: (data: string) => appendOutput(sessionId, data),
     getHistory: () => getHistoryOutput(sessionId),
     clear: () => clearHistoryCache(sessionId),
     destroy: () => destroySessionCache(sessionId),
     hasCache: () => hasSessionCache(sessionId),
+    resize: (cols: number, rows: number) => resizeHiddenTerminal(sessionId, cols, rows),
   }
 }
