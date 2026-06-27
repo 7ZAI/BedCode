@@ -8,6 +8,7 @@ use crate::desktop::server::services::PairingService;
 use crate::desktop::session::{SessionConfigManager, SessionManager};
 use crate::desktop::auth::QrTokenManager;
 use crate::shared::db::Database;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{broadcast, Mutex};
@@ -33,6 +34,8 @@ pub struct AppContext {
     app_handle: Arc<AppHandle>,
     /// 同步事件发送器
     sync_tx: broadcast::Sender<crate::desktop::events::DesktopSyncEvent>,
+    /// 资源目录路径（用于项目级 hooks 脚本复制）
+    resource_dir: Arc<PathBuf>,
 }
 
 /// 全局单实例存储 — init() 和 global() 必须引用同一个 static
@@ -84,6 +87,10 @@ impl AppContext {
     pub fn sync_tx(&self) -> &broadcast::Sender<crate::desktop::events::DesktopSyncEvent> {
         &self.sync_tx
     }
+
+    pub fn resource_dir(&self) -> &Arc<PathBuf> {
+        &self.resource_dir
+    }
 }
 
 /// 构建器，用于分步组装 AppContext
@@ -96,6 +103,7 @@ pub struct AppContextBuilder {
     qr_manager: Option<Arc<QrTokenManager>>,
     app_handle: Option<Arc<AppHandle>>,
     sync_tx: Option<broadcast::Sender<crate::desktop::events::DesktopSyncEvent>>,
+    resource_dir: Option<Arc<PathBuf>>,
 }
 
 impl AppContextBuilder {
@@ -109,6 +117,7 @@ impl AppContextBuilder {
             qr_manager: None,
             app_handle: None,
             sync_tx: None,
+            resource_dir: None,
         }
     }
 
@@ -152,6 +161,11 @@ impl AppContextBuilder {
         self
     }
 
+    pub fn resource_dir(mut self, rd: Arc<PathBuf>) -> Self {
+        self.resource_dir = Some(rd);
+        self
+    }
+
     /// 构建并初始化全局 AppContext
     pub fn build_and_init(self) -> &'static AppContext {
         let ctx = AppContext {
@@ -163,6 +177,7 @@ impl AppContextBuilder {
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
             app_handle: self.app_handle.expect("AppContext: app_handle is required"),
             sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
+            resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),
         };
         AppContext::init(ctx)
     }

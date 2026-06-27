@@ -233,19 +233,26 @@ pub fn run() {
             // 初始化全局配置单例
             crate::shared::system::config::AppConfig::init(app_config.clone());
 
-            // Hooks 自动配置：检查 token、在 settings.json 中注入 hooks
+            let mut app_config = app_config;
+
+            // Token 校验/生成：确保 plugin token 合法
+            let token_result = crate::desktop::plugin::setup::ensure_token(
+                &mut app_config,
+                &config_path,
+            );
+            if token_result.token_generated {
+                // 配置可能修改了 token，重新初始化全局配置
+                crate::shared::system::config::AppConfig::init(app_config.clone());
+            }
+
+            // 清理旧版全局 hooks（迁移到项目级后不再需要全局 hooks）
+            crate::desktop::plugin::setup::cleanup_global_hooks();
+
+            // 保存 resource_dir 供后续会话创建时使用
             let resource_dir = app_handle
                 .path()
                 .resource_dir()
                 .expect("Failed to get resource dir");
-            let mut app_config = app_config;
-            let plugin_result = crate::desktop::plugin::setup::setup_plugin(
-                &mut app_config,
-                &config_path,
-                &resource_dir,
-            );
-            // 配置可能修改了 token，重新初始化全局配置
-            crate::shared::system::config::AppConfig::init(app_config.clone());
 
             let ws_port = app_config.network.port;
 
@@ -277,7 +284,8 @@ pub fn run() {
             // ==================== 创建所有全局单实例 ====================
 
             let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
-            let session_manager = Arc::new(desktop::session::SessionManager::new(storage));
+            let resource_dir_arc = Arc::new(resource_dir);
+            let session_manager = Arc::new(desktop::session::SessionManager::new(storage, resource_dir_arc.clone()));
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
             let plugin_manager = Arc::new(desktop::plugin::PluginManager::new());
             let pairing_service = Arc::new(PairingService::new());
@@ -314,6 +322,7 @@ pub fn run() {
                 .qr_manager(qr_manager.clone())
                 .app_handle(app_handle_arc.clone())
                 .sync_tx(sync_tx.clone())
+                .resource_dir(resource_dir_arc.clone())
                 .build_and_init();
 
             // 同时注册到 Tauri State（前端 invoke 可用）
@@ -403,12 +412,12 @@ pub fn run() {
             let init_elapsed = start.elapsed();
             tracing::info!("BedCode (Desktop) initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
 
-            // 发送插件配置结果到前端
+            // 发送 Token 配置结果到前端
             let app_handle_for_plugin = app_handle_arc.clone();
             tauri::async_runtime::spawn(async move {
                 // 延迟 500ms 发送，确保前端已加载完成
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let _ = app_handle_for_plugin.emit("plugin-setup-result", &plugin_result);
+                let _ = app_handle_for_plugin.emit("plugin-setup-result", &token_result);
             });
 
             Ok(())

@@ -22,8 +22,10 @@ use crate::desktop::session::{
 };
 use crate::desktop::traits::PtyOutputListener;
 use crate::shared::enums::{SessionStatus, SessionType};
+use crate::shared::system::config::AppConfig;
 use crate::Result;
 use chrono::Utc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
@@ -55,6 +57,8 @@ pub struct SessionManager {
     output_listener: Arc<RwLock<Option<Arc<dyn PtyOutputListener>>>>,
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
+    /// 资源目录路径（用于项目级 hooks 脚本复制）
+    resource_dir: Arc<PathBuf>,
 }
 
 impl SessionManager {
@@ -89,23 +93,24 @@ impl SessionManager {
     }
 
     /// 创建新的 Session Manager（使用具体实现）
-    pub fn new(storage: Arc<SessionStorage>) -> Self {
+    pub fn new(storage: Arc<SessionStorage>, resource_dir: Arc<PathBuf>) -> Self {
         let pty_handler = Arc::new(PtySessionHandler::new());
-        Self::new_with_handlers(storage, pty_handler)
+        Self::new_with_handlers(storage, pty_handler, resource_dir)
     }
 
     /// 从数据库创建 Session Manager（兼容旧 API）
-    pub fn from_database(db: crate::shared::db::Database) -> Self {
+    pub fn from_database(db: crate::shared::db::Database, resource_dir: Arc<PathBuf>) -> Self {
         let db = Arc::new(tokio::sync::Mutex::new(db));
         let storage = Arc::new(SessionStorage::new(db));
         let pty_handler = Arc::new(PtySessionHandler::new());
-        Self::new_with_handlers(storage, pty_handler)
+        Self::new_with_handlers(storage, pty_handler, resource_dir)
     }
 
     /// 创建新的 Session Manager（使用具体类型注入）
     pub fn new_with_handlers(
         storage: Arc<SessionStorage>,
         pty_handler: Arc<PtySessionHandler>,
+        resource_dir: Arc<PathBuf>,
     ) -> Self {
         let pty_registry = Arc::new(DefaultPtyRegistry::new());
         let session_info = Arc::new(DefaultSessionInfoRegistry::new());
@@ -127,6 +132,7 @@ impl SessionManager {
             running,
             output_listener: Arc::new(RwLock::new(None)),
             sync_tx: RwLock::new(None),
+            resource_dir,
         }
     }
 
@@ -172,6 +178,20 @@ impl SessionManager {
             .get_config(config_id)
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
+
+        // 项目级 Hooks 配置：仅在 Claude Code 会话时配置
+        if config.command.to_lowercase().contains("claude") {
+            let app_config = AppConfig::global();
+            let result = crate::desktop::plugin::setup::ensure_project_hooks(
+                &config.working_dir,
+                app_config.network.port,
+                &app_config.plugin.token,
+                &self.resource_dir,
+            );
+            if !result.skipped {
+                tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
+            }
+        }
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -240,6 +260,20 @@ impl SessionManager {
             .get_config(config_id)
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
+
+        // 项目级 Hooks 配置：仅在 Claude Code 会话时配置
+        if config.command.to_lowercase().contains("claude") {
+            let app_config = AppConfig::global();
+            let result = crate::desktop::plugin::setup::ensure_project_hooks(
+                &config.working_dir,
+                app_config.network.port,
+                &app_config.plugin.token,
+                &self.resource_dir,
+            );
+            if !result.skipped {
+                tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
+            }
+        }
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -396,6 +430,20 @@ impl SessionManager {
             .get_config(&config_id)
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
+
+        // 项目级 Hooks 配置：仅在 Claude Code 会话时配置
+        if config.command.to_lowercase().contains("claude") {
+            let app_config = AppConfig::global();
+            let result = crate::desktop::plugin::setup::ensure_project_hooks(
+                &config.working_dir,
+                app_config.network.port,
+                &app_config.plugin.token,
+                &self.resource_dir,
+            );
+            if !result.skipped {
+                tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
+            }
+        }
 
         // 构建启动配置（复用配置映射服务）
         let mut launch_config = self.config_mapper.to_launch_config(&config)?;
@@ -671,8 +719,9 @@ impl Default for SessionManager {
         let db = Arc::new(tokio::sync::Mutex::new(db));
         let storage = Arc::new(SessionStorage::new(db));
         let pty_handler = Arc::new(PtySessionHandler::new());
+        let resource_dir = Arc::new(std::path::PathBuf::from("."));
 
-        Self::new_with_handlers(storage, pty_handler)
+        Self::new_with_handlers(storage, pty_handler, resource_dir)
     }
 }
 

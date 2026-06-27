@@ -6,4 +6,4 @@ pub mod manager;
 pub mod setup;
 
 pub use self::manager::PluginManager;
-pub use setup::PluginSetupResult;
+pub use setup::{TokenSetupResult, ProjectHooksResult};

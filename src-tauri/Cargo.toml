@@ -91,6 +91,7 @@ portable-pty = "0.8"
 [dev-dependencies]
 # Testing
 criterion = { version = "0.5", features = ["async_tokio"] }
+tempfile = "3"
 
 # Benchmark targets
 [[bench]]
