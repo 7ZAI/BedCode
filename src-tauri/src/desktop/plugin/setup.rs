@@ -315,7 +315,8 @@ fn merge_hooks(existing: &serde_json::Value, bedcode_hooks: &serde_json::Value) 
 /// 在会话启动前调用，仅在项目目录下的 `.claude/settings.json` 中配置 hooks。
 /// 如果项目已配置 hooks，则跳过。
 /// 所有 I/O 错误仅记录日志，不阻塞会话创建。
-pub fn ensure_project_hooks(
+/// 使用 spawn_blocking 避免阻塞 tokio 运行时。
+pub async fn ensure_project_hooks(
     working_dir: &str,
     port: u16,
     token: &str,
@@ -323,25 +324,54 @@ pub fn ensure_project_hooks(
 ) -> ProjectHooksResult {
     tracing::info!("ensure_project_hooks called for project: {}", working_dir);
 
+    let working_dir = working_dir.to_string();
+    let token = token.to_string();
+    let resource_dir = resource_dir.clone();
+
+    tokio::task::spawn_blocking(move || {
+        ensure_project_hooks_blocking(&working_dir, port, &token, &resource_dir)
+    })
+    .await
+    .unwrap_or_else(|e| ProjectHooksResult {
+        success: false,
+        message: format!("Hooks 配置任务异常: {}", e),
+        skipped: false,
+    })
+}
+
+/// ensure_project_hooks 的同步实现，由 spawn_blocking 调用
+fn ensure_project_hooks_blocking(
+    working_dir: &str,
+    port: u16,
+    token: &str,
+    resource_dir: &PathBuf,
+) -> ProjectHooksResult {
     let project_path = PathBuf::from(working_dir);
     let claude_dir = project_path.join(".claude");
-
-    // 1. 检查项目是否已有 BedCode hooks
     let settings_path = claude_dir.join("settings.json");
-    if settings_path.exists() {
-        if let Ok(content) = fs::read_to_string(&settings_path) {
-            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(hooks) = settings.get("hooks") {
-                    if is_bedcode_hooks_configured(hooks) {
-                        tracing::info!("Project already has BedCode hooks configured, skipping");
-                        return ProjectHooksResult {
-                            success: true,
-                            message: "项目已配置 BedCode hooks".to_string(),
-                            skipped: true,
-                        };
-                    }
-                }
+
+    // 1. 读取现有 settings.json（只读一次，后续复用）
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        match fs::read_to_string(&settings_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+            Err(e) => {
+                tracing::warn!("Failed to read project settings.json: {}", e);
+                serde_json::json!({})
             }
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    // 检查项目是否已有 BedCode hooks
+    if let Some(hooks) = settings.get("hooks") {
+        if is_bedcode_hooks_configured(hooks) {
+            tracing::info!("Project already has BedCode hooks configured, skipping");
+            return ProjectHooksResult {
+                success: true,
+                message: "项目已配置 BedCode hooks".to_string(),
+                skipped: true,
+            };
         }
     }
 
@@ -381,20 +411,7 @@ pub fn ensure_project_hooks(
     let hook_script_str = hook_script_path.to_string_lossy().to_string();
     let hooks_config = build_hooks_config(port, token, &hook_script_str);
 
-    // 读取现有项目 settings.json 或创建空对象
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        match fs::read_to_string(&settings_path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
-            Err(e) => {
-                tracing::warn!("Failed to read project settings.json: {}", e);
-                serde_json::json!({})
-            }
-        }
-    } else {
-        serde_json::json!({})
-    };
-
-    // 合并 hooks：保留非 BedCode hooks，添加 BedCode hooks
+    // 合并 hooks：保留非 BedCode hooks，添加 BedCode hooks（复用已读取的 settings）
     let existing_hooks = settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
     let merged_hooks = merge_hooks(&existing_hooks, &hooks_config);
     settings["hooks"] = merged_hooks;
@@ -421,6 +438,11 @@ pub fn ensure_project_hooks(
         }
     }
 
+    // 5. 验证 hooks 配置是否生效
+    if !verify_project_hooks(&settings_path) {
+        tracing::warn!("Project hooks verification failed: bedcode_hook.py not found in written settings.json");
+    }
+
     tracing::info!(
         "Project hooks configured in {} with BEDCODE_PORT={}",
         settings_path.display(),
@@ -431,6 +453,23 @@ pub fn ensure_project_hooks(
         success: true,
         message: "项目 Hooks 已配置".to_string(),
         skipped: false,
+    }
+}
+
+/// 验证项目 settings.json 中的 hooks 配置是否包含 BedCode hooks
+fn verify_project_hooks(settings_path: &PathBuf) -> bool {
+    match fs::read_to_string(settings_path) {
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(settings) => {
+                if let Some(hooks) = settings.get("hooks") {
+                    is_bedcode_hooks_configured(hooks)
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        },
+        Err(_) => false,
     }
 }
 
@@ -606,7 +645,7 @@ mod tests {
         let working_dir = tmp_dir.path().to_string_lossy().to_string();
         let resource_dir = PathBuf::from("/nonexistent");
 
-        let result = ensure_project_hooks(&working_dir, 8765, "testtoken123456", &resource_dir);
+        let result = ensure_project_hooks_blocking(&working_dir, 8765, "testtoken123456", &resource_dir);
 
         assert!(result.success);
         assert!(!result.skipped);
@@ -625,12 +664,28 @@ mod tests {
         let working_dir = tmp_dir.path().to_string_lossy().to_string();
         let resource_dir = PathBuf::from("/nonexistent");
 
-        let result1 = ensure_project_hooks(&working_dir, 8765, "testtoken123456", &resource_dir);
+        let result1 = ensure_project_hooks_blocking(&working_dir, 8765, "testtoken123456", &resource_dir);
         assert!(result1.success);
         assert!(!result1.skipped);
 
-        let result2 = ensure_project_hooks(&working_dir, 8765, "testtoken123456", &resource_dir);
+        let result2 = ensure_project_hooks_blocking(&working_dir, 8765, "testtoken123456", &resource_dir);
         assert!(result2.success);
         assert!(result2.skipped);
+    }
+
+    #[test]
+    fn test_verify_project_hooks() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let working_dir = tmp_dir.path().to_string_lossy().to_string();
+        let resource_dir = PathBuf::from("/nonexistent");
+
+        // 配置前不应验证通过
+        let settings_path = tmp_dir.path().join(".claude").join("settings.json");
+        assert!(!verify_project_hooks(&settings_path));
+
+        // 配置后应验证通过
+        let result = ensure_project_hooks_blocking(&working_dir, 8765, "testtoken123456", &resource_dir);
+        assert!(result.success);
+        assert!(verify_project_hooks(&settings_path));
     }
 }

@@ -187,7 +187,7 @@ impl SessionManager {
                 app_config.network.port,
                 &app_config.plugin.token,
                 &self.resource_dir,
-            );
+            ).await;
             if !result.skipped {
                 tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
             }
@@ -269,7 +269,7 @@ impl SessionManager {
                 app_config.network.port,
                 &app_config.plugin.token,
                 &self.resource_dir,
-            );
+            ).await;
             if !result.skipped {
                 tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
             }
@@ -439,7 +439,7 @@ impl SessionManager {
                 app_config.network.port,
                 &app_config.plugin.token,
                 &self.resource_dir,
-            );
+            ).await;
             if !result.skipped {
                 tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
             }
