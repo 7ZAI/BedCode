@@ -288,6 +288,7 @@ pub fn run() {
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage, resource_dir_arc.clone()));
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
             let plugin_manager = Arc::new(desktop::plugin::PluginManager::new());
+            let plugin_host = Arc::new(desktop::plugin::PluginHost::new(db.clone()));
             let pairing_service = Arc::new(PairingService::new());
             let qr_manager = Arc::new(crate::desktop::auth::QrTokenManager::new());
             let app_handle_arc = Arc::new(app_handle.clone());
@@ -318,6 +319,7 @@ pub fn run() {
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
                 .plugin_manager(plugin_manager.clone())
+                .plugin_host(plugin_host.clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
                 .app_handle(app_handle_arc.clone())
@@ -331,6 +333,7 @@ pub fn run() {
             app.manage(session_manager.clone());
             app.manage(pairing_service.clone());
             app.manage(qr_manager.clone());
+            app.manage(plugin_host.clone());
 
             // ==================== 启动 WebSocket 服务 ====================
 
@@ -475,6 +478,19 @@ pub fn run() {
             shared::system::commands::get_startup_time,
             shared::system::commands::get_local_ip_addresses,
             desktop::commands::devices::get_connected_devices,
+            // Plugin
+            desktop::commands::plugin::plugin_list_loaded,
+            desktop::commands::plugin::plugin_get_info,
+            desktop::commands::plugin::plugin_activate,
+            desktop::commands::plugin::plugin_deactivate,
+            desktop::commands::plugin::plugin_mark_error,
+            desktop::commands::plugin::plugin_storage_get,
+            desktop::commands::plugin::plugin_storage_set,
+            desktop::commands::plugin::plugin_storage_delete,
+            desktop::commands::plugin::plugin_terminal_send_input,
+            desktop::commands::plugin::plugin_list_commands,
+            desktop::commands::plugin::plugin_list_views,
+            desktop::commands::plugin::plugin_find_file_handler,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
