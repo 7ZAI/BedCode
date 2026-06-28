@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 /// 插件描述文件 (plugin.json) 的完整结构
@@ -38,6 +39,34 @@ fn default_sandbox() -> String {
     "inline".to_string()
 }
 
+/// 插件配置声明
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginConfiguration {
+    /// 配置区域标题
+    pub title: String,
+    /// 配置属性映射（key → 属性定义）
+    pub properties: HashMap<String, ConfigProperty>,
+}
+
+/// 配置属性定义
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigProperty {
+    /// 属性类型：string / number / boolean
+    #[serde(rename = "type")]
+    pub prop_type: String,
+    /// 显示标题
+    pub title: String,
+    /// 帮助描述
+    #[serde(default)]
+    pub description: Option<String>,
+    /// 默认值
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+    /// 枚举选项（type 为 string 时使用）
+    #[serde(default)]
+    pub enum_values: Option<Vec<String>>,
+}
+
 /// 插件扩展点声明
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginContributes {
@@ -51,6 +80,9 @@ pub struct PluginContributes {
     pub tool_providers: Vec<ToolProviderContribution>,
     #[serde(default)]
     pub file_handlers: Vec<FileHandlerContribution>,
+    /// 配置声明
+    #[serde(default)]
+    pub configuration: Option<PluginConfiguration>,
 }
 
 /// 命令扩展点
