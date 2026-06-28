@@ -121,5 +121,10 @@ export default {
       restartSession: '重启会话',
       deleteSession: '删除会话',
     },
+    plugin: {
+      viewNotFound: '插件视图未找到',
+      searchCommands: '搜索插件命令...',
+      noCommands: '没有找到匹配的命令',
+    },
   },
 }

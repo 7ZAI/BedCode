@@ -121,5 +121,10 @@ export default {
       restartSession: 'Restart Session',
       deleteSession: 'Delete Session',
     },
+    plugin: {
+      viewNotFound: 'Plugin view not found',
+      searchCommands: 'Search plugin commands...',
+      noCommands: 'No matching commands found',
+    },
   },
 }

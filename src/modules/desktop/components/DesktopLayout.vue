@@ -19,6 +19,7 @@
         </main>
       </div>
     </div>
+    <PluginCommandPalette />
   </template>
 </template>
 
@@ -27,6 +28,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import TitleBar from '@/modules/desktop/components/TitleBar.vue'
 import Sidebar from '@/modules/desktop/components/Sidebar.vue'
+import PluginCommandPalette from '@/modules/shared/plugin/components/PluginCommandPalette.vue'
 
 const route = useRoute()
 

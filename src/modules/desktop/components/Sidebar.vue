@@ -1,3 +1,13 @@
+<script setup lang="ts">
+/**
+ * 桌面端侧边栏 — 导航和插件面板
+ */
+import { getPluginRegistry } from '@/modules/shared/plugin/registry'
+
+const pluginRegistry = getPluginRegistry()
+const sidebarPlugins = pluginRegistry.sidebarViews
+</script>
+
 <template>
   <aside class="w-64 bg-white dark:bg-dark-800 border-r border-slate-200 dark:border-dark-700 flex flex-col">
     <!-- Navigation -->
@@ -71,6 +81,25 @@
           </router-link>
         </li>
       </ul>
+
+      <!-- Plugin Sidebar Panels -->
+      <div v-if="sidebarPlugins.length > 0" class="mt-4 pt-4 border-t border-slate-200 dark:border-dark-700">
+        <ul class="space-y-2">
+          <li v-for="view in sidebarPlugins" :key="view.viewId">
+            <router-link
+              :to="`/plugin/sidebar/${view.pluginId}/${view.viewId}`"
+              class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+              :class="[
+                $route.path === `/plugin/sidebar/${view.pluginId}/${view.viewId}`
+                  ? 'bg-primary-600 text-white'
+                  : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+              ]"
+            >
+              {{ view.title }}
+            </router-link>
+          </li>
+        </ul>
+      </div>
     </nav>
 
     <!-- Status Bar -->
