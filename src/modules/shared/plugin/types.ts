@@ -81,6 +81,7 @@ export interface PluginInfo {
   version: string
   description: string
   author: string
+  main: string
   sandbox: string
   permissions: string[]
   state: PluginState
