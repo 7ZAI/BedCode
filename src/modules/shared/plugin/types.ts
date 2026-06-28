@@ -22,6 +22,28 @@ export interface PluginManifest {
   contributes: PluginContributes
 }
 
+/** 插件配置声明 */
+export interface PluginConfiguration {
+  /** 配置区域标题 */
+  title: string
+  /** 配置属性映射（key → 属性定义） */
+  properties: Record<string, ConfigProperty>
+}
+
+/** 配置属性定义 */
+export interface ConfigProperty {
+  /** 属性类型 */
+  type: 'string' | 'number' | 'boolean'
+  /** 显示标题 */
+  title: string
+  /** 帮助描述 */
+  description?: string
+  /** 默认值 */
+  default?: any
+  /** 枚举选项（type 为 string 时使用） */
+  enum?: string[]
+}
+
 /** 插件扩展点声明 */
 export interface PluginContributes {
   commands: CommandContribution[]
@@ -29,6 +51,8 @@ export interface PluginContributes {
   terminal?: TerminalContribution
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
+  /** 配置声明 */
+  configuration?: PluginConfiguration
 }
 
 /** 命令扩展点 */
