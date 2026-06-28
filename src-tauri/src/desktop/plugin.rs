@@ -5,6 +5,7 @@
 pub mod loader;
 pub mod manager;
 pub mod permission;
+pub mod registry;
 pub mod setup;
 pub mod storage;
 pub mod types;
