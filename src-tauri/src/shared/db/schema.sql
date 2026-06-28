@@ -52,3 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_pairings_active ON pairings(is_active);
 CREATE INDEX IF NOT EXISTS idx_session_configs_name ON session_configs(name);
 CREATE INDEX IF NOT EXISTS idx_quick_actions_order ON quick_actions(sort_order);
 CREATE INDEX IF NOT EXISTS idx_quick_actions_category ON quick_actions(category);
+
+-- Plugin key-value storage (per-plugin isolation)
+CREATE TABLE IF NOT EXISTS plugin_storage (
+    plugin_id TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    value     TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (plugin_id, key)
+);

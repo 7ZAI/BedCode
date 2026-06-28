@@ -37,6 +37,9 @@ pub enum AppError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
