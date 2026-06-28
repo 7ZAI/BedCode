@@ -29,50 +29,62 @@ Internet connectivity interface or NAT traversal protocol will be reserved in th
 - **Session Management** - Create, configure, and manage multiple Claude Code sessions
 - **Terminal Preview** - Real-time xterm.js terminal output preview
 - **Device Pairing** - QR code + 6-digit code authentication for secure device pairing
+- **Plugin System** - Auto-configure Claude Code hooks, task status tracking, auto-approve mode
+- **HTTP + WebSocket Server** - Actix Web based HTTP API + WebSocket for terminal communication
 - **System Tray** - Quick actions from the system tray
 - **WSL2 Support** - Run sessions inside Windows Subsystem for Linux
 
 ### Mobile (Remote)
 - **Device Discovery & Pairing** - Scan QR code or enter pairing code to connect
 - **Terminal Output** - Enhanced mode (parsed ANSI/Markdown) and raw mode toggle
-- **Smart Input Bar** - Special keys (Tab, Ctrl+C, Esc, arrows) and input assistant
-- **Quick Actions** - Customizable command shortcuts grid
+- **Smart Input Bar** - Special keys (Tab, Ctrl+C, Esc, arrows), input assistant, and shortcut config
+- **Auto-Execute Engine** - Queue and auto-execute multiple tasks with auto/manual mode toggle
+- **Code Explorer** - Browse project files, view code with syntax highlighting, and diff rendering
+- **Preset Tasks** - Pre-configured task cards with type badges and action menus
+- **Task Notifications** - Per-session task status notifications
 - **Auto-Reconnect** - Automatic reconnection on unexpected disconnects
-- **Foreground Service** - Keep connection alive in background (Android)
+- **Foreground Service** - Keep connection alive in background with WakeLock (Android)
 - **Edge-to-Edge Display** - Modern full-screen mobile experience
 
 ### Security
 - JWT-based session authentication (HS256, 7-day expiry)
 - QR token with one-time use and configurable TTL
+- Plugin token for Claude Code hooks authentication
 - Pairing codes expire after 60 seconds
 - Device fingerprint verification on connection
 
 > **Note:** End-to-end encryption (X25519 key exchange + AES-GCM) is planned but not yet implemented. Current WebSocket communication is unencrypted (ws://). See [Roadmap](#roadmap).
 
+### Internationalization
+- Full i18n support via vue-i18n (zh-CN / en)
+- Language switcher in settings with persistent preference
+- Error code mapping system for localized error messages
+
 ## Architecture
 
 ```
-┌─────────────────┐       WebSocket        ┌─────────────────┐
-│   Desktop App    │◄──────────────────────►│   Mobile App     │
-│  (Tauri + Vue)   │     WebSocket (WS)      │  (Tauri + Vue)   │
-│                  │                        │                  │
-│  ┌────────────┐  │                        │  ┌────────────┐  │
-│  │ PTY Manager│  │                        │  │ WS Client  │  │
-│  │ (Claude)   │  │                        │  │            │  │
-│  └────────────┘  │                        │  └────────────┘  │
-│  ┌────────────┐  │                        │  ┌────────────┐  │
-│  │ WS Server  │  │                        │  │ UI (Touch) │  │
-│  └────────────┘  │                        │  └────────────┘  │
-└─────────────────┘                        └─────────────────┘
+┌─────────────────────────────────┐                ┌─────────────────────────────────┐
+│         Desktop App              │                │         Mobile App               │
+│        (Tauri + Vue 3)           │                │        (Tauri + Vue 3)           │
+│                                  │                │                                  │
+│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
+│  │ PTY Manager│  │ WS Server  │ │   WebSocket    │  │ WS Client  │  │ Auto-Exec  │ │
+│  │ (Claude)   │  │ (Actix)    │◄├───────────────►├►│            │  │ Engine     │ │
+│  └────────────┘  └────────────┘ │   + HTTP API   │  └────────────┘  └────────────┘ │
+│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
+│  │ Plugin Mgr │  │ HTTP API   │ │                │  │ Code       │  │ Touch UI   │ │
+│  │ (Hooks)    │  │ (Actix)    │ │                │  │ Explorer   │  │            │ │
+│  └────────────┘  └────────────┘ │                │  └────────────┘  └────────────┘ │
+└─────────────────────────────────┘                └─────────────────────────────────┘
 ```
 
 The project uses a **shared + platform-specific** architecture:
 
 | Layer | Frontend (Vue 3) | Backend (Rust) |
 |-------|-------------------|-----------------|
-| **Shared** | Components, composables, stores, utils | Auth, DB, WebSocket, parser, models |
-| **Desktop** | Session manager, terminal preview, sidebar | PTY, WS server, session management |
-| **Mobile** | Terminal view, quick actions, pairing | WS client, remote connection |
+| **Shared** | Components, composables, stores, i18n, utils | Auth, DB, WebSocket, parser, models, error handling |
+| **Desktop** | Session manager, terminal preview, sidebar | PTY, Actix Web server, session management, plugin system |
+| **Mobile** | Terminal view, code explorer, auto-exec, toolbox | WS client, HTTP client, remote connection, routing |
 
 ## Tech Stack
 
@@ -83,9 +95,11 @@ The project uses a **shared + platform-specific** architecture:
 | Styling | TailwindCSS |
 | State | Pinia |
 | Backend | Rust (Tokio async runtime) |
+| HTTP Server | Actix Web 4 |
 | Database | SQLite (rusqlite) |
-| Communication | WebSocket
+| Communication | WebSocket + HTTP REST API |
 | Terminal | xterm.js |
+| I18n | vue-i18n@9 |
 | Testing | Vitest, Playwright, Rust test |
 
 ## Getting Started
@@ -159,30 +173,55 @@ BedCode uses a `config.json` file (bundled as a Tauri resource) for runtime conf
 | Network | `network.heartbeat_interval_secs` | `30` | Heartbeat interval |
 | Session | `session.default_command` | `"claude"` | Default terminal command |
 | UI | `ui.theme` | `"system"` | Theme (system/light/dark) |
+| UI | `ui.language` | `"zh-CN"` | Language (zh-CN/en) |
 | Terminal | `terminal.default_cols` | `120` | Default terminal columns |
 | Terminal | `terminal.flush_interval_ms` | `30` | Output flush interval |
 
 ## How It Works
 
-1. **Start Desktop App** - Launch BedCode on your desktop, which starts the WebSocket server and mDNS discovery service
+1. **Start Desktop App** - Launch BedCode on your desktop, which starts the Actix Web server (HTTP + WebSocket) and mDNS discovery service
 2. **Pair Your Phone** - Open BedCode on your phone, scan the QR code or enter the 6-digit pairing code
 3. **Control Remotely** - Once paired, select a session and start sending commands from your phone
 4. **Real-time Output** - Terminal output is streamed to your phone in real-time with ANSI rendering
+5. **Auto-Execute Tasks** - Queue multiple tasks on your phone; the auto-execute engine sends them one by one as Claude Code becomes idle
+6. **Browse Code** - Use the code explorer to browse project files and view diffs with syntax highlighting
+
+## Plugin System
+
+BedCode integrates with Claude Code through a hook-based plugin system:
+
+- **Auto-Configuration** - Project-scoped Claude Code hooks are automatically configured when a session starts
+- **Task Status Tracking** - Claude Code hooks push task status (idle/in_progress/asking/completed/interrupted) to the desktop app via HTTP API
+- **Auto-Approve Mode** - In auto mode, Claude Code tool-use permissions are automatically approved; in manual mode, the user operates Claude Code directly
+- **Session ID Binding** - PTY sessions inject `BEDCODE_SESSION_ID` environment variable to bind Claude Code sessions with BedCode sessions
+
+```
+Claude Code Hook (Python)
+    ↓ HTTP POST
+Rust HTTP API (plugin_controller)
+    ↓ DesktopSyncEvent
+SyncEventHandler → WebSocket broadcast
+    ↓ ws_sync_task_status_changed
+Mobile Tauri Event → Auto-Execute Engine (state machine)
+    ↓ sendInput / HTTP API
+Claude Code (PTY)
+```
 
 ## Project Structure
 
 ```
 bedcode/
 ├── src/                          # Vue 3 frontend
-│   └── modules/
-│       ├── desktop/              # Desktop UI (sessions, terminal, devices)
-│       ├── mobile/               # Mobile UI (terminal, pairing, quick actions)
-│       └── shared/               # Shared components, stores, composables
+│   ├── modules/
+│   │   ├── desktop/              # Desktop UI (sessions, terminal, devices)
+│   │   ├── mobile/               # Mobile UI (terminal, code explorer, toolbox, pairing)
+│   │   └── shared/               # Shared components, stores, composables, i18n
+│   └── locales/                  # i18n translations (zh-CN / en)
 ├── src-tauri/
 │   └── src/
-│       ├── shared/               # Shared Rust modules (auth, db, websocket, parser)
-│       ├── desktop/              # Desktop-only (PTY, WS server, session mgmt)
-│       └── mobile/               # Mobile-only (WS client, remote connection)
+│       ├── shared/               # Shared Rust modules (auth, db, enums, models, system)
+│       ├── desktop/              # Desktop-only (PTY, Actix server, session mgmt, plugin)
+│       └── mobile/               # Mobile-only (WS client, HTTP client, routing, remote)
 ├── docs/                         # Documentation
 └── e2e/                          # E2E tests
 ```
@@ -191,16 +230,17 @@ See [docs/code-map.md](docs/code-map.md) for the complete module index.
 
 ## Roadmap
 
+- [x] Plugin system for Claude Code hooks and auto-execute
+- [x] Mobile file browser and code viewer with diff rendering
+- [x] Multi-language support (i18n: zh-CN / en)
+- [x] Auto-execute task engine with auto/manual mode
 - [ ] End-to-end encryption (X25519 + AES-GCM)
-- [ ] Mobile file browser and code viewer
 - [ ] Linux desktop support
-- [ ] Multi-language support (i18n)
 - [ ] Internet connectivity interface
-- [ ] Plugin system for custom commands
 - [ ] FCM push notifications
 - [ ] Virtual scrolling for terminal history
 
-## Contributing 
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
