@@ -135,8 +135,7 @@ const saving = ref(false)
 
 /** 判断插件是否为激活状态 */
 function isActivatedState(state: PluginState): boolean {
-  if (typeof state === 'object' && state !== null) return state.state === 'Activated'
-  return state === 'Activated'
+  return state.state === 'Activated'
 }
 
 /** 从 manifest defaults 构建初始值 */

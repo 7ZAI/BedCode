@@ -12,31 +12,25 @@ import type { PluginInfo, PluginState } from '@/modules/shared/plugin/types'
 
 /** 获取插件状态的显示文本 key */
 function getStateKey(state: PluginState): string {
-  if (typeof state === 'object' && state !== null) {
-    if (state.state === 'Error') return 'desktop.plugin.error'
-  }
-  if (state === 'Activated' || (typeof state === 'object' && state?.state === 'Activated')) return 'desktop.plugin.activated'
-  if (state === 'Deactivated' || (typeof state === 'object' && state?.state === 'Deactivated')) return 'desktop.plugin.deactivated'
+  if (state.state === 'Error') return 'desktop.plugin.error'
+  if (state.state === 'Activated') return 'desktop.plugin.activated'
+  if (state.state === 'Deactivated') return 'desktop.plugin.deactivated'
   return 'desktop.plugin.deactivated'
 }
 
 /** 判断插件是否为激活状态 */
 function isActivated(state: PluginState): boolean {
-  if (typeof state === 'object' && state !== null) return state.state === 'Activated'
-  return state === 'Activated'
+  return state.state === 'Activated'
 }
 
 /** 判断插件是否为错误状态 */
 function isErrorState(state: PluginState): boolean {
-  if (typeof state === 'object' && state !== null) return state.state === 'Error'
-  return false
+  return state.state === 'Error'
 }
 
 /** 获取错误信息 */
 function getErrorMessage(state: PluginState): string {
-  if (typeof state === 'object' && state !== null && state.state === 'Error') {
-    return state.error || ''
-  }
+  if (state.state === 'Error') return state.error || ''
   return ''
 }
 

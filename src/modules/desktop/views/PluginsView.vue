@@ -28,7 +28,7 @@
         <div v-else class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 shadow-sm dark:shadow-none overflow-hidden">
           <!-- Table Header -->
           <div class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-4 py-2 bg-slate-50 dark:bg-dark-700/50 text-xs font-semibold text-slate-500 dark:text-dark-400 border-b border-slate-200 dark:border-dark-700 items-center">
-            <span>{{ $t('desktop.sidebar.sessionConfig') }}</span>
+            <span>{{ $t('desktop.plugin.title') }}</span>
             <span>{{ $t('desktop.plugin.version') }}</span>
             <span>{{ $t('desktop.plugin.state') }}</span>
             <span></span>
