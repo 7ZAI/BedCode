@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 /// 插件描述文件 (plugin.json) 的完整结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
     /// 唯一标识（反向域名格式，如 com.bedcode.quick-snippets）
     pub id: String,
@@ -41,6 +42,7 @@ fn default_sandbox() -> String {
 
 /// 插件配置声明
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginConfiguration {
     /// 配置区域标题
     pub title: String,
@@ -50,6 +52,7 @@ pub struct PluginConfiguration {
 
 /// 配置属性定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigProperty {
     /// 属性类型：string / number / boolean
     #[serde(rename = "type")]
@@ -69,6 +72,7 @@ pub struct ConfigProperty {
 
 /// 插件扩展点声明
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginContributes {
     #[serde(default)]
     pub commands: Vec<CommandContribution>,
@@ -96,6 +100,7 @@ pub struct CommandContribution {
 
 /// 视图扩展点
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewContribution {
     pub id: String,
     /// "sidebar" | "toolbox" | "statusbar"
@@ -107,6 +112,7 @@ pub struct ViewContribution {
 
 /// 终端扩展点
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalContribution {
     #[serde(default)]
     pub input_handlers: Vec<String>,
@@ -116,6 +122,7 @@ pub struct TerminalContribution {
 
 /// 外部工具扩展点
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolProviderContribution {
     pub id: String,
     pub name: String,
@@ -124,6 +131,7 @@ pub struct ToolProviderContribution {
 
 /// 文件处理扩展点
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileHandlerContribution {
     pub id: String,
     pub extensions: Vec<String>,
@@ -154,6 +162,7 @@ pub struct LoadedPlugin {
 
 /// 插件信息（返回给前端的精简版本）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginInfo {
     pub id: String,
     pub name: String,

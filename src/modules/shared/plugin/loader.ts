@@ -4,6 +4,7 @@
  * 加载、激活、停用插件 — 前端入口
  */
 
+import { convertFileSrc } from '@tauri-apps/api/core'
 import type { PluginInfo, PluginModule, PluginContext } from './types'
 import * as pluginCmds from './commands'
 import { createPluginContext } from './context'
@@ -105,13 +106,17 @@ class PluginLoaderClass {
     return Array.from(this.plugins.values())
   }
 
-  /** 判断插件是否需要按需激活 */
+  /** 判断插件是否需要按需激活
+   *
+   * 有 views 的插件立即激活（需要在侧边栏/工具箱显示入口）
+   * 仅声明 commands/terminal 的插件懒激活（按需调用，如命令面板触发）
+   */
   private shouldLazyActivate(manifest: PluginInfo): boolean {
     const c = manifest.contributes
+    if (c.views.length > 0) return false
     return (
       c.commands.length > 0 ||
-      !!c.terminal ||
-      c.views.length > 0
+      !!c.terminal
     )
   }
 
@@ -124,7 +129,7 @@ class PluginLoaderClass {
       await pluginCmds.pluginActivate(manifest.id)
 
       // 动态导入插件入口文件
-      const entryUrl = this.convertFileUrl(manifest.extension_path, manifest.main)
+      const entryUrl = this.convertFileUrl(manifest.extensionPath, manifest.main)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
 
       // 创建 PluginContext
@@ -141,21 +146,23 @@ class PluginLoaderClass {
     }
   }
 
-  /** 将插件路径转换为可导入的 URL */
+  /** 将插件路径转换为可导入的 URL（通过 Tauri asset protocol） */
   private convertFileUrl(extensionPath: string, main: string): string {
-    // Tauri 中使用 asset protocol 或 convertFileSrc 加载本地文件
-    const path = `${extensionPath}/${main}`.replace(/\\/g, '/')
-    return `https://asset.localhost/${path}`
+    const filePath = `${extensionPath}/${main}`.replace(/\\/g, '/')
+    return convertFileSrc(filePath)
   }
 
   /** 带超时的动态导入 */
   private async importWithTimeout(url: string, timeoutMs: number): Promise<PluginModule> {
-    return Promise.race([
-      import(/* @vite-ignore */ url),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Import timeout: ${url}`)), timeoutMs)
-      ),
-    ])
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Import timeout: ${url}`)), timeoutMs)
+    })
+    try {
+      return await Promise.race([import(/* @vite-ignore */ url), timeout])
+    } finally {
+      clearTimeout(timer!)
+    }
   }
 
   /** 带超时的 activate 调用 */
@@ -164,12 +171,15 @@ class PluginLoaderClass {
     context: PluginContext,
     timeoutMs: number,
   ): Promise<void> {
-    return Promise.race([
-      module.activate(context),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Activate timeout')), timeoutMs)
-      ),
-    ])
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Activate timeout')), timeoutMs)
+    })
+    try {
+      await Promise.race([module.activate(context), timeout])
+    } finally {
+      clearTimeout(timer!)
+    }
   }
 }
 

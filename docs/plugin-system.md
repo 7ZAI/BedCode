@@ -47,7 +47,7 @@
 |------|------|
 | `types.rs` | `PluginManifest`、`PluginState`、`LoadedPlugin`、`PluginInfo`、`PluginContributes`、`PluginConfiguration` |
 | `permission.rs` | `PermissionManager` — 合法权限枚举、权限授予/校验/撤销、权限→API 映射 |
-| `loader.rs` | `PluginLoader` — 扫描 `~/.bedcode/plugins/`、解析 `plugin.json`、验证必填字段 |
+| `loader.rs` | `PluginLoader` — 扫描 `{resource_dir}/plugins/desktop/`、解析 `plugin.json`、验证必填字段 |
 | `registry.rs` | `PluginRegistry` — 扩展点注册表（commands/views/terminal/http/file_handlers） |
 | `host.rs` | `PluginHost` — 生命周期协调器，组合 loader + permission + registry + storage |
 | `storage.rs` | `PluginStorage` — SQLite `plugin_storage` 表 CRUD，按 plugin_id 隔离 |
@@ -97,7 +97,10 @@
 ### 3.1 启动阶段（Rust 端）
 
 1. **`PluginHost::new(db)`** 在 `lib.rs` 的 Tauri setup 闭包中创建
-2. **`PluginLoader::load_all()`** 扫描 `~/.bedcode/plugins/` 目录
+2. **`PluginLoader::load_all()`** 扫描安装目录下 `plugins/desktop/` 目录
+   - 目录路径通过 `resource_dir` 解析：`{resource_dir}/plugins/desktop/{plugin-id}/plugin.json`
+   - 开发模式：`src-tauri/resources/plugins/desktop/`
+   - 生产安装：安装目录下 `resources/plugins/desktop/`
    - 每个子目录需包含 `plugin.json`
    - 解析并验证必填字段（id, name, version, main）
    - 验证 sandbox 模式（MVP 仅允许 `inline`）

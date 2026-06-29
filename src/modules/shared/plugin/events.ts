@@ -10,30 +10,40 @@ import type { Disposable } from './types'
 
 type EventHandler = (...args: any[]) => void
 
-/** 全局事件总线 */
-const handlers = new Map<string, Set<EventHandler>>()
+/**
+ * 全局事件总线
+ *
+ * 使用嵌套 Map 避免字符串解析的脆弱性
+ * 外层 key 为 pluginId，内层 key 为 eventName
+ */
+const handlers = new Map<string, Map<string, Set<EventHandler>>>()
 
 /** 监听事件 */
 export function on(pluginId: string, event: string, handler: EventHandler): Disposable {
-  const key = `${pluginId}:${event}`
-  if (!handlers.has(key)) {
-    handlers.set(key, new Set())
+  let pluginMap = handlers.get(pluginId)
+  if (!pluginMap) {
+    pluginMap = new Map()
+    handlers.set(pluginId, pluginMap)
   }
-  handlers.get(key)!.add(handler)
+  let handlerSet = pluginMap.get(event)
+  if (!handlerSet) {
+    handlerSet = new Set()
+    pluginMap.set(event, handlerSet)
+  }
+  handlerSet.add(handler)
 
   return {
     dispose() {
-      handlers.get(key)?.delete(handler)
+      handlers.get(pluginId)?.get(event)?.delete(handler)
     },
   }
 }
 
 /** 发射事件 */
 export function emit(event: string, ...args: any[]): void {
-  for (const [key, handlerSet] of handlers.entries()) {
-    // key 格式为 pluginId:eventName
-    const eventName = key.split(':').slice(1).join(':')
-    if (eventName === event) {
+  for (const pluginMap of handlers.values()) {
+    const handlerSet = pluginMap.get(event)
+    if (handlerSet) {
       handlerSet.forEach(h => {
         try {
           h(...args)
@@ -47,9 +57,5 @@ export function emit(event: string, ...args: any[]): void {
 
 /** 清理插件的所有事件监听 */
 export function clearPluginEvents(pluginId: string): void {
-  for (const key of handlers.keys()) {
-    if (key.startsWith(`${pluginId}:`)) {
-      handlers.delete(key)
-    }
-  }
+  handlers.delete(pluginId)
 }

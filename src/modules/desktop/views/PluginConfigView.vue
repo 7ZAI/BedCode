@@ -28,7 +28,7 @@
 
         <!-- No Configuration -->
         <div v-else-if="!configSchema" class="py-12 text-center text-slate-500 dark:text-dark-400">
-          {{ pluginInfo.name }} — no configuration available
+          {{ pluginInfo.name }} — {{ $t('desktop.plugin.noConfigAvailable') }}
         </div>
 
         <!-- Config Form -->
@@ -187,7 +187,7 @@ async function loadConfig(): Promise<void> {
     const defaults = buildDefaults(schema)
     configValues.value = saved ? { ...defaults, ...saved } : defaults
   } catch (e: any) {
-    toast.error(e.message || 'Failed to load plugin config')
+    toast.error(t('desktop.plugin.loadConfigFailed'))
   } finally {
     loading.value = false
   }
@@ -201,7 +201,7 @@ async function saveConfig(): Promise<void> {
     await pluginStorageSet(pluginId.value, 'config', { ...configValues.value })
     toast.success(t('desktop.plugin.configSaved'))
   } catch (e: any) {
-    toast.error(e.message || 'Failed to save config')
+    toast.error(t('desktop.plugin.saveConfigFailed'))
   } finally {
     saving.value = false
   }

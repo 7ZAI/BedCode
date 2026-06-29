@@ -14,8 +14,9 @@ import type { PluginInfo, PluginState } from '@/modules/shared/plugin/types'
 function getStateKey(state: PluginState): string {
   if (state.state === 'Error') return 'desktop.plugin.error'
   if (state.state === 'Activated') return 'desktop.plugin.activated'
+  if (state.state === 'Loaded') return 'desktop.plugin.loaded'
   if (state.state === 'Deactivated') return 'desktop.plugin.deactivated'
-  return 'desktop.plugin.deactivated'
+  return 'desktop.plugin.loaded'
 }
 
 /** 判断插件是否为激活状态 */
@@ -38,11 +39,12 @@ function getErrorMessage(state: PluginState): string {
 function getContributesSummary(plugin: PluginInfo): string {
   const parts: string[] = []
   const c = plugin.contributes
-  if (c.commands.length > 0) parts.push(`${c.commands.length} commands`)
-  if (c.views.length > 0) parts.push(`${c.views.length} views`)
+  if (!c) return '—'
+  if (c.commands?.length) parts.push(`${c.commands.length} commands`)
+  if (c.views?.length) parts.push(`${c.views.length} views`)
   if (c.terminal) parts.push('terminal')
-  if (c.toolProviders.length > 0) parts.push(`${c.toolProviders.length} tools`)
-  if (c.fileHandlers.length > 0) parts.push(`${c.fileHandlers.length} handlers`)
+  if (c.toolProviders?.length) parts.push(`${c.toolProviders.length} tools`)
+  if (c.fileHandlers?.length) parts.push(`${c.fileHandlers.length} handlers`)
   return parts.length > 0 ? parts.join(' · ') : '—'
 }
 
@@ -60,7 +62,7 @@ export function usePluginManager() {
     try {
       plugins.value = await pluginListLoaded()
     } catch (e: any) {
-      toast.error(e.message || 'Failed to load plugins')
+      toast.error(t('desktop.plugin.loadFailed'))
     } finally {
       loading.value = false
     }
@@ -95,7 +97,7 @@ export function usePluginManager() {
       await navigator.clipboard.writeText(path)
       toast.success(t('desktop.plugin.pathCopied'))
     } catch {
-      toast.error('Failed to copy path')
+      toast.error(t('desktop.plugin.copyFailed'))
     }
   }
 

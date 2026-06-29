@@ -11,6 +11,7 @@ use crate::desktop::plugin::types::{LoadedPlugin, PluginInfo, PluginState};
 use crate::shared::db::Database;
 use chrono::Utc;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -28,13 +29,13 @@ pub struct PluginHost {
 
 impl PluginHost {
     /// 创建 PluginHost 并扫描加载插件
-    pub fn new(db: Arc<Mutex<Database>>) -> Self {
+    pub fn new(db: Arc<Mutex<Database>>, plugins_dir: &Path) -> Self {
         let permission = Arc::new(PermissionManager::new());
         let registry = Arc::new(PluginRegistry::new());
         let storage = Arc::new(PluginStorage::new(db));
 
         // 扫描并加载所有 plugin.json
-        let plugins = PluginLoader::load_all(&permission);
+        let plugins = PluginLoader::load_all(plugins_dir, &permission);
         let count = plugins.len();
 
         let host = Self {
@@ -99,6 +100,14 @@ impl PluginHost {
         plugins.get(plugin_id).map(PluginInfo::from)
     }
 
+    /// 检查插件是否处于激活状态（用于 API 调用的调用者身份校验）
+    pub async fn is_activated(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins.get(plugin_id)
+            .map(|p| matches!(p.state, PluginState::Activated))
+            .unwrap_or(false)
+    }
+
     /// 激活插件（标记状态为 Activated）
     ///
     /// 实际的 JS 模块加载在前端 PluginLoader 中完成，
@@ -122,6 +131,12 @@ impl PluginHost {
 
         loaded.state = PluginState::Activated;
         loaded.activated_at = Some(Utc::now());
+
+        // 重新授权：deactivate 会 revoke_all，再次激活时必须重新授予 manifest 声明的权限
+        let permissions = loaded.manifest.permissions.clone();
+        let granted = self.permission.grant_permissions(plugin_id, &permissions);
+        loaded.granted_permissions = granted;
+
         tracing::info!("Plugin activated: {}", plugin_id);
         Ok(())
     }

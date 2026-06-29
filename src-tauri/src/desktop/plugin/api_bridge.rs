@@ -59,15 +59,22 @@ pub async fn plugin_mark_error(
 // ==================== Plugin Storage ====================
 
 /// 插件存储：获取值
+///
+/// 校验调用者身份：plugin_id 对应的插件必须处于 Activated 状态
 #[tauri::command]
 pub async fn plugin_storage_get(
     plugin_id: String,
     key: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<serde_json::Value>> {
+    if !plugin_host.is_activated(&plugin_id).await {
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} is not activated", plugin_id
+        )));
+    }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "插件 {} 没有 storage 权限", plugin_id
+            "Plugin {} has no storage permission", plugin_id
         )));
     }
     plugin_host.storage().get(&plugin_id, &key).await
@@ -81,9 +88,14 @@ pub async fn plugin_storage_set(
     value: serde_json::Value,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
+    if !plugin_host.is_activated(&plugin_id).await {
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} is not activated", plugin_id
+        )));
+    }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "插件 {} 没有 storage 权限", plugin_id
+            "Plugin {} has no storage permission", plugin_id
         )));
     }
     plugin_host.storage().set(&plugin_id, &key, value).await
@@ -96,9 +108,14 @@ pub async fn plugin_storage_delete(
     key: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
+    if !plugin_host.is_activated(&plugin_id).await {
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} is not activated", plugin_id
+        )));
+    }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "插件 {} 没有 storage 权限", plugin_id
+            "Plugin {} has no storage permission", plugin_id
         )));
     }
     plugin_host.storage().delete(&plugin_id, &key).await
@@ -107,6 +124,8 @@ pub async fn plugin_storage_delete(
 // ==================== Plugin Terminal ====================
 
 /// 插件终端：发送输入
+///
+/// 校验调用者身份：plugin_id 对应的插件必须处于 Activated 状态
 #[tauri::command]
 pub async fn plugin_terminal_send_input(
     plugin_id: String,
@@ -114,9 +133,14 @@ pub async fn plugin_terminal_send_input(
     text: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
+    if !plugin_host.is_activated(&plugin_id).await {
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} is not activated", plugin_id
+        )));
+    }
     if !plugin_host.permission().check(&plugin_id, "terminal:input") {
         return Err(crate::AppError::Plugin(format!(
-            "插件 {} 没有 terminal:input 权限", plugin_id
+            "Plugin {} has no terminal:input permission", plugin_id
         )));
     }
     let ctx = crate::desktop::app_context::AppContext::global();

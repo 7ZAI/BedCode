@@ -201,7 +201,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
 
   return {
     id: info.id,
-    extensionPath: info.extension_path,
+    extensionPath: info.extensionPath,
     commands,
     terminal,
     session,

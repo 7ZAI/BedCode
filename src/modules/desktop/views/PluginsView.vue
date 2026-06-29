@@ -118,9 +118,9 @@
                   <div>
                     <div class="text-xs font-medium text-slate-500 dark:text-dark-400 mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
                     <div class="flex items-center gap-2">
-                      <code class="text-xs text-slate-600 dark:text-dark-300 bg-slate-100 dark:bg-dark-700 px-2 py-1 rounded truncate max-w-[280px]">{{ plugin.extension_path }}</code>
+                      <code class="text-xs text-slate-600 dark:text-dark-300 bg-slate-100 dark:bg-dark-700 px-2 py-1 rounded truncate max-w-[280px]">{{ plugin.extensionPath }}</code>
                       <button
-                        @click="copyPath(plugin.extension_path)"
+                        @click="copyPath(plugin.extensionPath)"
                         class="text-xs text-primary-600 dark:text-primary-400 hover:underline shrink-0"
                       >
                         {{ $t('desktop.plugin.copyPath') }}

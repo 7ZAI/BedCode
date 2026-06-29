@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 
 /// 已注册的命令条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandEntry {
     pub plugin_id: String,
     pub command_id: String,
@@ -22,6 +23,7 @@ pub struct CommandEntry {
 
 /// 已注册的视图条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewEntry {
     pub plugin_id: String,
     pub view_id: String,
@@ -32,6 +34,7 @@ pub struct ViewEntry {
 
 /// 已注册的终端处理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalHandlers {
     pub plugin_id: String,
     pub input_handlers: Vec<String>,
@@ -40,6 +43,7 @@ pub struct TerminalHandlers {
 
 /// 已注册的 HTTP 端点
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HttpEndpointEntry {
     pub plugin_id: String,
     pub path: String,
@@ -47,6 +51,7 @@ pub struct HttpEndpointEntry {
 
 /// 已注册的文件处理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileHandlerEntry {
     pub plugin_id: String,
     pub handler_id: String,

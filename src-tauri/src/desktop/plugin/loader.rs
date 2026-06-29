@@ -1,13 +1,13 @@
 //! Plugin Loader
 //!
-//! 扫描 ~/.bedcode/plugins/ 目录，解析所有 plugin.json
+//! 扫描插件目录，解析所有 plugin.json
 //! 验证必填字段和权限合法性，返回已加载的插件列表
 
 use crate::desktop::plugin::types::{LoadedPlugin, PluginManifest, PluginState};
 use crate::desktop::plugin::permission::PermissionManager;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 插件加载器
 pub struct PluginLoader;
@@ -15,24 +15,16 @@ pub struct PluginLoader;
 impl PluginLoader {
     /// 扫描插件目录并加载所有 plugin.json
     ///
-    /// 目录约定：`~/.bedcode/plugins/{plugin-id}/plugin.json`
+    /// 目录约定：`plugins/desktop/{plugin-id}/plugin.json`
     /// 解析失败的插件跳过并记录警告，不影响其他插件
-    pub fn load_all(permission_mgr: &PermissionManager) -> HashMap<String, LoadedPlugin> {
-        let plugins_dir = match Self::plugins_dir() {
-            Some(dir) => dir,
-            None => {
-                tracing::info!("Plugin directory not found, skipping plugin load");
-                return HashMap::new();
-            }
-        };
-
+    pub fn load_all(plugins_dir: &Path, permission_mgr: &PermissionManager) -> HashMap<String, LoadedPlugin> {
         if !plugins_dir.exists() {
             tracing::info!("Plugin directory does not exist: {:?}", plugins_dir);
             return HashMap::new();
         }
 
         let mut plugins = HashMap::new();
-        let entries = match fs::read_dir(&plugins_dir) {
+        let entries = match fs::read_dir(plugins_dir) {
             Ok(entries) => entries,
             Err(e) => {
                 tracing::warn!("Failed to read plugin directory: {}", e);
@@ -115,11 +107,6 @@ impl PluginLoader {
         }
 
         Ok(manifest)
-    }
-
-    /// 获取插件根目录路径
-    pub fn plugins_dir() -> Option<PathBuf> {
-        dirs::home_dir().map(|d| d.join(".bedcode").join("plugins"))
     }
 }
 

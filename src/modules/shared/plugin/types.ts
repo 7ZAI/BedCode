@@ -109,7 +109,7 @@ export interface PluginInfo {
   sandbox: string
   permissions: string[]
   state: PluginState
-  extension_path: string
+  extensionPath: string
   contributes: PluginContributes
 }
 
