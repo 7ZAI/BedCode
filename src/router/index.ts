@@ -49,12 +49,14 @@ const router = createRouter({
       path: '/plugin/sidebar/:pluginId/:viewId',
       name: 'plugin-sidebar-view',
       component: () => import('@/modules/shared/plugin/components/PluginViewHost.vue'),
+      props: true,
       meta: { platform: 'desktop' },
     },
     {
       path: '/plugin/toolbox/:pluginId/:viewId',
       name: 'plugin-toolbox-view',
       component: () => import('@/modules/shared/plugin/components/PluginViewHost.vue'),
+      props: true,
       meta: { platform: 'desktop' },
     },
     {
