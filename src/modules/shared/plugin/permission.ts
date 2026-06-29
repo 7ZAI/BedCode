@@ -27,8 +27,8 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'session:write': ['session.create', 'session.stop'],
   'ui:sidebar': ['ui.registerSidebarPanel'],
   'ui:toolbox': ['ui.registerToolboxPage'],
-  'ui:statusbar': ['ui.registerStatusBarItem'],
-  'ui:input': ['ui.registerInputExtension'],
+  'ui:statusbar': ['ui.registerStatusBarItem', 'ui.registerTitleBarItem'],
+  'ui:input': ['ui.registerInputExtension', 'ui.registerTerminalToolbarItem'],
   'network:http': ['http.registerEndpoint'],
   'storage': ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
 }
