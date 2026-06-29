@@ -34,6 +34,24 @@ interface RegisteredInputExtension {
   onActivate?: () => void
 }
 
+/** 注册的终端工具栏项 */
+interface RegisteredTerminalToolbarItem {
+  pluginId: string
+  id: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
+/** 注册的标题栏项 */
+interface RegisteredTitleBarItem {
+  pluginId: string
+  id: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
 /** 注册的文件处理器 */
 interface RegisteredFileHandler {
   pluginId: string
@@ -47,12 +65,18 @@ class PluginRegistryClass {
   private views = new Map<string, RegisteredView>()
   private statusBarItem = new Map<string, RegisteredStatusBarItem>()
   private inputExtensions = new Map<string, RegisteredInputExtension>()
+  private terminalToolbarItemsMap = new Map<string, RegisteredTerminalToolbarItem>()
+  private titleBarItemsMap = new Map<string, RegisteredTitleBarItem>()
   private fileHandlers = new Map<string, RegisteredFileHandler>()
 
   /** 响应式数据供 Vue 组件使用 */
   readonly sidebarViews: Ref<RegisteredView[]> = ref([])
+  readonly toolboxViews: Ref<RegisteredView[]> = ref([])
+  readonly statusbarViews: Ref<RegisteredView[]> = ref([])
   readonly statusbarItems: Ref<RegisteredStatusBarItem[]> = ref([])
   readonly inputExts: Ref<RegisteredInputExtension[]> = ref([])
+  readonly terminalToolbarItems: Ref<RegisteredTerminalToolbarItem[]> = ref([])
+  readonly titleBarItems: Ref<RegisteredTitleBarItem[]> = ref([])
 
   /** 注册视图 */
   registerView(pluginId: string, viewType: string, panel: { id: string; title: string; component: any }): Disposable {
@@ -119,6 +143,46 @@ class PluginRegistryClass {
     }
   }
 
+  /** 注册终端工具栏项 */
+  registerTerminalToolbarItem(pluginId: string, item: { id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+    const key = `${pluginId}:${item.id}`
+    const entry: RegisteredTerminalToolbarItem = {
+      pluginId,
+      id: item.id,
+      label: item.label,
+      icon: item.icon,
+      onClick: item.onClick,
+    }
+    this.terminalToolbarItemsMap.set(key, entry)
+    this.updateReactiveTerminalToolbar()
+    return {
+      dispose: () => {
+        this.terminalToolbarItemsMap.delete(key)
+        this.updateReactiveTerminalToolbar()
+      },
+    }
+  }
+
+  /** 注册标题栏项 */
+  registerTitleBarItem(pluginId: string, item: { id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+    const key = `${pluginId}:${item.id}`
+    const entry: RegisteredTitleBarItem = {
+      pluginId,
+      id: item.id,
+      label: item.label,
+      icon: item.icon,
+      onClick: item.onClick,
+    }
+    this.titleBarItemsMap.set(key, entry)
+    this.updateReactiveTitleBarItems()
+    return {
+      dispose: () => {
+        this.titleBarItemsMap.delete(key)
+        this.updateReactiveTitleBarItems()
+      },
+    }
+  }
+
   /** 注册文件处理器 */
   registerFileHandler(pluginId: string, handler: { id: string; extensions: string[]; component: any }): Disposable {
     const key = `${pluginId}:${handler.id}`
@@ -169,6 +233,20 @@ class PluginRegistryClass {
     }
     this.updateReactiveInputExts()
 
+    for (const key of [...this.terminalToolbarItemsMap.keys()]) {
+      if (key.startsWith(`${pluginId}:`)) {
+        this.terminalToolbarItemsMap.delete(key)
+      }
+    }
+    this.updateReactiveTerminalToolbar()
+
+    for (const key of [...this.titleBarItemsMap.keys()]) {
+      if (key.startsWith(`${pluginId}:`)) {
+        this.titleBarItemsMap.delete(key)
+      }
+    }
+    this.updateReactiveTitleBarItems()
+
     for (const key of [...this.fileHandlers.keys()]) {
       if (key.startsWith(`${pluginId}:`)) {
         this.fileHandlers.delete(key)
@@ -177,7 +255,10 @@ class PluginRegistryClass {
   }
 
   private updateReactiveViews() {
-    this.sidebarViews.value = [...this.views.values()].filter(v => v.viewType === 'sidebar')
+    const views = [...this.views.values()]
+    this.sidebarViews.value = views.filter(v => v.viewType === 'sidebar')
+    this.toolboxViews.value = views.filter(v => v.viewType === 'toolbox')
+    this.statusbarViews.value = views.filter(v => v.viewType === 'statusbar')
   }
 
   private updateReactiveStatusBar() {
@@ -186,6 +267,14 @@ class PluginRegistryClass {
 
   private updateReactiveInputExts() {
     this.inputExts.value = [...this.inputExtensions.values()]
+  }
+
+  private updateReactiveTerminalToolbar() {
+    this.terminalToolbarItems.value = [...this.terminalToolbarItemsMap.values()]
+  }
+
+  private updateReactiveTitleBarItems() {
+    this.titleBarItems.value = [...this.titleBarItemsMap.values()]
   }
 }
 
