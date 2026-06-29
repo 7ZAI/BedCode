@@ -143,6 +143,22 @@ export interface InputExtensionDescriptor {
   onActivate?: () => void
 }
 
+/** 终端工具栏项描述符 */
+export interface TerminalToolbarItemDescriptor {
+  id: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
+/** 标题栏项描述符 */
+export interface TitleBarItemDescriptor {
+  id: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
 /** 文件处理器描述符 */
 export interface FileHandlerDescriptor {
   id: string
@@ -186,6 +202,8 @@ export interface UIRegistry {
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
   registerStatusBarItem(item: StatusBarItemDescriptor): Disposable
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
+  registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
+  registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
 }
 
