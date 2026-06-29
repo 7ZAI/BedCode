@@ -19,6 +19,8 @@ import type {
   ToolboxPageDescriptor,
   StatusBarItemDescriptor,
   InputExtensionDescriptor,
+  TerminalToolbarItemDescriptor,
+  TitleBarItemDescriptor,
   FileHandlerDescriptor,
 } from './types'
 import { hasPermissionForApi } from './permission'
@@ -34,7 +36,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   /** 快速失败：检查权限 */
   function requirePermission(apiMethod: string): void {
     if (!hasPermissionForApi(permissions, apiMethod)) {
-      throw new Error(`插件 ${info.id} 没有 ${apiMethod} 所需的权限`)
+      throw new Error(`Plugin ${info.id} lacks permission for ${apiMethod}`)
     }
   }
 
@@ -57,7 +59,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       if (handler) {
         return handler(...args)
       }
-      throw new Error(`命令 ${id} 未注册`)
+      throw new Error(`Command not registered: ${id}`)
     },
   }
 
@@ -128,6 +130,20 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requirePermission('ui.registerInputExtension')
       const registry = getPluginRegistry()
       const disposable = registry.registerInputExtension(info.id, ext)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable {
+      requirePermission('ui.registerTerminalToolbarItem')
+      const registry = getPluginRegistry()
+      const disposable = registry.registerTerminalToolbarItem(info.id, item)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerTitleBarItem(item: TitleBarItemDescriptor): Disposable {
+      requirePermission('ui.registerTitleBarItem')
+      const registry = getPluginRegistry()
+      const disposable = registry.registerTitleBarItem(info.id, item)
       disposables.push(disposable)
       return disposable
     },
