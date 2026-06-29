@@ -39,8 +39,8 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
     (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
-    (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem"]),
-    (PERMISSION_UI_INPUT, &["ui.registerInputExtension"]),
+    (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem", "ui.registerTitleBarItem"]),
+    (PERMISSION_UI_INPUT, &["ui.registerInputExtension", "ui.registerTerminalToolbarItem"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete", "storage.flush"]),
 ];
@@ -71,28 +71,24 @@ impl PermissionManager {
         let mut granted = granted;
         granted.insert(PERMISSION_STORAGE.to_string());
 
-        self.granted
-            .write()
-            .unwrap()
-            .insert(plugin_id.to_string(), granted.clone());
+        let mut lock = self.granted.write().unwrap_or_else(|e| e.into_inner());
+        lock.insert(plugin_id.to_string(), granted.clone());
 
         granted
     }
 
     /// 检查插件是否拥有指定权限
     pub fn check(&self, plugin_id: &str, permission: &str) -> bool {
-        self.granted
-            .read()
-            .unwrap()
-            .get(plugin_id)
+        let lock = self.granted.read().unwrap_or_else(|e| e.into_inner());
+        lock.get(plugin_id)
             .map(|perms| perms.contains(permission))
             .unwrap_or(false)
     }
 
     /// 检查插件是否拥有调用指定 API 方法的权限
     pub fn check_api(&self, plugin_id: &str, api_method: &str) -> bool {
-        let granted = self.granted.read().unwrap();
-        let perms = match granted.get(plugin_id) {
+        let lock = self.granted.read().unwrap_or_else(|e| e.into_inner());
+        let perms = match lock.get(plugin_id) {
             Some(p) => p,
             None => return false,
         };
@@ -107,15 +103,14 @@ impl PermissionManager {
 
     /// 移除插件的权限（停用时调用）
     pub fn revoke_all(&self, plugin_id: &str) {
-        self.granted.write().unwrap().remove(plugin_id);
+        let mut lock = self.granted.write().unwrap_or_else(|e| e.into_inner());
+        lock.remove(plugin_id);
     }
 
     /// 获取插件的已授予权限列表
     pub fn get_granted(&self, plugin_id: &str) -> HashSet<String> {
-        self.granted
-            .read()
-            .unwrap()
-            .get(plugin_id)
+        let lock = self.granted.read().unwrap_or_else(|e| e.into_inner());
+        lock.get(plugin_id)
             .cloned()
             .unwrap_or_default()
     }
