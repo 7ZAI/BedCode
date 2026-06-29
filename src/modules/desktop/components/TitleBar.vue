@@ -8,6 +8,9 @@
       <img src="/favicon.svg" alt="BedCode" class="h-5 w-auto" />
     </div>
 
+    <!-- Plugin Title Bar Extension -->
+    <PluginTitleBarItems />
+
     <!-- Right: Window Controls -->
     <div class="flex items-center titlebar-buttons">
       <button
@@ -45,6 +48,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import PluginTitleBarItems from '@/modules/shared/plugin/components/PluginTitleBarItems.vue'
 
 const appWindow = getCurrentWindow()
 const isMaximized = ref(false)
