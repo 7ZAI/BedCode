@@ -77,6 +77,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from '@/modules/shared/plugin/events'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
@@ -103,6 +104,9 @@ let resizeObserver: ResizeObserver | null = null
 // 滚动状态追踪
 let isUserScrolling = false
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null
+
+// 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
+let currentLineBuffer = ''
 
 const sessionId = computed(() => props.session?.id || '')
 
@@ -382,6 +386,19 @@ function initTerminal() {
   terminal.onData((data: string) => {
     if (!props.session) return
     sessionStore.writeToSession(props.session.id, data)
+
+    // 追踪当前行输入
+    if (data === '\r' || data === '\n') {
+      currentLineBuffer = ''
+    } else if (data === '\x7f' || data === '\b') {
+      currentLineBuffer = currentLineBuffer.slice(0, -1)
+    } else if (data === '\x15') {
+      // Ctrl+U 清除当前行
+      currentLineBuffer = ''
+    } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+      currentLineBuffer += data
+    }
+    // 忽略方向键、控制序列等复杂场景
   })
 }
 
@@ -512,6 +529,11 @@ onMounted(async () => {
 
   initTerminal()
 
+  // 监听 AI 插件请求当前终端输入
+  pluginEventOn('__host__', 'ai-chatbox:getCurrentInput', () => {
+    pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
+  })
+
   // 显示终端 fit 后，同步隐藏终端尺寸
   if (terminal && sessionId.value) {
     resizeHiddenTerminal(sessionId.value, terminal.cols, terminal.rows)
@@ -544,6 +566,9 @@ watch(terminalTheme, () => {
 })
 
 onUnmounted(() => {
+  // 清理 AI 插件事件监听
+  clearPluginEvents('__host__')
+
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
   if (viewport) {
     viewport.removeEventListener('scroll', handleScroll)
