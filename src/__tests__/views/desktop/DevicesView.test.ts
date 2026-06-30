@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import DevicesView from '@/views/desktop/DevicesView.vue'
+import DevicesView from '@/modules/desktop/views/DevicesView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 // Mock composables
-vi.mock('@/composables/useToast', () => ({
+vi.mock('@/modules/shared/composables/useToast', () => ({
   useToast: () => ({
     success: vi.fn(),
     error: vi.fn(),
@@ -22,9 +22,10 @@ vi.mock('@/composables/useToast', () => ({
   }),
 }))
 
-vi.mock('@/composables/useTauri', () => ({
+vi.mock('@/modules/shared/composables/useTauri', () => ({
   usePairing: () => ({
     generateCode: vi.fn(),
+    clearCode: vi.fn(),
     verifyCode: vi.fn().mockResolvedValue(true),
     removeDevice: vi.fn(),
     loadDevices: vi.fn().mockResolvedValue(undefined),
@@ -35,22 +36,47 @@ vi.mock('@/composables/useTauri', () => ({
     localAddresses: { value: ['192.168.1.100'] },
     loadLocalAddresses: vi.fn().mockResolvedValue(undefined),
   }),
-  useDiscovery: () => ({
-    startBroadcast: vi.fn().mockResolvedValue(undefined),
-    startDiscovery: vi.fn().mockResolvedValue(undefined),
-    loadDiscoveredDevices: vi.fn().mockResolvedValue(undefined),
+  useConnectedDevices: () => ({
+    connectedDevices: { value: [] },
+    isLoading: { value: false },
+    loadConnectedDevices: vi.fn().mockResolvedValue(undefined),
+  }),
+  useQrCodeApi: () => ({
+    generateQrCode: vi.fn().mockResolvedValue('test-token'),
+    clearQrCode: vi.fn().mockResolvedValue(undefined),
+    getQrConnectionInfo: vi.fn().mockResolvedValue(null),
+    getQrTokenTtl: vi.fn().mockResolvedValue(300),
+    setQrTokenTtl: vi.fn().mockResolvedValue(undefined),
   }),
 }))
 
+vi.mock('@/modules/shared/composables/useQrCode', () => ({
+  useQrCode: () => ({
+    qrData: { value: null },
+    remainingSeconds: { value: 0 },
+    isLoading: { value: false },
+    isExpired: { value: true },
+    hasQr: { value: false },
+    generateQr: vi.fn(),
+    clearQr: vi.fn(),
+  }),
+}))
+
+vi.mock('qrcode', () => ({
+  default: {
+    toCanvas: vi.fn().mockResolvedValue(undefined),
+  },
+}))
+
 // Mock components
-vi.mock('@/components/common/Button.vue', () => ({
+vi.mock('@/modules/shared/components/Button.vue', () => ({
   default: {
     template: '<button @click="$emit(\'click\')"><slot /><slot name="icon" /></button>',
     props: ['variant', 'size', 'loading', 'disabled'],
   },
 }))
 
-vi.mock('@/components/common/Toggle.vue', () => ({
+vi.mock('@/modules/shared/components/Toggle.vue', () => ({
   default: {
     template: '<button @click="$emit(\'update:modelValue\', !modelValue)" :class="{ active: modelValue }"><slot /></button>',
     props: ['modelValue'],
@@ -104,7 +130,7 @@ describe('DevicesView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('新建配对')
-    expect(wrapper.text()).toContain('生成配对码')
+    expect(wrapper.text()).toContain('生成配对�?)
   })
 
   it('should show network info section', async () => {
@@ -137,7 +163,7 @@ describe('DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已配对设备')
+    expect(wrapper.text()).toContain('已配对设�?)
   })
 
   it('should show empty paired devices state', async () => {
@@ -153,7 +179,7 @@ describe('DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂无已配对设备')
+    expect(wrapper.text()).toContain('暂无已配对设�?)
   })
 
   it('should have generate code button', async () => {
@@ -173,29 +199,9 @@ describe('DevicesView', () => {
     await flushPromises()
 
     const buttons = wrapper.findAll('button')
-    const generateBtn = buttons.find(b => b.text().includes('生成配对码'))
+    const generateBtn = buttons.find(b => b.text().includes('生成配对�?))
 
     expect(generateBtn).toBeDefined()
-  })
-
-  it('should have mDNS toggle', async () => {
-    const wrapper = mount(DevicesView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          Button: true,
-          Toggle: {
-            template: '<button class="toggle" :class="{ active: modelValue }"><slot /></button>',
-            props: ['modelValue'],
-          },
-        },
-      },
-    })
-
-    await flushPromises()
-
-    const toggle = wrapper.find('.toggle')
-    expect(toggle.exists()).toBe(true)
   })
 
   it('should display pairing code when generated', async () => {
@@ -228,36 +234,6 @@ describe('DevicesView', () => {
     }
   })
 
-  it('should handle mDNS toggle', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(DevicesView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Toggle: {
-            template: '<button class="toggle" @click="$emit(\'update:modelValue\', !modelValue)"><slot /></button>',
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-          },
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Initial state
-    expect(wrapper.vm.mDnsEnabled).toBe(true)
-
-    // The toggleMDns function is async and toggles state
-    // After calling with false, it should set mDnsEnabled to false
-    await wrapper.vm.toggleMDns(false)
-
-    // Check that the function was called (the state is managed internally)
-    expect(typeof wrapper.vm.toggleMDns).toBe('function')
-  })
 })
 
 describe('DevicesView Countdown', () => {
@@ -348,20 +324,22 @@ describe('DevicesView Device Management', () => {
             props: ['variant', 'size'],
           },
           Toggle: true,
+          Modal: {
+            template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
+            props: ['modelValue', 'title', 'size'],
+          },
         },
       },
     })
 
     await flushPromises()
 
-    // Mock confirm dialog
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // Call removeDevice (now shows a modal instead of confirm)
+    wrapper.vm.removeDevice('device-1')
+    await flushPromises()
 
-    // Call removeDevice
-    await wrapper.vm.removeDevice('device-1')
-
-    // Verify function executed without error
-    expect(true).toBe(true)
+    expect(wrapper.vm.showRemoveDeviceDialog).toBe(true)
+    expect(wrapper.vm.pendingDeviceId).toBe('device-1')
   })
 
   it('should display paired devices when available', async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Select from '@/components/common/Select.vue'
+import Select from '@/modules/shared/components/Select.vue'
 
 // Mock uuid - must match the import pattern in the component
 vi.mock('uuid', () => ({

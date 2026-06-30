@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useRemoteConnection } from '@/composables/useRemoteConnection'
+import { useRemoteConnection } from '@/modules/shared/composables/useRemoteConnection'
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -14,11 +14,6 @@ describe('useRemoteConnection', () => {
   it('should initialize with disconnected state', () => {
     const { state } = useRemoteConnection()
     expect(state.value.status).toBe('disconnected')
-  })
-
-  it('should have empty discovered devices initially', () => {
-    const { discoveredDevices } = useRemoteConnection()
-    expect(discoveredDevices.value).toEqual([])
   })
 
   it('should have empty paired devices initially', () => {

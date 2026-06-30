@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore } from '@/modules/shared/stores/session'
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({

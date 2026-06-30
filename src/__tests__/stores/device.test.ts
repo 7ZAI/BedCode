@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useDeviceStore } from '@/stores/device'
+import { useDeviceStore } from '@/modules/shared/stores/device'
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -10,7 +10,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 // Create a mutable devices array that will be managed by the mock
 let mockDevicesValue: any[] = []
 
-vi.mock('@/composables/useTauri', () => ({
+vi.mock('@/modules/shared/composables/useTauri', () => ({
   usePairing: () => ({
     devices: {
       get value() { return mockDevicesValue },
@@ -34,7 +34,6 @@ describe('Device Store', () => {
     const store = useDeviceStore()
 
     expect(store.pairedDevices).toEqual([])
-    expect(store.discoveredDevices).toEqual([])
     expect(store.pairingCode).toBeNull()
     expect(store.pairingExpiry).toBe(0)
   })
@@ -49,21 +48,6 @@ describe('Device Store', () => {
 
     expect(store.pairingCode).toBeNull()
     expect(store.pairingExpiry).toBe(0)
-  })
-
-  it('should add discovered device', () => {
-    const store = useDeviceStore()
-
-    const device = {
-      name: 'Desktop-PC',
-      address: '192.168.1.100',
-      port: 8765,
-    }
-
-    store.discoveredDevices.push(device)
-
-    expect(store.discoveredDevices).toHaveLength(1)
-    expect(store.discoveredDevices[0]).toEqual(device)
   })
 
   it('should add paired device', () => {
