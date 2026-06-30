@@ -30,21 +30,19 @@ export function useForegroundService() {
    */
   async function startService(): Promise<void> {
     if (!isAndroid()) {
-      console.log('[ForegroundService] Not Android, skipping')
       return
     }
 
     const content = buildNotificationContent()
-    console.log('[ForegroundService] Starting service:', content)
 
     try {
       await invoke('startForegroundService', {
         title: 'BedCode',
         content,
       })
-      console.log('[ForegroundService] Service started')
     } catch (e) {
-      console.error('[ForegroundService] Failed to start service:', e)
+      // Android 原生插件命令可能未注册（Tauri 2.0 自定义插件需额外注册步骤）
+      console.warn('[ForegroundService] startService failed (plugin may not be registered):', e)
     }
   }
 
@@ -56,13 +54,10 @@ export function useForegroundService() {
       return
     }
 
-    console.log('[ForegroundService] Stopping service')
-
     try {
       await invoke('stopForegroundService')
-      console.log('[ForegroundService] Service stopped')
     } catch (e) {
-      console.error('[ForegroundService] Failed to stop service:', e)
+      console.warn('[ForegroundService] stopService failed (plugin may not be registered):', e)
     }
   }
 
@@ -82,7 +77,7 @@ export function useForegroundService() {
         content,
       })
     } catch (e) {
-      console.error('[ForegroundService] Failed to update notification:', e)
+      console.warn('[ForegroundService] updateNotification failed (plugin may not be registered):', e)
     }
   }
 

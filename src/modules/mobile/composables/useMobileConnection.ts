@@ -470,6 +470,7 @@ export async function connect(device: RemoteDevice): Promise<void> {
   } catch (error) {
     clearConnectionTimeout()
     console.error('[MobileConnection] wsConnect failed:', error)
+    connectionStatus.value = 'error'
     isConnecting.value = false
     throw error
   }
@@ -613,8 +614,13 @@ export async function disconnect(): Promise<void> {
     // 断开连接时取消所有任务通知
     const { cancelAllTaskNotifications } = useTaskNotification()
     await cancelAllTaskNotifications()
-    // 状态由后端 ws_disconnected 事件驱动更新
+  } catch (e) {
+    // wsDisconnect 可能因无活跃连接而失败，确保前端状态仍被重置
+    console.warn('[MobileConnection] wsDisconnect failed (expected if no active connection):', e)
   } finally {
+    // 无论后端是否成功断开，前端状态必须重置
+    connectionStatus.value = 'disconnected'
+    isConnecting.value = false
     currentDevice.value = null
   }
 }

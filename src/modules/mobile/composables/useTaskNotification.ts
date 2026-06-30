@@ -93,7 +93,8 @@ export function useTaskNotification() {
         sound,
       })
     } catch (e) {
-      console.error('[TaskNotification] Failed to show notification:', e)
+      // Android 原生插件命令可能未注册（Tauri 2.0 自定义插件需额外注册步骤）
+      console.warn('[TaskNotification] showTaskNotification failed (plugin may not be registered):', e)
     }
   }
 
@@ -106,7 +107,7 @@ export function useTaskNotification() {
     try {
       await invoke('cancelTaskNotification', { sessionId })
     } catch (e) {
-      console.error('[TaskNotification] Failed to cancel notification:', e)
+      console.warn('[TaskNotification] cancelTaskNotification failed (plugin may not be registered):', e)
     }
   }
 
@@ -119,7 +120,7 @@ export function useTaskNotification() {
     try {
       await invoke('cancelAllTaskNotifications')
     } catch (e) {
-      console.error('[TaskNotification] Failed to cancel all notifications:', e)
+      console.warn('[TaskNotification] cancelAllTaskNotifications failed (plugin may not be registered):', e)
     }
   }
 

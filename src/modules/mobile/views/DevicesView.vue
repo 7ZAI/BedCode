@@ -569,8 +569,9 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
       toast.error(t('mobile.connection.connectFailedToast', { error: errorMsg }))
     }
 
-    // 连接失败时确保状态正确
-    // 后端会发送 ws_error 事件，前端状态会变为 'error'
+    // 连接失败时确保前后端状态一致：断开后端连接 + 重置前端状态
+    await connection.disconnect()
+    connectionError.value = String(error)
   } finally {
     console.timeEnd('startConnection')
     connection.isConnecting.value = false

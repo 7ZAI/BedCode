@@ -136,24 +136,29 @@ impl ConnectionManager {
         // 建立 WebSocket 连接（带超时）
         let connect_start = std::time::Instant::now();
 
-        let ws_stream = tokio::time::timeout(
+        let ws_result = tokio::time::timeout(
             std::time::Duration::from_millis(self.config.connect_timeout_ms),
             tokio_tungstenite::connect_async(&url),
         )
-        .await
-        .map_err(|_| {
-            self.running.store(false, std::sync::atomic::Ordering::SeqCst);
-            self.lifecycle.set_status_sync(ConnectionStatus::Error("Connection timeout".to_string()));
-            error!("[ConnectionManager] Connection timeout after {}ms", self.config.connect_timeout_ms);
-            crate::AppError::WebSocket("Connection timeout".to_string())
-        })?
-        .map_err(|e| {
-            self.running.store(false, std::sync::atomic::Ordering::SeqCst);
-            let error_msg = format!("Failed to connect: {}", e);
-            self.lifecycle.set_status_sync(ConnectionStatus::Error(error_msg.clone()));
-            error!("[ConnectionManager] Failed to connect to {}: {:#}", url, e);
-            crate::AppError::WebSocket(error_msg)
-        })?;
+        .await;
+
+        // 在 async 上下文中处理连接错误，避免 map_err 闭包中调用 blocking 方法导致 panic
+        let ws_stream = match ws_result {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => {
+                self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+                let error_msg = format!("Failed to connect: {}", e);
+                self.lifecycle.set_status(ConnectionStatus::Error(error_msg.clone())).await;
+                error!("[ConnectionManager] Failed to connect to {}: {:#}", url, e);
+                return Err(crate::AppError::WebSocket(error_msg));
+            }
+            Err(_) => {
+                self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+                self.lifecycle.set_status(ConnectionStatus::Error("Connection timeout".to_string())).await;
+                error!("[ConnectionManager] Connection timeout after {}ms", self.config.connect_timeout_ms);
+                return Err(crate::AppError::WebSocket("Connection timeout".to_string()));
+            }
+        };
 
         let connect_duration = connect_start.elapsed();
         tracing::info!("WebSocket handshake completed in {}ms", connect_duration.as_millis());
