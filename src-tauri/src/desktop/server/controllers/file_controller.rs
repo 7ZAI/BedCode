@@ -132,10 +132,12 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
             let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
             if should_exclude(&relative, &file_name, filters) { continue; }
             let child_dir = dir.join(&file_name);
-            let node_path = if relative.is_empty() {
+            // 统一使用 / 作为路径分隔符，避免 Windows 上 to_string_lossy 产生 \ 导致混合分隔符
+            let normalized_relative = relative.replace('\\', "/");
+            let node_path = if normalized_relative.is_empty() {
                 file_name.clone()
             } else {
-                format!("{}/{}", relative, file_name)
+                format!("{}/{}", normalized_relative, file_name)
             };
             let children = scan_dir(root, &child_dir, filters, depth + 1)?;
             folders.push(FileTreeNode {
@@ -146,10 +148,12 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
             });
         } else if file_type.is_file() {
             let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
-            let node_path = if relative.is_empty() {
+            // 统一使用 / 作为路径分隔符，避免 Windows 上 to_string_lossy 产生 \ 导致混合分隔符
+            let normalized_relative = relative.replace('\\', "/");
+            let node_path = if normalized_relative.is_empty() {
                 file_name.clone()
             } else {
-                format!("{}/{}", relative, file_name)
+                format!("{}/{}", normalized_relative, file_name)
             };
             files.push(FileTreeNode {
                 name: file_name,

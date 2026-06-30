@@ -55,7 +55,8 @@
           </div>
         </div>
         <button
-          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border border-[var(--mobile-error)]/20 text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
+          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
+          style="border-color: color-mix(in srgb, var(--mobile-error) 40%, transparent)"
           @click="handleDisconnect"
         >
           {{ t('mobile.connection.disconnect') }}

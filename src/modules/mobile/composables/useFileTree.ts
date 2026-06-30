@@ -80,7 +80,8 @@ function transformApiNode(node: any): FileTreeNode {
   return {
     name: node.name,
     type: node.nodeType === 'folder' ? 'folder' : 'file',
-    path: node.path ?? undefined,
+    // 统一路径分隔符为 /，避免 Windows 后端返回 \ 导致混合分隔符
+    path: node.path ? node.path.replace(/\\/g, '/') : undefined,
     children: node.children ? node.children.map(transformApiNode) : undefined,
     expanded: node.nodeType === 'folder' ? false : undefined,
   }

@@ -149,9 +149,13 @@
       </div>
 
       <!-- File Sidebar - 覆盖层，不影响终端宽高 -->
-      <transition name="sidebar-slide">
-        <FileSidebar v-if="showSidebar" class="sidebar-overlay" :session-id="sessionId" @long-press="handleLongPress" />
-      </transition>
+      <!-- 始终挂载保持展开状态，通过 CSS 类切换实现滑入/滑出动画 -->
+      <FileSidebar
+        class="sidebar-overlay"
+        :class="{ 'sidebar-hidden': !showSidebar }"
+        :session-id="sessionId"
+        @long-press="handleLongPress"
+      />
 
       <!-- 点击侧边栏外部关闭 -->
       <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
@@ -1839,15 +1843,14 @@ watch(sessionId, async (newId, oldId) => {
   z-index: 15;
 }
 
-/* Sidebar Slide Transition */
-.sidebar-slide-enter-active,
-.sidebar-slide-leave-active {
+/* Sidebar Slide - CSS 类驱动动画，始终挂载保持展开状态 */
+.sidebar-overlay {
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.sidebar-slide-enter-from,
-.sidebar-slide-leave-to {
+.sidebar-hidden {
   transform: translateX(100%);
+  pointer-events: none;
 }
 
 /* Settings Modal */
