@@ -226,6 +226,46 @@ fn build_hooks_config(port: u16, token: &str, hook_script_path: &str) -> serde_j
     })
 }
 
+/// 检查 hooks 配置中的 BEDCODE_TOKEN 是否与当前 token 一致
+///
+/// 遍历所有 hook 事件类型的 command 字段，提取 BEDCODE_TOKEN 值进行比对。
+/// 只要有一个 command 中的 token 不匹配就返回 false。
+fn is_token_match_in_hooks(hooks: &serde_json::Value, current_token: &str) -> bool {
+    if let Some(hooks_obj) = hooks.as_object() {
+        for (_event_type, events) in hooks_obj {
+            if let Some(events_arr) = events.as_array() {
+                for event in events_arr {
+                    if let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) {
+                        for hook in hook_list {
+                            if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
+                                if cmd.contains("bedcode_hook.py") {
+                                    // 从命令中提取 BEDCODE_TOKEN=xxx
+                                    if let Some(hook_token) = extract_token_from_command(cmd) {
+                                        if hook_token != current_token {
+                                            return false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// 从 hook command 字符串中提取 BEDCODE_TOKEN 的值
+fn extract_token_from_command(cmd: &str) -> Option<String> {
+    for part in cmd.split_whitespace() {
+        if let Some(token_val) = part.strip_prefix("BEDCODE_TOKEN=") {
+            return Some(token_val.to_string());
+        }
+    }
+    None
+}
+
 /// 验证 hooks 配置是否包含预期的 BedCode hook 命令
 fn is_bedcode_hooks_configured(hooks: &serde_json::Value) -> bool {
     let hooks_obj = match hooks.as_object() {
@@ -363,16 +403,22 @@ fn ensure_project_hooks_blocking(
         serde_json::json!({})
     };
 
-    // 检查项目是否已有 BedCode hooks
-    if let Some(hooks) = settings.get("hooks") {
-        if is_bedcode_hooks_configured(hooks) {
-            tracing::info!("Project already has BedCode hooks configured, skipping");
-            return ProjectHooksResult {
-                success: true,
-                message: "项目已配置 BedCode hooks".to_string(),
-                skipped: true,
-            };
+    // 检查项目是否已有 BedCode hooks 且 token 匹配
+    let needs_update = match settings.get("hooks") {
+        Some(hooks) if is_bedcode_hooks_configured(hooks) => {
+            // hooks 存在，但需检查 token 是否与当前配置一致
+            !is_token_match_in_hooks(hooks, token)
         }
+        _ => true,
+    };
+
+    if !needs_update {
+        tracing::info!("Project already has BedCode hooks with matching token, skipping");
+        return ProjectHooksResult {
+            success: true,
+            message: "项目已配置 BedCode hooks 且 token 一致".to_string(),
+            skipped: true,
+        };
     }
 
     // 2. 确保 .claude 目录存在
@@ -668,9 +714,58 @@ mod tests {
         assert!(result1.success);
         assert!(!result1.skipped);
 
+        // 相同 token 应跳过
         let result2 = ensure_project_hooks_blocking(&working_dir, 8765, "testtoken123456", &resource_dir);
         assert!(result2.success);
         assert!(result2.skipped);
+    }
+
+    #[test]
+    fn test_ensure_project_hooks_updates_if_token_changed() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let working_dir = tmp_dir.path().to_string_lossy().to_string();
+        let resource_dir = PathBuf::from("/nonexistent");
+
+        let result1 = ensure_project_hooks_blocking(&working_dir, 8765, "old_token_123456", &resource_dir);
+        assert!(result1.success);
+        assert!(!result1.skipped);
+
+        // 不同 token 应更新 hooks
+        let result2 = ensure_project_hooks_blocking(&working_dir, 8765, "new_token_654321", &resource_dir);
+        assert!(result2.success);
+        assert!(!result2.skipped);
+
+        // 验证 token 已更新
+        let settings_path = tmp_dir.path().join(".claude").join("settings.json");
+        let content = fs::read_to_string(&settings_path).unwrap();
+        assert!(content.contains("new_token_654321"));
+        assert!(!content.contains("old_token_123456"));
+    }
+
+    #[test]
+    fn test_extract_token_from_command() {
+        let cmd = r#"BEDCODE_PORT=8765 BEDCODE_TOKEN=abc123 python "/home/user/.claude/bedcode_hook.py" session-start"#;
+        assert_eq!(extract_token_from_command(cmd), Some("abc123".to_string()));
+
+        let cmd_no_token = r#"python "/home/user/.claude/bedcode_hook.py" session-start"#;
+        assert_eq!(extract_token_from_command(cmd_no_token), None);
+    }
+
+    #[test]
+    fn test_is_token_match_in_hooks() {
+        let hooks = serde_json::json!({
+            "SessionStart": [{
+                "matcher": "",
+                "hooks": [{
+                    "type": "command",
+                    "command": "BEDCODE_PORT=8765 BEDCODE_TOKEN=mytoken123 python \"bedcode_hook.py\" session-start",
+                    "timeout": 5
+                }]
+            }]
+        });
+
+        assert!(is_token_match_in_hooks(&hooks, "mytoken123"));
+        assert!(!is_token_match_in_hooks(&hooks, "wrongtoken"));
     }
 
     #[test]

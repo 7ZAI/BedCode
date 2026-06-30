@@ -34,6 +34,32 @@ const router = createRouter({
       meta: { platform: 'desktop' },
     },
     {
+      path: '/plugins',
+      name: 'plugins',
+      component: () => import('@/modules/desktop/views/PluginsView.vue'),
+      meta: { platform: 'desktop' },
+    },
+    {
+      path: '/plugins/:id/config',
+      name: 'plugin-config',
+      component: () => import('@/modules/desktop/views/PluginConfigView.vue'),
+      meta: { platform: 'desktop' },
+    },
+    {
+      path: '/plugin/sidebar/:pluginId/:viewId',
+      name: 'plugin-sidebar-view',
+      component: () => import('@/modules/shared/plugin/components/PluginViewHost.vue'),
+      props: true,
+      meta: { platform: 'desktop' },
+    },
+    {
+      path: '/plugin/toolbox/:pluginId/:viewId',
+      name: 'plugin-toolbox-view',
+      component: () => import('@/modules/shared/plugin/components/PluginViewHost.vue'),
+      props: true,
+      meta: { platform: 'desktop' },
+    },
+    {
       path: '/mobile',
       name: 'mobile-home',
       component: () => import('@/modules/mobile/components/MobileSwipeContainer.vue'),

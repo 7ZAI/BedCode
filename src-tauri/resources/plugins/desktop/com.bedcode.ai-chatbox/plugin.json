@@ -1,0 +1,36 @@
+{
+  "id": "com.bedcode.ai-chatbox",
+  "name": "AI Chatbox",
+  "version": "1.0.0",
+  "description": "AI 大模型对话与终端提示词优化",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "permissions": ["ui:sidebar", "ui:input", "storage", "terminal:input", "session:read"],
+  "contributes": {
+    "views": [
+      {
+        "id": "ai-chatbox.sidebar",
+        "type": "sidebar",
+        "title": "AI 对话",
+        "component": "ChatView"
+      }
+    ],
+    "configuration": {
+      "title": "AI Chatbox Settings",
+      "properties": {
+        "apiProviders": {
+          "type": "string",
+          "title": "API Providers (JSON)",
+          "description": "JSON array of API provider configs",
+          "default": "[]"
+        },
+        "activeProvider": {
+          "type": "string",
+          "title": "Active Provider Name",
+          "default": ""
+        }
+      }
+    }
+  }
+}

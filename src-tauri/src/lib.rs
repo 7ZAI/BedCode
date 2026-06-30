@@ -254,6 +254,28 @@ pub fn run() {
                 .resource_dir()
                 .expect("Failed to get resource dir");
 
+            // 解析桌面端插件目录
+            // dev 模式下 resolve 指向 target/debug/resources/...（Tauri 不自动复制资源）
+            // 生产模式下 resolve 指向安装目录的 resources/...（打包时已包含）
+            // 因此 dev 模式回退到源码目录
+            let plugins_dir = {
+                let resolved = app_handle
+                    .path()
+                    .resolve("resources/plugins/desktop", tauri::path::BaseDirectory::Resource)
+                    .expect("Failed to resolve plugins directory");
+                if resolved.exists() {
+                    resolved
+                } else {
+                    // dev 模式 fallback：使用源码目录
+                    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+                        .expect("CARGO_MANIFEST_DIR not set");
+                    let fallback = std::path::PathBuf::from(manifest_dir)
+                        .join("resources").join("plugins").join("desktop");
+                    tracing::info!("Plugin resolved path not found, falling back to source dir: {:?}", fallback);
+                    fallback
+                }
+            };
+
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
@@ -288,6 +310,7 @@ pub fn run() {
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage, resource_dir_arc.clone()));
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
             let plugin_manager = Arc::new(desktop::plugin::PluginManager::new());
+            let plugin_host = Arc::new(desktop::plugin::PluginHost::new(db.clone(), &plugins_dir));
             let pairing_service = Arc::new(PairingService::new());
             let qr_manager = Arc::new(crate::desktop::auth::QrTokenManager::new());
             let app_handle_arc = Arc::new(app_handle.clone());
@@ -318,6 +341,7 @@ pub fn run() {
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
                 .plugin_manager(plugin_manager.clone())
+                .plugin_host(plugin_host.clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
                 .app_handle(app_handle_arc.clone())
@@ -331,6 +355,7 @@ pub fn run() {
             app.manage(session_manager.clone());
             app.manage(pairing_service.clone());
             app.manage(qr_manager.clone());
+            app.manage(plugin_host.clone());
 
             // ==================== 启动 WebSocket 服务 ====================
 
@@ -475,6 +500,19 @@ pub fn run() {
             shared::system::commands::get_startup_time,
             shared::system::commands::get_local_ip_addresses,
             desktop::commands::devices::get_connected_devices,
+            // Plugin
+            desktop::commands::plugin::plugin_list_loaded,
+            desktop::commands::plugin::plugin_get_info,
+            desktop::commands::plugin::plugin_activate,
+            desktop::commands::plugin::plugin_deactivate,
+            desktop::commands::plugin::plugin_mark_error,
+            desktop::commands::plugin::plugin_storage_get,
+            desktop::commands::plugin::plugin_storage_set,
+            desktop::commands::plugin::plugin_storage_delete,
+            desktop::commands::plugin::plugin_terminal_send_input,
+            desktop::commands::plugin::plugin_list_commands,
+            desktop::commands::plugin::plugin_list_views,
+            desktop::commands::plugin::plugin_find_file_handler,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

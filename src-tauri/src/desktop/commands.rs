@@ -11,3 +11,4 @@ pub mod qr;
 pub mod quick_actions;
 pub mod settings;
 pub mod devices;
+pub mod plugin;

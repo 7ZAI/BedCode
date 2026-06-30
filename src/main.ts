@@ -55,3 +55,9 @@ listen<PluginSetupResult>('plugin-setup-result', (event) => {
 })
 
 app.mount('#app')
+
+// 初始化插件系统（非阻塞，失败不影响主应用）
+import { pluginLoader } from '@/modules/shared/plugin/loader'
+pluginLoader.loadAll().catch(e => {
+  console.error('[PluginSystem] Failed to initialize:', e)
+})
