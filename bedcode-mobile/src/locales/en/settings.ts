@@ -1,0 +1,69 @@
+export default {
+  settings: {
+    title: 'Settings',
+    network: {
+      title: 'Network Settings',
+      websocketPort: 'WebSocket Port',
+    },
+    session: {
+      title: 'Session Defaults',
+      defaultEnvironment: 'Default Environment',
+      defaultCommand: 'Default Start Command',
+    },
+    qr: {
+      title: 'QR Code Settings',
+      validity: 'QR Code Validity',
+      validityDesc: 'Set the validity period for QR codes (60-3600 seconds)',
+    },
+    ui: {
+      title: 'UI Settings',
+      terminalFontSize: 'Terminal Font Size',
+    },
+    appearance: {
+      title: 'Appearance',
+      theme: 'Theme',
+      lightMode: 'Light Mode',
+      darkMode: 'Dark Mode',
+      followSystem: 'Follow System',
+      language: 'Language',
+      fontSize: 'Font Size',
+      fontSmall: 'Small',
+      fontMedium: 'Medium',
+      fontLarge: 'Large',
+      terminalCacheCount: 'Terminal Cache Count',
+    },
+    connection: {
+      title: 'Connection Settings',
+      autoReconnect: 'Auto Reconnect',
+      keepAlive: 'Keep Alive',
+      reconnectInterval: 'Reconnect Interval (s)',
+      defaultPort: 'Default Port',
+    },
+    notification: {
+      title: 'Notification Settings',
+      notifyOnWaiting: 'Notify on Waiting Input',
+      notifyOnConnection: 'Notify on Connection Change',
+      vibrate: 'Vibrate',
+      notifyInBackground: 'Notify in Background',
+      soundOnTaskComplete: 'Sound on Task Complete',
+    },
+    about: {
+      title: 'About',
+      githubRepo: 'GitHub Repository',
+      checkUpdate: 'Check for Updates',
+      alreadyLatest: 'Already on the latest version',
+    },
+    actions: {
+      resetSettings: 'Reset Settings',
+      clearAllData: 'Clear All Data',
+      clearDataConfirm: 'Are you sure you want to clear all data? This action cannot be undone.',
+    },
+    browser: {
+      confirmOpen: 'Are you sure you want to open this link in a browser?',
+    },
+    shortcuts: {
+      title: 'Shortcut Settings',
+      description: 'Configure shortcut keys for the terminal panel',
+    },
+  },
+}

@@ -1,0 +1,50 @@
+{
+  "network": {
+    "port": 8765,
+    "heartbeat_interval_secs": 30,
+    "heartbeat_timeout_secs": 90
+  },
+  "session": {
+    "default_environment": "windows",
+    "default_wsl_distro": null,
+    "default_working_dir": null,
+    "default_command": "claude",
+    "session_timeout": 3600
+  },
+  "ui": {
+    "theme": "system",
+    "terminal_font_size": 12,
+    "terminal_font_family": "Consolas",
+    "show_preview": true
+  },
+  "channels": {
+    "output_broadcast_capacity": 2048,
+    "status_broadcast_capacity": 64,
+    "restart_broadcast_capacity": 64,
+    "event_broadcast_capacity": 256,
+    "pty_subscription_capacity": 1024,
+    "global_queue_capacity": 50000,
+    "ws_event_capacity": 1024,
+    "lifecycle_capacity": 16
+  },
+  "terminal": {
+    "default_cols": 120,
+    "default_rows": 40,
+    "flush_interval_ms": 30,
+    "max_buffer_size": 65536,
+    "read_buffer_size": 4096
+  },
+  "output_history": {
+    "ring_buffer_capacity": 10000
+  },
+  "plugin": {
+    "file_poll_interval_ms": 500,
+    "heartbeat_timeout_secs": 90
+  },
+  "display": {
+    "max_tool_input_display": 200,
+    "max_tool_result_display": 500,
+    "max_thinking_display": 300,
+    "max_read_size": 1048576
+  }
+}

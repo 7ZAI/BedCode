@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="50%" stop-color="#16213e"/>
+      <stop offset="100%" stop-color="#0f3460"/>
+    </linearGradient>
+    <linearGradient id="highlightGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e94560"/>
+      <stop offset="100%" stop-color="#c23a51"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bgGradient)"/>
+  <circle cx="512" cy="512" r="380" fill="none" stroke="#e94560" stroke-width="3" opacity="0.15"/>
+  <circle cx="512" cy="512" r="340" fill="none" stroke="#e94560" stroke-width="2" opacity="0.1"/>
+  <rect x="272" y="580" width="480" height="140" rx="24" ry="24" fill="#e94560" opacity="0.9"/>
+  <rect x="292" y="550" width="440" height="50" rx="12" ry="12" fill="#f8f9fa" opacity="0.95"/>
+  <rect x="312" y="525" width="120" height="45" rx="18" ry="18" fill="#ffffff" opacity="0.9"/>
+  <text x="350" y="420" font-family="SF Mono, Monaco, Consolas, monospace" font-size="140" font-weight="bold" fill="#ffffff" opacity="0.9" text-anchor="middle">&lt;</text>
+  <text x="512" y="420" font-family="SF Mono, Monaco, Consolas, monospace" font-size="140" font-weight="bold" fill="#e94560" text-anchor="middle">/</text>
+  <text x="674" y="420" font-family="SF Mono, Monaco, Consolas, monospace" font-size="140" font-weight="bold" fill="#ffffff" opacity="0.9" text-anchor="middle">&gt;</text>
+  <circle cx="430" cy="360" r="6" fill="#e94560" opacity="0.6"/>
+  <circle cx="512" cy="340" r="6" fill="#e94560" opacity="0.6"/>
+  <circle cx="594" cy="360" r="6" fill="#e94560" opacity="0.6"/>
+</svg>
