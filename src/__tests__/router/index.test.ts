@@ -7,11 +7,11 @@ describe('Router Configuration', () => {
   })
 
   describe('route definitions', () => {
-    it('should have root redirect to sessions', () => {
+    it('should have root route with LoadingView component', () => {
       const route = router.getRoutes().find((r) => r.path === '/')
 
       expect(route).toBeDefined()
-      expect(route?.redirect).toBe('/sessions')
+      expect(route?.name).toBe('root')
     })
 
     it('should have sessions route', () => {
@@ -51,18 +51,11 @@ describe('Router Configuration', () => {
       expect(route?.name).toBe('mobile-terminal')
     })
 
-    it('should have mobile quick-actions route', () => {
-      const route = router.getRoutes().find((r) => r.path === '/mobile/quick-actions')
+    it('should have mobile toolbox route', () => {
+      const route = router.getRoutes().find((r) => r.path === '/mobile/toolbox')
 
       expect(route).toBeDefined()
-      expect(route?.name).toBe('mobile-quick-actions')
-    })
-
-    it('should have mobile history route', () => {
-      const route = router.getRoutes().find((r) => r.path === '/mobile/history')
-
-      expect(route).toBeDefined()
-      expect(route?.name).toBe('mobile-history')
+      expect(route?.name).toBe('mobile-toolbox')
     })
 
     it('should have mobile settings route', () => {
@@ -81,8 +74,7 @@ describe('Router Configuration', () => {
         'settings',
         'mobile-devices',
         'mobile-terminal',
-        'mobile-quick-actions',
-        'mobile-history',
+        'mobile-toolbox',
         'mobile-settings',
       ]
 
@@ -106,8 +98,7 @@ describe('Router Configuration', () => {
       const mobilePaths = [
         '/mobile/devices',
         '/mobile/terminal/:id',
-        '/mobile/quick-actions',
-        '/mobile/history',
+        '/mobile/toolbox',
         '/mobile/settings',
       ]
 
@@ -143,7 +134,7 @@ describe('Router Configuration', () => {
 
       // Count includes redirect routes and component routes
       // Desktop: /, /sessions, /devices, /settings
-      // Mobile: /mobile/devices, /mobile/terminal/:id, /mobile/quick-actions, /mobile/history, /mobile/settings
+      // Mobile: /mobile/devices, /mobile/terminal/:id, /mobile/toolbox, /mobile/settings
       expect(routes.length).toBeGreaterThanOrEqual(9)
     })
   })

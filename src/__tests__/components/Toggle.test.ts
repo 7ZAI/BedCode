@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Toggle from '@/components/common/Toggle.vue'
+import Toggle from '@/modules/shared/components/Toggle.vue'
 
 describe('Toggle Component', () => {
   describe('rendering', () => {

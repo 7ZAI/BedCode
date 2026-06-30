@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { useOutputParser } from '@/composables/useOutputParser'
+import { useOutputParser } from '@/modules/shared/composables/useOutputParser'
 
 describe('useOutputParser', () => {
   it('should initialize with empty state', () => {

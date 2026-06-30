@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useSettingsStore } from '@/stores/settings'
+import { useSettingsStore } from '@/modules/shared/stores/settings'
 
 // Mock Tauri invoke
 const mockInvoke = vi.fn()
@@ -20,8 +20,6 @@ describe('Settings Store', () => {
       const store = useSettingsStore()
 
       expect(store.settings.network.port).toBe(8765)
-      expect(store.settings.network.service_name).toBe('bedcode')
-      expect(store.settings.network.enable_discovery).toBe(true)
     })
 
     it('should have correct default session settings', () => {
@@ -49,8 +47,6 @@ describe('Settings Store', () => {
       const mockSettings = {
         network: {
           port: 9000,
-          service_name: 'custom-service',
-          enable_discovery: false,
         },
         session: {
           default_environment: 'wsl',
@@ -74,8 +70,6 @@ describe('Settings Store', () => {
 
       expect(mockInvoke).toHaveBeenCalledWith('get_app_settings')
       expect(store.settings.network.port).toBe(9000)
-      expect(store.settings.network.service_name).toBe('custom-service')
-      expect(store.settings.network.enable_discovery).toBe(false)
       expect(store.settings.session.default_environment).toBe('wsl')
       expect(store.settings.ui.theme).toBe('dark')
     })
@@ -107,7 +101,7 @@ describe('Settings Store', () => {
 
       // Should keep default settings on error
       expect(store.settings.network.port).toBe(8765)
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to load settings:', expect.any(Error))
+      expect(consoleSpy).toHaveBeenCalledWith('[Settings] Failed to load settings:', expect.any(Error))
 
       consoleSpy.mockRestore()
     })
@@ -121,8 +115,6 @@ describe('Settings Store', () => {
       await store.saveSettings({
         network: {
           port: 7777,
-          service_name: 'test-service',
-          enable_discovery: true,
         },
       })
 
@@ -130,7 +122,6 @@ describe('Settings Store', () => {
         settings: expect.objectContaining({
           network: expect.objectContaining({
             port: 7777,
-            service_name: 'test-service',
           }),
         }),
       })
@@ -194,12 +185,10 @@ describe('Settings Store', () => {
       await store.saveSettings({
         network: {
           port: 1111,
-          service_name: 'fail-test',
-          enable_discovery: false,
         },
       })
 
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to save settings:', expect.any(Error))
+      expect(consoleSpy).toHaveBeenCalledWith('[Settings] Failed to save settings:', expect.any(Error))
 
       consoleSpy.mockRestore()
     })
@@ -242,8 +231,6 @@ describe('Settings Store', () => {
       await store1.saveSettings({
         network: {
           port: 5555,
-          service_name: 'persisted-service',
-          enable_discovery: false,
         },
       })
 
@@ -251,7 +238,6 @@ describe('Settings Store', () => {
       const store2 = useSettingsStore()
 
       expect(store2.settings.network.port).toBe(5555)
-      expect(store2.settings.network.service_name).toBe('persisted-service')
     })
   })
 })

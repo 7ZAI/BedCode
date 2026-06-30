@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import DevicesView from '@/views/mobile/DevicesView.vue'
+import DevicesView from '@/modules/mobile/views/DevicesView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -14,42 +14,61 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 // Mock useRemoteConnection composable
-const mockDiscoveredDevices = { value: [] }
 const mockPairedDevices = { value: [] }
 const mockCurrentDevice = { value: null }
 const mockState = { value: { status: 'disconnected' } }
 const mockIsConnected = { value: false }
+const mockSendMessageWithResponse = vi.fn()
+const mockActiveSessionId = { value: null }
 
-vi.mock('@/composables/useRemoteConnection', () => ({
+vi.mock('@/modules/shared/composables/useRemoteConnection', () => ({
   useRemoteConnection: () => ({
     state: mockState,
-    discoveredDevices: mockDiscoveredDevices,
     pairedDevices: mockPairedDevices,
     currentDevice: mockCurrentDevice,
     isConnected: mockIsConnected,
     lastMessage: { value: null },
     isReady: { value: false },
-    discoverDevices: vi.fn().mockResolvedValue(undefined),
+    activeSessionId: mockActiveSessionId,
     connect: vi.fn().mockResolvedValue(undefined),
+    authenticate: vi.fn().mockResolvedValue(false),
     requestPairing: vi.fn().mockResolvedValue(undefined),
     verifyPairingCode: vi.fn().mockResolvedValue(true),
     disconnect: vi.fn(),
     loadPairedDevices: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn(),
-    sendMessageWithResponse: vi.fn(),
+    sendMessageWithResponse: mockSendMessageWithResponse,
+    setReconnectCallback: vi.fn(),
+  }),
+}))
+
+// Mock useRemoteTerminal composable
+vi.mock('@/modules/shared/composables/useRemoteTerminal', () => ({
+  useRemoteTerminal: () => ({
+    sessions: { value: [] },
+    sessionConfigs: { value: [] },
+    currentSessionId: { value: null },
+    outputBuffer: { value: [] },
+    isWaitingInput: { value: false },
+    isLoading: { value: false },
+    error: { value: null },
+    loadSessions: vi.fn().mockResolvedValue(undefined),
+    loadSessionConfigs: vi.fn().mockResolvedValue(undefined),
+    startSession: vi.fn().mockResolvedValue('session-1'),
+    stopSession: vi.fn().mockResolvedValue(undefined),
+    joinSession: vi.fn().mockResolvedValue(undefined),
+    leaveSession: vi.fn().mockResolvedValue(undefined),
+    sendInput: vi.fn(),
+    sendSpecialKey: vi.fn(),
+    clearOutput: vi.fn(),
+    reconnectAndResume: vi.fn().mockResolvedValue(undefined),
+    enableAutoReconnect: vi.fn(),
+    disableAutoReconnect: vi.fn(),
   }),
 }))
 
 // Mock components
-vi.mock('@/components/mobile/DeviceCard.vue', () => ({
-  default: {
-    template: '<div class="device-card" @click="$emit(\'click\')">{{ device.name }}</div>',
-    props: ['device'],
-    emits: ['click'],
-  },
-}))
-
-vi.mock('@/components/mobile/BottomSheet.vue', () => ({
+vi.mock('@/modules/mobile/components/BottomSheet.vue', () => ({
   default: {
     template: '<div v-if="modelValue" class="bottom-sheet"><slot /></div>',
     props: ['modelValue', 'title', 'placeholder'],
@@ -57,7 +76,7 @@ vi.mock('@/components/mobile/BottomSheet.vue', () => ({
   },
 }))
 
-vi.mock('@/components/mobile/PairingInput.vue', () => ({
+vi.mock('@/modules/mobile/components/PairingInput.vue', () => ({
   default: {
     template: '<div v-if="modelValue" class="pairing-input"><slot /></div>',
     props: ['modelValue', 'loading', 'error'],
@@ -71,6 +90,7 @@ const mockRouter = createRouter({
   routes: [
     { path: '/', component: { template: '<div />' } },
     { path: '/mobile/devices', component: { template: '<div />' } },
+    { path: '/mobile/scan', component: { template: '<div />' }, name: 'mobile-scan' },
     { path: '/mobile/terminal/:id', component: { template: '<div />' } },
   ],
 })
@@ -79,12 +99,13 @@ describe('Mobile DevicesView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    // Reset mock state
-    mockDiscoveredDevices.value = []
     mockPairedDevices.value = []
     mockCurrentDevice.value = null
     mockState.value = { status: 'disconnected' }
     mockIsConnected.value = false
+    mockSendMessageWithResponse.mockResolvedValue({
+      payload: { action: { type: 'session_config_list', configs: [] } },
+    })
   })
 
   it('should render header with title', async () => {
@@ -92,7 +113,6 @@ describe('Mobile DevicesView', () => {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -102,15 +122,14 @@ describe('Mobile DevicesView', () => {
     await flushPromises()
 
     expect(wrapper.find('header').exists()).toBe(true)
-    expect(wrapper.find('h1').text()).toContain('设备')
+    expect(wrapper.find('h1').text()).toContain('会话配置')
   })
 
-  it('should show scan button', async () => {
+  it('should show connection history section when disconnected', async () => {
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -119,16 +138,14 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    const scanButton = wrapper.find('button')
-    expect(scanButton.exists()).toBe(true)
+    expect(wrapper.text()).toContain('连接历史')
   })
 
-  it('should show discovered devices section', async () => {
+  it('should show empty connection history', async () => {
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -137,15 +154,14 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('发现设备')
+    expect(wrapper.text()).toContain('暂无连接历史')
   })
 
-  it('should show paired devices section', async () => {
+  it('should show scan button when disconnected', async () => {
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -154,15 +170,14 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已配对设备')
+    expect(wrapper.text()).toContain('扫描连接')
   })
 
-  it('should show empty state for discovered devices', async () => {
+  it('should show manual connect button when disconnected', async () => {
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -171,15 +186,24 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('点击右上角扫描设备')
+    expect(wrapper.text()).toContain('手动连接')
   })
 
-  it('should show empty state for paired devices', async () => {
+  it('should show session configs section when connected', async () => {
+    mockState.value = { status: 'paired' }
+    mockIsConnected.value = true
+    mockCurrentDevice.value = {
+      id: 'device-1',
+      name: 'My Desktop',
+      address: '192.168.1.100',
+      port: 8765,
+      isPaired: true,
+    }
+
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -188,15 +212,27 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂无已配对设备')
+    expect(wrapper.text()).toContain('会话配置')
   })
 
-  it('should show manual connect button', async () => {
+  it('should show empty session configs when none exist', async () => {
+    mockState.value = { status: 'paired' }
+    mockIsConnected.value = true
+    mockCurrentDevice.value = {
+      id: 'device-1',
+      name: 'My Desktop',
+      address: '192.168.1.100',
+      port: 8765,
+      isPaired: true,
+    }
+    mockSendMessageWithResponse.mockResolvedValue({
+      payload: { action: { type: 'session_config_list', configs: [] } },
+    })
+
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -205,17 +241,49 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('手动输入地址连接')
+    expect(wrapper.text()).toContain('暂无会话配置')
   })
 
-  it('should show scanning indicator when scanning', async () => {
-    mockState.value = { status: 'connecting' }
+  it('should display session config details', async () => {
+    mockState.value = { status: 'paired' }
+    mockIsConnected.value = true
+    mockCurrentDevice.value = {
+      id: 'device-1',
+      name: 'My Desktop',
+      address: '192.168.1.100',
+      port: 8765,
+      isPaired: true,
+    }
+    mockSendMessageWithResponse.mockResolvedValue({
+      payload: {
+        action: {
+          type: 'session_config_list',
+          configs: [
+            {
+              id: 'cfg-1',
+              name: 'Claude Code',
+              environment: 'windows',
+              wsl_distro: null,
+              working_dir: 'C:\\projects',
+              command: 'claude',
+            },
+            {
+              id: 'cfg-2',
+              name: 'WSL Dev',
+              environment: 'wsl2',
+              wsl_distro: 'Ubuntu-22.04',
+              working_dir: '/home/user',
+              command: 'bash',
+            },
+          ],
+        },
+      },
+    })
 
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -224,7 +292,10 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('扫描中...')
+    expect(wrapper.text()).toContain('Claude Code')
+    expect(wrapper.text()).toContain('Windows')
+    expect(wrapper.text()).toContain('WSL Dev')
+    expect(wrapper.text()).toContain('WSL2')
   })
 
   it('should show manual connect dialog', async () => {
@@ -232,7 +303,6 @@ describe('Mobile DevicesView', () => {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -241,7 +311,6 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    // Set showManualConnect
     wrapper.vm.showManualConnect = true
     await flushPromises()
 
@@ -253,7 +322,6 @@ describe('Mobile DevicesView', () => {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -262,7 +330,6 @@ describe('Mobile DevicesView', () => {
 
     await flushPromises()
 
-    // Set showPairing
     wrapper.vm.showPairing = true
     await flushPromises()
 
@@ -275,6 +342,9 @@ describe('Mobile DevicesView Manual Connect', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     mockState.value = { status: 'disconnected' }
+    mockSendMessageWithResponse.mockResolvedValue({
+      payload: { action: { type: 'session_config_list', configs: [] } },
+    })
   })
 
   it('should parse address with port', async () => {
@@ -282,7 +352,6 @@ describe('Mobile DevicesView Manual Connect', () => {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -291,7 +360,6 @@ describe('Mobile DevicesView Manual Connect', () => {
 
     await flushPromises()
 
-    // Call handleConnectManual
     wrapper.vm.handleConnectManual('192.168.1.100:9000')
 
     expect(wrapper.vm.pendingDevice).toEqual({
@@ -308,7 +376,6 @@ describe('Mobile DevicesView Manual Connect', () => {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -317,7 +384,6 @@ describe('Mobile DevicesView Manual Connect', () => {
 
     await flushPromises()
 
-    // Call handleConnectManual without port
     wrapper.vm.handleConnectManual('192.168.1.100')
 
     expect(wrapper.vm.pendingDevice).toEqual({
@@ -335,14 +401,16 @@ describe('Mobile DevicesView Pairing', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     mockState.value = { status: 'disconnected' }
+    mockSendMessageWithResponse.mockResolvedValue({
+      payload: { action: { type: 'session_config_list', configs: [] } },
+    })
   })
 
-  it('should show error on failed pairing', async () => {
+  it('should have empty pairing error initially', async () => {
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -355,57 +423,42 @@ describe('Mobile DevicesView Pairing', () => {
   })
 })
 
-describe('Mobile DevicesView Navigation', () => {
+describe('Mobile DevicesView Session Start', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    mockState.value = { status: 'disconnected' }
-  })
-
-  it('should navigate to terminal when opening device', async () => {
-    const pushSpy = vi.spyOn(mockRouter, 'push')
-
-    const wrapper = mount(DevicesView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          DeviceCard: true,
-          BottomSheet: true,
-          PairingInput: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Open terminal
-    const device = {
+    mockState.value = { status: 'paired' }
+    mockIsConnected.value = true
+    mockCurrentDevice.value = {
       id: 'device-1',
       name: 'My Desktop',
       address: '192.168.1.100',
       port: 8765,
       isPaired: true,
     }
-
-    wrapper.vm.handleOpenTerminal(device)
-
-    expect(pushSpy).toHaveBeenCalledWith('/mobile/terminal/device-1')
-  })
-})
-
-describe('Mobile DevicesView Connection', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    vi.clearAllMocks()
-    mockState.value = { status: 'disconnected' }
   })
 
-  it('should set pending device when connecting', async () => {
+  it('should refresh sessions after starting session instead of navigating', async () => {
+    const pushSpy = vi.spyOn(mockRouter, 'push')
+    mockSendMessageWithResponse
+      .mockResolvedValueOnce({
+        payload: {
+          action: {
+            type: 'session_config_list',
+            configs: [
+              { id: 'cfg-1', name: 'Test', environment: 'windows', working_dir: '/tmp', command: 'claude' },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        session_id: 'session-123',
+      })
+
     const wrapper = mount(DevicesView, {
       global: {
         plugins: [mockRouter, createPinia()],
         stubs: {
-          DeviceCard: true,
           BottomSheet: true,
           PairingInput: true,
         },
@@ -414,17 +467,20 @@ describe('Mobile DevicesView Connection', () => {
 
     await flushPromises()
 
-    const device = {
-      id: 'device-1',
-      name: 'Test Device',
-      address: '192.168.1.100',
-      port: 8765,
-      isPaired: false,
+    // Tap the config card to start session
+    const config = {
+      id: 'cfg-1',
+      name: 'Test',
+      environment: 'windows',
+      working_dir: '/tmp',
+      command: 'claude',
     }
+    wrapper.vm.handleStartSession(config)
+    await flushPromises()
 
-    wrapper.vm.handleConnect(device)
-
-    expect(wrapper.vm.pendingDevice).toEqual(device)
-    expect(wrapper.vm.showPairing).toBe(true)
+    // Should NOT navigate to terminal anymore
+    expect(pushSpy).not.toHaveBeenCalled()
+    // activeSessionId should be set
+    expect(mockActiveSessionId.value).toBe('session-123')
   })
 })

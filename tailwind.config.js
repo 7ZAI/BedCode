@@ -30,8 +30,11 @@ export default {
           400: '#94a3b8',
           500: '#64748b',
           600: '#475569',
+          650: '#3d4f63',
           700: '#334155',
+          750: '#2d3a4f',
           800: '#1e293b',
+          850: '#172033',
           900: '#0f172a',
           950: '#020617',
         },
@@ -39,6 +42,9 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['Consolas', 'Monaco', 'monospace'],
+      },
+      boxShadow: {
+        'xs': '0 1px 2px 0 rgb(0 0 0 / 0.04)',
       },
     },
   },

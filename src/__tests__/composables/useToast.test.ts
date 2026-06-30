@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
-import { useToast } from '@/composables/useToast'
+import { useToast } from '@/modules/shared/composables/useToast'
 
 // Helper to use composable in component context
 function withComposable<T>(composable: () => T) {

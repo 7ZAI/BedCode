@@ -3,14 +3,12 @@ import { mount } from '@vue/test-utils'
 import { defineComponent, nextTick } from 'vue'
 import {
   useWsl,
-  useTmux,
   useSessionConfig,
   useSession,
   useQuickActions,
   usePairing,
-  useDiscovery,
   useNetwork,
-} from '@/composables/useTauri'
+} from '@/modules/shared/composables/useTauri'
 
 // Mock Tauri APIs
 const mockInvoke = vi.fn()
@@ -95,60 +93,10 @@ describe('useTauri Composables', () => {
     })
 
     it('should handle load error gracefully', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       mockInvoke.mockRejectedValueOnce(new Error('WSL check failed'))
 
       const { result, wrapper } = withComposable(() => useWsl())
-      await result.loadDistros()
-
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to load WSL distros:', expect.any(Error))
-
-      consoleSpy.mockRestore()
-      wrapper.unmount()
-    })
-  })
-
-  describe('useTmux', () => {
-    it('should initialize with empty sessions', () => {
-      const { result, wrapper } = withComposable(() => useTmux())
-
-      expect(result.sessions.value).toEqual([])
-      expect(result.isAvailable.value).toBe(false)
-
-      wrapper.unmount()
-    })
-
-    it('should load tmux sessions when available', async () => {
-      mockInvoke
-        .mockResolvedValueOnce(true) // is_tmux_available
-        .mockResolvedValueOnce([
-          { name: 'main', windows: 2, isAttached: true },
-          { name: 'dev', windows: 1, isAttached: false },
-        ])
-
-      const { result, wrapper } = withComposable(() => useTmux())
-      await result.loadSessions()
-
-      expect(result.sessions.value).toHaveLength(2)
-      expect(result.sessions.value[0].name).toBe('main')
-      expect(result.isAvailable.value).toBe(true)
-
-      wrapper.unmount()
-    })
-
-    it('should create a new tmux session', async () => {
-      mockInvoke
-        .mockResolvedValueOnce(undefined) // create_tmux_session
-        .mockResolvedValueOnce(true) // is_tmux_available (for loadSessions)
-        .mockResolvedValueOnce([{ name: 'new-session', windows: 1, isAttached: false }])
-
-      const { result, wrapper } = withComposable(() => useTmux())
-      await result.createSession('new-session', 'vim')
-
-      expect(mockInvoke).toHaveBeenCalledWith('create_tmux_session', {
-        name: 'new-session',
-        command: 'vim',
-      })
+      await expect(result.loadDistros()).rejects.toThrow('WSL check failed')
 
       wrapper.unmount()
     })
@@ -204,7 +152,6 @@ describe('useTauri Composables', () => {
         workingDir: '/home',
         command: 'claude',
         wslDistro: undefined,
-        tmuxSession: undefined,
       })
 
       wrapper.unmount()
@@ -417,55 +364,6 @@ describe('useTauri Composables', () => {
       await result.removeDevice('device-id')
 
       expect(mockInvoke).toHaveBeenCalledWith('remove_paired_device', { id: 'device-id' })
-
-      wrapper.unmount()
-    })
-  })
-
-  describe('useDiscovery', () => {
-    it('should initialize with empty discovered devices', () => {
-      const { result, wrapper } = withComposable(() => useDiscovery())
-
-      expect(result.discoveredDevices.value).toEqual([])
-
-      wrapper.unmount()
-    })
-
-    it('should start discovery', async () => {
-      mockInvoke.mockResolvedValueOnce(undefined)
-
-      const { result, wrapper } = withComposable(() => useDiscovery())
-      await result.startDiscovery()
-
-      expect(mockInvoke).toHaveBeenCalledWith('start_discovery')
-
-      wrapper.unmount()
-    })
-
-    it('should load discovered devices', async () => {
-      mockInvoke.mockResolvedValueOnce([
-        { name: 'Device 1', address: '192.168.1.100', port: 8765 },
-      ])
-
-      const { result, wrapper } = withComposable(() => useDiscovery())
-      await result.loadDiscoveredDevices()
-
-      expect(mockInvoke).toHaveBeenCalledWith('get_discovered_devices')
-      expect(result.discoveredDevices.value).toHaveLength(1)
-
-      wrapper.unmount()
-    })
-
-    it('should start broadcast', async () => {
-      mockInvoke.mockResolvedValueOnce(undefined)
-
-      const { result, wrapper } = withComposable(() => useDiscovery())
-      await result.startBroadcast('my-service', 8765)
-
-      expect(mockInvoke).toHaveBeenCalledWith('start_broadcast', {
-        serviceName: 'my-service',
-        port: 8765,
-      })
 
       wrapper.unmount()
     })

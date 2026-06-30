@@ -1,204 +1,255 @@
+<div align="center">
+
 # BedCode
 
-通过移动设备远程控制 Claude Code 的跨平台应用。
+**Use your phone to control Claude Code on your desktop**
 
-## 功能特性
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
-- 🖥️ **桌面端**: 管理会话配置、配对设备、系统托盘
-- 📱 **移动端**: 设备发现、终端显示、快捷指令、历史记录
-- 🔐 **安全配对**: 6位数字配对码验证
-- 🌐 **局域网通信**: WebSocket (WSS) + mDNS 自动发现
-- 🐧 **WSL2 支持**: 在 Windows 上运行 WSL2 环境
-- 💻 **Tmux 支持**: 连接现有 Tmux 会话
-- 📝 **输出解析**: ANSI 解析、Markdown 渲染、代码高亮
-- 🔔 **智能通知**: 等待输入提醒、设备连接通知
+English | [简体中文](README_zh.md)
 
-## 技术栈
+</div>
 
-| 层级 | 技术 |
-|------|------|
-| 桌面端 | Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS |
-| 移动端 | Tauri 2.0 (Android) / Capacitor (备选) |
-| 后端 | Rust |
-| 数据库 | SQLite |
-| 通信 | WebSocket (WSS) + mDNS |
-| 安全 | X25519 密钥交换 + AES-GCM 加密 |
+---
 
-## 项目结构
+BedCode is a cross-platform application that lets you remotely control [Claude Code](https://claude.ai/code) from your mobile device within the same local network. The desktop app (Tauri + Vue 3) acts as the host running terminal sessions, while your phone becomes a powerful remote terminal with an optimized touch interface. While designed as a Claude Code remote control app, it also works as a general-purpose remote terminal.
+
+Typical use cases: as the name suggests — coding from bed; handling other tasks at home while programming, such as bathroom breaks, cooking, childcare, or just before sleep.
+
+> Currently only supports desktop and mobile on the same WiFi network.
+
+Internet connectivity interface or NAT traversal protocol will be reserved in the future (requires a server).
+
+## Features
+
+### Desktop (Host)
+- **Session Management** - Create, configure, and manage multiple Claude Code sessions
+- **Terminal Preview** - Real-time xterm.js terminal output preview
+- **Device Pairing** - QR code + 6-digit code authentication for secure device pairing
+- **Plugin System** - Auto-configure Claude Code hooks, task status tracking, auto-approve mode
+- **HTTP + WebSocket Server** - Actix Web based HTTP API + WebSocket for terminal communication
+- **System Tray** - Quick actions from the system tray
+- **WSL2 Support** - Run sessions inside Windows Subsystem for Linux
+
+### Mobile (Remote)
+- **Device Discovery & Pairing** - Scan QR code or enter pairing code to connect
+- **Terminal Output** - Enhanced mode (parsed ANSI/Markdown) and raw mode toggle
+- **Smart Input Bar** - Special keys (Tab, Ctrl+C, Esc, arrows), input assistant, and shortcut config
+- **Auto-Execute Engine** - Queue and auto-execute multiple tasks with auto/manual mode toggle
+- **Code Explorer** - Browse project files, view code with syntax highlighting, and diff rendering
+- **Preset Tasks** - Pre-configured task cards with type badges and action menus
+- **Task Notifications** - Per-session task status notifications
+- **Auto-Reconnect** - Automatic reconnection on unexpected disconnects
+- **Foreground Service** - Keep connection alive in background with WakeLock (Android)
+- **Edge-to-Edge Display** - Modern full-screen mobile experience
+
+### Security
+- JWT-based session authentication (HS256, 7-day expiry)
+- QR token with one-time use and configurable TTL
+- Plugin token for Claude Code hooks authentication
+- Pairing codes expire after 60 seconds
+- Device fingerprint verification on connection
+
+> **Note:** End-to-end encryption (X25519 key exchange + AES-GCM) is planned but not yet implemented. Current WebSocket communication is unencrypted (ws://). See [Roadmap](#roadmap).
+
+### Internationalization
+- Full i18n support via vue-i18n (zh-CN / en)
+- Language switcher in settings with persistent preference
+- Error code mapping system for localized error messages
+
+## Architecture
 
 ```
-bedcode/
-├── src/                    # Vue 前端源码
-│   ├── components/         # Vue 组件
-│   │   ├── desktop/        # 桌面端组件
-│   │   ├── mobile/         # 移动端组件
-│   │   └── common/         # 通用组件
-│   ├── views/              # 页面视图
-│   │   ├── desktop/        # 桌面端视图
-│   │   └── mobile/         # 移动端视图
-│   ├── stores/             # Pinia 状态管理
-│   ├── router/             # Vue Router 路由
-│   └── composables/        # Vue 组合式函数
-├── src-tauri/              # Rust 后端源码
-│   ├── src/
-│   │   ├── db/             # 数据库模块
-│   │   ├── pty/            # PTY 管理
-│   │   ├── session/        # 会话管理
-│   │   ├── auth/           # 认证配对
-│   │   ├── discovery/      # mDNS 发现
-│   │   ├── websocket/      # WebSocket 服务
-│   │   ├── parser/         # 输出解析
-│   │   └── notify/         # 通知服务
-│   └── tauri.conf.json     # Tauri 配置
-└── docs/                   # 文档
-    ├── superpowers/specs/  # 设计文档
-    └── implementation-plans/ # 实现计划
+┌─────────────────────────────────┐                ┌─────────────────────────────────┐
+│         Desktop App              │                │         Mobile App               │
+│        (Tauri + Vue 3)           │                │        (Tauri + Vue 3)           │
+│                                  │                │                                  │
+│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
+│  │ PTY Manager│  │ WS Server  │ │   WebSocket    │  │ WS Client  │  │ Auto-Exec  │ │
+│  │ (Claude)   │  │ (Actix)    │◄├───────────────►├►│            │  │ Engine     │ │
+│  └────────────┘  └────────────┘ │   + HTTP API   │  └────────────┘  └────────────┘ │
+│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
+│  │ Plugin Mgr │  │ HTTP API   │ │                │  │ Code       │  │ Touch UI   │ │
+│  │ (Hooks)    │  │ (Actix)    │ │                │  │ Explorer   │  │            │ │
+│  └────────────┘  └────────────┘ │                │  └────────────┘  └────────────┘ │
+└─────────────────────────────────┘                └─────────────────────────────────┘
 ```
 
-## 快速开始
+The project uses a **shared + platform-specific** architecture:
 
-### 前置要求
+| Layer | Frontend (Vue 3) | Backend (Rust) |
+|-------|-------------------|-----------------|
+| **Shared** | Components, composables, stores, i18n, utils | Auth, DB, WebSocket, parser, models, error handling |
+| **Desktop** | Session manager, terminal preview, sidebar | PTY, Actix Web server, session management, plugin system |
+| **Mobile** | Terminal view, code explorer, auto-exec, toolbox | WS client, HTTP client, remote connection, routing |
 
-1. **Node.js** >= 18
-2. **Rust** >= 1.70
-3. **Tauri CLI** 2.0
+## Tech Stack
 
-### 安装
+| Category | Technology |
+|----------|------------|
+| Framework | Tauri 2.0 |
+| Frontend | Vue 3 + TypeScript |
+| Styling | TailwindCSS |
+| State | Pinia |
+| Backend | Rust (Tokio async runtime) |
+| HTTP Server | Actix Web 4 |
+| Database | SQLite (rusqlite) |
+| Communication | WebSocket + HTTP REST API |
+| Terminal | xterm.js |
+| I18n | vue-i18n@9 |
+| Testing | Vitest, Playwright, Rust test |
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) >= 18
+- [Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) dependencies for your platform
+- [Claude Code CLI](https://claude.ai/code) installed and configured
+
+### Install Dependencies
 
 ```bash
-# 克隆仓库
-git clone https://github.com/your-repo/bedcode.git
-cd bedcode
-
-# 安装依赖
+# Install frontend dependencies
 npm install
+
+# Rust dependencies are fetched automatically by Cargo
 ```
 
-### 开发
+### Development
 
 ```bash
-# 开发模式
-npm run tauri dev
+# Start desktop app in dev mode
+npm run tauri:dev
 ```
 
-### 构建
+### Build
 
 ```bash
-# 构建生产版本
-npm run tauri build
+# Build desktop app
+npm run tauri:build
+
+# Build Android APK
+npm run tauri:android:build
 ```
 
-## 平台特定说明
-
-### Windows
-
-Windows 平台原生支持，无需额外配置。
-
-### WSL2
-
-支持在 WSL2 环境中运行 Claude Code：
-- 自动检测 WSL 发行版
-- 路径自动转换 (Windows ↔ WSL)
-- 支持所有 WSL 发行版
-
-### Linux
+### Testing
 
 ```bash
-# 安装系统依赖
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+# Frontend unit tests
+npm run test
+
+# Frontend tests with coverage
+npm run test:coverage
+
+# E2E tests
+npm run test:e2e
+
+# Rust tests
+cargo test
 ```
 
-### Android
+### Linting & Formatting
 
 ```bash
-# 添加 Android 目标
-npm run tauri android init
-
-# 构建 Android APK
-npm run tauri android build
-```
-
-## 使用指南
-
-### 桌面端
-
-1. 启动应用后，创建会话配置
-2. 选择执行环境（Windows 原生或 WSL2）
-3. 设置工作目录和启动命令
-4. 点击"生成配对码"
-5. 在移动端输入配对码完成配对
-
-### 移动端
-
-1. 打开应用，自动扫描附近设备
-2. 或手动输入设备 IP 地址
-3. 输入桌面端显示的配对码
-4. 配对成功后，点击设备连接
-5. 查看终端输出，发送输入
-
-### 快捷指令
-
-预设指令：
-- ▶️ 继续 - 发送 "请继续"
-- 📝 解释代码 - 发送 "请解释这段代码的作用"
-- 🔧 修复 Bug - 发送 "请帮我修复这个 Bug"
-- 📤 提交代码 - 发送 "请帮我提交代码"
-
-可自定义添加更多快捷指令。
-
-## 开发命令
-
-```bash
-# 前端开发服务器
-npm run dev
-
-# Tauri 开发模式
-npm run tauri dev
-
-# 构建生产版本
-npm run tauri build
-
-# 代码检查
+# Lint
 npm run lint
 
-# 代码格式化
+# Format
 npm run format
 ```
 
-## 实现进度
+## Configuration
 
-| 阶段 | 名称 | 状态 |
-|------|------|------|
-| Phase 1 | 项目骨架和核心基础设施 | ✅ 已完成 |
-| Phase 2 | PTY Manager 和会话管理 | ✅ 已完成 |
-| Phase 3 | 网络通信和安全 | ✅ 已完成 |
-| Phase 4 | 桌面端 UI | ✅ 已完成 |
-| Phase 5 | 移动端 UI | ✅ 已完成 |
-| Phase 6 | 增强功能和完善 | 🔄 进行中 |
+BedCode uses a `config.json` file (bundled as a Tauri resource) for runtime configuration:
 
-详见 [实现计划](./docs/implementation-plans/README.md)
+| Category | Key | Default | Description |
+|----------|-----|---------|-------------|
+| Network | `network.port` | `8765` | WebSocket server port |
+| Network | `network.heartbeat_interval_secs` | `30` | Heartbeat interval |
+| Session | `session.default_command` | `"claude"` | Default terminal command |
+| UI | `ui.theme` | `"system"` | Theme (system/light/dark) |
+| UI | `ui.language` | `"zh-CN"` | Language (zh-CN/en) |
+| Terminal | `terminal.default_cols` | `120` | Default terminal columns |
+| Terminal | `terminal.flush_interval_ms` | `30` | Output flush interval |
 
-## 文档
+## How It Works
 
-- [设计文档](./docs/superpowers/specs/2026-04-30-bedcode-design.md)
-- [实现计划总览](./docs/implementation-plans/README.md)
+1. **Start Desktop App** - Launch BedCode on your desktop, which starts the Actix Web server (HTTP + WebSocket) and mDNS discovery service
+2. **Pair Your Phone** - Open BedCode on your phone, scan the QR code or enter the 6-digit pairing code
+3. **Control Remotely** - Once paired, select a session and start sending commands from your phone
+4. **Real-time Output** - Terminal output is streamed to your phone in real-time with ANSI rendering
+5. **Auto-Execute Tasks** - Queue multiple tasks on your phone; the auto-execute engine sends them one by one as Claude Code becomes idle
+6. **Browse Code** - Use the code explorer to browse project files and view diffs with syntax highlighting
 
-## 安全说明
+## Plugin System
 
-- 所有通信使用 WebSocket Secure (WSS)
-- 设备配对使用 X25519 密钥交换
-- 配对码 60 秒后自动过期
-- 密钥存储使用系统安全存储 (Windows Credential Manager / Linux Secret Service)
+BedCode integrates with Claude Code through a hook-based plugin system:
 
-## 已知问题
+- **Auto-Configuration** - Project-scoped Claude Code hooks are automatically configured when a session starts
+- **Task Status Tracking** - Claude Code hooks push task status (idle/in_progress/asking/completed/interrupted) to the desktop app via HTTP API
+- **Auto-Approve Mode** - In auto mode, Claude Code tool-use permissions are automatically approved; in manual mode, the user operates Claude Code directly
+- **Session ID Binding** - PTY sessions inject `BEDCODE_SESSION_ID` environment variable to bind Claude Code sessions with BedCode sessions
 
-- Tauri Android 支持仍在完善中，部分功能可能不稳定
-- 大量输出时可能需要手动滚动
+```
+Claude Code Hook (Python)
+    ↓ HTTP POST
+Rust HTTP API (plugin_controller)
+    ↓ DesktopSyncEvent
+SyncEventHandler → WebSocket broadcast
+    ↓ ws_sync_task_status_changed
+Mobile Tauri Event → Auto-Execute Engine (state machine)
+    ↓ sendInput / HTTP API
+Claude Code (PTY)
+```
 
-## 贡献
+## Project Structure
 
-欢迎提交 Issue 和 Pull Request！
+```
+bedcode/
+├── src/                          # Vue 3 frontend
+│   ├── modules/
+│   │   ├── desktop/              # Desktop UI (sessions, terminal, devices)
+│   │   ├── mobile/               # Mobile UI (terminal, code explorer, toolbox, pairing)
+│   │   └── shared/               # Shared components, stores, composables, i18n
+│   └── locales/                  # i18n translations (zh-CN / en)
+├── src-tauri/
+│   └── src/
+│       ├── shared/               # Shared Rust modules (auth, db, enums, models, system)
+│       ├── desktop/              # Desktop-only (PTY, Actix server, session mgmt, plugin)
+│       └── mobile/               # Mobile-only (WS client, HTTP client, routing, remote)
+├── docs/                         # Documentation
+└── e2e/                          # E2E tests
+```
 
-## 许可证
+See [docs/code-map.md](docs/code-map.md) for the complete module index.
 
-MIT
+## Roadmap
+
+- [x] Plugin system for Claude Code hooks and auto-execute
+- [x] Mobile file browser and code viewer with diff rendering
+- [x] Multi-language support (i18n: zh-CN / en)
+- [x] Auto-execute task engine with auto/manual mode
+- [ ] End-to-end encryption (X25519 + AES-GCM)
+- [ ] Linux desktop support
+- [ ] Internet connectivity interface
+- [ ] FCM push notifications
+- [ ] Virtual scrolling for terminal history
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feat/my-feature`)
+3. Commit your changes (`git commit -m 'feat: add my feature'`)
+4. Push to the branch (`git push origin feat/my-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

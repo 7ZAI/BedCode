@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>BedCode - 模拟终端演示</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="https://esm.sh/@xterm/xterm@5.5.0/css/xterm.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #12121a;
+      --text-primary: #e0e0e0;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --accent: #00d4ff;
+      --accent-dim: rgba(0, 212, 255, 0.2);
+      --accent-border: rgba(0, 212, 255, 0.15);
+      --border: #374151;
+      --success: #10b981;
+      --error: #ef4444;
+    }
+
+    html, body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      background: rgba(18, 18, 26, 0.9);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--accent-border);
+      flex-shrink: 0;
+    }
+
+    .back-btn {
+      padding: 0.5rem;
+      margin-left: -0.5rem;
+      color: var(--text-secondary);
+      background: none;
+      border: none;
+      cursor: pointer;
+      transition: color 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .back-btn:hover { color: var(--accent); }
+
+    .header-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #ffffff;
+      margin: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    .status-running {
+      background: var(--success);
+      box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+    }
+    .status-stopped { background: var(--error); }
+    .status-text {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .clear-btn {
+      padding: 0.5rem;
+      border-radius: 0.5rem;
+      background: #1f2937;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .clear-btn:hover { border-color: rgba(0, 212, 255, 0.3); }
+
+    /* Terminal Area */
+    .terminal-output-area {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #xterm-container {
+      height: 100%;
+      width: 100%;
+    }
+
+    /* Modern Scrollbar Styling for xterm.js viewport */
+    .xterm-viewport::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .xterm-viewport::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .xterm-viewport::-webkit-scrollbar-thumb {
+      background: rgba(100, 100, 120, 0.3);
+      border-radius: 3px;
+      transition: background 0.2s ease;
+    }
+
+    .xterm-viewport::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 212, 255, 0.4);
+    }
+
+    /* Firefox scrollbar */
+    .xterm-viewport {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(100, 100, 120, 0.3) transparent;
+    }
+
+    /* Input Bar */
+    .input-bar {
+      flex-shrink: 0;
+      background: rgba(18, 18, 26, 0.95);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid var(--accent-border);
+      padding: 0.5rem 1rem;
+    }
+
+    .input-area {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .toggle-btn {
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      background: #1f2937;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+    .toggle-btn:hover {
+      border-color: rgba(0, 212, 255, 0.3);
+      color: var(--accent);
+    }
+
+    .input-box {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      background: var(--bg-primary);
+      border: 1px solid var(--accent-border);
+      border-radius: 9999px;
+      padding: 0.5rem 1rem;
+      transition: border-color 0.2s ease;
+    }
+    .input-box:focus-within { border-color: rgba(0, 212, 255, 0.5); }
+
+    .input-field {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #ffffff;
+      font-size: 0.875rem;
+      font-family: inherit;
+    }
+    .input-field::placeholder { color: #4b5563; }
+
+    .send-btn, .execute-btn {
+      width: 2.5rem;
+      height: 2.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9999px;
+      border: 1px solid;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .send-btn {
+      background: #1f2937;
+      border-color: var(--border);
+      color: var(--text-secondary);
+    }
+    .send-btn:hover:not(:disabled) { border-color: rgba(0, 212, 255, 0.3); }
+    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .execute-btn {
+      background: var(--accent-dim);
+      border-color: rgba(0, 212, 255, 0.3);
+      color: var(--accent);
+    }
+    .execute-btn:hover:not(:disabled) { background: rgba(0, 212, 255, 0.3); }
+    .execute-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <button class="back-btn" onclick="history.back()">
+        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+        </svg>
+      </button>
+      <div style="flex: 1; min-width: 0;">
+        <h1 class="header-title">模拟终端</h1>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.375rem; font-size: 0.75rem;">
+        <div class="status-dot status-running"></div>
+        <span class="status-text">运行中</span>
+      </div>
+      <button class="clear-btn" onclick="clearTerminal()">
+        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+      </button>
+    </header>
+
+    <!-- Terminal Output -->
+    <div class="terminal-output-area">
+      <div id="xterm-container"></div>
+    </div>
+
+    <!-- Input Bar -->
+    <div class="input-bar">
+      <div class="input-area">
+        <button class="toggle-btn" onclick="toggleShortcuts()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+        </button>
+        <div class="input-box">
+          <input id="input-field" class="input-field" type="text" placeholder="输入命令..." onkeypress="handleKeyPress(event)" />
+        </div>
+        <button class="send-btn" id="send-btn" onclick="handleSubmit()">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+          </svg>
+        </button>
+        <button class="execute-btn" id="execute-btn" onclick="handleExecute()">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { Terminal } from 'https://esm.sh/@xterm/xterm@5.5.0'
+    import { FitAddon } from 'https://esm.sh/@xterm/addon-fit@0.10.0'
+    import { WebLinksAddon } from 'https://esm.sh/@xterm/addon-web-links@0.11.0'
+    import { WebglAddon } from 'https://esm.sh/@xterm/addon-webgl@0.19.0'
+
+    // ==================== Theme ====================
+    const DARK_THEME = {
+      background: '#0a0a0f',
+      foreground: '#e0e0e0',
+      cursor: '#00d4ff',
+      cursorAccent: '#0a0a0f',
+      selectionBackground: '#1a3a4a',
+      black: '#000000',
+      red: '#ff5555',
+      green: '#50fa7b',
+      yellow: '#f1fa8c',
+      blue: '#bd93f9',
+      magenta: '#ff79c6',
+      cyan: '#8be9fd',
+      white: '#bbbbbb',
+      brightBlack: '#555555',
+      brightRed: '#ff5555',
+      brightGreen: '#50fa7b',
+      brightYellow: '#f1fa8c',
+      brightBlue: '#bd93f9',
+      brightMagenta: '#ff79c6',
+      brightCyan: '#8be9fd',
+      brightWhite: '#ffffff',
+    }
+
+    // ==================== Mock Data ====================
+    const MOCK_COMMANDS = [
+      'ls -la', 'cd /usr/local/bin', 'cat package.json', 'git status',
+      'npm install', 'docker ps', 'curl -I https://api.example.com',
+      'ps aux | grep node', 'mkdir -p src/components',
+      'echo "Hello, World!"', 'python3 -m http.server 8080',
+      'tail -f /var/log/syslog', 'find . -name "*.ts" -type f',
+      'tar -czf archive.tar.gz ./dist', 'ssh user@remote-host',
+    ]
+
+    const MOCK_OUTPUTS = [
+      'total 128\r\n  drwxr-xr-x  12 user  staff   384 Jun 01 10:23 .\r\n  drwxr-xr-x   5 root   root   160 Jun 01 09:15 ..',
+      '{\r\n  "name": "bedcode-app",\r\n  "version": "1.0.0"\r\n}',
+      'On branch dev\r\n  modified:   src/components/Terminal.vue\r\n  no changes added',
+      'CONTAINER ID   IMAGE          COMMAND\r\n  abc123def456   nginx:latest   "/docker"  2 hours ago',
+      'HTTP/1.1 200 OK\r\n  Content-Type: application/json\r\n  {"status":"ok"}',
+      'PID   USER   TIME   COMMAND\r\n  1234  root   0:05   node server.js',
+      'Server running at http://localhost:8080/\r\n  Serving directory: /home/user/project',
+      'Connection established to remote-host\r\n  Welcome to Ubuntu 22.04.4 LTS',
+    ]
+
+    const MOCK_LOG_MESSAGES = [
+      'Processing request...',
+      'Connection established',
+      'Data received',
+      'Operation completed',
+      'Syncing...',
+      'Heartbeat received',
+      'Task finished',
+    ]
+
+    const MOCK_LEVELS = ['INFO', 'WARN', 'DEBUG', 'ERROR']
+    const MOCK_COLORS = ['\x1b[32m', '\x1b[33m', '\x1b[36m', '\x1b[35m', '\x1b[34m', '\x1b[37m']
+
+    function getRandomInt(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min
+    }
+
+    function getRandomItem(arr) {
+      return arr[getRandomInt(0, arr.length - 1)]
+    }
+
+    function getTimestamp() {
+      return new Date().toISOString().slice(11, 19)
+    }
+
+    // Generate 2-3 lines of mock output
+    function generateMockOutput() {
+      const lineCount = getRandomInt(8, 10)
+      const lines = []
+
+      for (let i = 0; i < lineCount; i++) {
+        const type = getRandomInt(0, 3)
+
+        switch (type) {
+          case 0: // Command
+            lines.push('$ ' + getRandomItem(MOCK_COMMANDS))
+            break
+          case 1: // Output
+            lines.push(getRandomItem(MOCK_OUTPUTS))
+            break
+          case 2: { // Colored log
+            const color = getRandomItem(MOCK_COLORS)
+            const level = getRandomItem(MOCK_LEVELS)
+            const msg = getRandomItem(MOCK_LOG_MESSAGES)
+            lines.push(color + '[' + getTimestamp() + '] [' + level + '] ' + msg + '\x1b[0m')
+            break
+          }
+          case 3: { // Progress bar
+            const progress = getRandomInt(5, 30)
+            const remaining = getRandomInt(0, 10)
+            lines.push('[' + '='.repeat(progress) + ' '.repeat(remaining) + '] ' + getRandomInt(10, 100) + '%')
+            break
+          }
+        }
+      }
+
+      return lines.join('\r\n') + '\r\n'
+    }
+
+    // ==================== Terminal Setup ====================
+    const container = document.getElementById('xterm-container')
+
+    const terminal = new Terminal({
+      theme: DARK_THEME,
+      fontFamily: '"Courier New", Courier, "Lucida Console", monospace',
+      fontSize: 14,
+      lineHeight: 1.2,
+      cursorBlink: true,
+      cursorStyle: 'block',
+      allowProposedApi: true,
+      scrollback: 5000,
+      convertEol: true,
+    })
+
+    terminal.open(container)
+
+    const fitAddon = new FitAddon()
+    terminal.loadAddon(fitAddon)
+    terminal.loadAddon(new WebLinksAddon())
+
+    // Try to load WebGL renderer
+    try {
+      const webglAddon = new WebglAddon()
+      terminal.loadAddon(webglAddon)
+      webglAddon.onContextLoss(() => {
+        console.warn('WebGL context lost')
+      })
+      console.log('WebGL renderer loaded')
+    } catch (e) {
+      console.warn('WebGL not supported, using DOM renderer:', e)
+    }
+
+    // Initial welcome message
+    terminal.write('\x1b[36m[模拟终端]\x1b[0m 欢迎使用 BedCode 模拟终端演示\r\n')
+    terminal.write('每 5 秒自动生成模拟数据，支持滚动查看历史\r\n')
+    terminal.write('='.repeat(50) + '\r\n\r\n')
+
+    // Fit terminal
+    function fitTerminal() {
+      try {
+        fitAddon.fit()
+      } catch (e) {
+        console.warn('fit failed:', e)
+      }
+    }
+
+    // Delay fit to ensure container is rendered
+    setTimeout(fitTerminal, 100)
+
+    // Resize observer
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(fitTerminal)
+    })
+    resizeObserver.observe(container)
+
+    window.addEventListener('resize', () => {
+      setTimeout(fitTerminal, 100)
+    })
+
+    // ==================== Mock Data Timer ====================
+    let mockInterval = setInterval(() => {
+      const output = generateMockOutput()
+      terminal.write(output)
+    }, 5000)
+
+    // ==================== Input Handlers ====================
+    const inputField = document.getElementById('input-field')
+    const sendBtn = document.getElementById('send-btn')
+    const executeBtn = document.getElementById('execute-btn')
+
+    function updateButtons() {
+      const hasText = inputField.value.trim().length > 0
+      sendBtn.disabled = !hasText
+      executeBtn.disabled = !hasText
+    }
+
+    inputField.addEventListener('input', updateButtons)
+    updateButtons()
+
+    function handleKeyPress(e) {
+      if (e.key === 'Enter') {
+        handleExecute()
+      }
+    }
+
+    function handleSubmit() {
+      const text = inputField.value.trim()
+      if (!text) return
+
+      terminal.write('$ ' + text + '\r\n')
+
+      setTimeout(() => {
+        const responses = [
+          'Command not found: ' + text + '\r\n',
+          'Executing: ' + text + '\r\n  Done.\r\n',
+          'Error: Permission denied\r\n',
+          text + ': command executed successfully\r\n',
+        ]
+        terminal.write(getRandomItem(responses))
+      }, 300)
+
+      inputField.value = ''
+      updateButtons()
+      inputField.focus()
+    }
+
+    function handleExecute() {
+      const text = inputField.value.trim()
+      if (!text) return
+
+      terminal.write('$ ' + text + '\r\n')
+
+      setTimeout(() => {
+        terminal.write('\x1b[32m[执行结果]\x1b[0m\r\n')
+        terminal.write('  命令: ' + text + '\r\n')
+        terminal.write('  状态: \x1b[32m成功\x1b[0m\r\n')
+        terminal.write('  耗时: ' + (Math.random() * 2).toFixed(3) + 's\r\n\r\n')
+      }, 200)
+
+      inputField.value = ''
+      updateButtons()
+      inputField.focus()
+    }
+
+    function clearTerminal() {
+      terminal.clear()
+    }
+
+    function toggleShortcuts() {
+      console.log('Shortcuts toggled')
+    }
+
+    // Expose to window for onclick handlers
+    window.handleSubmit = handleSubmit
+    window.handleExecute = handleExecute
+    window.clearTerminal = clearTerminal
+    window.toggleShortcuts = toggleShortcuts
+    window.handleKeyPress = handleKeyPress
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      clearInterval(mockInterval)
+      resizeObserver.disconnect()
+      terminal.dispose()
+    })
+  </script>
+</body>
+</html>

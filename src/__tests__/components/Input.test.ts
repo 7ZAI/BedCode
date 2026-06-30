@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Input from '@/components/common/Input.vue'
+import Input from '@/modules/shared/components/Input.vue'
 
 // Mock uuid - must match the import pattern in the component
 vi.mock('uuid', () => ({
