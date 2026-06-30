@@ -152,6 +152,41 @@ def query_session_mode(session_id, logger):
         return False
 
 
+# ==================== Fallback JSON Parsing ====================
+
+
+def extract_fields_from_raw_json(raw_text):
+    """从损坏的 JSON 文本中用正则提取关键字段。
+
+    Stop/SubagentStop 的 stdin 可能包含超长 transcript 导致 JSON 解析失败，
+    但 session_id / reason / stop_hook_active 通常在 JSON 前部且格式简单，
+    可以通过正则安全提取。
+    """
+    fields = {}
+
+    # session_id: UUID 格式，8-4-4-4-12 hex chars
+    m = re.search(r'"session_id"\s*:\s*"([0-9a-f-]{36})"', raw_text)
+    if m:
+        fields["session_id"] = m.group(1)
+
+    # reason: 字符串值（可能包含转义字符，取到引号前）
+    m = re.search(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*?)"', raw_text)
+    if m:
+        fields["reason"] = m.group(1).replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"")
+
+    # stop_hook_active: boolean
+    m = re.search(r'"stop_hook_active"\s*:\s*(true|false)', raw_text)
+    if m:
+        fields["stop_hook_active"] = m.group(1) == "true"
+
+    # hook_event_name: 字符串（Stop 或 SubagentStop）
+    m = re.search(r'"hook_event_name"\s*:\s*"((?:[^"\\]|\\.)*?)"', raw_text)
+    if m:
+        fields["hook_event_name"] = m.group(1)
+
+    return fields
+
+
 # ==================== Status Parsing ====================
 
 
@@ -316,7 +351,7 @@ def handle_write_event(data, logger):
     """
     session_id = data.get("session_id", "")
     if not session_id:
-        logger.error("write_event: missing session_id")
+        logger.error("write_event: missing session_id, data keys={}".format(list(data.keys())))
         sys.exit(2)
 
     hook_event = data.get("hook_event_name", "Stop")
@@ -366,9 +401,11 @@ def main():
         data = json.loads(raw_input) if raw_input.strip() else {}
     except json.JSONDecodeError as e:
         # Stop/SubagentStop 的 stdin 可能包含超长 transcript 导致解析失败
-        # 降级为空数据，仅从 reason 环境变量推断状态
+        # 用正则从损坏的 JSON 中提取关键字段，避免丢失 session_id
         logger.error("JSON parse error: {}, input length={}".format(e, len(raw_input) if raw_input else 0))
-        data = {}
+        data = extract_fields_from_raw_json(raw_input) if raw_input else {}
+        if data:
+            logger.info("Extracted fields from raw JSON: {}".format(list(data.keys())))
 
     if command == "session-start":
         handle_session_start(data, logger)

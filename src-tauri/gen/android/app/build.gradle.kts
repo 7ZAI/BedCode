@@ -45,8 +45,16 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
 
-        // APK 命名：BedCode-v1.0.0-release.apk
-        setProperty("archivesBaseName", "BedCode-v${versionName}")
+    // APK 命名仅在 release 构建时自定义，debug 构建保留默认命名以兼容 tauri android dev
+    applicationVariants.all {
+        val variant = this
+        if (variant.buildType.name == "release") {
+            variant.outputs.all {
+                val output = this as com.android.build.gradle.internal.api.ApkVariantOutputImpl
+                output.outputFileName = "BedCode-v${variant.versionName}-${variant.buildType.name}.apk"
+            }
+        }
+    }
     }
     buildTypes {
         getByName("debug") {

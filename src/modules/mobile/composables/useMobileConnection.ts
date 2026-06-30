@@ -47,6 +47,8 @@ const CONNECTION_TIMEOUT_MS = 12000 // 12秒超时（比 Rust 端 10 秒稍长�
 // 重连控制
 const MAX_AUTO_RECONNECT_ATTEMPTS = 3
 let autoReconnectAttemptCount = 0
+// 用户主动连接/断开时设为 true，取消正在进行的自动重连
+let autoReconnectAborted = false
 
 // 意外断开监听器
 let unlistenUnexpectedDisconnect: UnlistenFn | null = null
@@ -338,6 +340,11 @@ async function init() {
   // 监听重连开始事件
   await listen<{ retry: number; max_retry: number }>('ws_reconnecting', async (event) => {
     console.log('[MobileConnection] Reconnecting:', event.payload)
+    // 如果用户已主动发起新连接，忽略过期重连事件
+    if (autoReconnectAborted) {
+      console.log('[MobileConnection] Ignoring reconnect event (aborted)')
+      return
+    }
     connectionStatus.value = 'connecting'
 
     // 更新前台服务通知为重连状态
@@ -350,6 +357,13 @@ async function init() {
   // ws_paired 事件会触发 DevicesView 的 watch，进而调用 loadActiveSessions
   await listen('ws_reconnected', async () => {
     console.log('[MobileConnection] Reconnected successfully')
+
+    // 如果用户已主动发起新连接，跳过过期重连的认证流程
+    if (autoReconnectAborted) {
+      console.log('[MobileConnection] Auto-reconnect aborted, skipping re-auth')
+      return
+    }
+
     connectionStatus.value = 'connected'
     connectionError.value = null
     // 重连成功后需要重新认证，isConnecting 保持 true 直到认证完成
@@ -412,12 +426,26 @@ init()
  */
 export async function connect(device: RemoteDevice): Promise<void> {
   console.log('[MobileConnection] Starting connection to:', device.address, device.port)
+
+  // 取消正在进行的自动重连
+  autoReconnectAborted = true
+  autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS
+
+  // 如果当前有残留连接（自动重连中等），先断开确保后端状态干净
+  if (connectionStatus.value !== 'disconnected') {
+    console.log('[MobileConnection] Disconnecting stale connection before new connect')
+    try {
+      await wsDisconnect()
+    } catch (e) {
+      console.warn('[MobileConnection] Disconnect before reconnect failed:', e)
+    }
+    connectionStatus.value = 'disconnected'
+    isConnecting.value = false
+  }
+
   currentDevice.value = device
   connectionError.value = null
   isConnecting.value = true
-
-  // 新的主动连接，重置自动重连计数
-  autoReconnectAttemptCount = 0
   clearConnectionTimeout()
   connectionTimeout = setTimeout(async () => {
     if (isConnecting.value && connectionStatus.value === 'connecting') {
@@ -498,6 +526,12 @@ async function autoStopForegroundService() {
 async function handleUnexpectedDisconnect(reason: string) {
   console.log('[MobileConnection] Handling unexpected disconnect, reason:', reason, 'attempt:', autoReconnectAttemptCount + 1, '/', MAX_AUTO_RECONNECT_ATTEMPTS)
 
+  // 用户已主动发起新连接或断开，取消自动重连
+  if (autoReconnectAborted) {
+    console.log('[MobileConnection] Auto-reconnect aborted by user action')
+    return
+  }
+
   // 读取用户设置
   const savedSettings = localStorage.getItem('mobile-settings')
   const settings = savedSettings
@@ -535,6 +569,8 @@ async function handleUnexpectedDisconnect(reason: string) {
 
   autoReconnectAttemptCount++
   console.log('[MobileConnection] Starting reconnect attempt', autoReconnectAttemptCount, 'token length:', creds.sessionToken.length)
+  // 开始自动重连前重置取消标记
+  autoReconnectAborted = false
   isConnecting.value = true
   connectionStatus.value = 'connecting'
   connectionError.value = null
@@ -543,6 +579,11 @@ async function handleUnexpectedDisconnect(reason: string) {
     // 使用用户设置的重连间隔
     if (settings.reconnectInterval > 0) {
       await new Promise(resolve => setTimeout(resolve, settings.reconnectInterval * 1000))
+      // 等待期间用户可能已发起新连接，检查取消标记
+      if (autoReconnectAborted) {
+        console.log('[MobileConnection] Auto-reconnect aborted during delay wait')
+        return
+      }
     }
     await wsReconnect(creds.sessionToken)
     console.log('[MobileConnection] Reconnect initiated successfully')
@@ -552,8 +593,8 @@ async function handleUnexpectedDisconnect(reason: string) {
     connectionError.value = 'mobile.connection.reconnectFailedMsg'
     isConnecting.value = false
 
-    // 重连失败后，如果还有重试次数，继续尝试
-    if (autoReconnectAttemptCount < MAX_AUTO_RECONNECT_ATTEMPTS) {
+    // 重连失败后，如果还有重试次数且未被用户取消，继续尝试
+    if (autoReconnectAttemptCount < MAX_AUTO_RECONNECT_ATTEMPTS && !autoReconnectAborted) {
       handleUnexpectedDisconnect(reason)
     }
   }
@@ -563,8 +604,9 @@ async function handleUnexpectedDisconnect(reason: string) {
  * 断开连接
  */
 export async function disconnect(): Promise<void> {
-  // 重置自动重连计数，防止断开后继续重连
-  autoReconnectAttemptCount = 0
+  // 取消正在进行的自动重连
+  autoReconnectAborted = true
+  autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS
   clearConnectionTimeout()
   try {
     await wsDisconnect()

@@ -458,13 +458,9 @@ async function handleConnectFromHistory(item: any) {
     isPaired: false,
   }
 
-  // 如果当前有残留连接（被动断开后状态未清理），先断开再重连
-  if (connection.connectionStatus.value !== 'disconnected') {
-    console.log('[DevicesView] Clearing stale connection before reconnect')
-    await connection.disconnect()
-    connection.clearSessionConfigs()
-    connection.clearActiveSessions()
-  }
+  // 清理残留的会话数据（connect() 内部会处理断开旧连接）
+  connection.clearSessionConfigs()
+  connection.clearActiveSessions()
 
   // 从历史连接，允许使用已存储的 token 跳过配对
   await startConnection(device, true)
@@ -486,13 +482,9 @@ async function handleConnectManual(address: string) {
   // 关闭手动连接弹窗，后续由 PairingInput 接管
   showManualConnect.value = false
 
-  // 如果当前有残留连接（被动断开后状态未清理），先断开再重连
-  if (connection.connectionStatus.value !== 'disconnected') {
-    console.log('[DevicesView] Clearing stale connection before manual reconnect')
-    await connection.disconnect()
-    connection.clearSessionConfigs()
-    connection.clearActiveSessions()
-  }
+  // 清理残留的会话数据（connect() 内部会处理断开旧连接）
+  connection.clearSessionConfigs()
+  connection.clearActiveSessions()
 
   // 手动连接，必须走配对流程
   await startConnection(device, false)

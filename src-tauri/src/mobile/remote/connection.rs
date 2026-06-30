@@ -292,6 +292,8 @@ impl ConnectionManager {
     pub async fn disconnect(&self) {
         // 设置手动断开标记，阻止监控任务弹出通知
         self.manual_disconnect.store(true, Ordering::SeqCst);
+        // 重置重连标记，确保进行中的重连循环退出
+        self.is_reconnecting.store(false, Ordering::SeqCst);
         tracing::info!("Disconnecting...");
 
         // 断开 WebSocket
@@ -311,6 +313,13 @@ impl ConnectionManager {
         let mut current_retry: u32 = 0;
 
         while current_retry < MAX_RETRY {
+            // 用户主动断开，停止重连循环
+            if self.manual_disconnect.load(Ordering::SeqCst) {
+                tracing::info!("Manual disconnect detected, aborting reconnect");
+                self.is_reconnecting.store(false, Ordering::SeqCst);
+                return Ok(());
+            }
+
             // 检查是否已经在重连
             if self.is_reconnecting.load(Ordering::SeqCst) {
                 tracing::info!("Already reconnecting, skip");
@@ -332,6 +341,12 @@ impl ConnectionManager {
                 let delay = RETRY_DELAYS[(current_retry - 1) as usize];
                 tracing::info!("Waiting {}ms before retry...", delay);
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                // 等待期间用户可能已断开，再次检查
+                if self.manual_disconnect.load(Ordering::SeqCst) {
+                    tracing::info!("Manual disconnect during reconnect delay, aborting");
+                    self.is_reconnecting.store(false, Ordering::SeqCst);
+                    return Ok(());
+                }
             }
 
             // 获取目标设备信息

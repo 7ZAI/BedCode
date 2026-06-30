@@ -190,6 +190,23 @@ impl KeyCombo {
         Some(KeyCombo { modifiers: 0, key })
     }
 
+    /// 计算修饰键编号（xterm 修饰键协议）
+    ///
+    /// Shift=2, Alt=3, Alt+Shift=4, Ctrl=5, Ctrl+Shift=6, Ctrl+Alt=7, Ctrl+Alt+Shift=8
+    /// 无修饰键返回 None
+    fn modifier_number(&self) -> Option<u8> {
+        match (self.ctrl(), self.shift(), self.alt()) {
+            (false, true, false) => Some(2),
+            (false, false, true) => Some(3),
+            (false, true, true) => Some(4),
+            (true, false, false) => Some(5),
+            (true, true, false) => Some(6),
+            (true, false, true) => Some(7),
+            (true, true, true) => Some(8),
+            (false, false, false) => None,
+        }
+    }
+
     /// 计算对应的 PTY 字节序列
     ///
     /// 根据按键组合动态生成 ANSI 转义序列或 ASCII 控制字符
@@ -216,70 +233,31 @@ impl KeyCombo {
                 Some(bytes)
             }
 
-            // ==================== 方向键 + 修饰键 ====================
+            // ==================== 方向键（动态修饰键） ====================
             KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
                 self.arrow_key_bytes()
             }
 
-            // ==================== 功能键 F1~F12 ====================
+            // ==================== 功能键 F1~F12（动态修饰键） ====================
             KeyCode::F(n) => self.function_key_bytes(*n),
 
-            // ==================== 无修饰键的编辑键 ====================
-            KeyCode::Tab if !self.ctrl() && !self.alt() => {
-                Some(vec![0x09]) // \t
-            }
-            KeyCode::Enter if !self.ctrl() && !self.alt() => {
+            // ==================== Tab（动态修饰键） ====================
+            KeyCode::Tab => self.tab_key_bytes(),
+
+            // ==================== CSI 编辑键（动态修饰键） ====================
+            // Delete/Insert/PageUp/PageDown/Home/End 统一走 csi_edit_key_bytes
+            KeyCode::Delete | KeyCode::Insert | KeyCode::PageUp | KeyCode::PageDown
+            | KeyCode::Home | KeyCode::End => self.csi_edit_key_bytes(),
+
+            // ==================== ASCII 控制字符编辑键 ====================
+            KeyCode::Enter if !self.ctrl() && !self.shift() && !self.alt() => {
                 Some(vec![0x0d]) // \r
             }
-            KeyCode::Escape if !self.ctrl() && !self.alt() => {
+            KeyCode::Escape if !self.ctrl() && !self.shift() && !self.alt() => {
                 Some(vec![0x1b]) // ESC
             }
-            KeyCode::Backspace if !self.ctrl() && !self.alt() => {
+            KeyCode::Backspace if !self.ctrl() && !self.shift() && !self.alt() => {
                 Some(vec![0x7f]) // DEL
-            }
-            KeyCode::Delete if !self.ctrl() && !self.alt() => {
-                Some("\x1b[3~".as_bytes().to_vec())
-            }
-            KeyCode::Home if !self.ctrl() && !self.alt() => {
-                Some("\x1b[H".as_bytes().to_vec())
-            }
-            KeyCode::End if !self.ctrl() && !self.alt() => {
-                Some("\x1b[F".as_bytes().to_vec())
-            }
-            KeyCode::PageUp if !self.ctrl() && !self.alt() => {
-                Some("\x1b[5~".as_bytes().to_vec())
-            }
-            KeyCode::PageDown if !self.ctrl() && !self.alt() => {
-                Some("\x1b[6~".as_bytes().to_vec())
-            }
-            KeyCode::Insert if !self.ctrl() && !self.alt() => {
-                Some("\x1b[2~".as_bytes().to_vec())
-            }
-
-            // ==================== Ctrl + 编辑键 ====================
-            KeyCode::Tab if self.ctrl() => {
-                // Ctrl+Tab 不常用，返回 None
-                None
-            }
-
-            // ==================== Shift + 编辑键 ====================
-            KeyCode::Home if self.shift() => {
-                Some("\x1b[1;2H".as_bytes().to_vec())
-            }
-            KeyCode::End if self.shift() => {
-                Some("\x1b[1;2F".as_bytes().to_vec())
-            }
-            KeyCode::Insert if self.shift() => {
-                Some("\x1b[2;2~".as_bytes().to_vec())
-            }
-            KeyCode::Delete if self.shift() => {
-                Some("\x1b[3;2~".as_bytes().to_vec())
-            }
-            KeyCode::PageUp if self.shift() => {
-                Some("\x1b[5;2~".as_bytes().to_vec())
-            }
-            KeyCode::PageDown if self.shift() => {
-                Some("\x1b[6;2~".as_bytes().to_vec())
             }
 
             // ==================== 无修饰字母/数字（直接输入字符） ====================
@@ -327,10 +305,7 @@ impl KeyCombo {
     /// 方向键 + 修饰键 → ANSI 转义序列
     ///
     /// 无修饰：\x1b[A/B/C/D
-    /// Shift：  \x1b[1;2A/B/C/D
-    /// Alt：    \x1b[1;3A/B/C/D
-    /// Ctrl：   \x1b[1;5A/B/C/D
-    /// C+S：    \x1b[1;6A/B/C/D
+    /// 带修饰：\x1b[1;{mod}A/B/C/D
     fn arrow_key_bytes(&self) -> Option<Vec<u8>> {
         let dir = match &self.key {
             KeyCode::Up => 'A',
@@ -340,23 +315,72 @@ impl KeyCombo {
             _ => return None,
         };
 
-        let bytes = if !self.ctrl() && !self.shift() && !self.alt() {
-            format!("\x1b[{}", dir)
-        } else {
-            // 修饰键编号：Shift=2, Alt=3, Ctrl=5, Ctrl+Shift=6, Alt+Shift=4, Ctrl+Alt=7, Ctrl+Alt+Shift=8
-            let mod_num = match (self.ctrl(), self.shift(), self.alt()) {
-                (false, true, false) => 2,
-                (false, false, true) => 3,
-                (false, true, true) => 4,
-                (true, false, false) => 5,
-                (true, true, false) => 6,
-                (true, false, true) => 7,
-                (true, true, true) => 8,
-                (false, false, false) => return None,
-            };
-            format!("\x1b[1;{}{}", mod_num, dir)
+        let bytes = match self.modifier_number() {
+            None => format!("\x1b[{}", dir),
+            Some(mod_num) => format!("\x1b[1;{}{}", mod_num, dir),
         };
 
+        Some(bytes.into_bytes())
+    }
+
+    /// Tab + 修饰键 → ANSI 转义序列
+    ///
+    /// 无修饰：0x09 (HT)
+    /// Shift+Tab：\x1b[Z (SHT，终端传统序列)
+    /// 其他修饰：\x1b[1;{mod}I (xterm CHT 序列)
+    fn tab_key_bytes(&self) -> Option<Vec<u8>> {
+        if !self.ctrl() && !self.shift() && !self.alt() {
+            return Some(vec![0x09]); // HT
+        }
+        // Shift+Tab 传统序列 \x1b[Z（仅无其他修饰键时）
+        if self.shift() && !self.ctrl() && !self.alt() {
+            return Some("\x1b[Z".as_bytes().to_vec());
+        }
+        // 其他修饰键组合：\x1b[1;{mod}I
+        let mod_num = self.modifier_number()?;
+        Some(format!("\x1b[1;{}I", mod_num).into_bytes())
+    }
+
+    /// CSI 编辑键 + 修饰键 → ANSI 转义序列
+    ///
+    /// 统一处理 Delete/Insert/PageUp/PageDown/Home/End 的所有修饰键组合
+    ///
+    /// CSI~ 格式键（Delete/Insert/PageUp/PageDown）：
+    ///   无修饰：\x1b[{n}~
+    ///   带修饰：\x1b[{n};{mod}~
+    ///
+    /// CSI 字母格式键（Home/End）：
+    ///   无修饰：\x1b[H / \x1b[F
+    ///   带修饰：\x1b[1;{mod}H / \x1b[1;{mod}F
+    fn csi_edit_key_bytes(&self) -> Option<Vec<u8>> {
+        match &self.key {
+            // CSI~ 格式：\x1b[{n}~ 或 \x1b[{n};{mod}~
+            KeyCode::Delete => self.csi_tilde_key(3),
+            KeyCode::Insert => self.csi_tilde_key(2),
+            KeyCode::PageUp => self.csi_tilde_key(5),
+            KeyCode::PageDown => self.csi_tilde_key(6),
+            // CSI 字母格式：\x1b[{final} 或 \x1b[1;{mod}{final}
+            KeyCode::Home => self.csi_letter_key('H'),
+            KeyCode::End => self.csi_letter_key('F'),
+            _ => None,
+        }
+    }
+
+    /// CSI~ 格式键：\x1b[{n}~ 或 \x1b[{n};{mod}~
+    fn csi_tilde_key(&self, n: u8) -> Option<Vec<u8>> {
+        let bytes = match self.modifier_number() {
+            None => format!("\x1b[{}~", n),
+            Some(mod_num) => format!("\x1b[{};{}~", n, mod_num),
+        };
+        Some(bytes.into_bytes())
+    }
+
+    /// CSI 字母格式键：\x1b[{final} 或 \x1b[1;{mod}{final}
+    fn csi_letter_key(&self, final_char: char) -> Option<Vec<u8>> {
+        let bytes = match self.modifier_number() {
+            None => format!("\x1b[{}", final_char),
+            Some(mod_num) => format!("\x1b[1;{}{}", mod_num, final_char),
+        };
         Some(bytes.into_bytes())
     }
 
@@ -366,34 +390,8 @@ impl KeyCombo {
             return None;
         }
 
-        let bytes = match n {
-            1 => "\x1bOP".as_bytes().to_vec(),
-            2 => "\x1bOQ".as_bytes().to_vec(),
-            3 => "\x1bOR".as_bytes().to_vec(),
-            4 => "\x1bOS".as_bytes().to_vec(),
-            5 => "\x1b[15~".as_bytes().to_vec(),
-            6 => "\x1b[17~".as_bytes().to_vec(),
-            7 => "\x1b[18~".as_bytes().to_vec(),
-            8 => "\x1b[19~".as_bytes().to_vec(),
-            9 => "\x1b[20~".as_bytes().to_vec(),
-            10 => "\x1b[21~".as_bytes().to_vec(),
-            11 => "\x1b[23~".as_bytes().to_vec(),
-            12 => "\x1b[24~".as_bytes().to_vec(),
-            _ => return None,
-        };
-
         // 带修饰键的 F 键
-        if self.ctrl() || self.shift() || self.alt() {
-            let mod_num = match (self.ctrl(), self.shift(), self.alt()) {
-                (false, true, false) => 2,
-                (false, false, true) => 3,
-                (false, true, true) => 4,
-                (true, false, false) => 5,
-                (true, true, false) => 6,
-                (true, false, true) => 7,
-                (true, true, true) => 8,
-                (false, false, false) => return None,
-            };
+        if let Some(mod_num) = self.modifier_number() {
             // F1~F4 使用 SS3 序列加修饰键
             if (1..=4).contains(&n) {
                 let pp = match n {
@@ -420,6 +418,22 @@ impl KeyCombo {
             return Some(format!("\x1b[{};{}~", code, mod_num).into_bytes());
         }
 
+        // 无修饰键
+        let bytes = match n {
+            1 => "\x1bOP".as_bytes().to_vec(),
+            2 => "\x1bOQ".as_bytes().to_vec(),
+            3 => "\x1bOR".as_bytes().to_vec(),
+            4 => "\x1bOS".as_bytes().to_vec(),
+            5 => "\x1b[15~".as_bytes().to_vec(),
+            6 => "\x1b[17~".as_bytes().to_vec(),
+            7 => "\x1b[18~".as_bytes().to_vec(),
+            8 => "\x1b[19~".as_bytes().to_vec(),
+            9 => "\x1b[20~".as_bytes().to_vec(),
+            10 => "\x1b[21~".as_bytes().to_vec(),
+            11 => "\x1b[23~".as_bytes().to_vec(),
+            12 => "\x1b[24~".as_bytes().to_vec(),
+            _ => return None,
+        };
         Some(bytes)
     }
 
@@ -582,6 +596,108 @@ mod tests {
         assert_eq!(
             KeyCombo::parse("ctrl_c").unwrap().to_pty_bytes(),
             KeyCombo::parse("ctrl+c").unwrap().to_pty_bytes()
+        );
+    }
+
+    #[test]
+    fn test_shift_tab() {
+        // Shift+Tab = \x1b[Z (SHT - 终端标准序列)
+        assert_eq!(
+            KeyCombo::parse("shift+tab").unwrap().to_pty_bytes(),
+            Some("\x1b[Z".as_bytes().to_vec())
+        );
+        // 确认普通 Tab 不受影响
+        assert_eq!(KeyCombo::parse("tab").unwrap().to_pty_bytes(), Some(vec![0x09]));
+    }
+
+    #[test]
+    fn test_ctrl_tab() {
+        // Ctrl+Tab = \x1b[1;5I
+        assert_eq!(
+            KeyCombo::parse("ctrl+tab").unwrap().to_pty_bytes(),
+            Some("\x1b[1;5I".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_alt_tab() {
+        // Alt+Tab = \x1b[1;3I
+        assert_eq!(
+            KeyCombo::parse("alt+tab").unwrap().to_pty_bytes(),
+            Some("\x1b[1;3I".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_ctrl_shift_tab() {
+        // Ctrl+Shift+Tab = \x1b[1;6I
+        assert_eq!(
+            KeyCombo::parse("ctrl+shift+tab").unwrap().to_pty_bytes(),
+            Some("\x1b[1;6I".as_bytes().to_vec())
+        );
+    }
+
+    // ==================== CSI 编辑键修饰键测试 ====================
+
+    #[test]
+    fn test_modified_delete() {
+        // Shift+Delete = \x1b[3;2~
+        assert_eq!(
+            KeyCombo::parse("shift+delete").unwrap().to_pty_bytes(),
+            Some("\x1b[3;2~".as_bytes().to_vec())
+        );
+        // Ctrl+Delete = \x1b[3;5~
+        assert_eq!(
+            KeyCombo::parse("ctrl+delete").unwrap().to_pty_bytes(),
+            Some("\x1b[3;5~".as_bytes().to_vec())
+        );
+        // Alt+Delete = \x1b[3;3~
+        assert_eq!(
+            KeyCombo::parse("alt+delete").unwrap().to_pty_bytes(),
+            Some("\x1b[3;3~".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_modified_home_end() {
+        // Shift+Home = \x1b[1;2H
+        assert_eq!(
+            KeyCombo::parse("shift+home").unwrap().to_pty_bytes(),
+            Some("\x1b[1;2H".as_bytes().to_vec())
+        );
+        // Ctrl+Home = \x1b[1;5H
+        assert_eq!(
+            KeyCombo::parse("ctrl+home").unwrap().to_pty_bytes(),
+            Some("\x1b[1;5H".as_bytes().to_vec())
+        );
+        // Alt+End = \x1b[1;3F
+        assert_eq!(
+            KeyCombo::parse("alt+end").unwrap().to_pty_bytes(),
+            Some("\x1b[1;3F".as_bytes().to_vec())
+        );
+        // Ctrl+Shift+End = \x1b[1;6F
+        assert_eq!(
+            KeyCombo::parse("ctrl+shift+end").unwrap().to_pty_bytes(),
+            Some("\x1b[1;6F".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_modified_page_keys() {
+        // Ctrl+PageUp = \x1b[5;5~
+        assert_eq!(
+            KeyCombo::parse("ctrl+pageup").unwrap().to_pty_bytes(),
+            Some("\x1b[5;5~".as_bytes().to_vec())
+        );
+        // Alt+PageDown = \x1b[6;3~
+        assert_eq!(
+            KeyCombo::parse("alt+pagedown").unwrap().to_pty_bytes(),
+            Some("\x1b[6;3~".as_bytes().to_vec())
+        );
+        // Ctrl+Shift+PageUp = \x1b[5;6~
+        assert_eq!(
+            KeyCombo::parse("ctrl+shift+pageup").unwrap().to_pty_bytes(),
+            Some("\x1b[5;6~".as_bytes().to_vec())
         );
     }
 
