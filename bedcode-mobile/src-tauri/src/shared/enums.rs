@@ -14,7 +14,7 @@ pub mod sync;
 pub use auth::{AuthPayload, AuthStage};
 pub use control::{SessionControlAction, SessionControlPayload, SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
-pub use session::{SessionStatus, SessionType, TaskStatus};
+pub use session::{SessionStatus, TaskStatus};
 pub use special_key::{KeyCombo, KeyCode};
 pub use sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 pub use sync::SyncPayload;

@@ -3,8 +3,7 @@
 //! 移动端专用命令 - 使用内存存储和 JSON 文件存储
 //! 从 shared/system/commands.rs 迁移而来
 
-use crate::shared::auth::PairingCode;
-use crate::shared::db::{QuickAction, SessionConfig};
+use crate::shared::models::{QuickAction, SessionConfig, Setting};
 use crate::Result;
 use std::sync::Arc;
 use tauri::State;
@@ -108,12 +107,12 @@ pub async fn delete_quick_action_mobile(id: String) -> Result<()> {
 #[tauri::command]
 pub async fn get_all_db_settings_mobile(
     settings_manager: State<'_, SettingsManager>,
-) -> Result<Vec<crate::shared::db::Setting>> {
+) -> Result<Vec<Setting>> {
     let settings = settings_manager.get_all().await?;
     let now = Utc::now();
     Ok(settings
         .into_iter()
-        .map(|(key, value)| crate::shared::db::Setting {
+        .map(|(key, value)| Setting {
             key,
             value,
             updated_at: now,

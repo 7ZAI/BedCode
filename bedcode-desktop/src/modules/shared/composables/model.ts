@@ -13,14 +13,6 @@ export interface AnsiRenderOptions {
   useClasses?: boolean
 }
 
-// Error Handler
-export interface AppError {
-  code: string
-  message: string
-  details?: string
-  timestamp?: number
-}
-
 // Keyboard Shortcuts
 export interface Shortcut {
   key: string
@@ -32,24 +24,6 @@ export interface Shortcut {
   handler?: () => void
   description?: string
   ignoreInput?: boolean
-}
-
-// Output Buffer
-export interface BufferedOutput {
-  sessionId?: string
-  text?: string
-  data?: string
-  timestamp: number
-}
-
-// Output Parser
-export interface OutputBlock {
-  id: string
-  type: 'text' | 'code' | 'link' | 'error' | 'success' | 'info' | 'warning' | 'markdown' | 'tool_use' | 'progress'
-  content: string
-  raw?: string
-  language?: string
-  timestamp: number
 }
 
 // QR Code
@@ -76,27 +50,6 @@ export interface SessionRestartEvent {
   sessionName: string
 }
 
-// Device Store — 已废弃，请使用 @/modules/shared/stores/device 中的 PairedDevice
-/** @deprecated Use PairedDevice from @/modules/shared/stores/device instead */
-export interface PairedDevice {
-  id: string
-  deviceName: string
-  deviceFingerprint: string
-  address: string
-  pairedAt: string
-  lastSeen?: string
-  connectCount: number
-}
-
-// Notification
-export interface Notification {
-  id: string
-  type: 'info' | 'success' | 'warning' | 'error'
-  title: string
-  message: string
-  duration?: number
-}
-
 export interface SessionEventPayload {
   type: string
   event_type?: string
@@ -109,13 +62,6 @@ export interface DeviceEventPayload {
   device_id?: string
   device_name?: string
   event?: string
-}
-
-export interface ToastOptions {
-  message: string
-  type?: 'success' | 'error' | 'warning' | 'info'
-  duration?: number
-  position?: 'top' | 'bottom'
 }
 
 export interface TerminalWindowState {

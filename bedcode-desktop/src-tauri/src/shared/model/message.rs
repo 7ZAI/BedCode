@@ -17,21 +17,6 @@ use crate::shared::enums::SyncPayload;
 /// Ack 成功响应代码
 pub const ACK_CODE_SUCCESS: u16 = 0;
 
-/// Ack 失败响应代码 - 通用错误
-pub const ACK_CODE_FAILURE: u16 = 1;
-
-/// Ack 失败响应代码 - 认证失败
-pub const ACK_CODE_AUTH_FAILED: u16 = 1001;
-
-/// Ack 失败响应代码 - 会话不存在
-pub const ACK_CODE_SESSION_NOT_FOUND: u16 = 1002;
-
-/// Ack 失败响应代码 - 无效请求
-pub const ACK_CODE_INVALID_REQUEST: u16 = 1003;
-
-/// Ack 失败响应代码 - 操作超时
-pub const ACK_CODE_TIMEOUT: u16 = 1004;
-
 /// 生成唯一消息ID
 pub(crate) fn generate_message_id() -> String {
     Uuid::new_v4().to_string()

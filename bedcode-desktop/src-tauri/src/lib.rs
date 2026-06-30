@@ -317,7 +317,6 @@ pub fn run() {
                     .expect("Failed to initialize WebSocketManager");
 
                 // 注册同步事件处理器
-                use crate::shared::event::handler::EventHandler;
                 use crate::shared::event::global_matcher;
                 use crate::desktop::events::{DesktopSyncEvent, SyncEventHandler};
 

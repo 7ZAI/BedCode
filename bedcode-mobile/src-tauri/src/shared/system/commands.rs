@@ -1,16 +1,11 @@
 //! Shared System Commands
 //!
 //! 桌面端和移动端共享的系统命令
-//!
-//! 桌面端专用命令在 desktop/commands.rs
-//! 移动端专用命令在 mobile/commands/mobile_commands.rs
 
 use crate::shared::auth::PairingCode;
-use crate::shared::db::Database;
 use crate::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
-use tokio::sync::Mutex;
 
 use crate::mobile::remote::PairingService;
 
@@ -48,25 +43,6 @@ pub async fn clear_pairing_code(
 ) -> Result<()> {
     pairing_service.clear_code().await;
     Ok(())
-}
-
-/// 获取已配对设备
-#[tauri::command]
-pub async fn list_paired_devices(
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<Vec<crate::shared::db::Pairing>> {
-    let db = db.lock().await;
-    db.get_pairings()
-}
-
-/// 移除配对设备
-#[tauri::command]
-pub async fn remove_paired_device(
-    db: State<'_, Arc<Mutex<Database>>>,
-    id: String,
-) -> Result<()> {
-    let db = db.lock().await;
-    db.remove_pairing(&id)
 }
 
 // ==================== Settings Commands ====================

@@ -136,27 +136,3 @@ pub struct PendingDevice {
     pub requested_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// 设备指纹
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceFingerprint {
-    /// 设备 ID
-    pub device_id: String,
-    /// 设备名称
-    pub device_name: String,
-    /// 平台
-    pub platform: String,
-    /// 时间戳
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-impl DeviceFingerprint {
-    /// 创建新的设备指纹
-    pub fn new(device_name: String, platform: String) -> Self {
-        Self {
-            device_id: uuid::Uuid::new_v4().to_string(),
-            device_name,
-            platform,
-            timestamp: chrono::Utc::now(),
-        }
-    }
-}

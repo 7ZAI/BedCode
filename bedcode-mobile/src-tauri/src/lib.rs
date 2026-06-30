@@ -9,7 +9,7 @@ pub use shared::{AppError, Result};
 // Re-export shared modules for testing
 pub use shared::auth;
 pub use shared::config;
-pub use shared::db;
+pub use shared::models;
 pub use shared::system;
 
 use mobile::remote::PairingService;
@@ -100,8 +100,6 @@ pub fn run() {
             shared::system::commands::get_current_pairing_code,
             shared::system::commands::verify_pairing_code,
             shared::system::commands::clear_pairing_code,
-            shared::system::commands::list_paired_devices,
-            shared::system::commands::remove_paired_device,
             // Quick Actions (移动端使用内存存储)
             mobile::commands::mobile_commands::list_quick_actions_mobile,
             mobile::commands::mobile_commands::create_quick_action_mobile,

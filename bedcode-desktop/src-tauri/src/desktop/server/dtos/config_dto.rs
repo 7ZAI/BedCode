@@ -1,6 +1,6 @@
 //! Config DTOs
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 // Re-export shared file tree types
 pub use crate::shared::model::api_dto::{FileTreeRequest, FileTreeNode, FileTreeResponseData};

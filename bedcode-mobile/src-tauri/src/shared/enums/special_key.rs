@@ -473,18 +473,6 @@ impl<'de> Deserialize<'de> for KeyCombo {
     }
 }
 
-// ==================== 兼容旧 SpecialKey ====================
-
-/// 旧 SpecialKey enum 到 KeyCombo 的转换
-/// 用于过渡期间兼容现有代码
-impl KeyCombo {
-    /// 从旧格式字符串创建常用快捷键
-    /// 支持 "ctrl_c"、"ctrlc"、"arrow_up" 等旧格式
-    pub fn from_legacy(s: &str) -> Option<Self> {
-        Self::parse(s)
-    }
-}
-
 // ==================== 单元测试 ====================
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
-//! Model Module - DTO and DO types
+//! Model Module - Message types
 //!
-//! 跨平台共享的数据模型
+//! 跨平台共享的消息类型
 
-pub mod api_dto;
 pub mod message;

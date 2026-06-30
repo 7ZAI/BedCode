@@ -30,13 +30,6 @@ impl Default for SessionStatus {
     }
 }
 
-/// 会话类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SessionType {
-    Pty,
-}
-
 /// 会话任务状态
 ///
 /// Plugin 会话的 Claude Code 任务执行状态，由插件通过 HTTP API 推送
@@ -58,12 +51,6 @@ pub enum TaskStatus {
 impl Default for TaskStatus {
     fn default() -> Self {
         Self::Idle
-    }
-}
-
-impl Default for SessionType {
-    fn default() -> Self {
-        Self::Pty
     }
 }
 

@@ -124,8 +124,6 @@ pub enum MobileEvent {
     },
 }
 
-impl crate::shared::event::AppEvent for MobileEvent {}
-
 // ==================== Event Forwarding ====================
 
 /// 输出事件转发标志（只启动一次）

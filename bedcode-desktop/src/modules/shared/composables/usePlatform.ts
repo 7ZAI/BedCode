@@ -18,18 +18,13 @@ export type { PlatformInfo }
 export type Platform = 'windows' | 'macos' | 'linux' | 'android' | 'ios'
 export type Arch = 'x86_64' | 'aarch64' | 'arm'
 
-
-
 const platformInfo = ref<PlatformInfo>({
   platform: null,
   arch: null,
   osVersion: null,
   osType: null,
-  // 优化：使用 localStorage 缓存上次检测结果作为默认值的候选
-  // 这样可以在检测完成前给出一个更可能的默认值，减少切换
-  // 检测完成后会被覆盖
-  isDesktop: false,  // 乐观假设为移动端（移动端用户更多等待体验）
-  isMobile: true,    // 先显示移动端布局，如果检测到桌面端再切换
+  isDesktop: false,
+  isMobile: true,
   isWindows: false,
   isMacos: false,
   isLinux: false,
@@ -37,20 +32,13 @@ const platformInfo = ref<PlatformInfo>({
   isIos: false,
 })
 
-// 使用 Promise 来同步等待初始化完成
 let initialized = false
 let initPromise: Promise<PlatformInfo> | null = null
 
-/**
- * 检测是否在 Tauri 运行时环境中
- */
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI__' in window
 }
 
-/**
- * 从 Tauri OS 插件获取平台信息
- */
 async function detectFromTauri(): Promise<PlatformInfo | null> {
   try {
     const { platform, arch, version, type } = await import('@tauri-apps/plugin-os')
@@ -84,11 +72,7 @@ async function detectFromTauri(): Promise<PlatformInfo | null> {
   }
 }
 
-/**
- * 在浏览器环境中模拟平台信息 (用于开发调试)
- */
 function simulateForBrowser(): PlatformInfo {
-  // 优先级: URL 参数 > localStorage > 默认桌面
   const urlParams = new URLSearchParams(window.location.search)
   const urlMode = urlParams.get('platform')
   const storedMode = localStorage.getItem('platform-mode')
@@ -117,9 +101,6 @@ function simulateForBrowser(): PlatformInfo {
   }
 }
 
-/**
- * 平台检测 composable
- */
 export function usePlatform() {
   async function detectPlatform() {
     if (initialized) {
@@ -128,7 +109,6 @@ export function usePlatform() {
 
     let info: PlatformInfo | null = null
 
-    // 生产环境: Tauri 运行时
     if (isTauriRuntime()) {
       info = await detectFromTauri()
       if (info) {
@@ -136,7 +116,6 @@ export function usePlatform() {
       }
     }
 
-    // 开发环境或 Tauri 检测失败: 浏览器模拟
     if (!info) {
       info = simulateForBrowser()
     }
@@ -155,24 +134,15 @@ export function usePlatform() {
   }
 }
 
-/**
- * 立即初始化平台检测（用于路由守卫）
- * 返回 Promise，等待检测完成后返回平台信息
- *
- * 使用场景：在路由导航前确定平台类型
- */
 export async function initPlatform(): Promise<PlatformInfo> {
-  // 已初始化，直接返回当前值
   if (initialized && platformInfo.value.platform !== null) {
     return platformInfo.value
   }
 
-  // 正在初始化，等待完成
   if (initPromise) {
     return initPromise
   }
 
-  // 开始初始化
   initPromise = (async () => {
     let info: PlatformInfo | null = null
 
@@ -193,65 +163,4 @@ export async function initPlatform(): Promise<PlatformInfo> {
   })()
 
   return initPromise
-}
-
-/**
- * 获取当前平台信息（同步，可能为初始状态）
- */
-export function getPlatformInfo(): PlatformInfo {
-  return platformInfo.value
-}
-
-/**
- * 快速检测是否为桌面平台
- */
-export function useIsDesktop() {
-  const isDesktop = ref(true)
-
-  onMounted(async () => {
-    if (isTauriRuntime()) {
-      try {
-        const { platform } = await import('@tauri-apps/plugin-os')
-        const p = platform()
-        isDesktop.value = p !== 'android' && p !== 'ios'
-      } catch {
-        isDesktop.value = true
-      }
-    } else {
-      // 浏览器环境: 检查模拟模式
-      const storedMode = localStorage.getItem('platform-mode')
-      const urlMode = new URLSearchParams(window.location.search).get('platform')
-      const mode = urlMode || storedMode || 'desktop'
-      isDesktop.value = mode !== 'mobile'
-    }
-  })
-
-  return readonly(isDesktop)
-}
-
-/**
- * 快速检测是否为移动平台
- */
-export function useIsMobile() {
-  const isMobile = ref(false)
-
-  onMounted(async () => {
-    if (isTauriRuntime()) {
-      try {
-        const { platform } = await import('@tauri-apps/plugin-os')
-        const p = platform()
-        isMobile.value = p === 'android' || p === 'ios'
-      } catch {
-        isMobile.value = false
-      }
-    } else {
-      // 浏览器环境: 检查模拟模式
-      const storedMode = localStorage.getItem('platform-mode')
-      const urlMode = new URLSearchParams(window.location.search).get('platform')
-      const mode = urlMode || storedMode || 'desktop'
-      isMobile.value = mode === 'mobile'
-    }
-  })
-
-  return readonly(isMobile)
 }
