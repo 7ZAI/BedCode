@@ -1,5 +1,6 @@
 <template>
   <div
+    v-show="isActive"
     class="terminal-view"
     :style="terminalViewStyle"
   >
@@ -413,6 +414,8 @@ const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>
 // 注意：使用 ref 确保每个组件实例有独立的状态
 // 在 <script setup> 中，顶层 let 声明的变量是模块级共享的
 
+// keep-alive 可见性：停用时隐藏终端视图，避免 position:fixed 覆盖层拦截触摸事件
+const isActive = ref(true)
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
 // 终端是否准备就绪（初始化 + 订阅完成）
@@ -1424,6 +1427,9 @@ onUnmounted(async () => {
 
 // keep-alive 生命周期：组件被激活时恢复显示
 onActivated(async () => {
+  // 恢复终端视图可见性（停用时隐藏以避免覆盖层拦截触摸事件）
+  isActive.value = true
+
   // 如果正在订阅中（subscribeSession 的 await 期间），跳过
   if (isSubscribing.value) {
     return
@@ -1448,6 +1454,8 @@ onActivated(async () => {
 // 保持前端监听器和后端订阅活跃，让所有终端持续接收输出
 onDeactivated(() => {
   // 不取消订阅，不清理监听器
+  // 隐藏终端视图，避免 position:fixed 覆盖层拦截触摸事件
+  isActive.value = false
 })
 
 // Watch session status changes
