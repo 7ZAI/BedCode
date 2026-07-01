@@ -4,6 +4,7 @@
 //! 启动 Actix Web (HTTP + WS) + IPC handler + 心跳上报
 
 use std::io::{BufRead, Write};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use actix_web::{web, App, HttpServer};
@@ -63,6 +64,25 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/plugin/session-mode", web::get().to(plugin_controller::get_session_mode));
 }
 
+/// 采集当前系统指标（CPU/内存/连接数）
+fn collect_system_metrics(sys: &mut sysinfo::System) -> (usize, f64, u64) {
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    let cpu_percent = sys.global_cpu_usage();
+    let memory_bytes = sys.used_memory();
+
+    let connections = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(async {
+            crate::desktop::server::ws::registry::WsSessionRegistry::global()
+                .client_count()
+                .await
+        }),
+        Err(_) => 0,
+    };
+
+    (connections, cpu_percent as f64, memory_bytes)
+}
+
 /// 运行服务器模式
 pub fn run_server_mode() {
     // 初始化简单日志（输出到 stderr，主进程可转发）
@@ -72,6 +92,9 @@ pub fn run_server_mode() {
         .init();
 
     tracing::info!("BedCode server-only mode starting...");
+
+    // 共享 sysinfo 采集器（心跳线程和 IPC 循环共用）
+    let sys = Arc::new(Mutex::new(sysinfo::System::new()));
 
     // 从 stdin 读取初始命令（阻塞等待 start 命令）
     let stdin = std::io::stdin();
@@ -112,7 +135,7 @@ pub fn run_server_mode() {
         rt.block_on(async move {
             tracing::info!("Starting Actix Web server on port {}", port_for_server);
 
-            let server = HttpServer::new(|| {
+            let server_result = HttpServer::new(|| {
                 let cors = Cors::default()
                     .allow_any_origin()
                     .allow_any_method()
@@ -126,9 +149,11 @@ pub fn run_server_mode() {
             })
             .bind(format!("0.0.0.0:{}", port_for_server));
 
-            match server {
+            match server_result {
                 Ok(s) => {
-                    let handle = s.handle();
+                    let server_future = s.run();
+                    // 在 await 之前获取 handle，用于后续优雅停机
+                    let handle = server_future.handle();
                     *handle_clone.lock().unwrap() = Some(handle);
 
                     // 通知主进程服务器已启动
@@ -139,7 +164,7 @@ pub fn run_server_mode() {
                         let _ = out.flush();
                     }
 
-                    if let Err(e) = s.run().await {
+                    if let Err(e) = server_future.await {
                         tracing::error!("Actix Web server error: {}", e);
                     }
                 }
@@ -156,15 +181,21 @@ pub fn run_server_mode() {
         });
     });
 
-    // 启动心跳任务
+    // 启动心跳任务（采集 sysinfo 指标 + WS 连接数，通过 IPC stdout 上报主进程）
+    let sys_heartbeat = sys.clone();
     let heartbeat_stdout = std::io::stdout();
     std::thread::spawn(move || {
         let mut out = heartbeat_stdout;
         loop {
             std::thread::sleep(Duration::from_secs(5));
 
+            let (connections, cpu_percent, memory_bytes) = {
+                let mut sys = sys_heartbeat.lock().unwrap();
+                collect_system_metrics(&mut sys)
+            };
+
             let collector = MetricsCollector::global();
-            let metrics = collector.sample(0, 0.0, 0);
+            let metrics = collector.sample(connections, cpu_percent, memory_bytes);
 
             let resp = IpcResponse::Heartbeat(Box::new(metrics));
             if let Ok(json) = resp.to_json_line() {
@@ -196,8 +227,13 @@ pub fn run_server_mode() {
                 break;
             }
             Ok(IpcCommand::GetMetrics) => {
+                let (connections, cpu_percent, memory_bytes) = {
+                    let mut sys_guard = sys.lock().unwrap();
+                    collect_system_metrics(&mut sys_guard)
+                };
+
                 let collector = MetricsCollector::global();
-                let metrics = collector.sample(0, 0.0, 0);
+                let metrics = collector.sample(connections, cpu_percent, memory_bytes);
                 let resp = IpcResponse::Metrics(Box::new(metrics));
                 if let Ok(json) = resp.to_json_line() {
                     let _ = stdout.write_all(json.as_bytes());

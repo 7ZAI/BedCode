@@ -265,7 +265,7 @@ watch(status, (newVal) => {
           :disabled="status !== 'stopped' || loading"
           @click="handleStart"
         >
-          ▶ {{ $t('desktop.server.start') }}
+          {{ $t('desktop.server.start') }}
         </button>
         <button
           class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
@@ -273,7 +273,7 @@ watch(status, (newVal) => {
           :disabled="status !== 'running' || loading"
           @click="handleStop"
         >
-          ■ {{ $t('desktop.server.stop') }}
+          {{ $t('desktop.server.stop') }}
         </button>
         <button
           class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
@@ -281,7 +281,7 @@ watch(status, (newVal) => {
           :disabled="status !== 'running' || loading"
           @click="handleRestart"
         >
-          ↻ {{ $t('desktop.server.restart') }}
+          {{ $t('desktop.server.restart') }}
         </button>
       </div>
     </div>

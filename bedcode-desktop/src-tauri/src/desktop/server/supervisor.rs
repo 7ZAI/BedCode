@@ -5,14 +5,14 @@
 
 use std::collections::VecDeque;
 use std::io::Write;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::shared::system::error::AppError;
 use crate::Result;
 
-use super::ipc::IpcCommand;
+use super::ipc::{IpcCommand, IpcResponse};
 use super::metrics::ServerMetrics;
 
 /// 服务器状态
@@ -44,6 +44,8 @@ pub struct ServerStatusInfo {
 /// Supervisor 内部状态
 struct SupervisorInner {
     child: Option<Child>,
+    /// 子进程 stdin，保留用于发送 IPC 命令
+    child_stdin: Option<ChildStdin>,
     status: ServerStatus,
     metrics: ServerMetrics,
     metrics_history: VecDeque<TimestampedMetrics>,
@@ -63,6 +65,7 @@ impl ServerSupervisor {
             std::sync::LazyLock::new(|| ServerSupervisor {
                 inner: Arc::new(RwLock::new(SupervisorInner {
                     child: None,
+                    child_stdin: None,
                     status: ServerStatus::Stopped,
                     metrics: ServerMetrics::default(),
                     metrics_history: VecDeque::with_capacity(60),
@@ -107,47 +110,23 @@ impl ServerSupervisor {
             .spawn()
             .map_err(|e| AppError::Internal(format!("Failed to spawn server process: {}", e)))?;
 
-        // 发送 start 命令到子进程 stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            let cmd = IpcCommand::Start { port };
-            if let Ok(line) = cmd.to_json_line() {
-                let _ = stdin.write_all(line.as_bytes());
-                let _ = stdin.flush();
-            }
-            drop(stdin);
-        }
+        // 取出 stdin/stdout 句柄
+        let child_stdin = child.stdin.take();
+        let child_stdout = child.stdout.take();
 
         {
             let mut inner = self.inner.write().await;
             inner.child = Some(child);
+            inner.child_stdin = child_stdin;
         }
 
-        // 后台等待子进程启动完成
-        let inner_arc = self.inner.clone();
-        let port_for_log = port;
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // 发送 start 命令到子进程 stdin
+        self.send_ipc_command(&IpcCommand::Start { port }).await?;
 
-            let mut inner = inner_arc.write().await;
-            if let Some(ref mut child) = inner.child {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        tracing::error!("Server child process exited prematurely: {}", status);
-                        inner.status = ServerStatus::Stopped;
-                        inner.child = None;
-                    }
-                    Ok(None) => {
-                        inner.status = ServerStatus::Running;
-                        tracing::info!("Server child process started on port {}", port_for_log);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to check server child process: {}", e);
-                        inner.status = ServerStatus::Stopped;
-                        inner.child = None;
-                    }
-                }
-            }
-        });
+        // 启动 IPC 读取循环（后台线程读取子进程 stdout）
+        if let Some(stdout) = child_stdout {
+            self.start_ipc_reader(stdout);
+        }
 
         // 启动子进程崩溃监控
         self.start_process_monitor();
@@ -157,20 +136,33 @@ impl ServerSupervisor {
 
     /// 停止服务器
     pub async fn stop(&self) -> Result<()> {
+        // 尝试通过 IPC 发送优雅停机命令
+        let _ = self.send_ipc_command(&IpcCommand::Stop).await;
+
+        // 给子进程一点时间优雅退出
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
         let mut inner = self.inner.write().await;
-        if inner.status != ServerStatus::Running {
+        if inner.status != ServerStatus::Running && inner.status != ServerStatus::Starting {
             return Err(AppError::WebSocket("Server not running".to_string()));
         }
 
-        // kill 子进程
+        // 强制 kill 子进程（如果仍在运行）
         if let Some(ref mut child) = inner.child {
-            let _ = child.kill();
-            let _ = child.wait();
+            match child.try_wait() {
+                Ok(Some(_)) => {}
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
         }
 
         inner.child = None;
+        inner.child_stdin = None;
         inner.status = ServerStatus::Stopped;
         inner.metrics = ServerMetrics::default();
+        inner.metrics_history.clear();
         tracing::info!("Server stopped");
         Ok(())
     }
@@ -228,12 +220,77 @@ impl ServerSupervisor {
         inner.auto_start = auto_start;
     }
 
+    /// 发送 IPC 命令到子进程 stdin
+    async fn send_ipc_command(&self, cmd: &IpcCommand) -> Result<()> {
+        let mut inner = self.inner.write().await;
+        if let Some(ref mut stdin) = inner.child_stdin {
+            if let Ok(line) = cmd.to_json_line() {
+                stdin.write_all(line.as_bytes())
+                    .map_err(|e| AppError::Internal(format!("Failed to write IPC command: {}", e)))?;
+                stdin.flush()
+                    .map_err(|e| AppError::Internal(format!("Failed to flush IPC command: {}", e)))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 启动 IPC 读取循环（后台 std 线程读 stdout → tokio 任务更新状态）
+    fn start_ipc_reader(&self, stdout: std::process::ChildStdout) {
+        let inner_arc = self.inner.clone();
+
+        // 使用 std 线程读取 stdout（BufRead 是阻塞操作）
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line_str) => {
+                        let trimmed = line_str.trim().to_string();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        match IpcResponse::from_json_line(&trimmed) {
+                            Ok(response) => {
+                                // 使用 tokio runtime 在异步上下文中更新状态
+                                let rt = tokio::runtime::Handle::current();
+                                let inner = inner_arc.clone();
+                                rt.spawn(async move {
+                                    handle_ipc_response(inner, response).await;
+                                });
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to parse IPC response: {} (line: {})", e, trimmed);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("IPC stdout read error: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            // stdout 关闭意味着子进程退出
+            tracing::info!("IPC reader: stdout closed, child process likely exited");
+            let rt = tokio::runtime::Handle::current();
+            let inner = inner_arc.clone();
+            rt.spawn(async move {
+                let mut inner = inner.write().await;
+                inner.status = ServerStatus::Stopped;
+                inner.child = None;
+                inner.child_stdin = None;
+            });
+        });
+    }
+
     /// 启动子进程崩溃监控
     fn start_process_monitor(&self) {
         let inner_arc = self.inner.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                 let mut inner = inner_arc.write().await;
                 if let Some(ref mut child) = inner.child {
@@ -242,6 +299,7 @@ impl ServerSupervisor {
                             tracing::warn!("Server child process exited: {}", status);
                             inner.status = ServerStatus::Stopped;
                             inner.child = None;
+                            inner.child_stdin = None;
                             break;
                         }
                         Ok(None) => {
@@ -251,6 +309,7 @@ impl ServerSupervisor {
                             tracing::error!("Failed to check server process: {}", e);
                             inner.status = ServerStatus::Stopped;
                             inner.child = None;
+                            inner.child_stdin = None;
                             break;
                         }
                     }
@@ -259,5 +318,48 @@ impl ServerSupervisor {
                 }
             }
         });
+    }
+}
+
+/// 处理从子进程接收到的 IPC 响应
+async fn handle_ipc_response(inner: Arc<RwLock<SupervisorInner>>, response: IpcResponse) {
+    match response {
+        IpcResponse::Started { port } => {
+            let mut inner = inner.write().await;
+            inner.status = ServerStatus::Running;
+            tracing::info!("Server child process confirmed started on port {}", port);
+        }
+        IpcResponse::Stopped => {
+            let mut inner = inner.write().await;
+            inner.status = ServerStatus::Stopped;
+            inner.child = None;
+            inner.child_stdin = None;
+            tracing::info!("Server child process confirmed stopped via IPC");
+        }
+        IpcResponse::Heartbeat(metrics) => {
+            let mut inner = inner.write().await;
+            // 追加到指标历史
+            let entry = TimestampedMetrics {
+                timestamp_secs: metrics.uptime_secs,
+                ws_sent_rate: metrics.ws_sent_rate,
+                ws_recv_rate: metrics.ws_recv_rate,
+            };
+            inner.metrics_history.push_back(entry);
+            if inner.metrics_history.len() > 60 {
+                inner.metrics_history.pop_front();
+            }
+            inner.metrics = *metrics;
+        }
+        IpcResponse::Metrics(metrics) => {
+            let mut inner = inner.write().await;
+            inner.metrics = *metrics;
+        }
+        IpcResponse::Error { message } => {
+            tracing::error!("Server child process reported error: {}", message);
+            let mut inner = inner.write().await;
+            inner.status = ServerStatus::Stopped;
+            inner.child = None;
+            inner.child_stdin = None;
+        }
     }
 }
