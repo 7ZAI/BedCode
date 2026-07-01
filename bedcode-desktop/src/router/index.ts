@@ -3,8 +3,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    { path: '/', redirect: '/sessions' },
     {
-      path: '/',
+      path: '/sessions',
       name: 'sessions',
       component: () => import('@/modules/desktop/views/SessionsConfigView.vue'),
     },
@@ -12,6 +13,11 @@ const router = createRouter({
       path: '/session-manager',
       name: 'session-manager',
       component: () => import('@/modules/desktop/views/SessionManagerView.vue'),
+    },
+    {
+      path: '/server',
+      name: 'server',
+      component: () => import('@/modules/desktop/views/ServerView.vue'),
     },
     {
       path: '/devices',

@@ -60,7 +60,7 @@ pub async fn get_qr_connection_info(
             let config = crate::shared::system::config::AppConfig::load(
                 &app_handle.path().app_data_dir()
                     .unwrap_or_default()
-                    .join("config.json")
+                    .join("config.properties")
             ).unwrap_or_default();
             let port = config.network.port;
 

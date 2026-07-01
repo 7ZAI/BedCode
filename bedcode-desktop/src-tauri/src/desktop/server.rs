@@ -10,6 +10,11 @@ pub mod connection_types;
 pub mod services;
 pub mod port_checker;
 
+pub mod ipc;
+pub mod metrics;
+pub mod supervisor;
+pub mod server_mode;
+
 // Actix Web 模块
 pub mod app;
 pub mod controllers;

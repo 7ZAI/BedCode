@@ -42,7 +42,7 @@ fn save_port_to_config(app_handle: &AppHandle, port: u16) -> Result<()> {
         .path()
         .app_data_dir()
         .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?
-        .join("config.json");
+        .join("config.properties");
 
     let mut config = AppConfig::load(&config_path)?;
     config.network.port = port;

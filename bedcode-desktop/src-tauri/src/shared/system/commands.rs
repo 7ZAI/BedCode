@@ -82,7 +82,7 @@ pub async fn get_app_settings(
     let config_path = app_handle
         .path()
         .app_data_dir()
-        .map(|p| p.join("config.json"))
+        .map(|p| p.join("config.properties"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
     crate::shared::system::config::AppConfig::load(&config_path)
@@ -98,7 +98,7 @@ pub async fn save_app_settings(
     let config_path = app_handle
         .path()
         .app_data_dir()
-        .map(|p| p.join("config.json"))
+        .map(|p| p.join("config.properties"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
     settings.save(&config_path)?;

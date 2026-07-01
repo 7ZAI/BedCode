@@ -44,7 +44,7 @@
     "active": true,
     "targets": ["nsis"],
     "resources": [
-      "resources/config.json",
+      "resources/config.properties",
       "resources/plugins/",
       "../scripts/bedcode_hook.py"
     ],

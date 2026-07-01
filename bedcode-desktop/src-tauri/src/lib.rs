@@ -155,14 +155,14 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir")
-                .join("config.json");
+                .join("config.properties");
 
             // 首次启动时从打包资源复制默认配置到 AppData
             // 后续启动直接使用 AppData 中的配置，用户修改不会丢失
             if !config_path.exists() {
                 if let Ok(resource_path) = app_handle
                     .path()
-                    .resolve("resources/config.json", tauri::path::BaseDirectory::Resource)
+                    .resolve("resources/config.properties", tauri::path::BaseDirectory::Resource)
                 {
                     if resource_path.exists() {
                         if let Some(parent) = config_path.parent() {
@@ -312,17 +312,20 @@ pub fn run() {
             app.manage(qr_manager.clone());
             app.manage(plugin_host.clone());
 
-            // ==================== 启动 WebSocket 服务 ====================
+            // ==================== 启动服务器（通过 ServerSupervisor）====================
 
-            let ws_manager = desktop::websocket_manager::WebSocketManager::global();
+            let supervisor = desktop::server::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
+            let auto_start = app_config.network.auto_start;
             tauri::async_runtime::spawn(async move {
-                ws_manager.init().await
-                    .expect("Failed to initialize WebSocketManager");
+                supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
                 // 注册同步事件处理器
                 use crate::shared::event::global_matcher;
                 use crate::desktop::events::{DesktopSyncEvent, SyncEventHandler};
+
+                let ws_manager = desktop::websocket_manager::WebSocketManager::global();
+                ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 // 注册事件源
                 global_matcher().register_source::<DesktopSyncEvent>(ctx.sync_tx().clone()).await;
@@ -336,17 +339,14 @@ pub fn run() {
                 global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
                 tracing::info!("[BedCode] SyncEventHandler registered");
 
-                // 注册 WebSocket 服务器事件处理器（已移至 Actix WS actor 内部）
-
-                tracing::info!("[BedCode] Starting WebSocket server on port {}", ws_port_for_spawn);
-                match ws_manager.start(ws_port_for_spawn).await {
-                    Ok(_) => {
-                        tracing::info!("[BedCode] WebSocket server started successfully");
-
-                        // Actix Web server 已启动（HTTP + WS 统一端口）
-                        tracing::info!("[BedCode] Actix Web server started");
+                if auto_start {
+                    tracing::info!("[BedCode] Auto-starting server on port {}", ws_port_for_spawn);
+                    match supervisor.start(ws_port_for_spawn).await {
+                        Ok(_) => tracing::info!("[BedCode] Server started successfully"),
+                        Err(e) => tracing::error!("[BedCode] Server failed to start: {}", e),
                     }
-                    Err(e) => tracing::error!("[BedCode] WebSocket server failed to start: {}", e),
+                } else {
+                    tracing::info!("[BedCode] Server auto-start disabled, waiting for manual start");
                 }
             });
 
@@ -469,6 +469,14 @@ pub fn run() {
             desktop::commands::plugin::plugin_find_file_handler,
             desktop::commands::plugin::plugin_invoke,
             desktop::commands::plugin::plugin_list_rust_commands,
+            // Server
+            desktop::commands::server::server_start,
+            desktop::commands::server::server_stop,
+            desktop::commands::server::server_restart,
+            desktop::commands::server::get_server_status,
+            desktop::commands::server::get_server_metrics,
+            desktop::commands::server::update_server_port,
+            desktop::commands::server::update_server_auto_start,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
