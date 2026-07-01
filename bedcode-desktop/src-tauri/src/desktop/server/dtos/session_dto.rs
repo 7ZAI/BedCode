@@ -49,3 +49,14 @@ pub struct ResizeSessionRequest {
     pub cols: u16,
     pub rows: u16,
 }
+
+/// POST /api/sessions/{id}/input request
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInputRequest {
+    /// 输入文本数据
+    pub data: String,
+    /// 特殊按键（如 "enter", "ctrl_c", "arrow_up" 等）
+    #[serde(default)]
+    pub special_key: Option<String>,
+}

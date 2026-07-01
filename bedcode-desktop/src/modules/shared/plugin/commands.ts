@@ -90,3 +90,20 @@ export async function pluginListViews(viewType: string): Promise<ViewEntry[]> {
 export async function pluginFindFileHandler(extension: string): Promise<FileHandlerEntry | null> {
   return await invoke<FileHandlerEntry | null>('plugin_find_file_handler', { extension })
 }
+
+/** Rust 插件 command 入口 */
+export interface PluginCommandEntry {
+  plugin_id: string
+  command_name: string
+  title: string
+}
+
+/** 调用 Rust 插件的自定义 command */
+export async function pluginInvoke(pluginId: string, command: string, args?: unknown): Promise<unknown> {
+  return await invoke('plugin_invoke', { pluginId, command, args: args ?? null })
+}
+
+/** 获取所有 Rust 插件的 command 列表 */
+export async function pluginListRustCommands(): Promise<PluginCommandEntry[]> {
+  return await invoke<PluginCommandEntry[]>('plugin_list_rust_commands')
+}

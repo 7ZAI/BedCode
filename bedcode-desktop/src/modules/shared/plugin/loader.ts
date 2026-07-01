@@ -27,20 +27,51 @@ class PluginLoaderClass {
     console.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
 
     for (const manifest of manifests) {
+      // Rust-only 插件：Rust 端已通过静态注册激活，前端无需加载
+      if (manifest.pluginType === 'rust') {
+        console.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend`)
+        continue
+      }
+
       if (manifest.sandbox !== 'inline') {
         console.warn(`[PluginLoader] Skipping ${manifest.id}: unsupported sandbox mode "${manifest.sandbox}"`)
         continue
       }
 
-      // 判断是否需要按需激活
+      // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
+      // TS-only 插件：完整加载流程
       const shouldLazy = this.shouldLazyActivate(manifest)
       if (shouldLazy) {
         console.log(`[PluginLoader] Plugin ${manifest.id} will be lazy-activated`)
         continue
       }
 
-      // 无 contributes 的插件立即激活
-      await this.loadInline(manifest)
+      // Rust+TS 插件跳过后端 activate（已由 PluginHost 处理）
+      if (manifest.pluginType === 'rust-ts') {
+        await this.loadFrontendOnly(manifest)
+      } else {
+        await this.loadInline(manifest)
+      }
+    }
+  }
+
+  /** 加载 Rust+TS 插件的前端部分（不触发后端 activate，Rust 端已激活） */
+  private async loadFrontendOnly(manifest: PluginInfo): Promise<void> {
+    const ACTIVATE_TIMEOUT = 5000
+
+    try {
+      // 不调用 pluginActivate — Rust 端已通过静态注册激活
+      const entryUrl = this.convertFileUrl(manifest.extensionPath, manifest.main)
+      const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+
+      const context = createPluginContext(manifest)
+      await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+
+      this.plugins.set(manifest.id, { manifest, module, context })
+      console.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
+    } catch (e: any) {
+      console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
   }
 

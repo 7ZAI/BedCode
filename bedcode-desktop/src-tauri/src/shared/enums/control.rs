@@ -93,8 +93,11 @@ pub enum TerminalAction {
         data: String,
         /// 是否等待输入
         is_waiting: bool,
-        /// 全局递增索引，用于去重
+        /// 合并消息的起始索引，用于去重和增量同步起点
         index: usize,
+        /// 合并消息的结束索引，用于精确去重（合并多条事件时 index..=end_index）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        end_index: Option<usize>,
     },
 
     /// 输入消息 (客户端 → 服务端)

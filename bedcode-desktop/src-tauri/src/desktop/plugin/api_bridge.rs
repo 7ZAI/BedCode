@@ -4,7 +4,7 @@
 //! Rust 端做权限校验后执行操作
 
 use crate::desktop::plugin::host::PluginHost;
-use crate::desktop::plugin::types::PluginInfo;
+use crate::desktop::plugin::types::DesktopPluginInfo;
 use std::sync::Arc;
 use tauri::State;
 
@@ -14,7 +14,7 @@ use tauri::State;
 #[tauri::command]
 pub async fn plugin_list_loaded(
     plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<Vec<PluginInfo>> {
+) -> crate::Result<Vec<DesktopPluginInfo>> {
     Ok(plugin_host.list_plugins().await)
 }
 
@@ -23,7 +23,7 @@ pub async fn plugin_list_loaded(
 pub async fn plugin_get_info(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<Option<PluginInfo>> {
+) -> crate::Result<Option<DesktopPluginInfo>> {
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
 
@@ -124,8 +124,6 @@ pub async fn plugin_storage_delete(
 // ==================== Plugin Terminal ====================
 
 /// 插件终端：发送输入
-///
-/// 校验调用者身份：plugin_id 对应的插件必须处于 Activated 状态
 #[tauri::command]
 pub async fn plugin_terminal_send_input(
     plugin_id: String,
@@ -173,4 +171,28 @@ pub async fn plugin_find_file_handler(
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<crate::desktop::plugin::registry::FileHandlerEntry>> {
     Ok(plugin_host.registry().find_file_handler(&extension).await)
+}
+
+// ==================== Rust Plugin Command Dispatch ====================
+
+/// 调用 Rust 插件的自定义 command
+///
+/// 统一路由：前端通过 `invoke('plugin_invoke', { pluginId, command, args })` 调用
+/// PluginHost 内部查找对应 handler 并执行，前端无法伪造 plugin_id
+#[tauri::command]
+pub async fn plugin_invoke(
+    plugin_id: String,
+    command: String,
+    args: serde_json::Value,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<serde_json::Value> {
+    plugin_host.invoke_rust_command(&plugin_id, &command, args).await
+}
+
+/// 获取所有 Rust 插件的 command 列表
+#[tauri::command]
+pub async fn plugin_list_rust_commands(
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<Vec<bedcode_plugin_api::PluginCommandEntry>> {
+    Ok(plugin_host.list_rust_commands().await)
 }

@@ -3,7 +3,7 @@
 //! 扩展点注册表 — 管理 commands/views/terminal/http/file_handlers 的注册与查询
 //! 前端 PluginContext 的注册调用通过 Tauri invoke 到达此注册表
 
-use crate::desktop::plugin::types::{
+use bedcode_plugin_api::{
     CommandContribution, FileHandlerContribution, ToolProviderContribution, ViewContribution,
 };
 use serde::{Deserialize, Serialize};
@@ -193,7 +193,6 @@ impl PluginRegistry {
     pub async fn register_tool_providers(&self, plugin_id: &str, providers: &[ToolProviderContribution]) {
         let mut map = self.http_endpoints.write().await;
         for provider in providers {
-            // 强制前缀 /api/plugin/{plugin_id}/
             let full_path = format!("/api/plugin/{}/{}", plugin_id, provider.endpoint.trim_start_matches('/'));
             map.insert(
                 full_path.clone(),

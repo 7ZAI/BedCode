@@ -2,10 +2,11 @@
 //!
 //! HTTP REST API endpoints for session management
 //! Routes:
-//! - GET  /api/sessions
-//! - POST /api/sessions/start
-//! - POST /api/sessions/{id}/stop
-//! - POST /api/sessions/{id}/resize
+//! - GET    /api/sessions
+//! - POST   /api/sessions/start
+//! - POST   /api/sessions/{id}/stop
+//! - POST   /api/sessions/{id}/resize
+//! - POST   /api/sessions/{id}/input
 //! - DELETE /api/sessions/{id}/remove
 
 use actix_web::{web, HttpRequest, HttpResponse};
@@ -155,4 +156,38 @@ pub async fn remove_session(
             HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
         }
     }
+}
+
+/// POST /api/sessions/{id}/input
+///
+/// 通过 HTTP 直接写入终端输入，绕过 WebSocket 的 send_and_wait 阻塞
+/// 适用于移动端长文本输入场景，避免 WebSocket 通道因等待 ack 导致超时
+pub async fn send_session_input(
+    path: web::Path<String>,
+    body: web::Json<SessionInputRequest>,
+) -> HttpResponse {
+    let session_id = path.into_inner();
+    let ctx = AppContext::global();
+    let session_manager = ctx.session_manager();
+
+    let data = body.data.clone();
+    let special_key = body.special_key.clone();
+
+    // 处理普通数据输入
+    if !data.is_empty() {
+        if let Err(e) = session_manager.write_input(&session_id, &data).await {
+            tracing::error!("[SessionController] Failed to write input to session {}: {}", session_id, e);
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
+        }
+    }
+
+    // 处理特殊键输入
+    if let Some(ref key) = special_key {
+        if let Err(e) = session_manager.send_special_key(&session_id, key).await {
+            tracing::error!("[SessionController] Failed to send special key to session {}: {}", session_id, e);
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
+        }
+    }
+
+    HttpResponse::Ok().json(ApiResponse::ok())
 }

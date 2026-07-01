@@ -138,10 +138,14 @@ export async function wsLoadSessions(): Promise<SessionInfo[]> {
 
 /**
  * 订阅会话，开始接收该会话的输出
+ *
+ * @param sessionId - 会话 ID
+ * @param startSeq - 起始序号，不指定则从头补完所有历史；用于断线重连从断点继续
+ * @returns 订阅响应信息，包含 minSeq/maxSeq/historyCount
  */
-export async function wsJoinSession(sessionId: string): Promise<void> {
-  console.log('[wsJoinSession] sessionId=' + sessionId)
-  return await invoke('ws_join_session', { sessionId })
+export async function wsJoinSession(sessionId: string, startSeq?: number): Promise<{ minSeq: number; maxSeq: number; historyCount: number }> {
+  console.log('[wsJoinSession] sessionId=' + sessionId + ', startSeq=' + startSeq)
+  return await invoke('ws_subscribe_session', { sessionId, startSeq: startSeq ?? null })
 }
 
 /**

@@ -167,15 +167,36 @@ impl PtySession {
 
     /// 写入输入
     pub async fn write(&self, data: &[u8]) -> Result<()> {
-        let mut state = self.state.lock().await;
-        let writer = state.writer.as_mut()
-            .ok_or_else(|| {
-                tracing::error!("[PtyProcess] write: writer not available");
-                crate::AppError::Pty("Writer not available".to_string())
-            })?;
+        // PTY 内核缓冲区通常为 4096 字节，超过此长度分块写入避免背压阻塞
+        const CHUNK_SIZE: usize = 4000;
 
-        writer.write_all(data)?;
-        writer.flush()?;
+        if data.len() <= CHUNK_SIZE {
+            let mut state = self.state.lock().await;
+            let writer = state.writer.as_mut()
+                .ok_or_else(|| {
+                    tracing::error!("[PtyProcess] write: writer not available");
+                    crate::AppError::Pty("Writer not available".to_string())
+                })?;
+            writer.write_all(data)?;
+            writer.flush()?;
+            return Ok(());
+        }
+
+        // 分块写入：每块之间短暂 yield，让 PTY 有时间消费缓冲区
+        for chunk in data.chunks(CHUNK_SIZE) {
+            let mut state = self.state.lock().await;
+            let writer = state.writer.as_mut()
+                .ok_or_else(|| {
+                    tracing::error!("[PtyProcess] write: writer not available");
+                    crate::AppError::Pty("Writer not available".to_string())
+                })?;
+            writer.write_all(chunk)?;
+            writer.flush()?;
+            drop(state);
+            // 让出执行权，避免连续写入导致 PTY 缓冲区溢出
+            tokio::task::yield_now().await;
+        }
+
         Ok(())
     }
 

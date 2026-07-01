@@ -4,7 +4,13 @@
 
 ## 1. 架构概览
 
-插件系统采用 **Rust 后端仲裁 + TypeScript 前端执行** 的双层架构：
+插件系统采用 **Rust 后端仲裁 + TypeScript 前端执行** 的双层架构，支持三种插件类型：
+
+- **Rust+TS**: Rust 端通过 `BedcodePlugin` trait 提供后端能力（自定义 command、终端处理），前端提供 UI 组件
+- **Rust only**: 纯 Rust 插件，无前端组件
+- **TS only**: 纯前端插件，仅通过 `plugin.json` 声明 + TypeScript 入口文件
+
+Rust 插件通过 `inventory` crate 实现静态注册（编译期链接），TS-only 插件通过文件扫描动态加载。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

@@ -55,11 +55,17 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       return disposable
     },
     async execute(id: string, ...args: any[]): Promise<any> {
+      // 先查找前端注册的本地命令
       const handler = commandHandlers.get(id)
       if (handler) {
         return handler(...args)
       }
-      throw new Error(`Command not registered: ${id}`)
+      // 尝试调用 Rust 插件的 command（通过 plugin_invoke 路由）
+      try {
+        return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
+      } catch {
+        throw new Error(`Command not found: ${id}`)
+      }
     },
   }
 

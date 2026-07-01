@@ -1,0 +1,13 @@
+[package]
+name = "bedcode-plugin-ai-chatbox"
+version = "1.0.0"
+description = "AI Chatbox Plugin — AI chat and terminal prompt optimization"
+authors = ["BedCode"]
+edition = "2021"
+
+[dependencies]
+bedcode-plugin-api = { path = "../../bedcode-plugin-api" }
+serde_json = "1"
+anyhow = "1"
+inventory = "0.3"
+tracing = "0.1"

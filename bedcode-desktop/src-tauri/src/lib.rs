@@ -261,7 +261,11 @@ pub fn run() {
             let session_manager = Arc::new(desktop::session::SessionManager::new(storage, resource_dir_arc.clone()));
             let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
             let plugin_manager = Arc::new(desktop::plugin::PluginManager::new());
-            let plugin_host = Arc::new(desktop::plugin::PluginHost::new(db.clone(), &plugins_dir));
+            let plugin_host = Arc::new(
+                tauri::async_runtime::block_on(
+                    desktop::plugin::PluginHost::new(db.clone(), &plugins_dir)
+                )
+            );
             let pairing_service = Arc::new(PairingService::new());
             let qr_manager = Arc::new(crate::desktop::auth::QrTokenManager::new());
             let app_handle_arc = Arc::new(app_handle.clone());
@@ -463,6 +467,8 @@ pub fn run() {
             desktop::commands::plugin::plugin_list_commands,
             desktop::commands::plugin::plugin_list_views,
             desktop::commands::plugin::plugin_find_file_handler,
+            desktop::commands::plugin::plugin_invoke,
+            desktop::commands::plugin::plugin_list_rust_commands,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

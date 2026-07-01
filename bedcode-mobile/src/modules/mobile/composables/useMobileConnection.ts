@@ -15,7 +15,6 @@ import {
   wsAuthenticate,
   wsRequestPairing,
   wsVerifyPairingCode,
-  wsSendInput,
   wsJoinSession,
   initMobileEventListeners,
   cleanupMobileEventListeners,
@@ -26,7 +25,7 @@ import {
   type RemoteDevice,
   type AuthCredentials,
 } from './useMobileCommands'
-import { useHttpApi } from './useHttpApi'
+import { useHttpApi, httpSendSessionInput } from './useHttpApi'
 import { useForegroundService } from './useForegroundService'
 import { useTaskNotification } from './useTaskNotification'
 
@@ -938,10 +937,13 @@ export function clearActiveSessions(): void {
 }
 
 /**
- * 发送输入到会话
+ * 发送输入到会话（通过 HTTP API，绕过 WebSocket 阻塞）
  */
 export async function sendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
-  await wsSendInput(sessionId, data, specialKey)
+  const result = await httpSendSessionInput(sessionId, data, specialKey)
+  if (result.code !== 0) {
+    throw new Error(result.message || 'Send input failed')
+  }
 }
 
 /**

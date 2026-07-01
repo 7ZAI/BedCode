@@ -2,9 +2,11 @@
 //!
 //! 扫描插件目录，解析所有 plugin.json
 //! 验证必填字段和权限合法性，返回已加载的插件列表
+//! 仅处理 TS-only 插件（文件扫描），Rust 插件由 PluginHost 通过 inventory 收集
 
-use crate::desktop::plugin::types::{LoadedPlugin, PluginManifest, PluginState};
 use crate::desktop::plugin::permission::PermissionManager;
+use crate::desktop::plugin::types::{LoadedPlugin, PluginSource};
+use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +51,12 @@ impl PluginLoader {
                     let plugin_id = manifest.id.clone();
                     let extension_path = path.to_string_lossy().to_string();
 
+                    // TS-only 插件强制设置 plugin_type
+                    let mut manifest = manifest;
+                    if manifest.plugin_type == PluginType::TsOnly && !manifest.main.is_empty() {
+                        // 保留 manifest 中的 plugin_type，若未指定则默认 TsOnly
+                    }
+
                     // 授权并过滤非法权限
                     let granted = permission_mgr.grant_permissions(
                         &plugin_id,
@@ -61,6 +69,7 @@ impl PluginLoader {
                         granted_permissions: granted,
                         extension_path,
                         activated_at: None,
+                        source: PluginSource::FileScan,
                     };
 
                     tracing::info!("Plugin loaded: {} v{}", loaded.manifest.id, loaded.manifest.version);
@@ -73,35 +82,39 @@ impl PluginLoader {
             }
         }
 
-        tracing::info!("Loaded {} plugin(s)", plugins.len());
+        tracing::info!("Loaded {} file-based plugin(s)", plugins.len());
         plugins
     }
 
     /// 解析单个 plugin.json
     fn load_manifest(path: &PathBuf) -> crate::Result<PluginManifest> {
         let content = fs::read_to_string(path)
-            .map_err(|e| crate::AppError::Plugin(format!("读取 plugin.json 失败: {}", e)))?;
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to read plugin.json: {}", e)))?;
 
         let manifest: PluginManifest = serde_json::from_str(&content)
-            .map_err(|e| crate::AppError::Plugin(format!("解析 plugin.json 失败: {}", e)))?;
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
 
         if manifest.id.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json 缺少 id 字段".to_string()));
+            return Err(crate::AppError::Plugin("plugin.json missing id field".to_string()));
         }
         if manifest.name.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json 缺少 name 字段".to_string()));
+            return Err(crate::AppError::Plugin("plugin.json missing name field".to_string()));
         }
         if manifest.version.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json 缺少 version 字段".to_string()));
+            return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
         }
-        if manifest.main.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json 缺少 main 字段".to_string()));
+
+        // TS-only 插件必须有 main 字段
+        if manifest.plugin_type == PluginType::TsOnly && manifest.main.is_empty() {
+            return Err(crate::AppError::Plugin(
+                "TS-only plugin.json missing main field".to_string(),
+            ));
         }
 
         // MVP 只支持 inline 模式
         if manifest.sandbox != "inline" {
             return Err(crate::AppError::Plugin(format!(
-                "不支持的 sandbox 模式: {}，MVP 仅支持 inline",
+                "Unsupported sandbox mode: {}, MVP only supports inline",
                 manifest.sandbox
             )));
         }

@@ -281,6 +281,7 @@ export default {
       selectSession: '选择会话',
       noActiveSessions: '暂无活跃会话',
       confirmExecute: '确认执行',
+      execute: '执行',
       willSendToTerminal: '将发送到终端：',
       connectFirst: '请先连接设备',
       sentToTerminal: '已发送到终端',

@@ -314,21 +314,14 @@ function handleTaskTap(task: PresetTask) {
     return
   }
 
-  // 优先使用用户手动选择的会话，否则取唯一活跃会话
-  const sessionId = activeSessionId.value || (sessions.length === 1 ? sessions[0].id : '')
-
-  if (!sessionId) {
-    showSessionPicker.value = true
-    return
-  }
-
-  // 仅一个活跃会话或已有选中会话时跳过 picker
-  if (sessions.length <= 1 || activeSessionId.value) {
-    pendingSessionId.value = sessionId
+  // 仅一个活跃会话时跳过 picker，直接执行
+  if (sessions.length === 1) {
+    pendingSessionId.value = sessions[0].id
     showConfirmDialog.value = true
     return
   }
 
+  // 多个活跃会话时始终显示 picker，让用户选择目标会话
   showSessionPicker.value = true
 }
 

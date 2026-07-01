@@ -611,13 +611,15 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 | HTTP API | `bedcode-desktop/src-tauri/src/shared/model/api_dto.rs` |
 | 插件系统 (Rust) | `bedcode-desktop/src-tauri/src/desktop/plugin/manager.rs`, `desktop/plugin/setup.rs` |
 | 插件系统 (前端) | `bedcode-desktop/src/modules/shared/plugin/`, `desktop/composables/usePluginManager.ts` |
+| 插件 API Crate | `bedcode-desktop/src-tauri/bedcode-plugin-api/` — 共享 trait、类型、权限定义 |
 | 插件 API 桥接 | `bedcode-desktop/src-tauri/src/desktop/plugin/api_bridge.rs` |
 | 插件宿主 | `bedcode-desktop/src-tauri/src/desktop/plugin/host.rs` |
 | 插件加载器 | `bedcode-desktop/src-tauri/src/desktop/plugin/loader.rs` |
-| 插件权限 | `bedcode-desktop/src-tauri/src/desktop/plugin/permission.rs` |
+| 插件权限 | `bedcode-desktop/src-tauri/src/desktop/plugin/permission.rs` (re-export from api crate) |
 | 插件注册表 | `bedcode-desktop/src-tauri/src/desktop/plugin/registry.rs` |
 | 插件存储 | `bedcode-desktop/src-tauri/src/desktop/plugin/storage.rs` |
-| AI Chatbox 插件 | `bedcode-desktop/src/plugins/com.bedcode.ai-chatbox/` |
+| AI Chatbox 插件 (Rust) | `bedcode-desktop/src-tauri/plugins/ai-chatbox/` — BedcodePlugin trait 实现 |
+| AI Chatbox 插件 (TS) | `bedcode-desktop/src/plugins/com.bedcode.ai-chatbox/` |
 | 自动执行引擎 | `bedcode-mobile/src/modules/mobile/composables/useAutoExecutor.ts` |
 | 预设任务 | `bedcode-mobile/src/modules/mobile/composables/usePresetTasks.ts` |
 | 任务执行状态 | `bedcode-mobile/src/modules/mobile/composables/useTaskExecutionState.ts` |

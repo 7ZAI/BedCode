@@ -281,6 +281,7 @@ export default {
       selectSession: 'Select Session',
       noActiveSessions: 'No active sessions',
       confirmExecute: 'Confirm Execute',
+      execute: 'Execute',
       willSendToTerminal: 'Will send to terminal:',
       connectFirst: 'Please connect to a device first',
       sentToTerminal: 'Sent to terminal',

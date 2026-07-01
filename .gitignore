@@ -11,8 +11,8 @@ build/
 docs/
 
 # Tauri / Rust
-**/src-tauri/target/
-**/src-tauri/Cargo.lock
+**/target/
+**/src-tauri/**/Cargo.lock
 **/src-tauri/bedcode.db
 **/src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb

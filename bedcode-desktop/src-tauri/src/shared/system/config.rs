@@ -167,7 +167,7 @@ impl Default for TerminalConfig {
         Self {
             default_cols: 120,
             default_rows: 40,
-            flush_interval_ms: 30,
+            flush_interval_ms: 100,
             max_buffer_size: 64 * 1024,
             read_buffer_size: 4096,
         }

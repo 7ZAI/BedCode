@@ -691,6 +691,7 @@ impl Handler<SendTextMessage> for TerminalWs {
 struct OutputBuffer {
     data: Vec<u8>,
     start_index: u64,
+    end_index: u64,
     last_is_waiting: bool,
 }
 
@@ -699,6 +700,7 @@ impl OutputBuffer {
         Self {
             data: Vec::new(),
             start_index: 0,
+            end_index: 0,
             last_is_waiting: false,
         }
     }
@@ -707,6 +709,8 @@ impl OutputBuffer {
         if self.data.is_empty() {
             self.start_index = event.index;
         }
+        // 始终更新 end_index 为最新事件的 index
+        self.end_index = event.index;
         self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
     }
@@ -716,16 +720,26 @@ impl OutputBuffer {
     }
 
     /// Flush 缓冲区为 WS 消息 JSON
+    ///
+    /// 合并多条事件时，index 为起始索引，end_index 为结束索引，
+    /// 前端可用 end_index 精确更新去重游标，支持增量同步
     fn flush(&mut self, session_id: &str) -> String {
         let data_base64 = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
             &self.data,
         );
+        // 仅在合并了多条事件（end_index > start_index）时附带 end_index
+        let end_index = if self.end_index > self.start_index {
+            Some(self.end_index as usize)
+        } else {
+            None
+        };
         let message = Message::output_from_base64(
             session_id,
             &data_base64,
             self.last_is_waiting,
             self.start_index as usize,
+            end_index,
         );
         self.data.clear();
         message.to_json().unwrap_or_default()

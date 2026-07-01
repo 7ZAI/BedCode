@@ -221,6 +221,7 @@ impl Message {
                     data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
                     is_waiting,
                     index,
+                    end_index: None,
                 },
             },
         }
@@ -228,7 +229,8 @@ impl Message {
 
     /// 创建终端输出消息（使用已编码的 Base64 数据）
     /// 用于数据已经经过 Base64 编码的场景（如从 PTY 输出缓冲区转发）
-    pub fn output_from_base64(session_id: &str, data_base64: &str, is_waiting: bool, index: usize) -> Self {
+    /// end_index 在合并多条事件时提供结束索引，前端可用其精确更新去重游标
+    pub fn output_from_base64(session_id: &str, data_base64: &str, is_waiting: bool, index: usize, end_index: Option<usize>) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
@@ -240,6 +242,7 @@ impl Message {
                     data: data_base64.to_string(),
                     is_waiting,
                     index,
+                    end_index,
                 },
             },
         }

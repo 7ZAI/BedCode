@@ -12,6 +12,9 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: bedcode-desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +23,7 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: bedcode-desktop/package-lock.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -27,7 +31,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: './bedcode-desktop/src-tauri -> target'
 
       - name: Import Windows certificate
         if: env.WINDOWS_CERTIFICATE != ''
@@ -49,6 +53,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          projectPath: bedcode-desktop
           tagName: v__VERSION__
           releaseName: 'BedCode v__VERSION__'
           releaseBody: 'See the assets to download and install.'
@@ -56,8 +61,10 @@ jobs:
           prerelease: false
 
   build-android:
-    needs: build-windows
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bedcode-mobile
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +73,7 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: bedcode-mobile/package-lock.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -75,7 +83,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: './bedcode-mobile/src-tauri -> target'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -118,6 +126,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          files: src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+          files: bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

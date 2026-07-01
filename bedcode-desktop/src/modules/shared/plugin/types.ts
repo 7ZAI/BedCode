@@ -9,6 +9,9 @@ export interface Disposable {
   dispose(): void
 }
 
+/** 插件类型 */
+export type PluginType = 'rust' | 'rust-ts' | 'ts-only'
+
 /** 插件描述文件 (plugin.json) 结构 */
 export interface PluginManifest {
   id: string
@@ -18,6 +21,7 @@ export interface PluginManifest {
   author: string
   main: string
   sandbox: 'inline' | 'isolated'
+  pluginType: PluginType
   permissions: string[]
   contributes: PluginContributes
 }
@@ -107,6 +111,7 @@ export interface PluginInfo {
   author: string
   main: string
   sandbox: string
+  pluginType: PluginType
   permissions: string[]
   state: PluginState
   extensionPath: string

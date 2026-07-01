@@ -289,12 +289,13 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useMobileConnection } from '@/modules/mobile/composables/useMobileConnection'
+import { useTerminalOutput, type OutputPayload } from '@/modules/mobile/composables/useTerminalOutput'
 import {
   wsJoinSession,
   wsLeaveSession,
-  wsSendInput,
   wsResizeTerminal,
 } from '@/modules/mobile/composables/useMobileCommands'
+import { httpSendSessionInput } from '@/modules/mobile/composables/useHttpApi'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useTheme } from '@/modules/shared/composables/useTheme'
 import { useSettingsStore } from '@/modules/shared/stores/settings'
@@ -319,6 +320,7 @@ const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
+const { registerHandler, unregisterHandler } = useTerminalOutput()
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
@@ -429,7 +431,7 @@ const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
 const resizeObserverRef = ref<ResizeObserver | null>(null)
 // 终端输出事件监听器 - 使用 ref 确保组件隔离
-const outputListenerRef = ref<UnlistenFn | null>(null)
+const outputListenerRef = ref(false)
 // 输出索引去重 - 使用 ref 确保组件隔离
 const lastIndexRef = ref(-1)
 // 当前订阅的会话 ID - 用于取消订阅时使用（避免路由变化后 sessionId 变成 undefined）
@@ -883,10 +885,11 @@ function disposeTerminal() {
     resizeObserverRef.value = null
   }
   window.removeEventListener('resize', handleWindowResize)
-  // 清理输出监听器
-  if (outputListenerRef.value) {
-    outputListenerRef.value()
-    outputListenerRef.value = null
+  // 清理输出处理器（用 subscribedSessionIdRef 注销，避免 sessionId 已变导致注销错误会话）
+  const registeredSession = subscribedSessionIdRef.value || sessionId.value
+  if (outputListenerRef.value && registeredSession) {
+    unregisterHandler(registeredSession)
+    outputListenerRef.value = false
   }
   if (terminalRef.value) {
     terminalRef.value.dispose()
@@ -918,13 +921,14 @@ function disposeTerminal() {
   cellHeight.value = 0
 }
 
-/// 创建前端事件监听器（不调用后端订阅）
-/// 内部方法：统一创建 ws_output 监听器，确保不会重复创建
+/// 注册全局终端输出处理器（不调用后端订阅）
+/// 使用全局单一 ws_output 监听器 + sessionId 分发，替代 per-component 监听
 async function createOutputListener() {
-  // 防御性清理：确保不会重复创建
-  if (outputListenerRef.value) {
-    outputListenerRef.value()
-    outputListenerRef.value = null
+  // 防御性清理：确保不会重复注册
+  const currentRegistered = subscribedSessionIdRef.value || sessionId.value
+  if (outputListenerRef.value && currentRegistered) {
+    unregisterHandler(currentRegistered)
+    outputListenerRef.value = false
   }
 
   if (!sessionId.value) {
@@ -932,35 +936,30 @@ async function createOutputListener() {
   }
 
   try {
-    outputListenerRef.value = await listen<{
-      session_id: string
-      data: string
-      index: number
-      is_waiting: boolean
-    }>('ws_output', (event) => {
-      // 直接读取 sessionId.value（响应式），不闭包捕获
-      // 避免路由切换后闭包中仍是旧会话 ID，导致新会话输出被过滤
-      const currentSessionId = sessionId.value
-      if (!currentSessionId) return
+    await registerHandler(sessionId.value, {
+      onOutput: (payload: OutputPayload) => {
+        // 索引去重：避免重复输出（重连时可能发生）
+        // 使用 end_index（合并消息的结束索引）精确更新去重游标
+        if (payload.index !== undefined && payload.index <= lastIndexRef.value) {
+          return
+        }
+        lastIndexRef.value = payload.end_index ?? payload.index
 
-      // 只处理当前会话的输出（前端过滤）
-      if (event.payload.session_id !== currentSessionId) {
-        return
-      }
-
-      // 索引去重：避免重复输出（重连时可能发生）
-      if (event.payload.index !== undefined && event.payload.index <= lastIndexRef.value) {
-        return
-      }
-      lastIndexRef.value = event.payload.index
-
-      // 写入终端
-      if (terminalRef.value) {
-        terminalRef.value.write(event.payload.data)
-      }
+        // 写入终端：Base64 → Uint8Array → xterm.write()
+        // 比 string 更高效（避免 UTF-16 编码开销）且无损（不丢失非 UTF-8 字节）
+        if (terminalRef.value && payload.data_base64) {
+          const binary = atob(payload.data_base64)
+          const bytes = new Uint8Array(binary.length)
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i)
+          }
+          terminalRef.value.write(bytes)
+        }
+      },
     })
+    outputListenerRef.value = true
   } catch (e) {
-    console.error('[TerminalView] Failed to create output listener:', e)
+    console.error('[TerminalView] Failed to register output handler:', e)
   }
 }
 
@@ -971,8 +970,24 @@ async function subscribeSession() {
     return
   }
 
+  // 防重入：如果已经在订阅中（另一个 watch 或 onActivated 触发），跳过
+  // 避免并发 subscribeSession 导致重复 wsJoinSession 和监听器替换
+  if (isSubscribing.value) {
+    return
+  }
+
   // 标记订阅进行中，防止 onActivated 创建重复监听器
   isSubscribing.value = true
+
+  // 增量同步：如果 lastIndexRef >= 0，说明之前有订阅数据，尝试从断点继续
+  // lastIndexRef < 0 表示首次订阅或已重置，需要全量回放
+  const startSeq = lastIndexRef.value >= 0 ? lastIndexRef.value + 1 : undefined
+
+  // 增量同步时不重置 lastIndexRef（保留去重游标）
+  // 全量回放时重置 lastIndexRef（从头接收所有历史，旧值会过滤掉历史事件）
+  if (startSeq === undefined) {
+    lastIndexRef.value = -1
+  }
 
   try {
     // 先创建前端监听器，再调用后端订阅
@@ -980,7 +995,20 @@ async function subscribeSession() {
     await createOutputListener()
 
     // 加入会话，开始接收输出（后端订阅）
-    await wsJoinSession(sessionId.value)
+    const result = await wsJoinSession(sessionId.value, startSeq)
+
+    // 增量同步回退检测：如果后端 min_seq > startSeq，说明队列中旧数据已被覆盖
+    // 此时时 xterm 已有旧数据，后端从 min_seq 开始发送历史
+    // 清空 xterm 避免显示不完整的拼接内容，重置 lastIndexRef 让后续事件正常通过
+    if (startSeq !== undefined && result && result.minSeq > startSeq) {
+      console.warn(
+        `[TerminalView] Incremental sync gap: minSeq=${result.minSeq} > startSeq=${startSeq}, clearing terminal for fresh replay`
+      )
+      if (terminalRef.value) {
+        terminalRef.value.clear()
+      }
+      lastIndexRef.value = -1
+    }
 
     // 保存订阅的会话 ID，用于取消订阅时使用
     subscribedSessionIdRef.value = sessionId.value
@@ -1001,9 +1029,9 @@ async function createFrontendListener() {
 /// 清理前端事件监听器（不取消后端订阅）
 /// 用于组件停用时清理，保持后端订阅以持续接收输出
 function clearFrontendListener() {
-  if (outputListenerRef.value) {
-    outputListenerRef.value()
-    outputListenerRef.value = null
+  if (outputListenerRef.value && sessionId.value) {
+    unregisterHandler(sessionId.value)
+    outputListenerRef.value = false
   }
 }
 
@@ -1013,10 +1041,10 @@ async function unsubscribeSession() {
   // 使用保存的会话 ID（避免路由变化后 sessionId 变成 undefined）
   const sessionToLeave = subscribedSessionIdRef.value
 
-  // 清理输出监听器
-  if (outputListenerRef.value) {
-    outputListenerRef.value()
-    outputListenerRef.value = null
+  // 清理输出处理器
+  if (outputListenerRef.value && sessionToLeave) {
+    unregisterHandler(sessionToLeave)
+    outputListenerRef.value = false
   }
 
   // 清理保存的会话 ID
@@ -1041,11 +1069,13 @@ async function unsubscribeSession() {
 function handleInputSubmit(text: string) {
   if (!terminalRef.value) return
 
-  // 发送输入到桌面端（不带换行，仅输入文本）
+  // 通过 HTTP API 发送输入，绕过 WebSocket send_and_wait 阻塞
   if (isConnected.value && isSessionActive.value) {
-    wsSendInput(sessionId.value, text).catch(e => {
-      console.error('[TerminalView] Send input failed:', e)
-      toast.error(t('mobile.connection.connectFailed'))
+    httpSendSessionInput(sessionId.value, text).then(result => {
+      if (result.code !== 0) {
+        console.error('[TerminalView] Send input failed:', result.message)
+        toast.error(t('mobile.connection.connectFailed'))
+      }
     })
   }
 }
@@ -1053,25 +1083,23 @@ function handleInputSubmit(text: string) {
 async function handleInputExecute(text: string) {
   if (!terminalRef.value) return
 
-  // 发送输入到桌面端，然后发送 enter 特殊键执行命令
   if (isConnected.value && isSessionActive.value) {
-    try {
-      // 先发送文本
-      await wsSendInput(sessionId.value, text)
-      // 再发送 enter 特殊键
-      await wsSendInput(sessionId.value, '', 'enter')
-    } catch (e) {
-      console.error('[TerminalView] Send input failed:', e)
+    // 通过 HTTP API 发送文本 + enter，绕过 WebSocket 阻塞
+    const result = await httpSendSessionInput(sessionId.value, text, 'enter')
+    if (result.code !== 0) {
+      console.error('[TerminalView] Send input failed:', result.message)
       toast.error(t('mobile.connection.connectFailed'))
     }
   }
 }
 
 function handleSpecialKey(key: string) {
-  // 发送特殊键到桌面端
+  // 通过 HTTP API 发送特殊键
   if (isConnected.value && isSessionActive.value) {
-    wsSendInput(sessionId.value, '', key).catch(e => {
-      console.error('[TerminalView] Send special key failed:', e)
+    httpSendSessionInput(sessionId.value, '', key).then(result => {
+      if (result.code !== 0) {
+        console.error('[TerminalView] Send special key failed:', result.message)
+      }
     })
   }
 }
@@ -1434,11 +1462,20 @@ onActivated(async () => {
   // 恢复终端视图可见性（停用时隐藏以避免覆盖层拦截触摸事件）
   isActive.value = true
 
-  // 如果正在订阅中（subscribeSession 的 await 期间），跳过
+  // 如果正在订阅中（subscribeSession 的 await 期间），跳过订阅但继续恢复终端显示
   if (isSubscribing.value) {
+    // 仍然需要恢复终端渲染，不能跳过 clearTextureAtlas + refreshTerminal
+    setTimeout(() => {
+      if (terminalRef.value) {
+        terminalRef.value.clearTextureAtlas()
+      }
+      refreshTerminal()
+    }, 150)
     return
   }
-  // 如果没有监听器且会话活跃，重新订阅
+  // 如果没有监听器且会话活跃且已连接，重新订阅
+  // 缺少 isSessionActive 检查会导致：停用期间会话被停止后，
+  // outputListenerRef 被 unsubscribeSession 清空，激活时尝试订阅已停止的会话而报错
   if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {
     await subscribeSession()
   }
@@ -1603,7 +1640,7 @@ watch(sessionId, async (newId, oldId) => {
   border-bottom: 1px solid var(--mobile-border);
   flex-shrink: 0;
   position: relative;
-  z-index: 10;
+  z-index: 25;
 }
 
 .back-btn {

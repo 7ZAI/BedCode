@@ -197,6 +197,7 @@ pub async fn handle_control(
                                 data: event.data.clone(),
                                 is_waiting,
                                 index: event.index,
+                                end_index: None,
                             },
                         },
                     };

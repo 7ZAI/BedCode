@@ -62,6 +62,13 @@ regex = "1"
 # Network utilities
 local-ip-address = "0.6"
 
+# Plugin API
+bedcode-plugin-api = { path = "bedcode-plugin-api" }
+inventory = "0.3"
+
+# Built-in plugins
+bedcode-plugin-ai-chatbox = { path = "plugins/ai-chatbox" }
+
 # Async trait for dyn compatibility
 async-trait = "0.1"
 

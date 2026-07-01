@@ -153,6 +153,14 @@ export async function httpRemoveSession(sessionId: string) {
   return request(`/api/sessions/${sessionId}/remove`, { method: 'DELETE' })
 }
 
+/** 通过 HTTP API 发送终端输入（绕过 WebSocket 阻塞） */
+export async function httpSendSessionInput(sessionId: string, data: string, specialKey?: string) {
+  return request(`/api/sessions/${sessionId}/input`, {
+    method: 'POST',
+    body: JSON.stringify({ data, specialKey: specialKey || null }),
+  })
+}
+
 // ==================== Config API ====================
 
 export async function httpListConfigs() {
@@ -203,6 +211,30 @@ export async function httpSetSessionMode(sessionId: string, autoApprove: boolean
   })
 }
 
+// ==================== Git API ====================
+
+/** Git 分支列表响应 */
+export interface GitBranchesData {
+  currentBranch: string | null
+  branches: string[]
+  isGitRepo: boolean
+}
+
+/** 获取 git 分支列表 */
+export async function httpGetGitBranches(sessionId: string) {
+  return request<GitBranchesData>(
+    `/api/git/branches?session_id=${encodeURIComponent(sessionId)}`
+  )
+}
+
+/** 切换 git 分支 */
+export async function httpGitCheckout(sessionId: string, branch: string) {
+  return request<{ branch: string }>(
+    '/api/git/checkout',
+    { method: 'POST', body: JSON.stringify({ sessionId, branch }) }
+  )
+}
+
 // ==================== Setup ====================
 
 export function setApiBaseUrl(address: string, port: number) {
@@ -223,6 +255,7 @@ export function useHttpApi() {
     httpStopSession,
     httpResizeSession,
     httpRemoveSession,
+    httpSendSessionInput,
     // Config
     httpListConfigs,
     httpListQuickActions,

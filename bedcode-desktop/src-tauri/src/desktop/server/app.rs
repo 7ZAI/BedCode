@@ -9,7 +9,7 @@ use actix_web_actors::ws as actix_ws;
 
 use crate::desktop::server::controllers::{
     auth_controller, session_controller, config_controller, file_controller,
-    plugin_controller,
+    plugin_controller, git_controller,
 };
 use crate::desktop::server::ws::terminal_ws::TerminalWs;
 
@@ -41,6 +41,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/sessions/start", web::post().to(session_controller::start_session))
             .route("/sessions/{id}/stop", web::post().to(session_controller::stop_session))
             .route("/sessions/{id}/resize", web::post().to(session_controller::resize_session))
+            .route("/sessions/{id}/input", web::post().to(session_controller::send_session_input))
             .route("/sessions/{id}/remove", web::delete().to(session_controller::remove_session))
             .route("/configs", web::get().to(config_controller::list_configs))
             .route("/quick-actions", web::get().to(config_controller::list_quick_actions))
@@ -48,6 +49,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/file-content", web::post().to(file_controller::get_file_content))
             .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
             .route("/file-diff", web::post().to(file_controller::get_file_diff))
+            .route("/git/branches", web::get().to(git_controller::get_branches))
+            .route("/git/checkout", web::post().to(git_controller::checkout))
     );
 
     // 插件专用路由（token 认证，非 JWT）

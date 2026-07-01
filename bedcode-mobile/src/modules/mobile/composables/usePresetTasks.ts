@@ -5,7 +5,7 @@
  */
 
 import { ref } from 'vue'
-import { wsSendInput } from '@/modules/mobile/composables/useMobileCommands'
+import { httpSendSessionInput } from '@/modules/mobile/composables/useHttpApi'
 import type { PresetTask, PresetTaskType, OnceTaskStatus } from './model'
 
 const STORAGE_KEY = 'preset-tasks'
@@ -80,7 +80,16 @@ export async function executeTask(task: PresetTask, sessionId: string) {
     }
 
     try {
-      await wsSendInput(sessionId, task.content)
+      const result = await httpSendSessionInput(sessionId, task.content)
+      if (result.code !== 0) {
+        // 发送失败：running → failed
+        if (index !== -1) {
+          tasks.value[index].status = 'failed'
+          tasks.value[index].updatedAt = new Date().toISOString()
+          saveToStorage()
+        }
+        throw new Error('mobile.toolbox.sendFailed')
+      }
       // 发送成功：running → completed
       if (index !== -1) {
         tasks.value[index].status = 'completed'
@@ -98,7 +107,10 @@ export async function executeTask(task: PresetTask, sessionId: string) {
     }
   } else {
     // 模板任务：直接发送，不改变状态
-    await wsSendInput(sessionId, task.content)
+    const result = await httpSendSessionInput(sessionId, task.content)
+    if (result.code !== 0) {
+      throw new Error('mobile.toolbox.sendFailed')
+    }
   }
 }
 

@@ -30,7 +30,7 @@
   "terminal": {
     "default_cols": 120,
     "default_rows": 40,
-    "flush_interval_ms": 30,
+    "flush_interval_ms": 100,
     "max_buffer_size": 65536,
     "read_buffer_size": 4096
   },

@@ -34,6 +34,8 @@ pub enum MobileEvent {
         data: String,
         is_waiting: bool,
         index: u64,
+        /// 合并消息的结束索引，None 表示单条事件
+        end_index: Option<u64>,
     },
 
     // === 认证事件 ===
@@ -173,20 +175,16 @@ pub fn start_event_forwarding(app_handle: AppHandle) {
 /// 转发单个事件到前端
 async fn forward_event(app: &AppHandle, event: MobileEvent) {
     match event.clone() {
-        // 终端输出事件：解码 Base64 并发射 ws_output（高频，不记录详细日志）
-        MobileEvent::Output { session_id, data, is_waiting, index: global_index } => {
-            // 解码 Base64 并发射 ws_output
-            let decoded_data = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                &data,
-            ).unwrap_or_default();
-            let decoded_str = String::from_utf8_lossy(&decoded_data).to_string();
-
+        // 终端输出事件：直接传递 Base64 到前端，由前端解码
+        // 避免在 Rust 层做 Base64 解码 + UTF-8 lossy 转换的双重开销
+        // 前端用 atob() 解码为 Uint8Array 传给 xterm.write()，比 string 更高效且无损
+        MobileEvent::Output { session_id, data, is_waiting, index: global_index, end_index } => {
             if let Err(e) = app.emit("ws_output", serde_json::json!({
                 "session_id": session_id,
-                "data": decoded_str,
+                "data_base64": data,
                 "is_waiting": is_waiting,
                 "index": global_index,
+                "end_index": end_index,
             })) {
                 tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
             }
