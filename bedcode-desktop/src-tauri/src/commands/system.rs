@@ -127,7 +127,7 @@ pub fn get_startup_time(start_time: State<'_, crate::AppStartTime>) -> u64 {
     start_time.0.elapsed().as_millis() as u64
 }
 
-/// 获取本地 IP 地址
+/// 获取本地 IPv4 地址（排除回环和链路本地地址）
 #[tauri::command]
 pub fn get_local_ip_addresses() -> Vec<String> {
     local_ip_address::list_afinet_netifas()
@@ -139,9 +139,7 @@ pub fn get_local_ip_addresses() -> Vec<String> {
                         std::net::IpAddr::V4(ipv4) => {
                             !ipv4.is_loopback() && !ipv4.is_link_local()
                         }
-                        std::net::IpAddr::V6(ipv6) => {
-                            !ipv6.is_loopback()
-                        }
+                        std::net::IpAddr::V6(_) => false,
                     }
                 })
                 .map(|(_, ip)| ip.to_string())

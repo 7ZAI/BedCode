@@ -9,7 +9,6 @@ pub mod db;
 pub mod enums;
 pub mod error;
 pub mod error_boundary;
-pub mod event;
 pub mod events;
 pub mod model;
 pub mod parser;
@@ -23,7 +22,6 @@ pub mod traits;
 // ==================== Standalone Modules ====================
 
 pub mod app_context;
-pub mod event_forwarder;
 pub mod websocket_manager;
 
 // ==================== Re-exports ====================
@@ -334,7 +332,7 @@ pub fn run() {
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
                 // 注册同步事件处理器
-                use crate::event::global_matcher;
+                use crate::events::global_matcher;
                 use crate::events::{DesktopSyncEvent, SyncEventHandler};
 
                 let ws_manager = websocket_manager::WebSocketManager::global();
@@ -386,7 +384,7 @@ pub fn run() {
             });
 
             // 启动事件转发器：将 SessionManager 的事件转发到前端
-            let event_forwarder = event_forwarder::EventForwarder::new(
+            let event_forwarder = events::EventForwarder::new(
                 app_handle.clone(),
                 session_manager.clone(),
             );

@@ -7,7 +7,7 @@ use crate::session::SessionManager;
 use crate::session::SessionConfigManager;
 use crate::websocket_manager::WebSocketManager;
 use crate::enums::{SessionConfigSummary, SessionSummary, SyncPayload};
-use crate::event::handler::EventHandler;
+use super::matcher::EventHandler;
 use crate::model::message::Message;
 use std::sync::Arc;
 

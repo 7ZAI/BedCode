@@ -1,3 +1,146 @@
+<template>
+  <div class="p-6 max-w-4xl mx-auto space-y-6 h-full overflow-y-auto">
+    <!-- ==================== 区块 1：服务器配置 ==================== -->
+    <div class="bg-white dark:bg-dark-800 rounded-xl border border-slate-200 dark:border-dark-700 p-6">
+      <!-- 标题行：配置 + 状态 + 控制按钮 -->
+      <div class="flex items-center justify-between mb-5">
+        <div class="flex items-center gap-3">
+          <h2 class="text-lg font-semibold text-slate-800 dark:text-white">
+            {{ $t('desktop.server.config') }}
+          </h2>
+          <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+            :class="status === 'running' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : status === 'starting' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'"
+          >
+            <div class="w-2 h-2 rounded-full"
+              :class="status === 'running' ? 'bg-green-500' : status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'"
+            ></div>
+            {{ statusText }}
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button
+            class="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
+            :class="status === 'stopped' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-slate-100 dark:bg-dark-700 text-slate-400 dark:text-dark-500 cursor-not-allowed'"
+            :disabled="status !== 'stopped' || loading"
+            @click="handleStart"
+          >
+            {{ $t('desktop.server.start') }}
+          </button>
+          <button
+            class="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
+            :class="status === 'running' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-100 dark:bg-dark-700 text-slate-400 dark:text-dark-500 cursor-not-allowed'"
+            :disabled="status !== 'running' || loading"
+            @click="handleStop"
+          >
+            {{ $t('desktop.server.stop') }}
+          </button>
+          <button
+            class="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
+            :class="status === 'running' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 dark:bg-dark-700 text-slate-400 dark:text-dark-500 cursor-not-allowed'"
+            :disabled="status !== 'running' || loading"
+            @click="handleRestart"
+          >
+            {{ $t('desktop.server.restart') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 配置项网格 -->
+      <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 items-center">
+        <!-- 端口 -->
+        <label class="text-sm text-slate-500 dark:text-dark-400 text-right">{{ $t('desktop.server.port') }}</label>
+        <div class="flex items-center gap-2">
+          <input
+            v-model.number="portInput"
+            type="number"
+            min="1024"
+            max="65535"
+            class="w-28 px-2.5 py-1.5 text-sm border border-slate-200 dark:border-dark-600 rounded-lg bg-white dark:bg-dark-700 text-slate-800 dark:text-white"
+          />
+          <button
+            class="px-2.5 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
+            :disabled="loading"
+            @click="handleApplyPort"
+          >
+            {{ $t('desktop.server.applyAndRestart') }}
+          </button>
+        </div>
+
+        <!-- 本地 IP -->
+        <label class="text-sm text-slate-500 dark:text-dark-400 text-right">{{ $t('desktop.server.localIp') }}</label>
+        <div class="flex flex-wrap gap-x-4 gap-y-0.5">
+          <span v-for="ip in localIps" :key="ip" class="text-sm text-slate-800 dark:text-white font-mono">{{ ip }}</span>
+          <span v-if="localIps.length === 0" class="text-sm text-slate-400 dark:text-dark-500">-</span>
+        </div>
+
+        <!-- 自启动 -->
+        <label class="text-sm text-slate-500 dark:text-dark-400 text-right">{{ $t('desktop.server.autoStart') }}</label>
+        <button
+          class="relative w-10 h-5 rounded-full transition-colors"
+          :class="autoStart ? 'bg-primary-600' : 'bg-slate-300 dark:bg-dark-600'"
+          @click="handleAutoStartToggle(!autoStart)"
+        >
+          <span
+            class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-sm"
+            :class="autoStart ? 'translate-x-5' : 'translate-x-0'"
+          ></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== 区块 2：性能监控 ==================== -->
+    <div class="bg-white dark:bg-dark-800 rounded-xl border border-slate-200 dark:border-dark-700 p-6">
+      <h2 class="text-lg font-semibold text-slate-800 dark:text-white mb-4">
+        {{ $t('desktop.server.monitoring') }}
+      </h2>
+
+      <!-- 使用 v-show 保持 DOM 存活，避免切换页面时闪变 -->
+      <div v-show="status === 'running' && metrics">
+        <!-- 指标卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
+            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.uptime') }}</div>
+            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ formatUptime(metrics?.uptime_secs ?? 0) }}</div>
+          </div>
+          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
+            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.connections') }}</div>
+            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ metrics?.connections ?? 0 }}</div>
+          </div>
+          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
+            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.totalRequests') }}</div>
+            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ (metrics?.total_http_requests ?? 0).toLocaleString() }}</div>
+          </div>
+          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
+            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.cpuUsage') }}</div>
+            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ (metrics?.cpu_usage_percent ?? 0).toFixed(1) }}%</div>
+          </div>
+          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
+            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.memoryUsage') }}</div>
+            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ formatMemory(metrics?.memory_usage_bytes ?? 0) }}</div>
+          </div>
+          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
+            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.requestRate') }}</div>
+            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ (metrics?.http_requests_per_sec ?? 0).toFixed(1) }}/s</div>
+          </div>
+        </div>
+
+        <!-- WS 消息时序图 -->
+        <div>
+          <h3 class="text-sm font-medium text-slate-600 dark:text-dark-300 mb-2">
+            {{ $t('desktop.server.wsThroughput') }}
+          </h3>
+          <VChart :option="chartOption" style="height: 250px; width: 100%;" autoresize />
+        </div>
+      </div>
+
+      <!-- 服务器未运行时 -->
+      <div v-show="!(status === 'running' && metrics)" class="text-center py-8 text-slate-400 dark:text-dark-500">
+        {{ $t('desktop.server.status.stopped') }}
+      </div>
+    </div>
+  </div>
+</template>
+
 <script setup lang="ts">
 /**
  * 服务器管理页面 — 配置、启停控制、性能监控
@@ -43,14 +186,6 @@ const {
 const portInput = computed({
   get: () => port.value,
   set: (v: number) => { port.value = v },
-})
-
-const statusColor = computed(() => {
-  switch (status.value) {
-    case 'running': return 'bg-green-500'
-    case 'starting': return 'bg-yellow-500'
-    default: return 'bg-red-500'
-  }
 })
 
 const statusText = computed(() => {
@@ -198,142 +333,3 @@ watch(status, (newVal) => {
   }
 })
 </script>
-
-<template>
-  <div class="p-6 max-w-4xl mx-auto space-y-6">
-    <!-- ==================== 区块 1：服务器配置 ==================== -->
-    <div class="bg-white dark:bg-dark-800 rounded-xl border border-slate-200 dark:border-dark-700 p-6">
-      <h2 class="text-lg font-semibold text-slate-800 dark:text-white mb-4">
-        {{ $t('desktop.server.config') }}
-      </h2>
-
-      <!-- 状态指示器 -->
-      <div class="flex items-center gap-2 mb-4">
-        <div class="w-3 h-3 rounded-full" :class="statusColor"></div>
-        <span class="text-sm font-medium text-slate-600 dark:text-dark-300">{{ statusText }}</span>
-      </div>
-
-      <!-- 端口配置 -->
-      <div class="flex items-center gap-3 mb-3">
-        <label class="text-sm text-slate-600 dark:text-dark-300 w-20">{{ $t('desktop.server.port') }}</label>
-        <input
-          v-model.number="portInput"
-          type="number"
-          min="1024"
-          max="65535"
-          class="w-32 px-3 py-1.5 text-sm border border-slate-300 dark:border-dark-600 rounded-lg bg-white dark:bg-dark-700 text-slate-800 dark:text-white"
-        />
-        <button
-          class="px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
-          :disabled="loading"
-          @click="handleApplyPort"
-        >
-          {{ $t('desktop.server.applyAndRestart') }}
-        </button>
-      </div>
-      <p class="text-xs text-slate-400 dark:text-dark-500 ml-20 mb-3">{{ $t('desktop.server.portHint') }}</p>
-
-      <!-- 本地 IP -->
-      <div class="flex items-start gap-3 mb-3">
-        <label class="text-sm text-slate-600 dark:text-dark-300 w-20 pt-0.5">{{ $t('desktop.server.localIp') }}</label>
-        <div class="flex flex-col gap-1">
-          <span v-for="ip in localIps" :key="ip" class="text-sm text-slate-800 dark:text-white font-mono">{{ ip }}</span>
-          <span v-if="localIps.length === 0" class="text-sm text-slate-400 dark:text-dark-500">-</span>
-        </div>
-      </div>
-
-      <!-- 自启动开关 -->
-      <div class="flex items-center gap-3 mb-4">
-        <label class="text-sm text-slate-600 dark:text-dark-300 w-20">{{ $t('desktop.server.autoStart') }}</label>
-        <button
-          class="relative w-11 h-6 rounded-full transition-colors"
-          :class="autoStart ? 'bg-primary-600' : 'bg-slate-300 dark:bg-dark-600'"
-          @click="handleAutoStartToggle(!autoStart)"
-        >
-          <span
-            class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform"
-            :class="autoStart ? 'translate-x-5' : 'translate-x-0'"
-          ></span>
-        </button>
-      </div>
-
-      <!-- 控制按钮 -->
-      <div class="flex gap-3">
-        <button
-          class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-          :class="status === 'stopped' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-slate-200 dark:bg-dark-700 text-slate-400 cursor-not-allowed'"
-          :disabled="status !== 'stopped' || loading"
-          @click="handleStart"
-        >
-          {{ $t('desktop.server.start') }}
-        </button>
-        <button
-          class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-          :class="status === 'running' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-200 dark:bg-dark-700 text-slate-400 cursor-not-allowed'"
-          :disabled="status !== 'running' || loading"
-          @click="handleStop"
-        >
-          {{ $t('desktop.server.stop') }}
-        </button>
-        <button
-          class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-          :class="status === 'running' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-200 dark:bg-dark-700 text-slate-400 cursor-not-allowed'"
-          :disabled="status !== 'running' || loading"
-          @click="handleRestart"
-        >
-          {{ $t('desktop.server.restart') }}
-        </button>
-      </div>
-    </div>
-
-    <!-- ==================== 区块 2：性能监控 ==================== -->
-    <div class="bg-white dark:bg-dark-800 rounded-xl border border-slate-200 dark:border-dark-700 p-6">
-      <h2 class="text-lg font-semibold text-slate-800 dark:text-white mb-4">
-        {{ $t('desktop.server.monitoring') }}
-      </h2>
-
-      <template v-if="status === 'running' && metrics">
-        <!-- 指标卡片 -->
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.uptime') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ formatUptime(metrics.uptime_secs) }}</div>
-          </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.connections') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ metrics.connections }}</div>
-          </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.totalRequests') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ metrics.total_http_requests.toLocaleString() }}</div>
-          </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.cpuUsage') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ metrics.cpu_usage_percent.toFixed(1) }}%</div>
-          </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.memoryUsage') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ formatMemory(metrics.memory_usage_bytes) }}</div>
-          </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.requestRate') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ metrics.http_requests_per_sec.toFixed(1) }}/s</div>
-          </div>
-        </div>
-
-        <!-- WS 消息时序图 -->
-        <div>
-          <h3 class="text-sm font-medium text-slate-600 dark:text-dark-300 mb-2">
-            {{ $t('desktop.server.wsThroughput') }}
-          </h3>
-          <VChart :option="chartOption" style="height: 250px; width: 100%;" autoresize />
-        </div>
-      </template>
-
-      <!-- 服务器未运行时 -->
-      <div v-else class="text-center py-8 text-slate-400 dark:text-dark-500">
-        {{ $t('desktop.server.status.stopped') }}
-      </div>
-    </div>
-  </div>
-</template>

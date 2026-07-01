@@ -237,6 +237,8 @@ impl ServerSupervisor {
     /// 启动 IPC 读取循环（后台 std 线程读 stdout → tokio 任务更新状态）
     fn start_ipc_reader(&self, stdout: std::process::ChildStdout) {
         let inner_arc = self.inner.clone();
+        // 在 tokio runtime 内捕获 handle，std::thread::spawn 的线程中没有 reactor
+        let rt = tokio::runtime::Handle::current();
 
         // 使用 std 线程读取 stdout（BufRead 是阻塞操作）
         std::thread::spawn(move || {
@@ -253,8 +255,6 @@ impl ServerSupervisor {
 
                         match IpcResponse::from_json_line(&trimmed) {
                             Ok(response) => {
-                                // 使用 tokio runtime 在异步上下文中更新状态
-                                let rt = tokio::runtime::Handle::current();
                                 let inner = inner_arc.clone();
                                 rt.spawn(async move {
                                     handle_ipc_response(inner, response).await;
@@ -274,7 +274,6 @@ impl ServerSupervisor {
 
             // stdout 关闭意味着子进程退出
             tracing::info!("IPC reader: stdout closed, child process likely exited");
-            let rt = tokio::runtime::Handle::current();
             let inner = inner_arc.clone();
             rt.spawn(async move {
                 let mut inner = inner.write().await;

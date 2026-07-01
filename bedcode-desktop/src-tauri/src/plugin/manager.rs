@@ -100,7 +100,7 @@ impl PluginManager {
 
         // 通过 AppContext 获取 sync_tx 广播 DesktopSyncEvent
         {
-            use crate::events::sync_event::DesktopSyncEvent;
+            use crate::events::DesktopSyncEvent;
             let ctx = crate::app_context::AppContext::global();
             let sync_tx = ctx.sync_tx();
             let event = DesktopSyncEvent::TaskStatusChanged {
@@ -152,7 +152,7 @@ impl PluginManager {
 
         // 广播模式变更
         {
-            use crate::events::sync_event::DesktopSyncEvent;
+            use crate::events::DesktopSyncEvent;
             let ctx = crate::app_context::AppContext::global();
             let sync_tx = ctx.sync_tx();
             let event = DesktopSyncEvent::SessionModeChanged {

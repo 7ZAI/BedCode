@@ -13,7 +13,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { usePlatform } from '../../shared/composables/usePlatform'
+import { usePlatform } from './usePlatform'
 
 /**
  * Android 设备专用功能

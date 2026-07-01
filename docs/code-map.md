@@ -138,133 +138,124 @@ bedcode/                              # 仓库根目录
 │   │
 │   └── src-tauri/
 │       └── src/
-│           ├── shared/               # 共享模块 (desktop + mobile)
-│           │   ├── auth/             # 设备配对与认证
-│           │   │   ├── pairing.rs    # 配对流程
-│           │   │   └── storage.rs    # 认证存储 (已移除 jwt.rs, qr_token.rs → desktop/auth/)
-│           │   ├── db/               # SQLite 数据库 (仅桌面端)
-│           │   │   ├── database.rs   # 数据库连接
-│           │   │   ├── models.rs     # 数据模型
-│           │   │   └── operations.rs # CRUD 操作
-│           │   ├── enums/            # 共享枚举类型
-│           │   │   ├── auth.rs       # 认证状态枚举
-│           │   │   ├── control.rs    # 控制消息枚举
-│           │   │   ├── plugin.rs     # 插件相关枚举
-│           │   │   ├── session.rs    # 会话状态枚举
-│           │   │   ├── special_key.rs# 特殊键枚举
-│           │   │   ├── sumary.rs     # 总结类型枚举
-│           │   │   └── sync.rs       # 同步消息枚举
-│           │   ├── event/            # 事件系统
-│           │   │   ├── events.rs     # 事件定义
-│           │   │   └── handler.rs    # 事件处理器
-│           │   ├── model/            # 共享数据模型
-│           │   │   ├── api_dto.rs    # API 数据传输对象
-│           │   │   └── message.rs    # WebSocket 消息
-│           │   ├── system/           # 系统工具
-│           │   │   ├── commands.rs   # 共享 Tauri commands
-│           │   │   ├── config.rs     # 配置管理
-│           │   │   ├── error.rs      # 统一错误类型
-│           │   │   ├── error_boundary.rs # Panic 捕获
-│           │   │   └── process.rs    # 进程管理工具
-│           │   └── utils.rs          # 共享工具函数
-│           │
-│           ├── desktop/              # 桌面端模块
-│           │   ├── app_context.rs    # 全局应用上下文 (DI 容器)
-│           │   ├── auth/             # 桌面端认证
-│           │   │   ├── jwt.rs        # JWT 生成与验证
-│           │   │   └── qr_token.rs   # QR 码令牌管理
-│           │   ├── commands/         # 桌面端 Tauri commands（按领域拆分）
-│           │   │   ├── devices.rs
-│           │   │   ├── plugin.rs     # 插件命令
-│           │   │   ├── pty_input.rs
-│           │   │   ├── qr.rs
-│           │   │   ├── quick_actions.rs
-│           │   │   ├── session.rs
+│           ├── auth/                 # 认证（配对、JWT、QR Token）
+│           │   ├── jwt.rs            # JWT 生成与验证
+│           │   ├── pairing.rs        # 配对流程
+│           │   └── qr_token.rs       # QR 码令牌管理
+│           ├── commands/             # Tauri invoke 命令层（按领域拆分）
+│           │   ├── devices.rs        # 设备管理命令
+│           │   ├── plugin.rs         # 插件命令
+│           │   ├── pty_input.rs      # PTY 输入命令
+│           │   ├── qr.rs             # 二维码命令
+│           │   ├── quick_actions.rs  # 快捷操作命令
+│           │   ├── server.rs         # 服务器管理命令
+│           │   ├── session.rs        # 会话命令
+│           │   ├── session_config.rs # 会话配置命令
+│           │   ├── settings.rs       # 设置命令
+│           │   ├── system.rs         # 系统命令（启动时间、本地 IP）
+│           │   └── wsl.rs            # WSL 命令
+│           ├── db/                   # 数据库（连接、模型、操作）
+│           │   ├── database.rs       # 数据库连接
+│           │   ├── models.rs         # 数据模型
+│           │   └── operations.rs     # CRUD 操作
+│           ├── enums/                # 枚举类型（合并原 shared/enums + desktop/enums）
+│           │   ├── auth.rs           # 认证状态枚举
+│           │   ├── control.rs        # 控制消息枚举
+│           │   ├── plugin.rs         # 插件相关枚举
+│           │   ├── pty_status.rs     # PTY 状态枚举
+│           │   ├── session.rs        # 会话状态枚举
+│           │   ├── shell.rs          # Shell 类型枚举
+│           │   ├── special_key.rs    # 特殊键枚举
+│           │   ├── summary.rs        # 总结类型枚举
+│           │   └── sync.rs           # 同步消息枚举
+│           ├── events/               # 全局事件系统
+│           │   ├── app_event.rs      # 事件顶层 trait（AppEvent）
+│           │   ├── matcher.rs        # 事件匹配处理器（EventMatcher + 宏）
+│           │   ├── forwarder.rs      # 事件转发器（SessionManager → Tauri 前端）
+│           │   ├── sync_event.rs     # 桌面端同步事件定义
+│           │   └── sync_handler.rs   # 同步事件处理（→ WebSocket 广播）
+│           ├── model/                # 数据模型（API DTO、Message、PTY 输出、会话事件）
+│           │   ├── api_dto.rs        # API 数据传输对象
+│           │   ├── message.rs        # WebSocket 消息
+│           │   ├── pty_output.rs     # PTY 输出
+│           │   └── session_event.rs  # 会话事件
+│           ├── parser/               # 输出解析（ANSI、Markdown）
+│           │   ├── ansi.rs           # ANSI 解析
+│           │   ├── markdown.rs       # Markdown 解析
+│           │   ├── service.rs        # 解析服务
+│           │   └── types.rs          # 解析类型
+│           ├── plugin/               # 插件系统
+│           │   ├── api_bridge.rs     # 插件 API 桥接
+│           │   ├── host.rs           # 插件宿主
+│           │   ├── loader.rs         # 插件加载器
+│           │   ├── manager.rs        # 插件管理器（任务状态 + 会话映射 + 自动授权模式）
+│           │   ├── permission.rs     # 插件权限
+│           │   ├── registry.rs       # 插件注册表
+│           │   ├── setup.rs          # 全局 hooks 自动配置
+│           │   ├── storage.rs        # 插件存储
+│           │   └── types.rs          # 插件类型定义
+│           ├── pty/                  # PTY 管理
+│           │   ├── command.rs        # 命令构建
+│           │   ├── frontend_output_handler.rs # 前端输出
+│           │   ├── pty_handler.rs    # PTY 处理器
+│           │   ├── pty_output_listener.rs # 输出监听
+│           │   ├── pty_process.rs    # 进程管理
+│           │   ├── pty_reader.rs     # 输出读取
+│           │   └── wsl.rs            # WSL 支持
+│           ├── server/               # HTTP/WS 服务器（Actix Web）
+│           │   ├── controllers/      # HTTP REST 控制器
+│           │   │   ├── auth_controller.rs
+│           │   │   ├── config_controller.rs
+│           │   │   ├── file_controller.rs
+│           │   │   ├── git_controller.rs
+│           │   │   ├── plugin_controller.rs
+│           │   │   └── session_controller.rs
+│           │   ├── dtos/             # 请求/响应 DTO
+│           │   │   ├── auth_dto.rs
+│           │   │   ├── config_dto.rs
+│           │   │   ├── git_dto.rs
+│           │   │   ├── plugin_dto.rs
+│           │   │   └── session_dto.rs
+│           │   ├── middleware/        # Actix 中间件
+│           │   │   ├── cors.rs
+│           │   │   └── jwt_auth.rs
+│           │   ├── services/         # 业务服务
+│           │   │   ├── auth_service.rs
+│           │   │   ├── pairing_service.rs
 │           │   │   ├── session_config.rs
-│           │   │   ├── settings.rs
-│           │   │   └── wsl.rs
-│           │   ├── enums/            # 桌面端枚举
-│           │   │   ├── pty_status.rs # PTY 状态
-│           │   │   └── shell.rs      # Shell 类型
-│           │   ├── events/           # 事件处理
-│           │   │   ├── sync_event.rs     # 同步事件
-│           │   │   └── sync_handler.rs   # 同步事件处理
-│           │   ├── model/            # 桌面端数据模型
-│           │   │   ├── pty_output.rs # PTY 输出
-│           │   │   └── session_event.rs # 会话事件
-│           │   ├── notify.rs         # 通知服务
-│           │   ├── parser/           # 解析器 (后端状态检测)
-│           │   │   ├── ansi.rs       # ANSI 解析
-│           │   │   ├── markdown.rs   # Markdown 解析
-│           │   │   ├── service.rs    # 解析服务
-│           │   │   └── types.rs      # 解析类型
-│           │   ├── plugin/           # 插件系统
-│           │   │   ├── api_bridge.rs # 插件 API 桥接
-│           │   │   ├── host.rs       # 插件宿主
-│           │   │   ├── loader.rs     # 插件加载器
-│           │   │   ├── manager.rs    # 插件管理器（任务状态 + 会话映射 + 自动授权模式）
-│           │   │   ├── permission.rs # 插件权限
-│           │   │   ├── registry.rs   # 插件注册表
-│           │   │   ├── setup.rs      # 全局 hooks 自动配置
-│           │   │   ├── storage.rs    # 插件存储
-│           │   │   └── types.rs      # 插件类型定义
-│           │   ├── pty/              # PTY 进程管理
-│           │   │   ├── command.rs    # 命令构建
-│           │   │   ├── pty_process.rs # 进程管理
-│           │   │   ├── pty_reader.rs # 输出读取
-│           │   │   ├── pty_handler.rs # PTY 处理器
-│           │   │   ├── pty_output_listener.rs # 输出监听
-│           │   │   ├── frontend_output_handler.rs # 前端输出
-│           │   │   └── wsl.rs        # WSL 支持
-│           │   ├── server/           # Actix Web HTTP + WS 服务器
-│           │   │   ├── controllers/  # HTTP REST 控制器
-│           │   │   │   ├── auth_controller.rs
-│           │   │   │   ├── session_controller.rs
-│           │   │   │   ├── config_controller.rs
-│           │   │   │   ├── file_controller.rs
-│           │   │   │   ├── git_controller.rs
-│           │   │   │   └── plugin_controller.rs
-│           │   │   ├── dtos/         # 请求/响应 DTO
-│           │   │   │   ├── auth_dto.rs
-│           │   │   │   ├── session_dto.rs
-│           │   │   │   ├── config_dto.rs
-│           │   │   │   ├── git_dto.rs
-│           │   │   │   └── plugin_dto.rs
-│           │   │   ├── middleware/    # Actix 中间件
-│           │   │   │   ├── jwt_auth.rs
-│           │   │   │   └── cors.rs
-│           │   │   ├── ws/           # WebSocket 终端
-│           │   │   │   ├── terminal_ws.rs  # WS actor
-│           │   │   │   ├── session.rs      # WS 会话状态
-│           │   │   │   └── registry.rs     # WS 连接注册表
-│           │   │   ├── services/     # 业务服务
-│           │   │   │   ├── auth_service.rs
-│           │   │   │   ├── pairing_service.rs
-│           │   │   │   ├── session_config.rs
-│           │   │   │   ├── session_control.rs
-│           │   │   │   ├── session_sub.rs
-│           │   │   │   └── terminal_service.rs
-│           │   │   ├── app.rs        # Actix 路由配置和服务器启动
-│           │   │   ├── client_info.rs
-│           │   │   ├── connection_types.rs
-│           │   │   ├── ipc.rs        # IPC 通信
-│           │   │   ├── message.rs    # 服务器消息
-│           │   │   ├── metrics.rs    # 服务器指标
-│           │   │   └── port_checker.rs # 端口检查
-│           │   ├── session/          # 会话管理
-│           │   │   ├── session_manager.rs # 会话管理器
-│           │   │   ├── session_config.rs  # 会话配置 CRUD
-│           │   │   ├── event_bus.rs       # 统一事件广播
-│           │   │   ├── session_components.rs # 内部组件（注册表/命名/映射/检测）
-│           │   │   ├── session_output.rs   # 输出管理（缓存/队列/订阅/全局）
-│           │   │   └── storage.rs         # 会话存储
-│           │   ├── traits/           # 需要多态的 trait
-│           │   │   ├── pty_handler.rs
-│           │   │   ├── pty_output_handler.rs
-│           │   │   └── pty_output_listener.rs
-│           │   ├── event_forwarder.rs # 事件转发
-│           │   └── websocket_manager.rs # 服务器管理器（仅 port/initialized 状态）
-│           │
+│           │   │   ├── session_control.rs
+│           │   │   ├── session_sub.rs
+│           │   │   └── terminal_service.rs
+│           │   ├── ws/               # WebSocket 终端
+│           │   │   ├── registry.rs   # WS 连接注册表
+│           │   │   ├── session.rs    # WS 会话状态
+│           │   │   └── terminal_ws.rs # WS actor
+│           │   ├── app.rs            # Actix 路由配置和服务器启动
+│           │   ├── client_info.rs    # 客户端信息
+│           │   ├── connection_types.rs # 连接类型
+│           │   ├── ipc.rs            # IPC 通信
+│           │   ├── message.rs        # 服务器消息
+│           │   ├── metrics.rs        # 服务器指标
+│           │   ├── port_checker.rs   # 端口检查
+│           │   ├── server_mode.rs    # 服务器模式
+│           │   └── supervisor.rs     # 服务器生命周期管理
+│           ├── session/              # 会话管理
+│           │   ├── event_bus.rs      # 统一事件广播
+│           │   ├── session_components.rs # 内部组件（注册表/命名/映射/检测）
+│           │   ├── session_config.rs # 会话配置 CRUD
+│           │   ├── session_manager.rs # 会话管理器
+│           │   ├── session_output.rs # 输出管理（缓存/队列/订阅/全局）
+│           │   └── storage.rs        # 会话存储
+│           ├── traits/               # PTY trait 定义
+│           │   ├── pty_handler.rs
+│           │   ├── pty_output_handler.rs
+│           │   └── pty_output_listener.rs
+│           ├── app_context.rs        # 全局应用上下文 (DI 容器)
+│           ├── config.rs             # 应用配置（AppConfig）
+│           ├── error.rs              # AppError + Result
+│           ├── error_boundary.rs     # spawn_with_error_boundary
+│           ├── process.rs            # 进程工具（create_command）
+│           ├── websocket_manager.rs  # 服务器管理器（仅 port/initialized 状态）
 │           ├── lib.rs
 │           └── main.rs
 │
@@ -464,47 +455,31 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 
 | 模块 | 路径 | 职责 |
 |------|------|------|
-| Shared (Desktop) | `bedcode-desktop/src-tauri/src/shared/` | 桌面端共享代码：认证、数据库、枚举、事件、模型、系统工具 |
-| Shared (Mobile) | `bedcode-mobile/src-tauri/src/shared/` | 移动端共享代码：认证、枚举、模型、系统工具（精简版，无 db/event 子模块） |
-| Desktop | `bedcode-desktop/src-tauri/src/desktop/` | 桌面端专属：PTY、WebSocket 服务器、会话管理、插件系统 |
-| Mobile | `bedcode-mobile/src-tauri/src/mobile/` | 移动端专属：WebSocket 客户端、配对、连接、路由 |
+| Desktop | `bedcode-desktop/src-tauri/src/` | 桌面端 Rust：认证、命令、数据库、枚举、事件、模型、解析、插件、PTY、服务器、会话、trait（扁平化，无中间层级） |
+| Mobile | `bedcode-mobile/src-tauri/src/` | 移动端 Rust：共享模块 + 移动端专属模块（保持 shared/ + mobile/ 结构） |
 
-### Desktop Shared 模块详解
+### Desktop Rust 模块详解
 
 | 子模块 | 职责 |
 |--------|------|
-| `auth/` | 配对流程、认证存储 (JWT/QR Token 已迁移至 desktop/auth/) |
-| `db/` | SQLite 数据库连接与 CRUD 操作（仅桌面端） |
-| `enums/` | 认证状态、控制消息、插件、会话状态、特殊键、同步消息、总结类型 |
-| `event/` | Tauri 事件系统封装 |
-| `model/` | WebSocket 消息、API DTO |
-| `system/` | 错误处理、配置管理、Panic 捕获、进程管理、共享 Tauri commands |
-| `utils.rs` | 共享工具函数 |
-
-### Mobile Shared 模块详解
-
-| 子模块 | 职责 |
-|--------|------|
-| `auth/` | 配对流程 |
-| `enums/` | 认证状态、控制消息、插件、会话状态、特殊键、同步消息、总结类型 |
-| `model/` | WebSocket 消息（message.rs） |
-| `models.rs` | API DTO 等数据模型（单文件） |
-| `system/` | 错误处理、配置管理、Panic 捕获、共享 Tauri commands |
-
-### Desktop 模块详解
-
-| 子模块 | 职责 |
-|--------|------|
-| `commands/` | Tauri 命令：按领域拆分（devices, plugin, pty_input, qr, quick_actions, session, session_config, settings, wsl） |
-| `app_context.rs` | 全局应用上下文 (DI 容器)，统一管理所有全局单例 || `auth/` | JWT 认证、QR 码令牌管理 |
-| `pty/` | PTY 进程生命周期、输出读取、WSL 支持 |
-| `server/` | WebSocket 服务器：路由、控制器、服务层、端口检查、IPC、指标 |
-| `session/` | 会话管理：配置、状态、输出缓存、统一输出队列 |
-| `events/` | 同步事件、同步事件处理 |
-| `parser/` | 后端状态检测（ANSI/Markdown 解析，前端渲染用前端 composables） |
+| `auth/` | JWT 认证、QR 码令牌、配对流程 |
+| `commands/` | Tauri 命令：按领域拆分（devices, plugin, pty_input, qr, quick_actions, server, session, session_config, settings, system, wsl） |
+| `db/` | SQLite 数据库连接、模型、CRUD 操作 |
+| `enums/` | 合并原 shared + desktop 枚举：认证、控制、插件、PTY 状态、会话、Shell、特殊键、总结、同步 |
+| `events/` | 全局事件系统：AppEvent trait、EventMatcher、事件转发器、同步事件及处理器 |
+| `model/` | API DTO、WebSocket 消息、PTY 输出、会话事件 |
+| `parser/` | 输出解析（ANSI/Markdown） |
 | `plugin/` | 插件系统：宿主、加载器、管理器、权限、注册表、存储、API 桥接、全局 hooks 自动配置 |
-| `notify.rs` | 通知服务 |
-| `traits/` | 需要多态的 trait（PtyHandler, PtyOutputHandler, PtyOutputListener） |
+| `pty/` | PTY 进程生命周期、输出读取、前端输出、WSL 支持 |
+| `server/` | Actix Web HTTP + WS 服务器：路由、控制器、服务层、端口检查、IPC、指标、supervisor |
+| `session/` | 会话管理：配置、状态、输出缓存、事件广播、存储 |
+| `traits/` | PTY trait 定义（PtyHandler, PtyOutputHandler, PtyOutputListener） |
+| `app_context.rs` | 全局应用上下文 (DI 容器)，统一管理所有全局单例 |
+| `config.rs` | 应用配置（AppConfig） |
+| `error.rs` | AppError + Result |
+| `error_boundary.rs` | spawn_with_error_boundary |
+| `process.rs` | 进程工具（create_command） |
+| `websocket_manager.rs` | 服务器管理器（仅 port/initialized 状态） |
 
 ### Desktop 前端插件系统详解
 
@@ -584,40 +559,42 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 
 | 功能 | 关键文件 |
 |------|----------|
-| PTY 进程管理 | `bedcode-desktop/src-tauri/src/desktop/pty/pty_process.rs`, `desktop/pty/pty_handler.rs` |
-| 会话管理 | `bedcode-desktop/src-tauri/src/desktop/session/session_manager.rs` |
-| WebSocket 服务器 | `bedcode-desktop/src-tauri/src/desktop/websocket_manager.rs`, `desktop/server/app.rs` |
+| PTY 进程管理 | `bedcode-desktop/src-tauri/src/pty/pty_process.rs`, `pty/pty_handler.rs` |
+| 会话管理 | `bedcode-desktop/src-tauri/src/session/session_manager.rs` |
+| WebSocket 服务器 | `bedcode-desktop/src-tauri/src/websocket_manager.rs`, `server/app.rs` |
 | WebSocket 客户端 | `bedcode-mobile/src-tauri/src/mobile/websocket_client/ws_client.rs` |
 | 消息路由 | `bedcode-mobile/src-tauri/src/mobile/router/router.rs` |
-| 设备认证 | `bedcode-desktop/src-tauri/src/desktop/auth/jwt.rs`, `shared/auth/pairing.rs` |
-| 终端输入 | `bedcode-desktop/src-tauri/src/desktop/server/services/terminal_service.rs` |
-| 输出缓存 | `bedcode-desktop/src-tauri/src/desktop/session/session_output.rs` |
-| ANSI 解析 | `bedcode-desktop/src-tauri/src/desktop/parser/ansi.rs` |
-| 数据库操作 | `bedcode-desktop/src-tauri/src/shared/db/operations.rs` |
+| 设备认证 | `bedcode-desktop/src-tauri/src/auth/jwt.rs`, `auth/pairing.rs` |
+| 终端输入 | `bedcode-desktop/src-tauri/src/server/services/terminal_service.rs` |
+| 输出缓存 | `bedcode-desktop/src-tauri/src/session/session_output.rs` |
+| ANSI 解析 | `bedcode-desktop/src-tauri/src/parser/ansi.rs` |
+| 数据库操作 | `bedcode-desktop/src-tauri/src/db/operations.rs` |
 | 移动端连接管理 | `bedcode-mobile/src-tauri/src/mobile/remote/connection.rs`, `mobile/composables/useMobileConnection.ts` |
 | 移动端终端输出 | `bedcode-mobile/src/modules/mobile/composables/useTerminalOutput.ts` |
 | 移动端路由 | `bedcode-mobile/src-tauri/src/mobile/router/router.rs` |
-| 同步事件 | `bedcode-desktop/src-tauri/src/desktop/events/sync_event.rs` |
-| 端口检查 | `bedcode-desktop/src-tauri/src/desktop/server/port_checker.rs` |
-| IPC 通信 | `bedcode-desktop/src-tauri/src/desktop/server/ipc.rs` |
-| 服务器指标 | `bedcode-desktop/src-tauri/src/desktop/server/metrics.rs` |
-| Git 控制器 | `bedcode-desktop/src-tauri/src/desktop/server/controllers/git_controller.rs` |
-| 应用上下文 | `bedcode-desktop/src-tauri/src/desktop/app_context.rs` |
-| QR 码令牌 | `bedcode-desktop/src-tauri/src/desktop/auth/qr_token.rs` |
-| 通知服务 | `bedcode-desktop/src-tauri/src/desktop/notify.rs` |
+| 同步事件 | `bedcode-desktop/src-tauri/src/events/sync_event.rs` |
+| 端口检查 | `bedcode-desktop/src-tauri/src/server/port_checker.rs` |
+| IPC 通信 | `bedcode-desktop/src-tauri/src/server/ipc.rs` |
+| 服务器指标 | `bedcode-desktop/src-tauri/src/server/metrics.rs` |
+| 服务器生命周期 | `bedcode-desktop/src-tauri/src/server/supervisor.rs` |
+| Git 控制器 | `bedcode-desktop/src-tauri/src/server/controllers/git_controller.rs` |
+| 应用上下文 | `bedcode-desktop/src-tauri/src/app_context.rs` |
+| QR 码令牌 | `bedcode-desktop/src-tauri/src/auth/qr_token.rs` |
+| 事件匹配器 | `bedcode-desktop/src-tauri/src/events/matcher.rs` |
+| 事件转发器 | `bedcode-desktop/src-tauri/src/events/forwarder.rs` |
 | 文件浏览 | `bedcode-mobile/src/modules/mobile/composables/useHttpApi.ts` |
 | 移动端终端输入 | `bedcode-mobile/src/modules/mobile/composables/useHttpApi.ts`（httpSendSessionInput） |
 | 移动端设置 | `bedcode-mobile/src-tauri/src/mobile/system/settings.rs` |
-| HTTP API | `bedcode-desktop/src-tauri/src/shared/model/api_dto.rs` |
-| 插件系统 (Rust) | `bedcode-desktop/src-tauri/src/desktop/plugin/manager.rs`, `desktop/plugin/setup.rs` |
-| 插件系统 (前端) | `bedcode-desktop/src/modules/shared/plugin/`, `desktop/composables/usePluginManager.ts` |
+| HTTP API | `bedcode-desktop/src-tauri/src/model/api_dto.rs` |
+| 插件系统 (Rust) | `bedcode-desktop/src-tauri/src/plugin/manager.rs`, `plugin/setup.rs` |
+| 插件系统 (前端) | `bedcode-desktop/src/modules/shared/plugin/`, `composables/usePluginManager.ts` |
 | 插件 API Crate | `bedcode-desktop/src-tauri/bedcode-plugin-api/` — 共享 trait、类型、权限定义 |
-| 插件 API 桥接 | `bedcode-desktop/src-tauri/src/desktop/plugin/api_bridge.rs` |
-| 插件宿主 | `bedcode-desktop/src-tauri/src/desktop/plugin/host.rs` |
-| 插件加载器 | `bedcode-desktop/src-tauri/src/desktop/plugin/loader.rs` |
-| 插件权限 | `bedcode-desktop/src-tauri/src/desktop/plugin/permission.rs` (re-export from api crate) |
-| 插件注册表 | `bedcode-desktop/src-tauri/src/desktop/plugin/registry.rs` |
-| 插件存储 | `bedcode-desktop/src-tauri/src/desktop/plugin/storage.rs` |
+| 插件 API 桥接 | `bedcode-desktop/src-tauri/src/plugin/api_bridge.rs` |
+| 插件宿主 | `bedcode-desktop/src-tauri/src/plugin/host.rs` |
+| 插件加载器 | `bedcode-desktop/src-tauri/src/plugin/loader.rs` |
+| 插件权限 | `bedcode-desktop/src-tauri/src/plugin/permission.rs` (re-export from api crate) |
+| 插件注册表 | `bedcode-desktop/src-tauri/src/plugin/registry.rs` |
+| 插件存储 | `bedcode-desktop/src-tauri/src/plugin/storage.rs` |
 | AI Chatbox 插件 (Rust) | `bedcode-desktop/src-tauri/plugins/ai-chatbox/` — BedcodePlugin trait 实现 |
 | AI Chatbox 插件 (TS) | `bedcode-desktop/src/plugins/com.bedcode.ai-chatbox/` |
 | 自动执行引擎 | `bedcode-mobile/src/modules/mobile/composables/useAutoExecutor.ts` |
@@ -626,8 +603,8 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 | 任务通知 | `bedcode-mobile/src/modules/mobile/composables/useTaskNotification.ts` |
 | 代码浏览器 | `bedcode-mobile/src/modules/mobile/views/CodeExplorerView.vue` |
 | 代码查看器设置 | `bedcode-mobile/src/modules/shared/stores/codeViewer.ts` |
-| 进程管理工具 | `bedcode-desktop/src-tauri/src/shared/system/process.rs` |
-| 共享工具函数 | `bedcode-desktop/src-tauri/src/shared/utils.rs` |
+| 进程管理工具 | `bedcode-desktop/src-tauri/src/process.rs` |
+| 服务器管理页面 | `bedcode-desktop/src/views/ServerView.vue` |
 
 ### 自动化任务执行机制
 
@@ -660,7 +637,7 @@ Hook 脚本 (`scripts/bedcode_hook.py`) 注册 4 个事件：
 | Stop | Claude Code 停止响应 | 解析任务状态（completed/in_progress/asking/interrupted）并推送 |
 | SubagentStop | 子代理停止 | 同 Stop，解析并推送状态 |
 
-**2. HTTP API** (`desktop/server/controllers/plugin_controller.rs`)
+**2. HTTP API** (`server/controllers/plugin_controller.rs`)
 
 | 路由 | 方法 | 用途 |
 |------|------|------|
@@ -668,7 +645,7 @@ Hook 脚本 (`scripts/bedcode_hook.py`) 注册 4 个事件：
 | `/plugin/session-mode` | POST | 移动端设置会话自动/手动模式 |
 | `/plugin/session-mode` | GET | Python PreToolUse hook 查询会话模式 |
 
-**3. PluginManager** (`desktop/plugin/manager.rs`)
+**3. PluginManager** (`plugin/manager.rs`)
 
 内存存储三个 HashMap：
 - `task_states: HashMap<bedcode_session_id, TaskStateEntry>` — 任务状态 + reason + questions
@@ -741,7 +718,7 @@ PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
 | session-mode 查询 (GET) | `claude_session_id` | `resolve_session_id()` 查映射 | 解析后的 `bedcode_session_id` |
 | session-mode 设置 (POST) | `bedcode_session_id`（移动端已知） | 无需解析 | `bedcode_session_id` |
 
-**7. 全局 Hooks 自动配置** (`desktop/plugin/setup.rs`)
+**7. 全局 Hooks 自动配置** (`plugin/setup.rs`)
 
 应用启动时自动完成以下配置，对用户完全无感：
 
@@ -759,14 +736,17 @@ PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
 | 层 | 文件 | 职责 |
 |----|------|------|
 | Plugin | `scripts/bedcode_hook.py` | Hook 脚本：状态推送 + 模式查询 + auto-approve + session ID 映射 |
-| Rust Setup | `desktop/plugin/setup.rs` | 全局 hooks 自动配置（~/.claude/settings.json 注入） |
-| Rust HTTP | `desktop/server/controllers/plugin_controller.rs` | HTTP API 路由处理（含 session ID 解析） |
-| Rust DTO | `desktop/server/dtos/plugin_dto.rs` | 请求类型（含 bedcode_session_id 字段） |
-| Rust Core | `desktop/plugin/manager.rs` | 任务状态 + 会话映射 + 自动授权模式内存存储、事件广播 |
-| Rust PTY | `desktop/pty/pty_process.rs` | PTY 启动时注入 BEDCODE_SESSION_ID 环境变量 |
-| Rust Event | `desktop/events/sync_event.rs` | DesktopSyncEvent 定义 |
-| Rust Handler | `desktop/events/sync_handler.rs` | 事件→WebSocket 消息转换 |
-| Rust Forward | `mobile/router/event.rs` | WebSocket→Tauri 前端事件转发 |
+| Rust Setup | `plugin/setup.rs` | 全局 hooks 自动配置（~/.claude/settings.json 注入） |
+| Rust HTTP | `server/controllers/plugin_controller.rs` | HTTP API 路由处理（含 session ID 解析） |
+| Rust DTO | `server/dtos/plugin_dto.rs` | 请求类型（含 bedcode_session_id 字段） |
+| Rust Core | `plugin/manager.rs` | 任务状态 + 会话映射 + 自动授权模式内存存储、事件广播 |
+| Rust PTY | `pty/pty_process.rs` | PTY 启动时注入 BEDCODE_SESSION_ID 环境变量 |
+| Rust Event | `events/sync_event.rs` | DesktopSyncEvent 定义 |
+| Rust Handler | `events/sync_handler.rs` | 事件→WebSocket 消息转换 |
+| Rust Event | `events/sync_event.rs` | DesktopSyncEvent 定义 |
+| Rust Handler | `events/sync_handler.rs` | 事件→WebSocket 消息转换 |
+| Rust Forward | `events/forwarder.rs` | SessionManager→Tauri 前端事件转发 |
+| Rust Matcher | `events/matcher.rs` | 全局事件匹配处理器 |
 | Mobile Cmd | `mobile/composables/useMobileCommands.ts` | 事件监听注册 |
 | Mobile Conn | `mobile/composables/useMobileConnection.ts` | 同步事件回调处理 |
 | Mobile HTTP | `mobile/composables/useHttpApi.ts` | HTTP API 封装（含 httpSetSessionMode） |
@@ -780,43 +760,34 @@ PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
 
 | 类型 | 路径模式 |
 |------|----------|
-| Tauri Commands | `*/commands.rs`, `*/commands/*.rs` |
-| 错误处理 | `shared/system/error.rs` |
-| 数据模型 | `*/model/*.rs`, `*/model.rs`, `*/models.rs` |
-| 枚举类型 | `*/enums/*.rs` |
-| Traits | `*/traits/*.rs`, `*/traits.rs` |
-| 消息处理器 | `*/handler/*.rs`, `*/handlers/*.rs` |
-| 业务服务 | `desktop/server/services/*.rs` |
+| Tauri Commands | `commands/*.rs` |
+| 错误处理 | `error.rs` |
+| 数据模型 | `model/*.rs` |
+| 枚举类型 | `enums/*.rs` |
+| Traits | `traits/*.rs` |
+| 消息处理器 | `mobile/handler/*.rs` |
+| 业务服务 | `server/services/*.rs` |
 | Pinia Stores | `src/modules/shared/stores/*.ts` |
 | Composables | `src/modules/*/composables/*.ts` |
-| DTO | `desktop/server/dtos/*.rs`, `shared/model/api_dto.rs` |
+| DTO | `server/dtos/*.rs`, `model/api_dto.rs` |
 | 前端插件 | `src/modules/shared/plugin/`, `src/plugins/` |
-| Rust 插件 | `desktop/plugin/*.rs` |
+| Rust 插件 | `plugin/*.rs` |
 
 ---
 
-## Desktop 与 Mobile Shared 差异
+## Desktop 与 Mobile Rust 后端差异
 
-桌面端和移动端的 `shared/` 模块存在差异：
+桌面端 Rust 已扁平化（所有模块直接在 `src/` 下），移动端保持 `shared/` + `mobile/` 结构：
 
-| 子模块 | Desktop | Mobile | 说明 |
+| 子模块 | Desktop (扁平化) | Mobile (shared/ + mobile/) | 说明 |
 |--------|---------|--------|------|
-| `auth/` | ✅ pairing.rs | ✅ pairing.rs | 相同 |
+| `auth/` | ✅ jwt.rs + pairing.rs + qr_token.rs | ✅ pairing.rs | 桌面端多 JWT 和 QR Token |
 | `db/` | ✅ database/models/operations | ❌ | 数据库仅桌面端使用 |
-| `enums/` | ✅ 含 plugin.rs | ✅ 含 plugin.rs | 相同 |
-| `event/` | ✅ events.rs + handler.rs | ❌ | 事件系统仅桌面端使用 |
-| `model/` | ✅ api_dto.rs + message.rs | ✅ message.rs | 移动端只有 message.rs，DTO 用 models.rs |
+| `enums/` | ✅ 含 pty_status.rs, shell.rs, plugin.rs | ✅ 含 plugin.rs（无 pty_status/shell） | 桌面端多 PTY/Shell 枚举 |
+| `events/` | ✅ app_event + matcher + forwarder + sync_event + sync_handler | ❌ | 事件系统仅桌面端使用 |
+| `model/` | ✅ api_dto.rs + message.rs + pty_output.rs + session_event.rs | ✅ message.rs | 移动端只有 message.rs |
 | `models.rs` | ❌ | ✅ | 移动端单文件 DTO |
-| `system/` | ✅ 含 process.rs | ✅ 无 process.rs | 桌面端多进程管理工具 |
-| `utils.rs` | ✅ | ❌ | 桌面端共享工具函数 |
+| `system/` | ❌（error/config/error_boundary/process 拆为顶层文件） | ✅ 含 error/config/error_boundary | 桌面端拆为独立顶层文件 |
 
 ---
 
-## 最近更新
-
-- 2026-07-01: 移动端 Android 构建修复 — 安装 @xterm/xterm + addon-fit + addon-web-links + addon-webgl 依赖；重建 gen/android（包名 com.bedcode.app → com.bedcode.mobile）；恢复 ForegroundService/TaskNotification 自定义 Kotlin 文件和 ic_notification.xml；配置 Gradle 代理和本地缓存；移动端 shared 精简（移除 useBackgroundMonitor、useErrorHandler、useGlobalNotifications、useKeyboardShortcuts、useOutputBuffer、useOutputParser、useQrCode、useSessionStatusListener、useSessionWindows、useTauri、device/quickAction/session stores、invoke.ts、LoadingView.vue、EmptyState/Input/NotificationBadge/Select/Skeleton/Spinner/SplashLoading/Tooltip 组件）；新增 useTerminalOutput.ts；移动端 shared/model 新增 message.rs；桌面端 server 新增 git_controller.rs、git_dto.rs、ipc.rs、metrics.rs
-- 2026-06-30: 多项目仓库重构 — 从单一 `bedcode/` 拆分为 `bedcode-desktop/` + `bedcode-mobile/` 独立项目；桌面端新增前端插件系统（shared/plugin/）、Rust 插件扩展（api_bridge, host, loader, permission, registry, storage, types）、AI Chatbox 插件（com.bedcode.ai-chatbox）、PluginConfigView/PluginsView、usePluginManager、shared/enums/plugin.rs、shared/system/process.rs、shared/utils.rs、stores/i18n.ts、stores/wsl.ts；移动端新增 useAutoExecutor/usePresetTasks/useTaskExecutionState/useTaskNotification、CodeExplorerView、CodeViewerSettingsModal/ShortcutConfigModal/SessionConfigCard/PresetTaskCard、stores/codeViewer.ts；移动端 shared 精简（移除 db/event 子模块，model/ → models.rs，移除 remote/http_client.rs 和 commands/http.rs）；桌面端 dtos 移除 common.rs
-- 2026-06-26: Hooks 全局化 + 会话 ID 绑定 — hooks 配置从项目级 `.claude/settings.json` 改为全局 `~/.claude/settings.json`；hook 脚本从 `${CLAUDE_PROJECT_DIR}/scripts/` 改为 `~/.claude/bedcode_hook.py`（启动时自动复制）；新增 `BEDCODE_SESSION_ID` 环境变量注入实现 Claude Code session 与 BedCode PTY session 绑定；PluginManager 新增 `session_id_map` 映射和 `resolve_session_id()` 解析；去掉 Stop/SubagentStop 的 prompt hook（避免终端可见输出）；HTTP 路由修正为 `/plugin/*`（不含 `/api` 前缀）；新增 `desktop/plugin/setup.rs` 和 `plugin_controller.rs` 到目录树和索引
-- 2026-06-23: 自动化任务执行机制文档 — 新增"自动化任务执行机制"章节，记录 Plugin→HTTP→Rust→WebSocket→Mobile 完整链路；模式切换改为 HTTP 直接修改桌面端内存，移除 PTY 输入拦截 /bedcode 命令；手动模式下 PreToolUse 仍推送 asking 状态同步
-- 2026-06-19: 大幅重构更新 — WebSocket 客户端从 shared 迁移至 mobile/websocket_client/，JWT/QR Token 从 shared 迁移至 desktop/auth/，notify/parser 从 shared 迁移至 desktop/，新增 app_context (DI 容器)、mobile/system (设置管理)、mobile/commands/http (HTTP API)、mobile/commands/mobile_commands (移动端特有命令)、mobile/remote/http_client (文件浏览)，前端新增文件浏览组件 (FileSidebar/FileTreeItem/FileViewerModal/icons/)、ToolboxView 替代 QuickActionsView、新增 useCodeHighlight/useFileTree/useForegroundService/useHttpApi/useFontSize/useTheme
-- 2026-06-10: 同步项目当前结构，新增 events/、remote/、router/ 等目录，更新 stores 位置

@@ -4,7 +4,7 @@
 //! 触发向客户端的增量数据广播
 
 use crate::enums::SessionStatus;
-use crate::event::events::AppEvent;
+use super::app_event::AppEvent;
 use crate::enums::PluginQuestion;
 
 /// 桌面端数据变更事件

@@ -1,4 +1,4 @@
-//! Event Handler Module
+//! Event Matcher Module
 //!
 //! 全局事件匹配处理器实现
 //! 支持：
@@ -6,7 +6,7 @@
 //! - 处理器注册（整体事件或特定变体）
 //! - 自动桥接事件源和处理器
 
-use crate::event::events::AppEvent;
+use super::app_event::AppEvent;
 use std::any::{type_name, Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -438,7 +438,7 @@ pub fn global_matcher() -> &'static EventMatcher {
 #[macro_export]
 macro_rules! on_event {
     ($event_type:ty, $handler:expr) => {{
-        use $crate::event::global_matcher;
+        use $crate::events::global_matcher;
         let matcher = global_matcher();
         matcher.register_fn::<$event_type, _>($handler).await;
     }};
@@ -448,7 +448,7 @@ macro_rules! on_event {
 #[macro_export]
 macro_rules! on_event_filtered {
     ($event_type:ty, $filter:expr, $handler:expr) => {{
-        use $crate::event::global_matcher;
+        use $crate::events::global_matcher;
         let matcher = global_matcher();
         matcher.on_filter::<$event_type, _, _>($filter, $handler).await;
     }};

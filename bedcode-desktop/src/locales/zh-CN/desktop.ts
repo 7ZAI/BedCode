@@ -128,7 +128,7 @@ export default {
       port: '端口',
       portHint: '修改端口后需重启服务器生效',
       localIp: '本地 IP',
-      autoStart: '应用启动时自动开启',
+      autoStart: '自启动',
       start: '启动',
       stop: '停止',
       restart: '重启',

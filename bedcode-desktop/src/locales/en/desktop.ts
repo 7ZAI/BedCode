@@ -128,7 +128,7 @@ export default {
       port: 'Port',
       portHint: 'Restart required after port change',
       localIp: 'Local IP',
-      autoStart: 'Auto-start on app launch',
+      autoStart: 'Auto-start',
       start: 'Start',
       stop: 'Stop',
       restart: 'Restart',
