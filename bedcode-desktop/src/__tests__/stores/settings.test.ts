@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useSettingsStore } from '@/modules/shared/stores/settings'
+import { useSettingsStore } from '@/stores/settings'
 
 // Mock Tauri invoke
 const mockInvoke = vi.fn()

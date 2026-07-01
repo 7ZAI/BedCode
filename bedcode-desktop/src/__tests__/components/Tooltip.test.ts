@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Tooltip from '@/modules/shared/components/Tooltip.vue'
+import Tooltip from '@/components/Tooltip.vue'
 
 describe('Tooltip Component', () => {
   beforeEach(() => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Spinner from '@/modules/shared/components/Spinner.vue'
+import Spinner from '@/components/Spinner.vue'
 
 describe('Spinner Component', () => {
   it('should render with default props (circle variant)', () => {

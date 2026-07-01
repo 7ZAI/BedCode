@@ -222,11 +222,13 @@ bedcode/                              # 仓库根目录
 │           │   │   │   ├── session_controller.rs
 │           │   │   │   ├── config_controller.rs
 │           │   │   │   ├── file_controller.rs
+│           │   │   │   ├── git_controller.rs
 │           │   │   │   └── plugin_controller.rs
 │           │   │   ├── dtos/         # 请求/响应 DTO
 │           │   │   │   ├── auth_dto.rs
 │           │   │   │   ├── session_dto.rs
 │           │   │   │   ├── config_dto.rs
+│           │   │   │   ├── git_dto.rs
 │           │   │   │   └── plugin_dto.rs
 │           │   │   ├── middleware/    # Actix 中间件
 │           │   │   │   ├── jwt_auth.rs
@@ -245,7 +247,9 @@ bedcode/                              # 仓库根目录
 │           │   │   ├── app.rs        # Actix 路由配置和服务器启动
 │           │   │   ├── client_info.rs
 │           │   │   ├── connection_types.rs
+│           │   │   ├── ipc.rs        # IPC 通信
 │           │   │   ├── message.rs    # 服务器消息
+│           │   │   ├── metrics.rs    # 服务器指标
 │           │   │   └── port_checker.rs # 端口检查
 │           │   ├── session/          # 会话管理
 │           │   │   ├── session_manager.rs # 会话管理器
@@ -300,7 +304,6 @@ bedcode/                              # 仓库根目录
 │   │   │   │   │   ├── model.ts
 │   │   │   │   │   ├── useAndroidFeatures.ts
 │   │   │   │   │   ├── useAutoExecutor.ts
-│   │   │   │   │   ├── useBackgroundMonitor.ts
 │   │   │   │   │   ├── useCodeHighlight.ts
 │   │   │   │   │   ├── useEdgeToEdge.ts
 │   │   │   │   │   ├── useFileTree.ts
@@ -311,7 +314,8 @@ bedcode/                              # 仓库根目录
 │   │   │   │   │   ├── useOrientation.ts
 │   │   │   │   │   ├── usePresetTasks.ts
 │   │   │   │   │   ├── useTaskExecutionState.ts
-│   │   │   │   │   └── useTaskNotification.ts
+│   │   │   │   │   ├── useTaskNotification.ts
+│   │   │   │   │   └── useTerminalOutput.ts
 │   │   │   │   └── views/            # 移动端页面
 │   │   │   │       ├── CodeExplorerView.vue
 │   │   │   │       ├── DevicesView.vue
@@ -320,38 +324,27 @@ bedcode/                              # 仓库根目录
 │   │   │   │       ├── SettingsView.vue
 │   │   │   │       ├── TerminalView.vue
 │   │   │   │       └── ToolboxView.vue
-│   │   │   └── shared/               # 共享 UI 模块
-│   │   │       ├── components/       # 共享组件 (同桌面端)
+│   │   │   └── shared/               # 共享 UI 模块（精简版）
+│   │   │       ├── components/       # 共享组件
+│   │   │       │   ├── Button.vue
+│   │   │       │   ├── Modal.vue
+│   │   │       │   ├── Toast.vue
+│   │   │       │   ├── Toggle.vue
+│   │   │       │   └── index.ts
 │   │   │       ├── composables/      # 共享业务逻辑
 │   │   │       │   ├── model.ts
-│   │   │       │   ├── useAnsiRenderer.ts
-│   │   │       │   ├── useErrorHandler.ts
 │   │   │       │   ├── useFontSize.ts
-│   │   │       │   ├── useGlobalNotifications.ts
-│   │   │       │   ├── useKeyboardShortcuts.ts
-│   │   │       │   ├── useOutputBuffer.ts
-│   │   │       │   ├── useOutputParser.ts
 │   │   │       │   ├── usePlatform.ts
-│   │   │       │   ├── useQrCode.ts
 │   │   │       │   ├── useRunTime.ts
-│   │   │       │   ├── useSessionStatusListener.ts
-│   │   │       │   ├── useSessionWindows.ts
-│   │   │       │   ├── useTauri.ts
 │   │   │       │   ├── useTheme.ts
 │   │   │       │   └── useToast.ts
 │   │   │       ├── stores/           # Pinia 全局状态
 │   │   │       │   ├── codeViewer.ts
-│   │   │       │   ├── device.ts
 │   │   │       │   ├── i18n.ts
 │   │   │       │   ├── inputAssistant.ts
-│   │   │       │   ├── quickAction.ts
-│   │   │       │   ├── session.ts
 │   │   │       │   └── settings.ts
-│   │   │       ├── utils/            # 共享工具函数
-│   │   │       │   ├── clipboard.ts
-│   │   │       │   └── invoke.ts
-│   │   │       └── views/            # 共享页面
-│   │   │           └── LoadingView.vue
+│   │   │       └── utils/            # 共享工具函数
+│   │   │           └── clipboard.ts
 │   │   ├── locales/                  # 国际化
 │   │   ├── router/                   # 路由
 │   │   ├── App.vue
@@ -370,7 +363,9 @@ bedcode/                              # 仓库根目录
 │           │   │   ├── special_key.rs
 │           │   │   ├── sumary.rs
 │           │   │   └── sync.rs
-│           │   ├── models.rs         # 共享数据模型 (单文件，无 db/event 子模块)
+│           │   ├── model/            # 共享数据模型
+│           │   │   └── message.rs    # WebSocket 消息
+│           │   ├── models.rs         # API DTO 等数据模型
 │           │   └── system/           # 系统工具
 │           │       ├── commands.rs   # 共享 Tauri commands
 │           │       ├── config.rs     # 配置管理
@@ -463,7 +458,7 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 | Desktop | `bedcode-desktop/src/modules/desktop/` | 桌面端 UI：会话管理、设备列表、终端预览、插件管理 |
 | Mobile | `bedcode-mobile/src/modules/mobile/` | 移动端 UI：终端、工具箱、文件浏览、配对流程、自动执行 |
 | Shared (Desktop) | `bedcode-desktop/src/modules/shared/` | 桌面端共享组件、业务逻辑、Pinia stores、插件系统 |
-| Shared (Mobile) | `bedcode-mobile/src/modules/shared/` | 移动端共享组件、业务逻辑、Pinia stores |
+| Shared (Mobile) | `bedcode-mobile/src/modules/shared/` | 移动端共享组件、业务逻辑、Pinia stores（精简版） |
 
 ### Backend (Rust)
 
@@ -492,7 +487,8 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 |--------|------|
 | `auth/` | 配对流程 |
 | `enums/` | 认证状态、控制消息、插件、会话状态、特殊键、同步消息、总结类型 |
-| `models.rs` | 共享数据模型（单文件，无 db/event 子模块） |
+| `model/` | WebSocket 消息（message.rs） |
+| `models.rs` | API DTO 等数据模型（单文件） |
 | `system/` | 错误处理、配置管理、Panic 捕获、共享 Tauri commands |
 
 ### Desktop 模块详解
@@ -500,10 +496,9 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 | 子模块 | 职责 |
 |--------|------|
 | `commands/` | Tauri 命令：按领域拆分（devices, plugin, pty_input, qr, quick_actions, session, session_config, settings, wsl） |
-| `app_context.rs` | 全局应用上下文 (DI 容器)，统一管理所有全局单例 |
-| `auth/` | JWT 认证、QR 码令牌管理 |
+| `app_context.rs` | 全局应用上下文 (DI 容器)，统一管理所有全局单例 || `auth/` | JWT 认证、QR 码令牌管理 |
 | `pty/` | PTY 进程生命周期、输出读取、WSL 支持 |
-| `server/` | WebSocket 服务器：路由、控制器、服务层、端口检查 |
+| `server/` | WebSocket 服务器：路由、控制器、服务层、端口检查、IPC、指标 |
 | `session/` | 会话管理：配置、状态、输出缓存、统一输出队列 |
 | `events/` | 同步事件、同步事件处理 |
 | `parser/` | 后端状态检测（ANSI/Markdown 解析，前端渲染用前端 composables） |
@@ -536,7 +531,7 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 |------|------|
 | `composables/useMobileConnection.ts` | 连接管理：初始化、连接/断开、认证、会话操作 |
 | `composables/useMobileCommands.ts` | Tauri 命令封装：WebSocket 连接、认证、会话控制、终端输入 |
-| `composables/useHttpApi.ts` | HTTP API 调用：文件树浏览、插件模式设置 |
+| `composables/useHttpApi.ts` | HTTP API 调用：文件树浏览、插件模式设置、终端输入 |
 | `composables/useAutoExecutor.ts` | 自动执行状态机：按 sessionId 隔离的任务自动执行引擎 |
 | `composables/usePresetTasks.ts` | 预设任务管理 |
 | `composables/useTaskExecutionState.ts` | 任务执行状态管理 |
@@ -545,9 +540,9 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 | `composables/useCodeHighlight.ts` | 代码语法高亮 |
 | `composables/useForegroundService.ts` | Android 前台服务管理 |
 | `composables/useAndroidFeatures.ts` | Android 平台特定功能 |
-| `composables/useBackgroundMonitor.ts` | 后台监控 |
 | `composables/useEdgeToEdge.ts` | 边到边显示模式 |
 | `composables/useOrientation.ts` | 屏幕方向处理 |
+| `composables/useTerminalOutput.ts` | 终端输出订阅管理（全局单一 ws_output 监听 + sessionId 分发） |
 | `composables/model.ts` | 移动端类型定义 |
 | `views/TerminalView.vue` | 终端页面 |
 | `views/CodeExplorerView.vue` | 代码浏览器页面 |
@@ -600,13 +595,18 @@ BedCode 采用多项目仓库结构，桌面端和移动端各自独立：
 | ANSI 解析 | `bedcode-desktop/src-tauri/src/desktop/parser/ansi.rs` |
 | 数据库操作 | `bedcode-desktop/src-tauri/src/shared/db/operations.rs` |
 | 移动端连接管理 | `bedcode-mobile/src-tauri/src/mobile/remote/connection.rs`, `mobile/composables/useMobileConnection.ts` |
+| 移动端终端输出 | `bedcode-mobile/src/modules/mobile/composables/useTerminalOutput.ts` |
 | 移动端路由 | `bedcode-mobile/src-tauri/src/mobile/router/router.rs` |
 | 同步事件 | `bedcode-desktop/src-tauri/src/desktop/events/sync_event.rs` |
 | 端口检查 | `bedcode-desktop/src-tauri/src/desktop/server/port_checker.rs` |
+| IPC 通信 | `bedcode-desktop/src-tauri/src/desktop/server/ipc.rs` |
+| 服务器指标 | `bedcode-desktop/src-tauri/src/desktop/server/metrics.rs` |
+| Git 控制器 | `bedcode-desktop/src-tauri/src/desktop/server/controllers/git_controller.rs` |
 | 应用上下文 | `bedcode-desktop/src-tauri/src/desktop/app_context.rs` |
 | QR 码令牌 | `bedcode-desktop/src-tauri/src/desktop/auth/qr_token.rs` |
 | 通知服务 | `bedcode-desktop/src-tauri/src/desktop/notify.rs` |
 | 文件浏览 | `bedcode-mobile/src/modules/mobile/composables/useHttpApi.ts` |
+| 移动端终端输入 | `bedcode-mobile/src/modules/mobile/composables/useHttpApi.ts`（httpSendSessionInput） |
 | 移动端设置 | `bedcode-mobile/src-tauri/src/mobile/system/settings.rs` |
 | HTTP API | `bedcode-desktop/src-tauri/src/shared/model/api_dto.rs` |
 | 插件系统 (Rust) | `bedcode-desktop/src-tauri/src/desktop/plugin/manager.rs`, `desktop/plugin/setup.rs` |
@@ -771,6 +771,7 @@ PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
 | Mobile Conn | `mobile/composables/useMobileConnection.ts` | 同步事件回调处理 |
 | Mobile HTTP | `mobile/composables/useHttpApi.ts` | HTTP API 封装（含 httpSetSessionMode） |
 | Mobile Engine | `mobile/composables/useAutoExecutor.ts` | 自动执行状态机 |
+| Mobile Output | `mobile/composables/useTerminalOutput.ts` | 终端输出订阅管理（全局 ws_output 监听 + sessionId 分发） |
 | Mobile UI | `mobile/components/AutoExecuteBar.vue` | 自动执行状态条 |
 | Mobile UI | `mobile/components/TaskPickerModal.vue` | 任务选择弹窗 |
 | Mobile View | `mobile/views/TerminalView.vue` | 终端视图（整合 AutoExecutor） |
@@ -804,7 +805,8 @@ PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
 | `db/` | ✅ database/models/operations | ❌ | 数据库仅桌面端使用 |
 | `enums/` | ✅ 含 plugin.rs | ✅ 含 plugin.rs | 相同 |
 | `event/` | ✅ events.rs + handler.rs | ❌ | 事件系统仅桌面端使用 |
-| `model/` | ✅ api_dto.rs + message.rs | ❌ (用 models.rs) | 移动端用单文件 models.rs |
+| `model/` | ✅ api_dto.rs + message.rs | ✅ message.rs | 移动端只有 message.rs，DTO 用 models.rs |
+| `models.rs` | ❌ | ✅ | 移动端单文件 DTO |
 | `system/` | ✅ 含 process.rs | ✅ 无 process.rs | 桌面端多进程管理工具 |
 | `utils.rs` | ✅ | ❌ | 桌面端共享工具函数 |
 
@@ -812,6 +814,7 @@ PTY Session B (PID 1001) → BEDCODE_SESSION_ID=uuid-bbb
 
 ## 最近更新
 
+- 2026-07-01: 移动端 Android 构建修复 — 安装 @xterm/xterm + addon-fit + addon-web-links + addon-webgl 依赖；重建 gen/android（包名 com.bedcode.app → com.bedcode.mobile）；恢复 ForegroundService/TaskNotification 自定义 Kotlin 文件和 ic_notification.xml；配置 Gradle 代理和本地缓存；移动端 shared 精简（移除 useBackgroundMonitor、useErrorHandler、useGlobalNotifications、useKeyboardShortcuts、useOutputBuffer、useOutputParser、useQrCode、useSessionStatusListener、useSessionWindows、useTauri、device/quickAction/session stores、invoke.ts、LoadingView.vue、EmptyState/Input/NotificationBadge/Select/Skeleton/Spinner/SplashLoading/Tooltip 组件）；新增 useTerminalOutput.ts；移动端 shared/model 新增 message.rs；桌面端 server 新增 git_controller.rs、git_dto.rs、ipc.rs、metrics.rs
 - 2026-06-30: 多项目仓库重构 — 从单一 `bedcode/` 拆分为 `bedcode-desktop/` + `bedcode-mobile/` 独立项目；桌面端新增前端插件系统（shared/plugin/）、Rust 插件扩展（api_bridge, host, loader, permission, registry, storage, types）、AI Chatbox 插件（com.bedcode.ai-chatbox）、PluginConfigView/PluginsView、usePluginManager、shared/enums/plugin.rs、shared/system/process.rs、shared/utils.rs、stores/i18n.ts、stores/wsl.ts；移动端新增 useAutoExecutor/usePresetTasks/useTaskExecutionState/useTaskNotification、CodeExplorerView、CodeViewerSettingsModal/ShortcutConfigModal/SessionConfigCard/PresetTaskCard、stores/codeViewer.ts；移动端 shared 精简（移除 db/event 子模块，model/ → models.rs，移除 remote/http_client.rs 和 commands/http.rs）；桌面端 dtos 移除 common.rs
 - 2026-06-26: Hooks 全局化 + 会话 ID 绑定 — hooks 配置从项目级 `.claude/settings.json` 改为全局 `~/.claude/settings.json`；hook 脚本从 `${CLAUDE_PROJECT_DIR}/scripts/` 改为 `~/.claude/bedcode_hook.py`（启动时自动复制）；新增 `BEDCODE_SESSION_ID` 环境变量注入实现 Claude Code session 与 BedCode PTY session 绑定；PluginManager 新增 `session_id_map` 映射和 `resolve_session_id()` 解析；去掉 Stop/SubagentStop 的 prompt hook（避免终端可见输出）；HTTP 路由修正为 `/plugin/*`（不含 `/api` 前缀）；新增 `desktop/plugin/setup.rs` 和 `plugin_controller.rs` 到目录树和索引
 - 2026-06-23: 自动化任务执行机制文档 — 新增"自动化任务执行机制"章节，记录 Plugin→HTTP→Rust→WebSocket→Mobile 完整链路；模式切换改为 HTTP 直接修改桌面端内存，移除 PTY 输入拦截 /bedcode 命令；手动模式下 PreToolUse 仍推送 asking 状态同步

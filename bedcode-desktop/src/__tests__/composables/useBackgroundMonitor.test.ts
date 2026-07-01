@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ref } from 'vue'
-import { useBackgroundMonitor } from '@/modules/shared/composables/useBackgroundMonitor'
+import { useBackgroundMonitor } from '@/composables/useBackgroundMonitor'
 
 // Mock useAndroidFeatures
-vi.mock('@/modules/shared/composables/useAndroidFeatures', () => ({
+vi.mock('@/composables/useAndroidFeatures', () => ({
   useAndroidFeatures: vi.fn(() => ({
     isInBackground: ref(false),
   })),

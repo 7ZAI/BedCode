@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import SplashLoading from '@/modules/shared/components/SplashLoading.vue'
+import SplashLoading from '@/components/SplashLoading.vue'
 
 describe('SplashLoading Component', () => {
   beforeEach(() => {

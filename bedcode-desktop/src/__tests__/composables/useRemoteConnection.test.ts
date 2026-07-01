@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useRemoteConnection } from '@/modules/shared/composables/useRemoteConnection'
+import { useRemoteConnection } from '@/composables/useRemoteConnection'
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({

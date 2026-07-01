@@ -53,7 +53,7 @@ fn main() {
     // 检查是否以服务器模式运行
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--server-only".to_string()) {
-        bedcode_lib::desktop::server::server_mode::run_server_mode();
+        bedcode_lib::server::server_mode::run_server_mode();
         return;
     }
 

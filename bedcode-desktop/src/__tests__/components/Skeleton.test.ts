@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Skeleton from '@/modules/shared/components/Skeleton.vue'
+import Skeleton from '@/components/Skeleton.vue'
 
 describe('Skeleton Component', () => {
   it('should render with default shape (text)', () => {

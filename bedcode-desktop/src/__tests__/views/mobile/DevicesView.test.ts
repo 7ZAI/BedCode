@@ -21,7 +21,7 @@ const mockIsConnected = { value: false }
 const mockSendMessageWithResponse = vi.fn()
 const mockActiveSessionId = { value: null }
 
-vi.mock('@/modules/shared/composables/useRemoteConnection', () => ({
+vi.mock('@/composables/useRemoteConnection', () => ({
   useRemoteConnection: () => ({
     state: mockState,
     pairedDevices: mockPairedDevices,
@@ -43,7 +43,7 @@ vi.mock('@/modules/shared/composables/useRemoteConnection', () => ({
 }))
 
 // Mock useRemoteTerminal composable
-vi.mock('@/modules/shared/composables/useRemoteTerminal', () => ({
+vi.mock('@/composables/useRemoteTerminal', () => ({
   useRemoteTerminal: () => ({
     sessions: { value: [] },
     sessionConfigs: { value: [] },

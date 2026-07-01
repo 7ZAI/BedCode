@@ -8,9 +8,11 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 
 **Tech Stack:**
 - **Desktop**: Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS
+- **Mobile**: Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS
 - **Backend**: Rust (Tokio async runtime)
-- **Database**: SQLite
-- **Communication**: WebSocket
+- **Database**: SQLite (桌面端)
+- **Communication**: WebSocket + HTTP API
+- **Terminal**: @xterm/xterm + @xterm/addon-fit + @xterm/addon-web-links + @xterm/addon-webgl
 - **I18n**: vue-i18n@9 (zh-CN / en)
 - **State Management**: Pinia
 
@@ -414,12 +416,20 @@ mod tests {
 ## Build Commands
 
 ```bash
-# Development
+# Desktop Development
+cd bedcode-desktop
 npm run tauri:dev
 
-# Build
-npm run tauri:build           # Desktop
-npm run tauri:android:build   # Android
+# Desktop Build
+npm run tauri:build
+
+# Mobile Development
+cd bedcode-mobile
+npm run tauri:android:dev
+
+# Mobile Build
+npm run tauri:android:build           # Release (aarch64)
+npm run tauri:android:build:fast      # Debug fast build (aarch64)
 
 # Test
 npm run test
@@ -434,9 +444,50 @@ cargo test
 
 ---
 
-## Android Build Setup
+## Android Build Notes
 
-See `docs/android-setup.md` for detailed instructions.
+### 环境要求
+
+See `docs/android-setup.md` for detailed setup instructions.
+
+### Gradle 代理配置
+
+如果网络需要代理访问外网，在 `~/.gradle/gradle.properties` 中配置：
+
+```properties
+systemProp.http.proxyHost=127.0.0.1
+systemProp.http.proxyPort=<port>
+systemProp.https.proxyHost=127.0.0.1
+systemProp.https.proxyPort=<port>
+```
+
+### Gradle 版本与本地缓存
+
+如果 `services.gradle.org` 下载超时，可将 Gradle zip 下载到本地后修改 `gen/android/gradle/wrapper/gradle-wrapper.properties` 中的 `distributionUrl` 指向本地文件：
+
+```properties
+distributionUrl=file\:///C:/Users/<user>/.gradle/wrapper/dists/gradle-<version>-bin.zip
+```
+
+### gen/android 重建
+
+如果 `tauri.conf.json > identifier` 或 `Cargo.toml` 包名变更，需要重建 Android 项目：
+
+```bash
+rm -rf src-tauri/gen/android
+npx tauri android init
+```
+
+重建后需要：
+1. 恢复自定义 Kotlin 文件（ForegroundService.kt、TaskNotificationManager.kt 等），更新 `package` 声明为新包名
+2. 恢复 AndroidManifest.xml 中的权限和服务声明
+3. 恢复 key.properties 和 keystore 文件
+4. 恢复 ic_notification.xml drawable 资源
+
+### Android 包名
+
+- Desktop: `com.bedcode.app`
+- Mobile: `com.bedcode.mobile`
 
 ---
 
@@ -596,11 +647,13 @@ await i18nStore.initLanguage()
 
 ## Key Architecture Decisions
 
-1. **Separation of Concerns**: Composables 处理 API，stores 管理全局状态，components 只负责 UI
-2. **Async Everywhere**: Rust 用 Tokio，前端用 async/await + Tauri commands
-3. **Event-Driven**: PTY 输出通过 `broadcast` 通道分发到 WebSocket 和前端
-4. **Graceful Shutdown**: 使用 `AtomicBool` 信号通知后台任务关闭
-5. **Platform Modules**: `shared/` + `desktop/` + `mobile/` 三层架构
+1. **Multi-Project Monorepo**: `bedcode-desktop/` + `bedcode-mobile/` 独立项目，各自有 `src/` 和 `src-tauri/`
+2. **Separation of Concerns**: Composables 处理 API，stores 管理全局状态，components 只负责 UI
+3. **Async Everywhere**: Rust 用 Tokio，前端用 async/await + Tauri commands
+4. **Event-Driven**: PTY 输出通过 `broadcast` 通道分发到 WebSocket 和前端
+5. **Graceful Shutdown**: 使用 `AtomicBool` 信号通知后台任务关闭
+6. **Platform Modules**: `shared/` + `desktop/` + `mobile/` 三层架构（两端各自独立）
+7. **Plugin System**: Rust 插件 API crate + 前端插件加载器双层架构
 
 ---
 

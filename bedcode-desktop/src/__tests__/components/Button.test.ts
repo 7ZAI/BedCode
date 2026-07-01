@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Button from '@/modules/shared/components/Button.vue'
+import Button from '@/components/Button.vue'
 
 describe('Button Component', () => {
   it('should render with default props', () => {

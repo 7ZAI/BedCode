@@ -4,11 +4,11 @@ import { listen } from '@tauri-apps/api/event'
 import router from './router'
 import App from './App.vue'
 import i18n from './locales'
-import { initPlatform } from '@/modules/shared/composables/usePlatform'
-import { useSettingsStore } from '@/modules/shared/stores/settings'
-import { useI18nStore } from '@/modules/shared/stores/i18n'
-import { useWslStore } from '@/modules/desktop/stores/wsl'
-import { useToast } from '@/modules/shared/composables/useToast'
+import { initPlatform } from '@/composables/usePlatform'
+import { useSettingsStore } from '@/stores/settings'
+import { useI18nStore } from '@/stores/i18n'
+import { useWslStore } from '@/stores/wsl'
+import { useToast } from '@/composables/useToast'
 import './style.css'
 
 interface PluginSetupResult {
@@ -56,7 +56,7 @@ listen<PluginSetupResult>('plugin-setup-result', (event) => {
 app.mount('#app')
 
 // 初始化插件系统（非阻塞，失败不影响主应用）
-import { pluginLoader } from '@/modules/shared/plugin/loader'
+import { pluginLoader } from '@/plugin/loader'
 pluginLoader.loadAll().catch(e => {
   console.error('[PluginSystem] Failed to initialize:', e)
 })

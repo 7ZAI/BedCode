@@ -10,12 +10,12 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import DesktopLayout from '@/modules/desktop/components/DesktopLayout.vue'
-import { useGlobalNotifications } from '@/modules/shared/composables/useGlobalNotifications'
-import { ToastContainer } from '@/modules/shared/composables/useToast'
-import { useTheme } from '@/modules/shared/composables/useTheme'
-import { useFontSize } from '@/modules/shared/composables/useFontSize'
-import { useKeyboardShortcuts } from '@/modules/shared/composables/useKeyboardShortcuts'
+import DesktopLayout from '@/components/DesktopLayout.vue'
+import { useGlobalNotifications } from '@/composables/useGlobalNotifications'
+import { ToastContainer } from '@/composables/useToast'
+import { useTheme } from '@/composables/useTheme'
+import { useFontSize } from '@/composables/useFontSize'
+import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 
 const router = useRouter()
 

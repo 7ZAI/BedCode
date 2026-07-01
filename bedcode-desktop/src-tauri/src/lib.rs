@@ -1,26 +1,39 @@
 //! BedCode Desktop - Library Entry Point
 
-pub mod shared;
-pub mod desktop;
+// ==================== Domain Modules ====================
 
-// Re-export shared types
-pub use shared::{AppError, Result};
+pub mod auth;
+pub mod commands;
+pub mod config;
+pub mod db;
+pub mod enums;
+pub mod error;
+pub mod error_boundary;
+pub mod event;
+pub mod events;
+pub mod model;
+pub mod parser;
+pub mod plugin;
+pub mod process;
+pub mod pty;
+pub mod server;
+pub mod session;
+pub mod traits;
 
-// Re-export shared modules for testing
-pub use shared::auth;
-pub use shared::config;
-pub use shared::db;
-pub use shared::system;
+// ==================== Standalone Modules ====================
 
-// Re-export desktop modules for testing
-pub use desktop::session;
-pub use desktop::pty;
-pub use desktop::server;
-pub use desktop::plugin;
+pub mod app_context;
+pub mod event_forwarder;
+pub mod websocket_manager;
 
-use desktop::server::services::PairingService;
-use desktop::server::port_checker;
-use shared::db::Database;
+// ==================== Re-exports ====================
+
+pub use error::{AppError, Result};
+pub use config::AppConfig;
+
+// ==================== Application Setup ====================
+
+use db::Database;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -122,7 +135,7 @@ fn insert_default_quick_actions(db: &Database) -> Result<()> {
     ];
 
     for (name, content, icon, color) in default_actions {
-        let mut action = shared::db::QuickAction::new(name.to_string(), content.to_string());
+        let mut action = db::QuickAction::new(name.to_string(), content.to_string());
         action.icon = Some(icon.to_string());
         action.color = Some(color.to_string());
         db.create_quick_action(&action)?;
@@ -176,28 +189,28 @@ pub fn run() {
                 }
             }
 
-            let app_config = crate::shared::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
+            let app_config = crate::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
                 tracing::warn!("Failed to load config, using defaults: {}", e);
-                crate::shared::system::config::AppConfig::default()
+                crate::config::AppConfig::default()
             });
 
             // 初始化全局配置单例
-            crate::shared::system::config::AppConfig::init(app_config.clone());
+            crate::config::AppConfig::init(app_config.clone());
 
             let mut app_config = app_config;
 
             // Token 校验/生成：确保 plugin token 合法
-            let token_result = crate::desktop::plugin::setup::ensure_token(
+            let token_result = crate::plugin::setup::ensure_token(
                 &mut app_config,
                 &config_path,
             );
             if token_result.token_generated {
                 // 配置可能修改了 token，重新初始化全局配置
-                crate::shared::system::config::AppConfig::init(app_config.clone());
+                crate::config::AppConfig::init(app_config.clone());
             }
 
             // 清理旧版全局 hooks（迁移到项目级后不再需要全局 hooks）
-            crate::desktop::plugin::setup::cleanup_global_hooks();
+            crate::plugin::setup::cleanup_global_hooks();
 
             // 保存 resource_dir 供后续会话创建时使用
             let resource_dir = app_handle
@@ -230,7 +243,7 @@ pub fn run() {
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
-            let ws_port = match port_checker::check_and_resolve_port(&app_handle, ws_port) {
+            let ws_port = match server::port_checker::check_and_resolve_port(&app_handle, ws_port) {
                 Ok(port) => port,
                 Err(e) => {
                     tracing::error!("Port check failed: {}", e);
@@ -256,22 +269,22 @@ pub fn run() {
 
             // ==================== 创建所有全局单实例 ====================
 
-            let storage = Arc::new(desktop::session::SessionStorage::new(db.clone()));
+            let storage = Arc::new(session::SessionStorage::new(db.clone()));
             let resource_dir_arc = Arc::new(resource_dir);
-            let session_manager = Arc::new(desktop::session::SessionManager::new(storage, resource_dir_arc.clone()));
-            let config_manager = Arc::new(desktop::session::SessionConfigManager::new(db.clone()));
-            let plugin_manager = Arc::new(desktop::plugin::PluginManager::new());
+            let session_manager = Arc::new(session::SessionManager::new(storage, resource_dir_arc.clone()));
+            let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
+            let plugin_manager = Arc::new(plugin::PluginManager::new());
             let plugin_host = Arc::new(
                 tauri::async_runtime::block_on(
-                    desktop::plugin::PluginHost::new(db.clone(), &plugins_dir)
+                    plugin::PluginHost::new(db.clone(), &plugins_dir)
                 )
             );
-            let pairing_service = Arc::new(PairingService::new());
-            let qr_manager = Arc::new(crate::desktop::auth::QrTokenManager::new());
+            let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
+            let qr_manager = Arc::new(auth::QrTokenManager::new());
             let app_handle_arc = Arc::new(app_handle.clone());
 
             // 创建同步事件通道
-            let (sync_tx, _) = tokio::sync::broadcast::channel::<desktop::events::DesktopSyncEvent>(64);
+            let (sync_tx, _) = tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(64);
 
             // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
             tauri::async_runtime::block_on(async {
@@ -281,8 +294,8 @@ pub fn run() {
 
             // 创建并同步设置 PTY 输出监听器
             // 必须在 setup 返回前完成，否则会话启动时监听器可能未就绪导致输出丢失
-            let frontend_handler = Arc::new(desktop::pty::FrontendOutputHandler::new(app_handle.clone()));
-            let async_listener = Arc::new(desktop::pty::AsyncPtyOutputListener::new());
+            let frontend_handler = Arc::new(pty::FrontendOutputHandler::new(app_handle.clone()));
+            let async_listener = Arc::new(pty::AsyncPtyOutputListener::new());
             tauri::async_runtime::block_on(async {
                 async_listener.register(frontend_handler).await;
                 session_manager.set_output_listener(async_listener).await;
@@ -291,7 +304,7 @@ pub fn run() {
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
-            let ctx = desktop::app_context::AppContextBuilder::new()
+            let ctx = app_context::AppContextBuilder::new()
                 .db(db.clone())
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
@@ -314,17 +327,17 @@ pub fn run() {
 
             // ==================== 启动服务器（通过 ServerSupervisor）====================
 
-            let supervisor = desktop::server::supervisor::ServerSupervisor::global();
+            let supervisor = server::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
             let auto_start = app_config.network.auto_start;
             tauri::async_runtime::spawn(async move {
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
                 // 注册同步事件处理器
-                use crate::shared::event::global_matcher;
-                use crate::desktop::events::{DesktopSyncEvent, SyncEventHandler};
+                use crate::event::global_matcher;
+                use crate::events::{DesktopSyncEvent, SyncEventHandler};
 
-                let ws_manager = desktop::websocket_manager::WebSocketManager::global();
+                let ws_manager = websocket_manager::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 // 注册事件源
@@ -373,7 +386,7 @@ pub fn run() {
             });
 
             // 启动事件转发器：将 SessionManager 的事件转发到前端
-            let event_forwarder = desktop::EventForwarder::new(
+            let event_forwarder = event_forwarder::EventForwarder::new(
                 app_handle.clone(),
                 session_manager.clone(),
             );
@@ -403,80 +416,80 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // WSL
-            desktop::commands::wsl::list_wsl_distributions,
-            desktop::commands::wsl::is_wsl_available,
+            commands::wsl::list_wsl_distributions,
+            commands::wsl::is_wsl_available,
             // Session Config
-            desktop::commands::session_config::create_session_config,
-            desktop::commands::session_config::list_session_configs,
-            desktop::commands::session_config::get_session_config,
-            desktop::commands::session_config::delete_session_config,
-            desktop::commands::session_config::update_session_config,
+            commands::session_config::create_session_config,
+            commands::session_config::list_session_configs,
+            commands::session_config::get_session_config,
+            commands::session_config::delete_session_config,
+            commands::session_config::update_session_config,
             // Session
-            desktop::commands::session::start_session,
-            desktop::commands::session::create_session_no_start,
-            desktop::commands::session::start_existing_session,
-            desktop::commands::session::list_sessions,
-            desktop::commands::session::get_session,
-            desktop::commands::session::kill_session,
-            desktop::commands::session::delete_session,
-            desktop::commands::session::restart_session,
-            desktop::commands::session::resize_session,
-            desktop::commands::session::get_session_output_history,
+            commands::session::start_session,
+            commands::session::create_session_no_start,
+            commands::session::start_existing_session,
+            commands::session::list_sessions,
+            commands::session::get_session,
+            commands::session::kill_session,
+            commands::session::delete_session,
+            commands::session::restart_session,
+            commands::session::resize_session,
+            commands::session::get_session_output_history,
             // PTY Input
-            desktop::commands::pty_input::write_to_session,
-            desktop::commands::pty_input::send_special_key,
+            commands::pty_input::write_to_session,
+            commands::pty_input::send_special_key,
             // Pairing
-            shared::system::commands::generate_pairing_code,
-            shared::system::commands::get_current_pairing_code,
-            shared::system::commands::verify_pairing_code,
-            shared::system::commands::clear_pairing_code,
-            shared::system::commands::list_paired_devices,
-            shared::system::commands::remove_paired_device,
+            commands::system::generate_pairing_code,
+            commands::system::get_current_pairing_code,
+            commands::system::verify_pairing_code,
+            commands::system::clear_pairing_code,
+            commands::system::list_paired_devices,
+            commands::system::remove_paired_device,
             // QR Code
-            desktop::commands::qr::generate_qr_code,
-            desktop::commands::qr::clear_qr_code,
-            desktop::commands::qr::get_qr_connection_info,
-            desktop::commands::qr::get_qr_token_ttl,
-            desktop::commands::qr::set_qr_token_ttl,
+            commands::qr::generate_qr_code,
+            commands::qr::clear_qr_code,
+            commands::qr::get_qr_connection_info,
+            commands::qr::get_qr_token_ttl,
+            commands::qr::set_qr_token_ttl,
             // Quick Actions
-            desktop::commands::quick_actions::list_quick_actions,
-            desktop::commands::quick_actions::create_quick_action,
-            desktop::commands::quick_actions::update_quick_action,
-            desktop::commands::quick_actions::delete_quick_action,
-            desktop::commands::settings::get_all_db_settings,
-            desktop::commands::settings::set_db_setting,
+            commands::quick_actions::list_quick_actions,
+            commands::quick_actions::create_quick_action,
+            commands::quick_actions::update_quick_action,
+            commands::quick_actions::delete_quick_action,
+            commands::settings::get_all_db_settings,
+            commands::settings::set_db_setting,
             // Settings
-            shared::system::commands::get_app_settings,
-            shared::system::commands::save_app_settings,
+            commands::system::get_app_settings,
+            commands::system::save_app_settings,
             // Utility
-            shared::system::commands::ping,
-            shared::system::commands::get_app_version,
-            shared::system::commands::get_startup_time,
-            shared::system::commands::get_local_ip_addresses,
-            desktop::commands::devices::get_connected_devices,
+            commands::system::ping,
+            commands::system::get_app_version,
+            commands::system::get_startup_time,
+            commands::system::get_local_ip_addresses,
+            commands::devices::get_connected_devices,
             // Plugin
-            desktop::commands::plugin::plugin_list_loaded,
-            desktop::commands::plugin::plugin_get_info,
-            desktop::commands::plugin::plugin_activate,
-            desktop::commands::plugin::plugin_deactivate,
-            desktop::commands::plugin::plugin_mark_error,
-            desktop::commands::plugin::plugin_storage_get,
-            desktop::commands::plugin::plugin_storage_set,
-            desktop::commands::plugin::plugin_storage_delete,
-            desktop::commands::plugin::plugin_terminal_send_input,
-            desktop::commands::plugin::plugin_list_commands,
-            desktop::commands::plugin::plugin_list_views,
-            desktop::commands::plugin::plugin_find_file_handler,
-            desktop::commands::plugin::plugin_invoke,
-            desktop::commands::plugin::plugin_list_rust_commands,
+            commands::plugin::plugin_list_loaded,
+            commands::plugin::plugin_get_info,
+            commands::plugin::plugin_activate,
+            commands::plugin::plugin_deactivate,
+            commands::plugin::plugin_mark_error,
+            commands::plugin::plugin_storage_get,
+            commands::plugin::plugin_storage_set,
+            commands::plugin::plugin_storage_delete,
+            commands::plugin::plugin_terminal_send_input,
+            commands::plugin::plugin_list_commands,
+            commands::plugin::plugin_list_views,
+            commands::plugin::plugin_find_file_handler,
+            commands::plugin::plugin_invoke,
+            commands::plugin::plugin_list_rust_commands,
             // Server
-            desktop::commands::server::server_start,
-            desktop::commands::server::server_stop,
-            desktop::commands::server::server_restart,
-            desktop::commands::server::get_server_status,
-            desktop::commands::server::get_server_metrics,
-            desktop::commands::server::update_server_port,
-            desktop::commands::server::update_server_auto_start,
+            commands::server::server_start,
+            commands::server::server_stop,
+            commands::server::server_restart,
+            commands::server::get_server_status,
+            commands::server::get_server_metrics,
+            commands::server::update_server_port,
+            commands::server::update_server_auto_start,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

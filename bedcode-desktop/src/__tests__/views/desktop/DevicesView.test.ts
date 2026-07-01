@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import DevicesView from '@/modules/desktop/views/DevicesView.vue'
+import DevicesView from '@/views/DevicesView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 // Mock composables
-vi.mock('@/modules/shared/composables/useToast', () => ({
+vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
     success: vi.fn(),
     error: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock('@/modules/shared/composables/useToast', () => ({
   }),
 }))
 
-vi.mock('@/modules/shared/composables/useTauri', () => ({
+vi.mock('@/composables/useTauri', () => ({
   usePairing: () => ({
     generateCode: vi.fn(),
     clearCode: vi.fn(),
@@ -50,7 +50,7 @@ vi.mock('@/modules/shared/composables/useTauri', () => ({
   }),
 }))
 
-vi.mock('@/modules/shared/composables/useQrCode', () => ({
+vi.mock('@/composables/useQrCode', () => ({
   useQrCode: () => ({
     qrData: { value: null },
     remainingSeconds: { value: 0 },
@@ -69,14 +69,14 @@ vi.mock('qrcode', () => ({
 }))
 
 // Mock components
-vi.mock('@/modules/shared/components/Button.vue', () => ({
+vi.mock('@/components/Button.vue', () => ({
   default: {
     template: '<button @click="$emit(\'click\')"><slot /><slot name="icon" /></button>',
     props: ['variant', 'size', 'loading', 'disabled'],
   },
 }))
 
-vi.mock('@/modules/shared/components/Toggle.vue', () => ({
+vi.mock('@/components/Toggle.vue', () => ({
   default: {
     template: '<button @click="$emit(\'update:modelValue\', !modelValue)" :class="{ active: modelValue }"><slot /></button>',
     props: ['modelValue'],

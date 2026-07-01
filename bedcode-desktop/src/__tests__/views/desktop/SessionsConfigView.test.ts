@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { setActivePinia, createPinia } from 'pinia'
-import SessionsConfigView from '@/modules/desktop/views/SessionsConfigView.vue'
+import SessionsConfigView from '@/views/SessionsConfigView.vue'
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 // Mock composables
-vi.mock('@/modules/shared/composables/useToast', () => ({
+vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
     success: vi.fn(),
     error: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock('@/modules/shared/composables/useToast', () => ({
   }),
 }))
 
-vi.mock('@/modules/shared/composables/useTauri', () => ({
+vi.mock('@/composables/useTauri', () => ({
   useSessionConfig: () => ({
     loadConfigs: vi.fn().mockResolvedValue(undefined),
     configs: { value: [] },
@@ -38,14 +38,14 @@ vi.mock('@/modules/shared/composables/useTauri', () => ({
 }))
 
 // Mock components - must match actual file names
-vi.mock('@/modules/shared/components/Button.vue', () => ({
+vi.mock('@/components/Button.vue', () => ({
   default: {
     template: '<button @click="$emit(\'click\')"><slot /><slot name="icon" /></button>',
     props: ['variant', 'size', 'loading', 'disabled'],
   },
 }))
 
-vi.mock('@/modules/shared/components/Modal.vue', () => ({
+vi.mock('@/components/Modal.vue', () => ({
   default: {
     template: '<div v-if="modelValue" class="modal"><slot /></div>',
     props: ['modelValue', 'title', 'size'],
@@ -53,7 +53,7 @@ vi.mock('@/modules/shared/components/Modal.vue', () => ({
 }))
 
 // Mock child components with correct paths
-vi.mock('@/modules/desktop/components/SessionCard.vue', () => ({
+vi.mock('@/components/SessionCard.vue', () => ({
   default: {
     template: '<div class="session-card" @click="$emit(\'start\')"><slot /></div>',
     props: ['config'],
@@ -61,7 +61,7 @@ vi.mock('@/modules/desktop/components/SessionCard.vue', () => ({
   },
 }))
 
-vi.mock('@/modules/desktop/components/SessionForm.vue', () => ({
+vi.mock('@/components/SessionForm.vue', () => ({
   default: {
     template: '<form @submit.prevent="$emit(\'save\')"><slot /></form>',
     props: ['config'],
