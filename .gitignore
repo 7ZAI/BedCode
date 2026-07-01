@@ -75,11 +75,8 @@ temp/
 *.bak
 *.backup
 
-# Claude Code project files
-.claude/settings.json
-.claude/settings.local.json
-.claude/*.log.*
-.claude/bedcode_hook.py
+# Claude Code
+.claude/
 
 # Superpowers temporary files (brainstorm state, etc.)
 .superpowers/brainstorm/
