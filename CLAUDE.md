@@ -40,9 +40,27 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 
 ### 模块组织
 
-- **shared/**: 桌面端和移动端共享代码
-- **desktop/**: 仅桌面端使用 (PTY、WebSocket 服务器、会话管理)
-- **mobile/**: 仅移动端使用
+桌面端 Rust 模块按领域直接组织在 `src/` 下，无中间层级：
+
+- **auth/**: 认证（配对、JWT、QR Token）
+- **commands/**: Tauri invoke 命令层
+- **config.rs**: 应用配置（AppConfig）
+- **db/**: 数据库（连接、模型、操作）
+- **enums/**: 枚举类型（合并原 shared/enums + desktop/enums）
+- **error.rs**: AppError + Result
+- **error_boundary.rs**: spawn_with_error_boundary
+- **event/**: 全局事件系统（EventMatcher）
+- **events/**: 桌面端同步事件
+- **model/**: 数据模型（API DTO、Message、PTY 输出、会话事件）
+- **parser/**: 输出解析（ANSI、Markdown）
+- **plugin/**: 插件系统
+- **process.rs**: 进程工具（create_command）
+- **pty/**: PTY 管理
+- **server/**: HTTP/WS 服务器（Actix Web）
+- **session/**: 会话管理
+- **traits/**: PTY trait 定义
+
+移动端保持独立的模块结构（mobile/、shared/）。
 
 ### 模块文件组织 (重要)
 
@@ -652,7 +670,7 @@ await i18nStore.initLanguage()
 3. **Async Everywhere**: Rust 用 Tokio，前端用 async/await + Tauri commands
 4. **Event-Driven**: PTY 输出通过 `broadcast` 通道分发到 WebSocket 和前端
 5. **Graceful Shutdown**: 使用 `AtomicBool` 信号通知后台任务关闭
-6. **Platform Modules**: `shared/` + `desktop/` + `mobile/` 三层架构（两端各自独立）
+6. **Flat Module Structure**: 桌面端 Rust 模块按领域直接组织在 `src/` 下，无 `desktop/`/`shared/` 中间层
 7. **Plugin System**: Rust 插件 API crate + 前端插件加载器双层架构
 
 ---
