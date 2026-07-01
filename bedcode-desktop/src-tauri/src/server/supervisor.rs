@@ -1,19 +1,18 @@
 //! Server Supervisor
 //!
-//! 管理服务器子进程的生命周期：启动、停止、重启
-//! 通过 IPC (stdin/stdout JSON 行协议) 与子进程通信
+//! 管理服务器生命周期：启动、停止、重启
+//! Actix Web 在主进程内运行，通过 WebSocketManager 委托启动
+//! 指标采集直接调用 MetricsCollector + sysinfo，无需 IPC
 
 use std::collections::VecDeque;
-use std::io::Write;
-use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 
 use crate::error::AppError;
 use crate::Result;
 
-use super::ipc::{IpcCommand, IpcResponse};
-use super::metrics::ServerMetrics;
+use super::metrics::{MetricsCollector, ServerMetrics};
 
 /// 服务器状态
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -43,17 +42,22 @@ pub struct ServerStatusInfo {
 
 /// Supervisor 内部状态
 struct SupervisorInner {
-    child: Option<Child>,
-    /// 子进程 stdin，保留用于发送 IPC 命令
-    child_stdin: Option<ChildStdin>,
     status: ServerStatus,
     metrics: ServerMetrics,
     metrics_history: VecDeque<TimestampedMetrics>,
     port: u16,
     auto_start: bool,
+    /// 服务器启动时间，用于 uptime 计算
+    start_time: Option<std::time::Instant>,
+    /// sysinfo 采集器，用于 CPU/内存指标
+    sys: Arc<std::sync::Mutex<sysinfo::System>>,
+    /// 指标采样任务取消标志
+    metrics_task_cancel: Arc<AtomicBool>,
 }
 
-/// 服务器子进程管理器（全局单例）
+/// 服务器管理器（全局单例）
+///
+/// 委托 WebSocketManager 启动/停止 Actix Web，直接采集指标
 pub struct ServerSupervisor {
     inner: Arc<RwLock<SupervisorInner>>,
 }
@@ -64,13 +68,14 @@ impl ServerSupervisor {
         static INSTANCE: std::sync::LazyLock<ServerSupervisor> =
             std::sync::LazyLock::new(|| ServerSupervisor {
                 inner: Arc::new(RwLock::new(SupervisorInner {
-                    child: None,
-                    child_stdin: None,
                     status: ServerStatus::Stopped,
                     metrics: ServerMetrics::default(),
                     metrics_history: VecDeque::with_capacity(60),
                     port: 8765,
                     auto_start: true,
+                    start_time: None,
+                    sys: Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
+                    metrics_task_cancel: Arc::new(AtomicBool::new(false)),
                 })),
             });
         &INSTANCE
@@ -83,7 +88,7 @@ impl ServerSupervisor {
         inner.auto_start = auto_start;
     }
 
-    /// 启动服务器子进程
+    /// 启动服务器（主进程内 Actix Web）
     pub async fn start(&self, port: u16) -> Result<()> {
         {
             let inner = self.inner.read().await;
@@ -98,71 +103,57 @@ impl ServerSupervisor {
             inner.port = port;
         }
 
-        // 获取当前可执行文件路径
-        let exe_path = std::env::current_exe()
-            .map_err(|e| AppError::Internal(format!("Failed to get current exe path: {}", e)))?;
+        // 委托 WebSocketManager 启动 Actix Web
+        let ws_manager = crate::websocket_manager::WebSocketManager::global();
+        match ws_manager.start(port).await {
+            Ok(_handle) => {
+                let mut inner = self.inner.write().await;
+                inner.status = ServerStatus::Running;
+                inner.start_time = Some(std::time::Instant::now());
 
-        let mut child = Command::new(&exe_path)
-            .arg("--server-only")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| AppError::Internal(format!("Failed to spawn server process: {}", e)))?;
+                // 启动指标采样任务
+                let cancel_flag = Arc::new(AtomicBool::new(false));
+                inner.metrics_task_cancel = cancel_flag.clone();
+                let inner_arc = self.inner.clone();
+                tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag));
 
-        // 取出 stdin/stdout 句柄
-        let child_stdin = child.stdin.take();
-        let child_stdout = child.stdout.take();
-
-        {
-            let mut inner = self.inner.write().await;
-            inner.child = Some(child);
-            inner.child_stdin = child_stdin;
+                tracing::info!("Server started on port {} (in-process)", port);
+                Ok(())
+            }
+            Err(e) => {
+                let mut inner = self.inner.write().await;
+                inner.status = ServerStatus::Stopped;
+                tracing::error!("Failed to start server: {}", e);
+                Err(e)
+            }
         }
-
-        // 发送 start 命令到子进程 stdin
-        self.send_ipc_command(&IpcCommand::Start { port }).await?;
-
-        // 启动 IPC 读取循环（后台线程读取子进程 stdout）
-        if let Some(stdout) = child_stdout {
-            self.start_ipc_reader(stdout);
-        }
-
-        // 启动子进程崩溃监控
-        self.start_process_monitor();
-
-        Ok(())
     }
 
     /// 停止服务器
     pub async fn stop(&self) -> Result<()> {
-        // 尝试通过 IPC 发送优雅停机命令
-        let _ = self.send_ipc_command(&IpcCommand::Stop).await;
-
-        // 给子进程一点时间优雅退出
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        let mut inner = self.inner.write().await;
-        if inner.status != ServerStatus::Running && inner.status != ServerStatus::Starting {
-            return Err(AppError::WebSocket("Server not running".to_string()));
-        }
-
-        // 强制 kill 子进程（如果仍在运行）
-        if let Some(ref mut child) = inner.child {
-            match child.try_wait() {
-                Ok(Some(_)) => {}
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+        {
+            let inner = self.inner.read().await;
+            if inner.status != ServerStatus::Running && inner.status != ServerStatus::Starting {
+                return Err(AppError::WebSocket("Server not running".to_string()));
             }
         }
 
-        inner.child = None;
-        inner.child_stdin = None;
+        // 取消指标采样任务
+        {
+            let inner = self.inner.read().await;
+            inner.metrics_task_cancel.store(true, Ordering::Relaxed);
+        }
+
+        // 委托 WebSocketManager 停止 Actix Web
+        let ws_manager = crate::websocket_manager::WebSocketManager::global();
+        ws_manager.stop().await?;
+
+        let mut inner = self.inner.write().await;
         inner.status = ServerStatus::Stopped;
         inner.metrics = ServerMetrics::default();
         inner.metrics_history.clear();
+        inner.start_time = None;
+
         tracing::info!("Server stopped");
         Ok(())
     }
@@ -219,146 +210,64 @@ impl ServerSupervisor {
         let mut inner = self.inner.write().await;
         inner.auto_start = auto_start;
     }
-
-    /// 发送 IPC 命令到子进程 stdin
-    async fn send_ipc_command(&self, cmd: &IpcCommand) -> Result<()> {
-        let mut inner = self.inner.write().await;
-        if let Some(ref mut stdin) = inner.child_stdin {
-            if let Ok(line) = cmd.to_json_line() {
-                stdin.write_all(line.as_bytes())
-                    .map_err(|e| AppError::Internal(format!("Failed to write IPC command: {}", e)))?;
-                stdin.flush()
-                    .map_err(|e| AppError::Internal(format!("Failed to flush IPC command: {}", e)))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// 启动 IPC 读取循环（后台 std 线程读 stdout → tokio 任务更新状态）
-    fn start_ipc_reader(&self, stdout: std::process::ChildStdout) {
-        let inner_arc = self.inner.clone();
-        // 在 tokio runtime 内捕获 handle，std::thread::spawn 的线程中没有 reactor
-        let rt = tokio::runtime::Handle::current();
-
-        // 使用 std 线程读取 stdout（BufRead 是阻塞操作）
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line_str) => {
-                        let trimmed = line_str.trim().to_string();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-
-                        match IpcResponse::from_json_line(&trimmed) {
-                            Ok(response) => {
-                                let inner = inner_arc.clone();
-                                rt.spawn(async move {
-                                    handle_ipc_response(inner, response).await;
-                                });
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to parse IPC response: {} (line: {})", e, trimmed);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("IPC stdout read error: {}", e);
-                        break;
-                    }
-                }
-            }
-
-            // stdout 关闭意味着子进程退出
-            tracing::info!("IPC reader: stdout closed, child process likely exited");
-            let inner = inner_arc.clone();
-            rt.spawn(async move {
-                let mut inner = inner.write().await;
-                inner.status = ServerStatus::Stopped;
-                inner.child = None;
-                inner.child_stdin = None;
-            });
-        });
-    }
-
-    /// 启动子进程崩溃监控
-    fn start_process_monitor(&self) {
-        let inner_arc = self.inner.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-                let mut inner = inner_arc.write().await;
-                if let Some(ref mut child) = inner.child {
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            tracing::warn!("Server child process exited: {}", status);
-                            inner.status = ServerStatus::Stopped;
-                            inner.child = None;
-                            inner.child_stdin = None;
-                            break;
-                        }
-                        Ok(None) => {
-                            // 仍在运行
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to check server process: {}", e);
-                            inner.status = ServerStatus::Stopped;
-                            inner.child = None;
-                            inner.child_stdin = None;
-                            break;
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
-        });
-    }
 }
 
-/// 处理从子进程接收到的 IPC 响应
-async fn handle_ipc_response(inner: Arc<RwLock<SupervisorInner>>, response: IpcResponse) {
-    match response {
-        IpcResponse::Started { port } => {
-            let mut inner = inner.write().await;
-            inner.status = ServerStatus::Running;
-            tracing::info!("Server child process confirmed started on port {}", port);
+/// 采集当前进程的 CPU/内存占用
+fn collect_process_metrics(sys: &mut sysinfo::System) -> (f64, u64) {
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+
+    let pid = sysinfo::Pid::from(std::process::id() as usize);
+    sys.process(pid)
+        .map(|proc| (proc.cpu_usage() as f64, proc.memory()))
+        .unwrap_or((0.0, 0))
+}
+
+/// 指标采样后台任务（每 5 秒采样一次）
+async fn metrics_sampling_task(
+    inner: Arc<RwLock<SupervisorInner>>,
+    cancel: Arc<AtomicBool>,
+) {
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            tracing::debug!("Metrics sampling task cancelled");
+            break;
         }
-        IpcResponse::Stopped => {
-            let mut inner = inner.write().await;
-            inner.status = ServerStatus::Stopped;
-            inner.child = None;
-            inner.child_stdin = None;
-            tracing::info!("Server child process confirmed stopped via IPC");
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        if cancel.load(Ordering::Relaxed) {
+            break;
         }
-        IpcResponse::Heartbeat(metrics) => {
-            let mut inner = inner.write().await;
-            // 追加到指标历史
-            let entry = TimestampedMetrics {
-                timestamp_secs: metrics.uptime_secs,
-                ws_sent_rate: metrics.ws_sent_rate,
-                ws_recv_rate: metrics.ws_recv_rate,
-            };
-            inner.metrics_history.push_back(entry);
-            if inner.metrics_history.len() > 60 {
-                inner.metrics_history.pop_front();
-            }
-            inner.metrics = *metrics;
+
+        let inner_guard = inner.read().await;
+        let sys_arc = inner_guard.sys.clone();
+        drop(inner_guard);
+
+        // 异步获取连接数（WsSessionRegistry 是 async 的）
+        let connections = crate::server::ws::registry::WsSessionRegistry::global()
+            .client_count()
+            .await;
+
+        // 同步采集进程 CPU/内存
+        let (cpu_percent, memory_bytes) = {
+            let mut sys = sys_arc.lock().unwrap();
+            collect_process_metrics(&mut sys)
+        };
+
+        let collector = MetricsCollector::global();
+        let metrics = collector.sample(connections, cpu_percent, memory_bytes);
+
+        let mut inner = inner.write().await;
+        let entry = TimestampedMetrics {
+            timestamp_secs: metrics.uptime_secs,
+            ws_sent_rate: metrics.ws_sent_rate,
+            ws_recv_rate: metrics.ws_recv_rate,
+        };
+        inner.metrics_history.push_back(entry);
+        if inner.metrics_history.len() > 60 {
+            inner.metrics_history.pop_front();
         }
-        IpcResponse::Metrics(metrics) => {
-            let mut inner = inner.write().await;
-            inner.metrics = *metrics;
-        }
-        IpcResponse::Error { message } => {
-            tracing::error!("Server child process reported error: {}", message);
-            let mut inner = inner.write().await;
-            inner.status = ServerStatus::Stopped;
-            inner.child = None;
-            inner.child_stdin = None;
-        }
+        inner.metrics = metrics;
     }
 }

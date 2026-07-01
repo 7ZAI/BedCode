@@ -32,6 +32,8 @@ struct WsManagerInner {
     port: RwLock<Option<u16>>,
     /// 是否已初始化
     initialized: RwLock<bool>,
+    /// Actix Web 服务器句柄，用于优雅停机
+    server_handle: RwLock<Option<actix_web::dev::ServerHandle>>,
 }
 
 impl WsManagerInner {
@@ -39,6 +41,7 @@ impl WsManagerInner {
         Self {
             port: RwLock::new(None),
             initialized: RwLock::new(false),
+            server_handle: RwLock::new(None),
         }
     }
 }
@@ -71,7 +74,9 @@ impl WebSocketManager {
     }
 
     /// 启动 Actix Web 服务器（HTTP + WS 统一端口）
-    pub async fn start(&self, port: u16) -> Result<()> {
+    ///
+    /// 在独立线程中启动 Actix runtime，返回 `ServerHandle` 供调用方保存用于优雅停机
+    pub async fn start(&self, port: u16) -> Result<actix_web::dev::ServerHandle> {
         {
             let initialized = self.inner.initialized.read().await;
             if !*initialized {
@@ -88,32 +93,63 @@ impl WebSocketManager {
             }
         }
 
+        // 使用 oneshot 通道从 Actix 线程传回 ServerHandle
+        let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<std::io::Result<actix_web::dev::ServerHandle>>();
+
         std::thread::spawn(move || {
             let rt = actix_rt::Runtime::new().expect("Failed to create Actix runtime");
             rt.block_on(async move {
-                if let Err(e) = crate::server::app::start_http_server(port).await {
-                    tracing::error!("Actix Web server error: {}", e);
-                }
+                let result = crate::server::app::start_http_server(port).await;
+                let _ = handle_tx.send(result);
             });
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // 等待 Actix 服务器启动并获取 handle
+        let handle = handle_rx.await
+            .map_err(|_| AppError::WebSocket("Actix server thread panicked before returning handle".to_string()))?
+            .map_err(|e| AppError::WebSocket(format!("Failed to start Actix server: {}", e)))?;
 
         {
             let mut port_lock = self.inner.port.write().await;
             *port_lock = Some(port);
         }
 
+        {
+            let mut handle_lock = self.inner.server_handle.write().await;
+            *handle_lock = Some(handle.clone());
+        }
+
         tracing::info!("Actix Web server (HTTP + WS) started on port {}", port);
-        Ok(())
+        Ok(handle)
     }
 
     /// 停止服务器
+    ///
+    /// 调用 `ServerHandle::stop(true)` 优雅停机，并清理所有 WS 客户端连接
     pub async fn stop(&self) -> Result<()> {
+        // 优雅停机
+        {
+            let mut handle_lock = self.inner.server_handle.write().await;
+            if let Some(handle) = handle_lock.take() {
+                handle.stop(true).await;
+                tracing::info!("Actix Web server stopped via ServerHandle");
+            }
+        }
+
+        // 清理所有 WS 客户端连接
+        let registry = WsSessionRegistry::global();
+        let clients = registry.list_clients().await;
+        for client in &clients {
+            let global_manager = GlobalOutputManager::global();
+            global_manager.unsubscribe_all_for_client(&client.client_id).await;
+        }
+        registry.clear_all().await;
+
         {
             let mut port_lock = self.inner.port.write().await;
             *port_lock = None;
         }
+
         tracing::info!("WebSocketManager stopped");
         Ok(())
     }

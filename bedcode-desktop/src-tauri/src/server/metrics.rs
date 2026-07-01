@@ -1,6 +1,7 @@
 //! Server Metrics
 //!
-//! 服务器性能指标数据结构，由子进程采集并通过 IPC 心跳上报到主进程
+//! 服务器性能指标数据结构，由主进程内 MetricsCollector 采集
+//! Supervisor 定时采样并通过 Tauri command 提供给前端
 
 use serde::{Deserialize, Serialize};
 
@@ -46,10 +47,10 @@ impl Default for ServerMetrics {
     }
 }
 
-/// 全局指标采集器 — 在服务器子进程内使用
+/// 全局指标采集器 — 主进程内使用
 ///
 /// Actix Web 中间件和 WS actor 通过此单例递增计数器，
-/// 心跳任务定期读取并计算速率后上报主进程
+/// Supervisor 定时读取并计算速率
 pub struct MetricsCollector {
     inner: std::sync::Arc<MetricsInner>,
 }

@@ -266,7 +266,6 @@ onUnmounted(() => {
 
 :deep(.xterm-viewport) {
   border-radius: 0;
-  overflow-y: auto !important;
   overflow-x: hidden;
 }
 

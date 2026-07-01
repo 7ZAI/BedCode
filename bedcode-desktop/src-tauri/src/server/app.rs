@@ -60,10 +60,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 }
 
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）
-pub async fn start_http_server(port: u16) -> std::io::Result<()> {
+///
+/// 返回 `ServerHandle` 用于优雅停机
+pub async fn start_http_server(port: u16) -> std::io::Result<actix_web::dev::ServerHandle> {
     tracing::info!("Starting Actix Web server (HTTP + WS) on port {}", port);
 
-    HttpServer::new(|| {
+    let server = HttpServer::new(|| {
         let cors = Cors::default()
             .allow_any_origin()
             .allow_any_method()
@@ -76,6 +78,11 @@ pub async fn start_http_server(port: u16) -> std::io::Result<()> {
             .configure(configure_routes)
     })
     .bind(format!("0.0.0.0:{}", port))?
-    .run()
-    .await
+    .run();
+
+    // 在 await 之前获取 handle，用于后续优雅停机
+    let handle = server.handle();
+    tokio::spawn(server);
+
+    Ok(handle)
 }

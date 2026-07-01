@@ -267,6 +267,23 @@ impl WsSessionRegistry {
         }
         None
     }
+
+    /// 清空所有注册信息（服务器停机时调用）
+    pub async fn clear_all(&self) {
+        let count = {
+            let mut sessions = self.sessions.write().await;
+            let count = sessions.len();
+            sessions.clear();
+            count
+        };
+        {
+            let mut addr_map = self.addr_to_client_id.write().await;
+            addr_map.clear();
+        }
+        if count > 0 {
+            tracing::info!("[WsSessionRegistry] Cleared {} sessions", count);
+        }
+    }
 }
 
 /// 客户端摘要（与 websocket_manager 中的定义对齐）

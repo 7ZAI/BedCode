@@ -419,24 +419,24 @@ function refreshTerminal() {
 }
 
 function scrollToBottom() {
-  if (!terminal) return
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.scrollTop = viewport.scrollHeight
-  }
+  // 使用 xterm.js 官方 API，同步更新 DOM viewport 和 WebGL Canvas 偏移，避免重影
+  terminal?.scrollToBottom()
 }
 
 function handleScroll() {
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (!viewport) return
-
-  const isAtBottom = viewport.scrollHeight - viewport.scrollTop <= viewport.clientHeight + 50
-  isUserScrolling = !isAtBottom
+  // 使用 xterm.js buffer 判断是否在底部，比手动计算 scrollTop 更准确
+  if (!terminal) return
+  const buffer = terminal.buffer.active
+  const viewportTop = terminal.buffer.active.viewportY
+  const viewportBottom = viewportTop + terminal.rows
+  const totalLines = buffer.length
+  isUserScrolling = viewportBottom < totalLines - 1
 
   if (scrollTimeout) clearTimeout(scrollTimeout)
+  // 延长到 1.5s，避免用户刚停手就被拉回底部
   scrollTimeout = setTimeout(() => {
     isUserScrolling = false
-  }, 300)
+  }, 1500)
 }
 
 function clearTerminal() {
@@ -598,7 +598,6 @@ onUnmounted(() => {
 
 :deep(.xterm-viewport) {
   border-radius: 0;
-  overflow-y: auto !important;
   overflow-x: hidden;
 }
 
