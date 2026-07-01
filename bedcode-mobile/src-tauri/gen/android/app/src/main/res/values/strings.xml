@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">BedCode</string>
-    <string name="main_activity_title">BedCode</string>
+    <string name="app_name">"BedCode Mobile"</string>
+    <string name="main_activity_title">"BedCode Mobile"</string>
 </resources>

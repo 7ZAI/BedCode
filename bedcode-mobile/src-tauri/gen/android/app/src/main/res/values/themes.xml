@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Theme.bedcode" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.bedcode_mobile" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- 状态栏透明，让内容延伸到状态栏下方 -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <!-- 导航栏透明 -->

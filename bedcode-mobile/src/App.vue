@@ -9,13 +9,13 @@
 
 <script setup lang="ts">
 import { provide, onMounted, onUnmounted } from 'vue'
-import MobileLayout from '@/modules/mobile/components/MobileLayout.vue'
-import { usePlatform } from '@/modules/shared/composables/usePlatform'
-import { useOrientation } from '@/modules/mobile/composables/useOrientation'
-import { useEdgeToEdge } from '@/modules/mobile/composables/useEdgeToEdge'
-import { ToastContainer } from '@/modules/shared/composables/useToast'
-import { useTheme } from '@/modules/shared/composables/useTheme'
-import { useFontSize } from '@/modules/shared/composables/useFontSize'
+import MobileLayout from '@/components/MobileLayout.vue'
+import { usePlatform } from '@/composables/usePlatform'
+import { useOrientation } from '@/composables/useOrientation'
+import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
+import { ToastContainer } from '@/composables/useToast'
+import { useTheme } from '@/composables/useTheme'
+import { useFontSize } from '@/composables/useFontSize'
 
 const { platformInfo } = usePlatform()
 const { isLandscape, orientation } = useOrientation()
