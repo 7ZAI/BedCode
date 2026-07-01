@@ -266,5 +266,8 @@ export function useHttpApi() {
     httpGetFileDiff,
     // Plugin
     httpSetSessionMode,
+    // Git
+    httpGetGitBranches,
+    httpGitCheckout,
   }
 }

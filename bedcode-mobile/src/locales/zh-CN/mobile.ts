@@ -190,6 +190,12 @@ export default {
       close: '关闭',
       fetchTreeFailed: '获取文件树失败',
       fetchDiffTreeFailed: '获取 Diff 文件树失败',
+      branch: '分支',
+      noGit: '无 Git',
+      switchBranch: '切换分支',
+      switchSuccess: '已切换到 {branch}',
+      switchFailed: '切换分支失败',
+      fetchBranchesFailed: '获取分支失败',
     },
     codeViewer: {
       title: '代码查看',

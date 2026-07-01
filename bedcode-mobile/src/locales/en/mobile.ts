@@ -190,6 +190,12 @@ export default {
       close: 'Close',
       fetchTreeFailed: 'Failed to fetch file tree',
       fetchDiffTreeFailed: 'Failed to fetch diff tree',
+      branch: 'Branch',
+      noGit: 'No Git',
+      switchBranch: 'Switch Branch',
+      switchSuccess: 'Switched to {branch}',
+      switchFailed: 'Failed to switch branch',
+      fetchBranchesFailed: 'Failed to fetch branches',
     },
     codeViewer: {
       title: 'Code Viewer',

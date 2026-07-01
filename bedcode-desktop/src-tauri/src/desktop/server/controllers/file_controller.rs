@@ -21,7 +21,7 @@ const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
 ///
 /// 优先按 session_id 查找（通过 SessionManager → ConfigManager），失败后按 config_id 查找
 /// 这样即使会话未运行，也可以通过 config_id 直接浏览文件
-async fn resolve_working_dir(id: &str, ctx: &AppContext) -> crate::Result<String> {
+pub async fn resolve_working_dir(id: &str, ctx: &AppContext) -> crate::Result<String> {
     // 优先按 session_id 查找
     match ctx
         .config_manager()

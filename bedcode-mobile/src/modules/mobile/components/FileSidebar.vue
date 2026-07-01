@@ -8,7 +8,47 @@
     ></div>
     <!-- 工具栏 -->
     <div class="sidebar-header">
-      <span class="sidebar-title">{{ isDiffMode ? 'Diff' : t('mobile.file.title') }}</span>
+      <div class="branch-selector" @click.stop="showBranchDropdown = !showBranchDropdown">
+        <template v-if="!isGitRepo">
+          <span class="branch-label branch-label--no-git">{{ t('mobile.file.noGit') }}</span>
+        </template>
+        <template v-else-if="branchesLoading">
+          <svg class="branch-spinner" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </template>
+        <template v-else>
+          <svg class="branch-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span class="branch-label" :class="{ 'branch-label--switching': branchSwitching }">{{ currentBranch || t('mobile.file.branch') }}</span>
+          <svg class="branch-chevron" :class="{ open: showBranchDropdown }" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </template>
+
+        <!-- 分支下拉列表 -->
+        <transition name="dropdown">
+          <div v-if="showBranchDropdown && branches.length > 0" class="branch-dropdown" @click.stop>
+            <div class="branch-dropdown-title">{{ t('mobile.file.switchBranch') }}</div>
+            <div class="branch-dropdown-list">
+              <button
+                v-for="b in branches"
+                :key="b"
+                class="branch-dropdown-item"
+                :class="{ active: b === currentBranch }"
+                :disabled="b === currentBranch || branchSwitching"
+                @click="switchBranch(b)"
+              >
+                <span class="branch-dropdown-item-name">{{ b }}</span>
+                <svg v-if="b === currentBranch" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </transition>
+      </div>
       <div class="sidebar-actions">
         <button class="action-btn" :title="t('mobile.file.refresh')" @click="handleRefresh">
           <svg
@@ -156,10 +196,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, toRef } from 'vue'
+import { ref, computed, toRef, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useHttpApi } from '../composables/useHttpApi'
-import type { FileDiffLine } from '../composables/useHttpApi'
+import { useHttpApi, type GitBranchesData, type FileDiffLine } from '../composables/useHttpApi'
 import { useOrientation } from '@/modules/mobile/composables/useOrientation'
 import { useFileTree, type SidebarSettings, FONT_SIZE_MIN, FONT_SIZE_MAX } from '@/modules/mobile/composables/useFileTree'
 import FileTreeItem from './FileTreeItem.vue'
@@ -194,6 +233,14 @@ const fileContent = ref('')
 const fileLoading = ref(false)
 const fileError = ref<string | null>(null)
 const diffLines = ref<FileDiffLine[] | undefined>(undefined)
+
+// ==================== Git Branch Selector ====================
+const branches = ref<string[]>([])
+const currentBranch = ref<string | null>(null)
+const isGitRepo = ref(true)
+const branchesLoading = ref(false)
+const branchSwitching = ref(false)
+const showBranchDropdown = ref(false)
 
 // 侧边栏宽度（像素），null 表示使用默认百分比
 const sidebarWidth = ref<number | null>(null)
@@ -269,13 +316,62 @@ const sidebarStyle = computed(() => {
 
 async function handleRefresh() {
   isRefreshing.value = true
-  await refresh()
+  await Promise.all([refresh(), loadBranches()])
   if (error.value) {
     toast.error(error.value)
   }
   setTimeout(() => {
     isRefreshing.value = false
   }, 500)
+}
+
+async function loadBranches() {
+  const { httpGetGitBranches } = useHttpApi()
+  branchesLoading.value = true
+  try {
+    const result = await httpGetGitBranches(props.sessionId)
+    if (result.code !== 0 || !result.data) {
+      throw new Error(result.message || 'mobile.file.fetchBranchesFailed')
+    }
+    const data = result.data as GitBranchesData
+    isGitRepo.value = data.isGitRepo
+    currentBranch.value = data.currentBranch
+    branches.value = data.branches
+  } catch {
+    isGitRepo.value = false
+    currentBranch.value = null
+    branches.value = []
+  } finally {
+    branchesLoading.value = false
+  }
+}
+
+async function switchBranch(branch: string) {
+  if (branch === currentBranch.value || branchSwitching.value) return
+  const { httpGitCheckout } = useHttpApi()
+  branchSwitching.value = true
+  showBranchDropdown.value = false
+  try {
+    const result = await httpGitCheckout(props.sessionId, branch)
+    if (result.code !== 0 || !result.data) {
+      throw new Error(result.message || 'mobile.file.switchFailed')
+    }
+    currentBranch.value = result.data.branch
+    toast.success(t('mobile.file.switchSuccess', { branch }))
+    // 切换分支后自动刷新文件树
+    await refresh()
+  } catch {
+    toast.error(t('mobile.file.switchFailed'))
+  } finally {
+    branchSwitching.value = false
+  }
+}
+
+function onBranchClickOutside(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest('.branch-selector')) {
+    showBranchDropdown.value = false
+  }
 }
 
 async function handleDiff() {
@@ -398,6 +494,22 @@ async function handleLongPress(name: string, path: string) {
     toast.error(t('mobile.file.copyFailed'))
   }
 }
+
+// ==================== Branch Lifecycle ====================
+
+watch(toRef(props, 'sessionId'), (newId) => {
+  if (newId) {
+    loadBranches()
+  }
+}, { immediate: true })
+
+onMounted(() => {
+  document.addEventListener('click', onBranchClickOutside)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onBranchClickOutside)
+})
 </script>
 
 <style scoped>
@@ -447,12 +559,140 @@ async function handleLongPress(name: string, path: string) {
   flex-shrink: 0;
 }
 
-.sidebar-title {
+/* Branch Selector */
+.branch-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  position: relative;
+  transition: background-color 0.2s ease;
+  max-width: 160px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.branch-selector:hover {
+  background: var(--mobile-bg-elevated);
+}
+
+.branch-selector:active {
+  opacity: 0.8;
+}
+
+.branch-icon {
+  flex-shrink: 0;
+  color: var(--mobile-text-muted);
+}
+
+.branch-label {
   font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--mobile-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.branch-label--no-git {
+  color: var(--mobile-text-disabled);
+  font-weight: 400;
+  cursor: default;
+}
+
+.branch-label--switching {
+  opacity: 0.5;
+}
+
+.branch-chevron {
+  flex-shrink: 0;
+  color: var(--mobile-text-muted);
+  transition: transform 0.2s ease;
+}
+
+.branch-chevron.open {
+  transform: rotate(180deg);
+}
+
+.branch-spinner {
+  animation: spin 1s linear infinite;
+  color: var(--mobile-text-muted);
+}
+
+.branch-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 240px;
+  background: var(--mobile-bg-tertiary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.5rem;
+  z-index: 40;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.branch-dropdown-title {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   color: var(--mobile-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--mobile-border);
+  flex-shrink: 0;
+}
+
+.branch-dropdown-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.branch-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  color: var(--mobile-text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+.branch-dropdown-item:hover {
+  background: var(--mobile-bg-elevated);
+}
+
+.branch-dropdown-item:active {
+  background: var(--mobile-bg-primary);
+}
+
+.branch-dropdown-item.active {
+  color: var(--mobile-accent);
+  font-weight: 500;
+}
+
+.branch-dropdown-item:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+
+.branch-dropdown-item-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-actions {
