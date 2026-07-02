@@ -249,9 +249,11 @@ let modalObserver: MutationObserver | null = null
 
 function checkModalsOpen() {
   // Teleport 弹窗使用 v-if 控制显隐，存在即表示弹窗打开
-  // .fixed.inset-0 匹配 BottomSheet、Modal 等标准弹窗
+  // 排除 .mobile-loading-overlay（加载遮罩不应阻止滑动）
   // .confirm-modal-overlay 匹配 SettingsView 等自定义弹窗
-  const overlays = document.body.querySelectorAll('.fixed.inset-0, .confirm-modal-overlay')
+  const overlays = document.body.querySelectorAll(
+    '.fixed.inset-0:not(.mobile-loading-overlay), .confirm-modal-overlay'
+  )
   isModalOpen.value = overlays.length > 0
 }
 

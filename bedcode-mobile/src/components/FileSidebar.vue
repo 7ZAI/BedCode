@@ -392,7 +392,10 @@ async function switchBranch(branch: string) {
 /** 确认切换分支 */
 async function confirmSwitchBranch() {
   showBranchConfirm.value = false
-  await doSwitchBranch(pendingBranch.value)
+  if (pendingBranch.value) {
+    await doSwitchBranch(pendingBranch.value)
+  }
+  pendingBranch.value = ''
 }
 
 /** 执行分支切换 */

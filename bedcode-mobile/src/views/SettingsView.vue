@@ -441,12 +441,16 @@ async function clearData() {
   showConfirmDialog(
     t('settings.actions.clearDataConfirm'),
     async () => {
-      // 1. 断开当前连接
-      if (isConnected.value) {
-        await connection.disconnect()
+      try {
+        // 1. 断开当前连接
+        if (isConnected.value) {
+          await connection.disconnect()
+        }
+        // 停止前台服务
+        await stopService()
+      } catch (e) {
+        console.warn('[Settings] Disconnect/stopService failed, continuing cleanup:', e)
       }
-      // 停止前台服务
-      await stopService()
 
       // 2. 清除预设任务
       clearAllTasks()
@@ -489,12 +493,17 @@ function cancelConfirm() {
 }
 
 async function executeConfirm() {
-  if (confirmCallback) {
-    await confirmCallback()
-  }
+  const callback = confirmCallback
+  confirmCallback = null
   showConfirm.value = false
   confirmMessage.value = ''
-  confirmCallback = null
+  if (callback) {
+    try {
+      await callback()
+    } catch (e) {
+      console.error('[Settings] Confirm action failed:', e)
+    }
+  }
 }
 
 // 系统浏览器打开链接的确认弹窗状态

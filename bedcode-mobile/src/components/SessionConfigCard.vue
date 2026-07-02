@@ -160,6 +160,7 @@ const runningCount = computed(() => runningSessions.value.length)
 .slide-enter-active,
 .slide-leave-active {
   transition: transform 0.2s ease, opacity 0.2s ease;
+  transform-origin: top;
 }
 
 .slide-enter-from,
@@ -172,10 +173,5 @@ const runningCount = computed(() => runningSessions.value.length)
 .slide-leave-from {
   transform: scaleY(1);
   opacity: 1;
-}
-
-.slide-enter-active,
-.slide-leave-active {
-  transform-origin: top;
 }
 </style>

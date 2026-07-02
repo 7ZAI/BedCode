@@ -371,6 +371,8 @@ const connectionStatusText = computed(() => {
     case 'paired':
       return t('mobile.connection.authenticated')
     case 'error':
+      // connectionError 可能是 i18n key（如 'mobile.connection.unreachable'）或原始错误字符串
+      // t() 对未知 key 返回原字符串，因此两种情况都能正常显示
       return connectionError.value ? t(connectionError.value) : t('mobile.connection.connectFailed')
     default:
       return connection.connectionStatus.value === 'disconnected' ? t('mobile.connection.notConnected') : ''
