@@ -9,6 +9,7 @@ import type { PluginInfo, PluginModule, PluginContext } from './types'
 import * as pluginCmds from './commands'
 import { createPluginContext } from './context'
 import { clearPluginEvents } from './events'
+import { getPluginRegistry } from './registry'
 
 /** 已激活的插件实例 */
 interface ActivePlugin {
@@ -68,6 +69,8 @@ class PluginLoaderClass {
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
 
       this.plugins.set(manifest.id, { manifest, module, context })
+      // 将 context 存入 registry，供 PluginViewHost provide 给组件树
+      getPluginRegistry().setContext(manifest.id, context)
       console.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
@@ -106,6 +109,9 @@ class PluginLoaderClass {
 
     // 清理事件监听
     clearPluginEvents(pluginId)
+
+    // 清理注册表中的 context 和 UI 注册
+    getPluginRegistry().clearPlugin(pluginId)
 
     // 调用插件的 deactivate
     if (plugin.module.deactivate) {
@@ -170,6 +176,8 @@ class PluginLoaderClass {
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
 
       this.plugins.set(manifest.id, { manifest, module, context })
+      // 将 context 存入 registry，供 PluginViewHost provide 给组件树
+      getPluginRegistry().setContext(manifest.id, context)
       console.log(`[PluginLoader] Plugin activated: ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to activate ${manifest.id}:`, e)

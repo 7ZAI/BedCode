@@ -130,6 +130,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             init_logging(app.handle())?;
             app.manage(app_start);
@@ -167,6 +169,9 @@ pub fn run() {
 
             // 初始化全局配置单例
             crate::system::config::AppConfig::init(app_config.clone());
+
+            // 同步 PowerManager 开关状态到配置值
+            crate::system::power::power_manager().set_enabled(app_config.network.prevent_sleep);
 
             let mut app_config = app_config;
 
@@ -245,15 +250,16 @@ pub fn run() {
             let session_manager = Arc::new(session::SessionManager::new(storage, resource_dir_arc.clone()));
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
             let plugin_manager = Arc::new(plugin::PluginManager::new());
+            // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
+            let app_handle_arc = Arc::new(app_handle.clone());
             let plugin_host = Arc::new(
                 tauri::async_runtime::block_on(
-                    plugin::PluginHost::new(db.clone(), &plugins_dir)
+                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), app_handle_arc.clone())
                 )
             );
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
-            let app_handle_arc = Arc::new(app_handle.clone());
 
             // 创建同步事件通道
             let (sync_tx, _) = tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(64);

@@ -69,7 +69,7 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import type { ApiProvider, ProviderPreset } from '../types'
-import { PROVIDER_PRESETS } from '../services/openaiClient'
+import { PROVIDER_PRESETS } from '../types'
 
 const props = defineProps<{
   providers: ApiProvider[]

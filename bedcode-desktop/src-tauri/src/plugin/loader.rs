@@ -2,7 +2,7 @@
 //!
 //! 扫描插件目录，解析所有 plugin.json
 //! 验证必填字段和权限合法性，返回已加载的插件列表
-//! 仅处理 TS-only 插件（文件扫描），Rust 插件由 PluginHost 通过 inventory 收集
+//! 仅处理文件扫描加载，Rust+TS cdylib 插件由 PluginHost 通过 CdylibLoader 加载
 
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
@@ -52,7 +52,7 @@ impl PluginLoader {
                     let extension_path = path.to_string_lossy().to_string();
 
                     // TS-only 插件强制设置 plugin_type
-                    let mut manifest = manifest;
+                    let manifest = manifest;
                     if manifest.plugin_type == PluginType::TsOnly && !manifest.main.is_empty() {
                         // 保留 manifest 中的 plugin_type，若未指定则默认 TsOnly
                     }
@@ -63,13 +63,20 @@ impl PluginLoader {
                         &manifest.permissions,
                     );
 
+                    // 根据 rust_library 字段判断来源：有 cdylib 则为 Cdylib，否则为 FileScan
+                    let source = if !manifest.rust_library.is_empty() {
+                        PluginSource::Cdylib
+                    } else {
+                        PluginSource::FileScan
+                    };
+
                     let loaded = LoadedPlugin {
                         manifest,
                         state: PluginState::Loaded,
                         granted_permissions: granted,
                         extension_path,
                         activated_at: None,
-                        source: PluginSource::FileScan,
+                        source,
                     };
 
                     tracing::info!("Plugin loaded: {} v{}", loaded.manifest.id, loaded.manifest.version);

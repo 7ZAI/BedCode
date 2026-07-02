@@ -4,7 +4,7 @@
  * 前端扩展点注册表 — 管理插件注册的 Vue 组件、命令处理器和文件处理器
  */
 
-import type { Disposable } from './types'
+import type { Disposable, PluginContext } from './types'
 import { ref, type Ref } from 'vue'
 
 /** 注册的视图组件 */
@@ -68,6 +68,8 @@ class PluginRegistryClass {
   private terminalToolbarItemsMap = new Map<string, RegisteredTerminalToolbarItem>()
   private titleBarItemsMap = new Map<string, RegisteredTitleBarItem>()
   private fileHandlers = new Map<string, RegisteredFileHandler>()
+  /** 插件上下文映射，供 PluginViewHost provide 给组件树 */
+  private contexts = new Map<string, PluginContext>()
 
   /** 响应式数据供 Vue 组件使用 */
   readonly sidebarViews: Ref<RegisteredView[]> = ref([])
@@ -210,8 +212,20 @@ class PluginRegistryClass {
     return undefined
   }
 
+  /** 存储插件上下文（激活时调用） */
+  setContext(pluginId: string, context: PluginContext): void {
+    this.contexts.set(pluginId, context)
+  }
+
+  /** 获取插件上下文（PluginViewHost 使用） */
+  getContext(pluginId: string): PluginContext | undefined {
+    return this.contexts.get(pluginId)
+  }
+
   /** 清理插件的所有注册 */
   clearPlugin(pluginId: string): void {
+    this.contexts.delete(pluginId)
+
     for (const key of [...this.views.keys()]) {
       if (key.startsWith(`${pluginId}:`)) {
         this.views.delete(key)

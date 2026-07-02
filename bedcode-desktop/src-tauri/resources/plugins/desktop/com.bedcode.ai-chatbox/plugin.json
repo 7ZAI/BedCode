@@ -6,8 +6,20 @@
   "author": "BedCode",
   "main": "index.js",
   "sandbox": "inline",
-  "permissions": ["ui:sidebar", "ui:input", "storage", "terminal:input", "session:read"],
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_ai_chatbox.dll",
+  "permissions": ["ui:sidebar", "ui:input", "storage", "terminal:input", "terminal:output", "session:read"],
   "contributes": {
+    "commands": [
+      { "id": "ai-chatbox.chat-stream", "title": "Chat Stream" },
+      { "id": "ai-chatbox.chat-complete", "title": "Chat Complete" },
+      { "id": "ai-chatbox.optimize-prompt", "title": "Optimize Prompt" },
+      { "id": "ai-chatbox.list-conversations", "title": "List Conversations" },
+      { "id": "ai-chatbox.get-messages", "title": "Get Messages" },
+      { "id": "ai-chatbox.save-conversation", "title": "Save Conversation" },
+      { "id": "ai-chatbox.save-message", "title": "Save Message" },
+      { "id": "ai-chatbox.delete-conversation", "title": "Delete Conversation" }
+    ],
     "views": [
       {
         "id": "ai-chatbox.sidebar",
@@ -16,6 +28,10 @@
         "component": "ChatView"
       }
     ],
+    "terminal": {
+      "inputHandlers": ["on_terminal_input"],
+      "outputParsers": []
+    },
     "configuration": {
       "title": "AI Chatbox Settings",
       "properties": {

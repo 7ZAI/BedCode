@@ -18,6 +18,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
@@ -60,6 +62,9 @@ notify = "6"
 # Regex for parsing
 regex = "1"
 
+# Dynamic library loading for cdylib plugins
+libloading = "0.8"
+
 # mDNS service discovery
 mdns-sd = "0.20"
 
@@ -73,8 +78,8 @@ sysinfo = "0.33"
 bedcode-plugin-api = { path = "bedcode-plugin-api" }
 inventory = "0.3"
 
-# Built-in plugins
-bedcode-plugin-ai-chatbox = { path = "plugins/ai-chatbox" }
+# Power management (prevent system sleep)
+nosleep = "0.2"
 
 # Async trait for dyn compatibility
 async-trait = "0.1"

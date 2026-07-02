@@ -2,18 +2,14 @@
  * AI 聊天核心逻辑
  *
  * 发送消息、流式接收、对话管理、历史持久化
+ * 通过 PluginContext.commands 调用 Rust 后端命令，不再直接调用 openaiClient
  */
 import { ref, computed } from 'vue'
 import type { ChatMessage, ConversationMeta, ApiProvider } from '../types'
-import { chatStream } from '../services/openaiClient'
+import type { PluginContext } from '../../../plugin/types'
 
 /** 对话管理 composable */
-export function useAiChat(
-  storageGet: (key: string) => Promise<any>,
-  storageSet: (key: string, value: any) => Promise<void>,
-  storageDelete: (key: string) => Promise<void>,
-  getActiveProvider: () => ApiProvider | undefined,
-) {
+export function useAiChat(context: PluginContext) {
   const conversations = ref<ConversationMeta[]>([])
   const currentConvId = ref<string>('')
   const messages = ref<ChatMessage[]>([])
@@ -34,14 +30,13 @@ export function useAiChat(
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   }
 
-  /** 加载对话列表 */
+  /** 加载对话列表 — 通过 Rust 后端命令 */
   async function loadConversations(): Promise<void> {
     loadingHistory.value = true
     try {
-      const saved = await storageGet('conversations')
-      if (saved) {
-        const parsed = typeof saved === 'string' ? JSON.parse(saved) : saved
-        conversations.value = Array.isArray(parsed) ? parsed : []
+      const result = await context.commands.execute('ai-chatbox.list-conversations', {})
+      if (result && Array.isArray(result)) {
+        conversations.value = result
       }
     } catch (e) {
       console.error('[AI Chatbox] Failed to load conversations:', e)
@@ -50,13 +45,12 @@ export function useAiChat(
     }
   }
 
-  /** 加载对话消息 */
+  /** 加载对话消息 — 通过 Rust 后端命令 */
   async function loadMessages(convId: string): Promise<void> {
     try {
-      const saved = await storageGet(`conv:${convId}`)
-      if (saved) {
-        const parsed = typeof saved === 'string' ? JSON.parse(saved) : saved
-        messages.value = Array.isArray(parsed) ? parsed : []
+      const result = await context.commands.execute('ai-chatbox.get-messages', { conversationId: convId })
+      if (result && Array.isArray(result)) {
+        messages.value = result
       } else {
         messages.value = []
       }
@@ -67,22 +61,21 @@ export function useAiChat(
     currentConvId.value = convId
   }
 
-  /** 保存对话列表 */
-  async function saveConversations(): Promise<void> {
+  /** 保存对话 — 通过 Rust 后端命令 */
+  async function saveConversation(conv: ConversationMeta): Promise<void> {
     try {
-      await storageSet('conversations', JSON.stringify(conversations.value))
+      await context.commands.execute('ai-chatbox.save-conversation', { conversation: conv })
     } catch (e) {
-      console.error('[AI Chatbox] Failed to save conversations:', e)
+      console.error('[AI Chatbox] Failed to save conversation:', e)
     }
   }
 
-  /** 保存当前对话消息 */
-  async function saveMessages(): Promise<void> {
-    if (!currentConvId.value) return
+  /** 保存消息 — 通过 Rust 后端命令 */
+  async function saveMessage(conversationId: string, role: string, content: string, timestamp: string): Promise<void> {
     try {
-      await storageSet(`conv:${currentConvId.value}`, JSON.stringify(messages.value))
+      await context.commands.execute('ai-chatbox.save-message', { conversationId, role, content, timestamp })
     } catch (e) {
-      console.error('[AI Chatbox] Failed to save messages:', e)
+      console.error('[AI Chatbox] Failed to save message:', e)
     }
   }
 
@@ -96,28 +89,37 @@ export function useAiChat(
       providerName,
     }
     conversations.value.unshift(conv)
-    await saveConversations()
+    await saveConversation(conv)
     await loadMessages(conv.id)
   }
 
-  /** 删除对话 */
+  /** 删除对话 — 通过 Rust 后端命令 */
   async function deleteConversation(convId: string): Promise<void> {
     try {
-      await storageDelete(`conv:${convId}`)
+      await context.commands.execute('ai-chatbox.delete-conversation', { conversationId: convId })
     } catch (e) {
       console.error('[AI Chatbox] Failed to delete conversation:', e)
     }
     conversations.value = conversations.value.filter(c => c.id !== convId)
-    await saveConversations()
     if (currentConvId.value === convId) {
       currentConvId.value = ''
       messages.value = []
     }
   }
 
-  /** 发送消息 */
+  /** 发送消息 — 通过 Rust 后端流式命令 */
   async function sendMessage(content: string): Promise<void> {
-    const provider = getActiveProvider()
+    // 从 storage 读取当前活跃 provider
+    const providersStr = await context.storage.get<string>('apiProviders')
+    const activeName = await context.storage.get<string>('activeProvider')
+    let provider: ApiProvider | undefined
+    if (providersStr && activeName) {
+      try {
+        const parsed = typeof providersStr === 'string' ? JSON.parse(providersStr) : providersStr
+        const list = Array.isArray(parsed) ? parsed : []
+        provider = list.find((p: ApiProvider) => p.name === activeName)
+      } catch { /* ignore */ }
+    }
     if (!provider) throw new Error('请先配置 AI 模型')
 
     // 确保有当前对话
@@ -133,15 +135,16 @@ export function useAiChat(
     }
     messages.value.push(userMsg)
 
+    // 保存用户消息到后端
+    await saveMessage(currentConvId.value, 'user', content, userMsg.timestamp)
+
     // 更新对话标题（首条消息）
     const conv = conversations.value.find(c => c.id === currentConvId.value)
     if (conv && conv.title === '新对话') {
       conv.title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
       conv.updatedAt = new Date().toISOString()
-      await saveConversations()
+      await saveConversation(conv)
     }
-
-    await saveMessages()
 
     // 准备 AI 回复占位
     sending.value = true
@@ -159,38 +162,58 @@ export function useAiChat(
       .slice(0, -1)
       .map(m => ({ role: m.role, content: m.content }))
 
-    // 流式调用
-    await chatStream(
-      provider,
-      requestMessages,
-      {
-        onChunk: (text) => {
-          streamingContent.value += text
-          const last = messages.value[messages.value.length - 1]
-          if (last && last.role === 'assistant') {
-            last.content = streamingContent.value
-          }
-        },
-        onDone: async () => {
-          sending.value = false
-          streamingContent.value = ''
-          await saveMessages()
-          if (conv) {
-            conv.updatedAt = new Date().toISOString()
-            await saveConversations()
-          }
-        },
-        onError: async (error) => {
-          sending.value = false
-          streamingContent.value = ''
-          const last = messages.value[messages.value.length - 1]
-          if (last && last.role === 'assistant') {
-            last.content = `❌ ${error.message}`
-          }
-          await saveMessages()
-        },
-      },
-    )
+    // 生成 streamId 用于监听流式事件
+    const streamId = generateId()
+
+    // 监听 Rust 后端流式事件
+    const streamDisposable = context.events.on(`ai-chatbox:stream:${streamId}`, (payload: any) => {
+      if (payload.chunk) {
+        streamingContent.value += payload.chunk
+        const last = messages.value[messages.value.length - 1]
+        if (last && last.role === 'assistant') {
+          last.content = streamingContent.value
+        }
+      } else if (payload.done) {
+        streamDisposable.dispose()
+        sending.value = false
+        streamingContent.value = ''
+        // 保存助手消息到后端
+        const finalMsg = messages.value[messages.value.length - 1]
+        if (finalMsg && finalMsg.role === 'assistant') {
+          saveMessage(currentConvId.value, 'assistant', finalMsg.content, finalMsg.timestamp)
+        }
+        if (conv) {
+          conv.updatedAt = new Date().toISOString()
+          saveConversation(conv)
+        }
+      } else if (payload.error) {
+        streamDisposable.dispose()
+        sending.value = false
+        streamingContent.value = ''
+        const last = messages.value[messages.value.length - 1]
+        if (last && last.role === 'assistant') {
+          last.content = `❌ ${payload.error}`
+        }
+        saveMessage(currentConvId.value, 'assistant', last?.content || payload.error, assistantMsg.timestamp)
+      }
+    })
+
+    // 调用 Rust 后端流式命令
+    try {
+      await context.commands.execute('ai-chatbox.chat-stream', {
+        streamId,
+        provider,
+        messages: requestMessages,
+      })
+    } catch (e: any) {
+      streamDisposable.dispose()
+      sending.value = false
+      streamingContent.value = ''
+      const last = messages.value[messages.value.length - 1]
+      if (last && last.role === 'assistant') {
+        last.content = `❌ ${e.message || '请求失败'}`
+      }
+    }
   }
 
   /** 停止生成 */

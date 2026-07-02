@@ -92,40 +92,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted } from 'vue'
+import { ref, watch, nextTick, onMounted, inject } from 'vue'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import ProviderManager from './ProviderManager.vue'
 import PromptOptimizeDialog from './PromptOptimizeDialog.vue'
 import { useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
+import { usePromptOptimizer } from '../composables/usePromptOptimizer'
+import type { PluginContext } from '../../../plugin/types'
 
-// 从全局获取 PluginContext（由 index.ts 设置）
-const context = (window as any).__ai_chatbox_context__ as {
-  storage: {
-    get: (key: string) => Promise<any>
-    set: (key: string, value: any) => Promise<void>
-    delete: (key: string) => Promise<void>
-  }
-}
+// 通过 provide/inject 获取 PluginContext（由 PluginViewHost 或 index.ts provide）
+const context = inject<PluginContext>('pluginContext')!
 
 const config = useAiConfig(context.storage.get, context.storage.set)
-const chat = useAiChat(
-  context.storage.get,
-  context.storage.set,
-  context.storage.delete,
-  () => config.activeProvider.value,
-)
+const chat = useAiChat(context)
 
-// 从全局获取 optimizer 状态（由 index.ts 设置）
-const optimizerState = (window as any).__ai_chatbox_optimizer__ || {
-  showDialog: ref(false),
-  optimizing: ref(false),
-  originalText: ref(''),
-  optimizedText: ref(''),
-  errorMessage: ref(''),
-  acceptOptimized: () => {},
-  cancelOptimize: () => {},
+// 提示词优化状态（复用同一 context）
+const optimizer = usePromptOptimizer(context)
+const optimizerState = {
+  showDialog: optimizer.showDialog,
+  optimizing: optimizer.optimizing,
+  originalText: optimizer.originalText,
+  optimizedText: optimizer.optimizedText,
+  errorMessage: optimizer.errorMessage,
+  acceptOptimized: optimizer.acceptOptimized,
+  cancelOptimize: optimizer.cancelOptimize,
 }
 
 const messagesContainer = ref<HTMLElement | null>(null)

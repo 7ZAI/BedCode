@@ -1,25 +1,14 @@
 /**
  * 终端提示词优化
  *
- * 获取终端当前输入 → 调用 AI 优化 → 弹窗确认 → 填入终端
+ * 获取终端当前输入 → 调用 Rust 后端 AI 优化 → 弹窗确认 → 填入终端
+ * 通过 PluginContext.commands 调用 Rust 后端命令，不再直接调用 openaiClient
  */
 import { ref } from 'vue'
-import type { ApiProvider, CurrentInputEvent } from '../types'
-import { chat } from '../services/openaiClient'
+import type { CurrentInputEvent } from '../types'
+import type { PluginContext } from '../../../plugin/types'
 
-const OPTIMIZE_SYSTEM_PROMPT = `你是一个提示词优化专家。请优化以下用户输入的提示词，使其更清晰、更具体、更容易让 AI 理解和执行。
-要求：
-1. 保持原始意图不变
-2. 添加必要的上下文和约束条件
-3. 使用更精确的表达方式
-4. 只输出优化后的提示词，不要添加任何解释、前缀或引号`
-
-export function usePromptOptimizer(
-  getActiveProvider: () => ApiProvider | undefined | Promise<ApiProvider | undefined>,
-  sendInput: (sessionId: string, text: string) => Promise<void>,
-  eventEmit: (event: string, ...args: any[]) => void,
-  eventOn: (pluginId: string, event: string, handler: (...args: any[]) => void) => { dispose(): void },
-) {
+export function usePromptOptimizer(context: PluginContext) {
   const optimizing = ref(false)
   const showDialog = ref(false)
   const originalText = ref('')
@@ -30,12 +19,12 @@ export function usePromptOptimizer(
   /** 获取终端当前输入内容 */
   function getCurrentInput(): Promise<CurrentInputEvent> {
     return new Promise((resolve) => {
-      const disposable = eventOn('com.bedcode.ai-chatbox', 'ai-chatbox:currentInput', (data: any) => {
+      const disposable = context.events.on('ai-chatbox:currentInput', (data: any) => {
         disposable.dispose()
         resolve(data as CurrentInputEvent)
       })
       // 请求宿主组件返回当前输入
-      eventEmit('ai-chatbox:getCurrentInput')
+      context.events.emit('ai-chatbox:getCurrentInput')
       // 超时保护
       setTimeout(() => {
         disposable.dispose()
@@ -46,7 +35,18 @@ export function usePromptOptimizer(
 
   /** 触发优化流程 */
   async function optimizePrompt(): Promise<void> {
-    const provider = await getActiveProvider()
+    // 从 storage 读取当前活跃 provider
+    const providersStr = await context.storage.get<string>('apiProviders')
+    const activeName = await context.storage.get<string>('activeProvider')
+    let provider: any
+    if (providersStr && activeName) {
+      try {
+        const parsed = typeof providersStr === 'string' ? JSON.parse(providersStr) : providersStr
+        const list = Array.isArray(parsed) ? parsed : []
+        provider = list.find((p: any) => p.name === activeName)
+      } catch { /* ignore */ }
+    }
+
     if (!provider) {
       errorMessage.value = '请先配置 AI 模型'
       showDialog.value = true
@@ -69,10 +69,11 @@ export function usePromptOptimizer(
     optimizedText.value = ''
 
     try {
-      const result = await chat(provider, [
-        { role: 'system', content: OPTIMIZE_SYSTEM_PROMPT, timestamp: new Date().toISOString() },
-        { role: 'user', content: input.text, timestamp: new Date().toISOString() },
-      ])
+      // 调用 Rust 后端优化命令
+      const result = await context.commands.execute('ai-chatbox.optimize-prompt', {
+        provider,
+        prompt: input.text,
+      })
       optimizedText.value = result
     } catch (e: any) {
       errorMessage.value = e.message || '优化失败'
@@ -85,7 +86,7 @@ export function usePromptOptimizer(
   async function acceptOptimized(): Promise<void> {
     if (!currentSessionId || !optimizedText.value) return
     // \x15 = Ctrl+U 清除当前行，然后填入优化后的文本
-    await sendInput(currentSessionId, '\x15' + optimizedText.value)
+    await context.terminal.sendInput(currentSessionId, '\x15' + optimizedText.value)
     showDialog.value = false
   }
 

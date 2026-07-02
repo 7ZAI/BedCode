@@ -1,18 +1,22 @@
 //! Plugin Host
 //!
 //! 插件宿主 — 生命周期管理（加载/激活/停用）
-//! 协调 loader、permission、registry、storage 四个子系统
-//! 支持静态注册（Rust 插件）和文件扫描（TS-only 插件）
+//! 协调 loader、permission、registry、storage、cdylib_loader 五个子系统
+//! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 cdylib 动态库（Rust+TS 插件）
 
+use crate::plugin::cdylib_loader::{CdylibLoader, LoadedCdylibPlugin};
+use crate::plugin::host_context::HostContextFns;
 use crate::plugin::loader::PluginLoader;
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::registry::PluginRegistry;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::db::Database;
+use crate::session::SessionManager;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -27,24 +31,46 @@ pub struct PluginHost {
     permission: Arc<PermissionManager>,
     /// 插件存储
     storage: Arc<PluginStorage>,
-    /// Rust 插件的 command handlers（运行时注册）
+    /// Rust 插件的 command handlers（运行时注册，inventory 静态注册插件使用）
     rust_command_handlers: Arc<RwLock<HashMap<String, bedcode_plugin_api::PluginCommand>>>,
+    /// cdylib 插件句柄（plugin_id → LoadedCdylibPlugin）
+    cdylib_plugins: Arc<RwLock<HashMap<String, LoadedCdylibPlugin>>>,
+    /// HostContext 函数实现（共享引用，所有 cdylib 插件共用）
+    host_context_fns: Arc<HostContextFns>,
 }
 
 impl PluginHost {
-    /// 创建 PluginHost 并加载所有插件（静态注册 + 文件扫描）
+    /// 创建 PluginHost 并加载所有插件（静态注册 + 文件扫描 + cdylib）
     ///
-    /// 改为 async 方法，避免 block_on 在 Tokio runtime 中的潜在风险
-    pub async fn new(db: Arc<Mutex<Database>>, plugins_dir: &Path) -> Self {
+    /// # Arguments
+    /// * `db` - 数据库实例
+    /// * `plugins_dir` - 插件目录
+    /// * `session_manager` - 会话管理器（供 cdylib HostContext 使用）
+    /// * `app_handle` - Tauri AppHandle（供 cdylib HostContext 发送事件使用）
+    pub async fn new(
+        db: Arc<Mutex<Database>>,
+        plugins_dir: &Path,
+        session_manager: Arc<SessionManager>,
+        app_handle: Arc<tauri::AppHandle>,
+    ) -> Self {
         let permission = Arc::new(PermissionManager::new());
         let registry = Arc::new(PluginRegistry::new());
-        let storage = Arc::new(PluginStorage::new(db));
+        let storage = Arc::new(PluginStorage::new(db.clone()));
+
+        // 构建 HostContextFns 工厂，供 cdylib 插件激活时构建 HostContext
+        let host_context_fns = Arc::new(HostContextFns::new(
+            db.clone(),
+            storage.clone(),
+            session_manager,
+            app_handle,
+            permission.clone(),
+        ));
 
         // 1. 收集静态注册的 Rust 插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
             inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>.into_iter().collect();
 
-        // 2. 扫描文件系统中的 TS-only 插件
+        // 2. 扫描文件系统中的 TS-only 和 cdylib 插件
         let file_plugins = PluginLoader::load_all(plugins_dir, &permission);
 
         // 3. 合并所有插件
@@ -61,7 +87,7 @@ impl PluginHost {
                 manifest,
                 state: PluginState::Loaded,
                 granted_permissions: granted,
-                extension_path: String::new(), // Rust 插件无文件路径
+                extension_path: String::new(),
                 activated_at: None,
                 source: PluginSource::StaticRegistry,
             };
@@ -70,8 +96,36 @@ impl PluginHost {
             all_plugins.insert(plugin_id, loaded);
         }
 
-        // 添加文件扫描的 TS-only 插件
+        // 添加文件扫描的插件（包含 TS-only 和 cdylib 来源判定）
+        let mut cdylib_plugins_map: HashMap<String, LoadedCdylibPlugin> = HashMap::new();
+
         for (id, loaded) in file_plugins {
+            // 如果 manifest 声明了 rust_library，尝试加载 cdylib 动态库
+            if !loaded.manifest.rust_library.is_empty() {
+                let plugin_dir = Path::new(&loaded.extension_path);
+                match CdylibLoader::load(plugin_dir, &loaded.manifest.rust_library) {
+                    Ok(cdylib_plugin) => {
+                        tracing::info!(
+                            "Cdylib plugin loaded: {} v{} (library: {})",
+                            loaded.manifest.id,
+                            loaded.manifest.version,
+                            loaded.manifest.rust_library
+                        );
+                        cdylib_plugins_map.insert(id.clone(), cdylib_plugin);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to load cdylib for plugin {} v{}: {}",
+                            loaded.manifest.id,
+                            loaded.manifest.version,
+                            e
+                        );
+                        // cdylib 加载失败，跳过该插件，不插入 all_plugins
+                        continue;
+                    }
+                }
+            }
+
             all_plugins.insert(id, loaded);
         }
 
@@ -81,16 +135,23 @@ impl PluginHost {
             permission,
             storage,
             rust_command_handlers: Arc::new(RwLock::new(HashMap::new())),
+            cdylib_plugins: Arc::new(RwLock::new(cdylib_plugins_map)),
+            host_context_fns,
         };
 
         // 注册所有已加载插件的 manifest contributes 到 registry
         host.register_manifest_contributions().await;
 
-        // 注册 Rust 插件的 command handlers
+        // 注册 Rust 插件的 command handlers（inventory 静态注册）
         host.register_rust_command_handlers().await;
 
         let count = host.plugins.read().await.len();
-        tracing::info!("PluginHost initialized with {} plugin(s)", count);
+        let cdylib_count = host.cdylib_plugins.read().await.len();
+        tracing::info!(
+            "PluginHost initialized with {} plugin(s), {} cdylib plugin(s)",
+            count,
+            cdylib_count
+        );
         host
     }
 
@@ -111,7 +172,7 @@ impl PluginHost {
         }
     }
 
-    /// 注册 Rust 插件的 command handlers 到运行时注册表
+    /// 注册 Rust 插件的 command handlers 到运行时注册表（inventory 静态注册）
     async fn register_rust_command_handlers(&self) {
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
             inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>.into_iter().collect();
@@ -121,7 +182,6 @@ impl PluginHost {
             let commands = (entry.register_commands)();
             let plugin_id = entry.id;
             for cmd in commands {
-                // 使用 plugin_id::command_name 作为 key，避免冲突
                 let full_name = format!("{}::{}", plugin_id, cmd.name);
                 tracing::info!("Registered Rust command: {}", full_name);
                 handlers.insert(full_name, cmd);
@@ -165,10 +225,11 @@ impl PluginHost {
             .unwrap_or(false)
     }
 
-    /// 激活插件（标记状态为 Activated）
+    /// 激活插件
     ///
-    /// Rust 插件通过此方法调用 BedcodePlugin::activate()
-    /// TS-only 插件的前端模块加载在 PluginLoader 中完成
+    /// - 静态注册插件：仅标记状态
+    /// - cdylib 插件：调用 exports.activate() 传入 HostContext
+    /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
     pub async fn activate_plugin(&self, plugin_id: &str) -> crate::Result<()> {
         let mut plugins = self.plugins.write().await;
         let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
@@ -191,6 +252,56 @@ impl PluginHost {
         let granted = self.permission.grant_permissions(plugin_id, &permissions);
         loaded.granted_permissions = granted;
 
+        // cdylib 插件：调用 exports.activate() 并传入 HostContext
+        if loaded.source == PluginSource::Cdylib {
+            let cdylib_plugins = self.cdylib_plugins.read().await;
+            if let Some(cdylib_plugin) = cdylib_plugins.get(plugin_id) {
+                let host_context = self.host_context_fns.build_host_context(plugin_id);
+                let exports = cdylib_plugin.exports();
+
+                let activate_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // SAFETY: exports 函数指针由 libloading 从已加载的动态库解析，
+                    // Library 句柄由 LoadedCdylibPlugin.library 持有，生命周期与插件一致
+                    unsafe { (exports.activate)(&host_context as *const _) }
+                }));
+
+                match activate_result {
+                    Ok(0) => {
+                        tracing::info!("Cdylib plugin activate() succeeded: {}", plugin_id);
+                    }
+                    Ok(code) => {
+                        // activate 返回非零表示初始化失败
+                        tracing::error!(
+                            "Cdylib plugin activate() returned error code {}: {}",
+                            code,
+                            plugin_id
+                        );
+                        loaded.state = PluginState::Error(
+                            format!("activate() returned error code {}", code)
+                        );
+                        return Err(crate::AppError::Plugin(format!(
+                            "Plugin {} activate() returned error code {}", plugin_id, code
+                        )));
+                    }
+                    Err(_) => {
+                        tracing::error!("Cdylib plugin activate() panicked: {}", plugin_id);
+                        loaded.state = PluginState::Error("activate() panicked".to_string());
+                        return Err(crate::AppError::Plugin(format!(
+                            "Plugin {} activate() panicked", plugin_id
+                        )));
+                    }
+                }
+            } else {
+                tracing::error!(
+                    "Cdylib plugin {} not found in cdylib_plugins map (library not loaded)",
+                    plugin_id
+                );
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin {} cdylib library not loaded", plugin_id
+                )));
+            }
+        }
+
         loaded.state = PluginState::Activated;
         loaded.activated_at = Some(Utc::now());
 
@@ -199,7 +310,53 @@ impl PluginHost {
     }
 
     /// 停用插件
+    ///
+    /// cdylib 插件：先调用 exports.deactivate()，再执行现有清理流程
     pub async fn deactivate_plugin(&self, plugin_id: &str) -> crate::Result<()> {
+        // cdylib 插件：调用 exports.deactivate()
+        {
+            let plugins = self.plugins.read().await;
+            if let Some(loaded) = plugins.get(plugin_id) {
+                if loaded.source == PluginSource::Cdylib {
+                    let cdylib_plugins = self.cdylib_plugins.read().await;
+                    if let Some(cdylib_plugin) = cdylib_plugins.get(plugin_id) {
+                        let exports = cdylib_plugin.exports();
+
+                        let deactivate_result = std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| {
+                                // SAFETY: exports 函数指针由 libloading 从已加载的动态库解析
+                                unsafe { (exports.deactivate)() }
+                            }),
+                        );
+
+                        match deactivate_result {
+                            Ok(0) => {
+                                tracing::info!(
+                                    "Cdylib plugin deactivate() succeeded: {}",
+                                    plugin_id
+                                );
+                            }
+                            Ok(code) => {
+                                // deactivate 返回非零，记录警告但不阻止停用流程
+                                tracing::warn!(
+                                    "Cdylib plugin deactivate() returned error code {}: {}",
+                                    code,
+                                    plugin_id
+                                );
+                            }
+                            Err(_) => {
+                                tracing::error!(
+                                    "Cdylib plugin deactivate() panicked: {}",
+                                    plugin_id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 统一清理：取消注册和撤销权限
         self.registry.unregister_plugin(plugin_id).await;
         self.permission.revoke_all(plugin_id);
 
@@ -243,6 +400,10 @@ impl PluginHost {
     // ==================== Rust Command Dispatch ====================
 
     /// 执行 Rust 插件的 command handler
+    ///
+    /// 路由逻辑：
+    /// - cdylib 插件：通过 FFI 调用 exports.invoke_command()
+    /// - 静态注册插件：通过运行时注册表查找 handler
     pub async fn invoke_rust_command(
         &self,
         plugin_id: &str,
@@ -256,6 +417,113 @@ impl PluginHost {
             )));
         }
 
+        // 读取插件来源，决定路由方式
+        let source = {
+            let plugins = self.plugins.read().await;
+            plugins.get(plugin_id)
+                .map(|p| p.source.clone())
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?
+        };
+
+        match source {
+            PluginSource::Cdylib => {
+                self.invoke_cdylib_command(plugin_id, command_name, args).await
+            }
+            PluginSource::StaticRegistry => {
+                self.invoke_static_command(plugin_id, command_name, args).await
+            }
+            PluginSource::FileScan => {
+                // TS-only 插件不应有 Rust command 调用
+                Err(crate::AppError::Plugin(format!(
+                    "Plugin {} is TS-only, cannot invoke Rust command", plugin_id
+                )))
+            }
+        }
+    }
+
+    /// 调用 cdylib 插件的 command
+    ///
+    /// 将 command_name 和 args 转为 C 字符串，通过 FFI 调用 exports.invoke_command()，
+    /// 解析返回的 JSON 字符串，并通过 CString::from_raw 释放插件分配的内存
+    async fn invoke_cdylib_command(
+        &self,
+        plugin_id: &str,
+        command_name: &str,
+        args: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        let cdylib_plugins = self.cdylib_plugins.read().await;
+        let cdylib_plugin = cdylib_plugins.get(plugin_id).ok_or_else(|| {
+            crate::AppError::Plugin(format!(
+                "Cdylib plugin {} not found in loaded libraries", plugin_id
+            ))
+        })?;
+
+        let exports = cdylib_plugin.exports();
+
+        // 将参数转为 C 字符串
+        let name_cstr = CString::new(command_name)
+            .map_err(|e| crate::AppError::Plugin(format!(
+                "Command name contains null bytes: {}", e
+            )))?;
+        let args_str = serde_json::to_string(&args)
+            .map_err(|e| crate::AppError::Plugin(format!(
+                "Failed to serialize command args: {}", e
+            )))?;
+        let args_cstr = CString::new(args_str)
+            .map_err(|e| crate::AppError::Plugin(format!(
+                "Command args contain null bytes: {}", e
+            )))?;
+
+        // 调用 cdylib 的 invoke_command，catch_unwind 防止 panic 传播
+        let result_ptr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: exports 函数指针由 libloading 从已加载的动态库解析
+            unsafe {
+                (exports.invoke_command)(name_cstr.as_ptr(), args_cstr.as_ptr())
+            }
+        }));
+
+        let ptr = match result_ptr {
+            Ok(p) => p,
+            Err(_) => {
+                return Err(crate::AppError::Plugin(format!(
+                    "Cdylib plugin {} invoke_command() panicked", plugin_id
+                )));
+            }
+        };
+
+        // 解析返回值：null 表示调用失败
+        if ptr.is_null() {
+            return Err(crate::AppError::Plugin(format!(
+                "Cdylib plugin {} invoke_command() returned null", plugin_id
+            )));
+        }
+
+        // SAFETY: ptr 由插件通过 CString::into_raw() 或等价方式分配，
+        // 我们通过 CString::from_raw 回收内存（同一 allocator）
+        let result_string = unsafe {
+            let cstr = CStr::from_ptr(ptr);
+            let s = cstr.to_string_lossy().into_owned();
+            // 释放插件分配的内存
+            let _ = CString::from_raw(ptr);
+            s
+        };
+
+        // 解析 JSON 结果
+        let value: serde_json::Value = serde_json::from_str(&result_string)
+            .map_err(|e| crate::AppError::Plugin(format!(
+                "Cdylib plugin {} invoke_command() returned invalid JSON: {}", plugin_id, e
+            )))?;
+
+        Ok(value)
+    }
+
+    /// 调用静态注册插件的 command handler（inventory 静态注册）
+    async fn invoke_static_command(
+        &self,
+        plugin_id: &str,
+        command_name: &str,
+        args: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
         let handlers = self.rust_command_handlers.read().await;
         let full_name = format!("{}::{}", plugin_id, command_name);
         let cmd = handlers.get(&full_name).ok_or_else(|| {
@@ -293,6 +561,8 @@ impl Clone for PluginHost {
             permission: self.permission.clone(),
             storage: self.storage.clone(),
             rust_command_handlers: self.rust_command_handlers.clone(),
+            cdylib_plugins: self.cdylib_plugins.clone(),
+            host_context_fns: self.host_context_fns.clone(),
         }
     }
 }

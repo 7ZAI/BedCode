@@ -5,7 +5,7 @@
  */
 import { ref, computed } from 'vue'
 import type { ApiProvider, ProviderPreset } from '../types'
-import { PROVIDER_PRESETS } from '../services/openaiClient'
+import { PROVIDER_PRESETS } from '../types'
 
 /** 配置管理 composable */
 export function useAiConfig(
