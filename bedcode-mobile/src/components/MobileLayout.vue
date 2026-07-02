@@ -7,11 +7,12 @@
     <!-- Main Content -->
     <main class="flex-1 min-h-0">
       <router-view v-slot="{ Component, route }">
-        <!-- 终端页面使用 fullPath 作为 key，确保每个会话有独立的缓存实例 -->
-        <!-- 其他 keepAlive 页面使用组件名称缓存 -->
-        <keep-alive :include="cachedMobileRoutes" :max="maxCachedTerminals">
-          <component :is="Component" :key="getKey(route)" />
+        <!-- TerminalView 不使用 keep-alive：buffer store 持有数据，组件正常销毁/重建 -->
+        <!-- MobileSwipeContainer 保持 keep-alive 缓存 -->
+        <keep-alive v-if="route.name !== 'mobile-terminal'" :include="['MobileSwipeContainer']">
+          <component :is="Component" />
         </keep-alive>
+        <component v-else :is="Component" :key="route.fullPath" />
       </router-view>
     </main>
 
@@ -26,29 +27,12 @@
 import { computed, inject, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import MobileNav from '@/components/MobileNav.vue'
-import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
-const settingsStore = useSettingsStore()
 
 const isTerminalRoute = computed(() => {
   return route.name === 'mobile-terminal'
 })
-
-// 需要 KeepAlive 缓存的移动端组件名称
-// MobileSwipeContainer 包含 4 个子页面（设备、会话、快捷操作、设置），缓存以保持切换后数据
-const cachedMobileRoutes = ['TerminalView', 'MobileSwipeContainer']
-const maxCachedTerminals = computed(() => settingsStore.settings.ui.max_cached_terminals || 10)
-
-// 为 KeepAlive 生成 key
-// 终端页面使用 fullPath（包含会话 ID），确保每个会话有独立实例
-// 其他页面使用组件名称
-function getKey(route: any): string {
-  if (route.name === 'mobile-terminal') {
-    return route.fullPath
-  }
-  return route.name || route.fullPath
-}
 
 // 从 App.vue inject 的安全区域信息
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!

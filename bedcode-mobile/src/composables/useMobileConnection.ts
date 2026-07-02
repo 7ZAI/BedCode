@@ -25,9 +25,10 @@ import {
   type RemoteDevice,
   type AuthCredentials,
 } from './useMobileCommands'
-import { useHttpApi, httpSendSessionInput } from './useHttpApi'
+import { useHttpApi, httpSendSessionInput, httpProbe } from './useHttpApi'
 import { useForegroundService } from './useForegroundService'
 import { useTaskNotification } from './useTaskNotification'
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -150,6 +151,31 @@ async function init() {
       connectionError.value = null
       console.log('[MobileConnection] Connected')
       autoStartForegroundService()
+
+      // 连接恢复时重新订阅所有后台会话的终端输出
+      const bufferStore = useTerminalBufferStore()
+      bufferStore.startGlobalListener()
+      for (const [sid, buffer] of bufferStore.buffers.entries()) {
+        if (!buffer.sessionStopped && !buffer.subscribed) {
+          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
+          wsJoinSession(sid, startSeq)
+            .then((result) => {
+              if (startSeq !== undefined && result && result.minSeq > startSeq) {
+                // 增量同步回退 — 清空 buffer，标记 hasGap
+                const buf = bufferStore.getBuffer(sid)
+                if (buf) {
+                  buf.chunks = []
+                  buf.totalBytes = 0
+                  buf.lastIndex = -1
+                  buf.lastEndIndex = -1
+                  buf.hasGap = true
+                }
+              }
+              bufferStore.markSubscribed(sid)
+            })
+            .catch((e) => console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e))
+        }
+      }
     },
     onDisconnected: () => {
       clearConnectionTimeout()
@@ -157,6 +183,10 @@ async function init() {
       isConnecting.value = false
       console.log('[MobileConnection] Disconnected')
       autoStopForegroundService()
+
+      // 标记所有 buffer 未订阅 + hasGap
+      const bufferStore = useTerminalBufferStore()
+      bufferStore.markAllUnsubscribed()
     },
     onPaired: () => {
       clearConnectionTimeout()
@@ -286,6 +316,9 @@ async function init() {
       }
       // 取消该会话的任务通知
       cancelTaskNotification(data.session_id)
+      // 标记 buffer 会话停止
+      const bufferStore = useTerminalBufferStore()
+      bufferStore.markSessionStopped(data.session_id)
     },
     onSyncSessionRemoved: (data) => {
       console.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
@@ -293,6 +326,9 @@ async function init() {
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
       // 取消该会话的任务通知
       cancelTaskNotification(data.session_id)
+      // 清理 buffer
+      const bufferStore = useTerminalBufferStore()
+      bufferStore.clearBuffer(data.session_id)
     },
     onSyncTaskStatusChanged: (data) => {
       console.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
@@ -462,6 +498,19 @@ export async function connect(device: RemoteDevice): Promise<void> {
     // 设置 HTTP API 基础 URL
     const { setApiBaseUrl } = useHttpApi()
     setApiBaseUrl(device.address, device.port)
+
+    // HTTP 探测桌面端是否可达（3 秒超时，快速判断网络连通性）
+    console.log('[MobileConnection] Probing desktop reachability...')
+    const probeResult = await httpProbe(device.address, device.port)
+    if (!probeResult.reachable) {
+      clearConnectionTimeout()
+      console.warn('[MobileConnection] Desktop unreachable:', probeResult.error)
+      connectionError.value = 'mobile.connection.unreachable'
+      connectionStatus.value = 'error'
+      isConnecting.value = false
+      throw new Error('mobile.connection.unreachable')
+    }
+    console.log('[MobileConnection] Desktop reachable, proceeding to WS connect')
 
     // 调用后端连接，状态由后端事件驱动更新
     const result = await wsConnect(device.address, device.port, device.name)

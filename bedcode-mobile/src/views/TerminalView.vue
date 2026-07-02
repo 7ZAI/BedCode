@@ -1,6 +1,5 @@
 <template>
   <div
-    v-show="isActive"
     class="terminal-view"
     :style="terminalViewStyle"
   >
@@ -280,7 +279,7 @@
  */
 defineOptions({ name: 'TerminalView' })
 
-import { ref, reactive, computed, inject, type Ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { ref, reactive, computed, inject, type Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
@@ -289,12 +288,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useMobileConnection } from '@/composables/useMobileConnection'
-import { useTerminalOutput, type OutputPayload } from '@/composables/useTerminalOutput'
-import {
-  wsJoinSession,
-  wsLeaveSession,
-  wsResizeTerminal,
-} from '@/composables/useMobileCommands'
+import { useTerminalBuffer, type OutputPayload } from '@/composables/useTerminalBuffer'
+import { wsResizeTerminal } from '@/composables/useMobileCommands'
 import { httpSendSessionInput } from '@/composables/useHttpApi'
 import { useOrientation } from '@/composables/useOrientation'
 import { useTheme } from '@/composables/useTheme'
@@ -320,7 +315,7 @@ const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
-const { registerHandler, unregisterHandler } = useTerminalOutput()
+const { store: bufferStore, writeBufferHistoryToTerminal, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleReconnect, handleSessionStopped } = useTerminalBuffer()
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
@@ -420,8 +415,6 @@ const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>
 // 注意：使用 ref 确保每个组件实例有独立的状态
 // 在 <script setup> 中，顶层 let 声明的变量是模块级共享的
 
-// keep-alive 可见性：停用时隐藏终端视图，避免 position:fixed 覆盖层拦截触摸事件
-const isActive = ref(true)
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
 // 终端是否准备就绪（初始化 + 订阅完成）
@@ -430,14 +423,6 @@ const isTerminalReady = ref(false)
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
 const resizeObserverRef = ref<ResizeObserver | null>(null)
-// 终端输出事件监听器 - 使用 ref 确保组件隔离
-const outputListenerRef = ref(false)
-// 输出索引去重 - 使用 ref 确保组件隔离
-const lastIndexRef = ref(-1)
-// 当前订阅的会话 ID - 用于取消订阅时使用（避免路由变化后 sessionId 变成 undefined）
-const subscribedSessionIdRef = ref<string | null>(null)
-// 订阅进行中标志 - 防止 onActivated 在 subscribeSession 的 await 期间创建重复监听器
-const isSubscribing = ref(false)
 
 // 伪滚动容器相关状态
 const isUserScrolling = ref(false)
@@ -785,14 +770,9 @@ watch(isSystemDark, () => {
 // ==================== Terminal Setup ====================
 
 async function initTerminal() {
-  // console.log('[TerminalView] initTerminal called, xtermContainer:', xtermContainer.value)
-
   if (!xtermContainer.value) {
-    // console.error('[TerminalView] xtermContainer is null!')
     return
   }
-
-  // console.log('[TerminalView] Container dimensions:', xtermContainer.value.offsetWidth, 'x', xtermContainer.value.offsetHeight)
 
   const theme = TERMINAL_THEMES[terminalSettings.value.theme]
   const term = new Terminal({
@@ -820,28 +800,27 @@ async function initTerminal() {
   term.loadAddon(addon)
   term.loadAddon(new WebLinksAddon())
 
-  // WebGL renderer - 提升渲染性能
+  // WebGL renderer — 后台加载，不阻塞显示
   try {
     const { WebglAddon } = await import('@xterm/addon-webgl')
     const webglAddon = new WebglAddon()
     term.loadAddon(webglAddon)
     webglAddon.onContextLoss(() => {
-      // console.warn('[TerminalView] WebGL context lost')
+      // WebGL 上下文丢失不影响数据，切换回来时重建终端即可
     })
-    // console.log('[TerminalView] WebGL renderer loaded')
-  } catch (e) {
-    // console.warn('[TerminalView] WebGL not supported, using DOM renderer:', e)
+  } catch {
+    // WebGL 不可用时回退到 canvas 渲染器
   }
 
-  // Welcome message
-  // term.write('\x1b[36m[终端]\x1b[0m ' + sessionName.value + '\r\n')
-  // term.write('='.repeat(50) + '\r\n\r\n')
+  // 从 buffer 写入历史数据
+  writeBufferHistoryToTerminal(sessionId.value, term)
+
+  // 注册实时 handler — 新数据同时写 buffer（store 处理）和 xterm
+  registerRealtimeHandler(sessionId.value, term)
 
   // Fit terminal - delay to ensure container is rendered
   setTimeout(() => {
     fitTerminal()
-
-    // 配置伪滚动容器
     setupViewportScroll()
   }, 100)
 
@@ -856,7 +835,6 @@ async function initTerminal() {
   window.addEventListener('resize', handleWindowResize)
 
   // Terminal resize 事件：通知桌面端调整 PTY 大小
-  // 直接读取 sessionId.value（响应式），不闭包捕获，确保路由切换后使用正确的会话 ID
   term.onResize(({ cols, rows }) => {
     if (isConnected.value && isSessionActive.value && sessionId.value) {
       wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
@@ -885,20 +863,15 @@ function disposeTerminal() {
     resizeObserverRef.value = null
   }
   window.removeEventListener('resize', handleWindowResize)
-  // 清理输出处理器（用 subscribedSessionIdRef 注销，避免 sessionId 已变导致注销错误会话）
-  const registeredSession = subscribedSessionIdRef.value || sessionId.value
-  if (outputListenerRef.value && registeredSession) {
-    unregisterHandler(registeredSession)
-    outputListenerRef.value = false
+  // 注销实时 handler
+  if (sessionId.value) {
+    unregisterRealtimeHandler(sessionId.value)
   }
   if (terminalRef.value) {
     terminalRef.value.dispose()
     terminalRef.value = null
     fitAddonRef.value = null
   }
-  lastIndexRef.value = -1
-  subscribedSessionIdRef.value = null
-  isSubscribing.value = false
   isTerminalReady.value = false
   // 清理伪滚动容器状态
   isUserScrolling.value = false
@@ -919,149 +892,6 @@ function disposeTerminal() {
   }
   currentLine.value = 0
   cellHeight.value = 0
-}
-
-/// 注册全局终端输出处理器（不调用后端订阅）
-/// 使用全局单一 ws_output 监听器 + sessionId 分发，替代 per-component 监听
-async function createOutputListener() {
-  // 防御性清理：确保不会重复注册
-  const currentRegistered = subscribedSessionIdRef.value || sessionId.value
-  if (outputListenerRef.value && currentRegistered) {
-    unregisterHandler(currentRegistered)
-    outputListenerRef.value = false
-  }
-
-  if (!sessionId.value) {
-    return
-  }
-
-  try {
-    await registerHandler(sessionId.value, {
-      onOutput: (payload: OutputPayload) => {
-        // 索引去重：避免重复输出（重连时可能发生）
-        // 使用 end_index（合并消息的结束索引）精确更新去重游标
-        if (payload.index !== undefined && payload.index <= lastIndexRef.value) {
-          return
-        }
-        lastIndexRef.value = payload.end_index ?? payload.index
-
-        // 写入终端：Base64 → Uint8Array → xterm.write()
-        // 比 string 更高效（避免 UTF-16 编码开销）且无损（不丢失非 UTF-8 字节）
-        if (terminalRef.value && payload.data_base64) {
-          const binary = atob(payload.data_base64)
-          const bytes = new Uint8Array(binary.length)
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i)
-          }
-          terminalRef.value.write(bytes)
-        }
-      },
-    })
-    outputListenerRef.value = true
-  } catch (e) {
-    console.error('[TerminalView] Failed to register output handler:', e)
-  }
-}
-
-// ==================== Input Handlers ====================
-
-async function subscribeSession() {
-  if (!isConnected.value) {
-    return
-  }
-
-  // 防重入：如果已经在订阅中（另一个 watch 或 onActivated 触发），跳过
-  // 避免并发 subscribeSession 导致重复 wsJoinSession 和监听器替换
-  if (isSubscribing.value) {
-    return
-  }
-
-  // 标记订阅进行中，防止 onActivated 创建重复监听器
-  isSubscribing.value = true
-
-  // 增量同步：如果 lastIndexRef >= 0，说明之前有订阅数据，尝试从断点继续
-  // lastIndexRef < 0 表示首次订阅或已重置，需要全量回放
-  const startSeq = lastIndexRef.value >= 0 ? lastIndexRef.value + 1 : undefined
-
-  // 增量同步时不重置 lastIndexRef（保留去重游标）
-  // 全量回放时重置 lastIndexRef（从头接收所有历史，旧值会过滤掉历史事件）
-  if (startSeq === undefined) {
-    lastIndexRef.value = -1
-  }
-
-  try {
-    // 先创建前端监听器，再调用后端订阅
-    // 后端订阅成功后会立即发送历史输出，如果监听器尚未就绪会丢失
-    await createOutputListener()
-
-    // 加入会话，开始接收输出（后端订阅）
-    const result = await wsJoinSession(sessionId.value, startSeq)
-
-    // 增量同步回退检测：如果后端 min_seq > startSeq，说明队列中旧数据已被覆盖
-    // 此时时 xterm 已有旧数据，后端从 min_seq 开始发送历史
-    // 清空 xterm 避免显示不完整的拼接内容，重置 lastIndexRef 让后续事件正常通过
-    if (startSeq !== undefined && result && result.minSeq > startSeq) {
-      console.warn(
-        `[TerminalView] Incremental sync gap: minSeq=${result.minSeq} > startSeq=${startSeq}, clearing terminal for fresh replay`
-      )
-      if (terminalRef.value) {
-        terminalRef.value.clear()
-      }
-      lastIndexRef.value = -1
-    }
-
-    // 保存订阅的会话 ID，用于取消订阅时使用
-    subscribedSessionIdRef.value = sessionId.value
-  } catch (e) {
-    console.error('[TerminalView] Subscribe failed:', e)
-    toast.error(t('mobile.connection.connectFailed'))
-  } finally {
-    isSubscribing.value = false
-  }
-}
-
-/// 创建前端事件监听器（不调用后端订阅）
-/// 用于 onActivated 时恢复前端监听，后端订阅已保持活跃
-async function createFrontendListener() {
-  await createOutputListener()
-}
-
-/// 清理前端事件监听器（不取消后端订阅）
-/// 用于组件停用时清理，保持后端订阅以持续接收输出
-function clearFrontendListener() {
-  if (outputListenerRef.value && sessionId.value) {
-    unregisterHandler(sessionId.value)
-    outputListenerRef.value = false
-  }
-}
-
-/// 取消订阅会话（包括后端订阅）
-/// 用于会话停止、删除或组件销毁时
-async function unsubscribeSession() {
-  // 使用保存的会话 ID（避免路由变化后 sessionId 变成 undefined）
-  const sessionToLeave = subscribedSessionIdRef.value
-
-  // 清理输出处理器
-  if (outputListenerRef.value && sessionToLeave) {
-    unregisterHandler(sessionToLeave)
-    outputListenerRef.value = false
-  }
-
-  // 清理保存的会话 ID
-  subscribedSessionIdRef.value = null
-
-  // 清理去重索引
-  lastIndexRef.value = -1
-
-  if (!isConnected.value || !sessionToLeave) {
-    return
-  }
-
-  try {
-    await wsLeaveSession(sessionToLeave)
-  } catch (e) {
-    console.error('[TerminalView] Unsubscribe failed:', e)
-  }
 }
 
 // ==================== Input Handlers ====================
@@ -1418,21 +1248,20 @@ onMounted(async () => {
   await nextTick()
   initTerminal()
 
-  // 首次进入时订阅输出（后端订阅 + 前端监听）
+  // 订阅后端（如果未订阅）
   if (isSessionActive.value && isConnected.value) {
-    await subscribeSession()
+    await subscribeSession(sessionId.value)
   }
 
   isTerminalReady.value = true
 
-  // 监听桌面端推送的任务状态变更事件
+  // 监听任务状态变更
   taskStatusListenerRef.value = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; options: Array<{ label: string }> }> }>('ws_sync_task_status_changed', (event) => {
-    // 仅处理当前会话的任务状态
     if (event.payload.session_id !== sessionId.value) return
     handleTaskStatusChanged(event.payload.task_status, event.payload.task_questions)
   })
 
-  // 监听桌面端推送的会话模式变更事件（由 /bedcode auto/manual 触发）
+  // 监听会话模式变更
   sessionModeListenerRef.value = await listen<{ session_id: string; auto_approve: boolean }>('ws_sync_session_mode_changed', (event) => {
     if (event.payload.session_id !== sessionId.value) return
     handleSessionModeChanged(event.payload.auto_approve)
@@ -1440,16 +1269,19 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
-  // 组件销毁时完全取消订阅（包括后端）
-  // 注意：keep-alive 缓存的组件不会触发 onUnmounted
-  await unsubscribeSession()
+  // 注销实时 handler + 释放终端
   disposeTerminal()
-  // 清理任务状态监听器
+
+  // 如果会话已停止，取消后端订阅
+  if (!isSessionActive.value) {
+    await unsubscribeSession(sessionId.value)
+  }
+
+  // 清理事件监听器
   if (taskStatusListenerRef.value) {
     taskStatusListenerRef.value()
     taskStatusListenerRef.value = null
   }
-  // 清理会话模式监听器
   if (sessionModeListenerRef.value) {
     sessionModeListenerRef.value()
     sessionModeListenerRef.value = null
@@ -1457,113 +1289,29 @@ onUnmounted(async () => {
   autoCleanup()
 })
 
-// keep-alive 生命周期：组件被激活时恢复显示
-onActivated(async () => {
-  // 恢复终端视图可见性（停用时隐藏以避免覆盖层拦截触摸事件）
-  isActive.value = true
-
-  // 如果正在订阅中（subscribeSession 的 await 期间），跳过订阅但继续恢复终端显示
-  if (isSubscribing.value) {
-    // 仍然需要恢复终端渲染，不能跳过 clearTextureAtlas + refreshTerminal
-    setTimeout(() => {
-      if (terminalRef.value) {
-        terminalRef.value.clearTextureAtlas()
-      }
-      refreshTerminal()
-    }, 150)
-    return
-  }
-  // 如果没有监听器且会话活跃且已连接，重新订阅
-  // 缺少 isSessionActive 检查会导致：停用期间会话被停止后，
-  // outputListenerRef 被 unsubscribeSession 清空，激活时尝试订阅已停止的会话而报错
-  if (isConnected.value && isSessionActive.value && !outputListenerRef.value) {
-    await subscribeSession()
-  }
-  // 延迟执行恢复操作：等 DOM 从 keep-alive 缓存中恢复并完成布局计算
-  // 然后自动执行 refreshTerminal 确保终端尺寸和显示正确
-  setTimeout(() => {
-    // 清除 WebGL 纹理缓存（keep-alive 恢复后纹理可能损坏）
-    if (terminalRef.value) {
-      terminalRef.value.clearTextureAtlas()
-    }
-    // 直接调用 refreshTerminal：重新 fit 尺寸并同步到桌面端
-    refreshTerminal()
-  }, 150)
-})
-
-// keep-alive 生命周期：组件被停用时不做任何操作
-// 保持前端监听器和后端订阅活跃，让所有终端持续接收输出
-onDeactivated(() => {
-  // 不取消订阅，不清理监听器
-  // 隐藏终端视图，避免 position:fixed 覆盖层拦截触摸事件
-  isActive.value = false
-})
-
 // Watch session status changes
-// 注意：只在组件处于活跃状态且路由正确时才响应状态变化
 watch(isSessionActive, async (active, prevActive) => {
-  // 如果 sessionId 不存在（路由已离开），忽略状态变化
-  if (!sessionId.value) {
-    return
-  }
+  if (!sessionId.value) return
 
   if (active && !prevActive) {
-    // Session became active - 需要完整订阅（后端 + 前端）
-    await subscribeSession()
+    // Session became active — subscribe backend
+    await subscribeSession(sessionId.value)
   } else if (!active && prevActive) {
-    // Session stopped - 完全取消订阅
-    await unsubscribeSession()
+    // Session stopped — mark buffer + unsubscribe
+    await handleSessionStopped(sessionId.value)
   }
 })
 
 // Watch connection status changes
 watch(isConnected, async (connected) => {
-  // 如果 sessionId 不存在（路由已离开），忽略连接变化
-  if (!sessionId.value) {
-    return
-  }
+  if (!sessionId.value) return
 
   if (!connected) {
-    // 连接断开 - 清理前端监听器，后端订阅会自动失效
-    clearFrontendListener()
-    subscribedSessionIdRef.value = null
+    handleDisconnect()
   } else if (connected && isSessionActive.value) {
-    // 连接恢复 - 需要完整订阅（后端 + 前端）
-    await subscribeSession()
+    // Connection restored — resubscribe active session
+    await subscribeSession(sessionId.value)
   }
-})
-
-// Watch sessionId 变化 — keep-alive 可能复用组件实例
-// 路由从 /terminal/aaa 切到 /terminal/bbb 时，同一个 TerminalView 实例被复用
-// sessionId 变了但 xterm Terminal 和 outputListener 还是旧的
-// 需要完整重建：dispose 旧终端、创建新终端、订阅新会话
-watch(sessionId, async (newId, oldId) => {
-  if (!newId || newId === oldId) return
-
-  isTerminalReady.value = false
-
-  // 取消旧会话的后端订阅
-  if (oldId && isConnected.value) {
-    try {
-      await wsLeaveSession(oldId)
-    } catch (e) {
-      console.warn('[TerminalView] Leave old session failed:', e)
-    }
-  }
-
-  // 清理旧终端（dispose xterm + outputListener）
-  disposeTerminal()
-
-  // 重建新终端
-  await nextTick()
-  initTerminal()
-
-  // 订阅新会话
-  if (isSessionActive.value && isConnected.value) {
-    await subscribeSession()
-  }
-
-  isTerminalReady.value = true
 })
 </script>
 

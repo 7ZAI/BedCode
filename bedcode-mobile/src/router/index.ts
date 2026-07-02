@@ -29,7 +29,6 @@ const router = createRouter({
       path: '/mobile/terminal/:id',
       name: 'mobile-terminal',
       component: () => import('@/views/TerminalView.vue'),
-      meta: { keepAlive: true },
     },
     {
       path: '/mobile/toolbox',
