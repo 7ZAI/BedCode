@@ -59,6 +59,11 @@ async-trait = "0.1"
 
 # WebSocket
 tokio-tungstenite = "0.24"
+
+# mDNS service discovery
+mdns-sd = "0.20"
+flume = "0.12"
+
 futures-util = "0.3"
 
 # Android logging

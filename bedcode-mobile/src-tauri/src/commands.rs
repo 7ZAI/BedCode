@@ -8,6 +8,7 @@ pub mod connection;
 pub mod mobile_commands;
 pub mod session;
 pub mod terminal;
+pub mod mdns;
 
 // Re-export all commands for easy registration
 pub use connection::{

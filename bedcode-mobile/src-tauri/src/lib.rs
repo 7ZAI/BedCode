@@ -10,6 +10,7 @@ pub mod router;
 pub mod session;
 pub mod state;
 pub mod system;
+pub mod mdns;
 
 // Re-export core types
 pub use system::error::{AppError, Result};
@@ -63,6 +64,12 @@ pub fn run() {
 
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
+
+            // 初始化 mDNS 管理器
+            let mdns_discovery = Arc::new(tokio::sync::RwLock::new(crate::mdns::discovery::MdnsDiscovery::new()));
+            app.manage(mdns_discovery);
+            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(crate::mdns::advertiser::MdnsAdvertiser::new()));
+            app.manage(mdns_advertiser);
 
             tracing::info!("BedCode Mobile started successfully!");
             Ok(())
@@ -120,6 +127,12 @@ pub fn run() {
             // Session Config (移动端使用内存存储)
             commands::mobile_commands::list_session_configs_mobile,
             commands::mobile_commands::get_session_config_mobile,
+            // mDNS
+            commands::mdns::mdns_start_discovery,
+            commands::mdns::mdns_stop_discovery,
+            commands::mdns::mdns_get_discovered_services,
+            commands::mdns::mdns_start_advertise,
+            commands::mdns::mdns_stop_advertise,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

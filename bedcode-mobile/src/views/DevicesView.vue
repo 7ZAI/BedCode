@@ -183,7 +183,7 @@
 
     <!-- Action Buttons (when not connected) -->
     <div v-if="!isConnected" class="p-4 border-t border-[var(--mobile-border)] space-y-3 pb-safe">
-      <!-- Scan QR Code Button -->
+      <!-- QR Connect Button -->
       <button
         class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all flex items-center justify-center gap-2"
         :class="{ 'opacity-50': connection.isConnecting.value }"
@@ -196,9 +196,22 @@
         {{ t('mobile.connection.scanConnect') }}
       </button>
 
-      <!-- Manual Connect Button -->
+      <!-- Discover Devices Button -->
       <button
         class="w-full bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-all flex items-center justify-center gap-2"
+        :class="{ 'opacity-50': connection.isConnecting.value }"
+        :disabled="connection.isConnecting.value"
+        @click="$router.push({ name: 'mobile-discover' })"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
+        </svg>
+        {{ t('mobile.connection.discoverDevices') }}
+      </button>
+
+      <!-- Manual Connect Button -->
+      <button
+        class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-bg-secondary)] transition-all flex items-center justify-center gap-2"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="showManualConnect = true"
@@ -430,6 +443,17 @@ onActivated(() => {
 
 onMounted(async () => {
   connection.loadConnectionHistory()
+
+  // 从 DiscoverView 跳转回来时，自动连接 mDNS 发现的设备
+  const mdnsDevice = history.state?.mdnsDevice as RemoteDevice | undefined
+  if (mdnsDevice) {
+    // 清除 state 防止重复触发
+    history.replaceState({}, '')
+    connection.clearSessionConfigs()
+    connection.clearActiveSessions()
+    // 自动发起连接
+    startConnection(mdnsDevice, false)
+  }
 })
 
 // 监听连接状态变化，认证完成时加载会话数据

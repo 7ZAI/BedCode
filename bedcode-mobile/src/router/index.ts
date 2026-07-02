@@ -54,6 +54,11 @@ const router = createRouter({
       name: 'mobile-scan',
       component: () => import('@/views/ScanView.vue'),
     },
+    {
+      path: '/mobile/discover',
+      name: 'mobile-discover',
+      component: () => import('@/views/DiscoverView.vue'),
+    },
   ],
 })
 
