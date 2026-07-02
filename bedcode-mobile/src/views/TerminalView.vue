@@ -14,7 +14,7 @@
     <!-- Header -->
     <header class="header">
       <button class="back-btn" @click="handleBack">
-        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
@@ -28,42 +28,42 @@
       <!-- 常驻工具按钮：根据配置决定哪些按钮直接显示 -->
       <template v-for="item in visibleToolbarItems" :key="item.key">
         <button v-if="item.key === 'mode'" class="mode-btn" :class="{ active: autoMode === 'auto' }" @click="toggleMode" :title="autoMode === 'auto' ? t('mobile.terminal.switchToManual') : t('mobile.terminal.switchToAuto')">
-          <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
             <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
           </svg>
-          <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <svg v-else viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/>
           </svg>
         </button>
         <button v-else-if="item.key === 'task'" class="task-btn" @click="showTaskPicker = true" :title="t('mobile.terminal.pendingTasks')">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
             <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
           </svg>
           <span v-if="hasQueuedTasks" class="task-badge">{{ pendingCount }}</span>
         </button>
         <button v-else-if="item.key === 'shortcut'" class="tool-btn" @click="showShortcutConfig = true" :title="t('mobile.shortcutConfig.title')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
           </svg>
         </button>
         <button v-else-if="item.key === 'clear'" class="tool-btn" @click="confirmClear" :title="t('mobile.terminal.clearScreen')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
         </button>
         <button v-else-if="item.key === 'refresh'" class="tool-btn" @click="refreshTerminal" :title="t('mobile.terminal.refreshFormat')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </button>
         <button v-else-if="item.key === 'settings'" class="tool-btn" @click="openSettings" :title="t('mobile.terminal.settings')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
         <button v-else-if="item.key === 'folder'" class="folder-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" :title="t('mobile.terminal.files')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
           </svg>
         </button>
@@ -71,41 +71,41 @@
       <!-- 溢出菜单按钮：仅当有非常驻工具时显示 -->
       <div v-if="overflowToolbarItems.length > 0" class="overflow-menu-wrapper">
         <button class="overflow-btn" :class="{ active: showOverflowMenu }" @click.stop="showOverflowMenu = !showOverflowMenu" :title="t('mobile.terminal.moreTools')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
             <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
           </svg>
         </button>
         <transition name="overflow-menu">
           <div v-if="showOverflowMenu" class="overflow-menu" @click.stop>
             <button v-if="isOverflowItem('mode')" class="overflow-menu-item" :class="{ active: autoMode === 'auto' }" @click="toggleMode()">
-              <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
-              <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/></svg>
+              <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
+              <svg v-else viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/></svg>
               <span>{{ autoMode === 'auto' ? t('mobile.terminal.autoMode') : t('mobile.terminal.manualMode') }}</span>
               <span class="overflow-item-status">{{ autoMode === 'auto' ? 'ON' : 'OFF' }}</span>
             </button>
             <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/></svg>
+              <svg viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/></svg>
               <span>{{ t('mobile.terminal.pendingTasks') }}</span>
               <span v-if="hasQueuedTasks" class="overflow-item-badge">{{ pendingCount }}</span>
             </button>
             <button v-if="isOverflowItem('shortcut')" class="overflow-menu-item" @click="showShortcutConfig = true; closeOverflowMenu()">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
               <span>{{ t('mobile.shortcutConfig.title') }}</span>
             </button>
             <button v-if="isOverflowItem('clear')" class="overflow-menu-item" @click="confirmClear()">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
               <span>{{ t('mobile.terminal.clearScreen') }}</span>
             </button>
             <button v-if="isOverflowItem('refresh')" class="overflow-menu-item" @click="refreshTerminal()">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
               <span>{{ t('mobile.terminal.refreshFormat') }}</span>
             </button>
             <button v-if="isOverflowItem('settings')" class="overflow-menu-item" @click="openSettings()">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
               <span>{{ t('mobile.terminal.settings') }}</span>
             </button>
             <button v-if="isOverflowItem('folder')" class="overflow-menu-item" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
               <span>{{ t('mobile.terminal.files') }}</span>
             </button>
           </div>
@@ -1338,7 +1338,7 @@ watch(isConnected, async (connected) => {
 .loading-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: 50;
   background: var(--mobile-terminal-bg);
   display: flex;
   flex-direction: column;
@@ -1533,7 +1533,7 @@ watch(isConnected, async (connected) => {
   border-radius: 0.75rem;
   padding: 0.375rem;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  z-index: 100;
+  z-index: 30;
 }
 
 .overflow-menu-item {
@@ -1589,7 +1589,7 @@ watch(isConnected, async (connected) => {
 .overflow-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 99;
+  z-index: 29;
 }
 
 /* Overflow menu transition */
@@ -1649,7 +1649,7 @@ watch(isConnected, async (connected) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 50;
   padding: 1rem;
 }
 
@@ -1922,7 +1922,7 @@ watch(isConnected, async (connected) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 50;
   padding: 1rem;
 }
 

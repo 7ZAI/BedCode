@@ -1,12 +1,12 @@
 <template>
   <div class="h-full flex flex-col">
     <!-- Header -->
-    <header class="bg-white dark:bg-dark-800 border-b border-slate-200 dark:border-dark-700 px-6 py-3 h-12 flex items-center justify-between shadow-sm dark:shadow-none">
-      <h2 class="text-lg font-semibold">{{ $t('desktop.plugin.title') }}</h2>
+    <header class="bg-page px-8 h-14 flex items-center justify-between">
+      <h2 class="text-[var(--font-size-title)] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h2>
       <button
         @click="loadPlugins()"
         :disabled="loading"
-        class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 rounded-lg transition-colors disabled:opacity-50"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] rounded-btn transition-all duration-200 disabled:opacity-50"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -25,9 +25,9 @@
         />
 
         <!-- Plugin Table -->
-        <div v-else class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 shadow-sm dark:shadow-none overflow-hidden">
+        <div v-else class="bg-card rounded-card shadow-card overflow-hidden">
           <!-- Table Header -->
-          <div class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-4 py-2 bg-slate-50 dark:bg-dark-700/50 text-xs font-semibold text-slate-500 dark:text-dark-400 border-b border-slate-200 dark:border-dark-700 items-center">
+          <div class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-6 py-3 bg-[var(--bg-hover)]/50 text-xs font-semibold text-[var(--text-secondary)] border-b border-[var(--border)] items-center">
             <span>{{ $t('desktop.plugin.title') }}</span>
             <span>{{ $t('desktop.plugin.version') }}</span>
             <span>{{ $t('desktop.plugin.state') }}</span>
@@ -39,24 +39,24 @@
           <div v-for="plugin in plugins" :key="plugin.id">
             <!-- Row -->
             <div
-              class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-4 py-3 text-sm items-center cursor-pointer transition-colors border-b border-slate-100 dark:border-dark-700/50 last:border-b-0"
+              class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-6 py-3.5 text-sm items-center cursor-pointer transition-all duration-200 border-b border-[var(--border)] last:border-b-0"
               :class="[
-                isErrorState(plugin.state) ? 'bg-red-50 dark:bg-red-900/10' : '',
-                expandedId === plugin.id ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : 'hover:bg-slate-50 dark:hover:bg-dark-700/30'
+                isErrorState(plugin.state) ? 'bg-[var(--color-danger-light)]' : '',
+                expandedId === plugin.id ? 'bg-brand-light/30' : 'hover:bg-[var(--bg-hover)]'
               ]"
               @click="toggleExpand(plugin.id)"
             >
               <!-- Plugin Name + Description -->
               <div class="min-w-0">
                 <div class="flex items-center gap-1.5">
-                  <svg class="w-3 h-3 text-slate-400 dark:text-dark-500 shrink-0 transition-transform" :class="{ 'rotate-90': expandedId === plugin.id }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-3 h-3 text-[var(--text-tertiary)] shrink-0 transition-transform" :class="{ 'rotate-90': expandedId === plugin.id }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                   </svg>
-                  <span class="font-medium truncate" :class="isErrorState(plugin.state) ? 'text-red-700 dark:text-red-400' : 'text-slate-900 dark:text-white'">
+                  <span class="font-medium truncate text-[var(--text-primary)]">
                     {{ plugin.name }}
                   </span>
                 </div>
-                <div class="text-xs mt-0.5 pl-4.5 truncate" :class="isErrorState(plugin.state) ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-dark-400'">
+                <div class="text-xs mt-0.5 pl-4.5 truncate text-[var(--text-secondary)]">
                   <template v-if="isErrorState(plugin.state)">
                     ⚠ {{ getErrorMessage(plugin.state) }}
                   </template>
@@ -67,11 +67,11 @@
               </div>
 
               <!-- Version -->
-              <span class="text-slate-500 dark:text-dark-400 text-xs">{{ plugin.version }}</span>
+              <span class="text-[var(--text-secondary)] text-xs">{{ plugin.version }}</span>
 
               <!-- State Badge -->
               <span
-                class="text-xs px-2 py-0.5 rounded text-center"
+                class="inline-flex items-center h-6 px-2.5 rounded-tag text-[11px] font-medium"
                 :class="stateBadgeClass(plugin.state)"
               >
                 {{ $t(getStateKey(plugin.state)) }}
@@ -81,12 +81,12 @@
               <router-link
                 v-if="isActivated(plugin.state)"
                 :to="`/plugins/${plugin.id}/config`"
-                class="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                class="text-xs text-brand hover:underline"
                 @click.stop
               >
                 {{ $t('desktop.plugin.config') }}
               </router-link>
-              <span v-else class="text-xs text-slate-400 dark:text-dark-500 cursor-default">
+              <span v-else class="text-xs text-[var(--text-tertiary)] cursor-default">
                 {{ $t('desktop.plugin.config') }}
               </span>
 
@@ -102,26 +102,26 @@
             <!-- Expanded Detail -->
             <div
               v-if="expandedId === plugin.id"
-              class="px-4 py-3 bg-slate-50/50 dark:bg-dark-700/20 border-b border-slate-100 dark:border-dark-700/50"
+              class="px-6 py-3 bg-[var(--bg-hover)]/30 border-b border-[var(--border)]"
             >
               <div class="grid grid-cols-2 gap-4">
                 <!-- Left Column -->
                 <div class="space-y-3">
                   <div>
-                    <div class="text-xs font-medium text-slate-500 dark:text-dark-400 mb-1">ID</div>
-                    <div class="text-xs text-slate-600 dark:text-dark-300 font-mono">{{ plugin.id }}</div>
+                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">ID</div>
+                    <div class="text-xs text-[var(--text-primary)] font-mono">{{ plugin.id }}</div>
                   </div>
                   <div v-if="plugin.author">
-                    <div class="text-xs font-medium text-slate-500 dark:text-dark-400 mb-1">Author</div>
-                    <div class="text-xs text-slate-600 dark:text-dark-300">{{ plugin.author }}</div>
+                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">Author</div>
+                    <div class="text-xs text-[var(--text-primary)]">{{ plugin.author }}</div>
                   </div>
                   <div>
-                    <div class="text-xs font-medium text-slate-500 dark:text-dark-400 mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
+                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
                     <div class="flex items-center gap-2">
-                      <code class="text-xs text-slate-600 dark:text-dark-300 bg-slate-100 dark:bg-dark-700 px-2 py-1 rounded truncate max-w-[280px]">{{ plugin.extensionPath }}</code>
+                      <code class="text-xs text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-1 rounded-input truncate max-w-[280px]">{{ plugin.extensionPath }}</code>
                       <button
                         @click="copyPath(plugin.extensionPath)"
-                        class="text-xs text-primary-600 dark:text-primary-400 hover:underline shrink-0"
+                        class="text-xs text-brand hover:underline shrink-0"
                       >
                         {{ $t('desktop.plugin.copyPath') }}
                       </button>
@@ -131,7 +131,7 @@
                 <!-- Right Column -->
                 <div class="space-y-3">
                   <div>
-                    <div class="text-xs font-medium text-slate-500 dark:text-dark-400 mb-1">Permissions</div>
+                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">Permissions</div>
                     <div class="flex flex-wrap gap-1">
                       <span
                         v-for="perm in plugin.permissions"
@@ -140,12 +140,12 @@
                       >
                         {{ perm }}
                       </span>
-                      <span v-if="plugin.permissions.length === 0" class="text-xs text-slate-400">—</span>
+                      <span v-if="plugin.permissions.length === 0" class="text-xs text-[var(--text-tertiary)]">—</span>
                     </div>
                   </div>
                   <div>
-                    <div class="text-xs font-medium text-slate-500 dark:text-dark-400 mb-1">Contributes</div>
-                    <div class="text-xs text-slate-600 dark:text-dark-300">{{ getContributesSummary(plugin) }}</div>
+                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">Contributes</div>
+                    <div class="text-xs text-[var(--text-primary)]">{{ getContributesSummary(plugin) }}</div>
                   </div>
                 </div>
               </div>
@@ -183,15 +183,15 @@ const {
   getContributesSummary,
 } = usePluginManager()
 
-/** 状态徽章样式 */
+/** 状态徽章样式 — pill tag */
 function stateBadgeClass(state: PluginState): string {
   if (isActivated(state)) {
-    return 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+    return 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400'
   }
   if (isErrorState(state)) {
-    return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+    return 'bg-[var(--color-danger-light)] text-red-600 dark:text-red-400'
   }
-  return 'bg-slate-100 dark:bg-dark-600 text-slate-600 dark:text-dark-300'
+  return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
 }
 
 /** 处理切换，失败时恢复 UI 状态由 composable 内部处理 */

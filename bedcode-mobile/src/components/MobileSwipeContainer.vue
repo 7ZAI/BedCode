@@ -1,5 +1,5 @@
 <template>
-  <div class="swipe-container" ref="containerRef" @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd" @touchcancel="handleTouchEnd">
+  <div class="swipe-container" ref="containerRef">
     <div
       class="swipe-track"
       ref="trackRef"
@@ -23,6 +23,13 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * MobileSwipeContainer - 主导航页面左右滑动切换容器
+ *
+ * 使用 capture 阶段 + 非 passive 监听器确保水平滑动手势
+ * 始终被容器拦截，不被子元素滚动或浏览器默认行为吞掉。
+ * Teleport 弹窗打开时自动禁用滑动。
+ */
 import { ref, computed, onMounted, onUnmounted, onActivated, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DevicesView from '@/views/DevicesView.vue'
@@ -30,7 +37,6 @@ import SessionsView from '@/views/SessionsView.vue'
 import ToolboxView from '@/views/ToolboxView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 
-// 定义组件名称，用于 keep-alive 缓存
 defineOptions({
   name: 'MobileSwipeContainer'
 })
@@ -54,20 +60,22 @@ const translateX = ref(0)
 const isDragging = ref(false)
 const isAnimating = ref(false)
 
+// Teleport 弹窗打开时为 true，此时禁止滑动
+const isModalOpen = ref(false)
+
 // 触摸状态
 let startX = 0
 let startY = 0
 let startTime = 0
-let lastX = 0
 let direction: 'horizontal' | 'vertical' | null = null
 
 // 参数配置
 const CONFIG = {
-  directionThreshold: 20,
-  swipeThreshold: 80,
+  directionThreshold: 10,
+  swipeThreshold: 60,
   velocityThreshold: 0.3,
   maxOvershoot: 50,
-  animationDuration: 300
+  animationDuration: 280
 }
 
 // 计算轨道样式（拖动时无过渡，松手后 CSS 动画平滑滑动）
@@ -127,20 +135,34 @@ function resetTouchState() {
   translateX.value = -currentPage.value * window.innerWidth
 }
 
-// 触摸事件处理
-function handleTouchStart(e: TouchEvent) {
+// ==================== Touch Event Handling (capture + non-passive) ====================
+//
+// 核心策略：
+// 1. 使用 addEventListener 在 capture 阶段拦截，优先于子元素处理
+// 2. 监听器设为 non-passive，使 preventDefault() 生效
+// 3. 水平滑动手势一旦确认，立即 preventDefault 阻止浏览器默认行为
+// 4. 垂直滚动不干预，让子元素正常滚动
+// 5. Teleport 弹窗打开时完全跳过触摸处理
+
+function onTouchStart(e: TouchEvent) {
+  // 弹窗打开时不处理滑动
+  if (isModalOpen.value) return
   if (isAnimating.value) return
 
   startX = e.touches[0].clientX
   startY = e.touches[0].clientY
   startTime = Date.now()
-  lastX = startX
   direction = null
   isDragging.value = true
 }
 
-function handleTouchMove(e: TouchEvent) {
-  if (!isDragging.value || direction === 'vertical') return
+function onTouchMove(e: TouchEvent) {
+  if (!isDragging.value) return
+  if (isModalOpen.value) {
+    isDragging.value = false
+    direction = null
+    return
+  }
 
   const deltaX = e.touches[0].clientX - startX
   const deltaY = e.touches[0].clientY - startY
@@ -151,7 +173,7 @@ function handleTouchMove(e: TouchEvent) {
       direction = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical'
 
       if (direction === 'vertical') {
-        // 垂直滑动时不阻止默认行为，让子元素（如终端）可以正常滚动
+        // 垂直滑动，放弃水平拦截，让子元素正常滚动
         isDragging.value = false
         direction = null
         return
@@ -161,7 +183,7 @@ function handleTouchMove(e: TouchEvent) {
     }
   }
 
-  // 水平滑动
+  // 水平滑动：阻止浏览器默认行为（如前进/后退导航、overscroll）
   if (direction === 'horizontal') {
     e.preventDefault()
 
@@ -177,11 +199,10 @@ function handleTouchMove(e: TouchEvent) {
     }
 
     translateX.value = newTranslate
-    lastX = e.touches[0].clientX
   }
 }
 
-function handleTouchEnd(e: TouchEvent) {
+function onTouchEnd(e: TouchEvent) {
   if (!isDragging.value || direction !== 'horizontal') {
     isDragging.value = false
     direction = null
@@ -212,7 +233,48 @@ function handleTouchEnd(e: TouchEvent) {
   direction = null
 }
 
-// 路由监听
+function onTouchCancel() {
+  isDragging.value = false
+  direction = null
+  translateX.value = -currentPage.value * window.innerWidth
+}
+
+// ==================== Teleport 弹窗检测 ====================
+//
+// Teleport 弹窗渲染到 body，不在 swipe-container DOM 内，
+// 因此触摸事件无法到达容器。通过 MutationObserver 监听
+// body 下 z-50 / z-[9999] 的固定遮罩层，自动禁用滑动。
+
+let modalObserver: MutationObserver | null = null
+
+function checkModalsOpen() {
+  // Teleport 弹窗使用 v-if 控制显隐，存在即表示弹窗打开
+  // .fixed.inset-0 匹配 BottomSheet、Modal 等标准弹窗
+  // .confirm-modal-overlay 匹配 SettingsView 等自定义弹窗
+  const overlays = document.body.querySelectorAll('.fixed.inset-0, .confirm-modal-overlay')
+  isModalOpen.value = overlays.length > 0
+}
+
+function setupModalObserver() {
+  modalObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      // 只关心 body 直接子节点的增删（Teleport 弹窗挂载/卸载）
+      if (mutation.type === 'childList') {
+        checkModalsOpen()
+        return
+      }
+    }
+  })
+
+  // 只监听 body 直接子节点的增删，Teleport 弹窗是 body 的直接子元素
+  modalObserver.observe(document.body, {
+    childList: true,
+    subtree: false
+  })
+}
+
+// ==================== 路由监听 ====================
+
 watch(() => route.query.page, (queryPage) => {
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
@@ -222,23 +284,48 @@ watch(() => route.query.page, (queryPage) => {
   }
 })
 
-// 窗口大小变化
+// ==================== 窗口大小变化 ====================
+
 function handleResize() {
   translateX.value = -currentPage.value * window.innerWidth
 }
 
+// ==================== 生命周期 ====================
+
 onMounted(() => {
   initPage()
+
+  // 使用 capture 阶段 + non-passive 监听器
+  // capture: true 让容器优先于子元素处理触摸事件
+  // passive: false 使 preventDefault() 能够生效
+  const container = containerRef.value!
+  container.addEventListener('touchstart', onTouchStart, { passive: true, capture: true })
+  container.addEventListener('touchmove', onTouchMove, { passive: false, capture: true })
+  container.addEventListener('touchend', onTouchEnd, { passive: true, capture: true })
+  container.addEventListener('touchcancel', onTouchCancel, { passive: true, capture: true })
+
   window.addEventListener('resize', handleResize)
+
+  // 启动弹窗检测
+  setupModalObserver()
 })
 
 onUnmounted(() => {
+  const container = containerRef.value
+  if (container) {
+    container.removeEventListener('touchstart', onTouchStart, { capture: true })
+    container.removeEventListener('touchmove', onTouchMove, { capture: true })
+    container.removeEventListener('touchend', onTouchEnd, { capture: true })
+    container.removeEventListener('touchcancel', onTouchCancel, { capture: true })
+  }
+
   window.removeEventListener('resize', handleResize)
+
+  modalObserver?.disconnect()
+  modalObserver = null
 })
 
 // keep-alive 激活时重置触摸状态，确保从终端返回后滑动功能正常
-// 停用期间窗口大小可能变化（键盘弹出/收起、旋转等），translateX 需要重新同步
-// 触摸状态也可能残留（如导航离开时触摸序列未完成），需要清除
 onActivated(() => {
   resetTouchState()
 })

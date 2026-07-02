@@ -15,7 +15,7 @@ pub struct QrConnectionInfo {
 
 #[tauri::command]
 pub async fn generate_qr_code(
-    qr_manager: State<'_, Arc<crate::auth::QrTokenManager>>,
+    qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
     db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
 ) -> Result<String> {
     let ttl = {
@@ -34,7 +34,7 @@ pub async fn generate_qr_code(
 
 #[tauri::command]
 pub async fn clear_qr_code(
-    qr_manager: State<'_, Arc<crate::auth::QrTokenManager>>,
+    qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
 ) -> Result<()> {
     qr_manager.clear().await;
     tracing::info!("QR code cleared");
@@ -43,7 +43,7 @@ pub async fn clear_qr_code(
 
 #[tauri::command]
 pub async fn get_qr_connection_info(
-    qr_manager: State<'_, Arc<crate::auth::QrTokenManager>>,
+    qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
     app_handle: tauri::AppHandle,
     host: Option<String>,
 ) -> Result<Option<QrConnectionInfo>> {
@@ -57,7 +57,7 @@ pub async fn get_qr_connection_info(
                     .find(|ip| !ip.starts_with("127.") && !ip.starts_with("169.254."))
             }).unwrap_or_else(|| "127.0.0.1".to_string());
 
-            let config = crate::config::AppConfig::load(
+            let config = crate::system::config::AppConfig::load(
                 &app_handle.path().app_data_dir()
                     .unwrap_or_default()
                     .join("config.properties")

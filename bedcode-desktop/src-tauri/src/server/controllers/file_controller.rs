@@ -6,9 +6,9 @@
 //! - POST /api/diff-tree
 
 use actix_web::{web, HttpResponse};
-use crate::app_context::AppContext;
-use crate::model::api_dto::ApiResponse;
-use crate::model::api_dto::*;
+use crate::system::app_context::AppContext;
+use crate::server::dtos::ApiResponse;
+use crate::server::dtos::file_dto::*;
 use crate::process::create_command;
 use std::path::PathBuf;
 use std::collections::HashSet;
@@ -125,7 +125,6 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
     for entry in read_dir {
         let entry = entry.map_err(|e| crate::AppError::Internal(format!("Failed to read entry: {}", e)))?;
         let file_name = entry.file_name().to_string_lossy().to_string();
-        if file_name.starts_with('.') { continue; }
         let file_type = entry.file_type().map_err(|e| crate::AppError::Internal(format!("Failed to get file type: {}", e)))?;
 
         if file_type.is_dir() {

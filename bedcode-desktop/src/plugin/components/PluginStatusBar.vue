@@ -3,7 +3,7 @@
     <button
       v-for="item in items"
       :key="item.id"
-      class="flex items-center gap-1 px-2 py-0.5 text-xs text-slate-500 dark:text-dark-400 hover:text-slate-700 dark:hover:text-dark-200 transition-colors"
+      class="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
       @click="item.onClick?.()"
     >
       <span v-if="item.icon" v-html="item.icon" />

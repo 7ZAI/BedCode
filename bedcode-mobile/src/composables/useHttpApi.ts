@@ -220,10 +220,23 @@ export interface GitBranchesData {
   isGitRepo: boolean
 }
 
+/** Git 工作区状态响应 */
+export interface GitStatusData {
+  hasChanges: boolean
+  changedCount: number
+}
+
 /** 获取 git 分支列表 */
 export async function httpGetGitBranches(sessionId: string) {
   return request<GitBranchesData>(
     `/api/git/branches?session_id=${encodeURIComponent(sessionId)}`
+  )
+}
+
+/** 检查工作区是否有未提交的更改 */
+export async function httpGetGitStatus(sessionId: string) {
+  return request<GitStatusData>(
+    `/api/git/status?session_id=${encodeURIComponent(sessionId)}`
   )
 }
 
@@ -241,9 +254,56 @@ export function setApiBaseUrl(address: string, port: number) {
   API_BASE_URL.value = `${address}:${port}`
 }
 
+// ==================== Connectivity Probe ====================
+
+/** HTTP 探测结果 */
+export interface ProbeResult {
+  reachable: boolean
+  status?: string
+  port?: number
+  uptimeSecs?: number
+  error?: string
+}
+
+/**
+ * 探测桌面端 HTTP 服务是否可达
+ *
+ * 在 WS 连接前调用，3 秒超时快速判断网络连通性。
+ * 失败时立即返回而非等待 10 秒 WS 超时。
+ */
+export async function httpProbe(address: string, port: number): Promise<ProbeResult> {
+  const url = `http://${address}:${port}/api/health`
+  console.log('[HttpApi] Probing:', url)
+
+  try {
+    const response = await tauriFetch(url, {
+      method: 'GET',
+      connectTimeout: 3000,
+    })
+
+    if (!response.ok) {
+      return { reachable: false, error: `HTTP ${response.status}` }
+    }
+
+    const data = await response.json()
+    console.log('[HttpApi] Probe success:', data)
+    return {
+      reachable: true,
+      status: data.status,
+      port: data.port,
+      uptimeSecs: data.uptime_secs,
+    }
+  } catch (e: any) {
+    console.warn('[HttpApi] Probe failed:', e?.message || e)
+    return { reachable: false, error: e?.message || String(e) }
+  }
+}
+
 export function useHttpApi() {
   return {
     setApiBaseUrl,
+    // Probe
+    httpProbe,
     // Auth
     httpRequestPairing,
     httpVerifyPairingCode,
@@ -268,6 +328,7 @@ export function useHttpApi() {
     httpSetSessionMode,
     // Git
     httpGetGitBranches,
+    httpGetGitStatus,
     httpGitCheckout,
   }
 }

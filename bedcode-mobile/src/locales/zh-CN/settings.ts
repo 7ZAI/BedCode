@@ -52,11 +52,17 @@ export default {
       githubRepo: 'GitHub 仓库',
       checkUpdate: '检查更新',
       alreadyLatest: '已是最新版本',
+      checkingUpdate: '正在检查更新...',
+      newVersionAvailable: '发现新版本: {version}',
+      updateCheckFailed: '检查更新失败',
+      downloadUpdate: '下载更新',
+      currentVersion: '当前版本',
     },
     actions: {
       resetSettings: '重置设置',
+      resetSettingsConfirm: '确定要重置所有设置为默认值吗？',
       clearAllData: '清除所有数据',
-      clearDataConfirm: '确定要清除所有数据吗？此操作无法撤销。',
+      clearDataConfirm: '确定要清除所有数据吗？包括预设任务、连接历史、配对设备等，此操作无法撤销。',
     },
     browser: {
       confirmOpen: '确定要在浏览器中打开此链接吗？',

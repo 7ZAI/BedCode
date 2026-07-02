@@ -56,8 +56,8 @@ pub struct MetricsCollector {
 }
 
 struct MetricsInner {
-    /// 启动时间
-    start_time: std::time::Instant,
+    /// 启动时间（Mutex 保护以支持 reset）
+    start_time: std::sync::Mutex<std::time::Instant>,
     /// HTTP 请求计数
     http_requests: std::sync::atomic::AtomicU64,
     /// WS 发送消息计数
@@ -80,7 +80,7 @@ impl MetricsCollector {
         static INSTANCE: std::sync::LazyLock<MetricsCollector> =
             std::sync::LazyLock::new(|| MetricsCollector {
                 inner: std::sync::Arc::new(MetricsInner {
-                    start_time: std::time::Instant::now(),
+                    start_time: std::sync::Mutex::new(std::time::Instant::now()),
                     http_requests: std::sync::atomic::AtomicU64::new(0),
                     ws_sent: std::sync::atomic::AtomicU64::new(0),
                     ws_received: std::sync::atomic::AtomicU64::new(0),
@@ -108,12 +108,28 @@ impl MetricsCollector {
         self.inner.ws_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// 重置所有计数器和计时器（服务器重启时调用）
+    pub fn reset(&self) {
+        if let Ok(mut start_time) = self.inner.start_time.lock() {
+            *start_time = std::time::Instant::now();
+        }
+        self.inner.http_requests.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner.ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner.ws_received.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner.last_http_requests.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner.last_ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner.last_ws_received.store(0, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut last_time) = self.inner.last_sample_time.lock() {
+            *last_time = std::time::Instant::now();
+        }
+    }
+
     /// 采样并计算当前指标快照
     ///
     /// 使用滑动窗口计算速率：当前值 - 上次采样值 / 时间间隔
     pub fn sample(&self, connections: usize, cpu_percent: f64, memory_bytes: u64) -> ServerMetrics {
         let now = std::time::Instant::now();
-        let uptime = self.inner.start_time.elapsed().as_secs();
+        let uptime = self.inner.start_time.lock().map(|t| t.elapsed().as_secs()).unwrap_or(0);
 
         let http_total = self.inner.http_requests.load(std::sync::atomic::Ordering::Relaxed);
         let ws_sent_total = self.inner.ws_sent.load(std::sync::atomic::Ordering::Relaxed);

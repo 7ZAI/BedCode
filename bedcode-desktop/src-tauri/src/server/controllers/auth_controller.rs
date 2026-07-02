@@ -9,11 +9,11 @@
 
 use actix_web::{web, HttpResponse};
 use tauri::Emitter;
-use crate::app_context::AppContext;
-use crate::model::api_dto::ApiResponse;
+use crate::system::app_context::AppContext;
+use crate::server::dtos::ApiResponse;
 use crate::server::dtos::auth_dto::*;
-use crate::auth::jwt::JwtService;
-use crate::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
+use crate::utils::auth::jwt::JwtService;
+use crate::utils::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
 use crate::server::services::auth_service::format_device_display_name;
 
 /// POST /api/auth/pairing
@@ -34,7 +34,7 @@ pub async fn request_pairing(
         expires_in: code.remaining_seconds(),
         device_name: Some(body.device_name.clone()),
     }) {
-        tracing::error!("Failed to emit pairing code event: {}", e);
+        tracing::error!(error = %e, "Failed to emit pairing code event");
     }
 
     let data = PairingResponseData {
@@ -56,6 +56,7 @@ pub async fn verify_pairing_code(
     let is_valid = pairing_service.verify_and_consume_code(&body.pairing_code).await;
 
     if !is_valid {
+        tracing::warn!(device_name = ?body.device_name, "Pairing code verification failed");
         let current_code = pairing_service.get_current_code().await;
         let msg = if current_code.is_none() {
             "No pairing code available. Please generate a new code."
@@ -73,7 +74,7 @@ pub async fn verify_pairing_code(
     ) {
         Ok(t) => t,
         Err(e) => {
-            tracing::error!("JWT generation failed: {}", e);
+            tracing::error!(error = %e, "JWT generation failed");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, "Failed to generate token"));
         }
     };
@@ -84,7 +85,7 @@ pub async fn verify_pairing_code(
         let db = ctx.db();
         let db_guard = db.lock().await;
         if let Err(e) = db_guard.add_pairing(&display_name, &body.fingerprint, "", Some(&body.address)) {
-            tracing::warn!("Failed to record pairing for {}: {}", body.device_name, e);
+            tracing::warn!(device_name = %body.device_name, error = %e, "Failed to record pairing");
         }
     }
 
@@ -132,7 +133,7 @@ pub async fn qr_connect(
             ) {
                 Ok(t) => t,
                 Err(e) => {
-                    tracing::error!("JWT generation failed: {}", e);
+                    tracing::error!(error = %e, "JWT generation failed");
                     return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, "Failed to generate token"));
                 }
             };
@@ -143,7 +144,7 @@ pub async fn qr_connect(
                 let db = ctx.db();
                 let db_guard = db.lock().await;
                 if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address)) {
-                    tracing::warn!("Failed to record pairing for {}: {}", device_name, e);
+                    tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                 }
             }
 
@@ -162,6 +163,7 @@ pub async fn qr_connect(
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
         Err(e) => {
+            tracing::warn!(error = %e, "QR token verification failed");
             let error_msg = e.to_string();
             let user_msg = if error_msg.contains("expired") {
                 "二维码已过期，请重新生成"
@@ -193,7 +195,7 @@ pub async fn reauthenticate(
                 let db = ctx.db();
                 let db_guard = db.lock().await;
                 if let Err(e) = db_guard.update_pairing_last_seen(fp) {
-                    tracing::warn!("Failed to update pairing last_seen for {}: {}", fp, e);
+                    tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
                 }
             }
 
@@ -204,7 +206,7 @@ pub async fn reauthenticate(
             ) {
                 Ok(t) => t,
                 Err(e) => {
-                    tracing::error!("JWT generation failed: {}", e);
+                    tracing::error!(error = %e, "JWT generation failed");
                     return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, "Failed to generate token"));
                 }
             };
@@ -216,8 +218,9 @@ pub async fn reauthenticate(
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
         Err(e) => {
+            tracing::warn!(error = ?e, "Reauth JWT verification failed");
             let msg = match e {
-                crate::auth::jwt::JwtError::TokenExpired => "Token expired",
+                crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
                 _ => "Invalid token",
             };
             HttpResponse::Ok().json(ApiResponse::<()>::error(1001, msg))

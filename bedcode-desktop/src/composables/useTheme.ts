@@ -50,17 +50,10 @@ export function useTheme() {
     setupTheme()
   })
 
-  // 主题对应的容器类名
-  const themeClasses = computed(() => {
-    const theme = settingsStore.settings.ui.theme
-    const isDark = theme === 'system' ? isSystemDark.value : theme === 'dark'
-
-    return {
-      container: isDark
-        ? 'min-h-screen bg-slate-50 dark:bg-dark-900 text-slate-900 dark:text-dark-100'
-        : 'min-h-screen bg-slate-50 text-slate-900'
-    }
-  })
+  // 主题切换通过 :root.dark CSS 变量自动生效，无需 dark: 前缀
+  const themeClasses = computed(() => ({
+    container: 'min-h-screen bg-page text-[var(--text-primary)]'
+  }))
 
   return {
     isSystemDark,

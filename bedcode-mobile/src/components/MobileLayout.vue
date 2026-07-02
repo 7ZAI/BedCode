@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="safeAreaReady"
-    class="flex flex-col h-screen mobile-app mobile-ui"
+    class="flex flex-col h-[100dvh] overflow-hidden mobile-app mobile-ui"
     :style="mobileContainerStyle"
   >
     <!-- Main Content -->
@@ -20,7 +20,7 @@
     <MobileNav v-if="!isTerminalRoute" />
   </div>
   <!-- 安全区域初始化前的占位，避免内容在状态栏下闪现 -->
-  <div v-else class="h-screen mobile-app mobile-ui bg-[var(--mobile-bg)]" />
+  <div v-else class="h-[100dvh] mobile-app mobile-ui bg-[var(--mobile-bg-primary)]" />
 </template>
 
 <script setup lang="ts">

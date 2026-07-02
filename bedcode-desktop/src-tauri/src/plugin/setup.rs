@@ -5,7 +5,7 @@
 //! 2. cleanup_global_hooks() — 清理旧版全局 hooks（迁移到项目级后不再需要）
 //! 3. ensure_project_hooks() — 会话启动前为项目配置 hooks（项目级作用域）
 
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

@@ -20,14 +20,17 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 
 ## Code Map
 
-**完整的项目目录结构和模块索引请参阅 [`docs/code-map.md`](docs/code-map.md)。**
+各项目的完整目录结构和模块索引请参阅对应的 code-map 文档：
 
-该文档包含：
+- **桌面端**: [`bedcode-desktop/docs/code-map.md`](bedcode-desktop/docs/code-map.md)
+- **移动端**: [`bedcode-mobile/docs/code-map.md`](bedcode-mobile/docs/code-map.md)
+
+每个文档包含：
 - 完整的目录树结构
 - 各模块职责说明
 - 按功能和类型的快速导航索引
 
-**重要：当用户命令包含以下动作时，请先阅读 `docs/code-map.md`：**
+**重要：当用户命令包含以下动作时，请先阅读对应项目的 `docs/code-map.md`：**
 
 - 探索代码 / 查看代码 / 了解代码结构
 - 查找文件 / 定位模块 / 寻找某个功能
@@ -42,25 +45,31 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 
 桌面端 Rust 模块按领域直接组织在 `src/` 下，无中间层级：
 
-- **auth/**: 认证（配对、JWT、QR Token）
 - **commands/**: Tauri invoke 命令层
-- **config.rs**: 应用配置（AppConfig）
 - **db/**: 数据库（连接、模型、操作）
-- **enums/**: 枚举类型（合并原 shared/enums + desktop/enums）
-- **error.rs**: AppError + Result
-- **error_boundary.rs**: spawn_with_error_boundary
-- **event/**: 全局事件系统（EventMatcher）
-- **events/**: 桌面端同步事件
-- **model/**: 数据模型（API DTO、Message、PTY 输出、会话事件）
-- **parser/**: 输出解析（ANSI、Markdown）
+- **enums/**: 枚举类型
+- **events/**: 全局事件系统（AppEvent + EventMatcher + 同步事件）
 - **plugin/**: 插件系统
-- **process.rs**: 进程工具（create_command）
 - **pty/**: PTY 管理
 - **server/**: HTTP/WS 服务器（Actix Web）
 - **session/**: 会话管理
-- **traits/**: PTY trait 定义
+- **system/**: 系统模块（app_context、config、error、error_boundary）
+- **utils/auth/**: 认证工具（JWT、配对、QR Token）
+- **utils/parser/**: 输出解析（ANSI、Markdown）
+- **process.rs**: 进程工具（create_command）
 
-移动端保持独立的模块结构（mobile/、shared/）。
+移动端 Rust 也已扁平化，所有模块直接组织在 `src/` 下：
+
+- **auth/**: 认证（manager、配对）
+- **commands/**: Tauri invoke 命令层
+- **connection/**: 远程连接模块（含 WebSocket 客户端、心跳、重连、编解码、配对服务）
+- **enums/**: 枚举类型
+- **handler/**: 消息处理器
+- **model/**: 数据模型
+- **router/**: 消息路由
+- **system/**: 系统模块（commands、config、error、error_boundary、settings）
+- **session.rs**: 远程会话管理
+- **state.rs**: 全局状态管理
 
 ### 模块文件组织 (重要)
 
@@ -87,7 +96,7 @@ src/
 
 ### Error Handling
 
-使用 `shared/system/error.rs` 中的 `AppError` 统一错误类型：
+使用 `system/error.rs` 中的 `AppError` 统一错误类型：
 
 ```rust
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -95,7 +104,7 @@ pub type Result<T> = std::result::Result<T, AppError>;
 
 **全局机制（已启用）：**
 - **Panic Hook** (`main.rs`) — 全局 `set_hook` 捕获所有未处理 panic，输出到 stderr。**注意：** panic hook 中禁止调用 `tracing::error!`（可能因锁冲突导致死锁），只使用 `eprintln!`
-- **Error Boundary** (`shared/system/error_boundary.rs`) — `spawn_with_error_boundary()` 包装 `tokio::spawn`，后台任务 panic 时自动捕获并记录日志，不传播到整个进程
+- **Error Boundary** (`system/error_boundary.rs`) — `spawn_with_error_boundary()` 包装 `tokio::spawn`，后台任务 panic 时自动捕获并记录日志，不传播到整个进程
 - **anyhow::Context** — `.context()` / `.with_context()` 可在 `crate::Result` 函数中使用（自动将 `anyhow::Error` → `AppError::Internal`），为错误添加调用链上下文
 
 **错误处理规范：**
@@ -118,7 +127,7 @@ tracing::error!(
 );
 
 // ✅ 好：tokio::spawn 使用 error boundary
-use crate::shared::system::error_boundary::spawn_with_error_boundary;
+use crate::system::error_boundary::spawn_with_error_boundary;
 spawn_with_error_boundary("task_name", async move {
     // 可能 panic 的任务逻辑
 });
@@ -212,6 +221,24 @@ const { platformInfo } = usePlatform()
 ```
 
 **禁止使用屏幕宽度检测桌面/移动端。**
+
+### Frontend Styles & Layout
+
+**涉及前端样式、布局、动画、主题等非逻辑/非业务代码时，必须加载 `frontend-styles` skill。** 该 skill 定义了项目的 CSS token 体系、布局模式、暗色模式策略、动画规范、z-index 层级、移动端安全区等完整约定。
+
+**触发场景：**
+- 编写或修改 Vue 组件的 CSS class / style 属性
+- 设计页面布局结构（flex/grid/overflow）
+- 添加过渡动画或 `<Transition>` 效果
+- 调整暗色/浅色主题相关样式
+- 创建新组件或重构组件 UI 部分
+- 处理移动端安全区、触摸目标、键盘避让
+- 使用 `:deep()` 穿透子组件样式
+
+**不触发的场景：**
+- 纯业务逻辑（composable 中的 API 调用、数据处理）
+- Rust 后端代码
+- i18n / 路由 / Pinia store 等逻辑层
 
 ---
 
@@ -640,7 +667,7 @@ throw new Error(result.message || '获取文件树失败')
 通过 `useI18nStore` Pinia store 管理：
 
 ```typescript
-import { useI18nStore } from '@/modules/shared/stores/i18n'
+import { useI18nStore } from '@/stores/i18n'
 const i18nStore = useI18nStore()
 
 // 切换语言（自动持久化到 Settings.ui.language）
@@ -670,7 +697,7 @@ await i18nStore.initLanguage()
 3. **Async Everywhere**: Rust 用 Tokio，前端用 async/await + Tauri commands
 4. **Event-Driven**: PTY 输出通过 `broadcast` 通道分发到 WebSocket 和前端
 5. **Graceful Shutdown**: 使用 `AtomicBool` 信号通知后台任务关闭
-6. **Flat Module Structure**: 桌面端 Rust 模块按领域直接组织在 `src/` 下，无 `desktop/`/`shared/` 中间层
+6. **Flat Module Structure**: 桌面端和移动端 Rust 模块均按领域直接组织在 `src/` 下，无中间层级
 7. **Plugin System**: Rust 插件 API crate + 前端插件加载器双层架构
 
 ---

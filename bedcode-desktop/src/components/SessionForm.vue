@@ -1,5 +1,5 @@
 <template>
-  <form @submit.prevent="handleSubmit" class="space-y-4">
+  <form @submit.prevent="handleSubmit" class="space-y-5">
     <!-- Name -->
     <Input
       v-model="form.name"
@@ -29,17 +29,17 @@
       />
       <!-- WSL 初始化中的加载提示 -->
       <div v-else class="form-group">
-        <label class="block text-sm mb-2 text-slate-700 dark:text-dark-300">
+        <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
           {{ $t('desktop.form.wslDistro') }}
           <span class="text-red-500">*</span>
         </label>
-        <div class="flex items-center gap-2 border rounded-lg px-4 py-2 border-slate-300 dark:border-dark-600 bg-white dark:bg-dark-700 text-slate-500 dark:text-dark-400">
+        <div class="flex items-center gap-2 border rounded-input px-4 py-2 border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-tertiary)]">
           <Spinner size="sm" color="primary" />
           <span class="text-sm">{{ $t('desktop.form.wslInitializing') }}</span>
         </div>
       </div>
       <!-- WSL 不可用或加载失败的提示 -->
-      <p v-if="!wslStore.isLoading && !wslStore.isAvailable" class="mt-1 text-sm text-yellow-500">
+      <p v-if="!wslStore.isLoading && !wslStore.isAvailable" class="mt-1 text-sm text-amber-500">
         {{ $t('desktop.form.wslNotDetected') }}
       </p>
       <p v-else-if="wslStore.error" class="mt-1 text-sm text-red-500">
@@ -58,7 +58,7 @@
         <button
           type="button"
           @click="browseDir"
-          class="text-primary-400 hover:text-primary-300"
+          class="text-brand hover:text-[var(--color-primary-hover)]"
         >
           {{ $t('common.button.browse') }}
         </button>

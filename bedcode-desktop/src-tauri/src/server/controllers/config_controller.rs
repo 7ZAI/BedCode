@@ -5,8 +5,8 @@
 //! - GET /api/quick-actions
 
 use actix_web::HttpResponse;
-use crate::app_context::AppContext;
-use crate::model::api_dto::ApiResponse;
+use crate::system::app_context::AppContext;
+use crate::server::dtos::ApiResponse;
 use crate::server::dtos::config_dto::*;
 use crate::session::SessionConfigManager;
 
@@ -29,7 +29,7 @@ pub async fn list_configs() -> HttpResponse {
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
         Err(e) => {
-            tracing::error!("Failed to list configs: {}", e);
+            tracing::error!(error = %e, "Failed to list configs");
             HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
         }
     }
@@ -54,7 +54,7 @@ pub async fn list_quick_actions() -> HttpResponse {
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
         Err(e) => {
-            tracing::error!("Failed to list quick actions: {}", e);
+            tracing::error!(error = %e, "Failed to list quick actions");
             HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
         }
     }

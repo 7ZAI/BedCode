@@ -1,14 +1,18 @@
 <template>
-  <div class="p-6 max-w-4xl mx-auto space-y-6 h-full overflow-y-auto">
+  <div class="h-full overflow-y-auto">
+    <!-- ==================== 无缝头部 ==================== -->
+    <header class="bg-page px-8 h-14 flex items-center justify-between">
+      <h1 class="text-lg font-semibold text-[var(--text-primary)]">{{ $t('desktop.server.config') }}</h1>
+    </header>
+
+    <!-- ==================== 内容区 ==================== -->
+    <div class="p-6 px-8 max-w-4xl mx-auto space-y-4">
     <!-- ==================== 区块 1：服务器配置 ==================== -->
-    <div class="bg-white dark:bg-dark-800 rounded-xl border border-slate-200 dark:border-dark-700 p-6">
-      <!-- 标题行：配置 + 状态 + 控制按钮 -->
+    <div class="bg-card rounded-card p-6 shadow-card">
+      <!-- 标题行：状态 + 控制按钮 -->
       <div class="flex items-center justify-between mb-5">
         <div class="flex items-center gap-3">
-          <h2 class="text-lg font-semibold text-slate-800 dark:text-white">
-            {{ $t('desktop.server.config') }}
-          </h2>
-          <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+          <div class="flex items-center gap-1.5 rounded-tag h-7 px-3 text-xs font-medium"
             :class="status === 'running' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : status === 'starting' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'"
           >
             <div class="w-2 h-2 rounded-full"
@@ -19,24 +23,24 @@
         </div>
         <div class="flex gap-2">
           <button
-            class="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
-            :class="status === 'stopped' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-slate-100 dark:bg-dark-700 text-slate-400 dark:text-dark-500 cursor-not-allowed'"
+            class="px-3 py-1.5 text-sm font-medium rounded-btn transition-colors"
+            :class="status === 'stopped' ? 'bg-brand text-white hover:bg-[var(--color-primary-hover)]' : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)] cursor-not-allowed'"
             :disabled="status !== 'stopped' || loading"
             @click="handleStart"
           >
             {{ $t('desktop.server.start') }}
           </button>
           <button
-            class="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
-            :class="status === 'running' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-100 dark:bg-dark-700 text-slate-400 dark:text-dark-500 cursor-not-allowed'"
+            class="px-3 py-1.5 text-sm font-medium rounded-btn transition-colors"
+            :class="status === 'running' ? 'bg-[var(--color-danger-light)] text-red-600 hover:bg-red-100' : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)] cursor-not-allowed'"
             :disabled="status !== 'running' || loading"
             @click="handleStop"
           >
             {{ $t('desktop.server.stop') }}
           </button>
           <button
-            class="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
-            :class="status === 'running' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 dark:bg-dark-700 text-slate-400 dark:text-dark-500 cursor-not-allowed'"
+            class="px-3 py-1.5 text-sm font-medium rounded-btn transition-colors"
+            :class="status === 'running' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)] cursor-not-allowed'"
             :disabled="status !== 'running' || loading"
             @click="handleRestart"
           >
@@ -48,17 +52,17 @@
       <!-- 配置项网格 -->
       <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 items-center">
         <!-- 端口 -->
-        <label class="text-sm text-slate-500 dark:text-dark-400 text-right">{{ $t('desktop.server.port') }}</label>
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.port') }}</label>
         <div class="flex items-center gap-2">
           <input
             v-model.number="portInput"
             type="number"
             min="1024"
             max="65535"
-            class="w-28 px-2.5 py-1.5 text-sm border border-slate-200 dark:border-dark-600 rounded-lg bg-white dark:bg-dark-700 text-slate-800 dark:text-white"
+            class="w-28 h-[var(--input-height)] px-2.5 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]"
           />
           <button
-            class="px-2.5 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
+            class="px-2.5 py-1.5 text-xs bg-brand text-white rounded-btn hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-50"
             :disabled="loading"
             @click="handleApplyPort"
           >
@@ -67,17 +71,17 @@
         </div>
 
         <!-- 本地 IP -->
-        <label class="text-sm text-slate-500 dark:text-dark-400 text-right">{{ $t('desktop.server.localIp') }}</label>
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.localIp') }}</label>
         <div class="flex flex-wrap gap-x-4 gap-y-0.5">
-          <span v-for="ip in localIps" :key="ip" class="text-sm text-slate-800 dark:text-white font-mono">{{ ip }}</span>
-          <span v-if="localIps.length === 0" class="text-sm text-slate-400 dark:text-dark-500">-</span>
+          <span v-for="ip in localIps" :key="ip" class="text-sm text-[var(--text-primary)] font-mono">{{ ip }}</span>
+          <span v-if="localIps.length === 0" class="text-sm text-[var(--text-tertiary)]">-</span>
         </div>
 
         <!-- 自启动 -->
-        <label class="text-sm text-slate-500 dark:text-dark-400 text-right">{{ $t('desktop.server.autoStart') }}</label>
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.autoStart') }}</label>
         <button
           class="relative w-10 h-5 rounded-full transition-colors"
-          :class="autoStart ? 'bg-primary-600' : 'bg-slate-300 dark:bg-dark-600'"
+          :class="autoStart ? 'bg-brand' : 'bg-[var(--border)]'"
           @click="handleAutoStartToggle(!autoStart)"
         >
           <span
@@ -89,8 +93,8 @@
     </div>
 
     <!-- ==================== 区块 2：性能监控 ==================== -->
-    <div class="bg-white dark:bg-dark-800 rounded-xl border border-slate-200 dark:border-dark-700 p-6">
-      <h2 class="text-lg font-semibold text-slate-800 dark:text-white mb-4">
+    <div class="bg-card rounded-card p-6 shadow-card">
+      <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">
         {{ $t('desktop.server.monitoring') }}
       </h2>
 
@@ -98,35 +102,35 @@
       <div v-show="status === 'running' && metrics">
         <!-- 指标卡片 -->
         <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.uptime') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ formatUptime(metrics?.uptime_secs ?? 0) }}</div>
+          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.uptime') }}</div>
+            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ formatUptime(metrics?.uptime_secs ?? 0) }}</div>
           </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.connections') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ metrics?.connections ?? 0 }}</div>
+          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.connections') }}</div>
+            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics?.connections ?? 0 }}</div>
           </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.totalRequests') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ (metrics?.total_http_requests ?? 0).toLocaleString() }}</div>
+          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.totalRequests') }}</div>
+            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ (metrics?.total_http_requests ?? 0).toLocaleString() }}</div>
           </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.cpuUsage') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ (metrics?.cpu_usage_percent ?? 0).toFixed(1) }}%</div>
+          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.cpuUsage') }}</div>
+            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ (metrics?.cpu_usage_percent ?? 0).toFixed(1) }}%</div>
           </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.memoryUsage') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ formatMemory(metrics?.memory_usage_bytes ?? 0) }}</div>
+          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.memoryUsage') }}</div>
+            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ formatMemory(metrics?.memory_usage_bytes ?? 0) }}</div>
           </div>
-          <div class="bg-slate-50 dark:bg-dark-700 rounded-lg p-3">
-            <div class="text-xs text-slate-500 dark:text-dark-400">{{ $t('desktop.server.requestRate') }}</div>
-            <div class="text-lg font-semibold text-slate-800 dark:text-white">{{ (metrics?.http_requests_per_sec ?? 0).toFixed(1) }}/s</div>
+          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.requestRate') }}</div>
+            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ (metrics?.http_requests_per_sec ?? 0).toFixed(1) }}/s</div>
           </div>
         </div>
 
         <!-- WS 消息时序图 -->
         <div>
-          <h3 class="text-sm font-medium text-slate-600 dark:text-dark-300 mb-2">
+          <h3 class="text-sm font-medium text-[var(--text-secondary)] mb-2">
             {{ $t('desktop.server.wsThroughput') }}
           </h3>
           <VChart :option="chartOption" style="height: 250px; width: 100%;" autoresize />
@@ -134,9 +138,10 @@
       </div>
 
       <!-- 服务器未运行时 -->
-      <div v-show="!(status === 'running' && metrics)" class="text-center py-8 text-slate-400 dark:text-dark-500">
+      <div v-show="!(status === 'running' && metrics)" class="text-center py-8 text-[var(--text-tertiary)]">
         {{ $t('desktop.server.status.stopped') }}
       </div>
+    </div>
     </div>
   </div>
 </template>

@@ -52,15 +52,15 @@ defineEmits(['click'])
 const variantClass = computed(() => {
   switch (props.variant) {
     case 'primary':
-      return 'bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500'
+      return 'bg-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/80 text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
     case 'secondary':
-      return 'bg-slate-100 dark:bg-dark-700 hover:bg-slate-200 dark:hover:bg-dark-600 text-slate-800 dark:text-white border border-slate-300 dark:border-dark-600 focus:ring-slate-400'
+      return 'bg-[var(--mobile-bg-elevated)] hover:bg-[var(--mobile-bg-secondary)] text-[var(--mobile-text-secondary)] border border-[var(--mobile-border)] focus:ring-[var(--mobile-border)]'
     case 'danger':
-      return 'bg-red-600 hover:bg-red-700 text-white focus:ring-red-500'
+      return 'bg-[var(--mobile-error)] hover:bg-[var(--mobile-error)]/80 text-white focus:ring-[var(--mobile-error)]'
     case 'ghost':
-      return 'bg-transparent hover:bg-slate-100 dark:hover:bg-dark-700 text-slate-700 dark:text-dark-300 hover:text-slate-900 dark:hover:text-white focus:ring-slate-400'
+      return 'bg-transparent hover:bg-[var(--mobile-accent-muted)] text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] focus:ring-[var(--mobile-border)]'
     default:
-      return 'bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500'
+      return 'bg-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/80 text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
   }
 })
 

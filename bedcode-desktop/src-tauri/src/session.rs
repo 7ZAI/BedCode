@@ -11,6 +11,7 @@
 //! - session_output.rs: 输出管理
 
 pub mod session_config;
+pub mod session_event;
 mod session_manager;
 mod storage;
 
@@ -19,6 +20,7 @@ mod session_components;
 mod session_output;
 
 pub use session_config::SessionConfigManager;
+pub use session_event::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 pub use session_manager::SessionManager;
 pub use storage::{SessionStore, SessionStorage};
 
@@ -41,9 +43,6 @@ pub use session_output::{
     SessionOutputManager, SubscriberState, SubscribeResponse,
     GlobalOutputManager,
 };
-
-// 从 model 导入
-pub use crate::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 
 // Re-export from enums
 pub use crate::enums::{SessionStatus, SessionType};

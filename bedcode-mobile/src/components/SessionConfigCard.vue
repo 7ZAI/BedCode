@@ -20,8 +20,8 @@
           :class="[
             'text-xs px-2 py-0.5 rounded-full border shrink-0',
             config.environment === 'wsl2'
-              ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
-              : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+              ? 'bg-[var(--mobile-tag-wsl-bg)] border-[var(--mobile-tag-wsl-border)] text-[var(--mobile-tag-wsl-color)]'
+              : 'bg-[var(--mobile-tag-win-bg)] border-[var(--mobile-tag-win-border)] text-[var(--mobile-tag-win-color)]'
           ]"
         >
           {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
@@ -159,17 +159,23 @@ const runningCount = computed(() => runningSessions.value.length)
 <style scoped>
 .slide-enter-active,
 .slide-leave-active {
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
 .slide-enter-from,
 .slide-leave-to {
+  transform: scaleY(0);
   opacity: 0;
-  max-height: 0;
 }
 
 .slide-enter-to,
 .slide-leave-from {
-  max-height: 400px;
+  transform: scaleY(1);
+  opacity: 1;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transform-origin: top;
 }
 </style>

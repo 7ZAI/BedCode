@@ -57,7 +57,8 @@ impl MdnsAdvertiser {
             config.port,
             &*properties,
         )
-        .map_err(|e| crate::AppError::Internal(format!("Failed to create ServiceInfo: {}", e)))?;
+        .map_err(|e| crate::AppError::Internal(format!("Failed to create ServiceInfo: {}", e)))?
+        .enable_addr_auto();
 
         daemon.register(service_info)
             .map_err(|e| crate::AppError::Internal(format!("Failed to register mDNS service: {}", e)))?;

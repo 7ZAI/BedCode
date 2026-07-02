@@ -115,7 +115,7 @@ pub async fn resize_session(
 pub async fn get_session_output_history(
     _session_manager: State<'_, Arc<SessionManager>>,
     _session_id: String,
-) -> Result<Vec<crate::model::PtyOutputEvent>> {
+) -> Result<Vec<crate::pty::PtyOutputEvent>> {
     // TODO: 实现从 PTY 会话获取历史输出
     Ok(vec![])
 }

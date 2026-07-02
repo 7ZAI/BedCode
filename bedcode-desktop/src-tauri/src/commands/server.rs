@@ -4,7 +4,7 @@
 
 use crate::server::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::server::metrics::ServerMetrics;
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use crate::Result;
 use tauri::Manager;
 

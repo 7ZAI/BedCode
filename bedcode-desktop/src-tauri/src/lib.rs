@@ -2,32 +2,22 @@
 
 // ==================== Domain Modules ====================
 
-pub mod auth;
 pub mod commands;
-pub mod config;
 pub mod db;
 pub mod enums;
-pub mod error;
-pub mod error_boundary;
 pub mod events;
-pub mod model;
-pub mod parser;
+pub mod mdns;
 pub mod plugin;
 pub mod process;
 pub mod pty;
 pub mod server;
 pub mod session;
-pub mod traits;
-
-// ==================== Standalone Modules ====================
-
-pub mod app_context;
-pub mod websocket_manager;
+pub mod system;
+pub mod utils;
 
 // ==================== Re-exports ====================
 
-pub use error::{AppError, Result};
-pub use config::AppConfig;
+pub use system::{AppError, Result, AppConfig, AppContext};
 
 // ==================== Application Setup ====================
 
@@ -36,7 +26,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 use tracing_subscriber::Layer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// 初始化日志系统
 fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
@@ -44,6 +34,8 @@ fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
 }
 
 fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
+    // LogTracer 桥接由 try_init() 自动处理，无需手动初始化
+
     let log_dir = app_handle
         .path()
         .app_log_dir()
@@ -76,7 +68,7 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
         .with_target(true)
         .with_thread_ids(false)
         .with_line_number(true)
-        .with_filter(tracing_subscriber::filter::LevelFilter::ERROR);
+        .with_filter(EnvFilter::new("error"));
 
     // 运行时日志层：INFO 及以上
     let runtime_layer = tracing_subscriber::fmt::layer()
@@ -85,23 +77,27 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
         .with_target(true)
         .with_thread_ids(false)
         .with_line_number(true)
-        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+        .with_filter(EnvFilter::new("info"));
 
     #[cfg(debug_assertions)]
     {
-        // Debug 模式：控制台输出 DEBUG 及以上
+        // Debug 模式：控制台输出，支持 RUST_LOG 环境变量动态控制
+        // 默认 bedcode_lib=debug,actix_web=info；可通过 RUST_LOG 覆盖
+        let console_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("bedcode_lib=debug,actix_web=info,actix_http=info"));
         let console_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stdout)
             .with_ansi(true)
             .with_target(true)
             .pretty()
-            .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG);
+            .with_filter(console_filter);
 
         tracing_subscriber::registry()
             .with(error_layer)
             .with(runtime_layer)
             .with(console_layer)
-            .init();
+            .try_init()
+            .expect("Failed to set tracing subscriber");
     }
 
     #[cfg(not(debug_assertions))]
@@ -109,7 +105,8 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
         tracing_subscriber::registry()
             .with(error_layer)
             .with(runtime_layer)
-            .init();
+            .try_init()
+            .expect("Failed to set tracing subscriber");
     }
 
     tracing::info!("Logging initialized. Log directory: {:?}", log_dir);
@@ -118,30 +115,6 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Insert default quick actions
-fn insert_default_quick_actions(db: &Database) -> Result<()> {
-    let actions = db.get_quick_actions()?;
-    if !actions.is_empty() {
-        return Ok(());
-    }
-
-    let default_actions = [
-        ("继续", "请继续", "▶️", "#22c55e"),
-        ("解释代码", "请解释这段代码的作用", "📝", "#3b82f6"),
-        ("修复 Bug", "请帮我修复这个 Bug", "🔧", "#a855f7"),
-        ("提交代码", "请帮我提交代码", "📤", "#f97316"),
-    ];
-
-    for (name, content, icon, color) in default_actions {
-        let mut action = db::QuickAction::new(name.to_string(), content.to_string());
-        action.icon = Some(icon.to_string());
-        action.color = Some(color.to_string());
-        db.create_quick_action(&action)?;
-    }
-
-    tracing::info!("Inserted default quick actions");
-    Ok(())
-}
 
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
@@ -187,13 +160,13 @@ pub fn run() {
                 }
             }
 
-            let app_config = crate::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
+            let app_config = crate::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
                 tracing::warn!("Failed to load config, using defaults: {}", e);
-                crate::config::AppConfig::default()
+                crate::system::config::AppConfig::default()
             });
 
             // 初始化全局配置单例
-            crate::config::AppConfig::init(app_config.clone());
+            crate::system::config::AppConfig::init(app_config.clone());
 
             let mut app_config = app_config;
 
@@ -204,7 +177,7 @@ pub fn run() {
             );
             if token_result.token_generated {
                 // 配置可能修改了 token，重新初始化全局配置
-                crate::config::AppConfig::init(app_config.clone());
+                crate::system::config::AppConfig::init(app_config.clone());
             }
 
             // 清理旧版全局 hooks（迁移到项目级后不再需要全局 hooks）
@@ -261,7 +234,7 @@ pub fn run() {
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;
-            insert_default_quick_actions(&db)?;
+           
 
             let db = Arc::new(Mutex::new(db));
 
@@ -278,7 +251,8 @@ pub fn run() {
                 )
             );
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
-            let qr_manager = Arc::new(auth::QrTokenManager::new());
+            let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
+            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
             let app_handle_arc = Arc::new(app_handle.clone());
 
             // 创建同步事件通道
@@ -302,7 +276,7 @@ pub fn run() {
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
-            let ctx = app_context::AppContextBuilder::new()
+            let ctx = system::app_context::AppContextBuilder::new()
                 .db(db.clone())
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
@@ -310,6 +284,7 @@ pub fn run() {
                 .plugin_host(plugin_host.clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
+                .mdns_advertiser(mdns_advertiser.clone())
                 .app_handle(app_handle_arc.clone())
                 .sync_tx(sync_tx.clone())
                 .resource_dir(resource_dir_arc.clone())
@@ -321,6 +296,7 @@ pub fn run() {
             app.manage(session_manager.clone());
             app.manage(pairing_service.clone());
             app.manage(qr_manager.clone());
+            app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
 
             // ==================== 启动服务器（通过 ServerSupervisor）====================
@@ -335,7 +311,7 @@ pub fn run() {
                 use crate::events::global_matcher;
                 use crate::events::{DesktopSyncEvent, SyncEventHandler};
 
-                let ws_manager = websocket_manager::WebSocketManager::global();
+                let ws_manager = crate::server::ws::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 // 注册事件源
@@ -449,11 +425,7 @@ pub fn run() {
             commands::qr::get_qr_connection_info,
             commands::qr::get_qr_token_ttl,
             commands::qr::set_qr_token_ttl,
-            // Quick Actions
-            commands::quick_actions::list_quick_actions,
-            commands::quick_actions::create_quick_action,
-            commands::quick_actions::update_quick_action,
-            commands::quick_actions::delete_quick_action,
+
             commands::settings::get_all_db_settings,
             commands::settings::set_db_setting,
             // Settings
@@ -488,6 +460,10 @@ pub fn run() {
             commands::server::get_server_metrics,
             commands::server::update_server_port,
             commands::server::update_server_auto_start,
+            // mDNS
+            commands::mdns::mdns_start_advertise,
+            commands::mdns::mdns_stop_advertise,
+            commands::mdns::mdns_is_advertising,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

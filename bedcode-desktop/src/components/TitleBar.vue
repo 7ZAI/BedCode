@@ -3,9 +3,8 @@
     class="titlebar h-9 bg-white dark:bg-dark-800 flex items-center justify-between select-none border-b border-slate-200 dark:border-dark-700 shadow-sm dark:shadow-none"
     data-tauri-drag-region
   >
-    <!-- Left: App Logo -->
+    <!-- Left: drag region spacer -->
     <div class="flex items-center px-4" data-tauri-drag-region>
-      <img src="/favicon.svg" alt="BedCode" class="h-5 w-auto" />
     </div>
 
     <!-- Plugin Title Bar Extension -->

@@ -10,18 +10,24 @@ const toolboxPlugins = pluginRegistry.toolboxViews
 </script>
 
 <template>
-  <aside class="w-64 bg-white dark:bg-dark-800 border-r border-slate-200 dark:border-dark-700 flex flex-col">
+  <aside class="w-60 bg-sidebar flex flex-col shadow-sm dark:shadow-none">
+    <!-- Logo -->
+    <div class="h-12 flex items-center px-4 mb-6">
+      <div class="w-8 h-8 rounded-nav bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-base">B</div>
+      <span class="ml-3 font-semibold text-[var(--text-primary)] text-base tracking-tight">BedCode</span>
+    </div>
+
     <!-- Navigation -->
-    <nav class="flex-1 p-4">
-      <ul class="space-y-2">
+    <nav class="flex-1 px-3">
+      <ul class="space-y-1">
         <li>
           <router-link
             to="/devices"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
             :class="[
               $route.path === '/devices'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -33,11 +39,11 @@ const toolboxPlugins = pluginRegistry.toolboxViews
         <li>
           <router-link
             to="/sessions"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
             :class="[
               $route.path === '/sessions'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -49,11 +55,11 @@ const toolboxPlugins = pluginRegistry.toolboxViews
         <li>
           <router-link
             to="/session-manager"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
             :class="[
               $route.path === '/session-manager'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -65,11 +71,11 @@ const toolboxPlugins = pluginRegistry.toolboxViews
         <li>
           <router-link
             to="/server"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
             :class="[
               $route.path === '/server'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -81,11 +87,11 @@ const toolboxPlugins = pluginRegistry.toolboxViews
         <li>
           <router-link
             to="/plugins"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
             :class="[
               $route.path.startsWith('/plugins')
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -94,15 +100,14 @@ const toolboxPlugins = pluginRegistry.toolboxViews
             {{ $t('desktop.plugin.title') }}
           </router-link>
         </li>
-
         <li>
           <router-link
             to="/settings"
-            class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
             :class="[
               $route.path === '/settings'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
             ]"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,19 +117,39 @@ const toolboxPlugins = pluginRegistry.toolboxViews
             {{ $t('desktop.sidebar.settings') }}
           </router-link>
         </li>
+
+        <!-- DEV: Style Test (测试完后删除此块 + 路由 + StyleTestView) -->
+        <template v-if="false">
+        <li class="pt-3 mt-3 border-t border-[var(--border)]">
+          <router-link
+            to="/style-test"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
+            :class="[
+              $route.path === '/style-test'
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+            ]"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+            </svg>
+            Style Test
+          </router-link>
+        </li>
+        </template>
       </ul>
 
       <!-- Plugin Sidebar Panels -->
-      <div v-if="sidebarPlugins.length > 0" class="mt-4 pt-4 border-t border-slate-200 dark:border-dark-700">
-        <ul class="space-y-2">
+      <div v-if="sidebarPlugins.length > 0" class="mt-4 pt-4 border-t border-[var(--border)]">
+        <ul class="space-y-1">
           <li v-for="view in sidebarPlugins" :key="view.viewId">
             <router-link
               :to="`/plugin/sidebar/${view.pluginId}/${view.viewId}`"
-              class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+              class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
               :class="[
                 $route.path === `/plugin/sidebar/${view.pluginId}/${view.viewId}`
-                  ? 'bg-primary-600 text-white'
-                  : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                  ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
               ]"
             >
               {{ view.title }}
@@ -134,17 +159,17 @@ const toolboxPlugins = pluginRegistry.toolboxViews
       </div>
 
       <!-- Plugin Toolbox Panels -->
-      <div v-if="toolboxPlugins.length > 0" class="mt-4 pt-4 border-t border-slate-200 dark:border-dark-700">
-        <h4 class="px-4 mb-2 text-xs font-semibold text-slate-400 dark:text-dark-500 uppercase tracking-wider">{{ $t('desktop.plugin.toolboxPanels') }}</h4>
-        <ul class="space-y-2">
+      <div v-if="toolboxPlugins.length > 0" class="mt-4 pt-4 border-t border-[var(--border)]">
+        <h4 class="px-3.5 mb-2 text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{{ $t('desktop.plugin.toolboxPanels') }}</h4>
+        <ul class="space-y-1">
           <li v-for="view in toolboxPlugins" :key="view.viewId">
             <router-link
               :to="`/plugin/toolbox/${view.pluginId}/${view.viewId}`"
-              class="flex items-center gap-3 px-4 py-2 rounded-lg transition-colors"
+              class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
               :class="[
                 $route.path === `/plugin/toolbox/${view.pluginId}/${view.viewId}`
-                  ? 'bg-primary-600 text-white'
-                  : 'text-slate-600 dark:text-dark-300 hover:bg-slate-100 dark:hover:bg-dark-700 hover:text-slate-900 dark:hover:text-white'
+                  ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
               ]"
             >
               {{ view.title }}
@@ -155,10 +180,13 @@ const toolboxPlugins = pluginRegistry.toolboxViews
     </nav>
 
     <!-- Status Bar -->
-    <div class="p-4 border-t border-slate-200 dark:border-dark-700">
-      <div class="flex items-center gap-2 text-sm">
-        <div class="w-2 h-2 rounded-full bg-green-500"></div>
-        <span class="text-slate-500 dark:text-dark-400">{{ $t('desktop.sidebar.serviceRunning') }}</span>
+    <div class="p-3">
+      <div class="px-3.5 py-3.5 bg-[var(--bg-hover)]/50 rounded-nav">
+        <div class="flex items-center gap-2 text-sm">
+          <div class="w-[7px] h-[7px] rounded-full bg-green-500"></div>
+          <span class="text-[var(--text-primary)] font-medium text-xs">{{ $t('desktop.sidebar.serviceRunning') }}</span>
+        </div>
+        <div class="text-[11px] text-[var(--text-tertiary)] ml-[15px] mt-0.5">WebSocket Active</div>
       </div>
     </div>
   </aside>

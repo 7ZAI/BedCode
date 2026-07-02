@@ -3,7 +3,7 @@
 //! 在 WebSocket 服务器启动前检查端口是否被占用，
 //! 被占用时弹窗提示用户选择新端口
 
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use crate::Result;
 use std::net::TcpListener;
 use tauri::{AppHandle, Manager};

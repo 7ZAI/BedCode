@@ -11,7 +11,7 @@
       <div
         class="w-10 h-6 rounded-full transition-colors"
         :class="[
-          modelValue ? 'bg-primary-600' : 'bg-slate-300 dark:bg-dark-600',
+          modelValue ? 'bg-brand' : 'bg-[var(--border)]',
           { 'opacity-50 cursor-not-allowed': disabled }
         ]"
       ></div>
@@ -20,7 +20,7 @@
         :class="[modelValue ? 'translate-x-5 left-1' : 'translate-x-0 left-1']"
       ></div>
     </div>
-    <span v-if="label" class="text-sm text-slate-700 dark:text-dark-300">{{ label }}</span>
+    <span v-if="label" class="text-sm text-[var(--text-secondary)]">{{ label }}</span>
   </label>
 </template>
 

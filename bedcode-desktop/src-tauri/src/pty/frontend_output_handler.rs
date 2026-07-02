@@ -2,8 +2,8 @@
 //!
 //! 向前端发送 PTY 输出事件的 Handler 实现
 
-use crate::model::PtyOutputEvent;
-use crate::traits::PtyOutputHandler;
+use crate::pty::PtyOutputEvent;
+use crate::pty::PtyOutputHandler;
 use async_trait::async_trait;
 use tauri::{AppHandle, Emitter};
 

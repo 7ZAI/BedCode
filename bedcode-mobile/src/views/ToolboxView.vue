@@ -302,7 +302,7 @@ function handleTaskTap(task: PresetTask) {
 
   if (!isConnected.value) {
     toast.warning(t('mobile.toolbox.connectFirst'))
-    router.push('/mobile/devices')
+    router.push({ name: 'mobile-home', query: { page: '0' } })
     return
   }
 

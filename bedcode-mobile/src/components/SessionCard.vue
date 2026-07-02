@@ -1,15 +1,12 @@
 <template>
   <div
-    class="group bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-4 shadow-[var(--mobile-card-shadow)] transition-all duration-300 hover:border-cyan-500/30 hover:shadow-[var(--mobile-card-shadow-hover)] active:scale-[0.98] cursor-pointer"
+    class="group bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-4 shadow-[var(--mobile-card-shadow)] transition-all duration-300 hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)] active:scale-[0.98] cursor-pointer"
     :class="[
-      session.status === 'stopped' ? 'opacity-60' : '',
-      isHovered ? 'shadow-[0_0_15px_rgba(34,211,238,0.08)] border-cyan-500/20' : ''
+      session.status === 'stopped' ? 'opacity-60' : ''
     ]"
     @click="$emit('click')"
-    @mouseenter="isHovered = true"
-    @mouseleave="isHovered = false"
   >
-    <div class="flex items-start gap-3">
+    <div class="flex items-center gap-3">
       <!-- Status Icon -->
       <div
         :class="[
@@ -22,18 +19,10 @@
 
       <!-- Content -->
       <div class="flex-1 min-w-0">
-        <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
           <p class="font-semibold text-[var(--mobile-text-primary)] truncate text-base">
             {{ session.name }}
           </p>
-          <span
-            :class="[
-              'text-xs px-2.5 py-1 rounded-full font-medium shrink-0 border',
-              statusConfig.badgeClass
-            ]"
-          >
-            {{ statusConfig.label }}
-          </span>
         </div>
 
         <div class="flex items-center gap-3 mt-2">
@@ -52,51 +41,61 @@
             </svg>
             <span class="text-xs">{{ sessionType }}</span>
           </div>
-
-          <!-- Task Status (Plugin sessions) -->
-          <div v-if="taskStatusLabel" class="flex items-center gap-1.5">
-            <span
-              :class="[
-                'text-xs px-2 py-0.5 rounded-full font-medium',
-                taskStatusBadgeClass
-              ]"
-            >
-              {{ taskStatusLabel }}
-            </span>
-          </div>
         </div>
       </div>
 
-      <!-- Action Button -->
-      <button
-        v-if="session.status !== 'stopped'"
-        class="w-9 h-9 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center transition-all hover:bg-red-500/20 active:scale-90"
-        :class="[
-          session.status === 'running' ? 'text-red-400' : 'text-yellow-400'
-        ]"
-        @click.stop="$emit('stop')"
-        :title="t('mobile.sessionCard.stopSession')"
-      >
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-          <rect x="6" y="6" width="12" height="12" rx="2" />
-        </svg>
-      </button>
-      <button
-        v-else-if="session.status === 'stopped'"
-        class="w-9 h-9 rounded-xl bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] flex items-center justify-center transition-all hover:bg-[var(--mobile-accent-muted)] hover:border-[var(--mobile-accent)] active:scale-90 text-[var(--mobile-text-muted)]"
-        @click.stop="$emit('delete')"
-        :title="t('mobile.sessionCard.deleteSession')"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-        </svg>
-      </button>
+      <!-- Status Badge + Task Status + Action Button -->
+      <div class="flex items-center gap-2 shrink-0 self-center">
+        <span
+          :class="[
+            'inline-flex items-center justify-center text-xs h-5 px-2.5 rounded-full font-medium border',
+            statusConfig.badgeClass
+          ]"
+        >
+          {{ statusConfig.label }}
+        </span>
+
+        <span
+          v-if="taskStatusLabel"
+          :class="[
+            'text-xs px-2 py-0.5 rounded-full font-medium',
+            taskStatusBadgeClass
+          ]"
+        >
+          {{ taskStatusLabel }}
+        </span>
+
+        <!-- Action Button -->
+        <button
+          v-if="session.status !== 'stopped'"
+          class="w-9 h-9 rounded-xl bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] flex items-center justify-center transition-all hover:bg-[var(--mobile-error-muted)] active:scale-90"
+          :class="[
+            session.status === 'running' ? 'text-[var(--mobile-error)]' : 'text-[var(--mobile-warning)]'
+          ]"
+          @click.stop="$emit('stop')"
+          :title="t('mobile.sessionCard.stopSession')"
+        >
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+        </button>
+        <button
+          v-else-if="session.status === 'stopped'"
+          class="w-9 h-9 rounded-xl bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] flex items-center justify-center transition-all hover:bg-[var(--mobile-accent-muted)] hover:border-[var(--mobile-accent)] active:scale-90 text-[var(--mobile-text-muted)]"
+          @click.stop="$emit('delete')"
+          :title="t('mobile.sessionCard.deleteSession')"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, h } from 'vue'
+import { computed, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RemoteSession } from '@/composables/useMobileCommands'
 import { useRunTime } from '@/composables/useRunTime'
@@ -112,8 +111,6 @@ defineEmits<{
   stop: []
   delete: []
 }>()
-
-const isHovered = ref(false)
 
 // 判断是否在运行
 const isRunning = computed(() => {
@@ -184,12 +181,12 @@ const taskStatusBadgeClass = computed(() => {
   const status = props.session.taskStatus
   if (!status) return ''
   switch (status) {
-    case 'idle': return 'bg-gray-500/20 text-gray-400'
-    case 'in_progress': return 'bg-blue-500/20 text-blue-400'
-    case 'asking': return 'bg-yellow-500/20 text-yellow-400'
-    case 'completed': return 'bg-green-500/20 text-green-400'
-    case 'interrupted': return 'bg-red-500/20 text-red-400'
-    default: return 'bg-gray-500/20 text-gray-400'
+    case 'idle': return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-muted)]'
+    case 'in_progress': return 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]'
+    case 'asking': return 'bg-[var(--mobile-warning-muted)] text-[var(--mobile-warning)]'
+    case 'completed': return 'bg-[var(--mobile-success-muted)] text-[var(--mobile-success)]'
+    case 'interrupted': return 'bg-[var(--mobile-error-muted)] text-[var(--mobile-error)]'
+    default: return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-muted)]'
   }
 })
 </script>

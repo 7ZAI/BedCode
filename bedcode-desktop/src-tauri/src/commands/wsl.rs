@@ -13,7 +13,7 @@ use crate::Result;
 pub async fn list_wsl_distributions() -> Result<Vec<crate::pty::WslDistro>> {
     tokio::task::spawn_blocking(crate::pty::list_distributions)
         .await
-        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?
+        .map_err(|e| crate::system::error::AppError::Internal(e.to_string()))?
 }
 
 /// 检查 WSL 是否可用

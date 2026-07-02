@@ -64,13 +64,13 @@ const visible = ref(false)
 const typeClass = computed(() => {
   switch (props.type) {
     case 'success':
-      return 'bg-green-500 border-green-600 text-white'
+      return 'bg-[var(--mobile-success)] text-white'
     case 'error':
-      return 'bg-red-500 border-red-600 text-white'
+      return 'bg-[var(--mobile-error)] text-white'
     case 'warning':
-      return 'bg-yellow-500 border-yellow-600 text-white'
+      return 'bg-[var(--mobile-warning)] text-white'
     default:
-      return 'bg-white dark:bg-dark-800 border-slate-200 dark:border-dark-600 text-slate-900 dark:text-dark-100'
+      return 'bg-[var(--mobile-bg-card)] border-[var(--mobile-border)] text-[var(--mobile-text-primary)]'
   }
 })
 

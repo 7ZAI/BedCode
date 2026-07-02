@@ -4,7 +4,7 @@
 //! OutputCache trait 已内联到此文件（只有一个实现）
 
 use crate::pty::PtyOutputEvent;
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

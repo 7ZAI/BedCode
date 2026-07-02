@@ -52,11 +52,17 @@ export default {
       githubRepo: 'GitHub Repository',
       checkUpdate: 'Check for Updates',
       alreadyLatest: 'Already on the latest version',
+      checkingUpdate: 'Checking for updates...',
+      newVersionAvailable: 'New version available: {version}',
+      updateCheckFailed: 'Update check failed',
+      downloadUpdate: 'Download Update',
+      currentVersion: 'Current Version',
     },
     actions: {
       resetSettings: 'Reset Settings',
+      resetSettingsConfirm: 'Are you sure you want to reset all settings to defaults?',
       clearAllData: 'Clear All Data',
-      clearDataConfirm: 'Are you sure you want to clear all data? This action cannot be undone.',
+      clearDataConfirm: 'Are you sure you want to clear all data? This includes preset tasks, connection history, paired devices, etc. This action cannot be undone.',
     },
     browser: {
       confirmOpen: 'Are you sure you want to open this link in a browser?',

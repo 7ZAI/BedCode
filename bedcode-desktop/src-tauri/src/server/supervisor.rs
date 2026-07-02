@@ -3,13 +3,14 @@
 //! 管理服务器生命周期：启动、停止、重启
 //! Actix Web 在主进程内运行，通过 WebSocketManager 委托启动
 //! 指标采集直接调用 MetricsCollector + sysinfo，无需 IPC
+//! 服务器启动时自动启动 mDNS 广播，停止时自动停止
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 
-use crate::error::AppError;
+use crate::system::error::AppError;
 use crate::Result;
 
 use super::metrics::{MetricsCollector, ServerMetrics};
@@ -38,6 +39,7 @@ pub struct ServerStatusInfo {
     pub port: u16,
     pub auto_start: bool,
     pub local_ips: Vec<String>,
+    pub uptime_secs: Option<u64>,
 }
 
 /// Supervisor 内部状态
@@ -104,26 +106,55 @@ impl ServerSupervisor {
         }
 
         // 委托 WebSocketManager 启动 Actix Web
-        let ws_manager = crate::websocket_manager::WebSocketManager::global();
+        let ws_manager = crate::server::ws::WebSocketManager::global();
         match ws_manager.start(port).await {
             Ok(_handle) => {
+                // 重置指标采集器，确保 uptime 和计数器从零开始
+                MetricsCollector::global().reset();
+
                 let mut inner = self.inner.write().await;
                 inner.status = ServerStatus::Running;
                 inner.start_time = Some(std::time::Instant::now());
 
-                // 启动指标采样任务
+                // 取消旧的指标采样任务（防御性：确保 stop() 遗漏时也能停止）
+                inner.metrics_task_cancel.store(true, Ordering::Relaxed);
+
+                // 启动新的指标采样任务
                 let cancel_flag = Arc::new(AtomicBool::new(false));
                 inner.metrics_task_cancel = cancel_flag.clone();
                 let inner_arc = self.inner.clone();
                 tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag));
 
+                // 监听 Actix 线程异常退出事件
+                // 当 crash monitor 检测到 Actix 线程崩溃时，会发送 ServerEvent::Stopped
+                let event_rx = ws_manager.subscribe();
+                let inner_for_monitor = self.inner.clone();
+                tokio::spawn(async move {
+                    let mut rx = event_rx;
+                    // 等待 Stopped 事件（正常 stop 由 supervisor 自身处理，这里只关心 crash）
+                    if let Ok(crate::server::ws::ServerEvent::Stopped) = rx.recv().await {
+                        let mut inner = inner_for_monitor.write().await;
+                        // 仅在 Running 状态下处理（避免与正常 stop 冲突）
+                        if inner.status == ServerStatus::Running {
+                            tracing::error!("Server crashed unexpectedly, updating supervisor state");
+                            inner.status = ServerStatus::Stopped;
+                            inner.start_time = None;
+                            inner.metrics_task_cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
+                });
+
                 tracing::info!("Server started on port {} (in-process)", port);
+
+                // 服务器启动后自动启动 mDNS 广播
+                start_mdns_advertisement(port);
+
                 Ok(())
             }
             Err(e) => {
                 let mut inner = self.inner.write().await;
                 inner.status = ServerStatus::Stopped;
-                tracing::error!("Failed to start server: {}", e);
+                tracing::error!(error = %e, port, "Failed to start server");
                 Err(e)
             }
         }
@@ -145,7 +176,7 @@ impl ServerSupervisor {
         }
 
         // 委托 WebSocketManager 停止 Actix Web
-        let ws_manager = crate::websocket_manager::WebSocketManager::global();
+        let ws_manager = crate::server::ws::WebSocketManager::global();
         ws_manager.stop().await?;
 
         let mut inner = self.inner.write().await;
@@ -154,17 +185,20 @@ impl ServerSupervisor {
         inner.metrics_history.clear();
         inner.start_time = None;
 
+        // 服务器停止时自动停止 mDNS 广播
+        stop_mdns_advertisement();
+
         tracing::info!("Server stopped");
         Ok(())
     }
 
     /// 重启服务器
     pub async fn restart(&self) -> Result<()> {
-        let port = {
+        let (port, is_running) = {
             let inner = self.inner.read().await;
-            inner.port
+            (inner.port, inner.status == ServerStatus::Running)
         };
-        if self.inner.read().await.status == ServerStatus::Running {
+        if is_running {
             self.stop().await?;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
@@ -175,11 +209,13 @@ impl ServerSupervisor {
     pub async fn get_status_info(&self) -> ServerStatusInfo {
         let inner = self.inner.read().await;
         let local_ips = crate::commands::system::get_local_ip_addresses();
+        let uptime_secs = inner.start_time.map(|t| t.elapsed().as_secs());
         ServerStatusInfo {
             status: inner.status.clone(),
             port: inner.port,
             auto_start: inner.auto_start,
             local_ips,
+            uptime_secs,
         }
     }
 
@@ -270,4 +306,58 @@ async fn metrics_sampling_task(
         }
         inner.metrics = metrics;
     }
+}
+
+/// 获取设备主机名，用于 mDNS 服务实例名
+fn get_hostname() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Desktop".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "Desktop".to_string())
+    }
+}
+
+/// 启动 mDNS 广播
+fn start_mdns_advertisement(port: u16) {
+    let hostname = get_hostname();
+    let service_name = format!("BedCode-{}", hostname);
+
+    tokio::spawn(async move {
+        let ctx = crate::system::app_context::AppContext::global();
+        let advertiser = ctx.mdns_advertiser();
+        let a = advertiser.read().await;
+
+        let mut txt_records = std::collections::HashMap::new();
+        txt_records.insert("platform".to_string(), "desktop".to_string());
+        txt_records.insert("device_name".to_string(), service_name.clone());
+        txt_records.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
+
+        let config = crate::mdns::types::AdvertiseConfig {
+            service_name,
+            port,
+            txt_records,
+        };
+
+        if let Err(e) = a.start(config).await {
+            tracing::error!("[ServerSupervisor] Failed to start mDNS advertisement: {}", e);
+        }
+    });
+}
+
+/// 停止 mDNS 广播
+fn stop_mdns_advertisement() {
+    tokio::spawn(async move {
+        let ctx = crate::system::app_context::AppContext::global();
+        let advertiser = ctx.mdns_advertiser();
+        let a = advertiser.read().await;
+
+        if let Err(e) = a.stop().await {
+            tracing::error!("[ServerSupervisor] Failed to stop mDNS advertisement: {}", e);
+        }
+    });
 }

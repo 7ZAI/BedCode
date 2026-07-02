@@ -294,7 +294,7 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
   box-shadow: 0 4px 12px rgba(0,0,0,0.25);
   touch-action: none;
   cursor: pointer;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  background: var(--mobile-input-assist-bg);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .input-assist-btn:active {

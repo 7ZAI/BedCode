@@ -137,13 +137,8 @@
 
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-muted)]">{{ $t('common.misc.version') }}</span>
-            <span class="text-[var(--mobile-text-disabled)]">0.1.0</span>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-muted)]">{{ $t('common.misc.build') }}</span>
-            <span class="text-[var(--mobile-text-disabled)]">2026-04-30</span>
+            <span class="text-[var(--mobile-text-muted)]">{{ $t('settings.about.currentVersion') }}</span>
+            <span class="text-[var(--mobile-text-disabled)]">v{{ appVersion }}</span>
           </div>
 
           <button
@@ -153,12 +148,43 @@
             {{ $t('settings.about.githubRepo') }}
           </button>
 
-          <button
-            class="w-full text-left text-[var(--mobile-text-muted)] py-2 hover:text-[var(--mobile-accent)] transition-colors"
-            @click="checkUpdate"
-          >
-            {{ $t('settings.about.checkUpdate') }}
-          </button>
+          <!-- 检查更新 -->
+          <div class="space-y-2">
+            <button
+              class="w-full text-left py-2 transition-colors"
+              :class="updateStatus === 'available'
+                ? 'text-[var(--mobile-accent)]'
+                : 'text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)]'"
+              :disabled="updateStatus === 'checking'"
+              @click="checkForUpdate"
+            >
+              <span v-if="updateStatus === 'checking'" class="flex items-center gap-2">
+                <span class="inline-block w-3 h-3 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
+                {{ $t('settings.about.checkingUpdate') }}
+              </span>
+              <span v-else-if="updateStatus === 'available'">
+                {{ $t('settings.about.newVersionAvailable', { version: updateInfo?.latestVersion }) }}
+              </span>
+              <span v-else-if="updateStatus === 'latest'">
+                {{ $t('settings.about.alreadyLatest') }}
+              </span>
+              <span v-else-if="updateStatus === 'failed'">
+                {{ $t('settings.about.updateCheckFailed') }}
+              </span>
+              <span v-else>
+                {{ $t('settings.about.checkUpdate') }}
+              </span>
+            </button>
+
+            <!-- 新版本可用时显示下载按钮 -->
+            <button
+              v-if="updateStatus === 'available' && updateInfo?.downloadUrl"
+              class="w-full bg-[var(--mobile-accent)]/15 border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/25 transition-colors"
+              @click="openUpdateUrl"
+            >
+              {{ $t('settings.about.downloadUpdate') }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -192,6 +218,19 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- Confirm Dialog (Reset / Clear Data) -->
+    <Teleport to="body">
+      <div v-if="showConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelConfirm">
+        <div class="confirm-modal">
+          <p class="confirm-text">{{ confirmMessage }}</p>
+          <div class="confirm-buttons">
+            <button class="confirm-btn cancel" @click="cancelConfirm">{{ $t('common.button.cancel') }}</button>
+            <button class="confirm-btn confirm danger" @click="executeConfirm">{{ $t('common.button.confirm') }}</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -206,6 +245,9 @@ import { useMobileConnection } from '@/composables/useMobileConnection'
 import { useForegroundService } from '@/composables/useForegroundService'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
+import { clearAuthCredentials } from '@/composables/useMobileCommands'
+import { clearAllTasks } from '@/composables/usePresetTasks'
+import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import Toggle from '@/components/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -214,6 +256,10 @@ const connection = useMobileConnection()
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const { startService, stopService, updateNotification } = useForegroundService()
+const { status: updateStatus, updateInfo, checkForUpdate, getUpdateStatusText } = useUpdateChecker()
+
+/** 应用版本号，由 Vite 编译时从 tauri.conf.json 注入 */
+const appVersion = __APP_VERSION__
 
 const currentLanguage = computed({
   get: () => settingsStore.settings.ui.language || 'zh-CN',
@@ -369,16 +415,86 @@ function saveSettings() {
 }
 
 function resetSettings() {
-  settings.value = { ...defaultMobileSettings }
-  saveSettings()
+  showConfirmDialog(
+    t('settings.actions.resetSettingsConfirm'),
+    async () => {
+      // 重置移动端本地设置为默认值
+      settings.value = { ...defaultMobileSettings }
+      // 重置主题为跟随系统
+      await settingsStore.saveSettings({
+        ui: {
+          ...settingsStore.settings.ui,
+          theme: 'system',
+        }
+      })
+      // 重置语言为中文
+      await i18nStore.setLanguage('zh-CN')
+      // 重置终端字体大小
+      syncToSettingsStore()
+      // 保存到 localStorage 和后端
+      saveSettings()
+    }
+  )
 }
 
-function clearData() {
-  if (confirm(t('settings.actions.clearDataConfirm'))) {
-    localStorage.clear()
-    // In real app, also clear database
-    location.reload()
+async function clearData() {
+  showConfirmDialog(
+    t('settings.actions.clearDataConfirm'),
+    async () => {
+      // 1. 断开当前连接
+      if (isConnected.value) {
+        await connection.disconnect()
+      }
+      // 停止前台服务
+      await stopService()
+
+      // 2. 清除预设任务
+      clearAllTasks()
+
+      // 3. 清除连接历史和配对设备
+      connection.clearConnectionHistory()
+      connection.clearPairedDevices()
+      connection.clearSessionConfigs()
+      connection.clearActiveSessions()
+
+      // 4. 清除认证凭据
+      clearAuthCredentials()
+      connection.clearCredentials()
+
+      // 5. 清除所有 localStorage
+      localStorage.clear()
+
+      // 6. 重新加载页面
+      location.reload()
+    }
+  )
+}
+
+// ==================== Confirm Dialog ====================
+
+const showConfirm = ref(false)
+const confirmMessage = ref('')
+let confirmCallback: (() => Promise<void>) | null = null
+
+function showConfirmDialog(message: string, onConfirm: () => Promise<void>) {
+  confirmMessage.value = message
+  confirmCallback = onConfirm
+  showConfirm.value = true
+}
+
+function cancelConfirm() {
+  showConfirm.value = false
+  confirmMessage.value = ''
+  confirmCallback = null
+}
+
+async function executeConfirm() {
+  if (confirmCallback) {
+    await confirmCallback()
   }
+  showConfirm.value = false
+  confirmMessage.value = ''
+  confirmCallback = null
 }
 
 // 系统浏览器打开链接的确认弹窗状态
@@ -407,9 +523,11 @@ function cancelOpenBrowser() {
   pendingUrl.value = ''
 }
 
-function checkUpdate() {
-  // In real app, check for updates
-  alert(t('settings.about.alreadyLatest'))
+function openUpdateUrl() {
+  if (updateInfo.value?.downloadUrl) {
+    pendingUrl.value = updateInfo.value.downloadUrl
+    showBrowserConfirm.value = true
+  }
 }
 
 // Auto-save settings
@@ -427,7 +545,7 @@ watch(settings, saveSettings, { deep: true })
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 50;
   padding: 1rem;
 }
 
@@ -484,6 +602,15 @@ watch(settings, saveSettings, { deep: true })
 }
 
 .confirm-btn.confirm:hover {
+  opacity: 0.9;
+}
+
+.confirm-btn.confirm.danger {
+  background: var(--mobile-error);
+  color: white;
+}
+
+.confirm-btn.confirm.danger:hover {
   opacity: 0.9;
 }
 </style>

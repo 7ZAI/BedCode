@@ -5,7 +5,7 @@
 //! 桌面端专用命令在 desktop/commands.rs
 //! 移动端专用命令在 mobile/commands/mobile_commands.rs
 
-use crate::auth::PairingCode;
+use crate::utils::auth::PairingCode;
 use crate::db::Database;
 use crate::Result;
 use std::sync::Arc;
@@ -78,14 +78,14 @@ pub async fn remove_paired_device(
 #[tauri::command]
 pub async fn get_app_settings(
     app_handle: tauri::AppHandle,
-) -> crate::Result<crate::config::AppConfig> {
+) -> crate::Result<crate::system::config::AppConfig> {
     let config_path = app_handle
         .path()
         .app_data_dir()
         .map(|p| p.join("config.properties"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
-    crate::config::AppConfig::load(&config_path)
+    crate::system::config::AppConfig::load(&config_path)
         .map_err(|e| crate::AppError::Config(e.to_string()))
 }
 
@@ -93,7 +93,7 @@ pub async fn get_app_settings(
 #[tauri::command]
 pub async fn save_app_settings(
     app_handle: tauri::AppHandle,
-    settings: crate::config::AppConfig,
+    settings: crate::system::config::AppConfig,
 ) -> crate::Result<()> {
     let config_path = app_handle
         .path()

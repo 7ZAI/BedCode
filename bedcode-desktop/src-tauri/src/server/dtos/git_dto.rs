@@ -34,3 +34,15 @@ pub struct GitCheckoutRequest {
 pub struct GitCheckoutResponseData {
     pub branch: String,
 }
+
+// ==================== Git Status ====================
+
+/// GET /api/git/status response data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusResponseData {
+    /// 是否有未提交的更改
+    pub has_changes: bool,
+    /// 未提交更改的文件数量
+    pub changed_count: usize,
+}

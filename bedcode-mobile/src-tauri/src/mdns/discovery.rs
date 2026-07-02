@@ -74,8 +74,11 @@ impl MdnsDiscovery {
                                 let instance_name = info.get_fullname().to_string();
                                 let host_name = info.get_hostname().to_string();
                                 let port = info.get_port();
-                                let address = info.get_addresses().iter().next()
+                                // 优先使用 IPv4 地址，避免 IPv6 导致连接失败
+                                let address = info.get_addresses().iter()
+                                    .find(|a| a.is_ipv4())
                                     .map(|a| a.to_string())
+                                    .or_else(|| info.get_addresses().iter().next().map(|a| a.to_string()))
                                     .unwrap_or_default();
 
                                 let txt_records: HashMap<String, String> = info

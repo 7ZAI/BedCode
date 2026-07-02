@@ -149,8 +149,10 @@ function handleConnect(service: DiscoveredService) {
 
   // 跳转到连接页面并触发连接
   // 通过 router state 传递设备信息
+  // 导航到 mobile-home（滑动容器）page 0，而非独立路由
   router.push({
-    name: 'mobile-devices',
+    name: 'mobile-home',
+    query: { page: '0' },
     state: { mdnsDevice: device } as any,
   })
 }

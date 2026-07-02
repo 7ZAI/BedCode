@@ -3,7 +3,7 @@
     <!-- Header -->
     <header class="explorer-header">
       <button class="back-btn" @click="handleBack">
-        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
       </button>
@@ -13,13 +13,13 @@
       </div>
       <div class="header-meta">
         <button class="settings-btn" @click="showSettings = true" :title="t('mobile.codeViewer.settingsTitle')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
         <button class="sidebar-toggle-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" :title="t('mobile.file.title')">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
           </svg>
         </button>
@@ -34,6 +34,7 @@
         <FileSidebar
           v-if="showSidebar"
           class="explorer-sidebar"
+          :class="{ 'landscape-sidebar': isLandscape }"
           :session-id="sessionId"
           mode="emit"
           resize-side="right"
@@ -102,6 +103,7 @@ import { useCodeHighlight, getLangByFilename } from '@/composables/useCodeHighli
 import { useHttpApi } from '@/composables/useHttpApi'
 import FileSidebar from '@/components/FileSidebar.vue'
 import { useToast } from '@/composables/useToast'
+import { useOrientation } from '@/composables/useOrientation'
 import { writeClipboardText } from '@/utils/clipboard'
 import { useCodeViewerStore } from '@/stores/codeViewer'
 import CodeViewerSettingsModal from '@/components/CodeViewerSettingsModal.vue'
@@ -111,6 +113,7 @@ const route = useRoute()
 const connection = useMobileConnection()
 const toast = useToast()
 const { t } = useI18n()
+const { isLandscape } = useOrientation()
 const codeViewerStore = useCodeViewerStore()
 const showSettings = ref(false)
 const { highlightedHtml, highlight, highlightDiff } = useCodeHighlight()
@@ -370,10 +373,9 @@ async function onSettingsConfirm() {
   flex-shrink: 0;
 }
 
-@media (orientation: landscape) {
-  .explorer-sidebar {
-    width: 25%;
-  }
+/* 横屏时侧边栏收窄 */
+.explorer-sidebar.landscape-sidebar {
+  width: 25%;
 }
 
 /* ==================== Code Area ==================== */

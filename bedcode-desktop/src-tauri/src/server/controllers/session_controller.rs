@@ -11,8 +11,8 @@
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
-use crate::app_context::AppContext;
-use crate::model::api_dto::ApiResponse;
+use crate::system::app_context::AppContext;
+use crate::server::dtos::ApiResponse;
 use crate::server::dtos::session_dto::*;
 use crate::server::middleware::jwt_auth::get_claims_from_request;
 
@@ -77,7 +77,7 @@ pub async fn start_session(
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
         Err(e) => {
-            tracing::error!("Failed to start session: {}", e);
+            tracing::error!(error = %e, config_id = %body.config_id, "Failed to start session");
             HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
         }
     }
@@ -106,7 +106,7 @@ pub async fn stop_session(
             HttpResponse::Ok().json(ApiResponse::ok())
         }
         Err(e) => {
-            tracing::error!("Failed to stop session: {}", e);
+            tracing::error!(error = %e, session_id = %session_id, "Failed to stop session");
             HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
         }
     }
@@ -122,7 +122,7 @@ pub async fn resize_session(
     let session_manager = ctx.session_manager();
 
     if let Err(e) = session_manager.resize_session(&session_id, body.cols, body.rows).await {
-        tracing::warn!("Failed to resize session: {}", e);
+        tracing::warn!(error = %e, session_id = %session_id, "Failed to resize session");
         return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
     }
 
@@ -152,7 +152,7 @@ pub async fn remove_session(
             HttpResponse::Ok().json(ApiResponse::ok())
         }
         Err(e) => {
-            tracing::error!("Failed to remove session: {}", e);
+            tracing::error!(error = %e, session_id = %session_id, "Failed to remove session");
             HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
         }
     }
@@ -176,7 +176,7 @@ pub async fn send_session_input(
     // 处理普通数据输入
     if !data.is_empty() {
         if let Err(e) = session_manager.write_input(&session_id, &data).await {
-            tracing::error!("[SessionController] Failed to write input to session {}: {}", session_id, e);
+            tracing::error!(error = %e, session_id = %session_id, "Failed to write input to session");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
         }
     }
@@ -184,7 +184,7 @@ pub async fn send_session_input(
     // 处理特殊键输入
     if let Some(ref key) = special_key {
         if let Err(e) = session_manager.send_special_key(&session_id, key).await {
-            tracing::error!("[SessionController] Failed to send special key to session {}: {}", session_id, e);
+            tracing::error!(error = %e, session_id = %session_id, "Failed to send special key to session");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
         }
     }

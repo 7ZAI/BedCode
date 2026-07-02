@@ -2,11 +2,12 @@
 //!
 //! Routes:
 //! - GET /api/git/branches?session_id=X
+//! - GET /api/git/status?session_id=X
 //! - POST /api/git/checkout
 
 use actix_web::{web, HttpResponse};
-use crate::app_context::AppContext;
-use crate::model::api_dto::ApiResponse;
+use crate::system::app_context::AppContext;
+use crate::server::dtos::ApiResponse;
 use crate::process::create_command;
 use super::file_controller::resolve_working_dir;
 use crate::server::dtos::git_dto::*;
@@ -77,6 +78,33 @@ pub async fn checkout(body: web::Json<GitCheckoutRequest>) -> HttpResponse {
         }
         Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
         Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("Git checkout task failed: {}", e))),
+    }
+}
+
+/// GET /api/git/status?session_id=X
+///
+/// 检查工作区是否有未提交的更改
+pub async fn get_status(query: web::Query<GitBranchesQuery>) -> HttpResponse {
+    let ctx = AppContext::global();
+
+    let working_dir = match resolve_working_dir(&query.session_id, ctx).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
+        }
+    };
+
+    let working_dir_clone = working_dir.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        check_git_status(&working_dir_clone)
+    }).await;
+
+    match result {
+        Ok(Ok(data)) => HttpResponse::Ok().json(ApiResponse::ok_with_data(data)),
+        Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("Git status task failed: {}", e))),
     }
 }
 
@@ -152,4 +180,14 @@ fn run_git_command(working_dir: &str, args: &[&str]) -> crate::Result<Vec<String
         .collect();
 
     Ok(lines)
+}
+
+/// 检查工作区是否有未提交的更改（git status --porcelain）
+fn check_git_status(working_dir: &str) -> crate::Result<GitStatusResponseData> {
+    let lines = run_git_command(working_dir, &["status", "--porcelain"])?;
+    let changed_count = lines.len();
+    Ok(GitStatusResponseData {
+        has_changes: changed_count > 0,
+        changed_count,
+    })
 }

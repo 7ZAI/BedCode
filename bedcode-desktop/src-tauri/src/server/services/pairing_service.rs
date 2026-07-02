@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::auth::pairing::{PairingCode, PendingDevice};
+use crate::utils::auth::pairing::{PairingCode, PendingDevice};
 
 /// 配对服务 - 业务层实现
 /// 负责配对码的生成、验证和待配对设备的管理

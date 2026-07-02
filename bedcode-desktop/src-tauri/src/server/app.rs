@@ -6,6 +6,7 @@
 use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Error};
 use actix_cors::Cors;
 use actix_web_actors::ws as actix_ws;
+use serde_json::json;
 
 use crate::server::controllers::{
     auth_controller, session_controller, config_controller, file_controller,
@@ -20,10 +21,24 @@ async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpRespo
     actix_ws::start(ws_actor, &req, stream)
 }
 
+/// 健康检查端点 — 移动端 WS 连接前探测桌面端是否可达
+async fn health_check() -> HttpResponse {
+    let supervisor = crate::server::supervisor::ServerSupervisor::global();
+    let status_info = supervisor.get_status_info().await;
+    HttpResponse::Ok().json(json!({
+        "status": "ok",
+        "port": status_info.port,
+        "uptime_secs": status_info.uptime_secs,
+    }))
+}
+
 /// 构建路由配置
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 终端端点
     cfg.route("/ws/terminal", web::get().to(terminal_ws));
+
+    // 健康检查（公开，无需 JWT，供移动端探测连通性）
+    cfg.route("/api/health", web::get().to(health_check));
 
     // 公开路由（无需 JWT）
     cfg.service(
@@ -50,6 +65,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
             .route("/file-diff", web::post().to(file_controller::get_file_diff))
             .route("/git/branches", web::get().to(git_controller::get_branches))
+            .route("/git/status", web::get().to(git_controller::get_status))
             .route("/git/checkout", web::post().to(git_controller::checkout))
     );
 
@@ -62,7 +78,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）
 ///
 /// 返回 `ServerHandle` 用于优雅停机
-pub async fn start_http_server(port: u16) -> std::io::Result<actix_web::dev::ServerHandle> {
+/// 调用方通过 oneshot channel 获取 handle，然后继续 await server 保持运行
+pub async fn start_http_server(port: u16) -> std::io::Result<(actix_web::dev::ServerHandle, impl std::future::Future<Output = std::io::Result<()>>)> {
     tracing::info!("Starting Actix Web server (HTTP + WS) on port {}", port);
 
     let server = HttpServer::new(|| {
@@ -82,7 +99,17 @@ pub async fn start_http_server(port: u16) -> std::io::Result<actix_web::dev::Ser
 
     // 在 await 之前获取 handle，用于后续优雅停机
     let handle = server.handle();
-    tokio::spawn(server);
 
-    Ok(handle)
+    Ok((handle, server))
 }
+
+// 注意：由于 Tauri crate-type = ["cdylib", "rlib"] 的限制，
+// Windows 上 cargo test 无法运行（STATUS_ENTRYPOINT_NOT_FOUND）。
+// 连接链路测试通过手动运行桌面端 + curl/移动端实际连接来验证：
+//
+// 验证步骤：
+// 1. 启动桌面端应用，确保服务器运行中
+// 2. 在同一网络内的移动端或浏览器访问 http://<desktop-ip>:8765/api/health
+// 3. 预期返回: {"status":"ok","port":8765,"uptime_secs":123}
+// 4. 手动输入 IP 连接应能通过 HTTP 探测后继续 WS 连接
+// 5. 如果 HTTP 探测失败，3秒内返回"无法连接"错误而非10秒WS超时

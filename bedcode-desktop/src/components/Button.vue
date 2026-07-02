@@ -3,7 +3,7 @@
     :type="type"
     :disabled="disabled || loading"
     :title="title"
-    class="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-dark-900"
+    class="inline-flex items-center justify-center gap-2 font-medium rounded-btn transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-dark-900"
     :class="[variantClass, sizeClass, { 'opacity-50 cursor-not-allowed': disabled || loading }]"
     @click="$emit('click', $event)"
   >
@@ -52,28 +52,28 @@ defineEmits(['click'])
 const variantClass = computed(() => {
   switch (props.variant) {
     case 'primary':
-      return 'bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500'
+      return 'bg-brand hover:bg-[var(--color-primary-hover)] text-white focus:ring-brand shadow-xs hover:shadow-sm'
     case 'secondary':
-      return 'bg-slate-100 dark:bg-dark-700 hover:bg-slate-200 dark:hover:bg-dark-600 text-slate-800 dark:text-white border border-slate-300 dark:border-dark-600 focus:ring-slate-400'
+      return 'bg-card hover:bg-[var(--bg-hover)] text-[var(--text-primary)] border border-[var(--border)] focus:ring-[var(--border)]'
     case 'danger':
-      return 'bg-red-600 hover:bg-red-700 text-white focus:ring-red-500'
+      return 'bg-[var(--color-danger-light)] hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 focus:ring-red-500'
     case 'ghost':
-      return 'bg-transparent hover:bg-slate-100 dark:hover:bg-dark-700 text-slate-700 dark:text-dark-300 hover:text-slate-900 dark:hover:text-white focus:ring-slate-400'
+      return 'bg-transparent hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus:ring-[var(--border)]'
     default:
-      return 'bg-primary-600 hover:bg-primary-700 text-white focus:ring-primary-500'
+      return 'bg-brand hover:bg-[var(--color-primary-hover)] text-white focus:ring-brand shadow-xs hover:shadow-sm'
   }
 })
 
 const sizeClass = computed(() => {
   switch (props.size) {
     case 'sm':
-      return 'px-3 py-1.5 text-sm'
+      return 'h-8 px-3 text-xs'
     case 'md':
-      return 'px-4 py-2 text-sm'
+      return 'h-10 px-4 text-sm'
     case 'lg':
-      return 'px-6 py-3 text-base'
+      return 'h-10 px-6 text-sm'
     default:
-      return 'px-4 py-2 text-sm'
+      return 'h-10 px-4 text-sm'
   }
 })
 </script>

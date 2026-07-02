@@ -5,7 +5,7 @@
 
 use actix_web::{dev::ServiceRequest, Error, HttpMessage};
 use actix_web::error::ErrorUnauthorized;
-use crate::auth::jwt::{JwtService, JwtClaims};
+use crate::utils::auth::jwt::{JwtService, JwtClaims};
 
 /// JWT 认证验证器
 ///
@@ -27,7 +27,7 @@ pub fn validate_jwt(req: &ServiceRequest) -> Result<JwtClaims, Error> {
         .verify_token_with_expiry(token)
         .map_err(|e| {
             let msg = match e {
-                crate::auth::jwt::JwtError::TokenExpired => "Token expired",
+                crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
                 _ => "Invalid token",
             };
             ErrorUnauthorized(msg)

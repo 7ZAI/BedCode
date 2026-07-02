@@ -141,7 +141,7 @@ pub async fn plugin_terminal_send_input(
             "Plugin {} has no terminal:input permission", plugin_id
         )));
     }
-    let ctx = crate::app_context::AppContext::global();
+    let ctx = crate::system::app_context::AppContext::global();
     ctx.session_manager().write_input(&session_id, &text).await
 }
 

@@ -1,10 +1,9 @@
 //! WebSocket Message Types
 //!
 //! 定义移动端和桌面端之间的通信协议
-//! 类型已移至 shared::model::message
 
-// Re-export types from shared model module
-pub use crate::model::message::Message;
+// Re-export types from ws::message module
+pub use crate::server::ws::message::Message;
 
 // Re-export types from shared enums module (payload types)
 pub use crate::enums::{

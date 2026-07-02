@@ -259,14 +259,13 @@ defineExpose({ focus })
 }
 
 .send-btn {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.15), rgba(80, 250, 123, 0.08));
-  border-color: rgba(80, 250, 123, 0.4);
-  color: #50fa7b;
+  background: var(--mobile-send-bg);
+  border-color: var(--mobile-send-border);
+  color: var(--mobile-send-color);
 }
 
 .send-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(80, 250, 123, 0.25), rgba(80, 250, 123, 0.15));
-  border-color: rgba(80, 250, 123, 0.6);
+  background: var(--mobile-send-active-bg);
 }
 
 .send-btn:disabled {
@@ -275,14 +274,13 @@ defineExpose({ focus })
 }
 
 .execute-btn {
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.2), rgba(255, 121, 198, 0.15));
-  border-color: rgba(255, 184, 108, 0.5);
-  color: #ffb86c;
+  background: var(--mobile-execute-bg);
+  border-color: var(--mobile-execute-border);
+  color: var(--mobile-execute-color);
 }
 
 .execute-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(255, 184, 108, 0.35), rgba(255, 121, 198, 0.25));
-  border-color: rgba(255, 184, 108, 0.7);
+  background: var(--mobile-execute-active-bg);
 }
 
 .execute-btn:disabled {
@@ -297,9 +295,9 @@ defineExpose({ focus })
 }
 
 .toggle-active {
-  background: rgba(139, 233, 253, 0.15);
-  color: #8be9fd;
-  border-color: rgba(139, 233, 253, 0.5);
+  background: var(--mobile-add-cmd-bg);
+  color: var(--mobile-add-cmd-color);
+  border-color: var(--mobile-add-cmd-border);
 }
 
 .toggle-inactive {

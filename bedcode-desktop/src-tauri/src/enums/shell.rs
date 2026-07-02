@@ -2,7 +2,7 @@
 //!
 //! 执行环境和 Shell 类型定义
 
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

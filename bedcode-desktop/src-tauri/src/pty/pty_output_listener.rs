@@ -1,14 +1,53 @@
-//! Pty Output Listener Implementation
+//! PTY 输出事件监听器与处理器
 //!
-//! 异步 PTY 输出事件监听器实现
-//! 实现 traits::PtyOutputListener trait
+//! 包含 PtyOutputHandler、PtyOutputListener trait 定义
+//! 及 AsyncPtyOutputListener 实现
 
-use crate::model::PtyOutputEvent;
-use crate::traits::{PtyOutputHandler, PtyOutputListener};
+use crate::pty::PtyOutputEvent;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::{Mutex};
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+
+// ==================== Trait 定义 ====================
+
+/// 异步 PTY 输出事件处理器 trait
+///
+/// 用于在 AsyncPtyOutputListener 中注册多个处理器
+/// 每个 Handler 可以独立处理输出事件（如转发、缓存、广播等）
+#[async_trait]
+pub trait PtyOutputHandler: Send + Sync {
+    /// 处理 PTY 输出事件
+    async fn handle(&self, event: PtyOutputEvent)
+        -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Handler 名称（用于日志和调试）
+    fn name(&self) -> &str;
+}
+
+/// 异步 PTY 输出事件监听器 trait
+///
+/// 外部实现此 trait 来接收 PTY 输出事件
+/// 注意：on_output 是同步方法，内部使用 tokio::spawn 来异步执行 handlers
+/// 这样可以在同步线程（如 PtyReader 线程）中安全调用
+#[async_trait]
+pub trait PtyOutputListener: Send + Sync {
+    /// 当有输出事件时调用（同步方法，内部会 spawn 异步任务）
+    /// 这是为了兼容在同步线程中调用
+    async fn on_output(&self, event: PtyOutputEvent);
+
+    /// 获取监听器名称（用于日志）
+    fn name(&self) -> &str;
+}
+
+/// 同步版本的 PTY 输出事件监听器 trait
+/// (保留用于兼容现有代码)
+pub trait PtyOutputListenerSync: Send + Sync {
+    /// 当有输出事件时调用（同步）
+    fn on_output(&self, event: PtyOutputEvent);
+}
+
+// ==================== 实现 ====================
 
 /// Handler 错误处理策略
 #[derive(Debug, Clone, Default)]

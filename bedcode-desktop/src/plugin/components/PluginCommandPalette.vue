@@ -5,12 +5,12 @@
       class="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]"
       @click.self="close"
     >
-      <div class="bg-white dark:bg-dark-800 rounded-lg shadow-2xl border border-slate-200 dark:border-dark-600 w-full max-w-md overflow-hidden">
-        <div class="p-3 border-b border-slate-200 dark:border-dark-700">
+      <div class="bg-card rounded-card shadow-2xl border border-[var(--border)] w-full max-w-md overflow-hidden">
+        <div class="p-3 border-b border-[var(--border)]">
           <input
             ref="searchInput"
             v-model="query"
-            class="w-full bg-transparent text-sm outline-none text-slate-900 dark:text-white placeholder-slate-400"
+            class="w-full bg-transparent text-sm outline-none text-[var(--text-primary)] placeholder-[var(--text-tertiary)]"
             :placeholder="$t('desktop.plugin.searchCommands')"
             @keydown.escape="close"
           />
@@ -19,12 +19,12 @@
           <li
             v-for="cmd in filteredCommands"
             :key="cmd.command_id"
-            class="px-4 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-dark-700 text-sm text-slate-700 dark:text-dark-300"
+            class="px-4 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-sm text-[var(--text-secondary)]"
             @click="executeCommand(cmd)"
           >
             {{ cmd.title }}
           </li>
-          <li v-if="filteredCommands.length === 0" class="px-4 py-3 text-sm text-slate-400 text-center">
+          <li v-if="filteredCommands.length === 0" class="px-4 py-3 text-sm text-[var(--text-tertiary)] text-center">
             {{ $t('desktop.plugin.noCommands') }}
           </li>
         </ul>

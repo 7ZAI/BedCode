@@ -4,7 +4,7 @@ use crate::Result;
 
 #[tauri::command]
 pub async fn get_connected_devices() -> Result<Vec<crate::server::DeviceConnectionInfo>> {
-    let manager = crate::websocket_manager::WebSocketManager::global();
+    let manager = crate::server::ws::WebSocketManager::global();
     let clients = manager.list_clients().await;
     let devices = clients
         .into_iter()

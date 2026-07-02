@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-desktop"
-version = "0.1.0"
+version = "1.1.0"
 description = "BedCode Desktop - Remote control for Claude Code via mobile devices"
 authors = ["binblink"]
 edition = "2021"
@@ -52,12 +52,16 @@ thiserror = "1"
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+tracing-log = "0.2"
 
 # File watching
 notify = "6"
 
 # Regex for parsing
 regex = "1"
+
+# mDNS service discovery
+mdns-sd = "0.20"
 
 # Network utilities
 local-ip-address = "0.6"

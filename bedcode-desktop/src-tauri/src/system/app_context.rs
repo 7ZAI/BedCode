@@ -7,7 +7,8 @@ use crate::plugin::PluginHost;
 use crate::plugin::PluginManager;
 use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
-use crate::auth::QrTokenManager;
+use crate::utils::auth::QrTokenManager;
+use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::db::Database;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +34,8 @@ pub struct AppContext {
     pairing_service: Arc<PairingService>,
     /// QR Token 管理器
     qr_manager: Arc<QrTokenManager>,
+    /// mDNS 广播管理器
+    mdns_advertiser: Arc<tokio::sync::RwLock<MdnsAdvertiser>>,
     /// Tauri AppHandle
     app_handle: Arc<AppHandle>,
     /// 同步事件发送器
@@ -87,6 +90,10 @@ impl AppContext {
         &self.qr_manager
     }
 
+    pub fn mdns_advertiser(&self) -> &Arc<tokio::sync::RwLock<MdnsAdvertiser>> {
+        &self.mdns_advertiser
+    }
+
     pub fn app_handle(&self) -> &Arc<AppHandle> {
         &self.app_handle
     }
@@ -109,6 +116,7 @@ pub struct AppContextBuilder {
     plugin_host: Option<Arc<PluginHost>>,
     pairing_service: Option<Arc<PairingService>>,
     qr_manager: Option<Arc<QrTokenManager>>,
+    mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
     app_handle: Option<Arc<AppHandle>>,
     sync_tx: Option<broadcast::Sender<crate::events::DesktopSyncEvent>>,
     resource_dir: Option<Arc<PathBuf>>,
@@ -124,6 +132,7 @@ impl AppContextBuilder {
             plugin_host: None,
             pairing_service: None,
             qr_manager: None,
+            mdns_advertiser: None,
             app_handle: None,
             sync_tx: None,
             resource_dir: None,
@@ -165,6 +174,11 @@ impl AppContextBuilder {
         self
     }
 
+    pub fn mdns_advertiser(mut self, ma: Arc<tokio::sync::RwLock<MdnsAdvertiser>>) -> Self {
+        self.mdns_advertiser = Some(ma);
+        self
+    }
+
     pub fn app_handle(mut self, ah: Arc<AppHandle>) -> Self {
         self.app_handle = Some(ah);
         self
@@ -190,6 +204,7 @@ impl AppContextBuilder {
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
             pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
+            mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
             app_handle: self.app_handle.expect("AppContext: app_handle is required"),
             sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
             resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),

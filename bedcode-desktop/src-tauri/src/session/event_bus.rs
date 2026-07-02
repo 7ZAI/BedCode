@@ -3,9 +3,9 @@
 //! 统一事件广播 - 整合 output/status/restart 三个独立广播通道
 //! SessionEventBus trait 已内联到此文件
 
-use crate::model::{SessionRestartEvent, SessionStatusEvent};
+use crate::session::{SessionRestartEvent, SessionStatusEvent};
 use crate::pty::PtyOutputEvent;
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use tokio::sync::broadcast;
 
 /// 会话事件类型

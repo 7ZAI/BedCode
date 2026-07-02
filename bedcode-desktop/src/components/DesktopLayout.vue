@@ -14,7 +14,7 @@
         <Sidebar />
 
         <!-- Main Content -->
-        <main class="flex-1 overflow-hidden">
+        <main class="flex-1 overflow-hidden bg-page">
           <router-view />
         </main>
 

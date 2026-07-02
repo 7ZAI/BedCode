@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use crate::server::ws::session::WsSession;
 use crate::server::ws::registry::WsSessionRegistry;
 use crate::server::message::Message;
-use crate::app_context::AppContext;
+use crate::system::app_context::AppContext;
 use crate::session::GlobalOutputManager;
-use crate::auth::jwt::JwtService;
+use crate::utils::auth::jwt::JwtService;
 use crate::enums::{SessionControlPayload, TerminalPayload};
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 
 /// 心跳间隔
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -146,7 +146,7 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
         let msg = match msg {
             Ok(msg) => msg,
             Err(e) => {
-                tracing::error!("WS protocol error: {}", e);
+                tracing::error!(error = %e, "WS protocol error, closing connection");
                 ctx.stop();
                 return;
             }
@@ -179,7 +179,7 @@ impl TerminalWs {
         let message = match Message::from_json(&text) {
             Ok(m) => m,
             Err(e) => {
-                tracing::warn!("Failed to parse WS message: {}", e);
+                tracing::warn!(error = %e, addr = %self.session.addr, "Failed to parse WS message");
                 let error = Message::error("PARSE_ERROR", &e.to_string());
                 if let Ok(json) = error.to_json() {
                     ctx.text(json);
@@ -260,7 +260,7 @@ impl TerminalWs {
             let pairing_service = app_ctx.pairing_service().clone();
             let qr_manager = app_ctx.qr_manager().clone();
             let app_handle: Option<std::sync::Arc<tauri::AppHandle>> = Some(app_ctx.app_handle().clone());
-            let ws_manager = crate::websocket_manager::WebSocketManager::global();
+            let ws_manager = crate::server::ws::WebSocketManager::global();
             let jwt_service = JwtService::new();
             let db = app_ctx.db().clone();
 
@@ -309,7 +309,7 @@ impl TerminalWs {
                     response_json: None,
                 },
                 Err(e) => {
-                    tracing::error!("Auth service error: {}", e);
+                    tracing::error!(error = %e, addr = %addr, "Auth service error");
                     let error = Message::error("AUTH_ERROR", &e.to_string());
                     AuthResponse {
                         authenticated: false,
@@ -367,7 +367,7 @@ impl TerminalWs {
                         let db = app_ctx.db().clone();
                         let db_guard = db.lock().await;
                         if let Err(e) = db_guard.update_pairing_last_seen(&fp) {
-                            tracing::warn!("Failed to update pairing last_seen for {}: {}", fp, e);
+                            tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
                         }
                     }
                 });
@@ -402,7 +402,7 @@ impl TerminalWs {
             }
             Err(e) => {
                 let msg = match e {
-                    crate::auth::jwt::JwtError::TokenExpired => "Token expired",
+                    crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
                     _ => "Invalid token",
                 };
                 let error = Message::error_with_id(&message_id, "AUTH_FAILED", msg);
@@ -430,7 +430,7 @@ impl TerminalWs {
                         TerminalPayload { action: crate::enums::TerminalAction::Input { data, special_key } },
                         &Some(sm),
                     ).await {
-                        tracing::error!("Terminal input error: {}", e);
+                        tracing::error!(session_id = %session_id, error = %e, "Terminal input error");
                     }
                 });
 
@@ -586,7 +586,7 @@ impl TerminalWs {
                     }
                 }
                 Err(e) => {
-                    tracing::error!("[TerminalWs] Session control error: {}", e);
+                    tracing::error!(error = %e, "[TerminalWs] Session control error");
                     let error = Message::error_with_id(&message_id, "SESSION_CONTROL_ERROR", &e.to_string());
                     if let Ok(json) = error.to_json() {
                         let _ = actor_addr.send(SendTextMessage { text: json }).await;

@@ -3,7 +3,7 @@
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center gap-3">
       <button
-        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-cyan-500/10 transition-colors"
+        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
         @click="goBack"
       >
         <svg class="w-5 h-5 text-[var(--mobile-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -28,12 +28,12 @@
         v-show="!isConnecting && !errorMessage"
         class="absolute inset-0 pointer-events-none flex items-center justify-center"
       >
-        <div class="w-64 h-64 border-2 border-cyan-400/50 rounded-2xl relative">
+        <div class="w-64 h-64 border-2 border-[var(--mobile-accent)]/50 rounded-2xl relative">
           <!-- Corner accents -->
-          <div class="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg"></div>
-          <div class="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg"></div>
-          <div class="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg"></div>
-          <div class="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-cyan-400 rounded-br-lg"></div>
+          <div class="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-[var(--mobile-accent)] rounded-tl-lg"></div>
+          <div class="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-[var(--mobile-accent)] rounded-tr-lg"></div>
+          <div class="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-[var(--mobile-accent)] rounded-bl-lg"></div>
+          <div class="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-[var(--mobile-accent)] rounded-br-lg"></div>
         </div>
       </div>
 
@@ -57,13 +57,13 @@
         <p class="text-[var(--mobile-text-muted)] text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
         <div class="flex gap-3">
           <button
-            class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-lg hover:border-cyan-500/40 transition-colors"
+            class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-lg hover:border-[var(--mobile-accent)]/40 transition-colors"
             @click="goBack"
           >
             {{ t('mobile.scan.back') }}
           </button>
           <button
-            class="px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-[var(--mobile-accent)] rounded-lg hover:bg-cyan-500/30 transition-colors"
+            class="px-4 py-2 bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] rounded-lg hover:bg-[var(--mobile-accent)]/20 transition-colors"
             @click="retry"
           >
             {{ t('mobile.scan.rescan') }}

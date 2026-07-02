@@ -1,45 +1,50 @@
 <template>
-  <div class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 overflow-hidden shadow-sm dark:shadow-none">
+  <div class="bg-card rounded-card shadow-card hover:shadow-card-hover transition-all duration-200 overflow-hidden">
     <!-- Session Header -->
     <div
-      class="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-dark-750 transition-colors"
+      class="flex items-center gap-4 px-6 py-5 cursor-pointer"
       @click="toggleExpand"
     >
       <!-- Left: Status Indicator -->
       <div
         :class="[
-          'flex-shrink-0 w-3 h-3 rounded-full',
+          'flex-shrink-0 w-2.5 h-2.5 rounded-full',
           statusColor
         ]"
       ></div>
 
       <!-- Center: Session Info -->
       <div class="flex-1 min-w-0">
-        <h3 class="font-medium text-slate-900 dark:text-white truncate">{{ session.name }}</h3>
-        <p class="text-slate-500 dark:text-dark-400 text-sm">{{ displayTime }}</p>
+        <h3 class="font-semibold text-[var(--text-primary)] text-sm truncate">{{ session.name }}</h3>
+        <p class="text-[var(--text-secondary)] text-[13px] mt-0.5">{{ displayTime }}</p>
       </div>
 
-      <!-- Status Badge -->
+      <!-- Status Tag -->
       <span
         :class="[
-          'flex-shrink-0 text-xs px-2 py-1 rounded',
-          statusBadgeClass
+          'flex-shrink-0 inline-flex items-center gap-1.5 h-7 px-3 rounded-tag text-xs font-medium',
+          statusTagClass
         ]"
       >
+        <span v-if="session.status === 'running'" class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
         {{ statusText }}
       </span>
 
-      <!-- Session Type Badge -->
+      <!-- Session Type Tag -->
       <span
         v-if="session.sessionType"
-        class="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-400"
+        class="flex-shrink-0 inline-flex items-center h-7 px-3 rounded-tag text-xs font-medium bg-[var(--color-primary-light)] text-blue-600 dark:text-blue-400"
       >
         PTY
       </span>
 
       <!-- Right: Actions -->
-      <div class="flex items-center gap-2 flex-shrink-0" @click.stop>
-        <Button variant="ghost" size="sm" :title="$t('desktop.terminal.expandDetail')" @click="toggleExpand">
+      <div class="flex items-center gap-1 flex-shrink-0 ml-2" @click.stop>
+        <button
+          class="w-9 h-9 rounded-btn flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-all duration-200"
+          :title="$t('desktop.terminal.expandDetail')"
+          @click="toggleExpand"
+        >
           <svg
             :class="['w-4 h-4 transition-transform', isExpanded ? 'rotate-180' : '']"
             fill="none"
@@ -48,51 +53,69 @@
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
           </svg>
-        </Button>
-        <Button variant="ghost" size="sm" :title="$t('desktop.terminal.viewTerminal')" @click="handleView">
+        </button>
+        <button
+          class="w-9 h-9 rounded-btn flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-all duration-200"
+          :title="$t('desktop.terminal.viewTerminal')"
+          @click="handleView"
+        >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
           </svg>
-        </Button>
+        </button>
         <!-- 运行中显示停止按钮，已停止显示重启按钮 -->
-        <Button v-if="isRunning" variant="ghost" size="sm" :title="$t('desktop.terminal.stopSession')" @click="$emit('stop')">
-          <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button
+          v-if="isRunning"
+          class="w-9 h-9 rounded-btn flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--color-danger-light)] hover:text-red-600 dark:hover:text-red-400 transition-all duration-200"
+          :title="$t('desktop.terminal.stopSession')"
+          @click="$emit('stop')"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
           </svg>
-        </Button>
-        <Button v-else variant="ghost" size="sm" :title="$t('desktop.terminal.restartSession')" @click="$emit('restart')">
-          <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        </button>
+        <button
+          v-else
+          class="w-9 h-9 rounded-btn flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--color-success-light)] hover:text-green-600 dark:hover:text-green-400 transition-all duration-200"
+          :title="$t('desktop.terminal.restartSession')"
+          @click="$emit('restart')"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-        </Button>
-        <Button variant="ghost" size="sm" :title="$t('desktop.terminal.deleteSession')" @click="$emit('delete')">
-          <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        </button>
+        <button
+          class="w-9 h-9 rounded-btn flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--color-danger-light)] hover:text-red-600 dark:hover:text-red-400 transition-all duration-200"
+          :title="$t('desktop.terminal.deleteSession')"
+          @click="$emit('delete')"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
-        </Button>
+        </button>
       </div>
     </div>
 
     <!-- Expandable Info Area -->
-    <div v-if="isExpanded" class="border-t border-slate-200 dark:border-dark-700 px-4 py-3 bg-slate-50 dark:bg-dark-900">
+    <div v-if="isExpanded" class="border-t border-[var(--border)] px-6 py-4 bg-[var(--bg-hover)]/30">
       <div class="grid grid-cols-2 gap-4 text-sm">
         <div>
-          <span class="text-slate-500 dark:text-dark-400">{{ t('desktop.session.sessionId') }}</span>
-          <span class="text-slate-700 dark:text-dark-300 ml-2 font-mono text-xs">{{ session.id }}</span>
+          <span class="text-[var(--text-secondary)]">{{ t('desktop.session.sessionId') }}</span>
+          <span class="text-[var(--text-primary)] ml-2 font-mono text-xs">{{ session.id }}</span>
         </div>
         <div>
-          <span class="text-slate-500 dark:text-dark-400">{{ t('desktop.session.configId') }}</span>
-          <span class="text-slate-700 dark:text-dark-300 ml-2 font-mono text-xs">{{ session.configId }}</span>
+          <span class="text-[var(--text-secondary)]">{{ t('desktop.session.configId') }}</span>
+          <span class="text-[var(--text-primary)] ml-2 font-mono text-xs">{{ session.configId }}</span>
         </div>
         <div>
-          <span class="text-slate-500 dark:text-dark-400">{{ t('desktop.session.createdAt') }}</span>
-          <span class="text-slate-700 dark:text-dark-300 ml-2">{{ formatDateTime(session.createdAt || session.created_at || '') }}</span>
+          <span class="text-[var(--text-secondary)]">{{ t('desktop.session.createdAt') }}</span>
+          <span class="text-[var(--text-primary)] ml-2">{{ formatDateTime(session.createdAt || session.created_at || '') }}</span>
         </div>
         <div v-if="session.startedAt">
-          <span class="text-slate-500 dark:text-dark-400">{{ isRunning ? t('desktop.session.startTime') : t('desktop.session.stopTime') }}</span>
-          <span class="text-slate-700 dark:text-dark-300 ml-2">{{ isRunning ? formatDateTime(session.startedAt) : formatDateTime(session.stoppedAt || '') }}</span>
+          <span class="text-[var(--text-secondary)]">{{ isRunning ? t('desktop.session.startTime') : t('desktop.session.stopTime') }}</span>
+          <span class="text-[var(--text-primary)] ml-2">{{ isRunning ? formatDateTime(session.startedAt) : formatDateTime(session.stoppedAt || '') }}</span>
         </div>
       </div>
     </div>
@@ -100,10 +123,14 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * SessionItem - 运行中会话卡片
+ *
+ * 卡片式设计，pill 状态标签，36x36 操作按钮
+ */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SessionInfo } from '@/stores/session'
-import Button from '@/components/Button.vue'
 import { useSessionWindows } from '@/composables/useSessionWindows'
 import { useRunTime } from '@/composables/useRunTime'
 
@@ -148,9 +175,9 @@ const displayTime = computed(() => {
 const statusColor = computed(() => {
   switch (props.session.status) {
     case 'running': return 'bg-green-500 animate-pulse'
-    case 'waitingInput': return 'bg-yellow-500'
+    case 'waitingInput': return 'bg-amber-500'
     case 'error': return 'bg-red-500'
-    default: return 'bg-dark-500'
+    default: return 'bg-[var(--text-tertiary)]'
   }
 })
 
@@ -166,14 +193,14 @@ const statusText = computed(() => {
   }
 })
 
-// 状态徽章样式
-const statusBadgeClass = computed(() => {
+// 状态标签样式 — pill 形状，浅色背景 + 饱和文字
+const statusTagClass = computed(() => {
   switch (props.session.status) {
-    case 'running': return 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
-    case 'waitingInput': return 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300'
-    case 'error': return 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300'
-    case 'stopped': return 'bg-slate-100 dark:bg-dark-600 text-slate-600 dark:text-dark-400'
-    default: return 'bg-slate-100 dark:bg-dark-600 text-slate-600 dark:text-dark-400'
+    case 'running': return 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400'
+    case 'waitingInput': return 'bg-[var(--color-warning-light)] text-amber-600 dark:text-amber-400'
+    case 'error': return 'bg-[var(--color-danger-light)] text-red-600 dark:text-red-400'
+    case 'stopped': return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
+    default: return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
   }
 })
 

@@ -167,7 +167,7 @@ impl WsSessionRegistry {
             }
 
             if let Err(e) = entry.actor_addr.send(SendTextMessage { text: text.clone() }).await {
-                tracing::warn!("[WsSessionRegistry] Failed to broadcast to client {}: {}", client_id, e);
+                tracing::warn!(client_id = %client_id, error = %e, "Failed to broadcast to client");
             } else {
                 sent_count += 1;
             }

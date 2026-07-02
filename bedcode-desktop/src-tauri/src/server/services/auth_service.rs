@@ -5,9 +5,9 @@
 use crate::server::connection_types::{AuthPayload, AuthStage, DeviceConnectionEvent, PairingCodeGeneratedEvent};
 use crate::server::message::Message;
 use crate::server::services::pairing_service::PairingService;
-use crate::auth::qr_token::QrTokenManager;
-use crate::websocket_manager::WebSocketManager;
-use crate::auth::JwtService;
+use crate::utils::auth::qr_token::QrTokenManager;
+use crate::server::ws::WebSocketManager;
+use crate::utils::auth::JwtService;
 use crate::db::Database;
 use crate::Result;
 use std::net::SocketAddr;
@@ -47,7 +47,7 @@ pub async fn handle_auth(
                 };
                 tracing::info!("Emitting pairing-code-generated event: code={}", event.code);
                 if let Err(e) = handle.emit("pairing-code-generated", &event) {
-                    tracing::error!("Failed to emit pairing code event: {}", e);
+                    tracing::error!(error = %e, "Failed to emit pairing code event");
                 } else {
                     tracing::info!("pairing-code-generated event emitted successfully");
                 }
@@ -101,7 +101,7 @@ pub async fn handle_auth(
                 {
                     let db_guard = db.lock().await;
                     if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address)) {
-                        tracing::warn!("Failed to record pairing for {}: {}", device_name, e);
+                        tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                     }
                 }
 
@@ -115,7 +115,7 @@ pub async fn handle_auth(
                     });
                 }
 
-                tracing::info!("Device paired: {} (fingerprint: {}, addr: {})", device_name, fingerprint, address);
+                tracing::info!(device_name = %device_name, fingerprint = %fingerprint, addr = %address, "Device paired");
 
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
@@ -181,7 +181,7 @@ pub async fn handle_auth(
             if !fingerprint.is_empty() {
                 let db_guard = db.lock().await;
                 if let Err(e) = db_guard.update_pairing_last_seen(&fingerprint) {
-                    tracing::warn!("Failed to update pairing last_seen for {}: {}", fingerprint, e);
+                    tracing::warn!(fingerprint = %fingerprint, error = %e, "Failed to update pairing last_seen");
                 }
             }
 
@@ -244,7 +244,7 @@ pub async fn handle_auth(
                     {
                         let db_guard = db.lock().await;
                         if let Err(e) = db_guard.add_pairing(&display_name, &device_fingerprint, "", Some(&address)) {
-                            tracing::warn!("Failed to record pairing for {}: {}", device_name, e);
+                            tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                         }
                     }
 
@@ -278,7 +278,7 @@ pub async fn handle_auth(
                     Ok(Some(response))
                 }
                 Err(e) => {
-                    tracing::warn!("QR token verification failed from {}: {}", addr, e);
+                    tracing::warn!(addr = %addr, error = %e, "QR token verification failed");
                     let error_msg = e.to_string();
                     let user_message = if error_msg.contains("expired") {
                         "二维码已过期，请重新生成".to_string()
@@ -394,11 +394,11 @@ pub async fn handle_jwt_auth(
             }))
         }
         Err(e) => {
-            tracing::warn!("JWT verification failed for {}: {}", addr, e);
+            tracing::warn!(addr = %addr, error = ?e, "JWT verification failed");
 
             // 返回认证失败响应
             let error_msg = match e {
-                crate::auth::JwtError::TokenExpired => "JWT token expired, please re-authenticate",
+                crate::utils::auth::JwtError::TokenExpired => "JWT token expired, please re-authenticate",
                 _ => "Invalid JWT token",
             };
 

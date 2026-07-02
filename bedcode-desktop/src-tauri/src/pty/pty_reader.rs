@@ -8,11 +8,11 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use crate::enums::PtySessionStatus;
-use crate::model::PtyOutputEvent;
+use crate::pty::PtyOutputEvent;
 use crate::pty::next_output_index;
 use crate::session::{GlobalOutputManager, OutputEvent};
-use crate::traits::PtyOutputListener;
-use crate::config::AppConfig;
+use crate::pty::PtyOutputListener;
+use crate::system::config::AppConfig;
 
 /// PTY 输出读取器
 pub struct PtyReader {

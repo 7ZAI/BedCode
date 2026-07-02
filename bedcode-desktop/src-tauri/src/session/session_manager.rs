@@ -4,7 +4,7 @@
 //! 重构后只负责流程编排，各职责已拆分到独立模块
 
 use crate::events::DesktopSyncEvent;
-use crate::model::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
+use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::pty::{
     AsyncPtyOutputListener, PtyOutputEvent, PtySessionHandler, PtyHandler,
 };
@@ -20,9 +20,9 @@ use crate::session::{
     session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
 };
-use crate::traits::PtyOutputListener;
+use crate::pty::PtyOutputListener;
 use crate::enums::{SessionStatus, SessionType};
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 use crate::Result;
 use chrono::Utc;
 use std::path::PathBuf;

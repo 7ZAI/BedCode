@@ -18,7 +18,7 @@ export interface CodeViewerSettings {
 const STORAGE_KEY = 'bedcode-code-viewer-settings'
 
 const defaultSettings: CodeViewerSettings = {
-  fontSize: 13,
+  fontSize: 11,
   theme: 'vitesse-dark',
   tabSize: 4,
   showLineNumbers: true,

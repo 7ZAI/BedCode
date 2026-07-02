@@ -3,6 +3,14 @@
     <!-- Header -->
     <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.connection.title') }}</h1>
+      <button
+        class="text-sm text-[var(--mobile-accent)] hover:text-[var(--mobile-accent)]/80 transition-colors"
+        :class="{ 'opacity-50': connection.isConnecting.value }"
+        :disabled="connection.isConnecting.value"
+        @click="$router.push({ name: 'mobile-discover' })"
+      >
+        {{ t('mobile.connection.discoverDevices') }}
+      </button>
     </header>
 
     <!-- Connection Status Banner -->
@@ -196,19 +204,6 @@
         {{ t('mobile.connection.scanConnect') }}
       </button>
 
-      <!-- Discover Devices Button -->
-      <button
-        class="w-full bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-all flex items-center justify-center gap-2"
-        :class="{ 'opacity-50': connection.isConnecting.value }"
-        :disabled="connection.isConnecting.value"
-        @click="$router.push({ name: 'mobile-discover' })"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
-        </svg>
-        {{ t('mobile.connection.discoverDevices') }}
-      </button>
-
       <!-- Manual Connect Button -->
       <button
         class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-bg-secondary)] transition-all flex items-center justify-center gap-2"
@@ -270,10 +265,10 @@
     </Teleport>
 
     <!-- Loading Overlay: 跳转终端期间显示 -->
-    <transition name="loading-fade">
-      <div v-if="isNavigating" class="loading-overlay">
-        <div class="loading-spinner"></div>
-        <p class="loading-text">{{ t('mobile.terminal.preparing') }}</p>
+    <transition name="mobile-loading-fade">
+      <div v-if="isNavigating" class="mobile-loading-overlay">
+        <div class="mobile-loading-spinner"></div>
+        <p class="mobile-loading-text">{{ t('mobile.terminal.preparing') }}</p>
       </div>
     </transition>
   </div>
@@ -376,7 +371,7 @@ const connectionStatusText = computed(() => {
     case 'paired':
       return t('mobile.connection.authenticated')
     case 'error':
-      return connectionError.value || t('mobile.connection.connectFailed')
+      return connectionError.value ? t(connectionError.value) : t('mobile.connection.connectFailed')
     default:
       return connection.connectionStatus.value === 'disconnected' ? t('mobile.connection.notConnected') : ''
   }
@@ -420,8 +415,9 @@ async function handleStartSession(config: SessionConfigSummary) {
       // 启动成功，显示 toast 提示
       toast.success(t('mobile.connection.sessionStarted', { name: config.name }))
 
-      // 跳转到会话列表页面，而不是直接进入终端
-      router.push({ name: 'mobile-sessions' })
+      // 切换到滑动容器的会话页面（page 1），而非导航到独立路由
+      // 导航到 mobile-sessions 会卸载 MobileSwipeContainer，导致左右滑动失效
+      router.push({ name: 'mobile-home', query: { page: '1' } })
     } else {
       console.error('Failed to start session: no session_id returned')
       toast.error(t('mobile.connection.startFailedNoId'))
@@ -439,20 +435,28 @@ onActivated(() => {
   // 从终端返回时重置导航状态
   isNavigating.value = false
   connection.loadConnectionHistory(true)
+
+  // 从 DiscoverView 跳转回来时，自动连接 mDNS 发现的设备
+  // keep-alive 激活时 onMounted 不会重新触发，需在 onActivated 中处理
+  const mdnsDevice = history.state?.mdnsDevice as RemoteDevice | undefined
+  if (mdnsDevice) {
+    history.replaceState({}, '')
+    connection.clearSessionConfigs()
+    connection.clearActiveSessions()
+    startConnection(mdnsDevice, true)
+  }
 })
 
 onMounted(async () => {
   connection.loadConnectionHistory()
 
-  // 从 DiscoverView 跳转回来时，自动连接 mDNS 发现的设备
+  // 首次挂载时也检查 mDNS 设备（非 keep-alive 场景）
   const mdnsDevice = history.state?.mdnsDevice as RemoteDevice | undefined
   if (mdnsDevice) {
-    // 清除 state 防止重复触发
     history.replaceState({}, '')
     connection.clearSessionConfigs()
     connection.clearActiveSessions()
-    // 自动发起连接
-    startConnection(mdnsDevice, false)
+    startConnection(mdnsDevice, true)
   }
 })
 
@@ -662,49 +666,6 @@ function handleNavigateToFiles(config: SessionConfigSummary) {
 
 .fade-enter-from,
 .fade-leave-to {
-  opacity: 0;
-}
-
-/* Loading Overlay */
-.loading-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: var(--mobile-bg-primary);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-}
-
-.loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--mobile-border);
-  border-top-color: var(--mobile-accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.loading-text {
-  font-size: 0.875rem;
-  color: var(--mobile-text-muted);
-  margin: 0;
-}
-
-/* Loading fade transition */
-.loading-fade-enter-active,
-.loading-fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-
-.loading-fade-enter-from,
-.loading-fade-leave-to {
   opacity: 0;
 }
 </style>

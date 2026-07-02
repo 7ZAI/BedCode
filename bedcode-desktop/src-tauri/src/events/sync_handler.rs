@@ -5,10 +5,10 @@
 use crate::events::DesktopSyncEvent;
 use crate::session::SessionManager;
 use crate::session::SessionConfigManager;
-use crate::websocket_manager::WebSocketManager;
+use crate::server::ws::WebSocketManager;
 use crate::enums::{SessionConfigSummary, SessionSummary, SyncPayload};
 use super::matcher::EventHandler;
-use crate::model::message::Message;
+use crate::server::ws::message::Message;
 use std::sync::Arc;
 
 /// 同步事件处理器

@@ -192,17 +192,30 @@
       :error="fileError"
       @update:visible="showFileViewer = $event"
     />
+
+    <!-- 分支切换确认弹窗 -->
+    <Modal v-model="showBranchConfirm" :title="t('mobile.file.switchConfirmTitle')" size="sm">
+      <p class="text-[var(--mobile-text-disabled)] text-sm">{{ branchConfirmMsg }}</p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showBranchConfirm = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" :loading="branchSwitching" @click="confirmSwitchBranch">{{ t('common.button.confirm') }}</Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, toRef, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useHttpApi, type GitBranchesData, type FileDiffLine } from '../composables/useHttpApi'
+import { useHttpApi, type GitBranchesData, type GitStatusData, type FileDiffLine } from '../composables/useHttpApi'
 import { useOrientation } from '@/composables/useOrientation'
 import { useFileTree, type SidebarSettings, FONT_SIZE_MIN, FONT_SIZE_MAX } from '@/composables/useFileTree'
 import FileTreeItem from './FileTreeItem.vue'
 import FileViewerModal from './FileViewerModal.vue'
+import Modal from './Modal.vue'
+import Button from './Button.vue'
 import { useToast } from '@/composables/useToast'
 import { writeClipboardText } from '@/utils/clipboard'
 
@@ -241,6 +254,11 @@ const isGitRepo = ref(true)
 const branchesLoading = ref(false)
 const branchSwitching = ref(false)
 const showBranchDropdown = ref(false)
+
+// 分支切换确认弹窗
+const showBranchConfirm = ref(false)
+const pendingBranch = ref('')
+const branchConfirmMsg = ref('')
 
 // 侧边栏宽度（像素），null 表示使用默认百分比
 const sidebarWidth = ref<number | null>(null)
@@ -348,9 +366,39 @@ async function loadBranches() {
 
 async function switchBranch(branch: string) {
   if (branch === currentBranch.value || branchSwitching.value) return
+  showBranchDropdown.value = false
+
+  // 先检查工作区是否有未提交的更改
+  try {
+    const { httpGetGitStatus } = useHttpApi()
+    const result = await httpGetGitStatus(props.sessionId)
+    if (result.code === 0 && result.data) {
+      const status = result.data as GitStatusData
+      if (status.hasChanges) {
+        pendingBranch.value = branch
+        branchConfirmMsg.value = t('mobile.file.switchConfirmMsg', { count: status.changedCount, branch })
+        showBranchConfirm.value = true
+        return
+      }
+    }
+  } catch {
+    // 状态检查失败时仍允许切换，只是跳过确认
+  }
+
+  // 无未提交更改，直接切换
+  await doSwitchBranch(branch)
+}
+
+/** 确认切换分支 */
+async function confirmSwitchBranch() {
+  showBranchConfirm.value = false
+  await doSwitchBranch(pendingBranch.value)
+}
+
+/** 执行分支切换 */
+async function doSwitchBranch(branch: string) {
   const { httpGitCheckout } = useHttpApi()
   branchSwitching.value = true
-  showBranchDropdown.value = false
   try {
     const result = await httpGitCheckout(props.sessionId, branch)
     if (result.code !== 0 || !result.data) {

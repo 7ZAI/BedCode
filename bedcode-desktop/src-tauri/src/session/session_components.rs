@@ -3,7 +3,7 @@
 //! 会话管理器的内部组件：注册表、命名服务、配置映射、状态检测
 //! 这些组件各自只有一个实现，trait 已内联到此文件
 
-use crate::model::SessionInfo;
+use crate::session::SessionInfo;
 use crate::pty::{ExecutionEnvironment, PtySession, SessionLaunchConfig, WindowsShell};
 use crate::db::SessionConfig;
 use crate::enums::SessionStatus;
@@ -334,6 +334,6 @@ impl Default for DefaultStatusDetector {
 
 impl StatusDetector for DefaultStatusDetector {
     fn detect_waiting_input(&self, output: &str) -> bool {
-        crate::parser::detect_waiting_input(output)
+        crate::utils::parser::detect_waiting_input(output)
     }
 }

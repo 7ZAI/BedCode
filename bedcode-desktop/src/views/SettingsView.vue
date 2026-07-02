@@ -1,102 +1,84 @@
 <template>
   <div class="h-full flex flex-col">
     <!-- Header -->
-    <header class="bg-white dark:bg-dark-800 border-b border-slate-200 dark:border-dark-700 px-6 py-3 h-12 flex items-center shadow-sm dark:shadow-none">
-      <h2 class="text-lg font-semibold">{{ $t('settings.title') }}</h2>
+    <header class="bg-page px-8 h-14 flex items-center">
+      <h2 class="text-[var(--font-size-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.title') }}</h2>
     </header>
 
-    <div class="flex-1 overflow-auto p-6">
-      <div class="max-w-2xl mx-auto space-y-6">
+    <div class="flex-1 overflow-auto p-6 px-8">
+      <div class="max-w-2xl mx-auto space-y-4">
         <!-- Network Settings -->
-        <div class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 p-6 shadow-sm dark:shadow-none">
-          <h3 class="text-lg font-medium mb-4">{{ $t('settings.network.title') }}</h3>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-slate-700 dark:text-dark-300 text-sm mb-2">{{ $t('settings.network.websocketPort') }}</label>
-              <input
-                v-model.number="settingsStore.settings.network.port"
-                type="number"
-                class="w-full bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
-              />
-            </div>
+        <div class="bg-card rounded-card p-6 shadow-card">
+          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.network.title') }}</h3>
+          <div class="mt-5 space-y-4">
+            <Input
+              :model-value="settingsStore.settings.network.port"
+              type="number"
+              :label="$t('settings.network.websocketPort')"
+              @update:model-value="settingsStore.settings.network.port = Number($event)"
+            />
           </div>
         </div>
 
         <!-- Session Defaults -->
-        <div class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 p-6 shadow-sm dark:shadow-none">
-          <h3 class="text-lg font-medium mb-4">{{ $t('settings.session.title') }}</h3>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-slate-700 dark:text-dark-300 text-sm mb-2">{{ $t('settings.session.defaultEnvironment') }}</label>
-              <select
-                v-model="settingsStore.settings.session.default_environment"
-                class="w-full bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
-              >
-                <option value="windows">{{ $t('desktop.form.windowsNative') }}</option>
-                <option value="wsl2">WSL2</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-700 dark:text-dark-300 text-sm mb-2">{{ $t('settings.session.defaultCommand') }}</label>
-              <input
-                v-model="settingsStore.settings.session.default_command"
-                type="text"
-                class="w-full bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
-              />
-            </div>
+        <div class="bg-card rounded-card p-6 shadow-card">
+          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.session.title') }}</h3>
+          <div class="mt-5 grid grid-cols-2 gap-4">
+            <Select
+              :model-value="settingsStore.settings.session.default_environment || 'windows'"
+              :label="$t('settings.session.defaultEnvironment')"
+              :options="environmentOptions"
+              @update:model-value="settingsStore.settings.session.default_environment = String($event)"
+            />
+            <Input
+              :model-value="settingsStore.settings.session.default_command || ''"
+              type="text"
+              :label="$t('settings.session.defaultCommand')"
+              @update:model-value="settingsStore.settings.session.default_command = String($event)"
+            />
           </div>
         </div>
 
         <!-- QR Code Settings -->
-        <div class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 p-6 shadow-sm dark:shadow-none">
-          <h3 class="text-lg font-medium mb-4">{{ $t('settings.qr.title') }}</h3>
+        <div class="bg-card rounded-card p-6 shadow-card">
+          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.qr.title') }}</h3>
+          <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ $t('settings.qr.validityDesc') }}</p>
           <div class="flex items-center justify-between">
             <div>
-              <span class="text-slate-800 dark:text-dark-200">{{ $t('settings.qr.validity') }}</span>
-              <p class="text-slate-500 dark:text-dark-500 text-sm mt-1">{{ $t('settings.qr.validityDesc') }}</p>
+              <span class="text-[var(--text-primary)]">{{ $t('settings.qr.validity') }}</span>
             </div>
-            <input
-              v-model.number="qrTokenTtl"
+            <Input
+              :model-value="qrTokenTtl"
               type="number"
-              :min="60"
-              :max="3600"
-              class="w-24 bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white text-center focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
+              class="w-24"
+              @update:model-value="qrTokenTtl = Number($event)"
               @blur="saveQrTokenTtl"
             />
           </div>
         </div>
 
         <!-- UI Settings -->
-        <div class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 p-6 shadow-sm dark:shadow-none">
-          <h3 class="text-lg font-medium mb-4">{{ $t('settings.ui.title') }}</h3>
-          <div class="space-y-4">
+        <div class="bg-card rounded-card p-6 shadow-card">
+          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.ui.title') }}</h3>
+          <div class="mt-5 space-y-4">
+            <Select
+              :model-value="settingsStore.settings.ui.theme"
+              :label="$t('settings.appearance.theme')"
+              :options="themeOptions"
+              @update:model-value="settingsStore.settings.ui.theme = String($event)"
+            />
+            <Select
+              :model-value="currentLanguage"
+              :label="$t('settings.appearance.language')"
+              :options="languageOptions"
+              @update:model-value="currentLanguage = String($event)"
+            />
             <div>
-              <label class="block text-slate-700 dark:text-dark-300 text-sm mb-2">{{ $t('settings.appearance.theme') }}</label>
-              <select
-                v-model="settingsStore.settings.ui.theme"
-                class="w-full bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
-              >
-                <option value="light">{{ $t('settings.appearance.lightMode') }}</option>
-                <option value="dark">{{ $t('settings.appearance.darkMode') }}</option>
-                <option value="system">{{ $t('settings.appearance.followSystem') }}</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-700 dark:text-dark-300 text-sm mb-2">{{ $t('settings.appearance.language') }}</label>
-              <select
-                v-model="currentLanguage"
-                class="w-full bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
-              >
-                <option value="zh-CN">中文</option>
-                <option value="en">English</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-700 dark:text-dark-300 text-sm mb-2">{{ $t('settings.ui.terminalFontSize') }}</label>
+              <label class="text-xs font-medium text-[var(--text-secondary)] mb-2 block">{{ $t('settings.ui.terminalFontSize') }}</label>
               <div class="flex items-center gap-3">
                 <button
                   @click="decrementFontSize"
-                  class="w-10 h-10 bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-dark-600 transition-colors shadow-xs dark:shadow-none"
+                  class="w-10 h-10 rounded-btn border border-[var(--border-input)] bg-card text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
                   :disabled="settingsStore.settings.ui.terminal_font_size <= 10"
                   :class="{ 'opacity-50 cursor-not-allowed': settingsStore.settings.ui.terminal_font_size <= 10 }"
                 >
@@ -104,16 +86,15 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
                   </svg>
                 </button>
-                <input
-                  v-model.number="settingsStore.settings.ui.terminal_font_size"
+                <Input
+                  :model-value="settingsStore.settings.ui.terminal_font_size"
                   type="number"
-                  min="10"
-                  max="24"
-                  class="w-20 bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg px-4 py-2 text-slate-900 dark:text-white text-center focus:border-primary-500 outline-none shadow-xs dark:shadow-none"
+                  class="w-20"
+                  @update:model-value="settingsStore.settings.ui.terminal_font_size = Number($event)"
                 />
                 <button
                   @click="incrementFontSize"
-                  class="w-10 h-10 bg-white dark:bg-dark-700 border border-slate-300 dark:border-dark-600 rounded-lg text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-dark-600 transition-colors shadow-xs dark:shadow-none"
+                  class="w-10 h-10 rounded-btn border border-[var(--border-input)] bg-card text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
                   :disabled="settingsStore.settings.ui.terminal_font_size >= 24"
                   :class="{ 'opacity-50 cursor-not-allowed': settingsStore.settings.ui.terminal_font_size >= 24 }"
                 >
@@ -121,38 +102,98 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
-                <span class="text-slate-500 dark:text-dark-400 text-sm">px</span>
+                <span class="text-[var(--text-secondary)] text-sm">px</span>
               </div>
             </div>
           </div>
         </div>
 
         <!-- About -->
-        <div class="bg-white dark:bg-dark-800 rounded-lg border border-slate-200 dark:border-dark-700 p-6 shadow-sm dark:shadow-none">
-          <h3 class="text-lg font-medium mb-4">{{ $t('settings.about.title') }}</h3>
-          <div class="text-slate-700 dark:text-dark-300">
-            <p>BedCode</p>
-            <p class="text-slate-500 dark:text-dark-400 text-sm">{{ $t('common.misc.version') }} 0.1.0</p>
+        <div class="bg-card rounded-card p-6 shadow-card">
+          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.about.title') }}</h3>
+          <div class="mt-5 flex items-center justify-between">
+            <div class="text-[var(--text-primary)]">
+              <p>BedCode</p>
+              <p class="text-[var(--text-secondary)] text-sm">{{ $t('common.misc.version') }} {{ appVersion }}</p>
+            </div>
+            <Button variant="secondary" @click="handleCheckUpdate" :disabled="updateStatus === 'checking'">
+              <template #icon>
+                <svg v-if="updateStatus !== 'checking'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </template>
+              {{ updateStatus === 'checking' ? $t('common.status.loading') : $t('settings.about.checkUpdate') }}
+            </Button>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Update Available Dialog -->
+    <Modal v-model="showUpdateDialog" :title="$t('settings.about.newVersionAvailable')" size="sm">
+      <div class="space-y-3">
+        <div class="flex items-center gap-4 text-sm">
+          <span class="text-[var(--text-secondary)]">{{ $t('settings.about.currentVersion') }}</span>
+          <span class="text-[var(--text-primary)] font-medium">{{ updateInfo?.currentVersion }}</span>
+        </div>
+        <div class="flex items-center gap-4 text-sm">
+          <span class="text-[var(--text-secondary)]">{{ $t('settings.about.latestVersion') }}</span>
+          <span class="text-brand font-medium">{{ updateInfo?.latestVersion }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showUpdateDialog = false">{{ $t('settings.about.cancel') }}</Button>
+          <Button variant="primary" @click="openDownloadPage">{{ $t('settings.about.goToDownload') }}</Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
  * 设置视图 - 桌面端设置页面
- * 支持网络、会话、QR码、界面等设置，以及语言切换
+ * 支持网络、会话、QR码、界面等设置，以及语言切换和更新检查
  */
 import { onMounted, ref, watch, computed } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { useQrCodeApi } from '@/composables/useTauri'
+import Input from '@/components/Input.vue'
+import Select from '@/components/Select.vue'
+import Button from '@/components/Button.vue'
+import Modal from '@/components/Modal.vue'
+import i18n from '@/locales'
+import { getAppVersion } from '@/composables/useDesktopCommands'
+import { useUpdateChecker } from '@/composables/useUpdateChecker'
+import { useToast } from '@/composables/useToast'
+import { open } from '@tauri-apps/plugin-shell'
 
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const qrApi = useQrCodeApi()
+const toast = useToast()
+const { status: updateStatus, updateInfo, checkForUpdate } = useUpdateChecker()
+
+const appVersion = ref('')
+const showUpdateDialog = ref(false)
+
+const environmentOptions = computed(() => [
+  { value: 'windows', label: i18n.global.t('desktop.form.windowsNative') },
+  { value: 'wsl2', label: 'WSL2' },
+])
+
+const themeOptions = computed(() => [
+  { value: 'light', label: i18n.global.t('settings.appearance.lightMode') },
+  { value: 'dark', label: i18n.global.t('settings.appearance.darkMode') },
+  { value: 'system', label: i18n.global.t('settings.appearance.followSystem') },
+])
+
+const languageOptions = [
+  { value: 'zh-CN', label: '中文' },
+  { value: 'en', label: 'English' },
+]
 
 const currentLanguage = computed({
   get: () => settingsStore.settings.ui.language || 'zh-CN',
@@ -203,5 +244,28 @@ watch(
 onMounted(async () => {
   await settingsStore.loadSettings()
   await loadQrTokenTtl()
+  try {
+    appVersion.value = await getAppVersion()
+  } catch {
+    appVersion.value = '—'
+  }
 })
+
+async function handleCheckUpdate() {
+  const result = await checkForUpdate()
+  if (result?.hasUpdate) {
+    showUpdateDialog.value = true
+  } else if (result) {
+    toast.info(i18n.global.t('settings.about.alreadyLatest'))
+  } else {
+    toast.error(i18n.global.t('settings.about.checkFailed'))
+  }
+}
+
+async function openDownloadPage() {
+  if (updateInfo.value?.downloadUrl) {
+    await open(updateInfo.value.downloadUrl)
+  }
+  showUpdateDialog.value = false
+}
 </script>

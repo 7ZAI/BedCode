@@ -4,11 +4,11 @@
 //! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
 
 use crate::enums::{PtySessionStatus, SessionLaunchConfig};
-use crate::model::PtyOutputEvent;
+use crate::pty::PtyOutputEvent;
 use crate::pty::command::build_command;
 use crate::pty::pty_reader::PtyReader;
-use crate::traits::PtyOutputListener;
-use crate::config::AppConfig;
+use crate::pty::PtyOutputListener;
+use crate::system::config::AppConfig;
 use crate::process::create_command;
 use crate::Result;
 

@@ -124,6 +124,12 @@ export async function resetTaskStatus(id: string) {
   }
 }
 
+/** 清除所有预设任务 */
+export function clearAllTasks() {
+  tasks.value = []
+  saveToStorage()
+}
+
 export function usePresetTasks() {
   return {
     tasks,
@@ -133,6 +139,7 @@ export function usePresetTasks() {
     deleteTask,
     executeTask,
     resetTaskStatus,
+    clearAllTasks,
     saveToStorage,
   }
 }

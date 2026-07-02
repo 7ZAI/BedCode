@@ -7,12 +7,12 @@
 
 use actix_web::{web, HttpRequest, HttpResponse};
 
-use crate::app_context::AppContext;
-use crate::auth::jwt::JwtService;
-use crate::model::api_dto::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
+use crate::system::app_context::AppContext;
+use crate::utils::auth::jwt::JwtService;
+use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
 use crate::server::dtos::plugin_dto::{SessionModeRequest, TaskStatusRequest};
 use crate::enums::TaskStatus;
-use crate::config::AppConfig;
+use crate::system::config::AppConfig;
 
 /// POST /api/plugin/task-status
 ///
