@@ -146,6 +146,9 @@ impl ServerSupervisor {
 
                 tracing::info!("Server started on port {} (in-process)", port);
 
+                // 服务器启动后自动阻止系统休眠
+                crate::system::power::power_manager().enable();
+
                 // 服务器启动后自动启动 mDNS 广播
                 start_mdns_advertisement(port);
 
@@ -184,6 +187,9 @@ impl ServerSupervisor {
         inner.metrics = ServerMetrics::default();
         inner.metrics_history.clear();
         inner.start_time = None;
+
+        // 服务器停止后释放休眠阻止
+        crate::system::power::power_manager().disable();
 
         // 服务器停止时自动停止 mDNS 广播
         stop_mdns_advertisement();

@@ -4,6 +4,8 @@ export default {
     network: {
       title: '网络设置',
       websocketPort: 'WebSocket 端口',
+      preventSleep: '防止系统休眠',
+      preventSleepDesc: '服务器运行时阻止系统进入休眠状态',
     },
     session: {
       title: '会话默认设置',
@@ -54,11 +56,14 @@ export default {
       alreadyLatest: '已是最新版本',
       checkingUpdate: '正在检查更新...',
       checkFailed: '检查更新失败',
-      newVersionAvailable: '发现新版本: {version}',
+      newVersionAvailable: '发现新版本',
+      downloadingUpdate: '正在下载更新...',
+      downloadComplete: '下载完成，正在安装...',
+      installingUpdate: '正在安装更新...',
       currentVersion: '当前版本',
       latestVersion: '最新版本',
+      downloadUpdate: '立即更新',
       goToDownload: '前往下载',
-      downloadUpdate: '下载更新',
       cancel: '取消',
     },
     actions: {

@@ -1,9 +1,10 @@
 <template>
-  <div
-    v-if="visible"
-    class="settings-modal-overlay mobile-ui"
-    @click.self="emit('close')"
-  >
+  <Teleport to="body">
+    <div
+      v-if="visible"
+      class="settings-modal-overlay mobile-ui"
+      @click.self="emit('close')"
+    >
     <div class="settings-modal" :style="modalStyle">
       <div class="settings-header">
         <h2>{{ t('mobile.codeViewer.settingsTitle') }}</h2>
@@ -81,6 +82,7 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -140,7 +142,7 @@ function handleConfirm() {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 50;
   padding: 1rem;
 }
 

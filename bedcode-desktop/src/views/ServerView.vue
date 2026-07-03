@@ -8,7 +8,7 @@
     <!-- ==================== 内容区 ==================== -->
     <div class="p-6 px-8 max-w-4xl mx-auto space-y-4">
     <!-- ==================== 区块 1：服务器配置 ==================== -->
-    <div class="bg-card rounded-card p-6 shadow-card">
+    <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up">
       <!-- 标题行：状态 + 控制按钮 -->
       <div class="flex items-center justify-between mb-5">
         <div class="flex items-center gap-3">
@@ -93,7 +93,7 @@
     </div>
 
     <!-- ==================== 区块 2：性能监控 ==================== -->
-    <div class="bg-card rounded-card p-6 shadow-card">
+    <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 80ms">
       <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">
         {{ $t('desktop.server.monitoring') }}
       </h2>

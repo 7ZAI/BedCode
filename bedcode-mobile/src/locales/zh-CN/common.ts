@@ -20,6 +20,7 @@ export default {
       remove: '移除',
       retry: '重试',
       clear: '清除',
+      copy: '复制',
     },
     status: {
       connected: '已连接',

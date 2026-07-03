@@ -121,6 +121,7 @@ export default {
       stopSession: 'Stop Session',
       restartSession: 'Restart Session',
       deleteSession: 'Delete Session',
+      scrollToBottom: 'Scroll to Bottom',
     },
     server: {
       title: 'Server Management',

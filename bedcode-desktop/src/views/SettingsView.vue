@@ -8,7 +8,7 @@
     <div class="flex-1 overflow-auto p-6 px-8">
       <div class="max-w-2xl mx-auto space-y-4">
         <!-- Network Settings -->
-        <div class="bg-card rounded-card p-6 shadow-card">
+        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up">
           <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.network.title') }}</h3>
           <div class="mt-5 space-y-4">
             <Input
@@ -17,11 +17,21 @@
               :label="$t('settings.network.websocketPort')"
               @update:model-value="settingsStore.settings.network.port = Number($event)"
             />
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-[var(--text-primary)] text-sm">{{ $t('settings.network.preventSleep') }}</span>
+                <p class="text-[var(--text-tertiary)] text-xs mt-0.5">{{ $t('settings.network.preventSleepDesc') }}</p>
+              </div>
+              <Toggle
+                :model-value="settingsStore.settings.network.prevent_sleep ?? true"
+                @update:model-value="settingsStore.settings.network.prevent_sleep = $event"
+              />
+            </div>
           </div>
         </div>
 
         <!-- Session Defaults -->
-        <div class="bg-card rounded-card p-6 shadow-card">
+        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 50ms">
           <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.session.title') }}</h3>
           <div class="mt-5 grid grid-cols-2 gap-4">
             <Select
@@ -40,7 +50,7 @@
         </div>
 
         <!-- QR Code Settings -->
-        <div class="bg-card rounded-card p-6 shadow-card">
+        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 100ms">
           <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.qr.title') }}</h3>
           <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ $t('settings.qr.validityDesc') }}</p>
           <div class="flex items-center justify-between">
@@ -58,7 +68,7 @@
         </div>
 
         <!-- UI Settings -->
-        <div class="bg-card rounded-card p-6 shadow-card">
+        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 150ms">
           <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.ui.title') }}</h3>
           <div class="mt-5 space-y-4">
             <Select
@@ -109,45 +119,52 @@
         </div>
 
         <!-- About -->
-        <div class="bg-card rounded-card p-6 shadow-card">
+        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 200ms">
           <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.about.title') }}</h3>
           <div class="mt-5 flex items-center justify-between">
             <div class="text-[var(--text-primary)]">
               <p>BedCode</p>
               <p class="text-[var(--text-secondary)] text-sm">{{ $t('common.misc.version') }} {{ appVersion }}</p>
             </div>
-            <Button variant="secondary" @click="handleCheckUpdate" :disabled="updateStatus === 'checking'">
+            <!-- 检查更新按钮 -->
+            <Button
+              v-if="updateStatus === 'idle' || updateStatus === 'latest' || updateStatus === 'failed'"
+              variant="secondary"
+              @click="handleCheckUpdate"
+            >
               <template #icon>
-                <svg v-if="updateStatus !== 'checking'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               </template>
-              {{ updateStatus === 'checking' ? $t('common.status.loading') : $t('settings.about.checkUpdate') }}
+              {{ getUpdateStatusText() }}
             </Button>
+            <!-- 发现新版本 - 安装按钮 -->
+            <Button
+              v-else-if="updateStatus === 'available'"
+              variant="primary"
+              @click="handleInstallUpdate"
+            >
+              {{ $t('settings.about.downloadUpdate') }}
+            </Button>
+            <!-- 下载中 -->
+            <div v-else-if="updateStatus === 'downloading'" class="flex items-center gap-3">
+              <div class="w-32 h-2 bg-[var(--bg-hover)] rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-brand rounded-full transition-all duration-300"
+                  :style="{ width: downloadPercent + '%' }"
+                />
+              </div>
+              <span class="text-sm text-[var(--text-secondary)]">{{ downloadPercent }}%</span>
+            </div>
+            <!-- 其他状态 -->
+            <span v-else class="text-sm text-[var(--text-secondary)]">{{ getUpdateStatusText() }}</span>
           </div>
+          <!-- 失败时显示重试 -->
+          <p v-if="updateStatus === 'failed'" class="mt-2 text-xs text-red-500">{{ errorMessage }}</p>
         </div>
       </div>
     </div>
-
-    <!-- Update Available Dialog -->
-    <Modal v-model="showUpdateDialog" :title="$t('settings.about.newVersionAvailable')" size="sm">
-      <div class="space-y-3">
-        <div class="flex items-center gap-4 text-sm">
-          <span class="text-[var(--text-secondary)]">{{ $t('settings.about.currentVersion') }}</span>
-          <span class="text-[var(--text-primary)] font-medium">{{ updateInfo?.currentVersion }}</span>
-        </div>
-        <div class="flex items-center gap-4 text-sm">
-          <span class="text-[var(--text-secondary)]">{{ $t('settings.about.latestVersion') }}</span>
-          <span class="text-brand font-medium">{{ updateInfo?.latestVersion }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showUpdateDialog = false">{{ $t('settings.about.cancel') }}</Button>
-          <Button variant="primary" @click="openDownloadPage">{{ $t('settings.about.goToDownload') }}</Button>
-        </div>
-      </template>
-    </Modal>
   </div>
 </template>
 
@@ -163,21 +180,19 @@ import { useQrCodeApi } from '@/composables/useTauri'
 import Input from '@/components/Input.vue'
 import Select from '@/components/Select.vue'
 import Button from '@/components/Button.vue'
-import Modal from '@/components/Modal.vue'
+import Toggle from '@/components/Toggle.vue'
 import i18n from '@/locales'
 import { getAppVersion } from '@/composables/useDesktopCommands'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import { useToast } from '@/composables/useToast'
-import { open } from '@tauri-apps/plugin-shell'
 
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const qrApi = useQrCodeApi()
 const toast = useToast()
-const { status: updateStatus, updateInfo, checkForUpdate } = useUpdateChecker()
+const { status: updateStatus, downloadProgress, errorMessage, checkForUpdate, downloadAndInstall, getUpdateStatusText } = useUpdateChecker()
 
 const appVersion = ref('')
-const showUpdateDialog = ref(false)
 
 const environmentOptions = computed(() => [
   { value: 'windows', label: i18n.global.t('desktop.form.windowsNative') },
@@ -252,20 +267,22 @@ onMounted(async () => {
 })
 
 async function handleCheckUpdate() {
-  const result = await checkForUpdate()
-  if (result?.hasUpdate) {
-    showUpdateDialog.value = true
-  } else if (result) {
+  const update = await checkForUpdate()
+  if (update) {
+    // 有新版本，UI 自动切换为 "available" 状态，显示安装按钮
+  } else if (updateStatus.value === 'latest') {
     toast.info(i18n.global.t('settings.about.alreadyLatest'))
-  } else {
+  } else if (updateStatus.value === 'failed') {
     toast.error(i18n.global.t('settings.about.checkFailed'))
   }
 }
 
-async function openDownloadPage() {
-  if (updateInfo.value?.downloadUrl) {
-    await open(updateInfo.value.downloadUrl)
-  }
-  showUpdateDialog.value = false
+async function handleInstallUpdate() {
+  await downloadAndInstall()
 }
+
+const downloadPercent = computed(() => {
+  if (downloadProgress.value.contentLength === 0) return 0
+  return Math.round((downloadProgress.value.downloaded / downloadProgress.value.contentLength) * 100)
+})
 </script>

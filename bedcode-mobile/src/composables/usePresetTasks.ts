@@ -90,12 +90,8 @@ export async function executeTask(task: PresetTask, sessionId: string) {
         }
         throw new Error('mobile.toolbox.sendFailed')
       }
-      // 发送成功：running → completed
-      if (index !== -1) {
-        tasks.value[index].status = 'completed'
-        tasks.value[index].updatedAt = new Date().toISOString()
-        saveToStorage()
-      }
+      // 发送成功：保持 running，等桌面端事件通知真正完成
+      // 实际完成由 useTaskExecutionState.handleTaskStatusChanged 处理
     } catch {
       // 发送失败：running → failed
       if (index !== -1) {

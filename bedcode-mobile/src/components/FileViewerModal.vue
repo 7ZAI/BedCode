@@ -1,7 +1,8 @@
 <template>
-  <transition name="modal-fade">
-    <div v-if="visible" class="viewer-overlay mobile-ui" @click.self="handleClose" @touchstart.stop @touchmove.stop>
-      <div class="viewer-modal" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
+  <Teleport to="body">
+    <transition name="modal-fade">
+      <div v-if="visible" class="viewer-overlay mobile-ui" @click.self="handleClose" @touchstart.stop @touchmove.stop>
+        <div class="viewer-modal" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
         <!-- Header -->
         <div class="viewer-header">
           <div class="viewer-title-area">
@@ -9,6 +10,18 @@
             <span class="viewer-lang-badge">{{ displayLang }}</span>
           </div>
           <div class="viewer-actions">
+            <!-- Markdown 预览/源码切换（仅 .md 文件显示） -->
+            <button v-if="isMarkdownFile" class="viewer-action-btn viewer-mode-btn" :class="{ active: viewMode === 'preview' }" :title="t('mobile.file.previewMode')" @click="viewMode = 'preview'">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            </button>
+            <button v-if="isMarkdownFile" class="viewer-action-btn viewer-mode-btn" :class="{ active: viewMode === 'source' }" :title="t('mobile.file.sourceMode')" @click="viewMode = 'source'">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              </svg>
+            </button>
             <button class="viewer-action-btn" :title="t('mobile.file.settingsTitle')" @click="showSettings = true">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -36,6 +49,13 @@
           <div v-if="loading" class="viewer-loading">{{ t('mobile.file.loading') }}</div>
           <div v-else-if="error" class="viewer-error">{{ error }}</div>
           <div v-else-if="!code && !diffLines?.length" class="viewer-loading">{{ t('mobile.file.selectFile') }}</div>
+          <!-- Markdown 预览模式 -->
+          <div
+            v-else-if="isMarkdownFile && viewMode === 'preview'"
+            class="viewer-md-preview"
+            v-html="renderedMarkdown"
+          ></div>
+          <!-- 源码模式（shiki 高亮） -->
           <div
             v-else-if="highlightedHtml"
             class="viewer-code"
@@ -53,6 +73,7 @@
       </div>
     </div>
   </transition>
+  </Teleport>
 
   <!-- Settings Modal -->
   <CodeViewerSettingsModal
@@ -65,6 +86,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { marked } from 'marked'
 import { useCodeHighlight, getLangByFilename } from '@/composables/useCodeHighlight'
 import type { FileDiffLine } from '@/composables/useHttpApi'
 import { useCodeViewerStore } from '@/stores/codeViewer'
@@ -91,6 +113,18 @@ const { highlightedHtml, isLoading, error, highlight, highlightDiff } = useCodeH
 const isFullscreen = ref(false)
 const codeViewerStore = useCodeViewerStore()
 const showSettings = ref(false)
+/** Markdown 文件预览/源码切换：默认预览 */
+const viewMode = ref<'preview' | 'source'>('preview')
+
+const isMarkdownFile = computed(() => {
+  const ext = props.filename.split('.').pop()?.toLowerCase() || ''
+  return ext === 'md' || ext === 'mdx'
+})
+
+const renderedMarkdown = computed(() => {
+  if (!props.code || !isMarkdownFile.value) return ''
+  return marked.parse(props.code) as string
+})
 
 const displayLang = computed(() => getLangByFilename(props.filename))
 
@@ -130,7 +164,10 @@ watch(
   () => [props.visible, props.filename, props.code, props.diffLines] as const,
   async ([visible, filename, code, diffLines]) => {
     if (!visible || !filename) return
+    // 切换文件时重置为预览模式
+    viewMode.value = 'preview'
     const lang = getLangByFilename(filename)
+    // Markdown 预览模式下不需要 shiki 高亮，但保留以备切换源码
     if (diffLines && diffLines.length > 0) {
       await highlightDiff(diffLines, lang, codeViewerStore.settings.theme)
     } else if (code) {
@@ -163,7 +200,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 50;
   padding: 1rem;
 }
 
@@ -435,6 +472,162 @@ watch(
 
 .viewer-error {
   color: var(--mobile-error);
+}
+
+/* ==================== 模式切换按钮 ==================== */
+
+.viewer-mode-btn.active {
+  color: var(--mobile-accent);
+  background: var(--mobile-accent-muted);
+}
+
+/* ==================== Markdown 预览 ==================== */
+
+.viewer-md-preview {
+  padding: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--mobile-text-primary);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  word-break: break-word;
+}
+
+.viewer-md-preview :deep(h1) {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--mobile-text-primary);
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.viewer-md-preview :deep(h2) {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--mobile-accent);
+  margin: 1.25rem 0 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.viewer-md-preview :deep(h3) {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+  margin: 1rem 0 0.375rem;
+}
+
+.viewer-md-preview :deep(p) {
+  margin: 0.5rem 0;
+  color: var(--mobile-text-secondary);
+}
+
+.viewer-md-preview :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0 1rem;
+  font-size: 0.8125rem;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.viewer-md-preview :deep(thead th) {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-primary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--mobile-border);
+  white-space: nowrap;
+}
+
+.viewer-md-preview :deep(tbody td) {
+  padding: 0.4375rem 0.75rem;
+  border-bottom: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+.viewer-md-preview :deep(tbody tr:last-child td) {
+  border-bottom: none;
+}
+
+.viewer-md-preview :deep(code) {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.8125rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.25rem;
+  color: var(--mobile-accent);
+}
+
+.viewer-md-preview :deep(pre) {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.viewer-md-preview :deep(pre code) {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font-size: 0.8125rem;
+  color: var(--mobile-text-primary);
+}
+
+.viewer-md-preview :deep(blockquote) {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--mobile-accent);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+
+.viewer-md-preview :deep(ul),
+.viewer-md-preview :deep(ol) {
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+  color: var(--mobile-text-secondary);
+}
+
+.viewer-md-preview :deep(li) {
+  margin: 0.25rem 0;
+}
+
+.viewer-md-preview :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--mobile-border);
+  margin: 1rem 0;
+}
+
+.viewer-md-preview :deep(a) {
+  color: var(--mobile-accent);
+  text-decoration: none;
+}
+
+.viewer-md-preview :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.viewer-md-preview :deep(img) {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}
+
+.viewer-md-preview :deep(strong) {
+  color: var(--mobile-text-primary);
+  font-weight: 600;
 }
 
 .viewer-footer {

@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-slate-100 dark:bg-dark-900">
-    <!-- Header -->
-    <header class="px-4 py-3 flex items-center justify-between border-b border-slate-200 dark:border-dark-700 bg-white dark:bg-dark-800">
+    <!-- Header（终端窗口模式下隐藏，由外层统一管理） -->
+    <header v-if="showHeader" class="px-4 py-3 flex items-center justify-between border-b border-slate-200 dark:border-dark-700 bg-white dark:bg-dark-800">
       <div class="flex items-center gap-3">
         <div
           :class="[
@@ -55,7 +55,21 @@
     </header>
 
     <!-- Terminal Container (xterm.js) -->
-    <div ref="terminalContainerRef" class="flex-1 overflow-hidden"></div>
+    <div ref="terminalContainerRef" class="flex-1 overflow-hidden relative">
+      <!-- 滚动到底部指示器：用户向上滚动时显示，点击回到底部 -->
+      <transition name="scroll-indicator">
+        <button
+          v-if="isUserScrolling"
+          class="scroll-to-bottom-btn"
+          @click="scrollToBottomManual"
+          :title="$t('desktop.terminal.scrollToBottom')"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+        </button>
+      </transition>
+    </div>
   </div>
 </template>
 
@@ -83,27 +97,34 @@ import '@xterm/xterm/css/xterm.css'
 interface Props {
   session?: SessionInfo | null
   showInput?: boolean
+  /** 是否显示组件内 header（终端窗口模式下由外层统一管理 header） */
+  showHeader?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showInput: true,
+  showHeader: true,
 })
 
 const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
-const terminalTheme = ref<string>('dracula')
+const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'dracula')
 
 // xterm.js 实例（组件内）
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let webglAddon: WebglAddon | null = null
 let resizeObserver: ResizeObserver | null = null
+let resizeRaf = 0
 
 // 滚动状态追踪
-let isUserScrolling = false
-let scrollTimeout: ReturnType<typeof setTimeout> | null = null
+const isUserScrolling = ref(false)
+
+// rAF 节流：防止快速连续 scrollToBottom 调用导致 WebGL 重影
+// 多次输出事件在同一帧内触发时，只执行一次 scrollToBottom
+let pendingScrollRaf = 0
 
 // 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
 let currentLineBuffer = ''
@@ -294,9 +315,27 @@ function initWebGL(terminal: Terminal): boolean {
   try {
     webglAddon = new WebglAddon()
     webglAddon.onContextLoss(() => {
-      console.warn('[TerminalPreview] WebGL context lost')
+      console.warn('[TerminalPreview] WebGL context lost, attempting recovery')
       webglAddon?.dispose()
       webglAddon = null
+      // 延迟 1s 后尝试重新创建 WebGL 渲染器
+      setTimeout(() => {
+        if (!terminal || webglAddon) return
+        try {
+          const newAddon = new WebglAddon()
+          newAddon.onContextLoss(() => {
+            console.warn('[TerminalPreview] WebGL context lost again')
+            newAddon.dispose()
+            if (webglAddon === newAddon) webglAddon = null
+          })
+          terminal.loadAddon(newAddon)
+          webglAddon = newAddon
+          console.info('[TerminalPreview] WebGL context recovered')
+        } catch (e) {
+          console.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
+          webglAddon = null
+        }
+      }, 1000)
     })
     terminal.loadAddon(webglAddon)
     return true
@@ -314,10 +353,10 @@ function initTerminal() {
     fontSize: fontSize.value,
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
     theme: getTheme(),
-    cursorBlink: false,
+    cursorBlink: true,
     cursorStyle: 'bar',
     cursorWidth: 1,
-    scrollback: 50000,
+    scrollback: 10000,
     allowProposedApi: true,
   })
 
@@ -327,8 +366,11 @@ function initTerminal() {
   terminal.open(terminalContainerRef.value)
   initWebGL(terminal)
 
-  // 隐藏光标：DOM 层和 WebGL 层都不显示光标，避免双光标问题
-  terminal.element?.classList.add('xterm-hidden-cursor')
+  // WebGL 渲染器激活后，隐藏 DOM 层光标避免双光标问题
+  // 只隐藏 DOM 层，保留 WebGL 层光标（WebGL 光标更流畅且不会出现双光标）
+  if (webglAddon) {
+    terminal.element?.classList.add('xterm-hidden-cursor')
+  }
 
   fitAddon.fit()
 
@@ -342,7 +384,7 @@ function initTerminal() {
     }
   })
 
-  // ResizeObserver
+  // ResizeObserver — 使用 rAF 节流避免快速连续 fit 导致 WebGL 重影
   let lastCols = 0
   let lastRows = 0
   let lastContainerWidth = 0
@@ -363,22 +405,29 @@ function initTerminal() {
     lastContainerWidth = newWidth
     lastContainerHeight = newHeight
 
-    fitAddon.fit()
-    const newCols = terminal.cols
-    const newRows = terminal.rows
+    // 节流：同一帧内多次 resize 只执行一次 fit
+    if (!resizeRaf) {
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0
+        if (!fitAddon || !terminal) return
+        fitAddon.fit()
+        const newCols = terminal.cols
+        const newRows = terminal.rows
 
-    const colsChanged = Math.abs(newCols - lastCols) > lastCols * 0.1
-    const rowsChanged = Math.abs(newRows - lastRows) > 5
+        const colsChanged = Math.abs(newCols - lastCols) > lastCols * 0.1
+        const rowsChanged = Math.abs(newRows - lastRows) > 5
 
-    if ((colsChanged || rowsChanged) && lastCols > 0 && lastRows > 0) {
-      syncTerminalSize()
-      refreshTerminal()
-    } else {
-      syncTerminalSize()
+        if ((colsChanged || rowsChanged) && lastCols > 0 && lastRows > 0) {
+          syncTerminalSize()
+          refreshTerminal()
+        } else {
+          syncTerminalSize()
+        }
+
+        lastCols = newCols
+        lastRows = newRows
+      })
     }
-
-    lastCols = newCols
-    lastRows = newRows
   })
   resizeObserver.observe(terminalContainerRef.value)
 
@@ -419,8 +468,14 @@ function refreshTerminal() {
 }
 
 function scrollToBottom() {
-  // 使用 xterm.js 官方 API，同步更新 DOM viewport 和 WebGL Canvas 偏移，避免重影
-  terminal?.scrollToBottom()
+  // rAF 节流：同一帧内多次调用只执行一次 scrollToBottom
+  // 避免 WebGL 渲染器双缓冲不同步导致的重影
+  if (!pendingScrollRaf) {
+    pendingScrollRaf = requestAnimationFrame(() => {
+      pendingScrollRaf = 0
+      terminal?.scrollToBottom()
+    })
+  }
 }
 
 function handleScroll() {
@@ -430,13 +485,13 @@ function handleScroll() {
   const viewportTop = terminal.buffer.active.viewportY
   const viewportBottom = viewportTop + terminal.rows
   const totalLines = buffer.length
-  isUserScrolling = viewportBottom < totalLines - 1
+  isUserScrolling.value = viewportBottom < totalLines - 1
+}
 
-  if (scrollTimeout) clearTimeout(scrollTimeout)
-  // 延长到 1.5s，避免用户刚停手就被拉回底部
-  scrollTimeout = setTimeout(() => {
-    isUserScrolling = false
-  }, 1500)
+/// 用户点击"回到底部"按钮：重置滚动状态并滚到底
+function scrollToBottomManual() {
+  isUserScrolling.value = false
+  terminal?.scrollToBottom()
 }
 
 function clearTerminal() {
@@ -463,7 +518,7 @@ watch(realtimeOutput, (newOutput) => {
     lastOutputLength = newLength
   }
 
-  if (!isUserScrolling) {
+  if (!isUserScrolling.value) {
     scrollToBottom()
   }
 }, { deep: true })
@@ -559,9 +614,24 @@ onMounted(async () => {
   terminal?.focus()
 })
 
-watch(terminalTheme, () => {
+// 主题变化：更新终端 + 持久化
+let themeSaveTimeout: ReturnType<typeof setTimeout> | null = null
+watch(terminalTheme, (newTheme) => {
   if (terminal) {
     terminal.options.theme = getTheme()
+  }
+  if (themeSaveTimeout) clearTimeout(themeSaveTimeout)
+  themeSaveTimeout = setTimeout(() => {
+    settingsStore.saveSettings({
+      ui: { ...settingsStore.settings.ui, terminal_theme: newTheme }
+    })
+  }, 300)
+})
+
+// 外部设置变化同步主题
+watch(() => settingsStore.settings.ui.terminal_theme, (newTheme) => {
+  if (newTheme && terminalTheme.value !== newTheme) {
+    terminalTheme.value = newTheme
   }
 })
 
@@ -569,12 +639,21 @@ onUnmounted(() => {
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
 
+  // 清理待处理的滚动 rAF
+  if (pendingScrollRaf) {
+    cancelAnimationFrame(pendingScrollRaf)
+    pendingScrollRaf = 0
+  }
+
+  // 清理 resize rAF
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf)
+    resizeRaf = 0
+  }
+
   const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
   if (viewport) {
     viewport.removeEventListener('scroll', handleScroll)
-  }
-  if (scrollTimeout) {
-    clearTimeout(scrollTimeout)
   }
 
   if (resizeObserver) {
@@ -587,6 +666,19 @@ onUnmounted(() => {
     terminal = null
     webglAddon = null
   }
+})
+
+// ==================== Expose ====================
+
+/** 暴露给父组件：终端窗口模式下外层 header 需要访问的响应式状态和方法 */
+defineExpose({
+  fontSize,
+  terminalTheme,
+  themeNames,
+  isUserScrolling,
+  clearTerminal,
+  refreshTerminal,
+  scrollToBottomManual,
 })
 </script>
 
@@ -638,12 +730,54 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* 隐藏 DOM 层光标，配合 WebGL 层一起消除双光标 */
+/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题 */
+/* 只隐藏 DOM 光标元素，不隐藏 cursor-layer（WebGL 渲染器有自己的光标实现） */
 :deep(.xterm-hidden-cursor .xterm-cursor) {
   display: none !important;
 }
 
-:deep(.xterm-hidden-cursor .xterm-cursor-layer) {
-  opacity: 0 !important;
+/* 滚动到底部指示器 */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(128, 128, 128, 0.6);
+  color: white;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.scroll-to-bottom-btn:hover {
+  background: rgba(128, 128, 128, 0.85);
+}
+
+.dark .scroll-to-bottom-btn {
+  background: rgba(255, 255, 255, 0.25);
+  color: var(--text-primary);
+}
+
+.dark .scroll-to-bottom-btn:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+/* 滚动指示器过渡 */
+.scroll-indicator-enter-active,
+.scroll-indicator-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.scroll-indicator-enter-from,
+.scroll-indicator-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>

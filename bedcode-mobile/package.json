@@ -21,7 +21,9 @@
     "tauri:android:build:fast": "npm run build:fast && tauri android build --target aarch64 --debug",
     "tauri:android:build:emulator": "tauri android build --target x86_64 --debug",
     "tauri:android:build:all": "tauri android build",
-    "target:clean": "cd src-tauri && cargo clean"
+    "target:size": "node scripts/check-target-size.js",
+    "target:clean": "cd src-tauri && cargo clean",
+    "prebuild": "node scripts/check-target-size.js"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
@@ -36,6 +38,7 @@
     "@xterm/xterm": "^6.0.0",
     "ansi_up": "^6.0.6",
     "html5-qrcode": "^2.3.8",
+    "marked": "^18.0.5",
     "pinia": "^2.1.7",
     "shiki": "^4.2.0",
     "uuid": "^14.0.0",

@@ -150,40 +150,32 @@
 
           <!-- 检查更新 -->
           <div class="space-y-2">
+            <!-- 检查按钮 -->
             <button
-              class="w-full text-left py-2 transition-colors"
-              :class="updateStatus === 'available'
-                ? 'text-[var(--mobile-accent)]'
-                : 'text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)]'"
-              :disabled="updateStatus === 'checking'"
-              @click="checkForUpdate"
+              v-if="updateStatus === 'idle' || updateStatus === 'latest' || updateStatus === 'failed'"
+              class="w-full text-left py-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
+              @click="handleCheckUpdate"
             >
-              <span v-if="updateStatus === 'checking'" class="flex items-center gap-2">
-                <span class="inline-block w-3 h-3 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
-                {{ $t('settings.about.checkingUpdate') }}
-              </span>
-              <span v-else-if="updateStatus === 'available'">
-                {{ $t('settings.about.newVersionAvailable', { version: updateInfo?.latestVersion }) }}
-              </span>
-              <span v-else-if="updateStatus === 'latest'">
-                {{ $t('settings.about.alreadyLatest') }}
-              </span>
-              <span v-else-if="updateStatus === 'failed'">
-                {{ $t('settings.about.updateCheckFailed') }}
-              </span>
-              <span v-else>
-                {{ $t('settings.about.checkUpdate') }}
-              </span>
+              {{ getUpdateStatusText() }}
             </button>
 
-            <!-- 新版本可用时显示下载按钮 -->
+            <!-- 检查中 -->
+            <span v-if="updateStatus === 'checking'" class="flex items-center gap-2 py-2 text-[var(--mobile-text-muted)]">
+              <span class="inline-block w-3 h-3 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
+              {{ $t('settings.about.checkingUpdate') }}
+            </span>
+
+            <!-- 发现新版本 - 打开浏览器下载 -->
             <button
-              v-if="updateStatus === 'available' && updateInfo?.downloadUrl"
+              v-if="updateStatus === 'available' && updateInfo"
               class="w-full bg-[var(--mobile-accent)]/15 border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/25 transition-colors"
-              @click="openUpdateUrl"
+              @click="handleDownloadUpdate"
             >
-              {{ $t('settings.about.downloadUpdate') }}
+              {{ $t('settings.about.downloadUpdate') }} ({{ updateInfo.version }})
             </button>
+
+            <!-- 失败时显示错误 -->
+            <p v-if="updateStatus === 'failed'" class="text-xs text-[var(--mobile-error)]">{{ errorMessage }}</p>
           </div>
         </div>
       </div>
@@ -256,7 +248,7 @@ const connection = useMobileConnection()
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const { startService, stopService, updateNotification } = useForegroundService()
-const { status: updateStatus, updateInfo, checkForUpdate, getUpdateStatusText } = useUpdateChecker()
+const { status: updateStatus, errorMessage, updateInfo, checkForUpdate, getUpdateStatusText } = useUpdateChecker()
 
 /** 应用版本号，由 Vite 编译时从 tauri.conf.json 注入 */
 const appVersion = __APP_VERSION__
@@ -532,8 +524,13 @@ function cancelOpenBrowser() {
   pendingUrl.value = ''
 }
 
-function openUpdateUrl() {
-  if (updateInfo.value?.downloadUrl) {
+async function handleCheckUpdate() {
+  await checkForUpdate()
+}
+
+/** 发现新版本后，打开浏览器下载 APK */
+function handleDownloadUpdate() {
+  if (updateInfo.value) {
     pendingUrl.value = updateInfo.value.downloadUrl
     showBrowserConfirm.value = true
   }

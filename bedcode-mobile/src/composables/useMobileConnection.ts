@@ -27,7 +27,7 @@ import {
 } from './useMobileCommands'
 import { useHttpApi, httpSendSessionInput, httpProbe } from './useHttpApi'
 import { useForegroundService } from './useForegroundService'
-import { useTaskNotification } from './useTaskNotification'
+import { useNotification } from './useNotification'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 // Re-export types
@@ -135,8 +135,8 @@ async function init() {
   // 加载已配对设备列表
   loadPairedDevices()
 
-  // 初始化任务通知
-  const { showTaskNotification, cancelTaskNotification, cancelAllTaskNotifications } = useTaskNotification()
+  // 初始化通知
+  const { showTaskNotification, cancelTaskNotification, cancelAllTaskNotifications, showConnectionNotification } = useNotification()
 
   // 初始化事件监听 - 状态由后端事件驱动
   await initMobileEventListeners({
@@ -361,6 +361,12 @@ async function init() {
     const toast = useToast()
     toast.error(i18n.global.t('common.notification.connectionDisconnected', { reason: event.payload.reason }), 5000)
 
+    // 发送连接断开系统通知
+    showConnectionNotification({
+      type: 'disconnected',
+      deviceName: currentDevice.value?.name,
+    })
+
     // 更新前台服务通知为断连状态
     const { updateNotification } = useForegroundService()
     updateNotification()
@@ -420,6 +426,7 @@ async function init() {
           isConnecting.value = false
           connectionStatus.value = 'disconnected'
           connectionError.value = 'mobile.connection.reauthFailed'
+          showConnectionNotification({ type: 'auth_failed' })
         }
       } catch (e) {
         console.error('[MobileConnection] Re-auth error:', e)
@@ -445,6 +452,13 @@ async function init() {
 
     // 重连失败时停止前台服务
     autoStopForegroundService()
+
+    // 发送重连失败系统通知
+    showConnectionNotification({
+      type: 'reconnect_failed',
+      deviceName: currentDevice.value?.name,
+      reason: event.payload.reason,
+    })
 
     const toast = useToast()
     toast.error(i18n.global.t('common.notification.reconnectFailed', { reason: event.payload.reason }), 5000)
@@ -660,7 +674,7 @@ export async function disconnect(): Promise<void> {
   try {
     await wsDisconnect()
     // 断开连接时取消所有任务通知
-    const { cancelAllTaskNotifications } = useTaskNotification()
+    const { cancelAllTaskNotifications } = useNotification()
     await cancelAllTaskNotifications()
   } catch (e) {
     // wsDisconnect 可能因无活跃连接而失败，确保前端状态仍被重置

@@ -115,6 +115,9 @@ export default {
       shortcutCount: '快捷键数量',
       persistentToolbar: '常驻工具栏',
       preparing: '正在准备终端...',
+      copied: '已复制',
+      copyFailed: '复制失败',
+      selectAll: '全选',
     },
     autoExecute: {
       pending: '等待中',
@@ -177,6 +180,10 @@ export default {
       hidden: '隐藏',
       deleteShortcut: '删除',
       deleteConfirm: '确认删除该快捷键？',
+      help: '快捷键说明',
+    },
+    shortcutHelp: {
+      title: '快捷键说明',
     },
     file: {
       title: '文件',
@@ -213,6 +220,8 @@ export default {
       switchConfirmTitle: '切换分支',
       switchConfirmMsg: '当前有 {count} 个未提交的更改，切换分支可能导致更改丢失。确定要切换到 {branch} 吗？',
       switchConfirmNoChangeMsg: '确定要切换到 {branch} 吗？',
+      previewMode: '预览模式',
+      sourceMode: '源码模式',
     },
     codeViewer: {
       title: '代码查看',
@@ -309,6 +318,20 @@ export default {
       connectFirst: '请先连接设备',
       sentToTerminal: '已发送到终端',
       sendFailed: '发送失败',
+      browseFiles: '浏览项目文件',
+      selectProject: '选择工程目录',
+      browseProject: '浏览工程目录',
+    },
+    notification: {
+      taskIdle: '空闲',
+      taskInProgress: '执行中...',
+      taskAsking: '等待输入',
+      taskCompleted: '任务完成',
+      taskInterrupted: '任务中断',
+      taskInterruptedReason: '任务中断: {reason}',
+      connectionDisconnected: '与 {name} 断开连接',
+      reconnectFailed: '重连失败: {reason}',
+      authFailed: '认证失败，请重新配对',
     },
   },
 }

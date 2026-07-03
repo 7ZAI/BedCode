@@ -8,13 +8,13 @@
     <!-- Config List -->
     <div class="flex-1 overflow-auto p-6 px-8">
       <!-- Loading State -->
-      <div v-if="isLoading" class="text-center py-12">
+      <div v-if="isLoading" class="text-center py-12 animate-fade-slide-up">
         <Spinner size="xl" color="primary" class="mb-4" />
         <p class="text-[var(--text-secondary)]">{{ t('common.status.loading') }}</p>
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="configs.length === 0" class="text-center py-12">
+      <div v-else-if="configs.length === 0" class="text-center py-12 animate-fade-slide-up">
         <svg class="w-16 h-16 mx-auto text-[var(--text-tertiary)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
@@ -35,7 +35,7 @@
         <!-- New Config Entry Card -->
         <button
           @click="showCreateDialog = true"
-          class="w-full h-14 rounded-card border-2 border-dashed border-[var(--border-input)] hover:border-brand bg-transparent hover:bg-[var(--color-primary-light)] text-[var(--text-tertiary)] hover:text-brand flex items-center justify-center gap-2 transition-all duration-200 group"
+          class="w-full h-14 rounded-card border-2 border-dashed border-[var(--border-input)] hover:border-brand bg-transparent hover:bg-[var(--color-primary-light)] text-[var(--text-tertiary)] hover:text-brand flex items-center justify-center gap-2 transition-all duration-200 group animate-fade-slide-up"
         >
           <svg class="w-5 h-5 transition-transform duration-200 group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -44,10 +44,12 @@
         </button>
 
         <SessionCard
-          v-for="config in configs"
+          v-for="(config, index) in configs"
           :key="config.id"
           :config="config"
           :sessions="sessions"
+          class="animate-fade-slide-up"
+          :style="{ animationDelay: `${(index + 1) * 50}ms` }"
           @start="startSession(config.id)"
           @edit="editConfig(config)"
           @delete="deleteConfig(config.id)"

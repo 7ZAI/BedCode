@@ -115,6 +115,9 @@ export default {
       shortcutCount: 'Shortcut Count',
       persistentToolbar: 'Persistent Toolbar',
       preparing: 'Preparing terminal...',
+      copied: 'Copied',
+      copyFailed: 'Copy failed',
+      selectAll: 'Select All',
     },
     autoExecute: {
       pending: 'Pending',
@@ -177,6 +180,10 @@ export default {
       hidden: 'Hidden',
       deleteShortcut: 'Delete',
       deleteConfirm: 'Delete this shortcut?',
+      help: 'Shortcut Help',
+    },
+    shortcutHelp: {
+      title: 'Shortcut Help',
     },
     file: {
       title: 'Files',
@@ -213,6 +220,8 @@ export default {
       switchConfirmTitle: 'Switch Branch',
       switchConfirmMsg: 'You have {count} uncommitted change(s). Switching branches may cause these changes to be lost. Are you sure you want to switch to {branch}?',
       switchConfirmNoChangeMsg: 'Are you sure you want to switch to {branch}?',
+      previewMode: 'Preview',
+      sourceMode: 'Source',
     },
     codeViewer: {
       title: 'Code Viewer',
@@ -309,6 +318,20 @@ export default {
       connectFirst: 'Please connect to a device first',
       sentToTerminal: 'Sent to terminal',
       sendFailed: 'Send failed',
+      browseFiles: 'Browse project files',
+      selectProject: 'Select project dir',
+      browseProject: 'Browse project dir',
+    },
+    notification: {
+      taskIdle: 'Idle',
+      taskInProgress: 'In progress...',
+      taskAsking: 'Waiting for input',
+      taskCompleted: 'Task completed',
+      taskInterrupted: 'Task interrupted',
+      taskInterruptedReason: 'Task interrupted: {reason}',
+      connectionDisconnected: 'Disconnected from {name}',
+      reconnectFailed: 'Reconnect failed: {reason}',
+      authFailed: 'Authentication failed, please re-pair',
     },
   },
 }

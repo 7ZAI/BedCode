@@ -127,9 +127,11 @@
           @resume="autoResume"
         />
         <!-- 触摸滚动容器：接管触摸事件驱动终端滚动 -->
+        <!-- selection-mode 类切换：长按进入选择模式，允许 xterm 原生文本选择 -->
         <div
           ref="scrollContainer"
           class="terminal-scroll-container"
+          :class="{ 'selection-mode': isSelectionMode }"
         >
           <div
             ref="xtermContainer"
@@ -144,6 +146,20 @@
               :style="scrollbarThumbStyle"
             ></div>
           </div>
+          <!-- 选择模式浮动操作栏 -->
+          <transition name="selection-bar">
+            <div v-if="isSelectionMode && hasSelection" class="selection-action-bar">
+              <button class="selection-action-btn" @click="copySelection">
+                {{ t('common.button.copy') }}
+              </button>
+              <button class="selection-action-btn" @click="selectAllText">
+                {{ t('mobile.terminal.selectAll') }}
+              </button>
+              <button class="selection-action-btn cancel" @click="exitSelectionMode">
+                {{ t('common.button.cancel') }}
+              </button>
+            </div>
+          </transition>
         </div>
       </div>
 
@@ -388,7 +404,11 @@ function toggleToolbarItem(key: string) {
   }
 }
 
-/** 任务选择确认 */
+/** 任务选择确认
+ *  仅添加到队列，不立即执行
+ *  自动模式下由 handleTaskStatusChanged('idle') 驱动队列消费
+ *  startNext 内部会检查 currentTask 是否在运行，避免中断
+ */
 function onTaskConfirm(tasks: PresetTask[]) {
   addToQueue(tasks)
   showTaskPicker.value = false
@@ -443,6 +463,18 @@ const touchState = reactive({
   fractionalLine: 0,
 })
 
+// 选择模式状态：长按进入，允许 xterm 原生文本选择和复制
+const isSelectionMode = ref(false)
+const hasSelection = ref(false)
+// 长按检测定时器和触摸起点
+const longPressTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const longPressStartPos = reactive({ x: 0, y: 0 })
+// 选择模式：拖拽选择的起始行号
+let selectionStartLine = 0
+let selectionStartCol = 0
+// 选择模式轮询：检测 xterm selection 变化
+let selectionPollRaf = 0
+
 // 设置相关状态
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
@@ -454,17 +486,19 @@ const taskStatusListenerRef = ref<UnlistenFn | null>(null)
 const sessionModeListenerRef = ref<UnlistenFn | null>(null)
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
 // isThemeUserSet = false 时跟随系统主题变化，true 时保持用户选择
+// 从 localStorage 持久化设置回显，而非硬编码默认值
 const terminalSettings = ref({
-  fontSize: 12,
-  theme: (settingsStore.settings.ui.theme === 'system'
-    ? (isSystemDark.value ? 'dark' : 'light')
-    : settingsStore.settings.ui.theme) as string,
-  isThemeUserSet: false,
+  fontSize: assistStore.settings.terminalFontSize,
+  theme: assistStore.settings.terminalTheme
+    ?? (settingsStore.settings.ui.theme === 'system'
+      ? (isSystemDark.value ? 'dark' : 'light')
+      : settingsStore.settings.ui.theme) as string,
+  isThemeUserSet: assistStore.settings.isTerminalThemeUserSet,
 })
 
 // 临时设置（用于编辑中的状态）
-const tempFontSize = ref(12)
-const tempTheme = ref<string>(terminalSettings.value.theme)
+const tempFontSize = ref(terminalSettings.value.fontSize)
+const tempTheme = ref<string>(terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : 'system')
 const tempQuickBarCount = ref(assistStore.settings.quickBarCount)
 const tempToolbarItems = ref<string[]>([...(assistStore.settings.headerToolbarItems || ['folder'])])
 
@@ -650,10 +684,13 @@ function confirmSettings() {
     terminalSettings.value.theme = tempTheme.value
     terminalSettings.value.isThemeUserSet = true
   }
-  // 保存快捷键条设置
+  // 保存所有设置到 localStorage
   assistStore.saveSettings({
     quickBarCount: tempQuickBarCount.value,
     headerToolbarItems: tempToolbarItems.value,
+    terminalFontSize: terminalSettings.value.fontSize,
+    terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
+    isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
   })
   applySettings()
   showSettings.value = false
@@ -723,6 +760,7 @@ const shortcutsPanelHeight = ref(0)
 // 终端视图样式：顶部安全区 + 键盘避让
 // 底部安全区由 TerminalInputBar 的 paddingBottom 承担，这里只处理键盘避让
 // Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
+// paddingBottom 配合 CSS transition 实现平滑键盘避让动画
 const terminalViewStyle = computed(() => {
   const bottomOffset = keyboardHeight.value
   return {
@@ -741,7 +779,8 @@ const xtermContainerStyle = computed(() => {
 })
 
 // 监听键盘变化，重新 fit 终端
-// 延迟 300ms 等待系统键盘动画完成后再 resize，避免动画期间重排导致卡顿
+// 延迟 300ms 等待 CSS paddingBottom 过渡动画完成后再 resize
+// 过渡时长 250ms + 50ms 缓冲，避免动画期间重排导致卡顿
 watch(() => keyboardInfo.value.keyboardHeight, () => {
   setTimeout(() => fitTerminal(), 300)
 })
@@ -884,6 +923,12 @@ function disposeTerminal() {
     cancelAnimationFrame(touchState.inertiaRafId)
     touchState.inertiaRafId = 0
   }
+  // 清理待处理的滚动 rAF
+  if (pendingScrollRaf) {
+    cancelAnimationFrame(pendingScrollRaf)
+    pendingScrollRaf = 0
+  }
+  pendingScrollLine = -1
   // 清理触摸事件监听器
   if (scrollContainer.value) {
     scrollContainer.value.removeEventListener('touchstart', onTouchStart, { capture: true } as EventListenerOptions)
@@ -892,6 +937,14 @@ function disposeTerminal() {
   }
   currentLine.value = 0
   cellHeight.value = 0
+  // 清理选择模式
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+    longPressTimer.value = null
+  }
+  isSelectionMode.value = false
+  hasSelection.value = false
+  stopSelectionPoll()
 }
 
 // ==================== Input Handlers ====================
@@ -1019,7 +1072,7 @@ function isScrolledToBottom(): boolean {
   return currentLine.value >= maxLine - 2
 }
 
-/// 滚动到底部
+/// 滚动到底部（新输出触发，立即执行不走 rAF 节流）
 function scrollToBottom() {
   if (!terminalRef.value) return
 
@@ -1027,13 +1080,23 @@ function scrollToBottom() {
   const rows = terminalRef.value.rows
   const targetLine = Math.max(0, bufferLength - rows)
 
+  // 取消待处理的节流 rAF，直接执行
+  if (pendingScrollRaf) {
+    cancelAnimationFrame(pendingScrollRaf)
+    pendingScrollRaf = 0
+  }
+  pendingScrollLine = -1
+
   currentLine.value = targetLine
   terminalRef.value.scrollToLine(targetLine)
   isUserScrolling.value = false
-  // 新输出自动滚底时不显示滚动条
 }
 
 /// 同步滚动位置到 xterm viewport
+/// 使用 rAF 节流：快速连续调用（惯性滚动）时合并为每帧一次 scrollToLine，避免 WebGL 渲染器跟不上
+let pendingScrollRaf = 0
+let pendingScrollLine = -1
+
 function syncViewportToLine(line: number) {
   if (!terminalRef.value) return
 
@@ -1044,7 +1107,18 @@ function syncViewportToLine(line: number) {
   // 限制范围
   const clampedLine = Math.max(0, Math.min(line, maxLine))
   currentLine.value = clampedLine
-  terminalRef.value.scrollToLine(clampedLine)
+  pendingScrollLine = clampedLine
+
+  // 如果没有待处理的 rAF，立即调度一帧
+  if (!pendingScrollRaf) {
+    pendingScrollRaf = requestAnimationFrame(() => {
+      pendingScrollRaf = 0
+      if (terminalRef.value && pendingScrollLine >= 0) {
+        terminalRef.value.scrollToLine(pendingScrollLine)
+        pendingScrollLine = -1
+      }
+    })
+  }
 
   // 显示滚动条
   showScrollbar()
@@ -1089,6 +1163,31 @@ const scrollbarThumbStyle = computed(() => {
 // ==================== Touch Scroll Handler ====================
 
 function onTouchStart(e: TouchEvent) {
+  // 选择模式下：记录触摸起点，用于拖拽扩展选择
+  if (isSelectionMode.value) {
+    const touch = e.touches[0]
+    longPressStartPos.x = touch.clientX
+    longPressStartPos.y = touch.clientY
+
+    // 计算触摸位置对应的 buffer 行列
+    if (terminalRef.value?.element && cellHeight.value > 0) {
+      const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
+      if (screen) {
+        const rect = screen.getBoundingClientRect()
+        const relY = touch.clientY - rect.top
+        const relX = touch.clientX - rect.left
+        const visibleRow = Math.max(0, Math.min(Math.floor(relY / cellHeight.value), terminalRef.value.rows - 1))
+        const cellWidth = terminalRef.value.cols > 0 ? rect.width / terminalRef.value.cols : 8
+        const col = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
+        const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
+        // 更新选择起点，用户拖拽时从新起点开始选择
+        selectionStartLine = bufferLine
+        selectionStartCol = col
+      }
+    }
+    return
+  }
+
   // 取消惯性滚动
   if (touchState.inertiaRafId) {
     cancelAnimationFrame(touchState.inertiaRafId)
@@ -1102,9 +1201,38 @@ function onTouchStart(e: TouchEvent) {
   touchState.lastTime = Date.now()
   touchState.velocity = 0
   touchState.fractionalLine = 0
+
+  // 启用 GPU 合成层提示，减少滚动时的重绘延迟
+  enableGpuHint()
+
+  // 长按检测：记录起点，启动定时器
+  longPressStartPos.x = touch.clientX
+  longPressStartPos.y = touch.clientY
+  if (longPressTimer.value) clearTimeout(longPressTimer.value)
+  longPressTimer.value = setTimeout(() => {
+    longPressTimer.value = null
+    enterSelectionMode()
+  }, LONG_PRESS_DURATION)
 }
 
 function onTouchMove(e: TouchEvent) {
+  // 选择模式下扩展选择范围
+  if (isSelectionMode.value) {
+    extendSelectionToTouch(e.touches[0])
+    return
+  }
+
+  // 长按检测：移动超过阈值则取消
+  if (longPressTimer.value) {
+    const touch = e.touches[0]
+    const dx = Math.abs(touch.clientX - longPressStartPos.x)
+    const dy = Math.abs(touch.clientY - longPressStartPos.y)
+    if (dx > LONG_PRESS_MOVE_THRESHOLD || dy > LONG_PRESS_MOVE_THRESHOLD) {
+      clearTimeout(longPressTimer.value)
+      longPressTimer.value = null
+    }
+  }
+
   if (!terminalRef.value || cellHeight.value <= 0) return
 
   const touch = e.touches[0]
@@ -1142,10 +1270,47 @@ function onTouchMove(e: TouchEvent) {
 }
 
 function onTouchEnd() {
-  if (!terminalRef.value || cellHeight.value <= 0) return
+  // 取消长按定时器（短按未达到长按阈值）
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+    longPressTimer.value = null
+  }
 
-  // 启动惯性滚动
+  // 选择模式下：不处理惯性滚动
+  if (isSelectionMode.value) {
+    // 如果没有选中文本（短按空白区域），退出选择模式
+    if (!terminalRef.value?.hasSelection()) {
+      exitSelectionMode()
+    }
+    return
+  }
+
+  if (!terminalRef.value || cellHeight.value <= 0) {
+    disableGpuHint()
+    return
+  }
+
+  // 启动惯性滚动（内部会在结束时调用 disableGpuHint）
   startInertia()
+}
+
+/// 启用 GPU 合成层提示：在触摸滚动期间，提示浏览器将 xterm 渲染层提升为独立合成层
+/// 减少滚动时的重绘延迟，避免 WebGL 双缓冲不同步导致的重影
+function enableGpuHint() {
+  if (!terminalRef.value?.element) return
+  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
+  if (screen) {
+    screen.style.willChange = 'transform'
+  }
+}
+
+/// 禁用 GPU 合成层提示：滚动结束后移除，释放 GPU 内存
+function disableGpuHint() {
+  if (!terminalRef.value?.element) return
+  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
+  if (screen) {
+    screen.style.willChange = 'auto'
+  }
 }
 
 /// 惯性滚动：根据松手时的速度逐帧减速
@@ -1156,14 +1321,16 @@ function startInertia() {
     if (isScrolledToBottom()) {
       isUserScrolling.value = false
     }
+    disableGpuHint()
     return
   }
 
-  const friction = 0.97 // 摩擦系数，值越大惯性持续越久
+  const friction = 0.95 // 摩擦系数，值越大惯性持续越久
 
   function step() {
     if (!terminalRef.value || cellHeight.value <= 0) {
       touchState.inertiaRafId = 0
+      disableGpuHint()
       return
     }
 
@@ -1175,6 +1342,7 @@ function startInertia() {
       if (isScrolledToBottom()) {
         isUserScrolling.value = false
       }
+      disableGpuHint()
       return
     }
 
@@ -1240,6 +1408,160 @@ function setupViewportScroll() {
 
   // 初始滚到底部
   nextTick(() => scrollToBottom())
+}
+
+// ==================== Long Press Selection Mode ====================
+
+/// 长按阈值（毫秒）：超过此时间未松手且未大幅移动，进入选择模式
+const LONG_PRESS_DURATION = 500
+/// 长按移动容差（像素）：移动超过此距离视为滚动，取消长按检测
+const LONG_PRESS_MOVE_THRESHOLD = 10
+
+/// 进入选择模式：启用 xterm 原生文本选择，禁用触摸滚动
+function enterSelectionMode() {
+  isSelectionMode.value = true
+  hasSelection.value = false
+
+  // 根据长按坐标选中对应行，让用户立即看到选中效果
+  selectLineAtTouchPos(longPressStartPos.x, longPressStartPos.y)
+
+  // 轮询检测 selection 变化（xterm 没有提供 selection change 事件）
+  startSelectionPoll()
+}
+
+/// 根据触摸坐标选中对应行
+function selectLineAtTouchPos(clientX: number, clientY: number) {
+  if (!terminalRef.value?.element || cellHeight.value <= 0) return
+
+  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
+  if (!screen) return
+
+  const rect = screen.getBoundingClientRect()
+  const relY = clientY - rect.top
+  const relX = clientX - rect.left
+
+  // 计算可见行号（0-based，相对于 viewport）
+  const visibleRow = Math.max(0, Math.min(Math.floor(relY / cellHeight.value), terminalRef.value.rows - 1))
+  // 计算列号
+  const cellWidth = terminalRef.value.cols > 0 ? rect.width / terminalRef.value.cols : 8
+  const col = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
+
+  // 转换为 buffer 绝对行号
+  const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
+  const lineData = terminalRef.value.buffer.active.getLine(bufferLine)
+  const lineLength = lineData?.length ?? 0
+
+  // 记录选择起点
+  selectionStartLine = bufferLine
+  selectionStartCol = col
+
+  // 选中整行有效内容
+  const endCol = lineLength > 0 ? lineLength - 1 : 0
+  terminalRef.value.select(0, bufferLine, endCol + 1)
+  hasSelection.value = true
+}
+
+/// 选择模式下：根据触摸位置扩展选择范围
+function extendSelectionToTouch(touch: Touch) {
+  if (!terminalRef.value?.element || cellHeight.value <= 0) return
+
+  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
+  if (!screen) return
+
+  const rect = screen.getBoundingClientRect()
+  const relY = touch.clientY - rect.top
+  const relX = touch.clientX - rect.left
+
+  const visibleRow = Math.max(0, Math.min(Math.floor(relY / cellHeight.value), terminalRef.value.rows - 1))
+  const cellWidth = terminalRef.value.cols > 0 ? rect.width / terminalRef.value.cols : 8
+  const endCol = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
+
+  const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
+
+  // 从起点到当前点构建选区
+  const startLine = selectionStartLine
+  const startCol = selectionStartCol
+
+  if (startLine === bufferLine) {
+    // 同一行：列级选择
+    const left = Math.min(startCol, endCol)
+    const right = Math.max(startCol, endCol)
+    terminalRef.value.select(left, startLine, right - left + 1)
+  } else if (bufferLine > startLine) {
+    // 向下选择：从起点行到当前行
+    const startLineLength = terminalRef.value.buffer.active.getLine(startLine)?.length ?? 0
+    const colSpan = startLineLength - startCol
+    let totalSpan = colSpan
+    for (let i = startLine + 1; i < bufferLine; i++) {
+      totalSpan += terminalRef.value.buffer.active.getLine(i)?.length ?? 0
+    }
+    totalSpan += endCol + 1
+    terminalRef.value.select(startCol, startLine, totalSpan)
+  } else {
+    // 向上选择：从当前行到起点行
+    const endLineLength = terminalRef.value.buffer.active.getLine(bufferLine)?.length ?? 0
+    const colSpan = endLineLength - endCol
+    let totalSpan = colSpan
+    for (let i = bufferLine + 1; i < startLine; i++) {
+      totalSpan += terminalRef.value.buffer.active.getLine(i)?.length ?? 0
+    }
+    totalSpan += startCol + 1
+    terminalRef.value.select(endCol, bufferLine, totalSpan)
+  }
+
+  hasSelection.value = true
+}
+
+/// 退出选择模式：恢复触摸滚动，清除选择
+function exitSelectionMode() {
+  isSelectionMode.value = false
+  hasSelection.value = false
+
+  // 清除 xterm 选择
+  if (terminalRef.value) {
+    terminalRef.value.clearSelection()
+  }
+
+  stopSelectionPoll()
+}
+
+/// 轮询检测 xterm selection 状态
+function startSelectionPoll() {
+  stopSelectionPoll()
+  function poll() {
+    if (!isSelectionMode.value) return
+    hasSelection.value = terminalRef.value?.hasSelection() ?? false
+    selectionPollRaf = requestAnimationFrame(poll)
+  }
+  selectionPollRaf = requestAnimationFrame(poll)
+}
+
+function stopSelectionPoll() {
+  if (selectionPollRaf) {
+    cancelAnimationFrame(selectionPollRaf)
+    selectionPollRaf = 0
+  }
+}
+
+/// 复制当前选中文本到剪贴板
+async function copySelection() {
+  const text = terminalRef.value?.getSelection()
+  if (!text) return
+
+  try {
+    await writeClipboardText(text)
+    toast.success(t('mobile.terminal.copied'))
+  } catch {
+    toast.error(t('mobile.terminal.copyFailed'))
+  }
+  exitSelectionMode()
+}
+
+/// 全选终端内容
+function selectAllText() {
+  if (!terminalRef.value) return
+  terminalRef.value.selectAll()
+  hasSelection.value = true
 }
 
 // ==================== Lifecycle ====================
@@ -1328,10 +1650,10 @@ watch(isConnected, async (connected) => {
   bottom: 0;
   z-index: 1;
   overflow: hidden;
-  /* 不对 padding 做过渡动画：
-   * keyboardHeight 是键盘动画结束后的终值（离散跳变），
-   * CSS transition 叠加动画会与 Android 系统键盘动画冲突导致卡顿。
-   * padding 只做即时响应，由系统键盘动画驱动视觉平滑。 */
+  /* padding 由 JS 动态设置（安全区域 + 键盘高度），添加过渡保证平滑避让
+   * 与 TerminalInputBar 的 paddingBottom 过渡和快捷键面板 translateY 动画保持一致
+   * 使用 cubic-bezier(0.4, 0, 0.2, 1)（Material ease-out）曲线 */
+  transition: padding 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Loading Overlay */
@@ -2082,6 +2404,75 @@ watch(isConnected, async (connected) => {
 :deep(.xterm-screen::-webkit-scrollbar) {
   display: none;
   width: 0;
+}
+
+/* 选择模式：视觉高亮 + 允许选中 */
+.selection-mode :deep(.xterm) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.selection-mode :deep(.xterm-screen) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 选择模式：高亮 xterm 区域表示可选中 */
+.selection-mode .xterm-container {
+  outline: 2px solid rgba(0, 212, 255, 0.3);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+/* 选择模式操作栏 */
+.selection-action-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-bg-secondary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.selection-action-btn {
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.375rem;
+  background: var(--mobile-accent);
+  border: none;
+  color: var(--mobile-text-on-accent);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.selection-action-btn.cancel {
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+.selection-action-btn:active {
+  opacity: 0.8;
+}
+
+/* 选择栏过渡动画 */
+.selection-bar-enter-active,
+.selection-bar-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.selection-bar-enter-from,
+.selection-bar-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
 }
 
 /* 禁用 xterm-viewport 原生滚动，由外层伪滚动容器接管 */

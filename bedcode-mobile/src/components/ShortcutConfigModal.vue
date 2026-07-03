@@ -9,7 +9,18 @@
       <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
-          <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ t('mobile.shortcutConfig.title') }}</span>
+          <div class="flex items-center gap-2">
+            <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ t('mobile.shortcutConfig.title') }}</span>
+            <button
+              class="p-1 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
+              :title="t('mobile.shortcutConfig.help')"
+              @click="showHelp = true"
+            >
+              <svg class="w-4.5 h-4.5 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          </div>
           <button
             class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
             @click="emit('close')"
@@ -211,6 +222,9 @@
           </div>
         </div>
       </div>
+
+      <!-- 快捷键说明弹窗 -->
+      <ShortcutHelpModal :visible="showHelp" @close="showHelp = false" />
     </div>
   </Teleport>
 </template>
@@ -224,6 +238,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import type { ShortcutItem } from '@/stores/inputAssistant'
+import ShortcutHelpModal from '@/components/ShortcutHelpModal.vue'
 
 const { t } = useI18n()
 
@@ -265,6 +280,7 @@ function handleReset() {
 
 const isCapturing = ref(false)
 const confirmDeleteCode = ref('')
+const showHelp = ref(false)
 const activeModifiers = ref({
   ctrl: false,
   shift: false,
@@ -425,6 +441,7 @@ watch(() => props.visible, (show) => {
     activeModifiers.value = { ctrl: false, shift: false, alt: false }
     isCapturing.value = false
     confirmDeleteCode.value = ''
+    showHelp.value = false
   }
 })
 </script>

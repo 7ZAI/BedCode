@@ -50,6 +50,5 @@
     "android": {
       "minSdkVersion": 24
     }
-  },
-  "plugins": {}
+  }
 }

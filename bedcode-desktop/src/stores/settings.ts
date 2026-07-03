@@ -7,6 +7,8 @@ export interface Settings {
     port: number
     // QR 码使用的 IP 地址（用于多网卡环境）
     qr_host?: string
+    // 服务器运行时阻止系统休眠
+    prevent_sleep?: boolean
   }
   session: {
     default_environment: string
@@ -19,6 +21,7 @@ export interface Settings {
     theme: string
     terminal_font_size: number
     terminal_font_family: string
+    terminal_theme: string
     show_preview: boolean
     // 语言偏好
     language?: string
@@ -44,6 +47,7 @@ const defaultSettings: Settings = {
     theme: 'system',
     terminal_font_size: 12,
     terminal_font_family: 'Consolas',
+    terminal_theme: 'dracula',
     show_preview: true,
     language: 'zh-CN',
     max_cached_terminals: 10,

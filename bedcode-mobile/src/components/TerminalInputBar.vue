@@ -1,6 +1,6 @@
 <template>
   <div
-    class="terminal-input-bar sticky left-0 right-0 bottom-0 z-40"
+    class="terminal-input-bar z-40"
     :style="inputBarStyle"
   >
     <!-- 快捷键面板 - 覆盖层，不影响终端高度 -->
@@ -324,8 +324,8 @@
 
     <!-- 输入区域 -->
     <div class="input-area">
-      <!-- 输入框容器 -->
       <div class="input-box" :class="{ 'input-box--expanded': isInputFocused }">
+        <!-- 输入框：占满整行宽度 -->
         <textarea
           ref="inputRef"
           v-model="inputText"
@@ -339,38 +339,40 @@
           @input="adjustTextareaHeight"
         ></textarea>
 
-        <!-- 快捷键切换按钮 -->
-        <button
-          class="inline-btn toggle-btn"
-          :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
-          @mousedown.prevent="toggleShortcuts"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-          </svg>
-        </button>
+        <!-- 操作按钮行：输入框下方，不挤占输入宽度 -->
+        <div class="action-row">
+          <div class="action-row-spacer"></div>
 
-        <!-- 发送按钮 -->
-        <button
-          class="inline-btn send-btn"
-          :disabled="!canSubmit"
-          @click="handleSubmit"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
-          </svg>
-        </button>
+          <button
+            class="inline-btn send-btn"
+            :disabled="!canSubmit"
+            @click="handleSubmit"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
 
-        <!-- 执行按钮 -->
-        <button
-          class="inline-btn execute-btn"
-          :disabled="!canSubmit"
-          @click="handleExecute"
-        >
-          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-          </svg>
-        </button>
+          <button
+            class="inline-btn execute-btn"
+            :disabled="!canSubmit"
+            @click="handleExecute"
+          >
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+          </button>
+
+          <button
+            class="inline-btn toggle-btn"
+            :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
+            @mousedown.prevent="toggleShortcuts"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -685,30 +687,33 @@ function handleFocus() {
   // 延迟调整高度，等键盘弹出后再计算
   setTimeout(() => {
     adjustTextareaHeight()
-    if (inputRef.value) {
-      inputRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-    }
-  }, 100)
+  }, 300)
 }
 
 function handleBlur() {
   isInputFocused.value = false
-  // 失焦时如果内容为空，收缩回 1 行
-  if (!inputText.value.trim() && inputRef.value) {
-    inputRef.value.style.height = 'auto'
-  }
+  // 延迟收缩，等键盘收起动画完成后再调整高度，避免跳变
+  setTimeout(() => {
+    if (!inputText.value.trim() && inputRef.value) {
+      inputRef.value.style.height = 'auto'
+    }
+  }, 300)
 }
 
 function adjustTextareaHeight() {
   const textarea = inputRef.value
   if (!textarea) return
   textarea.style.height = 'auto'
-  // 聚焦时最小 3 行高度，失焦时最小 1 行
-  const minLines = isInputFocused.value ? 3 : 1
   const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 21
+  // 聚焦时最小 3 行，失焦时最小 1 行；最大 6 行，超过后滚动
+  const minLines = isInputFocused.value ? 3 : 1
+  const maxLines = 6
   const minHeight = lineHeight * minLines
-  const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, 120))
+  const maxHeight = lineHeight * maxLines
+  const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight))
   textarea.style.height = `${newHeight}px`
+  // 超过最大行数时滚动到底部
+  textarea.scrollTop = textarea.scrollHeight
 }
 
 // 弹窗打开时自动聚焦输入框
@@ -735,6 +740,8 @@ onMounted(() => {
   border-top: 1px solid var(--mobile-border);
   padding: 0.5rem 1rem;
   position: relative;
+  /* paddingBottom 由 JS 动态设置（安全区域），添加过渡保证平滑 */
+  transition: padding-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ==================== Quick Bar ==================== */
@@ -802,13 +809,12 @@ onMounted(() => {
 .input-box {
   flex: 1;
   display: flex;
-  align-items: flex-end;
-  gap: 0.375rem;
+  flex-direction: column;
   background: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
-  border-radius: 1.25rem;
-  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  border-radius: 1rem;
+  padding: 0.5rem 0.625rem 0.375rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, border-radius 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   min-height: 2.5rem;
 }
 
@@ -817,15 +823,27 @@ onMounted(() => {
   box-shadow: 0 0 0 2px var(--mobile-accent-muted);
 }
 
-/* 聚焦时输入框微扩张，配合 textarea 展开更协调 */
+/* 聚焦时输入框圆角微调 */
 .input-box--expanded {
-  border-radius: 1rem;
+  border-radius: 0.875rem;
 }
 
-/* 输入框内的内联按钮（快捷键切换、发送、执行） */
+/* 操作按钮行：左对齐 toggle，右对齐 send/execute */
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 0.375rem;
+}
+
+.action-row-spacer {
+  flex: 1;
+}
+
+/* 操作按钮：统一 2.25rem 圆形，保证移动端触摸目标 ≥ 36px */
 .inline-btn {
-  width: 2rem;
-  height: 2rem;
+  width: 2.25rem;
+  height: 2.25rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -856,7 +874,7 @@ onMounted(() => {
 }
 
 .input-field {
-  flex: 1;
+  width: 100%;
   background: transparent;
   border: none;
   outline: none;
@@ -864,15 +882,24 @@ onMounted(() => {
   font-size: 0.875rem;
   font-family: inherit;
   resize: none;
-  max-height: 120px;
-  overflow-y: auto;
   line-height: 1.5;
   min-height: 1.5rem;
+  /* 高度变化过渡：聚焦展开/失焦收缩时平滑动画 */
+  transition: min-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 6 行最大高度，超过后滚动 */
+  max-height: calc(1.5em * 6);
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
-/* 聚焦时 textarea 展开到 3 行高度 */
+.input-field::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+/* 聚焦时 textarea 展开到 3 行最小高度 */
 .input-field--expanded {
-  min-height: 4.5rem;
+  min-height: calc(1.5em * 3);
 }
 
 .input-field::placeholder {
@@ -896,6 +923,8 @@ onMounted(() => {
 }
 
 .execute-btn {
+  width: 2.5rem;
+  height: 2.5rem;
   background: var(--mobile-execute-bg);
   border-color: var(--mobile-execute-border);
   color: var(--mobile-execute-color);

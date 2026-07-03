@@ -31,6 +31,8 @@
     "dialog:allow-confirm",
     "notification:default",
     "os:default",
-    "shell:allow-open"
+    "shell:allow-open",
+    "updater:default",
+    "process:default"
   ]
 }

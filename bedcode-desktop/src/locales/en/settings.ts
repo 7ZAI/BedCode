@@ -4,6 +4,8 @@ export default {
     network: {
       title: 'Network Settings',
       websocketPort: 'WebSocket Port',
+      preventSleep: 'Prevent System Sleep',
+      preventSleepDesc: 'Prevent the system from sleeping while the server is running',
     },
     session: {
       title: 'Session Defaults',
@@ -54,11 +56,14 @@ export default {
       alreadyLatest: 'Already on the latest version',
       checkingUpdate: 'Checking for updates...',
       checkFailed: 'Failed to check for updates',
-      newVersionAvailable: 'New version available: {version}',
+      newVersionAvailable: 'New version available',
+      downloadingUpdate: 'Downloading update...',
+      downloadComplete: 'Download complete, installing...',
+      installingUpdate: 'Installing update...',
       currentVersion: 'Current version',
       latestVersion: 'Latest version',
+      downloadUpdate: 'Update Now',
       goToDownload: 'Go to Download',
-      downloadUpdate: 'Download Update',
       cancel: 'Cancel',
     },
     actions: {

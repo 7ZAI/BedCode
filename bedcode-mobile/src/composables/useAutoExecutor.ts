@@ -8,7 +8,7 @@ import { ref, computed, watch, type Ref } from 'vue'
 import type { PresetTask, PresetTaskType } from './model'
 import { useMobileConnection } from './useMobileConnection'
 import { useHttpApi } from './useHttpApi'
-import { useTaskNotification } from './useTaskNotification'
+import { useNotification } from './useNotification'
 import { useTaskExecutionState } from './useTaskExecutionState'
 
 /** 队列中的任务 */
@@ -72,7 +72,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     retryCount.value = state.retryCount
     isPaused.value = state.isPaused
     // 同步加载的模式到通知系统
-    const { setSessionMode } = useTaskNotification()
+    const { setSessionMode } = useNotification()
     setSessionMode(sid, state.mode)
   }
 
@@ -97,7 +97,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     mode.value = newMode
     saveState()
     // 同步模式到通知系统
-    const { setSessionMode } = useTaskNotification()
+    const { setSessionMode } = useNotification()
     setSessionMode(sessionId.value, newMode)
     // 同步模式到任务执行状态
     setExecutionMode(newMode)
@@ -175,9 +175,13 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     void questions
   }
 
-  /** 开始执行下一个 pending 任务 */
+  /** 开始执行下一个 pending 任务
+   *  仅在无任务运行时启动，避免中断正在执行的任务
+   */
   function startNext() {
     if (isPaused.value) return
+    // 有任务正在运行时排队等待，由 handleTaskStatusChanged('idle') 触发下一个
+    if (currentTask.value && currentTask.value.status === 'running') return
 
     const next = pendingTasks.value[0]
     if (!next) {
@@ -271,7 +275,7 @@ export function useAutoExecutor(sessionId: Ref<string>) {
     mode.value = newMode
     saveState()
     // 同步模式到通知系统
-    const { setSessionMode } = useTaskNotification()
+    const { setSessionMode } = useNotification()
     setSessionMode(sessionId.value, newMode)
     // 同步模式到任务执行状态
     setExecutionMode(newMode)

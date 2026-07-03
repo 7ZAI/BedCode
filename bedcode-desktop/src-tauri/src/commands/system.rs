@@ -101,6 +101,9 @@ pub async fn save_app_settings(
         .map(|p| p.join("config.properties"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
+    // 同步 PowerManager 开关状态
+    crate::system::power::power_manager().set_enabled(settings.network.prevent_sleep);
+
     settings.save(&config_path)?;
 
     tracing::info!("App settings saved to {:?}", config_path);

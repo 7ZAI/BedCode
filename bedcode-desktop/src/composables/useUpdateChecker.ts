@@ -1,99 +1,35 @@
 /**
- * Update Checker - GitHub Releases 版本检查（桌面端）
+ * Update Checker - 基于 tauri-plugin-updater 的更新检查（桌面端）
  *
- * 调用 GitHub API 检查最新 release，与当前版本比较
- * 从 release assets 中查找对应平台的安装包下载链接
+ * 使用 Tauri 官方 updater 插件，支持签名验证和应用内更新
  */
 
 import { ref } from 'vue'
-import { getAppVersion } from '@/composables/useDesktopCommands'
+import { check } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 import i18n from '@/locales'
 
-const GITHUB_OWNER = '7ZAI'
-const GITHUB_REPO = 'BedCode'
-const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
-
-/** 版本比较结果 */
-export interface UpdateInfo {
-  hasUpdate: boolean
-  currentVersion: string
-  latestVersion: string
-  downloadUrl: string
-  releaseUrl: string
-  releaseNotes: string
-}
-
-type UpdateStatus = 'idle' | 'checking' | 'available' | 'latest' | 'failed'
+/** 更新状态 */
+type UpdateStatus = 'idle' | 'checking' | 'available' | 'latest' | 'failed' | 'downloading' | 'downloaded' | 'installing'
 
 const status = ref<UpdateStatus>('idle')
-const updateInfo = ref<UpdateInfo | null>(null)
+const downloadProgress = ref({ downloaded: 0, contentLength: 0 })
 const errorMessage = ref('')
 
-/** 比较语义化版本号，返回 true 表示 remoteVersion > localVersion */
-function isNewerVersion(remoteVersion: string, localVersion: string): boolean {
-  const normalize = (v: string) => v.replace(/^v/, '')
-  const rParts = normalize(remoteVersion).split('.').map(Number)
-  const lParts = normalize(localVersion).split('.').map(Number)
-  const len = Math.max(rParts.length, lParts.length)
-
-  for (let i = 0; i < len; i++) {
-    const r = rParts[i] || 0
-    const l = lParts[i] || 0
-    if (r > l) return true
-    if (r < l) return false
-  }
-  return false
-}
-
-/** 从 release assets 中找到 Windows 安装包下载链接 */
-function findWindowsAsset(assets: Array<{ name: string; browser_download_url: string }>): string {
-  // 优先 NSIS exe，其次 msi
-  const nsis = assets.find(a => a.name.endsWith('.exe') && a.name.includes('setup'))
-  if (nsis) return nsis.browser_download_url
-  const exe = assets.find(a => a.name.endsWith('.exe'))
-  if (exe) return exe.browser_download_url
-  const msi = assets.find(a => a.name.endsWith('.msi'))
-  return msi?.browser_download_url || ''
-}
-
-/** 检查 GitHub 最新 release */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+/** 检查更新 */
+async function checkForUpdate() {
   status.value = 'checking'
   errorMessage.value = ''
 
   try {
-    const currentVersion = await getAppVersion()
+    const update = await check()
 
-    const response = await fetch(GITHUB_API_URL, {
-      headers: { 'Accept': 'application/vnd.github+json' },
-    })
-
-    if (!response.ok) {
-      throw new Error(`GitHub API returned ${response.status}`)
+    if (update) {
+      status.value = 'available'
+    } else {
+      status.value = 'latest'
     }
-
-    const data = await response.json()
-
-    const latestVersion = (data.tag_name as string) || ''
-    const releaseUrl = (data.html_url as string) || ''
-    const releaseNotes = (data.body as string) || ''
-    const assets = (data.assets as Array<{ name: string; browser_download_url: string }>) || []
-    const downloadUrl = findWindowsAsset(assets) || releaseUrl
-
-    const hasUpdate = isNewerVersion(latestVersion, currentVersion)
-
-    const info: UpdateInfo = {
-      hasUpdate,
-      currentVersion,
-      latestVersion: latestVersion.replace(/^v/, ''),
-      downloadUrl,
-      releaseUrl,
-      releaseNotes,
-    }
-
-    updateInfo.value = info
-    status.value = hasUpdate ? 'available' : 'latest'
-    return info
+    return update
   } catch (e) {
     errorMessage.value = e instanceof Error ? e.message : String(e)
     status.value = 'failed'
@@ -101,18 +37,56 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   }
 }
 
+/** 下载并安装更新 */
+async function downloadAndInstall(onProgress?: (downloaded: number, total: number) => void) {
+  const update = await check()
+  if (!update) return
+
+  status.value = 'downloading'
+  downloadProgress.value = { downloaded: 0, contentLength: 0 }
+
+  try {
+    await update.downloadAndInstall((event) => {
+      switch (event.event) {
+        case 'Started':
+          downloadProgress.value.contentLength = event.data.contentLength ?? 0
+          break
+        case 'Progress':
+          downloadProgress.value.downloaded += event.data.chunkLength
+          onProgress?.(downloadProgress.value.downloaded, downloadProgress.value.contentLength)
+          break
+        case 'Finished':
+          status.value = 'downloaded'
+          break
+      }
+    })
+
+    status.value = 'installing'
+    await relaunch()
+  } catch (e) {
+    errorMessage.value = e instanceof Error ? e.message : String(e)
+    status.value = 'failed'
+  }
+}
+
 /** 获取状态描述文本 */
-export function getUpdateStatusText(): string {
+function getUpdateStatusText(): string {
   const { t } = i18n.global
   switch (status.value) {
     case 'checking':
       return t('settings.about.checkingUpdate')
     case 'available':
-      return t('settings.about.newVersionAvailable', { version: updateInfo.value?.latestVersion })
+      return t('settings.about.newVersionAvailable')
+    case 'downloading':
+      return t('settings.about.downloadingUpdate')
+    case 'downloaded':
+      return t('settings.about.downloadComplete')
+    case 'installing':
+      return t('settings.about.installingUpdate')
     case 'latest':
       return t('settings.about.alreadyLatest')
     case 'failed':
-      return t('settings.about.updateCheckFailed')
+      return t('settings.about.checkFailed')
     default:
       return t('settings.about.checkUpdate')
   }
@@ -121,9 +95,10 @@ export function getUpdateStatusText(): string {
 export function useUpdateChecker() {
   return {
     status,
-    updateInfo,
+    downloadProgress,
     errorMessage,
     checkForUpdate,
+    downloadAndInstall,
     getUpdateStatusText,
   }
 }

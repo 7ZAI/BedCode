@@ -20,6 +20,7 @@ export default {
       remove: 'Remove',
       retry: 'Retry',
       clear: 'Clear',
+      copy: 'Copy',
     },
     status: {
       connected: 'Connected',

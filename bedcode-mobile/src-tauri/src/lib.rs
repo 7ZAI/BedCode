@@ -6,6 +6,7 @@ pub mod connection;
 pub mod enums;
 pub mod handler;
 pub mod model;
+pub mod plugin;
 pub mod router;
 pub mod session;
 pub mod state;
@@ -48,6 +49,7 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(crate::plugin::android_plugins::init())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");

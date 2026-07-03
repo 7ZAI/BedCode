@@ -7,7 +7,7 @@
 
     <div class="flex-1 overflow-auto p-6">
       <!-- QR Code Section -->
-      <div class="bg-card rounded-card p-6 shadow-card mb-6">
+      <div class="bg-card rounded-card p-6 shadow-card mb-6 animate-fade-slide-up">
         <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h3>
         <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ t('desktop.device.qrDesc') }}</p>
 
@@ -51,7 +51,7 @@
       </div>
 
       <!-- Pairing Section -->
-      <div class="bg-card rounded-card p-6 shadow-card mb-6">
+      <div class="bg-card rounded-card p-6 shadow-card mb-6 animate-fade-slide-up" style="animation-delay: 50ms">
         <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h3>
         <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ t('desktop.device.pairingCodeDesc') }}</p>
 
@@ -86,7 +86,7 @@
       </div>
 
       <!-- Network Info -->
-      <div class="bg-card rounded-card p-6 shadow-card mb-6">
+      <div class="bg-card rounded-card p-6 shadow-card mb-6 animate-fade-slide-up" style="animation-delay: 100ms">
         <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.networkTitle') }}</h3>
         <div class="space-y-3">
           <div class="flex items-center justify-between">
@@ -139,7 +139,7 @@
       </Modal>
 
       <!-- Paired Devices -->
-      <div class="bg-card rounded-card p-6 shadow-card">
+      <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 150ms">
         <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairedTitle') }}</h3>
 
         <div v-if="deviceStore.pairedDevices.length === 0" class="text-center py-8">

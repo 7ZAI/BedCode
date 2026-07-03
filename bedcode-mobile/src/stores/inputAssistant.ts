@@ -42,6 +42,12 @@ export interface InputAssistantSettings {
   floatingBall: boolean
   /** 终端 Header 常驻工具按钮 key 列表（其余收入溢出菜单） */
   headerToolbarItems: string[]
+  /** 终端字体大小（10-24） */
+  terminalFontSize: number
+  /** 终端主题名（dark/light/dracula 等），null 表示跟随外观设置 */
+  terminalTheme: string | null
+  /** 用户是否手动指定了终端主题（false 时跟随外观设置） */
+  isTerminalThemeUserSet: boolean
 }
 
 const DEFAULT_SETTINGS: InputAssistantSettings = {
@@ -56,6 +62,9 @@ const DEFAULT_SETTINGS: InputAssistantSettings = {
   quickBarCount: 6,
   floatingBall: false,
   headerToolbarItems: ['folder'],
+  terminalFontSize: 12,
+  terminalTheme: null,
+  isTerminalThemeUserSet: false,
 }
 
 const STORAGE_KEY_STATS = 'terminal_shortcut_stats'

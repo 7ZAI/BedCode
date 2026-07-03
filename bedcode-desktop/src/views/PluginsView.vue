@@ -25,7 +25,7 @@
         />
 
         <!-- Plugin Table -->
-        <div v-else class="bg-card rounded-card shadow-card overflow-hidden">
+        <div v-else class="bg-card rounded-card shadow-card overflow-hidden animate-fade-slide-up">
           <!-- Table Header -->
           <div class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-6 py-3 bg-[var(--bg-hover)]/50 text-xs font-semibold text-[var(--text-secondary)] border-b border-[var(--border)] items-center">
             <span>{{ $t('desktop.plugin.title') }}</span>

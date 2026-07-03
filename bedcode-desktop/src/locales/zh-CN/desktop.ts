@@ -121,6 +121,7 @@ export default {
       stopSession: '停止会话',
       restartSession: '重启会话',
       deleteSession: '删除会话',
+      scrollToBottom: '滚动到底部',
     },
     server: {
       title: '服务器管理',

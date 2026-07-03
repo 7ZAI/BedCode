@@ -13,8 +13,7 @@ static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::ne
 static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.port", "WebSocket 服务器端口"),
     ("network.auto_start", "应用启动时是否自动开启服务器"),
-    ("network.heartbeat_interval_secs", "心跳间隔（秒）- 客户端发送心跳的频率"),
-    ("network.heartbeat_timeout_secs", "心跳超时（秒）- 超过此时间未收到心跳则断开连接"),
+    ("network.prevent_sleep", "服务器运行时阻止系统休眠"),
     ("session.default_environment", "默认执行环境（windows / wsl2）"),
     ("session.default_wsl_distro", "默认 WSL 发行版（仅 wsl2 环境有效，留空则使用默认发行版）"),
     ("session.default_working_dir", "默认工作目录（留空则使用用户主目录）"),
@@ -23,6 +22,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.theme", "主题（light / dark / system）"),
     ("ui.terminal_font_size", "终端字体大小"),
     ("ui.terminal_font_family", "终端字体名称"),
+    ("ui.terminal_theme", "终端配色主题名"),
     ("ui.show_preview", "是否显示终端预览"),
     ("channels.output_broadcast_capacity", "PTY 输出事件广播容量 - 用于转发终端输出到前端"),
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
@@ -37,14 +37,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("terminal.flush_interval_ms", "输出缓冲刷新间隔（毫秒）- 合并多条输出减少 WebSocket 消息数"),
     ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 达到此大小立即刷新"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
-    ("output_history.ring_buffer_capacity", "环形缓冲区容量 - 存储最近 N 条 PTY 输出供历史回放"),
-    ("plugin.file_poll_interval_ms", "文件轮询间隔（毫秒）- 监听 JSONL 日志文件的频率"),
-    ("plugin.heartbeat_timeout_secs", "心跳超时（秒）- 超过此时间未收到心跳则判定插件断开"),
     ("plugin.token", "HTTP API 认证 token - 插件推送任务状态时需携带此 token，为空时跳过验证（开发模式）"),
-    ("display.max_tool_input_display", "工具输入最大显示长度（字符）- 超出部分截断"),
-    ("display.max_tool_result_display", "工具结果最大显示长度（字符）- 超出部分截断"),
-    ("display.max_thinking_display", "思考过程最大显示长度（字符）- 超出部分截断"),
-    ("display.max_read_size", "JSONL 文件最大读取大小（字节）- 防止内存溢出"),
 ];
 
 /// 配置 key 的分组顺序，控制写入文件时的排列
@@ -52,8 +45,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
     ("网络配置", &[
         "network.port",
         "network.auto_start",
-        "network.heartbeat_interval_secs",
-        "network.heartbeat_timeout_secs",
+        "network.prevent_sleep",
     ]),
     ("会话默认配置", &[
         "session.default_environment",
@@ -66,6 +58,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "ui.theme",
         "ui.terminal_font_size",
         "ui.terminal_font_family",
+        "ui.terminal_theme",
         "ui.show_preview",
     ]),
     ("Channel 容量配置", &[
@@ -85,19 +78,8 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "terminal.max_buffer_size",
         "terminal.read_buffer_size",
     ]),
-    ("输出历史配置", &[
-        "output_history.ring_buffer_capacity",
-    ]),
     ("插件配置", &[
-        "plugin.file_poll_interval_ms",
-        "plugin.heartbeat_timeout_secs",
         "plugin.token",
-    ]),
-    ("显示配置", &[
-        "display.max_tool_input_display",
-        "display.max_tool_result_display",
-        "display.max_thinking_display",
-        "display.max_read_size",
     ]),
 ];
 
@@ -107,8 +89,10 @@ pub struct AppConfig {
     /// 网络配置
     pub network: NetworkConfig,
     /// 会话默认配置
+    #[serde(default)]
     pub session: SessionConfig,
     /// UI 界面配置
+    #[serde(default)]
     pub ui: UiConfig,
     /// Channel 容量配置
     #[serde(default)]
@@ -116,15 +100,9 @@ pub struct AppConfig {
     /// 终端配置
     #[serde(default)]
     pub terminal: TerminalConfig,
-    /// 输出历史配置
-    #[serde(default)]
-    pub output_history: OutputHistoryConfig,
     /// 插件配置
     #[serde(default)]
     pub plugin: PluginConfig,
-    /// 显示配置
-    #[serde(default)]
-    pub display: DisplayConfig,
 }
 
 /// 网络配置
@@ -134,10 +112,13 @@ pub struct NetworkConfig {
     pub port: u16,
     /// 应用启动时是否自动开启服务器
     pub auto_start: bool,
-    /// 心跳间隔（秒）- 客户端发送心跳的频率
-    pub heartbeat_interval_secs: u64,
-    /// 心跳超时（秒）- 超过此时间未收到心跳则断开连接
-    pub heartbeat_timeout_secs: u64,
+    /// 服务器运行时阻止系统休眠
+    #[serde(default = "default_prevent_sleep")]
+    pub prevent_sleep: bool,
+}
+
+fn default_prevent_sleep() -> bool {
+    true
 }
 
 impl Default for NetworkConfig {
@@ -145,8 +126,7 @@ impl Default for NetworkConfig {
         Self {
             port: 8765,
             auto_start: true,
-            heartbeat_interval_secs: 30,
-            heartbeat_timeout_secs: 90,
+            prevent_sleep: true,
         }
     }
 }
@@ -187,8 +167,15 @@ pub struct UiConfig {
     pub terminal_font_size: u8,
     /// 终端字体名称
     pub terminal_font_family: String,
+    /// 终端配色主题名
+    #[serde(default = "default_terminal_theme")]
+    pub terminal_theme: String,
     /// 是否显示终端预览
     pub show_preview: bool,
+}
+
+fn default_terminal_theme() -> String {
+    "dracula".to_string()
 }
 
 impl Default for UiConfig {
@@ -197,6 +184,7 @@ impl Default for UiConfig {
             theme: "system".to_string(),
             terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
+            terminal_theme: default_terminal_theme(),
             show_preview: true,
         }
     }
@@ -270,32 +258,9 @@ impl Default for TerminalConfig {
     }
 }
 
-/// 输出历史配置
-///
-/// 控制终端输出历史的存储参数
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct OutputHistoryConfig {
-    /// 环形缓冲区容量 - 存储最近 N 条 PTY 输出供历史回放
-    pub ring_buffer_capacity: usize,
-}
-
-impl Default for OutputHistoryConfig {
-    fn default() -> Self {
-        Self {
-            ring_buffer_capacity: 10000,
-        }
-    }
-}
-
 /// 插件配置
-///
-/// 控制 Claude Code 插件会话的行为参数
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginConfig {
-    /// 文件轮询间隔（毫秒）- 监听 JSONL 日志文件的频率
-    pub file_poll_interval_ms: u64,
-    /// 心跳超时（秒）- 超过此时间未收到心跳则判定插件断开
-    pub heartbeat_timeout_secs: u64,
     /// HTTP API 认证 token - 插件推送任务状态时需携带此 token
     /// 为空时跳过验证（开发模式）
     #[serde(default)]
@@ -305,35 +270,7 @@ pub struct PluginConfig {
 impl Default for PluginConfig {
     fn default() -> Self {
         Self {
-            file_poll_interval_ms: 500,
-            heartbeat_timeout_secs: 90,
             token: String::new(),
-        }
-    }
-}
-
-/// 显示配置
-///
-/// 控制 Claude Code 消息日志的显示截断参数
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DisplayConfig {
-    /// 工具输入最大显示长度（字符）- 超出部分截断
-    pub max_tool_input_display: usize,
-    /// 工具结果最大显示长度（字符）- 超出部分截断
-    pub max_tool_result_display: usize,
-    /// 思考过程最大显示长度（字符）- 超出部分截断
-    pub max_thinking_display: usize,
-    /// JSONL 文件最大读取大小（字节）- 防止内存溢出
-    pub max_read_size: u64,
-}
-
-impl Default for DisplayConfig {
-    fn default() -> Self {
-        Self {
-            max_tool_input_display: 200,
-            max_tool_result_display: 500,
-            max_thinking_display: 300,
-            max_read_size: 1024 * 1024,
         }
     }
 }
@@ -346,9 +283,7 @@ impl Default for AppConfig {
             ui: UiConfig::default(),
             channels: ChannelsConfig::default(),
             terminal: TerminalConfig::default(),
-            output_history: OutputHistoryConfig::default(),
             plugin: PluginConfig::default(),
-            display: DisplayConfig::default(),
         }
     }
 }
@@ -431,8 +366,7 @@ impl AppConfig {
             network: NetworkConfig {
                 port: parse_value(props, "network.port", 8765),
                 auto_start: parse_value(props, "network.auto_start", true),
-                heartbeat_interval_secs: parse_value(props, "network.heartbeat_interval_secs", 30),
-                heartbeat_timeout_secs: parse_value(props, "network.heartbeat_timeout_secs", 90),
+                prevent_sleep: parse_value(props, "network.prevent_sleep", true),
             },
             session: SessionConfig {
                 default_environment: parse_value(props, "session.default_environment", "windows".to_string()),
@@ -445,6 +379,7 @@ impl AppConfig {
                 theme: parse_value(props, "ui.theme", "system".to_string()),
                 terminal_font_size: parse_value(props, "ui.terminal_font_size", 12),
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
+                terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
                 show_preview: parse_value(props, "ui.show_preview", true),
             },
             channels: ChannelsConfig {
@@ -464,19 +399,8 @@ impl AppConfig {
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
             },
-            output_history: OutputHistoryConfig {
-                ring_buffer_capacity: parse_value(props, "output_history.ring_buffer_capacity", 10000),
-            },
             plugin: PluginConfig {
-                file_poll_interval_ms: parse_value(props, "plugin.file_poll_interval_ms", 500),
-                heartbeat_timeout_secs: parse_value(props, "plugin.heartbeat_timeout_secs", 90),
                 token: parse_value(props, "plugin.token", String::new()),
-            },
-            display: DisplayConfig {
-                max_tool_input_display: parse_value(props, "display.max_tool_input_display", 200),
-                max_tool_result_display: parse_value(props, "display.max_tool_result_display", 500),
-                max_thinking_display: parse_value(props, "display.max_thinking_display", 300),
-                max_read_size: parse_value(props, "display.max_read_size", 1048576),
             },
         }
     }
@@ -508,8 +432,7 @@ impl AppConfig {
         let mut map = HashMap::new();
         map.insert("network.port".to_string(), self.network.port.to_string());
         map.insert("network.auto_start".to_string(), self.network.auto_start.to_string());
-        map.insert("network.heartbeat_interval_secs".to_string(), self.network.heartbeat_interval_secs.to_string());
-        map.insert("network.heartbeat_timeout_secs".to_string(), self.network.heartbeat_timeout_secs.to_string());
+        map.insert("network.prevent_sleep".to_string(), self.network.prevent_sleep.to_string());
         map.insert("session.default_environment".to_string(), self.session.default_environment.clone());
         map.insert("session.default_wsl_distro".to_string(), self.session.default_wsl_distro.clone().unwrap_or_default());
         map.insert("session.default_working_dir".to_string(), self.session.default_working_dir.clone().unwrap_or_default());
@@ -518,6 +441,7 @@ impl AppConfig {
         map.insert("ui.theme".to_string(), self.ui.theme.clone());
         map.insert("ui.terminal_font_size".to_string(), self.ui.terminal_font_size.to_string());
         map.insert("ui.terminal_font_family".to_string(), self.ui.terminal_font_family.clone());
+        map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());
         map.insert("ui.show_preview".to_string(), self.ui.show_preview.to_string());
         map.insert("channels.output_broadcast_capacity".to_string(), self.channels.output_broadcast_capacity.to_string());
         map.insert("channels.status_broadcast_capacity".to_string(), self.channels.status_broadcast_capacity.to_string());
@@ -532,14 +456,7 @@ impl AppConfig {
         map.insert("terminal.flush_interval_ms".to_string(), self.terminal.flush_interval_ms.to_string());
         map.insert("terminal.max_buffer_size".to_string(), self.terminal.max_buffer_size.to_string());
         map.insert("terminal.read_buffer_size".to_string(), self.terminal.read_buffer_size.to_string());
-        map.insert("output_history.ring_buffer_capacity".to_string(), self.output_history.ring_buffer_capacity.to_string());
-        map.insert("plugin.file_poll_interval_ms".to_string(), self.plugin.file_poll_interval_ms.to_string());
-        map.insert("plugin.heartbeat_timeout_secs".to_string(), self.plugin.heartbeat_timeout_secs.to_string());
         map.insert("plugin.token".to_string(), self.plugin.token.clone());
-        map.insert("display.max_tool_input_display".to_string(), self.display.max_tool_input_display.to_string());
-        map.insert("display.max_tool_result_display".to_string(), self.display.max_tool_result_display.to_string());
-        map.insert("display.max_thinking_display".to_string(), self.display.max_thinking_display.to_string());
-        map.insert("display.max_read_size".to_string(), self.display.max_read_size.to_string());
         map
     }
 }
@@ -593,15 +510,13 @@ mod tests {
         let content = r#"
 # 这是一个注释
 network.port=8765
-network.heartbeat_interval_secs=30
 
 # 另一个注释
-ui.theme=dark
+channels.output_broadcast_capacity=2048
 "#;
         let props = parse_properties(content);
         assert_eq!(props.get("network.port").unwrap(), "8765");
-        assert_eq!(props.get("network.heartbeat_interval_secs").unwrap(), "30");
-        assert_eq!(props.get("ui.theme").unwrap(), "dark");
+        assert_eq!(props.get("channels.output_broadcast_capacity").unwrap(), "2048");
     }
 
     #[test]
@@ -624,16 +539,23 @@ ui.theme=dark
         let props = HashMap::new();
         let config = AppConfig::from_properties(&props);
         assert_eq!(config.network.port, 8765);
+        assert_eq!(config.network.auto_start, true);
+        assert_eq!(config.session.default_environment, "windows");
         assert_eq!(config.ui.theme, "system");
+        assert_eq!(config.ui.terminal_theme, "dracula");
     }
 
     #[test]
     fn test_from_properties_override() {
         let mut props = HashMap::new();
         props.insert("network.port".to_string(), "9999".to_string());
+        props.insert("network.auto_start".to_string(), "false".to_string());
+        props.insert("session.default_environment".to_string(), "wsl2".to_string());
         props.insert("ui.theme".to_string(), "dark".to_string());
         let config = AppConfig::from_properties(&props);
         assert_eq!(config.network.port, 9999);
+        assert_eq!(config.network.auto_start, false);
+        assert_eq!(config.session.default_environment, "wsl2");
         assert_eq!(config.ui.theme, "dark");
     }
 
@@ -645,20 +567,12 @@ ui.theme=dark
         let config2 = AppConfig::from_properties(&props);
 
         assert_eq!(config.network.port, config2.network.port);
+        assert_eq!(config.network.auto_start, config2.network.auto_start);
+        assert_eq!(config.session.default_environment, config2.session.default_environment);
         assert_eq!(config.ui.theme, config2.ui.theme);
+        assert_eq!(config.ui.terminal_theme, config2.ui.terminal_theme);
         assert_eq!(config.channels.output_broadcast_capacity, config2.channels.output_broadcast_capacity);
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
-        assert_eq!(config.display.max_read_size, config2.display.max_read_size);
-    }
-
-    #[test]
-    fn test_optional_fields_empty() {
-        let mut props = HashMap::new();
-        props.insert("session.default_wsl_distro".to_string(), String::new());
-        props.insert("session.default_command".to_string(), "claude".to_string());
-        let config = AppConfig::from_properties(&props);
-        assert_eq!(config.session.default_wsl_distro, None);
-        assert_eq!(config.session.default_command, Some("claude".to_string()));
     }
 
     #[test]
@@ -682,7 +596,7 @@ ui.theme=dark
 
         let loaded = AppConfig::load(&path).unwrap();
         assert_eq!(config.network.port, loaded.network.port);
-        assert_eq!(config.ui.theme, loaded.ui.theme);
+        assert_eq!(config.network.auto_start, loaded.network.auto_start);
         assert_eq!(config.channels.output_broadcast_capacity, loaded.channels.output_broadcast_capacity);
     }
 
@@ -703,5 +617,28 @@ ui.theme=dark
         assert!(content.contains("# WebSocket 服务器端口"));
         // 验证包含 key=value
         assert!(content.contains("network.port=8765"));
+    }
+
+    #[test]
+    fn test_optional_fields_empty() {
+        let mut props = HashMap::new();
+        props.insert("session.default_wsl_distro".to_string(), String::new());
+        props.insert("session.default_command".to_string(), "claude".to_string());
+        let config = AppConfig::from_properties(&props);
+        assert_eq!(config.session.default_wsl_distro, None);
+        assert_eq!(config.session.default_command, Some("claude".to_string()));
+    }
+
+    #[test]
+    fn test_removed_keys_ignored_on_load() {
+        // 验证已移除的配置 key（output_history、display）不影响加载
+        let mut props = HashMap::new();
+        props.insert("network.port".to_string(), "9999".to_string());
+        props.insert("output_history.ring_buffer_capacity".to_string(), "5000".to_string());
+        props.insert("display.max_read_size".to_string(), "100".to_string());
+        let config = AppConfig::from_properties(&props);
+        // 有效的 key 正常读取
+        assert_eq!(config.network.port, 9999);
+        // 已移除的 key 被忽略，不影响 AppConfig 结构
     }
 }
