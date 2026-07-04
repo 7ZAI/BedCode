@@ -1,0 +1,119 @@
+[package]
+name = "bedcode-desktop"
+version = "1.1.0"
+description = "BedCode Desktop - Remote control for Claude Code via mobile devices"
+authors = ["binblink"]
+edition = "2021"
+
+[lib]
+name = "bedcode_lib"
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-os = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Security
+rand = "0.8"
+jsonwebtoken = "9"
+
+# Encoding
+encoding_rs = "0.8"
+base64 = "0.22"
+hex = "0.4"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+tracing-log = "0.2"
+
+# File watching
+notify = "6"
+
+# Regex for parsing
+regex = "1"
+
+# Dynamic library loading for cdylib plugins
+libloading = "0.8"
+
+# mDNS service discovery
+mdns-sd = "0.20"
+
+# Network utilities
+local-ip-address = "0.6"
+
+# System info (CPU/memory metrics)
+sysinfo = "0.33"
+
+# Plugin API
+bedcode-plugin-api = { path = "bedcode-plugin-api" }
+inventory = "0.3"
+
+# Power management (prevent system sleep)
+nosleep = "0.2"
+
+# Async trait for dyn compatibility
+async-trait = "0.1"
+
+# WebSocket
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+dirs = "6.0.0"
+
+# Actix Web (HTTP + WS server)
+actix-web = "4"
+actix = "0.13"
+actix-web-actors = "4"
+actix-rt = "2"
+actix-cors = "0.7"
+
+# PTY management
+portable-pty = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+# ==================== 开发模式优化 ====================
+[profile.dev]
+debug = 1
+incremental = true
+split-debuginfo = "packed"
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,68 @@
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { resolve } from 'path'
+import { readFileSync } from 'fs'
+
+const host = process.env.TAURI_DEV_HOST
+
+// 从 tauri.conf.json 读取应用版本（作为版本号的唯一来源）
+const tauriConf = JSON.parse(readFileSync(resolve(__dirname, 'src-tauri/tauri.conf.json'), 'utf-8'))
+const appVersion = tauriConf.version || '0.0.0'
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [vue()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+    },
+  },
+  server: {
+    host: host ? '0.0.0.0' : '0.0.0.0',
+    port: 1420,
+    strictPort: true,
+    hmr: host
+      ? {
+          protocol: 'ws',
+          host: host,
+          port: 1421,
+        }
+      : undefined,
+    fs: {
+      allow: [
+        resolve(__dirname, 'src'),
+        resolve(__dirname, 'index.html'),
+        resolve(__dirname, 'public'),
+        resolve(__dirname, 'node_modules'),
+        resolve(__dirname, 'package.json'),
+        resolve(__dirname, 'vite.config.ts'),
+        resolve(__dirname, 'tailwind.config.js'),
+        resolve(__dirname, 'postcss.config.js'),
+        resolve(__dirname, 'tsconfig.json'),
+      ],
+    },
+  },
+  optimizeDeps: {
+    entries: ['./index.html'],
+    include: [
+      'vue',
+      'vue-router',
+      'pinia',
+      '@tauri-apps/api/core',
+      '@tauri-apps/api/event',
+      '@tauri-apps/api/window',
+      '@tauri-apps/plugin-dialog',
+      '@tauri-apps/plugin-os',
+      '@tauri-apps/plugin-shell',
+      '@tauri-apps/plugin-notification',
+      'ansi_up',
+      'html5-qrcode',
+      'uuid',
+    ],
+    holdUntilCrawlEnd: false,
+  },
+  clearScreen: false,
+})

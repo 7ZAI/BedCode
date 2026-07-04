@@ -1,9 +1,9 @@
 # Dependencies
-node_modules/
+**/node_modules/
 .pnpm-store/
 
 # Build outputs
-dist/
+**/dist/
 build/
 *.local
 
@@ -11,10 +11,10 @@ build/
 docs/
 
 # Tauri / Rust
-src-tauri/target/
-src-tauri/Cargo.lock
-src-tauri/bedcode.db
-src-tauri/gen/android/app/src/main/assets/_up_/
+**/target/
+**/src-tauri/**/Cargo.lock
+**/src-tauri/bedcode.db
+**/src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb
 
 # IDE and editors
@@ -75,8 +75,11 @@ temp/
 *.bak
 *.backup
 
-# Claude Code
-.claude/
+# Claude Code project files
+.claude/settings.json
+.claude/settings.local.json
+.claude/*.log.*
+.claude/bedcode_hook.py
 
 # Superpowers temporary files (brainstorm state, etc.)
 .superpowers/brainstorm/

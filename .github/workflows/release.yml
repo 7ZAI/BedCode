@@ -10,8 +10,51 @@ permissions:
   contents: write
 
 jobs:
+  # ==================== Changelog ====================
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag or config
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(node -p "require('./bedcode-desktop/src-tauri/tauri.conf.json').version")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract changelog for current version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # 提取当前版本的 changelog 内容（从 ## [version] 到下一个 ## 之间的内容）
+          CHANGELOG=$(awk "/^## \\[${VERSION}\\]/,/^## \\[|^## \\[Unreleased/" CHANGELOG.md | head -n -1 | tail -n +2)
+          # 如果没找到对应版本，使用完整 CHANGELOG
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG=$(cat CHANGELOG.md)
+          fi
+          # 写入文件避免多行字符串在 GITHUB_OUTPUT 中的问题
+          echo "$CHANGELOG" > /tmp/changelog.txt
+          {
+            echo "changelog<<EOF"
+            cat /tmp/changelog.txt
+            echo ""
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+  # ==================== Windows Build ====================
   build-windows:
+    needs: prepare-release
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: bedcode-desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +63,7 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: bedcode-desktop/package-lock.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -27,7 +71,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: './bedcode-desktop/src-tauri -> target'
 
       - name: Import Windows certificate
         if: env.WINDOWS_CERTIFICATE != ''
@@ -38,7 +82,7 @@ jobs:
           New-Item -ItemType directory -Path certificate
           Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
           certutil -decode certificate/tempCert.txt certificate/certificate.pfx
-          Remove-Item -path certificate -include tempCert.txt
+          Remove-Item certificate/tempCert.txt
           Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
 
       - name: Install frontend dependencies
@@ -48,16 +92,29 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          projectPath: bedcode-desktop
           tagName: v__VERSION__
           releaseName: 'BedCode v__VERSION__'
-          releaseBody: 'See the assets to download and install.'
+          releaseBody: '${{ needs.prepare-release.outputs.changelog }}'
           releaseDraft: true
           prerelease: false
+          updaterJsonPreferNsis: true
 
+      - name: Clean up certificate
+        if: always()
+        run: |
+          if (Test-Path certificate) { Remove-Item -Recurse -Force certificate }
+
+  # ==================== Android Build ====================
   build-android:
-    needs: build-windows
+    needs: prepare-release
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bedcode-mobile
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +123,7 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: bedcode-mobile/package-lock.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -75,7 +133,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: './bedcode-mobile/src-tauri -> target'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -102,22 +160,31 @@ jobs:
         run: npm install
 
       - name: Build Android APK
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri android build --apk -t aarch64
-
-      - name: Get version from tag or config
-        id: version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-          else
-            VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-          fi
 
       - name: Upload APK to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          files: src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          files: |
+            bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+            bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==================== Publish Release ====================
+  publish-release:
+    needs: [prepare-release, build-windows, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
