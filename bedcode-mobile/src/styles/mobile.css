@@ -175,7 +175,7 @@ html:not(.dark) .mobile-app {
   --mobile-overlay-light: rgba(0, 0, 0, 0.2);
 
   /* 终端色 */
-  --mobile-terminal-bg: #ffffff;
+  --mobile-terminal-bg: #fafafa;
   --mobile-terminal-header: rgba(238, 241, 245, 0.95);
 
   /* 导航栏 */

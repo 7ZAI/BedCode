@@ -344,6 +344,16 @@
           <div class="action-row-spacer"></div>
 
           <button
+            class="inline-btn toggle-btn"
+            :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
+            @mousedown.prevent="toggleShortcuts"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+          </button>
+
+          <button
             class="inline-btn send-btn"
             :disabled="!canSubmit"
             @click="handleSubmit"
@@ -360,16 +370,6 @@
           >
             <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-            </svg>
-          </button>
-
-          <button
-            class="inline-btn toggle-btn"
-            :class="showShortcutsPanel ? 'toggle-active' : 'toggle-inactive'"
-            @mousedown.prevent="toggleShortcuts"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
             </svg>
           </button>
         </div>
@@ -740,8 +740,8 @@ onMounted(() => {
   border-top: 1px solid var(--mobile-border);
   padding: 0.5rem 1rem;
   position: relative;
-  /* paddingBottom 由 JS 动态设置（安全区域），添加过渡保证平滑 */
-  transition: padding-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* paddingBottom 由 JS 动态设置（安全区域），不使用 CSS transition
+   * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
 }
 
 /* ==================== Quick Bar ==================== */
@@ -855,8 +855,8 @@ onMounted(() => {
 }
 
 .toggle-btn {
-  background: transparent;
-  border-color: transparent;
+  background: var(--mobile-bg-elevated);
+  border-color: var(--mobile-border);
   color: var(--mobile-text-muted);
   padding: 0;
 }
@@ -866,7 +866,9 @@ onMounted(() => {
 }
 
 .toggle-active {
-  color: var(--mobile-toggle-active-color);
+  color: var(--mobile-accent);
+  border-color: var(--mobile-border-active);
+  background: var(--mobile-accent-muted);
 }
 
 .toggle-inactive {

@@ -38,7 +38,7 @@
               @click.stop="localSettings.theme = id"
             >
               <span class="theme-preview" :style="{ background: config.background, color: config.foreground }">Aa</span>
-              <span class="theme-name">{{ config.label }}</span>
+              <span class="theme-name">{{ resolveThemeLabel(config.label, t) }}</span>
             </button>
           </div>
         </div>
@@ -95,6 +95,7 @@
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCodeViewerStore, CODE_THEMES, type CodeViewerSettings } from '@/stores/codeViewer'
+import { resolveThemeLabel } from '@/config/terminalThemes'
 
 const { t } = useI18n()
 

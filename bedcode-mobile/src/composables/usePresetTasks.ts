@@ -34,14 +34,14 @@ export async function load() {
 }
 
 /** 添加预设任务 */
-export async function addTask(input: { title: string; content: string; type: PresetTaskType }) {
+export async function addTask(input: { title: string; content: string }) {
   const now = new Date().toISOString()
   const task: PresetTask = {
     id: crypto.randomUUID(),
     title: input.title,
     content: input.content,
-    type: input.type,
-    status: input.type === 'once' ? 'pending' : null,
+    type: 'template',
+    status: null,
     createdAt: now,
     updatedAt: now,
   }

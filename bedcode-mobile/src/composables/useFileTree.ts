@@ -98,7 +98,7 @@ const treeCache = new Map<string, CacheEntry>()
 
 // ==================== Composable ====================
 
-export function useFileTree(sessionId: Ref<string>) {
+export function useFileTree(sessionId: Ref<string>, baseUrl?: Ref<string>) {
   const settings = ref<SidebarSettings>(loadSettings())
   const tree = ref<FileTreeNode[]>([])
   const loading = ref(false)

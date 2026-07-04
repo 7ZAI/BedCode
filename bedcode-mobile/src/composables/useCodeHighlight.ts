@@ -114,9 +114,12 @@ import langClojure from '@shikijs/langs/clojure'
 import langSvelte from '@shikijs/langs/svelte'
 import langLess from '@shikijs/langs/less'
 import themeVitesseDark from '@shikijs/themes/vitesse-dark'
+import themeVitesseLight from '@shikijs/themes/vitesse-light'
 import themeOneDarkPro from '@shikijs/themes/one-dark-pro'
+import themeOneLight from '@shikijs/themes/one-light'
 import themeNord from '@shikijs/themes/nord'
 import themeGithubDark from '@shikijs/themes/github-dark'
+import themeGithubLight from '@shikijs/themes/github-light'
 import themeMonokai from '@shikijs/themes/monokai'
 
 /** 语言模块映射：语言 ID → 模块默认导出 */
@@ -175,9 +178,12 @@ const THEME = 'vitesse-dark'
 
 const THEME_MODULES = [
   themeVitesseDark,
+  themeVitesseLight,
   themeOneDarkPro,
+  themeOneLight,
   themeNord,
   themeGithubDark,
+  themeGithubLight,
   themeMonokai,
 ]
 

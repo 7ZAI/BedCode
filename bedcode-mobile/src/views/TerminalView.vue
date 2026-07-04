@@ -27,19 +27,10 @@
       </div>
       <!-- 常驻工具按钮：根据配置决定哪些按钮直接显示 -->
       <template v-for="item in visibleToolbarItems" :key="item.key">
-        <button v-if="item.key === 'mode'" class="mode-btn" :class="{ active: autoMode === 'auto' }" @click="toggleMode" :title="autoMode === 'auto' ? t('mobile.terminal.switchToManual') : t('mobile.terminal.switchToAuto')">
-          <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
-            <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
-          </svg>
-          <svg v-else viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/>
-          </svg>
-        </button>
-        <button v-else-if="item.key === 'task'" class="task-btn" @click="showTaskPicker = true" :title="t('mobile.terminal.pendingTasks')">
+        <button v-if="item.key === 'task'" class="task-btn" @click="showTaskPicker = true" :title="t('mobile.terminal.pendingTasks')">
           <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
             <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
           </svg>
-          <span v-if="hasQueuedTasks" class="task-badge">{{ pendingCount }}</span>
         </button>
         <button v-else-if="item.key === 'shortcut'" class="tool-btn" @click="showShortcutConfig = true" :title="t('mobile.shortcutConfig.title')">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -77,16 +68,9 @@
         </button>
         <transition name="overflow-menu">
           <div v-if="showOverflowMenu" class="overflow-menu" @click.stop>
-            <button v-if="isOverflowItem('mode')" class="overflow-menu-item" :class="{ active: autoMode === 'auto' }" @click="toggleMode()">
-              <svg v-if="autoMode === 'auto'" viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>
-              <svg v-else viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-14h-2v6l5.25 3.15.75-1.23-4.5-2.67V6z"/></svg>
-              <span>{{ autoMode === 'auto' ? t('mobile.terminal.autoMode') : t('mobile.terminal.manualMode') }}</span>
-              <span class="overflow-item-status">{{ autoMode === 'auto' ? 'ON' : 'OFF' }}</span>
-            </button>
-            <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true">
+            <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true; closeOverflowMenu()">
               <svg viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/></svg>
               <span>{{ t('mobile.terminal.pendingTasks') }}</span>
-              <span v-if="hasQueuedTasks" class="overflow-item-badge">{{ pendingCount }}</span>
             </button>
             <button v-if="isOverflowItem('shortcut')" class="overflow-menu-item" @click="showShortcutConfig = true; closeOverflowMenu()">
               <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
@@ -118,14 +102,6 @@
     <!-- Main Content: Terminal + Sidebar overlay -->
     <div class="main-content">
       <div class="terminal-output-area">
-        <!-- 自动执行状态条 -->
-        <AutoExecuteBar
-          :current-task="autoCurrentTask"
-          :is-paused="autoIsPaused"
-          :mode="autoMode"
-          @pause="autoPause"
-          @resume="autoResume"
-        />
         <!-- 触摸滚动容器：接管触摸事件驱动终端滚动 -->
         <!-- selection-mode 类切换：长按进入选择模式，允许 xterm 原生文本选择 -->
         <div
@@ -313,13 +289,12 @@ import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import TerminalInputBar from '@/components/TerminalInputBar.vue'
 import FileSidebar from '@/components/FileSidebar.vue'
-import AutoExecuteBar from '@/components/AutoExecuteBar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import { useToast } from '@/composables/useToast'
 import { writeClipboardText } from '@/utils/clipboard'
-import { useAutoExecutor } from '@/composables/useAutoExecutor'
 import { usePresetTasks } from '@/composables/usePresetTasks'
+import { executeTask } from '@/composables/usePresetTasks'
 import type { PresetTask } from '@/composables/model'
 
 // ==================== Props & Route ====================
@@ -336,34 +311,16 @@ const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
 
-// ==================== Auto Executor ====================
+// ==================== Task Picker ====================
 
-const {
-  mode: autoMode,
-  currentTask: autoCurrentTask,
-  isPaused: autoIsPaused,
-  hasQueuedTasks,
-  pendingTasks: autoPendingTasks,
-  setMode: autoSetMode,
-  addToQueue,
-  pause: autoPause,
-  resume: autoResume,
-  startNext: autoStartNext,
-  handleTaskStatusChanged,
-  handleSessionModeChanged,
-  cleanup: autoCleanup,
-} = useAutoExecutor(sessionId)
 const { tasks: presetTasks } = usePresetTasks()
-
 const showTaskPicker = ref(false)
 const showOverflowMenu = ref(false)
-const pendingCount = computed(() => autoPendingTasks.value.length)
 
 // ==================== Header Toolbar Config ====================
 
 /** 所有可用的 Header 工具项定义 */
 const ALL_TOOLBAR_ITEMS = [
-  { key: 'mode', label: computed(() => t('mobile.terminal.autoMode')), icon: 'mode' },
   { key: 'task', label: computed(() => t('mobile.terminal.pendingTasks')), icon: 'task' },
   { key: 'shortcut', label: computed(() => t('mobile.shortcutConfig.title')), icon: 'shortcut' },
   { key: 'clear', label: computed(() => t('mobile.terminal.clearScreen')), icon: 'clear' },
@@ -404,25 +361,20 @@ function toggleToolbarItem(key: string) {
   }
 }
 
-/** 任务选择确认
- *  仅添加到队列，不立即执行
- *  自动模式下由 handleTaskStatusChanged('idle') 驱动队列消费
- *  startNext 内部会检查 currentTask 是否在运行，避免中断
- */
-function onTaskConfirm(tasks: PresetTask[]) {
-  addToQueue(tasks)
+/** 任务选择确认：逐个执行选中的任务 */
+async function onTaskConfirm(tasks: PresetTask[]) {
   showTaskPicker.value = false
-  if (autoMode.value === 'auto') {
-    autoStartNext()
+  if (!isConnected.value || !isSessionActive.value) {
+    toast.error(t('mobile.connection.connectFailed'))
+    return
   }
-}
-
-/** 切换自动/手动模式 */
-function toggleMode() {
-  const newMode = autoMode.value === 'manual' ? 'auto' : 'manual'
-  autoSetMode(newMode)
-  if (newMode === 'auto' && hasQueuedTasks.value) {
-    autoStartNext()
+  for (const task of tasks) {
+    try {
+      await executeTask(task, sessionId.value)
+    } catch {
+      toast.error(t('mobile.toolbox.sendFailed'))
+      break
+    }
   }
 }
 
@@ -480,10 +432,6 @@ const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
 const showShortcutConfig = ref(false)
-// 自动执行：监听任务状态变更的 Tauri 事件监听器
-const taskStatusListenerRef = ref<UnlistenFn | null>(null)
-// 监听会话模式变更的 Tauri 事件监听器
-const sessionModeListenerRef = ref<UnlistenFn | null>(null)
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
 // isThemeUserSet = false 时跟随系统主题变化，true 时保持用户选择
 // 从 localStorage 持久化设置回显，而非硬编码默认值
@@ -1023,14 +971,18 @@ function refreshTerminal() {
   // 刷新格式：重新 fit 终端尺寸并同步到桌面端，不清除内容
   if (!fitAddonRef.value || !terminalRef.value) return
 
-  // 捕获当前 sessionId，避免路由切换后读取错误的会话 ID
   const currentSessionId = sessionId.value
 
   fitAddonRef.value.fit()
   if (isConnected.value && isSessionActive.value) {
-    wsResizeTerminal(currentSessionId, terminalRef.value.cols, terminalRef.value.rows).catch((e: Error) => {
+    wsResizeTerminal(currentSessionId, terminalRef.value.cols, terminalRef.value.rows).then(() => {
+      toast.success(t('mobile.terminal.refreshed'))
+    }).catch((e: Error) => {
       console.warn('[TerminalView] Refresh resize failed:', e)
+      toast.error(t('mobile.terminal.refreshFailed'))
     })
+  } else {
+    toast.success(t('mobile.terminal.refreshed'))
   }
 }
 
@@ -1576,18 +1528,6 @@ onMounted(async () => {
   }
 
   isTerminalReady.value = true
-
-  // 监听任务状态变更
-  taskStatusListenerRef.value = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; options: Array<{ label: string }> }> }>('ws_sync_task_status_changed', (event) => {
-    if (event.payload.session_id !== sessionId.value) return
-    handleTaskStatusChanged(event.payload.task_status, event.payload.task_questions)
-  })
-
-  // 监听会话模式变更
-  sessionModeListenerRef.value = await listen<{ session_id: string; auto_approve: boolean }>('ws_sync_session_mode_changed', (event) => {
-    if (event.payload.session_id !== sessionId.value) return
-    handleSessionModeChanged(event.payload.auto_approve)
-  })
 })
 
 onUnmounted(async () => {
@@ -1598,17 +1538,6 @@ onUnmounted(async () => {
   if (!isSessionActive.value) {
     await unsubscribeSession(sessionId.value)
   }
-
-  // 清理事件监听器
-  if (taskStatusListenerRef.value) {
-    taskStatusListenerRef.value()
-    taskStatusListenerRef.value = null
-  }
-  if (sessionModeListenerRef.value) {
-    sessionModeListenerRef.value()
-    sessionModeListenerRef.value = null
-  }
-  autoCleanup()
 })
 
 // Watch session status changes
@@ -1777,7 +1706,6 @@ watch(isConnected, async (connected) => {
 
 /* 通用工具按钮样式（常驻 + 溢出菜单项） */
 .tool-btn,
-.mode-btn,
 .task-btn,
 .folder-btn,
 .overflow-btn {
@@ -1794,38 +1722,14 @@ watch(isConnected, async (connected) => {
 }
 
 .tool-btn:hover,
-.mode-btn:hover,
 .task-btn:hover,
 .folder-btn:hover,
 .overflow-btn:hover {
   border-color: rgba(0, 212, 255, 0.3);
 }
 
-.mode-btn.active {
-  color: var(--mobile-accent);
-  border-color: var(--mobile-border-active);
-  background: var(--mobile-accent-muted);
-}
-
 .task-btn {
   position: relative;
-}
-
-.task-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 8px;
-  background: var(--mobile-error, #ef4444);
-  color: white;
-  font-size: 10px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
 }
 
 .folder-btn.active {
@@ -1880,32 +1784,6 @@ watch(isConnected, async (connected) => {
 
 .overflow-menu-item.active {
   color: var(--mobile-accent);
-}
-
-.overflow-item-status {
-  margin-left: auto;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--mobile-text-muted);
-}
-
-.overflow-menu-item.active .overflow-item-status {
-  color: var(--mobile-accent);
-}
-
-.overflow-item-badge {
-  margin-left: auto;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 9px;
-  background: var(--mobile-error, #ef4444);
-  color: white;
-  font-size: 10px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
 }
 
 .overflow-backdrop {

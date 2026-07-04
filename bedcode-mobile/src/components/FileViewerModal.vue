@@ -89,10 +89,12 @@ import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import { useCodeHighlight, getLangByFilename } from '@/composables/useCodeHighlight'
 import type { FileDiffLine } from '@/composables/useHttpApi'
-import { useCodeViewerStore } from '@/stores/codeViewer'
+import { useCodeViewerStore, resolveCodeTheme, CODE_THEMES } from '@/stores/codeViewer'
+import { useTheme } from '@/composables/useTheme'
 import CodeViewerSettingsModal from '@/components/CodeViewerSettingsModal.vue'
 
 const { t } = useI18n()
+const { isSystemDark } = useTheme()
 
 const props = defineProps<{
   visible: boolean
@@ -116,6 +118,15 @@ const showSettings = ref(false)
 /** Markdown 文件预览/源码切换：默认预览 */
 const viewMode = ref<'preview' | 'source'>('preview')
 
+/** 解析当前实际使用的 shiki 主题 ID */
+const resolvedTheme = computed(() => resolveCodeTheme(codeViewerStore.settings.theme, isSystemDark.value))
+
+/** 代码区域背景色：使用 shiki 主题的 background 色值 */
+const codeBgColor = computed(() => {
+  const themeConfig = CODE_THEMES[resolvedTheme.value]
+  return themeConfig?.background ?? 'var(--mobile-bg-secondary)'
+})
+
 const isMarkdownFile = computed(() => {
   const ext = props.filename.split('.').pop()?.toLowerCase() || ''
   return ext === 'md' || ext === 'mdx'
@@ -131,6 +142,7 @@ const displayLang = computed(() => getLangByFilename(props.filename))
 const codeStyle = computed(() => ({
   '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
   '--code-tab-size': codeViewerStore.settings.tabSize,
+  '--code-bg': codeBgColor.value,
 }))
 
 const lineCount = computed(() => {
@@ -159,36 +171,34 @@ function handleClose() {
   emit('update:visible', false)
 }
 
+/** 使用解析后的主题执行高亮 */
+async function doHighlight() {
+  if (!props.visible || !props.filename) return
+  const lang = getLangByFilename(props.filename)
+  const theme = resolvedTheme.value
+  if (props.diffLines && props.diffLines.length > 0) {
+    await highlightDiff(props.diffLines, lang, theme)
+  } else if (props.code) {
+    await highlight(props.code, lang, theme)
+  }
+}
+
 // 当文件变化时重新高亮
 watch(
   () => [props.visible, props.filename, props.code, props.diffLines] as const,
-  async ([visible, filename, code, diffLines]) => {
-    if (!visible || !filename) return
+  async ([visible]) => {
+    if (!visible) return
     // 切换文件时重置为预览模式
     viewMode.value = 'preview'
-    const lang = getLangByFilename(filename)
-    // Markdown 预览模式下不需要 shiki 高亮，但保留以备切换源码
-    if (diffLines && diffLines.length > 0) {
-      await highlightDiff(diffLines, lang, codeViewerStore.settings.theme)
-    } else if (code) {
-      await highlight(code, lang, codeViewerStore.settings.theme)
-    }
+    await doHighlight()
   },
   { immediate: true },
 )
 
-// 监听主题变化，重新高亮
+// 监听主题设置或系统暗色模式变化，重新高亮
 watch(
-  () => codeViewerStore.settings.theme,
-  () => {
-    if (!props.visible || !props.filename) return
-    const lang = getLangByFilename(props.filename)
-    if (props.diffLines && props.diffLines.length > 0) {
-      highlightDiff(props.diffLines, lang, codeViewerStore.settings.theme)
-    } else if (props.code) {
-      highlight(props.code, lang, codeViewerStore.settings.theme)
-    }
-  },
+  [() => codeViewerStore.settings.theme, isSystemDark],
+  () => doHighlight(),
 )
 </script>
 
@@ -315,11 +325,12 @@ watch(
 
 .viewer-code {
   margin: 0;
-  padding: 0;
+  padding: 0.75rem 0 0.5rem;
   font-size: var(--code-font-size, 13px);
   line-height: 0.8;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   tab-size: var(--code-tab-size, 4);
+  background: var(--code-bg, var(--mobile-bg-secondary));
 }
 
 /* Shiki 产出的 pre — 重置为容器角色 */
@@ -382,6 +393,7 @@ watch(
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: var(--code-font-size, 13px);
   white-space: pre;
+  background: var(--code-bg, var(--mobile-bg-secondary));
 }
 
 .viewer-code :deep(.diff-line-no) {
@@ -427,7 +439,7 @@ watch(
   background: rgba(248, 81, 73, 0.15);
 }
 .viewer-code :deep(.diff-removed .diff-marker) {
-  color: rgba(248, 81, 73, 0.8);
+  color: rgba(220, 38, 38, 0.9);
 }
 .viewer-code :deep(.diff-removed .diff-new-no) {
   background: rgba(248, 81, 73, 0.08);
@@ -437,7 +449,7 @@ watch(
   background: rgba(63, 185, 80, 0.15);
 }
 .viewer-code :deep(.diff-added .diff-marker) {
-  color: rgba(63, 185, 80, 0.8);
+  color: rgba(5, 150, 105, 0.9);
 }
 .viewer-code :deep(.diff-added .diff-old-no) {
   background: rgba(63, 185, 80, 0.08);

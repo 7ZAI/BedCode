@@ -3,7 +3,7 @@
     <Transition name="toast">
       <div
         v-if="visible"
-        class="fixed z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border"
+        class="fixed z-[9999] flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border"
         :class="[typeClass, positionClass]"
       >
         <!-- Icon -->

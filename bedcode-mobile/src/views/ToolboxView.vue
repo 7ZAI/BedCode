@@ -474,7 +474,6 @@ async function saveTask() {
     await addTask({
       title: dialogForm.value.title,
       content: dialogForm.value.content,
-      type: dialogForm.value.type,
     })
   }
 
