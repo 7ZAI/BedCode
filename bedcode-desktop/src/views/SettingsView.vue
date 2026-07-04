@@ -85,34 +85,20 @@
             />
             <div>
               <label class="text-xs font-medium text-[var(--text-secondary)] mb-2 block">{{ $t('settings.ui.terminalFontSize') }}</label>
-              <div class="flex items-center gap-3">
-                <button
-                  @click="decrementFontSize"
-                  class="w-10 h-10 rounded-btn border border-[var(--border-input)] bg-card text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-                  :disabled="settingsStore.settings.ui.terminal_font_size <= 10"
-                  :class="{ 'opacity-50 cursor-not-allowed': settingsStore.settings.ui.terminal_font_size <= 10 }"
-                >
-                  <svg class="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" />
-                  </svg>
-                </button>
-                <Input
-                  :model-value="settingsStore.settings.ui.terminal_font_size"
-                  type="number"
-                  class="w-20"
-                  @update:model-value="settingsStore.settings.ui.terminal_font_size = Number($event)"
+              <div class="flex items-center gap-4">
+                <input
+                  type="range"
+                  min="10"
+                  max="24"
+                  step="1"
+                  :value="settingsStore.settings.ui.terminal_font_size"
+                  @input="settingsStore.settings.ui.terminal_font_size = Number(($event.target as HTMLInputElement).value)"
+                  class="flex-1 h-1.5 rounded-full appearance-none cursor-pointer
+                    bg-[var(--border)]
+                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:duration-150 [&::-webkit-slider-thumb]:hover:scale-125
+                    [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-brand [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-sm"
                 />
-                <button
-                  @click="incrementFontSize"
-                  class="w-10 h-10 rounded-btn border border-[var(--border-input)] bg-card text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-                  :disabled="settingsStore.settings.ui.terminal_font_size >= 24"
-                  :class="{ 'opacity-50 cursor-not-allowed': settingsStore.settings.ui.terminal_font_size >= 24 }"
-                >
-                  <svg class="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                  </svg>
-                </button>
-                <span class="text-[var(--text-secondary)] text-sm">px</span>
+                <span class="text-sm text-[var(--text-secondary)] font-mono w-12 text-right">{{ settingsStore.settings.ui.terminal_font_size }}px</span>
               </div>
             </div>
           </div>
@@ -225,18 +211,6 @@ async function saveQrTokenTtl() {
   const val = Math.max(60, Math.min(3600, qrTokenTtl.value))
   qrTokenTtl.value = val
   await qrApi.setQrTokenTtl(val)
-}
-
-function incrementFontSize() {
-  if (settingsStore.settings.ui.terminal_font_size < 24) {
-    settingsStore.settings.ui.terminal_font_size++
-  }
-}
-
-function decrementFontSize() {
-  if (settingsStore.settings.ui.terminal_font_size > 10) {
-    settingsStore.settings.ui.terminal_font_size--
-  }
 }
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null

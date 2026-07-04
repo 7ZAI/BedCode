@@ -174,6 +174,11 @@ export default {
       wsMaxMessageSizeHint: 'MB',
       configSaved: '配置已保存，重启服务器后生效',
       restartToApply: '重启生效',
+      resetDefaults: '还原默认',
+      resetDefaultsConfirm: '确定还原所有高级配置为默认值？',
+      resetSuccess: '已还原为默认配置，重启服务器后生效',
+      collapse: '收起',
+      expand: '展开',
     },
     plugin: {
       viewNotFound: '插件视图未找到',

@@ -572,6 +572,12 @@ onUnmounted(() => {
   flex-shrink: 0;
   overflow: hidden;
   position: relative;
+  height: 100%;
+}
+
+/* 作为终端页 sidebar overlay 时，覆盖默认 position */
+.file-sidebar.sidebar-overlay {
+  position: absolute;
 }
 
 /* 拖动调整宽度手柄 */

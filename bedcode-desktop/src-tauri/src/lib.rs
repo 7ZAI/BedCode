@@ -468,6 +468,7 @@ pub fn run() {
             commands::server::update_server_port,
             commands::server::update_server_auto_start,
             commands::server::update_server_network_config,
+            commands::server::reset_server_network_config,
             // mDNS
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,

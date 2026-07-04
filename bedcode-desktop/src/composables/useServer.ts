@@ -154,6 +154,15 @@ export function useServer() {
     autoStart.value = config.auto_start
   }
 
+  /** 重置网络配置为默认值（需重启生效） */
+  async function resetNetworkConfig(): Promise<NetworkConfig> {
+    const config: NetworkConfig = await invoke('reset_server_network_config')
+    networkConfig.value = config
+    port.value = config.port
+    autoStart.value = config.auto_start
+    return config
+  }
+
   /** 轮询指标 */
   async function pollMetrics() {
     if (status.value !== 'running') return
@@ -212,5 +221,6 @@ export function useServer() {
     stopPolling,
     loadNetworkConfig,
     updateNetworkConfig,
+    resetNetworkConfig,
   }
 }

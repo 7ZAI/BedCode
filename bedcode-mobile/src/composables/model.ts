@@ -110,19 +110,11 @@ export interface TerminalIncrementalOutput {
 
 // ==================== Preset Task Types ====================
 
-/** 预设任务类型 */
-export type PresetTaskType = 'once' | 'template'
-
-/** 一次性任务状态 */
-export type OnceTaskStatus = 'pending' | 'running' | 'completed' | 'failed'
-
 /** 预设任务 */
 export interface PresetTask {
   id: string
   title: string
   content: string
-  type: PresetTaskType
-  status: OnceTaskStatus | null
   createdAt: string
   updatedAt: string
 }

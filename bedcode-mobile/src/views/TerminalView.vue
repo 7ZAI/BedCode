@@ -3,7 +3,7 @@
     class="terminal-view"
     :style="terminalViewStyle"
   >
-    <!-- Loading Overlay: 终端初始化期间显示 -->
+    <!-- Loading Overlay -->
     <transition name="loading-fade">
       <div v-if="!isTerminalReady" class="loading-overlay">
         <div class="loading-spinner"></div>
@@ -11,257 +11,116 @@
       </div>
     </transition>
 
-    <!-- Header -->
-    <header class="header">
-      <button class="back-btn" @click="handleBack">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-      <!-- <div class="status-area">
-        <div class="status-dot" :class="statusClass"></div>
-        <span class="status-text">{{ statusText }}</span>
-      </div> -->
-      <div class="header-title-area">
-        <h1 class="header-title">{{ sessionName }}</h1>
-      </div>
-      <!-- 常驻工具按钮：根据配置决定哪些按钮直接显示 -->
-      <template v-for="item in visibleToolbarItems" :key="item.key">
-        <button v-if="item.key === 'task'" class="task-btn" @click="showTaskPicker = true" :title="t('mobile.terminal.pendingTasks')">
-          <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
-            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/>
-          </svg>
-        </button>
-        <button v-else-if="item.key === 'shortcut'" class="tool-btn" @click="showShortcutConfig = true" :title="t('mobile.shortcutConfig.title')">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12" />
-          </svg>
-        </button>
-        <button v-else-if="item.key === 'clear'" class="tool-btn" @click="confirmClear" :title="t('mobile.terminal.clearScreen')">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-        </button>
-        <button v-else-if="item.key === 'refresh'" class="tool-btn" @click="refreshTerminal" :title="t('mobile.terminal.refreshFormat')">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-        </button>
-        <button v-else-if="item.key === 'settings'" class="tool-btn" @click="openSettings" :title="t('mobile.terminal.settings')">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
-        <button v-else-if="item.key === 'folder'" class="folder-btn" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar" :title="t('mobile.terminal.files')">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-          </svg>
-        </button>
-      </template>
-      <!-- 溢出菜单按钮：仅当有非常驻工具时显示 -->
-      <div v-if="overflowToolbarItems.length > 0" class="overflow-menu-wrapper">
-        <button class="overflow-btn" :class="{ active: showOverflowMenu }" @click.stop="showOverflowMenu = !showOverflowMenu" :title="t('mobile.terminal.moreTools')">
-          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
-          </svg>
-        </button>
-        <transition name="overflow-menu">
-          <div v-if="showOverflowMenu" class="overflow-menu" @click.stop>
-            <button v-if="isOverflowItem('task')" class="overflow-menu-item" @click="showTaskPicker = true; closeOverflowMenu()">
-              <svg viewBox="0 0 24 24" class="w-[18px] h-[18px]" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM17.99 9l-1.41-1.42-6.59 6.59-2.58-2.57-1.42 1.41 4 3.99z"/></svg>
-              <span>{{ t('mobile.terminal.pendingTasks') }}</span>
-            </button>
-            <button v-if="isOverflowItem('shortcut')" class="overflow-menu-item" @click="showShortcutConfig = true; closeOverflowMenu()">
-              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12"/></svg>
-              <span>{{ t('mobile.shortcutConfig.title') }}</span>
-            </button>
-            <button v-if="isOverflowItem('clear')" class="overflow-menu-item" @click="confirmClear()">
-              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-              <span>{{ t('mobile.terminal.clearScreen') }}</span>
-            </button>
-            <button v-if="isOverflowItem('refresh')" class="overflow-menu-item" @click="refreshTerminal()">
-              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-              <span>{{ t('mobile.terminal.refreshFormat') }}</span>
-            </button>
-            <button v-if="isOverflowItem('settings')" class="overflow-menu-item" @click="openSettings()">
-              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-              <span>{{ t('mobile.terminal.settings') }}</span>
-            </button>
-            <button v-if="isOverflowItem('folder')" class="overflow-menu-item" :class="{ active: showSidebar }" @click="showSidebar = !showSidebar">
-              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-              <span>{{ t('mobile.terminal.files') }}</span>
-            </button>
-          </div>
-        </transition>
-      </div>
-      <!-- 点击溢出菜单外部关闭 -->
-      <div v-if="showOverflowMenu" class="overflow-backdrop" @click="closeOverflowMenu"></div>
-    </header>
-
-    <!-- Main Content: Terminal + Sidebar overlay -->
-    <div class="main-content">
-      <div class="terminal-output-area">
-        <!-- 触摸滚动容器：接管触摸事件驱动终端滚动 -->
-        <!-- selection-mode 类切换：长按进入选择模式，允许 xterm 原生文本选择 -->
-        <div
-          ref="scrollContainer"
-          class="terminal-scroll-container"
-          :class="{ 'selection-mode': isSelectionMode }"
-        >
-          <div
-            ref="xtermContainer"
-            class="xterm-container"
-            :style="xtermContainerStyle"
-          ></div>
-          <!-- 自定义滚动条指示器 -->
-          <div class="scrollbar-track">
-            <div
-              class="scrollbar-thumb"
-              :class="{ visible: scrollbarVisible }"
-              :style="scrollbarThumbStyle"
-            ></div>
-          </div>
-          <!-- 选择模式浮动操作栏 -->
-          <transition name="selection-bar">
-            <div v-if="isSelectionMode && hasSelection" class="selection-action-bar">
-              <button class="selection-action-btn" @click="copySelection">
-                {{ t('common.button.copy') }}
-              </button>
-              <button class="selection-action-btn" @click="selectAllText">
-                {{ t('mobile.terminal.selectAll') }}
-              </button>
-              <button class="selection-action-btn cancel" @click="exitSelectionMode">
-                {{ t('common.button.cancel') }}
-              </button>
-            </div>
-          </transition>
-        </div>
-      </div>
-
-      <!-- File Sidebar - 覆盖层，不影响终端宽高 -->
-      <!-- 始终挂载保持展开状态，通过 CSS 类切换实现滑入/滑出动画 -->
-      <FileSidebar
-        class="sidebar-overlay"
-        :class="{ 'sidebar-hidden': !showSidebar }"
-        :session-id="sessionId"
-        @long-press="handleLongPress"
-      />
-
-      <!-- 点击侧边栏外部关闭 -->
-      <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
-    </div>
-
-    <!-- Input Bar -->
-    <TerminalInputBar
-      :disabled="!isSessionActive"
-      :is-connected="isConnected"
-      :placeholder="inputPlaceholder"
-      :is-landscape="isLandscape"
-      @submit="handleInputSubmit"
-      @execute="handleInputExecute"
-      @special-key="handleSpecialKey"
-      @shortcuts-panel-toggle="handleShortcutsPanelToggle"
+    <!-- Header - 固定位置，不随键盘移动 -->
+    <TerminalHeader
+      :session-name="sessionName"
+      :is-selection-mode="isSelectionMode"
+      :visible-items="visibleToolbarItems"
+      :all-items="ALL_TOOLBAR_ITEMS"
+      :show-sidebar="showSidebar"
+      @back="handleBack"
+      @action="handleToolbarAction"
     />
 
-    <!-- Settings Modal -->
-    <div v-if="showSettings" class="settings-modal-overlay mobile-ui" @click.self="cancelSettings">
-      <div class="settings-modal" :style="settingsModalStyle">
-        <div class="settings-header">
-          <h2>{{ t('mobile.terminal.terminalSettings') }}</h2>
-          <button class="close-btn" @click.stop="cancelSettings">
-            <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <!-- 裁剪容器：限制上移区域不突破 Header 底部 -->
+    <div class="movable-clip">
+      <!-- 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移 -->
+      <div ref="movableAreaRef" class="movable-area" :style="movableAreaStyle">
+        <!-- Main Content: Terminal + Sidebar overlay -->
+        <div class="main-content">
+          <div class="terminal-output-area">
+            <div
+              ref="scrollContainer"
+              class="terminal-scroll-container"
+              :class="{ 'selection-mode': isSelectionMode }"
+            >
+              <div
+                ref="xtermContainer"
+                class="xterm-container"
+                :style="xtermContainerStyle"
+              ></div>
+              <div class="scrollbar-track">
+                <div
+                  class="scrollbar-thumb"
+                  :class="{ visible: scrollbarVisible }"
+                  :style="scrollbarThumbStyle"
+                ></div>
+              </div>
+              <transition name="selection-bar">
+                <div v-if="isSelectionMode && hasSelection && selectionTouchEnded" class="selection-action-bar" :style="selectionBarStyle">
+                  <button class="selection-action-btn" @click="copySelection">
+                    {{ t('common.button.copy') }}
+                  </button>
+                  <button class="selection-action-btn" @click="selectAllText">
+                    {{ t('mobile.terminal.selectAll') }}
+                  </button>
+                  <button class="selection-action-btn cancel" @click="exitSelectionMode">
+                    {{ t('common.button.cancel') }}
+                  </button>
+                </div>
+              </transition>
+            </div>
+          </div>
+
+          <FileSidebar
+            class="sidebar-overlay"
+            :class="{ 'sidebar-hidden': !showSidebar }"
+            :session-id="sessionId"
+            @long-press="handleLongPress"
+          />
+
+          <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
         </div>
 
-        <div class="settings-content">
-          <!-- Font Size -->
-          <div class="settings-section">
-            <label class="settings-label">{{ t('mobile.terminal.fontSize') }}</label>
-            <div class="font-size-control">
-              <button class="size-btn" @click.stop="tempFontSize--" :disabled="tempFontSize <= 10">-</button>
-              <span class="size-value">{{ tempFontSize }}px</span>
-              <button class="size-btn" @click.stop="tempFontSize++" :disabled="tempFontSize >= 24">+</button>
-            </div>
-          </div>
-
-          <!-- Theme -->
-          <div class="settings-section">
-            <label class="settings-label">{{ t('mobile.terminal.theme') }}</label>
-            <div class="theme-grid">
-              <button
-                v-for="(theme, name) in TERMINAL_THEMES"
-                :key="name"
-                class="theme-btn"
-                :class="{ active: tempTheme === name }"
-                @click.stop="tempTheme = name"
-              >
-                <span class="theme-preview" :style="getThemePreviewStyle(name)">Aa</span>
-                <span class="theme-name">{{ resolveThemeLabel(theme.label, t) }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Quick Bar Count -->
-          <div class="settings-section">
-            <label class="settings-label">{{ t('mobile.terminal.shortcutCount') }}</label>
-            <div class="font-size-control">
-              <button class="size-btn" @click.stop="tempQuickBarCount--" :disabled="tempQuickBarCount <= 3">-</button>
-              <span class="size-value">{{ tempQuickBarCount }}</span>
-              <button class="size-btn" @click.stop="tempQuickBarCount++" :disabled="tempQuickBarCount >= 10">+</button>
-            </div>
-          </div>
-
-          <!-- Header Toolbar Items -->
-          <div class="settings-section">
-            <label class="settings-label">{{ t('mobile.terminal.persistentToolbar') }}</label>
-            <p class="settings-hint">{{ t('mobile.terminal.persistentToolbar') }}</p>
-            <div class="toolbar-toggle-grid">
-              <button
-                v-for="item in ALL_TOOLBAR_ITEMS"
-                :key="item.key"
-                class="toolbar-toggle-btn"
-                :class="{ active: tempToolbarItems.includes(item.key) }"
-                @click.stop="toggleToolbarItem(item.key)"
-              >
-                <span>{{ item.label }}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Settings Footer -->
-        <div class="settings-footer">
-          <button class="settings-footer-btn cancel" @click.stop="cancelSettings">{{ t('common.button.cancel') }}</button>
-          <button class="settings-footer-btn confirm" @click.stop="confirmSettings">{{ t('common.button.confirm') }}</button>
-        </div>
+        <!-- Input Bar -->
+        <TerminalInputBar
+          :disabled="!isSessionActive"
+          :is-connected="isConnected"
+          :placeholder="inputPlaceholder"
+          :is-landscape="isLandscape"
+          @submit="handleInputSubmit"
+          @execute="handleInputExecute"
+          @special-key="handleSpecialKey"
+          @shortcuts-panel-toggle="handleShortcutsPanelToggle"
+        />
       </div>
     </div>
+
+    <!-- Settings Modal -->
+    <TerminalSettingsModal
+      :visible="showSettings"
+      :font-size="terminalSettings.fontSize"
+      :theme="terminalSettings.theme"
+      :is-theme-user-set="terminalSettings.isThemeUserSet"
+      :quick-bar-count="assistStore.settings.quickBarCount"
+      :toolbar-items="assistStore.settings.headerToolbarItems || ['folder']"
+      :all-toolbar-items="ALL_TOOLBAR_ITEMS"
+      :safe-area-style="settingsModalStyle"
+      @confirm="handleSettingsConfirm"
+      @cancel="showSettings = false"
+    />
 
     <!-- Clear Confirm Modal -->
-    <div v-if="showClearConfirm" class="confirm-modal-overlay mobile-ui" @click.self="showClearConfirm = false">
-      <div class="confirm-modal" :style="confirmModalStyle">
-        <p class="confirm-text">{{ t('mobile.terminal.clearScreen') }}?</p>
-        <div class="confirm-buttons">
-          <button class="confirm-btn cancel" @click.stop="showClearConfirm = false">{{ t('common.button.cancel') }}</button>
-          <button class="confirm-btn confirm" @click.stop="clearTerminal">{{ t('common.button.confirm') }}</button>
-        </div>
-      </div>
-    </div>
+    <TerminalConfirmModal
+      :visible="showClearConfirm"
+      :message="t('mobile.terminal.clearScreen') + '?'"
+      :safe-area-style="confirmModalStyle"
+      @confirm="clearTerminal"
+      @cancel="showClearConfirm = false"
+    />
   </div>
 
-  <!-- 任务选择弹窗 -->
+  <!-- Task Picker -->
   <TaskPickerModal
     v-if="showTaskPicker"
     :tasks="presetTasks"
     :session-id="sessionId"
-    @confirm="onTaskConfirm"
+    @send="onTaskSend"
+    @execute="onTaskExecute"
     @close="showTaskPicker = false"
   />
 
-  <!-- 快捷键配置弹窗 -->
+  <!-- Shortcut Config -->
   <ShortcutConfigModal :visible="showShortcutConfig" @close="showShortcutConfig = false" />
 </template>
 
@@ -272,31 +131,35 @@
  */
 defineOptions({ name: 'TerminalView' })
 
-import { ref, reactive, computed, inject, type Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, inject, type Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
-import { useTerminalBuffer, type OutputPayload } from '@/composables/useTerminalBuffer'
+import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { wsResizeTerminal } from '@/composables/useMobileCommands'
 import { httpSendSessionInput } from '@/composables/useHttpApi'
 import { useOrientation } from '@/composables/useOrientation'
 import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
+import { useTerminalScroll } from '@/composables/useTerminalScroll'
+import TerminalHeader from '@/components/TerminalHeader.vue'
+import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
+import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
+import TerminalConfirmModal from '@/components/TerminalConfirmModal.vue'
 import TerminalInputBar from '@/components/TerminalInputBar.vue'
 import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import { useToast } from '@/composables/useToast'
 import { writeClipboardText } from '@/utils/clipboard'
-import { usePresetTasks } from '@/composables/usePresetTasks'
-import { executeTask } from '@/composables/usePresetTasks'
-import { TERMINAL_THEMES, resolveThemeLabel } from '@/config/terminalThemes'
+import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
+import { TERMINAL_THEMES } from '@/config/terminalThemes'
 import type { PresetTask } from '@/composables/model'
 
 // ==================== Props & Route ====================
@@ -308,135 +171,52 @@ const connection = useMobileConnection()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
-const { store: bufferStore, writeBufferHistoryToTerminal, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleReconnect, handleSessionStopped } = useTerminalBuffer()
+const { writeBufferHistoryToTerminal, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleSessionStopped } = useTerminalBuffer()
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
+
+// 安全区域从 App.vue inject
+const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
+const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>('keyboardInfo')!
 
 // ==================== Task Picker ====================
 
 const { tasks: presetTasks } = usePresetTasks()
 const showTaskPicker = ref(false)
-const showOverflowMenu = ref(false)
 
 // ==================== Header Toolbar Config ====================
 
-/** 所有可用的 Header 工具项定义 */
-const ALL_TOOLBAR_ITEMS = [
-  { key: 'task', label: computed(() => t('mobile.terminal.pendingTasks')), icon: 'task' },
-  { key: 'shortcut', label: computed(() => t('mobile.shortcutConfig.title')), icon: 'shortcut' },
-  { key: 'clear', label: computed(() => t('mobile.terminal.clearScreen')), icon: 'clear' },
-  { key: 'refresh', label: computed(() => t('mobile.terminal.refreshFormat')), icon: 'refresh' },
-  { key: 'settings', label: computed(() => t('mobile.terminal.settings')), icon: 'settings' },
-  { key: 'folder', label: computed(() => t('mobile.terminal.files')), icon: 'folder' },
-] as const
+const ALL_TOOLBAR_ITEMS: ToolbarItemConfig[] = [
+  { key: 'task', label: 'task', icon: 'task' },
+  { key: 'shortcut', label: 'shortcut', icon: 'shortcut' },
+  { key: 'clear', label: 'clear', icon: 'clear' },
+  { key: 'refresh', label: 'refresh', icon: 'refresh' },
+  { key: 'settings', label: 'settings', icon: 'settings' },
+  { key: 'folder', label: 'folder', icon: 'folder' },
+]
 
-/** 常驻显示的工具项（根据配置） */
 const visibleToolbarItems = computed(() => {
   const items = assistStore.settings.headerToolbarItems || ['folder']
   return ALL_TOOLBAR_ITEMS.filter(item => items.includes(item.key))
 })
 
-/** 收入溢出菜单的工具项 */
-const overflowToolbarItems = computed(() => {
-  const items = assistStore.settings.headerToolbarItems || ['folder']
-  return ALL_TOOLBAR_ITEMS.filter(item => !items.includes(item.key))
-})
-
-/** 判断某个工具项是否在溢出菜单中 */
-function isOverflowItem(key: string): boolean {
-  return overflowToolbarItems.value.some(item => item.key === key)
-}
-
-/** 关闭溢出菜单 */
-function closeOverflowMenu() {
-  showOverflowMenu.value = false
-}
-
-/** 切换工具栏常驻项（设置弹窗中使用） */
-function toggleToolbarItem(key: string) {
-  const idx = tempToolbarItems.value.indexOf(key)
-  if (idx >= 0) {
-    tempToolbarItems.value.splice(idx, 1)
-  } else {
-    tempToolbarItems.value.push(key)
-  }
-}
-
-/** 任务选择确认：逐个执行选中的任务 */
-async function onTaskConfirm(tasks: PresetTask[]) {
-  showTaskPicker.value = false
-  if (!isConnected.value || !isSessionActive.value) {
-    toast.error(t('mobile.connection.connectFailed'))
-    return
-  }
-  for (const task of tasks) {
-    try {
-      await executeTask(task, sessionId.value)
-    } catch {
-      toast.error(t('mobile.toolbox.sendFailed'))
-      break
-    }
-  }
-}
-
-// 安全区域从 App.vue inject，不独立初始化 useEdgeToEdge
-const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
-const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>('keyboardInfo')!
-
-
 // ==================== State ====================
-// 注意：使用 ref 确保每个组件实例有独立的状态
-// 在 <script setup> 中，顶层 let 声明的变量是模块级共享的
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
-// 终端是否准备就绪（初始化 + 订阅完成）
+const movableAreaRef = ref<HTMLDivElement | null>(null)
 const isTerminalReady = ref(false)
-// 终端实例 - 使用 ref 确保组件隔离
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
 const resizeObserverRef = ref<ResizeObserver | null>(null)
 
-// 伪滚动容器相关状态
-const isUserScrolling = ref(false)
-const currentLine = ref(0)
-const cellHeight = ref(0)
-// 滚动条可见状态：触摸滚动时显示，停止后淡出
-const scrollbarVisible = ref(false)
-// 触摸滚动状态（reactive 确保每个组件实例独立，避免 script setup 模块级共享）
-const touchState = reactive({
-  hideTimer: null as ReturnType<typeof setTimeout> | null,
-  inertiaRafId: 0,
-  startY: 0,
-  startLine: 0,
-  lastY: 0,
-  lastTime: 0,
-  velocity: 0,
-  // 亚像素累积：保留小数部分，避免 Math.round 丢失微小位移导致滚动不灵敏
-  fractionalLine: 0,
-})
-
-// 选择模式状态：长按进入，允许 xterm 原生文本选择和复制
-const isSelectionMode = ref(false)
-const hasSelection = ref(false)
-// 长按检测定时器和触摸起点
-const longPressTimer = ref<ReturnType<typeof setTimeout> | null>(null)
-const longPressStartPos = reactive({ x: 0, y: 0 })
-// 选择模式：拖拽选择的起始行号
-let selectionStartLine = 0
-let selectionStartCol = 0
-// 选择模式轮询：检测 xterm selection 变化
-let selectionPollRaf = 0
-
-// 设置相关状态
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
 const showShortcutConfig = ref(false)
+
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
-// isThemeUserSet = false 时跟随系统主题变化，true 时保持用户选择
-// 从 localStorage 持久化设置回显，而非硬编码默认值
 const terminalSettings = ref({
   fontSize: assistStore.settings.terminalFontSize,
   theme: assistStore.settings.terminalTheme
@@ -445,12 +225,6 @@ const terminalSettings = ref({
       : settingsStore.settings.ui.theme) as string,
   isThemeUserSet: assistStore.settings.isTerminalThemeUserSet,
 })
-
-// 临时设置（用于编辑中的状态）
-const tempFontSize = ref(terminalSettings.value.fontSize)
-const tempTheme = ref<string>(terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : 'system')
-const tempQuickBarCount = ref(assistStore.settings.quickBarCount)
-const tempToolbarItems = ref<string[]>([...(assistStore.settings.headerToolbarItems || ['folder'])])
 
 // 弹窗安全区域样式
 const settingsModalStyle = computed(() => ({
@@ -463,70 +237,30 @@ const confirmModalStyle = computed(() => ({
   paddingBottom: `${safeArea.value.bottom}px`,
 }))
 
-// ==================== Settings Functions ====================
+// ==================== Terminal Scroll ====================
 
-/// 获取主题预览样式：'system' 主题根据当前系统状态映射为 dark/light 的颜色
-function getThemePreviewStyle(themeName: string): { background: string; color: string } {
-  if (themeName === 'system') {
-    const resolved = isSystemDark.value ? 'dark' : 'light'
-    const t = TERMINAL_THEMES[resolved]
-    return { background: t.background, color: t.foreground }
-  }
-  const t = TERMINAL_THEMES[themeName]
-  return { background: t.background, color: t.foreground }
-}
-
-function openSettings() {
-  // 打开设置时，用当前设置初始化临时状态
-  tempFontSize.value = terminalSettings.value.fontSize
-  // 如果未手动指定主题，显示 'system'；否则显示实际主题名
-  tempTheme.value = terminalSettings.value.isThemeUserSet
-    ? terminalSettings.value.theme
-    : 'system'
-  tempQuickBarCount.value = assistStore.settings.quickBarCount
-  tempToolbarItems.value = [...(assistStore.settings.headerToolbarItems || ['folder'])]
-  showSettings.value = true
-}
-
-function cancelSettings() {
-  showSettings.value = false
-}
-
-function confirmSettings() {
-  // 确认时才应用设置
-  terminalSettings.value.fontSize = tempFontSize.value
-  // 'system' 解析为当前系统主题，并标记为非用户手动指定
-  if (tempTheme.value === 'system') {
-    terminalSettings.value.theme = isSystemDark.value ? 'dark' : 'light'
-    terminalSettings.value.isThemeUserSet = false
-  } else {
-    terminalSettings.value.theme = tempTheme.value
-    terminalSettings.value.isThemeUserSet = true
-  }
-  // 保存所有设置到 localStorage
-  assistStore.saveSettings({
-    quickBarCount: tempQuickBarCount.value,
-    headerToolbarItems: tempToolbarItems.value,
-    terminalFontSize: terminalSettings.value.fontSize,
-    terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
-    isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
-  })
-  applySettings()
-  showSettings.value = false
-}
-
-function applySettings() {
-  if (!terminalRef.value) return
-
-  const theme = TERMINAL_THEMES[terminalSettings.value.theme]
-
-  // 单独设置每个属性，避免覆盖整个 options 对象
-  terminalRef.value.options.theme = theme
-  terminalRef.value.options.fontSize = terminalSettings.value.fontSize
-
-  // 重新 fit 终端
-  setTimeout(() => fitTerminal(), 50)
-}
+const {
+  currentLine,
+  isSelectionMode,
+  hasSelection,
+  selectionTouchEnded,
+  scrollbarVisible,
+  scrollbarThumbStyle,
+  xtermContainerStyle,
+  isUserScrolling,
+  cellHeight,
+  scrollToBottom,
+  fitTerminal,
+  setupViewportScroll,
+  exitSelectionMode,
+  copySelection,
+  selectAllText,
+  handleShortcutsPanelToggle,
+  applySettings: applyScrollSettings,
+  dispose: disposeScroll,
+  longPressTriggerPos,
+  selectionViewportRange,
+} = useTerminalScroll(terminalRef, scrollContainer)
 
 // ==================== Computed ====================
 
@@ -539,29 +273,9 @@ const session = computed(() =>
   connection.activeSessions.value.find(s => s.id === sessionId.value)
 )
 
-const sessionName = computed(() => {
-  return session.value?.name || sessionId.value || t('desktop.terminal.title')
-})
+const sessionName = computed(() => session.value?.name || sessionId.value || t('desktop.terminal.title'))
 
-const sessionStatus = computed(() => {
-  return session.value?.status || 'stopped'
-})
-
-const isSessionActive = computed(() =>
-  sessionStatus.value === 'running'
-)
-
-const statusClass = computed(() => {
-  if (sessionStatus.value === 'running') return 'status-running'
-  if (sessionStatus.value === 'stopped') return 'status-stopped'
-  return 'status-unknown'
-})
-
-const statusText = computed(() => {
-  if (sessionStatus.value === 'running') return t('common.status.running')
-  if (sessionStatus.value === 'stopped') return t('common.status.stopped')
-  return t('common.status.unknown')
-})
+const isSessionActive = computed(() => (session.value?.status || 'stopped') === 'running')
 
 const inputPlaceholder = computed(() => {
   if (!isConnected.value) return t('mobile.input.disconnected') + '...'
@@ -569,43 +283,91 @@ const inputPlaceholder = computed(() => {
   return t('mobile.input.commandPlaceholder')
 })
 
-// 安全区域
 const safeAreaTop = computed(() => safeArea.value.top || 0)
 const keyboardHeight = computed(() => keyboardInfo.value.keyboardHeight || 0)
 
-// 快捷键面板偏移：面板展开且终端在底部时，xterm 向上偏移面板高度
-const shortcutsPanelHeight = ref(0)
+// terminal-view 只负责安全区域，不参与键盘避让动画
+const terminalViewStyle = computed(() => ({
+  paddingTop: `${safeAreaTop.value}px`,
+}))
 
-// 终端视图样式：顶部安全区 + 键盘避让
-// 底部安全区由 TerminalInputBar 的 paddingBottom 承担，这里只处理键盘避让
-// Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
-// paddingBottom 配合 CSS transition 实现平滑键盘避让动画
-const terminalViewStyle = computed(() => {
-  const bottomOffset = keyboardHeight.value
+// 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
+// 纯 transform 方案：GPU 合成不触发布局重排，无卡顿
+// xterm 容器尺寸不变，手动计算可见行数通知 PTY
+const movableAreaStyle = computed(() => ({
+  transform: keyboardHeight.value > 0 ? `translateY(-${keyboardHeight.value}px)` : 'translateY(0)',
+}))
+
+/** 选择操作栏定位：避让选区和屏幕边界 */
+const selectionBarStyle = computed(() => {
+  const BAR_MARGIN = 10
+  const EDGE_PADDING = 12
+
+  const container = scrollContainer.value
+  if (!container) return {}
+
+  const rect = container.getBoundingClientRect()
+  const estimatedBarWidth = 240
+  const estimatedBarHeight = 40
+
+  // 选区在容器内的像素范围（通过 viewport 行号 × 行高计算）
+  let selTop = 0
+  let selBottom = 0
+  if (cellHeight.value > 0) {
+    const topRow = Math.max(0, selectionViewportRange.topRow)
+    const bottomRow = Math.min(terminalRef.value?.rows ?? topRow, selectionViewportRange.bottomRow + 1)
+    selTop = topRow * cellHeight.value
+    selBottom = bottomRow * cellHeight.value
+  }
+
+  // 水平：以长按位置为中心，限制不超出容器
+  const relX = longPressTriggerPos.x - rect.left
+  let left = relX - estimatedBarWidth / 2
+  left = Math.max(EDGE_PADDING, Math.min(left, rect.width - estimatedBarWidth - EDGE_PADDING))
+
+  // 垂直：优先选区上方，空间不足则选区下方，都不行则就近边缘
+  let top: number
+  const aboveTop = selTop - estimatedBarHeight - BAR_MARGIN
+  const belowTop = selBottom + BAR_MARGIN
+
+  if (aboveTop >= EDGE_PADDING) {
+    top = aboveTop
+  } else if (belowTop + estimatedBarHeight <= rect.height - EDGE_PADDING) {
+    top = belowTop
+  } else if (selTop < rect.height / 2) {
+    // 选区偏上，操作栏放底部
+    top = rect.height - estimatedBarHeight - EDGE_PADDING
+  } else {
+    // 选区偏下，操作栏放顶部
+    top = EDGE_PADDING
+  }
+
   return {
-    paddingTop: `${safeAreaTop.value}px`,
-    paddingBottom: bottomOffset > 0 ? `${bottomOffset}px` : '0px',
+    top: `${top}px`,
+    left: `${left}px`,
   }
 })
 
-// xterm 容器偏移样式：快捷键面板展开时向上偏移，避免遮挡底部输出
-const xtermContainerStyle = computed(() => {
-  if (shortcutsPanelHeight.value <= 0) return {}
-  return {
-    transform: `translateY(-${shortcutsPanelHeight.value}px)`,
-    transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+// ==================== Watchers ====================
+
+// 键盘高度变化时的处理
+// transform 上移后，终端底部被键盘自然遮挡，无需手动 resize 行数
+// xterm 保持完整行数渲染，被遮挡部分用户看不到
+// 动画期间临时启用 will-change 保证流畅，动画结束后移除避免 xterm 重影
+watch(() => keyboardInfo.value.keyboardHeight, (newHeight) => {
+  // 临时启用 will-change 保证 transform 动画流畅
+  if (movableAreaRef.value) {
+    movableAreaRef.value.style.willChange = 'transform'
   }
+
+  // 动画结束后移除 will-change，避免 xterm 滚动重影
+  setTimeout(() => {
+    if (movableAreaRef.value) {
+      movableAreaRef.value.style.willChange = 'auto'
+    }
+  }, 300)
 })
 
-// 监听键盘变化，重新 fit 终端
-// 延迟 300ms 等待 CSS paddingBottom 过渡动画完成后再 resize
-// 过渡时长 250ms + 50ms 缓冲，避免动画期间重排导致卡顿
-watch(() => keyboardInfo.value.keyboardHeight, () => {
-  setTimeout(() => fitTerminal(), 300)
-})
-
-// 监听外观设置中的主题变化：用户未手动指定终端主题时，跟随外观设置
-// 外观设置可选 dark/light/system，终端主题映射为 dark/light
 watch(() => settingsStore.settings.ui.theme, (uiTheme) => {
   if (terminalSettings.value.isThemeUserSet) return
   const resolved = uiTheme === 'system'
@@ -613,24 +375,21 @@ watch(() => settingsStore.settings.ui.theme, (uiTheme) => {
     : uiTheme
   if (terminalSettings.value.theme !== resolved) {
     terminalSettings.value.theme = resolved as string
-    applySettings()
+    applyTerminalTheme()
   }
 })
 
-// 监听系统暗色模式变化：仅当外观设置为 system 时才响应
 watch(isSystemDark, () => {
   if (terminalSettings.value.isThemeUserSet) return
   if (settingsStore.settings.ui.theme !== 'system') return
   terminalSettings.value.theme = isSystemDark.value ? 'dark' : 'light'
-  applySettings()
+  applyTerminalTheme()
 })
 
 // ==================== Terminal Setup ====================
 
 async function initTerminal() {
-  if (!xtermContainer.value) {
-    return
-  }
+  if (!xtermContainer.value) return
 
   const theme = TERMINAL_THEMES[terminalSettings.value.theme]
   const term = new Terminal({
@@ -645,27 +404,24 @@ async function initTerminal() {
     convertEol: true,
     // 移动端禁用内置输入，避免弹出输入法
     disableStdin: true,
-    // 移动端滚动灵敏度，降低以获得更平滑的触摸滚动
+    // 移动端滚动灵敏度
     scrollSensitivity: 0.8,
   })
 
   terminalRef.value = term
   term.open(xtermContainer.value)
 
-  // Load addons
   const addon = new FitAddon()
   fitAddonRef.value = addon
   term.loadAddon(addon)
   term.loadAddon(new WebLinksAddon())
 
-  // WebGL renderer — 后台加载，不阻塞显示
+  // WebGL renderer — 后台加载
   try {
     const { WebglAddon } = await import('@xterm/addon-webgl')
     const webglAddon = new WebglAddon()
     term.loadAddon(webglAddon)
-    webglAddon.onContextLoss(() => {
-      // WebGL 上下文丢失不影响数据，切换回来时重建终端即可
-    })
+    webglAddon.onContextLoss(() => {})
   } catch {
     // WebGL 不可用时回退到 canvas 渲染器
   }
@@ -673,26 +429,22 @@ async function initTerminal() {
   // 从 buffer 写入历史数据
   writeBufferHistoryToTerminal(sessionId.value, term)
 
-  // 注册实时 handler — 新数据同时写 buffer（store 处理）和 xterm
+  // 注册实时 handler
   registerRealtimeHandler(sessionId.value, term)
 
-  // Fit terminal - delay to ensure container is rendered
   setTimeout(() => {
-    fitTerminal()
+    fitTerminal(fitAddonRef.value)
     setupViewportScroll()
   }, 100)
 
-  // Resize observer
   const observer = new ResizeObserver(() => {
-    requestAnimationFrame(fitTerminal)
+    requestAnimationFrame(() => fitTerminal(fitAddonRef.value))
   })
   resizeObserverRef.value = observer
   observer.observe(xtermContainer.value)
 
-  // Window resize
   window.addEventListener('resize', handleWindowResize)
 
-  // Terminal resize 事件：通知桌面端调整 PTY 大小
   term.onResize(({ cols, rows }) => {
     if (isConnected.value && isSessionActive.value && sessionId.value) {
       wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
@@ -702,17 +454,8 @@ async function initTerminal() {
   })
 }
 
-function fitTerminal() {
-  if (!fitAddonRef.value || !terminalRef.value) return
-  try {
-    fitAddonRef.value.fit()
-  } catch (e) {
-    console.warn('[TerminalView] fit failed:', e)
-  }
-}
-
 function handleWindowResize() {
-  setTimeout(fitTerminal, 100)
+  setTimeout(() => fitTerminal(fitAddonRef.value), 100)
 }
 
 function disposeTerminal() {
@@ -721,57 +464,32 @@ function disposeTerminal() {
     resizeObserverRef.value = null
   }
   window.removeEventListener('resize', handleWindowResize)
-  // 注销实时 handler
+
   if (sessionId.value) {
     unregisterRealtimeHandler(sessionId.value)
   }
+
+  disposeScroll()
+
   if (terminalRef.value) {
     terminalRef.value.dispose()
     terminalRef.value = null
     fitAddonRef.value = null
   }
   isTerminalReady.value = false
-  // 清理伪滚动容器状态
-  isUserScrolling.value = false
-  scrollbarVisible.value = false
-  if (touchState.hideTimer) {
-    clearTimeout(touchState.hideTimer)
-    touchState.hideTimer = null
-  }
-  if (touchState.inertiaRafId) {
-    cancelAnimationFrame(touchState.inertiaRafId)
-    touchState.inertiaRafId = 0
-  }
-  // 清理待处理的滚动 rAF
-  if (pendingScrollRaf) {
-    cancelAnimationFrame(pendingScrollRaf)
-    pendingScrollRaf = 0
-  }
-  pendingScrollLine = -1
-  // 清理触摸事件监听器
-  if (scrollContainer.value) {
-    scrollContainer.value.removeEventListener('touchstart', onTouchStart, { capture: true } as EventListenerOptions)
-    scrollContainer.value.removeEventListener('touchmove', onTouchMove, { capture: true } as EventListenerOptions)
-    scrollContainer.value.removeEventListener('touchend', onTouchEnd, { capture: true } as EventListenerOptions)
-  }
-  currentLine.value = 0
-  cellHeight.value = 0
-  // 清理选择模式
-  if (longPressTimer.value) {
-    clearTimeout(longPressTimer.value)
-    longPressTimer.value = null
-  }
-  isSelectionMode.value = false
-  hasSelection.value = false
-  stopSelectionPoll()
+}
+
+function applyTerminalTheme() {
+  if (!terminalRef.value) return
+  const theme = TERMINAL_THEMES[terminalSettings.value.theme]
+  terminalRef.value.options.theme = theme
+  fitTerminal(fitAddonRef.value)
 }
 
 // ==================== Input Handlers ====================
 
 function handleInputSubmit(text: string) {
   if (!terminalRef.value) return
-
-  // 通过 HTTP API 发送输入，绕过 WebSocket send_and_wait 阻塞
   if (isConnected.value && isSessionActive.value) {
     httpSendSessionInput(sessionId.value, text).then(result => {
       if (result.code !== 0) {
@@ -784,9 +502,7 @@ function handleInputSubmit(text: string) {
 
 async function handleInputExecute(text: string) {
   if (!terminalRef.value) return
-
   if (isConnected.value && isSessionActive.value) {
-    // 通过 HTTP API 发送文本 + enter，绕过 WebSocket 阻塞
     const result = await httpSendSessionInput(sessionId.value, text, 'enter')
     if (result.code !== 0) {
       console.error('[TerminalView] Send input failed:', result.message)
@@ -796,7 +512,6 @@ async function handleInputExecute(text: string) {
 }
 
 function handleSpecialKey(key: string) {
-  // 通过 HTTP API 发送特殊键
   if (isConnected.value && isSessionActive.value) {
     httpSendSessionInput(sessionId.value, '', key).then(result => {
       if (result.code !== 0) {
@@ -806,47 +521,57 @@ function handleSpecialKey(key: string) {
   }
 }
 
-// ==================== Shortcuts Panel ====================
+// ==================== Toolbar Actions ====================
 
-/** 快捷键面板展开/收起时，若终端在底部则向上偏移面板高度，避免遮挡最新输出 */
-function handleShortcutsPanelToggle(height: number) {
-  if (height > 0) {
-    // 仅当终端在底部时才偏移，否则用户已向上滚动，面板不会遮挡关注区域
-    if (isScrolledToBottom()) {
-      shortcutsPanelHeight.value = height
-    }
-  } else {
-    shortcutsPanelHeight.value = 0
+function handleToolbarAction(key: string) {
+  switch (key) {
+    case 'task': showTaskPicker.value = true; break
+    case 'shortcut': showShortcutConfig.value = true; break
+    case 'clear': showClearConfirm.value = true; break
+    case 'refresh': refreshTerminal(); break
+    case 'settings': showSettings.value = true; break
+    case 'folder': showSidebar.value = !showSidebar.value; break
   }
+}
+
+// ==================== Settings ====================
+
+function handleSettingsConfirm(settings: TerminalSettings) {
+  terminalSettings.value.fontSize = settings.fontSize
+  terminalSettings.value.theme = settings.theme
+  terminalSettings.value.isThemeUserSet = settings.isThemeUserSet
+
+  assistStore.saveSettings({
+    quickBarCount: settings.quickBarCount,
+    headerToolbarItems: settings.toolbarItems,
+    terminalFontSize: terminalSettings.value.fontSize,
+    terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
+    isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
+  })
+
+  applyTerminalTheme()
+  applyScrollSettings(settings.theme, settings.fontSize, fitAddonRef.value)
+  showSettings.value = false
 }
 
 // ==================== Clear Terminal ====================
 
-function confirmClear() {
-  showClearConfirm.value = true
-}
-
-async function clearTerminal() {
+function clearTerminal() {
   if (!terminalRef.value) return
-
   terminalRef.value.clear()
-  // 清屏后重置滚动状态
   currentLine.value = 0
   isUserScrolling.value = false
   showClearConfirm.value = false
 }
 
-// ==================== Refresh Terminal Format ====================
+// ==================== Refresh Terminal ====================
 
 function refreshTerminal() {
-  // 刷新格式：重新 fit 终端尺寸并同步到桌面端，不清除内容
   if (!fitAddonRef.value || !terminalRef.value) return
-
-  const currentSessionId = sessionId.value
 
   fitAddonRef.value.fit()
   if (isConnected.value && isSessionActive.value) {
-    wsResizeTerminal(currentSessionId, terminalRef.value.cols, terminalRef.value.rows).then(() => {
+    wsResizeTerminal(sessionId.value, terminalRef.value.cols, terminalRef.value.rows).then(() => {
       toast.success(t('mobile.terminal.refreshed'))
     }).catch((e: Error) => {
       console.warn('[TerminalView] Refresh resize failed:', e)
@@ -857,7 +582,7 @@ function refreshTerminal() {
   }
 }
 
-// ==================== Long Press Copy Path ====================
+// ==================== Misc Handlers ====================
 
 async function handleLongPress(name: string, path: string) {
   try {
@@ -868,523 +593,32 @@ async function handleLongPress(name: string, path: string) {
   }
 }
 
-// ==================== Navigation ====================
-
 function handleBack() {
   router.back()
 }
 
-// ==================== Terminal Viewport Scroll Setup ====================
-
-/// 计算单行高度（从 xterm DOM 元素获取）
-function computeCellHeight(): number {
-  if (!terminalRef.value?.element) return 0
-  // 最可靠的方式：viewport 高度 / 可见行数
-  const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport && terminalRef.value.rows > 0) {
-    return viewport.clientHeight / terminalRef.value.rows
-  }
-  return 0
-}
-
-/// 判断是否滚动到底部
-function isScrolledToBottom(): boolean {
-  if (!scrollContainer.value || !terminalRef.value) return true
-  const maxLine = terminalRef.value.buffer.active.length - terminalRef.value.rows
-  // 允许 2 行容差
-  return currentLine.value >= maxLine - 2
-}
-
-/// 滚动到底部（新输出触发，立即执行不走 rAF 节流）
-function scrollToBottom() {
-  if (!terminalRef.value) return
-
-  const bufferLength = terminalRef.value.buffer.active.length
-  const rows = terminalRef.value.rows
-  const targetLine = Math.max(0, bufferLength - rows)
-
-  // 取消待处理的节流 rAF，直接执行
-  if (pendingScrollRaf) {
-    cancelAnimationFrame(pendingScrollRaf)
-    pendingScrollRaf = 0
-  }
-  pendingScrollLine = -1
-
-  currentLine.value = targetLine
-  terminalRef.value.scrollToLine(targetLine)
-  isUserScrolling.value = false
-}
-
-/// 同步滚动位置到 xterm viewport
-/// 使用 rAF 节流：快速连续调用（惯性滚动）时合并为每帧一次 scrollToLine，避免 WebGL 渲染器跟不上
-let pendingScrollRaf = 0
-let pendingScrollLine = -1
-
-function syncViewportToLine(line: number) {
-  if (!terminalRef.value) return
-
-  const bufferLength = terminalRef.value.buffer.active.length
-  const rows = terminalRef.value.rows
-  const maxLine = Math.max(0, bufferLength - rows)
-
-  // 限制范围
-  const clampedLine = Math.max(0, Math.min(line, maxLine))
-  currentLine.value = clampedLine
-  pendingScrollLine = clampedLine
-
-  // 如果没有待处理的 rAF，立即调度一帧
-  if (!pendingScrollRaf) {
-    pendingScrollRaf = requestAnimationFrame(() => {
-      pendingScrollRaf = 0
-      if (terminalRef.value && pendingScrollLine >= 0) {
-        terminalRef.value.scrollToLine(pendingScrollLine)
-        pendingScrollLine = -1
-      }
-    })
-  }
-
-  // 显示滚动条
-  showScrollbar()
-}
-
-/// 显示滚动条，并在停止滚动后自动淡出
-function showScrollbar() {
-  scrollbarVisible.value = true
-  if (touchState.hideTimer) {
-    clearTimeout(touchState.hideTimer)
-  }
-  touchState.hideTimer = setTimeout(() => {
-    scrollbarVisible.value = false
-  }, 1200)
-}
-
-/// 滚动条 thumb 样式：根据 currentLine / bufferLength 计算位置和高度
-const scrollbarThumbStyle = computed(() => {
-  if (!terminalRef.value) return { top: '0%', height: '0%' }
-
-  const bufferLength = terminalRef.value.buffer.active.length
-  const rows = terminalRef.value.rows
-  if (bufferLength <= 0 || rows <= 0) return { top: '0%', height: '100%' }
-
-  const scrollableLines = bufferLength - rows
-  if (scrollableLines <= 0) return { top: '0%', height: '100%' }
-
-  // thumb 高度 = 可见行 / 总行数（最小 20px 对应的百分比，最大 80%）
-  const thumbRatio = rows / bufferLength
-  const thumbHeight = Math.max(0.08, Math.min(0.8, thumbRatio))
-
-  // thumb 位置 = 当前行 / 可滚动行数 × 可滚动区域
-  const scrollRatio = currentLine.value / scrollableLines
-  const top = scrollRatio * (1 - thumbHeight)
-
-  return {
-    top: `${(top * 100).toFixed(1)}%`,
-    height: `${(thumbHeight * 100).toFixed(1)}%`,
-  }
-})
-
-// ==================== Touch Scroll Handler ====================
-
-function onTouchStart(e: TouchEvent) {
-  // 选择模式下：记录触摸起点，用于拖拽扩展选择
-  if (isSelectionMode.value) {
-    const touch = e.touches[0]
-    longPressStartPos.x = touch.clientX
-    longPressStartPos.y = touch.clientY
-
-    // 计算触摸位置对应的 buffer 行列
-    if (terminalRef.value?.element && cellHeight.value > 0) {
-      const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
-      if (screen) {
-        const rect = screen.getBoundingClientRect()
-        const relY = touch.clientY - rect.top
-        const relX = touch.clientX - rect.left
-        const visibleRow = Math.max(0, Math.min(Math.floor(relY / cellHeight.value), terminalRef.value.rows - 1))
-        const cellWidth = terminalRef.value.cols > 0 ? rect.width / terminalRef.value.cols : 8
-        const col = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
-        const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
-        // 更新选择起点，用户拖拽时从新起点开始选择
-        selectionStartLine = bufferLine
-        selectionStartCol = col
-      }
-    }
+async function onTaskSend(task: PresetTask) {
+  if (!isConnected.value || !isSessionActive.value) {
+    toast.error(t('mobile.connection.connectFailed'))
     return
   }
-
-  // 取消惯性滚动
-  if (touchState.inertiaRafId) {
-    cancelAnimationFrame(touchState.inertiaRafId)
-    touchState.inertiaRafId = 0
-  }
-
-  const touch = e.touches[0]
-  touchState.startY = touch.clientY
-  touchState.startLine = currentLine.value
-  touchState.lastY = touch.clientY
-  touchState.lastTime = Date.now()
-  touchState.velocity = 0
-  touchState.fractionalLine = 0
-
-  // 启用 GPU 合成层提示，减少滚动时的重绘延迟
-  enableGpuHint()
-
-  // 长按检测：记录起点，启动定时器
-  longPressStartPos.x = touch.clientX
-  longPressStartPos.y = touch.clientY
-  if (longPressTimer.value) clearTimeout(longPressTimer.value)
-  longPressTimer.value = setTimeout(() => {
-    longPressTimer.value = null
-    enterSelectionMode()
-  }, LONG_PRESS_DURATION)
-}
-
-function onTouchMove(e: TouchEvent) {
-  // 选择模式下扩展选择范围
-  if (isSelectionMode.value) {
-    extendSelectionToTouch(e.touches[0])
-    return
-  }
-
-  // 长按检测：移动超过阈值则取消
-  if (longPressTimer.value) {
-    const touch = e.touches[0]
-    const dx = Math.abs(touch.clientX - longPressStartPos.x)
-    const dy = Math.abs(touch.clientY - longPressStartPos.y)
-    if (dx > LONG_PRESS_MOVE_THRESHOLD || dy > LONG_PRESS_MOVE_THRESHOLD) {
-      clearTimeout(longPressTimer.value)
-      longPressTimer.value = null
-    }
-  }
-
-  if (!terminalRef.value || cellHeight.value <= 0) return
-
-  const touch = e.touches[0]
-  const deltaY = touch.clientY - touchState.lastY
-  const deltaTime = Date.now() - touchState.lastTime
-
-  // 计算瞬时速度（像素/毫秒）
-  if (deltaTime > 0) {
-    touchState.velocity = deltaY / deltaTime
-  }
-
-  touchState.lastY = touch.clientY
-  touchState.lastTime = Date.now()
-
-  // 将像素距离转换为行数（保留小数，累积小数部分）
-  const rawLines = -deltaY / cellHeight.value
-  const totalLines = rawLines + touchState.fractionalLine
-  const linesDelta = Math.trunc(totalLines)
-
-  if (linesDelta === 0) {
-    // 保留累积的小数部分，下次 move 时继续累积
-    touchState.fractionalLine = totalLines
-    return
-  }
-
-  // 消耗整数行后，保留剩余小数
-  touchState.fractionalLine = totalLines - linesDelta
-
-  const newLine = currentLine.value + linesDelta
-
-  // 标记用户正在滚动
-  isUserScrolling.value = true
-
-  syncViewportToLine(newLine)
-}
-
-function onTouchEnd() {
-  // 取消长按定时器（短按未达到长按阈值）
-  if (longPressTimer.value) {
-    clearTimeout(longPressTimer.value)
-    longPressTimer.value = null
-  }
-
-  // 选择模式下：不处理惯性滚动
-  if (isSelectionMode.value) {
-    // 如果没有选中文本（短按空白区域），退出选择模式
-    if (!terminalRef.value?.hasSelection()) {
-      exitSelectionMode()
-    }
-    return
-  }
-
-  if (!terminalRef.value || cellHeight.value <= 0) {
-    disableGpuHint()
-    return
-  }
-
-  // 启动惯性滚动（内部会在结束时调用 disableGpuHint）
-  startInertia()
-}
-
-/// 启用 GPU 合成层提示：在触摸滚动期间，提示浏览器将 xterm 渲染层提升为独立合成层
-/// 减少滚动时的重绘延迟，避免 WebGL 双缓冲不同步导致的重影
-function enableGpuHint() {
-  if (!terminalRef.value?.element) return
-  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
-  if (screen) {
-    screen.style.willChange = 'transform'
-  }
-}
-
-/// 禁用 GPU 合成层提示：滚动结束后移除，释放 GPU 内存
-function disableGpuHint() {
-  if (!terminalRef.value?.element) return
-  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
-  if (screen) {
-    screen.style.willChange = 'auto'
-  }
-}
-
-/// 惯性滚动：根据松手时的速度逐帧减速
-function startInertia() {
-  // 速度阈值：太慢则不启动惯性
-  if (Math.abs(touchState.velocity) < 0.02) {
-    // 惯性结束，检查是否在底部
-    if (isScrolledToBottom()) {
-      isUserScrolling.value = false
-    }
-    disableGpuHint()
-    return
-  }
-
-  const friction = 0.95 // 摩擦系数，值越大惯性持续越久
-
-  function step() {
-    if (!terminalRef.value || cellHeight.value <= 0) {
-      touchState.inertiaRafId = 0
-      disableGpuHint()
-      return
-    }
-
-    touchState.velocity *= friction
-    // 速度衰减到阈值以下时停止
-    if (Math.abs(touchState.velocity) < 0.005) {
-      touchState.inertiaRafId = 0
-      touchState.fractionalLine = 0
-      if (isScrolledToBottom()) {
-        isUserScrolling.value = false
-      }
-      disableGpuHint()
-      return
-    }
-
-    // 速度单位是 像素/毫秒，每帧约 16ms
-    const pixelsPerFrame = touchState.velocity * 16
-    const rawLines = -pixelsPerFrame / cellHeight.value
-    const totalLines = rawLines + touchState.fractionalLine
-    const linesPerFrame = Math.trunc(totalLines)
-
-    if (linesPerFrame !== 0) {
-      touchState.fractionalLine = totalLines - linesPerFrame
-      syncViewportToLine(currentLine.value + linesPerFrame)
-    } else {
-      touchState.fractionalLine = totalLines
-    }
-
-    touchState.inertiaRafId = requestAnimationFrame(step)
-  }
-
-  touchState.inertiaRafId = requestAnimationFrame(step)
-}
-
-/// 配置触摸滚动：禁用 xterm-viewport 原生滚动，初始化行高
-function setupViewportScroll() {
-  if (!terminalRef.value?.element) return
-
-  // 禁用 xterm-viewport 的原生滚动
-  const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.style.overflowY = 'hidden'
-    viewport.style.touchAction = 'none'
-    viewport.style.pointerEvents = 'none'
-  }
-
-  // 计算行高
-  cellHeight.value = computeCellHeight()
-
-  // 在滚动容器上用捕获阶段监听触摸事件，确保即使 xterm 内部 stopPropagation 也能接收到
-  if (scrollContainer.value) {
-    scrollContainer.value.addEventListener('touchstart', onTouchStart, { passive: true, capture: true })
-    scrollContainer.value.addEventListener('touchmove', onTouchMove, { passive: true, capture: true })
-    scrollContainer.value.addEventListener('touchend', onTouchEnd, { capture: true })
-  }
-
-  // 监听新行输出
-  terminalRef.value.onLineFeed(() => {
-    // 用户未手动向上滚动时，自动滚到底部
-    if (!isUserScrolling.value) {
-      nextTick(() => scrollToBottom())
-    }
-  })
-
-  // 监听 xterm 内部滚动事件，同步 currentLine
-  // 当 scrollToLine / scrollToBottom 被调用时，xterm 会触发 onScroll
-  terminalRef.value.onScroll((viewportY: number) => {
-    currentLine.value = viewportY
-  })
-
-  // 监听 resize，更新行高
-  terminalRef.value.onResize(() => {
-    cellHeight.value = computeCellHeight()
-  })
-
-  // 初始滚到底部
-  nextTick(() => scrollToBottom())
-}
-
-// ==================== Long Press Selection Mode ====================
-
-/// 长按阈值（毫秒）：超过此时间未松手且未大幅移动，进入选择模式
-const LONG_PRESS_DURATION = 500
-/// 长按移动容差（像素）：移动超过此距离视为滚动，取消长按检测
-const LONG_PRESS_MOVE_THRESHOLD = 10
-
-/// 进入选择模式：启用 xterm 原生文本选择，禁用触摸滚动
-function enterSelectionMode() {
-  isSelectionMode.value = true
-  hasSelection.value = false
-
-  // 根据长按坐标选中对应行，让用户立即看到选中效果
-  selectLineAtTouchPos(longPressStartPos.x, longPressStartPos.y)
-
-  // 轮询检测 selection 变化（xterm 没有提供 selection change 事件）
-  startSelectionPoll()
-}
-
-/// 根据触摸坐标选中对应行
-function selectLineAtTouchPos(clientX: number, clientY: number) {
-  if (!terminalRef.value?.element || cellHeight.value <= 0) return
-
-  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
-  if (!screen) return
-
-  const rect = screen.getBoundingClientRect()
-  const relY = clientY - rect.top
-  const relX = clientX - rect.left
-
-  // 计算可见行号（0-based，相对于 viewport）
-  const visibleRow = Math.max(0, Math.min(Math.floor(relY / cellHeight.value), terminalRef.value.rows - 1))
-  // 计算列号
-  const cellWidth = terminalRef.value.cols > 0 ? rect.width / terminalRef.value.cols : 8
-  const col = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
-
-  // 转换为 buffer 绝对行号
-  const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
-  const lineData = terminalRef.value.buffer.active.getLine(bufferLine)
-  const lineLength = lineData?.length ?? 0
-
-  // 记录选择起点
-  selectionStartLine = bufferLine
-  selectionStartCol = col
-
-  // 选中整行有效内容
-  const endCol = lineLength > 0 ? lineLength - 1 : 0
-  terminalRef.value.select(0, bufferLine, endCol + 1)
-  hasSelection.value = true
-}
-
-/// 选择模式下：根据触摸位置扩展选择范围
-function extendSelectionToTouch(touch: Touch) {
-  if (!terminalRef.value?.element || cellHeight.value <= 0) return
-
-  const screen = terminalRef.value.element.querySelector('.xterm-screen') as HTMLElement
-  if (!screen) return
-
-  const rect = screen.getBoundingClientRect()
-  const relY = touch.clientY - rect.top
-  const relX = touch.clientX - rect.left
-
-  const visibleRow = Math.max(0, Math.min(Math.floor(relY / cellHeight.value), terminalRef.value.rows - 1))
-  const cellWidth = terminalRef.value.cols > 0 ? rect.width / terminalRef.value.cols : 8
-  const endCol = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
-
-  const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
-
-  // 从起点到当前点构建选区
-  const startLine = selectionStartLine
-  const startCol = selectionStartCol
-
-  if (startLine === bufferLine) {
-    // 同一行：列级选择
-    const left = Math.min(startCol, endCol)
-    const right = Math.max(startCol, endCol)
-    terminalRef.value.select(left, startLine, right - left + 1)
-  } else if (bufferLine > startLine) {
-    // 向下选择：从起点行到当前行
-    const startLineLength = terminalRef.value.buffer.active.getLine(startLine)?.length ?? 0
-    const colSpan = startLineLength - startCol
-    let totalSpan = colSpan
-    for (let i = startLine + 1; i < bufferLine; i++) {
-      totalSpan += terminalRef.value.buffer.active.getLine(i)?.length ?? 0
-    }
-    totalSpan += endCol + 1
-    terminalRef.value.select(startCol, startLine, totalSpan)
-  } else {
-    // 向上选择：从当前行到起点行
-    const endLineLength = terminalRef.value.buffer.active.getLine(bufferLine)?.length ?? 0
-    const colSpan = endLineLength - endCol
-    let totalSpan = colSpan
-    for (let i = bufferLine + 1; i < startLine; i++) {
-      totalSpan += terminalRef.value.buffer.active.getLine(i)?.length ?? 0
-    }
-    totalSpan += startCol + 1
-    terminalRef.value.select(endCol, bufferLine, totalSpan)
-  }
-
-  hasSelection.value = true
-}
-
-/// 退出选择模式：恢复触摸滚动，清除选择
-function exitSelectionMode() {
-  isSelectionMode.value = false
-  hasSelection.value = false
-
-  // 清除 xterm 选择
-  if (terminalRef.value) {
-    terminalRef.value.clearSelection()
-  }
-
-  stopSelectionPoll()
-}
-
-/// 轮询检测 xterm selection 状态
-function startSelectionPoll() {
-  stopSelectionPoll()
-  function poll() {
-    if (!isSelectionMode.value) return
-    hasSelection.value = terminalRef.value?.hasSelection() ?? false
-    selectionPollRaf = requestAnimationFrame(poll)
-  }
-  selectionPollRaf = requestAnimationFrame(poll)
-}
-
-function stopSelectionPoll() {
-  if (selectionPollRaf) {
-    cancelAnimationFrame(selectionPollRaf)
-    selectionPollRaf = 0
-  }
-}
-
-/// 复制当前选中文本到剪贴板
-async function copySelection() {
-  const text = terminalRef.value?.getSelection()
-  if (!text) return
-
   try {
-    await writeClipboardText(text)
-    toast.success(t('mobile.terminal.copied'))
+    await sendTask(task, sessionId.value)
   } catch {
-    toast.error(t('mobile.terminal.copyFailed'))
+    toast.error(t('mobile.toolbox.sendFailed'))
   }
-  exitSelectionMode()
 }
 
-/// 全选终端内容
-function selectAllText() {
-  if (!terminalRef.value) return
-  terminalRef.value.selectAll()
-  hasSelection.value = true
+async function onTaskExecute(task: PresetTask) {
+  if (!isConnected.value || !isSessionActive.value) {
+    toast.error(t('mobile.connection.connectFailed'))
+    return
+  }
+  try {
+    await executeTask(task, sessionId.value)
+  } catch {
+    toast.error(t('mobile.toolbox.sendFailed'))
+  }
 }
 
 // ==================== Lifecycle ====================
@@ -1393,7 +627,6 @@ onMounted(async () => {
   await nextTick()
   initTerminal()
 
-  // 订阅后端（如果未订阅）
   if (isSessionActive.value && isConnected.value) {
     await subscribeSession(sessionId.value)
   }
@@ -1402,848 +635,28 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
-  // 注销实时 handler + 释放终端
   disposeTerminal()
 
-  // 如果会话已停止，取消后端订阅
   if (!isSessionActive.value) {
     await unsubscribeSession(sessionId.value)
   }
 })
 
-// Watch session status changes
 watch(isSessionActive, async (active, prevActive) => {
   if (!sessionId.value) return
-
   if (active && !prevActive) {
-    // Session became active — subscribe backend
     await subscribeSession(sessionId.value)
   } else if (!active && prevActive) {
-    // Session stopped — mark buffer + unsubscribe
     await handleSessionStopped(sessionId.value)
   }
 })
 
-// Watch connection status changes
 watch(isConnected, async (connected) => {
   if (!sessionId.value) return
-
   if (!connected) {
     handleDisconnect()
   } else if (connected && isSessionActive.value) {
-    // Connection restored — resubscribe active session
     await subscribeSession(sessionId.value)
   }
 })
 </script>
-
-<style scoped>
-.terminal-view {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: var(--mobile-terminal-bg);
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1;
-  overflow: hidden;
-  /* padding 由 JS 动态设置（安全区域 + 键盘高度），添加过渡保证平滑避让
-   * 与 TerminalInputBar 的 paddingBottom 过渡和快捷键面板 translateY 动画保持一致
-   * 使用 cubic-bezier(0.4, 0, 0.2, 1)（Material ease-out）曲线 */
-  transition: padding 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Loading Overlay */
-.loading-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: var(--mobile-terminal-bg);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-}
-
-.loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--mobile-border);
-  border-top-color: var(--mobile-accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.loading-text {
-  font-size: 0.875rem;
-  color: var(--mobile-text-muted);
-  margin: 0;
-}
-
-/* Loading fade transition */
-.loading-fade-enter-active,
-.loading-fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-
-.loading-fade-enter-from,
-.loading-fade-leave-to {
-  opacity: 0;
-}
-
-/* Header */
-.header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: var(--mobile-terminal-header);
-  backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--mobile-border);
-  flex-shrink: 0;
-  position: relative;
-  z-index: 25;
-}
-
-.back-btn {
-  padding: 0.5rem;
-  margin-left: -0.5rem;
-  color: var(--mobile-text-secondary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  transition: color 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.back-btn:hover {
-  color: var(--accent, #00d4ff);
-}
-
-.header-title-area {
-  flex: 1;
-  min-width: 0;
-}
-
-.header-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--mobile-text-primary);
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.status-area {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  font-size: 0.75rem;
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.status-running {
-  background: var(--success, #10b981);
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
-}
-
-.status-stopped {
-  background: var(--error, #ef4444);
-}
-
-.status-unknown {
-  background: var(--text-muted, #6b7280);
-}
-
-.status-text {
-  color: var(--mobile-text-muted);
-}
-
-/* 通用工具按钮样式（常驻 + 溢出菜单项） */
-.tool-btn,
-.task-btn,
-.folder-btn,
-.overflow-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tool-btn:hover,
-.task-btn:hover,
-.folder-btn:hover,
-.overflow-btn:hover {
-  border-color: rgba(0, 212, 255, 0.3);
-}
-
-.task-btn {
-  position: relative;
-}
-
-.folder-btn.active {
-  color: var(--mobile-accent);
-  border-color: var(--mobile-border-active);
-  background: var(--mobile-accent-muted);
-}
-
-/* Overflow Menu */
-.overflow-menu-wrapper {
-  position: relative;
-}
-
-.overflow-btn.active {
-  color: var(--mobile-accent);
-  border-color: var(--mobile-border-active);
-  background: var(--mobile-accent-muted);
-}
-
-.overflow-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  min-width: 160px;
-  background: var(--mobile-bg-secondary);
-  border: 1px solid var(--mobile-border);
-  border-radius: 0.75rem;
-  padding: 0.375rem;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  z-index: 30;
-}
-
-.overflow-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  border-radius: 0.5rem;
-  background: none;
-  border: none;
-  color: var(--mobile-text-primary);
-  font-size: 0.875rem;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  text-align: left;
-}
-
-.overflow-menu-item:hover {
-  background: var(--mobile-bg-hover);
-}
-
-.overflow-menu-item.active {
-  color: var(--mobile-accent);
-}
-
-.overflow-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 29;
-}
-
-/* Overflow menu transition */
-.overflow-menu-enter-active,
-.overflow-menu-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-
-.overflow-menu-enter-from,
-.overflow-menu-leave-to {
-  opacity: 0;
-  transform: translateY(-4px) scale(0.95);
-}
-
-/* Main Content Area */
-.main-content {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  overflow: hidden;
-}
-
-/* Sidebar overlay - 浮动在终端上方，不影响终端宽高 */
-.sidebar-overlay {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
-}
-
-.sidebar-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 15;
-}
-
-/* Sidebar Slide - CSS 类驱动动画，始终挂载保持展开状态 */
-.sidebar-overlay {
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.sidebar-hidden {
-  transform: translateX(100%);
-  pointer-events: none;
-}
-
-/* Settings Modal */
-.settings-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--mobile-overlay-heavy);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  padding: 1rem;
-}
-
-.settings-modal {
-  background: var(--mobile-bg-secondary);
-  border-radius: 1rem;
-  width: 100%;
-  max-width: 360px;
-  max-height: 80vh;
-  overflow-y: auto;
-}
-
-.settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--mobile-border);
-}
-
-.settings-header h2 {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--mobile-text-primary);
-  margin: 0;
-}
-
-.close-btn {
-  padding: 0.25rem;
-  background: none;
-  border: none;
-  color: var(--mobile-text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.close-btn:hover {
-  color: var(--mobile-text-primary);
-}
-
-.settings-content {
-  padding: 1rem;
-}
-
-.settings-section {
-  margin-bottom: 1.5rem;
-}
-
-.settings-section:last-child {
-  margin-bottom: 0;
-}
-
-.settings-label {
-  display: block;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--mobile-text-muted);
-  margin-bottom: 0.75rem;
-}
-
-.font-size-control {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.size-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-primary);
-  font-size: 1.25rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.size-btn:hover:not(:disabled) {
-  background: var(--mobile-bg-hover);
-}
-
-.size-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.size-value {
-  flex: 1;
-  text-align: center;
-  font-size: 1.125rem;
-  font-weight: 500;
-  color: var(--mobile-text-primary);
-}
-
-.toggle-control {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.toggle-switch {
-  width: 2.75rem;
-  height: 1.5rem;
-  border-radius: 0.75rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  position: relative;
-  padding: 0;
-}
-
-.toggle-switch.active {
-  background: var(--mobile-accent);
-  border-color: var(--mobile-accent);
-}
-
-.toggle-knob {
-  position: absolute;
-  top: 0.125rem;
-  left: 0.125rem;
-  width: 1.125rem;
-  height: 1.125rem;
-  border-radius: 50%;
-  background: var(--mobile-text-primary);
-  transition: transform 0.2s ease;
-}
-
-.toggle-switch.active .toggle-knob {
-  transform: translateX(1.25rem);
-}
-
-.toggle-label {
-  font-size: 0.875rem;
-  color: var(--mobile-text-muted);
-}
-
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
-}
-
-.theme-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.75rem 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.theme-btn:hover {
-  background: var(--mobile-bg-hover);
-}
-
-.theme-btn.active {
-  border-color: var(--mobile-accent);
-  background: var(--mobile-accent-muted);
-  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
-}
-
-.theme-preview {
-  width: 100%;
-  padding: 0.5rem;
-  border-radius: 0.375rem;
-  text-align: center;
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.theme-name {
-  font-size: 0.75rem;
-  color: var(--mobile-text-muted);
-}
-
-.theme-btn.active .theme-name {
-  color: var(--mobile-accent);
-  font-weight: 600;
-}
-
-.settings-hint {
-  font-size: 0.75rem;
-  color: var(--mobile-text-muted);
-  margin: 0 0 0.75rem;
-}
-
-.toolbar-toggle-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
-}
-
-.toolbar-toggle-btn {
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  background: var(--mobile-bg-elevated);
-  border: 2px solid transparent;
-  color: var(--mobile-text-muted);
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  text-align: center;
-}
-
-.toolbar-toggle-btn:hover {
-  background: var(--mobile-bg-hover);
-}
-
-.toolbar-toggle-btn.active {
-  border-color: var(--mobile-accent);
-  background: var(--mobile-accent-muted);
-  color: var(--mobile-accent);
-  font-weight: 600;
-}
-
-.settings-footer {
-  display: flex;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border-top: 1px solid var(--mobile-border);
-}
-
-.settings-footer-btn {
-  flex: 1;
-  padding: 0.75rem;
-  border-radius: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.settings-footer-btn.cancel {
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-muted);
-}
-
-.settings-footer-btn.cancel:hover {
-  background: var(--mobile-bg-hover);
-  color: var(--mobile-text-primary);
-}
-
-.settings-footer-btn.confirm {
-  background: var(--mobile-accent);
-  border: none;
-  color: var(--mobile-text-on-accent);
-}
-
-.settings-footer-btn.confirm:hover {
-  background: #00b8e6;
-}
-
-/* Confirm Modal */
-.confirm-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--mobile-overlay-heavy);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  padding: 1rem;
-}
-
-.confirm-modal {
-  background: var(--mobile-bg-secondary);
-  border-radius: 1rem;
-  padding: 1.5rem;
-  width: 100%;
-  max-width: 300px;
-  text-align: center;
-}
-
-.confirm-text {
-  font-size: 1rem;
-  color: var(--mobile-text-primary);
-  margin: 0 0 1.25rem;
-}
-
-.confirm-buttons {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.confirm-btn {
-  flex: 1;
-  padding: 0.75rem;
-  border-radius: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.confirm-btn.cancel {
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-muted);
-}
-
-.confirm-btn.cancel:hover {
-  background: var(--mobile-bg-hover);
-  color: var(--mobile-text-primary);
-}
-
-.confirm-btn.confirm {
-  background: #ef4444;
-  border: none;
-  color: #ffffff;
-}
-
-.confirm-btn.confirm:hover {
-  background: #dc2626;
-}
-
-/* Modal Transition */
-.modal-enter-active,
-.modal-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
-
-.modal-enter-active .settings-modal,
-.modal-leave-active .settings-modal,
-.modal-enter-active .confirm-modal,
-.modal-leave-active .confirm-modal {
-  transition: transform 0.2s ease;
-}
-
-.modal-enter-from .settings-modal,
-.modal-leave-to .settings-modal,
-.modal-enter-from .confirm-modal,
-.modal-leave-to .confirm-modal {
-  transform: scale(0.95);
-}
-
-/* Terminal Area - 始终占满 main-content，不被 sidebar 挤压 */
-.terminal-output-area {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  background: var(--mobile-terminal-bg);
-}
-
-/* 伪滚动容器：触摸事件驱动滚动，不需要原生滚动条 */
-.terminal-scroll-container {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  touch-action: none;
-}
-
-/* 自定义滚动条轨道 */
-.scrollbar-track {
-  position: absolute;
-  top: 4px;
-  right: 2px;
-  bottom: 4px;
-  width: 4px;
-  z-index: 5;
-  pointer-events: none;
-}
-
-/* 自定义滚动条滑块 - 默认隐藏，滚动时淡入 */
-.scrollbar-thumb {
-  position: absolute;
-  left: 0;
-  right: 0;
-  min-height: 20px;
-  border-radius: 2px;
-  background: rgba(160, 160, 180, 0.3);
-  opacity: 0;
-  transition: opacity 0.25s ease, background 0.15s ease;
-  pointer-events: none;
-}
-
-/* 滚动时显示 */
-.scrollbar-thumb.visible {
-  opacity: 1;
-  background: rgba(0, 212, 255, 0.4);
-}
-
-/* xterm 容器：占满滚动容器 */
-.xterm-container {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  overflow: hidden;
-}
-
-/* xterm 核心样式 - 禁止触摸拖动（由外层滚动容器接管），但允许点击事件（链接等） */
-:deep(.xterm) {
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  scrollbar-width: none;
-}
-
-:deep(.xterm::-webkit-scrollbar) {
-  display: none;
-  width: 0;
-}
-
-:deep(.xterm-screen) {
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  scrollbar-width: none;
-}
-
-:deep(.xterm-screen::-webkit-scrollbar) {
-  display: none;
-  width: 0;
-}
-
-/* 选择模式：视觉高亮 + 允许选中 */
-.selection-mode :deep(.xterm) {
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.selection-mode :deep(.xterm-screen) {
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-/* 选择模式：高亮 xterm 区域表示可选中 */
-.selection-mode .xterm-container {
-  outline: 2px solid rgba(0, 212, 255, 0.3);
-  outline-offset: -2px;
-  border-radius: 2px;
-}
-
-/* 选择模式操作栏 */
-.selection-action-bar {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--mobile-bg-secondary);
-  border: 1px solid var(--mobile-border);
-  border-radius: 0.75rem;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  z-index: 10;
-}
-
-.selection-action-btn {
-  padding: 0.375rem 0.875rem;
-  border-radius: 0.375rem;
-  background: var(--mobile-accent);
-  border: none;
-  color: var(--mobile-text-on-accent);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-}
-
-.selection-action-btn.cancel {
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
-}
-
-.selection-action-btn:active {
-  opacity: 0.8;
-}
-
-/* 选择栏过渡动画 */
-.selection-bar-enter-active,
-.selection-bar-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.selection-bar-enter-from,
-.selection-bar-leave-to {
-  opacity: 0;
-  transform: translateX(-50%) translateY(8px);
-}
-
-/* 禁用 xterm-viewport 原生滚动，由外层伪滚动容器接管 */
-:deep(.xterm-viewport) {
-  overflow-y: hidden !important;
-  touch-action: none !important;
-  pointer-events: none !important;
-  scrollbar-width: none !important;
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar) {
-  display: none !important;
-  width: 0 !important;
-}
-
-/* 禁用 xterm-scroll-area 滚动条 */
-:deep(.xterm-scroll-area) {
-  scrollbar-width: none;
-}
-
-:deep(.xterm-scroll-area::-webkit-scrollbar) {
-  display: none;
-  width: 0;
-}
-</style>

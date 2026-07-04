@@ -174,6 +174,11 @@ export default {
       wsMaxMessageSizeHint: 'MB',
       configSaved: 'Config saved, restart to apply',
       restartToApply: 'Restart to Apply',
+      resetDefaults: 'Reset Defaults',
+      resetDefaultsConfirm: 'Reset all advanced settings to defaults?',
+      resetSuccess: 'Reset to defaults, restart to apply',
+      collapse: 'Collapse',
+      expand: 'Expand',
     },
     plugin: {
       viewNotFound: 'Plugin view not found',

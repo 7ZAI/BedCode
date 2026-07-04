@@ -1,12 +1,12 @@
 /**
  * Preset Tasks Composable
  *
- * 预设任务数据管理 - CRUD、状态流转、localStorage 持久化
+ * 预设任务数据管理 - CRUD、localStorage 持久化
  */
 
 import { ref } from 'vue'
 import { httpSendSessionInput } from '@/composables/useHttpApi'
-import type { PresetTask, PresetTaskType, OnceTaskStatus } from './model'
+import type { PresetTask } from './model'
 
 const STORAGE_KEY = 'preset-tasks'
 
@@ -17,7 +17,15 @@ function loadFromStorage(): PresetTask[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
-    return JSON.parse(raw) as PresetTask[]
+    const parsed = JSON.parse(raw) as PresetTask[]
+    // 兼容旧数据：移除 type/status 字段
+    return parsed.map(t => ({
+      id: t.id,
+      title: t.title,
+      content: t.content,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    }))
   } catch {
     return []
   }
@@ -40,8 +48,6 @@ export async function addTask(input: { title: string; content: string }) {
     id: crypto.randomUUID(),
     title: input.title,
     content: input.content,
-    type: 'template',
-    status: null,
     createdAt: now,
     updatedAt: now,
   }
@@ -49,14 +55,12 @@ export async function addTask(input: { title: string; content: string }) {
   saveToStorage()
 }
 
-/** 更新预设任务（类型不可更改） */
+/** 更新预设任务 */
 export async function updateTask(task: PresetTask) {
   const index = tasks.value.findIndex(t => t.id === task.id)
   if (index === -1) return
-  // 类型不可更改，保留原类型
   tasks.value[index] = {
     ...task,
-    type: tasks.value[index].type,
     updatedAt: new Date().toISOString(),
   }
   saveToStorage()
@@ -68,55 +72,19 @@ export async function deleteTask(id: string) {
   saveToStorage()
 }
 
-/** 执行预设任务：更新状态 + 发送内容到终端 */
-export async function executeTask(task: PresetTask, sessionId: string) {
-  if (task.type === 'once') {
-    // 一次性任务：pending → running
-    const index = tasks.value.findIndex(t => t.id === task.id)
-    if (index !== -1) {
-      tasks.value[index].status = 'running'
-      tasks.value[index].updatedAt = new Date().toISOString()
-      saveToStorage()
-    }
-
-    try {
-      const result = await httpSendSessionInput(sessionId, task.content)
-      if (result.code !== 0) {
-        // 发送失败：running → failed
-        if (index !== -1) {
-          tasks.value[index].status = 'failed'
-          tasks.value[index].updatedAt = new Date().toISOString()
-          saveToStorage()
-        }
-        throw new Error('mobile.toolbox.sendFailed')
-      }
-      // 发送成功：保持 running，等桌面端事件通知真正完成
-      // 实际完成由 useTaskExecutionState.handleTaskStatusChanged 处理
-    } catch {
-      // 发送失败：running → failed
-      if (index !== -1) {
-        tasks.value[index].status = 'failed'
-        tasks.value[index].updatedAt = new Date().toISOString()
-        saveToStorage()
-      }
-      throw new Error('mobile.toolbox.sendFailed')
-    }
-  } else {
-    // 模板任务：直接发送，不改变状态
-    const result = await httpSendSessionInput(sessionId, task.content)
-    if (result.code !== 0) {
-      throw new Error('mobile.toolbox.sendFailed')
-    }
+/** 发送任务内容到终端（不按回车） */
+export async function sendTask(task: PresetTask, sessionId: string) {
+  const result = await httpSendSessionInput(sessionId, task.content)
+  if (result.code !== 0) {
+    throw new Error('mobile.toolbox.sendFailed')
   }
 }
 
-/** 重置一次性任务状态为 pending */
-export async function resetTaskStatus(id: string) {
-  const index = tasks.value.findIndex(t => t.id === id)
-  if (index !== -1 && tasks.value[index].type === 'once') {
-    tasks.value[index].status = 'pending'
-    tasks.value[index].updatedAt = new Date().toISOString()
-    saveToStorage()
+/** 执行任务内容到终端（按回车） */
+export async function executeTask(task: PresetTask, sessionId: string) {
+  const result = await httpSendSessionInput(sessionId, task.content, 'enter')
+  if (result.code !== 0) {
+    throw new Error('mobile.toolbox.sendFailed')
   }
 }
 
@@ -133,8 +101,8 @@ export function usePresetTasks() {
     addTask,
     updateTask,
     deleteTask,
+    sendTask,
     executeTask,
-    resetTaskStatus,
     clearAllTasks,
     saveToStorage,
   }

@@ -144,3 +144,32 @@ pub async fn update_server_network_config(
     tracing::info!("Server network config updated");
     Ok(())
 }
+
+/// 重置服务器网络配置为默认值
+///
+/// 仅更新配置文件，需重启服务器生效
+#[tauri::command]
+pub async fn reset_server_network_config(
+    app_handle: tauri::AppHandle,
+) -> Result<NetworkConfig> {
+    let config_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?
+        .join("config.properties");
+
+    let mut config = AppConfig::load(&config_path)?;
+    let default_config = NetworkConfig::default();
+    let auto_start = default_config.auto_start;
+    let port = default_config.port;
+    config.network = default_config.clone();
+    config.save(&config_path)?;
+
+    // 更新 supervisor 内存中的端口和自启动
+    let supervisor = ServerSupervisor::global();
+    supervisor.update_port(port).await?;
+    supervisor.update_auto_start(auto_start).await;
+
+    tracing::info!("Server network config reset to defaults");
+    Ok(default_config)
+}

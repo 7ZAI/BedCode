@@ -2,7 +2,7 @@
 /**
  * TaskPickerModal - 可执行任务弹窗
  *
- * 展示所有预设任务，每个任务可单独点击执行发送到终端，
+ * 展示所有预设任务，每个任务可发送或执行到终端，
  * 也可新建/编辑任务
  */
 import { ref, computed } from 'vue'
@@ -26,7 +26,9 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 执行单个任务：将任务内容发送到终端 */
+  /** 发送任务内容到终端（不按回车） */
+  send: [task: PresetTask]
+  /** 执行任务内容到终端（按回车） */
   execute: [task: PresetTask]
   close: []
 }>()
@@ -68,6 +70,11 @@ const lockedDir = computed(() => {
 
 function toggleExpand(taskId: string) {
   expandedTaskId.value = expandedTaskId.value === taskId ? null : taskId
+}
+
+/** 点击发送按钮 */
+function handleSend(task: PresetTask) {
+  emit('send', task)
 }
 
 /** 点击执行按钮 */
@@ -130,28 +137,25 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
             >
               <div class="task-item-main">
                 <div class="task-info" @click="toggleExpand(task.id)">
-                  <div class="task-info-top">
-                    <span class="task-title">{{ task.title }}</span>
-                    <span class="task-type-badge">{{ task.type === 'template' ? t('mobile.presetTask.template') : t('mobile.presetTask.once') }}</span>
-                  </div>
+                  <span class="task-title">{{ task.title }}</span>
                   <span class="task-content-preview">{{ task.content }}</span>
                 </div>
+                <!-- 发送按钮 -->
+                <button class="send-btn" :title="t('mobile.presetTask.send')" @click.stop="handleSend(task)">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                </button>
                 <!-- 执行按钮 -->
                 <button class="exec-btn" :title="t('mobile.presetTask.execute')" @click.stop="handleExecute(task)">
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M8 5v14l11-7z"/>
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                   </svg>
                 </button>
                 <!-- 编辑按钮 -->
                 <button class="edit-btn" :title="t('mobile.presetTask.edit')" @click.stop="openEditDialog(task)">
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                  </svg>
-                </button>
-                <!-- 展开/收起按钮 -->
-                <button class="expand-btn" :class="{ rotated: expandedTaskId === task.id }" @click.stop="toggleExpand(task.id)">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M7 10l5 5 5-5z"/>
                   </svg>
                 </button>
               </div>
@@ -183,7 +187,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 </template>
 
 <style scoped>
-/* 主弹窗遮罩 - 居中 */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -337,12 +340,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   opacity: 0.8;
 }
 
-.task-info-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .task-title {
   font-size: 14px;
   color: var(--mobile-text-primary);
@@ -357,6 +354,26 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.send-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: var(--mobile-bg-secondary);
+  color: var(--mobile-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.send-btn:active {
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
 }
 
 .exec-btn {
@@ -399,29 +416,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   color: var(--mobile-accent);
 }
 
-.expand-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--mobile-text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: transform 0.2s ease, color 0.15s;
-}
-
-.expand-btn:active {
-  background: var(--mobile-bg-hover);
-}
-
-.expand-btn.rotated {
-  transform: rotate(180deg);
-}
-
 .task-content-full {
   padding: 0 12px 10px;
 }
@@ -440,7 +434,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   overflow-y: auto;
 }
 
-/* 展开动画 */
 .content-expand-enter-active,
 .content-expand-leave-active {
   transition: all 0.2s ease;
@@ -459,14 +452,5 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 .content-expand-leave-from {
   opacity: 1;
   max-height: 220px;
-}
-
-.task-type-badge {
-  flex-shrink: 0;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--mobile-bg-secondary);
-  color: var(--mobile-text-muted);
 }
 </style>
