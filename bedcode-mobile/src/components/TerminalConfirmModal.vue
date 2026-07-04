@@ -1,13 +1,17 @@
 <template>
-  <div v-if="visible" class="confirm-modal-overlay mobile-ui" @click.self="$emit('cancel')">
-    <div class="confirm-modal" :style="safeAreaStyle">
+  <Teleport to="body">
+    <Transition name="center-modal">
+    <div v-if="visible" class="confirm-modal-overlay mobile-ui" @click.self="$emit('cancel')">
+      <div class="confirm-modal modal-panel" :style="safeAreaStyle">
       <p class="confirm-text">{{ message }}</p>
       <div class="confirm-buttons">
         <button class="confirm-btn cancel" @click.stop="$emit('cancel')">{{ t('common.button.cancel') }}</button>
         <button class="confirm-btn confirm" @click.stop="$emit('confirm')">{{ t('common.button.confirm') }}</button>
       </div>
+      </div>
     </div>
-  </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">

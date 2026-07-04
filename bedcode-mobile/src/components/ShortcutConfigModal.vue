@@ -1,12 +1,13 @@
 <template>
   <Teleport to="body">
+    <Transition name="bottom-sheet">
     <div
       v-if="visible"
       class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui"
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
+      <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
           <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ t('mobile.shortcutConfig.title') }}</span>
@@ -211,10 +212,13 @@
           </div>
         </div>
       </div>
+    </div>
+    </Transition>
 
       <!-- 删除确认弹窗 -->
+      <Transition name="center-modal">
       <div v-if="confirmDeleteCode" class="delete-confirm-overlay" @click.self="confirmDeleteCode = ''">
-        <div class="delete-confirm-modal">
+        <div class="delete-confirm-modal modal-panel">
           <p class="delete-confirm-text">{{ t('mobile.shortcutConfig.deleteConfirm') }}</p>
           <div class="delete-confirm-buttons">
             <button class="delete-confirm-btn cancel" @click="confirmDeleteCode = ''">{{ t('common.button.cancel') }}</button>
@@ -222,11 +226,11 @@
           </div>
         </div>
       </div>
+      </Transition>
 
       <!-- 快捷键说明弹窗 -->
       <ShortcutHelpModal :visible="showHelp" @close="showHelp = false" />
-    </div>
-  </Teleport>
+    </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -447,21 +451,6 @@ watch(() => props.visible, (show) => {
 </script>
 
 <style scoped>
-.shortcut-config-modal {
-  animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes slide-up {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
 .shortcut-row {
   display: flex;
   align-items: center;

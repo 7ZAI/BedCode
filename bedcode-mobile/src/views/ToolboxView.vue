@@ -85,10 +85,10 @@
 
     <!-- Session Picker Dialog -->
     <Teleport to="body">
-      <Transition name="fade">
+      <Transition name="bottom-sheet">
         <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
           <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
-          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl modal-panel">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">{{ t('mobile.toolbox.selectSession') }}</h3>
 
             <div v-if="activeSessions.length === 0" class="text-center py-4">
@@ -120,10 +120,10 @@
 
     <!-- Confirm Execute Dialog -->
     <Teleport to="body">
-      <Transition name="fade">
+      <Transition name="center-modal">
         <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
           <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
-          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl modal-panel">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-2">{{ t('mobile.toolbox.confirmExecute') }}</h3>
             <p class="text-sm text-[var(--mobile-text-muted)] mb-1">{{ t('mobile.toolbox.willSendToTerminal') }}</p>
             <p class="text-sm text-[var(--mobile-text-primary)] bg-[var(--mobile-bg-primary)] rounded-lg p-3 mb-4 line-clamp-3">{{ pendingTask?.content }}</p>
@@ -294,16 +294,3 @@ async function doExecute() {
 }
 
 </script>
-
-<style scoped>
-/* Fade transition */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

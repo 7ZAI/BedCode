@@ -1,12 +1,13 @@
 <template>
   <Teleport to="body">
+    <Transition name="center-modal">
     <div
       v-if="visible"
       class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui"
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-sm p-5 shadow-xl">
+      <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-sm p-5 shadow-xl modal-panel">
         <div class="flex items-center justify-between mb-5">
           <span class="font-semibold text-[var(--mobile-text-primary)] text-lg">{{ t('mobile.inputAssistant.title') }}</span>
           <button
@@ -133,6 +134,7 @@
         </button>
       </div>
     </div>
+    </Transition>
   </Teleport>
 </template>
 

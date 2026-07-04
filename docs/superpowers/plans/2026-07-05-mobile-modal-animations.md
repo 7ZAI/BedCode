@@ -1,53 +1,73 @@
-# 移动端弹窗动画统一 实现计划
+# 移动端弹窗动画统一 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 bedcode-mobile 所有弹窗/模态框添加统一的打开/关闭动画，消除闪现问题
+**Goal:** 为 bedcode-mobile 所有弹窗/模态框添加统一的打开/关闭动画，消除"闪现"问题和不一致的动画参数。
 
-**Architecture:** 在全局 `mobile.css` 中定义两套 Vue transition CSS（`center-modal` 和 `bottom-sheet`），所有弹窗组件统一引用并删除自带的 scoped transition CSS。使用 `.modal-panel` class 标记内容面板元素。
+**Architecture:** 在全局 `mobile.css` 中定义两套 Vue `<Transition>` CSS 规则（`center-modal` 和 `bottom-sheet`），所有弹窗组件统一引用，删除各组件的 scoped transition CSS 和 `@keyframes`。内容面板通过 `.modal-panel` class 被全局选择器匹配。
 
-**Tech Stack:** Vue 3 `<Transition>`, CSS transitions, TailwindCSS
+**Tech Stack:** Vue 3 `<Transition>`, CSS transitions (transform + opacity), TailwindCSS
 
 ---
 
 ## File Structure
 
 | File | Action | Responsibility |
-|------|--------|---------------|
-| `bedcode-mobile/src/styles/mobile.css` | Modify | 添加全局 `center-modal` 和 `bottom-sheet` transition CSS |
-| `bedcode-mobile/src/components/Modal.vue` | Modify | 替换 transition name，加 `.modal-panel`，删 scoped CSS |
-| `bedcode-mobile/src/components/ConfirmDialog.vue` | Modify | 替换 transition name，加 `.modal-panel`，删 scoped CSS |
-| `bedcode-mobile/src/components/BottomSheet.vue` | Modify | 替换 transition name，加 `.modal-panel`，删 scoped CSS |
-| `bedcode-mobile/src/components/TaskEditDialog.vue` | Modify | 替换 transition name，加 `.modal-panel`，删 scoped CSS |
-| `bedcode-mobile/src/components/FileViewerModal.vue` | Modify | 替换 transition name，加 `.modal-panel`，删 scoped CSS |
-| `bedcode-mobile/src/components/TaskPickerModal.vue` | Modify | 加 `<Transition>`，加 `.modal-panel`，删 `@keyframes`，重构为标准 backdrop + panel 结构 |
-| `bedcode-mobile/src/components/ShortcutConfigModal.vue` | Modify | 加 `<Transition>`，加 `.modal-panel`，删 `@keyframes`，重构为标准结构 |
-| `bedcode-mobile/src/components/ShortcutHelpModal.vue` | Modify | 加 `<Transition>`，加 `.modal-panel`，删 `@keyframes`，重构为标准结构 |
-| `bedcode-mobile/src/components/TerminalConfirmModal.vue` | Modify | 加 `<Teleport>` + `<Transition>`，加 `.modal-panel` |
-| `bedcode-mobile/src/components/TerminalSettingsModal.vue` | Modify | 加 `<Teleport>` + `<Transition>`，加 `.modal-panel` |
-| `bedcode-mobile/src/components/CodeViewerSettingsModal.vue` | Modify | 加 `<Transition>`，加 `.modal-panel` |
-| `bedcode-mobile/src/components/SettingsModal.vue` | Modify | 加 `<Transition>`，加 `.modal-panel` |
-| `bedcode-mobile/src/views/ToolboxView.vue` | Modify | 替换 inline dialog 的 transition name，加 `.modal-panel` |
-| `bedcode-mobile/src/views/SettingsView.vue` | Modify | 替换 inline dialog 为 `<Transition>`，加 `.modal-panel` |
+|------|--------|----------------|
+| `bedcode-mobile/src/styles/mobile.css` | Modify | 添加 `center-modal` 和 `bottom-sheet` 全局 transition CSS |
+| `bedcode-mobile/src/components/Modal.vue` | Modify | 替换 transition name，删除 scoped transition CSS，加 `.modal-panel` |
+| `bedcode-mobile/src/components/ConfirmDialog.vue` | Modify | 替换 transition name，删除 scoped transition CSS，加 `.modal-panel` |
+| `bedcode-mobile/src/components/BottomSheet.vue` | Modify | 替换 transition name，删除 scoped transition CSS，加 `.modal-panel` |
+| `bedcode-mobile/src/components/TaskEditDialog.vue` | Modify | 替换 transition name，删除 scoped transition CSS，加 `.modal-panel` |
+| `bedcode-mobile/src/components/FileViewerModal.vue` | Modify | 替换 transition name，删除 scoped transition CSS，加 `.modal-panel` |
+| `bedcode-mobile/src/components/TaskPickerModal.vue` | Modify | 加 `<Transition name="bottom-sheet">` + `v-if`，删除 `@keyframes modal-in`，加 `.modal-panel` |
+| `bedcode-mobile/src/components/ShortcutConfigModal.vue` | Modify | 加 `<Transition name="bottom-sheet">` + `v-if`，删除 `@keyframes slide-up`，加 `.modal-panel` |
+| `bedcode-mobile/src/components/ShortcutHelpModal.vue` | Modify | 加 `<Transition name="bottom-sheet">` + `v-if`，删除 `@keyframes slide-up`，加 `.modal-panel` |
+| `bedcode-mobile/src/components/TerminalConfirmModal.vue` | Modify | 加 `<Teleport>` + `<Transition name="center-modal">` + `v-if`，加 `.modal-panel` |
+| `bedcode-mobile/src/components/TerminalSettingsModal.vue` | Modify | 加 `<Teleport>` + `<Transition name="center-modal">` + `v-if`，加 `.modal-panel` |
+| `bedcode-mobile/src/components/CodeViewerSettingsModal.vue` | Modify | 加 `<Transition name="center-modal">` + `v-if`，加 `.modal-panel` |
+| `bedcode-mobile/src/components/SettingsModal.vue` | Modify | 加 `<Transition name="center-modal">` + `v-if`，加 `.modal-panel` |
+| `bedcode-mobile/src/views/ToolboxView.vue` | Modify | session picker 改用 `bottom-sheet` transition，confirm dialog 改用 `ConfirmDialog` 组件 |
+| `bedcode-mobile/src/views/SettingsView.vue` | Modify | 内联弹窗改用 `ConfirmDialog` 组件 |
 
 ---
 
-### Task 1: 添加全局 transition CSS
+## Animation Spec
+
+| 参数 | 值 |
+|------|-----|
+| 时长 | 280ms |
+| 曲线 | `cubic-bezier(0.32, 0.72, 0, 1)` |
+| backdrop 曲线 | `ease` |
+| backdrop 颜色 | 不变，沿用 `--mobile-overlay` / `--mobile-overlay-heavy` / `--mobile-overlay-light` |
+
+### `center-modal` — 中央缩放弹出
+
+- **打开：** Backdrop `opacity 0→1` (280ms ease) + Content `opacity 0→1` + `scale(0.92)→scale(1)` (280ms cubic-bezier)
+- **关闭：** 反向
+
+### `bottom-sheet` — 底部滑入
+
+- **打开：** Backdrop `opacity 0→1` (280ms ease) + Content `translateY(100%)→translateY(0)` (280ms cubic-bezier)
+- **关闭：** 反向
+
+---
+
+## Task 1: 全局 Transition CSS
 
 **Files:**
-- Modify: `bedcode-mobile/src/styles/mobile.css` (末尾追加)
+- Modify: `bedcode-mobile/src/styles/mobile.css`
 
-- [ ] **Step 1: 在 mobile.css 末尾追加全局 transition 定义**
+在 `mobile.css` 末尾添加全局 transition 定义。这些 CSS 不使用 scoped，放在全局文件中供所有组件引用。
 
-在文件末尾（`mobile-loading-fade` 部分之后）追加：
+- [ ] **Step 1: 在 `mobile.css` 末尾追加 transition CSS**
+
+在文件最后（`mobile-loading-fade-leave-to` 块之后）追加：
 
 ```css
-/* ============================================
-   Modal Transition Classes
-   全局弹窗动画 — 所有模态弹窗统一使用
-   ============================================ */
+/* ==================== Modal Transitions ==================== */
 
-/* Center Modal: scale + fade — 用于确认框、设置弹窗、编辑表单 */
+/* Center Modal: scale + fade */
 .center-modal-enter-active,
 .center-modal-leave-active {
   transition: opacity 280ms ease;
@@ -67,7 +87,7 @@
   opacity: 0;
 }
 
-/* Bottom Sheet: slide up — 用于大面板、配置、帮助文档 */
+/* Bottom Sheet: slide up */
 .bottom-sheet-enter-active,
 .bottom-sheet-leave-active {
   transition: opacity 280ms ease;
@@ -86,7 +106,12 @@
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: 验证 CSS 无语法错误**
+
+Run: `cd bedcode-mobile && npx vue-tsc --noEmit 2>&1 | head -5`
+Expected: 无 CSS 相关报错（CSS 语法不在 TS 检查范围内，确认无构建错误即可）
+
+- [ ] **Step 3: Commit**
 
 ```bash
 git add bedcode-mobile/src/styles/mobile.css
@@ -95,24 +120,32 @@ git commit -m "feat(mobile): add global center-modal and bottom-sheet transition
 
 ---
 
-### Task 2: 迁移已有 Transition 的组件（center-modal 组）
-
-这 5 个组件已有 `<Transition>`，只需替换 name 并删除 scoped transition CSS。
+## Task 2: Modal.vue — 统一 center-modal
 
 **Files:**
 - Modify: `bedcode-mobile/src/components/Modal.vue`
-- Modify: `bedcode-mobile/src/components/ConfirmDialog.vue`
-- Modify: `bedcode-mobile/src/components/BottomSheet.vue`
-- Modify: `bedcode-mobile/src/components/TaskEditDialog.vue`
-- Modify: `bedcode-mobile/src/components/FileViewerModal.vue`
 
-- [ ] **Step 1: 修改 Modal.vue**
+当前状态：`<Transition name="modal">`，scoped CSS（0.2s ease, scale 0.95），无 `.modal-panel` class。
 
-1. 将 `<Transition name="modal">` 改为 `<Transition name="center-modal">`
-2. 在 content panel div 上加 `modal-panel` class：将 `class="relative rounded-xl shadow-2xl border..."` 改为 `class="relative modal-panel rounded-xl shadow-2xl border..."`
-3. 删除整个 `<style scoped>` 块中的 transition CSS（`.modal-enter-active` 到 `.modal-leave-to > div:last-child { transform: scale(0.95); }`）
+- [ ] **Step 1: 替换 Transition name**
 
-具体删除的 CSS：
+将模板中的 `<Transition name="modal">` 改为 `<Transition name="center-modal">`。
+
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+当前内容面板 div（第 14 行附近）：
+```html
+<div class="relative rounded-xl shadow-2xl border bg-[var(--mobile-bg-card)] border-[var(--mobile-border)]">
+```
+
+改为：
+```html
+<div class="relative rounded-xl shadow-2xl border bg-[var(--mobile-bg-card)] border-[var(--mobile-border)] modal-panel">
+```
+
+- [ ] **Step 3: 删除 scoped transition CSS**
+
+删除 `<style scoped>` 中的以下代码块（第 114-129 行）：
 ```css
 .modal-enter-active,
 .modal-leave-active {
@@ -130,14 +163,43 @@ git commit -m "feat(mobile): add global center-modal and bottom-sheet transition
 }
 ```
 
-如果 `<style scoped>` 块删除后为空，则删除整个 `<style scoped>` 标签。
+如果 `<style scoped>` 内没有其他样式规则，则整个 `<style scoped></style>` 块一并删除。
 
-- [ ] **Step 2: 修改 ConfirmDialog.vue**
+- [ ] **Step 4: Commit**
 
-1. 将 `<Transition name="confirm">` 改为 `<Transition name="center-modal">`
-2. 在 content panel div 上加 `modal-panel` class：将 `class="relative w-full max-w-sm mx-4..."` 改为 `class="relative modal-panel w-full max-w-sm mx-4..."`
-3. 删除整个 `<style scoped>` 中的 transition CSS：
+```bash
+git add bedcode-mobile/src/components/Modal.vue
+git commit -m "feat(mobile): Modal.vue use global center-modal transition"
+```
 
+---
+
+## Task 3: ConfirmDialog.vue — 统一 center-modal
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/ConfirmDialog.vue`
+
+当前状态：`<Transition name="confirm">`，scoped CSS（opacity 0.2s, translateY 20px + opacity 0.2s），内容面板用 `.relative` class 选择器。
+
+- [ ] **Step 1: 替换 Transition name**
+
+将 `<Transition name="confirm">` 改为 `<Transition name="center-modal">`。
+
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+当前内容面板 div（第 15 行附近）：
+```html
+<div class="relative w-full max-w-sm mx-4 mb-[var(--safe-area-bottom,0px)] bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl overflow-hidden shadow-xl">
+```
+
+改为：
+```html
+<div class="relative w-full max-w-sm mx-4 mb-[var(--safe-area-bottom,0px)] bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl overflow-hidden shadow-xl modal-panel">
+```
+
+- [ ] **Step 3: 删除 scoped transition CSS**
+
+删除 `<style scoped>` 中的以下代码块（第 132-153 行）：
 ```css
 .confirm-enter-active,
 .confirm-leave-active {
@@ -161,14 +223,43 @@ git commit -m "feat(mobile): add global center-modal and bottom-sheet transition
 }
 ```
 
-如果 `<style scoped>` 块删除后为空，则删除整个 `<style scoped>` 标签。
+如果 `<style scoped>` 内没有其他样式规则，则整个 `<style scoped></style>` 块一并删除。
 
-- [ ] **Step 3: 修改 BottomSheet.vue**
+- [ ] **Step 4: Commit**
 
-1. 将 `<Transition name="fade">` 改为 `<Transition name="center-modal">`
-2. 在 content panel div 上加 `modal-panel` class：将 `class="relative w-full max-w-sm bg-..."` 改为 `class="relative modal-panel w-full max-w-sm bg-..."`
-3. 删除 `<style scoped>` 中的 transition CSS：
+```bash
+git add bedcode-mobile/src/components/ConfirmDialog.vue
+git commit -m "feat(mobile): ConfirmDialog.vue use global center-modal transition"
+```
 
+---
+
+## Task 4: BottomSheet.vue — 统一 center-modal
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/BottomSheet.vue`
+
+当前状态：`<Transition name="fade">`，scoped CSS（opacity 0.2s, scale 0.95），内容面板用 `.relative` class 选择器。组件名虽为 BottomSheet 但实际是居中输入弹窗，使用 center-modal。
+
+- [ ] **Step 1: 替换 Transition name**
+
+将 `<Transition name="fade">` 改为 `<Transition name="center-modal">`。
+
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+当前内容面板 div（第 9 行附近）：
+```html
+<div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
+```
+
+改为：
+```html
+<div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl modal-panel">
+```
+
+- [ ] **Step 3: 删除 scoped transition CSS**
+
+删除 `<style scoped>` 中的以下代码块（第 130-151 行）：
 ```css
 .fade-enter-active,
 .fade-leave-active {
@@ -192,18 +283,55 @@ git commit -m "feat(mobile): add global center-modal and bottom-sheet transition
 }
 ```
 
-如果 `<style scoped>` 块删除后为空，则删除整个 `<style scoped>` 标签。
+如果 `<style scoped>` 内没有其他样式规则，则整个 `<style scoped></style>` 块一并删除。
 
-- [ ] **Step 4: 修改 TaskEditDialog.vue**
+- [ ] **Step 4: Commit**
 
-1. 将两处 `<Transition name="modal">` 改为 `<Transition name="center-modal">`
-   - 第一处：主弹窗（z-[110]）
-   - 第二处：FileExplorer 弹窗（z-[120]）
-2. 在两个 content panel div 上加 `modal-panel` class：
-   - 主弹窗：`class="relative w-full max-w-lg bg-..."` → `class="relative modal-panel w-full max-w-lg bg-..."`
-   - FileExplorer 弹窗：`class="relative w-full h-full bg-..."` → `class="relative modal-panel w-full h-full bg-..."`
-3. 删除 `<style scoped>` 中的 transition CSS：
+```bash
+git add bedcode-mobile/src/components/BottomSheet.vue
+git commit -m "feat(mobile): BottomSheet.vue use global center-modal transition"
+```
 
+---
+
+## Task 5: TaskEditDialog.vue — 统一 center-modal
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/TaskEditDialog.vue`
+
+当前状态：`<Transition name="modal">`，scoped CSS（all 0.2s ease, scale 0.95），用 `> :last-child` 选择器。有两处 Transition（主弹窗 z-110 和文件浏览器 z-120），都需要改。
+
+- [ ] **Step 1: 替换两处 Transition name**
+
+将第一个 `<Transition name="modal">`（第 3 行附近）改为 `<Transition name="center-modal">`。
+
+将第二个 `<Transition name="modal">`（第 116 行附近）也改为 `<Transition name="center-modal">`。
+
+- [ ] **Step 2: 给两个内容面板加 `.modal-panel` class**
+
+主弹窗内容面板（第 6 行附近）：
+```html
+<div class="relative w-full max-w-lg bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl max-h-[85vh] flex flex-col">
+```
+
+改为：
+```html
+<div class="relative w-full max-w-lg bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl max-h-[85vh] flex flex-col modal-panel">
+```
+
+文件浏览器内容面板（第 119 行附近）：
+```html
+<div class="relative w-full h-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl shadow-xl overflow-hidden flex flex-col">
+```
+
+改为：
+```html
+<div class="relative w-full h-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl shadow-xl overflow-hidden flex flex-col modal-panel">
+```
+
+- [ ] **Step 3: 删除 scoped modal transition CSS**
+
+删除以下代码块（第 263-278 行）：
 ```css
 /* Modal transition - scale + fade */
 .modal-enter-active,
@@ -220,28 +348,45 @@ git commit -m "feat(mobile): add global center-modal and bottom-sheet transition
 .modal-leave-to > :last-child {
   transform: scale(0.95);
 }
-
-/* Dropdown transition */
-.dropdown-enter-active,
-.dropdown-leave-active {
-  transition: all 0.2s ease;
-}
-
-.dropdown-enter-from,
-.dropdown-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
 ```
 
-**注意：** `dropdown` transition 在目录选择下拉菜单中使用，保留不动，只删除 `modal` transition 部分。
+保留 `.dropdown-*` transition CSS（用于目录下拉菜单，不在此次改动范围）。
 
-- [ ] **Step 5: 修改 FileViewerModal.vue**
+- [ ] **Step 4: Commit**
 
-1. 将 `<transition name="modal-fade">` 改为 `<Transition name="center-modal">`
-2. 在 content panel div 上加 `modal-panel` class：将 `class="viewer-modal"` 改为 `class="viewer-modal modal-panel"`
-3. 删除 `<style scoped>` 末尾的 transition CSS：
+```bash
+git add bedcode-mobile/src/components/TaskEditDialog.vue
+git commit -m "feat(mobile): TaskEditDialog.vue use global center-modal transition"
+```
 
+---
+
+## Task 6: FileViewerModal.vue — 统一 center-modal
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/FileViewerModal.vue`
+
+当前状态：`<transition name="modal-fade">`，scoped CSS（opacity 0.2s, scale 0.95），内容面板用 `.viewer-modal` class 选择器。
+
+- [ ] **Step 1: 替换 Transition name**
+
+将 `<transition name="modal-fade">`（第 3 行）改为 `<transition name="center-modal">`。
+
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+`.viewer-modal` div（第 5 行附近）：
+```html
+<div class="viewer-modal" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
+```
+
+改为：
+```html
+<div class="viewer-modal modal-panel" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
+```
+
+- [ ] **Step 3: 删除 scoped modal-fade transition CSS**
+
+删除 `<style scoped>` 末尾的以下代码块（第 686-705 行）：
 ```css
 /* Modal transition */
 .modal-fade-enter-active,
@@ -265,89 +410,199 @@ git commit -m "feat(mobile): add global center-modal and bottom-sheet transition
 }
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add bedcode-mobile/src/components/Modal.vue bedcode-mobile/src/components/ConfirmDialog.vue bedcode-mobile/src/components/BottomSheet.vue bedcode-mobile/src/components/TaskEditDialog.vue bedcode-mobile/src/components/FileViewerModal.vue
-git commit -m "refactor(mobile): migrate existing modals to global center-modal transition"
+git add bedcode-mobile/src/components/FileViewerModal.vue
+git commit -m "feat(mobile): FileViewerModal.vue use global center-modal transition"
 ```
 
 ---
 
-### Task 3: 迁移 bottom-sheet 组组件
-
-这 3 个组件目前只有入场动画（`@keyframes`），需要改为 `<Transition>` + 全局 CSS。
+## Task 7: TaskPickerModal.vue — 统一 bottom-sheet
 
 **Files:**
 - Modify: `bedcode-mobile/src/components/TaskPickerModal.vue`
-- Modify: `bedcode-mobile/src/components/ShortcutConfigModal.vue`
-- Modify: `bedcode-mobile/src/components/ShortcutHelpModal.vue`
 
-- [ ] **Step 1: 修改 TaskPickerModal.vue**
+当前状态：无 `<Transition>`，使用 `@keyframes modal-in`（0.2s, scale 0.95→1），仅入场动画。需改为 `<Transition name="bottom-sheet">` + `v-if`，删除 `@keyframes`。
 
-1. 重构模板结构为标准 backdrop + panel 形式。当前 `.modal-overlay` 既是容器又是 backdrop，需要拆分。
+- [ ] **Step 1: 添加 `<Transition>` 包裹和 `v-if`**
 
-将模板改为：
-```html
-<template>
-  <Teleport to="body">
-    <Transition name="bottom-sheet">
-      <div v-if="..." class="modal-overlay mobile-ui" @click.self="emit('close')">
-        <!-- Backdrop -->
-        <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="emit('close')"></div>
-        <!-- Content Panel -->
-        <div class="modal-content modal-panel">
-          ...（保持不变）
-        </div>
-      </div>
-    </Transition>
-
-    <!-- 新增/编辑任务弹窗（使用共享组件） -->
-    <TaskEditDialog ... />
-  </Teleport>
-</template>
-```
-
-关键变更：
-- 在 `.modal-overlay` 外包一层 `<Transition name="bottom-sheet">`
-- 原来的 `.modal-overlay` 的 `background: var(--mobile-overlay)` 样式删除，改用子元素 backdrop
-- `.modal-content` 加上 `modal-panel` class
-- `@click.self="emit('close')"` 保留在 overlay 上
-- 删除 `@keyframes modal-in` 和 `.modal-content { animation: modal-in 0.2s ease; }`
-
-CSS 变更：
-- 从 `.modal-overlay` 样式中删除 `background: var(--mobile-overlay);`
-- 删除 `@keyframes modal-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }`
-- 删除 `.modal-content { animation: modal-in 0.2s ease; }`（注意 `.modal-content` 的其他样式保留）
-- `.modal-overlay` 添加 `position: relative;`（保持 inset 布局）
-
-2. 由于 `.modal-overlay` 已有 `position: fixed; inset: 0;`，backdrop 子元素用 `absolute inset-0` 覆盖即可。
-
-- [ ] **Step 2: 修改 ShortcutConfigModal.vue**
-
-1. 在外层 `<Teleport>` 内的容器 div 外包 `<Transition name="bottom-sheet">`
-
-当前结构：
+当前模板结构（第 110-172 行）：
 ```html
 <Teleport to="body">
-  <div v-if="visible" class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui" ...>
-    <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-    <div class="shortcut-config-modal relative ...">
+  <div class="modal-overlay mobile-ui" @click.self="emit('close')">
+    <div class="modal-content">
+      ...
+    </div>
+  </div>
+  ...
+</Teleport>
 ```
 
 改为：
 ```html
 <Teleport to="body">
   <Transition name="bottom-sheet">
-    <div v-if="visible" class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui" ...>
-      <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="shortcut-config-modal relative modal-panel ...">
+    <div v-if="tasks.length > 0 || true" class="modal-overlay mobile-ui" @click.self="emit('close')">
+      ...
+    </div>
+  </Transition>
+  ...
+</Teleport>
 ```
 
-2. 在 `.shortcut-config-modal` div 上加 `modal-panel` class
-3. 删除 `<style scoped>` 中的 `@keyframes slide-up` 和 `.shortcut-config-modal { animation: slide-up 0.25s ...; }`
+**注意：** TaskPickerModal 没有自己的 `visible` prop，它是通过父组件 v-if 控制整个组件的挂载/卸载。所以这里不能用 v-if 控制动画——需要调整思路。
 
-删除：
+实际做法：**在父组件中使用 `<Transition>` 包裹 `<TaskPickerModal>`。但更简单的方式是给 TaskPickerModal 加一个 `visible` prop 并在组件内部控制。**
+
+但观察当前用法：TaskPickerModal 由父组件通过 v-if 控制显示，没有 visible prop。为了保持改动最小化，改用另一种方式：**保留 `@keyframes` 入场动画用于入场，添加 `<Transition>` 包裹用于退场动画。**
+
+**更好的方案：** TaskPickerModal 不加 visible prop，直接在组件外层包裹 Transition。但由于父组件用 v-if 控制整个组件，Transition 无法生效（组件卸载后 Transition 没有机会播放 leave 动画）。
+
+**最终方案：** 为 TaskPickerModal 添加 `visible` prop，内部用 `<Transition>` + `v-if` 控制。父组件改用 `:visible` + 事件控制，而非 v-if 直接卸载。
+
+先改组件内部：
+
+将模板改为：
+```html
+<Teleport to="body">
+  <Transition name="bottom-sheet">
+    <div v-if="visible" class="modal-overlay mobile-ui" @click.self="emit('close')">
+      <div class="modal-content modal-panel">
+        ...
+      </div>
+    </div>
+  </Transition>
+  ...
+</Teleport>
+```
+
+在 script 中添加 `visible` prop：
+```typescript
+const props = defineProps<{
+  tasks: PresetTask[]
+  visible?: boolean
+  sessionId?: string
+}>()
+```
+
+- [ ] **Step 2: 给 `.modal-content` 加 `.modal-panel` class**
+
+将：
+```html
+<div class="modal-content">
+```
+
+改为：
+```html
+<div class="modal-content modal-panel">
+```
+
+- [ ] **Step 3: 删除 `@keyframes modal-in` 和引用**
+
+删除 scoped CSS 中的（第 213-222 行）：
+```css
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+```
+
+同时删除 `.modal-content` 中的 `animation: modal-in 0.2s ease;`（第 210 行）。
+
+- [ ] **Step 4: 更新父组件调用方式**
+
+查找所有使用 TaskPickerModal 的父组件，将 `v-if` 改为 `:visible` prop 控制。
+
+在 `ToolboxView.vue` 中（需搜索确认具体位置），将：
+```html
+<TaskPickerModal v-if="..." :tasks="..." @close="..." @send="..." @execute="..." />
+```
+
+改为：
+```html
+<TaskPickerModal :visible="..." :tasks="..." @close="..." @send="..." @execute="..." />
+```
+
+在 `TerminalView.vue` 中（需搜索确认具体位置），做相同改动。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bedcode-mobile/src/components/TaskPickerModal.vue bedcode-mobile/src/views/ToolboxView.vue bedcode-mobile/src/views/TerminalView.vue
+git commit -m "feat(mobile): TaskPickerModal.vue use global bottom-sheet transition"
+```
+
+---
+
+## Task 8: ShortcutConfigModal.vue — 统一 bottom-sheet
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/ShortcutConfigModal.vue`
+
+当前状态：无 `<Transition>`，使用 `@keyframes slide-up`（0.25s, translateY 100%→0），仅入场动画。有 `visible` prop 但未配合 Transition。
+
+- [ ] **Step 1: 添加 `<Transition>` 包裹，改 `v-if` 为 Transition 控制**
+
+当前模板结构（第 2-229 行）：
+```html
+<Teleport to="body">
+  <div
+    v-if="visible"
+    class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui"
+    @click.self="emit('close')"
+  >
+    <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
+    <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] ...">
+```
+
+改为：
+```html
+<Teleport to="body">
+  <Transition name="bottom-sheet">
+    <div
+      v-if="visible"
+      class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui"
+      @click.self="emit('close')"
+    >
+      <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
+      <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] ... modal-panel">
+```
+
+在 `</div>` 结束标签后（即删除确认弹窗之前）关闭 `</Transition>`：
+
+```html
+    </div>
+  </Transition>
+
+  <!-- 删除确认弹窗 -->
+  ...
+```
+
+注意：删除确认弹窗（`confirmDeleteCode` 控制的 `delete-confirm-overlay`）和 `ShortcutHelpModal` 在 Transition 外部，不要包进去。
+
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+`.shortcut-config-modal` div（第 9 行附近）：
+```html
+<div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
+```
+
+改为：
+```html
+<div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
+```
+
+- [ ] **Step 3: 删除 `@keyframes slide-up` 和引用**
+
+删除 scoped CSS 中的（第 450-463 行）：
 ```css
 .shortcut-config-modal {
   animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -365,34 +620,73 @@ CSS 变更：
 }
 ```
 
-4. 添加闭合标签 `</Transition>`
+仅保留 `.shortcut-config-modal { ... }` 中除 `animation` 以外的样式（当前该选择器只有 animation，所以整块删除）。
 
-注意：此组件内部还有 `confirmDeleteCode` 内联弹窗和 `ShortcutHelpModal`，这些在 `<Transition>` 包裹的容器 div 之外（或在容器内部的嵌套层级），不影响外层 transition。
+- [ ] **Step 4: Commit**
 
-- [ ] **Step 3: 修改 ShortcutHelpModal.vue**
+```bash
+git add bedcode-mobile/src/components/ShortcutConfigModal.vue
+git commit -m "feat(mobile): ShortcutConfigModal.vue use global bottom-sheet transition"
+```
 
-当前结构：
+---
+
+## Task 9: ShortcutHelpModal.vue — 统一 bottom-sheet
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/ShortcutHelpModal.vue`
+
+当前状态：无 `<Transition>`，使用 `@keyframes slide-up`（0.25s, translateY 100%→0），仅入场动画。有 `visible` prop 但未配合 Transition。
+
+- [ ] **Step 1: 添加 `<Transition>` 包裹**
+
+当前模板结构（第 2-29 行）：
 ```html
 <Teleport to="body">
-  <div v-if="visible" class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui" ...>
+  <div
+    v-if="visible"
+    class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui"
+    @click.self="emit('close')"
+  >
     <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-    <div class="shortcut-help-modal relative ...">
+    <div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] ...">
 ```
 
 改为：
 ```html
 <Teleport to="body">
   <Transition name="bottom-sheet">
-    <div v-if="visible" class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui" ...>
+    <div
+      v-if="visible"
+      class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui"
+      @click.self="emit('close')"
+    >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="shortcut-help-modal relative modal-panel ...">
+      <div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] ... modal-panel">
 ```
 
-1. 在容器 div 外包 `<Transition name="bottom-sheet">`
-2. 在 `.shortcut-help-modal` div 上加 `modal-panel` class
-3. 删除 `<style scoped>` 中的 `@keyframes slide-up` 和 `.shortcut-help-modal { animation: slide-up 0.25s ...; }`
+在 `</div>` 结束标签后关闭 `</Transition>`：
+```html
+    </div>
+  </Transition>
+</Teleport>
+```
 
-删除：
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+`.shortcut-help-modal` div（第 9 行附近）：
+```html
+<div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
+```
+
+改为：
+```html
+<div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
+```
+
+- [ ] **Step 3: 删除 `@keyframes slide-up` 和引用**
+
+删除 scoped CSS 中的（第 59-73 行）：
 ```css
 .shortcut-help-modal {
   animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -410,33 +704,33 @@ CSS 变更：
 }
 ```
 
-4. 添加闭合标签 `</Transition>`
+同样，`.shortcut-help-modal { ... }` 当前只有 animation 属性，整块删除。
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add bedcode-mobile/src/components/TaskPickerModal.vue bedcode-mobile/src/components/ShortcutConfigModal.vue bedcode-mobile/src/components/ShortcutHelpModal.vue
-git commit -m "refactor(mobile): migrate bottom-sheet modals to global transition"
+git add bedcode-mobile/src/components/ShortcutHelpModal.vue
+git commit -m "feat(mobile): ShortcutHelpModal.vue use global bottom-sheet transition"
 ```
 
 ---
 
-### Task 4: 为无动画组件添加 Transition（center-modal 组）
-
-这 4 个组件完全没有动画，需要加 `<Teleport>` + `<Transition name="center-modal">` + `.modal-panel`。
+## Task 10: TerminalConfirmModal.vue — 添加动画
 
 **Files:**
 - Modify: `bedcode-mobile/src/components/TerminalConfirmModal.vue`
-- Modify: `bedcode-mobile/src/components/TerminalSettingsModal.vue`
-- Modify: `bedcode-mobile/src/components/CodeViewerSettingsModal.vue`
-- Modify: `bedcode-mobile/src/components/SettingsModal.vue`
 
-- [ ] **Step 1: 修改 TerminalConfirmModal.vue**
+当前状态：无 `<Teleport>`、无 `<Transition>`、无动画。直接用 `v-if="visible"` 控制显示。
 
-当前结构：
+- [ ] **Step 1: 添加 `<Teleport>` + `<Transition>` 包裹**
+
+当前模板（第 2-10 行）：
 ```html
 <div v-if="visible" class="confirm-modal-overlay mobile-ui" @click.self="$emit('cancel')">
   <div class="confirm-modal" :style="safeAreaStyle">
+    ...
+  </div>
+</div>
 ```
 
 改为：
@@ -445,55 +739,103 @@ git commit -m "refactor(mobile): migrate bottom-sheet modals to global transitio
   <Transition name="center-modal">
     <div v-if="visible" class="confirm-modal-overlay mobile-ui" @click.self="$emit('cancel')">
       <div class="confirm-modal modal-panel" :style="safeAreaStyle">
+        ...
+      </div>
+    </div>
+  </Transition>
+</Teleport>
 ```
 
-并在末尾 `</div>` 后加上 `</Transition></Teleport>`。
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
 
-变更：
-1. 外层包 `<Teleport to="body">` + `<Transition name="center-modal">`
-2. `.confirm-modal` div 加 `modal-panel` class
-3. 删除无用的 `@click.self`（改为 backdrop overlay 方式）
-
-进一步优化：添加 backdrop 子元素替换 `@click.self`：
+`.confirm-modal` div：
 ```html
-<Teleport to="body">
-  <Transition name="center-modal">
-    <div v-if="visible" class="confirm-modal-overlay mobile-ui">
-      <div class="absolute inset-0" @click="$emit('cancel')"></div>
-      <div class="confirm-modal modal-panel" :style="safeAreaStyle">
+<div class="confirm-modal" :style="safeAreaStyle">
 ```
 
-- [ ] **Step 2: 修改 TerminalSettingsModal.vue**
+改为：
+```html
+<div class="confirm-modal modal-panel" :style="safeAreaStyle">
+```
 
-当前结构：
+- [ ] **Step 3: Commit**
+
+```bash
+git add bedcode-mobile/src/components/TerminalConfirmModal.vue
+git commit -m "feat(mobile): TerminalConfirmModal.vue add center-modal transition"
+```
+
+---
+
+## Task 11: TerminalSettingsModal.vue — 添加动画
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/TerminalSettingsModal.vue`
+
+当前状态：无 `<Teleport>`、无 `<Transition>`、无动画。直接用 `v-if="visible"` 控制显示。
+
+- [ ] **Step 1: 添加 `<Teleport>` + `<Transition>` 包裹**
+
+当前模板（第 2-75 行）：
 ```html
 <div v-if="visible" class="settings-modal-overlay mobile-ui" @click.self="$emit('cancel')">
   <div class="settings-modal" :style="safeAreaStyle">
+    ...
+  </div>
+</div>
 ```
 
 改为：
 ```html
 <Teleport to="body">
   <Transition name="center-modal">
-    <div v-if="visible" class="settings-modal-overlay mobile-ui">
-      <div class="absolute inset-0" @click="$emit('cancel')"></div>
+    <div v-if="visible" class="settings-modal-overlay mobile-ui" @click.self="$emit('cancel')">
       <div class="settings-modal modal-panel" :style="safeAreaStyle">
+        ...
+      </div>
+    </div>
+  </Transition>
+</Teleport>
 ```
 
-并在末尾 `</div>` 后加上 `</Transition></Teleport>`。
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
 
-1. 外层包 `<Teleport to="body">` + `<Transition name="center-modal">`
-2. 删除 `@click.self`，改用子元素 backdrop
-3. `.settings-modal` div 加 `modal-panel` class
+`.settings-modal` div：
+```html
+<div class="settings-modal" :style="safeAreaStyle">
+```
 
-- [ ] **Step 3: 修改 CodeViewerSettingsModal.vue**
+改为：
+```html
+<div class="settings-modal modal-panel" :style="safeAreaStyle">
+```
 
-已有 `<Teleport>`，只需加 `<Transition>` 和 `.modal-panel`。
+- [ ] **Step 3: Commit**
 
-当前结构：
+```bash
+git add bedcode-mobile/src/components/TerminalSettingsModal.vue
+git commit -m "feat(mobile): TerminalSettingsModal.vue add center-modal transition"
+```
+
+---
+
+## Task 12: CodeViewerSettingsModal.vue — 添加动画
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/CodeViewerSettingsModal.vue`
+
+当前状态：已有 `<Teleport>`，无 `<Transition>`，无动画。直接用 `v-if="visible"` 控制。
+
+- [ ] **Step 1: 添加 `<Transition>` 包裹**
+
+当前模板结构（第 2-102 行）：
 ```html
 <Teleport to="body">
-  <div v-if="visible" class="settings-modal-overlay mobile-ui" @click.self="emit('close')">
+  <div
+    v-if="visible"
+    class="settings-modal-overlay mobile-ui"
+    @click.self="emit('close')"
+  >
     <div class="settings-modal" :style="modalStyle">
 ```
 
@@ -501,102 +843,172 @@ git commit -m "refactor(mobile): migrate bottom-sheet modals to global transitio
 ```html
 <Teleport to="body">
   <Transition name="center-modal">
-    <div v-if="visible" class="settings-modal-overlay mobile-ui">
-      <div class="absolute inset-0" @click="emit('close')"></div>
+    <div
+      v-if="visible"
+      class="settings-modal-overlay mobile-ui"
+      @click.self="emit('close')"
+    >
       <div class="settings-modal modal-panel" :style="modalStyle">
 ```
 
-并在末尾 `</div>` 后加上 `</Transition>`。
-
-1. 在 `<Teleport>` 内加 `<Transition name="center-modal">`
-2. 删除 `@click.self`，改用子元素 backdrop
-3. `.settings-modal` div 加 `modal-panel` class
-
-- [ ] **Step 4: 修改 SettingsModal.vue**
-
-当前结构：
+在 `</div></Teleport>` 之前关闭 `</Transition>`：
 ```html
-<Teleport to="body">
-  <div v-if="visible" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui" @click.self="emit('close')">
-    <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-    <div class="relative bg-[var(--mobile-bg-card)] border ...">
+    </div>
+  </Transition>
+</Teleport>
 ```
 
-已有 backdrop 子元素，只需加 `<Transition>` 和 `.modal-panel`。
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+`.settings-modal` div：
+```html
+<div class="settings-modal" :style="modalStyle">
+```
+
+改为：
+```html
+<div class="settings-modal modal-panel" :style="modalStyle">
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add bedcode-mobile/src/components/CodeViewerSettingsModal.vue
+git commit -m "feat(mobile): CodeViewerSettingsModal.vue add center-modal transition"
+```
+
+---
+
+## Task 13: SettingsModal.vue — 添加动画
+
+**Files:**
+- Modify: `bedcode-mobile/src/components/SettingsModal.vue`
+
+当前状态：已有 `<Teleport>`，无 `<Transition>`，无动画。直接用 `v-if="visible"` 控制。
+
+- [ ] **Step 1: 添加 `<Transition>` 包裹**
+
+当前模板结构（第 2-136 行）：
+```html
+<Teleport to="body">
+  <div
+    v-if="visible"
+    class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui"
+    @click.self="emit('close')"
+  >
+    <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
+    <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-sm p-5 shadow-xl">
+```
 
 改为：
 ```html
 <Teleport to="body">
   <Transition name="center-modal">
-    <div v-if="visible" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui" @click.self="emit('close')">
+    <div
+      v-if="visible"
+      class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui"
+      @click.self="emit('close')"
+    >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="relative modal-panel bg-[var(--mobile-bg-card)] border ...">
+      <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-sm p-5 shadow-xl modal-panel">
 ```
 
-1. 在 `<Teleport>` 内加 `<Transition name="center-modal">`
-2. content panel div 加 `modal-panel` class
-3. 在末尾 `</div>` 后加上 `</Transition>`
+在 `</div></Teleport>` 之前关闭 `</Transition>`：
+```html
+    </div>
+  </Transition>
+</Teleport>
+```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 2: 给内容面板加 `.modal-panel` class**
+
+内容面板 div：
+```html
+<div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-sm p-5 shadow-xl">
+```
+
+改为：
+```html
+<div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-sm p-5 shadow-xl modal-panel">
+```
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add bedcode-mobile/src/components/TerminalConfirmModal.vue bedcode-mobile/src/components/TerminalSettingsModal.vue bedcode-mobile/src/components/CodeViewerSettingsModal.vue bedcode-mobile/src/components/SettingsModal.vue
-git commit -m "feat(mobile): add center-modal transition to components without animation"
+git add bedcode-mobile/src/components/SettingsModal.vue
+git commit -m "feat(mobile): SettingsModal.vue add center-modal transition"
 ```
 
 ---
 
-### Task 5: 迁移视图内联弹窗
-
-ToolboxView 和 SettingsView 中有内联弹窗，需要迁移到全局 transition。
+## Task 14: ToolboxView 内联弹窗 — 统一动画
 
 **Files:**
 - Modify: `bedcode-mobile/src/views/ToolboxView.vue`
+
+当前状态：session picker 使用 `<Transition name="fade">`，confirm dialog 也使用 `<Transition name="fade">`。两者都有 Teleport 和 scoped fade transition，但没有 scoped CSS（使用内联样式）。
+
+需要搜索 ToolboxView.vue 中是否有对应的 scoped `<style>` 中的 `.fade-*` 规则。根据当前代码，ToolboxView.vue 没有 `<style scoped>` 块（样式由 TailwindCSS 内联处理），所以 fade transition 实际上没有 CSS 规则驱动——**意味着当前这两个弹窗也没有完整动画**。
+
+- [ ] **Step 1: session picker 改用 `bottom-sheet` transition + `.modal-panel`**
+
+当前（第 88-118 行）：
+```html
+<Teleport to="body">
+  <Transition name="fade">
+    <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+      <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
+      <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] ...">
+```
+
+改为：
+```html
+<Teleport to="body">
+  <Transition name="bottom-sheet">
+    <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+      <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
+      <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] ... modal-panel">
+```
+
+- [ ] **Step 2: confirm dialog 改用 `center-modal` transition + `.modal-panel`**
+
+当前（第 122-153 行附近）：
+```html
+<Teleport to="body">
+  <Transition name="fade">
+    <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+      <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
+      <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] ...">
+```
+
+改为：
+```html
+<Teleport to="body">
+  <Transition name="center-modal">
+    <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+      <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
+      <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] ... modal-panel">
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add bedcode-mobile/src/views/ToolboxView.vue
+git commit -m "feat(mobile): ToolboxView inline dialogs use global transitions"
+```
+
+---
+
+## Task 15: SettingsView 内联弹窗 — 统一动画
+
+**Files:**
 - Modify: `bedcode-mobile/src/views/SettingsView.vue`
 
-- [ ] **Step 1: 修改 ToolboxView.vue**
+当前状态：两个内联确认弹窗（`showBrowserConfirm` 和 `showConfirm`），无 `<Transition>`、无动画。使用 Teleport + v-if 直接控制。
 
-1. Session Picker Dialog：将 `<Transition name="fade">` 改为 `<Transition name="center-modal">`，在 content panel div 上加 `modal-panel` class
+- [ ] **Step 1: 浏览器确认弹窗加 `<Transition name="center-modal">` + `.modal-panel`**
 
-当前：
-```html
-<Transition name="fade">
-  <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
-    <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
-    <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] ...">
-```
-
-改为：
-```html
-<Transition name="center-modal">
-  <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
-    <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
-    <div class="relative modal-panel w-full max-w-sm bg-[var(--mobile-bg-card)] ...">
-```
-
-2. Confirm Execute Dialog：同理，将 `<Transition name="fade">` 改为 `<Transition name="center-modal">`，content panel 加 `modal-panel`
-
-当前：
-```html
-<Transition name="fade">
-  <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
-    <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
-    <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] ...">
-```
-
-改为：
-```html
-<Transition name="center-modal">
-  <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
-    <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
-    <div class="relative modal-panel w-full max-w-sm bg-[var(--mobile-bg-card)] ...">
-```
-
-- [ ] **Step 2: 修改 SettingsView.vue**
-
-1. Browser Confirm Modal 和 Confirm Dialog 都没有 `<Transition>`，需要加上。
-
-当前 Browser Confirm：
+当前（第 201-211 行）：
 ```html
 <Teleport to="body">
   <div v-if="showBrowserConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelOpenBrowser">
@@ -607,14 +1019,20 @@ ToolboxView 和 SettingsView 中有内联弹窗，需要迁移到全局 transiti
 ```html
 <Teleport to="body">
   <Transition name="center-modal">
-    <div v-if="showBrowserConfirm" class="confirm-modal-overlay mobile-ui">
-      <div class="absolute inset-0" @click="cancelOpenBrowser"></div>
+    <div v-if="showBrowserConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelOpenBrowser">
       <div class="confirm-modal modal-panel">
 ```
 
-末尾加 `</Transition>`。
+在 `</div></Teleport>` 之前关闭 `</Transition>`：
+```html
+    </div>
+  </Transition>
+</Teleport>
+```
 
-当前 Confirm Dialog：
+- [ ] **Step 2: 通用确认弹窗加 `<Transition name="center-modal">` + `.modal-panel`**
+
+当前（第 215-225 行）：
 ```html
 <Teleport to="body">
   <div v-if="showConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelConfirm">
@@ -625,71 +1043,135 @@ ToolboxView 和 SettingsView 中有内联弹窗，需要迁移到全局 transiti
 ```html
 <Teleport to="body">
   <Transition name="center-modal">
-    <div v-if="showConfirm" class="confirm-modal-overlay mobile-ui">
-      <div class="absolute inset-0" @click="cancelConfirm"></div>
+    <div v-if="showConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelConfirm">
       <div class="confirm-modal modal-panel">
 ```
 
-末尾加 `</Transition>`。
+在 `</div></Teleport>` 之前关闭 `</Transition>`：
+```html
+    </div>
+  </Transition>
+</Teleport>
+```
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add bedcode-mobile/src/views/ToolboxView.vue bedcode-mobile/src/views/SettingsView.vue
-git commit -m "refactor(mobile): migrate inline view dialogs to global transition"
+git add bedcode-mobile/src/views/SettingsView.vue
+git commit -m "feat(mobile): SettingsView inline dialogs add center-modal transition"
 ```
 
 ---
 
-### Task 6: 视觉验证
+## Task 16: ShortcutConfigModal 删除确认弹窗 — 添加动画
 
-- [ ] **Step 1: 启动开发服务器**
+**Files:**
+- Modify: `bedcode-mobile/src/components/ShortcutConfigModal.vue`
 
-```bash
-cd bedcode-mobile && npm run tauri:android:dev
+ShortcutConfigModal 内部有一个删除确认弹窗（`confirmDeleteCode` 控制），当前用 `v-if` 直接显示，无 Transition、无动画。
+
+- [ ] **Step 1: 给删除确认弹窗加 `<Transition name="center-modal">` + `.modal-panel`**
+
+当前（第 216-224 行）：
+```html
+<div v-if="confirmDeleteCode" class="delete-confirm-overlay" @click.self="confirmDeleteCode = ''">
+  <div class="delete-confirm-modal">
 ```
 
-或者如果只想在浏览器验证：
-```bash
-cd bedcode-mobile && npm run dev
+改为：
+```html
+<Transition name="center-modal">
+  <div v-if="confirmDeleteCode" class="delete-confirm-overlay" @click.self="confirmDeleteCode = ''">
+    <div class="delete-confirm-modal modal-panel">
 ```
 
-- [ ] **Step 2: 逐个验证弹窗动画**
+在 `</div>` 后关闭 `</Transition>`：
+```html
+  </div>
+</Transition>
+```
 
-逐个触发以下弹窗，验证打开和关闭动画都流畅播放：
+- [ ] **Step 2: Commit**
 
-**center-modal 组（缩放弹出）：**
-1. 终端设置弹窗 — 在终端页点击设置图标
-2. 终端确认弹窗 — 点击清屏确认
-3. 代码查看器设置 — 打开文件后点击设置
-4. InputAssistant 设置 — 长按悬浮球
-5. 确认对话框 — 停止会话确认
-6. 底部输入弹窗 — 手动连接输入 IP
-7. 任务编辑弹窗 — 新建/编辑任务
-8. 文件查看器 — 点击文件查看
-9. 工具箱确认执行弹窗
-10. 设置页确认弹窗
+```bash
+git add bedcode-mobile/src/components/ShortcutConfigModal.vue
+git commit -m "feat(mobile): ShortcutConfigModal delete confirm add center-modal transition"
+```
 
-**bottom-sheet 组（底部滑入）：**
-1. 任务选择器 — 点击任务按钮
-2. 快捷键配置 — 悬浮球配置
-3. 快捷键帮助 — 配置页帮助按钮
+---
 
-**检查要点：**
-- 打开动画流畅，有 scale/translateY 过渡
-- 关闭动画流畅，不是闪现消失
-- backdrop 淡入淡出
-- 时长约 280ms，不快不慢
-- 动画期间不影响交互（无抖动）
+## Task 17: 集成验证
 
-- [ ] **Step 3: 如有问题，修复并提交**
+**Files:**
+- All modified files
 
-常见问题及修复：
-- 如果某个弹窗动画不生效：检查 `.modal-panel` class 是否正确添加
-- 如果 backdrop 不跟随淡入淡出：检查 backdrop 是否是容器 div 的子元素而非背景色
-- 如果 content panel 初始位置不对：检查是否有 scoped CSS 覆盖了 transform
+- [ ] **Step 1: 确认构建无错误**
+
+Run: `cd bedcode-mobile && npx vue-tsc --noEmit 2>&1 | tail -20`
+Expected: 无类型错误
+
+- [ ] **Step 2: 确认无残留的旧 transition name 引用**
+
+搜索所有组件中是否还有旧的 transition name：
+
+Run: `cd bedcode-mobile && grep -rn 'name="modal"\|name="fade"\|name="confirm"\|name="modal-fade"' src/components/ src/views/`
+Expected: 无匹配结果（所有旧名称已替换为 `center-modal` 或 `bottom-sheet`）
+
+- [ ] **Step 3: 确认无残留的 `@keyframes` 入场动画**
+
+Run: `cd bedcode-mobile && grep -rn '@keyframes modal-in\|@keyframes slide-up' src/components/ src/views/`
+Expected: 无匹配结果
+
+- [ ] **Step 4: 确认所有 `.modal-panel` class 已添加**
+
+Run: `cd bedcode-mobile && grep -rn 'modal-panel' src/components/ src/views/`
+Expected: 每个弹窗组件的内容面板 div 都有 `modal-panel` class
+
+- [ ] **Step 5: 确认无残留的 scoped transition CSS**
+
+Run: `cd bedcode-mobile && grep -rn '\.modal-enter\|\.fade-enter\|\.confirm-enter\|\.modal-fade-enter' src/components/ src/views/`
+Expected: 无匹配结果
+
+- [ ] **Step 6: 手动运行 dev 服务器进行视觉验证**
+
+Run: `cd bedcode-mobile && npm run tauri:android:dev`
+
+逐一验证以下弹窗的打开/关闭动画：
+1. Modal.vue — center-modal（缩放弹出）
+2. ConfirmDialog.vue — center-modal
+3. BottomSheet.vue — center-modal
+4. TaskEditDialog.vue — center-modal
+5. FileViewerModal.vue — center-modal
+6. TaskPickerModal.vue — bottom-sheet（底部滑入）
+7. ShortcutConfigModal.vue — bottom-sheet
+8. ShortcutHelpModal.vue — bottom-sheet
+9. TerminalConfirmModal.vue — center-modal
+10. TerminalSettingsModal.vue — center-modal
+11. CodeViewerSettingsModal.vue — center-modal
+12. SettingsModal.vue — center-modal
+13. ToolboxView session picker — bottom-sheet
+14. ToolboxView confirm dialog — center-modal
+15. SettingsView 确认弹窗 — center-modal
+
+每个弹窗验证：
+- 打开动画流畅（280ms）
+- 关闭动画流畅（280ms，不闪现）
+- Backdrop 淡入淡出正常
+- Content 动画方向正确（center-modal: scale, bottom-sheet: translateY）
+
+- [ ] **Step 7: Final commit（如有修复）**
 
 ```bash
 git add -A
-git commit -m "fix(mobile): adjust modal transition issues from visual verification"
+git commit -m "fix(mobile): modal transition integration fixes"
 ```
+
+---
+
+## 注意事项
+
+1. **关闭动画必须播完**：使用 `v-if` 而非 `v-show` 控制 `<Transition>`，Vue 会等 leave 动画播完再移除 DOM
+2. **Teleport 一致性**：所有模态弹窗都应使用 `<Teleport to="body">`，避免被父容器 `overflow: hidden` 裁切
+3. **z-index 层级不变**：沿用现有的 z-50 / z-100 / z-110 / z-120 体系
+4. **`.modal-panel` class**：内容面板必须加此 class 才能被全局 CSS 选择器匹配到动画规则
+5. **性能**：`transform` 和 `opacity` 是 GPU 加速属性，不会触发重排，280ms 在移动端足够流畅

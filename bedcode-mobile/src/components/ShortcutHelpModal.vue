@@ -1,12 +1,13 @@
 <template>
   <Teleport to="body">
+    <Transition name="bottom-sheet">
     <div
       v-if="visible"
       class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui"
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
+      <div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
           <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ $t('mobile.shortcutHelp.title') }}</span>
@@ -26,6 +27,7 @@
         </div>
       </div>
     </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -57,21 +59,6 @@ const renderedContent = computed(() => {
 </script>
 
 <style scoped>
-.shortcut-help-modal {
-  animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes slide-up {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
 /* Markdown 渲染样式 */
 .md-body {
   font-size: 0.875rem;

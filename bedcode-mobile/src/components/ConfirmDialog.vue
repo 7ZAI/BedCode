@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <Transition name="confirm">
+    <Transition name="center-modal">
       <div
         v-if="modelValue"
         class="fixed inset-0 z-50 flex items-center justify-center mobile-ui"
@@ -12,7 +12,7 @@
         ></div>
 
         <!-- Panel -->
-        <div class="relative w-full max-w-sm mx-4 mb-[var(--safe-area-bottom,0px)] bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl overflow-hidden shadow-xl">
+        <div class="relative w-full max-w-sm mx-4 mb-[var(--safe-area-bottom,0px)] bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl overflow-hidden shadow-xl modal-panel">
           <!-- Header -->
           <div class="px-6 pt-6 pb-2">
             <div class="flex items-center gap-3 mb-2">
@@ -128,26 +128,3 @@ function handleBackdropClick() {
   }
 }
 </script>
-
-<style scoped>
-.confirm-enter-active,
-.confirm-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.confirm-enter-active .relative,
-.confirm-leave-active .relative {
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
-}
-
-.confirm-enter-from,
-.confirm-leave-to {
-  opacity: 0;
-}
-
-.confirm-enter-from .relative,
-.confirm-leave-to .relative {
-  transform: translateY(20px);
-  opacity: 0;
-}
-</style>

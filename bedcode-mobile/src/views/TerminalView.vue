@@ -112,7 +112,7 @@
 
   <!-- Task Picker -->
   <TaskPickerModal
-    v-if="showTaskPicker"
+    :visible="showTaskPicker"
     :tasks="presetTasks"
     :session-id="sessionId"
     @send="onTaskSend"

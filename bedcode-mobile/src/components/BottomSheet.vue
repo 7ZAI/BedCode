@@ -1,12 +1,12 @@
 <template>
   <Teleport to="body">
-    <Transition name="fade">
+    <Transition name="center-modal">
       <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
         <!-- Backdrop -->
         <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="handleBackdropClick"></div>
 
         <!-- Panel - 居中显示，避免被输入法遮挡 -->
-        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl">
+        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl modal-panel">
           <!-- Close button (loading时禁用) -->
           <button
             class="absolute top-4 right-4 p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-text-primary)]"
@@ -126,26 +126,3 @@ function handleCancel() {
   emit('update:modelValue', false)
 }
 </script>
-
-<style scoped>
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-active .relative,
-.fade-leave-active .relative {
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-.fade-enter-from .relative,
-.fade-leave-to .relative {
-  transform: scale(0.95);
-  opacity: 0;
-}
-</style>

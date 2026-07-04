@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <Transition name="modal">
+    <Transition name="center-modal">
       <div
         v-if="modelValue"
         class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui"
@@ -11,7 +11,7 @@
 
         <!-- Modal Content -->
         <div
-          class="relative rounded-xl shadow-2xl border bg-[var(--mobile-bg-card)] border-[var(--mobile-border)]"
+          class="relative rounded-xl shadow-2xl border bg-[var(--mobile-bg-card)] border-[var(--mobile-border)] modal-panel"
           :class="[sizeClass]"
         >
           <!-- Header -->
@@ -110,20 +110,3 @@ function close() {
   emit('close')
 }
 </script>
-
-<style scoped>
-.modal-enter-active,
-.modal-leave-active {
-  transition: all 0.2s ease;
-}
-
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
-
-.modal-enter-from > div:last-child,
-.modal-leave-to > div:last-child {
-  transform: scale(0.95);
-}
-</style>

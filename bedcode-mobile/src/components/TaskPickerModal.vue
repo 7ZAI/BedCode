@@ -17,11 +17,7 @@ const connection = useMobileConnection()
 
 const props = defineProps<{
   tasks: PresetTask[]
-  /**
-   * 当前终端会话 ID（终端视图场景传入）
-   * 传入时：新建/编辑任务弹窗自动锁定该会话的工作目录，不可更改
-   * 不传时：目录可自由选择（工具箱场景）
-   */
+  visible?: boolean
   sessionId?: string
 }>()
 
@@ -108,8 +104,9 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 
 <template>
   <Teleport to="body">
-    <div class="modal-overlay mobile-ui" @click.self="emit('close')">
-      <div class="modal-content">
+    <Transition name="bottom-sheet">
+    <div v-if="visible" class="modal-overlay mobile-ui" @click.self="emit('close')">
+      <div class="modal-content modal-panel">
         <div class="modal-header">
           <h3>{{ t('mobile.taskPicker.title') }}</h3>
           <div class="header-actions">
@@ -169,6 +166,7 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- 新增/编辑任务弹窗（使用共享组件） -->
     <TaskEditDialog
@@ -207,18 +205,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   background: var(--mobile-bg-secondary);
   border-radius: 16px;
   overflow: hidden;
-  animation: modal-in 0.2s ease;
-}
-
-@keyframes modal-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
 }
 
 .modal-header {

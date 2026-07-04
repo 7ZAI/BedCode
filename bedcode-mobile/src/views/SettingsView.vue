@@ -199,8 +199,9 @@
 
     <!-- Browser Confirm Modal -->
     <Teleport to="body">
+      <Transition name="center-modal">
       <div v-if="showBrowserConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelOpenBrowser">
-        <div class="confirm-modal">
+        <div class="confirm-modal modal-panel">
           <p class="confirm-text">{{ $t('settings.browser.confirmOpen') }}</p>
           <p class="confirm-url text-xs text-[var(--mobile-text-muted)] mt-1 mb-4 break-all">{{ pendingUrl }}</p>
           <div class="confirm-buttons">
@@ -209,12 +210,14 @@
           </div>
         </div>
       </div>
+      </Transition>
     </Teleport>
 
     <!-- Confirm Dialog (Reset / Clear Data) -->
     <Teleport to="body">
+      <Transition name="center-modal">
       <div v-if="showConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelConfirm">
-        <div class="confirm-modal">
+        <div class="confirm-modal modal-panel">
           <p class="confirm-text">{{ confirmMessage }}</p>
           <div class="confirm-buttons">
             <button class="confirm-btn cancel" @click="cancelConfirm">{{ $t('common.button.cancel') }}</button>
@@ -222,6 +225,7 @@
           </div>
         </div>
       </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

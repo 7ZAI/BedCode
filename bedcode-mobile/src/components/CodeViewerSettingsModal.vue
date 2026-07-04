@@ -1,11 +1,12 @@
 <template>
   <Teleport to="body">
+    <Transition name="center-modal">
     <div
       v-if="visible"
       class="settings-modal-overlay mobile-ui"
       @click.self="emit('close')"
     >
-    <div class="settings-modal" :style="modalStyle">
+    <div class="settings-modal modal-panel" :style="modalStyle">
       <div class="settings-header">
         <h2>{{ t('mobile.codeViewer.settingsTitle') }}</h2>
         <button class="close-btn" @click.stop="emit('close')">
@@ -97,8 +98,9 @@
         <button class="settings-footer-btn cancel" @click.stop="emit('close')">{{ t('common.button.cancel') }}</button>
         <button class="settings-footer-btn confirm" @click.stop="handleConfirm">{{ t('common.button.confirm') }}</button>
       </div>
+      </div>
     </div>
-  </div>
+    </Transition>
   </Teleport>
 </template>
 

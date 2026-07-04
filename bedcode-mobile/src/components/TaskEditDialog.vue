@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
-    <Transition name="modal">
+    <Transition name="center-modal">
       <div v-if="visible" class="fixed inset-0 z-[110] flex items-center justify-center p-4 mobile-ui">
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="emit('close')"></div>
-        <div class="relative w-full max-w-lg bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl max-h-[85vh] flex flex-col">
+        <div class="relative w-full max-w-lg bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl max-h-[85vh] flex flex-col modal-panel">
           <div class="flex items-center justify-between mb-4 flex-shrink-0">
             <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)]">
               {{ task ? t('mobile.toolbox.editTask') : t('mobile.toolbox.addTaskTitle') }}
@@ -113,10 +113,10 @@
 
   <!-- File Explorer Dialog (层级高于 Edit Dialog) -->
   <Teleport to="body">
-    <Transition name="modal">
+    <Transition name="center-modal">
       <div v-if="showFileExplorer && fileExplorerSessionId" class="fixed inset-0 z-[120] flex items-center justify-center p-[10%] mobile-ui">
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showFileExplorer = false"></div>
-        <div class="relative w-full h-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl shadow-xl overflow-hidden flex flex-col">
+        <div class="relative w-full h-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl shadow-xl overflow-hidden flex flex-col modal-panel">
           <FileExplorer
             :session-id="fileExplorerSessionId"
             mode="emit"
@@ -261,22 +261,6 @@ function handleSave() {
 </script>
 
 <style scoped>
-/* Modal transition - scale + fade */
-.modal-enter-active,
-.modal-leave-active {
-  transition: all 0.2s ease;
-}
-
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
-
-.modal-enter-from > :last-child,
-.modal-leave-to > :last-child {
-  transform: scale(0.95);
-}
-
 /* Dropdown transition */
 .dropdown-enter-active,
 .dropdown-leave-active {

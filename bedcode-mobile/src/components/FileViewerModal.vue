@@ -1,8 +1,8 @@
 <template>
   <Teleport to="body">
-    <transition name="modal-fade">
+    <transition name="center-modal">
       <div v-if="visible" class="viewer-overlay mobile-ui" @click.self="handleClose" @touchstart.stop @touchmove.stop>
-        <div class="viewer-modal" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
+        <div class="viewer-modal modal-panel" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
         <!-- Header -->
         <div class="viewer-header">
           <div class="viewer-title-area">
@@ -681,26 +681,5 @@ watch(
 .viewer-line-count {
   font-size: 0.75rem;
   color: var(--mobile-text-muted);
-}
-
-/* Modal transition */
-.modal-fade-enter-active,
-.modal-fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.modal-fade-enter-from,
-.modal-fade-leave-to {
-  opacity: 0;
-}
-
-.modal-fade-enter-active .viewer-modal,
-.modal-fade-leave-active .viewer-modal {
-  transition: transform 0.2s ease;
-}
-
-.modal-fade-enter-from .viewer-modal,
-.modal-fade-leave-to .viewer-modal {
-  transform: scale(0.95);
 }
 </style>
