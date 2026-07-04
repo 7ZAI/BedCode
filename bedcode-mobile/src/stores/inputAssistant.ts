@@ -25,6 +25,8 @@ export interface QuickBarItem {
   label: string
   /** 使用频次 */
   count: number
+  /** 颜色分类：enter=绿色, del=红色, arrow=黄色, shortcut=紫色, custom=绿色 */
+  category: 'enter' | 'del' | 'arrow' | 'shortcut' | 'custom'
 }
 
 export interface InputAssistantSettings {
@@ -72,6 +74,14 @@ const STORAGE_KEY_POSITION = 'input_assistant_position'
 const STORAGE_KEY_SETTINGS = 'input_assistant_settings'
 const STORAGE_KEY_CUSTOM_CMD_STATS = 'terminal_custom_cmd_stats'
 const STORAGE_KEY_SHORTCUT_CONFIG = 'terminal_shortcut_config'
+
+/** 根据快捷键 code 判断颜色分类 */
+function getShortcutCategory(code: string): QuickBarItem['category'] {
+  if (code === 'enter') return 'enter'
+  if (code === 'backspace') return 'del'
+  if (code.startsWith('arrow_')) return 'arrow'
+  return 'shortcut'
+}
 
 /** 默认快捷键列表（builtin，不可删除） */
 const DEFAULT_SHORTCUTS: ShortcutItem[] = [
@@ -289,6 +299,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
         key,
         label: SHORTCUT_LABELS[key] || key,
         count: cnt,
+        category: getShortcutCategory(key),
       }))
 
     // 收集自定义命令项
@@ -298,6 +309,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
         key: cmd.id,
         label: cmd.command,
         count: customCommandStats.value[cmd.id] || 0,
+        category: 'custom' as const,
       }))
 
     // 合并排序：按频次升序，最常用的排在末尾（右侧），方便拇指操作
@@ -315,6 +327,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
       key,
       label: SHORTCUT_LABELS[key] || key,
       count: 0,
+      category: getShortcutCategory(key),
     }))
   }
 

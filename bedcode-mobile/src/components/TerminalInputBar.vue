@@ -315,7 +315,7 @@
         v-for="item in quickBarItems"
         :key="item.type + '-' + item.key"
         class="quick-bar-btn"
-        :class="item.type === 'custom' ? 'quick-bar-custom' : 'quick-bar-shortcut'"
+        :class="quickBarClass(item.category)"
         @click="handleQuickBarClick(item)"
       >
         {{ item.label }}
@@ -682,6 +682,18 @@ function handleQuickBarClick(item: QuickBarItem) {
   }
 }
 
+/// 根据 category 返回 quick bar 按钮的样式类
+function quickBarClass(category: string): string {
+  const map: Record<string, string> = {
+    enter: 'quick-bar-enter',
+    del: 'quick-bar-del',
+    arrow: 'quick-bar-arrow',
+    shortcut: 'quick-bar-shortcut',
+    custom: 'quick-bar-custom',
+  }
+  return map[category] || 'quick-bar-shortcut'
+}
+
 function handleFocus() {
   isInputFocused.value = true
   // 延迟调整高度，等键盘弹出后再计算
@@ -740,7 +752,7 @@ onMounted(() => {
   border-top: 1px solid var(--mobile-border);
   padding: 0.5rem 1rem;
   position: relative;
-  /* paddingBottom 由 JS 动态设置（安全区域），不使用 CSS transition
+  /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
 }
 
@@ -799,6 +811,41 @@ onMounted(() => {
 .quick-bar-custom:active {
   transform: scale(0.93);
   background: var(--mobile-custom-cmd-active-bg);
+}
+
+.quick-bar-enter {
+  background: var(--mobile-confirm-bg);
+  border-color: var(--mobile-confirm-border);
+  color: var(--mobile-confirm-color);
+}
+
+.quick-bar-enter:active {
+  transform: scale(0.93);
+  background: var(--mobile-confirm-bg);
+  filter: brightness(1.2);
+}
+
+.quick-bar-del {
+  background: var(--mobile-danger-bg);
+  border-color: var(--mobile-danger-border);
+  color: var(--mobile-danger-color);
+}
+
+.quick-bar-del:active {
+  transform: scale(0.93);
+  background: var(--mobile-danger-bg);
+  filter: brightness(1.2);
+}
+
+.quick-bar-arrow {
+  background: var(--mobile-arrow-bg);
+  border-color: var(--mobile-arrow-border);
+  color: var(--mobile-arrow-color);
+}
+
+.quick-bar-arrow:active {
+  transform: scale(0.93);
+  background: var(--mobile-arrow-active-bg);
 }
 
 .input-area {
