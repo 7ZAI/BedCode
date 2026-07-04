@@ -1,91 +1,101 @@
 <script setup lang="ts">
 /**
- * TaskPickerModal - 任务选择弹窗
+ * TaskPickerModal - 可执行任务弹窗
  *
- * 居中弹窗展示可选的 PresetTask 列表，支持勾选、排序和新建任务
+ * 展示所有预设任务，每个任务可单独点击执行发送到终端，
+ * 也可新建/编辑任务
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { PresetTask, PresetTaskType } from '../composables/model'
+import type { PresetTask } from '../composables/model'
 import { usePresetTasks } from '../composables/usePresetTasks'
+import { useMobileConnection } from '@/composables/useMobileConnection'
+import TaskEditDialog from '@/components/TaskEditDialog.vue'
 
 const { t } = useI18n()
+const connection = useMobileConnection()
 
 const props = defineProps<{
   tasks: PresetTask[]
+  /**
+   * 当前终端会话 ID（终端视图场景传入）
+   * 传入时：新建/编辑任务弹窗自动锁定该会话的工作目录，不可更改
+   * 不传时：目录可自由选择（工具箱场景）
+   */
+  sessionId?: string
 }>()
 
 const emit = defineEmits<{
-  confirm: [tasks: PresetTask[]]
+  /** 执行单个任务：将任务内容发送到终端 */
+  execute: [task: PresetTask]
   close: []
 }>()
 
-const { addTask } = usePresetTasks()
+const { addTask, updateTask } = usePresetTasks()
 
-const selectedIds = ref<Set<string>>(new Set())
-const orderedSelection = ref<PresetTask[]>([])
 const expandedTaskId = ref<string | null>(null)
 
-// 新建任务弹窗状态
-const showCreateModal = ref(false)
-const newTitle = ref('')
-const newContent = ref('')
-const newType = ref<PresetTaskType>('template')
+// TaskEditDialog 状态
+const showEditDialog = ref(false)
+const editingTask = ref<PresetTask | null>(null)
 
-const availableTasks = computed(() =>
-  props.tasks.filter(t => t.type === 'template' || (t.type === 'once' && t.status === 'pending'))
+const isConnected = computed(() =>
+  connection.connectionStatus.value === 'connected' ||
+  connection.connectionStatus.value === 'paired'
 )
+const activeSessionId = computed(() => connection.activeSessionId.value || '')
+const activeSessions = computed(() => connection.activeSessions.value || [])
+const projectDirs = computed(() => {
+  const configs = connection.sessionConfigs.value || []
+  const dirs = configs
+    .map((c: any) => c.working_dir)
+    .filter((d: any): d is string => !!d)
+  return [...new Set(dirs)]
+})
 
-function toggleTask(task: PresetTask) {
-  if (selectedIds.value.has(task.id)) {
-    selectedIds.value.delete(task.id)
-    orderedSelection.value = orderedSelection.value.filter(t => t.id !== task.id)
-  } else {
-    selectedIds.value.add(task.id)
-    orderedSelection.value.push(task)
-  }
-}
+/** 根据 sessionId 查找对应会话的工作目录，用于锁定 TaskEditDialog */
+const lockedDir = computed(() => {
+  if (!props.sessionId) return undefined
+  const sessions = activeSessions.value
+  const session = sessions.find((s: any) => s.id === props.sessionId)
+  if (!session) return undefined
+  const configId = session.config_id || session.configId
+  if (!configId) return undefined
+  const configs = connection.sessionConfigs.value || []
+  const config = configs.find((c: any) => c.id === configId)
+  return config?.working_dir || undefined
+})
 
 function toggleExpand(taskId: string) {
   expandedTaskId.value = expandedTaskId.value === taskId ? null : taskId
 }
 
-function moveUp(index: number) {
-  if (index <= 0) return
-  const list = [...orderedSelection.value]
-  ;[list[index - 1], list[index]] = [list[index], list[index - 1]]
-  orderedSelection.value = list
-}
-
-function moveDown(index: number) {
-  if (index >= orderedSelection.value.length - 1) return
-  const list = [...orderedSelection.value]
-  ;[list[index], list[index + 1]] = [list[index + 1], list[index]]
-  orderedSelection.value = list
-}
-
-function handleConfirm() {
-  if (orderedSelection.value.length > 0) {
-    emit('confirm', orderedSelection.value)
-  }
+/** 点击执行按钮 */
+function handleExecute(task: PresetTask) {
+  emit('execute', task)
 }
 
 /** 打开新建任务弹窗 */
-function openCreateModal() {
-  newTitle.value = ''
-  newContent.value = ''
-  newType.value = 'template'
-  showCreateModal.value = true
+function openCreateDialog() {
+  editingTask.value = null
+  showEditDialog.value = true
 }
 
-/** 确认创建任务 */
-async function handleCreate() {
-  const title = newTitle.value.trim()
-  const content = newContent.value.trim()
-  if (!title || !content) return
+/** 打开编辑任务弹窗 */
+function openEditDialog(task: PresetTask) {
+  editingTask.value = task
+  showEditDialog.value = true
+}
 
-  await addTask({ title, content, type: newType.value })
-  showCreateModal.value = false
+/** TaskEditDialog 保存回调 */
+async function handleEditSave(data: PresetTask | { title: string; content: string }) {
+  if ('id' in data) {
+    await updateTask(data)
+  } else {
+    await addTask(data)
+  }
+  showEditDialog.value = false
+  editingTask.value = null
 }
 </script>
 
@@ -96,7 +106,7 @@ async function handleCreate() {
         <div class="modal-header">
           <h3>{{ t('mobile.taskPicker.title') }}</h3>
           <div class="header-actions">
-            <button class="add-btn" @click="openCreateModal" :title="t('mobile.taskPicker.newTask')">
+            <button class="add-btn" @click="openCreateDialog" :title="t('mobile.taskPicker.newTask')">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/>
               </svg>
@@ -106,31 +116,39 @@ async function handleCreate() {
         </div>
 
         <div class="modal-body">
-          <!-- 可选任务列表 -->
-          <div v-if="availableTasks.length === 0" class="empty-hint">
+          <!-- 任务列表 -->
+          <div v-if="tasks.length === 0" class="empty-hint">
             <p>{{ t('mobile.taskPicker.noTasks') }}</p>
-            <button class="empty-add-btn" @click="openCreateModal">{{ t('mobile.taskPicker.createTask') }}</button>
+            <button class="empty-add-btn" @click="openCreateDialog">{{ t('mobile.taskPicker.createTask') }}</button>
           </div>
           <div v-else class="task-list">
             <div
-              v-for="task in availableTasks"
+              v-for="task in tasks"
               :key="task.id"
               class="task-item"
-              :class="{ selected: selectedIds.has(task.id), expanded: expandedTaskId === task.id }"
+              :class="{ expanded: expandedTaskId === task.id }"
             >
-              <div class="task-item-main" @click="toggleTask(task)">
-                <div class="task-checkbox">
-                  <svg v-if="selectedIds.has(task.id)" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                  </svg>
-                </div>
-                <div class="task-info">
+              <div class="task-item-main">
+                <div class="task-info" @click="toggleExpand(task.id)">
                   <div class="task-info-top">
                     <span class="task-title">{{ task.title }}</span>
                     <span class="task-type-badge">{{ task.type === 'template' ? t('mobile.presetTask.template') : t('mobile.presetTask.once') }}</span>
                   </div>
                   <span class="task-content-preview">{{ task.content }}</span>
                 </div>
+                <!-- 执行按钮 -->
+                <button class="exec-btn" :title="t('mobile.presetTask.execute')" @click.stop="handleExecute(task)">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                  </svg>
+                </button>
+                <!-- 编辑按钮 -->
+                <button class="edit-btn" :title="t('mobile.presetTask.edit')" @click.stop="openEditDialog(task)">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                  </svg>
+                </button>
+                <!-- 展开/收起按钮 -->
                 <button class="expand-btn" :class="{ rotated: expandedTaskId === task.id }" @click.stop="toggleExpand(task.id)">
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                     <path d="M7 10l5 5 5-5z"/>
@@ -144,103 +162,23 @@ async function handleCreate() {
               </transition>
             </div>
           </div>
-
-          <!-- 已选任务排序 -->
-          <div v-if="orderedSelection.length > 0" class="selected-section">
-            <div class="section-title">{{ t('mobile.taskPicker.executionOrder') }}</div>
-            <div class="selected-list">
-              <div v-for="(task, index) in orderedSelection" :key="task.id" class="selected-item">
-                <span class="order-number">{{ index + 1 }}</span>
-                <div class="selected-info">
-                  <span class="selected-title">{{ task.title }}</span>
-                  <span class="selected-content-preview">{{ task.content }}</span>
-                </div>
-                <div class="order-actions">
-                  <button class="order-btn" :disabled="index === 0" @click.stop="moveUp(index)">↑</button>
-                  <button class="order-btn" :disabled="index === orderedSelection.length - 1" @click.stop="moveDown(index)">↓</button>
-                  <button class="order-btn remove" @click.stop="toggleTask(task)">&times;</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="modal-footer">
-          <button class="btn-cancel" @click="emit('close')">{{ t('common.button.cancel') }}</button>
-          <button
-            class="btn-confirm"
-            :disabled="orderedSelection.length === 0"
-            @click="handleConfirm"
-          >
-            {{ t('mobile.taskPicker.confirmAdd', { count: orderedSelection.length }) }}
-          </button>
         </div>
       </div>
     </div>
 
-    <!-- 新建任务弹窗 -->
-    <div v-if="showCreateModal" class="create-overlay mobile-ui" @click.self="showCreateModal = false">
-      <div class="create-modal">
-        <div class="create-header">
-          <h3>{{ t('mobile.taskPicker.newTask') }}</h3>
-          <button class="close-btn" @click="showCreateModal = false">&times;</button>
-        </div>
-
-        <div class="create-body">
-          <div class="form-group">
-            <label class="form-label">{{ t('mobile.taskPicker.taskName') }}</label>
-            <input
-              v-model="newTitle"
-              class="form-input"
-              :placeholder="t('mobile.taskPicker.taskNamePlaceholder')"
-              maxlength="50"
-            />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">{{ t('mobile.taskPicker.taskContent') }}</label>
-            <textarea
-              v-model="newContent"
-              class="form-textarea"
-              :placeholder="t('mobile.taskPicker.taskContentPlaceholder')"
-              rows="4"
-            ></textarea>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">{{ t('mobile.taskPicker.taskType') }}</label>
-            <div class="type-selector">
-              <button
-                class="type-btn"
-                :class="{ active: newType === 'template' }"
-                @click="newType = 'template'"
-              >
-                {{ t('mobile.presetTask.template') }}
-              </button>
-              <button
-                class="type-btn"
-                :class="{ active: newType === 'once' }"
-                @click="newType = 'once'"
-              >
-                {{ t('mobile.presetTask.once') }}
-              </button>
-            </div>
-            <p class="type-hint">{{ newType === 'template' ? t('mobile.taskPicker.templateHint') : t('mobile.taskPicker.onceHint') }}</p>
-          </div>
-        </div>
-
-        <div class="create-footer">
-          <button class="btn-cancel" @click="showCreateModal = false">{{ t('common.button.cancel') }}</button>
-          <button
-            class="btn-confirm"
-            :disabled="!newTitle.trim() || !newContent.trim()"
-            @click="handleCreate"
-          >
-            {{ t('common.button.create') }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- 新增/编辑任务弹窗（使用共享组件） -->
+    <TaskEditDialog
+      :visible="showEditDialog"
+      :task="editingTask"
+      :is-connected="isConnected"
+      :project-dirs="projectDirs"
+      :active-session-id="activeSessionId"
+      :active-sessions="activeSessions"
+      :session-configs="connection.sessionConfigs.value || []"
+      :locked-dir="lockedDir"
+      @save="handleEditSave"
+      @close="showEditDialog = false"
+    />
   </Teleport>
 </template>
 
@@ -378,37 +316,11 @@ async function handleCreate() {
   transition: border-color 0.15s, background 0.15s;
 }
 
-.task-item.selected {
-  border-color: var(--mobile-accent);
-  background: var(--mobile-accent-muted);
-}
-
 .task-item-main {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
   padding: 10px 12px;
-  cursor: pointer;
-}
-
-.task-item-main:active {
-  background: var(--mobile-bg-hover);
-}
-
-.task-checkbox {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  border: 2px solid var(--mobile-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--mobile-accent);
-  flex-shrink: 0;
-}
-
-.task-item.selected .task-checkbox {
-  border-color: var(--mobile-accent);
 }
 
 .task-info {
@@ -418,6 +330,11 @@ async function handleCreate() {
   overflow: hidden;
   flex: 1;
   min-width: 0;
+  cursor: pointer;
+}
+
+.task-info:active {
+  opacity: 0.8;
 }
 
 .task-info-top {
@@ -440,6 +357,46 @@ async function handleCreate() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.exec-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.exec-btn:active {
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+.edit-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--mobile-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.edit-btn:active {
+  background: var(--mobile-bg-hover);
+  color: var(--mobile-accent);
 }
 
 .expand-btn {
@@ -511,277 +468,5 @@ async function handleCreate() {
   border-radius: 4px;
   background: var(--mobile-bg-secondary);
   color: var(--mobile-text-muted);
-}
-
-.selected-section {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--mobile-border);
-}
-
-.section-title {
-  font-size: 12px;
-  color: var(--mobile-text-muted);
-  margin-bottom: 8px;
-}
-
-.selected-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.selected-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--mobile-bg-secondary);
-}
-
-.selected-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
-}
-
-.order-number {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--mobile-accent);
-  color: var(--mobile-text-on-accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.selected-title {
-  font-size: 13px;
-  color: var(--mobile-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.selected-content-preview {
-  font-size: 11px;
-  color: var(--mobile-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.order-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.order-btn {
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 4px;
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.order-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.order-btn.remove {
-  color: var(--mobile-error, #ef4444);
-}
-
-.modal-footer {
-  display: flex;
-  gap: 12px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--mobile-border);
-}
-
-.btn-cancel {
-  flex: 1;
-  padding: 10px;
-  border: 1px solid var(--mobile-border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--mobile-text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.btn-confirm {
-  flex: 1;
-  padding: 10px;
-  border: none;
-  border-radius: 8px;
-  background: var(--mobile-accent);
-  color: var(--mobile-text-on-accent);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-confirm:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* 新建任务弹窗 */
-.create-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--mobile-overlay);
-  padding: 1rem;
-}
-
-.create-modal {
-  width: 100%;
-  max-width: 380px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--mobile-bg-secondary);
-  border-radius: 16px;
-  overflow: hidden;
-  animation: modal-in 0.2s ease;
-}
-
-.create-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--mobile-border);
-}
-
-.create-header h3 {
-  margin: 0;
-  font-size: 16px;
-  color: var(--mobile-text-primary);
-}
-
-.create-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-group:last-child {
-  margin-bottom: 0;
-}
-
-.form-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--mobile-text-muted);
-  margin-bottom: 6px;
-}
-
-.form-input {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--mobile-border);
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.15s;
-  box-sizing: border-box;
-}
-
-.form-input:focus {
-  border-color: var(--mobile-accent);
-}
-
-.form-input::placeholder {
-  color: var(--mobile-text-muted);
-}
-
-.form-textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--mobile-border);
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-text-primary);
-  font-size: 14px;
-  outline: none;
-  resize: vertical;
-  min-height: 80px;
-  transition: border-color 0.15s;
-  box-sizing: border-box;
-  font-family: inherit;
-}
-
-.form-textarea:focus {
-  border-color: var(--mobile-accent);
-}
-
-.form-textarea::placeholder {
-  color: var(--mobile-text-muted);
-}
-
-.type-selector {
-  display: flex;
-  gap: 8px;
-}
-
-.type-btn {
-  flex: 1;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--mobile-border);
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.type-btn.active {
-  border-color: var(--mobile-accent);
-  background: var(--mobile-accent-muted);
-  color: var(--mobile-accent);
-  font-weight: 600;
-}
-
-.type-hint {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--mobile-text-muted);
-}
-
-.create-footer {
-  display: flex;
-  gap: 12px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--mobile-border);
 }
 </style>

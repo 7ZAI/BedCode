@@ -26,6 +26,23 @@
           </div>
         </div>
 
+        <!-- 行间距 -->
+        <div class="settings-section">
+          <label class="settings-label">{{ t('mobile.codeViewer.lineHeight') }}</label>
+          <div class="slider-control">
+            <span class="slider-value">{{ localSettings.lineHeight.toFixed(1) }}</span>
+            <input
+              type="range"
+              class="slider-track"
+              min="1.0"
+              max="2.5"
+              step="0.1"
+              v-model.number="localSettings.lineHeight"
+            />
+            <span class="slider-range-label">1.0 – 2.5</span>
+          </div>
+        </div>
+
         <!-- 代码主题 -->
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.codeViewer.codeTheme') }}</label>
@@ -327,6 +344,69 @@ function handleConfirm() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* 行间距滑块 */
+.slider-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.slider-value {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+}
+
+.slider-track {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--mobile-bg-elevated);
+  outline: none;
+  cursor: pointer;
+}
+
+.slider-track::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--mobile-accent);
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
+}
+
+.slider-track::-webkit-slider-thumb:active {
+  transform: scale(1.15);
+}
+
+.slider-track::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--mobile-accent);
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.slider-track::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--mobile-bg-elevated);
+}
+
+.slider-range-label {
+  font-size: 0.75rem;
+  color: var(--mobile-text-muted);
+  text-align: right;
 }
 
 .toggle-btn {

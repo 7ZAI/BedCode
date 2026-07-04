@@ -175,6 +175,22 @@
             class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
           <span class="text-xs text-[var(--text-tertiary)]">s</span>
         </div>
+
+        <!-- WS Max Frame Size -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.wsMaxFrameSize') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.ws_max_frame_size_kb" type="number" min="1" max="16384"
+            class="w-24 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.wsMaxFrameSizeHint') }}</span>
+        </div>
+
+        <!-- WS Max Message Size -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.wsMaxMessageSize') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.ws_max_message_size_mb" type="number" min="1" max="512"
+            class="w-24 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.wsMaxMessageSizeHint') }}</span>
+        </div>
       </div>
     </div>
 
@@ -212,7 +228,7 @@
         </div>
       </div>
 
-      <!-- WS 消息时序图 -->
+      <!-- WS 消息时序图：始终显示，无数据时展示空图表 -->
       <div>
         <h3 class="text-sm font-medium text-[var(--text-secondary)] mb-2">
           {{ $t('desktop.server.wsThroughput') }}
@@ -231,7 +247,6 @@
 import { onMounted, onUnmounted, computed, watch, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useServer } from '@/composables/useServer'
-import type { NetworkConfig } from '@/composables/useServer'
 import { useToast } from '@/composables/useToast'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -295,6 +310,7 @@ watch(status, (val) => {
   }
 })
 
+// 首次 metrics 到达时启动计时
 watch(metrics, (m) => {
   if (m && status.value === 'running' && !uptimeTimer) {
     uptimeTick.value = m.uptime_secs
@@ -316,21 +332,6 @@ function formatMemory(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   return `${(bytes / 1024).toFixed(0)} KB`
 }
-
-/** 高级配置本地编辑副本 */
-const advConfig = computed({
-  get: () => networkConfig.value ? {
-    workers: networkConfig.value.workers,
-    keep_alive_secs: networkConfig.value.keep_alive_secs,
-    client_request_timeout_secs: networkConfig.value.client_request_timeout_secs,
-    client_disconnect_timeout_secs: networkConfig.value.client_disconnect_timeout_secs,
-    max_connections: networkConfig.value.max_connections,
-    backlog: networkConfig.value.backlog,
-    tcp_nodelay: networkConfig.value.tcp_nodelay,
-    shutdown_timeout_secs: networkConfig.value.shutdown_timeout_secs,
-  } : null,
-  set: (v) => { if (v && networkConfig.value) Object.assign(networkConfig.value, v) },
-})
 
 /** ECharts 时序图配置 */
 const chartOption = computed(() => {
@@ -437,11 +438,28 @@ async function handleAutoStartToggle(val: boolean) {
   }
 }
 
+/** 高级配置本地编辑副本 */
+const advConfig = computed({
+  get: () => networkConfig.value ? {
+    workers: networkConfig.value.workers,
+    keep_alive_secs: networkConfig.value.keep_alive_secs,
+    client_request_timeout_secs: networkConfig.value.client_request_timeout_secs,
+    client_disconnect_timeout_secs: networkConfig.value.client_disconnect_timeout_secs,
+    max_connections: networkConfig.value.max_connections,
+    backlog: networkConfig.value.backlog,
+    tcp_nodelay: networkConfig.value.tcp_nodelay,
+    shutdown_timeout_secs: networkConfig.value.shutdown_timeout_secs,
+    ws_max_frame_size_kb: networkConfig.value.ws_max_frame_size_kb,
+    ws_max_message_size_mb: networkConfig.value.ws_max_message_size_mb,
+  } : null,
+  set: (v) => { if (v && networkConfig.value) Object.assign(networkConfig.value, v) },
+})
+
 /** 应用高级配置并重启 */
 async function handleApplyAdvConfig() {
   if (!networkConfig.value || !advConfig.value) return
   try {
-    const merged: NetworkConfig = { ...networkConfig.value, ...advConfig.value }
+    const merged = { ...networkConfig.value, ...advConfig.value }
     await updateNetworkConfig(merged)
     if (status.value === 'running') {
       await restartServer()

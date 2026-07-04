@@ -59,11 +59,12 @@ jobs:
           tagName: v__VERSION__
           releaseName: 'BedCode v__VERSION__'
           releaseBody: 'See the assets to download and install.'
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           updaterJsonPreferNSIS: true
 
   build-android:
+    needs: build-windows
     runs-on: ubuntu-latest
     defaults:
       run:

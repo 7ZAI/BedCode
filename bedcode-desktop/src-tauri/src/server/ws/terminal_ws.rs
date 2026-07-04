@@ -161,6 +161,7 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
                 self.hb = Instant::now();
             }
             WsMessage::Text(text) => {
+                crate::server::metrics::MetricsCollector::global().inc_ws_received();
                 self.handle_text_message(text.to_string(), ctx);
             }
             WsMessage::Binary(_) => {}
@@ -176,12 +177,14 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
 impl TerminalWs {
     /// 处理文本消息（JSON 格式的 Message）
     fn handle_text_message(&mut self, text: String, ctx: &mut ws::WebsocketContext<Self>) {
+        let metrics = crate::server::metrics::MetricsCollector::global();
         let message = match Message::from_json(&text) {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(error = %e, addr = %self.session.addr, "Failed to parse WS message");
                 let error = Message::error("PARSE_ERROR", &e.to_string());
                 if let Ok(json) = error.to_json() {
+                    metrics.inc_ws_sent();
                     ctx.text(json);
                 }
                 return;
@@ -195,7 +198,10 @@ impl TerminalWs {
             Message::Terminal { session_id, payload, message_id, expect_response, .. } => {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
-                    if let Ok(json) = error.to_json() { ctx.text(json); }
+                    if let Ok(json) = error.to_json() {
+                        metrics.inc_ws_sent();
+                        ctx.text(json);
+                    }
                     return;
                 }
                 self.handle_terminal(session_id, payload, message_id, expect_response, ctx);
@@ -203,7 +209,10 @@ impl TerminalWs {
             Message::SessionControl { payload, message_id, expect_response, .. } => {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
-                    if let Ok(json) = error.to_json() { ctx.text(json); }
+                    if let Ok(json) = error.to_json() {
+                        metrics.inc_ws_sent();
+                        ctx.text(json);
+                    }
                     return;
                 }
                 self.handle_session_control(payload, message_id, expect_response, ctx);
@@ -332,12 +341,16 @@ impl TerminalWs {
         message_id: String,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
+        let metrics = crate::server::metrics::MetricsCollector::global();
         let jwt_service = JwtService::new();
         let token = match &payload.session_token {
             Some(t) if !t.is_empty() => t.clone(),
             _ => {
                 let error = Message::error_with_id(&message_id, "NO_TOKEN", "No JWT token provided");
-                if let Ok(json) = error.to_json() { ctx.text(json); }
+                if let Ok(json) = error.to_json() {
+                    metrics.inc_ws_sent();
+                    ctx.text(json);
+                }
                 return;
             }
         };
@@ -398,7 +411,10 @@ impl TerminalWs {
                         ..Default::default()
                     },
                 };
-                if let Ok(json) = response.to_json() { ctx.text(json); }
+                if let Ok(json) = response.to_json() {
+                    metrics.inc_ws_sent();
+                    ctx.text(json);
+                }
             }
             Err(e) => {
                 let msg = match e {
@@ -406,7 +422,10 @@ impl TerminalWs {
                     _ => "Invalid token",
                 };
                 let error = Message::error_with_id(&message_id, "AUTH_FAILED", msg);
-                if let Ok(json) = error.to_json() { ctx.text(json); }
+                if let Ok(json) = error.to_json() {
+                    metrics.inc_ws_sent();
+                    ctx.text(json);
+                }
             }
         }
     }
@@ -437,7 +456,10 @@ impl TerminalWs {
                 // 输入消息需要立即回复 Ack，避免移动端 send_and_wait 超时断开
                 if expect_response {
                     let ack = Message::ack(&message_id);
-                    if let Ok(json) = ack.to_json() { ctx.text(json); }
+                    if let Ok(json) = ack.to_json() {
+                        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                        ctx.text(json);
+                    }
                 }
             }
             crate::enums::TerminalAction::Subscribe { start_seq } => {
@@ -614,11 +636,17 @@ impl Handler<SubscribeResult> for TerminalWs {
                     response.history_count,
                     &msg.request_id,
                 );
-                if let Ok(json) = ws_msg.to_json() { ctx.text(json); }
+                if let Ok(json) = ws_msg.to_json() {
+                    crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                    ctx.text(json);
+                }
             }
             None => {
                 let error = Message::error_with_id(&msg.request_id, "SESSION_NOT_FOUND", &format!("Session {} not found", msg.session_id));
-                if let Ok(json) = error.to_json() { ctx.text(json); }
+                if let Ok(json) = error.to_json() {
+                    crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                    ctx.text(json);
+                }
             }
         }
     }
@@ -632,7 +660,10 @@ impl Handler<UnsubscribeResult> for TerminalWs {
         if msg.success {
             self.session.subscribed_sessions.remove(&msg.session_id);
             let ws_msg = Message::unsubscribe_response_with_request_id(&msg.session_id, &msg.request_id);
-            if let Ok(json) = ws_msg.to_json() { ctx.text(json); }
+            if let Ok(json) = ws_msg.to_json() {
+                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                ctx.text(json);
+            }
         }
     }
 }
@@ -642,6 +673,7 @@ impl Handler<TerminalOutput> for TerminalWs {
     type Result = ();
 
     fn handle(&mut self, msg: TerminalOutput, ctx: &mut Self::Context) {
+        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
         ctx.text(msg.text);
     }
 }
@@ -671,6 +703,7 @@ impl Handler<AuthResponse> for TerminalWs {
 
         // 发送响应给客户端
         if let Some(json) = msg.response_json {
+            crate::server::metrics::MetricsCollector::global().inc_ws_sent();
             ctx.text(json);
         }
     }
@@ -681,6 +714,7 @@ impl Handler<SendTextMessage> for TerminalWs {
     type Result = ();
 
     fn handle(&mut self, msg: SendTextMessage, ctx: &mut Self::Context) {
+        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
         ctx.text(msg.text);
     }
 }

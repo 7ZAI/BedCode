@@ -22,6 +22,8 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.backlog", "TCP 半连接队列上限"),
     ("network.tcp_nodelay", "启用 TCP_NODELAY（禁用 Nagle 算法，降低小包延迟）"),
     ("network.shutdown_timeout_secs", "优雅停机超时秒数"),
+    ("network.ws_max_frame_size_kb", "WebSocket 单帧最大大小（KB）"),
+    ("network.ws_max_message_size_mb", "WebSocket 单消息最大大小（MB，可跨多帧）"),
     ("session.default_environment", "默认执行环境（windows / wsl2）"),
     ("session.default_wsl_distro", "默认 WSL 发行版（仅 wsl2 环境有效，留空则使用默认发行版）"),
     ("session.default_working_dir", "默认工作目录（留空则使用用户主目录）"),
@@ -32,6 +34,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.terminal_font_family", "终端字体名称"),
     ("ui.terminal_theme", "终端配色主题名"),
     ("ui.show_preview", "是否显示终端预览"),
+    ("ui.language", "语言偏好（zh-CN / en）"),
     ("channels.output_broadcast_capacity", "PTY 输出事件广播容量 - 用于转发终端输出到前端"),
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
     ("channels.restart_broadcast_capacity", "会话重启事件广播容量 - 用于通知会话重启"),
@@ -62,6 +65,8 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "network.backlog",
         "network.tcp_nodelay",
         "network.shutdown_timeout_secs",
+        "network.ws_max_frame_size_kb",
+        "network.ws_max_message_size_mb",
     ]),
     ("会话默认配置", &[
         "session.default_environment",
@@ -76,6 +81,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "ui.terminal_font_family",
         "ui.terminal_theme",
         "ui.show_preview",
+        "ui.language",
     ]),
     ("Channel 容量配置", &[
         "channels.output_broadcast_capacity",
@@ -155,9 +161,18 @@ pub struct NetworkConfig {
     /// 优雅停机超时秒数
     #[serde(default = "default_shutdown_timeout_secs")]
     pub shutdown_timeout_secs: u64,
+    /// WebSocket 单帧最大大小（KB）
+    #[serde(default = "default_ws_max_frame_size_kb")]
+    pub ws_max_frame_size_kb: usize,
+    /// WebSocket 单消息最大大小（MB）
+    #[serde(default = "default_ws_max_message_size_mb")]
+    pub ws_max_message_size_mb: usize,
 }
 
-fn default_prevent_sleep() -> bool { true }
+fn default_prevent_sleep() -> bool {
+    true
+}
+
 fn default_keep_alive_secs() -> u64 { 5 }
 fn default_client_request_timeout_secs() -> u64 { 5 }
 fn default_client_disconnect_timeout_secs() -> u64 { 5 }
@@ -165,6 +180,8 @@ fn default_max_connections() -> usize { 25000 }
 fn default_backlog() -> u32 { 2048 }
 fn default_tcp_nodelay() -> bool { true }
 fn default_shutdown_timeout_secs() -> u64 { 30 }
+fn default_ws_max_frame_size_kb() -> usize { 64 }
+fn default_ws_max_message_size_mb() -> usize { 16 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
@@ -180,6 +197,8 @@ impl Default for NetworkConfig {
             backlog: default_backlog(),
             tcp_nodelay: default_tcp_nodelay(),
             shutdown_timeout_secs: default_shutdown_timeout_secs(),
+            ws_max_frame_size_kb: default_ws_max_frame_size_kb(),
+            ws_max_message_size_mb: default_ws_max_message_size_mb(),
         }
     }
 }
@@ -225,10 +244,17 @@ pub struct UiConfig {
     pub terminal_theme: String,
     /// 是否显示终端预览
     pub show_preview: bool,
+    /// 语言偏好（zh-CN / en）
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 fn default_terminal_theme() -> String {
     "dracula".to_string()
+}
+
+fn default_language() -> String {
+    "zh-CN".to_string()
 }
 
 impl Default for UiConfig {
@@ -239,6 +265,7 @@ impl Default for UiConfig {
             terminal_font_family: "Consolas".to_string(),
             terminal_theme: default_terminal_theme(),
             show_preview: true,
+            language: default_language(),
         }
     }
 }
@@ -428,6 +455,8 @@ impl AppConfig {
                 backlog: parse_value(props, "network.backlog", default_backlog()),
                 tcp_nodelay: parse_value(props, "network.tcp_nodelay", default_tcp_nodelay()),
                 shutdown_timeout_secs: parse_value(props, "network.shutdown_timeout_secs", default_shutdown_timeout_secs()),
+                ws_max_frame_size_kb: parse_value(props, "network.ws_max_frame_size_kb", default_ws_max_frame_size_kb()),
+                ws_max_message_size_mb: parse_value(props, "network.ws_max_message_size_mb", default_ws_max_message_size_mb()),
             },
             session: SessionConfig {
                 default_environment: parse_value(props, "session.default_environment", "windows".to_string()),
@@ -442,6 +471,7 @@ impl AppConfig {
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
                 show_preview: parse_value(props, "ui.show_preview", true),
+                language: parse_value(props, "ui.language", default_language()),
             },
             channels: ChannelsConfig {
                 output_broadcast_capacity: parse_value(props, "channels.output_broadcast_capacity", 2048),
@@ -502,6 +532,8 @@ impl AppConfig {
         map.insert("network.backlog".to_string(), self.network.backlog.to_string());
         map.insert("network.tcp_nodelay".to_string(), self.network.tcp_nodelay.to_string());
         map.insert("network.shutdown_timeout_secs".to_string(), self.network.shutdown_timeout_secs.to_string());
+        map.insert("network.ws_max_frame_size_kb".to_string(), self.network.ws_max_frame_size_kb.to_string());
+        map.insert("network.ws_max_message_size_mb".to_string(), self.network.ws_max_message_size_mb.to_string());
         map.insert("session.default_environment".to_string(), self.session.default_environment.clone());
         map.insert("session.default_wsl_distro".to_string(), self.session.default_wsl_distro.clone().unwrap_or_default());
         map.insert("session.default_working_dir".to_string(), self.session.default_working_dir.clone().unwrap_or_default());
@@ -512,6 +544,7 @@ impl AppConfig {
         map.insert("ui.terminal_font_family".to_string(), self.ui.terminal_font_family.clone());
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());
         map.insert("ui.show_preview".to_string(), self.ui.show_preview.to_string());
+        map.insert("ui.language".to_string(), self.ui.language.clone());
         map.insert("channels.output_broadcast_capacity".to_string(), self.channels.output_broadcast_capacity.to_string());
         map.insert("channels.status_broadcast_capacity".to_string(), self.channels.status_broadcast_capacity.to_string());
         map.insert("channels.restart_broadcast_capacity".to_string(), self.channels.restart_broadcast_capacity.to_string());

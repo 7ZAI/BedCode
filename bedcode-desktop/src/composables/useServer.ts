@@ -18,7 +18,7 @@ export interface ServerStatusInfo {
   local_ips: string[]
 }
 
-/** 网络配置 — Actix Web 参数 */
+/** 网络配置 — Actix Web + WebSocket 参数 */
 export interface NetworkConfig {
   port: number
   auto_start: boolean
@@ -31,6 +31,8 @@ export interface NetworkConfig {
   backlog: number
   tcp_nodelay: boolean
   shutdown_timeout_secs: number
+  ws_max_frame_size_kb: number
+  ws_max_message_size_mb: number
 }
 
 /** 服务器性能指标 */

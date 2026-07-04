@@ -34,7 +34,7 @@
         </button>
         <button v-else-if="item.key === 'shortcut'" class="tool-btn" @click="showShortcutConfig = true" :title="t('mobile.shortcutConfig.title')">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12" />
           </svg>
         </button>
         <button v-else-if="item.key === 'clear'" class="tool-btn" @click="confirmClear" :title="t('mobile.terminal.clearScreen')">
@@ -73,7 +73,7 @@
               <span>{{ t('mobile.terminal.pendingTasks') }}</span>
             </button>
             <button v-if="isOverflowItem('shortcut')" class="overflow-menu-item" @click="showShortcutConfig = true; closeOverflowMenu()">
-              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+              <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12"/></svg>
               <span>{{ t('mobile.shortcutConfig.title') }}</span>
             </button>
             <button v-if="isOverflowItem('clear')" class="overflow-menu-item" @click="confirmClear()">
@@ -199,7 +199,7 @@
                 @click.stop="tempTheme = name"
               >
                 <span class="theme-preview" :style="getThemePreviewStyle(name)">Aa</span>
-                <span class="theme-name">{{ theme.label }}</span>
+                <span class="theme-name">{{ resolveThemeLabel(theme.label, t) }}</span>
               </button>
             </div>
           </div>
@@ -256,6 +256,7 @@
   <TaskPickerModal
     v-if="showTaskPicker"
     :tasks="presetTasks"
+    :session-id="sessionId"
     @confirm="onTaskConfirm"
     @close="showTaskPicker = false"
   />
@@ -295,6 +296,7 @@ import { useToast } from '@/composables/useToast'
 import { writeClipboardText } from '@/utils/clipboard'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 import { executeTask } from '@/composables/usePresetTasks'
+import { TERMINAL_THEMES, resolveThemeLabel } from '@/config/terminalThemes'
 import type { PresetTask } from '@/composables/model'
 
 // ==================== Props & Route ====================
@@ -460,137 +462,6 @@ const confirmModalStyle = computed(() => ({
   paddingTop: `${safeArea.value.top}px`,
   paddingBottom: `${safeArea.value.bottom}px`,
 }))
-
-// ==================== Terminal Themes ====================
-
-const TERMINAL_THEMES: Record<string, any> = {
-  system: {
-    label: t('settings.appearance.followSystem'),
-    // 动态解析，此处仅为占位
-    background: 'var(--mobile-terminal-bg)',
-    foreground: 'var(--mobile-text-primary)',
-  },
-  dark: {
-    label: t('settings.appearance.darkMode'),
-    background: '#0a0a0f',
-    foreground: '#e0e0e0',
-    cursor: '#00d4ff',
-    cursorAccent: '#0a0a0f',
-    selectionBackground: '#1a3a4a',
-    black: '#000000',
-    red: '#ff5555',
-    green: '#50fa7b',
-    yellow: '#f1fa8c',
-    blue: '#bd93f9',
-    magenta: '#ff79c6',
-    cyan: '#8be9fd',
-    white: '#bbbbbb',
-    brightBlack: '#555555',
-    brightRed: '#ff5555',
-    brightGreen: '#50fa7b',
-    brightYellow: '#f1fa8c',
-    brightBlue: '#bd93f9',
-    brightMagenta: '#ff79c6',
-    brightCyan: '#8be9fd',
-    brightWhite: '#ffffff',
-  },
-  light: {
-    label: t('settings.appearance.lightMode'),
-    background: '#ffffff',
-    foreground: '#1a1a1a',
-    cursor: '#0066cc',
-    cursorAccent: '#ffffff',
-    selectionBackground: '#b3d7ff',
-    black: '#000000',
-    red: '#cc0000',
-    green: '#008800',
-    yellow: '#996600',
-    blue: '#0066cc',
-    magenta: '#cc00cc',
-    cyan: '#008888',
-    white: '#cccccc',
-    brightBlack: '#666666',
-    brightRed: '#ff0000',
-    brightGreen: '#00cc00',
-    brightYellow: '#ccaa00',
-    brightBlue: '#0088ff',
-    brightMagenta: '#ff00ff',
-    brightCyan: '#00cccc',
-    brightWhite: '#ffffff',
-  },
-  dracula: {
-    label: 'Dracula',
-    background: '#282a36',
-    foreground: '#f8f8f2',
-    cursor: '#f8f8f0',
-    cursorAccent: '#282a36',
-    selectionBackground: '#44475a',
-    black: '#000000',
-    red: '#ff5555',
-    green: '#50fa7b',
-    yellow: '#f1fa8c',
-    blue: '#bd93f9',
-    magenta: '#ff79c6',
-    cyan: '#8be9fd',
-    white: '#bfbfbf',
-    brightBlack: '#282a36',
-    brightRed: '#ff5555',
-    brightGreen: '#50fa7b',
-    brightYellow: '#f1fa8c',
-    brightBlue: '#bd93f9',
-    brightMagenta: '#ff79c6',
-    brightCyan: '#8be9fd',
-    brightWhite: '#f8f8f2',
-  },
-  monokai: {
-    label: 'Monokai',
-    background: '#272822',
-    foreground: '#f8f8f2',
-    cursor: '#f8f8f0',
-    cursorAccent: '#272822',
-    selectionBackground: '#49483e',
-    black: '#000000',
-    red: '#f92672',
-    green: '#a6e22e',
-    yellow: '#f4bf75',
-    blue: '#66d9ef',
-    magenta: '#ae81ff',
-    cyan: '#a1efe4',
-    white: '#f8f8f2',
-    brightBlack: '#75715e',
-    brightRed: '#f92672',
-    brightGreen: '#a6e22e',
-    brightYellow: '#f4bf75',
-    brightBlue: '#66d9ef',
-    brightMagenta: '#ae81ff',
-    brightCyan: '#a1efe4',
-    brightWhite: '#f9f8f5',
-  },
-  nord: {
-    label: 'Nord',
-    background: '#2e3440',
-    foreground: '#d8dee9',
-    cursor: '#d8dee9',
-    cursorAccent: '#2e3440',
-    selectionBackground: '#434c5e',
-    black: '#3b4252',
-    red: '#bf616a',
-    green: '#a3be8c',
-    yellow: '#ebcb8b',
-    blue: '#81a1c1',
-    magenta: '#b48ead',
-    cyan: '#88c0d0',
-    white: '#e5e9f0',
-    brightBlack: '#4c566a',
-    brightRed: '#bf616a',
-    brightGreen: '#a3be8c',
-    brightYellow: '#ebcb8b',
-    brightBlue: '#81a1c1',
-    brightMagenta: '#b48ead',
-    brightCyan: '#8fbcbb',
-    brightWhite: '#eceff4',
-  },
-}
 
 // ==================== Settings Functions ====================
 
@@ -1866,7 +1737,7 @@ watch(isConnected, async (connected) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--mobile-border);
 }
 

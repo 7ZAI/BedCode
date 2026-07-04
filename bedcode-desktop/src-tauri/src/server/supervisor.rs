@@ -255,6 +255,10 @@ impl ServerSupervisor {
 }
 
 /// 采集当前进程的 CPU/内存占用
+///
+/// sysinfo 首次 refresh_cpu_usage() 只建立基线，需要两次刷新才能得到准确值。
+/// 为避免在调用链中 sleep，在采样任务启动时做一次预热刷新，
+/// 此处假设预热已完成，直接读取即可。
 fn collect_process_metrics(sys: &mut sysinfo::System) -> (f64, u64) {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
@@ -266,10 +270,21 @@ fn collect_process_metrics(sys: &mut sysinfo::System) -> (f64, u64) {
 }
 
 /// 指标采样后台任务（每 5 秒采样一次）
+///
+/// 首次循环做预热刷新（sysinfo 需要两次 refresh 才能获得准确 CPU 值），
+/// 第二次循环开始才有有效数据
 async fn metrics_sampling_task(
     inner: Arc<RwLock<SupervisorInner>>,
     cancel: Arc<AtomicBool>,
 ) {
+    // 预热：首次 refresh 建立基线
+    {
+        let inner_guard = inner.read().await;
+        let mut sys = inner_guard.sys.lock().unwrap();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+    }
+
     loop {
         if cancel.load(Ordering::Relaxed) {
             tracing::debug!("Metrics sampling task cancelled");

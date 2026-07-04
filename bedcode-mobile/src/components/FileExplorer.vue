@@ -15,6 +15,18 @@
       </div>
       <div class="header-meta">
         <span v-if="selectedFile && lineCount" class="header-line-count">{{ t('common.misc.lineCount', { count: lineCount }) }}</span>
+        <!-- Markdown 预览/源码切换（仅 .md 文件显示） -->
+        <button v-if="isMarkdownFile" class="header-btn" :class="{ 'header-btn--active': viewMode === 'preview' }" :title="t('mobile.file.previewMode')" @click="viewMode = 'preview'">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          </svg>
+        </button>
+        <button v-if="isMarkdownFile" class="header-btn" :class="{ 'header-btn--active': viewMode === 'source' }" :title="t('mobile.file.sourceMode')" @click="viewMode = 'source'">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+        </button>
         <slot name="header-right"></slot>
         <button class="header-btn" :class="{ 'header-btn--active': sidebarVisible }" @click="toggleSidebar" :title="t('mobile.file.title')">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -64,7 +76,14 @@
           <button class="text-xs text-[var(--mobile-accent)] mt-2" @click="retryLoadFile">{{ t('mobile.codeViewer.retry') }}</button>
         </div>
 
-        <!-- 代码内容 -->
+        <!-- Markdown 预览模式 -->
+        <div
+          v-else-if="isMarkdownFile && viewMode === 'preview'"
+          class="code-md-preview"
+          v-html="renderedMarkdown"
+        ></div>
+
+        <!-- 源码模式（shiki 高亮） -->
         <div
           v-else-if="highlightedHtml"
           class="code-content"
@@ -81,10 +100,10 @@
 /**
  * FileExplorer - 文件浏览 + 代码查看组件
  *
- * 封装文件树侧边栏 + 代码查看器（语法高亮）+ 长按复制 + 侧边栏切换
+ * 封装文件树侧边栏 + 代码查看器（语法高亮）+ Markdown 预览 + 长按复制 + 侧边栏切换
  * 供 CodeExplorerView（全屏）、ToolboxView（弹窗）等页面复用
  *
- * 内置 Header 布局：左侧按钮 + 文件名/标题 + 语言badge + 行数 + 侧边栏切换
+ * 内置 Header 布局：左侧按钮 + 文件名/标题 + 语言badge + 行数 + Markdown切换 + 侧边栏切换
  * - #header-left: 左侧按钮区域（默认关闭按钮，可替换为返回按钮等）
  * - #header-right: 右侧额外按钮区域（设置按钮、目录下拉等）
  *
@@ -95,6 +114,7 @@
 
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { marked } from 'marked'
 import FileSidebar from '@/components/FileSidebar.vue'
 import { useCodeHighlight, getLangByFilename } from '@/composables/useCodeHighlight'
 import { useHttpApi } from '@/composables/useHttpApi'
@@ -138,6 +158,21 @@ const codeBgColor = computed(() => {
   return themeConfig?.background ?? 'var(--mobile-bg-secondary)'
 })
 
+// ==================== Markdown Preview ====================
+
+/** Markdown 文件预览/源码切换：默认预览 */
+const viewMode = ref<'preview' | 'source'>('preview')
+
+const isMarkdownFile = computed(() => {
+  const ext = selectedFile.value.split('.').pop()?.toLowerCase() || ''
+  return ext === 'md' || ext === 'mdx'
+})
+
+const renderedMarkdown = computed(() => {
+  if (!fileContent.value || !isMarkdownFile.value) return ''
+  return marked.parse(fileContent.value) as string
+})
+
 // ==================== Sidebar Toggle ====================
 
 const sidebarVisible = ref(props.defaultShowSidebar)
@@ -166,6 +201,8 @@ const lineCount = computed(() => {
 async function handleFileSelect(name: string, path: string, isDiff: boolean) {
   selectedFile.value = name
   selectedFilePath.value = path
+  // 切换文件时重置为预览模式
+  viewMode.value = 'preview'
   if (isDiff) {
     await loadFileDiff(path)
   } else {
@@ -237,6 +274,7 @@ async function handleLongPress(name: string, path: string) {
 
 const codeStyle = computed(() => ({
   '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
+  '--code-line-height': codeViewerStore.settings.lineHeight,
   '--code-tab-size': codeViewerStore.settings.tabSize,
   '--code-bg': codeBgColor.value,
 }))
@@ -352,6 +390,11 @@ watch(
   scrollbar-color: rgba(100, 100, 120, 0.3) transparent;
 }
 
+/* 代码查看时，滚动容器背景跟随代码主题色，避免横向滚动时右侧空白 */
+.explorer-code-area:has(.code-content) {
+  background: var(--code-bg, var(--mobile-bg-secondary));
+}
+
 .explorer-code-area::-webkit-scrollbar {
   width: 4px;
   height: 4px;
@@ -383,10 +426,14 @@ watch(
   margin: 0;
   padding: 0.75rem 0 0.5rem;
   font-size: var(--code-font-size, 13px);
-  line-height: 0.8;
+  line-height: var(--code-line-height, 1.5);
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   tab-size: var(--code-tab-size, 4);
   background: var(--code-bg, var(--mobile-bg-secondary));
+  /* inline-block + min-width: 100% 保证长行横向滚动时背景延伸覆盖 */
+  display: inline-block;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 
 .code-content :deep(pre) {
@@ -406,7 +453,7 @@ watch(
 .code-content :deep(.line) {
   display: block;
   position: relative;
-  padding-left: 3.5em;
+  padding-left: 2.8em;
   white-space: pre;
 }
 
@@ -415,18 +462,21 @@ watch(
   position: absolute;
   left: 0;
   top: 0;
-  bottom: 0;
-  width: 3.2em;
-  padding-right: 0.8em;
+  width: 2.8em;
+  padding-right: 0.6em;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   color: var(--mobile-code-gutter-color);
-  font-size: 0.85em;
+  font-size: inherit;
+  line-height: inherit;
   user-select: none;
   pointer-events: none;
-  background: var(--mobile-code-gutter-bg);
+  /* 行号区域需要不透明背景遮挡下方代码文本 */
+  background: var(--code-bg, var(--mobile-bg-secondary));
   border-right: 1px solid var(--mobile-code-gutter-border);
+  z-index: 1;
 }
 
 .code-content :deep(.line:empty::after) {
@@ -435,7 +485,7 @@ watch(
 
 /* 行号隐藏 */
 .code-content.hide-line-numbers :deep(.line) {
-  padding-left: 0.5em;
+  padding-left: 0.75em;
 }
 
 .code-content.hide-line-numbers :deep(.line::before) {
@@ -451,8 +501,7 @@ watch(
 .code-content :deep(.diff-line) {
   display: flex;
   align-items: stretch;
-  min-height: 1.4em;
-  line-height: 1.4;
+  line-height: 1.5;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: var(--code-font-size, 13px);
   white-space: pre;
@@ -460,8 +509,8 @@ watch(
 }
 
 .code-content :deep(.diff-line-no) {
-  width: 3.2em;
-  padding: 0 0.5em;
+  width: 2.8em;
+  padding: 0 0.6em;
   text-align: right;
   font-size: 0.85em;
   user-select: none;
@@ -469,8 +518,12 @@ watch(
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  background: var(--mobile-code-gutter-bg);
+  /* 行号区域需要不透明背景遮挡下方代码文本 */
+  background: var(--code-bg, var(--mobile-bg-secondary));
   border-right: 1px solid var(--mobile-code-gutter-border);
+  position: sticky;
+  left: 0;
+  z-index: 1;
 }
 
 .code-content :deep(.diff-old-no) {
@@ -479,6 +532,8 @@ watch(
 
 .code-content :deep(.diff-new-no) {
   color: rgba(5, 150, 105, 0.6);
+  position: sticky;
+  left: 2.8em;
 }
 
 .code-content :deep(.diff-marker) {
@@ -490,6 +545,9 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
+  position: sticky;
+  left: 5.6em;
+  z-index: 1;
 }
 
 .code-content :deep(.diff-content) {
@@ -524,6 +582,155 @@ watch(
 
 .code-content :deep(.diff-context .diff-line-no) {
   color: var(--mobile-code-gutter-color);
+}
+
+/* ==================== Markdown 预览 ==================== */
+
+.code-md-preview {
+  padding: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--mobile-text-primary);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  word-break: break-word;
+}
+
+.code-md-preview :deep(h1) {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--mobile-text-primary);
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.code-md-preview :deep(h2) {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--mobile-accent);
+  margin: 1.25rem 0 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.code-md-preview :deep(h3) {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+  margin: 1rem 0 0.375rem;
+}
+
+.code-md-preview :deep(p) {
+  margin: 0.5rem 0;
+  color: var(--mobile-text-secondary);
+}
+
+.code-md-preview :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0 1rem;
+  font-size: 0.8125rem;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.code-md-preview :deep(thead th) {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-primary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--mobile-border);
+  white-space: nowrap;
+}
+
+.code-md-preview :deep(tbody td) {
+  padding: 0.4375rem 0.75rem;
+  border-bottom: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+.code-md-preview :deep(tbody tr:last-child td) {
+  border-bottom: none;
+}
+
+.code-md-preview :deep(code) {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.8125rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.25rem;
+  color: var(--mobile-accent);
+}
+
+.code-md-preview :deep(pre) {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.code-md-preview :deep(pre code) {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font-size: 0.8125rem;
+  color: var(--mobile-text-primary);
+}
+
+.code-md-preview :deep(blockquote) {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--mobile-accent);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+
+.code-md-preview :deep(ul),
+.code-md-preview :deep(ol) {
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+  color: var(--mobile-text-secondary);
+}
+
+.code-md-preview :deep(li) {
+  margin: 0.25rem 0;
+}
+
+.code-md-preview :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--mobile-border);
+  margin: 1rem 0;
+}
+
+.code-md-preview :deep(a) {
+  color: var(--mobile-accent);
+  text-decoration: none;
+}
+
+.code-md-preview :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.code-md-preview :deep(img) {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}
+
+.code-md-preview :deep(strong) {
+  color: var(--mobile-text-primary);
+  font-weight: 600;
 }
 
 /* ==================== Sidebar Slide Transition ==================== */

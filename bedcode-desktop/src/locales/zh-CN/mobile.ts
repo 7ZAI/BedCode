@@ -85,11 +85,6 @@ export default {
       loadFailed: '加载会话列表失败',
     },
     terminal: {
-      autoMode: '自动模式',
-      manualMode: '手动模式',
-      switchToManual: '切换为手动模式',
-      switchToAuto: '切换为自动模式',
-      pendingTasks: '待办任务',
       clearScreen: '清屏',
       refreshFormat: '刷新格式',
       settings: '设置',
@@ -101,15 +96,6 @@ export default {
       shortcutCount: '快捷键数量',
       persistentToolbar: '常驻工具栏',
       preparing: '正在准备终端...',
-    },
-    autoExecute: {
-      pending: '等待中',
-      running: '执行中',
-      completed: '已完成',
-      failed: '失败',
-      retrying: '重试中',
-      resume: '继续',
-      pause: '暂停',
     },
     pairing: {
       title: '输入配对码',

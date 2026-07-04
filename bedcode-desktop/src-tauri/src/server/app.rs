@@ -3,7 +3,7 @@
 //! 配置路由、中间件和服务器启动
 //! HTTP REST API + WebSocket 终端在同一端口上运行
 
-use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Error, http::KeepAlive, dev::Service};
+use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Error, dev::Service, http::KeepAlive};
 use actix_cors::Cors;
 use actix_web_actors::ws as actix_ws;
 use serde_json::json;
@@ -19,7 +19,15 @@ use crate::server::ws::terminal_ws::TerminalWs;
 async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let addr = req.peer_addr().unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
     let ws_actor = TerminalWs::new(addr);
-    actix_ws::start(ws_actor, &req, stream)
+    let config = crate::system::config::AppConfig::global();
+    // max_size 同时限制 frame 和 message 大小，取两者中较大的值
+    let max_size = std::cmp::max(
+        config.network.ws_max_frame_size_kb * 1024,
+        config.network.ws_max_message_size_mb * 1024 * 1024,
+    );
+    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
+        .frame_size(max_size)
+        .start()
 }
 
 /// 健康检查端点 — 移动端 WS 连接前探测桌面端是否可达
@@ -50,7 +58,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/reauth", web::post().to(auth_controller::reauthenticate))
     );
 
-    // 受保护路由（需要 JWT）
+    // 受保护路由（需要 JWT）— JWT 验证在各 handler 中通过 get_claims_from_request 实现
     cfg.service(
         web::scope("/api")
             .route("/sessions", web::get().to(session_controller::list_sessions))
@@ -78,7 +86,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）
 ///
-/// 根据 NetworkConfig 配置 workers、keep-alive、超时等参数
+/// 返回 `ServerHandle` 用于优雅停机
+/// 调用方通过 oneshot channel 获取 handle，然后继续 await server 保持运行
 pub async fn start_http_server(
     port: u16,
     config: &crate::system::config::NetworkConfig,
@@ -121,7 +130,20 @@ pub async fn start_http_server(
     }
 
     let server = server_builder.run();
+
+    // 在 await 之前获取 handle，用于后续优雅停机
     let handle = server.handle();
 
     Ok((handle, server))
 }
+
+// 注意：由于 Tauri crate-type = ["cdylib", "rlib"] 的限制，
+// Windows 上 cargo test 无法运行（STATUS_ENTRYPOINT_NOT_FOUND）。
+// 连接链路测试通过手动运行桌面端 + curl/移动端实际连接来验证：
+//
+// 验证步骤：
+// 1. 启动桌面端应用，确保服务器运行中
+// 2. 在同一网络内的移动端或浏览器访问 http://<desktop-ip>:8765/api/health
+// 3. 预期返回: {"status":"ok","port":8765,"uptime_secs":123}
+// 4. 手动输入 IP 连接应能通过 HTTP 探测后继续 WS 连接
+// 5. 如果 HTTP 探测失败，3秒内返回"无法连接"错误而非10秒WS超时

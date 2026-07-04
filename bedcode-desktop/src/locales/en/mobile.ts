@@ -85,11 +85,6 @@ export default {
       loadFailed: 'Failed to load session list',
     },
     terminal: {
-      autoMode: 'Auto Mode',
-      manualMode: 'Manual Mode',
-      switchToManual: 'Switch to Manual Mode',
-      switchToAuto: 'Switch to Auto Mode',
-      pendingTasks: 'Pending Tasks',
       clearScreen: 'Clear Screen',
       refreshFormat: 'Refresh Format',
       settings: 'Settings',
@@ -101,15 +96,6 @@ export default {
       shortcutCount: 'Shortcut Count',
       persistentToolbar: 'Persistent Toolbar',
       preparing: 'Preparing terminal...',
-    },
-    autoExecute: {
-      pending: 'Pending',
-      running: 'Running',
-      completed: 'Completed',
-      failed: 'Failed',
-      retrying: 'Retrying',
-      resume: 'Resume',
-      pause: 'Pause',
     },
     pairing: {
       title: 'Enter Pairing Code',

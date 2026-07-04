@@ -3,42 +3,24 @@
     class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-3.5 shadow-[var(--mobile-card-shadow)] active:scale-[0.98] transition-all duration-150"
     @click="$emit('tap')"
   >
-    <!-- Row 1: Title + Type badge -->
+    <!-- Row 1: Title -->
     <div class="flex items-start justify-between gap-2 mb-1.5">
       <h4 class="text-sm font-semibold text-[var(--mobile-text-primary)] line-clamp-1 flex-1">{{ task.title }}</h4>
-      <span
-        class="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full"
-        :class="typeBadgeClass"
-      >
-        {{ task.type === 'once' ? t('mobile.presetTask.once') : t('mobile.presetTask.template') }}
-      </span>
     </div>
 
     <!-- Row 2: Content preview -->
     <p class="text-xs text-[var(--mobile-text-muted)] line-clamp-2 mb-2 leading-relaxed">{{ task.content }}</p>
 
-    <!-- Row 3: Status + Date + Action menu -->
+    <!-- Row 3: Date + Action menu -->
     <div class="flex items-center justify-between">
-      <div class="flex items-center gap-1.5">
-        <!-- Status indicator -->
-        <template v-if="task.type === 'once' && task.status">
-          <span
-            class="inline-block w-1.5 h-1.5 rounded-full"
-            :class="statusDotClass"
-          ></span>
-          <span class="text-[10px]" :class="statusTextClass">{{ statusLabel }}</span>
-        </template>
-        <template v-else>
-          <span class="text-[10px] text-[var(--mobile-text-muted)]">{{ t('mobile.presetTask.reusable') }}</span>
-        </template>
-      </div>
+      <span class="text-[10px] text-[var(--mobile-text-disabled)]">{{ formattedDate }}</span>
 
       <div class="flex items-center gap-2">
-        <span class="text-[10px] text-[var(--mobile-text-disabled)]">{{ formattedDate }}</span>
         <!-- Action menu trigger -->
         <button
+          ref="menuTriggerRef"
           class="p-1 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-text-primary)] active:bg-[var(--mobile-bg-secondary)] rounded transition-colors"
-          @click.stop="showMenu = !showMenu"
+          @click.stop="toggleMenu"
         >
           <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
             <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" />
@@ -47,14 +29,13 @@
       </div>
     </div>
 
-    <!-- Dropdown menu -->
+    <!-- Dropdown menu - Teleport 到 body 避免被裁剪，自动选择上方/下方 -->
     <Teleport to="body">
       <Transition name="fade">
         <div v-if="showMenu" class="fixed inset-0 z-50 mobile-ui" @click="showMenu = false">
-          <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]"></div>
           <div
-            class="absolute right-4 bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl shadow-xl overflow-hidden min-w-[140px]"
-            :style="{ top: menuTop + 'px' }"
+            class="absolute bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl shadow-xl overflow-hidden min-w-[140px]"
+            :style="menuStyle"
             @click.stop
           >
             <button
@@ -80,7 +61,7 @@
               class="w-full px-4 py-3 text-left text-sm text-[var(--mobile-error)] hover:bg-[var(--mobile-bg-secondary)] flex items-center gap-2 transition-colors"
               @click="handleDelete"
             >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-4 h-4 text-[var(--mobile-error)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
               </svg>
               {{ t('mobile.presetTask.delete') }}
@@ -96,10 +77,11 @@
 /**
  * PresetTaskCard - 预设任务卡片
  *
- * 展示任务标题、内容预览、类型标签、状态指示器和操作菜单
+ * 展示任务标题、内容预览和操作菜单
+ * 菜单通过 Teleport 定位到 body，自动检测上方/下方空间选择最佳位置
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PresetTask } from '@/composables/model'
 
@@ -117,44 +99,51 @@ const emit = defineEmits<{
 }>()
 
 const showMenu = ref(false)
-const menuTop = ref(100)
+const menuTriggerRef = ref<HTMLElement | null>(null)
+const menuPosition = ref({ top: 0, left: 0, openUp: false })
 
-// 类型标签样式
-const typeBadgeClass = computed(() => {
-  return props.task.type === 'once'
-    ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
-    : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20'
+// 菜单预估高度：3 个按钮 × 48px
+const MENU_HEIGHT = 144
+
+const menuStyle = computed(() => {
+  const { top, left, openUp } = menuPosition.value
+  return {
+    top: openUp ? 'auto' : `${top}px`,
+    bottom: openUp ? `${window.innerHeight - top}px` : 'auto',
+    left: `${left}px`,
+  }
 })
 
-// 状态点样式
-const statusDotClass = computed(() => {
-  const status = props.task.status
-  if (status === 'pending') return 'bg-gray-500'
-  if (status === 'running') return 'bg-blue-400 animate-pulse'
-  if (status === 'completed') return 'bg-emerald-400'
-  if (status === 'failed') return 'bg-red-400'
-  return 'bg-gray-500'
-})
+/** 计算菜单定位，自动选择上方或下方 */
+function computeMenuPosition() {
+  const el = menuTriggerRef.value
+  if (!el) return
 
-// 状态文字样式
-const statusTextClass = computed(() => {
-  const status = props.task.status
-  if (status === 'pending') return 'text-gray-400'
-  if (status === 'running') return 'text-blue-400'
-  if (status === 'completed') return 'text-emerald-400'
-  if (status === 'failed') return 'text-red-400'
-  return 'text-gray-400'
-})
+  const rect = el.getBoundingClientRect()
+  // 菜单右对齐触发按钮
+  const left = Math.max(8, rect.right - 140)
+  const spaceAbove = rect.top
+  const spaceBelow = window.innerHeight - rect.bottom
 
-// 状态文字
-const statusLabel = computed(() => {
-  const status = props.task.status
-  if (status === 'pending') return t('mobile.presetTask.pending')
-  if (status === 'running') return t('mobile.presetTask.running')
-  if (status === 'completed') return t('mobile.presetTask.completed')
-  if (status === 'failed') return t('mobile.presetTask.failed')
-  return ''
-})
+  // 上方空间不足则向下展开
+  const openUp = spaceAbove >= MENU_HEIGHT || spaceAbove > spaceBelow
+  // 上方展开时定位到按钮顶部，下方展开时定位到按钮底部
+  const top = openUp ? rect.top : rect.bottom + 4
+
+  menuPosition.value = { top, left, openUp }
+}
+
+async function toggleMenu() {
+  if (showMenu.value) {
+    showMenu.value = false
+    return
+  }
+  computeMenuPosition()
+  showMenu.value = true
+  // 打开后重新计算（动画完成后 DOM 可能有变化）
+  await nextTick()
+  computeMenuPosition()
+}
 
 // 格式化日期 (MM-DD)
 const formattedDate = computed(() => {

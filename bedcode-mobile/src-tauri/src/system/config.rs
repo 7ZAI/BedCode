@@ -93,6 +93,13 @@ pub struct UiConfig {
     pub terminal_font_family: String,
     /// 是否显示终端预览
     pub show_preview: bool,
+    /// 语言偏好（zh-CN / en）
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+fn default_language() -> String {
+    "zh-CN".to_string()
 }
 
 impl Default for UiConfig {
@@ -102,6 +109,7 @@ impl Default for UiConfig {
             terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
             show_preview: true,
+            language: default_language(),
         }
     }
 }

@@ -10,6 +10,7 @@ import { ref } from 'vue'
 /** 代码查看设置 */
 export interface CodeViewerSettings {
   fontSize: number         // 10-24
+  lineHeight: number      // 1.0-2.5，步进 0.1
   theme: string            // shiki theme ID 或 'system'
   tabSize: number          // 2 | 4 | 8
   showLineNumbers: boolean
@@ -19,6 +20,7 @@ const STORAGE_KEY = 'bedcode-code-viewer-settings'
 
 const defaultSettings: CodeViewerSettings = {
   fontSize: 11,
+  lineHeight: 1.5,
   theme: 'system',
   tabSize: 4,
   showLineNumbers: true,

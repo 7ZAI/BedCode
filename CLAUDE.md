@@ -458,6 +458,10 @@ mod tests {
 
 ---
 
+## Git Commit Rules
+
+**禁止在 commit message 中添加 `Co-Authored-By: Claude ...` 行。** 所有提交均不附带 AI 协作者标记。
+
 ## Build Commands
 
 ```bash

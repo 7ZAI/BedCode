@@ -141,6 +141,7 @@ const displayLang = computed(() => getLangByFilename(props.filename))
 
 const codeStyle = computed(() => ({
   '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
+  '--code-line-height': codeViewerStore.settings.lineHeight,
   '--code-tab-size': codeViewerStore.settings.tabSize,
   '--code-bg': codeBgColor.value,
 }))
@@ -307,6 +308,11 @@ watch(
   scrollbar-color: var(--mobile-border) transparent;
 }
 
+/* 代码查看时，滚动容器背景跟随代码主题色，避免横向滚动时右侧空白 */
+.viewer-body:has(.viewer-code) {
+  background: var(--code-bg, var(--mobile-bg-secondary));
+}
+
 .viewer-body::-webkit-scrollbar {
   width: 4px;
   height: 4px;
@@ -327,10 +333,14 @@ watch(
   margin: 0;
   padding: 0.75rem 0 0.5rem;
   font-size: var(--code-font-size, 13px);
-  line-height: 0.8;
+  line-height: var(--code-line-height, 1.5);
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   tab-size: var(--code-tab-size, 4);
   background: var(--code-bg, var(--mobile-bg-secondary));
+  /* inline-block + min-width: 100% 保证长行横向滚动时背景延伸覆盖 */
+  display: inline-block;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 
 /* Shiki 产出的 pre — 重置为容器角色 */
@@ -354,7 +364,7 @@ watch(
 .viewer-code :deep(.line) {
   display: block;
   position: relative;
-  padding-left: 3.5em;
+  padding-left: 2.8em;
   white-space: pre;
 }
 
@@ -364,18 +374,21 @@ watch(
   position: absolute;
   left: 0;
   top: 0;
-  bottom: 0;
-  width: 3.2em;
-  padding-right: 0.8em;
+  width: 2.8em;
+  padding-right: 0.6em;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   color: var(--mobile-code-gutter-color);
-  font-size: 0.85em;
+  font-size: inherit;
+  line-height: inherit;
   user-select: none;
   pointer-events: none;
-  background: var(--mobile-code-gutter-bg);
+  /* 行号区域需要不透明背景遮挡下方代码文本 */
+  background: var(--code-bg, var(--mobile-bg-secondary));
   border-right: 1px solid var(--mobile-code-gutter-border);
+  z-index: 1;
 }
 
 /* 空行保持行高 */
@@ -388,8 +401,7 @@ watch(
 .viewer-code :deep(.diff-line) {
   display: flex;
   align-items: stretch;
-  min-height: 1.4em;
-  line-height: 1.4;
+  line-height: 1.5;
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: var(--code-font-size, 13px);
   white-space: pre;
@@ -397,8 +409,8 @@ watch(
 }
 
 .viewer-code :deep(.diff-line-no) {
-  width: 3.2em;
-  padding: 0 0.5em;
+  width: 2.8em;
+  padding: 0 0.6em;
   text-align: right;
   font-size: 0.85em;
   user-select: none;
@@ -406,8 +418,12 @@ watch(
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  background: var(--mobile-code-gutter-bg);
+  /* 行号区域需要不透明背景遮挡下方代码文本 */
+  background: var(--code-bg, var(--mobile-bg-secondary));
   border-right: 1px solid var(--mobile-code-gutter-border);
+  position: sticky;
+  left: 0;
+  z-index: 1;
 }
 
 .viewer-code :deep(.diff-old-no) {
@@ -416,6 +432,8 @@ watch(
 
 .viewer-code :deep(.diff-new-no) {
   color: rgba(63, 185, 80, 0.6);
+  position: sticky;
+  left: 2.8em;
 }
 
 .viewer-code :deep(.diff-marker) {
@@ -427,6 +445,9 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
+  position: sticky;
+  left: 5.6em;
+  z-index: 1;
 }
 
 .viewer-code :deep(.diff-content) {
@@ -461,7 +482,7 @@ watch(
 
 /* 行号隐藏 */
 .viewer-code.hide-line-numbers :deep(.line) {
-  padding-left: 0.5em;
+  padding-left: 0.75em;
 }
 
 .viewer-code.hide-line-numbers :deep(.line::before) {

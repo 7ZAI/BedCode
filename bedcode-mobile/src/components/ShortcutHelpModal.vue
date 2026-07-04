@@ -2,7 +2,7 @@
   <Teleport to="body">
     <div
       v-if="visible"
-      class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui"
+      class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui"
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>

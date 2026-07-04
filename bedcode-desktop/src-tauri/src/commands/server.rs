@@ -131,13 +131,15 @@ pub async fn update_server_network_config(
         .join("config.properties");
 
     let mut config = AppConfig::load(&config_path)?;
+    let auto_start = network_config.auto_start;
+    let port = network_config.port;
     config.network = network_config;
     config.save(&config_path)?;
 
     // 更新 supervisor 内存中的端口和自启动
     let supervisor = ServerSupervisor::global();
-    supervisor.update_port(config.network.port).await?;
-    supervisor.update_auto_start(config.network.auto_start).await;
+    supervisor.update_port(port).await?;
+    supervisor.update_auto_start(auto_start).await;
 
     tracing::info!("Server network config updated");
     Ok(())
