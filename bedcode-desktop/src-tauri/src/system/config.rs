@@ -14,6 +14,14 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.port", "WebSocket 服务器端口"),
     ("network.auto_start", "应用启动时是否自动开启服务器"),
     ("network.prevent_sleep", "服务器运行时阻止系统休眠"),
+    ("network.workers", "Actix Web worker 线程数（0 = CPU 核心数）"),
+    ("network.keep_alive_secs", "HTTP Keep-Alive 超时秒数（0 = 禁用）"),
+    ("network.client_request_timeout_secs", "客户端请求头读取超时秒数"),
+    ("network.client_disconnect_timeout_secs", "客户端断开连接等待超时秒数"),
+    ("network.max_connections", "每 worker 最大并发连接数"),
+    ("network.backlog", "TCP 半连接队列上限"),
+    ("network.tcp_nodelay", "启用 TCP_NODELAY（禁用 Nagle 算法，降低小包延迟）"),
+    ("network.shutdown_timeout_secs", "优雅停机超时秒数"),
     ("session.default_environment", "默认执行环境（windows / wsl2）"),
     ("session.default_wsl_distro", "默认 WSL 发行版（仅 wsl2 环境有效，留空则使用默认发行版）"),
     ("session.default_working_dir", "默认工作目录（留空则使用用户主目录）"),
@@ -46,6 +54,14 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "network.port",
         "network.auto_start",
         "network.prevent_sleep",
+        "network.workers",
+        "network.keep_alive_secs",
+        "network.client_request_timeout_secs",
+        "network.client_disconnect_timeout_secs",
+        "network.max_connections",
+        "network.backlog",
+        "network.tcp_nodelay",
+        "network.shutdown_timeout_secs",
     ]),
     ("会话默认配置", &[
         "session.default_environment",
@@ -115,11 +131,40 @@ pub struct NetworkConfig {
     /// 服务器运行时阻止系统休眠
     #[serde(default = "default_prevent_sleep")]
     pub prevent_sleep: bool,
+    /// Actix Web worker 线程数（0 = CPU 核心数）
+    #[serde(default)]
+    pub workers: usize,
+    /// HTTP Keep-Alive 超时秒数（0 = 禁用）
+    #[serde(default = "default_keep_alive_secs")]
+    pub keep_alive_secs: u64,
+    /// 客户端请求头读取超时秒数
+    #[serde(default = "default_client_request_timeout_secs")]
+    pub client_request_timeout_secs: u64,
+    /// 客户端断开连接等待超时秒数
+    #[serde(default = "default_client_disconnect_timeout_secs")]
+    pub client_disconnect_timeout_secs: u64,
+    /// 每 worker 最大并发连接数
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
+    /// TCP 半连接队列上限
+    #[serde(default = "default_backlog")]
+    pub backlog: u32,
+    /// 启用 TCP_NODELAY
+    #[serde(default = "default_tcp_nodelay")]
+    pub tcp_nodelay: bool,
+    /// 优雅停机超时秒数
+    #[serde(default = "default_shutdown_timeout_secs")]
+    pub shutdown_timeout_secs: u64,
 }
 
-fn default_prevent_sleep() -> bool {
-    true
-}
+fn default_prevent_sleep() -> bool { true }
+fn default_keep_alive_secs() -> u64 { 5 }
+fn default_client_request_timeout_secs() -> u64 { 5 }
+fn default_client_disconnect_timeout_secs() -> u64 { 5 }
+fn default_max_connections() -> usize { 25000 }
+fn default_backlog() -> u32 { 2048 }
+fn default_tcp_nodelay() -> bool { true }
+fn default_shutdown_timeout_secs() -> u64 { 30 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
@@ -127,6 +172,14 @@ impl Default for NetworkConfig {
             port: 8765,
             auto_start: true,
             prevent_sleep: true,
+            workers: 0,
+            keep_alive_secs: default_keep_alive_secs(),
+            client_request_timeout_secs: default_client_request_timeout_secs(),
+            client_disconnect_timeout_secs: default_client_disconnect_timeout_secs(),
+            max_connections: default_max_connections(),
+            backlog: default_backlog(),
+            tcp_nodelay: default_tcp_nodelay(),
+            shutdown_timeout_secs: default_shutdown_timeout_secs(),
         }
     }
 }
@@ -367,6 +420,14 @@ impl AppConfig {
                 port: parse_value(props, "network.port", 8765),
                 auto_start: parse_value(props, "network.auto_start", true),
                 prevent_sleep: parse_value(props, "network.prevent_sleep", true),
+                workers: parse_value(props, "network.workers", 0),
+                keep_alive_secs: parse_value(props, "network.keep_alive_secs", default_keep_alive_secs()),
+                client_request_timeout_secs: parse_value(props, "network.client_request_timeout_secs", default_client_request_timeout_secs()),
+                client_disconnect_timeout_secs: parse_value(props, "network.client_disconnect_timeout_secs", default_client_disconnect_timeout_secs()),
+                max_connections: parse_value(props, "network.max_connections", default_max_connections()),
+                backlog: parse_value(props, "network.backlog", default_backlog()),
+                tcp_nodelay: parse_value(props, "network.tcp_nodelay", default_tcp_nodelay()),
+                shutdown_timeout_secs: parse_value(props, "network.shutdown_timeout_secs", default_shutdown_timeout_secs()),
             },
             session: SessionConfig {
                 default_environment: parse_value(props, "session.default_environment", "windows".to_string()),
@@ -433,6 +494,14 @@ impl AppConfig {
         map.insert("network.port".to_string(), self.network.port.to_string());
         map.insert("network.auto_start".to_string(), self.network.auto_start.to_string());
         map.insert("network.prevent_sleep".to_string(), self.network.prevent_sleep.to_string());
+        map.insert("network.workers".to_string(), self.network.workers.to_string());
+        map.insert("network.keep_alive_secs".to_string(), self.network.keep_alive_secs.to_string());
+        map.insert("network.client_request_timeout_secs".to_string(), self.network.client_request_timeout_secs.to_string());
+        map.insert("network.client_disconnect_timeout_secs".to_string(), self.network.client_disconnect_timeout_secs.to_string());
+        map.insert("network.max_connections".to_string(), self.network.max_connections.to_string());
+        map.insert("network.backlog".to_string(), self.network.backlog.to_string());
+        map.insert("network.tcp_nodelay".to_string(), self.network.tcp_nodelay.to_string());
+        map.insert("network.shutdown_timeout_secs".to_string(), self.network.shutdown_timeout_secs.to_string());
         map.insert("session.default_environment".to_string(), self.session.default_environment.clone());
         map.insert("session.default_wsl_distro".to_string(), self.session.default_wsl_distro.clone().unwrap_or_default());
         map.insert("session.default_working_dir".to_string(), self.session.default_working_dir.clone().unwrap_or_default());

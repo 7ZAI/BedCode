@@ -59,7 +59,7 @@
             type="number"
             min="1024"
             max="65535"
-            class="w-28 h-[var(--input-height)] px-2.5 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]"
+            class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]"
           />
           <button
             class="px-2.5 py-1.5 text-xs bg-brand text-white rounded-btn hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-50"
@@ -92,54 +92,132 @@
       </div>
     </div>
 
+    <!-- ==================== 区块 1.5：高级配置 ==================== -->
+    <div v-if="networkConfig" class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 40ms">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)]">
+          {{ $t('desktop.server.advancedConfig') }}
+        </h2>
+        <button
+          class="px-2.5 py-1.5 text-xs bg-brand text-white rounded-btn hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-50"
+          :disabled="loading"
+          @click="handleApplyAdvConfig"
+        >
+          {{ $t('desktop.server.restartToApply') }}
+        </button>
+      </div>
+
+      <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 items-center">
+        <!-- Workers -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.workers') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.workers" type="number" min="0" max="64"
+            class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.workersHint') }}</span>
+        </div>
+
+        <!-- Keep-Alive -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.keepAlive') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.keep_alive_secs" type="number" min="0" max="300"
+            class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.keepAliveHint') }}</span>
+        </div>
+
+        <!-- Client Request Timeout -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.clientRequestTimeout') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.client_request_timeout_secs" type="number" min="1" max="120"
+            class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">s</span>
+        </div>
+
+        <!-- Client Disconnect Timeout -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.clientDisconnectTimeout') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.client_disconnect_timeout_secs" type="number" min="1" max="120"
+            class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">s</span>
+        </div>
+
+        <!-- Max Connections -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.maxConnections') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.max_connections" type="number" min="1" max="100000"
+            class="w-24 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.maxConnectionsHint') }}</span>
+        </div>
+
+        <!-- Backlog -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.backlog') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.backlog" type="number" min="64" max="8192"
+            class="w-24 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+        </div>
+
+        <!-- TCP_NODELAY -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.tcpNodelay') }}</label>
+        <button
+          class="relative w-10 h-5 rounded-full transition-colors"
+          :class="advConfig!.tcp_nodelay ? 'bg-brand' : 'bg-[var(--border)]'"
+          @click="advConfig!.tcp_nodelay = !advConfig!.tcp_nodelay"
+        >
+          <span
+            class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-sm"
+            :class="advConfig!.tcp_nodelay ? 'translate-x-5' : 'translate-x-0'"
+          ></span>
+        </button>
+
+        <!-- Shutdown Timeout -->
+        <label class="text-sm text-[var(--text-tertiary)] text-right">{{ $t('desktop.server.shutdownTimeout') }}</label>
+        <div class="flex items-center gap-2">
+          <input v-model.number="advConfig!.shutdown_timeout_secs" type="number" min="1" max="300"
+            class="w-20 h-7 px-2 text-sm rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)]" />
+          <span class="text-xs text-[var(--text-tertiary)]">s</span>
+        </div>
+      </div>
+    </div>
+
     <!-- ==================== 区块 2：性能监控 ==================== -->
     <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 80ms">
       <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">
         {{ $t('desktop.server.monitoring') }}
       </h2>
 
-      <!-- 使用 v-show 保持 DOM 存活，避免切换页面时闪变 -->
-      <div v-show="status === 'running' && metrics">
-        <!-- 指标卡片 -->
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
-            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.uptime') }}</div>
-            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ formatUptime(metrics?.uptime_secs ?? 0) }}</div>
-          </div>
-          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
-            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.connections') }}</div>
-            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics?.connections ?? 0 }}</div>
-          </div>
-          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
-            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.totalRequests') }}</div>
-            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ (metrics?.total_http_requests ?? 0).toLocaleString() }}</div>
-          </div>
-          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
-            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.cpuUsage') }}</div>
-            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ (metrics?.cpu_usage_percent ?? 0).toFixed(1) }}%</div>
-          </div>
-          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
-            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.memoryUsage') }}</div>
-            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ formatMemory(metrics?.memory_usage_bytes ?? 0) }}</div>
-          </div>
-          <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
-            <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.requestRate') }}</div>
-            <div class="text-lg font-semibold text-[var(--text-primary)]">{{ (metrics?.http_requests_per_sec ?? 0).toFixed(1) }}/s</div>
-          </div>
+      <!-- 指标卡片：始终显示，无数据时显示 - -->
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+        <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+          <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.uptime') }}</div>
+          <div class="text-lg font-semibold text-[var(--text-primary)]">{{ status === 'running' ? formatUptime(uptimeTick) : '-' }}</div>
         </div>
-
-        <!-- WS 消息时序图 -->
-        <div>
-          <h3 class="text-sm font-medium text-[var(--text-secondary)] mb-2">
-            {{ $t('desktop.server.wsThroughput') }}
-          </h3>
-          <VChart :option="chartOption" style="height: 250px; width: 100%;" autoresize />
+        <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+          <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.connections') }}</div>
+          <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics?.connections ?? '-' }}</div>
+        </div>
+        <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+          <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.totalRequests') }}</div>
+          <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics ? (metrics.total_http_requests).toLocaleString() : '-' }}</div>
+        </div>
+        <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+          <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.cpuUsage') }}</div>
+          <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics ? `${metrics.cpu_usage_percent.toFixed(1)}%` : '-' }}</div>
+        </div>
+        <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+          <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.memoryUsage') }}</div>
+          <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics ? formatMemory(metrics.memory_usage_bytes) : '-' }}</div>
+        </div>
+        <div class="bg-[var(--bg-hover)]/50 rounded-input p-4">
+          <div class="text-xs text-[var(--text-tertiary)]">{{ $t('desktop.server.requestRate') }}</div>
+          <div class="text-lg font-semibold text-[var(--text-primary)]">{{ metrics ? `${metrics.http_requests_per_sec.toFixed(1)}/s` : '-' }}</div>
         </div>
       </div>
 
-      <!-- 服务器未运行时 -->
-      <div v-show="!(status === 'running' && metrics)" class="text-center py-8 text-[var(--text-tertiary)]">
-        {{ $t('desktop.server.status.stopped') }}
+      <!-- WS 消息时序图 -->
+      <div>
+        <h3 class="text-sm font-medium text-[var(--text-secondary)] mb-2">
+          {{ $t('desktop.server.wsThroughput') }}
+        </h3>
+        <VChart :option="chartOption" style="height: 250px; width: 100%;" autoresize />
       </div>
     </div>
     </div>
@@ -150,9 +228,10 @@
 /**
  * 服务器管理页面 — 配置、启停控制、性能监控
  */
-import { onMounted, computed, watch } from 'vue'
+import { onMounted, onUnmounted, computed, watch, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useServer } from '@/composables/useServer'
+import type { NetworkConfig } from '@/composables/useServer'
 import { useToast } from '@/composables/useToast'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -178,6 +257,7 @@ const {
   metrics,
   metricsHistory,
   loading,
+  networkConfig,
   loadStatus,
   startServer,
   stopServer,
@@ -186,6 +266,8 @@ const {
   updateAutoStart,
   startPolling,
   stopPolling,
+  loadNetworkConfig,
+  updateNetworkConfig,
 } = useServer()
 
 const portInput = computed({
@@ -201,14 +283,31 @@ const statusText = computed(() => {
   }
 })
 
-/** 格式化运行时长 */
+/** 运行时长本地计时 — 每秒刷新，不依赖后端轮询 */
+const uptimeTick = ref(0)
+let uptimeTimer: ReturnType<typeof setInterval> | null = null
+
+watch(status, (val) => {
+  if (uptimeTimer) { clearInterval(uptimeTimer); uptimeTimer = null }
+  if (val === 'running' && metrics.value) {
+    uptimeTick.value = metrics.value.uptime_secs
+    uptimeTimer = setInterval(() => { uptimeTick.value++ }, 1000)
+  }
+})
+
+watch(metrics, (m) => {
+  if (m && status.value === 'running' && !uptimeTimer) {
+    uptimeTick.value = m.uptime_secs
+    uptimeTimer = setInterval(() => { uptimeTick.value++ }, 1000)
+  }
+})
+
+/** 格式化运行时长 — HH:MM:SS 格式 */
 function formatUptime(secs: number): string {
   const h = Math.floor(secs / 3600)
   const m = Math.floor((secs % 3600) / 60)
   const s = secs % 60
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${s}s`
-  return `${s}s`
+  return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
 /** 格式化内存 */
@@ -217,6 +316,21 @@ function formatMemory(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   return `${(bytes / 1024).toFixed(0)} KB`
 }
+
+/** 高级配置本地编辑副本 */
+const advConfig = computed({
+  get: () => networkConfig.value ? {
+    workers: networkConfig.value.workers,
+    keep_alive_secs: networkConfig.value.keep_alive_secs,
+    client_request_timeout_secs: networkConfig.value.client_request_timeout_secs,
+    client_disconnect_timeout_secs: networkConfig.value.client_disconnect_timeout_secs,
+    max_connections: networkConfig.value.max_connections,
+    backlog: networkConfig.value.backlog,
+    tcp_nodelay: networkConfig.value.tcp_nodelay,
+    shutdown_timeout_secs: networkConfig.value.shutdown_timeout_secs,
+  } : null,
+  set: (v) => { if (v && networkConfig.value) Object.assign(networkConfig.value, v) },
+})
 
 /** ECharts 时序图配置 */
 const chartOption = computed(() => {
@@ -323,11 +437,33 @@ async function handleAutoStartToggle(val: boolean) {
   }
 }
 
+/** 应用高级配置并重启 */
+async function handleApplyAdvConfig() {
+  if (!networkConfig.value || !advConfig.value) return
+  try {
+    const merged: NetworkConfig = { ...networkConfig.value, ...advConfig.value }
+    await updateNetworkConfig(merged)
+    if (status.value === 'running') {
+      await restartServer()
+      toast.success(t('desktop.server.restartSuccess'))
+    } else {
+      toast.success(t('desktop.server.configSaved'))
+    }
+  } catch (e: any) {
+    toast.error(e.message)
+  }
+}
+
 onMounted(async () => {
   await loadStatus()
+  await loadNetworkConfig()
   if (status.value === 'running') {
     startPolling()
   }
+})
+
+onUnmounted(() => {
+  if (uptimeTimer) { clearInterval(uptimeTimer); uptimeTimer = null }
 })
 
 watch(status, (newVal) => {

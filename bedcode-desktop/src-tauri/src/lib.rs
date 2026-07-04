@@ -464,8 +464,10 @@ pub fn run() {
             commands::server::server_restart,
             commands::server::get_server_status,
             commands::server::get_server_metrics,
+            commands::server::get_server_network_config,
             commands::server::update_server_port,
             commands::server::update_server_auto_start,
+            commands::server::update_server_network_config,
             // mDNS
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,

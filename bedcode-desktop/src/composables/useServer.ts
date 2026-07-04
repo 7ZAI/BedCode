@@ -18,6 +18,21 @@ export interface ServerStatusInfo {
   local_ips: string[]
 }
 
+/** 网络配置 — Actix Web 参数 */
+export interface NetworkConfig {
+  port: number
+  auto_start: boolean
+  prevent_sleep: boolean
+  workers: number
+  keep_alive_secs: number
+  client_request_timeout_secs: number
+  client_disconnect_timeout_secs: number
+  max_connections: number
+  backlog: number
+  tcp_nodelay: boolean
+  shutdown_timeout_secs: number
+}
+
 /** 服务器性能指标 */
 export interface ServerMetrics {
   uptime_secs: number
@@ -49,6 +64,7 @@ export function useServer() {
   const metrics = ref<ServerMetrics | null>(null)
   const metricsHistory = ref<TimestampedMetrics[]>([])
   const loading = ref(false)
+  const networkConfig = ref<NetworkConfig | null>(null)
 
   let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -116,6 +132,26 @@ export function useServer() {
     autoStart.value = value
   }
 
+  /** 加载网络配置 */
+  async function loadNetworkConfig() {
+    try {
+      const config: NetworkConfig = await invoke('get_server_network_config')
+      networkConfig.value = config
+      port.value = config.port
+      autoStart.value = config.auto_start
+    } catch (e) {
+      console.error('Failed to load network config:', e)
+    }
+  }
+
+  /** 更新网络配置（需重启生效） */
+  async function updateNetworkConfig(config: NetworkConfig) {
+    await invoke('update_server_network_config', { networkConfig: config })
+    networkConfig.value = { ...config }
+    port.value = config.port
+    autoStart.value = config.auto_start
+  }
+
   /** 轮询指标 */
   async function pollMetrics() {
     if (status.value !== 'running') return
@@ -163,6 +199,7 @@ export function useServer() {
     metrics,
     metricsHistory,
     loading,
+    networkConfig,
     loadStatus,
     startServer,
     stopServer,
@@ -171,5 +208,7 @@ export function useServer() {
     updateAutoStart,
     startPolling,
     stopPolling,
+    loadNetworkConfig,
+    updateNetworkConfig,
   }
 }

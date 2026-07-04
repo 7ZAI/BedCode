@@ -4,7 +4,7 @@
 
 use crate::server::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::server::metrics::ServerMetrics;
-use crate::system::config::AppConfig;
+use crate::system::config::{AppConfig, NetworkConfig};
 use crate::Result;
 use tauri::Manager;
 
@@ -52,6 +52,13 @@ pub async fn server_restart() -> Result<()> {
 pub async fn get_server_status() -> Result<ServerStatusInfo> {
     let supervisor = ServerSupervisor::global();
     Ok(supervisor.get_status_info().await)
+}
+
+/// 获取网络配置
+#[tauri::command]
+pub async fn get_server_network_config() -> Result<NetworkConfig> {
+    let config = AppConfig::global();
+    Ok(config.network.clone())
 }
 
 /// 获取服务器性能指标
@@ -106,5 +113,32 @@ pub async fn update_server_auto_start(
     supervisor.update_auto_start(auto_start).await;
 
     tracing::info!("Server auto_start updated to {}", auto_start);
+    Ok(())
+}
+
+/// 更新服务器网络配置（Actix Web + WebSocket 参数）
+///
+/// 仅更新配置文件，需重启服务器生效
+#[tauri::command]
+pub async fn update_server_network_config(
+    app_handle: tauri::AppHandle,
+    network_config: NetworkConfig,
+) -> Result<()> {
+    let config_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?
+        .join("config.properties");
+
+    let mut config = AppConfig::load(&config_path)?;
+    config.network = network_config;
+    config.save(&config_path)?;
+
+    // 更新 supervisor 内存中的端口和自启动
+    let supervisor = ServerSupervisor::global();
+    supervisor.update_port(config.network.port).await?;
+    supervisor.update_auto_start(config.network.auto_start).await;
+
+    tracing::info!("Server network config updated");
     Ok(())
 }

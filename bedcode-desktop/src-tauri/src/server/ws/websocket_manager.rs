@@ -104,12 +104,15 @@ impl WebSocketManager {
         // Ok(true) = 异常退出, Ok(false) = 正常退出, Err = 通道关闭（视为异常）
         let (crash_tx, crash_rx) = tokio::sync::oneshot::channel::<bool>();
 
+        // 读取网络配置传入 Actix 线程
+        let net_config = crate::system::config::AppConfig::global().network.clone();
+
         // 在独立线程中启动 Actix runtime
         // actix-web-actors 的 WS actor 需要 actix system context，不能直接在 tokio runtime 上运行
         std::thread::spawn(move || {
             let rt = actix_rt::Runtime::new().expect("Failed to create Actix runtime");
             rt.block_on(async move {
-                let result = crate::server::app::start_http_server(port).await;
+                let result = crate::server::app::start_http_server(port, &net_config).await;
                 match result {
                     Ok((handle, server)) => {
                         // 先发送 handle，让调用方可以开始使用服务器
