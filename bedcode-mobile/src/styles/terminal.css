@@ -1,0 +1,293 @@
+/**
+ * Terminal Styles - 终端视图布局、xterm 覆盖、滚动条、选择模式样式
+ *
+ * 从 TerminalView.vue 提取，供终端视图及相关组件共用
+ */
+
+/* Terminal View Layout */
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--mobile-terminal-bg);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  overflow: hidden;
+  /* 只负责顶部安全区域，键盘避让由 movable-area 的 transform 处理 */
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 可移动区域的裁剪容器
+ * 限制 movable-area 上移时不突破 Header 底部边界
+ * 使用独立容器而非 overflow:hidden，因为 overflow 对 transform 子元素裁剪不可靠 */
+.movable-clip {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* 创建新的 stacking context，确保 clip 生效 */
+  position: relative;
+}
+
+/* 可移动区域：终端内容 + 输入栏
+ * 键盘弹出时通过 transform 整体上移，GPU 合成不触发布局重排
+ * Header 不在此区域内，保持固定位置
+ * 父容器 .movable-clip 裁剪超出部分，防止突破安全区
+ * 不使用 will-change: transform，持续开启会导致 xterm 滚动重影
+ * will-change 由 JS 在键盘动画期间临时添加 */
+.movable-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  /* height: 100% 确保裁剪容器能正确裁剪 transform 后的内容 */
+  height: 100%;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Loading Overlay */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--mobile-terminal-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--mobile-border);
+  border-top-color: var(--mobile-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 0.875rem;
+  color: var(--mobile-text-muted);
+  margin: 0;
+}
+
+/* Loading fade transition */
+.loading-fade-enter-active,
+.loading-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.loading-fade-enter-from,
+.loading-fade-leave-to {
+  opacity: 0;
+}
+
+/* Main Content Area */
+.main-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Sidebar overlay */
+.sidebar-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-hidden {
+  transform: translateX(100%);
+  pointer-events: none;
+}
+
+.sidebar-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+}
+
+/* Terminal Area */
+.terminal-output-area {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--mobile-terminal-bg);
+}
+
+/* 触摸滚动容器 */
+.terminal-scroll-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* 自定义滚动条轨道 */
+.scrollbar-track {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 4px;
+  width: 4px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* 自定义滚动条滑块 */
+.scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 20px;
+  border-radius: 2px;
+  background: rgba(160, 160, 180, 0.3);
+  opacity: 0;
+  transition: opacity 0.25s ease, background 0.15s ease;
+  pointer-events: none;
+}
+
+.scrollbar-thumb.visible {
+  opacity: 1;
+  background: rgba(0, 212, 255, 0.4);
+}
+
+/* xterm 容器 */
+.xterm-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+
+/* xterm 核心样式 */
+.xterm {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  scrollbar-width: none;
+}
+
+.xterm::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.xterm-screen {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  scrollbar-width: none;
+}
+
+.xterm-screen::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+/* 选择模式：允许选中 */
+.selection-mode .xterm {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.selection-mode .xterm-screen {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 选择模式：高亮 xterm 区域 */
+.selection-mode .xterm-container {
+  outline: 2px solid rgba(0, 212, 255, 0.3);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+/* 选择模式操作栏 */
+.selection-action-bar {
+  position: absolute;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-bg-secondary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  white-space: nowrap;
+}
+
+.selection-action-btn {
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.375rem;
+  background: var(--mobile-accent);
+  border: none;
+  color: var(--mobile-text-on-accent);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.selection-action-btn.cancel {
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+.selection-action-btn:active {
+  opacity: 0.8;
+}
+
+/* 选择栏过渡动画 */
+.selection-bar-enter-active,
+.selection-bar-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.selection-bar-enter-from,
+.selection-bar-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* 禁用 xterm-viewport 原生滚动 */
+.xterm-viewport {
+  overflow-y: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
+  scrollbar-width: none !important;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+}
+
+/* 禁用 xterm-scroll-area 滚动条 */
+.xterm-scroll-area {
+  scrollbar-width: none;
+}
+
+.xterm-scroll-area::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}

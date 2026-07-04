@@ -1,0 +1,279 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles */
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* color-scheme 由 App.vue 根据设置动态设置 */
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* 安全区域变量 - 由 tauri-plugin-edge-to-edge 通过 JS 设置 */
+  /* Android WebView 不支持 CSS env(safe-area-inset-*)，这些变量仅作 iOS 兼容 */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --keyboard-height: 0px;
+  --keyboard-visible: 0;
+}
+
+/* 默认浅色模式 */
+:root {
+  color-scheme: light;
+}
+
+/* 深色模式 */
+:root.dark {
+  color-scheme: dark;
+}
+
+/* 全局字体大小变量 - 默认值 */
+:root {
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-base: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+}
+
+/* 桌面端整体字体大小 - 基于设置动态变化 */
+.desktop-ui {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+/* 桌面端标题字体 */
+.desktop-ui h1,
+.desktop-ui .text-xl,
+.desktop-ui .title-xl {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* 桌面端副标题 */
+.desktop-ui h2,
+.desktop-ui .text-lg,
+.desktop-ui .title-lg {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* 桌面端正文 */
+.desktop-ui p,
+.desktop-ui .text-base {
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+}
+
+/* 桌面端小号文字 */
+.desktop-ui .text-sm,
+.desktop-ui small {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 桌面端极小号文字 */
+.desktop-ui .text-xs {
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+/* 桌面端导航链接 */
+.desktop-ui nav a,
+.desktop-ui .nav-link {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+}
+
+/* ==================== 移动端字体样式 ==================== */
+.mobile-ui {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+/* 移动端标题 */
+.mobile-ui h1,
+.mobile-ui .text-xl,
+.mobile-ui .title-xl {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* 移动端副标题 */
+.mobile-ui h2,
+.mobile-ui .text-lg,
+.mobile-ui .title-lg {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* 移动端正文 */
+.mobile-ui p,
+.mobile-ui .text-base,
+.mobile-ui .body-text {
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+}
+
+/* 移动端小号文字 */
+.mobile-ui .text-sm,
+.mobile-ui small {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 移动端极小号文字 */
+.mobile-ui .text-xs {
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+/* 移动端按钮文字 */
+.mobile-ui button,
+.mobile-ui .btn {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+}
+
+/* 移动端输入框 */
+.mobile-ui input,
+.mobile-ui textarea,
+.mobile-ui select {
+  font-size: var(--font-size-base);
+}
+
+/* 移动端列表项 */
+.mobile-ui li,
+.mobile-ui .list-item {
+  font-size: var(--font-size-base);
+}
+
+/* 移动端导航 */
+.mobile-ui .bottom-nav,
+.mobile-ui nav {
+  font-size: var(--font-size-sm);
+}
+
+/* 移动端卡片标题 */
+.mobile-ui .card-title,
+.mobile-ui .item-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+}
+
+/* 移动端卡片描述 */
+.mobile-ui .card-desc,
+.mobile-ui .item-desc {
+  font-size: var(--font-size-sm);
+  color: oklch(var(--bc) / 0.7);
+}
+
+/* 字体大小类 - 使用 CSS 变量 */
+.text-xs { font-size: var(--font-size-xs); }
+.text-sm { font-size: var(--font-size-sm); }
+.text-base { font-size: var(--font-size-base); }
+.text-lg { font-size: var(--font-size-lg); }
+.text-xl { font-size: var(--font-size-xl); }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* 移动端专用样式 */
+.mobile-app {
+  /* 确保移动端全屏显示 */
+  min-height: 100vh;
+  min-height: 100dvh;
+  /* 安全区域由 App.vue 通过 JavaScript 动态设置 */
+  /* 顶部安全区通过容器 paddingTop 处理 */
+  /* 底部安全区通过各底部元素的 paddingBottom 处理 */
+  /* 平滑过渡动画 - 避免键盘弹出时闪现 */
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 移动端底部导航安全区域适配 */
+.mobile-nav-safe {
+  padding-bottom: var(--safe-area-bottom, 0px);
+}
+
+/* 移动端顶部安全区域适配 */
+.mobile-header-safe {
+  padding-top: var(--safe-area-top, 0px);
+}
+
+/* 移动端输入栏键盘避让 - 使用 margin 而非 transform 避免闪现 */
+.mobile-input-bar {
+  /* 键盘高度由插件动态注入，使用 margin-bottom 配合 CSS env 实现平滑过渡 */
+  margin-bottom: env(keyboard-inset-bottom, 0px);
+  /* 过渡动画：使用较长时间避免突兀 */
+  transition: margin-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Scrollbar styles - 浅色模式 (Modern Clean) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track-bg, #f1f5f9);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-bg, #94a3b8);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover-bg, #64748b);
+}
+
+/* Scrollbar styles - 深色模式 */
+:root.dark ::-webkit-scrollbar-track {
+  background: var(--scrollbar-track-bg, theme('colors.dark.800'));
+}
+
+:root.dark ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-bg, theme('colors.dark.600'));
+}
+
+:root.dark ::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover-bg, theme('colors.dark.500'));
+}
+
+/* Terminal styles */
+.terminal-output {
+  font-family: theme('fontFamily.mono');
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Animation */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

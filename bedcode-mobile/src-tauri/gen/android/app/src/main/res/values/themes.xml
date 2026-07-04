@@ -1,0 +1,15 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.bedcode_mobile" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- 状态栏透明，让内容延伸到状态栏下方 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <!-- 导航栏透明 -->
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- 允许内容绘制在系统栏后面 -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <!-- 状态栏图标使用深色（因为我们的 app 是深色主题） -->
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- 导航栏图标使用深色 -->
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>
