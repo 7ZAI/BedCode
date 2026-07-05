@@ -62,7 +62,7 @@
               :class="{ active: tempToolbarItems.includes(item.key) }"
               @click.stop="toggleToolbarItem(item.key)"
             >
-              <span>{{ item.label }}</span>
+              <span>{{ t(item.label) }}</span>
             </button>
           </div>
         </div>

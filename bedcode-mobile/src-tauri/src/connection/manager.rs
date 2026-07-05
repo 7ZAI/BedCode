@@ -141,9 +141,13 @@ impl ConnectionManager {
                 tracing::info!("Already connecting");
                 return Ok(());
             }
-            if status == WsConnStatus::Connected || status == WsConnStatus::Paired {
+            // 已认证的连接（Paired）才视为真正可用，直接复用
+            // Connected 表示 WebSocket 已建立但未认证，可能是残留的旧连接
+            // （如自动重连成功但 JWT 认证失败后前端以为断开了），
+            // 此时需要断开旧连接并重建，否则前端认证/配对请求会全部失败
+            if status == WsConnStatus::Paired {
                 let _ = app_handle.emit("ws_connected", ());
-                tracing::info!("Already connected");
+                tracing::info!("Already connected and authenticated");
                 return Ok(());
             }
         }

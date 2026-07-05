@@ -188,12 +188,12 @@ const showTaskPicker = ref(false)
 // ==================== Header Toolbar Config ====================
 
 const ALL_TOOLBAR_ITEMS: ToolbarItemConfig[] = [
-  { key: 'task', label: 'task', icon: 'task' },
-  { key: 'shortcut', label: 'shortcut', icon: 'shortcut' },
-  { key: 'clear', label: 'clear', icon: 'clear' },
-  { key: 'refresh', label: 'refresh', icon: 'refresh' },
-  { key: 'settings', label: 'settings', icon: 'settings' },
-  { key: 'folder', label: 'folder', icon: 'folder' },
+  { key: 'task', label: 'mobile.terminal.toolbarTask', icon: 'task' },
+  { key: 'shortcut', label: 'mobile.terminal.toolbarShortcut', icon: 'shortcut' },
+  { key: 'clear', label: 'mobile.terminal.toolbarClear', icon: 'clear' },
+  { key: 'refresh', label: 'mobile.terminal.toolbarRefresh', icon: 'refresh' },
+  { key: 'settings', label: 'mobile.terminal.toolbarSettings', icon: 'settings' },
+  { key: 'folder', label: 'mobile.terminal.toolbarFolder', icon: 'folder' },
 ]
 
 const visibleToolbarItems = computed(() => {
@@ -293,10 +293,18 @@ const terminalViewStyle = computed(() => ({
 
 // 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
 // 纯 transform 方案：GPU 合成不触发布局重排，无卡顿
-// xterm 容器尺寸不变，手动计算可见行数通知 PTY
-const movableAreaStyle = computed(() => ({
-  transform: keyboardHeight.value > 0 ? `translateY(-${keyboardHeight.value}px)` : 'translateY(0)',
-}))
+// 键盘弹出时限制 maxHeight 为可见高度，让 main-content 自然缩小，
+// 避免终端显示区和输入栏之间出现空白
+const movableAreaStyle = computed(() => {
+  if (keyboardHeight.value <= 0) {
+    return { transform: 'translateY(0)' }
+  }
+  const visibleHeight = window.innerHeight - safeAreaTop.value - keyboardHeight.value
+  return {
+    maxHeight: `${visibleHeight}px`,
+    transform: `translateY(-${keyboardHeight.value}px)`,
+  }
+})
 
 /** 选择操作栏定位：避让选区和屏幕边界 */
 const selectionBarStyle = computed(() => {

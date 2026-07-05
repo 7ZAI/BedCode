@@ -754,6 +754,11 @@ onMounted(() => {
   position: relative;
   /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
+  /* 响应式快捷键尺寸：小屏缩小，大屏放大，中间平滑过渡 */
+  --shortcut-btn-h: clamp(2rem, 2.25rem + (100vw - 400px) / 800 * 0.5rem, 2.5rem);
+  --shortcut-font: clamp(0.65rem, 0.75rem + (100vw - 400px) / 800 * 0.05rem, 0.8rem);
+  --quickbar-btn-h: clamp(1.5rem, 1.75rem + (100vw - 400px) / 800 * 0.25rem, 2rem);
+  --quickbar-font: clamp(0.6rem, 0.7rem + (100vw - 400px) / 800 * 0.05rem, 0.75rem);
 }
 
 /* ==================== Quick Bar ==================== */
@@ -776,9 +781,9 @@ onMounted(() => {
 }
 
 .quick-bar-btn {
-  height: 1.75rem;
+  height: var(--quickbar-btn-h);
   padding: 0 0.5rem;
-  font-size: 0.7rem;
+  font-size: var(--quickbar-font);
   font-weight: 500;
   border-radius: 0.375rem;
   cursor: pointer;
@@ -1068,8 +1073,8 @@ onMounted(() => {
 .shortcuts-left {
   flex: 1;
   min-width: 0;
-  /* 两行高度：2 * 2.25rem + 1 * 0.375rem = 4.875rem */
-  max-height: 4.875rem;
+  /* 两行高度：2 * 按钮 + 1 * gap */
+  max-height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
   overflow-y: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -1087,11 +1092,11 @@ onMounted(() => {
 }
 
 .shortcut-btn {
-  height: 2.25rem;
+  height: var(--shortcut-btn-h);
   background: var(--mobile-shortcut-bg);
   border: 1px solid var(--mobile-shortcut-border);
   color: var(--mobile-shortcut-color);
-  font-size: 0.75rem;
+  font-size: var(--shortcut-font);
   font-weight: 500;
   border-radius: 0.5rem;
   cursor: pointer;
@@ -1120,9 +1125,9 @@ onMounted(() => {
 }
 
 .action-btn {
-  width: 3.25rem;
-  height: 2.25rem;
-  font-size: 0.75rem;
+  width: calc(var(--shortcut-btn-h) * 1.44);
+  height: var(--shortcut-btn-h);
+  font-size: var(--shortcut-font);
   font-weight: 600;
   border-radius: 0.5rem;
   cursor: pointer;
@@ -1173,13 +1178,13 @@ onMounted(() => {
 }
 
 .arrow-placeholder {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--shortcut-btn-h);
+  height: var(--shortcut-btn-h);
 }
 
 .arrow-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--shortcut-btn-h);
+  height: var(--shortcut-btn-h);
   background: var(--mobile-arrow-bg);
   border: 1px solid var(--mobile-arrow-border);
   color: var(--mobile-arrow-color);
@@ -1197,14 +1202,14 @@ onMounted(() => {
 }
 
 .arrow-icon {
-  width: 1rem;
-  height: 1rem;
+  width: calc(var(--shortcut-btn-h) * 0.44);
+  height: calc(var(--shortcut-btn-h) * 0.44);
 }
 
 /* ==================== Custom Commands (Slide 2) ==================== */
 
 .custom-commands-layout {
-  min-height: 5rem;
+  min-height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
 }
 
 .custom-commands-grid {
@@ -1214,11 +1219,11 @@ onMounted(() => {
 }
 
 .custom-cmd-btn {
-  height: 2.25rem;
+  height: var(--shortcut-btn-h);
   background: var(--mobile-custom-cmd-bg);
   border: 1px solid var(--mobile-custom-cmd-border);
   color: var(--mobile-custom-cmd-color);
-  font-size: 0.75rem;
+  font-size: var(--shortcut-font);
   font-weight: 500;
   border-radius: 0.5rem;
   cursor: pointer;

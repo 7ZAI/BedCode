@@ -24,6 +24,8 @@ export interface OutputPayload {
 /** 实时输出回调 — TerminalView 注册，新数据同时写 buffer + xterm */
 export interface RealtimeHandler {
   onOutput: (data: Uint8Array, payload: OutputPayload) => void
+  /** buffer 被清空（增量回退/全量重播）时调用，TerminalView 应清空 xterm */
+  onClear?: () => void
 }
 
 /** 单会话缓冲区 */

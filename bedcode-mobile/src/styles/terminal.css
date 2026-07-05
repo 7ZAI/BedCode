@@ -34,6 +34,7 @@
 
 /* 可移动区域：终端内容 + 输入栏
  * 键盘弹出时通过 transform 整体上移，GPU 合成不触发布局重排
+ * 同时限制 maxHeight 为键盘上方可见区域，让 main-content 自然缩小
  * Header 不在此区域内，保持固定位置
  * 父容器 .movable-clip 裁剪超出部分，防止突破安全区
  * 不使用 will-change: transform，持续开启会导致 xterm 滚动重影
@@ -45,7 +46,8 @@
   overflow: hidden;
   /* height: 100% 确保裁剪容器能正确裁剪 transform 后的内容 */
   height: 100%;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Loading Overlay */
