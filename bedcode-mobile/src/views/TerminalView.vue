@@ -140,6 +140,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
+import { isMockSession, useMockTerminal } from '@/composables/useMockTerminal'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { wsResizeTerminal } from '@/composables/useMobileCommands'
 import { httpSendSessionInput } from '@/composables/useHttpApi'
@@ -168,6 +169,7 @@ const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 const connection = useMobileConnection()
+const mockTerminal = useMockTerminal()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
@@ -269,15 +271,19 @@ const isConnected = computed(() =>
   connection.connectionStatus.value === 'paired'
 )
 
-const session = computed(() =>
-  connection.activeSessions.value.find(s => s.id === sessionId.value)
-)
+const session = computed(() => {
+  if (isMockSession(sessionId.value)) {
+    return { id: sessionId.value, name: t('mobile.session.mockName'), status: 'running', is_active: true }
+  }
+  return connection.activeSessions.value.find(s => s.id === sessionId.value)
+})
 
 const sessionName = computed(() => session.value?.name || sessionId.value || t('desktop.terminal.title'))
 
-const isSessionActive = computed(() => (session.value?.status || 'stopped') === 'running')
+const isSessionActive = computed(() => isMockSession(sessionId.value) || (session.value?.status || 'stopped') === 'running')
 
 const inputPlaceholder = computed(() => {
+  if (isMockSession(sessionId.value)) return t('mobile.session.mockName')
   if (!isConnected.value) return t('mobile.input.disconnected') + '...'
   if (!isSessionActive.value) return t('mobile.connection.connectFailed')
   return t('mobile.input.commandPlaceholder')
@@ -455,7 +461,7 @@ async function initTerminal() {
   window.addEventListener('resize', handleWindowResize)
 
   term.onResize(({ cols, rows }) => {
-    if (isConnected.value && isSessionActive.value && sessionId.value) {
+    if (!isMockSession(sessionId.value) && isConnected.value && isSessionActive.value && sessionId.value) {
       wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
         console.warn('[TerminalView] Resize failed:', e)
       })
@@ -499,6 +505,7 @@ function applyTerminalTheme() {
 
 function handleInputSubmit(text: string) {
   if (!terminalRef.value) return
+  if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
     httpSendSessionInput(sessionId.value, text).then(result => {
       if (result.code !== 0) {
@@ -511,6 +518,7 @@ function handleInputSubmit(text: string) {
 
 async function handleInputExecute(text: string) {
   if (!terminalRef.value) return
+  if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
     const result = await httpSendSessionInput(sessionId.value, text, 'enter')
     if (result.code !== 0) {
@@ -521,6 +529,7 @@ async function handleInputExecute(text: string) {
 }
 
 function handleSpecialKey(key: string) {
+  if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
     httpSendSessionInput(sessionId.value, '', key).then(result => {
       if (result.code !== 0) {
@@ -636,7 +645,11 @@ onMounted(async () => {
   await nextTick()
   initTerminal()
 
-  if (isSessionActive.value && isConnected.value) {
+  if (isMockSession(sessionId.value)) {
+    if (terminalRef.value) {
+      mockTerminal.startOutput(terminalRef.value)
+    }
+  } else if (isSessionActive.value && isConnected.value) {
     await subscribeSession(sessionId.value)
   }
 
@@ -644,6 +657,9 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
+  if (isMockSession(sessionId.value)) {
+    mockTerminal.stopOutput()
+  }
   disposeTerminal()
 
   if (!isSessionActive.value) {
@@ -652,7 +668,7 @@ onUnmounted(async () => {
 })
 
 watch(isSessionActive, async (active, prevActive) => {
-  if (!sessionId.value) return
+  if (!sessionId.value || isMockSession(sessionId.value)) return
   if (active && !prevActive) {
     await subscribeSession(sessionId.value)
   } else if (!active && prevActive) {
@@ -661,7 +677,7 @@ watch(isSessionActive, async (active, prevActive) => {
 })
 
 watch(isConnected, async (connected) => {
-  if (!sessionId.value) return
+  if (!sessionId.value || isMockSession(sessionId.value)) return
   if (!connected) {
     handleDisconnect()
   } else if (connected && isSessionActive.value) {

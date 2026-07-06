@@ -97,6 +97,8 @@ export default {
       stopFailed: 'Failed to stop session',
       deleteFailed: 'Failed to delete session',
       loadFailed: 'Failed to load session list',
+      mockName: 'Test Terminal (DEV)',
+      mockToggle: 'Toggle Test Terminal',
     },
     terminal: {
       pendingTasks: 'Executable Tasks',

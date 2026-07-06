@@ -97,6 +97,8 @@ export default {
       stopFailed: '停止会话失败',
       deleteFailed: '删除会话失败',
       loadFailed: '加载会话列表失败',
+      mockName: '测试终端 (DEV)',
+      mockToggle: '切换测试终端',
     },
     terminal: {
       pendingTasks: '可执行任务',
