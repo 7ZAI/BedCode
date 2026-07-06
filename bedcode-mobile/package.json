@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "tauri": "tauri",
+    "tauri:dev": "tauri dev",
     "tauri:android:init": "tauri android init",
     "tauri:android:dev": "tauri android dev",
     "tauri:android:build": "tauri android build --target aarch64",

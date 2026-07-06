@@ -28,6 +28,12 @@
           </svg>
         </button>
         <slot name="header-right"></slot>
+        <button v-if="!hasHeaderRightSlot" class="header-btn" :title="t('mobile.codeViewer.settingsTitle')" @click="showCodeViewerSettings = true">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
         <button class="header-btn" :class="{ 'header-btn--active': sidebarVisible }" @click="toggleSidebar" :title="t('mobile.file.title')">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
@@ -93,6 +99,15 @@
         ></div>
       </div>
     </div>
+
+    <!-- Code Viewer Settings Modal (仅内部使用时渲染) -->
+    <CodeViewerSettingsModal
+      v-if="!hasHeaderRightSlot"
+      :visible="showCodeViewerSettings"
+      :z-index="130"
+      @close="showCodeViewerSettings = false"
+      @confirm="showCodeViewerSettings = false"
+    />
   </div>
 </template>
 
@@ -112,7 +127,7 @@
  * - "emit" - FileSidebar 发出 fileSelect 事件，本组件显示代码区
  */
 
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, useSlots } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import FileSidebar from '@/components/FileSidebar.vue'
@@ -123,6 +138,7 @@ import { useOrientation } from '@/composables/useOrientation'
 import { writeClipboardText } from '@/utils/clipboard'
 import { useCodeViewerStore, resolveCodeTheme, CODE_THEMES } from '@/stores/codeViewer'
 import { useTheme } from '@/composables/useTheme'
+import CodeViewerSettingsModal from '@/components/CodeViewerSettingsModal.vue'
 
 const props = withDefaults(defineProps<{
   sessionId: string
@@ -148,8 +164,12 @@ const { t } = useI18n()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
+const slots = useSlots()
 const codeViewerStore = useCodeViewerStore()
 const { highlightedHtml, highlight, highlightDiff } = useCodeHighlight()
+
+/** 外部已通过 header-right slot 传入设置按钮时，不显示内置按钮 */
+const hasHeaderRightSlot = computed(() => !!slots['header-right'])
 
 const resolvedTheme = computed(() => resolveCodeTheme(codeViewerStore.settings.theme, isSystemDark.value))
 
@@ -176,6 +196,7 @@ const renderedMarkdown = computed(() => {
 // ==================== Sidebar Toggle ====================
 
 const sidebarVisible = ref(props.defaultShowSidebar)
+const showCodeViewerSettings = ref(false)
 
 function toggleSidebar() {
   sidebarVisible.value = !sidebarVisible.value

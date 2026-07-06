@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="safeAreaReady"
-    class="flex flex-col h-[100dvh] overflow-hidden mobile-app mobile-ui"
+    class="flex flex-col h-[100dvh] overflow-hidden mobile-app mobile-ui bg-[var(--mobile-bg-primary)]"
     :style="mobileContainerStyle"
   >
     <!-- Main Content -->

@@ -10,6 +10,9 @@ build/
 # Documentation
 docs/
 
+AGENTS.md
+CLAUDE.md
+
 # Tauri / Rust
 **/target/
 **/src-tauri/**/Cargo.lock

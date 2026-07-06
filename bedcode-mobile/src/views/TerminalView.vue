@@ -293,8 +293,9 @@ const terminalViewStyle = computed(() => ({
 
 // 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
 // 纯 transform 方案：GPU 合成不触发布局重排，无卡顿
-// 键盘弹出时限制 maxHeight 为可见高度，让 main-content 自然缩小，
-// 避免终端显示区和输入栏之间出现空白
+//
+// AndroidManifest 已移除 adjustResize，系统不再自动调整 WebView 大小，
+// 完全由 JS 通过插件报告的 keyboardHeight 控制偏移，不存在双偏移问题
 const movableAreaStyle = computed(() => {
   if (keyboardHeight.value <= 0) {
     return { transform: 'translateY(0)' }

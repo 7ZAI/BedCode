@@ -4,6 +4,7 @@
     <div
       v-if="visible"
       class="settings-modal-overlay mobile-ui"
+      :style="{ zIndex: zIndex }"
       @click.self="emit('close')"
     >
     <div class="settings-modal modal-panel" :style="modalStyle">
@@ -21,7 +22,7 @@
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.codeViewer.fontSize') }}</label>
           <div class="font-size-control">
-            <button class="size-btn" @click.stop="localSettings.fontSize--" :disabled="localSettings.fontSize <= 10">-</button>
+            <button class="size-btn" @click.stop="localSettings.fontSize--" :disabled="localSettings.fontSize <= 6">-</button>
             <span class="size-value">{{ localSettings.fontSize }}px</span>
             <button class="size-btn" @click.stop="localSettings.fontSize++" :disabled="localSettings.fontSize >= 24">+</button>
           </div>
@@ -35,12 +36,12 @@
             <input
               type="range"
               class="slider-track"
-              min="1.0"
+              min="0.5"
               max="2.5"
               step="0.1"
               v-model.number="localSettings.lineHeight"
             />
-            <span class="slider-range-label">1.0 – 2.5</span>
+            <span class="slider-range-label">0.5 – 2.5</span>
           </div>
         </div>
 
@@ -118,9 +119,13 @@ import { resolveThemeLabel } from '@/config/terminalThemes'
 
 const { t } = useI18n()
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   visible: boolean
-}>()
+  /** 覆盖层 z-index，默认 50，嵌套在高层级弹窗中时应传入更高值 */
+  zIndex?: number
+}>(), {
+  zIndex: 50,
+})
 
 const emit = defineEmits<{
   close: []
@@ -162,7 +167,6 @@ function handleConfirm() {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
   padding: 1rem;
 }
 
