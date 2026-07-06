@@ -93,7 +93,7 @@ pub async fn ws_subscribe_session(app_handle: AppHandle, session_id: String, sta
     let message = TerminalRequest::subscribe(&session_id, start_seq);
     let response = conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::TERMINAL_SUBSCRIBE).await?;
 
-    // 解析 SubscribeResponse
+    // 解析响应：成功时为 SubscribeResponse，失败时为 Error（如 AUTH_REQUIRED）
     let result = if let Message::Terminal { payload, .. } = &response {
         if let TerminalAction::SubscribeResponse { min_seq, max_seq, history_count } = &payload.action {
             SubscribeResult {
@@ -105,6 +105,15 @@ pub async fn ws_subscribe_session(app_handle: AppHandle, session_id: String, sta
             // 非标准响应，返回默认值
             SubscribeResult { min_seq: 0, max_seq: 0, history_count: 0 }
         }
+    } else if let Message::Error { code, message, .. } = &response {
+        // 桌面端返回错误（如 AUTH_REQUIRED），转为 AppError 让前端可感知
+        tracing::warn!(
+            "[ws_subscribe_session] Server error: code={}, message={}",
+            code, message
+        );
+        return Err(crate::AppError::WebSocket(
+            format!("Subscribe failed: {} - {}", code, message)
+        ));
     } else {
         SubscribeResult { min_seq: 0, max_seq: 0, history_count: 0 }
     };

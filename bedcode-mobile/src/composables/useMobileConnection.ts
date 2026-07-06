@@ -152,40 +152,10 @@ async function init() {
       console.log('[MobileConnection] Connected')
       autoStartForegroundService()
 
-      // 连接恢复时重新订阅所有后台会话的终端输出
+      // 连接建立时确保全局监听器启动（订阅在 onPaired 认证成功后执行，
+      // 因为桌面端要求先认证才能订阅会话输出）
       const bufferStore = useTerminalBufferStore()
       bufferStore.startGlobalListener()
-      for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        if (!buffer.sessionStopped && !buffer.subscribed) {
-          // 先标记 subscribed 防止 watch(isConnected) 和此处竞态导致双重订阅
-          bufferStore.markSubscribed(sid)
-          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
-          wsJoinSession(sid, startSeq)
-            .then((result) => {
-              if (startSeq !== undefined && result && result.minSeq > startSeq) {
-                // 增量同步回退 — 清空 buffer，标记 hasGap，通知 xterm 清空
-                const buf = bufferStore.getBuffer(sid)
-                if (buf) {
-                  buf.chunks = []
-                  buf.totalBytes = 0
-                  buf.lastIndex = -1
-                  buf.lastEndIndex = -1
-                  buf.hasGap = true
-                }
-                // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
-                const handler = bufferStore.realtimeHandlers.get(sid)
-                if (handler?.onClear) {
-                  handler.onClear()
-                }
-              }
-            })
-            .catch((e) => {
-              console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
-              // 订阅失败时回退 subscribed 状态，允许后续重试
-              bufferStore.markUnsubscribed(sid)
-            })
-        }
-      }
     },
     onDisconnected: () => {
       clearConnectionTimeout()
@@ -221,6 +191,42 @@ async function init() {
         console.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
       }
       autoStartForegroundService()
+
+      // 认证成功后重新订阅所有后台会话的终端输出
+      // 必须在 onPaired 而非 onConnected 中执行，因为桌面端要求先认证才能订阅
+      const bufferStore = useTerminalBufferStore()
+      bufferStore.startGlobalListener()
+      for (const [sid, buffer] of bufferStore.buffers.entries()) {
+        if (!buffer.sessionStopped && !buffer.subscribed) {
+          // 先标记 subscribed 防止 watch(isConnected) 和此处竞态导致双重订阅
+          bufferStore.markSubscribed(sid)
+          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
+          wsJoinSession(sid, startSeq)
+            .then((result) => {
+              if (startSeq !== undefined && result && result.minSeq > startSeq) {
+                // 增量同步回退 — 清空 buffer，标记 hasGap，通知 xterm 清空
+                const buf = bufferStore.getBuffer(sid)
+                if (buf) {
+                  buf.chunks = []
+                  buf.totalBytes = 0
+                  buf.lastIndex = -1
+                  buf.lastEndIndex = -1
+                  buf.hasGap = true
+                }
+                // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
+                const handler = bufferStore.realtimeHandlers.get(sid)
+                if (handler?.onClear) {
+                  handler.onClear()
+                }
+              }
+            })
+            .catch((e) => {
+              console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
+              // 订阅失败时回退 subscribed 状态，允许后续重试
+              bufferStore.markUnsubscribed(sid)
+            })
+        }
+      }
     },
     onAuthSuccess: () => {
       console.log('[MobileConnection] Auth success')
