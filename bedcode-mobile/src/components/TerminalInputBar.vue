@@ -758,25 +758,28 @@ onMounted(() => {
   position: relative;
   /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
-  /* 响应式快捷键尺寸：小屏缩小，大屏放大，中间平滑过渡 */
-  --shortcut-btn-h: clamp(2rem, 2.25rem + (100vw - 400px) / 800 * 0.5rem, 2.5rem);
-  --shortcut-font: clamp(0.65rem, 0.75rem + (100vw - 400px) / 800 * 0.05rem, 0.8rem);
-  --quickbar-btn-h: clamp(1.5rem, 1.75rem + (100vw - 400px) / 800 * 0.25rem, 2rem);
-  --quickbar-font: clamp(0.6rem, 0.7rem + (100vw - 400px) / 800 * 0.05rem, 0.75rem);
+  /* 响应式快捷键尺寸：使用 clamp + vw 实现自适应 */
+  --shortcut-btn-h: clamp(2rem, 8vw, 2.5rem);
+  --shortcut-font: clamp(0.65rem, 2.6vw, 0.8rem);
+  --quickbar-btn-h: clamp(1.5rem, 6vw, 2rem);
+  --quickbar-font: clamp(0.6rem, 2.4vw, 0.75rem);
+  --action-btn-w: clamp(2.75rem, 10vw, 3.25rem);
+  --shortcut-min-w: clamp(2.25rem, 8.5vw, 2.75rem);
 }
 
 /* ==================== Quick Bar ==================== */
 
 .quick-bar {
   display: flex;
+  flex-wrap: nowrap;
   gap: 0.375rem;
   padding-bottom: 0.375rem;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  /* 右对齐：最常用的快捷键在右侧，方便右手拇指操作 */
-  justify-content: flex-end;
+  position: relative;
+  z-index: 40;
 }
 
 .quick-bar::-webkit-scrollbar {
@@ -860,6 +863,8 @@ onMounted(() => {
 .input-area {
   display: flex;
   align-items: flex-end;
+  position: relative;
+  z-index: 40;
 }
 
 .input-box {
@@ -1010,9 +1015,9 @@ onMounted(() => {
   background: var(--mobile-bg-secondary);
   backdrop-filter: blur(20px);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
-  z-index: 50;
+  z-index: 30;
   max-width: 100vw;
-  overflow: hidden;
+  overflow: visible;
   box-sizing: border-box;
   /*
    * 固定高度 = padding + 2行按钮 + dots
@@ -1045,9 +1050,9 @@ onMounted(() => {
 }
 
 .carousel-container {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
   max-width: 100%;
-  /* 固定高度 = 2行按钮 */
   height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
 }
 
@@ -1062,7 +1067,7 @@ onMounted(() => {
 .carousel-slide {
   width: 100%;
   height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
-  overflow: hidden;
+  overflow: visible;
   box-sizing: border-box;
   flex-shrink: 0;
 }
@@ -1093,14 +1098,14 @@ onMounted(() => {
 /* grid 布局：左侧自适应 | 中间固定 | 右侧固定 */
 .shortcuts-layout {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.5rem;
-  align-items: start;
+  align-items: stretch;
   /* 固定 2 行高度 */
   height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
   width: 100%;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
   box-sizing: border-box;
 }
 
@@ -1130,7 +1135,7 @@ onMounted(() => {
   height: var(--shortcut-btn-h);
   padding: 0 0.5rem;
   white-space: nowrap;
-  min-width: 2.75rem;
+  min-width: var(--shortcut-min-w);
   background: var(--mobile-shortcut-bg);
   border: 1px solid var(--mobile-shortcut-border);
   color: var(--mobile-shortcut-color);
@@ -1162,7 +1167,7 @@ onMounted(() => {
 }
 
 .action-btn {
-  width: 2.5rem;
+  width: var(--action-btn-w);
   height: var(--shortcut-btn-h);
   font-size: var(--shortcut-font);
   font-weight: 600;
@@ -1199,29 +1204,28 @@ onMounted(() => {
 
 /* 右侧：方向键，固定宽度 */
 .shortcuts-right {
-  width: 5.75rem;
 }
 
 .arrow-keys-layout {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.375rem;
 }
 
 .arrow-row {
   display: flex;
-  gap: 0.25rem;
+  gap: 0.375rem;
   justify-content: center;
 }
 
 .arrow-placeholder {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2.5rem;
+  height: var(--shortcut-btn-h);
 }
 
 .arrow-btn {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2.5rem;
+  height: var(--shortcut-btn-h);
   background: var(--mobile-arrow-bg);
   border: 1px solid var(--mobile-arrow-border);
   color: var(--mobile-arrow-color);
@@ -1239,17 +1243,19 @@ onMounted(() => {
 }
 
 .arrow-icon {
-  width: 0.75rem;
-  height: 0.75rem;
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* ==================== Custom Commands (Slide 2) ==================== */
 
 .custom-commands-layout {
-  /* 固定宽高，与 slide 同尺寸 */
   width: 100%;
   height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
   box-sizing: border-box;
 }
 
@@ -1267,7 +1273,7 @@ onMounted(() => {
 .custom-cmd-btn {
   padding: 0 0.5rem;
   white-space: nowrap;
-  min-width: 2.75rem;
+  min-width: var(--shortcut-min-w);
   height: var(--shortcut-btn-h);
   background: var(--mobile-custom-cmd-bg);
   border: 1px solid var(--mobile-custom-cmd-border);
