@@ -1,14 +1,14 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between gap-2">
-    
+    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
+      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.toolbox.title') }}</h1>
     </header>
 
     <!-- Main Content Area -->
-    <div class="flex-1 overflow-hidden relative">
+    <div class="flex-1 overflow-hidden relative min-h-0">
       <!-- Task List -->
-      <div class="h-full overflow-y-auto p-4 space-y-5">
+      <div class="h-full overflow-y-auto overflow-x-hidden p-4 pb-20 space-y-5">
 
         <!-- Section: 预设任务 -->
         <section>
@@ -56,14 +56,14 @@
       </div>
 
       <!-- Bottom Add Button -->
-      <div class="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[var(--mobile-bg-primary)] via-[var(--mobile-bg-primary)]/90 to-transparent pointer-events-none">
+      <div class="absolute bottom-0 left-0 right-0 p-4 pt-8 bg-gradient-to-t from-[var(--mobile-bg-primary)] via-[var(--mobile-bg-primary)] to-transparent pointer-events-none">
         <button
           class="w-full py-3 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2 pointer-events-auto"
           @click="openAddDialog"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <!-- <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-          </svg>
+          </svg> -->
           {{ t('mobile.toolbox.addTask') }}
         </button>
       </div>

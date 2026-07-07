@@ -22,10 +22,14 @@
           </router-view>
         </main>
 
+        <!-- TODO: 插件功能暂未上线
         <PluginStatusBar />
+        -->
       </div>
     </div>
+    <!-- TODO: 插件功能暂未上线
     <PluginCommandPalette />
+    -->
   </template>
 </template>
 
@@ -34,8 +38,9 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import PluginCommandPalette from '@/plugin/components/PluginCommandPalette.vue'
-import PluginStatusBar from '@/plugin/components/PluginStatusBar.vue'
+// TODO: 插件功能暂未上线
+// import PluginCommandPalette from '@/plugin/components/PluginCommandPalette.vue'
+// import PluginStatusBar from '@/plugin/components/PluginStatusBar.vue'
 
 const route = useRoute()
 

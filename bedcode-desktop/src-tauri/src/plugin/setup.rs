@@ -40,28 +40,31 @@ fn global_claude_dir() -> Option<PathBuf> {
 /// 确保 plugin token 合法，不合法则生成新 token
 ///
 /// 仅处理 token 生成/校验，不再写入全局 hooks 配置。
+/// 当前已不再需要校验/生成 token，逻辑已注释保留。
 pub fn ensure_token(config: &mut AppConfig, config_path: &PathBuf) -> TokenSetupResult {
-    tracing::info!("ensure_token called");
+    tracing::info!("ensure_token called (token validation skipped)");
 
-    let token_generated = config.ensure_valid_token();
-    if token_generated {
-        if let Err(e) = config.save_to(config_path) {
-            return TokenSetupResult {
-                success: false,
-                message: format!("Token 生成后保存配置失败: {}", e),
-                token_generated,
-            };
-        }
-    }
+    // // 校验/生成 token 逻辑已禁用，不再需要
+    // let token_generated = config.ensure_valid_token();
+    // if token_generated {
+    //     if let Err(e) = config.save_to(config_path) {
+    //         return TokenSetupResult {
+    //             success: false,
+    //             message: format!("Token 生成后保存配置失败: {}", e),
+    //             token_generated,
+    //         };
+    //     }
+    // }
 
     TokenSetupResult {
         success: true,
-        message: if token_generated {
-            "Token 已生成".to_string()
-        } else {
-            "Token 已验证".to_string()
-        },
-        token_generated,
+        // if token_generated {
+        //     "Token 已生成".to_string()
+        // } else {
+        //     "Token 已验证".to_string()
+        // },
+        message: "Token 校验已跳过".to_string(),
+        token_generated: false,
     }
 }
 
@@ -403,20 +406,29 @@ fn ensure_project_hooks_blocking(
         serde_json::json!({})
     };
 
-    // 检查项目是否已有 BedCode hooks 且 token 匹配
+    // 检查项目是否已有 BedCode hooks
+    // // 原 token 校验逻辑已禁用：不再比对 BEDCODE_TOKEN 是否一致
+    // let needs_update = match settings.get("hooks") {
+    //     Some(hooks) if is_bedcode_hooks_configured(hooks) => {
+    //         // hooks 存在，但需检查 token 是否与当前配置一致
+    //         !is_token_match_in_hooks(hooks, token)
+    //     }
+    //     _ => true,
+    // };
     let needs_update = match settings.get("hooks") {
         Some(hooks) if is_bedcode_hooks_configured(hooks) => {
-            // hooks 存在，但需检查 token 是否与当前配置一致
-            !is_token_match_in_hooks(hooks, token)
+            // hooks 已存在且包含 BedCode 配置，无需更新
+            false
         }
         _ => true,
     };
 
     if !needs_update {
-        tracing::info!("Project already has BedCode hooks with matching token, skipping");
+        tracing::info!("Project already has BedCode hooks, skipping");
         return ProjectHooksResult {
             success: true,
-            message: "项目已配置 BedCode hooks 且 token 一致".to_string(),
+            // message: "项目已配置 BedCode hooks 且 token 一致".to_string(),
+            message: "项目已配置 BedCode hooks".to_string(),
             skipped: true,
         };
     }

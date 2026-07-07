@@ -627,13 +627,17 @@ const canSubmit = computed(() => {
 function toggleShortcuts() {
   showShortcutsPanel.value = !showShortcutsPanel.value
   if (showShortcutsPanel.value) {
-    // 面板渲染后测量高度并通知终端
+    // 面板渲染后测量高度并通知终端，同时计算左侧网格列数
     nextTick(() => {
       const h = shortcutsPanelRef.value?.offsetHeight || 0
       emit('shortcutsPanelToggle', h)
     })
   } else {
-    emit('shortcutsPanelToggle', 0)
+    // 延迟通知终端收起，与面板 leave 动画同步（0.25s），
+    // 避免终端提前跳回而面板还在滑出
+    setTimeout(() => {
+      emit('shortcutsPanelToggle', 0)
+    }, 250)
   }
 }
 
@@ -754,20 +758,30 @@ onMounted(() => {
   position: relative;
   /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
+  /* 响应式快捷键尺寸：使用 clamp + vw 实现自适应 */
+  --shortcut-btn-h: clamp(2rem, 8vw, 2.5rem);
+  --shortcut-font: clamp(0.65rem, 2.6vw, 0.8rem);
+  --quickbar-btn-h: clamp(1.5rem, 6vw, 2rem);
+  --quickbar-font: clamp(0.6rem, 2.4vw, 0.75rem);
+  --action-btn-w: clamp(2.75rem, 10vw, 3.25rem);
+  --shortcut-min-w: clamp(2.25rem, 8.5vw, 2.75rem);
 }
 
 /* ==================== Quick Bar ==================== */
 
 .quick-bar {
   display: flex;
+  flex-wrap: nowrap;
   gap: 0.375rem;
   padding-bottom: 0.375rem;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  /* 右对齐：最常用的快捷键在右侧，方便右手拇指操作 */
-  justify-content: flex-end;
+  position: relative;
+  z-index: 40;
+  /* RTL 布局：首项渲染在右侧，新项目从左侧添加，右对齐方便拇指操作 */
+  direction: rtl;
 }
 
 .quick-bar::-webkit-scrollbar {
@@ -776,9 +790,9 @@ onMounted(() => {
 }
 
 .quick-bar-btn {
-  height: 1.75rem;
+  height: var(--quickbar-btn-h);
   padding: 0 0.5rem;
-  font-size: 0.7rem;
+  font-size: var(--quickbar-font);
   font-weight: 500;
   border-radius: 0.375rem;
   cursor: pointer;
@@ -789,6 +803,8 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   border: 1px solid;
+  /* 父容器 RTL 布局，按钮文本保持 LTR */
+  direction: ltr;
 }
 
 .quick-bar-shortcut {
@@ -851,6 +867,8 @@ onMounted(() => {
 .input-area {
   display: flex;
   align-items: flex-end;
+  position: relative;
+  z-index: 40;
 }
 
 .input-box {
@@ -1001,7 +1019,19 @@ onMounted(() => {
   background: var(--mobile-bg-secondary);
   backdrop-filter: blur(20px);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
-  z-index: 50;
+  z-index: 30;
+  max-width: 100vw;
+  overflow: visible;
+  box-sizing: border-box;
+  /*
+   * 固定高度 = padding + 2行按钮 + dots
+   * padding-top: 0.5rem, padding-bottom: 0.375rem
+   * 内容区: 2*btn-h + gap(0.375rem) + dots(padding-top 0.375rem + dot 0.375rem)
+   */
+  --panel-h: calc(0.5rem + 2 * var(--shortcut-btn-h) + 0.375rem + 0.75rem + 0.375rem);
+  height: var(--panel-h);
+  min-height: var(--panel-h);
+  max-height: var(--panel-h);
 }
 
 /* 快捷键面板滑动动画 - 从下往上展开/收起 */
@@ -1024,16 +1054,25 @@ onMounted(() => {
 }
 
 .carousel-container {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
+  max-width: 100%;
+  height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
 }
 
 .carousel-track {
   display: flex;
   will-change: transform;
+  /* 固定高度，防止被内容撑开 */
+  height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
 }
 
+/* 每页轮播固定宽高，绝不超出 */
 .carousel-slide {
-  min-width: 100%;
+  width: 100%;
+  height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
+  overflow: visible;
+  box-sizing: border-box;
   flex-shrink: 0;
 }
 
@@ -1060,19 +1099,29 @@ onMounted(() => {
 
 /* ==================== Shortcuts (Slide 1) ==================== */
 
+/* grid 布局：左侧自适应 | 中间固定 | 右侧固定 */
 .shortcuts-layout {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.5rem;
+  align-items: stretch;
+  /* 固定 2 行高度 */
+  height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
+  width: 100%;
+  max-width: 100%;
+  overflow: visible;
+  box-sizing: border-box;
 }
 
+/* 左侧：占满剩余宽度，固定2行高度，超出可滚动 */
 .shortcuts-left {
-  flex: 1;
   min-width: 0;
-  /* 两行高度：2 * 2.25rem + 1 * 0.375rem = 4.875rem */
-  max-height: 4.875rem;
+  height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
   overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
 }
 
 .shortcuts-left::-webkit-scrollbar {
@@ -1081,17 +1130,20 @@ onMounted(() => {
 }
 
 .shortcuts-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.375rem;
 }
 
 .shortcut-btn {
-  height: 2.25rem;
+  height: var(--shortcut-btn-h);
+  padding: 0 0.5rem;
+  white-space: nowrap;
+  min-width: var(--shortcut-min-w);
   background: var(--mobile-shortcut-bg);
   border: 1px solid var(--mobile-shortcut-border);
   color: var(--mobile-shortcut-color);
-  font-size: 0.75rem;
+  font-size: var(--shortcut-font);
   font-weight: 500;
   border-radius: 0.5rem;
   cursor: pointer;
@@ -1106,9 +1158,8 @@ onMounted(() => {
   background: var(--mobile-shortcut-active-bg);
 }
 
-/* 中间：Enter/Del 高频操作键 */
+/* 中间：Enter/Del，固定宽度 */
 .shortcuts-center {
-  flex-shrink: 0;
   display: flex;
   align-items: center;
 }
@@ -1120,9 +1171,9 @@ onMounted(() => {
 }
 
 .action-btn {
-  width: 3.25rem;
-  height: 2.25rem;
-  font-size: 0.75rem;
+  width: var(--action-btn-w);
+  height: var(--shortcut-btn-h);
+  font-size: var(--shortcut-font);
   font-weight: 600;
   border-radius: 0.5rem;
   cursor: pointer;
@@ -1155,31 +1206,30 @@ onMounted(() => {
   filter: brightness(1.2);
 }
 
+/* 右侧：方向键，固定宽度 */
 .shortcuts-right {
-  flex-shrink: 0;
-  width: auto;
 }
 
 .arrow-keys-layout {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.375rem;
 }
 
 .arrow-row {
   display: flex;
-  gap: 0.25rem;
+  gap: 0.375rem;
   justify-content: center;
 }
 
 .arrow-placeholder {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.5rem;
+  height: var(--shortcut-btn-h);
 }
 
 .arrow-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.5rem;
+  height: var(--shortcut-btn-h);
   background: var(--mobile-arrow-bg);
   border: 1px solid var(--mobile-arrow-border);
   color: var(--mobile-arrow-color);
@@ -1197,28 +1247,42 @@ onMounted(() => {
 }
 
 .arrow-icon {
-  width: 1rem;
-  height: 1rem;
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* ==================== Custom Commands (Slide 2) ==================== */
 
 .custom-commands-layout {
-  min-height: 5rem;
+  width: 100%;
+  height: calc(2 * var(--shortcut-btn-h) + 0.375rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
+}
+
+.custom-commands-layout::-webkit-scrollbar {
+  display: none;
+  width: 0;
 }
 
 .custom-commands-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.375rem;
 }
 
 .custom-cmd-btn {
-  height: 2.25rem;
+  padding: 0 0.5rem;
+  white-space: nowrap;
+  min-width: var(--shortcut-min-w);
+  height: var(--shortcut-btn-h);
   background: var(--mobile-custom-cmd-bg);
   border: 1px solid var(--mobile-custom-cmd-border);
   color: var(--mobile-custom-cmd-color);
-  font-size: 0.75rem;
+  font-size: var(--shortcut-font);
   font-weight: 500;
   border-radius: 0.5rem;
   cursor: pointer;

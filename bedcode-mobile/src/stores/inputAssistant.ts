@@ -312,17 +312,17 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
         category: 'custom' as const,
       }))
 
-    // 合并排序：按频次升序，最常用的排在末尾（右侧），方便拇指操作
+    // 合并排序：按频次降序，最常用的排在前面（配合 quick-bar RTL 布局，首项渲染在最右）
     const all = [...shortcutItems, ...cmdItems]
-      .sort((a, b) => a.count - b.count)
+      .sort((a, b) => b.count - a.count)
 
     // 有统计数据时取 top N
     if (all.some(item => item.count > 0)) {
-      return all.slice(-count)
+      return all.slice(0, count)
     }
 
-    // 无统计数据时返回默认快捷键（升序：最常用的在右）
-    return DEFAULT_QUICK_KEYS.slice(0, count).reverse().map(key => ({
+    // 无统计数据时返回默认快捷键（降序：最常用的首项渲染在最右）
+    return DEFAULT_QUICK_KEYS.slice(0, count).map(key => ({
       type: 'shortcut' as const,
       key,
       label: SHORTCUT_LABELS[key] || key,

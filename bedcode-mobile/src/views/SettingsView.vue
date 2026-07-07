@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3">
+    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3">
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('settings.title') }}</h1>
     </header>
 

@@ -384,13 +384,13 @@ pub fn run() {
             let init_elapsed = start.elapsed();
             tracing::info!("BedCode Desktop initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
 
-            // 发送 Token 配置结果到前端
-            let app_handle_for_plugin = app_handle_arc.clone();
-            tauri::async_runtime::spawn(async move {
-                // 延迟 500ms 发送，确保前端已加载完成
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let _ = app_handle_for_plugin.emit("plugin-setup-result", &token_result);
-            });
+            // TODO: 插件功能暂未上线，不再发送 Token 配置结果 toast
+            // let app_handle_for_plugin = app_handle_arc.clone();
+            // tauri::async_runtime::spawn(async move {
+            //     // 延迟 500ms 发送，确保前端已加载完成
+            //     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            //     let _ = app_handle_for_plugin.emit("plugin-setup-result", &token_result);
+            // });
 
             Ok(())
         })

@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
+    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.connection.title') }}</h1>
       <button
         class="text-sm text-[var(--mobile-accent)] hover:text-[var(--mobile-accent)]/80 transition-colors"
@@ -16,7 +16,7 @@
     <!-- Connection Status Banner -->
     <div
       v-if="connectionStatus === 'connecting' || connectionStatus === 'connected' || connectionStatus === 'pairing' || connectionStatus === 'error'"
-      class="px-4 py-3 bg-[var(--mobile-bg-secondary)] border-b border-[var(--mobile-border)]"
+      class="flex-shrink-0 px-4 py-3 bg-[var(--mobile-bg-secondary)] border-b border-[var(--mobile-border)]"
     >
       <div class="flex items-center gap-3">
         <!-- Connecting spinner -->
@@ -48,7 +48,7 @@
     <!-- Connected Banner -->
     <div
       v-if="isConnected && currentDevice"
-      class="mx-4 mt-4 p-3 bg-[var(--mobile-success-connected-bg)] border border-[var(--mobile-success-connected-border)] rounded-xl backdrop-blur-sm shadow-[var(--mobile-card-shadow-connected)]"
+      class="flex-shrink-0 mx-4 mt-4 p-3 bg-[var(--mobile-success-connected-bg)] border border-[var(--mobile-success-connected-border)] rounded-xl backdrop-blur-sm shadow-[var(--mobile-card-shadow-connected)]"
     >
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -73,7 +73,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-auto p-4">
+    <div class="flex-1 overflow-y-auto overflow-x-hidden p-4 min-h-0">
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
@@ -190,7 +190,7 @@
     </div>
 
     <!-- Action Buttons (when not connected) -->
-    <div v-if="!isConnected" class="p-4 border-t border-[var(--mobile-border)] space-y-3 pb-safe">
+    <div v-if="!isConnected" class="flex-shrink-0 p-4 border-t border-[var(--mobile-border)] space-y-3 bg-[var(--mobile-bg-primary)]" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
       <!-- QR Connect Button -->
       <button
         class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all flex items-center justify-center gap-2"
