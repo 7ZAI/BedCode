@@ -780,6 +780,8 @@ onMounted(() => {
   -webkit-overflow-scrolling: touch;
   position: relative;
   z-index: 40;
+  /* RTL 布局：首项渲染在右侧，新项目从左侧添加，右对齐方便拇指操作 */
+  direction: rtl;
 }
 
 .quick-bar::-webkit-scrollbar {
@@ -801,6 +803,8 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   border: 1px solid;
+  /* 父容器 RTL 布局，按钮文本保持 LTR */
+  direction: ltr;
 }
 
 .quick-bar-shortcut {

@@ -296,6 +296,7 @@ export default {
       taskTitlePlaceholder: 'Task title',
       taskContent: 'Task Content',
       taskContentPlaceholder: 'Command content to send to terminal',
+      insertAiTemplate: 'AI Template',
       selectSession: 'Select Session',
       noActiveSessions: 'No active sessions',
       confirmExecute: 'Confirm Execute',

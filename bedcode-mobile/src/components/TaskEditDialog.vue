@@ -80,7 +80,19 @@
             </div>
 
             <div class="flex-1 min-h-0 flex flex-col">
-              <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">{{ t('mobile.toolbox.taskContent') }}</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-[var(--mobile-text-muted)] text-sm">{{ t('mobile.toolbox.taskContent') }}</label>
+                <button
+                  v-if="!hasAiTemplate"
+                  class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] active:scale-[0.95] transition-all duration-150"
+                  @click="insertAiTemplate"
+                >
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  {{ t('mobile.toolbox.insertAiTemplate') }}
+                </button>
+              </div>
               <textarea
                 v-model="form.content"
                 :placeholder="t('mobile.toolbox.taskContentPlaceholder')"
@@ -175,6 +187,24 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+// ==================== AI 提示词模板 ====================
+
+/** AI 编程提示词标准 4 要素模板 */
+const AI_TEMPLATE = '目标：\n上下文：\n约束：\n完成条件：'
+
+/** 检测内容中是否已包含模板要素 */
+const hasAiTemplate = computed(() => {
+  const c = form.value.content
+  return c.includes('目标：') && c.includes('上下文：') && c.includes('约束：') && c.includes('完成条件：')
+})
+
+/** 插入 AI 提示词模板（仅当内容中尚未包含时） */
+function insertAiTemplate() {
+  if (hasAiTemplate.value) return
+  const current = form.value.content.trim()
+  form.value.content = current ? `${current}\n${AI_TEMPLATE}` : AI_TEMPLATE
+}
 
 // ==================== 表单状态 ====================
 

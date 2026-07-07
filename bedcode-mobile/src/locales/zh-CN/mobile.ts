@@ -296,6 +296,7 @@ export default {
       taskTitlePlaceholder: '任务标题',
       taskContent: '任务内容',
       taskContentPlaceholder: '发送到终端的指令内容',
+      insertAiTemplate: 'AI模板',
       selectSession: '选择会话',
       noActiveSessions: '暂无活跃会话',
       confirmExecute: '确认执行',
