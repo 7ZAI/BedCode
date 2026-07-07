@@ -9,7 +9,7 @@ build/
 *.local
 
 # Documentation
-docs/
+**/docs/
 
 AGENTS.md
 CLAUDE.md
