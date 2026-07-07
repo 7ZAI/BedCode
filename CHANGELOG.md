@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.11] - 2026-07-07
+
+### Added
+
+#### Mobile
+- AI 提示词标准 4 要素模板插入按钮（目标/上下文/约束/完成条件）
+- 快捷栏 RTL 布局，最常用项渲染在右侧方便拇指操作
+- 快捷键排序改为频次降序，配合 RTL 布局
+- 测试终端会话（DEV 模式）用于开发调试
+
+### Changed
+
+- 项目描述从强调 Claude Code 远程控制调整为本地远程终端应用
+- 插件页面入口、路由、组件初始化均已注释（暂未上线）
+- Token 校验/生成逻辑已禁用（ensure_token 直接跳过，不再弹出 toast）
+- 项目 hooks 配置不再比对 token 一致性
+
+### Fixed
+
+- 键盘避让与认证后订阅失败问题
+- 连接状态不一致导致重连失败
+- 终端键盘避让空白
+- 工具栏 i18n 缺失
+- 快捷键面板布局与自适应能力优化
+
+---
+
 ## [1.1.0] - 2026-07-05
 
 ### Added
@@ -216,6 +243,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.1.11 | 2026-07-07 | 移动端 AI 模板与快捷栏优化，插件入口注释，token 校验禁用 |
 | 1.1.0 | 2026-07-05 | Plugin system, mobile terminal refactor, i18n, Actix Web server |
 | 1.0.0 | 2026-06-30 | Multi-project monorepo, stable desktop + mobile release |
 | 0.1.0 | 2026-04-30 | Initial release with core features |

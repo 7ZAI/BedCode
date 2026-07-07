@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import { listen } from '@tauri-apps/api/event'
+// TODO: 插件功能暂未上线
+// import { listen } from '@tauri-apps/api/event'
 import router from './router'
 import App from './App.vue'
 import i18n from './locales'
@@ -38,25 +39,27 @@ Promise.all([
   console.log('[Init] Platform, settings and WSL info pre-loaded')
 })
 
+// TODO: 插件功能暂未上线
 // 监听插件配置结果事件
-listen<PluginSetupResult>('plugin-setup-result', (event) => {
-  const toast = useToast()
-  const result = event.payload
-
-  if (result.success) {
-    toast.success(result.message)
-    if (result.token_generated) {
-      setTimeout(() => toast.info(i18n.global.t('common.notification.tokenUpdated')), 1000)
-    }
-  } else {
-    toast.error(result.message, 5000)
-  }
-})
+// listen<PluginSetupResult>('plugin-setup-result', (event) => {
+//   const toast = useToast()
+//   const result = event.payload
+//
+//   if (result.success) {
+//     toast.success(result.message)
+//     if (result.token_generated) {
+//       setTimeout(() => toast.info(i18n.global.t('common.notification.tokenUpdated')), 1000)
+//     }
+//   } else {
+//     toast.error(result.message, 5000)
+//   }
+// })
 
 app.mount('#app')
 
+// TODO: 插件功能暂未上线
 // 初始化插件系统（非阻塞，失败不影响主应用）
-import { pluginLoader } from '@/plugin/loader'
-pluginLoader.loadAll().catch(e => {
-  console.error('[PluginSystem] Failed to initialize:', e)
-})
+// import { pluginLoader } from '@/plugin/loader'
+// pluginLoader.loadAll().catch(e => {
+//   console.error('[PluginSystem] Failed to initialize:', e)
+// })

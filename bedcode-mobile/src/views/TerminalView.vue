@@ -140,6 +140,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
+import { isMockSession, useMockTerminal } from '@/composables/useMockTerminal'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { wsResizeTerminal } from '@/composables/useMobileCommands'
 import { httpSendSessionInput } from '@/composables/useHttpApi'
@@ -168,6 +169,7 @@ const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 const connection = useMobileConnection()
+const mockTerminal = useMockTerminal()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
@@ -178,7 +180,6 @@ const sessionId = computed(() => route.params.id as string)
 
 // 安全区域从 App.vue inject
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
-const keyboardInfo = inject<Ref<{ keyboardHeight: number; isVisible: boolean }>>('keyboardInfo')!
 
 // ==================== Task Picker ====================
 
@@ -188,12 +189,12 @@ const showTaskPicker = ref(false)
 // ==================== Header Toolbar Config ====================
 
 const ALL_TOOLBAR_ITEMS: ToolbarItemConfig[] = [
-  { key: 'task', label: 'task', icon: 'task' },
-  { key: 'shortcut', label: 'shortcut', icon: 'shortcut' },
-  { key: 'clear', label: 'clear', icon: 'clear' },
-  { key: 'refresh', label: 'refresh', icon: 'refresh' },
-  { key: 'settings', label: 'settings', icon: 'settings' },
-  { key: 'folder', label: 'folder', icon: 'folder' },
+  { key: 'task', label: 'mobile.terminal.toolbarTask', icon: 'task' },
+  { key: 'shortcut', label: 'mobile.terminal.toolbarShortcut', icon: 'shortcut' },
+  { key: 'clear', label: 'mobile.terminal.toolbarClear', icon: 'clear' },
+  { key: 'refresh', label: 'mobile.terminal.toolbarRefresh', icon: 'refresh' },
+  { key: 'settings', label: 'mobile.terminal.toolbarSettings', icon: 'settings' },
+  { key: 'folder', label: 'mobile.terminal.toolbarFolder', icon: 'folder' },
 ]
 
 const visibleToolbarItems = computed(() => {
@@ -269,22 +270,69 @@ const isConnected = computed(() =>
   connection.connectionStatus.value === 'paired'
 )
 
-const session = computed(() =>
-  connection.activeSessions.value.find(s => s.id === sessionId.value)
-)
+const session = computed(() => {
+  if (isMockSession(sessionId.value)) {
+    return { id: sessionId.value, name: t('mobile.session.mockName'), status: 'running', is_active: true }
+  }
+  return connection.activeSessions.value.find(s => s.id === sessionId.value)
+})
 
 const sessionName = computed(() => session.value?.name || sessionId.value || t('desktop.terminal.title'))
 
-const isSessionActive = computed(() => (session.value?.status || 'stopped') === 'running')
+const isSessionActive = computed(() => isMockSession(sessionId.value) || (session.value?.status || 'stopped') === 'running')
 
 const inputPlaceholder = computed(() => {
+  if (isMockSession(sessionId.value)) return t('mobile.session.mockName')
   if (!isConnected.value) return t('mobile.input.disconnected') + '...'
   if (!isSessionActive.value) return t('mobile.connection.connectFailed')
   return t('mobile.input.commandPlaceholder')
 })
 
 const safeAreaTop = computed(() => safeArea.value.top || 0)
-const keyboardHeight = computed(() => keyboardInfo.value.keyboardHeight || 0)
+
+// ==================== Keyboard Avoidance ====================
+//
+// 双通道键盘检测，兼容不同 Android WebView 实现：
+// - 通道 1 (visualViewport): 部分 WebView 在键盘弹出时 visualViewport.height 缩小，
+//   通过 resize/scroll 事件检测，计算 fullLayoutHeight - viewportHeight 得到偏移量
+// - 通道 2 (插件 keyboardHeight): 部分 WebView 的 visualViewport 不触发事件，
+//   通过 tauri-plugin-edge-to-edge 的 safeAreaChanged 事件获取插件报告的键盘高度
+//
+// 最终偏移量取两个通道中较大的值，确保在所有设备上都能正确避让
+
+// 通道 1: visualViewport
+const fullLayoutHeight = ref(window.innerHeight)
+const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight)
+
+// 通道 2: 插件报告的键盘高度
+const pluginKeyboardHeight = ref(0)
+
+// 最终键盘偏移量：取两个通道中的较大值
+const keyboardOffset = computed(() => {
+  const vvOffset = fullLayoutHeight.value - viewportHeight.value
+  const offset = Math.max(vvOffset, pluginKeyboardHeight.value)
+  return offset > 10 ? offset : 0
+})
+
+// 通道 1 回调：visualViewport resize/scroll
+function handleVisualViewportChange() {
+  const vv = window.visualViewport
+  if (!vv) return
+  // 无键盘时更新基准高度
+  if (!keyboardOffset.value) {
+    fullLayoutHeight.value = window.innerHeight
+  }
+  viewportHeight.value = vv.height
+}
+
+// 通道 2 回调：插件 safeAreaChanged 事件
+function handlePluginSafeAreaChange(e: Event) {
+  const detail = (e as CustomEvent).detail as {
+    keyboardHeight: number
+    keyboardVisible: boolean
+  }
+  pluginKeyboardHeight.value = detail.keyboardVisible ? detail.keyboardHeight : 0
+}
 
 // terminal-view 只负责安全区域，不参与键盘避让动画
 const terminalViewStyle = computed(() => ({
@@ -293,10 +341,21 @@ const terminalViewStyle = computed(() => ({
 
 // 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
 // 纯 transform 方案：GPU 合成不触发布局重排，无卡顿
-// xterm 容器尺寸不变，手动计算可见行数通知 PTY
-const movableAreaStyle = computed(() => ({
-  transform: keyboardHeight.value > 0 ? `translateY(-${keyboardHeight.value}px)` : 'translateY(0)',
-}))
+//
+// 配合 AndroidManifest adjustNothing：
+// 系统不调整 WebView 大小，完全由 JS 控制偏移
+// 双通道检测取较大值，兼容不同 WebView 的 visualViewport 行为
+const movableAreaStyle = computed(() => {
+  if (keyboardOffset.value <= 0) {
+    return { transform: 'translateY(0)' }
+  }
+  // 只用 translateY 上移，不用 maxHeight
+  // translateY(-keyboardOffset) 使 movable-area 底部恰好对齐键盘顶部
+  // 底部超出 movable-clip 的部分由 overflow:hidden 裁剪
+  return {
+    transform: `translateY(-${keyboardOffset.value}px)`,
+  }
+})
 
 /** 选择操作栏定位：避让选区和屏幕边界 */
 const selectionBarStyle = computed(() => {
@@ -350,17 +409,13 @@ const selectionBarStyle = computed(() => {
 
 // ==================== Watchers ====================
 
-// 键盘高度变化时的处理
-// transform 上移后，终端底部被键盘自然遮挡，无需手动 resize 行数
-// xterm 保持完整行数渲染，被遮挡部分用户看不到
+// 键盘偏移变化时的处理
 // 动画期间临时启用 will-change 保证流畅，动画结束后移除避免 xterm 重影
-watch(() => keyboardInfo.value.keyboardHeight, (newHeight) => {
-  // 临时启用 will-change 保证 transform 动画流畅
+watch(keyboardOffset, (newVal, oldVal) => {
   if (movableAreaRef.value) {
     movableAreaRef.value.style.willChange = 'transform'
   }
 
-  // 动画结束后移除 will-change，避免 xterm 滚动重影
   setTimeout(() => {
     if (movableAreaRef.value) {
       movableAreaRef.value.style.willChange = 'auto'
@@ -446,7 +501,7 @@ async function initTerminal() {
   window.addEventListener('resize', handleWindowResize)
 
   term.onResize(({ cols, rows }) => {
-    if (isConnected.value && isSessionActive.value && sessionId.value) {
+    if (!isMockSession(sessionId.value) && isConnected.value && isSessionActive.value && sessionId.value) {
       wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
         console.warn('[TerminalView] Resize failed:', e)
       })
@@ -490,6 +545,7 @@ function applyTerminalTheme() {
 
 function handleInputSubmit(text: string) {
   if (!terminalRef.value) return
+  if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
     httpSendSessionInput(sessionId.value, text).then(result => {
       if (result.code !== 0) {
@@ -502,6 +558,7 @@ function handleInputSubmit(text: string) {
 
 async function handleInputExecute(text: string) {
   if (!terminalRef.value) return
+  if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
     const result = await httpSendSessionInput(sessionId.value, text, 'enter')
     if (result.code !== 0) {
@@ -512,6 +569,7 @@ async function handleInputExecute(text: string) {
 }
 
 function handleSpecialKey(key: string) {
+  if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
     httpSendSessionInput(sessionId.value, '', key).then(result => {
       if (result.code !== 0) {
@@ -624,10 +682,23 @@ async function onTaskExecute(task: PresetTask) {
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
+  // 监听 visualViewport 变化，获取键盘弹出/收起的实际偏移
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', handleVisualViewportChange)
+    window.visualViewport.addEventListener('scroll', handleVisualViewportChange)
+  }
+
+  // 通道 2: 监听插件 safeAreaChanged 事件
+  window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
+
   await nextTick()
   initTerminal()
 
-  if (isSessionActive.value && isConnected.value) {
+  if (isMockSession(sessionId.value)) {
+    if (terminalRef.value) {
+      mockTerminal.startOutput(terminalRef.value)
+    }
+  } else if (isSessionActive.value && isConnected.value) {
     await subscribeSession(sessionId.value)
   }
 
@@ -635,6 +706,16 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
+  // 移除 visualViewport 事件监听
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', handleVisualViewportChange)
+    window.visualViewport.removeEventListener('scroll', handleVisualViewportChange)
+  }
+  window.removeEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
+
+  if (isMockSession(sessionId.value)) {
+    mockTerminal.stopOutput()
+  }
   disposeTerminal()
 
   if (!isSessionActive.value) {
@@ -643,7 +724,7 @@ onUnmounted(async () => {
 })
 
 watch(isSessionActive, async (active, prevActive) => {
-  if (!sessionId.value) return
+  if (!sessionId.value || isMockSession(sessionId.value)) return
   if (active && !prevActive) {
     await subscribeSession(sessionId.value)
   } else if (!active && prevActive) {
@@ -652,7 +733,7 @@ watch(isSessionActive, async (active, prevActive) => {
 })
 
 watch(isConnected, async (connected) => {
-  if (!sessionId.value) return
+  if (!sessionId.value || isMockSession(sessionId.value)) return
   if (!connected) {
     handleDisconnect()
   } else if (connected && isSessionActive.value) {

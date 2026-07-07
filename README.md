@@ -2,9 +2,9 @@
 
 # BedCode
 
-**Use your phone to control Claude Code on your desktop**
+**A local remote terminal — control your desktop from your phone**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-1.1.11-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
@@ -15,9 +15,9 @@ English | [简体中文](README_zh.md)
 
 ---
 
-BedCode is a cross-platform application that lets you remotely control [Claude Code](https://claude.ai/code) from your mobile device within the same local network. The desktop app (Tauri + Vue 3) acts as the host running terminal sessions, while your phone becomes a powerful remote terminal with an optimized touch interface. While designed as a Claude Code remote control app, it also works as a general-purpose remote terminal.
+BedCode is a cross-platform local remote terminal application that lets you control your desktop from your mobile device within the same local network. The desktop app (Tauri + Vue 3) acts as the host running terminal sessions, while your phone becomes a powerful remote terminal with an optimized touch interface. It works with any terminal program — from system shells to interactive CLI tools like Claude Code.
 
-Typical use cases: as the name suggests — coding from bed; handling other tasks at home while programming, such as bathroom breaks, cooking, childcare, or just before sleep.
+Typical use cases: coding from bed; handling other tasks at home while programming — bathroom breaks, cooking, childcare, or just before sleep.
 
 > Currently only supports desktop and mobile on the same WiFi network.
 
@@ -26,7 +26,7 @@ Internet connectivity interface or NAT traversal protocol will be reserved in th
 ## Features
 
 ### Desktop (Host)
-- **Session Management** - Create, configure, and manage multiple Claude Code sessions with SQLite persistence
+- **Session Management** - Create, configure, and manage multiple terminal sessions with SQLite persistence
 - **Terminal Preview** - Real-time xterm.js terminal output preview
 - **Device Pairing** - QR code + 6-digit code authentication for secure device pairing
 - **Plugin System** - cdylib dynamic loading plugin architecture with host API bridge, permission control, and storage
@@ -110,7 +110,7 @@ The project uses a **monorepo with independent platform projects**:
 - [Node.js](https://nodejs.org/) >= 18
 - [Rust](https://www.rust-lang.org/tools/install) >= 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) dependencies for your platform
-- [Claude Code CLI](https://claude.ai/code) installed and configured
+- [Claude Code CLI](https://claude.ai/code) installed and configured (optional, for Claude Code sessions)
 
 ### Install Dependencies
 
@@ -203,7 +203,7 @@ BedCode uses a `config.properties` file (bundled as a Tauri resource) for runtim
 | `session.default_environment` | `windows` | Default execution environment (windows / wsl2) |
 | `session.default_wsl_distro` | *(empty)* | Default WSL distro (only for wsl2, empty = default) |
 | `session.default_working_dir` | *(empty)* | Default working directory (empty = user home) |
-| `session.default_command` | `claude` | Default terminal command |
+| `session.default_command` | *(empty)* | Default terminal command (empty = system shell)
 | `session.session_timeout` | `3600` | Session timeout in seconds (auto-close on inactivity) |
 
 ### UI

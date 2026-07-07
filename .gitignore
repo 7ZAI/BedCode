@@ -1,6 +1,7 @@
 # Dependencies
 **/node_modules/
 .pnpm-store/
+.playwright-cli
 
 # Build outputs
 **/dist/
@@ -9,6 +10,9 @@ build/
 
 # Documentation
 docs/
+
+AGENTS.md
+CLAUDE.md
 
 # Tauri / Rust
 **/target/

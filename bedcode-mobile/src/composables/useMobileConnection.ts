@@ -152,30 +152,10 @@ async function init() {
       console.log('[MobileConnection] Connected')
       autoStartForegroundService()
 
-      // 连接恢复时重新订阅所有后台会话的终端输出
+      // 连接建立时确保全局监听器启动（订阅在 onPaired 认证成功后执行，
+      // 因为桌面端要求先认证才能订阅会话输出）
       const bufferStore = useTerminalBufferStore()
       bufferStore.startGlobalListener()
-      for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        if (!buffer.sessionStopped && !buffer.subscribed) {
-          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
-          wsJoinSession(sid, startSeq)
-            .then((result) => {
-              if (startSeq !== undefined && result && result.minSeq > startSeq) {
-                // 增量同步回退 — 清空 buffer，标记 hasGap
-                const buf = bufferStore.getBuffer(sid)
-                if (buf) {
-                  buf.chunks = []
-                  buf.totalBytes = 0
-                  buf.lastIndex = -1
-                  buf.lastEndIndex = -1
-                  buf.hasGap = true
-                }
-              }
-              bufferStore.markSubscribed(sid)
-            })
-            .catch((e) => console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e))
-        }
-      }
     },
     onDisconnected: () => {
       clearConnectionTimeout()
@@ -211,6 +191,42 @@ async function init() {
         console.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
       }
       autoStartForegroundService()
+
+      // 认证成功后重新订阅所有后台会话的终端输出
+      // 必须在 onPaired 而非 onConnected 中执行，因为桌面端要求先认证才能订阅
+      const bufferStore = useTerminalBufferStore()
+      bufferStore.startGlobalListener()
+      for (const [sid, buffer] of bufferStore.buffers.entries()) {
+        if (!buffer.sessionStopped && !buffer.subscribed) {
+          // 先标记 subscribed 防止 watch(isConnected) 和此处竞态导致双重订阅
+          bufferStore.markSubscribed(sid)
+          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
+          wsJoinSession(sid, startSeq)
+            .then((result) => {
+              if (startSeq !== undefined && result && result.minSeq > startSeq) {
+                // 增量同步回退 — 清空 buffer，标记 hasGap，通知 xterm 清空
+                const buf = bufferStore.getBuffer(sid)
+                if (buf) {
+                  buf.chunks = []
+                  buf.totalBytes = 0
+                  buf.lastIndex = -1
+                  buf.lastEndIndex = -1
+                  buf.hasGap = true
+                }
+                // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
+                const handler = bufferStore.realtimeHandlers.get(sid)
+                if (handler?.onClear) {
+                  handler.onClear()
+                }
+              }
+            })
+            .catch((e) => {
+              console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
+              // 订阅失败时回退 subscribed 状态，允许后续重试
+              bufferStore.markUnsubscribed(sid)
+            })
+        }
+      }
     },
     onAuthSuccess: () => {
       console.log('[MobileConnection] Auth success')
@@ -423,6 +439,9 @@ async function init() {
           console.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
         } else {
           console.warn('[MobileConnection] Re-auth failed, need to pair again')
+          // JWT 被拒绝，必须断开 WebSocket 连接，否则 Rust 端 WsClient 仍为 Connected
+          // 后续用户点击历史连接时 conn.connect() 会误判 "Already connected" 拒绝新建
+          try { await wsDisconnect() } catch (_) {}
           isConnecting.value = false
           connectionStatus.value = 'disconnected'
           connectionError.value = 'mobile.connection.reauthFailed'
@@ -430,12 +449,16 @@ async function init() {
         }
       } catch (e) {
         console.error('[MobileConnection] Re-auth error:', e)
+        // 认证异常（超时/网络错误），同样断开 WebSocket 保持前后端状态一致
+        try { await wsDisconnect() } catch (_) {}
         isConnecting.value = false
         connectionStatus.value = 'disconnected'
         connectionError.value = 'mobile.connection.reauthError'
       }
     } else {
       console.log('[MobileConnection] No credentials stored, need manual pairing')
+      // 无凭据，断开 WebSocket，用户需要手动发起连接
+      try { await wsDisconnect() } catch (_) {}
       isConnecting.value = false
       connectionStatus.value = 'disconnected'
       connectionError.value = 'mobile.connection.noCredentials'
@@ -480,17 +503,25 @@ export async function connect(device: RemoteDevice): Promise<void> {
   autoReconnectAborted = true
   autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS
 
-  // 如果当前有残留连接（自动重连中等），先断开确保后端状态干净
-  if (connectionStatus.value !== 'disconnected') {
-    console.log('[MobileConnection] Disconnecting stale connection before new connect')
-    try {
+  // 无论前端 connectionStatus 状态如何，始终先断开 Rust 端可能残留的旧连接
+  // 被动断开后前端状态可能是 'disconnected'，但 Rust 端 WsClient 可能仍为 Connected
+  // （比如自动重连成功但 JWT 认证失败时，前端认为断开了，Rust 端连接仍活着）
+  // 不断开旧连接会导致 Rust conn.connect() 误判 "Already connected" 而拒绝新建连接
+  try {
+    const alreadyConnected = await wsIsConnected()
+    if (alreadyConnected) {
+      console.log('[MobileConnection] Disconnecting stale Rust-side connection before new connect')
       await wsDisconnect()
-    } catch (e) {
-      console.warn('[MobileConnection] Disconnect before reconnect failed:', e)
     }
-    connectionStatus.value = 'disconnected'
-    isConnecting.value = false
+  } catch (e) {
+    // wsIsConnected / wsDisconnect 失败不影响后续连接
+    console.warn('[MobileConnection] Pre-connect cleanup failed (expected if no connection):', e)
   }
+  // 确保前端状态也重置干净，无论之前是什么状态
+  connectionStatus.value = 'disconnected'
+  isConnecting.value = false
+  const bufferStore = useTerminalBufferStore()
+  bufferStore.markAllUnsubscribed()
 
   currentDevice.value = device
   connectionError.value = null
@@ -684,6 +715,10 @@ export async function disconnect(): Promise<void> {
     connectionStatus.value = 'disconnected'
     isConnecting.value = false
     currentDevice.value = null
+
+    // 手动断开不触发 Rust 端 ws_disconnected 事件，需显式重置 buffer 订阅状态
+    const bufferStore = useTerminalBufferStore()
+    bufferStore.markAllUnsubscribed()
   }
 }
 

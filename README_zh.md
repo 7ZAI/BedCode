@@ -2,9 +2,9 @@
 
 # BedCode
 
-**用手机远程控制桌面上的 Claude Code**
+**本地远程终端 — 用手机控制桌面**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-1.1.11-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
@@ -15,20 +15,16 @@
 
 ---
 
-BedCode 是一个跨平台应用，让你可以通过移动设备在同一个本地局域网中远程控制 [Claude Code](https://claude.ai/code)。桌面端 (Tauri + Vue 3) 作为主机运行终端会话，手机则成为带有优化触控界面的远程终端。
-
-虽然项目最初的目的是作为 Claude Code 的远程控制应用，但是目前应用同样实现了远程终端的效果。
+BedCode 是一个跨平台本地远程终端应用，让你可以通过移动设备在同一个本地局域网中远程控制桌面终端。桌面端 (Tauri + Vue 3) 作为主机运行终端会话，手机则成为带有优化触控界面的远程终端。它兼容任何终端程序——从系统 Shell 到 Claude Code 等交互式 CLI 工具均可使用。
 
 目前使用场景：如应用名所述躺床上编程；居家环境下当你需要编程同时并行处理其他事务的时候，如：上厕所、做饭、带孩子、睡觉等。
 
-> 目前仅仅适配桌面端和移动端在同一个 WiFi 下的场景。
-
-未来会预留联通互联网的接口或内网穿透的协议（需要服务器）。
+> 目前仅适配桌面端和移动端在同一 WiFi 下的场景，未来会预留互联网接口或内网穿透协议。
 
 ## 功能特性
 
 ### 桌面端（主机）
-- **会话管理** - 创建、配置和管理多个 Claude Code 会话，SQLite 持久化存储
+- **会话管理** - 创建、配置和管理多个终端会话，SQLite 持久化存储
 - **终端预览** - 基于 xterm.js 的实时终端输出预览
 - **设备配对** - 二维码 + 6位数字验证码安全配对
 - **插件系统** - cdylib 动态加载插件架构，支持宿主 API 桥接、权限控制和持久化存储
@@ -112,7 +108,7 @@ BedCode 是一个跨平台应用，让你可以通过移动设备在同一个本
 - [Node.js](https://nodejs.org/) >= 18
 - [Rust](https://www.rust-lang.org/tools/install) >= 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
-- 已安装并配置 [Claude Code CLI](https://claude.ai/code)
+- 已安装并配置 [Claude Code CLI](https://claude.ai/code)（可选，用于 Claude Code 会话）
 
 ### 安装依赖
 
@@ -205,7 +201,7 @@ BedCode 使用 `config.properties` 文件（作为 Tauri 资源打包）进行�
 | `session.default_environment` | `windows` | 默认执行环境（windows / wsl2） |
 | `session.default_wsl_distro` | *(空)* | 默认 WSL 发行版（仅 wsl2 环境有效，空 = 默认发行版） |
 | `session.default_working_dir` | *(空)* | 默认工作目录（空 = 用户主目录） |
-| `session.default_command` | `claude` | 默认启动命令 |
+| `session.default_command` | *(空)* | 默认启动命令（空 = 系统 Shell） |
 | `session.session_timeout` | `3600` | 会话超时时间（秒）- 无活动自动关闭 |
 
 ### 界面

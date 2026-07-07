@@ -49,6 +49,11 @@ export function useTerminalBuffer() {
           terminal.write(data)
         }
       },
+      onClear: () => {
+        if (terminal) {
+          terminal.clear()
+        }
+      },
     })
   }
 
@@ -100,6 +105,11 @@ export function useTerminalBuffer() {
         buf.lastIndex = -1
         buf.lastEndIndex = -1
         buf.hasGap = true
+      }
+      // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
+      const handler = store.realtimeHandlers.get(sessionId)
+      if (handler?.onClear) {
+        handler.onClear()
       }
     }
 

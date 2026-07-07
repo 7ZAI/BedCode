@@ -1,8 +1,20 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
+    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between gap-2">
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.session.title') }}</h1>
+      <!-- Mock Terminal Toggle (DEV only) -->
+      <button
+        v-if="mockTerminal.isDev"
+        class="p-2 rounded-lg transition-colors"
+        :class="mockTerminal.enabled.value ? 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)] hover:bg-[var(--mobile-border)]'"
+        @click="mockTerminal.toggle()"
+        :title="t('mobile.session.mockToggle')"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+        </svg>
+      </button>
       <button
         v-if="isConnected"
         class="p-2 rounded-lg hover:bg-[var(--mobile-border)] transition-colors"
@@ -29,13 +41,14 @@
           <p class="text-sm">{{ t('mobile.session.notConnected') }}</p>
         </div>
 
-        <!-- FIXME: 调试会话暂时注释 -->
-        <!-- <SessionCard
-          :session="mockDebugSession"
-          @click="handleDebugSessionClick"
-          @stop="handleDebugSessionStop"
-          @delete="handleDebugSessionDelete"
-        /> -->
+        <!-- Mock Terminal Session (DEV only) -->
+        <SessionCard
+          v-if="mockTerminal.isDev && mockTerminal.enabled.value"
+          :session="mockSession"
+          @click="handleMockSessionClick"
+          @stop=""
+          @delete=""
+        />
 
         <!-- 真实会话列表 -->
         <template v-if="isConnected">
@@ -103,6 +116,7 @@ import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { httpStopSession, httpRemoveSession } from '@/composables/useHttpApi'
 import { useToast } from '@/composables/useToast'
+import { useMockTerminal, MOCK_SESSION_ID } from '@/composables/useMockTerminal'
 import SessionCard from '@/components/SessionCard.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
@@ -112,22 +126,24 @@ const connection = useMobileConnection()
 const toast = useToast()
 const { t } = useI18n()
 
+// 模拟终端（DEV）
+const mockTerminal = useMockTerminal()
+
 // 连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 
 // 当前设备名称
 const currentDeviceName = computed(() => connection.currentDevice.value?.name || t('mobile.session.connected'))
 
-// FIXME: 调试会话暂时注释
-// const mockDebugSession = {
-//   id: 'mock-debug-session',
-//   name: '调试会话 (模拟)',
-//   status: 'running' as const,
-//   created_at: new Date().toISOString(),
-//   pty_type: 'bash',
-//   config_id: 'mock-config',
-//   is_active: true,
-// }
+const mockSession = computed(() => ({
+  id: MOCK_SESSION_ID,
+  name: t('mobile.session.mockName'),
+  config_id: '',
+  status: 'running',
+  created_at: new Date().toISOString(),
+  is_active: true,
+  sessionType: 'pty',
+}))
 
 // 真实会话列表（来自桌面端）
 const realSessions = computed(() => connection.activeSessions.value)
@@ -141,22 +157,12 @@ const isStopping = ref(false)
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
 
-// FIXME: 调试会话处理函数暂时注释
-// function handleDebugSessionClick() {
-//   connection.activeSessionId.value = mockDebugSession.id
-//   router.push({
-//     name: 'mobile-terminal',
-//     params: { id: mockDebugSession.id },
-//   })
-// }
-
-// function handleDebugSessionStop() {
-//   // 调试会话不可停止，不做任何操作
-// }
-
-// function handleDebugSessionDelete() {
-//   // 调试会话不可删除，不做任何操作
-// }
+function handleMockSessionClick() {
+  router.push({
+    name: 'mobile-terminal',
+    params: { id: MOCK_SESSION_ID },
+  })
+}
 
 // 真实会话处理函数
 const isNavigating = ref(false)
