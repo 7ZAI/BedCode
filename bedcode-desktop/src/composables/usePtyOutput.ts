@@ -25,24 +25,21 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
       return
     }
 
-    // 建立实时监听
-    unlisten = await onPtyOutput((event: any) => {
-      if (event.sessionId === targetSessionId) {
-        // 解码 base64 数据后再追加
-        try {
-          // atob() 解码后是 Latin-1 编码，需要转换为 UTF-8
-          const binaryString = atob(event.data)
-          const bytes = new Uint8Array(binaryString.length)
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i)
-          }
-          const decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-          output.value += decodedData
-        } catch (e) {
-          console.error('[usePtyOutput] Failed to decode base64:', e);
-          // 如果解码失败，直接使用原始数据（可能是旧数据格式）
-          output.value += event.data
+    // 按 session 分 channel 监听，无需前端过滤
+    unlisten = await onPtyOutput(targetSessionId, (event: any) => {
+      try {
+        // atob() 解码后是 Latin-1 编码，需要转换为 UTF-8
+        const binaryString = atob(event.data)
+        const bytes = new Uint8Array(binaryString.length)
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i)
         }
+        const decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+        output.value += decodedData
+      } catch (e) {
+        console.error('[usePtyOutput] Failed to decode base64:', e);
+        // 如果解码失败，直接使用原始数据（可能是旧数据格式）
+        output.value += event.data
       }
     })
   }

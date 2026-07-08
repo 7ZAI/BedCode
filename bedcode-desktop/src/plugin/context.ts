@@ -195,11 +195,8 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   const http: HttpAPI = {
     registerEndpoint(path: string, handler): Disposable {
       requirePermission('http.registerEndpoint')
-      const disposable: Disposable = {
-        dispose() {
-          // 后续实现：通知 Rust 端移除端点
-        },
-      }
+      const registry = getPluginRegistry()
+      const disposable = registry.registerHttpEndpoint(info.id, path, handler)
       disposables.push(disposable)
       return disposable
     },

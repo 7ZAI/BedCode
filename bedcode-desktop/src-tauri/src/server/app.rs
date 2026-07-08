@@ -82,6 +82,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/plugin/task-status", web::post().to(plugin_controller::update_task_status));
     cfg.route("/plugin/session-mode", web::post().to(plugin_controller::set_session_mode));
     cfg.route("/plugin/session-mode", web::get().to(plugin_controller::get_session_mode));
+
+    // 插件动态 HTTP 端点代理 — /api/plugin/{plugin_id}/{path:.*}
+    // 插件通过 manifest contributes.toolProviders 声明端点，运行时由 PluginHost 路由
+    // 注意：此路由在 /api scope 下，与 PluginRegistry::register_tool_providers 生成的路径一致
+    cfg.route("/api/plugin/{plugin_id}/{path:.*}", web::route().to(plugin_controller::plugin_http_endpoint));
 }
 
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）

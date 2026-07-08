@@ -33,6 +33,8 @@ pub struct PluginHost {
     storage: Arc<PluginStorage>,
     /// Rust 插件的 command handlers（运行时注册，inventory 静态注册插件使用）
     rust_command_handlers: Arc<RwLock<HashMap<String, bedcode_plugin_api::PluginCommand>>>,
+    /// Rust 插件的 terminal handlers（运行时注册，inventory 静态注册插件使用）
+    rust_terminal_handlers: Arc<RwLock<Vec<Box<dyn bedcode_plugin_api::TerminalHandler>>>>,
     /// cdylib 插件句柄（plugin_id → LoadedCdylibPlugin）
     cdylib_plugins: Arc<RwLock<HashMap<String, LoadedCdylibPlugin>>>,
     /// HostContext 函数实现（共享引用，所有 cdylib 插件共用）
@@ -135,6 +137,7 @@ impl PluginHost {
             permission,
             storage,
             rust_command_handlers: Arc::new(RwLock::new(HashMap::new())),
+            rust_terminal_handlers: Arc::new(RwLock::new(Vec::new())),
             cdylib_plugins: Arc::new(RwLock::new(cdylib_plugins_map)),
             host_context_fns,
         };
@@ -144,6 +147,9 @@ impl PluginHost {
 
         // 注册 Rust 插件的 command handlers（inventory 静态注册）
         host.register_rust_command_handlers().await;
+
+        // 注册 Rust 插件的 terminal handlers（inventory 静态注册）
+        host.register_rust_terminal_handlers().await;
 
         let count = host.plugins.read().await.len();
         let cdylib_count = host.cdylib_plugins.read().await.len();
@@ -185,6 +191,21 @@ impl PluginHost {
                 let full_name = format!("{}::{}", plugin_id, cmd.name);
                 tracing::info!("Registered Rust command: {}", full_name);
                 handlers.insert(full_name, cmd);
+            }
+        }
+    }
+
+    /// 注册 Rust 插件的 terminal handlers 到运行时注册表（inventory 静态注册）
+    async fn register_rust_terminal_handlers(&self) {
+        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
+            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>.into_iter().collect();
+
+        let mut handlers = self.rust_terminal_handlers.write().await;
+        for entry in static_plugins {
+            let plugin_handlers = (entry.terminal_handlers)();
+            for handler in plugin_handlers {
+                tracing::info!("Registered Rust terminal handler for plugin {}", entry.id);
+                handlers.push(handler);
             }
         }
     }
@@ -550,6 +571,48 @@ impl PluginHost {
             }
         }).collect()
     }
+
+    // ==================== Terminal Handler Pipeline ====================
+
+    /// 通过插件 TerminalHandler 管道处理终端输入
+    ///
+    /// 依次调用所有已注册的 Rust terminal handler 的 `on_input`，
+    /// 如果任一 handler 返回 `Some(modified)`，后续 handler 使用修改后的文本。
+    /// 返回最终处理后的文本（如果没有 handler 修改，返回原始输入）
+    pub async fn process_terminal_input(&self, session_id: &str, text: &str) -> String {
+        let handlers = self.rust_terminal_handlers.read().await;
+        let mut result = text.to_string();
+        for handler in handlers.iter() {
+            if let Some(modified) = handler.on_input(session_id, &result) {
+                tracing::debug!(
+                    "Terminal input modified by plugin handler: session_id={}, original_len={}, modified_len={}",
+                    session_id, result.len(), modified.len()
+                );
+                result = modified;
+            }
+        }
+        result
+    }
+
+    /// 通过插件 TerminalHandler 管道处理终端输出
+    ///
+    /// 依次调用所有已注册的 Rust terminal handler 的 `on_output`，
+    /// 如果任一 handler 返回 `Some(modified)`，后续 handler 使用修改后的数据。
+    /// 返回最终处理后的数据（如果没有 handler 修改，返回原始数据）
+    pub async fn process_terminal_output(&self, session_id: &str, data: &str) -> String {
+        let handlers = self.rust_terminal_handlers.read().await;
+        let mut result = data.to_string();
+        for handler in handlers.iter() {
+            if let Some(modified) = handler.on_output(session_id, &result) {
+                tracing::debug!(
+                    "Terminal output modified by plugin handler: session_id={}, original_len={}, modified_len={}",
+                    session_id, result.len(), modified.len()
+                );
+                result = modified;
+            }
+        }
+        result
+    }
 }
 
 // 通过 Arc 共享内部状态实现 Clone
@@ -561,6 +624,7 @@ impl Clone for PluginHost {
             permission: self.permission.clone(),
             storage: self.storage.clone(),
             rust_command_handlers: self.rust_command_handlers.clone(),
+            rust_terminal_handlers: self.rust_terminal_handlers.clone(),
             cdylib_plugins: self.cdylib_plugins.clone(),
             host_context_fns: self.host_context_fns.clone(),
         }

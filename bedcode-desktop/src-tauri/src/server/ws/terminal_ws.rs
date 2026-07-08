@@ -519,11 +519,14 @@ impl TerminalWs {
                         buffer.append(&event);
                         if buffer.data.len() >= max_buffer_size {
                             let text = buffer.flush(&session_id_for_fwd);
-                            let _ = addr.send(TerminalOutput { text }).await;
+                            if addr.send(TerminalOutput { text }).await.is_err() {
+                                tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                                break;
+                            }
                         }
                     }
                     Ok(None) => {
-                        // channel 关闭
+                        // channel 关闭，最终 flush
                         if !buffer.is_empty() {
                             let text = buffer.flush(&session_id_for_fwd);
                             let _ = addr.send(TerminalOutput { text }).await;
@@ -534,7 +537,10 @@ impl TerminalWs {
                         // 超时，flush 缓冲区
                         if !buffer.is_empty() {
                             let text = buffer.flush(&session_id_for_fwd);
-                            let _ = addr.send(TerminalOutput { text }).await;
+                            if addr.send(TerminalOutput { text }).await.is_err() {
+                                tracing::debug!("[OutputForwarder] Actor stopped on flush, exiting loop");
+                                break;
+                            }
                         }
                     }
                 }

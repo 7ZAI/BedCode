@@ -489,7 +489,7 @@ cargo test
 
 ## Target Directory Management
 
-编译前检查 `src-tauri/target` 目录大小，超过 15GB 执行 `cargo clean`。
+编译前（包括 `tauri:dev` 和 `tauri:build`）检查 `src-tauri/target` 目录大小，超过 10GB 执行 `cargo clean`。
 
 ---
 

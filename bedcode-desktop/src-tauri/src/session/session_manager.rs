@@ -6,7 +6,8 @@
 use crate::events::DesktopSyncEvent;
 use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::pty::{
-    AsyncPtyOutputListener, PtyOutputEvent, PtySessionHandler, PtyHandler,
+    PtyOutputEvent, PtySessionHandler, PtyHandler,
+    FrontendOutputHandler,
 };
 use crate::session::{
     session_components::{
@@ -20,7 +21,6 @@ use crate::session::{
     session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
 };
-use crate::pty::PtyOutputListener;
 use crate::enums::{SessionStatus, SessionType};
 use crate::system::config::AppConfig;
 use crate::Result;
@@ -28,6 +28,7 @@ use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tauri::AppHandle;
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 /// Session Manager
@@ -53,8 +54,8 @@ pub struct SessionManager {
     storage: Arc<SessionStorage>,
     /// 运行标志
     running: Arc<AtomicBool>,
-    /// PTY 输出事件监听器（可动态添加）
-    output_listener: Arc<RwLock<Option<Arc<dyn PtyOutputListener>>>>,
+    /// AppHandle（用于为每个会话启动 FrontendOutputHandler）
+    app_handle: Arc<RwLock<Option<AppHandle>>>,
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
@@ -62,19 +63,12 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    /// 设置 PTY 输出事件监听器
+    /// 设置 AppHandle（用于为每个会话启动 FrontendOutputHandler）
     ///
-    /// 在启动会话前设置，用于接收 PTY 输出事件
-    /// 传入 Arc<dyn PtyOutputListener>，任何实现该 trait 的类型都可以
-    pub async fn set_output_listener(&self, listener: Arc<dyn PtyOutputListener>) {
-        let mut output_listener = self.output_listener.write().await;
-        *output_listener = Some(listener);
-    }
-
-    /// 清除 PTY 输出事件监听器
-    pub async fn clear_output_listener(&self) {
-        let mut output_listener = self.output_listener.write().await;
-        *output_listener = None;
+    /// 在启动会话前设置，每个新会话创建后会自动 subscribe_output 并 spawn handler
+    pub async fn set_app_handle(&self, app_handle: AppHandle) {
+        let mut handle = self.app_handle.write().await;
+        *handle = Some(app_handle);
     }
 
     /// 获取输出广播发送器
@@ -130,7 +124,7 @@ impl SessionManager {
             pty_handler,
             storage,
             running,
-            output_listener: Arc::new(RwLock::new(None)),
+            app_handle: Arc::new(RwLock::new(None)),
             sync_tx: RwLock::new(None),
             resource_dir,
         }
@@ -206,10 +200,11 @@ impl SessionManager {
         let pty_session = self.pty_handler.create_session(launch_config.clone())?;
         let session_id = pty_session.id().to_string();
 
-        // 先注册输出监听器（如果已设置），再启动 PTY
-        let listener = self.output_listener.read().await.clone();
-        if let Some(listener) = listener {
-            pty_session.add_output_listener(listener);
+        // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）
+        let app_handle = self.app_handle.read().await.clone();
+        if let Some(app_handle) = app_handle {
+            let rx = pty_session.subscribe_output().await;
+            FrontendOutputHandler::spawn(app_handle, rx);
         }
 
         // 启动 PTY 会话
@@ -288,10 +283,11 @@ impl SessionManager {
         let pty_session = self.pty_handler.create_session(launch_config.clone())?;
         let session_id = pty_session.id().to_string();
 
-        // 注册输出监听器
-        let listener = self.output_listener.read().await.clone();
-        if let Some(listener) = listener {
-            pty_session.add_output_listener(listener);
+        // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）
+        let app_handle = self.app_handle.read().await.clone();
+        if let Some(app_handle) = app_handle {
+            let rx = pty_session.subscribe_output().await;
+            FrontendOutputHandler::spawn(app_handle, rx);
         }
 
         // 不启动 PTY，只保存会话信息
@@ -457,10 +453,11 @@ impl SessionManager {
             .pty_handler
             .create_session_with_id(session_id.to_string(), launch_config.clone())?;
 
-        // 先注册输出监听器（如果已设置），再启动 PTY
-        let listener = self.output_listener.read().await.clone();
-        if let Some(listener) = listener {
-            pty_session.add_output_listener(listener);
+        // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）
+        let app_handle = self.app_handle.read().await.clone();
+        if let Some(app_handle) = app_handle {
+            let rx = pty_session.subscribe_output().await;
+            FrontendOutputHandler::spawn(app_handle, rx);
         }
 
         // 启动生命周期处理器
@@ -530,7 +527,14 @@ impl SessionManager {
             preview
         );
 
-        self.pty_registry.write_input(session_id, data).await?;
+        // 通过插件 TerminalHandler 管道处理输入
+        let processed_data = {
+            let ctx = crate::system::app_context::AppContext::global();
+            let plugin_host = ctx.plugin_host();
+            plugin_host.process_terminal_input(session_id, data).await
+        };
+
+        self.pty_registry.write_input(session_id, &processed_data).await?;
 
         // 更新会话状态为 Running
         self.session_info

@@ -387,7 +387,6 @@ export async function getLocalIpAddresses(): Promise<string[]> {
 
 let unlistenDeviceConnected: UnlistenFn | null = null
 let unlistenDeviceDisconnected: UnlistenFn | null = null
-let unlistenPtyOutput: UnlistenFn | null = null
 
 /**
  * 监听设备连接事件
@@ -406,13 +405,13 @@ export async function onDeviceDisconnected(callback: (event: any) => void): Prom
 }
 
 /**
- * 监听 PTY 输出事件
+ * 监听指定会话的 PTY 输出事件
+ * 事件名按 session 分 channel：pty-output-{sessionId}
  */
-export async function onPtyOutput(callback: (event: any) => void): Promise<() => void> {
-  unlistenPtyOutput = await listen('pty-output', (event) => {
+export async function onPtyOutput(sessionId: string, callback: (event: any) => void): Promise<() => void> {
+  return await listen(`pty-output-${sessionId}`, (event) => {
     callback(event.payload);
   });
-  return unlistenPtyOutput;
 }
 
 /**
@@ -421,7 +420,6 @@ export async function onPtyOutput(callback: (event: any) => void): Promise<() =>
 export function cleanupEventListeners() {
   unlistenDeviceConnected?.()
   unlistenDeviceDisconnected?.()
-  unlistenPtyOutput?.()
 }
 
 // ==================== Desktop Commands Composable ====================

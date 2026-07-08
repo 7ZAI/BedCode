@@ -8,8 +8,11 @@
 build/
 *.local
 
+# CodeGraph index
+.codegraph/
+
 # Documentation
-docs/
+**/docs/
 
 AGENTS.md
 CLAUDE.md

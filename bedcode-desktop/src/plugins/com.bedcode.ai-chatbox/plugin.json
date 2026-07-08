@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "AI 大模型对话与终端提示词优化",
   "author": "BedCode",
-  "main": "index.ts",
+  "main": "index.js",
   "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_ai_chatbox.dll",

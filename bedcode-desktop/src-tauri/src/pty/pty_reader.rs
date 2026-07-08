@@ -1,6 +1,6 @@
 //! PTY Output Reader
 //!
-//! PTY 输出读取线程，使用观察者模式通知监听器
+//! PTY 输出读取线程，使用 broadcast channel 通知监听器
 
 use std::io::{BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +11,6 @@ use crate::enums::PtySessionStatus;
 use crate::pty::PtyOutputEvent;
 use crate::pty::next_output_index;
 use crate::session::{GlobalOutputManager, OutputEvent};
-use crate::pty::PtyOutputListener;
 use crate::system::config::AppConfig;
 
 /// PTY 输出读取器
@@ -23,13 +22,14 @@ impl PtyReader {
     /// 创建并启动输出读取线程
     ///
     /// - `reader`: PTY 读取器
-    /// - `output_listeners`: 观察者列表，用于通知输出事件
+    /// - `output_broadcast`: 输出事件广播器，替代旧的 Mutex<Vec<Listener>>
+    ///   broadcast send 不可阻塞，无 receiver 时自动丢弃，避免 try_lock 失败丢数据
     /// - `lifecycle_tx`: 生命周期事件发送器
     /// - `session_id`: 会话 ID
     /// - `running`: 运行标志
     pub fn start(
         reader: Box<dyn Read + Send + 'static>,
-        output_listeners: Arc<tokio::sync::Mutex<Vec<Arc<dyn PtyOutputListener>>>>,
+        output_broadcast: tokio::sync::broadcast::Sender<PtyOutputEvent>,
         lifecycle_tx: tokio::sync::broadcast::Sender<PtySessionStatus>,
         session_id: String,
         running: Arc<AtomicBool>,
@@ -75,19 +75,16 @@ impl PtyReader {
                             global_manager.on_output(output_event).await;
                         });
 
-                        // 通知所有监听器（观察者模式，用于桌面端前端）
-                        if let Ok(listeners) = output_listeners.try_lock() {
-                            for listener in listeners.iter() {
-                                let event_clone = event.clone();
-                                let listener_clone = listener.clone();
-
-                                // 在 tokio 异步 runtime 中 spawn 任务来执行 async on_output
-                                tauri::async_runtime::spawn(async move {
-                                    listener_clone.on_output(event_clone).await;
-                                });
+                        // 通过 broadcast channel 通知所有监听器（桌面端前端）
+                        // broadcast::send 不阻塞，无 receiver 时返回 Err 但不影响后续操作
+                        let receiver_count = output_broadcast.receiver_count();
+                        if receiver_count > 0 {
+                            if let Err(e) = output_broadcast.send(event) {
+                                // 无活跃 receiver 时正常，不 warn
+                                tracing::debug!(
+                                    "[PtyReader] broadcast send failed (no receivers or lagged): {}", e
+                                );
                             }
-                        } else {
-                            tracing::warn!("[PtyReader] Failed to acquire lock on output_listeners");
                         }
                     }
                     Err(e) => {

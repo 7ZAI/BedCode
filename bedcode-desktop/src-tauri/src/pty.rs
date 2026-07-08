@@ -13,7 +13,7 @@ pub mod wsl;
 
 pub use pty_handler::{PtyHandler, PtySessionHandler};
 pub use pty_output::PtyOutputEvent;
-pub use pty_output_listener::{AsyncPtyOutputListener, PtyOutputHandler, PtyOutputListener, PtyOutputListenerSync};
+pub use pty_output_listener::PtyOutputHandler;
 pub use pty_process::PtySession;
 pub use frontend_output_handler::FrontendOutputHandler;
 

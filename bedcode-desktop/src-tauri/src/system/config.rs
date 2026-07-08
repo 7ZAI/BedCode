@@ -41,6 +41,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("channels.event_broadcast_capacity", "统一事件广播容量 - 整合所有事件类型"),
     ("channels.pty_subscription_capacity", "PTY 订阅广播容量 - 用于移动端订阅输出"),
     ("channels.global_queue_capacity", "全局输出队列容量 - 存储历史输出供移动端回放"),
+    ("channels.global_queue_max_bytes", "全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧事件"),
     ("channels.ws_event_capacity", "WebSocket 事件广播容量 - 业务层事件分发"),
     ("channels.lifecycle_capacity", "生命周期事件广播容量 - PTY 进程状态变更"),
     ("terminal.default_cols", "默认终端列数"),
@@ -90,6 +91,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "channels.event_broadcast_capacity",
         "channels.pty_subscription_capacity",
         "channels.global_queue_capacity",
+        "channels.global_queue_max_bytes",
         "channels.ws_event_capacity",
         "channels.lifecycle_capacity",
     ]),
@@ -288,6 +290,8 @@ pub struct ChannelsConfig {
     pub pty_subscription_capacity: usize,
     /// 全局输出队列容量 - 存储历史输出供移动端回放
     pub global_queue_capacity: usize,
+    /// 全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧事件
+    pub global_queue_max_bytes: u64,
     /// WebSocket 事件广播容量 - 业务层事件分发
     pub ws_event_capacity: usize,
     /// 生命周期事件广播容量 - PTY 进程状态变更
@@ -303,6 +307,7 @@ impl Default for ChannelsConfig {
             event_broadcast_capacity: 256,
             pty_subscription_capacity: 1024,
             global_queue_capacity: 50000,
+            global_queue_max_bytes: 256 * 1024 * 1024, // 256MB
             ws_event_capacity: 1024,
             lifecycle_capacity: 16,
         }
@@ -331,7 +336,7 @@ impl Default for TerminalConfig {
         Self {
             default_cols: 120,
             default_rows: 40,
-            flush_interval_ms: 100,
+            flush_interval_ms: 50,
             max_buffer_size: 64 * 1024,
             read_buffer_size: 4096,
         }
@@ -480,13 +485,14 @@ impl AppConfig {
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
                 pty_subscription_capacity: parse_value(props, "channels.pty_subscription_capacity", 1024),
                 global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 50000),
+                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 256 * 1024 * 1024),
                 ws_event_capacity: parse_value(props, "channels.ws_event_capacity", 1024),
                 lifecycle_capacity: parse_value(props, "channels.lifecycle_capacity", 16),
             },
             terminal: TerminalConfig {
                 default_cols: parse_value(props, "terminal.default_cols", 120),
                 default_rows: parse_value(props, "terminal.default_rows", 40),
-                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 100),
+                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 50),
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
             },
@@ -551,6 +557,7 @@ impl AppConfig {
         map.insert("channels.event_broadcast_capacity".to_string(), self.channels.event_broadcast_capacity.to_string());
         map.insert("channels.pty_subscription_capacity".to_string(), self.channels.pty_subscription_capacity.to_string());
         map.insert("channels.global_queue_capacity".to_string(), self.channels.global_queue_capacity.to_string());
+        map.insert("channels.global_queue_max_bytes".to_string(), self.channels.global_queue_max_bytes.to_string());
         map.insert("channels.ws_event_capacity".to_string(), self.channels.ws_event_capacity.to_string());
         map.insert("channels.lifecycle_capacity".to_string(), self.channels.lifecycle_capacity.to_string());
         map.insert("terminal.default_cols".to_string(), self.terminal.default_cols.to_string());

@@ -128,9 +128,16 @@ impl OutputEvent {
 }
 
 /// 统一输出队列（环形缓冲区）
+///
+/// 双重容量限制：
+/// - `capacity`: 最大事件条数（条目级限制）
+/// - `max_total_bytes`: 最大总字节数（内存级限制）
+/// 任一限制超出时丢弃最旧事件，与前端 buffer 逻辑一致
 pub struct UnifiedOutputQueue {
     buffer: std::collections::VecDeque<OutputEvent>,
     capacity: usize,
+    max_total_bytes: u64,
+    total_bytes: u64,
     max_seq: AtomicU64,
     min_seq: AtomicU64,
     total_produced: AtomicU64,
@@ -138,9 +145,17 @@ pub struct UnifiedOutputQueue {
 
 impl UnifiedOutputQueue {
     pub fn new(capacity: usize) -> Self {
+        let config = AppConfig::global();
+        Self::with_max_bytes(capacity, config.channels.global_queue_max_bytes)
+    }
+
+    /// 创建指定字节上限的队列
+    pub fn with_max_bytes(capacity: usize, max_total_bytes: u64) -> Self {
         Self {
             buffer: std::collections::VecDeque::with_capacity(capacity),
             capacity,
+            max_total_bytes,
+            total_bytes: 0,
             max_seq: AtomicU64::new(0),
             min_seq: AtomicU64::new(0),
             total_produced: AtomicU64::new(0),
@@ -164,12 +179,21 @@ impl UnifiedOutputQueue {
     }
 
     /// 推入新事件
+    ///
+    /// 双重容量检查：条目数和总字节数任一超出时丢弃最旧事件
     pub fn push(&mut self, event: OutputEvent) {
         self.max_seq.store(event.index, Ordering::SeqCst);
         self.total_produced.fetch_add(1, Ordering::SeqCst);
 
-        if self.buffer.len() >= self.capacity {
+        let event_bytes = event.data.len() as u64;
+        self.total_bytes += event_bytes;
+
+        // 条目数或总字节数超出时，丢弃最旧事件直到满足限制
+        while (self.buffer.len() >= self.capacity || self.total_bytes > self.max_total_bytes)
+            && !self.buffer.is_empty()
+        {
             if let Some(old) = self.buffer.pop_front() {
+                self.total_bytes -= old.data.len() as u64;
                 self.min_seq.store(old.index + 1, Ordering::SeqCst);
             }
         }
@@ -276,8 +300,13 @@ impl SessionOutputManager {
 
     /// 订阅会话输出
     ///
-    /// - `start_seq = None` 或 `0`：从头补完所有历史
-    /// - `start_seq = N (N > 0)`：从指定序号开始获取，用于断线重连从断点继续
+    /// 使用"先占位后激活"模式：
+    /// 1. 先插入 active=false 的 subscriber（占位），释放写锁
+    /// 2. 逐条发送历史（不持锁，不阻塞 on_output 的读锁）
+    /// 3. 激活 subscriber（active=true），开始接收新输出
+    ///
+    /// 占位期间 on_output() 会看到该 subscriber 但因 active=false 跳过，
+    /// 激活后从 on_output() 接收的事件 index 一定 >= 历史最后一条的 index + 1
     pub async fn subscribe(
         &self,
         client_id: &str,
@@ -286,6 +315,13 @@ impl SessionOutputManager {
     ) -> SubscribeResponse {
         let subscriber = SubscriberState::new(client_id.to_string(), ws_sender);
 
+        // 第一步：插入占位 subscriber（active=false），释放写锁
+        self.subscribers
+            .write()
+            .await
+            .insert(client_id.to_string(), subscriber);
+
+        // 第二步：读取历史并发送（不持锁，不阻塞 on_output）
         let queue = self.output_queue.read().await;
         let min_seq = queue.min_seq();
         let max_seq = queue.max_seq();
@@ -296,21 +332,27 @@ impl SessionOutputManager {
         drop(queue);
 
         // 通过该订阅者的独立通道发送历史（保证顺序）
-        for event in &history {
-            if let Err(e) = subscriber.send_queue.send(event.clone()).await {
-                tracing::warn!(
-                    "[SessionOutputManager] Failed to send history to {}: {}",
-                    client_id, e
-                );
+        {
+            let subscribers = self.subscribers.read().await;
+            if let Some(sub) = subscribers.get(client_id) {
+                for event in &history {
+                    if let Err(e) = sub.send_queue.send(event.clone()).await {
+                        tracing::warn!(
+                            "[SessionOutputManager] Failed to send history to {}: {}",
+                            client_id, e
+                        );
+                    }
+                }
             }
         }
 
-        subscriber.activate(max_seq);
-
-        self.subscribers
-            .write()
-            .await
-            .insert(client_id.to_string(), subscriber);
+        // 第三步：激活 subscriber，开始接收 on_output 的新事件
+        {
+            let subscribers = self.subscribers.read().await;
+            if let Some(sub) = subscribers.get(client_id) {
+                sub.activate(max_seq);
+            }
+        }
 
         tracing::info!(
             "[SessionOutputManager] Client {} subscribed to session {}, start_seq={:?}, history_count={}",
@@ -524,6 +566,34 @@ mod tests {
         let events = queue.get_range(5);
         assert_eq!(events.len(), 5);
         assert_eq!(events[0].index, 5);
+    }
+
+    #[test]
+    fn test_max_bytes_limit_evicts_oldest() {
+        // 容量 100 条，但字节上限 10 字节
+        // make_event 的 data 是 b"test" = 4 字节
+        let mut queue = UnifiedOutputQueue::with_max_bytes(100, 10);
+
+        // push 3 个事件：4+4+4 = 12 字节 > 10，第一个应被淘汰
+        queue.push(make_event(0));
+        queue.push(make_event(1));
+        queue.push(make_event(2));
+
+        // 第一个事件被淘汰，剩余 2 个：4+4 = 8 字节
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.min_seq(), 1);
+        assert_eq!(queue.max_seq(), 2);
+    }
+
+    #[test]
+    fn test_max_bytes_single_event_exceeds_limit() {
+        // 单条事件就超过字节上限时，仍保留该事件（不能丢弃刚 push 的事件）
+        let mut queue = UnifiedOutputQueue::with_max_bytes(100, 2);
+
+        // b"test" = 4 字节 > 2 字节上限，但事件已 push
+        queue.push(make_event(0));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.total_bytes, 4);
     }
 
     #[tokio::test]

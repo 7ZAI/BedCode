@@ -60,6 +60,13 @@ interface RegisteredFileHandler {
   component: any
 }
 
+/** 注册的 HTTP 端点 handler */
+interface RegisteredHttpEndpoint {
+  pluginId: string
+  path: string
+  handler: (req: { method: string; path: string; body: any; headers: Record<string, string> }) => Promise<{ status: number; body: any }>
+}
+
 /** 前端插件注册表 */
 class PluginRegistryClass {
   private views = new Map<string, RegisteredView>()
@@ -68,6 +75,7 @@ class PluginRegistryClass {
   private terminalToolbarItemsMap = new Map<string, RegisteredTerminalToolbarItem>()
   private titleBarItemsMap = new Map<string, RegisteredTitleBarItem>()
   private fileHandlers = new Map<string, RegisteredFileHandler>()
+  private httpEndpoints = new Map<string, RegisteredHttpEndpoint>()
   /** 插件上下文映射，供 PluginViewHost provide 给组件树 */
   private contexts = new Map<string, PluginContext>()
 
@@ -212,6 +220,22 @@ class PluginRegistryClass {
     return undefined
   }
 
+  /** 注册 HTTP 端点 handler */
+  registerHttpEndpoint(pluginId: string, path: string, handler: RegisteredHttpEndpoint['handler']): Disposable {
+    const key = `${pluginId}:${path}`
+    this.httpEndpoints.set(key, { pluginId, path, handler })
+    return {
+      dispose: () => {
+        this.httpEndpoints.delete(key)
+      },
+    }
+  }
+
+  /** 查找 HTTP 端点 handler */
+  findHttpEndpoint(pluginId: string, path: string): RegisteredHttpEndpoint | undefined {
+    return this.httpEndpoints.get(`${pluginId}:${path}`)
+  }
+
   /** 存储插件上下文（激活时调用） */
   setContext(pluginId: string, context: PluginContext): void {
     this.contexts.set(pluginId, context)
@@ -264,6 +288,12 @@ class PluginRegistryClass {
     for (const key of [...this.fileHandlers.keys()]) {
       if (key.startsWith(`${pluginId}:`)) {
         this.fileHandlers.delete(key)
+      }
+    }
+
+    for (const key of [...this.httpEndpoints.keys()]) {
+      if (key.startsWith(`${pluginId}:`)) {
+        this.httpEndpoints.delete(key)
       }
     }
   }

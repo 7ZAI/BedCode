@@ -135,9 +135,34 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     return buffer
   }
 
+  /** 小 chunk 合并阈值（字节），低于此大小的相邻 chunk 会合并减少 GC 压力 */
+  const MERGE_THRESHOLD = 4096
+
   /** 追加输出数据到 buffer */
   function appendToBuffer(sessionId: string, data: Uint8Array, index: number, endIndex: number) {
     const buffer = ensureBuffer(sessionId)
+
+    // 小 chunk 合并：当最后一个 chunk 和新数据都较小时，合并为一个 Uint8Array
+    if (buffer.chunks.length > 0) {
+      const last = buffer.chunks[buffer.chunks.length - 1]
+      if (last.byteLength < MERGE_THRESHOLD && data.byteLength < MERGE_THRESHOLD) {
+        const merged = new Uint8Array(last.byteLength + data.byteLength)
+        merged.set(last)
+        merged.set(data, last.byteLength)
+        buffer.chunks[buffer.chunks.length - 1] = merged
+        buffer.totalBytes += data.length
+        buffer.lastIndex = index
+        buffer.lastEndIndex = endIndex
+
+        // 容量溢出时丢弃最旧 chunks
+        while (buffer.totalBytes > MAX_BUFFER_BYTES && buffer.chunks.length > 1) {
+          const removed = buffer.chunks.shift()!
+          buffer.totalBytes -= removed.length
+          buffer.hasGap = true
+        }
+        return
+      }
+    }
 
     buffer.chunks.push(data)
     buffer.totalBytes += data.length

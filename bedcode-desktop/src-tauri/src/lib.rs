@@ -270,15 +270,13 @@ pub fn run() {
                 config_manager.set_sync_tx(sync_tx.clone()).await;
             });
 
-            // 创建并同步设置 PTY 输出监听器
-            // 必须在 setup 返回前完成，否则会话启动时监听器可能未就绪导致输出丢失
-            let frontend_handler = Arc::new(pty::FrontendOutputHandler::new(app_handle.clone()));
-            let async_listener = Arc::new(pty::AsyncPtyOutputListener::new());
+            // 设置 AppHandle 到 SessionManager
+            // 会话创建时通过 subscribe_output() + FrontendOutputHandler::spawn() 转发输出
+            // 替代旧的 AsyncPtyOutputListener + try_lock 模式，避免 PtyReader 同步线程中锁竞争丢数据
             tauri::async_runtime::block_on(async {
-                async_listener.register(frontend_handler).await;
-                session_manager.set_output_listener(async_listener).await;
+                session_manager.set_app_handle(app_handle.clone()).await;
             });
-            tracing::info!("PTY output listener configured (frontend)");
+            tracing::info!("SessionManager app_handle configured for output forwarding");
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
