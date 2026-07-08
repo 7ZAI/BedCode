@@ -1,8 +1,17 @@
-import { ref, onUnmounted, type Ref, computed, watch } from 'vue'
+/**
+ * PTY 输出监听 Composable
+ *
+ * 使用增量回调模式：每次 PTY 输出事件直接通过回调传递解码后的数据，
+ * 不在 ref 中累积完整输出，避免长时间运行后内存无限增长导致页面崩溃
+ */
+
+import { onUnmounted, type Ref, computed, watch } from 'vue'
 import { onPtyOutput } from '@/composables/useDesktopCommands'
 
-export function usePtyOutput(sessionId: string | Ref<string>) {
-  const output = ref<string>('')
+export function usePtyOutput(
+  sessionId: string | Ref<string>,
+  onData: (data: string) => void,
+) {
   let unlisten: (() => void) | null = null
 
   // 支持传入字符串或 Ref/Computed
@@ -21,7 +30,6 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
 
     // 如果 sessionId 为空，不建立监听
     if (!targetSessionId) {
-      output.value = ''
       return
     }
 
@@ -35,11 +43,11 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
           bytes[i] = binaryString.charCodeAt(i)
         }
         const decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-        output.value += decodedData
+        onData(decodedData)
       } catch (e) {
-        console.error('[usePtyOutput] Failed to decode base64:', e);
-        // 如果解码失败，直接使用原始数据（可能是旧数据格式）
-        output.value += event.data
+        console.error('[usePtyOutput] Failed to decode base64:', e)
+        // 解码失败时使用原始数据
+        onData(event.data)
       }
     })
   }
@@ -51,18 +59,9 @@ export function usePtyOutput(sessionId: string | Ref<string>) {
     }
   }, { immediate: true })
 
-  function clearOutput() {
-    output.value = ''
-  }
-
   onUnmounted(() => {
     if (unlisten) {
       unlisten()
     }
   })
-
-  return {
-    output,
-    clearOutput,
-  }
 }

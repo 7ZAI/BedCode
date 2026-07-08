@@ -126,16 +126,30 @@ const isUserScrolling = ref(false)
 // 多次输出事件在同一帧内触发时，只执行一次 scrollToBottom
 let pendingScrollRaf = 0
 
+// xterm onScroll 取消监听（IDisposable 接口）
+let scrollDisposable: import('@xterm/xterm').IDisposable | null = null
+
 // 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
 let currentLineBuffer = ''
 
 const sessionId = computed(() => props.session?.id || '')
 
-// PTY 输出监听（组件内）
-const { output: realtimeOutput, clearOutput } = usePtyOutput(sessionId)
+// 终端历史缓存（传入 computed ref，会话切换时自动更新目标）
+const terminalHistory = useTerminalHistory(sessionId)
 
-// 终端历史缓存
-const terminalHistory = useTerminalHistory(sessionId.value)
+// PTY 输出监听：增量回调模式，每次输出直接写入 xterm + 全局缓存
+// 不在 ref 中累积完整输出，避免长时间运行后内存无限增长
+usePtyOutput(sessionId, (data: string) => {
+  // 始终写入全局缓存，即使 terminal 未初始化（数据可从历史恢复）
+  terminalHistory.append(data)
+
+  if (terminal) {
+    terminal.write(data)
+    if (!isUserScrolling.value) {
+      scrollToBottom()
+    }
+  }
+})
 
 const statusColor = computed(() => {
   if (!props.session) return 'bg-slate-400 dark:bg-dark-500'
@@ -318,6 +332,8 @@ function initWebGL(terminal: Terminal): boolean {
       console.warn('[TerminalPreview] WebGL context lost, attempting recovery')
       webglAddon?.dispose()
       webglAddon = null
+      // 上下文丢失时恢复 DOM 光标
+      terminal.element?.classList.remove('xterm-hidden-cursor')
       // 延迟 1s 后尝试重新创建 WebGL 渲染器
       setTimeout(() => {
         if (!terminal || webglAddon) return
@@ -327,9 +343,12 @@ function initWebGL(terminal: Terminal): boolean {
             console.warn('[TerminalPreview] WebGL context lost again')
             newAddon.dispose()
             if (webglAddon === newAddon) webglAddon = null
+            terminal.element?.classList.remove('xterm-hidden-cursor')
           })
           terminal.loadAddon(newAddon)
           webglAddon = newAddon
+          // 恢复后重新隐藏 DOM 光标
+          terminal.element?.classList.add('xterm-hidden-cursor')
           console.info('[TerminalPreview] WebGL context recovered')
         } catch (e) {
           console.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
@@ -431,6 +450,10 @@ function initTerminal() {
   })
   resizeObserver.observe(terminalContainerRef.value)
 
+  // 滚动事件：使用 xterm onScroll API，比 DOM addEventListener 更可靠
+  // 不会因 xterm 内部 DOM 重建而丢失监听
+  scrollDisposable = terminal.onScroll(() => handleScroll())
+
   // 键盘输入
   terminal.onData((data: string) => {
     if (!props.session) return
@@ -479,10 +502,10 @@ function scrollToBottom() {
 }
 
 function handleScroll() {
-  // 使用 xterm.js buffer 判断是否在底部，比手动计算 scrollTop 更准确
+  // 使用 xterm.js buffer 判断是否在底部
   if (!terminal) return
   const buffer = terminal.buffer.active
-  const viewportTop = terminal.buffer.active.viewportY
+  const viewportTop = buffer.viewportY
   const viewportBottom = viewportTop + terminal.rows
   const totalLines = buffer.length
   isUserScrolling.value = viewportBottom < totalLines - 1
@@ -497,31 +520,8 @@ function scrollToBottomManual() {
 function clearTerminal() {
   if (!terminal) return
   terminal.clear()
-  clearOutput()
   terminalHistory.clear()
 }
-
-// 增量写入计数器
-let lastOutputLength = 0
-
-// 监听 PTY 输出：写入组件 xterm + 同步到全局缓存
-watch(realtimeOutput, (newOutput) => {
-  if (!terminal) return
-
-  const newLength = newOutput.length
-  if (newLength > lastOutputLength) {
-    const newData = newOutput.slice(lastOutputLength)
-    // 写入组件 xterm
-    terminal.write(newData)
-    // 同步到全局缓存
-    terminalHistory.append(newData)
-    lastOutputLength = newLength
-  }
-
-  if (!isUserScrolling.value) {
-    scrollToBottom()
-  }
-}, { deep: true })
 
 // 字体大小变化
 let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
@@ -556,11 +556,9 @@ watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
     if (oldId) {
       clearTerminal()
-      lastOutputLength = 0
     }
 
     if (newId) {
-      lastOutputLength = 0
       await nextTick()
 
       if (terminal) {
@@ -594,19 +592,11 @@ onMounted(async () => {
     resizeHiddenTerminal(sessionId.value, terminal.cols, terminal.rows)
   }
 
-  // 添加滚动事件监听
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.addEventListener('scroll', handleScroll)
-  }
-
   // 从全局缓存恢复历史
   if (terminal && sessionId.value) {
     const history = terminalHistory.getHistory()
     if (history) {
       terminal.write(history)
-      // 更新计数器，避免重复写入
-      lastOutputLength = history.length
       scrollToBottom()
     }
   }
@@ -639,6 +629,12 @@ onUnmounted(() => {
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
 
+  // 清理 xterm onScroll 监听
+  if (scrollDisposable) {
+    scrollDisposable.dispose()
+    scrollDisposable = null
+  }
+
   // 清理待处理的滚动 rAF
   if (pendingScrollRaf) {
     cancelAnimationFrame(pendingScrollRaf)
@@ -651,9 +647,14 @@ onUnmounted(() => {
     resizeRaf = 0
   }
 
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.removeEventListener('scroll', handleScroll)
+  // 清理设置保存定时器
+  if (fontSizeSaveTimeout) {
+    clearTimeout(fontSizeSaveTimeout)
+    fontSizeSaveTimeout = null
+  }
+  if (themeSaveTimeout) {
+    clearTimeout(themeSaveTimeout)
+    themeSaveTimeout = null
   }
 
   if (resizeObserver) {

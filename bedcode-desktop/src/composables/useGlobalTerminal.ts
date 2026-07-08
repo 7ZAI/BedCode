@@ -5,6 +5,7 @@
  * 组件负责同步写入全局缓存
  */
 
+import { computed, type Ref } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 
@@ -14,8 +15,12 @@ const sessionHistoryCache = new Map<string, string[]>()
 // 隐藏的 xterm 实例（用于解析 ANSI 序列和计算行数）
 const hiddenTerminals = new Map<string, Terminal>()
 
-// 行数限制
-const MAX_HISTORY_LINES = 50000
+// 缓存字符数上限（约 5MB，超出后丢弃旧数据）
+// xterm scrollback 负责行数限制，cache 只需控制内存总量
+const MAX_CACHE_CHARS = 5 * 1024 * 1024
+
+// 追踪每个会话缓存的总字符数
+const sessionCacheSizes = new Map<string, number>()
 
 // 默认列数（与 Rust 端 TerminalConfig.default_cols 一致）
 const DEFAULT_COLS = 120
@@ -57,6 +62,7 @@ export function initSessionCache(sessionId: string, cols?: number): void {
   }
 
   sessionHistoryCache.set(sessionId, [])
+  sessionCacheSizes.set(sessionId, 0)
 
   const effectiveCols = cols || DEFAULT_COLS
 
@@ -66,7 +72,7 @@ export function initSessionCache(sessionId: string, cols?: number): void {
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
     theme: darkTheme,
     cursorBlink: false,
-    scrollback: MAX_HISTORY_LINES,
+    scrollback: 10000,
     cols: effectiveCols,
     rows: 40,
     allowProposedApi: true,
@@ -118,25 +124,28 @@ export function appendOutput(sessionId: string, data: string): void {
   // 追加到缓存
   cache.push(data)
 
-  // 行数限制：检查是否超出
-  if (terminal) {
-    const buffer = terminal.buffer.active
-    const totalLines = buffer.length
+  // 更新字符计数
+  const currentSize = (sessionCacheSizes.get(sessionId) || 0) + data.length
+  sessionCacheSizes.set(sessionId, currentSize)
 
-    if (totalLines > MAX_HISTORY_LINES) {
-      // 丢弃旧的缓存数据
-      // 计算需要丢弃的行数
-      const linesToRemove = totalLines - MAX_HISTORY_LINES
+  // 内存限制：超出上限时丢弃旧数据
+  // 丢弃到 70% 水位，避免频繁触发截断
+  if (currentSize > MAX_CACHE_CHARS) {
+    const targetSize = MAX_CACHE_CHARS * 0.7
+    let removedSize = 0
+    while (cache.length > 1 && (currentSize - removedSize) > targetSize) {
+      const removed = cache.shift()
+      if (removed) {
+        removedSize += removed.length
+      }
+    }
+    sessionCacheSizes.set(sessionId, currentSize - removedSize)
 
-      // 估算：每行约 80 字符，丢弃相应数量的缓存条目
-      // 实际上这里简化处理，因为 xterm 已经处理了 scrollback
-      // 我们只需要确保缓存不会无限增长
-      let removedCount = 0
-      while (cache.length > 1 && removedCount < linesToRemove) {
-        const removed = cache.shift()
-        if (removed) {
-          removedCount += (removed.match(/\n/g) || []).length || 1
-        }
+    // 截断后重置隐藏 xterm 并重放剩余缓存，保持两者同步
+    if (terminal) {
+      terminal.reset()
+      for (const chunk of cache) {
+        terminal.write(chunk)
       }
     }
   }
@@ -161,6 +170,7 @@ export function clearHistoryCache(sessionId: string): void {
   if (cache) {
     cache.length = 0
   }
+  sessionCacheSizes.set(sessionId, 0)
 
   const terminal = hiddenTerminals.get(sessionId)
   if (terminal) {
@@ -173,6 +183,7 @@ export function clearHistoryCache(sessionId: string): void {
  */
 export function destroySessionCache(sessionId: string): void {
   sessionHistoryCache.delete(sessionId)
+  sessionCacheSizes.delete(sessionId)
 
   const terminal = hiddenTerminals.get(sessionId)
   if (terminal) {
@@ -197,19 +208,27 @@ export function cleanupAllCaches(): void {
   }
   hiddenTerminals.clear()
   sessionHistoryCache.clear()
+  sessionCacheSizes.clear()
 }
 
 /**
  * Composable: 使用终端历史缓存
+ *
+ * @param sessionId - 会话 ID（字符串或 Ref，支持响应式切换）
  */
-export function useTerminalHistory(sessionId: string) {
+export function useTerminalHistory(sessionId: string | Ref<string>) {
+  const sessionIdRef = computed(() => {
+    if (typeof sessionId === 'string') return sessionId
+    return sessionId.value
+  })
+
   return {
-    init: (cols?: number) => initSessionCache(sessionId, cols),
-    append: (data: string) => appendOutput(sessionId, data),
-    getHistory: () => getHistoryOutput(sessionId),
-    clear: () => clearHistoryCache(sessionId),
-    destroy: () => destroySessionCache(sessionId),
-    hasCache: () => hasSessionCache(sessionId),
-    resize: (cols: number, rows: number) => resizeHiddenTerminal(sessionId, cols, rows),
+    init: (cols?: number) => initSessionCache(sessionIdRef.value, cols),
+    append: (data: string) => appendOutput(sessionIdRef.value, data),
+    getHistory: () => getHistoryOutput(sessionIdRef.value),
+    clear: () => clearHistoryCache(sessionIdRef.value),
+    destroy: () => destroySessionCache(sessionIdRef.value),
+    hasCache: () => hasSessionCache(sessionIdRef.value),
+    resize: (cols: number, rows: number) => resizeHiddenTerminal(sessionIdRef.value, cols, rows),
   }
 }
