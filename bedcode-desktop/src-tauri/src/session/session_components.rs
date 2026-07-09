@@ -254,15 +254,29 @@ impl NamingService for DefaultNamingService {
         base_name: &str,
         sessions: &[SessionInfo],
     ) -> String {
-        let count = sessions
+        // 从同配置的活跃会话名称中提取最大编号，避免删除后编号回退导致重名
+        let max_index = sessions
             .iter()
             .filter(|s| s.config_id == config_id && s.status != SessionStatus::Stopped)
-            .count();
+            .filter_map(|s| {
+                // 匹配 "baseName(N)" 格式，提取数字 N
+                let name = &s.name;
+                if name == base_name {
+                    Some(0)
+                } else if let Some(rest) = name.strip_prefix(base_name) {
+                    rest.strip_prefix('(')
+                        .and_then(|r| r.strip_suffix(')'))
+                        .and_then(|n| n.parse::<usize>().ok())
+                } else {
+                    None
+                }
+            })
+            .max();
 
-        if count == 0 {
-            base_name.to_string()
-        } else {
-            format!("{}({})", base_name, count)
+        match max_index {
+            None => base_name.to_string(),
+            Some(0) => format!("{}(1)", base_name),
+            Some(n) => format!("{}({})", base_name, n + 1),
         }
     }
 }
