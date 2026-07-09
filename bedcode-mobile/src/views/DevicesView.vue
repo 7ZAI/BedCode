@@ -479,7 +479,9 @@ watch([isConnected, connection.connectionStatus], async ([connected, status], [o
 // Connect from history
 async function handleConnectFromHistory(item: any) {
   const [host, portStr] = item.address.split(':')
-  const port = portStr ? parseInt(portStr) : 8765
+  const savedSettings = JSON.parse(localStorage.getItem('mobile-settings') || '{}')
+  const defaultPort = savedSettings.defaultPort || 8765
+  const port = portStr ? parseInt(portStr) : defaultPort
 
   const device: RemoteDevice = {
     id: `${host}:${port}`,
@@ -500,7 +502,9 @@ async function handleConnectFromHistory(item: any) {
 // Manual address input
 async function handleConnectManual(address: string) {
   const [host, portStr] = address.split(':')
-  const port = portStr ? parseInt(portStr) : 8765
+  const savedSettings = JSON.parse(localStorage.getItem('mobile-settings') || '{}')
+  const defaultPort = savedSettings.defaultPort || 8765
+  const port = portStr ? parseInt(portStr) : defaultPort
 
   const device: RemoteDevice = {
     id: `${host}:${port}`,

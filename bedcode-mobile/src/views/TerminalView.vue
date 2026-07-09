@@ -67,8 +67,8 @@
             :class="{ 'sidebar-hidden': !showSidebar }"
             :session-id="sessionId"
             @long-press="handleLongPress"
+            @settings-input-focus="handleSettingsInputFocus"
           />
-
           <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
         </div>
 
@@ -307,14 +307,18 @@ const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight)
 // 通道 2: 插件报告的键盘高度
 const pluginKeyboardHeight = ref(0)
 
+// 侧边栏设置面板输入框聚焦时，禁用键盘避让
+const settingsInputFocused = ref(false)
+
+
 // 最终键盘偏移量：取两个通道中的较大值
 const keyboardOffset = computed(() => {
+  // 侧边栏设置面板输入框聚焦时，禁用键盘避让偏移
+  if (settingsInputFocused.value) return 0
   const vvOffset = fullLayoutHeight.value - viewportHeight.value
   const offset = Math.max(vvOffset, pluginKeyboardHeight.value)
   return offset > 10 ? offset : 0
 })
-
-// 通道 1 回调：visualViewport resize/scroll
 function handleVisualViewportChange() {
   const vv = window.visualViewport
   if (!vv) return
@@ -641,6 +645,11 @@ function refreshTerminal() {
 }
 
 // ==================== Misc Handlers ====================
+
+/** 侧边栏设置面板输入框聚焦/失焦时，控制键盘避让 */
+function handleSettingsInputFocus(focused: boolean) {
+  settingsInputFocused.value = focused
+}
 
 async function handleLongPress(name: string, path: string) {
   try {

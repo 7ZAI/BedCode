@@ -5,7 +5,7 @@ export default {
       title: '网络设置',
       websocketPort: 'WebSocket 端口',
       preventSleep: '防止系统休眠',
-      preventSleepDesc: '服务器运行时阻止系统进入休眠状态',
+      preventSleepDesc: '服务器运行时阻止系统进入休眠状态（允许屏幕熄灭）',
     },
     session: {
       title: '会话默认设置',

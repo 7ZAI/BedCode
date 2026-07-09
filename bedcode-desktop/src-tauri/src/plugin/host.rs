@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
 
 /// 插件宿主
@@ -244,6 +245,110 @@ impl PluginHost {
         plugins.get(plugin_id)
             .map(|p| matches!(p.state, PluginState::Activated))
             .unwrap_or(false)
+    }
+
+    /// 通知所有已激活的 Rust 插件应用启动完成
+    ///
+    /// 遍历静态注册插件调用 `on_startup`，遍历 cdylib 插件调用 FFI `on_startup`。
+    /// 同时通过 Tauri 事件 `lifecycle:startup` 通知 TS-only 插件。
+    pub async fn notify_startup(&self) {
+        // 静态注册插件
+        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
+            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>.into_iter().collect();
+        for entry in &static_plugins {
+            if self.is_activated(entry.id).await {
+                tracing::debug!("Notifying plugin {} on_startup", entry.id);
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    (entry.on_startup)(),
+                ).await;
+                if result.is_err() {
+                    tracing::error!("Plugin {} on_startup timed out", entry.id);
+                }
+            }
+        }
+
+        // cdylib 插件
+        let cdylib_plugins = self.cdylib_plugins.read().await;
+        for (id, cdylib) in cdylib_plugins.iter() {
+            if self.is_activated(id).await {
+                if let Some(on_startup) = cdylib.exports().on_startup {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        unsafe { on_startup() }
+                    }));
+                    tracing::debug!("Cdylib plugin {} on_startup called", id);
+                }
+            }
+        }
+
+        // TS-only 插件：通过 Tauri 事件通知
+        let ctx = crate::system::app_context::AppContext::global();
+        let _ = ctx.app_handle().emit("lifecycle:startup", serde_json::json!({}));
+
+        tracing::info!("PluginHost notify_startup completed");
+    }
+
+    /// 通知所有已激活的插件应用即将关闭
+    ///
+    /// 在 deactivate 之前触发，此时插件仍处于激活状态。
+    /// 同时通过 Tauri 事件 `lifecycle:shutdown` 通知 TS-only 插件。
+    pub async fn notify_shutdown(&self) {
+        // 静态注册插件
+        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
+            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>.into_iter().collect();
+        for entry in &static_plugins {
+            if self.is_activated(entry.id).await {
+                tracing::debug!("Notifying plugin {} on_shutdown", entry.id);
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    (entry.on_shutdown)(),
+                ).await;
+                if result.is_err() {
+                    tracing::error!("Plugin {} on_shutdown timed out", entry.id);
+                }
+            }
+        }
+
+        // cdylib 插件
+        let cdylib_plugins = self.cdylib_plugins.read().await;
+        for (id, cdylib) in cdylib_plugins.iter() {
+            if self.is_activated(id).await {
+                if let Some(on_shutdown) = cdylib.exports().on_shutdown {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        unsafe { on_shutdown() }
+                    }));
+                    tracing::debug!("Cdylib plugin {} on_shutdown called", id);
+                }
+            }
+        }
+
+        // TS-only 插件：通过 Tauri 事件通知
+        let ctx = crate::system::app_context::AppContext::global();
+        let _ = ctx.app_handle().emit("lifecycle:shutdown", serde_json::json!({}));
+
+        tracing::info!("PluginHost notify_shutdown completed");
+    }
+
+    /// 停用所有已激活的插件
+    ///
+    /// 遍历所有 Activated 状态的插件，逐个调用 deactivate_plugin()。
+    pub async fn deactivate_all(&self) -> crate::Result<()> {
+        let plugin_ids: Vec<String> = {
+            let plugins = self.plugins.read().await;
+            plugins.values()
+                .filter(|p| matches!(p.state, PluginState::Activated))
+                .map(|p| p.manifest.id.clone())
+                .collect()
+        };
+
+        for id in plugin_ids {
+            if let Err(e) = self.deactivate_plugin(&id).await {
+                tracing::error!("Failed to deactivate plugin {} during shutdown: {}", id, e);
+            }
+        }
+
+        tracing::info!("PluginHost deactivate_all completed");
+        Ok(())
     }
 
     /// 激活插件

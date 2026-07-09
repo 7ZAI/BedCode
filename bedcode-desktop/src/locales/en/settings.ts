@@ -5,7 +5,7 @@ export default {
       title: 'Network Settings',
       websocketPort: 'WebSocket Port',
       preventSleep: 'Prevent System Sleep',
-      preventSleepDesc: 'Prevent the system from sleeping while the server is running',
+      preventSleepDesc: 'Prevent the system from sleeping while the server is running (display sleep allowed)',
     },
     session: {
       title: 'Session Defaults',

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { pluginLoader } from '@/plugin/loader'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -57,6 +58,16 @@ const router = createRouter({
       component: () => import('@/views/TerminalWindowView.vue'),
     },
   ],
+})
+
+// 插件视图路由守卫：确保懒激活插件在直接访问 URL 时被激活
+router.beforeEach(async (to) => {
+  if (to.name === 'plugin-sidebar-view' || to.name === 'plugin-toolbox-view') {
+    const pluginId = to.params.pluginId as string
+    if (pluginId && !pluginLoader.getActivePlugin(pluginId)) {
+      await pluginLoader.activate(pluginId)
+    }
+  }
 })
 
 export default router

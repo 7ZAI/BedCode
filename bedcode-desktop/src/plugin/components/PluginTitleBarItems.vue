@@ -7,7 +7,7 @@
       :title="item.label"
       @click="item.onClick?.()"
     >
-      <span v-if="item.icon" v-html="item.icon" />
+      <span v-if="item.icon" class="plugin-icon">{{ item.icon }}</span>
       <span>{{ item.label }}</span>
     </button>
   </div>
@@ -22,3 +22,10 @@ import { getPluginRegistry } from '../registry'
 const registry = getPluginRegistry()
 const items = registry.titleBarItems
 </script>
+
+<style scoped>
+.plugin-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+</style>

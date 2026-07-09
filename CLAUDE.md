@@ -18,7 +18,7 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 
 ---
 
-## Code Map
+<!-- ## Code Map
 
 各项目的完整目录结构和模块索引请参阅对应的 code-map 文档：
 
@@ -37,7 +37,7 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 - 理解架构 / 分析项目组成
 - 修改某模块前需要了解上下文
 
----
+--- -->
 
 ## Rust Backend Guidelines
 

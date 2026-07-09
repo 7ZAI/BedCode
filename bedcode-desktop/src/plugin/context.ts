@@ -154,7 +154,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       return disposable
     },
     registerFileHandler(handler: FileHandlerDescriptor): Disposable {
-      requirePermission('ui.registerSidebarPanel')
+      requirePermission('ui.registerFileHandler')
       const registry = getPluginRegistry()
       const disposable = registry.registerFileHandler(info.id, handler)
       disposables.push(disposable)

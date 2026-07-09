@@ -59,6 +59,16 @@ export interface PluginContributes {
   fileHandlers: FileHandlerContribution[]
   /** 配置声明 */
   configuration?: PluginConfiguration
+  /** 生命周期钩子声明 */
+  lifecycle?: LifecycleContribution
+}
+
+/** 生命周期扩展点声明 */
+export interface LifecycleContribution {
+  /** 是否注册 onStartup 回调 */
+  onStartup?: boolean
+  /** 是否注册 onShutdown 回调 */
+  onShutdown?: boolean
 }
 
 /** 命令扩展点 */

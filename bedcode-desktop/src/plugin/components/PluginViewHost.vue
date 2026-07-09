@@ -14,7 +14,7 @@
  *
  * 解析插件注册的视图组件并提供 PluginContext 给子组件树
  */
-import { computed, provide } from 'vue'
+import { computed, watchEffect, provide } from 'vue'
 import { getPluginRegistry } from '../registry'
 
 const props = defineProps<{
@@ -24,12 +24,13 @@ const props = defineProps<{
 
 const registry = getPluginRegistry()
 
-// 从 registry 获取插件上下文，provide 给组件树
-// 插件组件通过 inject('pluginContext') 获取
-const context = registry.getContext(props.pluginId)
-if (context) {
-  provide('pluginContext', context)
-}
+// 响应式 provide：插件 context 可能在组件挂载后才设置（懒激活场景）
+watchEffect(() => {
+  const context = registry.getContext(props.pluginId)
+  if (context) {
+    provide('pluginContext', context)
+  }
+})
 
 const resolvedComponent = computed(() =>
   registry.getViewComponent(props.pluginId, props.viewId)

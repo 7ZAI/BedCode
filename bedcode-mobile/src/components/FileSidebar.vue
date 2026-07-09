@@ -129,12 +129,14 @@
           </div>
         </div>
         <div class="settings-panel-section">
-          <label class="settings-panel-label">{{ t('mobile.file.filterDirs') }}</label>
-          <input
+          <textarea
             v-model="tempFilterText"
-            class="settings-panel-input"
+            class="settings-panel-input settings-panel-textarea"
             placeholder="node_modules, target, .git"
-          />
+            rows="2"
+            @focus="onSettingsInputFocus"
+            @blur="onSettingsInputBlur"
+          ></textarea>
         </div>
         <div class="settings-panel-actions">
           <button class="settings-panel-btn cancel" @click="cancelSettingsPanel">{{ t('common.button.cancel') }}</button>
@@ -230,8 +232,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'file-select': [name: string, path: string, isDiff: boolean]
+  'settings-input-focus': [focused: boolean]
 }>()
-
 const { t } = useI18n()
 const { isLandscape } = useOrientation()
 const toast = useToast()
@@ -434,6 +436,14 @@ async function handleDiff() {
   }
 }
 
+function onSettingsInputFocus() {
+  emit('settings-input-focus', true)
+}
+
+function onSettingsInputBlur() {
+  emit('settings-input-focus', false)
+}
+
 function toggleSettings() {
   if (showSettingsPanel.value) {
     cancelSettingsPanel()
@@ -447,9 +457,9 @@ function toggleSettings() {
 }
 
 function cancelSettingsPanel() {
+  emit('settings-input-focus', false)
   showSettingsPanel.value = false
 }
-
 function confirmSettingsPanel() {
   const newSettings: SidebarSettings = {
     defaultExpanded: tempDefaultExpanded.value,
@@ -459,9 +469,11 @@ function confirmSettingsPanel() {
       .filter(Boolean),
     fontSize: tempFontSize.value,
   }
+  emit('settings-input-focus', false)
   updateSettings(newSettings)
   showSettingsPanel.value = false
 }
+
 
 async function handleFileClick(name: string, path: string) {
   if (props.mode === 'emit') {
@@ -479,12 +491,17 @@ async function handleFileClick(name: string, path: string) {
   fileLoading.value = true
   try {
     if (isDiffMode.value) {
-      const { httpGetFileDiff } = useHttpApi()
-      const result = await httpGetFileDiff(props.sessionId, path)
-      if (result.code !== 0 || !result.data) {
-        throw new Error(result.message || t('mobile.file.fetchDiffFailed'))
+      const { httpGetFileDiff, httpGetFileContent } = useHttpApi()
+      // 同时获取 diff 和完整文件内容，以便显示全部行
+      const [diffResult, contentResult] = await Promise.all([
+        httpGetFileDiff(props.sessionId, path),
+        httpGetFileContent(props.sessionId, path),
+      ])
+      if (diffResult.code !== 0 || !diffResult.data) {
+        throw new Error(diffResult.message || t('mobile.file.fetchDiffFailed'))
       }
-      diffLines.value = result.data.lines
+      diffLines.value = diffResult.data.lines
+      fileContent.value = (contentResult.code === 0 && contentResult.data) ? contentResult.data.content : ''
     } else {
       const { httpGetFileContent } = useHttpApi()
       const result = await httpGetFileContent(props.sessionId, path)
@@ -872,6 +889,16 @@ onUnmounted(() => {
 .settings-panel-input::placeholder {
   color: var(--mobile-text-disabled);
 }
+
+.settings-panel-textarea {
+  resize: none;
+  line-height: 1.4;
+  min-height: 3rem;
+  font-family: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 
 /* Font Size Slider */
 .font-size-value {

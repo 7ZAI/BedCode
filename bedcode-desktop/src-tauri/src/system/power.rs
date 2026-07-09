@@ -1,6 +1,6 @@
 //! Power Manager
 //!
-//! 管理系统休眠阻止 - 服务器运行时阻止系统进入休眠状态
+//! 管理系统休眠阻止 - 服务器运行时阻止系统进入休眠状态，但允许屏幕熄灭
 //! 使用 nosleep crate 跨平台实现（Windows: PowerCreateRequest, macOS: IOPMAssertion, Linux: systemd-inhibit）
 
 use nosleep::{NoSleep, NoSleepType};
@@ -51,7 +51,7 @@ impl PowerManager {
 
     /// 阻止系统休眠
     ///
-    /// 服务器启动时调用，阻止显示器休眠和系统休眠
+    /// 服务器启动时调用，阻止系统休眠但允许屏幕熄灭
     /// 如果用户设置关闭了此功能，则不执行任何操作
     pub fn enable(&self) {
         if !self.is_enabled() {
@@ -77,15 +77,15 @@ impl PowerManager {
         }
 
         if let Some(ref mut ns) = inner.nosleep {
-            // PreventUserIdleDisplaySleep 同时阻止显示器休眠和系统休眠
-            // 服务器需要保持网络连接，显示器也需要保持唤醒以显示状态
-            match ns.start(NoSleepType::PreventUserIdleDisplaySleep) {
+            // PreventUserIdleSystemSleep 只阻止系统休眠，允许屏幕熄灭
+            // 服务器需要保持网络连接和后台进程运行，但无需保持屏幕常亮
+            match ns.start(NoSleepType::PreventUserIdleSystemSleep) {
                 Ok(()) => {
                     inner.active = true;
-                    tracing::info!("PowerManager: system sleep prevention enabled");
+                    tracing::info!("PowerManager: system sleep prevention enabled (display sleep allowed)");
                 }
                 Err(e) => {
-                    tracing::error!("PowerManager: failed to prevent display sleep: {}", e);
+                    tracing::error!("PowerManager: failed to prevent system sleep: {}", e);
                 }
             }
         }

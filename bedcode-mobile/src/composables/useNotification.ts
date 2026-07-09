@@ -14,14 +14,22 @@ import { usePlatform } from '@/composables/usePlatform'
 function shouldAlertForStatus(
   status: string,
   mode: 'manual' | 'auto',
-  notifyOnWaiting: boolean
+  notifyOnWaiting: boolean,
+  vibrate: boolean,
+  soundOnTaskComplete: boolean
 ): boolean {
+  // 震动和提示音都关闭时，始终静默
+  if (!vibrate && !soundOnTaskComplete) return false
+
   if (mode === 'manual') {
     if (status === 'asking') return notifyOnWaiting
-    return ['completed', 'interrupted'].includes(status)
+    // completed 状态受 soundOnTaskComplete 控制
+    if (status === 'completed') return soundOnTaskComplete
+    return ['interrupted'].includes(status)
   }
-  // 自动模式：仅 completed、interrupted
-  return ['completed', 'interrupted'].includes(status)
+  // 自动模式：completed 受 soundOnTaskComplete 控制，interrupted 始终提醒
+  if (status === 'completed') return soundOnTaskComplete
+  return ['interrupted'].includes(status)
 }
 
 /** 读取移动端设置 */
@@ -153,7 +161,9 @@ export function useNotification() {
     const shouldAlert = shouldAlertForStatus(
       params.taskStatus,
       mode,
-      settings.notifyOnWaiting ?? true
+      settings.notifyOnWaiting ?? true,
+      settings.vibrate ?? true,
+      settings.soundOnTaskComplete ?? true
     )
 
     const body = buildTaskBody(params.taskStatus, params.taskReason)

@@ -86,7 +86,7 @@ export function useTerminalScroll(
   })
 
   const xtermContainerStyle = computed(() => {
-    if (shortcutsPanelHeight.value <= 0) return {}
+    // 始终包含 transition，确保面板收起时 xterm 也能平滑回落
     return {
       transform: `translateY(-${shortcutsPanelHeight.value}px)`,
       transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',

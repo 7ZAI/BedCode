@@ -109,6 +109,25 @@ pub struct PluginContributes {
     /// 配置声明
     #[serde(default)]
     pub configuration: Option<PluginConfiguration>,
+    /// 生命周期钩子声明
+    #[serde(default)]
+    pub lifecycle: Option<LifecycleContribution>,
+}
+
+/// 生命周期扩展点声明
+///
+/// 插件通过此声明告知宿主它需要接收应用启动/关闭事件。
+/// Rust 插件通过 `BedcodePlugin` trait 的 `on_startup`/`on_shutdown` 方法实现回调；
+/// TS-only 插件通过前端事件 `lifecycle:startup`/`lifecycle:shutdown` 接收。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleContribution {
+    /// 是否注册 onStartup 回调
+    #[serde(default)]
+    pub on_startup: bool,
+    /// 是否注册 onShutdown 回调
+    #[serde(default)]
+    pub on_shutdown: bool,
 }
 
 /// 命令扩展点

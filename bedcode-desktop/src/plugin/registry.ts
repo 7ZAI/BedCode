@@ -82,7 +82,6 @@ class PluginRegistryClass {
   /** 响应式数据供 Vue 组件使用 */
   readonly sidebarViews: Ref<RegisteredView[]> = ref([])
   readonly toolboxViews: Ref<RegisteredView[]> = ref([])
-  readonly statusbarViews: Ref<RegisteredView[]> = ref([])
   readonly statusbarItems: Ref<RegisteredStatusBarItem[]> = ref([])
   readonly inputExts: Ref<RegisteredInputExtension[]> = ref([])
   readonly terminalToolbarItems: Ref<RegisteredTerminalToolbarItem[]> = ref([])
@@ -302,7 +301,6 @@ class PluginRegistryClass {
     const views = [...this.views.values()]
     this.sidebarViews.value = views.filter(v => v.viewType === 'sidebar')
     this.toolboxViews.value = views.filter(v => v.viewType === 'toolbox')
-    this.statusbarViews.value = views.filter(v => v.viewType === 'statusbar')
   }
 
   private updateReactiveStatusBar() {

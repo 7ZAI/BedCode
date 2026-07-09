@@ -40,6 +40,21 @@ pub trait BedcodePlugin: Send + Sync + 'static {
     fn terminal_handlers() -> Vec<Box<dyn TerminalHandler>> {
         vec![]
     }
+
+    /// 应用启动完成回调（可选，默认为空操作）
+    ///
+    /// 在所有核心服务初始化完成后触发，插件可在此执行启动后的初始化逻辑。
+    fn on_startup() -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
+
+    /// 应用即将关闭回调（可选，默认为空操作）
+    ///
+    /// 在插件 deactivate 之前触发，用于执行插件特定的清理逻辑。
+    /// 此时插件仍处于激活状态，权限和注册表条目仍可用。
+    fn on_shutdown() -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async {})
+    }
 }
 
 /// inventory 提交类型
@@ -50,6 +65,8 @@ pub struct BedcodePluginEntry {
     pub deactivate: fn(RustPluginContext) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>,
     pub register_commands: fn() -> Vec<PluginCommand>,
     pub terminal_handlers: fn() -> Vec<Box<dyn TerminalHandler>>,
+    pub on_startup: fn() -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    pub on_shutdown: fn() -> Pin<Box<dyn Future<Output = ()> + Send>>,
 }
 
 // inventory crate 需要的 submit! 宏目标类型
@@ -72,6 +89,8 @@ macro_rules! submit_plugin {
                 deactivate: <$plugin_type>::deactivate,
                 register_commands: <$plugin_type>::register_commands,
                 terminal_handlers: <$plugin_type>::terminal_handlers,
+                on_startup: <$plugin_type>::on_startup,
+                on_shutdown: <$plugin_type>::on_shutdown,
             }
         }
     };

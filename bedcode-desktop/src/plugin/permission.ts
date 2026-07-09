@@ -15,6 +15,7 @@ const VALID_PERMISSIONS = new Set([
   'ui:toolbox',
   'ui:statusbar',
   'ui:input',
+  'ui:fileHandler',
   'network:http',
   'storage',
 ])
@@ -29,6 +30,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ui:toolbox': ['ui.registerToolboxPage'],
   'ui:statusbar': ['ui.registerStatusBarItem', 'ui.registerTitleBarItem'],
   'ui:input': ['ui.registerInputExtension', 'ui.registerTerminalToolbarItem'],
+  'ui:fileHandler': ['ui.registerFileHandler'],
   'network:http': ['http.registerEndpoint'],
   'storage': ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
 }

@@ -125,7 +125,7 @@ pub fn run() {
     let app_start = AppStartTime(std::time::Instant::now());
     let start = app_start.0;
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -374,13 +374,30 @@ pub fn run() {
 
             let window = app_handle.get_webview_window("main").expect("Failed to get main window");
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { .. } = event {
-                    tracing::info!("Window close requested, shutting down...");
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // 检查生命周期钩子是否允许关闭（如存在运行中会话则阻止）
+                    let should_close = tauri::async_runtime::block_on(async {
+                        system::lifecycle::lifecycle_registry()
+                            .run_window_close_hooks()
+                            .await
+                    });
+                    if !should_close {
+                        api.prevent_close();
+                    }
                 }
             });
 
             let init_elapsed = start.elapsed();
             tracing::info!("BedCode Desktop initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
+
+            // 注册核心模块的生命周期钩子（Shutdown/WindowClose）
+            system::lifecycle::register_core_lifecycle_hooks();
+            system::lifecycle::register_window_close_hooks();
+
+            // 触发 Startup 钩子
+            tauri::async_runtime::spawn(async move {
+                system::lifecycle::lifecycle_registry().run_startup_hooks().await;
+            });
 
             // 发送 Token 配置结果到前端
             let app_handle_for_plugin = app_handle_arc.clone();
@@ -472,8 +489,27 @@ pub fn run() {
             commands::mdns::mdns_stop_advertise,
             commands::mdns::mdns_is_advertising,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 使用 .build() + .run() 替代 .run()，以接入 Tauri RunEvent 循环
+    // RunEvent::ExitRequested 是执行优雅关闭的最后时机
+    app.run(move |_app_handle, event| {
+        match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                tracing::info!("BedCode Desktop exit requested, running shutdown hooks...");
+                tauri::async_runtime::block_on(async {
+                    system::lifecycle::lifecycle_registry()
+                        .run_shutdown_hooks()
+                        .await;
+                });
+            }
+            tauri::RunEvent::Exit { .. } => {
+                tracing::info!("BedCode Desktop exited");
+            }
+            _ => {}
+        }
+    });
 }
 
 /// Setup system tray

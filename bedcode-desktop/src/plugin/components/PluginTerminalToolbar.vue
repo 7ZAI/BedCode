@@ -9,7 +9,7 @@
       :title="item.label"
       @click="item.onClick?.()"
     >
-      <span v-if="item.icon" v-html="item.icon" class="w-4 h-4" />
+      <span v-if="item.icon" class="w-4 h-4 plugin-icon">{{ item.icon }}</span>
       <span v-else class="text-xs">{{ item.label }}</span>
     </Button>
   </template>
@@ -25,3 +25,10 @@ import Button from '@/components/Button.vue'
 const registry = getPluginRegistry()
 const items = registry.terminalToolbarItems
 </script>
+
+<style scoped>
+.plugin-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+</style>

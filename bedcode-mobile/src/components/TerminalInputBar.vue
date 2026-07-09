@@ -633,11 +633,9 @@ function toggleShortcuts() {
       emit('shortcutsPanelToggle', h)
     })
   } else {
-    // 延迟通知终端收起，与面板 leave 动画同步（0.25s），
-    // 避免终端提前跳回而面板还在滑出
-    setTimeout(() => {
-      emit('shortcutsPanelToggle', 0)
-    }, 250)
+    // 立即通知终端收起，xterm 的 transition 会与面板 leave 动画同步
+    // 两者都是 0.25s cubic-bezier(0.4, 0, 0.2, 1)，视觉上同步下落
+    emit('shortcutsPanelToggle', 0)
   }
 }
 

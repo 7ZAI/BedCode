@@ -119,8 +119,10 @@ function onTouchStart(e: TouchEvent) {
   touchStartY = e.touches[0].clientY
   longPressTimer = setTimeout(() => {
     longPressTriggered = true
-    // 触觉反馈
-    if (navigator.vibrate) {
+    // 触觉反馈（受 vibrate 设置控制）
+    const saved = localStorage.getItem('mobile-settings')
+    const vibrateEnabled = saved ? JSON.parse(saved).vibrate ?? true : true
+    if (vibrateEnabled && navigator.vibrate) {
       navigator.vibrate(30)
     }
     emit('long-press', props.node.name, props.node.path ?? props.node.name)

@@ -13,7 +13,7 @@ static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::ne
 static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.port", "WebSocket 服务器端口"),
     ("network.auto_start", "应用启动时是否自动开启服务器"),
-    ("network.prevent_sleep", "服务器运行时阻止系统休眠"),
+    ("network.prevent_sleep", "服务器运行时阻止系统休眠（允许屏幕熄灭）"),
     ("network.workers", "Actix Web worker 线程数（0 = CPU 核心数）"),
     ("network.keep_alive_secs", "HTTP Keep-Alive 超时秒数（0 = 禁用）"),
     ("network.client_request_timeout_secs", "客户端请求头读取超时秒数"),
@@ -136,7 +136,7 @@ pub struct NetworkConfig {
     pub port: u16,
     /// 应用启动时是否自动开启服务器
     pub auto_start: bool,
-    /// 服务器运行时阻止系统休眠
+    /// 服务器运行时阻止系统休眠（允许屏幕熄灭）
     #[serde(default = "default_prevent_sleep")]
     pub prevent_sleep: bool,
     /// Actix Web worker 线程数（0 = CPU 核心数）

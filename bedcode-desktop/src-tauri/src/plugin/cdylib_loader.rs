@@ -9,7 +9,8 @@ use std::path::Path;
 
 /// cdylib 插件导出的类型化函数指针
 ///
-/// 所有 cdylib 插件必须提供这 5 个导出符号，否则加载失败
+/// 5 个必需导出符号 + 2 个可选生命周期符号。
+/// 可选符号不存在时为 None，生命周期回调时跳过。
 pub struct CdylibExports {
     /// 激活插件，传入 HostContext 供插件调用宿主 API
     pub activate: unsafe extern "C" fn(*const crate::plugin::host_context::HostContext) -> i32,
@@ -21,6 +22,10 @@ pub struct CdylibExports {
     pub on_terminal_input: unsafe extern "C" fn(*const c_char) -> *mut c_char,
     /// 终端输出回调，接收输出文本，返回处理后的文本（或原文本指针表示不修改）
     pub on_terminal_output: unsafe extern "C" fn(*const c_char) -> *mut c_char,
+    /// 应用启动完成回调（可选，不存在则为 None）
+    pub on_startup: Option<unsafe extern "C" fn()>,
+    /// 应用即将关闭回调（可选，不存在则为 None）
+    pub on_shutdown: Option<unsafe extern "C" fn()>,
 }
 
 /// 已加载的 cdylib 插件
@@ -100,7 +105,7 @@ impl CdylibLoader {
     }
 }
 
-/// 从已加载的动态库中解析所有必需的导出符号
+/// 从已加载的动态库中解析所有必需的导出符号 + 可选的生命周期符号
 ///
 /// # Safety
 /// 调用者必须确保 library 在返回的函数指针使用期间保持存活
@@ -116,6 +121,16 @@ unsafe fn load_exports(library: &Library) -> crate::Result<CdylibExports> {
     let on_terminal_output: Symbol<'_, unsafe extern "C" fn(*const c_char) -> *mut c_char> =
         load_symbol(library, b"bedcode_plugin_on_terminal_output")?;
 
+    // 可选的生命周期符号：不存在时为 None
+    let on_startup: Option<unsafe extern "C" fn()> = library
+        .get(b"bedcode_plugin_on_startup")
+        .ok()
+        .map(|s: Symbol<'_, unsafe extern "C" fn()>| *s);
+    let on_shutdown: Option<unsafe extern "C" fn()> = library
+        .get(b"bedcode_plugin_on_shutdown")
+        .ok()
+        .map(|s: Symbol<'_, unsafe extern "C" fn()>| *s);
+
     // 将 Symbol 解引用为函数指针 — Library 的生命周期由 LoadedCdylibPlugin.library 保证
     Ok(CdylibExports {
         activate: *activate,
@@ -123,6 +138,8 @@ unsafe fn load_exports(library: &Library) -> crate::Result<CdylibExports> {
         invoke_command: *invoke_command,
         on_terminal_input: *on_terminal_input,
         on_terminal_output: *on_terminal_output,
+        on_startup,
+        on_shutdown,
     })
 }
 

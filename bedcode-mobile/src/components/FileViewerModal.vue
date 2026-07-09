@@ -179,7 +179,7 @@ async function doHighlight() {
   const lang = getLangByFilename(props.filename)
   const theme = resolvedTheme.value
   if (props.diffLines && props.diffLines.length > 0) {
-    await highlightDiff(props.diffLines, lang, theme)
+    await highlightDiff(props.diffLines, lang, theme, props.code)
   } else if (props.code) {
     await highlight(props.code, lang, theme)
   }
