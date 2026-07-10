@@ -125,6 +125,7 @@ export default {
       selectMode: '选择模式',
       refreshed: '已刷新格式',
       refreshFailed: '刷新格式失败',
+      scrollToBottom: '回到底部',
     },
     pairing: {
       title: '输入配对码',

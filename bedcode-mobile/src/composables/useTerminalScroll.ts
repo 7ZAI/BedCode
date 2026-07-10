@@ -5,7 +5,7 @@
  * 不拥有 Terminal/FitAddon 实例，通过参数接收 ref。
  */
 
-import { ref, reactive, computed, nextTick, type Ref } from 'vue'
+import { ref, reactive, computed, nextTick, watch, type Ref } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { writeClipboardText } from '@/utils/clipboard'
@@ -60,6 +60,9 @@ export function useTerminalScroll(
   // rAF 节流滚动
   let pendingScrollRaf = 0
   let pendingScrollLine = -1
+  // 渲染帧同步：确保 scrollToLine 只在 xterm 渲染完成后执行
+  // WebGL 渲染器双缓冲在渲染未完成时切换 viewport 会导致新旧帧同时可见
+  let renderSyncRaf = 0
 
   // ==================== Computed ====================
 
@@ -85,12 +88,28 @@ export function useTerminalScroll(
     }
   })
 
+  // xterm-container 的 transition 只在面板高度动画期间启用
+  // 持续开启会导致 xterm-container 被 GPU 提升为合成层
+  // 触摸滚动时 WebGL canvas 在合成层上更新不同步，产生重影
+  const xtermTransitionActive = ref(false)
+  let xtermTransitionTimer: ReturnType<typeof setTimeout> | null = null
+
   const xtermContainerStyle = computed(() => {
-    // 始终包含 transition，确保面板收起时 xterm 也能平滑回落
+    const height = shortcutsPanelHeight.value
     return {
-      transform: `translateY(-${shortcutsPanelHeight.value}px)`,
-      transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+      transform: `translateY(-${height}px)`,
+      transition: xtermTransitionActive.value ? 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)' : 'none',
     }
+  })
+
+  // 监听面板高度变化，临时启用 transition，动画结束后移除
+  watch(shortcutsPanelHeight, () => {
+    xtermTransitionActive.value = true
+    if (xtermTransitionTimer) clearTimeout(xtermTransitionTimer)
+    xtermTransitionTimer = setTimeout(() => {
+      xtermTransitionActive.value = false
+      xtermTransitionTimer = null
+    }, 300)
   })
 
   // ==================== Scroll Helpers ====================
@@ -124,6 +143,8 @@ export function useTerminalScroll(
     pendingScrollLine = -1
 
     currentLine.value = targetLine
+    // 直接同步调用，scrollToBottom 通常不在高频调用场景
+    // 且需要立即响应（如新输出到达时）
     terminalRef.value.scrollToLine(targetLine)
     isUserScrolling.value = false
   }
@@ -139,12 +160,18 @@ export function useTerminalScroll(
     currentLine.value = clampedLine
     pendingScrollLine = clampedLine
 
+    // 渲染帧同步调度：
+    // WebGL 渲染器使用双缓冲，scrollToLine 同步修改 buffer ydisp 但渲染异步执行
+    // 如果在渲染未完成时再次 scrollToLine，新旧帧内容会同时可见（重影）
+    // 使用 rAF 节流确保每帧最多执行一次 scrollToLine，
+    // 并在 scrollToLine 后等待渲染完成再允许下一次滚动
     if (!pendingScrollRaf) {
       pendingScrollRaf = requestAnimationFrame(() => {
         pendingScrollRaf = 0
         if (terminalRef.value && pendingScrollLine >= 0) {
-          terminalRef.value.scrollToLine(pendingScrollLine)
+          const targetLine = pendingScrollLine
           pendingScrollLine = -1
+          terminalRef.value.scrollToLine(targetLine)
         }
       })
     }
@@ -332,6 +359,8 @@ export function useTerminalScroll(
 
       if (linesPerFrame !== 0) {
         touchState.fractionalLine = totalLines - linesPerFrame
+        // 直接更新滚动目标行，不立即调用 scrollToLine
+        // syncViewportToLine 内部的 rAF 节流确保每帧最多执行一次 scrollToLine
         syncViewportToLine(currentLine.value + linesPerFrame)
       } else {
         touchState.fractionalLine = totalLines
@@ -500,6 +529,15 @@ export function useTerminalScroll(
       viewport.style.pointerEvents = 'none'
     }
 
+    // 禁用 xterm-scrollable-element 的触摸和指针事件
+    // xterm 新版本使用 SmoothScrollableElement 管理 viewport 滚动
+    // 移动端由自定义触摸滚动接管，必须禁用 xterm 内部的触摸交互
+    const scrollableElement = terminalRef.value.element.querySelector('.xterm-scrollable-element') as HTMLElement
+    if (scrollableElement) {
+      scrollableElement.style.touchAction = 'none'
+      scrollableElement.style.pointerEvents = 'none'
+    }
+
     cellHeight.value = computeCellHeight()
 
     if (scrollContainerRef.value) {
@@ -562,6 +600,11 @@ export function useTerminalScroll(
     isUserScrolling.value = false
     scrollbarVisible.value = false
 
+    if (xtermTransitionTimer) {
+      clearTimeout(xtermTransitionTimer)
+      xtermTransitionTimer = null
+    }
+
     if (touchState.hideTimer) {
       clearTimeout(touchState.hideTimer)
       touchState.hideTimer = null
@@ -573,6 +616,10 @@ export function useTerminalScroll(
     if (pendingScrollRaf) {
       cancelAnimationFrame(pendingScrollRaf)
       pendingScrollRaf = 0
+    }
+    if (renderSyncRaf) {
+      cancelAnimationFrame(renderSyncRaf)
+      renderSyncRaf = 0
     }
     pendingScrollLine = -1
 

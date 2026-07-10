@@ -46,6 +46,18 @@
                   :style="scrollbarThumbStyle"
                 ></div>
               </div>
+              <transition name="scroll-indicator">
+                <button
+                  v-if="isUserScrolling && !isSelectionMode"
+                  class="scroll-to-bottom-btn"
+                  @click="scrollToBottom"
+                  :title="t('mobile.terminal.scrollToBottom')"
+                >
+                  <svg class="scroll-to-bottom-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                  </svg>
+                </button>
+              </transition>
               <transition name="selection-bar">
                 <div v-if="isSelectionMode && hasSelection && selectionTouchEnded" class="selection-action-bar" :style="selectionBarStyle">
                   <button class="selection-action-btn" @click="copySelection">
@@ -414,15 +426,19 @@ const selectionBarStyle = computed(() => {
 // ==================== Watchers ====================
 
 // 键盘偏移变化时的处理
-// 动画期间临时启用 will-change 保证流畅，动画结束后移除避免 xterm 重影
+// 动画期间临时启用 will-change + transition 保证流畅，动画结束后移除避免 xterm 重影
+// 持续开启 transition 会导致 movable-area 被 GPU 提升为合成层
+// 触摸滚动时 WebGL canvas 在合成层上更新不同步，产生重影
 watch(keyboardOffset, (newVal, oldVal) => {
   if (movableAreaRef.value) {
     movableAreaRef.value.style.willChange = 'transform'
+    movableAreaRef.value.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
   }
 
   setTimeout(() => {
     if (movableAreaRef.value) {
       movableAreaRef.value.style.willChange = 'auto'
+      movableAreaRef.value.style.transition = 'none'
     }
   }, 300)
 })
@@ -475,12 +491,42 @@ async function initTerminal() {
   term.loadAddon(addon)
   term.loadAddon(new WebLinksAddon())
 
-  // WebGL renderer — 后台加载
+  // WebGL renderer — 后台加载，带上下文丢失恢复
+  let webglAddon: InstanceType<typeof import('@xterm/addon-webgl').WebglAddon> | null = null
   try {
     const { WebglAddon } = await import('@xterm/addon-webgl')
-    const webglAddon = new WebglAddon()
-    term.loadAddon(webglAddon)
-    webglAddon.onContextLoss(() => {})
+    const addon = new WebglAddon()
+    addon.onContextLoss(() => {
+      console.warn('[TerminalView] WebGL context lost, disposing renderer')
+      addon.dispose()
+      webglAddon = null
+      // 恢复 DOM 光标
+      term.element?.classList.remove('xterm-hidden-cursor')
+      // 延迟后尝试重建 WebGL 渲染器
+      setTimeout(() => {
+        if (terminalRef.value !== term || webglAddon) return
+        try {
+          const newAddon = new WebglAddon()
+          newAddon.onContextLoss(() => {
+            console.warn('[TerminalView] WebGL context lost again')
+            newAddon.dispose()
+            if (webglAddon === newAddon) webglAddon = null
+            term.element?.classList.remove('xterm-hidden-cursor')
+          })
+          term.loadAddon(newAddon)
+          webglAddon = newAddon
+          term.element?.classList.add('xterm-hidden-cursor')
+          console.info('[TerminalView] WebGL context recovered')
+        } catch (e) {
+          console.warn('[TerminalView] WebGL recovery failed, using canvas fallback:', e)
+          webglAddon = null
+        }
+      }, 1000)
+    })
+    term.loadAddon(addon)
+    webglAddon = addon
+    // WebGL 渲染器激活后隐藏 DOM 层光标，避免双光标
+    term.element?.classList.add('xterm-hidden-cursor')
   } catch {
     // WebGL 不可用时回退到 canvas 渲染器
   }

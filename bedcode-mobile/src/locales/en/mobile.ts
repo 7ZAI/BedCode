@@ -125,6 +125,7 @@ export default {
       selectMode: 'Select',
       refreshed: 'Format refreshed',
       refreshFailed: 'Refresh failed',
+      scrollToBottom: 'Scroll to bottom',
     },
     pairing: {
       title: 'Enter Pairing Code',
