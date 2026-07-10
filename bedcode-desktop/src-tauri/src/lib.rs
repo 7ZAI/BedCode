@@ -29,13 +29,9 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// 初始化日志系统
-fn init_logging(app_handle: &tauri::AppHandle) -> Result<()> {
-    init_logging_desktop(app_handle)
-}
-
-fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
-    // LogTracer 桥接由 try_init() 自动处理，无需手动初始化
-
+///
+/// 接受 LogConfig 参数，所有日志行为均可通过配置文件控制
+fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogConfig) -> Result<()> {
     let log_dir = app_handle
         .path()
         .app_log_dir()
@@ -43,25 +39,41 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
 
     std::fs::create_dir_all(&log_dir)?;
 
-    // Error 日志文件：只记录 ERROR 及以上级别
-    let error_appender = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
+    // 解析轮转策略
+    let rotation = match log_config.rotation.as_str() {
+        "hourly" => tracing_appender::rolling::Rotation::HOURLY,
+        "never" => tracing_appender::rolling::Rotation::NEVER,
+        _ => tracing_appender::rolling::Rotation::DAILY,
+    };
+
+    // max_files: 0 表示不限制，不调用 .max_log_files() 让文件无限增长
+    // tracing_appender 的 max_log_files 接受 usize，无"不限制"选项，只能通过不调用来实现
+
+    // Error 日志文件：固定 ERROR 级别，始终记录最严重问题
+    let mut error_builder = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(rotation.clone())
         .filename_prefix("error")
-        .filename_suffix("log")
-        .max_log_files(7)
+        .filename_suffix("log");
+    if log_config.max_files > 0 {
+        error_builder = error_builder.max_log_files(log_config.max_files);
+    }
+    let error_appender = error_builder
         .build(&log_dir)
         .expect("Failed to create error log file appender");
 
-    // 运行时日志文件：记录 INFO 及以上级别
-    let runtime_appender = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
+    // 运行时日志文件：级别由 log.file_level 控制
+    let mut runtime_builder = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(rotation)
         .filename_prefix("runtime")
-        .filename_suffix("log")
-        .max_log_files(7)
+        .filename_suffix("log");
+    if log_config.max_files > 0 {
+        runtime_builder = runtime_builder.max_log_files(log_config.max_files);
+    }
+    let runtime_appender = runtime_builder
         .build(&log_dir)
         .expect("Failed to create runtime log file appender");
 
-    // Error 日志层：只接收 ERROR 及以上
+    // Error 日志层：固定 ERROR 及以上
     let error_layer = tracing_subscriber::fmt::layer()
         .with_writer(error_appender)
         .with_ansi(false)
@@ -70,21 +82,23 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
         .with_line_number(true)
         .with_filter(EnvFilter::new("error"));
 
-    // 运行时日志层：INFO 及以上
+    // 运行时日志层：级别由配置控制
+    let file_level = log_config.file_level.as_str();
     let runtime_layer = tracing_subscriber::fmt::layer()
         .with_writer(runtime_appender)
         .with_ansi(false)
         .with_target(true)
         .with_thread_ids(false)
         .with_line_number(true)
-        .with_filter(EnvFilter::new("info"));
+        .with_filter(EnvFilter::new(file_level));
 
-    #[cfg(debug_assertions)]
-    {
-        // Debug 模式：控制台输出，支持 RUST_LOG 环境变量动态控制
-        // 默认 bedcode_lib=debug,actix_web=info；可通过 RUST_LOG 覆盖
+    // 控制台输出逻辑
+    let should_add_console = cfg!(debug_assertions) || log_config.console_in_release;
+
+    if should_add_console {
+        // RUST_LOG 环境变量优先级最高，其次使用配置值
         let console_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("bedcode_lib=debug,actix_web=info,actix_http=info"));
+            .unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter));
         let console_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stdout)
             .with_ansi(true)
@@ -98,10 +112,7 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
             .with(console_layer)
             .try_init()
             .expect("Failed to set tracing subscriber");
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
+    } else {
         tracing_subscriber::registry()
             .with(error_layer)
             .with(runtime_layer)
@@ -110,6 +121,10 @@ fn init_logging_desktop(app_handle: &tauri::AppHandle) -> Result<()> {
     }
 
     tracing::info!("Logging initialized. Log directory: {:?}", log_dir);
+    tracing::info!(
+        "Log config: file_level={}, rotation={}, max_files={}, console_in_release={}",
+        log_config.file_level, log_config.rotation, log_config.max_files, log_config.console_in_release,
+    );
     tracing::info!("BedCode Desktop v{} starting...", env!("CARGO_PKG_VERSION"));
 
     Ok(())
@@ -133,7 +148,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(move |app| {
-            init_logging(app.handle())?;
             app.manage(app_start);
 
             let app_handle = app.handle();
@@ -155,17 +169,21 @@ pub fn run() {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         match std::fs::copy(&resource_path, &config_path) {
-                            Ok(_) => tracing::info!("Default config copied from resource to {:?}", config_path),
-                            Err(e) => tracing::warn!("Failed to copy default config: {}, using built-in defaults", e),
+                            Ok(_) => eprintln!("Default config copied from resource to {:?}", config_path),
+                            Err(e) => eprintln!("Failed to copy default config: {}, using built-in defaults", e),
                         }
                     }
                 }
             }
 
+            // 先加载配置，再初始化日志系统，使日志行为可配置
             let app_config = crate::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
-                tracing::warn!("Failed to load config, using defaults: {}", e);
+                eprintln!("Failed to load config, using defaults: {}", e);
                 crate::system::config::AppConfig::default()
             });
+
+            // 初始化日志系统（依赖已加载的 LogConfig）
+            init_logging(app.handle(), &app_config.log)?;
 
             // 初始化全局配置单例
             crate::system::config::AppConfig::init(app_config.clone());

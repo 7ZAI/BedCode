@@ -49,6 +49,11 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("terminal.flush_interval_ms", "输出缓冲刷新间隔（毫秒）- 合并多条输出减少 WebSocket 消息数"),
     ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 达到此大小立即刷新"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
+    ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
+    ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
+    ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
+    ("log.max_files", "日志文件最大保留数量（0 = 不限制）"),
+    ("log.console_in_release", "Release 模式是否启用控制台输出（调试用，默认关闭）"),
     ("plugin.token", "HTTP API 认证 token - 插件推送任务状态时需携带此 token，为空时跳过验证（开发模式）"),
 ];
 
@@ -102,6 +107,13 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "terminal.max_buffer_size",
         "terminal.read_buffer_size",
     ]),
+    ("日志配置", &[
+        "log.file_level",
+        "log.console_filter",
+        "log.rotation",
+        "log.max_files",
+        "log.console_in_release",
+    ]),
     ("插件配置", &[
         "plugin.token",
     ]),
@@ -124,6 +136,9 @@ pub struct AppConfig {
     /// 终端配置
     #[serde(default)]
     pub terminal: TerminalConfig,
+    /// 日志配置
+    #[serde(default)]
+    pub log: LogConfig,
     /// 插件配置
     #[serde(default)]
     pub plugin: PluginConfig,
@@ -343,6 +358,47 @@ impl Default for TerminalConfig {
     }
 }
 
+/// 日志配置
+///
+/// 控制日志级别、文件轮转策略、保留天数和控制台输出行为
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LogConfig {
+    /// 运行时日志文件级别（trace / debug / info / warn / error）
+    #[serde(default = "default_log_file_level")]
+    pub file_level: String,
+    /// 控制台日志过滤器
+    /// debug 构建始终启用控制台输出；release 构建需同时设置 console_in_release=true
+    /// 支持 tracing EnvFilter 语法，如 "bedcode_lib=debug,actix_web=info"
+    #[serde(default = "default_log_console_filter")]
+    pub console_filter: String,
+    /// 日志文件轮转策略（daily / hourly / never）
+    #[serde(default = "default_log_rotation")]
+    pub rotation: String,
+    /// 日志文件最大保留数量（0 = 不限制，但至少保留当前文件）
+    #[serde(default = "default_log_max_files")]
+    pub max_files: usize,
+    /// Release 模式是否启用控制台输出（调试用，默认关闭）
+    #[serde(default)]
+    pub console_in_release: bool,
+}
+
+fn default_log_file_level() -> String { "info".to_string() }
+fn default_log_console_filter() -> String { "bedcode_lib=debug,actix_web=info,actix_http=info".to_string() }
+fn default_log_rotation() -> String { "daily".to_string() }
+fn default_log_max_files() -> usize { 7 }
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            file_level: default_log_file_level(),
+            console_filter: default_log_console_filter(),
+            rotation: default_log_rotation(),
+            max_files: default_log_max_files(),
+            console_in_release: false,
+        }
+    }
+}
+
 /// 插件配置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginConfig {
@@ -368,6 +424,7 @@ impl Default for AppConfig {
             ui: UiConfig::default(),
             channels: ChannelsConfig::default(),
             terminal: TerminalConfig::default(),
+            log: LogConfig::default(),
             plugin: PluginConfig::default(),
         }
     }
@@ -496,6 +553,13 @@ impl AppConfig {
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
             },
+            log: LogConfig {
+                file_level: parse_value(props, "log.file_level", default_log_file_level()),
+                console_filter: parse_value(props, "log.console_filter", default_log_console_filter()),
+                rotation: parse_value(props, "log.rotation", default_log_rotation()),
+                max_files: parse_value(props, "log.max_files", default_log_max_files()),
+                console_in_release: parse_value(props, "log.console_in_release", false),
+            },
             plugin: PluginConfig {
                 token: parse_value(props, "plugin.token", String::new()),
             },
@@ -565,6 +629,11 @@ impl AppConfig {
         map.insert("terminal.flush_interval_ms".to_string(), self.terminal.flush_interval_ms.to_string());
         map.insert("terminal.max_buffer_size".to_string(), self.terminal.max_buffer_size.to_string());
         map.insert("terminal.read_buffer_size".to_string(), self.terminal.read_buffer_size.to_string());
+        map.insert("log.file_level".to_string(), self.log.file_level.clone());
+        map.insert("log.console_filter".to_string(), self.log.console_filter.clone());
+        map.insert("log.rotation".to_string(), self.log.rotation.clone());
+        map.insert("log.max_files".to_string(), self.log.max_files.to_string());
+        map.insert("log.console_in_release".to_string(), self.log.console_in_release.to_string());
         map.insert("plugin.token".to_string(), self.plugin.token.clone());
         map
     }
@@ -749,5 +818,55 @@ channels.output_broadcast_capacity=2048
         // 有效的 key 正常读取
         assert_eq!(config.network.port, 9999);
         // 已移除的 key 被忽略，不影响 AppConfig 结构
+    }
+
+    #[test]
+    fn test_log_config_defaults() {
+        let config = LogConfig::default();
+        assert_eq!(config.file_level, "info");
+        assert_eq!(config.console_filter, "bedcode_lib=debug,actix_web=info,actix_http=info");
+        assert_eq!(config.rotation, "daily");
+        assert_eq!(config.max_files, 7);
+        assert!(!config.console_in_release);
+    }
+
+    #[test]
+    fn test_log_config_from_properties() {
+        let mut props = HashMap::new();
+        props.insert("log.file_level".to_string(), "debug".to_string());
+        props.insert("log.console_filter".to_string(), "warn".to_string());
+        props.insert("log.rotation".to_string(), "hourly".to_string());
+        props.insert("log.max_files".to_string(), "14".to_string());
+        props.insert("log.console_in_release".to_string(), "true".to_string());
+        let config = AppConfig::from_properties(&props);
+        assert_eq!(config.log.file_level, "debug");
+        assert_eq!(config.log.console_filter, "warn");
+        assert_eq!(config.log.rotation, "hourly");
+        assert_eq!(config.log.max_files, 14);
+        assert!(config.log.console_in_release);
+    }
+
+    #[test]
+    fn test_log_config_roundtrip() {
+        let config = AppConfig::default();
+        let content = config.to_properties_string();
+        let props = parse_properties(&content);
+        let config2 = AppConfig::from_properties(&props);
+        assert_eq!(config.log.file_level, config2.log.file_level);
+        assert_eq!(config.log.console_filter, config2.log.console_filter);
+        assert_eq!(config.log.rotation, config2.log.rotation);
+        assert_eq!(config.log.max_files, config2.log.max_files);
+        assert_eq!(config.log.console_in_release, config2.log.console_in_release);
+    }
+
+    #[test]
+    fn test_log_config_in_properties_output() {
+        let config = AppConfig::default();
+        let content = config.to_properties_string();
+        assert!(content.contains("# ==================== 日志配置 ===================="));
+        assert!(content.contains("log.file_level=info"));
+        assert!(content.contains("log.rotation=daily"));
+        assert!(content.contains("log.max_files=7"));
+        assert!(content.contains("log.console_in_release=false"));
     }
 }
