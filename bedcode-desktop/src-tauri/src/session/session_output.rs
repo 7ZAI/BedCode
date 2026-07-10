@@ -5,6 +5,7 @@
 
 use crate::pty::PtyOutputEvent;
 use crate::system::config::AppConfig;
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -65,6 +66,32 @@ impl OutputCache for DefaultOutputCache {
     async fn len(&self) -> usize {
         let cache = self.cache.read().await;
         cache.values().map(Vec::len).sum()
+    }
+}
+
+// ==================== Output History Response ====================
+
+/// 历史回放响应（供桌面端终端窗口恢复使用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputHistoryResponse {
+    /// 队列中最早事件的序号
+    pub min_seq: u64,
+    /// 队列中最新事件的序号
+    pub max_seq: u64,
+    /// 历史事件列表（data 为 Base64 编码）
+    pub events: Vec<PtyOutputEvent>,
+}
+
+impl From<OutputEvent> for PtyOutputEvent {
+    fn from(e: OutputEvent) -> Self {
+        PtyOutputEvent::from_bytes(
+            e.session_id,
+            &e.data,
+            Utc.timestamp_millis_opt(e.timestamp).single().unwrap_or_default(),
+            e.is_waiting,
+            e.index as usize,
+        )
     }
 }
 
@@ -391,6 +418,24 @@ impl SessionOutputManager {
             .filter(|s| s.is_active())
             .count()
     }
+
+    /// 获取历史输出（供桌面端回放使用）
+    ///
+    /// 从 UnifiedOutputQueue 读取指定序号之后的全部事件，
+    /// 转换为 PtyOutputEvent 格式返回
+    pub async fn get_history(&self, start_seq: Option<u64>) -> OutputHistoryResponse {
+        let queue = self.output_queue.read().await;
+        let min_seq = queue.min_seq();
+        let max_seq = queue.max_seq();
+        let actual_start = start_seq.unwrap_or(0);
+        let events = queue.get_range(actual_start);
+
+        OutputHistoryResponse {
+            min_seq,
+            max_seq,
+            events: events.into_iter().map(|e| e.into()).collect(),
+        }
+    }
 }
 
 // ==================== Global Output Manager ====================
@@ -498,6 +543,20 @@ impl GlobalOutputManager {
             "[GlobalOutputManager] Cleaned up subscriptions for client {} across {} sessions",
             client_id, sessions.len()
         );
+    }
+
+    /// 获取会话历史输出（供桌面端终端窗口回放使用）
+    pub async fn get_history(
+        &self,
+        session_id: &str,
+        start_seq: Option<u64>,
+    ) -> Option<OutputHistoryResponse> {
+        let sessions = self.sessions.read().await;
+        if let Some(manager) = sessions.get(session_id) {
+            Some(manager.get_history(start_seq).await)
+        } else {
+            None
+        }
     }
 }
 

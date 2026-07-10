@@ -10,7 +10,7 @@ import { onPtyOutput } from '@/composables/useDesktopCommands'
 
 export function usePtyOutput(
   sessionId: string | Ref<string>,
-  onData: (data: string) => void,
+  onData: (data: string, index: number) => void,
 ) {
   let unlisten: (() => void) | null = null
 
@@ -43,11 +43,11 @@ export function usePtyOutput(
           bytes[i] = binaryString.charCodeAt(i)
         }
         const decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-        onData(decodedData)
+        onData(decodedData, event.index ?? 0)
       } catch (e) {
         console.error('[usePtyOutput] Failed to decode base64:', e)
         // 解码失败时使用原始数据
-        onData(event.data)
+        onData(event.data, event.index ?? 0)
       }
     })
   }

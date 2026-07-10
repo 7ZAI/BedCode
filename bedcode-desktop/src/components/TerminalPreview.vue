@@ -92,7 +92,21 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from '@/plugin/events'
+import { invoke } from '@tauri-apps/api/core'
 import '@xterm/xterm/css/xterm.css'
+
+/** Rust 端历史回放响应 */
+interface OutputHistoryResponse {
+  minSeq: number
+  maxSeq: number
+  events: Array<{
+    sessionId: string
+    data: string      // Base64 编码
+    index: number
+    timestamp: string
+    isWaiting: boolean
+  }>
+}
 
 interface Props {
   session?: SessionInfo | null
@@ -137,9 +151,29 @@ const sessionId = computed(() => props.session?.id || '')
 // 终端历史缓存（传入 computed ref，会话切换时自动更新目标）
 const terminalHistory = useTerminalHistory(sessionId)
 
+// 历史回放去重：记录已回放的最大 index，实时事件 index <= 此值时忽略
+let lastReplayedIndex = 0
+
+/** 解码 Base64 编码的 PTY 输出数据为 UTF-8 字符串 */
+function decodeBase64(base64: string): string {
+  try {
+    const binaryString = atob(base64)
+    const bytes = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i)
+    }
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  } catch (e) {
+    console.error('[TerminalPreview] Failed to decode base64:', e)
+    return base64
+  }
+}
+
 // PTY 输出监听：增量回调模式，每次输出直接写入 xterm + 全局缓存
-// 不在 ref 中累积完整输出，避免长时间运行后内存无限增长
-usePtyOutput(sessionId, (data: string) => {
+// 严格去重：忽略 index <= lastReplayedIndex 的事件（已在历史回放中写入）
+usePtyOutput(sessionId, (data: string, index: number) => {
+  if (index <= lastReplayedIndex) return
+
   // 始终写入全局缓存，即使 terminal 未初始化（数据可从历史恢复）
   terminalHistory.append(data)
 
@@ -554,6 +588,9 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
 // 会话变化
 watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
+    // 切换会话时重置去重状态
+    lastReplayedIndex = 0
+
     if (oldId) {
       clearTerminal()
     }
@@ -592,8 +629,36 @@ onMounted(async () => {
     resizeHiddenTerminal(sessionId.value, terminal.cols, terminal.rows)
   }
 
-  // 从全局缓存恢复历史
+  // 从 Rust 端获取历史输出（覆盖窗口关闭期间丢失的数据）
   if (terminal && sessionId.value) {
+    try {
+      const history = await invoke<OutputHistoryResponse>('get_session_output_history', {
+        sessionId: sessionId.value,
+        startSeq: null,
+      })
+
+      if (history.events.length > 0) {
+        // 逐个事件解码并写入 xterm + 全局缓存
+        // 不合并为单次写入，避免隐藏 xterm 实例处理超长字符串时卡顿
+        for (const event of history.events) {
+          const data = decodeBase64(event.data)
+          terminal.write(data)
+          terminalHistory.append(data)
+        }
+        lastReplayedIndex = history.maxSeq
+        scrollToBottom()
+      }
+    } catch (e) {
+      console.error('[TerminalPreview] Failed to get output history:', e)
+      // 回放失败时回退到全局缓存
+      const cachedHistory = terminalHistory.getHistory()
+      if (cachedHistory) {
+        terminal.write(cachedHistory)
+        scrollToBottom()
+      }
+    }
+  } else if (terminal && sessionId.value) {
+    // 无 Rust 端历史时，从全局缓存恢复
     const history = terminalHistory.getHistory()
     if (history) {
       terminal.write(history)
