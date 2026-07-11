@@ -2,269 +2,271 @@
 
 # BedCode
 
-**Use your phone to control Claude Code on your desktop**
+**用手机远程控制桌面上的 Claude Code**
 
 [![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
-English | [简体中文](README_zh.md)
+[English](README_en.md) | 简体中文
 
 </div>
 
 ---
 
-BedCode is a cross-platform application that lets you remotely control [Claude Code](https://claude.ai/code) from your mobile device within the same local network. The desktop app (Tauri + Vue 3) acts as the host running terminal sessions, while your phone becomes a powerful remote terminal with an optimized touch interface. While designed as a Claude Code remote control app, it also works as a general-purpose remote terminal.
+BedCode 是一个跨平台应用，让你可以通过移动设备在同一个本地局域网中远程控制 [Claude Code](https://claude.ai/code)。桌面端 (Tauri + Vue 3) 作为主机运行终端会话，手机则成为带有优化触控界面的远程终端。
 
-Typical use cases: as the name suggests — coding from bed; handling other tasks at home while programming, such as bathroom breaks, cooking, childcare, or just before sleep.
+虽然项目最初的目的是作为 Claude Code 的远程控制应用，但是目前应用同样实现了远程终端的效果。
 
-> Currently only supports desktop and mobile on the same WiFi network.
+目前使用场景：如应用名所述躺床上编程；居家环境下当你需要编程同时并行处理其他事务的时候，如：上厕所、做饭、带孩子、睡觉等。
 
-Internet connectivity interface or NAT traversal protocol will be reserved in the future (requires a server).
+> 目前仅仅适配桌面端和移动端在同一个 WiFi 下的场景。
 
-## Features
+未来会预留联通互联网的接口或内网穿透的协议（需要服务器）。
 
-### Desktop (Host)
-- **Session Management** - Create, configure, and manage multiple Claude Code sessions with SQLite persistence
-- **Terminal Preview** - Real-time xterm.js terminal output preview
-- **Device Pairing** - QR code + 6-digit code authentication for secure device pairing
-- **Plugin System** - cdylib dynamic loading plugin architecture with host API bridge, permission control, and storage
-- **HTTP + WebSocket Server** - Actix Web based HTTP API + WebSocket for terminal communication, with advanced network configuration (workers, keep-alive, timeouts, frame size limits)
-- **Server Management** - Dedicated server view with status monitoring, metrics dashboard, and network config editor
-- **System Tray** - Quick actions from the system tray
-- **WSL2 Support** - Run sessions inside Windows Subsystem for Linux with distro selection
-- **mDNS Discovery** - mDNS service advertisement for mobile device discovery
+## 功能特性
 
-### Mobile (Remote)
-- **Device Discovery & Pairing** - mDNS-based device discovery, QR code scanning, or pairing code input
-- **Terminal Output** - Enhanced mode (parsed ANSI/Markdown) and raw mode toggle
-- **Smart Input Bar** - Special keys (Tab, Ctrl+C, Esc, arrows), input assistant, and shortcut config
-- **Code Explorer** - Browse project files, view code with syntax highlighting, and diff rendering
-- **Preset Tasks** - Pre-configured task cards with type badges, edit dialog, and one-tap execution
-- **Toolbox** - Quick action panel with customizable commands
-- **Task Notifications** - Per-session task status notifications
-- **Auto-Reconnect** - Automatic reconnection on unexpected disconnects
-- **Foreground Service** - Keep connection alive in background with WakeLock (Android)
-- **Edge-to-Edge Display** - Modern full-screen mobile experience
+### 桌面端（主机）
+- **会话管理** - 创建、配置和管理多个 Claude Code 会话，SQLite 持久化存储
+- **终端预览** - 基于 xterm.js 的实时终端输出预览
+- **设备配对** - 二维码 + 6位数字验证码安全配对
+- **插件系统** - cdylib 动态加载插件架构，支持宿主 API 桥接、权限控制和持久化存储
+- **HTTP + WebSocket 服务器** - 基于 Actix Web 的 HTTP API + WebSocket 终端通信，支持高级网络配置（worker 线程、Keep-Alive、超时、帧大小限制等）
+- **服务器管理** - 独立服务器视图，状态监控、指标仪表盘、网络配置编辑器
+- **系统托盘** - 托盘快捷操作
+- **WSL2 支持** - 在 Windows Subsystem for Linux 中运行会话，支持发行版选择
+- **mDNS 发现** - mDNS 服务广播，供移动端发现设备
 
-### Security
-- JWT-based session authentication (HS256, 7-day expiry)
-- QR token with one-time use and configurable TTL
-- Plugin token for Claude Code hooks authentication
-- Pairing codes expire after 60 seconds
-- Device fingerprint verification on connection
+### 移动端（远程控制）
+- **设备发现与配对** - 基于 mDNS 的设备发现、扫描二维码或输入配对码连接
+- **终端输出** - 增强模式（解析 ANSI/Markdown）与原始模式切换
+- **智能输入栏** - 特殊按键（Tab、Ctrl+C、Esc、方向键）、输入助手、快捷键配置
+- **代码浏览器** - 浏览项目文件、语法高亮查看代码、Git diff 渲染
+- **预设任务** - 预配置任务卡片，支持类型标签、编辑对话框、一键执行
+- **工具箱** - 快捷操作面板，支持自定义命令
+- **任务通知** - 按会话的任务状态通知
+- **自动重连** - 意外断开后自动重新连接
+- **前台服务** - 后台保持连接存活并保持屏幕唤醒（Android）
+- **边到边显示** - 现代化全屏移动端体验
 
-> **Note:** End-to-end encryption (X25519 key exchange + AES-GCM) is planned but not yet implemented. Current WebSocket communication is unencrypted (ws://). See [Roadmap](#roadmap).
+### 安全性
+- 基于 JWT 的会话认证（HS256，7 天有效期）
+- QR 令牌一次性使用，支持可配置 TTL
+- 插件 Token 用于 Claude Code hooks 认证
+- 配对码 60 秒后自动过期
+- 连接时验证设备指纹
 
-### Internationalization
-- Full i18n support via vue-i18n (zh-CN / en)
-- Language switcher in settings with persistent preference
-- Error code mapping system for localized error messages
+> **注意：** 端到端加密（X25519 密钥交换 + AES-GCM）尚在计划中，当前 WebSocket 通信未加密（ws://）。详见[路线图](#路线图)。
 
-## Architecture
+### 国际化
+- 基于 vue-i18n 的完整 i18n 支持（zh-CN / en）
+- 设置页面语言切换器，偏好持久化
+- 错误码映射系统，实现本地化错误消息
+
+## 架构
 
 ```
-┌─────────────────────────────────┐                ┌─────────────────────────────────┐
-│         Desktop App              │                │         Mobile App               │
-│        (Tauri + Vue 3)           │                │        (Tauri + Vue 3)           │
-│                                  │                │                                  │
-│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
-│  │ PTY Manager│  │ WS Server  │ │   WebSocket    │  │ WS Client  │  │ Code       │ │
-│  │ (Claude)   │  │ (Actix)    │◄├───────────────►├►│            │  │ Explorer   │ │
-│  └────────────┘  └────────────┘ │   + HTTP API   │  └────────────┘  └────────────┘ │
-│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
-│  │ Plugin Mgr │  │ HTTP API   │ │                │  │ Preset     │  │ Touch UI   │ │
-│  │ (cdylib)   │  │ (Actix)    │ │                │  │ Tasks      │  │            │ │
-│  └────────────┘  └────────────┘ │                │  └────────────┘  └────────────┘ │
-└─────────────────────────────────┘                └─────────────────────────────────┘
+┌──────────────────────────────────┐                ┌──────────────────────────────────┐
+│          桌面端应用                │                │          移动端应用                │
+│        (Tauri + Vue 3)            │                │        (Tauri + Vue 3)            │
+│                                    │                │                                    │
+│  ┌────────────┐  ┌────────────┐   │                │  ┌────────────┐  ┌────────────┐   │
+│  │ PTY 管理器 │  │ WS 服务器  │   │   WebSocket    │  │ WS 客户端  │  │ 代码浏览器 │   │
+│  │ (Claude)   │  │ (Actix)    │◄──├───────────────►├─►│            │  │            │   │
+│  └────────────┘  └────────────┘   │   + HTTP API   │  └────────────┘  └────────────┘   │
+│  ┌────────────┐  ┌────────────┐   │                │  ┌────────────┐  ┌────────────┐   │
+│  │ 插件管理器 │  │ HTTP API   │   │                │  │ 预设任务   │  │ 触控界面   │   │
+│  │ (cdylib)   │  │ (Actix)    │   │                │  │            │  │            │   │
+│  └────────────┘  └────────────┘   │                │  └────────────┘  └────────────┘   │
+└──────────────────────────────────┘                └──────────────────────────────────┘
 ```
 
-The project uses a **monorepo with independent platform projects**:
+项目采用 **Monorepo 独立平台项目** 架构：
 
-| Layer | Frontend (Vue 3) | Backend (Rust) |
-|-------|-------------------|-----------------|
-| **Desktop** | Session manager, terminal preview, server view, plugin config, sidebar | PTY, Actix Web server, session management, cdylib plugin system, mDNS advertiser |
-| **Mobile** | Terminal view, code explorer, preset tasks, toolbox, device discovery | WS client, HTTP client, remote connection, routing, mDNS discovery |
+| 层级 | 前端 (Vue 3) | 后端 (Rust) |
+|------|-------------|-------------|
+| **桌面端** | 会话管理器、终端预览、服务器视图、插件配置、侧边栏 | PTY、Actix Web 服务器、会话管理、cdylib 插件系统、mDNS 广告 |
+| **移动端** | 终端视图、代码浏览器、预设任务、工具箱、设备发现 | WS 客户端、HTTP 客户端、远程连接、路由、mDNS 发现 |
 
-## Tech Stack
+## 技术栈
 
-| Category | Technology |
-|----------|------------|
-| Framework | Tauri 2.0 |
-| Frontend | Vue 3 + TypeScript |
-| Styling | TailwindCSS |
-| State | Pinia |
-| Backend | Rust (Tokio async runtime) |
-| HTTP Server | Actix Web 4 |
-| Database | SQLite (rusqlite) |
-| Communication | WebSocket + HTTP REST API |
-| Terminal | @xterm/xterm + @xterm/addon-fit + @xterm/addon-web-links + @xterm/addon-webgl |
-| I18n | vue-i18n@9 |
-| Testing | Vitest, Rust test |
+| 分类 | 技术 |
+|------|------|
+| 框架 | Tauri 2.0 |
+| 前端 | Vue 3 + TypeScript |
+| 样式 | TailwindCSS |
+| 状态管理 | Pinia |
+| 后端 | Rust (Tokio 异步运行时) |
+| HTTP 服务器 | Actix Web 4 |
+| 数据库 | SQLite (rusqlite) |
+| 通信 | WebSocket + HTTP REST API |
+| 终端 | @xterm/xterm + @xterm/addon-fit + @xterm/addon-web-links + @xterm/addon-webgl |
+| 国际化 | vue-i18n@9 |
+| 测试 | Vitest、Rust test |
 
-## Getting Started
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
 - [Node.js](https://nodejs.org/) >= 18
 - [Rust](https://www.rust-lang.org/tools/install) >= 1.70
-- [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) dependencies for your platform
-- [Claude Code CLI](https://claude.ai/code) installed and configured
+- [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
+- 已安装并配置 [Claude Code CLI](https://claude.ai/code)
 
-### Install Dependencies
+### 安装依赖
 
 ```bash
-# Desktop
+# 桌面端
 cd bedcode-desktop
 npm install
 
-# Mobile
+# 移动端
 cd bedcode-mobile
 npm install
 
-# Rust dependencies are fetched automatically by Cargo
+# Rust 依赖由 Cargo 自动获取
 ```
 
-### Development
+### 开发
 
 ```bash
-# Start desktop app in dev mode
+# 启动桌面端开发模式
 cd bedcode-desktop
 npm run tauri:dev
 
-# Start mobile app in dev mode
+# 启动移动端开发模式
 cd bedcode-mobile
 npm run tauri:android:dev
 ```
 
-### Build
+### 构建
 
 ```bash
-# Build desktop app
+# 构建桌面端应用
 cd bedcode-desktop
 npm run tauri:build
 
-# Build Android APK (release)
+# 构建 Android APK（Release）
 cd bedcode-mobile
 npm run tauri:android:build
 
-# Build Android APK (debug fast)
+# 构建 Android APK（Debug 快速构建）
 cd bedcode-mobile
 npm run tauri:android:build:fast
 ```
 
-### Testing
+### 测试
 
 ```bash
-# Frontend unit tests
+# 前端单元测试
 npm run test
 
-# Rust tests
+# Rust 测试
 cargo test
 ```
 
-### Linting & Formatting
+### 代码检查与格式化
 
 ```bash
-# Lint
+# 代码检查
 npm run lint
 
-# Format
+# 格式化
 npm run format
 ```
 
-## Configuration
+## 配置
 
-BedCode uses a `config.properties` file (bundled as a Tauri resource) for runtime configuration. The file supports comments and is organized by category:
+BedCode 使用 `config.properties` 文件（作为 Tauri 资源打包）进行运行时配置。文件支持注释，按分类组织：
 
-### Network
+### 网络
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `network.port` | `8765` | WebSocket server port |
-| `network.auto_start` | `true` | Auto-start server on app launch |
-| `network.prevent_sleep` | `true` | Prevent system sleep while server is running |
-| `network.workers` | `0` | Actix Web worker threads (0 = CPU core count) |
-| `network.keep_alive_secs` | `5` | HTTP Keep-Alive timeout in seconds (0 = disabled) |
-| `network.client_request_timeout_secs` | `5` | Client request header read timeout |
-| `network.client_disconnect_timeout_secs` | `3` | Client disconnect wait timeout |
-| `network.max_connections` | `256` | Max concurrent connections per worker |
-| `network.backlog` | `2048` | TCP half-open connection queue limit |
-| `network.tcp_nodelay` | `true` | Enable TCP_NODELAY (disable Nagle algorithm) |
-| `network.shutdown_timeout_secs` | `30` | Graceful shutdown timeout |
-| `network.ws_max_frame_size_kb` | `64` | WebSocket max frame size (KB) |
-| `network.ws_max_message_size_mb` | `16` | WebSocket max message size (MB, across frames) |
+| 键名 | 默认值 | 说明 |
+|------|--------|------|
+| `network.port` | `8765` | WebSocket 服务器端口 |
+| `network.auto_start` | `true` | 应用启动时自动开启服务器 |
+| `network.prevent_sleep` | `true` | 服务器运行时阻止系统休眠 |
+| `network.workers` | `0` | Actix Web worker 线程数（0 = CPU 核心数） |
+| `network.keep_alive_secs` | `5` | HTTP Keep-Alive 超时秒数（0 = 禁用） |
+| `network.client_request_timeout_secs` | `5` | 客户端请求头读取超时秒数 |
+| `network.client_disconnect_timeout_secs` | `3` | 客户端断开连接等待超时秒数 |
+| `network.max_connections` | `256` | 每 worker 最大并发连接数 |
+| `network.backlog` | `2048` | TCP 半连接队列上限 |
+| `network.tcp_nodelay` | `true` | 启用 TCP_NODELAY（禁用 Nagle 算法） |
+| `network.shutdown_timeout_secs` | `30` | 优雅停机超时秒数 |
+| `network.ws_max_frame_size_kb` | `64` | WebSocket 单帧最大大小（KB） |
+| `network.ws_max_message_size_mb` | `16` | WebSocket 单消息最大大小（MB，可跨多帧） |
 
-### Session
+### 会话
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `session.default_environment` | `windows` | Default execution environment (windows / wsl2) |
-| `session.default_wsl_distro` | *(empty)* | Default WSL distro (only for wsl2, empty = default) |
-| `session.default_working_dir` | *(empty)* | Default working directory (empty = user home) |
-| `session.default_command` | `claude` | Default terminal command |
-| `session.session_timeout` | `3600` | Session timeout in seconds (auto-close on inactivity) |
+| 键名 | 默认值 | 说明 |
+|------|--------|------|
+| `session.default_environment` | `windows` | 默认执行环境（windows / wsl2） |
+| `session.default_wsl_distro` | *(空)* | 默认 WSL 发行版（仅 wsl2 环境有效，空 = 默认发行版） |
+| `session.default_working_dir` | *(空)* | 默认工作目录（空 = 用户主目录） |
+| `session.default_command` | `claude` | 默认启动命令 |
+| `session.session_timeout` | `3600` | 会话超时时间（秒）- 无活动自动关闭 |
 
-### UI
+### 界面
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `ui.theme` | `system` | Theme (system/light/dark) |
-| `ui.terminal_font_size` | `12` | Terminal font size |
-| `ui.terminal_font_family` | `Consolas` | Terminal font family |
-| `ui.terminal_theme` | `dracula` | Terminal color theme name |
-| `ui.show_preview` | `true` | Show terminal preview |
+| 键名 | 默认值 | 说明 |
+|------|--------|------|
+| `ui.theme` | `system` | 主题（system/light/dark） |
+| `ui.terminal_font_size` | `12` | 终端字体大小 |
+| `ui.terminal_font_family` | `Consolas` | 终端字体名称 |
+| `ui.terminal_theme` | `dracula` | 终端配色主题名 |
+| `ui.show_preview` | `true` | 是否显示终端预览 |
 
-### Terminal
+### 终端
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `terminal.default_cols` | `120` | Default terminal columns |
-| `terminal.default_rows` | `40` | Default terminal rows |
-| `terminal.flush_interval_ms` | `50` | Output buffer flush interval (ms) |
-| `terminal.max_buffer_size` | `65536` | Max output buffer size (bytes) |
-| `terminal.read_buffer_size` | `4096` | PTY read buffer size (bytes) |
+| 键名 | 默认值 | 说明 |
+|------|--------|------|
+| `terminal.default_cols` | `120` | 默认终端列数 |
+| `terminal.default_rows` | `40` | 默认终端行数 |
+| `terminal.flush_interval_ms` | `50` | 输出缓冲刷新间隔（毫秒） |
+| `terminal.max_buffer_size` | `65536` | 最大输出缓冲大小（字节） |
+| `terminal.read_buffer_size` | `4096` | PTY 读取缓冲区大小（字节） |
 
-### Channels
+### Channel 容量
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `channels.output_broadcast_capacity` | `2048` | PTY output broadcast capacity |
-| `channels.status_broadcast_capacity` | `64` | Session status broadcast capacity |
-| `channels.restart_broadcast_capacity` | `64` | Session restart broadcast capacity |
-| `channels.event_broadcast_capacity` | `256` | Unified event broadcast capacity |
-| `channels.pty_subscription_capacity` | `1024` | PTY subscription broadcast capacity |
-| `channels.global_queue_capacity` | `50000` | Global output queue capacity (for mobile replay) |
-| `channels.ws_event_capacity` | `1024` | WebSocket event broadcast capacity |
-| `channels.lifecycle_capacity` | `16` | Lifecycle event broadcast capacity |
+| 键名 | 默认值 | 说明 |
+|------|--------|------|
+| `channels.output_broadcast_capacity` | `2048` | PTY 输出事件广播容量 |
+| `channels.status_broadcast_capacity` | `64` | 会话状态变更广播容量 |
+| `channels.restart_broadcast_capacity` | `64` | 会话重启事件广播容量 |
+| `channels.event_broadcast_capacity` | `256` | 统一事件广播容量 |
+| `channels.pty_subscription_capacity` | `1024` | PTY 订阅广播容量 |
+| `channels.global_queue_capacity` | `50000` | 全局输出队列容量（供移动端回放） |
+| `channels.ws_event_capacity` | `1024` | WebSocket 事件广播容量 |
+| `channels.lifecycle_capacity` | `16` | 生命周期事件广播容量 |
 
-### Plugin
+### 插件
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `plugin.token` | *(empty)* | HTTP API auth token for plugin status push (empty = skip verification, dev mode) |
+| 键名 | 默认值 | 说明 |
+|------|--------|------|
+| `plugin.token` | *(空)* | HTTP API 认证 token - 插件推送任务状态时需携带此 token（空 = 跳过验证，开发模式） |
 
-## How It Works
+## 工作原理
 
-1. **Start Desktop App** - Launch BedCode on your desktop, which starts the Actix Web server (HTTP + WebSocket) and mDNS discovery service
-2. **Pair Your Phone** - Open BedCode on your phone, discover the desktop via mDNS, scan the QR code or enter the 6-digit pairing code
-3. **Control Remotely** - Once paired, select a session and start sending commands from your phone
-4. **Real-time Output** - Terminal output is streamed to your phone in real-time with ANSI rendering
-5. **Browse Code** - Use the code explorer to browse project files and view diffs with syntax highlighting
-6. **Preset Tasks** - Configure common tasks as preset cards for one-tap execution
+1. **启动桌面端** - 在电脑上启动 BedCode，自动开启 Actix Web 服务器（HTTP + WebSocket）和 mDNS 发现服务
+2. **配对手机** - 在手机上打开 BedCode，通过 mDNS 发现桌面端，扫描二维码或输入 6 位配对码
+3. **远程控制** - 配对成功后，选择会话即可从手机发送命令
+4. **实时输出** - 终端输出实时推送到手机，支持 ANSI 渲染
+5. **浏览代码** - 使用代码浏览器浏览项目文件，查看带语法高亮的代码和 diff
+6. **预设任务** - 配置常用任务为预设卡片，一键执行
 
-## Plugin System
+## 插件系统
 
-BedCode features a cdylib-based dynamic plugin system on the desktop:
+BedCode 桌面端采用基于 cdylib 的动态插件系统：
 
-- **Dynamic Loading** - Plugins are compiled as `.cdylib` shared libraries and loaded at runtime
-- **Host API Bridge** - Plugins access host functionality (send input, read output, session info) through a versioned API bridge
-- **Permission Control** - Each plugin declares required permissions; the host enforces access boundaries
-- **Persistent Storage** - Plugins can store key-value data through the host-provided storage interface
-- **Auto-Configuration** - Project-scoped Claude Code hooks are automatically configured when a session starts
-- **Task Status Tracking** - Claude Code hooks push task status (idle/in_progress/asking/completed/interrupted) to the desktop app via HTTP API
-- **Session ID Binding** - PTY sessions inject `BEDCODE_SESSION_ID` environment variable to bind Claude Code sessions with BedCode sessions
+- **动态加载** - 插件编译为 `.cdylib` 共享库，运行时动态加载
+- **宿主 API 桥接** - 插件通过版本化 API 桥接访问宿主功能（发送输入、读取输出、会话信息）
+- **权限控制** - 每个插件声明所需权限，宿主强制执行访问边界
+- **持久化存储** - 插件可通过宿主提供的存储接口存取键值数据
+- **自动配置** - 会话启动时自动配置项目级 Claude Code hooks
+- **任务状态追踪** - Claude Code hooks 通过 HTTP API 推送任务状态（idle/in_progress/asking/completed/interrupted）到桌面端
+- **会话 ID 绑定** - PTY 会话注入 `BEDCODE_SESSION_ID` 环境变量，绑定 Claude Code 会话与 BedCode 会话
 
 ```
 Claude Code Hook (Python)
@@ -273,95 +275,95 @@ Rust HTTP API (plugin_controller)
     ↓ DesktopSyncEvent
 SyncEventHandler → WebSocket broadcast
     ↓ ws_sync_task_status_changed
-Mobile Tauri Event → Preset Tasks / UI
+Mobile Tauri Event → 预设任务 / UI
     ↓ sendInput / HTTP API
 Claude Code (PTY)
 ```
 
-## Project Structure
+## 项目结构
 
 ```
 BedCode/
-├── bedcode-desktop/               # Desktop app (Tauri + Vue 3)
-│   ├── src/                       # Vue 3 frontend
-│   │   ├── components/            # UI components
-│   │   ├── composables/           # Business logic composables
-│   │   ├── stores/                # Pinia state stores
-│   │   ├── views/                 # Page views
-│   │   ├── locales/               # i18n translations (zh-CN / en)
-│   │   └── plugins/               # Frontend plugin loader
+├── bedcode-desktop/               # 桌面端应用 (Tauri + Vue 3)
+│   ├── src/                       # Vue 3 前端
+│   │   ├── components/            # UI 组件
+│   │   ├── composables/           # 业务逻辑 composables
+│   │   ├── stores/                # Pinia 状态管理
+│   │   ├── views/                 # 页面视图
+│   │   ├── locales/               # i18n 翻译文件（zh-CN / en）
+│   │   └── plugins/               # 前端插件加载器
 │   ├── src-tauri/
 │   │   ├── src/
-│   │   │   ├── commands/          # Tauri invoke commands
-│   │   │   ├── db/                # SQLite database layer
-│   │   │   ├── enums/             # Enum types
-│   │   │   ├── events/            # Global event system
-│   │   │   ├── mdns/              # mDNS service advertisement
-│   │   │   ├── plugin/            # cdylib plugin system
-│   │   │   ├── pty/               # PTY management (Windows + WSL2)
-│   │   │   ├── server/            # Actix Web HTTP/WS server
-│   │   │   ├── session/           # Session management
-│   │   │   ├── system/            # Config, error handling, app context
-│   │   │   └── utils/             # Auth (JWT, pairing), parsers (ANSI, Markdown)
+│   │   │   ├── commands/          # Tauri invoke 命令
+│   │   │   ├── db/                # SQLite 数据库层
+│   │   │   ├── enums/             # 枚举类型
+│   │   │   ├── events/            # 全局事件系统
+│   │   │   ├── mdns/              # mDNS 服务广播
+│   │   │   ├── plugin/            # cdylib 插件系统
+│   │   │   ├── pty/               # PTY 管理（Windows + WSL2）
+│   │   │   ├── server/            # Actix Web HTTP/WS 服务器
+│   │   │   ├── session/           # 会话管理
+│   │   │   ├── system/            # 配置、错误处理、应用上下文
+│   │   │   └── utils/             # 认证（JWT、配对）、解析器（ANSI、Markdown）
 │   │   └── resources/
-│   │       └── config.properties  # Runtime configuration
+│   │       └── config.properties  # 运行时配置
 │   └── docs/
-│       └── code-map.md            # Desktop module index
+│       └── code-map.md            # 桌面端模块索引
 │
-├── bedcode-mobile/                # Mobile app (Tauri + Vue 3)
-│   ├── src/                       # Vue 3 frontend
-│   │   ├── components/            # UI components
-│   │   ├── composables/           # Business logic composables
-│   │   ├── stores/                # Pinia state stores
-│   │   ├── views/                 # Page views
-│   │   └── locales/               # i18n translations (zh-CN / en)
+├── bedcode-mobile/                # 移动端应用 (Tauri + Vue 3)
+│   ├── src/                       # Vue 3 前端
+│   │   ├── components/            # UI 组件
+│   │   ├── composables/           # 业务逻辑 composables
+│   │   ├── stores/                # Pinia 状态管理
+│   │   ├── views/                 # 页面视图
+│   │   └── locales/               # i18n 翻译文件（zh-CN / en）
 │   ├── src-tauri/
 │   │   └── src/
-│   │       ├── auth/              # Authentication (manager, pairing)
-│   │       ├── commands/          # Tauri invoke commands
-│   │       ├── connection/        # Remote connection (WS client, heartbeat, reconnect)
-│   │       ├── enums/             # Enum types
-│   │       ├── handler/           # Message handlers
-│   │       ├── mdns/              # mDNS service discovery
-│   │       ├── model/             # Data models
-│   │       ├── plugin/            # Android plugin bridge
-│   │       ├── router/            # Message routing
-│   │       ├── system/            # Config, error handling, settings
-│   │       ├── session.rs         # Remote session management
-│   │       └── state.rs           # Global state
+│   │       ├── auth/              # 认证（管理器、配对）
+│   │       ├── commands/          # Tauri invoke 命令
+│   │       ├── connection/        # 远程连接（WS 客户端、心跳、重连）
+│   │       ├── enums/             # 枚举类型
+│   │       ├── handler/           # 消息处理器
+│   │       ├── mdns/              # mDNS 服务发现
+│   │       ├── model/             # 数据模型
+│   │       ├── plugin/            # Android 插件桥接
+│   │       ├── router/            # 消息路由
+│   │       ├── system/            # 配置、错误处理、设置
+│   │       ├── session.rs         # 远程会话管理
+│   │       └── state.rs           # 全局状态
 │   └── docs/
-│       └── code-map.md            # Mobile module index
+│       └── code-map.md            # 移动端模块索引
 │
-├── docs/                          # Shared documentation
-└── .github/                       # CI/CD workflows
+├── docs/                          # 共享文档
+└── .github/                       # CI/CD 工作流
 ```
 
-See [bedcode-desktop/docs/code-map.md](bedcode-desktop/docs/code-map.md) and [bedcode-mobile/docs/code-map.md](bedcode-mobile/docs/code-map.md) for complete module indexes.
+完整模块索引请参阅 [bedcode-desktop/docs/code-map.md](bedcode-desktop/docs/code-map.md) 和 [bedcode-mobile/docs/code-map.md](bedcode-mobile/docs/code-map.md)。
 
-## Roadmap
+## 路线图
 
-- [x] Plugin system for Claude Code hooks and cdylib dynamic loading
-- [x] Mobile file browser and code viewer with diff rendering
-- [x] Multi-language support (i18n: zh-CN / en)
-- [x] Preset task cards with one-tap execution
-- [x] Advanced network configuration for Actix Web server
-- [x] Server management view with metrics dashboard
-- [ ] End-to-end encryption (X25519 + AES-GCM)
-- [ ] Linux desktop support
-- [ ] Internet connectivity interface
-- [ ] FCM push notifications
-- [ ] Virtual scrolling for terminal history
+- [x] Claude Code hooks 插件系统与 cdylib 动态加载
+- [x] 移动端文件浏览器和代码查看器（含 diff 渲染）
+- [x] 多语言支持 (i18n: zh-CN / en)
+- [x] 预设任务卡片，支持一键执行
+- [x] Actix Web 服务器高级网络配置
+- [x] 服务器管理视图与指标仪表盘
+- [ ] 端到端加密（X25519 + AES-GCM）
+- [ ] Linux 桌面端支持
+- [ ] 互联网连接接口预留
+- [ ] FCM 推送通知
+- [ ] 终端历史虚拟滚动
 
-## Contributing
+## 参与贡献
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+欢迎贡献！请随时提交 Pull Request。
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feat/my-feature`)
-3. Commit your changes (`git commit -m 'feat: add my feature'`)
-4. Push to the branch (`git push origin feat/my-feature`)
-5. Open a Pull Request
+1. Fork 本仓库
+2. 创建功能分支 (`git checkout -b feat/my-feature`)
+3. 提交更改 (`git commit -m 'feat: add my feature'`)
+4. 推送到分支 (`git push origin feat/my-feature`)
+5. 发起 Pull Request
 
-## License
+## 许可证
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+本项目基于 MIT 许可证开源 - 详见 [LICENSE](LICENSE) 文件。
