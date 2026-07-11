@@ -197,10 +197,13 @@ function handleConfirm() {
 }
 
 .settings-modal {
+  --size-btn: clamp(2rem, 2.5rem, 3rem);
+  --footer-btn-py: clamp(0.625rem, 0.75rem, 1rem);
+
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 100%;
-  max-width: 360px;
+  max-width: clamp(280px, 360px, 420px);
   max-height: 80vh;
   overflow-y: auto;
 }
@@ -262,13 +265,13 @@ function handleConfirm() {
 }
 
 .size-btn {
-  width: 40px;
-  height: 40px;
+  width: var(--size-btn);
+  height: var(--size-btn);
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-primary);
-  font-size: 1.25rem;
+  font-size: clamp(1rem, 1.25rem, 1.5rem);
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -285,7 +288,7 @@ function handleConfirm() {
 .size-value {
   flex: 1;
   text-align: center;
-  font-size: 1.125rem;
+  font-size: clamp(1rem, 1.125rem, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -293,7 +296,7 @@ function handleConfirm() {
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
+  gap: clamp(0.375rem, 0.5rem, 0.75rem);
 }
 
 .theme-btn {
@@ -301,7 +304,7 @@ function handleConfirm() {
   flex-direction: column;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.75rem 0.5rem;
+  padding: clamp(0.5rem, 0.75rem, 1rem) clamp(0.375rem, 0.5rem, 0.75rem);
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
@@ -324,12 +327,12 @@ function handleConfirm() {
   padding: 0.5rem;
   border-radius: 0.375rem;
   text-align: center;
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem, 1rem);
   font-weight: 600;
 }
 
 .theme-name {
-  font-size: 0.75rem;
+  font-size: clamp(0.625rem, 0.75rem, 0.875rem);
   color: var(--mobile-text-muted);
 }
 
@@ -339,7 +342,7 @@ function handleConfirm() {
 }
 
 .settings-hint {
-  font-size: 0.75rem;
+  font-size: clamp(0.625rem, 0.75rem, 0.875rem);
   color: var(--mobile-text-muted);
   margin: 0 0 0.75rem;
 }
@@ -347,16 +350,16 @@ function handleConfirm() {
 .toolbar-toggle-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
+  gap: clamp(0.375rem, 0.5rem, 0.75rem);
 }
 
 .toolbar-toggle-btn {
-  padding: 0.5rem;
+  padding: clamp(0.375rem, 0.5rem, 0.75rem);
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
   color: var(--mobile-text-muted);
-  font-size: 0.8rem;
+  font-size: clamp(0.6875rem, 0.8rem, 0.9375rem);
   cursor: pointer;
   transition: all 0.2s ease;
   text-align: center;
@@ -382,9 +385,9 @@ function handleConfirm() {
 
 .settings-footer-btn {
   flex: 1;
-  padding: 0.75rem;
+  padding: var(--footer-btn-py);
   border-radius: 0.5rem;
-  font-size: 0.875rem;
+  font-size: clamp(0.8125rem, 0.875rem, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

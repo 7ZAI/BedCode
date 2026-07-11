@@ -451,25 +451,33 @@ watch(() => props.visible, (show) => {
 </script>
 
 <style scoped>
+.shortcut-config-modal {
+  --key-h: clamp(1.75rem, 2rem, 2.5rem);
+  --key-font: clamp(0.625rem, 0.6875rem, 0.8rem);
+  --mod-h: clamp(1.75rem, 2rem, 2.5rem);
+  --row-px: clamp(0.5rem, 0.75rem, 1rem);
+  --row-py: clamp(0.375rem, 0.5rem, 0.625rem);
+}
+
 .shortcut-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.5rem 0.75rem;
+  padding: var(--row-py) var(--row-px);
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   border-radius: 0.5rem;
 }
 
 .shortcut-label {
-  font-size: 0.8125rem;
+  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
 
 .visibility-toggle {
-  width: 2.5rem;
-  height: 1.375rem;
+  width: clamp(2rem, 2.5rem, 3rem);
+  height: clamp(1.125rem, 1.375rem, 1.625rem);
   border-radius: 9999px;
   position: relative;
   transition: background-color 0.2s ease;
@@ -491,8 +499,8 @@ watch(() => props.visible, (show) => {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 1rem;
-  height: 1rem;
+  width: clamp(0.75rem, 1rem, 1.25rem);
+  height: clamp(0.75rem, 1rem, 1.25rem);
   border-radius: 9999px;
   background: white;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -500,7 +508,7 @@ watch(() => props.visible, (show) => {
 }
 
 .toggle-knob.on {
-  left: 1.25rem;
+  left: clamp(1rem, 1.25rem, 1.625rem);
 }
 
 .toggle-knob.off {
@@ -508,8 +516,8 @@ watch(() => props.visible, (show) => {
 }
 
 .delete-btn {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: clamp(1.375rem, 1.75rem, 2rem);
+  height: clamp(1.375rem, 1.75rem, 2rem);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -527,8 +535,8 @@ watch(() => props.visible, (show) => {
 
 .capture-input {
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
+  min-height: clamp(2.25rem, 2.75rem, 3.25rem);
+  padding: clamp(0.375rem, 0.5rem, 0.625rem) clamp(0.5rem, 0.75rem, 1rem);
   background: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
   border-radius: 0.75rem;
@@ -546,25 +554,25 @@ watch(() => props.visible, (show) => {
 }
 
 .preview-label {
-  font-size: 0.875rem;
+  font-size: clamp(0.8125rem, 0.875rem, 1rem);
   font-weight: 600;
   color: var(--mobile-accent);
   font-family: 'Courier New', monospace;
 }
 
 .capture-placeholder {
-  font-size: 0.8125rem;
+  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
   color: var(--mobile-input-placeholder);
 }
 
 .modifier-row {
   display: flex;
-  gap: 0.5rem;
+  gap: clamp(0.375rem, 0.5rem, 0.75rem);
 }
 
 .modifier-btn {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.75rem;
+  padding: clamp(0.25rem, 0.375rem, 0.5rem) clamp(0.5rem, 0.75rem, 1rem);
+  font-size: clamp(0.6875rem, 0.75rem, 0.875rem);
   font-weight: 500;
   border-radius: 0.5rem;
   border: 1px solid var(--mobile-border);
@@ -586,13 +594,13 @@ watch(() => props.visible, (show) => {
 
 .key-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(2.25rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(2rem, 2.25rem, 2.75rem), 1fr));
   gap: 0.25rem;
 }
 
 .key-btn {
-  height: 2rem;
-  font-size: 0.6875rem;
+  height: var(--key-h);
+  font-size: var(--key-font);
   font-weight: 500;
   border-radius: 0.375rem;
   border: 1px solid var(--mobile-border);
@@ -616,7 +624,7 @@ watch(() => props.visible, (show) => {
 }
 
 .duplicate-hint {
-  font-size: 0.75rem;
+  font-size: clamp(0.6875rem, 0.75rem, 0.875rem);
   color: var(--mobile-danger-color, #ff5555);
   text-align: center;
   padding: 0.25rem;
@@ -624,8 +632,8 @@ watch(() => props.visible, (show) => {
 
 .footer-btn {
   flex: 1;
-  padding: 0.625rem;
-  font-size: 0.8125rem;
+  padding: clamp(0.5rem, 0.625rem, 0.75rem);
+  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
   font-weight: 500;
   border-radius: 0.75rem;
   cursor: pointer;
@@ -673,13 +681,13 @@ watch(() => props.visible, (show) => {
   border-radius: 1rem;
   padding: 1.5rem;
   width: 100%;
-  max-width: 280px;
+  max-width: clamp(220px, 280px, 340px);
   text-align: center;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 .delete-confirm-text {
-  font-size: 0.9375rem;
+  font-size: clamp(0.875rem, 0.9375rem, 1.0625rem);
   color: var(--mobile-text-primary);
   margin: 0 0 1.25rem;
   line-height: 1.5;
@@ -692,9 +700,9 @@ watch(() => props.visible, (show) => {
 
 .delete-confirm-btn {
   flex: 1;
-  padding: 0.625rem;
+  padding: clamp(0.5rem, 0.625rem, 0.75rem);
   border-radius: 0.625rem;
-  font-size: 0.8125rem;
+  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;

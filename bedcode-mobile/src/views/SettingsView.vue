@@ -564,12 +564,12 @@ watch(settings, saveSettings, { deep: true })
   border-radius: 1rem;
   padding: 1.5rem;
   width: 100%;
-  max-width: 320px;
+  max-width: clamp(260px, 320px, 380px);
   text-align: center;
 }
 
 .confirm-text {
-  font-size: 1rem;
+  font-size: clamp(0.875rem, 1rem, 1.125rem);
   color: var(--mobile-text-primary);
   margin: 0;
 }
@@ -586,9 +586,9 @@ watch(settings, saveSettings, { deep: true })
 
 .confirm-btn {
   flex: 1;
-  padding: 0.75rem;
+  padding: clamp(0.625rem, 0.75rem, 1rem);
   border-radius: 0.5rem;
-  font-size: 0.875rem;
+  font-size: clamp(0.8125rem, 0.875rem, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

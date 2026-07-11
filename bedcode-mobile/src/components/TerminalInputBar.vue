@@ -1393,7 +1393,7 @@ onMounted(() => {
   border-radius: 1rem;
   padding: 1.25rem;
   width: 100%;
-  max-width: 20rem;
+  max-width: clamp(16rem, 20rem, 24rem);
 }
 
 .dialog-title {
@@ -1434,7 +1434,7 @@ onMounted(() => {
 
 .dialog-btn {
   flex: 1;
-  height: 2.25rem;
+  height: clamp(2rem, 2.25rem, 2.75rem);
   border-radius: 0.75rem;
   border: 1px solid;
   font-size: 0.875rem;

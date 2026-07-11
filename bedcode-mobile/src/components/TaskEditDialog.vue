@@ -23,7 +23,7 @@
               <!-- 可选目录：下拉菜单 -->
               <div v-else class="relative">
                 <button
-                  class="flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-xs hover:border-[var(--mobile-border-active)] active:opacity-80 transition-colors max-w-[120px]"
+                  class="flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-xs hover:border-[var(--mobile-border-active)] active:opacity-80 transition-colors max-w-[clamp(100px,120px,160px)]"
                   @click="showDirDropdown = !showDirDropdown"
                 >
                   <svg class="w-3 h-3 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -35,7 +35,7 @@
                   </svg>
                 </button>
                 <Transition name="dropdown">
-                  <div v-if="showDirDropdown" class="absolute top-full right-0 mt-1 min-w-[180px] max-h-[180px] overflow-y-auto bg-[var(--mobile-bg-tertiary)] border border-[var(--mobile-border)] rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.4)] z-30" @click.stop>
+                  <div v-if="showDirDropdown" class="absolute top-full right-0 mt-1 min-w-[clamp(140px,180px,220px)] max-h-[180px] overflow-y-auto bg-[var(--mobile-bg-tertiary)] border border-[var(--mobile-border)] rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.4)] z-30" @click.stop>
                     <button
                       v-for="dir in projectDirs"
                       :key="dir"

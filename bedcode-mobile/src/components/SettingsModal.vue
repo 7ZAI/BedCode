@@ -48,12 +48,12 @@
             <div class="flex items-center justify-between">
               <span class="text-sm text-[var(--mobile-text-secondary)]">{{ t('mobile.inputAssistant.doubleTap') }}</span>
               <button
-                class="w-11 h-6 rounded-full transition-colors"
+                class="w-11 h-6 rounded-full transition-colors settings-toggle"
                 :class="localSettings.gestures.doubleTap ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.doubleTap = !localSettings.gestures.doubleTap"
               >
                 <span
-                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform settings-toggle-knob"
                   :class="localSettings.gestures.doubleTap ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -62,12 +62,12 @@
             <div class="flex items-center justify-between">
               <span class="text-sm text-[var(--mobile-text-secondary)]">{{ t('mobile.inputAssistant.swipeDown') }}</span>
               <button
-                class="w-11 h-6 rounded-full transition-colors"
+                class="w-11 h-6 rounded-full transition-colors settings-toggle"
                 :class="localSettings.gestures.swipeDown ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeDown = !localSettings.gestures.swipeDown"
               >
                 <span
-                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform settings-toggle-knob"
                   :class="localSettings.gestures.swipeDown ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -76,12 +76,12 @@
             <div class="flex items-center justify-between">
               <span class="text-sm text-[var(--mobile-text-secondary)]">{{ t('mobile.inputAssistant.swipeUp') }}</span>
               <button
-                class="w-11 h-6 rounded-full transition-colors"
+                class="w-11 h-6 rounded-full transition-colors settings-toggle"
                 :class="localSettings.gestures.swipeUp ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeUp = !localSettings.gestures.swipeUp"
               >
                 <span
-                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform settings-toggle-knob"
                   :class="localSettings.gestures.swipeUp ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -90,12 +90,12 @@
             <div class="flex items-center justify-between">
               <span class="text-sm text-[var(--mobile-text-secondary)]">{{ t('mobile.inputAssistant.swipeLeft') }}</span>
               <button
-                class="w-11 h-6 rounded-full transition-colors"
+                class="w-11 h-6 rounded-full transition-colors settings-toggle"
                 :class="localSettings.gestures.swipeLeft ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeLeft = !localSettings.gestures.swipeLeft"
               >
                 <span
-                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform settings-toggle-knob"
                   :class="localSettings.gestures.swipeLeft ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -104,12 +104,12 @@
             <div class="flex items-center justify-between">
               <span class="text-sm text-[var(--mobile-text-secondary)]">{{ t('mobile.inputAssistant.swipeRight') }}</span>
               <button
-                class="w-11 h-6 rounded-full transition-colors"
+                class="w-11 h-6 rounded-full transition-colors settings-toggle"
                 :class="localSettings.gestures.swipeRight ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]'"
                 @click="localSettings.gestures.swipeRight = !localSettings.gestures.swipeRight"
               >
                 <span
-                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform"
+                  class="block w-5 h-5 bg-[var(--mobile-text-primary)] rounded-full shadow transform transition-transform settings-toggle-knob"
                   :class="localSettings.gestures.swipeRight ? 'translate-x-5' : 'translate-x-0.5'"
                 ></span>
               </button>
@@ -190,3 +190,15 @@ function handleReset() {
   }
 }
 </script>
+
+<style scoped>
+.settings-toggle {
+  width: clamp(2.5rem, 2.75rem, 3.25rem) !important;
+  height: clamp(1.375rem, 1.5rem, 1.75rem) !important;
+}
+
+.settings-toggle-knob {
+  width: clamp(1rem, 1.25rem, 1.5rem) !important;
+  height: clamp(1rem, 1.25rem, 1.5rem) !important;
+}
+</style>

@@ -220,7 +220,7 @@ watch(
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 90%;
-  max-width: 700px;
+  max-width: clamp(280px, 700px, 900px);
   height: 80vh;
   display: flex;
   flex-direction: column;
@@ -278,7 +278,7 @@ watch(
 }
 
 .viewer-action-btn {
-  padding: 0.375rem;
+  padding: clamp(0.25rem, 0.375rem, 0.5rem);
   border-radius: 0.375rem;
   background: none;
   border: none;
