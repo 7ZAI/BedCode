@@ -7,7 +7,7 @@
   "main": "index.js",
   "sandbox": "inline",
   "pluginType": "rust-ts",
-  "rustLibrary": "bedcode_plugin_ai_chatbox.dll",
+  "rustLibrary": "bedcode_plugin_ai_chatbox",
   "permissions": ["ui:sidebar", "ui:input", "storage", "terminal:input", "terminal:output", "session:read"],
   "contributes": {
     "commands": [

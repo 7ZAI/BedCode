@@ -1,18 +1,34 @@
 //! AI API Client
 //!
-//! 通过 reqwest 调用 OpenAI 兼容 API，支持流式和非流式两种模式
+//! 支持 OpenAI / Anthropic / Gemini / Ollama 四种 API 格式
 //! 流式模式通过宿主 emit_event 逐 chunk 推送到前端
 
 use crate::HOST_CONTEXT;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+/// API 格式
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiFormat {
+    OpenAI,
+    Anthropic,
+    Gemini,
+    Ollama,
+}
+
 /// API 提供商配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiProvider {
+    pub id: String,
     pub name: String,
     pub api_key: String,
     pub base_url: String,
+    pub api_format: ApiFormat,
+    pub models: Vec<String>,
+    pub active_model: String,
+    /// 兼容：前端传来的 provider 可能有 model 字段（由 useAiChat 构造）
+    #[serde(default)]
     pub model: String,
 }
 
@@ -23,23 +39,23 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-/// SSE 响应结构
+/// OpenAI SSE 响应结构
 #[derive(Debug, Deserialize)]
-struct SseResponse {
-    choices: Vec<SseChoice>,
+struct OpenAiSseResponse {
+    choices: Vec<OpenAiSseChoice>,
 }
 
 #[derive(Debug, Deserialize)]
-struct SseChoice {
-    delta: SseDelta,
+struct OpenAiSseChoice {
+    delta: OpenAiSseDelta,
 }
 
 #[derive(Debug, Deserialize)]
-struct SseDelta {
+struct OpenAiSseDelta {
     content: Option<String>,
 }
 
-/// 非流式响应结构
+/// OpenAI 非流式响应结构
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
@@ -55,15 +71,188 @@ struct ChatMessageResponse {
     content: String,
 }
 
-/// 非流式聊天请求
+/// Anthropic SSE 事件结构
+#[derive(Debug, Deserialize)]
+struct AnthropicDeltaEvent {
+    delta: AnthropicDelta,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicDelta {
+    text: Option<String>,
+}
+
+/// Gemini SSE 响应结构
+#[derive(Debug, Deserialize)]
+struct GeminiSseResponse {
+    candidates: Vec<GeminiCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiCandidate {
+    content: GeminiContent,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiPart {
+    text: Option<String>,
+}
+
+/// Ollama SSE 响应结构
+#[derive(Debug, Deserialize)]
+struct OllamaSseResponse {
+    message: Option<OllamaMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaMessage {
+    content: Option<String>,
+}
+
+/// 统一的流式聊天入口 — 根据 api_format 分发
+pub async fn chat_stream(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+    stream_id: &str,
+) -> anyhow::Result<()> {
+    // 验证插件已激活
+    if HOST_CONTEXT.get().is_none() || !crate::ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(anyhow::anyhow!("Plugin not activated"));
+    }
+
+    match provider.api_format {
+        ApiFormat::OpenAI => chat_stream_openai(provider, messages, stream_id).await,
+        ApiFormat::Anthropic => chat_stream_anthropic(provider, messages, stream_id).await,
+        ApiFormat::Gemini => chat_stream_gemini(provider, messages, stream_id).await,
+        ApiFormat::Ollama => chat_stream_ollama(provider, messages, stream_id).await,
+    }
+}
+
+/// 统一的非流式聊天入口
 pub async fn chat_complete(provider: &ApiProvider, messages: &[ChatMessage]) -> anyhow::Result<String> {
+    match provider.api_format {
+        ApiFormat::OpenAI => chat_complete_openai(provider, messages).await,
+        ApiFormat::Anthropic => chat_complete_anthropic(provider, messages).await,
+        ApiFormat::Gemini => chat_complete_gemini(provider, messages).await,
+        ApiFormat::Ollama => chat_complete_ollama(provider, messages).await,
+    }
+}
+
+/// 向前端 emit 事件
+fn emit_chunk(event_name: &str, chunk: &str) {
+    if let Some(host) = HOST_CONTEXT.get() {
+        let payload = serde_json::json!({ "chunk": chunk });
+        host.emit(event_name, &payload);
+    }
+}
+
+fn emit_done(event_name: &str) {
+    if let Some(host) = HOST_CONTEXT.get() {
+        let payload = serde_json::json!({ "done": true });
+        host.emit(event_name, &payload);
+    }
+}
+
+fn emit_error(event_name: &str, error: &str) {
+    if let Some(host) = HOST_CONTEXT.get() {
+        let payload = serde_json::json!({ "error": error, "done": true });
+        host.emit(event_name, &payload);
+    }
+}
+
+/// 获取当前使用的模型（优先使用 model 字段，其次 active_model）
+fn effective_model(provider: &ApiProvider) -> &str {
+    if !provider.model.is_empty() {
+        &provider.model
+    } else if !provider.active_model.is_empty() {
+        &provider.active_model
+    } else {
+        provider.models.first().map(|s| s.as_str()).unwrap_or("")
+    }
+}
+
+// ==================== OpenAI ====================
+
+async fn chat_stream_openai(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+    stream_id: &str,
+) -> anyhow::Result<()> {
+    let event_name = format!("ai-chatbox:stream:{}", stream_id);
     let client = reqwest::Client::new();
+    let model = effective_model(provider);
+
     let response = client
         .post(format!("{}/chat/completions", provider.base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {}", provider.api_key))
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
-            "model": provider.model,
+            "model": model,
+            "messages": messages,
+            "stream": true,
+        }))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        emit_error(&event_name, &format!("API error {}: {}", status, body));
+        return Err(anyhow::anyhow!("API error {}: {}", status, body));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_text = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+
+            for line in event_text.lines() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        emit_done(&event_name);
+                        return Ok(());
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<OpenAiSseResponse>(data) {
+                        if let Some(content) = parsed.choices.first().and_then(|c| c.delta.content.as_ref()) {
+                            if !content.is_empty() {
+                                emit_chunk(&event_name, content);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    emit_done(&event_name);
+    Ok(())
+}
+
+async fn chat_complete_openai(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let model = effective_model(provider);
+
+    let response = client
+        .post(format!("{}/chat/completions", provider.base_url.trim_end_matches('/')))
+        .header("Authorization", format!("Bearer {}", provider.api_key))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": model,
             "messages": messages,
             "stream": false,
         }))
@@ -82,29 +271,318 @@ pub async fn chat_complete(provider: &ApiProvider, messages: &[ChatMessage]) -> 
         .unwrap_or_default())
 }
 
-/// 流式聊天请求
-///
-/// 通过宿主 emit_event 逐 chunk 推送到前端，事件名格式：`ai-chatbox:stream:{stream_id}`
-/// 推送完成后发送 done 事件
-pub async fn chat_stream(
+// ==================== Anthropic ====================
+
+/// 将 ChatMessage 转为 Anthropic 格式（system 单独提取）
+fn split_anthropic_messages(messages: &[ChatMessage]) -> (String, Vec<serde_json::Value>) {
+    let mut system_prompt = String::new();
+    let mut chat_msgs = Vec::new();
+
+    for msg in messages {
+        if msg.role == "system" {
+            system_prompt = msg.content.clone();
+        } else {
+            chat_msgs.push(serde_json::json!({
+                "role": msg.role,
+                "content": msg.content,
+            }));
+        }
+    }
+
+    (system_prompt, chat_msgs)
+}
+
+async fn chat_stream_anthropic(
     provider: &ApiProvider,
     messages: &[ChatMessage],
     stream_id: &str,
 ) -> anyhow::Result<()> {
-    // 验证插件已激活
-    if HOST_CONTEXT.get().is_none() {
-        return Err(anyhow::anyhow!("Plugin not activated"));
-    }
-
     let event_name = format!("ai-chatbox:stream:{}", stream_id);
     let client = reqwest::Client::new();
+    let model = effective_model(provider);
+    let (system_prompt, chat_msgs) = split_anthropic_messages(messages);
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": chat_msgs,
+        "max_tokens": 8192,
+        "stream": true,
+    });
+    if !system_prompt.is_empty() {
+        body["system"] = serde_json::json!(system_prompt);
+    }
 
     let response = client
-        .post(format!("{}/chat/completions", provider.base_url.trim_end_matches('/')))
-        .header("Authorization", format!("Bearer {}", provider.api_key))
+        .post(format!("{}/v1/messages", provider.base_url.trim_end_matches('/')))
+        .header("x-api-key", &provider.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        emit_error(&event_name, &format!("API error {}: {}", status, body));
+        return Err(anyhow::anyhow!("API error {}: {}", status, body));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut current_event_type = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_text = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+
+            for line in event_text.lines() {
+                if let Some(evt_type) = line.strip_prefix("event: ") {
+                    current_event_type = evt_type.trim().to_string();
+                } else if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+
+                    match current_event_type.as_str() {
+                        "content_block_delta" => {
+                            if let Ok(parsed) = serde_json::from_str::<AnthropicDeltaEvent>(data) {
+                                if let Some(text) = parsed.delta.text {
+                                    if !text.is_empty() {
+                                        emit_chunk(&event_name, &text);
+                                    }
+                                }
+                            }
+                        }
+                        "message_stop" => {
+                            emit_done(&event_name);
+                            return Ok(());
+                        }
+                        "message_delta" => {
+                            // message_delta 包含 stop_reason 等信息，不再有文本内容
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                                if parsed["delta"]["stop_reason"].as_str() == Some("end_turn") {
+                                    emit_done(&event_name);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    emit_done(&event_name);
+    Ok(())
+}
+
+async fn chat_complete_anthropic(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let model = effective_model(provider);
+    let (system_prompt, chat_msgs) = split_anthropic_messages(messages);
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": chat_msgs,
+        "max_tokens": 8192,
+    });
+    if !system_prompt.is_empty() {
+        body["system"] = serde_json::json!(system_prompt);
+    }
+
+    let response = client
+        .post(format!("{}/v1/messages", provider.base_url.trim_end_matches('/')))
+        .header("x-api-key", &provider.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("API error {}: {}", status, body));
+    }
+
+    // Anthropic 非流式响应结构
+    #[derive(Debug, Deserialize)]
+    struct AnthropicResponse {
+        content: Vec<AnthropicContentBlock>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct AnthropicContentBlock {
+        text: Option<String>,
+    }
+
+    let resp: AnthropicResponse = response.json().await?;
+    let text = resp.content.iter()
+        .filter_map(|b| b.text.clone())
+        .collect::<Vec<_>>()
+        .join("");
+    Ok(text)
+}
+
+// ==================== Gemini ====================
+
+/// 将 ChatMessage 转为 Gemini 格式（contents 数组 + systemInstruction）
+fn build_gemini_body(messages: &[ChatMessage], _model: &str) -> serde_json::Value {
+    let mut system_instruction = None;
+    let mut contents = Vec::new();
+
+    for msg in messages {
+        if msg.role == "system" {
+            system_instruction = Some(serde_json::json!({
+                "parts": [{ "text": msg.content }]
+            }));
+        } else {
+            // Gemini 用 "user" / "model" 而非 "assistant"
+            let role = if msg.role == "assistant" { "model" } else { "user" };
+            contents.push(serde_json::json!({
+                "role": role,
+                "parts": [{ "text": msg.content }]
+            }));
+        }
+    }
+
+    let mut body = serde_json::json!({
+        "contents": contents,
+        "generationConfig": {},
+    });
+    if let Some(si) = system_instruction {
+        body["systemInstruction"] = si;
+    }
+    body
+}
+
+async fn chat_stream_gemini(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+    stream_id: &str,
+) -> anyhow::Result<()> {
+    let event_name = format!("ai-chatbox:stream:{}", stream_id);
+    let client = reqwest::Client::new();
+    let model = effective_model(provider);
+    let body = build_gemini_body(messages, model);
+
+    let url = format!(
+        "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+        provider.base_url.trim_end_matches('/'),
+        model,
+        provider.api_key
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        emit_error(&event_name, &format!("API error {}: {}", status, body));
+        return Err(anyhow::anyhow!("API error {}: {}", status, body));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_text = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+
+            for line in event_text.lines() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if let Ok(parsed) = serde_json::from_str::<GeminiSseResponse>(data) {
+                        if let Some(text) = parsed.candidates.first()
+                            .and_then(|c| c.content.parts.first())
+                            .and_then(|p| p.text.as_ref())
+                        {
+                            if !text.is_empty() {
+                                emit_chunk(&event_name, text);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    emit_done(&event_name);
+    Ok(())
+}
+
+async fn chat_complete_gemini(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let model = effective_model(provider);
+    let body = build_gemini_body(messages, model);
+
+    let url = format!(
+        "{}/models/{}:generateContent?key={}",
+        provider.base_url.trim_end_matches('/'),
+        model,
+        provider.api_key
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("API error {}: {}", status, body));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct GeminiResponse {
+        candidates: Vec<GeminiCandidate>,
+    }
+
+    let resp: GeminiResponse = response.json().await?;
+    let text = resp.candidates.first()
+        .and_then(|c| c.content.parts.first())
+        .and_then(|p| p.text.clone())
+        .unwrap_or_default();
+    Ok(text)
+}
+
+// ==================== Ollama ====================
+
+async fn chat_stream_ollama(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+    stream_id: &str,
+) -> anyhow::Result<()> {
+    let event_name = format!("ai-chatbox:stream:{}", stream_id);
+    let client = reqwest::Client::new();
+    let model = effective_model(provider);
+
+    let response = client
+        .post(format!("{}/api/chat", provider.base_url.trim_end_matches('/')))
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
-            "model": provider.model,
+            "model": model,
             "messages": messages,
             "stream": true,
         }))
@@ -114,18 +592,11 @@ pub async fn chat_stream(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let error_payload = serde_json::json!({
-            "error": format!("API error {}: {}", status, body),
-            "done": true
-        });
-        // emit 不涉及 await，短暂获取 host 引用后立即释放
-        if let Some(host) = HOST_CONTEXT.get() {
-            host.emit(&event_name, &error_payload);
-        }
+        emit_error(&event_name, &format!("API error {}: {}", status, body));
         return Err(anyhow::anyhow!("API error {}: {}", status, body));
     }
 
-    // SSE 流式解析
+    // Ollama 每行一个 JSON 对象，非 SSE 格式
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
 
@@ -133,42 +604,54 @@ pub async fn chat_stream(
         let chunk = chunk?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-        // 按行分割，处理完整的 SSE 事件
-        while let Some(pos) = buffer.find("\n\n") {
-            let event_text = buffer[..pos].to_string();
-            buffer = buffer[pos + 2..].to_string();
+        while let Some(pos) = buffer.find('\n') {
+            let line = buffer[..pos].trim().to_string();
+            buffer = buffer[pos + 1..].to_string();
 
-            for line in event_text.lines() {
-                if let Some(data) = line.strip_prefix("data: ") {
-                    let data = data.trim();
-                    if data == "[DONE]" {
-                        let done_payload = serde_json::json!({ "done": true });
-                        if let Some(host) = HOST_CONTEXT.get() {
-                            host.emit(&event_name, &done_payload);
-                        }
-                        return Ok(());
-                    }
+            if line.is_empty() {
+                continue;
+            }
 
-                    if let Ok(parsed) = serde_json::from_str::<SseResponse>(data) {
-                        if let Some(content) = parsed.choices.first().and_then(|c| c.delta.content.as_ref()) {
-                            if !content.is_empty() {
-                                let chunk_payload = serde_json::json!({ "chunk": content });
-                                if let Some(host) = HOST_CONTEXT.get() {
-                                    host.emit(&event_name, &chunk_payload);
-                                }
-                            }
+            if let Ok(parsed) = serde_json::from_str::<OllamaSseResponse>(&line) {
+                if let Some(msg) = &parsed.message {
+                    if let Some(text) = &msg.content {
+                        if !text.is_empty() {
+                            emit_chunk(&event_name, text);
                         }
                     }
-                    // 解析失败的行静默跳过（可能是不完整的事件或注释行）
                 }
             }
         }
     }
 
-    // 流结束但未收到 [DONE]
-    let done_payload = serde_json::json!({ "done": true });
-    if let Some(host) = HOST_CONTEXT.get() {
-        host.emit(&event_name, &done_payload);
-    }
+    emit_done(&event_name);
     Ok(())
+}
+
+async fn chat_complete_ollama(
+    provider: &ApiProvider,
+    messages: &[ChatMessage],
+) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let model = effective_model(provider);
+
+    let response = client
+        .post(format!("{}/api/chat", provider.base_url.trim_end_matches('/')))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+        }))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("API error {}: {}", status, body));
+    }
+
+    let resp: OllamaSseResponse = response.json().await?;
+    Ok(resp.message.and_then(|m| m.content).unwrap_or_default())
 }

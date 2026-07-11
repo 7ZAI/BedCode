@@ -13,6 +13,8 @@ pub mod registry;
 pub mod setup;
 pub mod storage;
 pub mod types;
+#[cfg(debug_assertions)]
+pub mod watcher;
 
 pub use manager::PluginManager;
 pub use host::PluginHost;

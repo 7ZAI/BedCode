@@ -13,10 +13,22 @@ use host_api::HostContext;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 /// 宿主注入的上下文（activate 时设置，deactivate 时清除）
 static HOST_CONTEXT: OnceLock<HostContext> = OnceLock::new();
+
+/// 插件激活状态标记 — 停用后拒绝所有 API 调用
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// 检查插件是否处于激活状态，未激活时返回错误
+fn ensure_active() -> anyhow::Result<()> {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        anyhow::bail!("Plugin not activated");
+    }
+    Ok(())
+}
 
 /// 返回插件 manifest JSON
 #[no_mangle]
@@ -30,7 +42,7 @@ pub extern "C" fn bedcode_plugin_manifest() -> *mut c_char {
         "main": "index.js",
         "sandbox": "inline",
         "pluginType": "rust-ts",
-        "rustLibrary": "bedcode_plugin_ai_chatbox.dll",
+        "rustLibrary": "bedcode_plugin_ai_chatbox",
         "permissions": ["ui:sidebar", "ui:input", "storage", "terminal:input", "terminal:output", "session:read"],
         "contributes": {
             "commands": [
@@ -54,7 +66,8 @@ pub extern "C" fn bedcode_plugin_manifest() -> *mut c_char {
                 "title": "AI Chatbox Settings",
                 "properties": {
                     "apiProviders": { "type": "string", "title": "API Providers (JSON)", "description": "JSON array of API provider configs", "default": "[]" },
-                    "activeProvider": { "type": "string", "title": "Active Provider Name", "default": "" }
+                    "activeProvider": { "type": "string", "title": "Active Provider ID", "default": "" },
+                    "activeModel": { "type": "string", "title": "Active Model", "default": "" }
                 }
             }
         }
@@ -69,18 +82,20 @@ pub extern "C" fn bedcode_plugin_activate(host_ctx: *const HostContext) -> c_int
         tracing::error!("[AiChatbox] activate: null HostContext");
         return 1;
     }
-    let _ctx = unsafe { &*host_ctx };
     match HOST_CONTEXT.set(unsafe { std::ptr::read(host_ctx) }) {
         Ok(()) => {
-            tracing::info!("[AiChatbox] Plugin activated (cdylib)");
             // 初始化自定义数据库表
             if let Err(e) = db::init() {
                 tracing::error!("[AiChatbox] DB init failed: {}", e);
                 return 2;
             }
+            ACTIVE.store(true, Ordering::SeqCst);
+            tracing::info!("[AiChatbox] Plugin activated (cdylib)");
             0
         }
         Err(_) => {
+            // 已激活（重复调用），标记为激活状态
+            ACTIVE.store(true, Ordering::SeqCst);
             tracing::warn!("[AiChatbox] Plugin already activated, HostContext already set");
             0
         }
@@ -90,6 +105,7 @@ pub extern "C" fn bedcode_plugin_activate(host_ctx: *const HostContext) -> c_int
 /// 停用插件
 #[no_mangle]
 pub extern "C" fn bedcode_plugin_deactivate() -> c_int {
+    ACTIVE.store(false, Ordering::SeqCst);
     tracing::info!("[AiChatbox] Plugin deactivated (cdylib)");
     0
 }
@@ -100,6 +116,12 @@ pub extern "C" fn bedcode_plugin_invoke_command(
     command_name: *const c_char,
     args_json: *const c_char,
 ) -> *mut c_char {
+    // 激活状态检查
+    if let Err(e) = ensure_active() {
+        let error_json = serde_json::json!({ "error": e.to_string() });
+        return CString::new(error_json.to_string()).unwrap().into_raw();
+    }
+
     let name = if command_name.is_null() {
         tracing::error!("[AiChatbox] invoke_command: null command_name");
         return ptr::null_mut();
@@ -129,7 +151,6 @@ pub extern "C" fn bedcode_plugin_invoke_command(
         Ok(val) => CString::new(val.to_string()).unwrap().into_raw(),
         Err(e) => {
             tracing::error!("[AiChatbox] Command '{}' failed: {}", name, e);
-            // 返回错误 JSON 而非 null，让前端能区分"命令不存在"和"执行失败"
             let error_json = serde_json::json!({ "error": e.to_string() });
             CString::new(error_json.to_string()).unwrap().into_raw()
         }

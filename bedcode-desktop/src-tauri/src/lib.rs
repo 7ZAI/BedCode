@@ -82,8 +82,12 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
         .with_line_number(true)
         .with_filter(EnvFilter::new("error"));
 
-    // 运行时日志层：级别由配置控制
-    let file_level = log_config.file_level.as_str();
+    // 运行时日志层：dev 构建强制 debug，release 使用配置值
+    let file_level = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        log_config.file_level.as_str()
+    };
     let runtime_layer = tracing_subscriber::fmt::layer()
         .with_writer(runtime_appender)
         .with_ansi(false)
@@ -321,6 +325,17 @@ pub fn run() {
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
 
+            // ==================== 开发模式：启动插件文件监听 ====================
+            // 仅 debug 构建启用，监听插件产物变化触发热重载
+            #[cfg(debug_assertions)]
+            {
+                let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf());
+                // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
+                // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
+                Box::leak(Box::new(_dev_watcher));
+                tracing::info!("Plugin dev watcher enabled (debug build)");
+            }
+
             // ==================== 启动服务器（通过 ServerSupervisor）====================
 
             let supervisor = server::supervisor::ServerSupervisor::global();
@@ -491,6 +506,7 @@ pub fn run() {
             commands::plugin::plugin_find_file_handler,
             commands::plugin::plugin_invoke,
             commands::plugin::plugin_list_rust_commands,
+            commands::plugin::plugin_dev_reload,
             // Server
             commands::server::server_start,
             commands::server::server_stop,

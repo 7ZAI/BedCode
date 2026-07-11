@@ -196,3 +196,25 @@ pub async fn plugin_list_rust_commands(
 ) -> crate::Result<Vec<bedcode_plugin_api::PluginCommandEntry>> {
     Ok(plugin_host.list_rust_commands().await)
 }
+
+// ==================== Dev Mode ====================
+
+/// 热重载 cdylib 插件（仅开发模式可用）
+///
+/// 执行完整的卸载-重载-激活循环，用于开发期间快速迭代。
+/// 生产构建中调用此命令返回错误
+#[tauri::command]
+pub async fn plugin_dev_reload(
+    plugin_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        plugin_host.reload_cdylib_plugin(&plugin_id).await
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (plugin_host, plugin_id);
+        Err(crate::AppError::Plugin("Hot reload only available in dev mode".to_string()))
+    }
+}

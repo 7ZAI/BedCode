@@ -314,8 +314,11 @@ extern "C" fn host_storage_get(
         }
 
         // 调用 PluginStorage::get
+        // block_in_place 让 tokio 释放当前工作线程，避免 "Cannot start a runtime from within a runtime" panic
         let storage = ctx.plugin_host().storage();
-        match tauri::async_runtime::block_on(storage.get(&plugin_id, &key_str)) {
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(storage.get(&plugin_id, &key_str))
+        }) {
             Ok(Some(value)) => json_to_cstr(&value),
             Ok(None) => ptr::null_mut(),
             Err(e) => {
@@ -400,7 +403,9 @@ extern "C" fn host_storage_set(
 
         // 调用 PluginStorage::set
         let storage = ctx.plugin_host().storage();
-        match tauri::async_runtime::block_on(storage.set(&plugin_id, &key_str, json_value)) {
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(storage.set(&plugin_id, &key_str, json_value))
+        }) {
             Ok(()) => 0,
             Err(e) => {
                 tracing::error!(
@@ -461,7 +466,9 @@ extern "C" fn host_storage_delete(
 
         // 调用 PluginStorage::delete
         let storage = ctx.plugin_host().storage();
-        match tauri::async_runtime::block_on(storage.delete(&plugin_id, &key_str)) {
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(storage.delete(&plugin_id, &key_str))
+        }) {
             Ok(()) => 0,
             Err(e) => {
                 tracing::error!(
@@ -533,9 +540,11 @@ extern "C" fn host_db_execute(
 
         // 获取数据库锁并执行
         let db = ctx.db();
-        match tauri::async_runtime::block_on(async {
-            let db = db.lock().await;
-            db.conn().execute(&sql_str, []).map_err(|e| e.to_string())
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let db = db.lock().await;
+                db.conn().execute(&sql_str, []).map_err(|e| e.to_string())
+            })
         }) {
             Ok(affected) => affected as i32,
             Err(e) => {
@@ -609,7 +618,8 @@ extern "C" fn host_db_query(
         // 获取数据库锁并查询
         let db = ctx.db();
         let query_result: Result<serde_json::Value, String> =
-            tauri::async_runtime::block_on(async {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
                 let db = db.lock().await;
                 let conn = db.conn();
 
@@ -648,7 +658,8 @@ extern "C" fn host_db_query(
                         .map(serde_json::Value::Object)
                         .collect(),
                 ))
-            });
+            })
+        });
 
         match query_result {
             Ok(value) => json_to_cstr(&value),
@@ -711,7 +722,9 @@ extern "C" fn host_terminal_send_input(
         // 权限校验由宿主在 activate 时通过 permission 字段控制
         let ctx = crate::system::app_context::AppContext::global();
         let sm = ctx.session_manager();
-        match tauri::async_runtime::block_on(sm.write_input(&session_id_str, &data_str)) {
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(sm.write_input(&session_id_str, &data_str))
+        }) {
             Ok(()) => 0,
             Err(e) => {
                 tracing::error!(
@@ -740,7 +753,9 @@ extern "C" fn host_session_list() -> *mut c_char {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let ctx = crate::system::app_context::AppContext::global();
         let sm = ctx.session_manager();
-        let sessions = tauri::async_runtime::block_on(sm.list_sessions());
+        let sessions = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(sm.list_sessions())
+        });
 
         match serde_json::to_string(&sessions) {
             Ok(json) => string_to_cstr(json),
@@ -778,7 +793,9 @@ extern "C" fn host_session_get(session_id: *const c_char) -> *mut c_char {
 
         let ctx = crate::system::app_context::AppContext::global();
         let sm = ctx.session_manager();
-        match tauri::async_runtime::block_on(sm.get_session(&session_id_str)) {
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(sm.get_session(&session_id_str))
+        }) {
             Some(info) => match serde_json::to_string(&info) {
                 Ok(json) => string_to_cstr(json),
                 Err(e) => {

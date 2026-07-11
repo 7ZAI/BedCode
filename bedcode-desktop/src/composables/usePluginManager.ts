@@ -2,11 +2,14 @@
  * Plugin Manager Composable
  *
  * 插件管理页面业务逻辑 — 加载列表、切换启用、展开详情、复制路径
+ * 开发模式下监听 plugin:dev-reload 事件触发热重载
  */
 
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { pluginListLoaded, pluginActivate, pluginDeactivate } from '@/plugin/commands'
+import { pluginLoader } from '@/plugin/loader'
 import { useToast } from '@/composables/useToast'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import i18n from '@/locales'
 import type { PluginInfo, PluginState } from '@/plugin/types'
 
@@ -56,6 +59,9 @@ export function usePluginManager() {
   const loading = ref(false)
   const expandedId = ref<string | null>(null)
 
+  // 开发模式热重载事件监听
+  let devReloadUnlisten: UnlistenFn | null = null
+
   /** 加载插件列表 */
   async function loadPlugins(): Promise<void> {
     loading.value = true
@@ -100,6 +106,21 @@ export function usePluginManager() {
       toast.error(t('desktop.plugin.copyFailed'))
     }
   }
+
+  // 开发模式：监听 plugin:dev-reload 事件，自动热重载前端 TS 模块
+  onMounted(async () => {
+    devReloadUnlisten = await listen<{ pluginId: string }>('plugin:dev-reload', async (event) => {
+      const { pluginId } = event.payload
+      console.log(`[PluginManager] Dev reload event: ${pluginId}`)
+      await pluginLoader.reloadPlugin(pluginId)
+      await loadPlugins()
+    })
+  })
+
+  onUnmounted(() => {
+    devReloadUnlisten?.()
+    devReloadUnlisten = null
+  })
 
   return {
     plugins,

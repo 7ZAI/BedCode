@@ -6,30 +6,35 @@
       :placeholder="placeholder"
       :disabled="disabled"
       rows="1"
-      class="flex-1 resize-none bg-slate-50 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-dark-500 focus:border-primary-500 outline-none"
+      class="flex-1 resize-none bg-[var(--bg-card)] border border-[var(--border)] rounded-input px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:border-brand outline-none"
       @keydown.enter.exact.prevent="handleSend"
       @input="autoResize"
     ></textarea>
     <button
       :disabled="disabled || !text.trim()"
-      class="px-3 py-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors flex-shrink-0"
+      class="px-3 py-2 bg-brand hover:bg-brand-hover disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-btn text-sm font-medium transition-colors flex-shrink-0"
       @click="handleSend"
     >
-      发送
+      {{ label }}
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = withDefaults(defineProps<{
   disabled?: boolean
   placeholder?: string
 }>(), {
   disabled: false,
-  placeholder: '输入消息...',
+  placeholder: '',
 })
+
+const label = t('desktop.plugin.aiChatbox.send')
 
 const emit = defineEmits<{
   send: [content: string]

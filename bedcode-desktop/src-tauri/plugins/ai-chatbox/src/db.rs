@@ -30,33 +30,60 @@ pub struct ChatMessageRecord {
 const TABLE_CONVERSATIONS: &str = "plugin_com_bedcode_ai_chatbox_conversations";
 const TABLE_MESSAGES: &str = "plugin_com_bedcode_ai_chatbox_messages";
 
+/// 将 Rust 值转为 SQL 字面量（安全，无注入风险）
+///
+/// 通过 serde_json 序列化后提取 JSON 字面量，确保所有特殊字符被正确转义
+fn sql_value<T: serde::Serialize>(val: &T) -> String {
+    match serde_json::to_value(val) {
+        Ok(serde_json::Value::String(s)) => {
+            // 单引号转义为 SQLite 标准的 ''
+            let escaped = s.replace('\'', "''");
+            format!("'{}'", escaped)
+        }
+        Ok(serde_json::Value::Number(n)) => n.to_string(),
+        Ok(serde_json::Value::Bool(b)) => if b { "1" } else { "0" }.to_string(),
+        Ok(serde_json::Value::Null) => "NULL".to_string(),
+        _ => "NULL".to_string(),
+    }
+}
+
 /// 初始化自定义数据库表
 pub fn init() -> anyhow::Result<()> {
     let host = HOST_CONTEXT.get()
         .ok_or_else(|| anyhow::anyhow!("Plugin not activated"))?;
 
-    let sql = format!(
+    let sql1 = format!(
         "CREATE TABLE IF NOT EXISTS {} (\
             id TEXT PRIMARY KEY, \
             title TEXT NOT NULL, \
             created_at TEXT NOT NULL, \
             updated_at TEXT NOT NULL, \
             provider_name TEXT NOT NULL\
-        );\
-        CREATE TABLE IF NOT EXISTS {} (\
+        )",
+        TABLE_CONVERSATIONS
+    );
+
+    let sql2 = format!(
+        "CREATE TABLE IF NOT EXISTS {} (\
             id INTEGER PRIMARY KEY AUTOINCREMENT, \
             conversation_id TEXT NOT NULL, \
             role TEXT NOT NULL, \
             content TEXT NOT NULL, \
             timestamp TEXT NOT NULL, \
             FOREIGN KEY (conversation_id) REFERENCES {}(id)\
-        );",
-        TABLE_CONVERSATIONS, TABLE_MESSAGES, TABLE_CONVERSATIONS
+        )",
+        TABLE_MESSAGES, TABLE_CONVERSATIONS
     );
 
-    let result = host.db_execute_sql(&sql);
-    if result < 0 {
-        return Err(anyhow::anyhow!("Failed to create tables: error code {}", result));
+    // 拆分为两次调用，rusqlite execute 不支持多语句
+    let result1 = host.db_execute_sql(&sql1);
+    if result1 < 0 {
+        return Err(anyhow::anyhow!("Failed to create conversations table: error code {}", result1));
+    }
+
+    let result2 = host.db_execute_sql(&sql2);
+    if result2 < 0 {
+        return Err(anyhow::anyhow!("Failed to create messages table: error code {}", result2));
     }
 
     tracing::info!("[AiChatbox] Custom DB tables initialized");
@@ -88,8 +115,8 @@ pub fn get_messages(conversation_id: &str) -> anyhow::Result<Vec<ChatMessageReco
         .ok_or_else(|| anyhow::anyhow!("Plugin not activated"))?;
 
     let sql = format!(
-        "SELECT id, conversation_id, role, content, timestamp FROM {} WHERE conversation_id = '{}' ORDER BY timestamp ASC",
-        TABLE_MESSAGES, conversation_id.replace('\'', "''")
+        "SELECT id, conversation_id, role, content, timestamp FROM {} WHERE conversation_id = {} ORDER BY timestamp ASC",
+        TABLE_MESSAGES, sql_value(&conversation_id)
     );
 
     let rows = host.db_query_sql(&sql)
@@ -107,13 +134,13 @@ pub fn save_conversation(conv: &ConversationMeta) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Plugin not activated"))?;
 
     let sql = format!(
-        "INSERT OR REPLACE INTO {} (id, title, created_at, updated_at, provider_name) VALUES ('{}', '{}', '{}', '{}', '{}')",
+        "INSERT OR REPLACE INTO {} (id, title, created_at, updated_at, provider_name) VALUES ({}, {}, {}, {}, {})",
         TABLE_CONVERSATIONS,
-        conv.id.replace('\'', "''"),
-        conv.title.replace('\'', "''"),
-        conv.created_at.replace('\'', "''"),
-        conv.updated_at.replace('\'', "''"),
-        conv.provider_name.replace('\'', "''")
+        sql_value(&conv.id),
+        sql_value(&conv.title),
+        sql_value(&conv.created_at),
+        sql_value(&conv.updated_at),
+        sql_value(&conv.provider_name)
     );
 
     let result = host.db_execute_sql(&sql);
@@ -129,12 +156,12 @@ pub fn save_message(conversation_id: &str, role: &str, content: &str, timestamp:
         .ok_or_else(|| anyhow::anyhow!("Plugin not activated"))?;
 
     let sql = format!(
-        "INSERT INTO {} (conversation_id, role, content, timestamp) VALUES ('{}', '{}', '{}', '{}')",
+        "INSERT INTO {} (conversation_id, role, content, timestamp) VALUES ({}, {}, {}, {})",
         TABLE_MESSAGES,
-        conversation_id.replace('\'', "''"),
-        role.replace('\'', "''"),
-        content.replace('\'', "''"),
-        timestamp.replace('\'', "''")
+        sql_value(&conversation_id),
+        sql_value(&role),
+        sql_value(&content),
+        sql_value(&timestamp)
     );
 
     let result = host.db_execute_sql(&sql);
@@ -149,19 +176,17 @@ pub fn delete_conversation(conversation_id: &str) -> anyhow::Result<()> {
     let host = HOST_CONTEXT.get()
         .ok_or_else(|| anyhow::anyhow!("Plugin not activated"))?;
 
-    // 先删除消息
     let sql_msgs = format!(
-        "DELETE FROM {} WHERE conversation_id = '{}'",
+        "DELETE FROM {} WHERE conversation_id = {}",
         TABLE_MESSAGES,
-        conversation_id.replace('\'', "''")
+        sql_value(&conversation_id)
     );
     host.db_execute_sql(&sql_msgs);
 
-    // 再删除对话
     let sql_conv = format!(
-        "DELETE FROM {} WHERE id = '{}'",
+        "DELETE FROM {} WHERE id = {}",
         TABLE_CONVERSATIONS,
-        conversation_id.replace('\'', "''")
+        sql_value(&conversation_id)
     );
     let result = host.db_execute_sql(&sql_conv);
     if result < 0 {

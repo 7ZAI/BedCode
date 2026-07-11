@@ -497,6 +497,76 @@ impl PluginHost {
         Ok(())
     }
 
+    /// 热重载 cdylib 插件（开发模式）
+    ///
+    /// 执行完整的卸载-重载-激活循环：
+    /// 1. 停用插件（调用 deactivate + 清理注册/权限）
+    /// 2. 卸载旧 cdylib（从 map 移除触发 Library drop / FreeLibrary）
+    /// 3. 重新加载 cdylib（shadow copy 新 DLL + 解析符号）
+    /// 4. 重新激活插件
+    ///
+    /// 仅在开发模式下可用，生产构建中调用返回错误
+    pub async fn reload_cdylib_plugin(&self, plugin_id: &str) -> crate::Result<()> {
+        // 验证插件存在且为 cdylib 来源
+        let (rust_library, extension_path) = {
+            let plugins = self.plugins.read().await;
+            let loaded = plugins.get(plugin_id).ok_or_else(|| {
+                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
+            })?;
+            if loaded.source != PluginSource::Cdylib {
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin {} is not a cdylib plugin, cannot hot-reload",
+                    plugin_id
+                )));
+            }
+            (loaded.manifest.rust_library.clone(), loaded.extension_path.clone())
+        };
+
+        tracing::info!("Hot-reloading cdylib plugin: {}", plugin_id);
+
+        // 1. 停用插件
+        self.deactivate_plugin(plugin_id).await?;
+
+        // 2. 卸载旧 cdylib：从 map 移除，触发 Library drop（FreeLibrary）
+        let old_cdylib = {
+            let mut cdylib = self.cdylib_plugins.write().await;
+            cdylib.remove(plugin_id)
+        };
+        // 显式 drop 确保 Library 在重新加载前释放
+        drop(old_cdylib);
+
+        // 3. 重新加载 cdylib（CdylibLoader::load 会自动 shadow copy）
+        let plugin_dir = Path::new(&extension_path);
+        let new_cdylib = CdylibLoader::load(plugin_dir, &rust_library)?;
+
+        // 存入 cdylib_plugins map
+        self.cdylib_plugins.write().await.insert(plugin_id.to_string(), new_cdylib);
+
+        // 4. 重新注册 manifest contributes（deactivate 时已 unregister）
+        let m = {
+            let plugins = self.plugins.read().await;
+            let loaded = plugins.get(plugin_id).ok_or_else(|| {
+                crate::AppError::Plugin(format!("Plugin not found after reload: {}", plugin_id))
+            })?;
+            loaded.manifest.clone()
+        };
+        self.registry.register_commands(&m.id, &m.contributes.commands).await;
+        self.registry.register_views(&m.id, &m.contributes.views).await;
+        if let Some(ref term) = m.contributes.terminal {
+            self.registry
+                .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
+                .await;
+        }
+        self.registry.register_tool_providers(&m.id, &m.contributes.tool_providers).await;
+        self.registry.register_file_handlers(&m.id, &m.contributes.file_handlers).await;
+
+        // 5. 重新激活
+        self.activate_plugin(plugin_id).await?;
+
+        tracing::info!("Cdylib plugin hot-reloaded successfully: {}", plugin_id);
+        Ok(())
+    }
+
     /// 标记插件为错误状态
     pub async fn mark_error(&self, plugin_id: &str, error: String) {
         let mut plugins = self.plugins.write().await;

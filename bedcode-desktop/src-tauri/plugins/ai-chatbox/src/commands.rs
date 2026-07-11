@@ -34,9 +34,10 @@ pub fn chat_complete(args_json: &str) -> anyhow::Result<serde_json::Value> {
     let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
     let messages: Vec<ChatMessage> = serde_json::from_value(args["messages"].clone())?;
 
-    let rt = tokio::runtime::Handle::current();
-    let result = rt.block_on(async {
-        ai_client::chat_complete(&provider, &messages).await
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            ai_client::chat_complete(&provider, &messages).await
+        })
     })?;
 
     Ok(serde_json::json!({ "content": result }))
@@ -57,9 +58,10 @@ pub fn optimize_prompt(args_json: &str) -> anyhow::Result<serde_json::Value> {
         ChatMessage { role: "user".to_string(), content: prompt.clone() },
     ];
 
-    let rt = tokio::runtime::Handle::current();
-    let optimized = rt.block_on(async {
-        ai_client::chat_complete(&provider, &messages).await
+    let optimized = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            ai_client::chat_complete(&provider, &messages).await
+        })
     })?;
 
     Ok(serde_json::json!({ "original": prompt, "optimized": optimized }))

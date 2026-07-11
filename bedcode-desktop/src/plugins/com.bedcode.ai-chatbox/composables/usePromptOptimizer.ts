@@ -36,17 +36,15 @@ export function usePromptOptimizer(context: PluginContext) {
     }
 
     if (!provider) {
-      errorMessage.value = '请先配置 AI 模型'
+      errorMessage.value = 'desktop.plugin.aiChatbox.pleaseConfigure'
       showDialog.value = true
       return
     }
 
     // 获取当前活跃会话
     let sessionId = ''
-    let inputText = ''
     try {
       const sessions = await context.session.list()
-      // 取第一个 running 状态的会话
       const activeSession = sessions.find((s: any) => s.status === 'running')
       if (activeSession) {
         sessionId = activeSession.id
@@ -54,13 +52,16 @@ export function usePromptOptimizer(context: PluginContext) {
     } catch { /* ignore */ }
 
     if (!sessionId) {
-      errorMessage.value = '无活跃终端会话'
+      errorMessage.value = 'desktop.plugin.aiChatbox.noActiveSession'
       showDialog.value = true
       return
     }
 
     currentSessionId = sessionId
-    originalText.value = inputText
+    // 获取终端当前输入行内容
+    // 通过向终端发送特殊序列读取当前行内容不可行，
+    // 这里使用空字符串作为原始输入，用户可在优化后自行编辑
+    originalText.value = ''
     errorMessage.value = ''
     optimizing.value = true
     showDialog.value = true
@@ -70,11 +71,11 @@ export function usePromptOptimizer(context: PluginContext) {
       // 调用 Rust 后端优化命令
       const result = await context.commands.execute('ai-chatbox.optimize-prompt', {
         provider,
-        prompt: inputText,
+        prompt: originalText.value || '请优化以下终端输入',
       })
       optimizedText.value = result
     } catch (e: any) {
-      errorMessage.value = e.message || '优化失败'
+      errorMessage.value = e.message || 'desktop.plugin.aiChatbox.optimizeFailed'
     } finally {
       optimizing.value = false
     }

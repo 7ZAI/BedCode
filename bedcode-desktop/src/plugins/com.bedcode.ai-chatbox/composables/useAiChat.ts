@@ -83,7 +83,7 @@ export function useAiChat(context: PluginContext) {
   async function newConversation(providerName: string): Promise<void> {
     const conv: ConversationMeta = {
       id: generateId(),
-      title: '新对话',
+      title: 'desktop.plugin.aiChatbox.newConversation',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       providerName,
@@ -111,16 +111,20 @@ export function useAiChat(context: PluginContext) {
   async function sendMessage(content: string): Promise<void> {
     // 从 storage 读取当前活跃 provider
     const providersStr = await context.storage.get<string>('apiProviders')
-    const activeName = await context.storage.get<string>('activeProvider')
+    const activeId = await context.storage.get<string>('activeProvider')
+    const currentModel = await context.storage.get<string>('activeModel')
     let provider: ApiProvider | undefined
-    if (providersStr && activeName) {
+    if (providersStr && activeId) {
       try {
         const parsed = typeof providersStr === 'string' ? JSON.parse(providersStr) : providersStr
         const list = Array.isArray(parsed) ? parsed : []
-        provider = list.find((p: ApiProvider) => p.name === activeName)
+        provider = list.find((p: ApiProvider) => p.id === activeId)
       } catch { /* ignore */ }
     }
-    if (!provider) throw new Error('请先配置 AI 模型')
+    if (!provider) throw new Error('desktop.plugin.aiChatbox.pleaseConfigure')
+
+    // 用 activeModel 覆盖 provider.model，传给后端时使用当前选中模型
+    const providerWithModel = { ...provider, model: currentModel || provider.activeModel || provider.models[0] || '' }
 
     // 确保有当前对话
     if (!currentConvId.value) {
@@ -140,7 +144,7 @@ export function useAiChat(context: PluginContext) {
 
     // 更新对话标题（首条消息）
     const conv = conversations.value.find(c => c.id === currentConvId.value)
-    if (conv && conv.title === '新对话') {
+    if (conv && conv.title === 'desktop.plugin.aiChatbox.newConversation') {
       conv.title = content.slice(0, 30) + (content.length > 30 ? '...' : '')
       conv.updatedAt = new Date().toISOString()
       await saveConversation(conv)
@@ -202,7 +206,7 @@ export function useAiChat(context: PluginContext) {
     try {
       await context.commands.execute('ai-chatbox.chat-stream', {
         streamId,
-        provider,
+        provider: providerWithModel,
         messages: requestMessages,
       })
     } catch (e: any) {
@@ -211,7 +215,7 @@ export function useAiChat(context: PluginContext) {
       streamingContent.value = ''
       const last = messages.value[messages.value.length - 1]
       if (last && last.role === 'assistant') {
-        last.content = `❌ ${e.message || '请求失败'}`
+        last.content = `❌ ${e.message || 'desktop.plugin.aiChatbox.requestFailed'}`
       }
     }
   }

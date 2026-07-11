@@ -57,6 +57,9 @@
           </svg>
         </button>
 
+        <!-- Plugin Toolbar Extension -->
+        <PluginTerminalToolbar />
+
         <!-- Divider -->
         <div class="w-px h-4 bg-slate-200 dark:bg-dark-600 mx-0.5"></div>
 
@@ -104,6 +107,7 @@ import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TerminalPreview from '@/components/TerminalPreview.vue'
+import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import type { SessionInfo } from '@/composables/useTauri'
 
 const { t } = useI18n()

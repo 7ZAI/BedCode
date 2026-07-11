@@ -143,6 +143,55 @@ class PluginLoaderClass {
     return Array.from(this.plugins.values())
   }
 
+  /** 热重载插件（开发模式）
+   *
+   * 停用旧插件 → 重新加载 TS 入口（带缓存破坏）→ 重新激活。
+   * Rust 端 cdylib 热重载由 PluginHost::reload_cdylib_plugin() 处理，
+   * 此方法只负责前端 TS 模块的重载。
+   */
+  async reloadPlugin(pluginId: string): Promise<void> {
+    const plugin = this.plugins.get(pluginId)
+    const ACTIVATE_TIMEOUT = 5000
+
+    // 1. 停用旧插件（清理 disposables、事件、注册表、调用 deactivate）
+    if (plugin) {
+      plugin.context._disposables.forEach(d => {
+        try { d.dispose() } catch { /* ignore */ }
+      })
+      clearPluginEvents(pluginId)
+      getPluginRegistry().clearPlugin(pluginId)
+
+      if (plugin.module.deactivate) {
+        try { await plugin.module.deactivate() } catch { /* ignore */ }
+      }
+      this.plugins.delete(pluginId)
+    }
+
+    // 2. 获取最新插件信息
+    const info = await pluginCmds.pluginGetInfo(pluginId)
+    if (!info) {
+      console.error(`[PluginLoader] Cannot reload: plugin ${pluginId} not found`)
+      return
+    }
+
+    // 3. 重新加载 TS 入口（添加时间戳破坏浏览器缓存）
+    const entryUrl = this.convertFileUrl(info.extensionPath, info.main)
+      + '?t=' + Date.now()
+
+    try {
+      const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+      const context = createPluginContext(info)
+      await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+
+      this.plugins.set(pluginId, { manifest: info, module, context })
+      getPluginRegistry().setContext(pluginId, context)
+      console.log(`[PluginLoader] Plugin hot-reloaded: ${pluginId}`)
+    } catch (e: any) {
+      console.error(`[PluginLoader] Failed to hot-reload ${pluginId}:`, e)
+      await pluginCmds.pluginMarkError(pluginId, e.message || 'Hot reload failed')
+    }
+  }
+
   /** 判断插件是否需要按需激活
    *
    * 有 views 的插件立即激活（需要在侧边栏/工具箱显示入口）

@@ -6,6 +6,9 @@ const pluginId = 'com.bedcode.ai-chatbox'
 
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('production'),
+  },
   build: {
     lib: {
       entry: resolve(__dirname, 'index.ts'),
@@ -14,5 +17,6 @@ export default defineConfig({
     },
     outDir: resolve(__dirname, '../../../src-tauri/resources/plugins/desktop', pluginId),
     emptyOutDir: false,
+    minify: 'terser',
   },
 })

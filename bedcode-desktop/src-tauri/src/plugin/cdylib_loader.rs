@@ -2,10 +2,13 @@
 //!
 //! cdylib 动态库加载器 — 通过 libloading 加载插件动态库并解析导出符号
 //! 支持跨平台：Windows (.dll), macOS (.dylib), Linux (.so)
+//!
+//! 使用影子复制（shadow copy）策略：加载前将 DLL 复制到临时目录，
+//! 避免原始文件被宿主进程锁定，使开发期间可覆盖更新
 
 use libloading::{Library, Symbol};
 use std::ffi::c_char;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// cdylib 插件导出的类型化函数指针
 ///
@@ -31,18 +34,26 @@ pub struct CdylibExports {
 /// 已加载的 cdylib 插件
 ///
 /// 持有 Library 句柄和缓存的导出函数指针，Library 的生命周期
-/// 确保函数指针在插件卸载前始终有效
+/// 确保函数指针在插件卸载前始终有效。
+/// shadow_path 记录影子复制路径，用于热重载时清理旧文件
 pub struct LoadedCdylibPlugin {
     // Library 句柄必须持有，否则动态库被卸载后函数指针悬空
     #[allow(dead_code)]
     library: Library,
     exports: CdylibExports,
+    /// 影子复制路径（临时目录中的副本），热重载时用于清理
+    shadow_path: PathBuf,
 }
 
 impl LoadedCdylibPlugin {
     /// 获取导出函数指针引用
     pub fn exports(&self) -> &CdylibExports {
         &self.exports
+    }
+
+    /// 获取影子复制路径
+    pub fn shadow_path(&self) -> &Path {
+        &self.shadow_path
     }
 }
 
@@ -77,7 +88,17 @@ impl CdylibLoader {
             )));
         }
 
-        let full_path = plugin_dir.join(rust_library);
+        // 根据 platform 自动添加动态库后缀
+        // rustLibrary 字段只写库名（如 "bedcode_plugin_ai_chatbox"），不含后缀
+        let lib_filename = if cfg!(target_os = "windows") {
+            format!("{}.dll", rust_library)
+        } else if cfg!(target_os = "macos") {
+            format!("lib{}.dylib", rust_library)
+        } else {
+            format!("lib{}.so", rust_library)
+        };
+
+        let full_path = plugin_dir.join(&lib_filename);
 
         // 验证文件存在
         if !full_path.exists() {
@@ -87,12 +108,17 @@ impl CdylibLoader {
             )));
         }
 
-        // 加载动态库
+        // 影子复制：将 DLL 复制到临时目录，避免锁定原始文件
+        // 开发期间可覆盖原始 DLL，热重载时从临时目录卸载后重新复制
+        let shadow_path = shadow_copy_library(&full_path, &lib_filename)?;
+
+        // 从影子副本加载动态库
         let library = unsafe {
-            Library::new(&full_path).map_err(|e| {
+            Library::new(&shadow_path).map_err(|e| {
                 crate::AppError::Plugin(format!(
-                    "Failed to load library '{}': {}",
+                    "Failed to load library '{}' (shadow copy at '{}'): {}",
                     full_path.display(),
+                    shadow_path.display(),
                     e
                 ))
             })?
@@ -101,7 +127,7 @@ impl CdylibLoader {
         // 解析所有导出符号
         let exports = unsafe { load_exports(&library)? };
 
-        Ok(LoadedCdylibPlugin { library, exports })
+        Ok(LoadedCdylibPlugin { library, exports, shadow_path })
     }
 }
 
@@ -158,4 +184,45 @@ unsafe fn load_symbol<'lib, T>(
             e
         ))
     })
+}
+
+/// 将动态库文件影子复制到临时目录
+///
+/// 从原始路径复制 DLL 到 %TEMP%/bedcode-plugins/ 目录，
+/// 并在文件名中添加唯一后缀避免多实例冲突。
+/// 返回影子副本的路径，供 libloading 从该路径加载。
+///
+/// 影子复制解决 Windows 下 DLL 被宿主进程锁定无法覆盖的问题：
+/// 宿主加载的是临时目录中的副本，原始文件始终可被覆盖更新
+fn shadow_copy_library(original_path: &Path, lib_filename: &str) -> crate::Result<PathBuf> {
+    let shadow_dir = std::env::temp_dir().join("bedcode-plugins");
+    std::fs::create_dir_all(&shadow_dir).map_err(|e| {
+        crate::AppError::Plugin(format!(
+            "Failed to create shadow copy directory '{}': {}",
+            shadow_dir.display(),
+            e
+        ))
+    })?;
+
+    // 添加进程 PID 后缀，多实例场景下互不干扰
+    let pid = std::process::id();
+    let shadow_filename = format!("{}.{}", pid, lib_filename);
+    let shadow_path = shadow_dir.join(&shadow_filename);
+
+    std::fs::copy(original_path, &shadow_path).map_err(|e| {
+        crate::AppError::Plugin(format!(
+            "Failed to shadow copy library '{}' to '{}': {}",
+            original_path.display(),
+            shadow_path.display(),
+            e
+        ))
+    })?;
+
+    tracing::debug!(
+        "Shadow copied '{}' → '{}'",
+        original_path.display(),
+        shadow_path.display()
+    );
+
+    Ok(shadow_path)
 }
