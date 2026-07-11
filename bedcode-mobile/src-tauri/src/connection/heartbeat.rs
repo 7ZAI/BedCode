@@ -10,6 +10,9 @@ use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tracing::debug;
 
+use crate::system::constants::connection::BROADCAST_CHANNEL_CAPACITY;
+use crate::system::constants::heartbeat::{DEFAULT_MAX_HEARTBEAT_TIMEOUTS, HEARTBEAT_TIMEOUT_MULTIPLIER};
+
 /// 心跳配置
 #[derive(Debug, Clone)]
 pub struct HeartbeatConfig {
@@ -25,8 +28,8 @@ impl Default for HeartbeatConfig {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(30),
-            timeout: Duration::from_secs(90),
-            max_timeouts: 3,
+            timeout: Duration::from_secs(30 * HEARTBEAT_TIMEOUT_MULTIPLIER),
+            max_timeouts: DEFAULT_MAX_HEARTBEAT_TIMEOUTS,
         }
     }
 }
@@ -36,7 +39,7 @@ impl HeartbeatConfig {
         Self {
             interval: Duration::from_secs(interval_secs),
             timeout: Duration::from_secs(timeout_secs),
-            max_timeouts: 3,
+            max_timeouts: DEFAULT_MAX_HEARTBEAT_TIMEOUTS,
         }
     }
 }
@@ -76,7 +79,7 @@ pub struct HeartbeatManager {
 impl HeartbeatManager {
     /// 创建新的心跳管理器
     pub fn new(config: HeartbeatConfig) -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         Arc::new(Self {
             config,
             event_tx,
@@ -91,8 +94,8 @@ impl HeartbeatManager {
     pub fn from_client_config(heartbeat_interval_secs: u64) -> Arc<Self> {
         Self::new(HeartbeatConfig {
             interval: Duration::from_secs(heartbeat_interval_secs),
-            timeout: Duration::from_secs(heartbeat_interval_secs * 3),
-            max_timeouts: 3,
+            timeout: Duration::from_secs(heartbeat_interval_secs * HEARTBEAT_TIMEOUT_MULTIPLIER),
+            max_timeouts: DEFAULT_MAX_HEARTBEAT_TIMEOUTS,
         })
     }
 
@@ -165,7 +168,7 @@ impl Default for HeartbeatManager {
     fn default() -> Self {
         Self {
             config: HeartbeatConfig::default(),
-            event_tx: broadcast::channel(1024).0,
+            event_tx: broadcast::channel(BROADCAST_CHANNEL_CAPACITY).0,
             is_running: Arc::new(RwLock::new(false)),
             last_pong: RwLock::new(None),
             consecutive_timeouts: RwLock::new(0),

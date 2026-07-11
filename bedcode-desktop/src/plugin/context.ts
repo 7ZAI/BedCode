@@ -15,6 +15,7 @@ import type {
   EventAPI,
   StorageAPI,
   HttpAPI,
+  I18nAPI,
   SidebarPanelDescriptor,
   ToolboxPageDescriptor,
   StatusBarItemDescriptor,
@@ -202,6 +203,31 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
+  // ==================== I18nAPI ====================
+  const i18n: I18nAPI = {
+    getI18n(): any {
+      return (window as any).__BEDCODE_SHARED__?.i18n
+    },
+    registerMessages(locale: string, messages: Record<string, any>): void {
+      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
+      if (!hostI18n) return
+      // 用插件 ID 作为命名空间前缀，避免 key 冲突
+      const prefixed: Record<string, any> = {}
+      for (const [key, value] of Object.entries(messages)) {
+        prefixed[`${info.id}.${key}`] = value
+      }
+      const existing = hostI18n.global.getLocaleMessage(locale)
+      hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
+    },
+    t(key: string, params?: Record<string, any>): string {
+      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
+      if (!hostI18n) return key
+      // 自动添加插件 ID 前缀
+      const fullKey = `${info.id}.${key}`
+      return hostI18n.global.t(fullKey, params)
+    },
+  }
+
   return {
     id: info.id,
     extensionPath: info.extensionPath,
@@ -212,6 +238,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     events,
     storage,
     http,
+    i18n,
     _disposables: disposables,
   }
 }

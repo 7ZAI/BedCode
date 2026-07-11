@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 
 use super::types::{DiscoveredService, SERVICE_TYPE};
+use crate::system::constants::mdns::RECV_TIMEOUT_SECS;
 
 /// mDNS 发现管理器
 pub struct MdnsDiscovery {
@@ -61,7 +62,7 @@ impl MdnsDiscovery {
                     break;
                 }
 
-                match receiver.recv_timeout(std::time::Duration::from_secs(1)) {
+                match receiver.recv_timeout(std::time::Duration::from_secs(RECV_TIMEOUT_SECS)) {
                     Ok(event) => {
                         match event {
                             ServiceEvent::ServiceFound(service_type, instance_name) => {

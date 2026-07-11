@@ -6,6 +6,8 @@
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+use crate::system::constants::connection::BROADCAST_CHANNEL_CAPACITY;
+
 /// 客户端事件（IO 模块输出）
 #[derive(Debug, Clone)]
 pub enum IoEvent {
@@ -42,7 +44,7 @@ pub struct IoManager {
 impl IoManager {
     /// 创建新的 IO 管理器
     pub fn new() -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         Arc::new(Self {
             event_tx,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -63,7 +65,7 @@ impl IoManager {
 impl Default for IoManager {
     fn default() -> Self {
         Self {
-            event_tx: broadcast::channel(1024).0,
+            event_tx: broadcast::channel(BROADCAST_CHANNEL_CAPACITY).0,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }

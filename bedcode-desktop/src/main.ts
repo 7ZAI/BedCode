@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { useWslStore } from '@/stores/wsl'
 import { useToast } from '@/composables/useToast'
+import { setupSharedRuntime } from '@/plugin/shared-runtime'
 import './style.css'
 
 interface PluginSetupResult {
@@ -22,6 +23,9 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 app.use(i18n)
+
+// 初始化共享模块运行时（供插件通过 @bedcode/plugin-sdk-desktop 访问）
+setupSharedRuntime(i18n, router)
 
 // 预初始化：并行执行平台检测、设置加载和 WSL 信息缓存
 // WSL 命令执行较慢（可能触发虚拟机启动），提前加载避免弹窗卡顿

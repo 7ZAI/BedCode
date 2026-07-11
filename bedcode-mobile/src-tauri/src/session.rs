@@ -13,6 +13,7 @@ use crate::Result;
 use crate::connection::request::{SessionRequest, ResponseParser, timeouts};
 
 use crate::connection::manager::ConnectionManager;
+use crate::system::constants::terminal::SESSION_NAME_ID_PREFIX_LEN;
 
 /// 会话信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +75,7 @@ impl SessionManager {
             let name = session_name
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| {
-                    let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+                    let short_id = if session_id.len() > SESSION_NAME_ID_PREFIX_LEN { &session_id[..SESSION_NAME_ID_PREFIX_LEN] } else { &session_id };
                     format!("Session-{}", short_id)
                 });
             let session = SessionInfo {

@@ -6,7 +6,7 @@
  */
 import { ref, computed } from 'vue'
 import type { ChatMessage, ConversationMeta, ApiProvider } from '../types'
-import type { PluginContext } from '../../../plugin/types'
+import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 /** 对话管理 composable */
 export function useAiChat(context: PluginContext) {

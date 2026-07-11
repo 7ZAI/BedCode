@@ -3,6 +3,7 @@
   "version": "1.1.11",
   "private": true,
   "type": "module",
+  "workspaces": ["packages/*"],
   "scripts": {
     "dev": "vite optimize && vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -30,6 +31,7 @@
     "plugins:build:release": "node scripts/plugin-build.js"
   },
   "dependencies": {
+    "@bedcode/plugin-sdk-desktop": "workspace:*",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-notification": "^2.0.0",

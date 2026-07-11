@@ -21,12 +21,14 @@ use crate::Result;
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 use crate::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
 
+use crate::system::constants::connection::{
+    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN,
+    WS_TERMINAL_PATH,
+};
+use crate::system::constants::reconnect::DEFAULT_RETRY_DELAYS_MS;
+
 // Re-export ConnectionStatus for public API
 pub use crate::connection::ConnectionStatus;
-
-/// 重连配置
-const MAX_RETRY: u32 = 5;
-const RETRY_DELAYS: &[u64] = &[1000, 2000, 4000, 8000, 16000]; // 指数退避（毫秒）
 
 /// 判断错误是否表示连接已断开或请求失败（需要通知前端）
 fn is_disconnect_error(error: &crate::AppError) -> bool {
@@ -91,7 +93,7 @@ pub struct ConnectionManager {
 impl ConnectionManager {
     /// 创建新的连接管理器
     pub fn new() -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         Arc::new(Self {
             target: Arc::new(RwLock::new(None)),
@@ -180,7 +182,7 @@ impl ConnectionManager {
 
         // 创建配置和客户端
         tracing::debug!("Creating WsClientConfig with address: {}, port: {}", address, port);
-        let config = WsClientConfig::new(&address, port).with_path("/ws/terminal");
+        let config = WsClientConfig::new(&address, port).with_path(WS_TERMINAL_PATH);
         tracing::debug!("WsClientConfig created, url: {}", config.url());
 
         tracing::debug!("Creating WsClient...");
@@ -247,7 +249,7 @@ impl ConnectionManager {
         *self.client.write().await = Some(client);
 
         // 短暂等待连接稳定
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(CONNECTION_STABILIZE_DELAY_MS)).await;
 
         // 发射连接成功事件
         let _ = app_handle.emit("ws_connected", ());
@@ -272,7 +274,7 @@ impl ConnectionManager {
         });
 
         // 创建配置和客户端
-        let config = WsClientConfig::new(&address, port).with_path("/ws/terminal");
+        let config = WsClientConfig::new(&address, port).with_path(WS_TERMINAL_PATH);
         let client = WsClient::new(config);
 
         // 构建路由器
@@ -287,7 +289,7 @@ impl ConnectionManager {
         *self.client.write().await = Some(client);
 
         // 短暂等待连接稳定
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(CONNECTION_STABILIZE_DELAY_MS)).await;
 
         Ok(())
     }
@@ -312,11 +314,12 @@ impl ConnectionManager {
         *self.target.write().await = None;
     }
 
-    /// 尝试重连（最多3次，指数退避）
+    /// 尝试重连（指数退避，使用 ReconnectManager 配置）
     pub async fn reconnect(&self, app_handle: AppHandle, _token: Option<String>) -> Result<()> {
+        let max_retry = DEFAULT_RETRY_DELAYS_MS.len() as u32;
         let mut current_retry: u32 = 0;
 
-        while current_retry < MAX_RETRY {
+        while current_retry < max_retry {
             // 用户主动断开，停止重连循环
             if self.manual_disconnect.load(Ordering::SeqCst) {
                 tracing::info!("Manual disconnect detected, aborting reconnect");
@@ -336,13 +339,13 @@ impl ConnectionManager {
             // 发射重连开始事件
             let _ = app_handle.emit("ws_reconnecting", serde_json::json!({
                 "retry": current_retry + 1,
-                "max_retry": MAX_RETRY
+                "max_retry": max_retry
             }));
-            tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, MAX_RETRY);
+            tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, max_retry);
 
             // 等待指数退避间隔（首次不等待）
             if current_retry > 0 {
-                let delay = RETRY_DELAYS[(current_retry - 1) as usize];
+                let delay = DEFAULT_RETRY_DELAYS_MS[(current_retry - 1) as usize];
                 tracing::info!("Waiting {}ms before retry...", delay);
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
                 // 等待期间用户可能已断开，再次检查
@@ -367,7 +370,7 @@ impl ConnectionManager {
             }
 
             // 创建新客户端
-            let config = WsClientConfig::new(&target.address, target.port).with_path("/ws/terminal");
+            let config = WsClientConfig::new(&target.address, target.port).with_path(WS_TERMINAL_PATH);
             let client = WsClient::new(config);
 
             // 构建路由器
@@ -402,7 +405,7 @@ impl ConnectionManager {
         let _ = app_handle.emit("ws_reconnect_failed", serde_json::json!({
             "reason": "Max retries exceeded"
         }));
-        tracing::error!("Reconnect failed after {} attempts", MAX_RETRY);
+        tracing::error!("Reconnect failed after {} attempts", max_retry);
 
         Err(crate::AppError::WebSocket("Reconnect failed".to_string()))
     }
@@ -419,7 +422,7 @@ impl ConnectionManager {
         let msg_preview = message.to_json().unwrap_or_default();
         tracing::info!("[ConnectionManager] send() message_type={:?}, preview={}",
             "Message",
-            &msg_preview[..msg_preview.len().min(200)]);
+            &msg_preview[..msg_preview.len().min(LOG_PREVIEW_MAX_LEN)]);
 
         if let Some(client) = self.client.read().await.as_ref() {
             let result = client.send(&message).await;
@@ -522,7 +525,7 @@ impl ConnectionManager {
 
 impl Default for ConnectionManager {
     fn default() -> Self {
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         Self {
             target: Arc::new(RwLock::new(None)),

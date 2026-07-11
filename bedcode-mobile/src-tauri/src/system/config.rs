@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::system::constants::auth::MIN_PLUGIN_TOKEN_LEN;
+
 /// 全局配置单例
 static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
@@ -303,7 +305,7 @@ impl AppConfig {
     /// 返回 true 表示新生成了 token
     pub fn ensure_valid_token(&mut self) -> bool {
         let is_valid = !self.plugin.token.is_empty()
-            && self.plugin.token.len() >= 16
+            && self.plugin.token.len() >= MIN_PLUGIN_TOKEN_LEN
             && self.plugin.token.is_ascii();
 
         if !is_valid {

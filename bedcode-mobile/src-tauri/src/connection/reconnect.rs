@@ -10,6 +10,10 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::info;
 
+use crate::system::constants::reconnect::{
+    DEFAULT_BACKOFF_MULTIPLIER, DEFAULT_INITIAL_DELAY_MS, DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RETRIES,
+};
+
 /// 重连配置
 #[derive(Debug, Clone)]
 pub struct ReconnectConfig {
@@ -28,10 +32,10 @@ pub struct ReconnectConfig {
 impl Default for ReconnectConfig {
     fn default() -> Self {
         Self {
-            max_retries: 0,
-            initial_delay_ms: 1000,
-            max_delay_ms: 30000,
-            backoff_multiplier: 2.0,
+            max_retries: DEFAULT_MAX_RETRIES,
+            initial_delay_ms: DEFAULT_INITIAL_DELAY_MS,
+            max_delay_ms: DEFAULT_MAX_DELAY_MS,
+            backoff_multiplier: DEFAULT_BACKOFF_MULTIPLIER,
             jitter: true,
         }
     }
@@ -43,7 +47,7 @@ impl ReconnectConfig {
             max_retries,
             initial_delay_ms,
             max_delay_ms,
-            backoff_multiplier: 2.0,
+            backoff_multiplier: DEFAULT_BACKOFF_MULTIPLIER,
             jitter: true,
         }
     }
@@ -114,11 +118,12 @@ pub struct ReconnectManager {
 impl ReconnectManager {
     /// 创建新的重连管理器
     pub fn new(config: ReconnectConfig) -> Arc<Self> {
+        let initial_delay = config.initial_delay_ms;
         Arc::new(Self {
             config,
             state: RwLock::new(ReconnectState::Idle),
             retry_count: RwLock::new(0),
-            current_delay: RwLock::new(Duration::from_millis(1000)),
+            current_delay: RwLock::new(Duration::from_millis(initial_delay)),
             abandoned: RwLock::new(false),
         })
     }
@@ -130,13 +135,7 @@ impl ReconnectManager {
 
     /// 从客户端配置创建
     pub fn from_client_config(_heartbeat_interval_secs: u64) -> Arc<Self> {
-        Self::new(ReconnectConfig {
-            max_retries: 0,
-            initial_delay_ms: 1000,
-            max_delay_ms: 30000,
-            backoff_multiplier: 2.0,
-            jitter: true,
-        })
+        Self::new(ReconnectConfig::default())
     }
 
     /// 获取配置
@@ -288,11 +287,13 @@ impl ReconnectManager {
 
 impl Default for ReconnectManager {
     fn default() -> Self {
+        let config = ReconnectConfig::default();
+        let initial_delay = config.initial_delay_ms;
         Self {
-            config: ReconnectConfig::default(),
+            config,
             state: RwLock::new(ReconnectState::Idle),
             retry_count: RwLock::new(0),
-            current_delay: RwLock::new(Duration::from_millis(1000)),
+            current_delay: RwLock::new(Duration::from_millis(initial_delay)),
             abandoned: RwLock::new(false),
         }
     }

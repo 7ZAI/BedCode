@@ -14,6 +14,7 @@ use crate::connection::request::{AuthRequest, ResponseParser, timeouts};
 use crate::Result;
 
 use crate::connection::manager::ConnectionManager;
+use crate::system::constants::auth::DEFAULT_DEVICE_NAME;
 
 use super::{AuthCredentials, AuthStatus};
 
@@ -203,7 +204,7 @@ impl AuthManager {
         *self.status.write().await = AuthStatus::Authenticating;
 
         let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
+        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
         let fingerprint = self.device_fingerprint.read().await.clone();
 
         let message = AuthRequest::request_pairing(&device_id, &device_name, &fingerprint);
@@ -238,7 +239,7 @@ impl AuthManager {
         }
 
         let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
+        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
         let fingerprint = self.device_fingerprint.read().await.clone();
 
         let message = AuthRequest::verify_pairing_code(&device_id, &device_name, &fingerprint, code);
@@ -297,7 +298,7 @@ impl AuthManager {
         }
 
         let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| "Mobile Device".to_string());
+        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
         let fingerprint = self.device_fingerprint.read().await.clone();
 
         let message = AuthRequest::authenticate_with_qr(&device_id, &device_name, &fingerprint, token);

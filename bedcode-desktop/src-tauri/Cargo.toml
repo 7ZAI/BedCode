@@ -75,7 +75,7 @@ local-ip-address = "0.6"
 sysinfo = "0.33"
 
 # Plugin API
-bedcode-plugin-api = { path = "bedcode-plugin-api" }
+bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)

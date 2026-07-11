@@ -67,7 +67,7 @@ BedCode 是一个跨平台应用，支持移动设备远程控制 Claude Code。
 - **handler/**: 消息处理器
 - **model/**: 数据模型
 - **router/**: 消息路由
-- **system/**: 系统模块（commands、config、error、error_boundary、settings）
+- **system/**: 系统模块（commands、config、constants、error、error_boundary、settings）
 - **session.rs**: 远程会话管理
 - **state.rs**: 全局状态管理
 
@@ -141,6 +141,84 @@ spawn_with_error_boundary("task_name", async move {
 ### Thread Safety
 
 使用 `Arc<Mutex<T>>` 或 `Arc<RwLock<T>>` 进行状态共享，**不要用 `unsafe impl Send/Sync`**。
+
+### 常量与魔法值禁止 (重要)
+
+**禁止在 Rust 代码中使用魔法值**（硬编码的数字字面量、字符串字面量），必须提取到 `system::constants` 模块中有意义的命名常量。
+
+#### 常量模块结构
+
+移动端和桌面端各自维护独立的常量模块，按领域分组：
+
+```
+system/
+├── constants.rs          # 顶层 re-export + 子模块声明
+└── constants/
+    ├── connection.rs     # Channel 容量、轮询间隔、日志截断、连接超时、WS 路径
+    ├── heartbeat.rs      # 心跳间隔、超时倍数、最大超时次数
+    ├── reconnect.rs      # 退避参数、延迟表、最大重试次数
+    ├── terminal.rs       # 默认终端尺寸、输入超时、会话名截断长度
+    ├── auth.rs           # 配对码位数、默认设备名、Token 最小长度
+    └── mdns.rs           # mDNS 接收超时
+```
+
+使用方式：`use crate::system::constants::connection::BROADCAST_CHANNEL_CAPACITY;`
+
+#### 什么是魔法值
+
+以下均为魔法值，**必须提取为常量**：
+
+```rust
+// ❌ 硬编码数字
+broadcast::channel(1024)
+Duration::from_millis(50)
+max_timeouts: 3
+text.len().min(500)
+
+// ❌ 硬编码字符串
+"0.0.0.0:0".parse().unwrap()
+"Mobile Device".to_string()
+.with_path("/ws/terminal")
+
+// ❌ 在多处重复的相同值
+// heartbeat.rs 里 max_timeouts: 3 出现 3 次
+// auth/manager.rs 里 "Mobile Device" 出现 3 次
+```
+
+#### 什么不算魔法值
+
+以下情况**不需要**提取为常量：
+
+- `0`、`1`、`-1` 等显而易见的值
+- 仅在一处使用的局部计算值
+- 枚举变体的判别值（如 `#[repr(u8)]` 的自动编号）
+- 循环中的索引初始值 `0`
+- `Default` trait 中已由对应常量赋值的字段
+
+#### 常量命名规范
+
+```rust
+// 格式：SCREAMING_SNAKE_CASE，名称应体现含义而非数值
+pub const BROADCAST_CHANNEL_CAPACITY: usize = 1024;           // ✅ 含义明确
+pub const CHANNEL_SIZE: usize = 1024;                          // ❌ 含义模糊
+pub const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 30;          // ✅ 包含单位
+pub const HEARTBEAT: u64 = 30;                                 // ❌ 缺少单位
+
+// 带前缀分组
+pub const DEFAULT_MAX_RETRIES: u32 = 5;                        // 默认值前缀 DEFAULT_
+pub const DEFAULT_RETRY_DELAYS_MS: &[u64] = &[1000, 2000];    // 延迟表后缀 _MS
+pub const HEARTBEAT_TIMEOUT_MULTIPLIER: u64 = 3;               // 倍数后缀 MULTIPLIER
+pub const MIN_PLUGIN_TOKEN_LEN: usize = 16;                    // 最小值前缀 MIN_
+pub const WS_TERMINAL_PATH: &str = "/ws/terminal";             // 按领域前缀 WS_
+```
+
+#### 新增常量的规则
+
+1. **新增常量必须归入对应领域的子模块**，不要平铺在 `constants.rs` 中
+2. **每个常量必须有 `///` 文档注释**，说明用途和取值原因
+3. **同一含义的值只定义一次**，通过 `use` 引用，禁止在多处重复定义
+4. **新增领域时在 `constants.rs` 中添加 `pub mod` 声明**
+5. **修改常量值时检查所有使用处**，确认影响范围
 
 ### Tauri Commands
 

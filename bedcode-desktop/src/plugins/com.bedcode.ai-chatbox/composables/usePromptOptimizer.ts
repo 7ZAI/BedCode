@@ -6,7 +6,7 @@
  * 通过 PluginContext.terminal API 获取/写入终端输入
  */
 import { ref } from 'vue'
-import type { PluginContext } from '../../../plugin/types'
+import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 export function usePromptOptimizer(context: PluginContext) {
   const optimizing = ref(false)

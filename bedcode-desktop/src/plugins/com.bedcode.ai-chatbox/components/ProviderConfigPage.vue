@@ -49,12 +49,14 @@
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import i18n from '@/locales'
+import { getI18n } from '@bedcode/plugin-sdk-desktop'
 import ProviderSidebar from './ProviderSidebar.vue'
 import ProviderForm from './ProviderForm.vue'
 import type { ApiProvider, ProviderPreset } from '../types'
 
 const { t } = useI18n()
+// 模块级代码不能使用 useI18n()，通过 SDK 获取宿主 i18n 实例
+const i18n = getI18n()
 
 const props = defineProps<{
   providers: ApiProvider[]

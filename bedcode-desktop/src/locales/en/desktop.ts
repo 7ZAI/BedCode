@@ -7,6 +7,8 @@ export default {
       devicePairing: 'Device Pairing',
       settings: 'Settings',
       serviceRunning: 'Service Running',
+      collapse: 'Collapse Sidebar',
+      expand: 'Expand Sidebar',
     },
     session: {
       newConfig: 'New Config',

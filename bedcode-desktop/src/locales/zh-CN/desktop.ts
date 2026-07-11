@@ -7,6 +7,8 @@ export default {
       devicePairing: '设备配对',
       settings: '设置',
       serviceRunning: '服务运行中',
+      collapse: '收起侧边栏',
+      expand: '展开侧边栏',
     },
     session: {
       newConfig: '新建配置',

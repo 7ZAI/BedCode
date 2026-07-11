@@ -17,6 +17,12 @@ use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, error, info, warn};
 
+use crate::system::constants::connection::{
+    BROADCAST_CHANNEL_CAPACITY, DISCONNECT_TASK_TIMEOUT_SECS,
+    EVENT_FORWARDER_POLL_INTERVAL_MS, LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR,
+    RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
+};
+
 /// WebSocket 客户端
 pub struct WsClient {
     config: WsClientConfig,
@@ -56,7 +62,7 @@ impl WsClient {
         let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
         let request_manager = RequestResponseManager::new();
 
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         Arc::new(Self {
             config: config.clone(),
@@ -179,7 +185,7 @@ impl WsClient {
                         msg = rx.next() => {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
-                                    info!("[WsClient] <<< RECV: {}...", &text[..text.len().min(1000)]);
+                                    info!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
 
                                     // 1. 尝试匹配 pending 请求
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {
@@ -193,7 +199,7 @@ impl WsClient {
                                             if let Some(h) = &handler {
                                                 h.handle(
                                                     WsMsg::Text(text),
-                                                    "0.0.0.0:0".parse().unwrap(),
+                                                    PLACEHOLDER_CLIENT_ADDR.parse().unwrap(),
                                                     None,
                                                     None,
                                                 );
@@ -254,7 +260,7 @@ impl WsClient {
                                 _ => {}
                             }
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(RECEIVER_POLL_INTERVAL_MS)) => {}
                     }
                 }
             })
@@ -276,7 +282,7 @@ impl WsClient {
                         msg = rx.recv() => {
                             match msg {
                                 Some(WsMsg::Text(text)) => {
-                                    info!("[WsClient] >>> SEND: {}...", &text[..text.len().min(500)]);
+                                    info!("[WsClient] >>> SEND: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Text(text)).await {
                                         error!("[WsClient] Send error: {}", e);
@@ -297,7 +303,7 @@ impl WsClient {
                                 _ => {}
                             }
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(SENDER_POLL_INTERVAL_MS)) => {}
                     }
                 }
             })
@@ -341,7 +347,7 @@ impl WsClient {
                             _ => {}
                         }
                     }
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(EVENT_FORWARDER_POLL_INTERVAL_MS)) => {}
                 }
             }
         });
@@ -434,7 +440,7 @@ impl WsClient {
         // 通知所有 pending 请求
         self.request_manager.on_error("Disconnected").await;
 
-        self.await_tasks(3).await;
+        self.await_tasks(DISCONNECT_TASK_TIMEOUT_SECS).await;
 
         self.lifecycle.set_status(ConnectionStatus::Disconnected).await;
 
@@ -453,7 +459,7 @@ impl WsClient {
         tracing::info!("[WsClient] send() called, checking ws_sender...");
         if let Some(sender) = self.ws_sender.read().await.as_ref() {
             let json = message.to_json()?;
-            tracing::info!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(500)]);
+            tracing::info!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(LOG_PREVIEW_MAX_LEN)]);
             sender
                 .send(WsMsg::Text(json))
                 .await

@@ -9,6 +9,11 @@ use std::sync::Arc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, error, info, warn};
 
+use crate::system::constants::connection::{
+    DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_HEARTBEAT_INTERVAL_SECS,
+    DEFAULT_MESSAGE_QUEUE_SIZE, WS_DEFAULT_PATH,
+};
+
 /// WebSocket 客户端配置
 #[derive(Debug, Clone)]
 pub struct WsClientConfig {
@@ -32,10 +37,10 @@ impl WsClientConfig {
         Self {
             address: address.into(),
             port,
-            path: "/".to_string(),
-            heartbeat_interval_secs: 30,
-            message_queue_size: 256,
-            connect_timeout_ms: 10000,
+            path: WS_DEFAULT_PATH.to_string(),
+            heartbeat_interval_secs: DEFAULT_HEARTBEAT_INTERVAL_SECS,
+            message_queue_size: DEFAULT_MESSAGE_QUEUE_SIZE,
+            connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
         }
     }
 
@@ -56,10 +61,10 @@ impl Default for WsClientConfig {
         Self {
             address: "127.0.0.1".to_string(),
             port: 8765,
-            path: "/".to_string(),
-            heartbeat_interval_secs: 30,
-            message_queue_size: 256,
-            connect_timeout_ms: 10000,
+            path: WS_DEFAULT_PATH.to_string(),
+            heartbeat_interval_secs: DEFAULT_HEARTBEAT_INTERVAL_SECS,
+            message_queue_size: DEFAULT_MESSAGE_QUEUE_SIZE,
+            connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
         }
     }
 }

@@ -108,12 +108,14 @@
  */
 import { reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import i18n from '@/locales'
+import { getI18n } from '@bedcode/plugin-sdk-desktop'
 import ModelListEditor from './ModelListEditor.vue'
 import type { ApiProvider, ApiFormat } from '../types'
 import { API_FORMAT_OPTIONS, generateId } from '../types'
 
 const { t } = useI18n()
+// 模块级代码不能使用 useI18n()，通过 SDK 获取宿主 i18n 实例
+const i18n = getI18n()
 
 const props = defineProps<{
   mode: 'add' | 'edit'

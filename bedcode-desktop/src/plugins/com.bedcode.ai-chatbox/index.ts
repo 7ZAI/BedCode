@@ -5,7 +5,7 @@
  * cdylib 插件架构：Rust 后端处理 AI 请求，前端通过 PluginContext 调用
  */
 import ChatView from './components/ChatView.vue'
-import type { PluginContext } from '../../plugin/types'
+import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 export async function activate(context: PluginContext): Promise<void> {
   // 注册侧边栏面板

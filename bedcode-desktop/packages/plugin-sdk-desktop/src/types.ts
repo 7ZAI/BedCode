@@ -1,8 +1,10 @@
 /**
- * Plugin Types
+ * @bedcode/plugin-sdk-desktop 类型定义
  *
- * 插件系统类型定义 — manifest、context、扩展点描述符
+ * 插件系统所有公开类型 — 插件通过此包引用，无需依赖宿主源码
  */
+
+// ==================== 基础类型 ====================
 
 /** Disposable 接口 — 用于资源清理 */
 export interface Disposable {
@@ -30,23 +32,16 @@ export interface PluginManifest {
 
 /** 插件配置声明 */
 export interface PluginConfiguration {
-  /** 配置区域标题 */
   title: string
-  /** 配置属性映射（key → 属性定义） */
   properties: Record<string, ConfigProperty>
 }
 
 /** 配置属性定义 */
 export interface ConfigProperty {
-  /** 属性类型 */
   type: 'string' | 'number' | 'boolean'
-  /** 显示标题 */
   title: string
-  /** 帮助描述 */
   description?: string
-  /** 默认值 */
   default?: any
-  /** 枚举选项（type 为 string 时使用） */
   enum?: string[]
 }
 
@@ -57,17 +52,13 @@ export interface PluginContributes {
   terminal?: TerminalContribution
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
-  /** 配置声明 */
   configuration?: PluginConfiguration
-  /** 生命周期钩子声明 */
   lifecycle?: LifecycleContribution
 }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {
-  /** 是否注册 onStartup 回调 */
   onStartup?: boolean
-  /** 是否注册 onShutdown 回调 */
   onShutdown?: boolean
 }
 
@@ -107,30 +98,7 @@ export interface FileHandlerContribution {
   icon?: string
 }
 
-/** 插件运行时状态 */
-export type PluginState =
-  | { state: 'Loaded' }
-  | { state: 'Activated' }
-  | { state: 'Error'; error: string }
-  | { state: 'Deactivated' }
-
-/** 插件信息（从后端获取） */
-export interface PluginInfo {
-  id: string
-  name: string
-  version: string
-  description: string
-  author: string
-  main: string
-  sandbox: string
-  pluginType: PluginType
-  /** cdylib 动态库文件名（仅 rust-ts 类型插件使用） */
-  rustLibrary?: string
-  permissions: string[]
-  state: PluginState
-  extensionPath: string
-  contributes: PluginContributes
-}
+// ==================== UI 描述符 ====================
 
 /** 侧边栏面板描述符 */
 export interface SidebarPanelDescriptor {
@@ -193,7 +161,7 @@ export interface RequestHandler {
   }>
 }
 
-// ==================== PluginContext API Types ====================
+// ==================== PluginContext API ====================
 
 /** 命令注册表 */
 export interface CommandRegistry {
@@ -276,4 +244,28 @@ export interface PluginContext {
 export interface PluginModule {
   activate(context: PluginContext): Promise<void>
   deactivate?: () => Promise<void>
+}
+
+/** 插件运行时状态 */
+export type PluginState =
+  | { state: 'Loaded' }
+  | { state: 'Activated' }
+  | { state: 'Error'; error: string }
+  | { state: 'Deactivated' }
+
+/** 插件信息（从后端获取） */
+export interface PluginInfo {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string
+  main: string
+  sandbox: string
+  pluginType: PluginType
+  rustLibrary?: string
+  permissions: string[]
+  state: PluginState
+  extensionPath: string
+  contributes: PluginContributes
 }

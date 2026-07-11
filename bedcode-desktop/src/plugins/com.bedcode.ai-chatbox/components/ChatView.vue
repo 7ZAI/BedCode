@@ -118,7 +118,7 @@ import PromptOptimizeDialog from './PromptOptimizeDialog.vue'
 import { useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePromptOptimizer } from '../composables/usePromptOptimizer'
-import type { PluginContext } from '../../../plugin/types'
+import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 const { t } = useI18n()
 
