@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
+use crate::system::constants::plugin::PLUGIN_RELOAD_DEBOUNCE_MS;
+use crate::system::constants::event;
+
 /// 插件开发文件监听器
 ///
 /// 持有 notify::Watcher 实例，监听插件产物目录变化。
@@ -75,7 +78,7 @@ impl PluginDevWatcher {
                                 let p = pending.read().await;
                                 if let Some((ref prev_id, ref prev_time)) = *p {
                                     if prev_id == &plugin_id_clone
-                                        && prev_time.elapsed() < Duration::from_millis(500)
+                                        && prev_time.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
                                     {
                                         tracing::debug!(
                                             "Plugin watcher: debounced reload for '{}'",
@@ -119,7 +122,7 @@ impl PluginDevWatcher {
                         );
 
                         let ctx = crate::system::app_context::AppContext::global();
-                        let _ = ctx.app_handle().emit("plugin:dev-reload", serde_json::json!({
+                        let _ = ctx.app_handle().emit(event::PLUGIN_DEV_RELOAD, serde_json::json!({
                             "pluginId": plugin_id
                         }));
                     }

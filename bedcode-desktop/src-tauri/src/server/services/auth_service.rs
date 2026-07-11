@@ -8,6 +8,7 @@ use crate::server::services::pairing_service::PairingService;
 use crate::utils::auth::qr_token::QrTokenManager;
 use crate::server::ws::WebSocketManager;
 use crate::utils::auth::JwtService;
+use crate::system::constants::event;
 use crate::db::Database;
 use crate::Result;
 use std::net::SocketAddr;
@@ -106,7 +107,7 @@ pub async fn handle_auth(
                 }
 
                 if let Some(handle) = app_handle {
-                    let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                    let _ = handle.emit(event::DEVICE_CONNECTED, &DeviceConnectionEvent {
                         addr: addr.to_string(),
                         device_id: device_id.clone(),
                         device_name: payload.device_name.clone(),
@@ -186,7 +187,7 @@ pub async fn handle_auth(
             }
 
             if let Some(handle) = app_handle {
-                let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                let _ = handle.emit(event::DEVICE_CONNECTED, &DeviceConnectionEvent {
                     addr: addr.to_string(),
                     device_id: claims.sub.clone(),
                     device_name: payload.device_name.clone(),
@@ -249,7 +250,7 @@ pub async fn handle_auth(
                     }
 
                     if let Some(handle) = app_handle {
-                        let _ = handle.emit("device-connected", &DeviceConnectionEvent {
+                        let _ = handle.emit(event::DEVICE_CONNECTED, &DeviceConnectionEvent {
                             addr: addr.to_string(),
                             device_id: device_id.clone(),
                             device_name: Some(device_name.clone()),
@@ -366,7 +367,7 @@ pub async fn handle_jwt_auth(
                     fingerprint: claims.fingerprint.clone(),
                     event: "authenticated".to_string(),
                 };
-                let _ = handle.emit("device-connected", &event);
+                let _ = handle.emit(event::DEVICE_CONNECTED, &event);
             }
 
             tracing::info!(

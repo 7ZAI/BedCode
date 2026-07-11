@@ -18,11 +18,13 @@ use crate::session::GlobalOutputManager;
 use crate::utils::auth::jwt::JwtService;
 use crate::enums::{SessionControlPayload, TerminalPayload};
 use crate::system::config::AppConfig;
+use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS};
+use crate::system::constants::event;
 
 /// 心跳间隔
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
 /// 心跳超时
-const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(CLIENT_TIMEOUT_SECS);
 
 /// 订阅结果消息（actor 内部消息，用于从异步任务传回订阅结果）
 #[derive(Message)]
@@ -387,7 +389,7 @@ impl TerminalWs {
 
                 // 通知桌面端
                 let app_ctx = AppContext::global();
-                let _ = app_ctx.app_handle().emit("device-connected", &crate::server::connection_types::DeviceConnectionEvent {
+                let _ = app_ctx.app_handle().emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
                     addr: self.session.addr.to_string(),
                     device_id: claims.sub,
                     device_name: self.session.device_name.clone(),

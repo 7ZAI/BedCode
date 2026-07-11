@@ -15,6 +15,7 @@ use crate::server::dtos::auth_dto::*;
 use crate::utils::auth::jwt::JwtService;
 use crate::utils::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
 use crate::server::services::auth_service::format_device_display_name;
+use crate::system::constants::event;
 
 /// POST /api/auth/pairing
 ///
@@ -91,7 +92,7 @@ pub async fn verify_pairing_code(
 
     // 通知桌面端有设备连接
     let app_handle = ctx.app_handle();
-    let _ = app_handle.emit("device-connected", &crate::server::connection_types::DeviceConnectionEvent {
+    let _ = app_handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
         addr: body.address.clone(),
         device_id: body.device_id.clone(),
         device_name: Some(body.device_name.clone()),
@@ -148,7 +149,7 @@ pub async fn qr_connect(
                 }
             }
 
-            let _ = app_handle.emit("device-connected", &crate::server::connection_types::DeviceConnectionEvent {
+            let _ = app_handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
                 addr: address,
                 device_id,
                 device_name: Some(device_name),

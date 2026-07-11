@@ -7,6 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::system::constants::lifecycle::HOOK_TIMEOUT_SECS;
+
 /// 生命周期阶段
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LifecyclePhase {
@@ -61,7 +63,7 @@ pub struct LifecycleRegistry {
 }
 
 /// 单个 Shutdown 钩子的超时时间
-const SHUTDOWN_HOOK_TIMEOUT_SECS: u64 = 5;
+const SHUTDOWN_HOOK_TIMEOUT_SECS: u64 = HOOK_TIMEOUT_SECS;
 
 impl LifecycleRegistry {
     /// 创建新的注册表

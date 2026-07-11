@@ -14,10 +14,14 @@ use crate::server::controllers::{
     plugin_controller, git_controller,
 };
 use crate::server::ws::terminal_ws::TerminalWs;
+use crate::system::constants::server::{
+    WS_TERMINAL_PATH, API_HEALTH_PATH, PLACEHOLDER_PEER_ADDR,
+    CORS_MAX_AGE_SECS, BIND_ADDRESS,
+};
 
 /// WS 握手端点 — 升级为 WebSocket 连接处理终端 I/O
 async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let addr = req.peer_addr().unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     let ws_actor = TerminalWs::new(addr);
     let config = crate::system::config::AppConfig::global();
     // max_size 同时限制 frame 和 message 大小，取两者中较大的值
@@ -44,10 +48,10 @@ async fn health_check() -> HttpResponse {
 /// 构建路由配置
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 终端端点
-    cfg.route("/ws/terminal", web::get().to(terminal_ws));
+    cfg.route(WS_TERMINAL_PATH, web::get().to(terminal_ws));
 
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
-    cfg.route("/api/health", web::get().to(health_check));
+    cfg.route(API_HEALTH_PATH, web::get().to(health_check));
 
     // 公开路由（无需 JWT）
     cfg.service(
@@ -110,7 +114,7 @@ pub async fn start_http_server(
             .allow_any_origin()
             .allow_any_method()
             .allow_any_header()
-            .max_age(3600);
+            .max_age(CORS_MAX_AGE_SECS);
 
         App::new()
             .wrap(cors)
@@ -121,7 +125,7 @@ pub async fn start_http_server(
             })
             .configure(configure_routes)
     })
-    .bind(format!("0.0.0.0:{}", port))?
+    .bind(format!("{}:{}", BIND_ADDRESS, port))?
     .keep_alive(keep_alive)
     .client_request_timeout(Duration::from_secs(config.client_request_timeout_secs))
     .client_disconnect_timeout(Duration::from_secs(config.client_disconnect_timeout_secs))

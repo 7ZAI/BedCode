@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
+use crate::system::constants::auth::QR_TOKEN_BYTES;
+
 /// 128-bit random hex token for QR code connection
 #[derive(Debug, Clone)]
 pub struct QrToken {
@@ -17,7 +19,7 @@ pub struct QrToken {
 
 impl QrToken {
     pub fn new(ttl_secs: u64) -> Self {
-        let random_bytes: [u8; 16] = rand::random();
+        let random_bytes: [u8; QR_TOKEN_BYTES] = rand::random();
         let token = hex::encode(random_bytes);
 
         Self {

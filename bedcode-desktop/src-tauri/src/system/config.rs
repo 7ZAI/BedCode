@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::system::constants::auth::MIN_PLUGIN_TOKEN_LEN;
+
 /// 全局配置单例
 static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
@@ -468,7 +470,7 @@ impl AppConfig {
     /// 返回 true 表示新生成了 token
     pub fn ensure_valid_token(&mut self) -> bool {
         let is_valid = !self.plugin.token.is_empty()
-            && self.plugin.token.len() >= 16
+            && self.plugin.token.len() >= MIN_PLUGIN_TOKEN_LEN
             && self.plugin.token.is_ascii();
 
         if !is_valid {
@@ -758,7 +760,7 @@ channels.output_broadcast_capacity=2048
         let mut config = AppConfig::default();
         // 空 token 应生成新 token
         assert!(config.ensure_valid_token());
-        assert!(config.plugin.token.len() >= 16);
+        assert!(config.plugin.token.len() >= MIN_PLUGIN_TOKEN_LEN);
 
         // 合法 token 不应重新生成
         assert!(!config.ensure_valid_token());

@@ -10,12 +10,14 @@ use crate::system::app_context::AppContext;
 use crate::server::dtos::ApiResponse;
 use crate::server::dtos::file_dto::*;
 use crate::process::create_command;
+use crate::system::constants::file::{FILE_TREE_MAX_DEPTH, FILE_CONTENT_MAX_SIZE_BYTES};
 use std::path::PathBuf;
 use std::collections::HashSet;
 
-const MAX_DEPTH: usize = 20;
-/// 文件内容读取上限 2MB，防止传输过大文件
-const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+/// 文件树最大递归深度
+const MAX_DEPTH: usize = FILE_TREE_MAX_DEPTH;
+/// 文件内容读取上限，防止传输过大文件
+const MAX_FILE_SIZE: u64 = FILE_CONTENT_MAX_SIZE_BYTES;
 
 /// 解析 working_dir：id 可以是 session_id 或 config_id
 ///

@@ -10,6 +10,7 @@ use crate::server::message::Message as BusinessMessage;
 use crate::server::ws::registry::WsSessionRegistry;
 use crate::session::GlobalOutputManager;
 use crate::system::error::AppError;
+use crate::system::constants::server::WS_EVENT_BROADCAST_CAPACITY;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,7 +41,7 @@ struct WsManagerInner {
 
 impl WsManagerInner {
     fn new() -> Self {
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, _) = tokio::sync::broadcast::channel(WS_EVENT_BROADCAST_CAPACITY);
         Self {
             port: RwLock::new(None),
             initialized: RwLock::new(false),

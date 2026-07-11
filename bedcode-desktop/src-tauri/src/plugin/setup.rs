@@ -6,6 +6,10 @@
 //! 3. ensure_project_hooks() — 会话启动前为项目配置 hooks（项目级作用域）
 
 use crate::system::config::AppConfig;
+use crate::system::constants::plugin::{
+    CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE, HOOK_SCRIPT_NAME,
+    ENV_BEDCODE_PORT, ENV_BEDCODE_TOKEN,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -34,7 +38,7 @@ pub struct ProjectHooksResult {
 
 /// 获取全局 ~/.claude 目录路径
 fn global_claude_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|d| d.join(".claude"))
+    dirs::home_dir().map(|d| d.join(CLAUDE_CONFIG_DIR_NAME))
 }
 
 /// 确保 plugin token 合法，不合法则生成新 token
@@ -82,7 +86,7 @@ pub fn cleanup_global_hooks() {
         None => return,
     };
 
-    let settings_path = claude_dir.join("settings.json");
+    let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE);
 
     let mut settings: serde_json::Value = match fs::read_to_string(&settings_path) {
         Ok(content) => match serde_json::from_str(&content) {
@@ -137,7 +141,7 @@ fn remove_bedcode_hooks(hooks: &serde_json::Value) -> serde_json::Value {
                                 hook_list.iter().all(|h| {
                                     h.get("command")
                                         .and_then(|v| v.as_str())
-                                        .map(|cmd| !cmd.contains("bedcode_hook.py"))
+                                        .map(|cmd| !cmd.contains(HOOK_SCRIPT_NAME))
                                         .unwrap_or(true)
                                 })
                             })
@@ -162,7 +166,7 @@ fn remove_bedcode_hooks(hooks: &serde_json::Value) -> serde_json::Value {
 fn build_hooks_config(port: u16, token: &str, hook_script_path: &str) -> serde_json::Value {
     // 环境变量前缀：跨平台兼容，统一使用 Unix 风格
     // Python 脚本通过 os.environ 读取，Unix 风格在 Claude Code 环境中通用
-    let env_prefix = format!("BEDCODE_PORT={} BEDCODE_TOKEN={} ", port, token);
+    let env_prefix = format!("{}={} {}={} ", ENV_BEDCODE_PORT, port, ENV_BEDCODE_TOKEN, token);
 
     let session_start_cmd = format!(
         "{}python \"{}\" session-start",
@@ -241,7 +245,7 @@ fn is_token_match_in_hooks(hooks: &serde_json::Value, current_token: &str) -> bo
                     if let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) {
                         for hook in hook_list {
                             if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
-                                if cmd.contains("bedcode_hook.py") {
+                                if cmd.contains(HOOK_SCRIPT_NAME) {
                                     // 从命令中提取 BEDCODE_TOKEN=xxx
                                     if let Some(hook_token) = extract_token_from_command(cmd) {
                                         if hook_token != current_token {
@@ -262,7 +266,7 @@ fn is_token_match_in_hooks(hooks: &serde_json::Value, current_token: &str) -> bo
 /// 从 hook command 字符串中提取 BEDCODE_TOKEN 的值
 fn extract_token_from_command(cmd: &str) -> Option<String> {
     for part in cmd.split_whitespace() {
-        if let Some(token_val) = part.strip_prefix("BEDCODE_TOKEN=") {
+        if let Some(token_val) = part.strip_prefix(&format!("{}=", ENV_BEDCODE_TOKEN)) {
             return Some(token_val.to_string());
         }
     }
@@ -276,13 +280,13 @@ fn is_bedcode_hooks_configured(hooks: &serde_json::Value) -> bool {
         None => return false,
     };
 
-    // 检查 SessionStart 中是否包含 bedcode_hook.py
+    // 检查 SessionStart 中是否包含 hook 脚本
     if let Some(events) = hooks_obj.get("SessionStart").and_then(|v| v.as_array()) {
         for event in events {
             if let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) {
                 for hook in hook_list {
                     if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
-                        if cmd.contains("bedcode_hook.py") {
+                        if cmd.contains(HOOK_SCRIPT_NAME) {
                             return true;
                         }
                     }
@@ -327,7 +331,7 @@ fn merge_hooks(existing: &serde_json::Value, bedcode_hooks: &serde_json::Value) 
                                 hooks.iter().any(|h| {
                                     h.get("command")
                                         .and_then(|v| v.as_str())
-                                        .map(|cmd| cmd.contains("bedcode_hook.py"))
+                                        .map(|cmd| cmd.contains(HOOK_SCRIPT_NAME))
                                         .unwrap_or(false)
                                 })
                             })
@@ -390,8 +394,8 @@ fn ensure_project_hooks_blocking(
     resource_dir: &PathBuf,
 ) -> ProjectHooksResult {
     let project_path = PathBuf::from(working_dir);
-    let claude_dir = project_path.join(".claude");
-    let settings_path = claude_dir.join("settings.json");
+    let claude_dir = project_path.join(CLAUDE_CONFIG_DIR_NAME);
+    let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE);
 
     // 1. 读取现有 settings.json（只读一次，后续复用）
     let mut settings: serde_json::Value = if settings_path.exists() {
@@ -443,17 +447,17 @@ fn ensure_project_hooks_blocking(
         };
     }
 
-    // 3. 复制 bedcode_hook.py 到项目 .claude/ 目录
-    let hook_script_path = claude_dir.join("bedcode_hook.py");
-    let source_script = resource_dir.join("_up_/scripts/bedcode_hook.py");
+    // 3. 复制 hook 脚本到项目 .claude/ 目录
+    let hook_script_path = claude_dir.join(HOOK_SCRIPT_NAME);
+    let source_script = resource_dir.join(format!("_up_/scripts/{}", HOOK_SCRIPT_NAME));
     let source_script = if source_script.exists() {
         source_script
     } else {
-        let dev_path = std::env::current_dir().unwrap_or_default().join("scripts/bedcode_hook.py");
+        let dev_path = std::env::current_dir().unwrap_or_default().join(format!("scripts/{}", HOOK_SCRIPT_NAME));
         if !dev_path.exists() {
             tracing::warn!(
                 "Source hook script not found (tried {} and {}), skipping copy",
-                resource_dir.join("_up_/scripts/bedcode_hook.py").display(),
+                resource_dir.join(format!("_up_/scripts/{}", HOOK_SCRIPT_NAME)).display(),
                 dev_path.display()
             );
         }
@@ -461,7 +465,7 @@ fn ensure_project_hooks_blocking(
     };
     if source_script.exists() {
         if let Err(e) = fs::copy(&source_script, &hook_script_path) {
-            tracing::warn!("Failed to copy bedcode_hook.py to project .claude/: {}", e);
+            tracing::warn!("Failed to copy {} to project {}: {}", HOOK_SCRIPT_NAME, CLAUDE_CONFIG_DIR_NAME, e);
         }
     }
 
@@ -498,12 +502,13 @@ fn ensure_project_hooks_blocking(
 
     // 5. 验证 hooks 配置是否生效
     if !verify_project_hooks(&settings_path) {
-        tracing::warn!("Project hooks verification failed: bedcode_hook.py not found in written settings.json");
+        tracing::warn!("Project hooks verification failed: {} not found in written {}", HOOK_SCRIPT_NAME, CLAUDE_SETTINGS_FILE);
     }
 
     tracing::info!(
-        "Project hooks configured in {} with BEDCODE_PORT={}",
+        "Project hooks configured in {} with {}={}",
         settings_path.display(),
+        ENV_BEDCODE_PORT,
         port
     );
 

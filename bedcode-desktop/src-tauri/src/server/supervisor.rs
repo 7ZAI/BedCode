@@ -11,6 +11,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 
 use crate::system::error::AppError;
+use crate::system::constants::server::{
+    DEFAULT_SERVER_PORT, METRICS_HISTORY_CAPACITY, METRICS_SAMPLING_INTERVAL_SECS,
+    SERVER_RESTART_DELAY_MS,
+};
+use crate::system::constants::mdns;
 use crate::Result;
 
 use super::metrics::{MetricsCollector, ServerMetrics};
@@ -72,8 +77,8 @@ impl ServerSupervisor {
                 inner: Arc::new(RwLock::new(SupervisorInner {
                     status: ServerStatus::Stopped,
                     metrics: ServerMetrics::default(),
-                    metrics_history: VecDeque::with_capacity(60),
-                    port: 8765,
+                    metrics_history: VecDeque::with_capacity(METRICS_HISTORY_CAPACITY),
+                    port: DEFAULT_SERVER_PORT,
                     auto_start: true,
                     start_time: None,
                     sys: Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
@@ -206,7 +211,7 @@ impl ServerSupervisor {
         };
         if is_running {
             self.stop().await?;
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(SERVER_RESTART_DELAY_MS)).await;
         }
         self.start(port).await
     }
@@ -291,7 +296,7 @@ async fn metrics_sampling_task(
             break;
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(METRICS_SAMPLING_INTERVAL_SECS)).await;
 
         if cancel.load(Ordering::Relaxed) {
             break;
@@ -322,7 +327,7 @@ async fn metrics_sampling_task(
             ws_recv_rate: metrics.ws_recv_rate,
         };
         inner.metrics_history.push_back(entry);
-        if inner.metrics_history.len() > 60 {
+        if inner.metrics_history.len() > METRICS_HISTORY_CAPACITY {
             inner.metrics_history.pop_front();
         }
         inner.metrics = metrics;
@@ -333,20 +338,20 @@ async fn metrics_sampling_task(
 fn get_hostname() -> String {
     #[cfg(target_os = "windows")]
     {
-        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Desktop".to_string())
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| mdns::DEFAULT_HOSTNAME.to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
         hostname::get()
             .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "Desktop".to_string())
+            .unwrap_or_else(|_| mdns::DEFAULT_HOSTNAME.to_string())
     }
 }
 
 /// 启动 mDNS 广播
 fn start_mdns_advertisement(port: u16) {
     let hostname = get_hostname();
-    let service_name = format!("BedCode-{}", hostname);
+    let service_name = format!("{}{}", mdns::SERVICE_NAME_PREFIX, hostname);
 
     tokio::spawn(async move {
         let ctx = crate::system::app_context::AppContext::global();
@@ -354,9 +359,9 @@ fn start_mdns_advertisement(port: u16) {
         let a = advertiser.read().await;
 
         let mut txt_records = std::collections::HashMap::new();
-        txt_records.insert("platform".to_string(), "desktop".to_string());
-        txt_records.insert("device_name".to_string(), service_name.clone());
-        txt_records.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
+        txt_records.insert(mdns::TXT_KEY_PLATFORM.to_string(), mdns::TXT_VALUE_PLATFORM.to_string());
+        txt_records.insert(mdns::TXT_KEY_DEVICE_NAME.to_string(), service_name.clone());
+        txt_records.insert(mdns::TXT_KEY_VERSION.to_string(), env!("CARGO_PKG_VERSION").to_string());
 
         let config = crate::mdns::types::AdvertiseConfig {
             service_name,

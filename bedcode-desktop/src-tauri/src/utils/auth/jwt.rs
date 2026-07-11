@@ -6,6 +6,8 @@ use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::system::constants::auth::JWT_ISSUER;
+
 /// 默认 JWT 过期时间（7 天）
 pub const DEFAULT_TOKEN_EXPIRY_SECS: u64 = 7 * 24 * 60 * 60;
 
@@ -49,7 +51,7 @@ impl JwtClaims {
 
         Self {
             sub: subject,
-            iss: "BedCode".to_string(),
+            iss: JWT_ISSUER.to_string(),
             iat: now,
             exp: now + expires_in_secs,
             device_name,

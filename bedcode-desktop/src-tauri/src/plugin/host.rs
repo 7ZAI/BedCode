@@ -13,6 +13,8 @@ use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::db::Database;
 use crate::session::SessionManager;
+use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
+use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -259,7 +261,7 @@ impl PluginHost {
             if self.is_activated(entry.id).await {
                 tracing::debug!("Notifying plugin {} on_startup", entry.id);
                 let result = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
                     (entry.on_startup)(),
                 ).await;
                 if result.is_err() {
@@ -283,7 +285,7 @@ impl PluginHost {
 
         // TS-only 插件：通过 Tauri 事件通知
         let ctx = crate::system::app_context::AppContext::global();
-        let _ = ctx.app_handle().emit("lifecycle:startup", serde_json::json!({}));
+        let _ = ctx.app_handle().emit(event::LIFECYCLE_STARTUP, serde_json::json!({}));
 
         tracing::info!("PluginHost notify_startup completed");
     }
@@ -300,7 +302,7 @@ impl PluginHost {
             if self.is_activated(entry.id).await {
                 tracing::debug!("Notifying plugin {} on_shutdown", entry.id);
                 let result = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
                     (entry.on_shutdown)(),
                 ).await;
                 if result.is_err() {
@@ -324,7 +326,7 @@ impl PluginHost {
 
         // TS-only 插件：通过 Tauri 事件通知
         let ctx = crate::system::app_context::AppContext::global();
-        let _ = ctx.app_handle().emit("lifecycle:shutdown", serde_json::json!({}));
+        let _ = ctx.app_handle().emit(event::LIFECYCLE_SHUTDOWN, serde_json::json!({}));
 
         tracing::info!("PluginHost notify_shutdown completed");
     }

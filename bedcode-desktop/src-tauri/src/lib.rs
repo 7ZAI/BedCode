@@ -18,6 +18,7 @@ pub mod utils;
 // ==================== Re-exports ====================
 
 pub use system::{AppError, Result, AppConfig, AppContext};
+use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 
 // ==================== Application Setup ====================
 
@@ -284,7 +285,7 @@ pub fn run() {
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
 
             // 创建同步事件通道
-            let (sync_tx, _) = tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(64);
+            let (sync_tx, _) = tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
 
             // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
             tauri::async_runtime::block_on(async {

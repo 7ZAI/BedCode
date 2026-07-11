@@ -8,6 +8,7 @@ use crate::pty::PtyOutputEvent;
 use crate::pty::command::build_command;
 use crate::pty::pty_reader::PtyReader;
 use crate::system::config::AppConfig;
+use crate::system::constants::plugin::ENV_BEDCODE_SESSION_ID;
 use crate::process::create_command;
 use crate::Result;
 
@@ -134,7 +135,7 @@ impl PtySession {
 
             // 注入 BedCode session ID 到进程环境变量，
             // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
-            cmd.env("BEDCODE_SESSION_ID", &self.id);
+            cmd.env(ENV_BEDCODE_SESSION_ID, &self.id);
 
             // 从 state 中取出 pair
             let pair = state.pair.take()
