@@ -17,7 +17,7 @@ use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
 use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::sync::Arc;
@@ -153,6 +153,9 @@ impl PluginHost {
 
         // 注册 Rust 插件的 terminal handlers（inventory 静态注册）
         host.register_rust_terminal_handlers().await;
+
+        // 4. 根据持久化状态自动激活之前已激活的插件
+        host.auto_activate_from_persisted_state().await;
 
         let count = host.plugins.read().await.len();
         let cdylib_count = host.cdylib_plugins.read().await.len();
@@ -344,7 +347,7 @@ impl PluginHost {
         };
 
         for id in plugin_ids {
-            if let Err(e) = self.deactivate_plugin(&id).await {
+            if let Err(e) = self.deactivate_plugin(&id, false).await {
                 tracing::error!("Failed to deactivate plugin {} during shutdown: {}", id, e);
             }
         }
@@ -358,7 +361,11 @@ impl PluginHost {
     /// - 静态注册插件：仅标记状态
     /// - cdylib 插件：调用 exports.activate() 传入 HostContext
     /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
-    pub async fn activate_plugin(&self, plugin_id: &str) -> crate::Result<()> {
+    ///
+    /// # Arguments
+    /// * `plugin_id` - 插件 ID
+    /// * `persist` - 是否持久化激活状态（用户操作传 true，启动自动激活/热重载传 false）
+    pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         let mut plugins = self.plugins.write().await;
         let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
             crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
@@ -434,13 +441,22 @@ impl PluginHost {
         loaded.activated_at = Some(Utc::now());
 
         tracing::info!("Plugin activated: {}", plugin_id);
+
+        if persist {
+            self.persist_activation_state().await;
+        }
+
         Ok(())
     }
 
     /// 停用插件
     ///
     /// cdylib 插件：先调用 exports.deactivate()，再执行现有清理流程
-    pub async fn deactivate_plugin(&self, plugin_id: &str) -> crate::Result<()> {
+    ///
+    /// # Arguments
+    /// * `plugin_id` - 插件 ID
+    /// * `persist` - 是否持久化激活状态（用户操作传 true，shutdown/热重载传 false）
+    pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         // cdylib 插件：调用 exports.deactivate()
         {
             let plugins = self.plugins.read().await;
@@ -496,6 +512,11 @@ impl PluginHost {
         loaded.state = PluginState::Deactivated;
         loaded.activated_at = None;
         tracing::info!("Plugin deactivated: {}", plugin_id);
+
+        if persist {
+            self.persist_activation_state().await;
+        }
+
         Ok(())
     }
 
@@ -526,8 +547,8 @@ impl PluginHost {
 
         tracing::info!("Hot-reloading cdylib plugin: {}", plugin_id);
 
-        // 1. 停用插件
-        self.deactivate_plugin(plugin_id).await?;
+        // 1. 停用插件（不持久化，热重载后立即重新激活）
+        self.deactivate_plugin(plugin_id, false).await?;
 
         // 2. 卸载旧 cdylib：从 map 移除，触发 Library drop（FreeLibrary）
         let old_cdylib = {
@@ -562,8 +583,8 @@ impl PluginHost {
         self.registry.register_tool_providers(&m.id, &m.contributes.tool_providers).await;
         self.registry.register_file_handlers(&m.id, &m.contributes.file_handlers).await;
 
-        // 5. 重新激活
-        self.activate_plugin(plugin_id).await?;
+        // 5. 重新激活（不持久化，保持原有激活状态记录）
+        self.activate_plugin(plugin_id, false).await?;
 
         tracing::info!("Cdylib plugin hot-reloaded successfully: {}", plugin_id);
         Ok(())
@@ -574,6 +595,83 @@ impl PluginHost {
         let mut plugins = self.plugins.write().await;
         if let Some(loaded) = plugins.get_mut(plugin_id) {
             loaded.state = PluginState::Error(error);
+        }
+    }
+
+    /// 获取当前所有非 StaticRegistry 插件的激活状态映射
+    pub async fn get_activated_state(&self) -> HashMap<String, bool> {
+        let plugins = self.plugins.read().await;
+        let mut map = HashMap::new();
+        for (id, loaded) in plugins.iter() {
+            if loaded.source == PluginSource::StaticRegistry {
+                continue;
+            }
+            map.insert(id.clone(), matches!(loaded.state, PluginState::Activated));
+        }
+        map
+    }
+
+    /// 持久化当前激活状态到 SQLite
+    ///
+    /// 仅记录非 StaticRegistry 插件的状态，Rust-only 插件始终激活无需记录
+    async fn persist_activation_state(&self) {
+        let activated_map = self.get_activated_state().await;
+        if let Err(e) = self.storage.save_activated_plugins(&activated_map).await {
+            tracing::warn!("Failed to persist plugin activation state: {}", e);
+        }
+    }
+
+    /// 根据持久化状态自动激活之前已激活的插件
+    ///
+    /// 在 PluginHost::new() 末尾调用，跳过 StaticRegistry 插件，
+    /// 清理已不存在的插件 ID
+    async fn auto_activate_from_persisted_state(&self) {
+        let activated_map = match self.storage.load_activated_plugins().await {
+            Ok(map) => map,
+            Err(e) => {
+                tracing::warn!("Failed to load persisted activation state, skipping auto-activation: {}", e);
+                return;
+            }
+        };
+
+        if activated_map.is_empty() {
+            return;
+        }
+
+        // 收集需要激活的插件 ID（跳过 StaticRegistry）
+        let to_activate: Vec<String> = {
+            let plugins = self.plugins.read().await;
+            activated_map.iter()
+                .filter(|(id, &is_active)| {
+                    if !is_active { return false; }
+                    // 跳过 Rust-only 插件（始终激活，不可控）
+                    plugins.get(*id)
+                        .map(|p| p.source != PluginSource::StaticRegistry)
+                        .unwrap_or(false)
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        for plugin_id in &to_activate {
+            if let Err(e) = self.activate_plugin(plugin_id, false).await {
+                tracing::warn!("Failed to auto-activate plugin {}: {}", plugin_id, e);
+            }
+        }
+
+        // 清理已不存在的插件 ID（磁盘已删除）
+        let current_ids: HashSet<String> = self.plugins.read().await.keys().cloned().collect();
+        let original_len = activated_map.len();
+        let mut cleaned_map = activated_map;
+        cleaned_map.retain(|id, _| current_ids.contains(id));
+        if cleaned_map.len() != original_len {
+            if let Err(e) = self.storage.save_activated_plugins(&cleaned_map).await {
+                tracing::warn!("Failed to clean up stale activation entries: {}", e);
+            }
+        }
+
+        if !to_activate.is_empty() {
+            tracing::info!("Auto-activated {} plugin(s) from persisted state", to_activate.len());
         }
     }
 

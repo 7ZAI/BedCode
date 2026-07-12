@@ -112,3 +112,8 @@ export async function pluginListRustCommands(): Promise<PluginCommandEntry[]> {
 export async function pluginDevReload(pluginId: string): Promise<void> {
   return await invoke('plugin_dev_reload', { pluginId })
 }
+
+/** 获取插件激活状态映射（plugin_id → is_activated） */
+export async function pluginGetActivatedState(): Promise<Record<string, boolean>> {
+  return await invoke<Record<string, boolean>>('plugin_get_activated_state')
+}

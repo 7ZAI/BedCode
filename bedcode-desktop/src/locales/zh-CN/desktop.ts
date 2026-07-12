@@ -213,6 +213,7 @@ export default {
       noConfigAvailable: '无可用的配置项',
       loadConfigFailed: '加载插件配置失败',
       saveConfigFailed: '保存配置失败',
+      alwaysOn: '始终启用',
       toolboxPanels: '工具箱',
       aiChatbox: {
         noProvider: '未配置模型',

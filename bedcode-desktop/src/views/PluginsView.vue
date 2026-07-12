@@ -93,9 +93,13 @@
               <!-- Toggle -->
               <div class="flex justify-center" @click.stop>
                 <Toggle
+                  v-if="plugin.pluginType !== 'rust'"
                   :modelValue="isActivated(plugin.state)"
                   @update:modelValue="(val: boolean) => handleToggle(plugin.id, val)"
                 />
+                <span v-else class="text-xs text-[var(--text-tertiary)]">
+                  {{ $t('desktop.plugin.alwaysOn') }}
+                </span>
               </div>
             </div>
 

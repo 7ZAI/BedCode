@@ -213,6 +213,7 @@ export default {
       noConfigAvailable: 'No configuration available',
       loadConfigFailed: 'Failed to load plugin config',
       saveConfigFailed: 'Failed to save config',
+      alwaysOn: 'Always on',
       toolboxPanels: 'Toolbox',
       aiChatbox: {
         noProvider: 'No model configured',

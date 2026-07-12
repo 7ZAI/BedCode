@@ -22,7 +22,13 @@ interface ActivePlugin {
 class PluginLoaderClass {
   private plugins: Map<string, ActivePlugin> = new Map()
 
-  /** 加载所有插件（应用启动时调用） */
+  /** 加载所有插件（应用启动时调用）
+   *
+   * 根据 Rust 后端返回的插件状态决定前端加载策略：
+   * - Rust 端已 Activated 的插件：加载前端 TS 模块（UI 组件注册）
+   * - Rust 端未激活的插件：跳过，等待用户手动激活
+   * - Rust-only 插件：完全由后端管理，前端无需处理
+   */
   async loadAll(): Promise<void> {
     const manifests = await pluginCmds.pluginListLoaded()
     console.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
@@ -39,19 +45,21 @@ class PluginLoaderClass {
         continue
       }
 
-      // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
-      // TS-only 插件：完整加载流程
-      const shouldLazy = this.shouldLazyActivate(manifest)
-      if (shouldLazy) {
-        console.log(`[PluginLoader] Plugin ${manifest.id} will be lazy-activated`)
+      // 只有 Rust 端已 Activated 的插件才加载前端模块
+      // Rust 端在 PluginHost::new() 中已根据持久化状态自动激活
+      const isActivated = manifest.state.state === 'Activated'
+
+      if (!isActivated) {
+        console.log(`[PluginLoader] Plugin ${manifest.id} not activated (state: ${manifest.state.state}), skipping frontend load`)
         continue
       }
 
-      // Rust+TS 插件跳过后端 activate（已由 PluginHost 处理）
+      // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
       if (manifest.pluginType === 'rust-ts') {
         await this.loadFrontendOnly(manifest)
       } else {
-        await this.loadInline(manifest)
+        // TS-only 插件：Rust 端已激活（自动激活），前端加载入口但不重复调用 pluginActivate
+        await this.loadFrontendForAlreadyActivated(manifest)
       }
     }
   }
@@ -72,6 +80,31 @@ class PluginLoaderClass {
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树
       getPluginRegistry().setContext(manifest.id, context)
       console.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
+    } catch (e: any) {
+      console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
+    }
+  }
+
+  /** 加载 TS-only 插件的前端模块（Rust 端已激活，跳过 pluginActivate 调用）
+   *
+   * 用于启动时 Rust 端已根据持久化状态自动激活的 TS-only 插件，
+   * 避免重复调用 pluginActivate
+   */
+  private async loadFrontendForAlreadyActivated(manifest: PluginInfo): Promise<void> {
+    const ACTIVATE_TIMEOUT = 5000
+
+    try {
+      // 跳过 pluginActivate — Rust 端已通过自动激活处理
+      const entryUrl = this.convertFileUrl(manifest.extensionPath, manifest.main)
+      const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+
+      const context = createPluginContext(manifest)
+      await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+
+      this.plugins.set(manifest.id, { manifest, module, context })
+      getPluginRegistry().setContext(manifest.id, context)
+      console.log(`[PluginLoader] Plugin frontend loaded (already activated): ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
@@ -190,20 +223,6 @@ class PluginLoaderClass {
       console.error(`[PluginLoader] Failed to hot-reload ${pluginId}:`, e)
       await pluginCmds.pluginMarkError(pluginId, e.message || 'Hot reload failed')
     }
-  }
-
-  /** 判断插件是否需要按需激活
-   *
-   * 有 views 的插件立即激活（需要在侧边栏/工具箱显示入口）
-   * 仅声明 commands/terminal 的插件懒激活（按需调用，如命令面板触发）
-   */
-  private shouldLazyActivate(manifest: PluginInfo): boolean {
-    const c = manifest.contributes
-    if (c.views.length > 0) return false
-    return (
-      c.commands.length > 0 ||
-      !!c.terminal
-    )
   }
 
   /** 加载 inline 模式插件 */

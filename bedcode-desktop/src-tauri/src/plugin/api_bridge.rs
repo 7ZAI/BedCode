@@ -27,22 +27,22 @@ pub async fn plugin_get_info(
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
 
-/// 激活插件
+/// 激活插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_activate(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    plugin_host.activate_plugin(&plugin_id).await
+    plugin_host.activate_plugin(&plugin_id, true).await
 }
 
-/// 停用插件
+/// 停用插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_deactivate(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    plugin_host.deactivate_plugin(&plugin_id).await
+    plugin_host.deactivate_plugin(&plugin_id, true).await
 }
 
 /// 标记插件错误
@@ -54,6 +54,14 @@ pub async fn plugin_mark_error(
 ) -> crate::Result<()> {
     plugin_host.mark_error(&plugin_id, error).await;
     Ok(())
+}
+
+/// 获取插件激活状态映射（plugin_id → is_activated）
+#[tauri::command]
+pub async fn plugin_get_activated_state(
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<std::collections::HashMap<String, bool>> {
+    Ok(plugin_host.get_activated_state().await)
 }
 
 // ==================== Plugin Storage ====================

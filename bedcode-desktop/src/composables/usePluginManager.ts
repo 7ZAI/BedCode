@@ -6,7 +6,7 @@
  */
 
 import { ref, onMounted, onUnmounted } from 'vue'
-import { pluginListLoaded, pluginActivate, pluginDeactivate } from '@/plugin/commands'
+import { pluginListLoaded } from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
 import { useToast } from '@/composables/useToast'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -78,9 +78,9 @@ export function usePluginManager() {
   async function togglePlugin(id: string, enable: boolean): Promise<boolean> {
     try {
       if (enable) {
-        await pluginActivate(id)
+        await pluginLoader.activate(id)
       } else {
-        await pluginDeactivate(id)
+        await pluginLoader.deactivate(id)
       }
       // 重新加载列表以获取最新状态
       await loadPlugins()
