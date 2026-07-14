@@ -1,14 +1,17 @@
 //! Mobile Plugin System
 //!
-//! 插件系统入口 — 管理内置插件的加载、激活、停用和状态持久化
+//! 插件系统入口 — WASM 动态加载 + 前端插件管理
 
 pub mod android_plugins;
 pub mod commands;
-pub mod host;
+pub mod downloader;
+pub mod loader;
 pub mod manager;
 pub mod registry;
 pub mod storage;
 pub mod types;
+pub mod wasm_host;
+pub mod wasm_runtime;
 
 pub use android_plugins::init;
-pub use registry::{MobilePlugin, PluginHostContext, builtin_manifests};
+pub use registry::builtin_manifests;
