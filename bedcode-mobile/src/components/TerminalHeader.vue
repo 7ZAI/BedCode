@@ -45,6 +45,8 @@
         </svg>
       </button>
     </template>
+    <!-- 插件工具栏项 -->
+    <PluginTerminalBar />
     <!-- 溢出菜单按钮 -->
     <div v-if="overflowItems.length > 0" class="overflow-menu-wrapper">
       <button class="overflow-btn" :class="{ active: showOverflowMenu }" @click.stop="showOverflowMenu = !showOverflowMenu" :title="t('mobile.terminal.moreTools')">
@@ -97,6 +99,7 @@ defineOptions({ name: 'TerminalHeader' })
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolbarItemConfig } from '@/components/TerminalSettingsModal.vue'
+import PluginTerminalBar from '@/plugin/components/PluginTerminalBar.vue'
 
 const props = defineProps<{
   sessionName: string
