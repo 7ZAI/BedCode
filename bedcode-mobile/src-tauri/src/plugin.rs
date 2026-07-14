@@ -8,6 +8,7 @@
 pub mod android_plugins;
 pub mod commands;
 pub mod host;
+pub mod manager;
 pub mod registry;
 pub mod storage;
 pub mod types;
