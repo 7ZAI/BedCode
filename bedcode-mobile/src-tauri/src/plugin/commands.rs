@@ -8,7 +8,6 @@ use crate::Result;
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::Manager;
-
 // ==================== Plugin Lifecycle Commands ====================
 
 /// 获取所有已加载插件信息
@@ -119,4 +118,45 @@ pub async fn plugin_storage_delete(
 ) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.storage().delete(&plugin_id, &key).await
+}
+
+// ==================== Plugin Download Commands ====================
+
+/// 下载并安装远程插件
+#[tauri::command]
+pub async fn plugin_download(
+    app_handle: tauri::AppHandle,
+    manifest_url: String,
+) -> Result<String> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    let plugins_dir = manager.plugins_dir().clone();
+
+    let plugin_id = crate::plugin::downloader::PluginDownloader::download_and_install(
+        &manifest_url,
+        &plugins_dir,
+    )
+    .await?;
+
+    // 重新扫描并加载
+    manager.scan_and_load().await;
+
+    Ok(plugin_id)
+}
+
+/// 重新加载 WASM 插件（热重载）
+#[tauri::command]
+pub async fn reload_wasm_plugin(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+
+    // 先停用
+    manager.deactivate(&plugin_id).await?;
+
+    // 重新扫描
+    manager.scan_and_load().await;
+
+    // 重新激活
+    manager.activate(&plugin_id, &app_handle).await
 }
