@@ -61,8 +61,14 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
-            let settings_manager = SettingsManager::new(&app_data_dir)?;
-            app.manage(settings_manager);
+            let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
+            app.manage(settings_manager.clone());
+
+            // 初始化插件管理器
+            let plugin_manager = Arc::new(
+                crate::plugin::manager::PluginManager::new(&app_data_dir, settings_manager.clone())
+            );
+            app.manage(plugin_manager);
 
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
@@ -135,6 +141,17 @@ pub fn run() {
             commands::mdns::mdns_get_discovered_services,
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,
+            // Plugin Commands
+            crate::plugin::commands::plugin_list_loaded,
+            crate::plugin::commands::plugin_get_info,
+            crate::plugin::commands::plugin_activate,
+            crate::plugin::commands::plugin_deactivate,
+            crate::plugin::commands::plugin_is_enabled,
+            crate::plugin::commands::plugin_set_enabled,
+            crate::plugin::commands::plugin_mark_error,
+            crate::plugin::commands::plugin_storage_get,
+            crate::plugin::commands::plugin_storage_set,
+            crate::plugin::commands::plugin_storage_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

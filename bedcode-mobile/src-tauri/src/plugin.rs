@@ -1,9 +1,6 @@
-//! Android 原生插件桥接
+//! Mobile Plugin System
 //!
-//! 通过 Rust 端 Tauri Plugin 的 `register_android_plugin()` API
-//! 将 Kotlin 端的 ForegroundServicePlugin 注册到 Tauri PluginManager
-//!
-//! 任务状态通知已迁移到 @tauri-apps/plugin-notification (JS API)
+//! 插件系统入口 — 管理内置插件的加载、激活、停用和状态持久化
 
 pub mod android_plugins;
 pub mod commands;
