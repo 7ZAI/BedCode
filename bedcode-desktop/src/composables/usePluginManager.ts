@@ -65,9 +65,16 @@ export function usePluginManager() {
   /** 加载插件列表 */
   async function loadPlugins(): Promise<void> {
     loading.value = true
+    console.log('[PluginManager] loadPlugins() started')
     try {
-      plugins.value = await pluginListLoaded()
+      const result = await pluginListLoaded()
+      console.log('[PluginManager] loadPlugins() received', result.length, 'plugin(s)')
+      for (const p of result) {
+        console.log(`[PluginManager]   - ${p.id} (state=${p.state.state}, type=${p.pluginType})`)
+      }
+      plugins.value = result
     } catch (e: any) {
+      console.error('[PluginManager] loadPlugins() failed:', e)
       toast.error(t('desktop.plugin.loadFailed'))
     } finally {
       loading.value = false
@@ -76,6 +83,7 @@ export function usePluginManager() {
 
   /** 切换插件启用/停用 */
   async function togglePlugin(id: string, enable: boolean): Promise<boolean> {
+    console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
     try {
       if (enable) {
         await pluginLoader.activate(id)
@@ -84,9 +92,11 @@ export function usePluginManager() {
       }
       // 重新加载列表以获取最新状态
       await loadPlugins()
+      console.log(`[PluginManager] togglePlugin(${id}) succeeded`)
       return true
     } catch (e: any) {
       const key = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
+      console.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
       toast.error(t(key, { error: e.message || 'Unknown error' }))
       return false
     }

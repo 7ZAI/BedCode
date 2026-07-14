@@ -86,7 +86,7 @@ pub fn init() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("Failed to create messages table: error code {}", result2));
     }
 
-    tracing::info!("[AiChatbox] Custom DB tables initialized");
+    host.log_info("Custom DB tables initialized");
     Ok(())
 }
 

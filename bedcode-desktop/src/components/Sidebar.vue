@@ -263,14 +263,14 @@ const { isResizing, dragWidth, onResizeStart } = useSidebarResize()
       </div>
     </div>
 
-    <!-- Collapse/Expand Toggle Button -->
+    <!-- Collapse/Expand Toggle — straddles right edge -->
     <button
-      class="absolute bottom-3 right-3 w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors duration-200 z-10"
+      class="absolute top-1/2 -translate-y-1/2 -right-3 w-6 h-6 flex items-center justify-center rounded-full bg-sidebar border border-[var(--border)] text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] shadow-sm transition-colors duration-200 z-10"
       :title="collapsed ? $t('desktop.sidebar.expand') : $t('desktop.sidebar.collapse')"
       @click="toggleSidebar()"
     >
       <svg
-        class="w-4 h-4 transition-transform duration-200"
+        class="w-3.5 h-3.5 transition-transform duration-200"
         :class="collapsed && 'rotate-180'"
         fill="none" stroke="currentColor" viewBox="0 0 24 24"
       >

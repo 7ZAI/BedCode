@@ -53,6 +53,18 @@ pub struct HostContext {
     /// 向前端发送事件
     /// 参数：(event_name, payload_json)
     pub emit_event: extern "C" fn(*const c_char, *const c_char),
+    /// 统一日志：info 级别
+    /// 参数：(plugin_id, message)
+    pub log_info: extern "C" fn(*const c_char, *const c_char),
+    /// 统一日志：debug 级别
+    /// 参数：(plugin_id, message)
+    pub log_debug: extern "C" fn(*const c_char, *const c_char),
+    /// 统一日志：warn 级别
+    /// 参数：(plugin_id, message)
+    pub log_warn: extern "C" fn(*const c_char, *const c_char),
+    /// 统一日志：error 级别
+    /// 参数：(plugin_id, message)
+    pub log_error: extern "C" fn(*const c_char, *const c_char),
 }
 
 // ==================== HostContextFns ====================
@@ -108,6 +120,10 @@ impl HostContextFns {
             session_list: host_session_list,
             session_get: host_session_get,
             emit_event: host_emit_event,
+            log_info: host_log_info,
+            log_debug: host_log_debug,
+            log_warn: host_log_warn,
+            log_error: host_log_error,
         }
     }
 }
@@ -870,6 +886,38 @@ extern "C" fn host_emit_event(event_name: *const c_char, payload: *const c_char)
     if result.is_err() {
         tracing::error!("Panic in host_emit_event");
     }
+}
+
+// ==================== Unified Plugin Logging ====================
+
+/// 插件统一日志：info 级别
+///
+/// 自动添加 `[plugin:{plugin_id}]` 前缀，通过宿主 tracing 输出
+extern "C" fn host_log_info(plugin_id: *const c_char, message: *const c_char) {
+    let plugin_id = unsafe { cstr_to_string(plugin_id) }.unwrap_or_default();
+    let message = unsafe { cstr_to_string(message) }.unwrap_or_default();
+    tracing::info!("[plugin:{}] {}", plugin_id, message);
+}
+
+/// 插件统一日志：debug 级别
+extern "C" fn host_log_debug(plugin_id: *const c_char, message: *const c_char) {
+    let plugin_id = unsafe { cstr_to_string(plugin_id) }.unwrap_or_default();
+    let message = unsafe { cstr_to_string(message) }.unwrap_or_default();
+    tracing::debug!("[plugin:{}] {}", plugin_id, message);
+}
+
+/// 插件统一日志：warn 级别
+extern "C" fn host_log_warn(plugin_id: *const c_char, message: *const c_char) {
+    let plugin_id = unsafe { cstr_to_string(plugin_id) }.unwrap_or_default();
+    let message = unsafe { cstr_to_string(message) }.unwrap_or_default();
+    tracing::warn!("[plugin:{}] {}", plugin_id, message);
+}
+
+/// 插件统一日志：error 级别
+extern "C" fn host_log_error(plugin_id: *const c_char, message: *const c_char) {
+    let plugin_id = unsafe { cstr_to_string(plugin_id) }.unwrap_or_default();
+    let message = unsafe { cstr_to_string(message) }.unwrap_or_default();
+    tracing::error!("[plugin:{}] {}", plugin_id, message);
 }
 
 // ==================== Tests ====================

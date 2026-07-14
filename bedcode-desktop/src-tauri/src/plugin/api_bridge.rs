@@ -15,7 +15,10 @@ use tauri::State;
 pub async fn plugin_list_loaded(
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Vec<DesktopPluginInfo>> {
-    Ok(plugin_host.list_plugins().await)
+    tracing::debug!("[API] plugin_list_loaded called");
+    let result = plugin_host.list_plugins().await;
+    tracing::debug!("[API] plugin_list_loaded returning {} plugin(s)", result.len());
+    Ok(result)
 }
 
 /// 获取单个插件信息
@@ -24,6 +27,7 @@ pub async fn plugin_get_info(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<DesktopPluginInfo>> {
+    tracing::debug!("[API] plugin_get_info({})", plugin_id);
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
 
@@ -33,7 +37,12 @@ pub async fn plugin_activate(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    plugin_host.activate_plugin(&plugin_id, true).await
+    tracing::info!("[API] plugin_activate({})", plugin_id);
+    let result = plugin_host.activate_plugin(&plugin_id, true).await;
+    if let Err(ref e) = result {
+        tracing::error!("[API] plugin_activate({}) failed: {}", plugin_id, e);
+    }
+    result
 }
 
 /// 停用插件（用户操作，持久化状态）
@@ -42,7 +51,12 @@ pub async fn plugin_deactivate(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    plugin_host.deactivate_plugin(&plugin_id, true).await
+    tracing::info!("[API] plugin_deactivate({})", plugin_id);
+    let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
+    if let Err(ref e) = result {
+        tracing::error!("[API] plugin_deactivate({}) failed: {}", plugin_id, e);
+    }
+    result
 }
 
 /// 标记插件错误

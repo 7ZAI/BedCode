@@ -20,8 +20,10 @@ impl PluginLoader {
     /// 目录约定：`plugins/desktop/{plugin-id}/plugin.json`
     /// 解析失败的插件跳过并记录警告，不影响其他插件
     pub fn load_all(plugins_dir: &Path, permission_mgr: &PermissionManager) -> HashMap<String, LoadedPlugin> {
+        tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
+
         if !plugins_dir.exists() {
-            tracing::info!("Plugin directory does not exist: {:?}", plugins_dir);
+            tracing::warn!("[PluginLoader] Plugin directory does not exist: {:?}", plugins_dir);
             return HashMap::new();
         }
 
@@ -29,20 +31,22 @@ impl PluginLoader {
         let entries = match fs::read_dir(plugins_dir) {
             Ok(entries) => entries,
             Err(e) => {
-                tracing::warn!("Failed to read plugin directory: {}", e);
+                tracing::error!("[PluginLoader] Failed to read plugin directory: {}", e);
                 return HashMap::new();
             }
         };
 
+        let mut dir_count = 0;
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
             }
+            dir_count += 1;
 
             let manifest_path = path.join("plugin.json");
             if !manifest_path.exists() {
-                tracing::debug!("Skipping {:?}: no plugin.json", path);
+                tracing::debug!("[PluginLoader] Skipping {:?}: no plugin.json", path);
                 continue;
             }
 
@@ -70,6 +74,11 @@ impl PluginLoader {
                         PluginSource::FileScan
                     };
 
+                    tracing::info!(
+                        "[PluginLoader] Plugin loaded: {} v{} (type={:?}, source={:?}, path={})",
+                        manifest.id, manifest.version, manifest.plugin_type, source, extension_path
+                    );
+
                     let loaded = LoadedPlugin {
                         manifest,
                         state: PluginState::Loaded,
@@ -79,17 +88,16 @@ impl PluginLoader {
                         source,
                     };
 
-                    tracing::info!("Plugin loaded: {} v{}", loaded.manifest.id, loaded.manifest.version);
                     plugins.insert(plugin_id, loaded);
                 }
                 Err(e) => {
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    tracing::warn!("Failed to load plugin from {:?}: {}", dir_name, e);
+                    tracing::error!("[PluginLoader] Failed to load plugin from {:?}: {}", dir_name, e);
                 }
             }
         }
 
-        tracing::info!("Loaded {} file-based plugin(s)", plugins.len());
+        tracing::info!("[PluginLoader] Scanned {} dir(s), loaded {} plugin(s)", dir_count, plugins.len());
         plugins
     }
 

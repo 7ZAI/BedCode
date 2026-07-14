@@ -20,6 +20,10 @@ pub struct HostContext {
     pub session_list: extern "C" fn() -> *mut c_char,
     pub session_get: extern "C" fn(*const c_char) -> *mut c_char,
     pub emit_event: extern "C" fn(*const c_char, *const c_char),
+    pub log_info: extern "C" fn(*const c_char, *const c_char),
+    pub log_debug: extern "C" fn(*const c_char, *const c_char),
+    pub log_warn: extern "C" fn(*const c_char, *const c_char),
+    pub log_error: extern "C" fn(*const c_char, *const c_char),
 }
 
 // SAFETY: HostContext 由宿主在 activate 时注入，所有指针在插件生命周期内有效。
@@ -135,5 +139,35 @@ impl HostContext {
             Err(_) => return,
         };
         (self.emit_event)(name_cstr.as_ptr(), payload_cstr.as_ptr());
+    }
+
+    // ==================== Unified Logging ====================
+
+    /// info 级别日志 — 通过宿主 tracing 输出，自动带 plugin_id 前缀
+    pub fn log_info(&self, message: &str) {
+        if let Ok(msg) = CString::new(message) {
+            (self.log_info)(self.plugin_id, msg.as_ptr());
+        }
+    }
+
+    /// debug 级别日志
+    pub fn log_debug(&self, message: &str) {
+        if let Ok(msg) = CString::new(message) {
+            (self.log_debug)(self.plugin_id, msg.as_ptr());
+        }
+    }
+
+    /// warn 级别日志
+    pub fn log_warn(&self, message: &str) {
+        if let Ok(msg) = CString::new(message) {
+            (self.log_warn)(self.plugin_id, msg.as_ptr());
+        }
+    }
+
+    /// error 级别日志
+    pub fn log_error(&self, message: &str) {
+        if let Ok(msg) = CString::new(message) {
+            (self.log_error)(self.plugin_id, msg.as_ptr());
+        }
     }
 }

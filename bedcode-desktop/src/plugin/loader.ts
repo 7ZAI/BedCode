@@ -30,13 +30,16 @@ class PluginLoaderClass {
    * - Rust-only 插件：完全由后端管理，前端无需处理
    */
   async loadAll(): Promise<void> {
+    console.log('[PluginLoader] loadAll() started')
     const manifests = await pluginCmds.pluginListLoaded()
-    console.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
+    console.log(`[PluginLoader] Found ${manifests.length} plugin(s) from backend`)
 
     for (const manifest of manifests) {
+      console.log(`[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state}, sandbox=${manifest.sandbox})`)
+
       // Rust-only 插件：Rust 端已通过静态注册激活，前端无需加载
       if (manifest.pluginType === 'rust') {
-        console.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend`)
+        console.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend, skipping`)
         continue
       }
 
@@ -56,12 +59,16 @@ class PluginLoaderClass {
 
       // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
       if (manifest.pluginType === 'rust-ts') {
+        console.log(`[PluginLoader] Loading Rust+TS plugin frontend: ${manifest.id}`)
         await this.loadFrontendOnly(manifest)
       } else {
         // TS-only 插件：Rust 端已激活（自动激活），前端加载入口但不重复调用 pluginActivate
+        console.log(`[PluginLoader] Loading TS-only plugin frontend (already activated): ${manifest.id}`)
         await this.loadFrontendForAlreadyActivated(manifest)
       }
     }
+
+    console.log(`[PluginLoader] loadAll() complete, ${this.plugins.size} plugin(s) with frontend modules loaded`)
   }
 
   /** 加载 Rust+TS 插件的前端部分（不触发后端 activate，Rust 端已激活） */
@@ -71,10 +78,13 @@ class PluginLoaderClass {
     try {
       // 不调用 pluginActivate — Rust 端已通过静态注册激活
       const entryUrl = this.convertFileUrl(manifest.extensionPath, manifest.main)
+      console.log(`[PluginLoader] Importing frontend module: ${entryUrl}`)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+      console.log(`[PluginLoader] Frontend module imported: ${manifest.id}`)
 
       const context = createPluginContext(manifest)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+      console.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
 
       this.plugins.set(manifest.id, { manifest, module, context })
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树
@@ -97,10 +107,13 @@ class PluginLoaderClass {
     try {
       // 跳过 pluginActivate — Rust 端已通过自动激活处理
       const entryUrl = this.convertFileUrl(manifest.extensionPath, manifest.main)
+      console.log(`[PluginLoader] Importing frontend module (already activated): ${entryUrl}`)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+      console.log(`[PluginLoader] Frontend module imported: ${manifest.id}`)
 
       const context = createPluginContext(manifest)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+      console.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
 
       this.plugins.set(manifest.id, { manifest, module, context })
       getPluginRegistry().setContext(manifest.id, context)
@@ -113,23 +126,32 @@ class PluginLoaderClass {
 
   /** 按需激活插件 */
   async activate(pluginId: string): Promise<void> {
+    console.log(`[PluginLoader] activate(${pluginId}) called`)
+
     if (this.plugins.has(pluginId)) {
+      console.log(`[PluginLoader] Plugin ${pluginId} already has frontend module loaded, skipping`)
       return
     }
 
     const info = await pluginCmds.pluginGetInfo(pluginId)
     if (!info) {
-      console.error(`[PluginLoader] Plugin ${pluginId} not found`)
+      console.error(`[PluginLoader] Plugin ${pluginId} not found in backend`)
       return
     }
 
+    console.log(`[PluginLoader] Plugin ${pluginId} info: type=${info.pluginType}, state=${info.state.state}`)
     await this.loadInline(info)
   }
 
   /** 停用插件 */
   async deactivate(pluginId: string): Promise<void> {
+    console.log(`[PluginLoader] deactivate(${pluginId}) called`)
+
     const plugin = this.plugins.get(pluginId)
-    if (!plugin) return
+    if (!plugin) {
+      console.warn(`[PluginLoader] Plugin ${pluginId} has no frontend module loaded, nothing to deactivate`)
+      return
+    }
 
     // 清理所有 Disposable
     plugin.context._disposables.forEach(d => {
@@ -150,6 +172,7 @@ class PluginLoaderClass {
     if (plugin.module.deactivate) {
       try {
         await plugin.module.deactivate()
+        console.log(`[PluginLoader] Plugin deactivate() called: ${pluginId}`)
       } catch (e) {
         console.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
       }
@@ -158,6 +181,7 @@ class PluginLoaderClass {
     // 通知后端
     try {
       await pluginCmds.pluginDeactivate(pluginId)
+      console.log(`[PluginLoader] Backend notified of deactivation: ${pluginId}`)
     } catch (e) {
       console.error(`[PluginLoader] Error notifying backend for deactivation of ${pluginId}:`, e)
     }
@@ -231,17 +255,22 @@ class PluginLoaderClass {
 
     try {
       // 通知后端标记激活
+      console.log(`[PluginLoader] Calling backend pluginActivate for ${manifest.id}`)
       await pluginCmds.pluginActivate(manifest.id)
+      console.log(`[PluginLoader] Backend pluginActivate succeeded for ${manifest.id}`)
 
       // 动态导入插件入口文件
       const entryUrl = this.convertFileUrl(manifest.extensionPath, manifest.main)
+      console.log(`[PluginLoader] Importing frontend module: ${entryUrl}`)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+      console.log(`[PluginLoader] Frontend module imported: ${manifest.id}`)
 
       // 创建 PluginContext
       const context = createPluginContext(manifest)
 
       // 调用 activate
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+      console.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
 
       this.plugins.set(manifest.id, { manifest, module, context })
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树

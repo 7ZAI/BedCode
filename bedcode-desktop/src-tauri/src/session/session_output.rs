@@ -258,6 +258,8 @@ pub struct SubscriberState {
     pub sent_seq: AtomicU64,
     /// 独立发送通道（绑定该客户端的 WebSocket）
     pub send_queue: mpsc::Sender<OutputEvent>,
+    /// inactive 期间的待发送缓冲，消除历史发送→激活之间的丢失窗口
+    pub pending: RwLock<Vec<OutputEvent>>,
 }
 
 impl SubscriberState {
@@ -267,6 +269,7 @@ impl SubscriberState {
             active: AtomicBool::new(false),
             sent_seq: AtomicU64::new(0),
             send_queue,
+            pending: RwLock::new(Vec::new()),
         }
     }
 
@@ -321,19 +324,24 @@ impl SessionOutputManager {
                         subscriber.client_id, e
                     );
                 }
+            } else {
+                // inactive 期间缓存事件，激活时排空，消除历史发送→激活的丢失窗口
+                if let Ok(mut pending) = subscriber.pending.try_write() {
+                    pending.push(event.clone());
+                }
             }
         }
     }
 
     /// 订阅会话输出
     ///
-    /// 使用"先占位后激活"模式：
+    /// 使用"先占位→发历史→排空 pending→原子激活"模式：
     /// 1. 先插入 active=false 的 subscriber（占位），释放写锁
     /// 2. 逐条发送历史（不持锁，不阻塞 on_output 的读锁）
-    /// 3. 激活 subscriber（active=true），开始接收新输出
+    /// 3. 持写锁排空 pending + 原子激活（on_output 被阻塞，不会在排空和激活之间插入新事件）
     ///
-    /// 占位期间 on_output() 会看到该 subscriber 但因 active=false 跳过，
-    /// 激活后从 on_output() 接收的事件 index 一定 >= 历史最后一条的 index + 1
+    /// 占位期间 on_output() 会看到该 subscriber 但因 active=false 将事件缓存到 pending，
+    /// 排空 pending 和 activate 在同一写锁内完成，保证零丢失且顺序正确
     pub async fn subscribe(
         &self,
         client_id: &str,
@@ -373,11 +381,43 @@ impl SessionOutputManager {
             }
         }
 
-        // 第三步：激活 subscriber，开始接收 on_output 的新事件
+        // 第三步：排空 pending + 原子激活
+        // 先读锁检查 pending 是否为空，空则无需写锁，避免不必要地阻塞 on_output()
+        // 非空时升级为写锁，保证排空和激活之间不会有新事件进入 pending
         {
-            let subscribers = self.subscribers.read().await;
-            if let Some(sub) = subscribers.get(client_id) {
-                sub.activate(max_seq);
+            let need_drain = {
+                let subscribers = self.subscribers.read().await;
+                match subscribers.get(client_id) {
+                    Some(sub) => !sub.pending.read().await.is_empty(),
+                    None => false,
+                }
+            };
+
+            if need_drain {
+                let mut subscribers = self.subscribers.write().await;
+                if let Some(sub) = subscribers.get(client_id) {
+                    let mut pending = sub.pending.write().await;
+                    for event in pending.drain(..) {
+                        if let Err(e) = sub.send_queue.send(event.clone()).await {
+                            tracing::warn!(
+                                "[SessionOutputManager] Failed to send pending to {}: {}",
+                                client_id, e
+                            );
+                        }
+                    }
+                    drop(pending);
+
+                    // 读取最新 max_seq，此时 on_output 被写锁阻塞，max_seq 不会继续增长
+                    let current_max = self.output_queue.read().await.max_seq();
+                    sub.activate(current_max);
+                }
+            } else {
+                // pending 为空，只需读锁激活
+                let subscribers = self.subscribers.read().await;
+                if let Some(sub) = subscribers.get(client_id) {
+                    let current_max = self.output_queue.read().await.max_seq();
+                    sub.activate(current_max);
+                }
             }
         }
 
@@ -811,5 +851,123 @@ mod tests {
             let e = rx.recv().await.unwrap();
             assert_eq!(e.index, i);
         }
+    }
+
+    /// 验证 pending 缓冲消除订阅丢失窗口：
+    /// subscribe 期间 on_output 产生的事件应通过 pending 缓冲补齐，零丢失
+    #[tokio::test]
+    async fn test_pending_covers_subscribe_gap() {
+        let manager = SessionOutputManager::new("test-session");
+
+        // 预填充历史
+        for i in 0..5 {
+            manager.output_queue.write().await.push(make_event(i));
+        }
+
+        let (tx, mut rx) = mpsc::channel(100);
+
+        // subscribe 会：占位 → 发历史(0-4) → 排空 pending → activate
+        let response = manager.subscribe("client-1", tx, None).await;
+        assert_eq!(response.history_count, 5);
+
+        // 收到历史 0-4
+        for i in 0..5 {
+            let e = rx.recv().await.unwrap();
+            assert_eq!(e.index, i);
+        }
+
+        // subscribe 完成后，on_output 应正常接收
+        manager.on_output(make_event(5)).await;
+        let e = rx.recv().await.unwrap();
+        assert_eq!(e.index, 5);
+    }
+
+    /// 验证 inactive 期间 on_output 缓存到 pending
+    #[tokio::test]
+    async fn test_on_output_caches_to_pending_when_inactive() {
+        let manager = SessionOutputManager::new("test-session");
+
+        // 预填充历史
+        for i in 0..3 {
+            manager.output_queue.write().await.push(make_event(i));
+        }
+
+        let (tx, mut rx) = mpsc::channel(100);
+
+        // 手动模拟：先占位（inactive），然后 on_output，再激活
+        let subscriber = SubscriberState::new("client-1".to_string(), tx);
+        manager
+            .subscribers
+            .write()
+            .await
+            .insert("client-1".to_string(), subscriber);
+
+        // inactive 期间 on_output 应缓存到 pending
+        manager.on_output(make_event(3)).await;
+        manager.on_output(make_event(4)).await;
+
+        // 验证 pending 中有 2 个事件
+        {
+            let subs = manager.subscribers.read().await;
+            let sub = subs.get("client-1").unwrap();
+            let pending = sub.pending.read().await;
+            assert_eq!(pending.len(), 2);
+            assert_eq!(pending[0].index, 3);
+            assert_eq!(pending[1].index, 4);
+        }
+
+        // 排空 pending 并激活（持写锁，与 subscribe 实际逻辑一致）
+        {
+            let mut subs = manager.subscribers.write().await;
+            let sub = subs.get("client-1").unwrap();
+            let mut pending = sub.pending.write().await;
+            for event in pending.drain(..) {
+                sub.send_queue.send(event).await.unwrap();
+            }
+            drop(pending);
+            let current_max = manager.output_queue.read().await.max_seq();
+            sub.activate(current_max);
+        }
+
+        // 收到历史 + pending 事件
+        for i in 0..5 {
+            let e = rx.recv().await.unwrap();
+            assert_eq!(e.index, i);
+        }
+
+        // 激活后 on_output 正常发送
+        manager.on_output(make_event(5)).await;
+        let e = rx.recv().await.unwrap();
+        assert_eq!(e.index, 5);
+    }
+
+    /// 验证 activate 使用最新 max_seq，而非历史读取时的旧值
+    #[tokio::test]
+    async fn test_activate_uses_current_max_seq() {
+        let manager = SessionOutputManager::new("test-session");
+
+        // 预填充历史
+        for i in 0..3 {
+            manager.output_queue.write().await.push(make_event(i));
+        }
+
+        let (tx, mut rx) = mpsc::channel(100);
+
+        // subscribe 完成后，sent_seq 应为当前 max_seq
+        let response = manager.subscribe("client-1", tx, None).await;
+        assert_eq!(response.max_seq, 2);
+
+        // 验证 subscriber 的 sent_seq 是最新的
+        {
+            let subs = manager.subscribers.read().await;
+            let sub = subs.get("client-1").unwrap();
+            assert!(sub.is_active());
+            assert_eq!(sub.sent_seq.load(Ordering::SeqCst), 2);
+        }
+
+        // 后续 on_output 正常接收，无重复无丢失
+        manager.on_output(make_event(3)).await;
+        let e = rx.recv().await.unwrap();
+        assert_eq!(e.index, 3);
     }
 }

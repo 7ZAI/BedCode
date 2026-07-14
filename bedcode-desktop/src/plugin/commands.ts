@@ -33,22 +33,32 @@ export interface FileHandlerEntry {
 
 /** 获取所有已加载插件 */
 export async function pluginListLoaded(): Promise<PluginInfo[]> {
-  return await invoke<PluginInfo[]>('plugin_list_loaded')
+  console.log('[PluginCmd] pluginListLoaded() invoking...')
+  const result = await invoke<PluginInfo[]>('plugin_list_loaded')
+  console.log(`[PluginCmd] pluginListLoaded() returned ${result.length} plugin(s)`)
+  return result
 }
 
 /** 获取单个插件信息 */
 export async function pluginGetInfo(pluginId: string): Promise<PluginInfo | null> {
-  return await invoke<PluginInfo | null>('plugin_get_info', { pluginId })
+  console.log(`[PluginCmd] pluginGetInfo(${pluginId}) invoking...`)
+  const result = await invoke<PluginInfo | null>('plugin_get_info', { pluginId })
+  console.log(`[PluginCmd] pluginGetInfo(${pluginId}) returned:`, result ? `state=${result.state.state}` : 'null')
+  return result
 }
 
 /** 激活插件 */
 export async function pluginActivate(pluginId: string): Promise<void> {
-  return await invoke('plugin_activate', { pluginId })
+  console.log(`[PluginCmd] pluginActivate(${pluginId}) invoking...`)
+  await invoke('plugin_activate', { pluginId })
+  console.log(`[PluginCmd] pluginActivate(${pluginId}) succeeded`)
 }
 
 /** 停用插件 */
 export async function pluginDeactivate(pluginId: string): Promise<void> {
-  return await invoke('plugin_deactivate', { pluginId })
+  console.log(`[PluginCmd] pluginDeactivate(${pluginId}) invoking...`)
+  await invoke('plugin_deactivate', { pluginId })
+  console.log(`[PluginCmd] pluginDeactivate(${pluginId}) succeeded`)
 }
 
 /** 标记插件错误 */

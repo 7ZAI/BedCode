@@ -79,24 +79,27 @@ pub extern "C" fn bedcode_plugin_manifest() -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn bedcode_plugin_activate(host_ctx: *const HostContext) -> c_int {
     if host_ctx.is_null() {
-        tracing::error!("[AiChatbox] activate: null HostContext");
+        // activate 阶段 HostContext 尚未设置，使用 tracing 作为 fallback
+        tracing::error!("[plugin:com.bedcode.ai-chatbox] activate: null HostContext");
         return 1;
     }
     match HOST_CONTEXT.set(unsafe { std::ptr::read(host_ctx) }) {
         Ok(()) => {
+            let host = HOST_CONTEXT.get().unwrap();
             // 初始化自定义数据库表
             if let Err(e) = db::init() {
-                tracing::error!("[AiChatbox] DB init failed: {}", e);
+                host.log_error(&format!("DB init failed: {}", e));
                 return 2;
             }
             ACTIVE.store(true, Ordering::SeqCst);
-            tracing::info!("[AiChatbox] Plugin activated (cdylib)");
+            host.log_info("Plugin activated (cdylib)");
             0
         }
         Err(_) => {
             // 已激活（重复调用），标记为激活状态
             ACTIVE.store(true, Ordering::SeqCst);
-            tracing::warn!("[AiChatbox] Plugin already activated, HostContext already set");
+            let host = HOST_CONTEXT.get().unwrap();
+            host.log_warn("Plugin already activated, HostContext already set");
             0
         }
     }
@@ -106,7 +109,9 @@ pub extern "C" fn bedcode_plugin_activate(host_ctx: *const HostContext) -> c_int
 #[no_mangle]
 pub extern "C" fn bedcode_plugin_deactivate() -> c_int {
     ACTIVE.store(false, Ordering::SeqCst);
-    tracing::info!("[AiChatbox] Plugin deactivated (cdylib)");
+    if let Some(host) = HOST_CONTEXT.get() {
+        host.log_info("Plugin deactivated (cdylib)");
+    }
     0
 }
 
@@ -123,7 +128,9 @@ pub extern "C" fn bedcode_plugin_invoke_command(
     }
 
     let name = if command_name.is_null() {
-        tracing::error!("[AiChatbox] invoke_command: null command_name");
+        if let Some(host) = HOST_CONTEXT.get() {
+            host.log_error("invoke_command: null command_name");
+        }
         return ptr::null_mut();
     } else {
         unsafe { CStr::from_ptr(command_name) }.to_str().unwrap_or("").to_string()
@@ -150,7 +157,9 @@ pub extern "C" fn bedcode_plugin_invoke_command(
     match result {
         Ok(val) => CString::new(val.to_string()).unwrap().into_raw(),
         Err(e) => {
-            tracing::error!("[AiChatbox] Command '{}' failed: {}", name, e);
+            if let Some(host) = HOST_CONTEXT.get() {
+                host.log_error(&format!("Command '{}' failed: {}", name, e));
+            }
             let error_json = serde_json::json!({ "error": e.to_string() });
             CString::new(error_json.to_string()).unwrap().into_raw()
         }
