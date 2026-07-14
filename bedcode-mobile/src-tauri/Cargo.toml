@@ -66,6 +66,18 @@ flume = "0.12"
 
 futures-util = "0.3"
 
+# WASM runtime for plugin system
+wasmtime = "46"
+
+# HTTP client (WASM plugin HTTP proxy + remote download)
+reqwest = { version = "0.12", features = ["stream"] }
+
+# Regex for SQL table name extraction
+regex = "1"
+
+# SHA256 hash (plugin download verification)
+sha2 = "0.10"
+
 # Android logging
 log = "0.4"
 android_logger = "0.14"
