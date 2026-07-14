@@ -6,5 +6,8 @@
 //! 任务状态通知已迁移到 @tauri-apps/plugin-notification (JS API)
 
 pub mod android_plugins;
+pub mod registry;
+pub mod types;
 
 pub use android_plugins::init;
+pub use registry::{MobilePlugin, PluginHostContext, builtin_manifests};
