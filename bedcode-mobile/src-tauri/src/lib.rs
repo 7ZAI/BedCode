@@ -64,17 +64,61 @@ pub fn run() {
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
 
+            // 初始化插件 KV 存储
+            let plugin_storage = Arc::new(
+                crate::plugin::storage::PluginStorage::new(&app_data_dir)
+            );
+
+            // 创建插件数据库连接（WASM Host Function 使用）
+            let db_path = app_data_dir.join("bedcode_plugins.db");
+            let plugin_db = Arc::new(tokio::sync::Mutex::new(
+                rusqlite::Connection::open(&db_path)
+                    .map_err(|e| tauri::Error::Setup(e.to_string()))?
+            ));
+
+            // 创建 WASM 运行时
+            let wasm_runtime = Arc::new(
+                crate::plugin::wasm_runtime::WasmRuntime::new(
+                    plugin_db.clone(),
+                    plugin_storage.clone(),
+                    Arc::new(app_handle.clone()),
+                )
+                .map_err(|e| tauri::Error::Setup(e.to_string()))?
+            );
+
+            // 创建 WASM 宿主上下文
+            let wasm_host_ctx = Arc::new(
+                crate::plugin::wasm_runtime::WasmHostContext::new(
+                    plugin_db,
+                    plugin_storage,
+                    Arc::new(app_handle.clone()),
+                )
+            );
+
             // 初始化插件管理器
             let plugin_manager = Arc::new(
-                crate::plugin::manager::PluginManager::new(&app_data_dir, settings_manager.clone())
+                crate::plugin::manager::PluginManager::new(
+                    &app_data_dir,
+                    settings_manager.clone(),
+                    wasm_runtime,
+                    wasm_host_ctx,
+                )
             );
             app.manage(plugin_manager.clone());
 
-            // 自动激活之前启用的插件
+            // 解压 APK assets 中的内置插件
+            if let Err(e) = crate::plugin::loader::PluginLoader::extract_apk_plugins(
+                &app_data_dir, &app_handle
+            ) {
+                tracing::warn!("Failed to extract APK plugins: {}", e);
+            }
+
+            // 异步：扫描加载 + 自动激活
             {
                 let pm = plugin_manager;
                 let ah = app_handle.clone();
                 tokio::spawn(async move {
+                    pm.scan_and_load().await;
                     pm.load_all(&ah).await;
                 });
             }
@@ -161,6 +205,8 @@ pub fn run() {
             crate::plugin::commands::plugin_storage_get,
             crate::plugin::commands::plugin_storage_set,
             crate::plugin::commands::plugin_storage_delete,
+            crate::plugin::commands::plugin_download,
+            crate::plugin::commands::reload_wasm_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
