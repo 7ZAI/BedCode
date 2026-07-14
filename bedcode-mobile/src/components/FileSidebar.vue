@@ -101,6 +101,16 @@
               <span class="toggle-knob"></span>
             </button>
           </div>
+          <div class="settings-panel-row">
+            <span class="settings-panel-label">{{ t('mobile.file.lazyLoad') }}</span>
+            <button
+              class="toggle-switch"
+              :class="{ active: tempLazyLoad }"
+              @click="tempLazyLoad = !tempLazyLoad"
+            >
+              <span class="toggle-knob"></span>
+            </button>
+          </div>
         </div>
         <div class="settings-panel-section">
           <div class="settings-panel-row">
@@ -179,6 +189,7 @@
           :font-size="settings.fontSize"
           @file-click="handleFileClick"
           @long-press="handleLongPress"
+          @load-children="loadChildren"
         />
       </template>
     </div>
@@ -237,7 +248,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const { isLandscape } = useOrientation()
 const toast = useToast()
-const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggleDiffMode, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
+const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggleDiffMode, loadChildren, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
 
 const isRefreshing = ref(false)
 const showSettingsPanel = ref(false)
@@ -269,6 +280,7 @@ const sidebarWidth = ref<number | null>(null)
 const tempDefaultExpanded = ref(false)
 const tempFilterText = ref('')
 const tempFontSize = ref(FONT_SIZE_MIN)
+const tempLazyLoad = ref(false)
 
 // 滑块拖动
 const sliderTrackRef = ref<HTMLElement | null>(null)
@@ -450,6 +462,7 @@ function toggleSettings() {
   } else {
     // 用当前设置初始化临时状态
     tempDefaultExpanded.value = settings.value.defaultExpanded
+    tempLazyLoad.value = settings.value.lazyLoad
     tempFilterText.value = settings.value.filterPatterns.join(', ')
     tempFontSize.value = settings.value.fontSize
     showSettingsPanel.value = true
@@ -468,6 +481,7 @@ function confirmSettingsPanel() {
       .map(s => s.trim())
       .filter(Boolean),
     fontSize: tempFontSize.value,
+    lazyLoad: tempLazyLoad.value,
   }
   emit('settings-input-focus', false)
   updateSettings(newSettings)
