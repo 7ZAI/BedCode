@@ -9,9 +9,21 @@
       @touchmove="onTouchMove"
       @contextmenu.prevent="onContextMenu"
     >
+      <!-- 文件夹加载中 spinner -->
+      <svg
+        v-if="node.type === 'folder' && node.loading"
+        class="chevron spinning-icon"
+        :width="iconSize"
+        :height="iconSize"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+      </svg>
       <!-- 文件夹展开/折叠箭头 -->
       <svg
-        v-if="node.type === 'folder'"
+        v-else-if="node.type === 'folder'"
         class="chevron"
         :class="{ expanded: node.expanded }"
         :width="iconSize"
@@ -43,12 +55,18 @@
         :font-size="fontSize"
         @file-click="(name, path) => emit('file-click', name, path)"
         @long-press="(name, path) => emit('long-press', name, path)"
+        @load-children="(n) => emit('load-children', n)"
       />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+/**
+ * 文件树节点组件
+ *
+ * 支持懒加载：文件夹展开时 emit load-children 事件请求加载子节点
+ */
 import { computed } from 'vue'
 import type { FileTreeNode } from '@/composables/useFileTree'
 import FolderOpenIcon from './icons/FolderOpenIcon.vue'
@@ -66,6 +84,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'file-click': [name: string, path: string]
   'long-press': [name: string, path: string]
+  'load-children': [node: FileTreeNode]
 }>()
 
 // 基于 fontSize 的比例缩放因子（以 13px 为基准）
@@ -162,6 +181,10 @@ function handleClick() {
   }
   if (props.node.type === 'folder') {
     props.node.expanded = !props.node.expanded
+    // 懒加载：展开时如果 children 未加载，请求加载
+    if (props.node.expanded && props.node.children === undefined && !props.node.loading) {
+      emit('load-children', props.node)
+    }
   } else {
     emit('file-click', props.node.name, props.node.path ?? props.node.name)
   }
@@ -210,5 +233,15 @@ function handleClick() {
 
 .tree-item-children {
   overflow: hidden;
+}
+
+.spinning-icon {
+  animation: spin 1s linear infinite;
+  color: var(--mobile-text-muted);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>
