@@ -6,17 +6,15 @@
       :class="{ dragging: isDragging }"
       :style="trackStyle"
     >
-      <div class="swipe-page">
-        <DevicesView />
-      </div>
-      <div class="swipe-page">
-        <SessionsView />
-      </div>
-      <div class="swipe-page">
-        <ToolboxView />
-      </div>
-      <div class="swipe-page">
-        <SettingsView />
+      <div
+        v-for="(page, index) in pages"
+        :key="page.name"
+        class="swipe-page"
+      >
+        <component
+          :is="page.pluginId ? PluginNavTabHost : page.component"
+          v-bind="page.pluginId ? { pluginId: page.pluginId, component: page.component } : {}"
+        />
       </div>
     </div>
   </div>
@@ -36,6 +34,8 @@ import DevicesView from '@/views/DevicesView.vue'
 import SessionsView from '@/views/SessionsView.vue'
 import ToolboxView from '@/views/ToolboxView.vue'
 import SettingsView from '@/views/SettingsView.vue'
+import { getPluginRegistry } from '@/plugin/registry'
+import PluginNavTabHost from '@/plugin/components/PluginNavTabHost.vue'
 
 defineOptions({
   name: 'MobileSwipeContainer'
@@ -46,13 +46,26 @@ const router = useRouter()
 const containerRef = ref<HTMLElement | null>(null)
 const trackRef = ref<HTMLElement | null>(null)
 
-// 页面配置
-const pages = [
-  { name: 'mobile-devices', component: DevicesView },
-  { name: 'mobile-sessions', component: SessionsView },
-  { name: 'mobile-toolbox', component: ToolboxView },
-  { name: 'mobile-settings', component: SettingsView }
-]
+// 插件注册表
+const pluginRegistry = getPluginRegistry()
+
+// 页面配置（内置 + 插件导航 Tab，响应式）
+const pages = computed(() => {
+  const builtin = [
+    { name: 'mobile-devices', component: DevicesView },
+    { name: 'mobile-sessions', component: SessionsView },
+    { name: 'mobile-toolbox', component: ToolboxView },
+    { name: 'mobile-settings', component: SettingsView },
+  ]
+
+  const pluginPages = pluginRegistry.navTabs.value.map(tab => ({
+    name: `plugin-nav-${tab.id}`,
+    component: tab.component,
+    pluginId: tab.pluginId,
+  }))
+
+  return [...builtin, ...pluginPages]
+})
 
 // 状态
 const currentPage = ref(0)
@@ -91,7 +104,7 @@ function initPage() {
   const queryPage = route.query.page
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
-    if (!isNaN(page) && page >= 0 && page <= 3) {
+    if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1) {
       currentPage.value = page
       translateX.value = -page * window.innerWidth
       return
@@ -113,7 +126,7 @@ function syncRoute(page: number) {
 
 // 切换到指定页面
 function goToPage(page: number, animate = true) {
-  if (page < 0 || page > 3 || page === currentPage.value) return
+  if (page < 0 || page > pages.value.length - 1 || page === currentPage.value) return
 
   isAnimating.value = animate
   currentPage.value = page
@@ -194,7 +207,7 @@ function onTouchMove(e: TouchEvent) {
     // 边界弹性处理
     if (currentPage.value === 0 && deltaX > 0) {
       newTranslate = baseTranslate + deltaX * 0.3
-    } else if (currentPage.value === 3 && deltaX < 0) {
+    } else if (currentPage.value === pages.value.length - 1 && deltaX < 0) {
       newTranslate = baseTranslate + deltaX * 0.3
     }
 
@@ -218,7 +231,7 @@ function onTouchEnd(e: TouchEvent) {
   const shouldSwipe = Math.abs(deltaX) > CONFIG.swipeThreshold || velocity > CONFIG.velocityThreshold
 
   if (shouldSwipe) {
-    if (deltaX < 0 && currentPage.value < 3) {
+    if (deltaX < 0 && currentPage.value < pages.value.length - 1) {
       goToPage(currentPage.value + 1)
     } else if (deltaX > 0 && currentPage.value > 0) {
       goToPage(currentPage.value - 1)
@@ -280,7 +293,7 @@ function setupModalObserver() {
 watch(() => route.query.page, (queryPage) => {
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
-    if (!isNaN(page) && page >= 0 && page <= 3 && page !== currentPage.value) {
+    if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1 && page !== currentPage.value) {
       goToPage(page, false)
     }
   }
