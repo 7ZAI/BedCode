@@ -74,6 +74,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/configs", web::get().to(config_controller::list_configs))
             .route("/quick-actions", web::get().to(config_controller::list_quick_actions))
             .route("/file-tree", web::post().to(file_controller::get_file_tree))
+            .route("/file-tree-children", web::get().to(file_controller::get_file_tree_children))
             .route("/file-content", web::post().to(file_controller::get_file_content))
             .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
             .route("/file-diff", web::post().to(file_controller::get_file_diff))
