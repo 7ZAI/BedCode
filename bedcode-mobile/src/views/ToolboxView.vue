@@ -5,8 +5,35 @@
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.toolbox.title') }}</h1>
     </header>
 
+    <!-- Plugin Tab Bar -->
+    <div
+      v-if="pluginRegistry.toolboxViews.value.length > 0"
+      class="flex-shrink-0 flex border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/50 px-4 gap-1 overflow-x-auto"
+    >
+      <button
+        class="px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap"
+        :class="activeTab === 'preset'
+          ? 'text-[var(--mobile-accent)] border-b-2 border-[var(--mobile-accent)]'
+          : 'text-[var(--mobile-text-secondary)]'"
+        @click="activeTab = 'preset'"
+      >
+        {{ t('mobile.toolbox.presetTasks') }}
+      </button>
+      <button
+        v-for="view in pluginRegistry.toolboxViews.value"
+        :key="view.viewId"
+        class="px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap"
+        :class="activeTab === view.viewId
+          ? 'text-[var(--mobile-accent)] border-b-2 border-[var(--mobile-accent)]'
+          : 'text-[var(--mobile-text-secondary)]'"
+        @click="activeTab = view.viewId"
+      >
+        {{ view.title }}
+      </button>
+    </div>
+
     <!-- Main Content Area -->
-    <div class="flex-1 overflow-hidden relative min-h-0">
+    <div v-show="activeTab === 'preset'" class="flex-1 overflow-hidden relative min-h-0">
       <!-- Task List -->
       <div class="h-full overflow-y-auto overflow-x-hidden p-4 pb-20 space-y-5">
 
@@ -68,6 +95,14 @@
         </button>
       </div>
 
+    </div>
+
+    <!-- Plugin View -->
+    <div v-if="activeTab !== 'preset'" class="flex-1 overflow-hidden min-h-0">
+      <PluginViewHost
+        :plugin-id="pluginRegistry.toolboxViews.value.find(v => v.viewId === activeTab)?.pluginId ?? ''"
+        :component="pluginRegistry.toolboxViews.value.find(v => v.viewId === activeTab)?.component"
+      />
     </div>
 
     <!-- Add/Edit Dialog -->
@@ -164,6 +199,8 @@ import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 import { useToast } from '@/composables/useToast'
+import { getPluginRegistry } from '@/plugin/registry'
+import PluginViewHost from '@/plugin/components/PluginViewHost.vue'
 import PresetTaskCard from '@/components/PresetTaskCard.vue'
 import TaskEditDialog from '@/components/TaskEditDialog.vue'
 import type { PresetTask } from '@/composables/model'
@@ -173,6 +210,8 @@ const connection = useMobileConnection()
 const toast = useToast()
 const { t } = useI18n()
 const { tasks, load, addTask, updateTask, deleteTask, executeTask } = usePresetTasks()
+const pluginRegistry = getPluginRegistry()
+const activeTab = ref<'preset' | string>('preset')
 
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 const activeSessionId = computed(() => connection.activeSessionId.value || '')
