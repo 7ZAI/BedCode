@@ -68,7 +68,16 @@ pub fn run() {
             let plugin_manager = Arc::new(
                 crate::plugin::manager::PluginManager::new(&app_data_dir, settings_manager.clone())
             );
-            app.manage(plugin_manager);
+            app.manage(plugin_manager.clone());
+
+            // 自动激活之前启用的插件
+            {
+                let pm = plugin_manager;
+                let ah = app_handle.clone();
+                tokio::spawn(async move {
+                    pm.load_all(&ah).await;
+                });
+            }
 
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
