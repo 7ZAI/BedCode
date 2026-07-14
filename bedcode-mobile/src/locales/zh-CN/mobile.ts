@@ -221,6 +221,9 @@ export default {
       switchConfirmNoChangeMsg: '确定要切换到 {branch} 吗？',
       previewMode: '预览模式',
       sourceMode: '源码模式',
+      lazyLoad: '懒加载',
+      loadingChildren: '加载中...',
+      loadChildrenFailed: '加载子目录失败',
     },
     codeViewer: {
       title: '代码查看',

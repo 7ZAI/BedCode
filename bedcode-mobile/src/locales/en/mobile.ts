@@ -221,6 +221,9 @@ export default {
       switchConfirmNoChangeMsg: 'Are you sure you want to switch to {branch}?',
       previewMode: 'Preview',
       sourceMode: 'Source',
+      lazyLoad: 'Lazy Load',
+      loadingChildren: 'Loading...',
+      loadChildrenFailed: 'Failed to load children',
     },
     codeViewer: {
       title: 'Code Viewer',
