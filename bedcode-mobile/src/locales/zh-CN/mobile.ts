@@ -318,5 +318,18 @@ export default {
       reconnectFailed: '重连失败: {reason}',
       authFailed: '认证失败，请重新配对',
     },
+    plugin: {
+      title: '插件管理',
+      enabled: '已启用',
+      disabled: '已禁用',
+      version: '版本',
+      author: '作者',
+      permissions: '权限',
+      extensions: '扩展',
+      activateFailed: '启用失败: {error}',
+      deactivateFailed: '禁用失败: {error}',
+      noPlugins: '暂无插件',
+      loadFailed: '插件加载失败',
+    },
   },
 }

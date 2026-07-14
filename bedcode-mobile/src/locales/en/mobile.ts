@@ -318,5 +318,18 @@ export default {
       reconnectFailed: 'Reconnect failed: {reason}',
       authFailed: 'Authentication failed, please re-pair',
     },
+    plugin: {
+      title: 'Plugin Manager',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      version: 'Version',
+      author: 'Author',
+      permissions: 'Permissions',
+      extensions: 'Extensions',
+      activateFailed: 'Activation failed: {error}',
+      deactivateFailed: 'Deactivation failed: {error}',
+      noPlugins: 'No plugins',
+      loadFailed: 'Plugin load failed',
+    },
   },
 }
