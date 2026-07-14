@@ -131,6 +131,41 @@
         </div>
       </div>
 
+      <!-- Plugin Manager -->
+      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('mobile.plugin.title') }}</h3>
+
+        <div v-if="plugins.length === 0" class="text-[var(--mobile-text-disabled)] text-sm">
+          {{ $t('mobile.plugin.noPlugins') }}
+        </div>
+
+        <div v-else class="space-y-3">
+          <div v-for="plugin in plugins" :key="plugin.id">
+            <div class="flex items-center justify-between" @click="expandedPlugin = expandedPlugin === plugin.id ? null : plugin.id">
+              <span class="text-[var(--mobile-text-secondary)]">{{ plugin.name }}</span>
+              <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
+            </div>
+            <!-- Expanded details -->
+            <div v-if="expandedPlugin === plugin.id" class="mt-2 ml-2 space-y-1 text-xs text-[var(--mobile-text-muted)]">
+              <div>{{ $t('mobile.plugin.version') }}: {{ plugin.version }}</div>
+              <div>{{ $t('mobile.plugin.author') }}: {{ plugin.author }}</div>
+              <div>{{ $t('mobile.plugin.permissions') }}: {{ plugin.permissions.join(', ') || '-' }}</div>
+              <div>{{ $t('mobile.plugin.extensions') }}: {{ getPluginExtensions(plugin) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Plugin Settings Sections -->
+      <div
+        v-for="section in pluginRegistry.settingsSections.value"
+        :key="section.id"
+        class="px-4 py-3 border-b border-[var(--mobile-border)]"
+      >
+        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ section.section }}</h3>
+        <PluginSettingsHost :plugin-id="section.pluginId" :component="section.component" />
+      </div>
+
       <!-- About -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
         <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.about.title') }}</h3>
@@ -244,13 +279,20 @@ import { useI18nStore } from '@/stores/i18n'
 import { clearAuthCredentials } from '@/composables/useMobileCommands'
 import { clearAllTasks } from '@/composables/usePresetTasks'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
+import { useToast } from '@/composables/useToast'
 import Toggle from '@/components/Toggle.vue'
 import { invoke } from '@tauri-apps/api/core'
+import { pluginListLoaded, pluginSetEnabled, pluginIsEnabled } from '@/plugin/commands'
+import { pluginLoader } from '@/plugin/loader'
+import { getPluginRegistry } from '@/plugin/registry'
+import PluginSettingsHost from '@/plugin/components/PluginSettingsHost.vue'
+import type { PluginInfo } from '@/plugin/types'
 
 const { t } = useI18n()
 const connection = useMobileConnection()
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
+const toast = useToast()
 const { startService, stopService, updateNotification } = useForegroundService()
 const { status: updateStatus, errorMessage, updateInfo, checkForUpdate, getUpdateStatusText } = useUpdateChecker()
 
@@ -298,6 +340,12 @@ const defaultMobileSettings: MobileSettings = {
 }
 
 const settings = ref<MobileSettings>({ ...defaultMobileSettings })
+
+// ==================== Plugin State ====================
+const pluginRegistry = getPluginRegistry()
+const plugins = ref<PluginInfo[]>([])
+const pluginEnabledStates = ref<Record<string, boolean>>({})
+const expandedPlugin = ref<string | null>(null)
 
 // 主题模式 - 直接绑定到 settingsStore
 const themeMode = computed({
@@ -350,6 +398,16 @@ onMounted(async () => {
 
   // 同步到 settingsStore（使设置生效）
   syncToSettingsStore()
+
+  // 加载插件列表
+  try {
+    plugins.value = await pluginListLoaded()
+    for (const p of plugins.value) {
+      pluginEnabledStates.value[p.id] = await pluginIsEnabled(p.id)
+    }
+  } catch {
+    // 插件系统可能未就绪
+  }
 })
 
 // ==================== Foreground Service Integration ====================
@@ -542,6 +600,32 @@ function handleDownloadUpdate() {
 
 // Auto-save settings
 watch(settings, saveSettings, { deep: true })
+
+// ==================== Plugin Management ====================
+
+async function handlePluginToggle(pluginId: string, enabled: boolean) {
+  try {
+    await pluginSetEnabled(pluginId, enabled)
+    if (enabled) {
+      await pluginLoader.activate(pluginId)
+    } else {
+      await pluginLoader.deactivate(pluginId)
+    }
+  } catch (e: any) {
+    toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: e.message || String(e) }))
+    // 恢复开关状态
+    pluginEnabledStates.value[pluginId] = !enabled
+  }
+}
+
+function getPluginExtensions(plugin: PluginInfo): string {
+  const parts: string[] = []
+  if (plugin.contributes.views.length > 0) parts.push('toolbox')
+  if (plugin.contributes.navTab) parts.push('navTab')
+  if (plugin.contributes.terminal) parts.push('terminal')
+  if (plugin.contributes.settings) parts.push('settings')
+  return parts.join(', ') || '-'
+}
 </script>
 
 <style scoped>
