@@ -64,5 +64,18 @@ export default defineConfig({
     ],
     holdUntilCrawlEnd: false,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        chunkFileNames: (chunkInfo) => {
+          // 插件 chunk 输出到 plugins/ 目录
+          if (chunkInfo.name?.startsWith('plugins/')) {
+            return `${chunkInfo.name}.js`
+          }
+          return 'assets/[name]-[hash].js'
+        },
+      },
+    },
+  },
   clearScreen: false,
 })
