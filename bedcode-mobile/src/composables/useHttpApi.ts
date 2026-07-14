@@ -180,6 +180,27 @@ export async function httpGetFileTree(sessionId: string, excludeDirs: string[] =
   )
 }
 
+/** 获取指定目录的一层子节点（懒加载模式） */
+export async function httpGetFileTreeChildren(
+  sessionId: string,
+  dirPath: string,
+  excludeDirs: string[] = [],
+  noCache = false,
+) {
+  const params = new URLSearchParams({
+    session_id: sessionId,
+    dir_path: dirPath || '.',
+    exclude_dirs: excludeDirs.join(','),
+  })
+  // 刷新时附加时间戳绕过 HTTP 缓存
+  if (noCache) {
+    params.set('_t', Date.now().toString())
+  }
+  return request<{ children: any[] }>(
+    `/api/file-tree-children?${params.toString()}`,
+  )
+}
+
 export async function httpGetFileContent(sessionId: string, filePath: string) {
   return request<{ content: string; fileName: string }>(
     '/api/file-content',
@@ -321,6 +342,7 @@ export function useHttpApi() {
     httpListQuickActions,
     // File
     httpGetFileTree,
+    httpGetFileTreeChildren,
     httpGetFileContent,
     httpGetDiffTree,
     httpGetFileDiff,
