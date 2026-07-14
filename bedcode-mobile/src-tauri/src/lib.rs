@@ -73,7 +73,7 @@ pub fn run() {
             let db_path = app_data_dir.join("bedcode_plugins.db");
             let plugin_db = Arc::new(tokio::sync::Mutex::new(
                 rusqlite::Connection::open(&db_path)
-                    .map_err(|e| tauri::Error::Setup(e.to_string()))?
+                    .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?
             ));
 
             // 创建 WASM 运行时
@@ -83,7 +83,7 @@ pub fn run() {
                     plugin_storage.clone(),
                     Arc::new(app_handle.clone()),
                 )
-                .map_err(|e| tauri::Error::Setup(e.to_string()))?
+                .map_err(|e| anyhow::anyhow!("Failed to create WasmRuntime: {}", e))?
             );
 
             // 创建 WASM 宿主上下文
