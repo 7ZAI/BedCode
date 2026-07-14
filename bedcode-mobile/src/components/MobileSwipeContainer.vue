@@ -49,16 +49,23 @@ const trackRef = ref<HTMLElement | null>(null)
 // 插件注册表
 const pluginRegistry = getPluginRegistry()
 
+/** 页面配置类型 */
+interface PageConfig {
+  name: string
+  component: any
+  pluginId?: string
+}
+
 // 页面配置（内置 + 插件导航 Tab，响应式）
-const pages = computed(() => {
-  const builtin = [
+const pages = computed<PageConfig[]>(() => {
+  const builtin: PageConfig[] = [
     { name: 'mobile-devices', component: DevicesView },
     { name: 'mobile-sessions', component: SessionsView },
     { name: 'mobile-toolbox', component: ToolboxView },
     { name: 'mobile-settings', component: SettingsView },
   ]
 
-  const pluginPages = pluginRegistry.navTabs.value.map(tab => ({
+  const pluginPages: PageConfig[] = pluginRegistry.navTabs.value.map(tab => ({
     name: `plugin-nav-${tab.id}`,
     component: tab.component,
     pluginId: tab.pluginId,
@@ -112,7 +119,7 @@ function initPage() {
   }
 
   const name = route.name as string
-  const pageIndex = pages.findIndex(p => p.name === name)
+  const pageIndex = pages.value.findIndex(p => p.name === name)
   if (pageIndex !== -1) {
     currentPage.value = pageIndex
     translateX.value = -pageIndex * window.innerWidth
