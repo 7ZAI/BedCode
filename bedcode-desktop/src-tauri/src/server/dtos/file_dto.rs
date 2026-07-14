@@ -35,6 +35,26 @@ pub struct FileTreeNode {
     pub children: Option<Vec<FileTreeNode>>,
 }
 
+// ==================== File Tree Children DTOs ====================
+
+/// GET /api/file-tree-children query params
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileTreeChildrenQuery {
+    /// 会话 ID 或配置 ID
+    pub session_id: String,
+    /// 相对于工作目录的路径，空或 "." 表示根目录
+    pub dir_path: Option<String>,
+    /// 逗号分隔的排除目录列表
+    pub exclude_dirs: Option<String>,
+}
+
+/// GET /api/file-tree-children response data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeChildrenResponseData {
+    pub children: Vec<FileTreeNode>,
+}
+
 // ==================== File Content DTOs ====================
 
 /// POST /api/file-content request
