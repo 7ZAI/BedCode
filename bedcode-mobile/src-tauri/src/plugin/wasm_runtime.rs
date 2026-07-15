@@ -46,11 +46,11 @@ pub struct WasmPluginState {
 /// 移动端无 SessionManager 和 PermissionManager
 pub struct WasmHostContext {
     /// 数据库（移动端直接使用 rusqlite::Connection）
-    db: Arc<Mutex<rusqlite::Connection>>,
+    pub db: Arc<Mutex<rusqlite::Connection>>,
     /// 插件 KV 存储
-    storage: Arc<PluginStorage>,
+    pub storage: Arc<PluginStorage>,
     /// Tauri AppHandle
-    app_handle: Arc<tauri::AppHandle>,
+    pub app_handle: Arc<tauri::AppHandle>,
 }
 
 /// 已加载的 WASM 插件
@@ -274,6 +274,70 @@ impl LoadedWasmPlugin {
         let len = results[1].unwrap_i32() as u32;
 
         self.read_string_from_memory(ptr, len)
+    }
+
+    /// 调用生命周期事件回调（可选导出，不存在则跳过）
+    pub fn call_lifecycle_event(&mut self, event: &crate::plugin::types::PluginLifecycleEvent) -> crate::Result<()> {
+        use crate::plugin::types::PluginLifecycleEvent;
+
+        let export_name = event.wasm_export_name();
+
+        // 检查导出函数是否存在（可选导出）
+        let func = match self.instance.get_func(&mut self.store, export_name) {
+            Some(f) => f,
+            None => return Ok(()),
+        };
+
+        match event {
+            PluginLifecycleEvent::AppStartup
+            | PluginLifecycleEvent::AppShutdown
+            | PluginLifecycleEvent::AuthSuccess => {
+                let mut results = [wasmtime::Val::I32(0)];
+                func.call(&mut self.store, &[], &mut results)
+                    .map_err(|e| crate::AppError::Plugin(format!(
+                        "WASM {} call failed: {}", export_name, e
+                    )))?;
+            }
+            PluginLifecycleEvent::Disconnect { reason } => {
+                let (ptr, len) = self.write_string_to_memory(reason)?;
+                let mut results = [wasmtime::Val::I32(0)];
+                func.call(&mut self.store, &[
+                    wasmtime::Val::I32(ptr as i32),
+                    wasmtime::Val::I32(len as i32),
+                ], &mut results)
+                    .map_err(|e| crate::AppError::Plugin(format!(
+                        "WASM {} call failed: {}", export_name, e
+                    )))?;
+            }
+            PluginLifecycleEvent::SessionCreated { session_id }
+            | PluginLifecycleEvent::SessionStopped { session_id } => {
+                let (ptr, len) = self.write_string_to_memory(session_id)?;
+                let mut results = [wasmtime::Val::I32(0)];
+                func.call(&mut self.store, &[
+                    wasmtime::Val::I32(ptr as i32),
+                    wasmtime::Val::I32(len as i32),
+                ], &mut results)
+                    .map_err(|e| crate::AppError::Plugin(format!(
+                        "WASM {} call failed: {}", export_name, e
+                    )))?;
+            }
+            PluginLifecycleEvent::TerminalInput { session_id, data }
+            | PluginLifecycleEvent::TerminalOutput { session_id, data } => {
+                let (sid_ptr, sid_len) = self.write_string_to_memory(session_id)?;
+                let (data_ptr, data_len) = self.write_string_to_memory(data)?;
+                let mut results = [wasmtime::Val::I32(0)];
+                func.call(&mut self.store, &[
+                    wasmtime::Val::I32(sid_ptr as i32),
+                    wasmtime::Val::I32(sid_len as i32),
+                    wasmtime::Val::I32(data_ptr as i32),
+                    wasmtime::Val::I32(data_len as i32),
+                ], &mut results)
+                    .map_err(|e| crate::AppError::Plugin(format!(
+                        "WASM {} call failed: {}", export_name, e
+                    )))?;
+            }
+        }
+        Ok(())
     }
 
     // ==================== Memory Helpers ====================

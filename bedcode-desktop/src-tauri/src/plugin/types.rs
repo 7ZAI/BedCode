@@ -27,8 +27,8 @@ pub enum PluginSource {
     StaticRegistry,
     /// 文件系统扫描的 TS-only 插件
     FileScan,
-    /// cdylib 动态库加载的 Rust+TS 插件
-    Cdylib,
+    /// WASM 模块加载的 Rust+TS 插件
+    Wasm,
 }
 
 /// 插件信息（返回给前端的精简版本）
@@ -45,7 +45,7 @@ pub struct DesktopPluginInfo {
     pub main: String,
     pub sandbox: String,
     pub plugin_type: PluginType,
-    /// cdylib 动态库文件名（仅 rust-ts 类型插件使用）
+    /// WASM 模块文件名（仅 rust-ts 类型插件使用）
     pub rust_library: String,
     pub permissions: Vec<String>,
     pub state: PluginState,

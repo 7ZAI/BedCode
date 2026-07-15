@@ -15,6 +15,7 @@ import type {
   EventAPI,
   StorageAPI,
   I18nAPI,
+  LifecycleAPI,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
@@ -169,6 +170,50 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
+  // ==================== LifecycleAPI ====================
+  const lifecycle: LifecycleAPI = {
+    onAppStartup(handler: () => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:appStartup', handler)
+      disposables.push(disposable)
+      return disposable
+    },
+    onAppShutdown(handler: () => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:appShutdown', handler)
+      disposables.push(disposable)
+      return disposable
+    },
+    onAuthSuccess(handler: () => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:authSuccess', handler)
+      disposables.push(disposable)
+      return disposable
+    },
+    onDisconnect(handler: (reason: string) => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:disconnect', (payload: any) => handler(payload.reason))
+      disposables.push(disposable)
+      return disposable
+    },
+    onSessionCreated(handler: (sessionId: string) => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:sessionCreated', (payload: any) => handler(payload.sessionId))
+      disposables.push(disposable)
+      return disposable
+    },
+    onSessionStopped(handler: (sessionId: string) => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:sessionStopped', (payload: any) => handler(payload.sessionId))
+      disposables.push(disposable)
+      return disposable
+    },
+    onTerminalInput(handler: (sessionId: string, data: string) => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:terminalInput', (payload: any) => handler(payload.sessionId, payload.data))
+      disposables.push(disposable)
+      return disposable
+    },
+    onTerminalOutput(handler: (sessionId: string, data: string) => void): Disposable {
+      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:terminalOutput', (payload: any) => handler(payload.sessionId, payload.data))
+      disposables.push(disposable)
+      return disposable
+    },
+  }
+
   return {
     id: info.id,
     commands,
@@ -178,6 +223,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     events,
     storage,
     i18n,
+    lifecycle,
     _disposables: disposables,
   }
 }

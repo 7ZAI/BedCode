@@ -14,6 +14,7 @@
     </header>
 
     <!-- Connection Status Banner -->
+    <Transition name="fade">
     <div
       v-if="connectionStatus === 'connecting' || connectionStatus === 'connected' || connectionStatus === 'pairing' || connectionStatus === 'error'"
       class="flex-shrink-0 px-4 py-3 bg-[var(--mobile-bg-secondary)] border-b border-[var(--mobile-border)]"
@@ -44,8 +45,10 @@
         </span>
       </div>
     </div>
+    </Transition>
 
     <!-- Connected Banner -->
+    <Transition name="config-list">
     <div
       v-if="isConnected && currentDevice"
       class="flex-shrink-0 mx-4 mt-4 p-3 bg-[var(--mobile-success-connected-bg)] border border-[var(--mobile-success-connected-border)] rounded-xl backdrop-blur-sm shadow-[var(--mobile-card-shadow-connected)]"
@@ -71,6 +74,7 @@
         </button>
       </div>
     </div>
+    </Transition>
 
     <!-- Main Content -->
     <div class="flex-1 overflow-y-auto overflow-x-hidden p-4 min-h-0">
@@ -125,7 +129,7 @@
         </div>
 
         <!-- Config List -->
-        <div v-else class="space-y-2">
+        <TransitionGroup name="config-list" tag="div" class="space-y-2">
           <SessionConfigCard
             v-for="config in sessionConfigs"
             :key="config.id"
@@ -137,7 +141,7 @@
             @session-click="handleSessionClick"
             @stop-session="handleStopSession"
           />
-        </div>
+        </TransitionGroup>
       </div>
 
       <!-- Connection History (when not connected) -->
@@ -158,7 +162,7 @@
           <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.connection.noHistory') }}</p>
         </div>
 
-        <div v-else class="space-y-2">
+        <TransitionGroup name="config-list" tag="div" class="space-y-2">
           <div
             v-for="item in connectionHistory"
             :key="item.address"
@@ -245,6 +249,19 @@
         <div class="flex justify-end gap-3">
           <Button variant="ghost" @click="showStopConfirm = false">{{ t('common.button.cancel') }}</Button>
           <Button variant="danger" :loading="isStopping" @click="confirmStop">{{ t('common.button.stop') }}</Button>
+        </div>
+      </template>
+    </Modal>
+
+    <!-- Disconnect Confirmation Modal -->
+    <Modal v-model="showDisconnectConfirm" :title="t('mobile.connection.disconnect')" size="sm">
+      <p class="text-[var(--mobile-text-disabled)]">
+        {{ t('mobile.connection.confirmDisconnectMsg') }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showDisconnectConfirm = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" @click="confirmDisconnect">{{ t('mobile.connection.disconnect') }}</Button>
         </div>
       </template>
     </Modal>
@@ -648,7 +665,14 @@ async function handlePairingSubmit(code: string) {
   }
 }
 
+const showDisconnectConfirm = ref(false)
+
 async function handleDisconnect() {
+  showDisconnectConfirm.value = true
+}
+
+async function confirmDisconnect() {
+  showDisconnectConfirm.value = false
   await connection.disconnect()
   connection.clearSessionConfigs()
   connection.clearActiveSessions()
@@ -673,5 +697,27 @@ function handleNavigateToFiles(config: SessionConfigSummary) {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.config-list-enter-active {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.config-list-leave-active {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.config-list-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.config-list-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.config-list-move {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 </style>

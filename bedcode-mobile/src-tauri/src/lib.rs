@@ -96,14 +96,13 @@ pub fn run() {
             );
 
             // 初始化插件管理器
-            let plugin_manager = Arc::new(
-                crate::plugin::manager::PluginManager::new(
-                    &app_data_dir,
-                    settings_manager.clone(),
-                    wasm_runtime,
-                    wasm_host_ctx,
-                )
+            let plugin_manager = crate::plugin::manager::PluginManager::new(
+                &app_data_dir,
+                settings_manager.clone(),
+                wasm_runtime,
+                wasm_host_ctx,
             );
+            let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
 
             // 解压 APK assets 中的内置插件

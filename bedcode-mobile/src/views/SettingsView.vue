@@ -9,21 +9,21 @@
     <div class="flex-1 overflow-auto">
       <!-- Connection Settings -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.connection.title') }}</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.connection.title') }}</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.autoReconnect') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.autoReconnect') }}</span>
             <Toggle v-model="settings.autoReconnect" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.keepAlive') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.keepAlive') }}</span>
             <Toggle v-model="settings.keepAlive" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.reconnectInterval') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.reconnectInterval') }}</span>
             <input
               v-model.number="settings.reconnectInterval"
               type="number"
@@ -34,7 +34,7 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.defaultPort') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.defaultPort') }}</span>
             <input
               v-model.number="settings.defaultPort"
               type="number"
@@ -48,31 +48,31 @@
 
       <!-- Notification Settings -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.notification.title') }}</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.notification.title') }}</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnWaiting') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnWaiting') }}</span>
             <Toggle v-model="settings.notifyOnWaiting" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnConnection') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnConnection') }}</span>
             <Toggle v-model="settings.notifyOnConnection" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.vibrate') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.vibrate') }}</span>
             <Toggle v-model="settings.vibrate" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyInBackground') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyInBackground') }}</span>
             <Toggle v-model="settings.notifyInBackground" />
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.soundOnTaskComplete') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.soundOnTaskComplete') }}</span>
             <Toggle v-model="settings.soundOnTaskComplete" />
           </div>
         </div>
@@ -80,11 +80,11 @@
 
       <!-- Appearance Settings -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.appearance.title') }}</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.appearance.title') }}</h3>
 
         <div class="space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.theme') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.theme') }}</span>
             <select
               v-model="themeMode"
               class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1.5 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
@@ -96,7 +96,7 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.language') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.language') }}</span>
             <select
               v-model="currentLanguage"
               class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1.5 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
@@ -107,7 +107,7 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.fontSize') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.fontSize') }}</span>
             <select
               v-model="settings.fontSize"
               class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
@@ -119,7 +119,7 @@
           </div>
 
           <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.terminalCacheCount') }}</span>
+            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.terminalCacheCount') }}</span>
             <input
               v-model.number="settings.maxCachedTerminals"
               type="number"
@@ -133,7 +133,7 @@
 
       <!-- Plugin Manager -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('mobile.plugin.title') }}</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('mobile.plugin.title') }}</h3>
 
         <div v-if="plugins.length === 0" class="text-[var(--mobile-text-disabled)] text-sm">
           {{ $t('mobile.plugin.noPlugins') }}
@@ -142,7 +142,7 @@
         <div v-else class="space-y-3">
           <div v-for="plugin in plugins" :key="plugin.id">
             <div class="flex items-center justify-between" @click="expandedPlugin = expandedPlugin === plugin.id ? null : plugin.id">
-              <span class="text-[var(--mobile-text-secondary)]">{{ plugin.name }}</span>
+              <span class="text-sm text-[var(--mobile-text-secondary)]">{{ plugin.name }}</span>
               <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
             </div>
             <!-- Expanded details -->
@@ -162,13 +162,13 @@
         :key="section.id"
         class="px-4 py-3 border-b border-[var(--mobile-border)]"
       >
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ section.section }}</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ section.section }}</h3>
         <PluginSettingsHost :plugin-id="section.pluginId" :component="section.component" />
       </div>
 
       <!-- About -->
       <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 tracking-wider uppercase">{{ $t('settings.about.title') }}</h3>
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.about.title') }}</h3>
 
         <div class="space-y-3">
           <div class="flex items-center justify-between">
@@ -218,7 +218,7 @@
       <!-- Footer Actions -->
       <div class="px-4 py-4 space-y-2">
         <button
-          class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
+          class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-sm text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
           @click="resetSettings"
         >
           {{ $t('settings.actions.resetSettings') }}

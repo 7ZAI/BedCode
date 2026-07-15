@@ -22,6 +22,14 @@ impl ClientRouteHandler for AuthHandler {
                         ctx.emit(MobileEvent::AuthSuccess {
                             session_token,
                         });
+
+                        // 通知插件认证成功
+                        {
+                            let pm = crate::state::get_plugin_manager();
+                            pm.dispatch_lifecycle_event(
+                                crate::plugin::types::PluginLifecycleEvent::AuthSuccess
+                            ).await;
+                        }
                     }
                 }
                 AuthStage::VerifyCode => {

@@ -173,19 +173,26 @@ impl SessionManager {
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        // TODO: 项目级 Hooks 自动配置暂时禁用，后续重新设计后启用
-        // if config.command.to_lowercase().contains("claude") {
-        //     let app_config = AppConfig::global();
-        //     let result = crate::plugin::setup::ensure_project_hooks(
-        //         &config.working_dir,
-        //         app_config.network.port,
-        //         &app_config.plugin.token,
-        //         &self.resource_dir,
-        //     ).await;
-        //     if !result.skipped {
-        //         tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
-        //     }
-        // }
+        // Auto Task 插件：项目级 Hooks 自动配置
+        if config.command.to_lowercase().contains("claude") {
+            let ctx = crate::system::app_context::AppContext::global();
+            let plugin_host = ctx.plugin_host();
+            let app_config = crate::system::config::AppConfig::global();
+            let result = plugin_host.invoke_rust_command(
+                "com.bedcode.auto-task",
+                "setup-project-hooks",
+                serde_json::json!({
+                    "working_dir": config.working_dir,
+                    "port": app_config.network.port,
+                    "token": app_config.plugin.token,
+                }),
+            ).await;
+            if let Err(e) = &result {
+                tracing::warn!("Auto Task hooks setup failed (non-blocking): {}", e);
+            } else if let Ok(val) = &result {
+                tracing::debug!("Auto Task hooks setup result: {:?}", val);
+            }
+        }
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -256,19 +263,26 @@ impl SessionManager {
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        // TODO: 项目级 Hooks 自动配置暂时禁用，后续重新设计后启用
-        // if config.command.to_lowercase().contains("claude") {
-        //     let app_config = AppConfig::global();
-        //     let result = crate::plugin::setup::ensure_project_hooks(
-        //         &config.working_dir,
-        //         app_config.network.port,
-        //         &app_config.plugin.token,
-        //         &self.resource_dir,
-        //     ).await;
-        //     if !result.skipped {
-        //         tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
-        //     }
-        // }
+        // Auto Task 插件：项目级 Hooks 自动配置
+        if config.command.to_lowercase().contains("claude") {
+            let ctx = crate::system::app_context::AppContext::global();
+            let plugin_host = ctx.plugin_host();
+            let app_config = crate::system::config::AppConfig::global();
+            let result = plugin_host.invoke_rust_command(
+                "com.bedcode.auto-task",
+                "setup-project-hooks",
+                serde_json::json!({
+                    "working_dir": config.working_dir,
+                    "port": app_config.network.port,
+                    "token": app_config.plugin.token,
+                }),
+            ).await;
+            if let Err(e) = &result {
+                tracing::warn!("Auto Task hooks setup failed (non-blocking): {}", e);
+            } else if let Ok(val) = &result {
+                tracing::debug!("Auto Task hooks setup result: {:?}", val);
+            }
+        }
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -427,19 +441,26 @@ impl SessionManager {
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        // TODO: 项目级 Hooks 自动配置暂时禁用，后续重新设计后启用
-        // if config.command.to_lowercase().contains("claude") {
-        //     let app_config = AppConfig::global();
-        //     let result = crate::plugin::setup::ensure_project_hooks(
-        //         &config.working_dir,
-        //         app_config.network.port,
-        //         &app_config.plugin.token,
-        //         &self.resource_dir,
-        //     ).await;
-        //     if !result.skipped {
-        //         tracing::info!("Project hooks setup: {} (skipped={})", result.message, result.skipped);
-        //     }
-        // }
+        // Auto Task 插件：项目级 Hooks 自动配置
+        if config.command.to_lowercase().contains("claude") {
+            let ctx = crate::system::app_context::AppContext::global();
+            let plugin_host = ctx.plugin_host();
+            let app_config = crate::system::config::AppConfig::global();
+            let result = plugin_host.invoke_rust_command(
+                "com.bedcode.auto-task",
+                "setup-project-hooks",
+                serde_json::json!({
+                    "working_dir": config.working_dir,
+                    "port": app_config.network.port,
+                    "token": app_config.plugin.token,
+                }),
+            ).await;
+            if let Err(e) = &result {
+                tracing::warn!("Auto Task hooks setup failed (non-blocking): {}", e);
+            } else if let Ok(val) = &result {
+                tracing::debug!("Auto Task hooks setup result: {:?}", val);
+            }
+        }
 
         // 构建启动配置（复用配置映射服务）
         let mut launch_config = self.config_mapper.to_launch_config(&config)?;

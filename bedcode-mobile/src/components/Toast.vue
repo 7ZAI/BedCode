@@ -75,7 +75,9 @@ const typeClass = computed(() => {
 })
 
 const positionClass = computed(() => {
-  return props.position === 'top' ? 'top-4 left-1/2 -translate-x-1/2' : 'bottom-4 left-1/2 -translate-x-1/2'
+  return props.position === 'top'
+    ? 'top-[calc(var(--safe-area-top,0px)+0.75rem)] left-1/2 -translate-x-1/2'
+    : 'bottom-[calc(var(--safe-area-bottom,0px)+0.75rem)] left-1/2 -translate-x-1/2'
 })
 
 function close() {
@@ -103,12 +105,12 @@ onMounted(() => {
 
 <style scoped>
 .toast-root {
-  --toast-icon: clamp(1rem, 1.25rem, 1.5rem);
-  --toast-font: clamp(0.75rem, 0.875rem, 1rem);
-  --toast-px: clamp(0.75rem, 1rem, 1.25rem);
-  --toast-py: clamp(0.5rem, 0.75rem, 1rem);
+  --toast-icon: clamp(0.875rem, 1rem + (100vw - 360px) / 840 * 0.375rem, 1.375rem);
+  --toast-font: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.1875rem, 0.875rem);
+  --toast-px: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 0.375rem, 1rem);
+  --toast-py: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.375rem, 0.875rem);
   padding: var(--toast-py) var(--toast-px);
-  max-width: clamp(280px, 80vw, 420px);
+  max-width: clamp(240px, 75vw, 400px);
 }
 
 .toast-icon {
@@ -119,6 +121,8 @@ onMounted(() => {
 .toast-message {
   font-size: var(--toast-font);
   font-weight: 500;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .toast-close-icon {

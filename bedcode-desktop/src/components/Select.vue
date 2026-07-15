@@ -34,7 +34,7 @@
         <div
           v-show="isOpen"
           ref="panelRef"
-          class="fixed z-30 bg-[var(--bg-card)] border border-[var(--border-input)] rounded-input shadow-card overflow-hidden transition-opacity duration-150"
+          class="fixed z-[60] bg-[var(--bg-card)] border border-[var(--border-input)] rounded-input shadow-card overflow-hidden transition-opacity duration-150"
           :class="isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'"
           :style="panelStyle"
         >

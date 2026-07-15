@@ -188,6 +188,17 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
             })) {
                 tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
             }
+
+            // 通知插件终端输出（只读通知，仅传递 session_id 避免大量数据拷贝）
+            {
+                let pm = crate::state::get_plugin_manager();
+                pm.dispatch_lifecycle_event(
+                    crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
+                        session_id: session_id.clone(),
+                        data: String::new(),
+                    }
+                ).await;
+            }
         }
 
         // 会话同步事件

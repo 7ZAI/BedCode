@@ -9,6 +9,7 @@ export default {
     connection: {
       title: 'Connection & Config',
       disconnect: 'Disconnect',
+      confirmDisconnectMsg: 'Are you sure you want to disconnect? All remote sessions will be terminated.',
       sessionConfig: 'Session Config',
       refreshConfig: 'Refresh Config',
       noConfig: 'No session configs',

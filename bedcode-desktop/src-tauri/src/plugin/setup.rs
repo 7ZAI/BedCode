@@ -448,21 +448,15 @@ fn ensure_project_hooks_blocking(
     }
 
     // 3. 复制 hook 脚本到项目 .claude/ 目录
+    // hook 脚本现在随 auto-task 插件分发，resource_dir 指向插件目录
     let hook_script_path = claude_dir.join(HOOK_SCRIPT_NAME);
-    let source_script = resource_dir.join(format!("_up_/scripts/{}", HOOK_SCRIPT_NAME));
-    let source_script = if source_script.exists() {
-        source_script
-    } else {
-        let dev_path = std::env::current_dir().unwrap_or_default().join(format!("scripts/{}", HOOK_SCRIPT_NAME));
-        if !dev_path.exists() {
-            tracing::warn!(
-                "Source hook script not found (tried {} and {}), skipping copy",
-                resource_dir.join(format!("_up_/scripts/{}", HOOK_SCRIPT_NAME)).display(),
-                dev_path.display()
-            );
-        }
-        dev_path
-    };
+    let source_script = resource_dir.join(HOOK_SCRIPT_NAME);
+    if !source_script.exists() {
+        tracing::warn!(
+            "Source hook script not found at {}, skipping copy",
+            source_script.display()
+        );
+    }
     if source_script.exists() {
         if let Err(e) = fs::copy(&source_script, &hook_script_path) {
             tracing::warn!("Failed to copy {} to project {}: {}", HOOK_SCRIPT_NAME, CLAUDE_CONFIG_DIR_NAME, e);
@@ -517,6 +511,98 @@ fn ensure_project_hooks_blocking(
         message: "项目 Hooks 已配置".to_string(),
         skipped: false,
     }
+}
+
+/// 清理指定项目的 BedCode hooks
+///
+/// 从项目 .claude/settings.json 中移除 BedCode 相关的 hook 条目。
+/// 插件停用时可选调用。
+pub async fn cleanup_project_hooks(working_dir: &str) -> ProjectHooksResult {
+    tracing::info!("cleanup_project_hooks called for project: {}", working_dir);
+
+    let working_dir = working_dir.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let project_path = PathBuf::from(&working_dir);
+        let claude_dir = project_path.join(CLAUDE_CONFIG_DIR_NAME);
+        let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE);
+
+        if !settings_path.exists() {
+            return ProjectHooksResult {
+                success: true,
+                message: "项目无 .claude/settings.json，无需清理".to_string(),
+                skipped: true,
+            };
+        }
+
+        let mut settings: serde_json::Value = match fs::read_to_string(&settings_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+            Err(e) => {
+                return ProjectHooksResult {
+                    success: false,
+                    message: format!("读取 settings.json 失败: {}", e),
+                    skipped: false,
+                };
+            }
+        };
+
+        let hooks = match settings.get("hooks") {
+            Some(h) => h,
+            None => {
+                return ProjectHooksResult {
+                    success: true,
+                    message: "项目无 hooks 配置".to_string(),
+                    skipped: true,
+                };
+            }
+        };
+
+        if !is_bedcode_hooks_configured(hooks) {
+            return ProjectHooksResult {
+                success: true,
+                message: "项目无 BedCode hooks".to_string(),
+                skipped: true,
+            };
+        }
+
+        let cleaned_hooks = remove_bedcode_hooks(hooks);
+
+        if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            settings.as_object_mut().map(|o| o.remove("hooks"));
+        } else {
+            settings["hooks"] = cleaned_hooks;
+        }
+
+        match serde_json::to_string_pretty(&settings) {
+            Ok(content) => {
+                if let Err(e) = fs::write(&settings_path, content) {
+                    ProjectHooksResult {
+                        success: false,
+                        message: format!("写入 settings.json 失败: {}", e),
+                        skipped: false,
+                    }
+                } else {
+                    tracing::info!("Cleaned BedCode hooks from project: {}", working_dir);
+                    ProjectHooksResult {
+                        success: true,
+                        message: "项目 BedCode hooks 已清理".to_string(),
+                        skipped: false,
+                    }
+                }
+            }
+            Err(e) => ProjectHooksResult {
+                success: false,
+                message: format!("序列化 settings.json 失败: {}", e),
+                skipped: false,
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|e| ProjectHooksResult {
+        success: false,
+        message: format!("清理任务异常: {}", e),
+        skipped: false,
+    })
 }
 
 /// 验证项目 settings.json 中的 hooks 配置是否包含 BedCode hooks

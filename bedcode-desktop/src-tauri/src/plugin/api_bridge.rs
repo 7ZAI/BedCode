@@ -221,7 +221,7 @@ pub async fn plugin_list_rust_commands(
 
 // ==================== Dev Mode ====================
 
-/// 热重载 cdylib 插件（仅开发模式可用）
+/// 热重载 WASM 插件（仅开发模式可用）
 ///
 /// 执行完整的卸载-重载-激活循环，用于开发期间快速迭代。
 /// 生产构建中调用此命令返回错误
@@ -232,7 +232,7 @@ pub async fn plugin_dev_reload(
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
     {
-        plugin_host.reload_cdylib_plugin(&plugin_id).await
+        plugin_host.reload_wasm_plugin(&plugin_id).await
     }
     #[cfg(not(debug_assertions))]
     {

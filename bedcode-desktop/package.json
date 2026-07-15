@@ -3,7 +3,7 @@
   "version": "1.1.11",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "plugins/*"],
   "scripts": {
     "dev": "vite optimize && vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -25,7 +25,9 @@
     "target:size": "node scripts/check-target-size.js",
     "target:clean": "cd src-tauri && cargo clean",
     "prebuild": "node scripts/check-target-size.js",
-    "plugins:build": "cd src/plugins/com.bedcode.ai-chatbox && npx vite build",
+    "plugins:build": "cd plugins/ai-chatbox && npm run build",
+    "plugins:build:frontend": "cd plugins/ai-chatbox && npm run build:frontend",
+    "plugins:build:rust": "cd plugins/ai-chatbox && npm run build:rust",
     "plugins:build:all": "npm run plugins:build",
     "plugins:dev": "node scripts/plugin-dev.js",
     "plugins:build:release": "node scripts/plugin-build.js"

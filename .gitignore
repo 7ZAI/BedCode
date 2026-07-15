@@ -27,12 +27,12 @@ CLAUDE.md
 # IDE and editors
 .idea/
 .vscode/
+.VSCodeCounter/
 *.swp
 *.swo
 *.sublime-workspace
 *.sublime-project
 *.iml
-
 # OS generated files
 .DS_Store
 .DS_Store?

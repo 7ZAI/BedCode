@@ -1,27 +1,28 @@
 //! Plugin Host
 //!
 //! 插件宿主 — 生命周期管理（加载/激活/停用）
-//! 协调 loader、permission、registry、storage、cdylib_loader 五个子系统
-//! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 cdylib 动态库（Rust+TS 插件）
+//! 协调 loader、permission、registry、storage、wasm_runtime 五个子系统
+//! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 WASM 模块（Rust+TS 插件）
 
-use crate::plugin::cdylib_loader::{CdylibLoader, LoadedCdylibPlugin};
-use crate::plugin::host_context::HostContextFns;
 use crate::plugin::loader::PluginLoader;
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::registry::PluginRegistry;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
+use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::db::Database;
+use crate::plugin::setup;
 use crate::session::SessionManager;
+use crate::system::app_context::AppContext;
+use crate::system::config::AppConfig;
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
 use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
 /// 插件宿主
@@ -38,20 +39,22 @@ pub struct PluginHost {
     rust_command_handlers: Arc<RwLock<HashMap<String, bedcode_plugin_api::PluginCommand>>>,
     /// Rust 插件的 terminal handlers（运行时注册，inventory 静态注册插件使用）
     rust_terminal_handlers: Arc<RwLock<Vec<Box<dyn bedcode_plugin_api::TerminalHandler>>>>,
-    /// cdylib 插件句柄（plugin_id → LoadedCdylibPlugin）
-    cdylib_plugins: Arc<RwLock<HashMap<String, LoadedCdylibPlugin>>>,
-    /// HostContext 函数实现（共享引用，所有 cdylib 插件共用）
-    host_context_fns: Arc<HostContextFns>,
+    /// WASM 运行时（全局共享）
+    wasm_runtime: Arc<WasmRuntime>,
+    /// WASM 插件实例（plugin_id → LoadedWasmPlugin）
+    wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
+    /// 宿主上下文工厂（供 WASM 插件激活时使用）
+    wasm_host_ctx: Arc<WasmHostContext>,
 }
 
 impl PluginHost {
-    /// 创建 PluginHost 并加载所有插件（静态注册 + 文件扫描 + cdylib）
+    /// 创建 PluginHost 并加载所有插件（静态注册 + 文件扫描 + WASM）
     ///
     /// # Arguments
     /// * `db` - 数据库实例
     /// * `plugins_dir` - 插件目录
-    /// * `session_manager` - 会话管理器（供 cdylib HostContext 使用）
-    /// * `app_handle` - Tauri AppHandle（供 cdylib HostContext 发送事件使用）
+    /// * `session_manager` - 会话管理器
+    /// * `app_handle` - Tauri AppHandle
     pub async fn new(
         db: Arc<Mutex<Database>>,
         plugins_dir: &Path,
@@ -64,21 +67,31 @@ impl PluginHost {
         let registry = Arc::new(PluginRegistry::new());
         let storage = Arc::new(PluginStorage::new(db.clone()));
 
-        // 构建 HostContextFns 工厂，供 cdylib 插件激活时构建 HostContext
-        let host_context_fns = Arc::new(HostContextFns::new(
+        // 构建 WASM 运行时和宿主上下文
+        let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db.clone(),
             storage.clone(),
-            session_manager,
-            app_handle,
+            session_manager.clone(),
+            app_handle.clone(),
             permission.clone(),
         ));
+        let wasm_runtime = Arc::new(
+            WasmRuntime::new(
+                db.clone(),
+                storage.clone(),
+                session_manager,
+                app_handle,
+                permission.clone(),
+            )
+            .expect("Failed to initialize WASM runtime"),
+        );
 
         // 1. 收集静态注册的 Rust 插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
             inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>.into_iter().collect();
         tracing::info!("[PluginHost] Found {} static plugin(s) from inventory", static_plugins.len());
 
-        // 2. 扫描文件系统中的 TS-only 和 cdylib 插件
+        // 2. 扫描文件系统中的 TS-only 和 WASM 插件
         let file_plugins = PluginLoader::load_all(plugins_dir, &permission);
         tracing::info!("[PluginHost] Found {} file-based plugin(s)", file_plugins.len());
 
@@ -105,31 +118,56 @@ impl PluginHost {
             all_plugins.insert(plugin_id, loaded);
         }
 
-        // 添加文件扫描的插件（包含 TS-only 和 cdylib 来源判定）
-        let mut cdylib_plugins_map: HashMap<String, LoadedCdylibPlugin> = HashMap::new();
+        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）
+        let mut wasm_plugins_map: HashMap<String, LoadedWasmPlugin> = HashMap::new();
 
         for (id, loaded) in file_plugins {
-            // 如果 manifest 声明了 rust_library，尝试加载 cdylib 动态库
+            // 如果 manifest 声明了 rust_library，尝试加载 WASM 模块
             if !loaded.manifest.rust_library.is_empty() {
                 let plugin_dir = Path::new(&loaded.extension_path);
-                match CdylibLoader::load(plugin_dir, &loaded.manifest.rust_library) {
-                    Ok(cdylib_plugin) => {
-                        tracing::info!(
-                            "Cdylib plugin loaded: {} v{} (library: {})",
-                            loaded.manifest.id,
-                            loaded.manifest.version,
-                            loaded.manifest.rust_library
-                        );
-                        cdylib_plugins_map.insert(id.clone(), cdylib_plugin);
+                let wasm_filename = format!("{}.wasm", loaded.manifest.rust_library);
+                let wasm_path = plugin_dir.join(&wasm_filename);
+
+                if !wasm_path.exists() {
+                    tracing::error!(
+                        "WASM module not found for plugin {} v{}: {}",
+                        loaded.manifest.id,
+                        loaded.manifest.version,
+                        wasm_path.display()
+                    );
+                    continue;
+                }
+
+                match wasm_runtime.compile_module_from_file(&wasm_path) {
+                    Ok(module) => {
+                        match wasm_runtime.instantiate(&module, &id, wasm_host_ctx.clone()) {
+                            Ok(wasm_plugin) => {
+                                tracing::info!(
+                                    "WASM plugin loaded: {} v{} (module: {})",
+                                    loaded.manifest.id,
+                                    loaded.manifest.version,
+                                    wasm_filename
+                                );
+                                wasm_plugins_map.insert(id.clone(), wasm_plugin);
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to instantiate WASM for plugin {} v{}: {}",
+                                    loaded.manifest.id,
+                                    loaded.manifest.version,
+                                    e
+                                );
+                                continue;
+                            }
+                        }
                     }
                     Err(e) => {
                         tracing::error!(
-                            "Failed to load cdylib for plugin {} v{}: {}",
+                            "Failed to compile WASM for plugin {} v{}: {}",
                             loaded.manifest.id,
                             loaded.manifest.version,
                             e
                         );
-                        // cdylib 加载失败，跳过该插件，不插入 all_plugins
                         continue;
                     }
                 }
@@ -145,8 +183,9 @@ impl PluginHost {
             storage,
             rust_command_handlers: Arc::new(RwLock::new(HashMap::new())),
             rust_terminal_handlers: Arc::new(RwLock::new(Vec::new())),
-            cdylib_plugins: Arc::new(RwLock::new(cdylib_plugins_map)),
-            host_context_fns,
+            wasm_runtime,
+            wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
+            wasm_host_ctx,
         };
 
         // 注册所有已加载插件的 manifest contributes 到 registry
@@ -163,13 +202,13 @@ impl PluginHost {
         host.auto_activate_from_persisted_state().await;
 
         let count = host.plugins.read().await.len();
-        let cdylib_count = host.cdylib_plugins.read().await.len();
+        let wasm_count = host.wasm_plugins.read().await.len();
         let activated_count = host.plugins.read().await.values()
             .filter(|p| matches!(p.state, PluginState::Activated))
             .count();
         tracing::info!(
-            "[PluginHost] Initialization complete: {} plugin(s) total, {} cdylib, {} activated",
-            count, cdylib_count, activated_count
+            "[PluginHost] Initialization complete: {} plugin(s) total, {} wasm, {} activated",
+            count, wasm_count, activated_count
         );
         host
     }
@@ -267,9 +306,6 @@ impl PluginHost {
     }
 
     /// 通知所有已激活的 Rust 插件应用启动完成
-    ///
-    /// 遍历静态注册插件调用 `on_startup`，遍历 cdylib 插件调用 FFI `on_startup`。
-    /// 同时通过 Tauri 事件 `lifecycle:startup` 通知 TS-only 插件。
     pub async fn notify_startup(&self) {
         // 静态注册插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
@@ -287,15 +323,42 @@ impl PluginHost {
             }
         }
 
-        // cdylib 插件
-        let cdylib_plugins = self.cdylib_plugins.read().await;
-        for (id, cdylib) in cdylib_plugins.iter() {
+        // Auto Task 插件启动逻辑：token 校验 + 全局 hooks 清理
+        // 这些操作需要访问 AppConfig 和文件系统，在宿主进程内执行
+        if self.is_activated("com.bedcode.auto-task").await {
+            tracing::info!("Auto Task plugin activated, running startup setup");
+
+            // 清理旧版全局 hooks
+            setup::cleanup_global_hooks();
+
+            // Token 校验/生成
+            let app_config = AppConfig::global();
+            let config_path = {
+                let ctx = AppContext::global();
+                ctx.app_handle()
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_default()
+                    .join("config.properties")
+            };
+            let mut config_clone = app_config.clone();
+            let token_result = setup::ensure_token(&mut config_clone, &config_path);
+            if token_result.token_generated {
+                // 配置可能修改了 token，重新初始化全局配置
+                AppConfig::init(config_clone);
+            }
+            tracing::info!(
+                "Auto Task startup setup complete: token_generated={}",
+                token_result.token_generated
+            );
+        }
+
+        // WASM 插件
+        let mut wasm_plugins = self.wasm_plugins.write().await;
+        for (id, wasm_plugin) in wasm_plugins.iter_mut() {
             if self.is_activated(id).await {
-                if let Some(on_startup) = cdylib.exports().on_startup {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        unsafe { on_startup() }
-                    }));
-                    tracing::debug!("Cdylib plugin {} on_startup called", id);
+                if let Err(e) = wasm_plugin.on_startup() {
+                    tracing::warn!("WASM plugin {} on_startup failed: {}", id, e);
                 }
             }
         }
@@ -308,9 +371,6 @@ impl PluginHost {
     }
 
     /// 通知所有已激活的插件应用即将关闭
-    ///
-    /// 在 deactivate 之前触发，此时插件仍处于激活状态。
-    /// 同时通过 Tauri 事件 `lifecycle:shutdown` 通知 TS-only 插件。
     pub async fn notify_shutdown(&self) {
         // 静态注册插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
@@ -328,15 +388,12 @@ impl PluginHost {
             }
         }
 
-        // cdylib 插件
-        let cdylib_plugins = self.cdylib_plugins.read().await;
-        for (id, cdylib) in cdylib_plugins.iter() {
+        // WASM 插件
+        let mut wasm_plugins = self.wasm_plugins.write().await;
+        for (id, wasm_plugin) in wasm_plugins.iter_mut() {
             if self.is_activated(id).await {
-                if let Some(on_shutdown) = cdylib.exports().on_shutdown {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        unsafe { on_shutdown() }
-                    }));
-                    tracing::debug!("Cdylib plugin {} on_shutdown called", id);
+                if let Err(e) = wasm_plugin.on_shutdown() {
+                    tracing::warn!("WASM plugin {} on_shutdown failed: {}", id, e);
                 }
             }
         }
@@ -349,8 +406,6 @@ impl PluginHost {
     }
 
     /// 停用所有已激活的插件
-    ///
-    /// 遍历所有 Activated 状态的插件，逐个调用 deactivate_plugin()。
     pub async fn deactivate_all(&self) -> crate::Result<()> {
         let plugin_ids: Vec<String> = {
             let plugins = self.plugins.read().await;
@@ -373,12 +428,8 @@ impl PluginHost {
     /// 激活插件
     ///
     /// - 静态注册插件：仅标记状态
-    /// - cdylib 插件：调用 exports.activate() 传入 HostContext
+    /// - WASM 插件：调用 __bedcode_activate 导出函数
     /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
-    ///
-    /// # Arguments
-    /// * `plugin_id` - 插件 ID
-    /// * `persist` - 是否持久化激活状态（用户操作传 true，启动自动激活/热重载传 false）
     pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] activate_plugin({}, persist={})", plugin_id, persist);
 
@@ -406,30 +457,16 @@ impl PluginHost {
         let granted = self.permission.grant_permissions(plugin_id, &permissions);
         loaded.granted_permissions = granted;
 
-        // cdylib 插件：调用 exports.activate() 并传入 HostContext
-        if loaded.source == PluginSource::Cdylib {
-            let cdylib_plugins = self.cdylib_plugins.read().await;
-            if let Some(cdylib_plugin) = cdylib_plugins.get(plugin_id) {
-                let host_context = self.host_context_fns.build_host_context(plugin_id);
-                let exports = cdylib_plugin.exports();
-
-                let activate_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // SAFETY: exports 函数指针由 libloading 从已加载的动态库解析，
-                    // Library 句柄由 LoadedCdylibPlugin.library 持有，生命周期与插件一致
-                    unsafe { (exports.activate)(&host_context as *const _) }
-                }));
-
-                match activate_result {
+        // WASM 插件：调用 __bedcode_activate
+        if loaded.source == PluginSource::Wasm {
+            let mut wasm_plugins = self.wasm_plugins.write().await;
+            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                match wasm_plugin.activate() {
                     Ok(0) => {
-                        tracing::info!("Cdylib plugin activate() succeeded: {}", plugin_id);
+                        tracing::info!("WASM plugin activate() succeeded: {}", plugin_id);
                     }
                     Ok(code) => {
-                        // activate 返回非零表示初始化失败
-                        tracing::error!(
-                            "Cdylib plugin activate() returned error code {}: {}",
-                            code,
-                            plugin_id
-                        );
+                        tracing::error!("WASM plugin activate() returned error code {}: {}", code, plugin_id);
                         loaded.state = PluginState::Error(
                             format!("activate() returned error code {}", code)
                         );
@@ -437,21 +474,18 @@ impl PluginHost {
                             "Plugin {} activate() returned error code {}", plugin_id, code
                         )));
                     }
-                    Err(_) => {
-                        tracing::error!("Cdylib plugin activate() panicked: {}", plugin_id);
-                        loaded.state = PluginState::Error("activate() panicked".to_string());
+                    Err(e) => {
+                        tracing::error!("WASM plugin activate() failed: {}: {}", plugin_id, e);
+                        loaded.state = PluginState::Error(format!("activate() failed: {}", e));
                         return Err(crate::AppError::Plugin(format!(
-                            "Plugin {} activate() panicked", plugin_id
+                            "Plugin {} activate() failed: {}", plugin_id, e
                         )));
                     }
                 }
             } else {
-                tracing::error!(
-                    "Cdylib plugin {} not found in cdylib_plugins map (library not loaded)",
-                    plugin_id
-                );
+                tracing::error!("WASM plugin {} not found in wasm_plugins map", plugin_id);
                 return Err(crate::AppError::Plugin(format!(
-                    "Plugin {} cdylib library not loaded", plugin_id
+                    "Plugin {} WASM module not loaded", plugin_id
                 )));
             }
         }
@@ -460,6 +494,9 @@ impl PluginHost {
         loaded.activated_at = Some(Utc::now());
 
         tracing::info!("[PluginHost] Plugin activated successfully: {} (persist={})", plugin_id, persist);
+
+        // 释放写锁后再持久化
+        drop(plugins);
 
         if persist {
             tracing::debug!("[PluginHost] Persisting activation state after activating {}", plugin_id);
@@ -470,51 +507,25 @@ impl PluginHost {
     }
 
     /// 停用插件
-    ///
-    /// cdylib 插件：先调用 exports.deactivate()，再执行现有清理流程
-    ///
-    /// # Arguments
-    /// * `plugin_id` - 插件 ID
-    /// * `persist` - 是否持久化激活状态（用户操作传 true，shutdown/热重载传 false）
     pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] deactivate_plugin({}, persist={})", plugin_id, persist);
 
-        // cdylib 插件：调用 exports.deactivate()
+        // WASM 插件：调用 __bedcode_deactivate
         {
             let plugins = self.plugins.read().await;
             if let Some(loaded) = plugins.get(plugin_id) {
-                if loaded.source == PluginSource::Cdylib {
-                    let cdylib_plugins = self.cdylib_plugins.read().await;
-                    if let Some(cdylib_plugin) = cdylib_plugins.get(plugin_id) {
-                        let exports = cdylib_plugin.exports();
-
-                        let deactivate_result = std::panic::catch_unwind(
-                            std::panic::AssertUnwindSafe(|| {
-                                // SAFETY: exports 函数指针由 libloading 从已加载的动态库解析
-                                unsafe { (exports.deactivate)() }
-                            }),
-                        );
-
-                        match deactivate_result {
+                if loaded.source == PluginSource::Wasm {
+                    let mut wasm_plugins = self.wasm_plugins.write().await;
+                    if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                        match wasm_plugin.deactivate() {
                             Ok(0) => {
-                                tracing::info!(
-                                    "Cdylib plugin deactivate() succeeded: {}",
-                                    plugin_id
-                                );
+                                tracing::info!("WASM plugin deactivate() succeeded: {}", plugin_id);
                             }
                             Ok(code) => {
-                                // deactivate 返回非零，记录警告但不阻止停用流程
-                                tracing::warn!(
-                                    "Cdylib plugin deactivate() returned error code {}: {}",
-                                    code,
-                                    plugin_id
-                                );
+                                tracing::warn!("WASM plugin deactivate() returned error code {}: {}", code, plugin_id);
                             }
-                            Err(_) => {
-                                tracing::error!(
-                                    "Cdylib plugin deactivate() panicked: {}",
-                                    plugin_id
-                                );
+                            Err(e) => {
+                                tracing::error!("WASM plugin deactivate() failed: {}: {}", plugin_id, e);
                             }
                         }
                     }
@@ -535,6 +546,9 @@ impl PluginHost {
         loaded.activated_at = None;
         tracing::info!("[PluginHost] Plugin deactivated successfully: {} (persist={})", plugin_id, persist);
 
+        // 释放写锁后再持久化
+        drop(plugins);
+
         if persist {
             tracing::debug!("[PluginHost] Persisting activation state after deactivating {}", plugin_id);
             self.persist_activation_state().await;
@@ -543,52 +557,44 @@ impl PluginHost {
         Ok(())
     }
 
-    /// 热重载 cdylib 插件（开发模式）
+    /// 热重载 WASM 插件（开发模式）
     ///
     /// 执行完整的卸载-重载-激活循环：
-    /// 1. 停用插件（调用 deactivate + 清理注册/权限）
-    /// 2. 卸载旧 cdylib（从 map 移除触发 Library drop / FreeLibrary）
-    /// 3. 重新加载 cdylib（shadow copy 新 DLL + 解析符号）
-    /// 4. 重新激活插件
-    ///
-    /// 仅在开发模式下可用，生产构建中调用返回错误
-    pub async fn reload_cdylib_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        // 验证插件存在且为 cdylib 来源
+    /// 1. 停用插件
+    /// 2. 重新编译并实例化 WASM 模块
+    /// 3. 重新激活插件
+    pub async fn reload_wasm_plugin(&self, plugin_id: &str) -> crate::Result<()> {
         let (rust_library, extension_path) = {
             let plugins = self.plugins.read().await;
             let loaded = plugins.get(plugin_id).ok_or_else(|| {
                 crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
             })?;
-            if loaded.source != PluginSource::Cdylib {
+            if loaded.source != PluginSource::Wasm {
                 return Err(crate::AppError::Plugin(format!(
-                    "Plugin {} is not a cdylib plugin, cannot hot-reload",
+                    "Plugin {} is not a WASM plugin, cannot hot-reload",
                     plugin_id
                 )));
             }
             (loaded.manifest.rust_library.clone(), loaded.extension_path.clone())
         };
 
-        tracing::info!("Hot-reloading cdylib plugin: {}", plugin_id);
+        tracing::info!("Hot-reloading WASM plugin: {}", plugin_id);
 
-        // 1. 停用插件（不持久化，热重载后立即重新激活）
+        // 1. 停用插件（不持久化）
         self.deactivate_plugin(plugin_id, false).await?;
 
-        // 2. 卸载旧 cdylib：从 map 移除，触发 Library drop（FreeLibrary）
-        let old_cdylib = {
-            let mut cdylib = self.cdylib_plugins.write().await;
-            cdylib.remove(plugin_id)
-        };
-        // 显式 drop 确保 Library 在重新加载前释放
-        drop(old_cdylib);
-
-        // 3. 重新加载 cdylib（CdylibLoader::load 会自动 shadow copy）
+        // 2. 重新编译并实例化 WASM 模块
         let plugin_dir = Path::new(&extension_path);
-        let new_cdylib = CdylibLoader::load(plugin_dir, &rust_library)?;
+        let wasm_filename = format!("{}.wasm", rust_library);
+        let wasm_path = plugin_dir.join(&wasm_filename);
 
-        // 存入 cdylib_plugins map
-        self.cdylib_plugins.write().await.insert(plugin_id.to_string(), new_cdylib);
+        let module = self.wasm_runtime.compile_module_from_file(&wasm_path)?;
+        let new_wasm_plugin = self.wasm_runtime.instantiate(&module, plugin_id, self.wasm_host_ctx.clone())?;
 
-        // 4. 重新注册 manifest contributes（deactivate 时已 unregister）
+        // 替换 wasm_plugins map 中的实例
+        self.wasm_plugins.write().await.insert(plugin_id.to_string(), new_wasm_plugin);
+
+        // 3. 重新注册 manifest contributes
         let m = {
             let plugins = self.plugins.read().await;
             let loaded = plugins.get(plugin_id).ok_or_else(|| {
@@ -606,10 +612,10 @@ impl PluginHost {
         self.registry.register_tool_providers(&m.id, &m.contributes.tool_providers).await;
         self.registry.register_file_handlers(&m.id, &m.contributes.file_handlers).await;
 
-        // 5. 重新激活（不持久化，保持原有激活状态记录）
+        // 4. 重新激活
         self.activate_plugin(plugin_id, false).await?;
 
-        tracing::info!("Cdylib plugin hot-reloaded successfully: {}", plugin_id);
+        tracing::info!("WASM plugin hot-reloaded successfully: {}", plugin_id);
         Ok(())
     }
 
@@ -637,8 +643,6 @@ impl PluginHost {
     }
 
     /// 持久化当前激活状态到 SQLite
-    ///
-    /// 仅记录非 StaticRegistry 插件的状态，Rust-only 插件始终激活无需记录
     async fn persist_activation_state(&self) {
         let activated_map = self.get_activated_state().await;
         tracing::debug!("[PluginHost] Persisting activation state: {} plugin(s)", activated_map.len());
@@ -651,9 +655,6 @@ impl PluginHost {
     }
 
     /// 根据持久化状态自动激活之前已激活的插件
-    ///
-    /// 在 PluginHost::new() 末尾调用，跳过 StaticRegistry 插件，
-    /// 清理已不存在的插件 ID
     async fn auto_activate_from_persisted_state(&self) {
         let activated_map = match self.storage.load_activated_plugins().await {
             Ok(map) => {
@@ -674,13 +675,11 @@ impl PluginHost {
             return;
         }
 
-        // 收集需要激活的插件 ID（跳过 StaticRegistry）
         let to_activate: Vec<String> = {
             let plugins = self.plugins.read().await;
             activated_map.iter()
                 .filter(|(id, &is_active)| {
                     if !is_active { return false; }
-                    // 跳过 Rust-only 插件（始终激活，不可控）
                     plugins.get(*id)
                         .map(|p| p.source != PluginSource::StaticRegistry)
                         .unwrap_or(false)
@@ -698,7 +697,7 @@ impl PluginHost {
             }
         }
 
-        // 清理已不存在的插件 ID（磁盘已删除）
+        // 清理已不存在的插件 ID
         let current_ids: HashSet<String> = self.plugins.read().await.keys().cloned().collect();
         let original_len = activated_map.len();
         let mut cleaned_map = activated_map;
@@ -719,7 +718,6 @@ impl PluginHost {
     pub async fn should_lazy_activate(&self, plugin_id: &str) -> bool {
         let plugins = self.plugins.read().await;
         if let Some(loaded) = plugins.get(plugin_id) {
-            // Rust 插件（static registry）不懒激活，由 PluginHost 统一管理生命周期
             if loaded.source == PluginSource::StaticRegistry {
                 return false;
             }
@@ -738,7 +736,7 @@ impl PluginHost {
     /// 执行 Rust 插件的 command handler
     ///
     /// 路由逻辑：
-    /// - cdylib 插件：通过 FFI 调用 exports.invoke_command()
+    /// - WASM 插件：通过 WASM 导出函数调用 invoke_command
     /// - 静态注册插件：通过运行时注册表查找 handler
     pub async fn invoke_rust_command(
         &self,
@@ -746,14 +744,19 @@ impl PluginHost {
         command_name: &str,
         args: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        // 权限校验：插件必须处于激活状态
         if !self.is_activated(plugin_id).await {
             return Err(crate::AppError::Plugin(format!(
                 "Plugin {} is not activated", plugin_id
             )));
         }
 
-        // 读取插件来源，决定路由方式
+        // Auto Task 插件：文件 I/O 命令由宿主侧直接执行
+        // WASM 沙箱无法访问文件系统，因此 setup-project-hooks 等命令
+        // 在宿主进程内调用 setup.rs 函数，而非走 WASM invoke_command
+        if plugin_id == "com.bedcode.auto-task" {
+            return self.invoke_auto_task_command(command_name, args).await;
+        }
+
         let source = {
             let plugins = self.plugins.read().await;
             plugins.get(plugin_id)
@@ -762,14 +765,13 @@ impl PluginHost {
         };
 
         match source {
-            PluginSource::Cdylib => {
-                self.invoke_cdylib_command(plugin_id, command_name, args).await
+            PluginSource::Wasm => {
+                self.invoke_wasm_command(plugin_id, command_name, args).await
             }
             PluginSource::StaticRegistry => {
                 self.invoke_static_command(plugin_id, command_name, args).await
             }
             PluginSource::FileScan => {
-                // TS-only 插件不应有 Rust command 调用
                 Err(crate::AppError::Plugin(format!(
                     "Plugin {} is TS-only, cannot invoke Rust command", plugin_id
                 )))
@@ -777,83 +779,36 @@ impl PluginHost {
         }
     }
 
-    /// 调用 cdylib 插件的 command
-    ///
-    /// 将 command_name 和 args 转为 C 字符串，通过 FFI 调用 exports.invoke_command()，
-    /// 解析返回的 JSON 字符串，并通过 CString::from_raw 释放插件分配的内存
-    async fn invoke_cdylib_command(
+    /// 调用 WASM 插件的 command
+    async fn invoke_wasm_command(
         &self,
         plugin_id: &str,
         command_name: &str,
         args: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        let cdylib_plugins = self.cdylib_plugins.read().await;
-        let cdylib_plugin = cdylib_plugins.get(plugin_id).ok_or_else(|| {
+        let mut wasm_plugins = self.wasm_plugins.write().await;
+        let wasm_plugin = wasm_plugins.get_mut(plugin_id).ok_or_else(|| {
             crate::AppError::Plugin(format!(
-                "Cdylib plugin {} not found in loaded libraries", plugin_id
+                "WASM plugin {} not found in loaded instances", plugin_id
             ))
         })?;
 
-        let exports = cdylib_plugin.exports();
-
-        // 将参数转为 C 字符串
-        let name_cstr = CString::new(command_name)
-            .map_err(|e| crate::AppError::Plugin(format!(
-                "Command name contains null bytes: {}", e
-            )))?;
         let args_str = serde_json::to_string(&args)
             .map_err(|e| crate::AppError::Plugin(format!(
                 "Failed to serialize command args: {}", e
             )))?;
-        let args_cstr = CString::new(args_str)
+
+        let result_str = wasm_plugin.invoke_command(command_name, &args_str)?;
+
+        let value: serde_json::Value = serde_json::from_str(&result_str)
             .map_err(|e| crate::AppError::Plugin(format!(
-                "Command args contain null bytes: {}", e
-            )))?;
-
-        // 调用 cdylib 的 invoke_command，catch_unwind 防止 panic 传播
-        let result_ptr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // SAFETY: exports 函数指针由 libloading 从已加载的动态库解析
-            unsafe {
-                (exports.invoke_command)(name_cstr.as_ptr(), args_cstr.as_ptr())
-            }
-        }));
-
-        let ptr = match result_ptr {
-            Ok(p) => p,
-            Err(_) => {
-                return Err(crate::AppError::Plugin(format!(
-                    "Cdylib plugin {} invoke_command() panicked", plugin_id
-                )));
-            }
-        };
-
-        // 解析返回值：null 表示调用失败
-        if ptr.is_null() {
-            return Err(crate::AppError::Plugin(format!(
-                "Cdylib plugin {} invoke_command() returned null", plugin_id
-            )));
-        }
-
-        // SAFETY: ptr 由插件通过 CString::into_raw() 或等价方式分配，
-        // 我们通过 CString::from_raw 回收内存（同一 allocator）
-        let result_string = unsafe {
-            let cstr = CStr::from_ptr(ptr);
-            let s = cstr.to_string_lossy().into_owned();
-            // 释放插件分配的内存
-            let _ = CString::from_raw(ptr);
-            s
-        };
-
-        // 解析 JSON 结果
-        let value: serde_json::Value = serde_json::from_str(&result_string)
-            .map_err(|e| crate::AppError::Plugin(format!(
-                "Cdylib plugin {} invoke_command() returned invalid JSON: {}", plugin_id, e
+                "WASM plugin {} invoke_command() returned invalid JSON: {}", plugin_id, e
             )))?;
 
         Ok(value)
     }
 
-    /// 调用静态注册插件的 command handler（inventory 静态注册）
+    /// 调用静态注册插件的 command handler
     async fn invoke_static_command(
         &self,
         plugin_id: &str,
@@ -870,6 +825,96 @@ impl PluginHost {
             .map_err(|e| crate::AppError::Plugin(format!("Command execution error: {}", e)))?;
 
         Ok(result)
+    }
+
+    /// 执行 Auto Task 插件的命令（宿主侧路由）
+    ///
+    /// auto-task 插件的命令需要文件系统访问（WASM 无法执行），
+    /// 因此在宿主进程内直接调用 setup.rs 函数。
+    async fn invoke_auto_task_command(
+        &self,
+        command_name: &str,
+        args: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        match command_name {
+            "setup-project-hooks" => {
+                let working_dir = args.get("working_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let port = args.get("port")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(8765) as u16;
+                let token = args.get("token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // 从插件 extension_path 解析 bedcode_hook.py 路径
+                let resource_dir = {
+                    let plugins = self.plugins.read().await;
+                    plugins.get("com.bedcode.auto-task")
+                        .map(|p| std::path::PathBuf::from(&p.extension_path))
+                        .unwrap_or_default()
+                };
+
+                let result = setup::ensure_project_hooks(
+                    &working_dir, port, &token, &resource_dir,
+                ).await;
+
+                Ok(serde_json::json!({
+                    "success": result.success,
+                    "message": result.message,
+                    "skipped": result.skipped,
+                }))
+            }
+            "cleanup-project-hooks" => {
+                let working_dir = args.get("working_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let result = setup::cleanup_project_hooks(&working_dir).await;
+
+                Ok(serde_json::json!({
+                    "success": result.success,
+                    "message": result.message,
+                }))
+            }
+            "get-task-status" => {
+                let session_id = args.get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let ctx = AppContext::global();
+                let plugin_manager = ctx.plugin_manager();
+                let status = plugin_manager.get_task_status(session_id).await;
+                let reason = plugin_manager.get_task_reason(session_id).await;
+
+                Ok(serde_json::json!({
+                    "session_id": session_id,
+                    "task_status": status.map(|s| serde_json::to_string(&s).unwrap_or_default().trim_matches('"').to_string()),
+                    "task_reason": reason,
+                }))
+            }
+            "set-auto-mode" => {
+                let session_id = args.get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let auto_approve = args.get("auto_approve")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let ctx = AppContext::global();
+                let plugin_manager = ctx.plugin_manager();
+                plugin_manager.set_auto_mode(session_id, auto_approve).await;
+
+                Ok(serde_json::json!({ "success": true }))
+            }
+            _ => Err(crate::AppError::Plugin(format!(
+                "Unknown auto-task command: {}", command_name
+            ))),
+        }
     }
 
     /// 获取所有 Rust 插件的 command 列表
@@ -890,10 +935,6 @@ impl PluginHost {
     // ==================== Terminal Handler Pipeline ====================
 
     /// 通过插件 TerminalHandler 管道处理终端输入
-    ///
-    /// 依次调用所有已注册的 Rust terminal handler 的 `on_input`，
-    /// 如果任一 handler 返回 `Some(modified)`，后续 handler 使用修改后的文本。
-    /// 返回最终处理后的文本（如果没有 handler 修改，返回原始输入）
     pub async fn process_terminal_input(&self, session_id: &str, text: &str) -> String {
         let handlers = self.rust_terminal_handlers.read().await;
         let mut result = text.to_string();
@@ -910,10 +951,6 @@ impl PluginHost {
     }
 
     /// 通过插件 TerminalHandler 管道处理终端输出
-    ///
-    /// 依次调用所有已注册的 Rust terminal handler 的 `on_output`，
-    /// 如果任一 handler 返回 `Some(modified)`，后续 handler 使用修改后的数据。
-    /// 返回最终处理后的数据（如果没有 handler 修改，返回原始数据）
     pub async fn process_terminal_output(&self, session_id: &str, data: &str) -> String {
         let handlers = self.rust_terminal_handlers.read().await;
         let mut result = data.to_string();
@@ -940,8 +977,9 @@ impl Clone for PluginHost {
             storage: self.storage.clone(),
             rust_command_handlers: self.rust_command_handlers.clone(),
             rust_terminal_handlers: self.rust_terminal_handlers.clone(),
-            cdylib_plugins: self.cdylib_plugins.clone(),
-            host_context_fns: self.host_context_fns.clone(),
+            wasm_runtime: self.wasm_runtime.clone(),
+            wasm_plugins: self.wasm_plugins.clone(),
+            wasm_host_ctx: self.wasm_host_ctx.clone(),
         }
     }
 }

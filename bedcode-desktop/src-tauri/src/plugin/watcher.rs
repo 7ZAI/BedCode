@@ -1,7 +1,7 @@
 //! Plugin Dev Watcher
 //!
 //! 开发模式文件监听器 — 监听插件产物目录变化，触发热重载
-//! 检测 .dll/.dylib/.so 变化触发 Rust 端 cdylib 热重载
+//! 检测 .wasm 变化触发 Rust 端 WASM 热重载
 //! 检测 .js 变化通过 Tauri 事件通知前端重新加载 TS 模块
 //!
 //! 仅在开发模式下启用（cfg!(debug_assertions)）
@@ -62,10 +62,10 @@ impl PluginDevWatcher {
                 };
 
                 match ext.as_deref() {
-                    // Rust cdylib 产物变化 → 触发 Rust 端热重载
-                    Some("dll") | Some("dylib") | Some("so") => {
+                    // WASM 产物变化 → 触发 Rust 端热重载
+                    Some("wasm") => {
                         tracing::info!(
-                            "Plugin watcher: cdylib changed for plugin '{}': {}",
+                            "Plugin watcher: WASM changed for plugin '{}': {}",
                             plugin_id,
                             path.display()
                         );
@@ -96,16 +96,16 @@ impl PluginDevWatcher {
                             // 通过 AppContext 全局单例获取 PluginHost
                             let ctx = crate::system::app_context::AppContext::global();
                             let ph = ctx.plugin_host().clone();
-                            match ph.reload_cdylib_plugin(&plugin_id_clone).await {
+                            match ph.reload_wasm_plugin(&plugin_id_clone).await {
                                 Ok(()) => {
                                     tracing::info!(
-                                        "Plugin watcher: cdylib hot-reloaded '{}'",
+                                        "Plugin watcher: WASM hot-reloaded '{}'",
                                         plugin_id_clone
                                     );
                                 }
                                 Err(e) => {
                                     tracing::error!(
-                                        "Plugin watcher: cdylib hot-reload failed for '{}': {}",
+                                        "Plugin watcher: WASM hot-reload failed for '{}': {}",
                                         plugin_id_clone,
                                         e
                                     );

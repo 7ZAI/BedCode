@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use crate::connection::manager::ConnectionManager;
 use crate::auth::AuthManager;
 use crate::session::SessionManager;
+use crate::plugin::manager::PluginManager;
 
 // ==================== Global Token ====================
 
@@ -66,4 +67,23 @@ pub fn get_session_manager() -> Arc<SessionManager> {
         let conn = get_connection_manager();
         SessionManager::new(conn)
     }).clone()
+}
+
+// ==================== Plugin Manager ====================
+
+/// 全局插件管理器单例
+static PLUGIN_MANAGER: OnceLock<Arc<PluginManager>> = OnceLock::new();
+
+/// 初始化插件管理器（在 lib.rs setup 中调用）
+pub fn init_plugin_manager(manager: Arc<PluginManager>) -> Arc<PluginManager> {
+    let _ = PLUGIN_MANAGER.set(manager.clone());
+    manager
+}
+
+/// 获取插件管理器
+///
+/// # Panics
+/// 如果 init_plugin_manager 未调用则 panic
+pub fn get_plugin_manager() -> Arc<PluginManager> {
+    PLUGIN_MANAGER.get().expect("PluginManager not initialized").clone()
 }

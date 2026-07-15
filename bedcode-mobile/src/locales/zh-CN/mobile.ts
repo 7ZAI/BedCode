@@ -9,6 +9,7 @@ export default {
     connection: {
       title: '连接与配置',
       disconnect: '断开',
+      confirmDisconnectMsg: '确定要断开与当前设备的连接吗？所有远程会话将终止。',
       sessionConfig: '会话配置',
       refreshConfig: '刷新配置',
       noConfig: '暂无会话配置',

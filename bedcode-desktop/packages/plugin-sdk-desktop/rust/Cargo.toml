@@ -5,6 +5,10 @@ description = "BedCode Plugin API — trait definitions and shared types for Bed
 authors = ["binblink"]
 edition = "2021"
 
+[features]
+default = []
+wasm = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

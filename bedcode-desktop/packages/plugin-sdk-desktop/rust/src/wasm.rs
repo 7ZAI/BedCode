@@ -1,0 +1,203 @@
+//! WASM 插件入口
+//!
+//! WasmPlugin trait — WASM 插件核心接口
+//! wasm_entry! 宏 — 自动生成 WASM 导出函数和内存分配器
+//!
+//! 插件开发者只需实现 WasmPlugin trait，然后调用 wasm_entry!(MyPlugin)
+
+use crate::types::PluginManifest;
+
+/// WASM 插件核心 trait
+///
+/// 所有 WASM 插件必须实现此 trait，并通过 `wasm_entry!` 宏生成导出函数
+pub trait WasmPlugin: Send + Sync + 'static {
+    /// 插件唯一标识（反向域名格式，如 com.bedcode.ai-chatbox）
+    const ID: &'static str;
+
+    /// 返回插件 manifest
+    fn manifest() -> PluginManifest;
+
+    /// 激活插件
+    fn activate() -> anyhow::Result<()>;
+
+    /// 停用插件
+    fn deactivate() -> anyhow::Result<()>;
+
+    /// 调用自定义命令
+    fn invoke_command(name: &str, args_json: &str) -> anyhow::Result<serde_json::Value>;
+
+    /// 终端输入处理（可选，默认不做修改）
+    fn on_terminal_input(_session_id: &str, _text: &str) -> Option<String> {
+        None
+    }
+
+    /// 终端输出处理（可选，默认不做修改）
+    fn on_terminal_output(_session_id: &str, _data: &str) -> Option<String> {
+        None
+    }
+
+    /// 应用启动完成回调（可选）
+    fn on_startup() -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 应用即将关闭回调（可选）
+    fn on_shutdown() -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// 自动生成 WASM 导出函数 + 线性内存分配器
+///
+/// 生成以下导出：
+/// - `__bedcode_allocate(size) -> ptr` — 内存分配器，供宿主写入字符串
+/// - `__bedcode_manifest() -> (ptr, len)` — 返回 manifest JSON
+/// - `__bedcode_activate() -> i32` — 激活插件
+/// - `__bedcode_deactivate() -> i32` — 停用插件
+/// - `__bedcode_invoke_command(name_ptr, name_len, args_ptr, args_len) -> (ptr, len)` — 调用命令
+/// - `__bedcode_on_terminal_input(sid_ptr, sid_len, text_ptr, text_len) -> (ptr, len)` — 终端输入
+/// - `__bedcode_on_terminal_output(sid_ptr, sid_len, data_ptr, data_len) -> (ptr, len)` — 终端输出
+/// - `__bedcode_on_startup() -> ()` — 启动回调
+/// - `__bedcode_on_shutdown() -> ()` — 关闭回调
+///
+/// # 用法
+/// ```ignore
+/// struct MyPlugin;
+/// impl WasmPlugin for MyPlugin { ... }
+/// wasm_entry!(MyPlugin);
+/// ```
+#[macro_export]
+macro_rules! wasm_entry {
+    ($plugin_type:ty) => {
+        static PLUGIN: std::sync::OnceLock<$plugin_type> = std::sync::OnceLock::new();
+        static HOST: std::sync::OnceLock<$crate::wasm_host::WasmHost> = std::sync::OnceLock::new();
+
+        /// 内存分配器 — 供宿主写入字符串到 WASM 线性内存
+        ///
+        /// 宿主调用此函数分配 len 字节的内存，然后将字符串字节写入返回的指针位置
+        #[no_mangle]
+        pub extern "C" fn __bedcode_allocate(len: usize) -> *mut u8 {
+            let mut buf = Vec::with_capacity(len);
+            let ptr = buf.as_mut_ptr();
+            std::mem::forget(buf);
+            ptr
+        }
+
+        /// 返回 manifest JSON — (ptr, len)
+        #[no_mangle]
+        pub extern "C" fn __bedcode_manifest() -> (u32, u32) {
+            let manifest = <$plugin_type>::manifest();
+            let json = match serde_json::to_string(&manifest) {
+                Ok(s) => s,
+                Err(_) => return (0, 0),
+            };
+            $crate::wasm_host::wasm_alloc_string(&json)
+        }
+
+        /// 激活插件
+        #[no_mangle]
+        pub extern "C" fn __bedcode_activate() -> i32 {
+            // 初始化 WasmHost（首次调用时设置）
+            let host = HOST.get_or_init(|| $crate::wasm_host::WasmHost::new(<$plugin_type>::ID));
+            match <$plugin_type>::activate() {
+                Ok(()) => {
+                    host.log_info("Plugin activated (wasm)");
+                    0
+                }
+                Err(e) => {
+                    host.log_error(&format!("activate failed: {}", e));
+                    1
+                }
+            }
+        }
+
+        /// 停用插件
+        #[no_mangle]
+        pub extern "C" fn __bedcode_deactivate() -> i32 {
+            match <$plugin_type>::deactivate() {
+                Ok(()) => 0,
+                Err(e) => {
+                    if let Some(host) = HOST.get() {
+                        host.log_error(&format!("deactivate failed: {}", e));
+                    }
+                    1
+                }
+            }
+        }
+
+        /// 调用自定义命令
+        #[no_mangle]
+        pub extern "C" fn __bedcode_invoke_command(
+            name_ptr: u32,
+            name_len: u32,
+            args_ptr: u32,
+            args_len: u32,
+        ) -> (u32, u32) {
+            let name = $crate::wasm_host::wasm_read_string(name_ptr, name_len);
+            let args = $crate::wasm_host::wasm_read_string(args_ptr, args_len);
+
+            match <$plugin_type>::invoke_command(&name, &args) {
+                Ok(value) => {
+                    let json = match serde_json::to_string(&value) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let err = format!("{{\"error\": \"{}\"}}", e);
+                            return $crate::wasm_host::wasm_alloc_string(&err);
+                        }
+                    };
+                    $crate::wasm_host::wasm_alloc_string(&json)
+                }
+                Err(e) => {
+                    let err = format!("{{\"error\": \"{}\"}}", e);
+                    $crate::wasm_host::wasm_alloc_string(&err)
+                }
+            }
+        }
+
+        /// 终端输入处理
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_terminal_input(
+            sid_ptr: u32,
+            sid_len: u32,
+            text_ptr: u32,
+            text_len: u32,
+        ) -> (u32, u32) {
+            let session_id = $crate::wasm_host::wasm_read_string(sid_ptr, sid_len);
+            let text = $crate::wasm_host::wasm_read_string(text_ptr, text_len);
+
+            match <$plugin_type>::on_terminal_input(&session_id, &text) {
+                Some(modified) => $crate::wasm_host::wasm_alloc_string(&modified),
+                None => (0, 0),
+            }
+        }
+
+        /// 终端输出处理
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_terminal_output(
+            sid_ptr: u32,
+            sid_len: u32,
+            data_ptr: u32,
+            data_len: u32,
+        ) -> (u32, u32) {
+            let session_id = $crate::wasm_host::wasm_read_string(sid_ptr, sid_len);
+            let data = $crate::wasm_host::wasm_read_string(data_ptr, data_len);
+
+            match <$plugin_type>::on_terminal_output(&session_id, &data) {
+                Some(modified) => $crate::wasm_host::wasm_alloc_string(&modified),
+                None => (0, 0),
+            }
+        }
+
+        /// 应用启动完成回调
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_startup() {
+            let _ = <$plugin_type>::on_startup();
+        }
+
+        /// 应用即将关闭回调
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_shutdown() {
+            let _ = <$plugin_type>::on_shutdown();
+        }
+    };
+}

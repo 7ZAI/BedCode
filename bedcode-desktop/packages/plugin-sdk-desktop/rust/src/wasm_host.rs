@@ -209,18 +209,21 @@ extern "C" {
 
 /// 分配字符串到 WASM 线性内存，返回 (ptr, len)
 ///
-/// 通过宿主的 __bedcode_allocate 或 WASM 线性内存分配器分配空间
+/// 直接在 WASM 线性内存中分配空间（不依赖外部 __bedcode_allocate，
+/// 避免与 wasm_entry! 宏生成的 __bedcode_allocate 重复符号冲突）
 pub fn wasm_alloc_string(s: &str) -> (u32, u32) {
     if s.is_empty() {
         return (0, 0);
     }
     let bytes = s.as_bytes();
     let len = bytes.len();
-    let ptr = __bedcode_allocate(len);
+    let mut buf: Vec<u8> = Vec::with_capacity(len);
+    let ptr: *mut u8 = buf.as_mut_ptr();
+    std::mem::forget(buf);
     if ptr.is_null() {
         return (0, 0);
     }
-    // SAFETY: ptr 由 __bedcode_allocate 分配，大小为 len 字节
+    // SAFETY: ptr 由 Vec::with_capacity 分配，大小为 len 字节
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, len);
     }
@@ -237,16 +240,4 @@ pub fn wasm_read_string(ptr: u32, len: u32) -> String {
         let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
         String::from_utf8_lossy(slice).into_owned()
     }
-}
-
-/// WASM 线性内存分配器（与 wasm_entry! 宏中生成的 __bedcode_allocate 相同）
-///
-/// 在 WASM 模块内部调用时使用本模块生成的版本，
-/// 宿主侧也通过此函数分配内存写入字符串
-#[no_mangle]
-pub extern "C" fn __bedcode_allocate(len: usize) -> *mut u8 {
-    let mut buf = Vec::with_capacity(len);
-    let ptr = buf.as_mut_ptr();
-    std::mem::forget(buf);
-    ptr
 }

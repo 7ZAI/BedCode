@@ -43,7 +43,12 @@
         },
         "activeProvider": {
           "type": "string",
-          "title": "Active Provider Name",
+          "title": "Active Provider ID",
+          "default": ""
+        },
+        "activeModel": {
+          "type": "string",
+          "title": "Active Model",
           "default": ""
         }
       }

@@ -7,13 +7,13 @@
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
+      <div class="shortcut-config-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-xl modal-panel">
         <!-- Header -->
-        <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
-          <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ t('mobile.shortcutConfig.title') }}</span>
+        <div class="flex items-center justify-between p-3 border-b border-[var(--mobile-border)]">
+          <span class="font-semibold text-[var(--mobile-text-primary)] text-sm">{{ t('mobile.shortcutConfig.title') }}</span>
           <div class="flex items-center gap-2">
             <button
-              class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] transition-colors active:scale-95"
+              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] transition-colors active:scale-95"
               @click="showHelp = true"
             >
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -33,7 +33,7 @@
         </div>
 
         <!-- Scrollable Content -->
-        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <div class="flex-1 overflow-y-auto p-3 space-y-3">
           <!-- 快捷键列表 -->
           <div class="space-y-2">
             <div
@@ -41,7 +41,7 @@
               :key="item.code"
               class="shortcut-row"
             >
-              <span class="shortcut-label" :class="{ 'text-[var(--mobile-text-disabled)]': !item.visible }">
+              <span class="shortcut-label min-w-0 truncate" :class="{ 'text-[var(--mobile-text-disabled)]': !item.visible }">
                 {{ item.label }}
               </span>
               <div class="flex items-center gap-3">
@@ -189,21 +189,21 @@
         </div>
 
         <!-- Footer -->
-        <div class="p-4 border-t border-[var(--mobile-border)] space-y-2">
+        <div class="p-3 border-t border-[var(--mobile-border)] space-y-1.5">
           <!-- 重复提示 -->
           <div v-if="isDuplicate" class="duplicate-hint">
             {{ t('mobile.shortcutConfig.alreadyExists') }}
           </div>
 
-          <div class="flex gap-3">
+          <div class="flex gap-2">
             <button
-              class="footer-btn reset-btn"
+              class="footer-btn reset-btn min-w-0 truncate"
               @click="handleReset"
             >
               {{ t('mobile.shortcutConfig.resetDefaults') }}
             </button>
             <button
-              class="footer-btn add-btn"
+              class="footer-btn add-btn min-w-0 truncate"
               :disabled="!canAdd"
               @click="handleAdd"
             >
@@ -452,11 +452,12 @@ watch(() => props.visible, (show) => {
 
 <style scoped>
 .shortcut-config-modal {
-  --key-h: clamp(1.75rem, 2rem, 2.5rem);
-  --key-font: clamp(0.625rem, 0.6875rem, 0.8rem);
-  --mod-h: clamp(1.75rem, 2rem, 2.5rem);
-  --row-px: clamp(0.5rem, 0.75rem, 1rem);
-  --row-py: clamp(0.375rem, 0.5rem, 0.625rem);
+  --key-h: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.5rem, 2.25rem);
+  --key-font: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
+  --mod-h: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.5rem, 2.25rem);
+  --row-px: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.375rem, 0.875rem);
+  --row-py: clamp(0.25rem, 0.375rem + (100vw - 360px) / 840 * 0.25rem, 0.625rem);
+  --footer-font: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.125rem, 0.8125rem);
 }
 
 .shortcut-row {
@@ -470,7 +471,7 @@ watch(() => props.visible, (show) => {
 }
 
 .shortcut-label {
-  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.125rem, 0.8125rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -535,11 +536,11 @@ watch(() => props.visible, (show) => {
 
 .capture-input {
   width: 100%;
-  min-height: clamp(2.25rem, 2.75rem, 3.25rem);
-  padding: clamp(0.375rem, 0.5rem, 0.625rem) clamp(0.5rem, 0.75rem, 1rem);
+  min-height: clamp(1.75rem, 2rem + (100vw - 360px) / 840 * 0.5rem, 2.5rem);
+  padding: clamp(0.25rem, 0.375rem + (100vw - 360px) / 840 * 0.125rem, 0.5rem) clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.25rem, 0.75rem);
   background: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   display: flex;
@@ -554,27 +555,28 @@ watch(() => props.visible, (show) => {
 }
 
 .preview-label {
-  font-size: clamp(0.8125rem, 0.875rem, 1rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem);
   font-weight: 600;
   color: var(--mobile-accent);
   font-family: 'Courier New', monospace;
 }
 
 .capture-placeholder {
-  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.125rem, 0.8125rem);
   color: var(--mobile-input-placeholder);
 }
 
 .modifier-row {
   display: flex;
-  gap: clamp(0.375rem, 0.5rem, 0.75rem);
+  flex-wrap: wrap;
+  gap: clamp(0.25rem, 0.375rem + (100vw - 360px) / 840 * 0.25rem, 0.625rem);
 }
 
 .modifier-btn {
-  padding: clamp(0.25rem, 0.375rem, 0.5rem) clamp(0.5rem, 0.75rem, 1rem);
-  font-size: clamp(0.6875rem, 0.75rem, 0.875rem);
+  padding: clamp(0.1875rem, 0.25rem + (100vw - 360px) / 840 * 0.1875rem, 0.4375rem) clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.25rem, 0.75rem);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
   font-weight: 500;
-  border-radius: 0.5rem;
+  border-radius: 0.375rem;
   border: 1px solid var(--mobile-border);
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-secondary);
@@ -594,8 +596,8 @@ watch(() => props.visible, (show) => {
 
 .key-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(clamp(2rem, 2.25rem, 2.75rem), 1fr));
-  gap: 0.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(1.625rem, 1.875rem + (100vw - 360px) / 840 * 0.5rem, 2.375rem), 1fr));
+  gap: clamp(0.125rem, 0.1875rem, 0.25rem);
 }
 
 .key-btn {
@@ -624,20 +626,21 @@ watch(() => props.visible, (show) => {
 }
 
 .duplicate-hint {
-  font-size: clamp(0.6875rem, 0.75rem, 0.875rem);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
   color: var(--mobile-danger-color, #ff5555);
   text-align: center;
-  padding: 0.25rem;
+  padding: 0.1875rem;
 }
 
 .footer-btn {
   flex: 1;
-  padding: clamp(0.5rem, 0.625rem, 0.75rem);
-  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
+  padding: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.125rem, 0.625rem);
+  font-size: var(--footer-font);
   font-weight: 500;
-  border-radius: 0.75rem;
+  border-radius: 0.625rem;
   cursor: pointer;
   transition: all 0.15s ease;
+  overflow: hidden;
 }
 
 .reset-btn {
@@ -687,9 +690,9 @@ watch(() => props.visible, (show) => {
 }
 
 .delete-confirm-text {
-  font-size: clamp(0.875rem, 0.9375rem, 1.0625rem);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 840 * 0.125rem, 0.9375rem);
   color: var(--mobile-text-primary);
-  margin: 0 0 1.25rem;
+  margin: 0 0 1rem;
   line-height: 1.5;
 }
 
@@ -700,9 +703,9 @@ watch(() => props.visible, (show) => {
 
 .delete-confirm-btn {
   flex: 1;
-  padding: clamp(0.5rem, 0.625rem, 0.75rem);
-  border-radius: 0.625rem;
-  font-size: clamp(0.75rem, 0.8125rem, 0.9375rem);
+  padding: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.125rem, 0.625rem);
+  border-radius: 0.5rem;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.125rem, 0.8125rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;

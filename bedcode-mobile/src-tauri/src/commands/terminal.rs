@@ -37,6 +37,17 @@ pub async fn ws_send_input_async(
     let timeout = std::time::Duration::from_secs(INPUT_TIMEOUT_SECS);
     conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeout).await?;
 
+    // 通知插件终端输入（只读通知）
+    {
+        let pm = crate::state::get_plugin_manager();
+        pm.dispatch_lifecycle_event(
+            crate::plugin::types::PluginLifecycleEvent::TerminalInput {
+                session_id: session_id.clone(),
+                data: trimmed_data.clone(),
+            }
+        ).await;
+    }
+
     Ok(())
 }
 

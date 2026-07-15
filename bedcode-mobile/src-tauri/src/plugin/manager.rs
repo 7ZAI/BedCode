@@ -14,6 +14,7 @@ use crate::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::RwLock;
 
 /// 插件生命周期管理器
@@ -111,6 +112,9 @@ impl PluginManager {
                 }
             }
         }
+
+        // 通知所有插件应用启动完成
+        self.dispatch_lifecycle_event(PluginLifecycleEvent::AppStartup).await;
     }
 
     /// 激活插件
@@ -255,5 +259,71 @@ impl PluginManager {
     /// 获取 WASM 宿主上下文引用
     pub fn wasm_host_ctx(&self) -> &Arc<WasmHostContext> {
         &self.wasm_host_ctx
+    }
+
+    /// 分发生命周期事件到所有已激活插件
+    ///
+    /// 1. 遍历所有已激活的 WASM 插件，检查声明后调用导出函数
+    /// 2. 通过 app_handle.emit() 发射 Tauri 事件给前端 TS 插件
+    pub async fn dispatch_lifecycle_event(&self, event: PluginLifecycleEvent) {
+        let event_name = event.name();
+
+        // 快速检查：是否有任何 WASM 插件声明了该事件
+        let plugins = self.plugins.read().await;
+        let any_wasm_declared = plugins.values().any(|p| {
+            p.state == PluginState::Activated
+                && p.manifest.plugin_type == PluginType::Wasm
+                && p.manifest.contributes.lifecycle.as_ref()
+                    .map(|l| l.is_declared(event_name))
+                    .unwrap_or(false)
+        });
+
+        if any_wasm_declared {
+            // WASM 插件回调
+            for (id, plugin) in plugins.iter() {
+                if plugin.state != PluginState::Activated {
+                    continue;
+                }
+                if plugin.manifest.plugin_type != PluginType::Wasm {
+                    continue;
+                }
+                if !plugin.manifest.contributes.lifecycle.as_ref()
+                    .map(|l| l.is_declared(event_name))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                let mut wasm_plugins = self.wasm_plugins.write().await;
+                if let Some(wasm_plugin) = wasm_plugins.get_mut(id) {
+                    if let Err(e) = wasm_plugin.call_lifecycle_event(&event) {
+                        tracing::warn!(
+                            plugin_id = %id,
+                            event = %event_name,
+                            error = %e,
+                            "WASM lifecycle callback failed"
+                        );
+                    }
+                }
+            }
+        }
+
+        drop(plugins);
+
+        // 前端 Tauri 事件发射
+        self.emit_frontend_event(&event);
+    }
+
+    /// 发射前端 Tauri 生命周期事件
+    fn emit_frontend_event(&self, event: &PluginLifecycleEvent) {
+        let tauri_event = format!("plugin:lifecycle:{}", event.tauri_event_name());
+        let payload = event.to_payload();
+        if let Err(e) = self.wasm_host_ctx.app_handle.emit(&tauri_event, payload) {
+            tracing::error!(
+                event = %tauri_event,
+                error = %e,
+                "Failed to emit frontend lifecycle event"
+            );
+        }
     }
 }

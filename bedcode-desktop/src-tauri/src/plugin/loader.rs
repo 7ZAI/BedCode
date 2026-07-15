@@ -2,7 +2,7 @@
 //!
 //! 扫描插件目录，解析所有 plugin.json
 //! 验证必填字段和权限合法性，返回已加载的插件列表
-//! 仅处理文件扫描加载，Rust+TS cdylib 插件由 PluginHost 通过 CdylibLoader 加载
+//! 仅处理文件扫描加载，Rust+TS WASM 插件由 PluginHost 通过 WasmRuntime 加载
 
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
@@ -67,9 +67,9 @@ impl PluginLoader {
                         &manifest.permissions,
                     );
 
-                    // 根据 rust_library 字段判断来源：有 cdylib 则为 Cdylib，否则为 FileScan
+                    // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan
                     let source = if !manifest.rust_library.is_empty() {
-                        PluginSource::Cdylib
+                        PluginSource::Wasm
                     } else {
                         PluginSource::FileScan
                     };

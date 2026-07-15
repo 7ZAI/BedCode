@@ -233,6 +233,16 @@ impl ConnectionManager {
                                 let _ = app_clone.emit("ws_unexpected_disconnect", serde_json::json!({
                                     "reason": reason
                                 }));
+
+                                // 通知插件连接断开
+                                {
+                                    let pm = crate::state::get_plugin_manager();
+                                    pm.dispatch_lifecycle_event(
+                                        crate::plugin::types::PluginLifecycleEvent::Disconnect {
+                                            reason: reason.clone(),
+                                        }
+                                    ).await;
+                                }
                             } else {
                                 tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
                             }
