@@ -38,6 +38,10 @@ pub struct PluginManager {
     plugin_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
     /// Tauri AppHandle
     app_handle: Arc<tauri::AppHandle>,
+    /// 文件系统访问校验器
+    fs_auth: Arc<crate::plugin::fs_auth::FsAuthChecker>,
+    /// 消息总线
+    message_bus: Arc<crate::plugin::message_bus::MessageBus>,
 }
 
 impl PluginManager {
@@ -53,6 +57,12 @@ impl PluginManager {
     ) -> Self {
         let storage = Arc::new(PluginStorage::new(app_data_dir));
         let plugins_dir = app_data_dir.join(PLUGIN_DATA_DIR);
+
+        let fs_auth = Arc::new(crate::plugin::fs_auth::FsAuthChecker::new(
+            storage.clone(),
+            app_handle.clone(),
+        ));
+        let message_bus = Arc::new(crate::plugin::message_bus::MessageBus::new());
 
         // builtin_manifests() 当前返回空 Vec，内置插件走 APK assets 加载
         let mut plugins = HashMap::new();
@@ -82,6 +92,8 @@ impl PluginManager {
             plugins_dir,
             plugin_db,
             app_handle,
+            fs_auth,
+            message_bus,
         }
     }
 
@@ -99,10 +111,21 @@ impl PluginManager {
             self.plugin_db.clone(),
             self.storage.clone(),
             self.app_handle.clone(),
+            self.fs_auth.clone(),
+            self.message_bus.clone(),
         ));
 
         let _ = self.wasm_runtime.set(runtime);
         let _ = self.wasm_host_ctx.set(host_ctx);
+
+        // 注入 dispatcher（PluginManagerDispatcher 实现 MessageDispatcher）
+        let dispatcher: Arc<dyn crate::plugin::message_bus::MessageDispatcher> = Arc::new(PluginManagerDispatcher {
+            plugins: self.plugins.clone(),
+            wasm_plugins: self.wasm_plugins.clone(),
+        });
+        let bus = self.message_bus.clone();
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(bus.set_dispatcher(dispatcher));
 
         Ok(())
     }
@@ -224,6 +247,12 @@ impl PluginManager {
             }
         }
 
+        // 清理消息总线订阅
+        let bus = self.message_bus.clone();
+        let pid = plugin_id.to_string();
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(bus.remove_all_subscriptions(&pid));
+
         plugin.state = PluginState::Deactivated;
         tracing::info!(plugin_id = %plugin_id, "Plugin deactivated");
         Ok(())
@@ -286,6 +315,16 @@ impl PluginManager {
     /// 获取存储管理器引用
     pub fn storage(&self) -> &PluginStorage {
         &self.storage
+    }
+
+    /// 获取文件系统访问校验器引用
+    pub fn fs_auth(&self) -> &Arc<crate::plugin::fs_auth::FsAuthChecker> {
+        &self.fs_auth
+    }
+
+    /// 获取消息总线引用
+    pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
+        &self.message_bus
     }
 
     /// 获取插件数据目录
@@ -373,5 +412,34 @@ impl PluginManager {
                 "Failed to emit frontend lifecycle event"
             );
         }
+    }
+}
+
+/// PluginManager 的 MessageDispatcher 代理
+///
+/// 独立结构体避免 PluginManager 直接实现 trait 导致的生命周期问题
+struct PluginManagerDispatcher {
+    plugins: Arc<RwLock<HashMap<String, LoadedPlugin>>>,
+    wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
+}
+
+impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
+    fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
+        let mut wasm_plugins = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.wasm_plugins.write())
+        });
+        if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+            wasm_plugin.on_bus_message(msg)?;
+        }
+        Ok(())
+    }
+
+    fn is_activated(&self, plugin_id: &str) -> bool {
+        let plugins = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.plugins.read())
+        });
+        plugins.get(plugin_id)
+            .map(|p| p.state == PluginState::Activated)
+            .unwrap_or(false)
     }
 }
