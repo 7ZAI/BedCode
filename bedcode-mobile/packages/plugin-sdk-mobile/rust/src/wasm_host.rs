@@ -165,6 +165,53 @@ impl WasmHost {
         let (body_ptr, body_len) = wasm_alloc_string(body);
         unsafe { host_notify(title_ptr, title_len, body_ptr, body_len) == 0 }
     }
+
+    // ==================== File System ====================
+
+    /// 文件系统：读取文件内容
+    pub fn fs_read(&self, path: &str) -> Option<String> {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let (ptr, len) = unsafe { host_fs_read(path_ptr, path_len) };
+        if ptr == 0 && len == 0 { return None; }
+        let content = wasm_read_string(ptr, len);
+        Some(content)
+    }
+
+    /// 文件系统：写入文件内容（自动创建父目录）
+    pub fn fs_write(&self, path: &str, data: &str) -> bool {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let (data_ptr, data_len) = wasm_alloc_string(data);
+        unsafe { host_fs_write(path_ptr, path_len, data_ptr, data_len) == 0 }
+    }
+
+    /// 文件系统：复制文件（自动创建目标父目录）
+    pub fn fs_copy(&self, src: &str, dst: &str) -> bool {
+        let (src_ptr, src_len) = wasm_alloc_string(src);
+        let (dst_ptr, dst_len) = wasm_alloc_string(dst);
+        unsafe { host_fs_copy(src_ptr, src_len, dst_ptr, dst_len) == 0 }
+    }
+
+    // ==================== Message Bus ====================
+
+    /// 发布消息到总线
+    pub fn bus_publish(&self, topic: &str, payload: &serde_json::Value) -> bool {
+        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
+        let payload_str = serde_json::to_string(payload).unwrap_or_default();
+        let (payload_ptr, payload_len) = wasm_alloc_string(&payload_str);
+        unsafe { host_bus_publish(topic_ptr, topic_len, payload_ptr, payload_len) == 0 }
+    }
+
+    /// 订阅 topic
+    pub fn bus_subscribe(&self, topic: &str) -> bool {
+        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
+        unsafe { host_bus_subscribe(topic_ptr, topic_len) == 0 }
+    }
+
+    /// 取消订阅
+    pub fn bus_unsubscribe(&self, topic: &str) -> bool {
+        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
+        unsafe { host_bus_unsubscribe(topic_ptr, topic_len) == 0 }
+    }
 }
 
 // ==================== WASM Import Declarations ====================
@@ -203,6 +250,18 @@ extern "C" {
     fn host_log_error(msg_ptr: u32, msg_len: u32);
     /// 通知：发送系统通知 — 返回 0 成功，-1 失败
     fn host_notify(title_ptr: u32, title_len: u32, body_ptr: u32, body_len: u32) -> i32;
+    /// 文件系统：读取文件 — 返回 (ptr, len) 或 (0, 0)
+    fn host_fs_read(path_ptr: u32, path_len: u32) -> (u32, u32);
+    /// 文件系统：写入文件 — 返回 0 成功，-1 失败
+    fn host_fs_write(path_ptr: u32, path_len: u32, data_ptr: u32, data_len: u32) -> i32;
+    /// 文件系统：复制文件 — 返回 0 成功，-1 失败
+    fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
+    /// 消息总线：发布消息 — 返回 0 成功，-1 失败
+    fn host_bus_publish(topic_ptr: u32, topic_len: u32, payload_ptr: u32, payload_len: u32) -> i32;
+    /// 消息总线：订阅 topic — 返回 0 成功，-1 失败
+    fn host_bus_subscribe(topic_ptr: u32, topic_len: u32) -> i32;
+    /// 消息总线：取消订阅 — 返回 0 成功，-1 失败
+    fn host_bus_unsubscribe(topic_ptr: u32, topic_len: u32) -> i32;
 }
 
 // ==================== WASM Memory Helpers ====================

@@ -14,6 +14,21 @@ pub mod terminal;
 pub mod traits;
 pub mod types;
 
+/// 消息总线消息
+///
+/// 插件间通信的统一消息封装，通过 Topic 消息总线传递
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BusMessage {
+    /// 消息主题（格式：domain:action，如 task:status-changed）
+    pub topic: String,
+    /// 发送者插件 ID
+    pub sender: String,
+    /// 消息负载（任意 JSON）
+    pub payload: serde_json::Value,
+    /// 时间戳（毫秒 Unix）
+    pub timestamp: u64,
+}
+
 #[cfg(feature = "wasm")]
 pub mod wasm;
 #[cfg(feature = "wasm")]

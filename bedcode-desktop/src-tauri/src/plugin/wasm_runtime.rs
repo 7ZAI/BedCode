@@ -11,9 +11,10 @@ use crate::plugin::storage::PluginStorage;
 use crate::plugin::wasm_host;
 use crate::session::SessionManager;
 use crate::system::config::AppConfig;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use wasmtime::{Engine, Instance, Linker, Memory, Module, Store};
 
@@ -45,6 +46,8 @@ pub struct WasmPluginState {
 /// 持有宿主子系统引用，Host Functions 通过此上下文访问宿主能力
 pub struct WasmHostContext {
     db: Arc<Mutex<Database>>,
+    /// 插件独立数据库池 — 每插件一个独立 .db 文件和连接
+    plugin_dbs: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>,
     storage: Arc<PluginStorage>,
     session_manager: Arc<SessionManager>,
     app_handle: Arc<tauri::AppHandle>,
@@ -454,6 +457,7 @@ impl WasmHostContext {
     /// 创建宿主上下文
     pub fn new(
         db: Arc<Mutex<Database>>,
+        plugin_dbs: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>,
         storage: Arc<PluginStorage>,
         session_manager: Arc<SessionManager>,
         app_handle: Arc<tauri::AppHandle>,
@@ -463,6 +467,7 @@ impl WasmHostContext {
     ) -> Self {
         Self {
             db,
+            plugin_dbs,
             storage,
             session_manager,
             app_handle,
@@ -475,6 +480,51 @@ impl WasmHostContext {
     /// 获取消息总线引用
     pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
         &self.message_bus
+    }
+
+    /// 获取或懒加载插件独立数据库
+    ///
+    /// 首次调用时创建目录 + 打开/创建 plugin.db + 缓存连接
+    /// 后续调用直接返回缓存的连接
+    pub async fn get_or_create_plugin_db(&self, plugin_id: &str) -> crate::Result<Arc<Mutex<Database>>> {
+        // 快速路径：已缓存
+        {
+            let dbs = self.plugin_dbs.lock().await;
+            if let Some(db) = dbs.get(plugin_id) {
+                return Ok(db.clone());
+            }
+        }
+
+        // 慢路径：创建数据库
+        let app_data_dir = self.app_handle.path().app_data_dir()
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to get app data dir: {}", e)))?;
+        let plugin_dir = app_data_dir.join("plugins").join(plugin_id);
+
+        // 创建插件数据目录
+        if !plugin_dir.exists() {
+            std::fs::create_dir_all(&plugin_dir)
+                .map_err(|e| crate::AppError::Plugin(format!(
+                    "Failed to create plugin data dir '{}': {}",
+                    plugin_dir.display(), e
+                )))?;
+        }
+
+        let db_path = plugin_dir.join("plugin.db");
+        let db = Database::new(&db_path)?;
+
+        // 缓存连接
+        let db_arc = Arc::new(Mutex::new(db));
+        {
+            let mut dbs = self.plugin_dbs.lock().await;
+            // 双重检查：另一个线程可能已插入
+            if let Some(existing) = dbs.get(plugin_id) {
+                return Ok(existing.clone());
+            }
+            dbs.insert(plugin_id.to_string(), db_arc.clone());
+        }
+
+        tracing::info!(plugin_id = %plugin_id, path = %db_path.display(), "Plugin database created/opened");
+        Ok(db_arc)
     }
 }
 
@@ -506,6 +556,15 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_db_query", host_db_query)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_db_query: {}", e)))?;
+
+    // 插件独立数据库
+    linker
+        .func_wrap("bedcode", "host_plugin_db_execute", host_plugin_db_execute)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_plugin_db_execute: {}", e)))?;
+
+    linker
+        .func_wrap("bedcode", "host_plugin_db_query", host_plugin_db_query)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_plugin_db_query: {}", e)))?;
 
     // 终端
     linker
@@ -965,6 +1024,148 @@ fn host_db_query(
         }
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_db_query: SQL query failed");
+            -1
+        }
+    }
+}
+
+/// 插件独立数据库：执行 SQL
+///
+/// 参数：(sql_ptr, sql_len)
+/// 返回：受影响行数（>= 0），负数表示错误
+///
+/// 与 host_db_execute 的区别：
+/// - 使用插件独立数据库连接（无全局 Mutex 竞争）
+/// - 无表名前缀校验（整个数据库都是插件的）
+fn host_plugin_db_execute(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    sql_ptr: u32,
+    sql_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let sql = match read_wasm_string(&mut caller, sql_ptr, sql_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_plugin_db_execute: failed to read SQL");
+            return -1;
+        }
+    };
+
+    if !host_ctx.permission.check(&plugin_id, PERMISSION_STORAGE) {
+        tracing::error!(plugin_id = %plugin_id, permission = "storage", "host_plugin_db_execute: permission denied");
+        return -1;
+    }
+
+    let result: Result<i32, String> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db_arc = host_ctx.get_or_create_plugin_db(&plugin_id).await
+                .map_err(|e| e.to_string())?;
+            let db = db_arc.lock().await;
+            db.conn().execute(&sql, []).map(|n| n as i32).map_err(|e| e.to_string())
+        })
+    });
+
+    match result {
+        Ok(affected) => affected as i32,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_plugin_db_execute: SQL execution failed");
+            -1
+        }
+    }
+}
+
+/// 插件独立数据库：查询 SQL
+///
+/// 参数：(sql_ptr, sql_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+///
+/// 与 host_db_query 的区别：
+/// - 使用插件独立数据库连接（无全局 Mutex 竞争）
+/// - 无表名前缀校验（整个数据库都是插件的）
+fn host_plugin_db_query(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    sql_ptr: u32,
+    sql_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let sql = match read_wasm_string(&mut caller, sql_ptr, sql_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_plugin_db_query: failed to read SQL");
+            return -1;
+        }
+    };
+
+    if !host_ctx.permission.check(&plugin_id, PERMISSION_STORAGE) {
+        tracing::error!(plugin_id = %plugin_id, permission = "storage", "host_plugin_db_query: permission denied");
+        return -1;
+    }
+
+    let query_result: Result<serde_json::Value, String> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db_arc = host_ctx.get_or_create_plugin_db(&plugin_id).await
+                .map_err(|e| e.to_string())?;
+            let db = db_arc.lock().await;
+            let conn = db.conn();
+
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| format!("prepare: {}", e))?;
+
+            let column_count = stmt.column_count();
+            let column_names: Vec<String> = (0..column_count)
+                .map(|i| {
+                    stmt.column_name(i)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| format!("col{}", i))
+                })
+                .collect();
+
+            let rows: Vec<serde_json::Map<String, serde_json::Value>> = stmt
+                .query_map([], |row| {
+                    let mut map = serde_json::Map::new();
+                    for (i, col_name) in column_names.iter().enumerate() {
+                        let value = wasm_host::column_to_json(row, i);
+                        map.insert(col_name.clone(), value);
+                    }
+                    Ok(map)
+                })
+                .map_err(|e| format!("query_map: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            Ok(serde_json::Value::Array(
+                rows.into_iter()
+                    .map(serde_json::Value::Object)
+                    .collect(),
+            ))
+        })
+    });
+
+    match query_result {
+        Ok(value) => {
+            let json_str = match serde_json::to_string(&value) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, plugin_id = %plugin_id, "host_plugin_db_query: JSON serialization failed");
+                    return -1;
+                }
+            };
+            match write_wasm_string(&mut caller, &json_str) {
+                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+                None => {
+                    tracing::error!(plugin_id = %plugin_id, "host_plugin_db_query: failed to write result to WASM memory");
+                    -1
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_plugin_db_query: SQL query failed");
             -1
         }
     }

@@ -1,18 +1,32 @@
 //! 任务状态与自动授权模式管理
 //!
-//! 通过宿主 storage API 持久化状态，通过 broadcast_sync 广播变更到移动端。
+//! 通过插件独立数据库持久化任务历史，通过 broadcast_sync 广播变更到移动端。
 //! HTTP 端点处理逻辑在此实现，由 lib.rs 的 _http_endpoint command 路由调用。
 
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::Value;
 
-// ==================== Storage Key 前缀 ====================
+// ==================== 查询辅助函数 ====================
 
-const TASK_STATUS_PREFIX: &str = "task_status:";
-const TASK_REASON_PREFIX: &str = "task_reason:";
-const TASK_QUESTIONS_PREFIX: &str = "task_questions:";
-const AUTO_MODE_PREFIX: &str = "auto_mode:";
-const SESSION_MAP_PREFIX: &str = "session_map:";
+/// 查询任务历史行 — 按 session_id 查找最新一条
+fn find_task_by_session(host: &WasmHost, session_id: &str) -> Option<Value> {
+    let sql = format!(
+        "SELECT * FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+        session_id.replace('\'', "''")
+    );
+    let result = host.plugin_db_query(&sql)?;
+    result.as_array()?.first().cloned()
+}
+
+/// 查询任务历史行 — 按 claude_sid 查找最新一条
+fn find_task_by_claude_sid(host: &WasmHost, claude_sid: &str) -> Option<Value> {
+    let sql = format!(
+        "SELECT * FROM task_history WHERE claude_sid = '{}' ORDER BY created_at DESC LIMIT 1",
+        claude_sid.replace('\'', "''")
+    );
+    let result = host.plugin_db_query(&sql)?;
+    result.as_array()?.first().cloned()
+}
 
 // ==================== HTTP 端点处理 ====================
 
@@ -70,39 +84,75 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         return error_response(400, &format!("Invalid task status: {}. Must be one of: {}", status, valid_statuses.join(", ")));
     }
 
-    // 注册 Claude Code session → BedCode PTY session 映射
-    if let Some(bedcode_sid) = bedcode_session_id {
-        if !bedcode_sid.is_empty() {
-            let map_key = format!("{}{}", SESSION_MAP_PREFIX, session_id);
-            host.storage_set(&map_key, &serde_json::json!(bedcode_sid));
-            host.log_info(&format!("Session mapping: claude_sid={} → bedcode_sid={}", session_id, bedcode_sid));
+    // 解析 bedcode_session_id
+    let resolved_session_id = bedcode_session_id.filter(|s| !s.is_empty()).unwrap_or(session_id);
+
+    // 查找已有任务记录
+    let existing = find_task_by_claude_sid(host, session_id)
+        .or_else(|| find_task_by_session(host, resolved_session_id));
+
+    if let Some(row) = existing {
+        // 更新已有记录
+        let task_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut sql_parts = vec![
+            format!("status = '{}'", status.replace('\'', "''")),
+            "updated_at = datetime('now')".to_string(),
+        ];
+
+        if let Some(r) = reason {
+            sql_parts.push(format!("exit_reason = '{}'", r.replace('\'', "''")));
         }
-    }
+        if let Some(q) = questions {
+            let q_str = serde_json::to_string(q).unwrap_or_default().replace('\'', "''");
+            sql_parts.push(format!("questions = '{}'", q_str));
+        }
 
-    // 优先使用 bedcode_session_id 作为存储 key
-    let storage_key = bedcode_session_id.filter(|s| !s.is_empty()).unwrap_or(session_id);
-    host.log_debug(&format!("task-status storage_key resolved: {} (from bedcode_sid={:?})", storage_key, bedcode_session_id));
+        // 更新 session_id 映射
+        if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
+            sql_parts.push(format!("session_id = '{}'", bedcode_sid.replace('\'', "''")));
+            sql_parts.push(format!("claude_sid = '{}'", session_id.replace('\'', "''")));
+        }
 
-    // 存储状态
-    let status_key = format!("{}{}", TASK_STATUS_PREFIX, storage_key);
-    host.storage_set(&status_key, &serde_json::json!(status));
-    host.log_debug(&format!("storage_set: key={}, value={}", status_key, status));
+        // 状态转换时更新时间戳
+        match status {
+            "in_progress" => sql_parts.push("started_at = datetime('now')".to_string()),
+            "completed" | "interrupted" | "failed" => sql_parts.push("completed_at = datetime('now')".to_string()),
+            _ => {}
+        }
 
-    if let Some(r) = reason {
-        let reason_key = format!("{}{}", TASK_REASON_PREFIX, storage_key);
-        host.storage_set(&reason_key, &serde_json::json!(r));
-        host.log_debug(&format!("storage_set: key={}, value={}", reason_key, r));
-    }
-    if let Some(q) = questions {
-        let questions_key = format!("{}{}", TASK_QUESTIONS_PREFIX, storage_key);
-        host.storage_set(&questions_key, q);
-        host.log_debug(&format!("storage_set: key={}, questions_len={}", questions_key, q.to_string().len()));
+        let sql = format!(
+            "UPDATE task_history SET {} WHERE id = '{}'",
+            sql_parts.join(", "),
+            task_id.replace('\'', "''")
+        );
+        let affected = host.plugin_db_execute(&sql);
+        host.log_debug(&format!("UPDATE task_history: affected={}", affected));
+    } else {
+        // 创建新记录
+        let questions_str = questions
+            .map(|q| serde_json::to_string(q).unwrap_or_default().replace('\'', "''"))
+            .unwrap_or_default();
+        let reason_str = reason
+            .map(|r| r.replace('\'', "''"))
+            .unwrap_or_default();
+
+        let sql = format!(
+            "INSERT INTO task_history (id, name, status, session_id, claude_sid, exit_reason, questions, created_at, updated_at) \
+             VALUES (lower(hex(randomblob(16))), '', '{}', '{}', '{}', '{}', '{}', datetime('now'), datetime('now'))",
+            status.replace('\'', "''"),
+            resolved_session_id.replace('\'', "''"),
+            session_id.replace('\'', "''"),
+            reason_str,
+            questions_str,
+        );
+        let affected = host.plugin_db_execute(&sql);
+        host.log_debug(&format!("INSERT task_history: affected={}", affected));
     }
 
     // 广播状态变更到移动端
     let mut broadcast_payload = serde_json::json!({
         "type": "TaskStatusChanged",
-        "session_id": storage_key,
+        "session_id": resolved_session_id,
         "task_status": status,
     });
     if let Some(r) = reason {
@@ -112,15 +162,14 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         broadcast_payload["task_questions"] = q.clone();
     }
     host.broadcast_sync(&broadcast_payload);
-    host.log_debug(&format!("broadcast_sync: TaskStatusChanged for session_id={}", storage_key));
 
     // 通过消息总线通知其他插件任务状态变更
     host.bus_publish("task:status-changed", &serde_json::json!({
-        "session_id": storage_key,
+        "session_id": resolved_session_id,
         "task_status": status,
     }));
 
-    host.log_info(&format!("Task status updated: claude_sid={} bedcode_sid={} status={}", session_id, storage_key, status));
+    host.log_info(&format!("Task status updated: claude_sid={} bedcode_sid={} status={}", session_id, resolved_session_id, status));
     ok_response()
 }
 
@@ -150,10 +199,13 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, query: &Value) -> Valu
         return error_response(403, "Invalid plugin token or JWT authentication");
     }
 
-    // 存储模式
-    let mode_key = format!("{}{}", AUTO_MODE_PREFIX, session_id);
-    host.storage_set(&mode_key, &serde_json::json!(auto_approve));
-    host.log_debug(&format!("storage_set: key={}, value={}", mode_key, auto_approve));
+    // 更新任务历史表中的 auto_approve 字段
+    let sql = format!(
+        "UPDATE task_history SET auto_approve = {}, updated_at = datetime('now') WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+        if auto_approve { 1 } else { 0 },
+        session_id.replace('\'', "''")
+    );
+    host.plugin_db_execute(&sql);
 
     // 广播模式变更到移动端
     host.broadcast_sync(&serde_json::json!({
@@ -200,12 +252,12 @@ fn handle_get_session_mode(host: &WasmHost, query: &Value) -> Value {
     let resolved_id = resolve_session_id(host, session_id);
     host.log_debug(&format!("session-mode GET resolved: claude_sid={} → resolved_sid={}", session_id, resolved_id));
 
-    // 查询自动模式
-    let mode_key = format!("{}{}", AUTO_MODE_PREFIX, &resolved_id);
-    let stored = host.storage_get(&mode_key);
-    host.log_debug(&format!("storage_get: key={}, raw_value={:?}", mode_key, stored));
-
-    let auto_approve = stored.and_then(|v| v.as_bool()).unwrap_or(false);
+    // 从任务历史表查询 auto_approve
+    let auto_approve = find_task_by_session(host, &resolved_id)
+        .and_then(|row| row.get("auto_approve").cloned())
+        .and_then(|v| v.as_i64())
+        .map(|v| v != 0)
+        .unwrap_or(false);
 
     host.log_debug(&format!("Session mode queried: claude_sid={} resolved_sid={} auto_approve={}", session_id, resolved_id, auto_approve));
 
@@ -242,24 +294,24 @@ fn validate_token_from_query(host: &WasmHost, query: &Value) -> bool {
 }
 
 /// 解析 Claude Code session_id → BedCode PTY session_id
+///
+/// 从任务历史表查找 claude_sid → session_id 映射
 fn resolve_session_id(host: &WasmHost, claude_session_id: &str) -> String {
-    let map_key = format!("{}{}", SESSION_MAP_PREFIX, claude_session_id);
-    let mapped = host.storage_get(&map_key);
-    host.log_debug(&format!("resolve_session_id: key={}, mapped={:?}", map_key, mapped));
-    mapped.and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_else(|| {
-        host.log_debug(&format!("resolve_session_id: no mapping found, using claude_session_id as-is: {}", claude_session_id));
-        claude_session_id.to_string()
-    })
+    find_task_by_claude_sid(host, claude_session_id)
+        .and_then(|row| row.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            host.log_debug(&format!("resolve_session_id: no mapping found, using claude_session_id as-is: {}", claude_session_id));
+            claude_session_id.to_string()
+        })
 }
 
 /// 获取任务状态（供插件内部 command 使用）
 pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Value> {
-    let status_key = format!("{}{}", TASK_STATUS_PREFIX, session_id);
-    let status = host.storage_get(&status_key);
-    host.log_debug(&format!("get_task_status: key={}, value={:?}", status_key, status));
+    let task = find_task_by_session(host, session_id);
     Ok(serde_json::json!({
         "session_id": session_id,
-        "task_status": status,
+        "task_status": task.and_then(|row| row.get("status").cloned()),
     }))
 }
 
@@ -267,9 +319,12 @@ pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Valu
 pub fn set_auto_mode(host: &WasmHost, session_id: &str, auto_approve: bool) -> anyhow::Result<Value> {
     host.log_debug(&format!("set_auto_mode: session_id={}, auto_approve={}", session_id, auto_approve));
 
-    let mode_key = format!("{}{}", AUTO_MODE_PREFIX, session_id);
-    host.storage_set(&mode_key, &serde_json::json!(auto_approve));
-    host.log_debug(&format!("storage_set: key={}, value={}", mode_key, auto_approve));
+    let sql = format!(
+        "UPDATE task_history SET auto_approve = {}, updated_at = datetime('now') WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+        if auto_approve { 1 } else { 0 },
+        session_id.replace('\'', "''")
+    );
+    host.plugin_db_execute(&sql);
 
     // 通知前端模式变更
     host.emit_event("session:modeChanged", &serde_json::json!({

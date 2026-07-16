@@ -83,6 +83,7 @@ impl PluginHost {
 
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db.clone(),
+            Arc::new(Mutex::new(HashMap::new())),
             storage.clone(),
             session_manager,
             app_handle,

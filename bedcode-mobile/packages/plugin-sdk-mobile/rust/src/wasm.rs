@@ -24,6 +24,9 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_disconnect(_reason: &str) -> anyhow::Result<()> { Ok(()) }
     fn on_session_created(_session_id: &str) -> anyhow::Result<()> { Ok(()) }
     fn on_session_stopped(_session_id: &str) -> anyhow::Result<()> { Ok(()) }
+
+    /// 收到总线消息回调（可选，默认忽略）
+    fn on_bus_message(_msg: &crate::BusMessage) -> anyhow::Result<()> { Ok(()) }
 }
 
 /// 自动生成 WASM 导出函数 + 线性内存分配器
@@ -141,6 +144,35 @@ macro_rules! wasm_entry {
         pub extern "C" fn __bedcode_on_session_stopped(sid_ptr: u32, sid_len: u32) {
             let session_id = $crate::wasm_host::wasm_read_string(sid_ptr, sid_len);
             let _ = <$plugin_type>::on_session_stopped(&session_id);
+        }
+
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_bus_message(
+            topic_ptr: u32, topic_len: u32,
+            sender_ptr: u32, sender_len: u32,
+            payload_ptr: u32, payload_len: u32,
+            timestamp: u64,
+        ) -> i32 {
+            let topic = $crate::wasm_host::wasm_read_string(topic_ptr, topic_len);
+            let sender = $crate::wasm_host::wasm_read_string(sender_ptr, sender_len);
+            let payload_str = $crate::wasm_host::wasm_read_string(payload_ptr, payload_len);
+            let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::Null,
+            };
+            let msg = $crate::BusMessage {
+                topic,
+                sender,
+                payload,
+                timestamp,
+            };
+            match <$plugin_type>::on_bus_message(&msg) {
+                Ok(()) => 0,
+                Err(e) => {
+                    if let Some(host) = HOST.get() { host.log_error(&format!("on_bus_message failed: {}", e)); }
+                    1
+                }
+            }
         }
     };
 }

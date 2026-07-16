@@ -55,6 +55,10 @@ pub struct WasmHostContext {
     pub storage: Arc<PluginStorage>,
     /// Tauri AppHandle
     pub app_handle: Arc<tauri::AppHandle>,
+    /// 文件系统访问校验器
+    pub fs_auth: Arc<crate::plugin::fs_auth::FsAuthChecker>,
+    /// 消息总线
+    pub message_bus: Arc<crate::plugin::message_bus::MessageBus>,
 }
 
 /// 已加载的 WASM 插件
@@ -348,6 +352,39 @@ impl LoadedWasmPlugin {
         Ok(())
     }
 
+    /// 调用插件的 on_bus_message 回调（可选导出）
+    pub fn on_bus_message(&mut self, msg: &bedcode_plugin_api_mobile::BusMessage) -> crate::Result<()> {
+        let func = match self.instance.get_func(&mut self.store, "__bedcode_on_bus_message") {
+            Some(f) => f,
+            None => return Ok(()), // 可选导出，不存在则跳过
+        };
+
+        let (topic_ptr, topic_len) = self.write_string_to_memory(&msg.topic)?;
+        let (sender_ptr, sender_len) = self.write_string_to_memory(&msg.sender)?;
+        let payload_str = serde_json::to_string(&msg.payload).unwrap_or_default();
+        let (payload_ptr, payload_len) = self.write_string_to_memory(&payload_str)?;
+
+        let mut results = [wasmtime::Val::I32(0)];
+        func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(topic_ptr as i32),
+                wasmtime::Val::I32(topic_len as i32),
+                wasmtime::Val::I32(sender_ptr as i32),
+                wasmtime::Val::I32(sender_len as i32),
+                wasmtime::Val::I32(payload_ptr as i32),
+                wasmtime::Val::I32(payload_len as i32),
+                wasmtime::Val::I64(msg.timestamp as i64),
+            ],
+            &mut results,
+        )
+        .map_err(|e| crate::AppError::Plugin(format!(
+            "WASM __bedcode_on_bus_message call failed: {}", e
+        )))?;
+
+        Ok(())
+    }
+
     // ==================== Memory Helpers ====================
 
     fn get_export_func(&mut self, name: &str) -> crate::Result<wasmtime::Func> {
@@ -446,11 +483,15 @@ impl WasmHostContext {
         db: Arc<Mutex<rusqlite::Connection>>,
         storage: Arc<PluginStorage>,
         app_handle: Arc<tauri::AppHandle>,
+        fs_auth: Arc<crate::plugin::fs_auth::FsAuthChecker>,
+        message_bus: Arc<crate::plugin::message_bus::MessageBus>,
     ) -> Self {
         Self {
             db,
             storage,
             app_handle,
+            fs_auth,
+            message_bus,
         }
     }
 }
@@ -519,6 +560,28 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_session_get", host_session_get_noop)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_session_get: {}", e)))?;
+
+    // 文件系统
+    linker
+        .func_wrap("bedcode", "host_fs_read", host_fs_read)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_read: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_fs_write", host_fs_write)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_write: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_fs_copy", host_fs_copy)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_copy: {}", e)))?;
+
+    // 消息总线
+    linker
+        .func_wrap("bedcode", "host_bus_publish", host_bus_publish)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_publish: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_bus_subscribe", host_bus_subscribe)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_subscribe: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_bus_unsubscribe", host_bus_unsubscribe)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_unsubscribe: {}", e)))?;
 
     Ok(())
 }
@@ -1088,4 +1151,258 @@ fn host_log_error(mut caller: wasmtime::Caller<'_, WasmPluginState>, msg_ptr: u3
     let plugin_id = caller.data().plugin_id.clone();
     let message = read_wasm_string(&mut caller, msg_ptr, msg_len).unwrap_or_default();
     tracing::error!("[plugin:{}] {}", plugin_id, message);
+}
+
+// ==================== File System Host Functions ====================
+
+/// 文件系统：读取文件
+fn host_fs_read(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+) -> (u32, u32) {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_read: failed to read path");
+            return (0, 0);
+        }
+    };
+
+    // 访问校验
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Read))
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_read: access denied by fs_auth");
+        return (0, 0);
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => match write_wasm_string(&mut caller, &content) {
+            Some((ptr, len)) => (ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_read: failed to write result to WASM memory");
+                (0, 0)
+            }
+        },
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_read: file read failed");
+            (0, 0)
+        }
+    }
+}
+
+/// 文件系统：写入文件
+fn host_fs_write(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+    data_ptr: u32,
+    data_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_write: failed to read path");
+            return -1;
+        }
+    };
+
+    let data = match read_wasm_string(&mut caller, data_ptr, data_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_write: failed to read data");
+            return -1;
+        }
+    };
+
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Write))
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_write: access denied by fs_auth");
+        return -1;
+    }
+
+    // 自动创建父目录
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_write: failed to create parent directory");
+                return -1;
+            }
+        }
+    }
+
+    match std::fs::write(&path, &data) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_write: file write failed");
+            -1
+        }
+    }
+}
+
+/// 文件系统：复制文件
+fn host_fs_copy(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    src_ptr: u32,
+    src_len: u32,
+    dst_ptr: u32,
+    dst_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let src = match read_wasm_string(&mut caller, src_ptr, src_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_copy: failed to read src path");
+            return -1;
+        }
+    };
+
+    let dst = match read_wasm_string(&mut caller, dst_ptr, dst_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_copy: failed to read dst path");
+            return -1;
+        }
+    };
+
+    // 复制需要读+写权限
+    let fs_auth = host_ctx.fs_auth.clone();
+    let plugin_id_clone = plugin_id.clone();
+    let src_clone = src.clone();
+    let dst_clone = dst.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            let read_ok = fs_auth.check(&plugin_id_clone, &src_clone, crate::plugin::fs_auth::FsOp::Read).await;
+            if !read_ok { return false; }
+            fs_auth.check(&plugin_id_clone, &dst_clone, crate::plugin::fs_auth::FsOp::Write).await
+        })
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, src = %src, dst = %dst, "host_fs_copy: access denied by fs_auth");
+        return -1;
+    }
+
+    // 自动创建目标父目录
+    if let Some(parent) = std::path::Path::new(&dst).parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(error = %e, plugin_id = %plugin_id, dst = %dst, "host_fs_copy: failed to create parent directory");
+                return -1;
+            }
+        }
+    }
+
+    match std::fs::copy(&src, &dst) {
+        Ok(_) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, src = %src, dst = %dst, "host_fs_copy: file copy failed");
+            -1
+        }
+    }
+}
+
+// ==================== Message Bus Host Functions ====================
+
+/// 消息总线：发布消息
+fn host_bus_publish(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    topic_ptr: u32,
+    topic_len: u32,
+    payload_ptr: u32,
+    payload_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_bus_publish: failed to read topic");
+            return -1;
+        }
+    };
+
+    let payload_str = match read_wasm_string(&mut caller, payload_ptr, payload_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, topic = %topic, "host_bus_publish: failed to read payload");
+            return -1;
+        }
+    };
+
+    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, plugin_id = %plugin_id, topic = %topic, "host_bus_publish: invalid JSON payload, using raw string");
+            serde_json::Value::String(payload_str)
+        }
+    };
+
+    host_ctx.message_bus.publish(&topic, &plugin_id, payload);
+    0
+}
+
+/// 消息总线：订阅 topic
+fn host_bus_subscribe(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    topic_ptr: u32,
+    topic_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_bus_subscribe: failed to read topic");
+            return -1;
+        }
+    };
+
+    let bus = host_ctx.message_bus.clone();
+    let handle = caller.data().runtime_handle.clone();
+    tokio::task::block_in_place(|| {
+        handle.block_on(bus.subscribe_wasm(&plugin_id, &topic))
+    });
+    0
+}
+
+/// 消息总线：取消订阅
+fn host_bus_unsubscribe(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    topic_ptr: u32,
+    topic_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_bus_unsubscribe: failed to read topic");
+            return -1;
+        }
+    };
+
+    let bus = host_ctx.message_bus.clone();
+    let handle = caller.data().runtime_handle.clone();
+    tokio::task::block_in_place(|| {
+        handle.block_on(bus.unsubscribe(&plugin_id, &topic))
+    });
+    0
 }
