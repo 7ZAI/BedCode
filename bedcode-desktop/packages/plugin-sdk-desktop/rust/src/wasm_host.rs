@@ -217,6 +217,28 @@ impl WasmHost {
         unsafe { host_broadcast_sync(ptr, len) }
     }
 
+    // ==================== Message Bus ====================
+
+    /// 发布消息到总线
+    pub fn bus_publish(&self, topic: &str, payload: &serde_json::Value) -> bool {
+        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
+        let payload_str = serde_json::to_string(payload).unwrap_or_default();
+        let (payload_ptr, payload_len) = wasm_alloc_string(&payload_str);
+        unsafe { host_bus_publish(topic_ptr, topic_len, payload_ptr, payload_len) == 0 }
+    }
+
+    /// 订阅 topic
+    pub fn bus_subscribe(&self, topic: &str) -> bool {
+        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
+        unsafe { host_bus_subscribe(topic_ptr, topic_len) == 0 }
+    }
+
+    /// 取消订阅
+    pub fn bus_unsubscribe(&self, topic: &str) -> bool {
+        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
+        unsafe { host_bus_unsubscribe(topic_ptr, topic_len) == 0 }
+    }
+
     // ==================== Notification ====================
 
     /// 通知：发送系统通知（移动端特有，桌面端为空操作）
@@ -281,6 +303,12 @@ extern "C" {
     fn host_broadcast_sync(payload_ptr: u32, payload_len: u32);
     /// 通知：发送系统通知 — 返回 0 成功，-1 失败
     fn host_notify(title_ptr: u32, title_len: u32, body_ptr: u32, body_len: u32) -> i32;
+    /// 消息总线：发布消息 — 返回 0 成功，-1 失败
+    fn host_bus_publish(topic_ptr: u32, topic_len: u32, payload_ptr: u32, payload_len: u32) -> i32;
+    /// 消息总线：订阅 topic — 返回 0 成功，-1 失败
+    fn host_bus_subscribe(topic_ptr: u32, topic_len: u32) -> i32;
+    /// 消息总线：取消订阅 — 返回 0 成功，-1 失败
+    fn host_bus_unsubscribe(topic_ptr: u32, topic_len: u32) -> i32;
 }
 
 // ==================== WASM Memory Helpers ====================

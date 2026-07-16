@@ -45,6 +45,11 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_shutdown() -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// 接收总线消息（可选，默认忽略）
+    fn on_message(_topic: &str, _sender: &str, _payload: &serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// 自动生成 WASM 导出函数 + 线性内存分配器
@@ -198,6 +203,34 @@ macro_rules! wasm_entry {
         #[no_mangle]
         pub extern "C" fn __bedcode_on_shutdown() {
             let _ = <$plugin_type>::on_shutdown();
+        }
+
+        /// 接收消息总线消息
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_message(
+            topic_ptr: u32,
+            topic_len: u32,
+            sender_ptr: u32,
+            sender_len: u32,
+            payload_ptr: u32,
+            payload_len: u32,
+        ) -> i32 {
+            let topic = $crate::wasm_host::wasm_read_string(topic_ptr, topic_len);
+            let sender = $crate::wasm_host::wasm_read_string(sender_ptr, sender_len);
+            let payload_str = $crate::wasm_host::wasm_read_string(payload_ptr, payload_len);
+            let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::Null,
+            };
+            match <$plugin_type>::on_message(&topic, &sender, &payload) {
+                Ok(()) => 0,
+                Err(e) => {
+                    if let Some(host) = HOST.get() {
+                        host.log_error(&format!("on_message failed: {}", e));
+                    }
+                    -1
+                }
+            }
         }
     };
 }

@@ -42,6 +42,8 @@ pub struct PluginHost {
     wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
     /// 宿主上下文工厂（供 WASM 插件激活时使用）
     wasm_host_ctx: Arc<WasmHostContext>,
+    /// 消息总线
+    message_bus: Arc<crate::plugin::message_bus::MessageBus>,
 }
 
 impl PluginHost {
@@ -76,6 +78,9 @@ impl PluginHost {
             .expect("Failed to initialize WASM runtime"),
         );
 
+        // 创建消息总线（dispatcher 延迟注入，在 init_message_bus 中设置）
+        let message_bus = Arc::new(crate::plugin::message_bus::MessageBus::new());
+
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db.clone(),
             storage.clone(),
@@ -83,6 +88,7 @@ impl PluginHost {
             app_handle,
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
+            message_bus.clone(),
         ));
 
         // 1. 收集静态注册的 Rust 插件
@@ -185,6 +191,7 @@ impl PluginHost {
             wasm_runtime,
             wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
             wasm_host_ctx,
+            message_bus,
         };
 
         // 注册所有已加载插件的 manifest contributes 到 registry
@@ -278,6 +285,18 @@ impl PluginHost {
     /// 获取 WASM 运行时引用
     pub fn wasm_runtime(&self) -> &Arc<WasmRuntime> {
         &self.wasm_runtime
+    }
+
+    /// 获取消息总线引用
+    pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
+        &self.message_bus
+    }
+
+    /// 初始化消息总线 dispatcher（必须在 new() 之后调用）
+    pub async fn init_message_bus(&self) {
+        let dispatcher: Arc<dyn crate::plugin::message_bus::MessageDispatcher> = Arc::new(self.clone());
+        self.message_bus.set_dispatcher(dispatcher).await;
+        tracing::info!("[PluginHost] MessageBus dispatcher initialized");
     }
 
     // ==================== Lifecycle ====================
@@ -467,10 +486,24 @@ impl PluginHost {
         loaded.state = PluginState::Activated;
         loaded.activated_at = Some(Utc::now());
 
-        tracing::info!("[PluginHost] Plugin activated successfully: {} (persist={})", plugin_id, persist);
-
-        // 释放写锁后再持久化
+        // 注册 manifest 中声明的 topic 订阅
+        let subscribes = loaded.manifest.contributes.subscribes.clone();
+        let plugin_id_owned = plugin_id.to_string();
         drop(plugins);
+
+        if !subscribes.is_empty() {
+            for topic in &subscribes {
+                self.message_bus.subscribe_wasm(&plugin_id_owned, topic).await;
+            }
+            tracing::info!(
+                "[PluginHost] Plugin {} subscribed to {} topic(s): {:?}",
+                plugin_id_owned,
+                subscribes.len(),
+                subscribes
+            );
+        }
+
+        tracing::info!("[PluginHost] Plugin activated successfully: {} (persist={})", plugin_id, persist);
 
         if persist {
             tracing::debug!("[PluginHost] Persisting activation state after activating {}", plugin_id);
@@ -510,6 +543,9 @@ impl PluginHost {
         // 统一清理：取消注册和撤销权限
         self.registry.unregister_plugin(plugin_id).await;
         self.permission.revoke_all(plugin_id);
+
+        // 清理消息总线订阅
+        self.message_bus.remove_all_subscriptions(plugin_id).await;
 
         let mut plugins = self.plugins.write().await;
         let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
@@ -868,6 +904,30 @@ impl Clone for PluginHost {
             wasm_runtime: self.wasm_runtime.clone(),
             wasm_plugins: self.wasm_plugins.clone(),
             wasm_host_ctx: self.wasm_host_ctx.clone(),
+            message_bus: self.message_bus.clone(),
         }
+    }
+}
+
+// ==================== MessageDispatcher Implementation ====================
+
+impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
+    fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+        let mut wasm_plugins = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.wasm_plugins.write())
+        });
+        if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+            wasm_plugin.on_message(&msg.topic, &msg.sender, &msg.payload)?;
+        }
+        Ok(())
+    }
+
+    fn is_activated(&self, plugin_id: &str) -> bool {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.plugins.read())
+        })
+        .get(plugin_id)
+        .map(|p| matches!(p.state, PluginState::Activated))
+        .unwrap_or(false)
     }
 }

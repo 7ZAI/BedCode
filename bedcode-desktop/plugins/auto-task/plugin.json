@@ -19,6 +19,8 @@
     "lifecycle": {
       "onStartup": true,
       "onShutdown": true
-    }
+    },
+    "provides": ["task:status-changed", "session:mode-changed"],
+    "subscribes": []
   }
 }

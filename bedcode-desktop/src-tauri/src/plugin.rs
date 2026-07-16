@@ -6,6 +6,7 @@ pub mod api_bridge;
 pub mod fs_auth;
 pub mod host;
 pub mod loader;
+pub mod message_bus;
 pub mod permission;
 pub mod registry;
 pub mod storage;

@@ -50,6 +50,7 @@ pub struct WasmHostContext {
     app_handle: Arc<tauri::AppHandle>,
     permission: Arc<PermissionManager>,
     fs_auth: Arc<FsAuthChecker>,
+    message_bus: Arc<crate::plugin::message_bus::MessageBus>,
 }
 
 /// 已加载的 WASM 插件
@@ -295,6 +296,47 @@ impl LoadedWasmPlugin {
         Ok(())
     }
 
+    /// 调用插件的消息总线消息接收导出函数（可选）
+    pub fn on_message(
+        &mut self,
+        topic: &str,
+        sender: &str,
+        payload: &serde_json::Value,
+    ) -> crate::Result<()> {
+        // 可选导出：如果插件未导出 __bedcode_on_message，跳过
+        let Ok(func) = self.get_export_func("__bedcode_on_message") else {
+            return Ok(());
+        };
+
+        let (topic_ptr, topic_len) = self.write_string_to_memory(topic)?;
+        let (sender_ptr, sender_len) = self.write_string_to_memory(sender)?;
+        let payload_str = serde_json::to_string(payload).unwrap_or_default();
+        let (payload_ptr, payload_len) = self.write_string_to_memory(&payload_str)?;
+
+        let mut results = [wasmtime::Val::I32(0)];
+        func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(topic_ptr as i32),
+                wasmtime::Val::I32(topic_len as i32),
+                wasmtime::Val::I32(sender_ptr as i32),
+                wasmtime::Val::I32(sender_len as i32),
+                wasmtime::Val::I32(payload_ptr as i32),
+                wasmtime::Val::I32(payload_len as i32),
+            ],
+            &mut results,
+        )
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("WASM on_message() call failed: {}", e))
+        })?;
+
+        let status = results[0].unwrap_i32();
+        if status != 0 {
+            tracing::warn!("WASM on_message() returned non-zero status: {}", status);
+        }
+        Ok(())
+    }
+
     /// 获取插件的 manifest JSON
     pub fn get_manifest(&mut self) -> crate::Result<String> {
         let func = self.get_export_func("__bedcode_manifest")?;
@@ -417,6 +459,7 @@ impl WasmHostContext {
         app_handle: Arc<tauri::AppHandle>,
         permission: Arc<PermissionManager>,
         fs_auth: Arc<FsAuthChecker>,
+        message_bus: Arc<crate::plugin::message_bus::MessageBus>,
     ) -> Self {
         Self {
             db,
@@ -425,7 +468,13 @@ impl WasmHostContext {
             app_handle,
             permission,
             fs_auth,
+            message_bus,
         }
+    }
+
+    /// 获取消息总线引用
+    pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
+        &self.message_bus
     }
 }
 
@@ -526,6 +575,19 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_config_get", host_config_get)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_config_get: {}", e)))?;
+
+    // 消息总线
+    linker
+        .func_wrap("bedcode", "host_bus_publish", host_bus_publish)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_publish: {}", e)))?;
+
+    linker
+        .func_wrap("bedcode", "host_bus_subscribe", host_bus_subscribe)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_subscribe: {}", e)))?;
+
+    linker
+        .func_wrap("bedcode", "host_bus_unsubscribe", host_bus_unsubscribe)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_unsubscribe: {}", e)))?;
 
     Ok(())
 }
@@ -1573,4 +1635,103 @@ fn host_config_get(
             -1
         }
     }
+}
+
+// ==================== Message Bus Host Functions ====================
+
+/// 消息总线：发布消息
+///
+/// 参数：(topic_ptr, topic_len, payload_ptr, payload_len)
+/// 返回：0 成功，-1 失败
+fn host_bus_publish(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    topic_ptr: u32,
+    topic_len: u32,
+    payload_ptr: u32,
+    payload_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_bus_publish: failed to read topic");
+            return -1;
+        }
+    };
+
+    let payload_str = match read_wasm_string(&mut caller, payload_ptr, payload_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, topic = %topic, "host_bus_publish: failed to read payload");
+            return -1;
+        }
+    };
+
+    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, topic = %topic, "host_bus_publish: invalid JSON payload");
+            return -1;
+        }
+    };
+
+    let bus = host_ctx.message_bus.clone();
+    bus.publish(&topic, &plugin_id, payload);
+    0
+}
+
+/// 消息总线：订阅 topic
+///
+/// 参数：(topic_ptr, topic_len)
+/// 返回：0 成功，-1 失败
+fn host_bus_subscribe(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    topic_ptr: u32,
+    topic_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_bus_subscribe: failed to read topic");
+            return -1;
+        }
+    };
+
+    let bus = host_ctx.message_bus.clone();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(bus.subscribe_wasm(&plugin_id, &topic))
+    });
+    0
+}
+
+/// 消息总线：取消订阅
+///
+/// 参数：(topic_ptr, topic_len)
+/// 返回：0 成功，-1 失败
+fn host_bus_unsubscribe(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    topic_ptr: u32,
+    topic_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_bus_unsubscribe: failed to read topic");
+            return -1;
+        }
+    };
+
+    let bus = host_ctx.message_bus.clone();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(bus.unsubscribe(&plugin_id, &topic))
+    });
+    0
 }

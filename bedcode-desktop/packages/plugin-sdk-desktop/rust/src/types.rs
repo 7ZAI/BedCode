@@ -112,6 +112,12 @@ pub struct PluginContributes {
     /// 生命周期钩子声明
     #[serde(default)]
     pub lifecycle: Option<LifecycleContribution>,
+    /// 声明此插件会发布的消息 topic（文档性质，不做强制校验）
+    #[serde(default)]
+    pub provides: Vec<String>,
+    /// 声明此插件感兴趣的消息 topic（宿主据此路由消息）
+    #[serde(default)]
+    pub subscribes: Vec<String>,
 }
 
 /// 生命周期扩展点声明

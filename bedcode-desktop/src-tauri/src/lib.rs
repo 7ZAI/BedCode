@@ -275,6 +275,8 @@ pub fn run() {
                     plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), app_handle_arc.clone())
                 )
             );
+            // 注入消息总线 dispatcher（两阶段初始化）
+            tauri::async_runtime::block_on(plugin_host.init_message_bus());
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
