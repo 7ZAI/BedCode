@@ -28,17 +28,21 @@ use wasmtime::{Engine, Instance, Linker, Memory, Module, Store};
 pub struct WasmRuntime {
     engine: Engine,
     linker: Linker<WasmPluginState>,
+    /// Tokio 运行时句柄，供 Host Function 中 block_on 使用
+    runtime_handle: tokio::runtime::Handle,
 }
 
 /// 单个 WASM 插件实例的状态
 ///
 /// 每个插件实例化时创建独立的 Store<WasmPluginState>，
-/// state 中包含插件 ID 和宿主上下文引用
+/// state 中包含插件 ID、宿主上下文引用和 Tokio 运行时句柄
 pub struct WasmPluginState {
     /// 插件 ID（用于数据隔离）
     plugin_id: String,
     /// 宿主上下文
     host_ctx: Arc<WasmHostContext>,
+    /// Tokio 运行时句柄（供 Host Function block_on 使用）
+    runtime_handle: tokio::runtime::Handle,
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -67,17 +71,20 @@ impl WasmRuntime {
     /// 创建 WASM 运行时
     ///
     /// 初始化 Engine、Linker，注册所有 Host Functions
+    /// 必须在 Tokio 运行时上下文中调用（需要 Handle 供 Host Function 使用）
     pub fn new(
         db: Arc<Mutex<rusqlite::Connection>>,
         storage: Arc<PluginStorage>,
         app_handle: Arc<tauri::AppHandle>,
     ) -> crate::Result<Self> {
+        let runtime_handle = tokio::runtime::Handle::current();
+
         let engine = Engine::default();
         let mut linker = Linker::new(&engine);
 
         register_host_functions(&mut linker)?;
 
-        Ok(Self { engine, linker })
+        Ok(Self { engine, linker, runtime_handle })
     }
 
     /// 从字节流编译 WASM 模块
@@ -110,6 +117,7 @@ impl WasmRuntime {
         let state = WasmPluginState {
             plugin_id: plugin_id.to_string(),
             host_ctx,
+            runtime_handle: self.runtime_handle.clone(),
         };
         let mut store = Store::new(&self.engine, state);
 
@@ -589,8 +597,9 @@ fn host_storage_get(
     };
 
     let storage = host_ctx.storage.clone();
+    let handle = caller.data().runtime_handle.clone();
     let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(storage.get(&plugin_id, &key))
+        handle.block_on(storage.get(&plugin_id, &key))
     });
 
     match result {
@@ -653,8 +662,9 @@ fn host_storage_set(
     };
 
     let storage = host_ctx.storage.clone();
+    let handle = caller.data().runtime_handle.clone();
     match tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(storage.set(&plugin_id, &key, json_value))
+        handle.block_on(storage.set(&plugin_id, &key, json_value))
     }) {
         Ok(()) => 0,
         Err(e) => {
@@ -681,8 +691,9 @@ fn host_storage_delete(
     };
 
     let storage = host_ctx.storage.clone();
+    let handle = caller.data().runtime_handle.clone();
     match tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(storage.delete(&plugin_id, &key))
+        handle.block_on(storage.delete(&plugin_id, &key))
     }) {
         Ok(()) => 0,
         Err(e) => {
@@ -715,8 +726,9 @@ fn host_db_execute(
     }
 
     let db = host_ctx.db.clone();
+    let handle = caller.data().runtime_handle.clone();
     match tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
+        handle.block_on(async {
             let conn = db.lock().await;
             conn.execute(&sql, []).map_err(|e| e.to_string())
         })
@@ -751,8 +763,9 @@ fn host_db_query(
     }
 
     let db = host_ctx.db.clone();
+    let handle = caller.data().runtime_handle.clone();
     let query_result: Result<serde_json::Value, String> = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
+        handle.block_on(async {
             let conn = db.lock().await;
 
             let mut stmt = conn
@@ -842,9 +855,10 @@ fn host_terminal_send(
     // 通过 ConnectionManager WebSocket 转发到桌面端
     let conn = get_connection_manager();
     let message = TerminalRequest::input(&session_id, &data, None);
+    let handle = caller.data().runtime_handle.clone();
 
     match tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(conn.send(&message))
+        handle.block_on(conn.send(&message))
     }) {
         Ok(()) => 0,
         Err(e) => {
@@ -962,8 +976,9 @@ fn host_http_fetch(
             None => (0, 0),
         }
     } else {
+        let handle = caller.data().runtime_handle.clone();
         match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(wasm_host::execute_http_request(&request))
+            handle.block_on(wasm_host::execute_http_request(&request))
         }) {
             Ok(response) => {
                 let result_str = match serde_json::to_string(&response) {

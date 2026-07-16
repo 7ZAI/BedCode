@@ -14,6 +14,7 @@ use crate::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
@@ -21,27 +22,34 @@ use tokio::sync::RwLock;
 pub struct PluginManager {
     /// 已加载的插件清单
     plugins: Arc<RwLock<HashMap<String, LoadedPlugin>>>,
-    /// WASM 运行时
-    wasm_runtime: Arc<WasmRuntime>,
+    /// WASM 运行时（延迟初始化，必须在 Tokio 上下文中创建）
+    wasm_runtime: OnceLock<Arc<WasmRuntime>>,
     /// 已加载的 WASM 插件实例
     wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
-    /// WASM 宿主上下文
-    wasm_host_ctx: Arc<WasmHostContext>,
+    /// WASM 宿主上下文（延迟初始化）
+    wasm_host_ctx: OnceLock<Arc<WasmHostContext>>,
     /// 插件键值存储
     storage: Arc<PluginStorage>,
     /// 设置管理器
     settings: Arc<SettingsManager>,
     /// 插件数据目录
     plugins_dir: PathBuf,
+    /// 插件数据库连接（WASM Host Function 使用）
+    plugin_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
+    /// Tauri AppHandle
+    app_handle: Arc<tauri::AppHandle>,
 }
 
 impl PluginManager {
-    /// 创建插件管理器
+    /// 创建插件管理器（不初始化 WASM 运行时）
+    ///
+    /// WASM 运行时通过 init_wasm_runtime() 延迟初始化，
+    /// 因为 Engine 创建需要 Tokio 运行时上下文
     pub fn new(
         app_data_dir: &PathBuf,
         settings: Arc<SettingsManager>,
-        wasm_runtime: Arc<WasmRuntime>,
-        wasm_host_ctx: Arc<WasmHostContext>,
+        plugin_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
+        app_handle: Arc<tauri::AppHandle>,
     ) -> Self {
         let storage = Arc::new(PluginStorage::new(app_data_dir));
         let plugins_dir = app_data_dir.join(PLUGIN_DATA_DIR);
@@ -66,23 +74,57 @@ impl PluginManager {
 
         Self {
             plugins: Arc::new(RwLock::new(plugins)),
-            wasm_runtime,
+            wasm_runtime: OnceLock::new(),
             wasm_plugins: Arc::new(RwLock::new(HashMap::new())),
-            wasm_host_ctx,
+            wasm_host_ctx: OnceLock::new(),
             storage,
             settings,
             plugins_dir,
+            plugin_db,
+            app_handle,
         }
+    }
+
+    /// 延迟初始化 WASM 运行时
+    ///
+    /// 必须在 Tokio 运行时上下文中调用（Engine 创建需要 Handle）
+    pub fn init_wasm_runtime(&self) -> crate::Result<()> {
+        let runtime = Arc::new(WasmRuntime::new(
+            self.plugin_db.clone(),
+            self.storage.clone(),
+            self.app_handle.clone(),
+        )?);
+
+        let host_ctx = Arc::new(WasmHostContext::new(
+            self.plugin_db.clone(),
+            self.storage.clone(),
+            self.app_handle.clone(),
+        ));
+
+        let _ = self.wasm_runtime.set(runtime);
+        let _ = self.wasm_host_ctx.set(host_ctx);
+
+        Ok(())
     }
 
     /// 扫描并加载所有插件
     ///
     /// 在 APK assets 解压后调用，扫描 plugins_dir 下的所有 plugin.json
+    /// 需要 WASM 运行时已初始化（调用 init_wasm_runtime 后）
     pub async fn scan_and_load(&self) {
+        let Some(wasm_runtime) = self.wasm_runtime.get() else {
+            tracing::warn!("[PluginManager] WASM runtime not initialized, skipping scan");
+            return;
+        };
+        let Some(wasm_host_ctx) = self.wasm_host_ctx.get() else {
+            tracing::warn!("[PluginManager] WASM host context not initialized, skipping scan");
+            return;
+        };
+
         let (plugins, wasm_plugins) = PluginLoader::load_all(
             &self.plugins_dir,
-            &self.wasm_runtime,
-            &self.wasm_host_ctx,
+            wasm_runtime,
+            wasm_host_ctx,
         );
 
         let mut current_plugins = self.plugins.write().await;
@@ -252,13 +294,19 @@ impl PluginManager {
     }
 
     /// 获取 WASM 运行时引用
+    ///
+    /// # Panics
+    /// 如果 init_wasm_runtime 未调用则 panic
     pub fn wasm_runtime(&self) -> &Arc<WasmRuntime> {
-        &self.wasm_runtime
+        self.wasm_runtime.get().expect("WasmRuntime not initialized")
     }
 
     /// 获取 WASM 宿主上下文引用
+    ///
+    /// # Panics
+    /// 如果 init_wasm_runtime 未调用则 panic
     pub fn wasm_host_ctx(&self) -> &Arc<WasmHostContext> {
-        &self.wasm_host_ctx
+        self.wasm_host_ctx.get().expect("WasmHostContext not initialized")
     }
 
     /// 分发生命周期事件到所有已激活插件
@@ -318,7 +366,7 @@ impl PluginManager {
     fn emit_frontend_event(&self, event: &PluginLifecycleEvent) {
         let tauri_event = format!("plugin:lifecycle:{}", event.tauri_event_name());
         let payload = event.to_payload();
-        if let Err(e) = self.wasm_host_ctx.app_handle.emit(&tauri_event, payload) {
+        if let Err(e) = self.app_handle.emit(&tauri_event, payload) {
             tracing::error!(
                 event = %tauri_event,
                 error = %e,

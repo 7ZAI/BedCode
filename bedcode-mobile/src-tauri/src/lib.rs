@@ -64,11 +64,6 @@ pub fn run() {
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
 
-            // 初始化插件 KV 存储
-            let plugin_storage = Arc::new(
-                crate::plugin::storage::PluginStorage::new(&app_data_dir)
-            );
-
             // 创建插件数据库连接（WASM Host Function 使用）
             let db_path = app_data_dir.join("bedcode_plugins.db");
             let plugin_db = Arc::new(tokio::sync::Mutex::new(
@@ -76,31 +71,12 @@ pub fn run() {
                     .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?
             ));
 
-            // 创建 WASM 运行时
-            let wasm_runtime = Arc::new(
-                crate::plugin::wasm_runtime::WasmRuntime::new(
-                    plugin_db.clone(),
-                    plugin_storage.clone(),
-                    Arc::new(app_handle.clone()),
-                )
-                .map_err(|e| anyhow::anyhow!("Failed to create WasmRuntime: {}", e))?
-            );
-
-            // 创建 WASM 宿主上下文
-            let wasm_host_ctx = Arc::new(
-                crate::plugin::wasm_runtime::WasmHostContext::new(
-                    plugin_db,
-                    plugin_storage,
-                    Arc::new(app_handle.clone()),
-                )
-            );
-
-            // 初始化插件管理器
+            // 创建插件管理器（WASM 运行时延迟初始化）
             let plugin_manager = crate::plugin::manager::PluginManager::new(
                 &app_data_dir,
                 settings_manager.clone(),
-                wasm_runtime,
-                wasm_host_ctx,
+                plugin_db,
+                Arc::new(app_handle.clone()),
             );
             let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
@@ -112,11 +88,19 @@ pub fn run() {
                 tracing::warn!("Failed to extract APK plugins: {}", e);
             }
 
-            // 异步：扫描加载 + 自动激活
+            // 异步：初始化 WASM 运行时 + 扫描加载 + 自动激活
+            // 使用 tauri::async_runtime::spawn 而非 tokio::spawn，
+            // 因为 setup 闭包不在 Tokio 运行时上下文中执行，tokio::spawn 会 panic
             {
                 let pm = plugin_manager;
                 let ah = app_handle.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
+                    // 在 Tokio 运行时上下文中初始化 WASM 运行时
+                    if let Err(e) = pm.init_wasm_runtime() {
+                        tracing::error!("Failed to init WASM runtime: {}", e);
+                        return;
+                    }
+
                     pm.scan_and_load().await;
                     pm.load_all(&ah).await;
                 });
