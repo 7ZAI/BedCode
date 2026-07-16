@@ -28,12 +28,13 @@ pub struct PluginDevWatcher {
 impl PluginDevWatcher {
     /// 启动插件开发文件监听
     ///
-    /// 监听 plugins_dir 下的文件变化，对 .dll/.js 变化触发热重载。
+    /// 监听 plugins_dir 下的文件变化，对 .wasm/.js 变化触发热重载。
     /// 使用防抖机制避免短时间内多次触发（如 cargo build 连续写入多个文件）
     ///
     /// # Arguments
     /// * `plugins_dir` - 插件产物目录（resources/plugins/desktop/）
-    pub fn start(plugins_dir: PathBuf) -> Self {
+    /// * `runtime_handle` - Tokio 运行时 Handle（notify 回调在非 Tokio 线程，需通过 handle spawn）
+    pub fn start(plugins_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> Self {
         // 防抖状态：记录最近一次变化的插件 ID 和时间
         let pending: Arc<RwLock<Option<(String, Instant)>>> = Arc::new(RwLock::new(None));
 
@@ -72,7 +73,8 @@ impl PluginDevWatcher {
 
                         let pending = pending.clone();
                         let plugin_id_clone = plugin_id.clone();
-                        tokio::spawn(async move {
+                        // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
+                        runtime_handle.spawn(async move {
                             // 防抖：500ms 内同一插件只触发一次重载
                             {
                                 let p = pending.read().await;

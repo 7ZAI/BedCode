@@ -4,6 +4,9 @@
 
     <!-- Global Toast Container -->
     <ToastContainer />
+
+    <!-- File System Auth Dialog -->
+    <FsAuthDialog />
   </div>
 </template>
 
@@ -11,6 +14,7 @@
 import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import DesktopLayout from '@/components/DesktopLayout.vue'
+import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import { useGlobalNotifications } from '@/composables/useGlobalNotifications'
 import { ToastContainer } from '@/composables/useToast'
 import { useTheme } from '@/composables/useTheme'

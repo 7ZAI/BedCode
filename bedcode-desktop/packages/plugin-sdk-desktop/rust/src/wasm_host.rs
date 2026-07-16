@@ -34,11 +34,12 @@ impl WasmHost {
     /// 存储：获取值
     pub fn storage_get(&self, key: &str) -> Option<serde_json::Value> {
         let (key_ptr, key_len) = wasm_alloc_string(key);
-        let (ptr, len) = unsafe { host_storage_get(key_ptr, key_len) };
-        if ptr == 0 && len == 0 {
+        let mut out = [0u32; 2];
+        let status = unsafe { host_storage_get(key_ptr, key_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
             return None;
         }
-        let json_str = wasm_read_string(ptr, len);
+        let json_str = wasm_read_string(out[0], out[1]);
         serde_json::from_str(&json_str).ok()
     }
 
@@ -67,11 +68,12 @@ impl WasmHost {
     /// 数据库：查询 SQL
     pub fn db_query(&self, sql: &str) -> Option<serde_json::Value> {
         let (sql_ptr, sql_len) = wasm_alloc_string(sql);
-        let (ptr, len) = unsafe { host_db_query(sql_ptr, sql_len) };
-        if ptr == 0 && len == 0 {
+        let mut out = [0u32; 2];
+        let status = unsafe { host_db_query(sql_ptr, sql_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
             return None;
         }
-        let json_str = wasm_read_string(ptr, len);
+        let json_str = wasm_read_string(out[0], out[1]);
         serde_json::from_str(&json_str).ok()
     }
 
@@ -88,22 +90,24 @@ impl WasmHost {
 
     /// 会话：列出所有
     pub fn session_list(&self) -> Option<serde_json::Value> {
-        let (ptr, len) = unsafe { host_session_list() };
-        if ptr == 0 && len == 0 {
+        let mut out = [0u32; 2];
+        let status = unsafe { host_session_list(out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
             return None;
         }
-        let json_str = wasm_read_string(ptr, len);
+        let json_str = wasm_read_string(out[0], out[1]);
         serde_json::from_str(&json_str).ok()
     }
 
     /// 会话：获取单个
     pub fn session_get(&self, session_id: &str) -> Option<serde_json::Value> {
         let (sid_ptr, sid_len) = wasm_alloc_string(session_id);
-        let (ptr, len) = unsafe { host_session_get(sid_ptr, sid_len) };
-        if ptr == 0 && len == 0 {
+        let mut out = [0u32; 2];
+        let status = unsafe { host_session_get(sid_ptr, sid_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
             return None;
         }
-        let json_str = wasm_read_string(ptr, len);
+        let json_str = wasm_read_string(out[0], out[1]);
         serde_json::from_str(&json_str).ok()
     }
 
@@ -123,11 +127,12 @@ impl WasmHost {
     pub fn http_fetch(&self, request: &serde_json::Value) -> Option<serde_json::Value> {
         let req_str = serde_json::to_string(request).unwrap_or_default();
         let (req_ptr, req_len) = wasm_alloc_string(&req_str);
-        let (ptr, len) = unsafe { host_http_fetch(req_ptr, req_len) };
-        if ptr == 0 && len == 0 {
+        let mut out = [0u32; 2];
+        let status = unsafe { host_http_fetch(req_ptr, req_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
             return None;
         }
-        let json_str = wasm_read_string(ptr, len);
+        let json_str = wasm_read_string(out[0], out[1]);
         serde_json::from_str(&json_str).ok()
     }
 
@@ -157,6 +162,61 @@ impl WasmHost {
         unsafe { host_log_error(ptr, len) }
     }
 
+    // ==================== File System ====================
+
+    /// 文件系统：读取文件内容
+    pub fn fs_read(&self, path: &str) -> Option<String> {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_fs_read(path_ptr, path_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
+            return None;
+        }
+        let content = wasm_read_string(out[0], out[1]);
+        Some(content)
+    }
+
+    /// 文件系统：写入文件内容（自动创建父目录）
+    pub fn fs_write(&self, path: &str, data: &str) -> bool {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let (data_ptr, data_len) = wasm_alloc_string(data);
+        unsafe { host_fs_write(path_ptr, path_len, data_ptr, data_len) == 0 }
+    }
+
+    /// 文件系统：复制文件（自动创建目标父目录）
+    pub fn fs_copy(&self, src: &str, dst: &str) -> bool {
+        let (src_ptr, src_len) = wasm_alloc_string(src);
+        let (dst_ptr, dst_len) = wasm_alloc_string(dst);
+        unsafe { host_fs_copy(src_ptr, src_len, dst_ptr, dst_len) == 0 }
+    }
+
+    // ==================== Config ====================
+
+    /// 配置：读取宿主配置项（白名单限制）
+    pub fn config_get(&self, key: &str) -> Option<String> {
+        let (key_ptr, key_len) = wasm_alloc_string(key);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_config_get(key_ptr, key_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
+            return None;
+        }
+        let val = wasm_read_string(out[0], out[1]);
+        Some(val)
+    }
+
+    // ==================== Broadcast ====================
+
+    /// 广播同步事件到所有客户端（移动端同步通道）
+    ///
+    /// payload 必须包含 `type` 字段，支持的类型：
+    /// - `TaskStatusChanged`: { type, session_id, task_status, task_reason?, task_questions? }
+    /// - `SessionModeChanged`: { type, session_id, auto_approve }
+    pub fn broadcast_sync(&self, payload: &serde_json::Value) {
+        let payload_str = serde_json::to_string(payload).unwrap_or_default();
+        let (ptr, len) = wasm_alloc_string(&payload_str);
+        unsafe { host_broadcast_sync(ptr, len) }
+    }
+
     // ==================== Notification ====================
 
     /// 通知：发送系统通知（移动端特有，桌面端为空操作）
@@ -171,28 +231,44 @@ impl WasmHost {
 //
 // 这些 extern "C" 声明在编译为 WASM 时对应宿主在 wasmtime Linker 中
 // 注册的 "bedcode" 命名空间下的 host functions
+// #[link(wasm_import_module)] 确保 WASM 模块从 "bedcode" 命名空间导入，
+// 而非默认的 "env" 命名空间
+//
+// WASM ABI 约定：返回 (ptr, len) 的函数通过输出参数（out_ptr）传递结果，
+// 因为 C ABI 不支持多值返回，Rust 的 (u32, u32) 元组会被编译器
+// 拆解为额外的指针参数，导致签名不匹配。
+// 宿主端将结果写入 out_ptr 指向的 8 字节内存（ptr: u32 + len: u32）。
 
+#[link(wasm_import_module = "bedcode")]
 extern "C" {
-    /// 存储：获取值 — 返回 (ptr, len) JSON 或 (0,0)
-    fn host_storage_get(key_ptr: u32, key_len: u32) -> (u32, u32);
+    /// 存储：获取值 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_storage_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
     /// 存储：设置值 — 返回 0 成功，-1 失败
     fn host_storage_set(key_ptr: u32, key_len: u32, val_ptr: u32, val_len: u32) -> i32;
     /// 存储：删除值 — 返回 0 成功，-1 失败
     fn host_storage_delete(key_ptr: u32, key_len: u32) -> i32;
     /// 数据库：执行 SQL — 返回受影响行数
     fn host_db_execute(sql_ptr: u32, sql_len: u32) -> i32;
-    /// 数据库：查询 SQL — 返回 (ptr, len) JSON 或 (0,0)
-    fn host_db_query(sql_ptr: u32, sql_len: u32) -> (u32, u32);
+    /// 数据库：查询 SQL — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_db_query(sql_ptr: u32, sql_len: u32, out_ptr: u32) -> i32;
     /// 终端：发送输入 — 返回 0 成功，-1 失败
     fn host_terminal_send(sid_ptr: u32, sid_len: u32, data_ptr: u32, data_len: u32) -> i32;
-    /// 会话：列出所有 — 返回 (ptr, len) JSON
-    fn host_session_list() -> (u32, u32);
-    /// 会话：获取单个 — 返回 (ptr, len) JSON 或 (0,0)
-    fn host_session_get(sid_ptr: u32, sid_len: u32) -> (u32, u32);
+    /// 会话：列出所有 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_session_list(out_ptr: u32) -> i32;
+    /// 会话：获取单个 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_session_get(sid_ptr: u32, sid_len: u32, out_ptr: u32) -> i32;
     /// 事件：向前端发送
     fn host_emit_event(name_ptr: u32, name_len: u32, payload_ptr: u32, payload_len: u32);
-    /// HTTP 代理 — 返回 (ptr, len) JSON 或 (0,0)
-    fn host_http_fetch(req_ptr: u32, req_len: u32) -> (u32, u32);
+    /// HTTP 代理 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_http_fetch(req_ptr: u32, req_len: u32, out_ptr: u32) -> i32;
+    /// 文件系统：读取文件 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_fs_read(path_ptr: u32, path_len: u32, out_ptr: u32) -> i32;
+    /// 文件系统：写入文件 — 返回 0 成功，-1 失败
+    fn host_fs_write(path_ptr: u32, path_len: u32, data_ptr: u32, data_len: u32) -> i32;
+    /// 文件系统：复制文件 — 返回 0 成功，-1 失败
+    fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
+    /// 配置：读取配置项 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_config_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
     /// 日志：info
     fn host_log_info(msg_ptr: u32, msg_len: u32);
     /// 日志：debug
@@ -201,6 +277,8 @@ extern "C" {
     fn host_log_warn(msg_ptr: u32, msg_len: u32);
     /// 日志：error
     fn host_log_error(msg_ptr: u32, msg_len: u32);
+    /// 广播：同步事件到所有客户端
+    fn host_broadcast_sync(payload_ptr: u32, payload_len: u32);
     /// 通知：发送系统通知 — 返回 0 成功，-1 失败
     fn host_notify(title_ptr: u32, title_len: u32, body_ptr: u32, body_len: u32) -> i32;
 }

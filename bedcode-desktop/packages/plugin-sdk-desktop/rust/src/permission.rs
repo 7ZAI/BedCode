@@ -16,6 +16,9 @@ pub const PERMISSION_UI_STATUSBAR: &str = "ui:statusbar";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
+pub const PERMISSION_FS_READ: &str = "fs:read";
+pub const PERMISSION_FS_WRITE: &str = "fs:write";
+pub const PERMISSION_BROADCAST: &str = "broadcast";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -29,6 +32,9 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_UI_INPUT,
     PERMISSION_NETWORK_HTTP,
     PERMISSION_STORAGE,
+    PERMISSION_FS_READ,
+    PERMISSION_FS_WRITE,
+    PERMISSION_BROADCAST,
 ];
 
 /// 权限到 API 方法的映射
@@ -43,6 +49,9 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_INPUT, &["ui.registerInputExtension", "ui.registerTerminalToolbarItem"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete", "storage.flush"]),
+    (PERMISSION_BROADCAST, &["broadcast.sync"]),
+    (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
+    (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
 ];
 
 /// 权限管理器

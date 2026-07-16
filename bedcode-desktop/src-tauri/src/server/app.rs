@@ -83,11 +83,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/git/checkout", web::post().to(git_controller::checkout))
     );
 
-    // 插件专用路由（token 认证，非 JWT）
-    cfg.route("/plugin/task-status", web::post().to(plugin_controller::update_task_status));
-    cfg.route("/plugin/session-mode", web::post().to(plugin_controller::set_session_mode));
-    cfg.route("/plugin/session-mode", web::get().to(plugin_controller::get_session_mode));
-
     // 插件动态 HTTP 端点代理 — /api/plugin/{plugin_id}/{path:.*}
     // 插件通过 manifest contributes.toolProviders 声明端点，运行时由 PluginHost 路由
     // 注意：此路由在 /api scope 下，与 PluginRegistry::register_tool_providers 生成的路径一致

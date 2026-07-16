@@ -205,8 +205,7 @@ pub fn run() {
                 crate::system::config::AppConfig::init(app_config.clone());
             }
 
-            // 清理旧版全局 hooks：现在由 auto-task 插件 on_startup 回调处理
-            // crate::plugin::setup::cleanup_global_hooks();
+            // 清理旧版全局 hooks：由 auto-task 插件 on_startup 回调处理
 
             // 保存 resource_dir 供后续会话创建时使用
             let resource_dir = app_handle
@@ -269,7 +268,6 @@ pub fn run() {
             let resource_dir_arc = Arc::new(resource_dir);
             let session_manager = Arc::new(session::SessionManager::new(storage, resource_dir_arc.clone()));
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
-            let plugin_manager = Arc::new(plugin::PluginManager::new());
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());
             let plugin_host = Arc::new(
@@ -304,7 +302,6 @@ pub fn run() {
                 .db(db.clone())
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
-                .plugin_manager(plugin_manager.clone())
                 .plugin_host(plugin_host.clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
@@ -322,12 +319,18 @@ pub fn run() {
             app.manage(qr_manager.clone());
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
+            app.manage(plugin_host.wasm_runtime().fs_auth().clone());
 
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载
+            // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
+            // setup 闭包不在 Tokio runtime 上下文中，需通过 block_on 获取 Handle
             #[cfg(debug_assertions)]
             {
-                let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf());
+                let runtime_handle = tauri::async_runtime::block_on(async {
+                    tokio::runtime::Handle::current()
+                });
+                let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
                 Box::leak(Box::new(_dev_watcher));
@@ -430,20 +433,17 @@ pub fn run() {
                 system::lifecycle::lifecycle_registry().run_startup_hooks().await;
             });
 
-            // 发送 Token 配置结果到前端
-            // auto-task 插件负责完整的 token 校验，此处仅做基础 fallback
+            // 发送 Token 就绪通知到前端
+            // auto-task 插件 on_startup 负责完整的 token 校验
             let app_handle_for_plugin = app_handle_arc.clone();
-            // token 已在上方 ensure_valid_token() 中确保非空，此处无需标记为新生成
-            let token_generated = false;
             tauri::async_runtime::spawn(async move {
                 // 延迟 500ms 发送，确保前端已加载完成
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let result = crate::plugin::setup::TokenSetupResult {
-                    success: true,
-                    message: "Token 已就绪".to_string(),
-                    token_generated,
-                };
-                let _ = app_handle_for_plugin.emit("plugin-setup-result", &result);
+                let _ = app_handle_for_plugin.emit("plugin-setup-result", serde_json::json!({
+                    "success": true,
+                    "message": "Token 已就绪",
+                    "token_generated": false,
+                }));
             });
 
             Ok(())
@@ -514,6 +514,7 @@ pub fn run() {
             commands::plugin::plugin_invoke,
             commands::plugin::plugin_list_rust_commands,
             commands::plugin::plugin_dev_reload,
+            commands::plugin::plugin_fs_auth_respond,
             // Server
             commands::server::server_start,
             commands::server::server_stop,

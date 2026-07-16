@@ -11,10 +11,7 @@ use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::db::Database;
-use crate::plugin::setup;
 use crate::session::SessionManager;
-use crate::system::app_context::AppContext;
-use crate::system::config::AppConfig;
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
 use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
@@ -68,23 +65,25 @@ impl PluginHost {
         let storage = Arc::new(PluginStorage::new(db.clone()));
 
         // 构建 WASM 运行时和宿主上下文
-        let wasm_host_ctx = Arc::new(WasmHostContext::new(
-            db.clone(),
-            storage.clone(),
-            session_manager.clone(),
-            app_handle.clone(),
-            permission.clone(),
-        ));
         let wasm_runtime = Arc::new(
             WasmRuntime::new(
                 db.clone(),
                 storage.clone(),
-                session_manager,
-                app_handle,
+                session_manager.clone(),
+                app_handle.clone(),
                 permission.clone(),
             )
             .expect("Failed to initialize WASM runtime"),
         );
+
+        let wasm_host_ctx = Arc::new(WasmHostContext::new(
+            db.clone(),
+            storage.clone(),
+            session_manager,
+            app_handle,
+            permission.clone(),
+            wasm_runtime.fs_auth().clone(),
+        ));
 
         // 1. 收集静态注册的 Rust 插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
@@ -276,6 +275,11 @@ impl PluginHost {
         &self.storage
     }
 
+    /// 获取 WASM 运行时引用
+    pub fn wasm_runtime(&self) -> &Arc<WasmRuntime> {
+        &self.wasm_runtime
+    }
+
     // ==================== Lifecycle ====================
 
     /// 获取所有已加载插件的信息列表
@@ -321,36 +325,6 @@ impl PluginHost {
                     tracing::error!("Plugin {} on_startup timed out", entry.id);
                 }
             }
-        }
-
-        // Auto Task 插件启动逻辑：token 校验 + 全局 hooks 清理
-        // 这些操作需要访问 AppConfig 和文件系统，在宿主进程内执行
-        if self.is_activated("com.bedcode.auto-task").await {
-            tracing::info!("Auto Task plugin activated, running startup setup");
-
-            // 清理旧版全局 hooks
-            setup::cleanup_global_hooks();
-
-            // Token 校验/生成
-            let app_config = AppConfig::global();
-            let config_path = {
-                let ctx = AppContext::global();
-                ctx.app_handle()
-                    .path()
-                    .app_data_dir()
-                    .unwrap_or_default()
-                    .join("config.properties")
-            };
-            let mut config_clone = app_config.clone();
-            let token_result = setup::ensure_token(&mut config_clone, &config_path);
-            if token_result.token_generated {
-                // 配置可能修改了 token，重新初始化全局配置
-                AppConfig::init(config_clone);
-            }
-            tracing::info!(
-                "Auto Task startup setup complete: token_generated={}",
-                token_result.token_generated
-            );
         }
 
         // WASM 插件
@@ -750,13 +724,6 @@ impl PluginHost {
             )));
         }
 
-        // Auto Task 插件：文件 I/O 命令由宿主侧直接执行
-        // WASM 沙箱无法访问文件系统，因此 setup-project-hooks 等命令
-        // 在宿主进程内调用 setup.rs 函数，而非走 WASM invoke_command
-        if plugin_id == "com.bedcode.auto-task" {
-            return self.invoke_auto_task_command(command_name, args).await;
-        }
-
         let source = {
             let plugins = self.plugins.read().await;
             plugins.get(plugin_id)
@@ -786,6 +753,17 @@ impl PluginHost {
         command_name: &str,
         args: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
+        // 为需要 resource_dir 的命令自动注入插件 extension_path
+        let mut enriched_args = args;
+        if enriched_args.get("resource_dir").is_none() {
+            let plugins = self.plugins.read().await;
+            if let Some(loaded) = plugins.get(plugin_id) {
+                enriched_args.as_object_mut().map(|obj| {
+                    obj.insert("resource_dir".to_string(), serde_json::Value::String(loaded.extension_path.clone()));
+                });
+            }
+        }
+
         let mut wasm_plugins = self.wasm_plugins.write().await;
         let wasm_plugin = wasm_plugins.get_mut(plugin_id).ok_or_else(|| {
             crate::AppError::Plugin(format!(
@@ -793,7 +771,7 @@ impl PluginHost {
             ))
         })?;
 
-        let args_str = serde_json::to_string(&args)
+        let args_str = serde_json::to_string(&enriched_args)
             .map_err(|e| crate::AppError::Plugin(format!(
                 "Failed to serialize command args: {}", e
             )))?;
@@ -825,96 +803,6 @@ impl PluginHost {
             .map_err(|e| crate::AppError::Plugin(format!("Command execution error: {}", e)))?;
 
         Ok(result)
-    }
-
-    /// 执行 Auto Task 插件的命令（宿主侧路由）
-    ///
-    /// auto-task 插件的命令需要文件系统访问（WASM 无法执行），
-    /// 因此在宿主进程内直接调用 setup.rs 函数。
-    async fn invoke_auto_task_command(
-        &self,
-        command_name: &str,
-        args: serde_json::Value,
-    ) -> crate::Result<serde_json::Value> {
-        match command_name {
-            "setup-project-hooks" => {
-                let working_dir = args.get("working_dir")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let port = args.get("port")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(8765) as u16;
-                let token = args.get("token")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                // 从插件 extension_path 解析 bedcode_hook.py 路径
-                let resource_dir = {
-                    let plugins = self.plugins.read().await;
-                    plugins.get("com.bedcode.auto-task")
-                        .map(|p| std::path::PathBuf::from(&p.extension_path))
-                        .unwrap_or_default()
-                };
-
-                let result = setup::ensure_project_hooks(
-                    &working_dir, port, &token, &resource_dir,
-                ).await;
-
-                Ok(serde_json::json!({
-                    "success": result.success,
-                    "message": result.message,
-                    "skipped": result.skipped,
-                }))
-            }
-            "cleanup-project-hooks" => {
-                let working_dir = args.get("working_dir")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let result = setup::cleanup_project_hooks(&working_dir).await;
-
-                Ok(serde_json::json!({
-                    "success": result.success,
-                    "message": result.message,
-                }))
-            }
-            "get-task-status" => {
-                let session_id = args.get("session_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                let ctx = AppContext::global();
-                let plugin_manager = ctx.plugin_manager();
-                let status = plugin_manager.get_task_status(session_id).await;
-                let reason = plugin_manager.get_task_reason(session_id).await;
-
-                Ok(serde_json::json!({
-                    "session_id": session_id,
-                    "task_status": status.map(|s| serde_json::to_string(&s).unwrap_or_default().trim_matches('"').to_string()),
-                    "task_reason": reason,
-                }))
-            }
-            "set-auto-mode" => {
-                let session_id = args.get("session_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let auto_approve = args.get("auto_approve")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-
-                let ctx = AppContext::global();
-                let plugin_manager = ctx.plugin_manager();
-                plugin_manager.set_auto_mode(session_id, auto_approve).await;
-
-                Ok(serde_json::json!({ "success": true }))
-            }
-            _ => Err(crate::AppError::Plugin(format!(
-                "Unknown auto-task command: {}", command_name
-            ))),
-        }
     }
 
     /// 获取所有 Rust 插件的 command 列表

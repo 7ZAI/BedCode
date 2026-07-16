@@ -1,18 +1,36 @@
 #!/usr/bin/env python3
 """BedCode Claude Code Hooks - Hook 脚本
 
-统一入口脚本，处理 SessionStart / PreToolUse / Stop / SubagentStop 事件。
+统一入口脚本，处理所有 Claude Code hook 事件，同步对话任务状态到 BedCode 桌面端。
 跨平台（Windows/macOS/Linux），零外部依赖（仅标准库）。
 
 用法:
     python3 bedcode_hook.py session-start       # SessionStart hook
+    python3 bedcode_hook.py user-prompt-submit  # UserPromptSubmit hook
     python3 bedcode_hook.py pre-tool-use        # PreToolUse hook (权限请求 + AskUserQuestion)
-    python3 bedcode_hook.py write-event         # Stop / SubagentStop hook
+    python3 bedcode_hook.py post-tool-use       # PostToolUse hook
+    python3 bedcode_hook.py post-tool-use-fail  # PostToolUseFailure hook
+    python3 bedcode_hook.py notification        # Notification hook
+    python3 bedcode_hook.py stop                # Stop hook
+    python3 bedcode_hook.py subagent-stop       # SubagentStop hook
+    python3 bedcode_hook.py session-end         # SessionEnd hook
 
 环境变量:
     CLAUDE_PROJECT_DIR  - 项目根目录（Claude Code 自动设置）
     BEDCODE_TOKEN       - HTTP API 认证 token（存在时才推送状态）
     BEDCODE_PORT        - HTTP API 端口（默认 8765）
+    BEDCODE_SESSION_ID  - BedCode PTY 会话 ID（由 pty_process.rs 启动时注入）
+
+状态机:
+    SessionStart        → idle
+    UserPromptSubmit    → in_progress
+    PreToolUse(AskUser) → asking
+    Notification(perm)  → asking
+    PostToolUse         → in_progress
+    PostToolUseFailure  → in_progress / interrupted
+    Stop                → completed / in_progress
+    SubagentStop        → completed / in_progress
+    SessionEnd          → completed / interrupted
 """
 
 import json
@@ -32,6 +50,28 @@ BEDCODE_PORT_DEFAULT = 8765
 HTTP_TIMEOUT_SECONDS = 3
 LOG_RETENTION_DAYS = 7
 VALID_STATUSES = {"idle", "in_progress", "asking", "completed", "interrupted"}
+
+# SessionEnd reason → 任务状态映射
+# prompt_input_exit: 用户在输入框退出（Ctrl+C / Esc）
+# clear: /clear 命令清空对话
+# resume: 会话恢复（非终止，标记 completed）
+# logout: 用户登出
+# bypass_permissions_disabled: 权限模式切换
+# other: 其他原因
+SESSION_END_INTERRUPT_REASONS = {"prompt_input_exit", "clear", "logout", "bypass_permissions_disabled"}
+
+# Notification type → 任务状态映射
+# permission_prompt: Claude 等待权限确认
+# idle_prompt: Claude 空闲等待用户输入
+# elicitation_dialog: Claude 弹出交互对话框
+NOTIFICATION_ASKING_TYPES = {"permission_prompt", "idle_prompt", "elicitation_dialog"}
+
+# AskUserQuestion 自动回复策略：推荐标记关键词（不区分大小写）
+# Claude Code 在推荐选项的 label 中会包含这些关键词，如 "Yes (Recommended)"
+RECOMMENDED_KEYWORDS = ["(recommended)", "(推荐)", "(首选)"]
+
+# 自动回复 fallback 文本：无选项时的自由回答
+AUTO_ANSWER_FALLBACK = "Proceed with best practice"
 
 # ==================== Logging ====================
 
@@ -86,7 +126,7 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
         return
 
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}/plugin/task-status".format(port)
+    url = "http://localhost:{}/api/plugin/com.bedcode.auto-task/task-status".format(port)
 
     payload_dict = {
         "session_id": session_id,
@@ -131,7 +171,7 @@ def query_session_mode(session_id, logger):
         return False
 
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}/plugin/session-mode?session_id={}&token={}".format(
+    url = "http://localhost:{}/api/plugin/com.bedcode.auto-task/session-mode?session_id={}&token={}".format(
         port, session_id, token
     )
 
@@ -179,34 +219,127 @@ def extract_fields_from_raw_json(raw_text):
     if m:
         fields["stop_hook_active"] = m.group(1) == "true"
 
-    # hook_event_name: 字符串（Stop 或 SubagentStop）
+    # hook_event_name: 字符串
     m = re.search(r'"hook_event_name"\s*:\s*"((?:[^"\\]|\\.)*?)"', raw_text)
     if m:
         fields["hook_event_name"] = m.group(1)
 
+    # notification_type: 字符串
+    m = re.search(r'"notification_type"\s*:\s*"((?:[^"\\]|\\.)*?)"', raw_text)
+    if m:
+        fields["notification_type"] = m.group(1)
+
+    # is_interrupt: boolean
+    m = re.search(r'"is_interrupt"\s*:\s*(true|false)', raw_text)
+    if m:
+        fields["is_interrupt"] = m.group(1) == "true"
+
     return fields
 
 
-# ==================== Status Parsing ====================
+# ==================== Auto-Answer Strategy ====================
 
 
-def infer_status_from_reason(reason):
-    """根据 Claude Code 的 reason 字段推断任务状态。
+def select_option(options, logger):
+    """从选项列表中选择最佳选项。
 
-    Claude Code Stop hook 的 reason 字段取值:
-    - "complete" / ":complete" → 任务完成
-    - "tool_use" → 工具调用中
-    - 其他 → 默认 completed（Stop 事件触发时通常任务已结束）
+    策略优先级：
+    1. label 含推荐标记（如 "(Recommended)"）→ 选该选项
+    2. 无推荐标记 → 选第一项（Claude Code 通常将推荐选项放在首位）
+    3. 无选项 → 返回 None
     """
-    if not reason:
-        return "completed", "Task stopped"
+    if not options:
+        return None
 
-    if reason in ("complete", ":complete"):
-        return "completed", "Task completed"
-    if reason == "tool_use":
-        return "in_progress", "Tool use in progress"
+    # 优先匹配推荐标记
+    for opt in options:
+        label = opt.get("label", "")
+        label_lower = label.lower()
+        for keyword in RECOMMENDED_KEYWORDS:
+            if keyword in label_lower:
+                logger.info("select_option: picked recommended option: {}".format(label))
+                return label
 
-    return "completed", reason
+    # 次选第一项
+    first_label = options[0].get("label", "")
+    logger.info("select_option: picked first option: {}".format(first_label))
+    return first_label
+
+
+def build_auto_answers(questions, logger):
+    """为 AskUserQuestion 构造自动回复。
+
+    策略：
+    - 有选项：优先选带推荐标记的，次选第一项
+    - 无选项：返回 fallback 文本（"Proceed with best practice"）
+    - 多选：选推荐项或第一项（多选场景下选一个即可，Claude 会理解）
+    """
+    answers = {}
+    for q in questions:
+        header = q.get("header", "")
+        options = q.get("options", [])
+
+        selected = select_option(options, logger)
+        if selected:
+            answers[header] = selected
+        else:
+            # 无选项的自由回答，按最佳实践处理
+            answers[header] = AUTO_ANSWER_FALLBACK
+            logger.info("build_auto_answers: no options for '{}', using fallback".format(header))
+
+    return answers
+
+
+# ==================== Question Extraction ====================
+
+
+def extract_ask_user_questions(tool_input):
+    """从 AskUserQuestion 工具输入中提取问题列表。
+
+    返回格式与 PluginQuestion DTO 对齐：
+    [{ question, header, multi_select, options: [{ label, description }] }]
+    """
+    questions = tool_input.get("questions", [])
+    questions_data = []
+    for q in questions:
+        question = {
+            "question": q.get("question", ""),
+            "header": q.get("header", ""),
+            "multi_select": q.get("multiSelect", False),
+            "options": [],
+        }
+        for opt in q.get("options", []):
+            question["options"].append({
+                "label": opt.get("label", ""),
+                "description": opt.get("description", ""),
+            })
+        questions_data.append(question)
+    return questions_data
+
+
+def extract_notification_questions(data):
+    """从 Notification hook 数据中提取问题信息。
+
+    Notification 的 permission_prompt / elicitation_dialog 类型
+    包含 message 和 title，构造为单问题格式以复用 PluginQuestion DTO。
+    """
+    message = data.get("message", "")
+    title = data.get("title", "")
+    notification_type = data.get("notification_type", "")
+
+    if not message:
+        return None
+
+    # 构造为 PluginQuestion 兼容格式
+    return [{
+        "question": message,
+        "header": title or notification_type,
+        "multi_select": False,
+        "options": [
+            {"label": "Allow", "description": "Approve the request"},
+            {"label": "Deny", "description": "Reject the request"},
+        ],
+    }]
 
 
 # ==================== Hook Handlers ====================
@@ -250,6 +383,28 @@ def handle_session_start(data, logger):
     print(json.dumps(output))
 
 
+def handle_user_prompt_submit(data, logger):
+    """处理 UserPromptSubmit 事件。
+
+    用户提交新 prompt 时触发，标记任务进入执行状态。
+    这是"对话任务开始执行"的精确信号。
+    """
+    session_id = data.get("session_id", "")
+    if not session_id:
+        logger.error("user_prompt_submit: missing session_id")
+        return
+
+    prompt = data.get("prompt", "")
+    # 截断过长的 prompt 用于 reason
+    prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+
+    logger.info(
+        "HOOK user_prompt_submit: session_id={} prompt={}".format(session_id, prompt_preview)
+    )
+
+    push_task_status(session_id, "in_progress", "User submitted: {}".format(prompt_preview), logger)
+
+
 def handle_pre_tool_use(data, logger):
     """处理 PreToolUse 事件。
 
@@ -275,24 +430,10 @@ def handle_pre_tool_use(data, logger):
     # AskUserQuestion 时始终推送 asking 状态到桌面端（无论手动/自动模式）
     if tool_name == "AskUserQuestion":
         tool_input = data.get("tool_input", {})
-        questions = tool_input.get("questions", [])
+        questions_data = extract_ask_user_questions(tool_input)
 
         # 推送 asking 状态到桌面端
         reason = "Auto-answered by BedCode" if auto_approve else "Waiting for user input"
-        questions_data = []
-        for q in questions:
-            question = {
-                "question": q.get("question", ""),
-                "header": q.get("header", ""),
-                "multi_select": q.get("multiSelect", False),
-                "options": [],
-            }
-            for opt in q.get("options", []):
-                question["options"].append({
-                    "label": opt.get("label", ""),
-                    "description": opt.get("description", ""),
-                })
-            questions_data.append(question)
         push_task_status(session_id, "asking", reason, logger, questions=questions_data)
 
         if not auto_approve:
@@ -300,13 +441,8 @@ def handle_pre_tool_use(data, logger):
             logger.info("pre_tool_use: manual mode, pushed asking status, no auto-approve")
             return
 
-        # 自动模式：构造 answers，选推荐选项
-        answers = {}
-        for q in questions:
-            header = q.get("header", "")
-            options = q.get("options", [])
-            if options:
-                answers[header] = options[0].get("label", "")
+        # 自动模式：按策略构造 answers
+        answers = build_auto_answers(tool_input.get("questions", []), logger)
 
         output = {
             "hookSpecificOutput": {
@@ -343,53 +479,214 @@ def handle_pre_tool_use(data, logger):
         print(json.dumps(output))
 
 
-def handle_write_event(data, logger):
-    """处理 Stop / SubagentStop 事件。
+def handle_post_tool_use(data, logger):
+    """处理 PostToolUse 事件。
 
-    解析任务状态并推送到桌面端。
-    从 reason 字段和 last_assistant_message 推断状态。
+    工具执行成功后触发，标记任务继续执行中。
     """
     session_id = data.get("session_id", "")
+    tool_name = data.get("tool_name", "")
+
     if not session_id:
-        logger.error("write_event: missing session_id, data keys={}".format(list(data.keys())))
-        sys.exit(2)
-
-    hook_event = data.get("hook_event_name", "Stop")
-    reason = data.get("reason", "")
-    stop_hook_active = data.get("stop_hook_active", False)
-
-    # 确定事件类型
-    event_type = "subagent_stop" if hook_event == "SubagentStop" else "stop"
-
-    # 从 reason 字段推断状态
-    status, status_reason = infer_status_from_reason(reason)
-
-    # stop_hook_active=true 表示 hook 已触发过续行，说明任务仍在进行
-    if stop_hook_active:
-        status = "in_progress"
-        status_reason = "Stop hook triggered continuation"
+        logger.error("post_tool_use: missing session_id")
+        return
 
     logger.info(
-        "HOOK {}: session_id={} status={} reason={}".format(
-            event_type, session_id, status, status_reason
+        "HOOK post_tool_use: session_id={} tool_name={}".format(session_id, tool_name)
+    )
+
+    # 工具执行成功，任务仍在进行
+    push_task_status(session_id, "in_progress", "Tool {} completed".format(tool_name), logger)
+
+
+def handle_post_tool_use_failure(data, logger):
+    """处理 PostToolUseFailure 事件。
+
+    工具执行失败时触发。
+    - is_interrupt=true：用户主动中断，标记 interrupted
+    - is_interrupt=false：工具执行出错，任务仍在进行（Claude 会尝试恢复）
+    """
+    session_id = data.get("session_id", "")
+    tool_name = data.get("tool_name", "")
+    is_interrupt = data.get("is_interrupt", False)
+    error = data.get("error", "")
+
+    if not session_id:
+        logger.error("post_tool_use_failure: missing session_id")
+        return
+
+    logger.info(
+        "HOOK post_tool_use_failure: session_id={} tool_name={} is_interrupt={} error={}".format(
+            session_id, tool_name, is_interrupt, error[:100]
         )
     )
 
-    # 推送状态到桌面端
+    if is_interrupt:
+        push_task_status(session_id, "interrupted", "User interrupted: {}".format(tool_name), logger)
+    else:
+        # 工具失败但非中断，Claude 会继续尝试
+        push_task_status(session_id, "in_progress", "Tool {} failed: {}".format(tool_name, error[:80]), logger)
+
+
+def handle_notification(data, logger):
+    """处理 Notification 事件。
+
+    根据 notification_type 推送不同状态：
+    - permission_prompt / idle_prompt / elicitation_dialog → asking
+    - auth_success / elicitation_complete / elicitation_response → in_progress
+    - 其他 → 仅记录日志
+    """
+    session_id = data.get("session_id", "")
+    if not session_id:
+        logger.error("notification: missing session_id")
+        return
+
+    notification_type = data.get("notification_type", "")
+    message = data.get("message", "")
+    title = data.get("title", "")
+
+    logger.info(
+        "HOOK notification: session_id={} type={} title={} message={}".format(
+            session_id, notification_type, title, message[:100]
+        )
+    )
+
+    if notification_type in NOTIFICATION_ASKING_TYPES:
+        # 需要用户交互的通知 → asking
+        questions_data = extract_notification_questions(data)
+        reason = "Waiting for user action: {}".format(notification_type)
+        push_task_status(session_id, "asking", reason, logger, questions=questions_data)
+    elif notification_type in ("auth_success", "elicitation_complete", "elicitation_response"):
+        # 用户已完成交互 → in_progress
+        push_task_status(session_id, "in_progress", "User responded: {}".format(notification_type), logger)
+    else:
+        logger.debug("notification: unhandled type={}, skip status push".format(notification_type))
+
+
+def handle_stop(data, logger):
+    """处理 Stop 事件。
+
+    主 agent 完成响应时触发（不含用户中断和 API 错误）。
+    - stop_hook_active=false：正常完成 → completed
+    - stop_hook_active=true：hook 续行中 → in_progress
+    """
+    session_id = data.get("session_id", "")
+    if not session_id:
+        logger.error("stop: missing session_id, data keys={}".format(list(data.keys())))
+        sys.exit(2)
+
+    stop_hook_active = data.get("stop_hook_active", False)
+
+    if stop_hook_active:
+        # hook 已触发过续行，任务仍在进行
+        status = "in_progress"
+        reason = "Stop hook triggered continuation"
+    else:
+        # 主 agent 正常完成响应
+        status = "completed"
+        reason = "Task completed"
+
+    logger.info(
+        "HOOK stop: session_id={} status={} stop_hook_active={}".format(
+            session_id, status, stop_hook_active
+        )
+    )
+
+    push_task_status(session_id, status, reason, logger)
+
+
+def handle_subagent_stop(data, logger):
+    """处理 SubagentStop 事件。
+
+    子 agent 完成响应时触发。
+    - stop_hook_active=false：子任务完成 → completed
+    - stop_hook_active=true：hook 续行中 → in_progress
+    """
+    session_id = data.get("session_id", "")
+    if not session_id:
+        logger.error("subagent_stop: missing session_id, data keys={}".format(list(data.keys())))
+        sys.exit(2)
+
+    stop_hook_active = data.get("stop_hook_active", False)
+    agent_type = data.get("agent_type", "")
+
+    if stop_hook_active:
+        status = "in_progress"
+        reason = "Subagent stop hook triggered continuation"
+    else:
+        status = "completed"
+        reason = "Subagent ({}) completed".format(agent_type) if agent_type else "Subagent completed"
+
+    logger.info(
+        "HOOK subagent_stop: session_id={} agent_type={} status={}".format(
+            session_id, agent_type, status
+        )
+    )
+
+    push_task_status(session_id, status, reason, logger)
+
+
+def handle_session_end(data, logger):
+    """处理 SessionEnd 事件。
+
+    会话结束时触发，根据 reason 判断最终状态：
+    - prompt_input_exit / clear / logout → interrupted
+    - resume → completed（会话恢复，非终止）
+    - other → interrupted
+    """
+    session_id = data.get("session_id", "")
+    if not session_id:
+        logger.error("session_end: missing session_id")
+        return
+
+    reason = data.get("reason", "other")
+
+    if reason == "resume":
+        # 会话恢复，非终止
+        status = "completed"
+        status_reason = "Session resumed"
+    elif reason in SESSION_END_INTERRUPT_REASONS:
+        status = "interrupted"
+        status_reason = "Session ended: {}".format(reason)
+    else:
+        # other 等未知原因，保守标记为 interrupted
+        status = "interrupted"
+        status_reason = "Session ended: {}".format(reason)
+
+    logger.info(
+        "HOOK session_end: session_id={} reason={} status={}".format(
+            session_id, reason, status
+        )
+    )
+
     push_task_status(session_id, status, status_reason, logger)
 
 
 # ==================== Main ====================
 
+# 命令 → handler 映射
+COMMAND_HANDLERS = {
+    "session-start": handle_session_start,
+    "user-prompt-submit": handle_user_prompt_submit,
+    "pre-tool-use": handle_pre_tool_use,
+    "post-tool-use": handle_post_tool_use,
+    "post-tool-use-fail": handle_post_tool_use_failure,
+    "notification": handle_notification,
+    "stop": handle_stop,
+    "subagent-stop": handle_subagent_stop,
+    "session-end": handle_session_end,
+}
+
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 bedcode_hook.py <session-start|pre-tool-use|write-event>", file=sys.stderr)
+        print("Usage: python3 bedcode_hook.py <command>", file=sys.stderr)
+        print("Commands: {}".format(", ".join(COMMAND_HANDLERS.keys())), file=sys.stderr)
         sys.exit(1)
 
     command = sys.argv[1]
-    if command not in ("session-start", "pre-tool-use", "write-event"):
-        print("Unknown command: {}. Use session-start, pre-tool-use, or write-event".format(command), file=sys.stderr)
+    if command not in COMMAND_HANDLERS:
+        print("Unknown command: {}. Available: {}".format(command, ", ".join(COMMAND_HANDLERS.keys())), file=sys.stderr)
         sys.exit(1)
 
     # 先初始化日志，确保异常处理中可用
@@ -407,12 +704,7 @@ def main():
         if data:
             logger.info("Extracted fields from raw JSON: {}".format(list(data.keys())))
 
-    if command == "session-start":
-        handle_session_start(data, logger)
-    elif command == "pre-tool-use":
-        handle_pre_tool_use(data, logger)
-    elif command == "write-event":
-        handle_write_event(data, logger)
+    COMMAND_HANDLERS[command](data, logger)
 
 
 if __name__ == "__main__":

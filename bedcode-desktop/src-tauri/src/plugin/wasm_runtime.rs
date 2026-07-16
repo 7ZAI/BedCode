@@ -5,10 +5,12 @@
 //! 注册宿主 Host Functions 供 WASM 插件调用
 
 use crate::db::Database;
-use crate::plugin::permission::{PermissionManager, PERMISSION_STORAGE};
+use crate::plugin::fs_auth::{FsAuthChecker, FsOp};
+use crate::plugin::permission::{PermissionManager, PERMISSION_STORAGE, PERMISSION_FS_READ, PERMISSION_FS_WRITE};
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::wasm_host;
 use crate::session::SessionManager;
+use crate::system::config::AppConfig;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::Emitter;
@@ -23,6 +25,8 @@ use wasmtime::{Engine, Instance, Linker, Memory, Module, Store};
 pub struct WasmRuntime {
     engine: Engine,
     linker: Linker<WasmPluginState>,
+    /// 文件系统访问校验器
+    fs_auth: Arc<FsAuthChecker>,
 }
 
 /// 单个 WASM 插件实例的状态
@@ -45,6 +49,7 @@ pub struct WasmHostContext {
     session_manager: Arc<SessionManager>,
     app_handle: Arc<tauri::AppHandle>,
     permission: Arc<PermissionManager>,
+    fs_auth: Arc<FsAuthChecker>,
 }
 
 /// 已加载的 WASM 插件
@@ -74,7 +79,9 @@ impl WasmRuntime {
         // 注册所有 Host Functions 到 "bedcode" 命名空间
         register_host_functions(&mut linker)?;
 
-        Ok(Self { engine, linker })
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle.clone()));
+
+        Ok(Self { engine, linker, fs_auth })
     }
 
     /// 从字节流编译 WASM 模块
@@ -93,6 +100,11 @@ impl WasmRuntime {
                 e
             ))
         })
+    }
+
+    /// 获取文件系统访问校验器引用
+    pub fn fs_auth(&self) -> &Arc<FsAuthChecker> {
+        &self.fs_auth
     }
 
     /// 实例化 WASM 模块
@@ -404,6 +416,7 @@ impl WasmHostContext {
         session_manager: Arc<SessionManager>,
         app_handle: Arc<tauri::AppHandle>,
         permission: Arc<PermissionManager>,
+        fs_auth: Arc<FsAuthChecker>,
     ) -> Self {
         Self {
             db,
@@ -411,6 +424,7 @@ impl WasmHostContext {
             session_manager,
             app_handle,
             permission,
+            fs_auth,
         }
     }
 }
@@ -463,6 +477,11 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
         .func_wrap("bedcode", "host_emit_event", host_emit_event)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_emit_event: {}", e)))?;
 
+    // 广播同步事件（移动端同步通道）
+    linker
+        .func_wrap("bedcode", "host_broadcast_sync", host_broadcast_sync)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_broadcast_sync: {}", e)))?;
+
     // HTTP 代理
     linker
         .func_wrap("bedcode", "host_http_fetch", host_http_fetch)
@@ -490,6 +509,24 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
         .func_wrap("bedcode", "host_notify", host_notify_noop)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_notify: {}", e)))?;
 
+    // 文件系统
+    linker
+        .func_wrap("bedcode", "host_fs_read", host_fs_read)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_read: {}", e)))?;
+
+    linker
+        .func_wrap("bedcode", "host_fs_write", host_fs_write)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_write: {}", e)))?;
+
+    linker
+        .func_wrap("bedcode", "host_fs_copy", host_fs_copy)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_copy: {}", e)))?;
+
+    // 配置读取
+    linker
+        .func_wrap("bedcode", "host_config_get", host_config_get)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_config_get: {}", e)))?;
+
     Ok(())
 }
 
@@ -497,8 +534,33 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
 //
 // 所有 Host Function 签名约定：
 // - 字符串参数以 (ptr, len) 对传递，指向 WASM 线性内存
-// - 返回值通过 (ptr, len) 对写回线性内存，或用 i32 状态码
+// - 返回 (ptr, len) 对的函数通过 out_ptr 输出参数写入（8 字节: ptr + len）
+// - 其他函数用 i32 状态码返回
 // - 宿主通过 Caller 访问 WasmPluginState 获取 plugin_id 和宿主能力
+
+/// 将 (ptr, len) 结果写入 WASM 线性内存中的 out_ptr 位置（8 字节: ptr:u32 + len:u32）
+///
+/// 返回 0 表示成功，-1 表示写入失败
+fn write_result_to_out_ptr(
+    caller: &mut wasmtime::Caller<'_, WasmPluginState>,
+    out_ptr: u32,
+    ptr: u32,
+    len: u32,
+) -> i32 {
+    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+        Some(m) => m,
+        None => return -1,
+    };
+    let data = memory.data_mut(caller);
+    let start = out_ptr as usize;
+    let end = start + 8;
+    if end > data.len() {
+        return -1;
+    }
+    data[start..start + 4].copy_from_slice(&ptr.to_le_bytes());
+    data[start + 4..end].copy_from_slice(&len.to_le_bytes());
+    0
+}
 
 /// 从 WASM 线性内存读取字符串
 fn read_wasm_string(caller: &mut wasmtime::Caller<'_, WasmPluginState>, ptr: u32, len: u32) -> Option<String> {
@@ -554,13 +616,14 @@ fn write_wasm_string(
 
 /// 存储：获取值
 ///
-/// 参数：(key_ptr, key_len)
-/// 返回：(result_ptr, result_len) — JSON 字符串或 (0,0) 表示不存在
+/// 参数：(key_ptr, key_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
 fn host_storage_get(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     key_ptr: u32,
     key_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
     let host_ctx = caller.data().host_ctx.clone();
 
@@ -568,7 +631,7 @@ fn host_storage_get(
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_storage_get: failed to read key from WASM memory");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -579,7 +642,7 @@ fn host_storage_get(
             permission = "storage",
             "host_storage_get: permission denied"
         );
-        return (0, 0);
+        return -1;
     }
 
     let storage = host_ctx.storage.clone();
@@ -593,21 +656,21 @@ fn host_storage_get(
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_get: JSON serialization failed");
-                    return (0, 0);
+                    return -1;
                 }
             };
             match write_wasm_string(&mut caller, &json_str) {
-                Some((ptr, len)) => (ptr, len),
+                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
                 None => {
                     tracing::error!(plugin_id = %plugin_id, "host_storage_get: failed to write result to WASM memory");
-                    (0, 0)
+                    -1
                 }
             }
         }
-        Ok(None) => (0, 0),
+        Ok(None) => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, key = %key, "host_storage_get: storage error");
-            (0, 0)
+            -1
         }
     }
 }
@@ -752,13 +815,14 @@ fn host_db_execute(
 
 /// 数据库：查询 SQL
 ///
-/// 参数：(sql_ptr, sql_len)
-/// 返回：(result_ptr, result_len) — JSON 数组字符串或 (0,0) 表示错误
+/// 参数：(sql_ptr, sql_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
 fn host_db_query(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     sql_ptr: u32,
     sql_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
     let host_ctx = caller.data().host_ctx.clone();
 
@@ -766,18 +830,18 @@ fn host_db_query(
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to read SQL");
-            return (0, 0);
+            return -1;
         }
     };
 
     if !host_ctx.permission.check(&plugin_id, PERMISSION_STORAGE) {
         tracing::error!(plugin_id = %plugin_id, permission = "storage", "host_db_query: permission denied");
-        return (0, 0);
+        return -1;
     }
 
     if let Err(e) = wasm_host::validate_sql_table_prefix(&plugin_id, &sql) {
         tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: table name validation failed");
-        return (0, 0);
+        return -1;
     }
 
     let db = host_ctx.db.clone();
@@ -826,20 +890,20 @@ fn host_db_query(
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: JSON serialization failed");
-                    return (0, 0);
+                    return -1;
                 }
             };
             match write_wasm_string(&mut caller, &json_str) {
-                Some((ptr, len)) => (ptr, len),
+                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
                 None => {
                     tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to write result to WASM memory");
-                    (0, 0)
+                    -1
                 }
             }
         }
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_db_query: SQL query failed");
-            (0, 0)
+            -1
         }
     }
 }
@@ -893,10 +957,12 @@ fn host_terminal_send(
 
 /// 会话：列出所有会话
 ///
-/// 返回：(result_ptr, result_len) — JSON 数组字符串
+/// 参数：(out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
 fn host_session_list(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let host_ctx = caller.data().host_ctx.clone();
     let sm = host_ctx.session_manager.clone();
 
@@ -906,33 +972,34 @@ fn host_session_list(
 
     match serde_json::to_string(&sessions) {
         Ok(json) => match write_wasm_string(&mut caller, &json) {
-            Some((ptr, len)) => (ptr, len),
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
             None => {
                 tracing::error!("host_session_list: failed to write result to WASM memory");
-                (0, 0)
+                -1
             }
         },
         Err(e) => {
             tracing::error!(error = %e, "host_session_list: serialization failed");
-            (0, 0)
+            -1
         }
     }
 }
 
 /// 会话：获取单个会话
 ///
-/// 参数：(session_id_ptr, session_id_len)
-/// 返回：(result_ptr, result_len) — JSON 对象字符串或 (0,0) 表示不存在
+/// 参数：(session_id_ptr, session_id_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
 fn host_session_get(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     sid_ptr: u32,
     sid_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let session_id = match read_wasm_string(&mut caller, sid_ptr, sid_len) {
         Some(s) => s,
         None => {
             tracing::error!("host_session_get: failed to read session_id");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -944,18 +1011,18 @@ fn host_session_get(
     }) {
         Some(info) => match serde_json::to_string(&info) {
             Ok(json) => match write_wasm_string(&mut caller, &json) {
-                Some((ptr, len)) => (ptr, len),
+                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
                 None => {
                     tracing::error!(session_id = %session_id, "host_session_get: failed to write result to WASM memory");
-                    (0, 0)
+                    -1
                 }
             },
             Err(e) => {
                 tracing::error!(error = %e, session_id = %session_id, "host_session_get: serialization failed");
-                (0, 0)
+                -1
             }
         },
-        None => (0, 0),
+        None => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
     }
 }
 
@@ -999,10 +1066,82 @@ fn host_emit_event(
     }
 }
 
+/// 广播同步事件到所有客户端（移动端同步通道）
+///
+/// 插件通过此函数将状态变更推送到 DesktopSyncEvent 广播通道，
+/// 由 SyncEventHandler 转发给所有已认证的 WebSocket 客户端（移动端）。
+///
+/// payload 格式：
+/// ```json
+/// { "type": "TaskStatusChanged", "session_id": "...", "task_status": "in_progress", "task_reason": "...", "task_questions": [...] }
+/// { "type": "SessionModeChanged", "session_id": "...", "auto_approve": true }
+/// ```
+fn host_broadcast_sync(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    payload_ptr: u32,
+    payload_len: u32,
+) {
+    let plugin_id = caller.data().plugin_id.clone();
+
+    let payload_str = match read_wasm_string(&mut caller, payload_ptr, payload_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!("[plugin:{}] host_broadcast_sync: failed to read payload", plugin_id);
+            return;
+        }
+    };
+
+    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "[plugin:{}] host_broadcast_sync: invalid JSON payload", plugin_id);
+            return;
+        }
+    };
+
+    let event_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    use crate::events::DesktopSyncEvent;
+
+    let sync_event = match event_type {
+        "TaskStatusChanged" => {
+            let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let task_status = payload.get("task_status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let task_reason = payload.get("task_reason").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let task_questions = payload.get("task_questions")
+                .and_then(|v| serde_json::from_value::<Vec<crate::enums::PluginQuestion>>(v.clone()).ok());
+            DesktopSyncEvent::TaskStatusChanged {
+                session_id,
+                task_status,
+                task_reason,
+                task_questions,
+            }
+        }
+        "SessionModeChanged" => {
+            let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let auto_approve = payload.get("auto_approve").and_then(|v| v.as_bool()).unwrap_or(false);
+            DesktopSyncEvent::SessionModeChanged {
+                session_id,
+                auto_approve,
+            }
+        }
+        _ => {
+            tracing::warn!("[plugin:{}] host_broadcast_sync: unknown event type: {}", plugin_id, event_type);
+            return;
+        }
+    };
+
+    let ctx = crate::system::app_context::AppContext::global();
+    let sync_tx = ctx.sync_tx();
+    if let Err(e) = sync_tx.send(sync_event) {
+        tracing::error!(error = %e, "[plugin:{}] host_broadcast_sync: broadcast failed", plugin_id);
+    }
+}
+
 /// HTTP 代理：发起 HTTP 请求
 ///
-/// 参数：(request_json_ptr, request_json_len)
-/// 返回：(result_ptr, result_len) — JSON 响应字符串或 (0,0) 表示错误
+/// 参数：(request_json_ptr, request_json_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
 ///
 /// request_json 格式：
 /// ```json
@@ -1023,7 +1162,8 @@ fn host_http_fetch(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     req_ptr: u32,
     req_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
     let host_ctx = caller.data().host_ctx.clone();
 
@@ -1031,7 +1171,7 @@ fn host_http_fetch(
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to read request JSON");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -1040,7 +1180,7 @@ fn host_http_fetch(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: invalid request JSON");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -1088,8 +1228,8 @@ fn host_http_fetch(
         });
         let result_str = serde_json::to_string(&result_json).unwrap_or_default();
         match write_wasm_string(&mut caller, &result_str) {
-            Some((ptr, len)) => (ptr, len),
-            None => (0, 0),
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => -1,
         }
     } else {
         // 非流式模式：同步执行 HTTP 请求
@@ -1101,20 +1241,20 @@ fn host_http_fetch(
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: response serialization failed");
-                        return (0, 0);
+                        return -1;
                     }
                 };
                 match write_wasm_string(&mut caller, &result_str) {
-                    Some((ptr, len)) => (ptr, len),
+                    Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
                     None => {
                         tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to write result to WASM memory");
-                        (0, 0)
+                        -1
                     }
                 }
             }
             Err(e) => {
                 tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: HTTP request failed");
-                (0, 0)
+                -1
             }
         }
     }
@@ -1173,4 +1313,264 @@ fn host_notify_noop(
     _body_len: u32,
 ) -> i32 {
     0
+}
+
+// ==================== File System Host Functions ====================
+
+/// 文件系统：读取文件
+///
+/// 参数：(path_ptr, path_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+fn host_fs_read(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_read: failed to read path");
+            return -1;
+        }
+    };
+
+    // 权限校验
+    if !host_ctx.permission.check(&plugin_id, PERMISSION_FS_READ) {
+        tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_read: permission denied");
+        return -1;
+    }
+
+    // 访问校验（三层策略）
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(fs_auth.check(&plugin_id, &path, FsOp::Read))
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_read: access denied by fs_auth");
+        return -1;
+    }
+
+    // 执行文件读取
+    match std::fs::read_to_string(&path) {
+        Ok(content) => match write_wasm_string(&mut caller, &content) {
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_read: failed to write result to WASM memory");
+                -1
+            }
+        },
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_read: file read failed");
+            -1
+        }
+    }
+}
+
+/// 文件系统：写入文件
+///
+/// 参数：(path_ptr, path_len, data_ptr, data_len)
+/// 返回：0 成功，-1 失败
+fn host_fs_write(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+    data_ptr: u32,
+    data_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_write: failed to read path");
+            return -1;
+        }
+    };
+
+    let data = match read_wasm_string(&mut caller, data_ptr, data_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_write: failed to read data");
+            return -1;
+        }
+    };
+
+    // 权限校验
+    if !host_ctx.permission.check(&plugin_id, PERMISSION_FS_WRITE) {
+        tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_write: permission denied");
+        return -1;
+    }
+
+    // 访问校验
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(fs_auth.check(&plugin_id, &path, FsOp::Write))
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_write: access denied by fs_auth");
+        return -1;
+    }
+
+    // 自动创建父目录
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_write: failed to create parent directory");
+                return -1;
+            }
+        }
+    }
+
+    match std::fs::write(&path, &data) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_write: file write failed");
+            -1
+        }
+    }
+}
+
+/// 文件系统：复制文件
+///
+/// 参数：(src_ptr, src_len, dst_ptr, dst_len)
+/// 返回：0 成功，-1 失败
+fn host_fs_copy(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    src_ptr: u32,
+    src_len: u32,
+    dst_ptr: u32,
+    dst_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let src = match read_wasm_string(&mut caller, src_ptr, src_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_copy: failed to read src path");
+            return -1;
+        }
+    };
+
+    let dst = match read_wasm_string(&mut caller, dst_ptr, dst_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_copy: failed to read dst path");
+            return -1;
+        }
+    };
+
+    // 复制需要读+写权限
+    if !host_ctx.permission.check(&plugin_id, PERMISSION_FS_READ) {
+        tracing::error!(plugin_id = %plugin_id, "host_fs_copy: fs:read permission denied");
+        return -1;
+    }
+    if !host_ctx.permission.check(&plugin_id, PERMISSION_FS_WRITE) {
+        tracing::error!(plugin_id = %plugin_id, "host_fs_copy: fs:write permission denied");
+        return -1;
+    }
+
+    // 访问校验（源文件读、目标文件写）
+    let fs_auth = host_ctx.fs_auth.clone();
+    let plugin_id_clone = plugin_id.clone();
+    let src_clone = src.clone();
+    let dst_clone = dst.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            let read_ok = fs_auth.check(&plugin_id_clone, &src_clone, FsOp::Read).await;
+            if !read_ok {
+                return false;
+            }
+            fs_auth.check(&plugin_id_clone, &dst_clone, FsOp::Write).await
+        })
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, src = %src, dst = %dst, "host_fs_copy: access denied by fs_auth");
+        return -1;
+    }
+
+    // 自动创建目标父目录
+    if let Some(parent) = std::path::Path::new(&dst).parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(error = %e, plugin_id = %plugin_id, dst = %dst, "host_fs_copy: failed to create parent directory");
+                return -1;
+            }
+        }
+    }
+
+    match std::fs::copy(&src, &dst) {
+        Ok(_) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, src = %src, dst = %dst, "host_fs_copy: file copy failed");
+            -1
+        }
+    }
+}
+
+// ==================== Config Host Functions ====================
+
+/// 配置白名单 key 列表
+const CONFIG_WHITELIST: &[&str] = &["plugin.token", "network.port", "home_dir"];
+
+/// 配置：读取宿主配置项
+///
+/// 参数：(key_ptr, key_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+fn host_config_get(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    key_ptr: u32,
+    key_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+
+    let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_config_get: failed to read key");
+            return -1;
+        }
+    };
+
+    // 白名单校验
+    if !CONFIG_WHITELIST.contains(&key.as_str()) {
+        tracing::warn!(plugin_id = %plugin_id, key = %key, "host_config_get: key not in whitelist");
+        return -1;
+    }
+
+    let value = match key.as_str() {
+        "plugin.token" => {
+            let config = AppConfig::global();
+            config.plugin.token.clone()
+        }
+        "network.port" => {
+            let config = AppConfig::global();
+            config.network.port.to_string()
+        }
+        "home_dir" => {
+            match dirs::home_dir() {
+                Some(dir) => dir.to_string_lossy().to_string(),
+                None => {
+                    tracing::error!(plugin_id = %plugin_id, "host_config_get: home_dir not available");
+                    return -1;
+                }
+            }
+        }
+        _ => return -1,
+    };
+
+    match write_wasm_string(&mut caller, &value) {
+        Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+        None => {
+            tracing::error!(plugin_id = %plugin_id, key = %key, "host_config_get: failed to write result to WASM memory");
+            -1
+        }
+    }
 }

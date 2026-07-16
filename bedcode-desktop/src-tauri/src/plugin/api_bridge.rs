@@ -3,6 +3,7 @@
 //! Tauri commands — 前端 PluginContext 的每个 API 调用通过 Tauri invoke 到达此桥接层
 //! Rust 端做权限校验后执行操作
 
+use crate::plugin::fs_auth::FsAuthChecker;
 use crate::plugin::host::PluginHost;
 use crate::plugin::types::DesktopPluginInfo;
 use std::sync::Arc;
@@ -239,4 +240,22 @@ pub async fn plugin_dev_reload(
         let _ = (plugin_host, plugin_id);
         Err(crate::AppError::Plugin("Hot reload only available in dev mode".to_string()))
     }
+}
+
+// ==================== File System Auth ====================
+
+/// 回复文件系统授权请求（由前端弹窗调用）
+#[tauri::command]
+pub async fn plugin_fs_auth_respond(
+    request_id: String,
+    allowed: bool,
+    remember: bool,
+    fs_auth: State<'_, Arc<FsAuthChecker>>,
+) -> crate::Result<()> {
+    tracing::info!(
+        "[API] plugin_fs_auth_respond: request_id={}, allowed={}, remember={}",
+        request_id, allowed, remember
+    );
+    fs_auth.respond(&request_id, allowed, remember).await;
+    Ok(())
 }

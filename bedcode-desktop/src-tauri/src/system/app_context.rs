@@ -4,7 +4,6 @@
 //! 在 lib.rs 的 run() 中一次性创建，后续通过 AppContext::global() 获取
 
 use crate::plugin::PluginHost;
-use crate::plugin::PluginManager;
 use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::utils::auth::QrTokenManager;
@@ -26,8 +25,6 @@ pub struct AppContext {
     session_manager: Arc<SessionManager>,
     /// 会话配置管理器
     config_manager: Arc<SessionConfigManager>,
-    /// 插件管理器（任务状态）
-    plugin_manager: Arc<PluginManager>,
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
     /// 配对服务
@@ -74,10 +71,6 @@ impl AppContext {
         &self.config_manager
     }
 
-    pub fn plugin_manager(&self) -> &Arc<PluginManager> {
-        &self.plugin_manager
-    }
-
     pub fn plugin_host(&self) -> &Arc<PluginHost> {
         &self.plugin_host
     }
@@ -112,7 +105,6 @@ pub struct AppContextBuilder {
     db: Option<Arc<Mutex<Database>>>,
     session_manager: Option<Arc<SessionManager>>,
     config_manager: Option<Arc<SessionConfigManager>>,
-    plugin_manager: Option<Arc<PluginManager>>,
     plugin_host: Option<Arc<PluginHost>>,
     pairing_service: Option<Arc<PairingService>>,
     qr_manager: Option<Arc<QrTokenManager>>,
@@ -128,7 +120,6 @@ impl AppContextBuilder {
             db: None,
             session_manager: None,
             config_manager: None,
-            plugin_manager: None,
             plugin_host: None,
             pairing_service: None,
             qr_manager: None,
@@ -151,11 +142,6 @@ impl AppContextBuilder {
 
     pub fn config_manager(mut self, cm: Arc<SessionConfigManager>) -> Self {
         self.config_manager = Some(cm);
-        self
-    }
-
-    pub fn plugin_manager(mut self, pm: Arc<PluginManager>) -> Self {
-        self.plugin_manager = Some(pm);
         self
     }
 
@@ -200,7 +186,6 @@ impl AppContextBuilder {
             db: self.db.expect("AppContext: db is required"),
             session_manager: self.session_manager.expect("AppContext: session_manager is required"),
             config_manager: self.config_manager.expect("AppContext: config_manager is required"),
-            plugin_manager: self.plugin_manager.expect("AppContext: plugin_manager is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
             pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),

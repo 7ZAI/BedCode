@@ -75,10 +75,10 @@
     />
 
     <!-- Auto Start -->
-    <Toggle
+    <!-- <Toggle
       v-model="form.autoStart"
       :label="$t('desktop.form.autoStart')"
-    />
+    /> -->
   </form>
 </template>
 
