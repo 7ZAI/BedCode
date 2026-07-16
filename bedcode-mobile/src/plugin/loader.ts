@@ -72,7 +72,7 @@ class PluginLoaderClass {
     if (!plugin) return
 
     // 清理所有 Disposable
-    plugin.context._disposables.forEach(d => {
+    plugin.context._disposables.forEach((d: { dispose(): void }) => {
       try { d.dispose() } catch (e) {
         console.error(`[PluginLoader] Error disposing resource for ${pluginId}:`, e)
       }

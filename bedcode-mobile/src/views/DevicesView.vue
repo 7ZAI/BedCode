@@ -189,7 +189,7 @@
               </svg>
             </button>
           </div>
-        </div>
+        </TransitionGroup>
       </div>
     </div>
 

@@ -452,12 +452,12 @@ watch(() => props.visible, (show) => {
 
 <style scoped>
 .shortcut-config-modal {
-  --key-h: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.5rem, 2.25rem);
-  --key-font: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
+  --key-h: clamp(1.875rem, 2.125rem + (100vw - 360px) / 840 * 0.5rem, 2.625rem);
+  --key-font: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem);
   --mod-h: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.5rem, 2.25rem);
   --row-px: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.375rem, 0.875rem);
   --row-py: clamp(0.25rem, 0.375rem + (100vw - 360px) / 840 * 0.25rem, 0.625rem);
-  --footer-font: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.125rem, 0.8125rem);
+  --footer-font: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 840 * 0.125rem, 0.9375rem);
 }
 
 .shortcut-row {
@@ -569,12 +569,12 @@ watch(() => props.visible, (show) => {
 .modifier-row {
   display: flex;
   flex-wrap: wrap;
-  gap: clamp(0.25rem, 0.375rem + (100vw - 360px) / 840 * 0.25rem, 0.625rem);
+  gap: 0.625rem;
 }
 
 .modifier-btn {
-  padding: clamp(0.1875rem, 0.25rem + (100vw - 360px) / 840 * 0.1875rem, 0.4375rem) clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.25rem, 0.75rem);
-  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
+  padding: clamp(0.3125rem, 0.375rem + (100vw - 360px) / 840 * 0.1875rem, 0.5625rem) clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.25rem, 1.125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem);
   font-weight: 500;
   border-radius: 0.375rem;
   border: 1px solid var(--mobile-border);
@@ -595,13 +595,15 @@ watch(() => props.visible, (show) => {
 }
 
 .key-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(clamp(1.625rem, 1.875rem + (100vw - 360px) / 840 * 0.5rem, 2.375rem), 1fr));
-  gap: clamp(0.125rem, 0.1875rem, 0.25rem);
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.1875rem, 0.25rem, 0.375rem);
 }
 
 .key-btn {
+  min-width: 0;
   height: var(--key-h);
+  padding: 0 clamp(0.5rem, 0.625rem, 0.875rem);
   font-size: var(--key-font);
   font-weight: 500;
   border-radius: 0.375rem;
@@ -634,7 +636,8 @@ watch(() => props.visible, (show) => {
 
 .footer-btn {
   flex: 1;
-  padding: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.125rem, 0.625rem);
+  height: clamp(2.25rem, 2.5rem + (100vw - 360px) / 840 * 0.5rem, 3rem);
+  padding: 0;
   font-size: var(--footer-font);
   font-weight: 500;
   border-radius: 0.625rem;
