@@ -15,6 +15,31 @@ mod state;
 use bedcode_plugin_api::{WasmHost, WasmPlugin};
 use bedcode_plugin_api::types::PluginManifest;
 
+/// 任务历史表建表 SQL
+const TASK_HISTORY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS task_history (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    agent           TEXT,
+    source          TEXT,
+    session_id      TEXT,
+    claude_sid      TEXT,
+    working_dir     TEXT,
+    exit_reason     TEXT,
+    questions       TEXT,
+    auto_approve    INTEGER DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    started_at      TEXT,
+    completed_at    TEXT,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_history_status ON task_history(status);
+CREATE INDEX IF NOT EXISTS idx_task_history_session_id ON task_history(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_history_created_at ON task_history(created_at);
+"#;
+
 struct AutoTaskPlugin;
 
 impl WasmPlugin for AutoTaskPlugin {
@@ -140,6 +165,14 @@ impl WasmPlugin for AutoTaskPlugin {
 
         // 2. Token 校验
         let _token_result = token::ensure_token(&host);
+
+        // 3. 初始化插件独立数据库（建表 + 索引）
+        let affected = host.plugin_db_execute(TASK_HISTORY_SCHEMA);
+        if affected < 0 {
+            host.log_error("Failed to initialize task_history table");
+        } else {
+            host.log_info("task_history table initialized");
+        }
 
         Ok(())
     }

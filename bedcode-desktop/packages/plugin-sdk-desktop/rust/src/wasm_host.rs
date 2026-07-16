@@ -77,6 +77,30 @@ impl WasmHost {
         serde_json::from_str(&json_str).ok()
     }
 
+    // ==================== Plugin Database ====================
+
+    /// 插件独立数据库：执行 SQL
+    ///
+    /// 操作插件专属 .db 文件，无表名前缀限制
+    pub fn plugin_db_execute(&self, sql: &str) -> i32 {
+        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
+        unsafe { host_plugin_db_execute(sql_ptr, sql_len) }
+    }
+
+    /// 插件独立数据库：查询 SQL
+    ///
+    /// 操作插件专属 .db 文件，无表名前缀限制
+    pub fn plugin_db_query(&self, sql: &str) -> Option<serde_json::Value> {
+        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_plugin_db_query(sql_ptr, sql_len, out.as_mut_ptr() as u32) };
+        if status != 0 || (out[0] == 0 && out[1] == 0) {
+            return None;
+        }
+        let json_str = wasm_read_string(out[0], out[1]);
+        serde_json::from_str(&json_str).ok()
+    }
+
     // ==================== Terminal ====================
 
     /// 终端：发送输入
@@ -273,6 +297,10 @@ extern "C" {
     fn host_db_execute(sql_ptr: u32, sql_len: u32) -> i32;
     /// 数据库：查询 SQL — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
     fn host_db_query(sql_ptr: u32, sql_len: u32, out_ptr: u32) -> i32;
+    /// 插件独立数据库：执行 SQL — 返回受影响行数
+    fn host_plugin_db_execute(sql_ptr: u32, sql_len: u32) -> i32;
+    /// 插件独立数据库：查询 SQL — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
+    fn host_plugin_db_query(sql_ptr: u32, sql_len: u32, out_ptr: u32) -> i32;
     /// 终端：发送输入 — 返回 0 成功，-1 失败
     fn host_terminal_send(sid_ptr: u32, sid_len: u32, data_ptr: u32, data_len: u32) -> i32;
     /// 会话：列出所有 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
