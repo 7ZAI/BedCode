@@ -160,3 +160,76 @@ pub async fn reload_wasm_plugin(
     // 重新激活
     manager.activate(&plugin_id, &app_handle).await
 }
+
+// ==================== File System Auth Commands ====================
+
+/// 回复文件访问授权请求
+#[tauri::command]
+pub async fn plugin_fs_auth_respond(
+    app_handle: tauri::AppHandle,
+    request_id: String,
+    allowed: bool,
+    remember: bool,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().respond(&request_id, allowed, remember).await;
+    Ok(())
+}
+
+/// 添加路径白名单
+#[tauri::command]
+pub async fn plugin_fs_add_path_whitelist(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().add_path_whitelist(&path).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+}
+
+/// 移除路径白名单
+#[tauri::command]
+pub async fn plugin_fs_remove_path_whitelist(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().remove_path_whitelist(&path).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+}
+
+/// 获取路径白名单
+#[tauri::command]
+pub async fn plugin_fs_get_path_whitelist(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<String>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().get_path_whitelist().await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+}
+
+/// 添加插件白名单
+#[tauri::command]
+pub async fn plugin_fs_add_plugin_whitelist(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().add_plugin_whitelist(&plugin_id).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+}
+
+/// 移除插件白名单
+#[tauri::command]
+pub async fn plugin_fs_remove_plugin_whitelist(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().remove_plugin_whitelist(&plugin_id).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+}
+
+/// 获取插件白名单
+#[tauri::command]
+pub async fn plugin_fs_get_plugin_whitelist(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<String>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.fs_auth().get_plugin_whitelist().await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+}
