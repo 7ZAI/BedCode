@@ -3,6 +3,11 @@
     class="terminal-input-bar z-40"
     :style="inputBarStyle"
   >
+    <!-- 快捷键面板遮罩 - 点击终端区域关闭面板 -->
+    <transition name="shortcuts-overlay">
+      <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-overlay" @touchstart.prevent="closeShortcutsPanel" @mousedown.prevent="closeShortcutsPanel"></div>
+    </transition>
+
     <!-- 快捷键面板 - 覆盖层，不影响终端高度 -->
     <transition name="shortcuts-slide">
       <div v-if="showShortcutsPanel && !props.isLandscape" ref="shortcutsPanelRef" class="shortcuts-panel" @mousedown.prevent>
@@ -639,6 +644,12 @@ function toggleShortcuts() {
   }
 }
 
+function closeShortcutsPanel() {
+  if (!showShortcutsPanel.value) return
+  showShortcutsPanel.value = false
+  emit('shortcutsPanelToggle', 0)
+}
+
 function handleSubmit() {
   const text = inputText.value.trim()
   if (!text) return
@@ -1030,6 +1041,23 @@ onMounted(() => {
   height: var(--panel-h);
   min-height: var(--panel-h);
   max-height: var(--panel-h);
+}
+
+/* 快捷键面板遮罩 - 覆盖终端区域，点击关闭面板 */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+}
+
+.shortcuts-overlay-enter-active,
+.shortcuts-overlay-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.shortcuts-overlay-enter-from,
+.shortcuts-overlay-leave-to {
+  opacity: 0;
 }
 
 /* 快捷键面板滑动动画 - 从下往上展开/收起 */
