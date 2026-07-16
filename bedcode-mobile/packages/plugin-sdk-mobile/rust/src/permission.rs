@@ -14,6 +14,9 @@ pub const PERMISSION_UI_SETTINGS: &str = "ui:settings";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
+pub const PERMISSION_FS_READ: &str = "fs:read";
+pub const PERMISSION_FS_WRITE: &str = "fs:write";
+pub const PERMISSION_BUS: &str = "bus";
 
 static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_INPUT,
@@ -26,6 +29,9 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_UI_INPUT,
     PERMISSION_NETWORK_HTTP,
     PERMISSION_STORAGE,
+    PERMISSION_FS_READ,
+    PERMISSION_FS_WRITE,
+    PERMISSION_BUS,
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
@@ -39,6 +45,9 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_INPUT, &["ui.registerTerminalToolbarItem"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete"]),
+    (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
+    (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
+    (PERMISSION_BUS, &["bus.publish", "bus.subscribe", "bus.unsubscribe"]),
 ];
 
 pub struct PermissionManager {
