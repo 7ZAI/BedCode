@@ -17,7 +17,7 @@ export async function activate(context: PluginContext): Promise<void> {
   })
 
   // 监听任务状态变更 → toast 提示
-  context.events.on('task:statusChanged', (data: any) => {
+  context.events.on('task:status-changed', (data: any) => {
     const { taskStatus, taskReason } = data
     const statusMessages: Record<string, string> = {
       idle: '空闲',
@@ -31,7 +31,7 @@ export async function activate(context: PluginContext): Promise<void> {
   })
 
   // 监听会话模式变更
-  context.events.on('session:modeChanged', (data: any) => {
+  context.events.on('session:mode-changed', (data: any) => {
     const { autoApprove } = data
     console.log(`[Auto Task] 模式变更: ${autoApprove ? '自动授权' : '手动模式'}`)
   })

@@ -163,12 +163,9 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     );
     host.plugin_db_execute(&sql);
 
-    // 先发送 /clear 清屏
-    host.terminal_send(session_id, "/clear");
-    host.log_debug(&format!("try_dispatch_next: sent /clear for session_id={}", session_id));
-
-    // 再发送 prompt
-    host.terminal_send(session_id, prompt);
+    // 合并 /clear 和 prompt 为一次发送，避免 /clear 未处理完 prompt 就到达
+    let combined = format!("/clear\n\n{}", prompt);
+    host.terminal_send(session_id, &combined);
     host.log_info(&format!(
         "try_dispatch_next: dispatched task_id={} prompt_len={} session_id={}",
         task_id, prompt.len(), session_id
@@ -189,8 +186,8 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     );
     host.plugin_db_execute(&sql);
 
-    // 广播出队事件
-    let remaining = pending_count(host, session_id);
+    // 计算剩余数量（刚出队一个，所以是队列长度 - 1）
+    let remaining = (queue.len() as i64).saturating_sub(1);
     broadcast_queue_changed(host, session_id, remaining, "dequeue");
 
     // 如果还有剩余任务，确保自动模式开启
@@ -361,12 +358,23 @@ fn reorder_positions(host: &WasmHost, session_id: &str) {
 
 /// 确保自动模式开启
 fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
+    // 先尝试更新已有记录
     let sql = format!(
         "UPDATE task_history SET auto_approve = 1, updated_at = datetime('now') \
          WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
         session_id.replace('\'', "''"),
     );
-    host.plugin_db_execute(&sql);
+    let affected = host.plugin_db_execute(&sql);
+
+    // 如果该 session 还没有 task_history 记录，先插入一条
+    if affected == 0 {
+        let insert_sql = format!(
+            "INSERT INTO task_history (id, name, status, session_id, auto_approve, created_at, updated_at) \
+             VALUES (lower(hex(randomblob(16))), '', 'idle', '{}', 1, datetime('now'), datetime('now'))",
+            session_id.replace('\'', "''"),
+        );
+        host.plugin_db_execute(&insert_sql);
+    }
 
     host.broadcast_sync(&serde_json::json!({
         "type": "SessionModeChanged",

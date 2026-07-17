@@ -105,7 +105,14 @@ async function loadQueue(sessionId: string) {
 async function refresh() {
   loading.value = true
   await loadHistory()
-  if (selectedSessionId.value) {
+  // 自动选择第一个有任务的 session 来展示队列
+  if (!selectedSessionId.value && tasks.value.length > 0) {
+    const firstSession = tasks.value[0].session_id
+    if (firstSession) {
+      selectedSessionId.value = firstSession
+      await loadQueue(firstSession)
+    }
+  } else if (selectedSessionId.value) {
     await loadQueue(selectedSessionId.value)
   }
   loading.value = false
@@ -132,8 +139,8 @@ let queueDisposable: any = null
 onMounted(async () => {
   await refresh()
 
-  statusDisposable = context.events.on('task:statusChanged', onStatusChanged)
-  queueDisposable = context.events.on('task:queueChanged', onQueueChanged)
+  statusDisposable = context.events.on('task:status-changed', onStatusChanged)
+  queueDisposable = context.events.on('task:queue-changed', onQueueChanged)
 })
 
 onUnmounted(() => {

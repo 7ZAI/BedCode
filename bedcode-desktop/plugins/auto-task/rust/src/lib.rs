@@ -161,7 +161,11 @@ impl WasmPlugin for AutoTaskPlugin {
                 state::get_task_status(&host, session_id)
             }
             "list-task-history" => {
-                state::list_task_history(&host)
+                let session_id = args.get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                state::list_task_history(&host, session_id)
             }
             "list-task-queue" => {
                 let session_id = args.get("session_id")

@@ -95,7 +95,13 @@ const _sfc_main = /* @__PURE__ */ defineComponent({
     async function refresh() {
       loading.value = true;
       await loadHistory();
-      if (selectedSessionId.value) {
+      if (!selectedSessionId.value && tasks.value.length > 0) {
+        const firstSession = tasks.value[0].session_id;
+        if (firstSession) {
+          selectedSessionId.value = firstSession;
+          await loadQueue(firstSession);
+        }
+      } else if (selectedSessionId.value) {
         await loadQueue(selectedSessionId.value);
       }
       loading.value = false;
@@ -113,8 +119,8 @@ const _sfc_main = /* @__PURE__ */ defineComponent({
     let queueDisposable = null;
     onMounted(async () => {
       await refresh();
-      statusDisposable = context.events.on("task:statusChanged", onStatusChanged);
-      queueDisposable = context.events.on("task:queueChanged", onQueueChanged);
+      statusDisposable = context.events.on("task:status-changed", onStatusChanged);
+      queueDisposable = context.events.on("task:queue-changed", onQueueChanged);
     });
     onUnmounted(() => {
       statusDisposable == null ? void 0 : statusDisposable.dispose();
@@ -219,7 +225,7 @@ async function activate(context) {
     icon: "📋",
     component: _sfc_main
   });
-  context.events.on("task:statusChanged", (data) => {
+  context.events.on("task:status-changed", (data) => {
     const { taskStatus, taskReason } = data;
     const statusMessages = {
       idle: "空闲",
@@ -231,7 +237,7 @@ async function activate(context) {
     const label = statusMessages[taskStatus] || taskStatus;
     console.log(`[Auto Task] 状态变更: ${label}${taskReason ? ` - ${taskReason}` : ""}`);
   });
-  context.events.on("session:modeChanged", (data) => {
+  context.events.on("session:mode-changed", (data) => {
     const { autoApprove } = data;
     console.log(`[Auto Task] 模式变更: ${autoApprove ? "自动授权" : "手动模式"}`);
   });

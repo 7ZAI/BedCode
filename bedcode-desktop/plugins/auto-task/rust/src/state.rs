@@ -56,25 +56,18 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
 
     let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
     let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
     let reason = body.get("reason").and_then(|v| v.as_str());
     let questions = body.get("questions");
     let bedcode_session_id = body.get("bedcode_session_id").and_then(|v| v.as_str());
 
     host.log_debug(&format!(
-        "task-status parsed: session_id={}, status={}, has_token={}, reason={:?}, has_questions={}, bedcode_sid={:?}",
-        session_id, status, !token.is_empty(), reason, questions.is_some(), bedcode_session_id
+        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}",
+        session_id, status, reason, questions.is_some(), bedcode_session_id
     ));
 
     if session_id.is_empty() {
         host.log_warn("task-status rejected: empty session_id");
         return error_response(400, "Missing session_id");
-    }
-
-    // 验证 plugin token
-    if !validate_token(host, token) {
-        host.log_warn(&format!("task-status auth failed: session_id={}, token_len={}", session_id, token.len()));
-        return error_response(403, "Invalid plugin token");
     }
 
     // 验证 status 值
@@ -171,8 +164,9 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
 
     host.log_info(&format!("Task status updated: claude_sid={} bedcode_sid={} status={}", session_id, resolved_session_id, status));
 
-    // 任务完成时检查队列，尝试调度下一个任务
-    if matches!(status, "completed" | "interrupted" | "idle") {
+    // 任务终态时检查队列，尝试调度下一个任务
+    // idle 不触发：仅表示"无任务运行"，SessionStart 时推送 idle，此时不应出队
+    if matches!(status, "completed" | "interrupted") {
         crate::queue::try_dispatch_next(&host, resolved_session_id);
     }
 
@@ -321,10 +315,19 @@ pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Valu
     }))
 }
 
-/// 查询所有任务历史记录（供插件内部 command 使用）
-pub fn list_task_history(host: &WasmHost) -> anyhow::Result<Value> {
-    let sql = "SELECT id, name, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history ORDER BY created_at DESC LIMIT 100";
-    let rows = host.plugin_db_query(sql)
+/// 查询任务历史记录（供插件内部 command 使用）
+///
+/// 可选 session_id 过滤，无则返回所有会话记录
+pub fn list_task_history(host: &WasmHost, session_id: &str) -> anyhow::Result<Value> {
+    let sql = if session_id.is_empty() {
+        "SELECT id, name, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history ORDER BY created_at DESC LIMIT 100".to_string()
+    } else {
+        format!(
+            "SELECT id, name, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 100",
+            session_id.replace('\'', "''")
+        )
+    };
+    let rows = host.plugin_db_query(&sql)
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
     Ok(serde_json::json!({ "tasks": rows }))
