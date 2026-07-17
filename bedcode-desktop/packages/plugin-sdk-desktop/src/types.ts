@@ -75,6 +75,7 @@ export interface ViewContribution {
   type: 'sidebar' | 'toolbox' | 'statusbar'
   title: string
   component: string
+  icon?: string
 }
 
 /** 终端扩展点 */
@@ -104,6 +105,7 @@ export interface FileHandlerContribution {
 export interface SidebarPanelDescriptor {
   id: string
   title: string
+  icon?: string
   component: any
 }
 

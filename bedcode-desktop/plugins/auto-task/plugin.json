@@ -8,19 +8,28 @@
   "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_auto_task",
-  "permissions": ["storage", "terminal:input", "terminal:output", "session:read"],
+  "permissions": ["storage", "terminal:input", "terminal:output", "session:read", "broadcast", "fs:read", "fs:write", "ui:sidebar"],
   "contributes": {
     "commands": [
       { "id": "auto-task.setup-project-hooks", "title": "Setup Project Hooks" },
       { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
       { "id": "auto-task.get-task-status", "title": "Get Task Status" },
-      { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" }
+      { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
+      { "id": "auto-task.add-task", "title": "Add Task to Queue" },
+      { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
+      { "id": "auto-task.list-queue", "title": "List Task Queue" },
+      { "id": "auto-task.clear-queue", "title": "Clear Task Queue" },
+      { "id": "auto-task.list-task-history", "title": "List Task History" },
+      { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" }
+    ],
+    "views": [
+      { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "📋" }
     ],
     "lifecycle": {
       "onStartup": true,
       "onShutdown": true
     },
-    "provides": ["task:status-changed", "session:mode-changed"],
+    "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"],
     "subscribes": []
   }
 }

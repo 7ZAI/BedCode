@@ -18,6 +18,7 @@ const VALID_PERMISSIONS = new Set([
   'ui:fileHandler',
   'network:http',
   'storage',
+  'broadcast',
 ])
 
 /** 权限到 API 方法的映射 */

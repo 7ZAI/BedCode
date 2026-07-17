@@ -11,6 +11,7 @@
 mod hooks;
 mod token;
 mod state;
+mod queue;
 
 use bedcode_plugin_api::{WasmHost, WasmPlugin};
 use bedcode_plugin_api::types::PluginManifest;
@@ -56,18 +57,28 @@ impl WasmPlugin for AutoTaskPlugin {
             "sandbox": "inline",
             "pluginType": "rust-ts",
             "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "session:read", "fs:read", "fs:write"],
+            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "session:read", "fs:read", "fs:write", "ui:sidebar"],
             "contributes": {
                 "commands": [
                     { "id": "auto-task.setup-project-hooks", "title": "Setup Project Hooks" },
                     { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
                     { "id": "auto-task.get-task-status", "title": "Get Task Status" },
-                    { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" }
+                    { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
+                    { "id": "auto-task.add-task", "title": "Add Task to Queue" },
+                    { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
+                    { "id": "auto-task.list-queue", "title": "List Task Queue" },
+                    { "id": "auto-task.clear-queue", "title": "Clear Task Queue" },
+                    { "id": "auto-task.list-task-history", "title": "List Task History" },
+                    { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" }
+                ],
+                "views": [
+                    { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "📋" }
                 ],
                 "lifecycle": {
                     "onStartup": true,
                     "onShutdown": true
-                }
+                },
+                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"]
             }
         });
         serde_json::from_value(json).expect("Invalid manifest JSON")
@@ -95,7 +106,14 @@ impl WasmPlugin for AutoTaskPlugin {
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let body = args.get("body").cloned().unwrap_or(serde_json::Value::Null);
                 let query = args.get("query").cloned().unwrap_or(serde_json::json!({}));
-                Ok(state::handle_http_endpoint(&host, method, path, &body, &query))
+
+                // 队列端点路由
+                if path.starts_with("task-queue/") {
+                    let queue_path = path.strip_prefix("task-queue/").unwrap_or("");
+                    Ok(queue::handle_queue_http(&host, method, queue_path, &body, &query))
+                } else {
+                    Ok(state::handle_http_endpoint(&host, method, path, &body, &query))
+                }
             }
             "setup-project-hooks" => {
                 let working_dir = args.get("working_dir")
@@ -142,6 +160,17 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 state::get_task_status(&host, session_id)
             }
+            "list-task-history" => {
+                state::list_task_history(&host)
+            }
+            "list-task-queue" => {
+                let session_id = args.get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let tasks = queue::list_queue(&host, session_id);
+                Ok(serde_json::json!({ "tasks": tasks, "session_id": session_id }))
+            }
             "set-auto-mode" => {
                 let session_id = args.get("session_id")
                     .and_then(|v| v.as_str())
@@ -172,6 +201,14 @@ impl WasmPlugin for AutoTaskPlugin {
             host.log_error("Failed to initialize task_history table");
         } else {
             host.log_info("task_history table initialized");
+        }
+
+        // 4. 初始化任务队列表
+        let affected = host.plugin_db_execute(queue::TASK_QUEUE_SCHEMA);
+        if affected < 0 {
+            host.log_error("Failed to initialize task_queue table");
+        } else {
+            host.log_info("task_queue table initialized");
         }
 
         Ok(())

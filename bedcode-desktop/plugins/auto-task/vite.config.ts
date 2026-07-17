@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import { bedcodePlugin } from '@bedcode/plugin-sdk-desktop/vite'
 
 export default defineConfig({
-  plugins: [bedcodePlugin()],
+  plugins: [vue(), bedcodePlugin()],
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
   },

@@ -170,6 +170,12 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     }));
 
     host.log_info(&format!("Task status updated: claude_sid={} bedcode_sid={} status={}", session_id, resolved_session_id, status));
+
+    // 任务完成时检查队列，尝试调度下一个任务
+    if matches!(status, "completed" | "interrupted" | "idle") {
+        crate::queue::try_dispatch_next(&host, resolved_session_id);
+    }
+
     ok_response()
 }
 
@@ -313,6 +319,15 @@ pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Valu
         "session_id": session_id,
         "task_status": task.and_then(|row| row.get("status").cloned()),
     }))
+}
+
+/// 查询所有任务历史记录（供插件内部 command 使用）
+pub fn list_task_history(host: &WasmHost) -> anyhow::Result<Value> {
+    let sql = "SELECT id, name, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history ORDER BY created_at DESC LIMIT 100";
+    let rows = host.plugin_db_query(sql)
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    Ok(serde_json::json!({ "tasks": rows }))
 }
 
 /// 设置自动授权模式（供插件内部 command 使用）

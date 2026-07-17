@@ -13,6 +13,7 @@ interface RegisteredView {
   viewId: string
   viewType: string
   title: string
+  icon?: string
   component: any
 }
 
@@ -88,13 +89,14 @@ class PluginRegistryClass {
   readonly titleBarItems: Ref<RegisteredTitleBarItem[]> = ref([])
 
   /** 注册视图 */
-  registerView(pluginId: string, viewType: string, panel: { id: string; title: string; component: any }): Disposable {
+  registerView(pluginId: string, viewType: string, panel: { id: string; title: string; icon?: string; component: any }): Disposable {
     const key = `${pluginId}:${panel.id}`
     const entry: RegisteredView = {
       pluginId,
       viewId: panel.id,
       viewType,
       title: panel.title,
+      icon: panel.icon,
       component: panel.component,
     }
     this.views.set(key, entry)

@@ -2,11 +2,20 @@
  * Auto Task 插件入口
  *
  * Claude Code 任务状态同步与自动授权
- * Rust+TS 双层架构：Rust WASM 处理后端逻辑，TS 负责 toast 通知
+ * Rust+TS 双层架构：Rust WASM 处理后端逻辑，TS 负责 UI 和 toast 通知
  */
+import TaskHistoryView from './components/TaskHistoryView.vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 export async function activate(context: PluginContext): Promise<void> {
+  // 注册侧边栏面板 — 任务历史
+  context.ui.registerSidebarPanel({
+    id: 'auto-task.history',
+    title: '任务历史',
+    icon: '📋',
+    component: TaskHistoryView,
+  })
+
   // 监听任务状态变更 → toast 提示
   context.events.on('task:statusChanged', (data: any) => {
     const { taskStatus, taskReason } = data

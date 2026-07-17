@@ -10,10 +10,12 @@
     "dev": "node scripts/build.js --watch"
   },
   "dependencies": {
-    "@bedcode/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
+    "@bedcode/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop",
+    "vue": "^3.4.0"
   },
   "devDependencies": {
     "vite": "^5.0.0",
+    "@vitejs/plugin-vue": "^5.0.0",
     "typescript": "^5.0.0",
     "terser": "^5.0.0"
   }
