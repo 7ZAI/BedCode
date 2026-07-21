@@ -199,13 +199,10 @@ pub fn run() {
             let mut app_config = app_config;
 
             // 确保 plugin token 存在（基础功能，不依赖插件）
-            // auto-task 插件激活后会执行完整的 token 校验/生成逻辑
             if app_config.plugin.token.is_empty() {
                 app_config.ensure_valid_token();
                 crate::system::config::AppConfig::init(app_config.clone());
             }
-
-            // 清理旧版全局 hooks：由 auto-task 插件 on_startup 回调处理
 
             // 保存 resource_dir 供后续会话创建时使用
             let resource_dir = app_handle
@@ -277,6 +274,12 @@ pub fn run() {
             );
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
+            // 注册 PluginHost 为 SessionManager 的生命周期监听器
+            // PluginHost 将会话生命周期事件桥接到 MessageBus，供插件订阅
+            tauri::async_runtime::block_on(async {
+                session_manager.register_lifecycle_listener(Box::new((*plugin_host).clone())).await;
+            });
+            tracing::info!("PluginHost registered as SessionLifecycleListener");
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
@@ -433,19 +436,6 @@ pub fn run() {
             // 触发 Startup 钩子
             tauri::async_runtime::spawn(async move {
                 system::lifecycle::lifecycle_registry().run_startup_hooks().await;
-            });
-
-            // 发送 Token 就绪通知到前端
-            // auto-task 插件 on_startup 负责完整的 token 校验
-            let app_handle_for_plugin = app_handle_arc.clone();
-            tauri::async_runtime::spawn(async move {
-                // 延迟 500ms 发送，确保前端已加载完成
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let _ = app_handle_for_plugin.emit("plugin-setup-result", serde_json::json!({
-                    "success": true,
-                    "message": "Token 已就绪",
-                    "token_generated": false,
-                }));
             });
 
             Ok(())
