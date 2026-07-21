@@ -59,10 +59,11 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     let reason = body.get("reason").and_then(|v| v.as_str());
     let questions = body.get("questions");
     let bedcode_session_id = body.get("bedcode_session_id").and_then(|v| v.as_str());
+    let task_name = body.get("name").and_then(|v| v.as_str());
 
     host.log_debug(&format!(
-        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}",
-        session_id, status, reason, questions.is_some(), bedcode_session_id
+        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}, name={:?}",
+        session_id, status, reason, questions.is_some(), bedcode_session_id, task_name
     ));
 
     if session_id.is_empty() {
@@ -106,6 +107,14 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             sql_parts.push(format!("claude_sid = '{}'", session_id.replace('\'', "''")));
         }
 
+        // 更新任务名称：仅在当前 name 为空且新 name 不为空时更新
+        if let Some(name) = task_name.filter(|n| !n.is_empty()) {
+            let current_name = row.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if current_name.is_empty() {
+                sql_parts.push(format!("name = '{}'", name.replace('\'', "''")));
+            }
+        }
+
         // 状态转换时更新时间戳
         match status {
             "in_progress" => sql_parts.push("started_at = datetime('now')".to_string()),
@@ -128,10 +137,15 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         let reason_str = reason
             .map(|r| r.replace('\'', "''"))
             .unwrap_or_default();
+        let name_str = task_name
+            .filter(|n| !n.is_empty())
+            .map(|n| n.replace('\'', "''"))
+            .unwrap_or_default();
 
         let sql = format!(
             "INSERT INTO task_history (id, name, status, session_id, claude_sid, exit_reason, questions, created_at, updated_at) \
-             VALUES (lower(hex(randomblob(16))), '', '{}', '{}', '{}', '{}', '{}', datetime('now'), datetime('now'))",
+             VALUES (lower(hex(randomblob(16))), '{}', '{}', '{}', '{}', '{}', '{}', datetime('now'), datetime('now'))",
+            name_str,
             status.replace('\'', "''"),
             resolved_session_id.replace('\'', "''"),
             session_id.replace('\'', "''"),

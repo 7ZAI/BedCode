@@ -263,6 +263,19 @@ impl WasmHost {
         unsafe { host_bus_unsubscribe(topic_ptr, topic_len) == 0 }
     }
 
+    // ==================== Session Lifecycle ====================
+
+    /// 订阅会话生命周期事件
+    ///
+    /// 调用后，当会话创建/停止时会通过 on_message 回调接收事件：
+    /// - topic="session:creating": 会话创建前（同步阻塞）
+    /// - topic="session:created": 会话创建后
+    /// - topic="session:stopping": 会话停止前
+    /// - topic="session:stopped": 会话停止后
+    pub fn session_lifecycle_subscribe(&self) -> bool {
+        unsafe { host_session_lifecycle_subscribe() == 0 }
+    }
+
     // ==================== Notification ====================
 
     /// 通知：发送系统通知（移动端特有，桌面端为空操作）
@@ -337,6 +350,8 @@ extern "C" {
     fn host_bus_subscribe(topic_ptr: u32, topic_len: u32) -> i32;
     /// 消息总线：取消订阅 — 返回 0 成功，-1 失败
     fn host_bus_unsubscribe(topic_ptr: u32, topic_len: u32) -> i32;
+    /// 会话生命周期：订阅 — 返回 0 成功，-1 失败
+    fn host_session_lifecycle_subscribe() -> i32;
 }
 
 // ==================== WASM Memory Helpers ====================

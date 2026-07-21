@@ -11,7 +11,7 @@ use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::db::Database;
-use crate::session::SessionManager;
+use crate::session::{SessionManager, SessionLifecycleEvent, SessionLifecycleListener};
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
 use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
@@ -19,7 +19,7 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
 
 /// 插件宿主
@@ -44,6 +44,8 @@ pub struct PluginHost {
     wasm_host_ctx: Arc<WasmHostContext>,
     /// 消息总线
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
+    /// 已订阅会话生命周期事件的插件 ID 集合
+    session_lifecycle_subscribers: Arc<RwLock<HashSet<String>>>,
 }
 
 impl PluginHost {
@@ -193,6 +195,7 @@ impl PluginHost {
             wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
             wasm_host_ctx,
             message_bus,
+            session_lifecycle_subscribers: Arc::new(RwLock::new(HashSet::new())),
         };
 
         // 注册所有已加载插件的 manifest contributes 到 registry
@@ -548,6 +551,9 @@ impl PluginHost {
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
+        // 清理会话生命周期订阅
+        self.unsubscribe_session_lifecycle(plugin_id).await;
+
         let mut plugins = self.plugins.write().await;
         let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
             crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
@@ -892,6 +898,106 @@ impl PluginHost {
     }
 }
 
+// ==================== SessionLifecycleListener Implementation ====================
+
+/// 会话生命周期 topic 映射（用于 on_message 回调的 topic 参数）
+const TOPIC_SESSION_CREATING: &str = "session:creating";
+const TOPIC_SESSION_CREATED: &str = "session:created";
+const TOPIC_SESSION_STOPPING: &str = "session:stopping";
+const TOPIC_SESSION_STOPPED: &str = "session:stopped";
+
+impl SessionLifecycleListener for PluginHost {
+    fn on_session_lifecycle(&self, event: &SessionLifecycleEvent) {
+        let (topic, payload) = match event {
+            SessionLifecycleEvent::Creating { config_id, command, working_dir, source_device } => {
+                (TOPIC_SESSION_CREATING, serde_json::json!({
+                    "config_id": config_id,
+                    "command": command,
+                    "working_dir": working_dir,
+                    "source_device": source_device,
+                }))
+            }
+            SessionLifecycleEvent::Created { session_id, config_id, name, working_dir } => {
+                (TOPIC_SESSION_CREATED, serde_json::json!({
+                    "session_id": session_id,
+                    "config_id": config_id,
+                    "name": name,
+                    "working_dir": working_dir,
+                }))
+            }
+            SessionLifecycleEvent::Stopping { session_id, source_device } => {
+                (TOPIC_SESSION_STOPPING, serde_json::json!({
+                    "session_id": session_id,
+                    "source_device": source_device,
+                }))
+            }
+            SessionLifecycleEvent::Stopped { session_id, source_device } => {
+                (TOPIC_SESSION_STOPPED, serde_json::json!({
+                    "session_id": session_id,
+                    "source_device": source_device,
+                }))
+            }
+        };
+
+        // 直接分发给已订阅生命周期事件的 WASM 插件
+        let subscribers = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.session_lifecycle_subscribers.read())
+        });
+        if subscribers.is_empty() {
+            return;
+        }
+
+        let mut wasm_plugins = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.wasm_plugins.write())
+        });
+
+        for plugin_id in subscribers.iter() {
+            // 只投递给已激活插件
+            if !self.is_activated_block(plugin_id) {
+                continue;
+            }
+            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                if let Err(e) = wasm_plugin.on_message(topic, "session-manager", &payload) {
+                    tracing::error!(
+                        "SessionLifecycle: dispatch to WASM plugin '{}' failed: {}",
+                        plugin_id, e
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl PluginHost {
+    /// 注册插件为会话生命周期事件订阅者
+    ///
+    /// 由 WASM 插件在 activate 时通过 host_session_lifecycle_subscribe Host Function 调用
+    pub async fn subscribe_session_lifecycle(&self, plugin_id: &str) {
+        let mut subscribers = self.session_lifecycle_subscribers.write().await;
+        if subscribers.insert(plugin_id.to_string()) {
+            tracing::info!("Plugin '{}' subscribed to session lifecycle events", plugin_id);
+        }
+    }
+
+    /// 取消插件的会话生命周期事件订阅
+    pub async fn unsubscribe_session_lifecycle(&self, plugin_id: &str) {
+        let mut subscribers = self.session_lifecycle_subscribers.write().await;
+        if subscribers.remove(plugin_id) {
+            tracing::info!("Plugin '{}' unsubscribed from session lifecycle events", plugin_id);
+        }
+    }
+
+    /// 阻塞式检查插件是否已激活（用于同步分发场景）
+    fn is_activated_block(&self, plugin_id: &str) -> bool {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.plugins.read())
+        })
+        .get(plugin_id)
+        .map(|p| matches!(p.state, PluginState::Activated))
+        .unwrap_or(false)
+    }
+}
+
 // 通过 Arc 共享内部状态实现 Clone
 impl Clone for PluginHost {
     fn clone(&self) -> Self {
@@ -906,6 +1012,7 @@ impl Clone for PluginHost {
             wasm_plugins: self.wasm_plugins.clone(),
             wasm_host_ctx: self.wasm_host_ctx.clone(),
             message_bus: self.message_bus.clone(),
+            session_lifecycle_subscribers: self.session_lifecycle_subscribers.clone(),
         }
     }
 }

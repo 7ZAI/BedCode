@@ -62,8 +62,12 @@ export function createPluginContext(info: PluginInfo): PluginContext {
         return handler(...args)
       }
       // 尝试调用 Rust 插件的 command（通过 plugin_invoke 路由）
+      // WASM 插件的 invoke_command 接收的是去掉插件前缀的命令名
+      // 例如 "auto-task.list-task-history" → "list-task-history"
+      const pluginPrefix = info.id.split('.').pop()! + '.'
+      const commandName = id.startsWith(pluginPrefix) ? id.slice(pluginPrefix.length) : id
       try {
-        return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
+        return await pluginCmds.pluginInvoke(info.id, commandName, args.length === 1 ? args[0] : args)
       } catch {
         throw new Error(`Command not found: ${id}`)
       }

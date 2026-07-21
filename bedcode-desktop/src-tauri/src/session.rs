@@ -12,6 +12,7 @@
 
 pub mod session_config;
 pub mod session_event;
+pub mod session_lifecycle;
 mod session_manager;
 mod storage;
 
@@ -43,6 +44,8 @@ pub use session_output::{
     SessionOutputManager, SubscriberState, SubscribeResponse,
     GlobalOutputManager,
 };
+
+pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
 
 // Re-export from enums
 pub use crate::enums::{SessionStatus, SessionType};

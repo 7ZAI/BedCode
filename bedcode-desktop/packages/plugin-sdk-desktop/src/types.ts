@@ -105,6 +105,7 @@ export interface FileHandlerContribution {
 export interface SidebarPanelDescriptor {
   id: string
   title: string
+  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24） */
   icon?: string
   component: any
 }

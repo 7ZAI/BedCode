@@ -5,6 +5,7 @@
 
 use crate::events::DesktopSyncEvent;
 use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
+use crate::session::session_lifecycle::SessionLifecycleEvent;
 use crate::pty::{
     PtyOutputEvent, PtySessionHandler, PtyHandler,
     FrontendOutputHandler,
@@ -18,18 +19,18 @@ use crate::session::{
         DefaultStatusDetector, StatusDetector,
     },
     event_bus::{DefaultSessionEventBus, SessionEventBus},
+    session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
 };
 use crate::enums::{SessionStatus, SessionType};
-use crate::system::config::AppConfig;
 use crate::Result;
 use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, RwLock};
 
 /// Session Manager
 ///
@@ -60,6 +61,8 @@ pub struct SessionManager {
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
     resource_dir: Arc<PathBuf>,
+    /// 会话生命周期监听器注册表
+    lifecycle_listeners: Arc<RwLock<Vec<Box<dyn SessionLifecycleListener>>>>,
 }
 
 impl SessionManager {
@@ -113,6 +116,7 @@ impl SessionManager {
         let config_mapper = Arc::new(DefaultConfigMapper::new());
         let status_detector = Arc::new(DefaultStatusDetector::new());
         let running = Arc::new(AtomicBool::new(true));
+        let lifecycle_listeners = Arc::new(RwLock::new(Vec::new()));
 
         Self {
             pty_registry,
@@ -127,6 +131,7 @@ impl SessionManager {
             app_handle: Arc::new(RwLock::new(None)),
             sync_tx: RwLock::new(None),
             resource_dir,
+            lifecycle_listeners,
         }
     }
 
@@ -136,6 +141,26 @@ impl SessionManager {
     pub async fn set_sync_tx(&self, sync_tx: broadcast::Sender<DesktopSyncEvent>) {
         let mut tx = self.sync_tx.write().await;
         *tx = Some(sync_tx);
+    }
+
+    /// 注册会话生命周期监听器
+    ///
+    /// 监听器在会话关键生命周期节点被调用（Creating/Created/Stopping/Stopped）
+    pub async fn register_lifecycle_listener(&self, listener: Box<dyn SessionLifecycleListener>) {
+        let mut listeners = self.lifecycle_listeners.write().await;
+        tracing::info!("SessionLifecycleListener registered (total: {})", listeners.len() + 1);
+        listeners.push(listener);
+    }
+
+    /// 分发会话生命周期事件
+    ///
+    /// 同步遍历所有已注册的监听器并调用
+    /// Creating 事件会阻塞直到所有监听器处理完成
+    async fn dispatch_lifecycle_event(&self, event: SessionLifecycleEvent) {
+        let listeners = self.lifecycle_listeners.read().await;
+        for listener in listeners.iter() {
+            listener.on_session_lifecycle(&event);
+        }
     }
 
     /// 发布同步事件
@@ -173,26 +198,13 @@ impl SessionManager {
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        // Auto Task 插件：项目级 Hooks 自动配置
-        if config.command.to_lowercase().contains("claude") {
-            let ctx = crate::system::app_context::AppContext::global();
-            let plugin_host = ctx.plugin_host();
-            let app_config = crate::system::config::AppConfig::global();
-            let result = plugin_host.invoke_rust_command(
-                "com.bedcode.auto-task",
-                "setup-project-hooks",
-                serde_json::json!({
-                    "working_dir": config.working_dir,
-                    "port": app_config.network.port,
-                    "token": app_config.plugin.token,
-                }),
-            ).await;
-            if let Err(e) = &result {
-                tracing::warn!("Auto Task hooks setup failed (non-blocking): {}", e);
-            } else if let Ok(val) = &result {
-                tracing::debug!("Auto Task hooks setup result: {:?}", val);
-            }
-        }
+        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
+            config_id: config_id.to_string(),
+            command: config.command.clone(),
+            working_dir: config.working_dir.clone(),
+            source_device: source_device.clone(),
+        }).await;
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -243,6 +255,14 @@ impl SessionManager {
         // 注册到全局输出管理器（启用移动端订阅功能）
         self.register_output_manager(&session_id).await;
 
+        // 分发 Created 事件（异步通知）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
+            session_id: session_id.clone(),
+            config_id: config_id.to_string(),
+            name: session_name.clone(),
+            working_dir: config.working_dir.clone(),
+        }).await;
+
         // 发布同步事件：会话创建
         self.publish_sync_event(DesktopSyncEvent::SessionCreated {
             session_id: session_id.clone(),
@@ -263,26 +283,13 @@ impl SessionManager {
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        // Auto Task 插件：项目级 Hooks 自动配置
-        if config.command.to_lowercase().contains("claude") {
-            let ctx = crate::system::app_context::AppContext::global();
-            let plugin_host = ctx.plugin_host();
-            let app_config = crate::system::config::AppConfig::global();
-            let result = plugin_host.invoke_rust_command(
-                "com.bedcode.auto-task",
-                "setup-project-hooks",
-                serde_json::json!({
-                    "working_dir": config.working_dir,
-                    "port": app_config.network.port,
-                    "token": app_config.plugin.token,
-                }),
-            ).await;
-            if let Err(e) = &result {
-                tracing::warn!("Auto Task hooks setup failed (non-blocking): {}", e);
-            } else if let Ok(val) = &result {
-                tracing::debug!("Auto Task hooks setup result: {:?}", val);
-            }
-        }
+        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
+            config_id: config_id.to_string(),
+            command: config.command.clone(),
+            working_dir: config.working_dir.clone(),
+            source_device: None,
+        }).await;
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -441,26 +448,13 @@ impl SessionManager {
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
-        // Auto Task 插件：项目级 Hooks 自动配置
-        if config.command.to_lowercase().contains("claude") {
-            let ctx = crate::system::app_context::AppContext::global();
-            let plugin_host = ctx.plugin_host();
-            let app_config = crate::system::config::AppConfig::global();
-            let result = plugin_host.invoke_rust_command(
-                "com.bedcode.auto-task",
-                "setup-project-hooks",
-                serde_json::json!({
-                    "working_dir": config.working_dir,
-                    "port": app_config.network.port,
-                    "token": app_config.plugin.token,
-                }),
-            ).await;
-            if let Err(e) = &result {
-                tracing::warn!("Auto Task hooks setup failed (non-blocking): {}", e);
-            } else if let Ok(val) = &result {
-                tracing::debug!("Auto Task hooks setup result: {:?}", val);
-            }
-        }
+        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
+            config_id: config_id.clone(),
+            command: config.command.clone(),
+            working_dir: config.working_dir.clone(),
+            source_device: None,
+        }).await;
 
         // 构建启动配置（复用配置映射服务）
         let mut launch_config = self.config_mapper.to_launch_config(&config)?;
@@ -510,6 +504,14 @@ impl SessionManager {
         self.session_info.insert(info).await;
 
         tracing::info!("Session restarted: {} ({})", old_name_for_event, session_id);
+
+        // 分发 Created 事件（异步通知）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
+            session_id: session_id.to_string(),
+            config_id: config_id.clone(),
+            name: old_name_for_event.clone(),
+            working_dir: config.working_dir.clone(),
+        }).await;
 
         // 发送重启事件
         let _ = self.event_bus.restart_sender().send(SessionRestartEvent {
@@ -596,6 +598,12 @@ impl SessionManager {
     pub async fn kill_session_with_source(&self, session_id: &str, source_device: Option<String>) -> Result<()> {
         tracing::info!("kill_session called for: {}", session_id);
 
+        // 分发 Stopping 事件（异步通知）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopping {
+            session_id: session_id.to_string(),
+            source_device: source_device.clone(),
+        }).await;
+
         // 使用 PTY 注册表终止会话
         if let Err(e) = self.pty_registry.kill(session_id).await {
             tracing::warn!("Failed to kill PTY for session {}: {}", session_id, e);
@@ -623,6 +631,12 @@ impl SessionManager {
 
         // 发布同步事件：会话停止
         self.publish_sync_event(DesktopSyncEvent::SessionStopped {
+            session_id: session_id.to_string(),
+            source_device: source_device.clone(),
+        }).await;
+
+        // 分发 Stopped 事件（异步通知）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopped {
             session_id: session_id.to_string(),
             source_device,
         }).await;

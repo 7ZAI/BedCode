@@ -49,6 +49,8 @@ from urllib.error import URLError
 BEDCODE_PORT_DEFAULT = 8765
 HTTP_TIMEOUT_SECONDS = 3
 LOG_RETENTION_DAYS = 7
+PLUGIN_ID = "com.bedcode.auto-task"
+PLUGIN_API_PREFIX = "/api/plugin/{}".format(PLUGIN_ID)
 VALID_STATUSES = {"idle", "in_progress", "asking", "completed", "interrupted"}
 
 # SessionEnd reason → 任务状态映射
@@ -114,7 +116,7 @@ def setup_logging():
 # ==================== HTTP Helpers ====================
 
 
-def push_task_status(session_id, status, reason, logger, questions=None, bedcode_session_id=None):
+def push_task_status(session_id, status, reason, logger, questions=None, bedcode_session_id=None, task_name=None):
     """推送任务状态到 BedCode 桌面端 HTTP API。
 
     仅在 BEDCODE_TOKEN 环境变量存在时推送。
@@ -126,7 +128,7 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
         return
 
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}/api/plugin/com.bedcode.auto-task/task-status".format(port)
+    url = "http://localhost:{}{}/task-status".format(port, PLUGIN_API_PREFIX)
 
     payload_dict = {
         "session_id": session_id,
@@ -139,6 +141,9 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
         payload_dict["bedcode_session_id"] = bedcode_session_id
     if questions:
         payload_dict["questions"] = questions
+    # 任务名称：UserPromptSubmit 时将 prompt 作为任务名称
+    if task_name:
+        payload_dict["name"] = task_name
 
     payload = json.dumps(payload_dict).encode("utf-8")
 
@@ -161,7 +166,7 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
 def query_session_mode(session_id, logger):
     """查询会话自动授权模式。
 
-    通过 HTTP GET /api/plugin/session-mode 查询。
+    通过 HTTP GET /api/plugin/com.bedcode.auto-task/session-mode 查询。
     返回 True 表示自动授权模式，False 表示手动模式。
     查询失败默认返回 False（手动模式，安全优先）。
     """
@@ -171,8 +176,8 @@ def query_session_mode(session_id, logger):
         return False
 
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}/api/plugin/com.bedcode.auto-task/session-mode?session_id={}&token={}".format(
-        port, session_id, token
+    url = "http://localhost:{}{}/session-mode?session_id={}&token={}".format(
+        port, PLUGIN_API_PREFIX, session_id, token
     )
 
     logger.info("HTTP GET {} session_id={}".format(url, session_id))
@@ -388,6 +393,7 @@ def handle_user_prompt_submit(data, logger):
 
     用户提交新 prompt 时触发，标记任务进入执行状态。
     这是"对话任务开始执行"的精确信号。
+    将 prompt 内容作为任务名称推送，便于桌面端/移动端展示当前任务。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -397,12 +403,14 @@ def handle_user_prompt_submit(data, logger):
     prompt = data.get("prompt", "")
     # 截断过长的 prompt 用于 reason
     prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+    # 任务名称：取 prompt 第一行，截断到 80 字符
+    task_name = prompt.split("\n")[0][:80]
 
     logger.info(
         "HOOK user_prompt_submit: session_id={} prompt={}".format(session_id, prompt_preview)
     )
 
-    push_task_status(session_id, "in_progress", "User submitted: {}".format(prompt_preview), logger)
+    push_task_status(session_id, "in_progress", "User submitted: {}".format(prompt_preview), logger, task_name=task_name)
 
 
 def handle_pre_tool_use(data, logger):
