@@ -612,9 +612,9 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
         .func_wrap("bedcode", "host_log_error", host_log_error)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_log_error: {}", e)))?;
 
-    // 通知（桌面端空操作，保持 ABI 兼容）
+    // 通知（发送 Tauri 事件到前端 toast 显示）
     linker
-        .func_wrap("bedcode", "host_notify", host_notify_noop)
+        .func_wrap("bedcode", "host_notify", host_notify)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_notify: {}", e)))?;
 
     // 文件系统
@@ -647,6 +647,11 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_bus_unsubscribe", host_bus_unsubscribe)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_unsubscribe: {}", e)))?;
+
+    // 会话生命周期事件订阅
+    linker
+        .func_wrap("bedcode", "host_session_lifecycle_subscribe", host_session_lifecycle_subscribe)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_session_lifecycle_subscribe: {}", e)))?;
 
     Ok(())
 }
@@ -1567,15 +1572,47 @@ fn host_log_error(
     tracing::error!("[plugin:{}] {}", plugin_id, message);
 }
 
-/// 通知：桌面端空操作（返回 0），保持 ABI 兼容
-fn host_notify_noop(
-    _caller: wasmtime::Caller<'_, WasmPluginState>,
-    _title_ptr: u32,
-    _title_len: u32,
-    _body_ptr: u32,
-    _body_len: u32,
+/// 通知：通过 Tauri 事件发送到前端 toast
+///
+/// 参数：(title_ptr, title_len, body_ptr, body_len)
+/// 返回：0 成功，-1 失败
+fn host_notify(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    title_ptr: u32,
+    title_len: u32,
+    body_ptr: u32,
+    body_len: u32,
 ) -> i32 {
-    0
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let title = match read_wasm_string(&mut caller, title_ptr, title_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_notify: failed to read title");
+            return -1;
+        }
+    };
+
+    let body = match read_wasm_string(&mut caller, body_ptr, body_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, title = %title, "host_notify: failed to read body");
+            return -1;
+        }
+    };
+
+    match host_ctx.app_handle.emit("plugin:notify", serde_json::json!({
+        "plugin_id": plugin_id,
+        "title": title,
+        "body": body,
+    })) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_notify: emit failed");
+            -1
+        }
+    }
 }
 
 // ==================== File System Host Functions ====================
@@ -1933,6 +1970,26 @@ fn host_bus_unsubscribe(
     let bus = host_ctx.message_bus.clone();
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(bus.unsubscribe(&plugin_id, &topic))
+    });
+    0
+}
+
+// ==================== Session Lifecycle Host Function ====================
+
+/// 会话生命周期：订阅生命周期事件
+///
+/// 插件调用后，当会话创建/停止时会通过 on_message 回调接收事件
+/// 参数：无（自动根据调用者的 plugin_id 注册）
+/// 返回：0 成功，-1 失败
+fn host_session_lifecycle_subscribe(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+
+    let ctx = crate::system::app_context::AppContext::global();
+    let plugin_host = ctx.plugin_host();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(plugin_host.subscribe_session_lifecycle(&plugin_id))
     });
     0
 }
