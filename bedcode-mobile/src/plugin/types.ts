@@ -32,6 +32,7 @@ export type {
   StorageAPI,
   I18nAPI,
   LifecycleAPI,
+  LoggerAPI,
   PluginContext,
   PluginModule,
 } from '@bedcode/plugin-sdk-mobile'

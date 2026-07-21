@@ -16,6 +16,7 @@ import type {
   StorageAPI,
   I18nAPI,
   LifecycleAPI,
+  LoggerAPI,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
@@ -214,6 +215,14 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
+  // ==================== LoggerAPI ====================
+  const logger: LoggerAPI = {
+    info(message: string): void { pluginCmds.pluginLog(info.id, 'info', message) },
+    debug(message: string): void { pluginCmds.pluginLog(info.id, 'debug', message) },
+    warn(message: string): void { pluginCmds.pluginLog(info.id, 'warn', message) },
+    error(message: string): void { pluginCmds.pluginLog(info.id, 'error', message) },
+  }
+
   return {
     id: info.id,
     commands,
@@ -224,6 +233,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     storage,
     i18n,
     lifecycle,
+    logger,
     _disposables: disposables,
   }
 }

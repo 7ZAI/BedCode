@@ -29,6 +29,9 @@ export function getPinia(): any { return getSharedModule('pinia') }
 /** 获取宿主 Router 实例 */
 export function getRouter(): any { return getSharedModule('router') }
 
+/** 获取宿主预设任务 composable */
+export function getPresetTasks(): any { return getSharedModule('presetTasks') }
+
 /** 从 Vue inject 获取 PluginContext */
 export function getPluginContext(): PluginContext {
   const vue = getVue()

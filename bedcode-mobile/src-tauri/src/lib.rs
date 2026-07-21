@@ -198,6 +198,7 @@ pub fn run() {
             crate::plugin::commands::plugin_fs_add_plugin_whitelist,
             crate::plugin::commands::plugin_fs_remove_plugin_whitelist,
             crate::plugin::commands::plugin_fs_get_plugin_whitelist,
+            crate::plugin::commands::plugin_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

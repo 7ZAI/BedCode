@@ -233,3 +233,16 @@ pub async fn plugin_fs_get_plugin_whitelist(
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.fs_auth().get_plugin_whitelist().await.map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
+
+// ==================== Plugin Logging Commands ====================
+
+/// 插件日志输出（TS SDK 调用，统一到宿主 tracing）
+#[tauri::command]
+pub fn plugin_log(plugin_id: String, level: String, message: String) {
+    match level.as_str() {
+        "debug" => tracing::debug!("[plugin:{}] {}", plugin_id, message),
+        "warn" => tracing::warn!("[plugin:{}] {}", plugin_id, message),
+        "error" => tracing::error!("[plugin:{}] {}", plugin_id, message),
+        _ => tracing::info!("[plugin:{}] {}", plugin_id, message),
+    }
+}

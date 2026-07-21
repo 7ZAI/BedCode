@@ -232,6 +232,55 @@ export async function httpSetSessionMode(sessionId: string, autoApprove: boolean
   })
 }
 
+// ==================== Auto Task Queue API ====================
+
+/** 队列任务项 */
+export interface AutoTaskQueueItem {
+  id: string
+  prompt: string
+  position: number
+  status: string
+  created_at: string
+}
+
+/** 任务队列列表响应 */
+export interface QueueListResponse {
+  session_id: string
+  tasks: AutoTaskQueueItem[]
+  queue_count: number
+}
+
+/** 查询任务队列 */
+export async function httpTaskQueueList(sessionId: string) {
+  return request<QueueListResponse>(
+    `/api/plugin/com.bedcode.auto-task/task-queue/list?session_id=${encodeURIComponent(sessionId)}`
+  )
+}
+
+/** 添加任务到队列 */
+export async function httpTaskQueueAdd(sessionId: string, prompt: string) {
+  return request(
+    '/api/plugin/com.bedcode.auto-task/task-queue/add',
+    { method: 'POST', body: JSON.stringify({ session_id: sessionId, prompt }) }
+  )
+}
+
+/** 从队列删除任务 */
+export async function httpTaskQueueRemove(sessionId: string, taskId: string) {
+  return request(
+    '/api/plugin/com.bedcode.auto-task/task-queue/remove',
+    { method: 'DELETE', body: JSON.stringify({ session_id: sessionId, task_id: taskId }) }
+  )
+}
+
+/** 清空任务队列 */
+export async function httpTaskQueueClear(sessionId: string) {
+  return request(
+    '/api/plugin/com.bedcode.auto-task/task-queue/clear',
+    { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }
+  )
+}
+
 // ==================== Git API ====================
 
 /** Git 分支列表响应 */
@@ -348,6 +397,11 @@ export function useHttpApi() {
     httpGetFileDiff,
     // Plugin
     httpSetSessionMode,
+    // Auto Task Queue
+    httpTaskQueueList,
+    httpTaskQueueAdd,
+    httpTaskQueueRemove,
+    httpTaskQueueClear,
     // Git
     httpGetGitBranches,
     httpGetGitStatus,

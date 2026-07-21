@@ -319,6 +319,18 @@ export default {
       reconnectFailed: 'Reconnect failed: {reason}',
       authFailed: 'Authentication failed, please re-pair',
     },
+    autoTask: {
+      title: 'Auto Task',
+      clear: 'Clear',
+      addFromPreset: 'Add from Preset',
+      inputPlaceholder: 'Enter command to add to queue...',
+      emptyQueue: 'No auto tasks',
+      emptyHint: 'Add from preset above or enter a command',
+      addFailed: 'Failed to add task',
+      removeFailed: 'Failed to remove task',
+      clearFailed: 'Failed to clear queue',
+      loadFailed: 'Failed to load task queue',
+    },
     plugin: {
       title: 'Plugin Manager',
       enabled: 'Enabled',

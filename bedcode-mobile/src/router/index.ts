@@ -49,6 +49,12 @@ const router = createRouter({
       meta: { standAlone: true },
     },
     {
+      path: '/mobile/plugins',
+      name: 'mobile-plugins',
+      component: () => import('@/views/PluginView.vue'),
+      meta: { standAlone: true },
+    },
+    {
       path: '/mobile/scan',
       name: 'mobile-scan',
       component: () => import('@/views/ScanView.vue'),

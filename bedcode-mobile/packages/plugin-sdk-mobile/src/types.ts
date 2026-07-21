@@ -151,6 +151,14 @@ export interface SettingsSectionDescriptor {
   component: any
 }
 
+/** 日志 API */
+export interface LoggerAPI {
+  info(message: string): void
+  debug(message: string): void
+  warn(message: string): void
+  error(message: string): void
+}
+
 // ==================== PluginContext API ====================
 
 /** 命令注册表 */
@@ -222,6 +230,7 @@ export interface PluginContext {
   readonly storage: StorageAPI
   readonly i18n: I18nAPI
   readonly lifecycle: LifecycleAPI
+  readonly logger: LoggerAPI
   readonly _disposables: Disposable[]
 }
 

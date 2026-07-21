@@ -56,3 +56,8 @@ export async function pluginStorageSet(pluginId: string, key: string, value: any
 export async function pluginStorageDelete(pluginId: string, key: string): Promise<void> {
   return await invoke('plugin_storage_delete', { pluginId, key })
 }
+
+/** 插件日志输出 */
+export async function pluginLog(pluginId: string, level: string, message: string): Promise<void> {
+  return await invoke('plugin_log', { pluginId, level, message })
+}

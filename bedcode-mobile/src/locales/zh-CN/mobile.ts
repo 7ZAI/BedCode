@@ -319,6 +319,18 @@ export default {
       reconnectFailed: '重连失败: {reason}',
       authFailed: '认证失败，请重新配对',
     },
+    autoTask: {
+      title: '自动任务',
+      clear: '清空',
+      addFromPreset: '从预设添加',
+      inputPlaceholder: '输入指令添加到队列...',
+      emptyQueue: '暂无自动任务',
+      emptyHint: '从上方预设添加或手动输入指令',
+      addFailed: '添加任务失败',
+      removeFailed: '删除任务失败',
+      clearFailed: '清空队列失败',
+      loadFailed: '加载任务队列失败',
+    },
     plugin: {
       title: '插件管理',
       enabled: '已启用',

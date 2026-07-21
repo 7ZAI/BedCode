@@ -31,6 +31,7 @@ export type {
   StorageAPI,
   I18nAPI,
   LifecycleAPI,
+  LoggerAPI,
   PluginContext,
   PluginModule,
 } from './types'
@@ -43,4 +44,5 @@ export {
   getPinia,
   getRouter,
   getPluginContext,
+  getPresetTasks,
 } from './runtime'
