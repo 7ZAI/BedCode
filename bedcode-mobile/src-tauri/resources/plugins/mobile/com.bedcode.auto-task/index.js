@@ -2,7 +2,7 @@ async function activate(context) {
   context.logger.info("Auto Task plugin activating...");
   context.ui.registerTerminalToolbarItem({
     id: "auto-task-toolbar",
-    label: "自动任务",
+    label: context.i18n.t("mobile.autoTask.title"),
     icon: "📋",
     onClick: () => {
     }
