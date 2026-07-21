@@ -12,10 +12,10 @@ import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
 import './style.css'
 
-interface PluginSetupResult {
-  success: boolean
-  message: string
-  token_generated: boolean
+interface PluginNotifyPayload {
+  plugin_id: string
+  title: string
+  body: string
 }
 
 const app = createApp(App)
@@ -42,18 +42,14 @@ Promise.all([
   console.log('[Init] Platform, settings and WSL info pre-loaded')
 })
 
-// 监听插件配置结果事件
-listen<PluginSetupResult>('plugin-setup-result', (event) => {
+// 监听插件通知事件（由 host_notify Host Function 发送）
+listen<PluginNotifyPayload>('plugin:notify', (event) => {
+  const { title, body } = event.payload
   const toast = useToast()
-  const result = event.payload
-
-  if (result.success) {
-    toast.success(result.message)
-    if (result.token_generated) {
-      setTimeout(() => toast.info(i18n.global.t('common.notification.tokenUpdated')), 1000)
-    }
+  if (body) {
+    toast.info(`${title}: ${body}`)
   } else {
-    toast.error(result.message, 5000)
+    toast.info(title)
   }
 })
 
