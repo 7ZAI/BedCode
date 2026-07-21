@@ -72,13 +72,14 @@ impl WasmPlugin for AutoTaskPlugin {
                     { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" }
                 ],
                 "views": [
-                    { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "📋" }
+                    { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" }
                 ],
                 "lifecycle": {
                     "onStartup": true,
                     "onShutdown": true
                 },
-                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"]
+                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"],
+                "subscribes": ["session:creating"]
             }
         });
         serde_json::from_value(json).expect("Invalid manifest JSON")
@@ -87,6 +88,15 @@ impl WasmPlugin for AutoTaskPlugin {
     fn activate() -> anyhow::Result<()> {
         let host = WasmHost::new(Self::ID);
         host.log_info("Auto Task plugin activated");
+
+        // 订阅会话生命周期事件
+        // 会话创建前会收到 session:creating 事件，用于自动设置项目 hooks
+        if host.session_lifecycle_subscribe() {
+            host.log_info("Subscribed to session lifecycle events");
+        } else {
+            host.log_error("Failed to subscribe to session lifecycle events");
+        }
+
         Ok(())
     }
 
@@ -196,8 +206,11 @@ impl WasmPlugin for AutoTaskPlugin {
         // 1. 清理旧版全局 hooks
         hooks::cleanup_global_hooks(&host);
 
-        // 2. Token 校验
-        let _token_result = token::ensure_token(&host);
+        // 2. Token 校验并通知前端
+        let token_result = token::ensure_token(&host);
+        if token_result.success {
+            host.notify("Auto Task", &token_result.message);
+        }
 
         // 3. 初始化插件独立数据库（建表 + 索引）
         let affected = host.plugin_db_execute(TASK_HISTORY_SCHEMA);
@@ -221,6 +234,47 @@ impl WasmPlugin for AutoTaskPlugin {
     fn on_shutdown() -> anyhow::Result<()> {
         let host = WasmHost::new(Self::ID);
         host.log_info("Auto Task plugin on_shutdown");
+        Ok(())
+    }
+
+    fn on_message(topic: &str, _sender: &str, payload: &serde_json::Value) -> anyhow::Result<()> {
+        match topic {
+            "session:creating" => {
+                let host = WasmHost::new(Self::ID);
+
+                let command = payload.get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // 只为 Claude 命令设置 hooks
+                if !command.to_lowercase().contains("claude") {
+                    return Ok(());
+                }
+
+                let working_dir = payload.get("working_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // 读取宿主配置（port + token）
+                let port = host.config_get("network.port")
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or(8765);
+                let token = host.config_get("plugin.token")
+                    .unwrap_or_default();
+
+                let result = hooks::ensure_project_hooks(&host, &working_dir, port, &token, "");
+
+                if result.success {
+                    host.log_info(&format!("Session lifecycle: hooks setup for {}", working_dir));
+                } else if result.skipped {
+                    host.log_debug(&format!("Session lifecycle: hooks skipped for {}", working_dir));
+                } else {
+                    host.log_warn(&format!("Session lifecycle: hooks setup failed for {}: {}", working_dir, result.message));
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 }
