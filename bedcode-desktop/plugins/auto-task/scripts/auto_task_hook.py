@@ -33,9 +33,13 @@
     Notification(perm)  → asking
     PostToolUse         → in_progress
     PostToolUseFailure  → in_progress / interrupted
-    Stop                → completed / in_progress
-    SubagentStop        → completed / in_progress
-    SessionEnd          → completed / interrupted
+    Stop                → completed / interrupted（根据当前状态判断）
+    SubagentStop        → completed / interrupted（根据当前状态判断）
+    SessionEnd          → interrupted / 不推送（根据 reason 和当前状态判断）
+
+终态保护:
+    completed / interrupted 为终态，后续事件不覆盖（防止 Stop 与 SessionEnd 冲突）
+    idle 状态下 SessionEnd 不推送终态（无任务运行）
 """
 
 import json
@@ -58,13 +62,16 @@ PLUGIN_ID = "com.bedcode.auto-task"
 PLUGIN_API_PREFIX = "/api/plugin/{}".format(PLUGIN_ID)
 VALID_STATUSES = {"idle", "in_progress", "asking", "completed", "interrupted"}
 
+# 任务终态集合 — 一旦进入终态，不应被其他事件降级
+TERMINAL_STATUSES = {"completed", "interrupted"}
+
 # SessionEnd reason → 任务状态映射
 # prompt_input_exit: 用户在输入框退出（Ctrl+C / Esc）
 # clear: /clear 命令清空对话
-# resume: 会话恢复（非终止，标记 completed）
+# resume: 会话恢复（非终止，不推送状态）
 # logout: 用户登出
 # bypass_permissions_disabled: 权限模式切换
-# other: 其他原因
+# other: 其他原因（可能是正常退出，需根据当前状态判断）
 SESSION_END_INTERRUPT_REASONS = {"prompt_input_exit", "clear", "logout", "bypass_permissions_disabled"}
 
 # Notification type → 任务状态映射
@@ -200,6 +207,38 @@ def query_session_mode(session_id, logger):
     except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
         logger.warning("HTTP session mode query failed: {}".format(e))
         return False
+
+
+def query_task_status(session_id, logger):
+    """查询当前任务状态。
+
+    通过 HTTP GET /api/plugin/com.bedcode.auto-task/task-status 查询。
+    用于终止 hook 判断当前状态，避免盲目覆盖。
+    查询失败返回 None（未知状态，由调用方决定默认行为）。
+    """
+    token = os.environ.get("BEDCODE_TOKEN", "")
+    if not token:
+        logger.debug("BEDCODE_TOKEN not set, skip task status query")
+        return None
+
+    port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
+    url = "http://localhost:{}{}/task-status?session_id={}&token={}".format(
+        port, PLUGIN_API_PREFIX, session_id, token
+    )
+
+    logger.debug("HTTP GET {} session_id={}".format(url, session_id))
+
+    try:
+        req = Request(url, method="GET")
+        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
+            body = resp.read().decode("utf-8")
+            result = json.loads(body)
+            if result.get("code") == 0 and result.get("data"):
+                return result["data"].get("task_status")
+            return None
+    except (URLError, OSError, json.JSONDecodeError, ValueError) as e:
+        logger.warning("HTTP task status query failed: {}".format(e))
+        return None
 
 
 # ==================== Fallback JSON Parsing ====================
@@ -579,9 +618,12 @@ def handle_notification(data, logger):
 def handle_stop(data, logger):
     """处理 Stop 事件。
 
-    主 agent 完成响应时触发（不含用户中断和 API 错误）。
-    - stop_hook_active=false：正常完成 → completed
-    - stop_hook_active=true：hook 续行中 → in_progress
+    主 agent 完成响应时触发。
+    需结合当前状态判断终态：
+    - 已在终态（completed/interrupted）→ 不覆盖，防止 Stop 与 SessionEnd 冲突
+    - stop_hook_active=true → in_progress（hook 续行中）
+    - 当前 asking → interrupted（用户在等待输入时停止，视为中断）
+    - 其他 → completed（正常完成）
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -591,13 +633,25 @@ def handle_stop(data, logger):
     stop_hook_active = data.get("stop_hook_active", False)
 
     if stop_hook_active:
-        # hook 已触发过续行，任务仍在进行
         status = "in_progress"
         reason = "Stop hook triggered continuation"
     else:
-        # 主 agent 正常完成响应
-        status = "completed"
-        reason = "Task completed"
+        current = query_task_status(session_id, logger)
+        if current in TERMINAL_STATUSES:
+            # 已在终态，Stop 是冗余信号（SessionEnd 或之前的 PostToolUseFailure 已标记）
+            logger.info(
+                "HOOK stop: session_id={} skipped, already in terminal status '{}'".format(
+                    session_id, current
+                )
+            )
+            return
+        elif current == "asking":
+            # 从 asking 状态停止 = 用户拒绝回答 / 中断
+            status = "interrupted"
+            reason = "Stopped while waiting for user input"
+        else:
+            status = "completed"
+            reason = "Task completed"
 
     logger.info(
         "HOOK stop: session_id={} status={} stop_hook_active={}".format(
@@ -612,8 +666,8 @@ def handle_subagent_stop(data, logger):
     """处理 SubagentStop 事件。
 
     子 agent 完成响应时触发。
-    - stop_hook_active=false：子任务完成 → completed
-    - stop_hook_active=true：hook 续行中 → in_progress
+    子 agent 完成不等于主任务完成，主 agent 还会继续，所以保持 in_progress。
+    仅 stop_hook_active=false 时标记 completed（所有 agent 均已停止）。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -627,8 +681,20 @@ def handle_subagent_stop(data, logger):
         status = "in_progress"
         reason = "Subagent stop hook triggered continuation"
     else:
-        status = "completed"
-        reason = "Subagent ({}) completed".format(agent_type) if agent_type else "Subagent completed"
+        current = query_task_status(session_id, logger)
+        if current in TERMINAL_STATUSES:
+            logger.info(
+                "HOOK subagent_stop: session_id={} skipped, already in terminal status '{}'".format(
+                    session_id, current
+                )
+            )
+            return
+        elif current == "asking":
+            status = "interrupted"
+            reason = "Subagent stopped while waiting for user input"
+        else:
+            status = "completed"
+            reason = "Subagent ({}) completed".format(agent_type) if agent_type else "Subagent completed"
 
     logger.info(
         "HOOK subagent_stop: session_id={} agent_type={} status={}".format(
@@ -642,10 +708,12 @@ def handle_subagent_stop(data, logger):
 def handle_session_end(data, logger):
     """处理 SessionEnd 事件。
 
-    会话结束时触发，根据 reason 判断最终状态：
-    - prompt_input_exit / clear / logout → interrupted
-    - resume → completed（会话恢复，非终止）
-    - other → interrupted
+    会话结束时触发，根据 reason 和当前状态判断终态：
+    - resume → 不推送（会话恢复，非终止）
+    - prompt_input_exit / clear / logout / bypass_permissions_disabled → interrupted
+    - other + 当前已完成 → 不覆盖（Stop 已正确标记 completed）
+    - other + 当前 idle → 不推送（无任务运行，无需标记）
+    - other + 其他状态 → interrupted（保守处理）
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -655,14 +723,38 @@ def handle_session_end(data, logger):
     reason = data.get("reason", "other")
 
     if reason == "resume":
-        # 会话恢复，非终止
-        status = "completed"
-        status_reason = "Session resumed"
-    elif reason in SESSION_END_INTERRUPT_REASONS:
+        # 会话恢复，非终止，不推送状态
+        logger.info("HOOK session_end: session_id={} reason=resume, skipped".format(session_id))
+        return
+
+    if reason in SESSION_END_INTERRUPT_REASONS:
         status = "interrupted"
         status_reason = "Session ended: {}".format(reason)
+    elif reason == "other":
+        # other 可能是正常退出，需根据当前状态判断
+        current = query_task_status(session_id, logger)
+        if current in TERMINAL_STATUSES:
+            # 已在终态（Stop 已标记 completed 或之前已 interrupted），不覆盖
+            logger.info(
+                "HOOK session_end: session_id={} reason=other skipped, already in terminal status '{}'".format(
+                    session_id, current
+                )
+            )
+            return
+        elif current == "idle" or current is None:
+            # 无任务运行或查询失败，不推送终态
+            logger.info(
+                "HOOK session_end: session_id={} reason=other skipped, no active task (current={})".format(
+                    session_id, current
+                )
+            )
+            return
+        else:
+            # in_progress / asking → 会话异常退出
+            status = "interrupted"
+            status_reason = "Session ended unexpectedly (current: {})".format(current)
     else:
-        # other 等未知原因，保守标记为 interrupted
+        # 未知 reason，保守标记 interrupted
         status = "interrupted"
         status_reason = "Session ended: {}".format(reason)
 

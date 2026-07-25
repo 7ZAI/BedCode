@@ -57,6 +57,7 @@ fn upsert_session_mapping(host: &WasmHost, claude_sid: &str, session_id: &str) {
 ///
 /// 路由：
 /// - POST /task-status → update_task_status
+/// - GET /task-status → get_task_status
 /// - POST /session-mode → set_session_mode
 /// - GET /session-mode → get_session_mode
 pub fn handle_http_endpoint(host: &WasmHost, method: &str, path: &str, body: &Value, query: &Value) -> Value {
@@ -64,6 +65,7 @@ pub fn handle_http_endpoint(host: &WasmHost, method: &str, path: &str, body: &Va
 
     match (method, path) {
         ("POST", "task-status") => handle_update_task_status(host, body),
+        ("GET", "task-status") => handle_get_task_status(host, query),
         ("POST", "session-mode") => handle_set_session_mode(host, body, query),
         ("GET", "session-mode") => handle_get_session_mode(host, query),
         _ => {
@@ -109,6 +111,19 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         .or_else(|| find_task_by_session(host, resolved_session_id));
 
     if let Some(row) = existing {
+        // 终态保护：completed / interrupted 不应被后续事件降级
+        // 防止 Stop(completed) 后 SessionEnd(interrupted) 覆盖正常完成状态
+        let current_status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let is_current_terminal = matches!(current_status, "completed" | "interrupted");
+        let is_new_terminal = matches!(status, "completed" | "interrupted");
+        if is_current_terminal && !is_new_terminal {
+            host.log_info(&format!(
+                "task-status: session_id={} skip, current '{}' is terminal, new '{}' is not",
+                session_id, current_status, status
+            ));
+            return ok_response();
+        }
+
         // 更新已有记录
         let task_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let mut sql_parts = vec![
@@ -262,6 +277,28 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
 
     host.log_info(&format!("Session mode set: session_id={}, auto_approve={}", session_id, auto_approve));
     ok_response()
+}
+
+/// GET /task-status — 查询当前任务状态
+///
+/// 供终止 hook（Stop/SubagentStop/SessionEnd）查询当前状态，避免盲目覆盖终态
+fn handle_get_task_status(host: &WasmHost, query: &Value) -> Value {
+    let session_id = query.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        host.log_warn("task-status GET rejected: empty session_id");
+        return error_response(400, "Missing session_id");
+    }
+
+    let resolved_id = resolve_session_id(host, session_id);
+    let task_status = find_task_by_session(host, &resolved_id)
+        .and_then(|row| row.get("status").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "idle".to_string());
+
+    ok_response_with_data(serde_json::json!({
+        "session_id": session_id,
+        "task_status": task_status,
+    }))
 }
 
 /// GET /session-mode — 查询会话自动授权模式
