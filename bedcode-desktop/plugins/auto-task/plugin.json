@@ -11,7 +11,6 @@
   "permissions": ["storage", "terminal:input", "terminal:output", "session:read", "broadcast", "fs:read", "fs:write", "ui:sidebar"],
   "contributes": {
     "commands": [
-      { "id": "auto-task.setup-project-hooks", "title": "Setup Project Hooks" },
       { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
       { "id": "auto-task.get-task-status", "title": "Get Task Status" },
       { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
@@ -29,7 +28,6 @@
       "onStartup": true,
       "onShutdown": true
     },
-    "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"],
-    "subscribes": ["session:creating"]
+    "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"]
   }
 }

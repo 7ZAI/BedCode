@@ -40,20 +40,25 @@ pub fn ensure_project_hooks(
         None => serde_json::json!({}),
     };
 
-    // 检查项目是否已有 BedCode hooks
+    // 检查项目是否已有 BedCode hooks 且端口/token 匹配
     let needs_update = match settings.get("hooks") {
-        Some(hooks) if is_bedcode_hooks_configured(hooks) => false,
+        Some(hooks) if is_bedcode_hooks_configured(hooks) => {
+            // hooks 存在，但需要验证端口和 token 是否与当前值匹配
+            !is_hooks_port_token_matching(hooks, port, token)
+        }
         _ => true,
     };
 
     if !needs_update {
-        host.log_info("Project already has BedCode hooks, skipping");
+        host.log_info("Project already has BedCode hooks with matching config, skipping");
         return ProjectHooksResult {
             success: true,
-            message: "项目已配置 BedCode hooks".to_string(),
+            message: "项目已配置 BedCode hooks 且配置匹配".to_string(),
             skipped: true,
         };
     }
+
+    host.log_info(&format!("Updating BedCode hooks (port={}, token={}...)", port, &token[..token.len().min(8)]));
 
     // 2. 复制 hook 脚本到项目 .claude/ 目录
     let hook_script_path = format!("{}/{}", claude_dir, hook_script_name);
@@ -482,4 +487,38 @@ fn merge_hooks(existing: &serde_json::Value, bedcode_hooks: &serde_json::Value) 
     }
 
     result
+}
+
+/// 检查现有 hooks 中的端口和 token 是否与当前值匹配
+///
+/// 环境变量前缀格式：BEDCODE_PORT={port} BEDCODE_TOKEN={token}
+/// 解析 hook command 中的环境变量，与当前 port/token 比较
+fn is_hooks_port_token_matching(hooks: &serde_json::Value, port: u16, token: &str) -> bool {
+    let expected_prefix = format!("BEDCODE_PORT={} BEDCODE_TOKEN={} ", port, token);
+
+    let hooks_obj = match hooks.as_object() {
+        Some(obj) => obj,
+        None => return false,
+    };
+
+    for (_event_type, events) in hooks_obj {
+        if let Some(events_arr) = events.as_array() {
+            for event in events_arr {
+                if let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) {
+                    for hook in hook_list {
+                        if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
+                            if cmd.contains("bedcode_hook.py") {
+                                // 检查命令中的环境变量前缀是否匹配
+                                if !cmd.starts_with(&expected_prefix) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    true
 }

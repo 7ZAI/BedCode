@@ -8,6 +8,7 @@ edition = "2021"
 [features]
 default = []
 wasm = []
+test-plugin = ["wasm"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

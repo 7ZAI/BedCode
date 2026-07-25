@@ -26,6 +26,7 @@ CLAUDE.md
 
 # IDE and editors
 .idea/
+.claude/
 .vscode/
 .VSCodeCounter/
 *.swp

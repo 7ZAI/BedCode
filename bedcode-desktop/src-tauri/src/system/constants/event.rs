@@ -19,3 +19,6 @@ pub const LIFECYCLE_SHUTDOWN: &str = "lifecycle:shutdown";
 
 /// 插件开发模式热重载通知
 pub const PLUGIN_DEV_RELOAD: &str = "plugin:dev-reload";
+
+/// 窗口关闭请求 — 有运行中会话时发送到前端，请求用户确认
+pub const WINDOW_CLOSE_REQUESTED: &str = "window-close-requested";

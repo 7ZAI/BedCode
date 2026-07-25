@@ -55,6 +55,9 @@ export default {
       startTime: 'Start Time',
       stopTime: 'Stop Time',
       runTime: 'Run Time: {time}',
+      confirmExitTitle: 'Confirm Exit',
+      confirmExitMsg: '{count} session(s) are still running. All running processes will be terminated if you exit.',
+      confirmExitForce: 'Force Exit',
     },
     form: {
       name: 'Name',

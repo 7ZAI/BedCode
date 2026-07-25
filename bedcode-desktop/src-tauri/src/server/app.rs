@@ -53,18 +53,50 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
 
-    // 公开路由（无需 JWT）
-    cfg.service(
-        web::scope("/api/auth")
-            .route("/pairing", web::post().to(auth_controller::request_pairing))
-            .route("/verify", web::post().to(auth_controller::verify_pairing_code))
-            .route("/qr-connect", web::post().to(auth_controller::qr_connect))
-            .route("/reauth", web::post().to(auth_controller::reauthenticate))
-    );
-
-    // 受保护路由（需要 JWT）— JWT 验证在各 handler 中通过 get_claims_from_request 实现
+    // /api scope — 挂载 JWT 网关中间件
+    // 中间件内部按路径区分：/api/auth/* 公开放行，/api/plugin/* 允许 plugin token，其余要求 JWT
     cfg.service(
         web::scope("/api")
+            .wrap_fn(|req, srv| {
+                use crate::server::middleware::jwt_auth::{
+                    is_public_path, is_plugin_path, extract_and_verify_jwt,
+                };
+                use actix_web::HttpMessage;
+
+                let path = req.path().to_string();
+
+                // 公开路由（/api/auth/*）直接放行
+                if is_public_path(&path) {
+                    return srv.call(req);
+                }
+
+                // 有效 JWT → 注入 claims 并放行
+                if let Some(claims) = extract_and_verify_jwt(&req) {
+                    req.extensions_mut().insert(claims);
+                    return srv.call(req);
+                }
+
+                // 插件端点：无 JWT 时放行给 handler 自行校验 plugin token
+                if is_plugin_path(&path) {
+                    return srv.call(req);
+                }
+
+                // 其余受保护路由：无有效 JWT → 返回 401
+                let (req, _payload) = req.into_parts();
+                let response = actix_web::HttpResponse::Unauthorized()
+                    .json(json!({
+                        "code": 1007,
+                        "message": "Authentication required"
+                    }));
+                let srv_response = actix_web::dev::ServiceResponse::new(req, response);
+                Box::pin(std::future::ready(Ok(srv_response)))
+            })
+            // 公开路由（配对/认证）— 中间件按路径放行
+            .route("/auth/pairing", web::post().to(auth_controller::request_pairing))
+            .route("/auth/verify", web::post().to(auth_controller::verify_pairing_code))
+            .route("/auth/qr-connect", web::post().to(auth_controller::qr_connect))
+            .route("/auth/reauth", web::post().to(auth_controller::reauthenticate))
+            // 受 JWT 保护的业务路由
             .route("/sessions", web::get().to(session_controller::list_sessions))
             .route("/sessions/start", web::post().to(session_controller::start_session))
             .route("/sessions/{id}/stop", web::post().to(session_controller::stop_session))
@@ -81,12 +113,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/git/branches", web::get().to(git_controller::get_branches))
             .route("/git/status", web::get().to(git_controller::get_status))
             .route("/git/checkout", web::post().to(git_controller::checkout))
+            // 插件动态 HTTP 端点代理 — 中间件允许 JWT 或 plugin token
+            .route("/plugin/{plugin_id}/{path:.*}", web::route().to(plugin_controller::plugin_http_endpoint))
     );
-
-    // 插件动态 HTTP 端点代理 — /api/plugin/{plugin_id}/{path:.*}
-    // 插件通过 manifest contributes.toolProviders 声明端点，运行时由 PluginHost 路由
-    // 注意：此路由在 /api scope 下，与 PluginRegistry::register_tool_providers 生成的路径一致
-    cfg.route("/api/plugin/{plugin_id}/{path:.*}", web::route().to(plugin_controller::plugin_http_endpoint));
 }
 
 /// 启动 Actix Web 服务器（HTTP + WebSocket 统一端口）

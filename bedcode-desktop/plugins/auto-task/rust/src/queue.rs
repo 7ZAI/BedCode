@@ -171,10 +171,10 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         task_id, prompt.len(), session_id
     ));
 
-    // 更新 task_history 状态为 in_progress
+    // 更新 task_history 状态为 in_progress（子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY）
     let sql = format!(
         "UPDATE task_history SET status = 'in_progress', updated_at = datetime('now') \
-         WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+         WHERE id = (SELECT id FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1)",
         session_id.replace('\'', "''"),
     );
     host.plugin_db_execute(&sql);
@@ -359,18 +359,20 @@ fn reorder_positions(host: &WasmHost, session_id: &str) {
 /// 确保自动模式开启
 fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
     // 先尝试更新已有记录
+    // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
     let sql = format!(
         "UPDATE task_history SET auto_approve = 1, updated_at = datetime('now') \
-         WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+         WHERE id = (SELECT id FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1)",
         session_id.replace('\'', "''"),
     );
     let affected = host.plugin_db_execute(&sql);
 
-    // 如果该 session 还没有 task_history 记录，先插入一条
+    // 如果该 session 还没有 task_history 记录，插入一条语义合理的记录
+    // 队列调度时任务确实在执行中，所以 status='in_progress' 而非 idle
     if affected == 0 {
         let insert_sql = format!(
-            "INSERT INTO task_history (id, name, status, session_id, auto_approve, created_at, updated_at) \
-             VALUES (lower(hex(randomblob(16))), '', 'idle', '{}', 1, datetime('now'), datetime('now'))",
+            "INSERT INTO task_history (id, name, status, session_id, auto_approve, started_at, created_at, updated_at) \
+             VALUES (lower(hex(randomblob(16))), 'Auto Task', 'in_progress', '{}', 1, datetime('now'), datetime('now'), datetime('now'))",
             session_id.replace('\'', "''"),
         );
         host.plugin_db_execute(&insert_sql);
@@ -392,9 +394,10 @@ fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
 
 /// 确保自动模式关闭
 fn ensure_auto_mode_off(host: &WasmHost, session_id: &str) {
+    // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
     let sql = format!(
         "UPDATE task_history SET auto_approve = 0, updated_at = datetime('now') \
-         WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+         WHERE id = (SELECT id FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1)",
         session_id.replace('\'', "''"),
     );
     host.plugin_db_execute(&sql);

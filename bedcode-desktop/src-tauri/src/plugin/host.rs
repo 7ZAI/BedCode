@@ -44,8 +44,6 @@ pub struct PluginHost {
     wasm_host_ctx: Arc<WasmHostContext>,
     /// 消息总线
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
-    /// 已订阅会话生命周期事件的插件 ID 集合
-    session_lifecycle_subscribers: Arc<RwLock<HashSet<String>>>,
 }
 
 impl PluginHost {
@@ -195,8 +193,11 @@ impl PluginHost {
             wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
             wasm_host_ctx,
             message_bus,
-            session_lifecycle_subscribers: Arc::new(RwLock::new(HashSet::new())),
         };
+
+        // 两阶段初始化：将 PluginHost 自身注入 WasmHostContext
+        // 必须在 auto_activate 之前完成，否则 host_session_lifecycle_register 无法获取 plugin_host
+        host.wasm_host_ctx().set_plugin_host(host.clone()).await;
 
         // 注册所有已加载插件的 manifest contributes 到 registry
         host.register_manifest_contributions().await;
@@ -274,6 +275,11 @@ impl PluginHost {
 
     // ==================== Accessors ====================
 
+    /// 获取 WASM 宿主上下文引用
+    pub fn wasm_host_ctx(&self) -> &Arc<WasmHostContext> {
+        &self.wasm_host_ctx
+    }
+
     pub fn registry(&self) -> &Arc<PluginRegistry> {
         &self.registry
     }
@@ -350,15 +356,7 @@ impl PluginHost {
             }
         }
 
-        // WASM 插件
-        let mut wasm_plugins = self.wasm_plugins.write().await;
-        for (id, wasm_plugin) in wasm_plugins.iter_mut() {
-            if self.is_activated(id).await {
-                if let Err(e) = wasm_plugin.on_startup() {
-                    tracing::warn!("WASM plugin {} on_startup failed: {}", id, e);
-                }
-            }
-        }
+        // WASM 插件的 on_startup 已在 activate_plugin() 中自动调用，此处不再重复
 
         // TS-only 插件：通过 Tauri 事件通知
         let ctx = crate::system::app_context::AppContext::global();
@@ -385,15 +383,7 @@ impl PluginHost {
             }
         }
 
-        // WASM 插件
-        let mut wasm_plugins = self.wasm_plugins.write().await;
-        for (id, wasm_plugin) in wasm_plugins.iter_mut() {
-            if self.is_activated(id).await {
-                if let Err(e) = wasm_plugin.on_shutdown() {
-                    tracing::warn!("WASM plugin {} on_shutdown failed: {}", id, e);
-                }
-            }
-        }
+        // WASM 插件的 on_shutdown 已在 deactivate_plugin() 中自动调用，此处不再重复
 
         // TS-only 插件：通过 Tauri 事件通知
         let ctx = crate::system::app_context::AppContext::global();
@@ -460,10 +450,10 @@ impl PluginHost {
             if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
                 match wasm_plugin.activate() {
                     Ok(0) => {
-                        tracing::info!("WASM plugin activate() succeeded: {}", plugin_id);
+                        tracing::info!("[PluginHost] Plugin '{}' activated", plugin_id);
                     }
                     Ok(code) => {
-                        tracing::error!("WASM plugin activate() returned error code {}: {}", code, plugin_id);
+                        tracing::error!("[PluginHost] Plugin '{}' activate() returned error code {}", plugin_id, code);
                         loaded.state = PluginState::Error(
                             format!("activate() returned error code {}", code)
                         );
@@ -472,12 +462,20 @@ impl PluginHost {
                         )));
                     }
                     Err(e) => {
-                        tracing::error!("WASM plugin activate() failed: {}: {}", plugin_id, e);
+                        tracing::error!("[PluginHost] Plugin '{}' activate() failed: {}", plugin_id, e);
                         loaded.state = PluginState::Error(format!("activate() failed: {}", e));
                         return Err(crate::AppError::Plugin(format!(
                             "Plugin {} activate() failed: {}", plugin_id, e
                         )));
                     }
+                }
+
+                // 激活成功后自动调用 on_startup
+                tracing::info!("[PluginHost] Calling on_startup for plugin '{}'", plugin_id);
+                if let Err(e) = wasm_plugin.on_startup() {
+                    tracing::warn!("[PluginHost] Plugin '{}' on_startup failed: {}", plugin_id, e);
+                } else {
+                    tracing::info!("[PluginHost] Plugin '{}' on_startup completed", plugin_id);
                 }
             } else {
                 tracing::error!("WASM plugin {} not found in wasm_plugins map", plugin_id);
@@ -521,22 +519,30 @@ impl PluginHost {
     pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] deactivate_plugin({}, persist={})", plugin_id, persist);
 
-        // WASM 插件：调用 __bedcode_deactivate
+        // WASM 插件：调用 on_shutdown + __bedcode_deactivate
         {
             let plugins = self.plugins.read().await;
             if let Some(loaded) = plugins.get(plugin_id) {
                 if loaded.source == PluginSource::Wasm {
                     let mut wasm_plugins = self.wasm_plugins.write().await;
                     if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                        // 停用前先调用 on_shutdown
+                        tracing::info!("[PluginHost] Calling on_shutdown for plugin '{}'", plugin_id);
+                        if let Err(e) = wasm_plugin.on_shutdown() {
+                            tracing::warn!("[PluginHost] Plugin '{}' on_shutdown failed: {}", plugin_id, e);
+                        } else {
+                            tracing::info!("[PluginHost] Plugin '{}' on_shutdown completed", plugin_id);
+                        }
+
                         match wasm_plugin.deactivate() {
                             Ok(0) => {
-                                tracing::info!("WASM plugin deactivate() succeeded: {}", plugin_id);
+                                tracing::info!("[PluginHost] Plugin '{}' deactivated", plugin_id);
                             }
                             Ok(code) => {
-                                tracing::warn!("WASM plugin deactivate() returned error code {}: {}", code, plugin_id);
+                                tracing::warn!("[PluginHost] Plugin '{}' deactivate() returned error code {}", plugin_id, code);
                             }
                             Err(e) => {
-                                tracing::error!("WASM plugin deactivate() failed: {}: {}", plugin_id, e);
+                                tracing::error!("[PluginHost] Plugin '{}' deactivate() failed: {}", plugin_id, e);
                             }
                         }
                     }
@@ -551,8 +557,11 @@ impl PluginHost {
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-        // 清理会话生命周期订阅
-        self.unsubscribe_session_lifecycle(plugin_id).await;
+        // 移除该插件的会话生命周期监听器
+        {
+            let session_manager = self.wasm_host_ctx().session_manager_arc();
+            session_manager.remove_lifecycle_listener(plugin_id).await;
+        }
 
         let mut plugins = self.plugins.write().await;
         let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
@@ -898,103 +907,121 @@ impl PluginHost {
     }
 }
 
-// ==================== SessionLifecycleListener Implementation ====================
+// ==================== PluginLifecycleListener ====================
 
-/// 会话生命周期 topic 映射（用于 on_message 回调的 topic 参数）
-const TOPIC_SESSION_CREATING: &str = "session:creating";
-const TOPIC_SESSION_CREATED: &str = "session:created";
-const TOPIC_SESSION_STOPPING: &str = "session:stopping";
-const TOPIC_SESSION_STOPPED: &str = "session:stopped";
+/// 插件专属的会话生命周期监听器
+///
+/// 每个 WASM 插件在 activate 时通过 host_session_lifecycle_register 注册。
+/// 收到生命周期事件后，将事件序列化为 JSON payload，调用插件的
+/// __bedcode_on_session_lifecycle 导出函数。
+pub struct PluginLifecycleListener {
+    /// 插件 ID
+    plugin_id: String,
+    /// 插件宿主（Arc 内部，Clone 成本低）
+    plugin_host: PluginHost,
+}
 
-impl SessionLifecycleListener for PluginHost {
+impl PluginLifecycleListener {
+    /// 创建插件生命周期监听器
+    pub fn new(plugin_id: String, plugin_host: PluginHost) -> Self {
+        Self { plugin_id, plugin_host }
+    }
+
+    /// 获取插件 ID
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+}
+
+impl SessionLifecycleListener for PluginLifecycleListener {
     fn on_session_lifecycle(&self, event: &SessionLifecycleEvent) {
-        let (topic, payload) = match event {
+        // 获取插件的 extension_path 作为 resource_dir 注入 payload
+        let plugins = self.plugin_host.plugins.clone();
+        let plugin_id = self.plugin_id.clone();
+        let resource_dir = crate::plugin::wasm_runtime::block_on_async(async move {
+            let plugins = plugins.read().await;
+            plugins.get(&plugin_id)
+                .map(|p| p.extension_path.clone())
+                .unwrap_or_default()
+        });
+
+        let payload = match event {
             SessionLifecycleEvent::Creating { config_id, command, working_dir, source_device } => {
-                (TOPIC_SESSION_CREATING, serde_json::json!({
+                serde_json::json!({
+                    "event_type": "creating",
                     "config_id": config_id,
                     "command": command,
                     "working_dir": working_dir,
                     "source_device": source_device,
-                }))
+                    "resource_dir": resource_dir,
+                })
             }
             SessionLifecycleEvent::Created { session_id, config_id, name, working_dir } => {
-                (TOPIC_SESSION_CREATED, serde_json::json!({
+                serde_json::json!({
+                    "event_type": "created",
                     "session_id": session_id,
                     "config_id": config_id,
                     "name": name,
                     "working_dir": working_dir,
-                }))
+                    "resource_dir": resource_dir,
+                })
             }
             SessionLifecycleEvent::Stopping { session_id, source_device } => {
-                (TOPIC_SESSION_STOPPING, serde_json::json!({
+                serde_json::json!({
+                    "event_type": "stopping",
                     "session_id": session_id,
                     "source_device": source_device,
-                }))
+                    "resource_dir": resource_dir,
+                })
             }
             SessionLifecycleEvent::Stopped { session_id, source_device } => {
-                (TOPIC_SESSION_STOPPED, serde_json::json!({
+                serde_json::json!({
+                    "event_type": "stopped",
                     "session_id": session_id,
                     "source_device": source_device,
-                }))
+                    "resource_dir": resource_dir,
+                })
             }
         };
 
-        // 直接分发给已订阅生命周期事件的 WASM 插件
-        let subscribers = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.session_lifecycle_subscribers.read())
-        });
-        if subscribers.is_empty() {
-            return;
-        }
+        self.plugin_host.dispatch_lifecycle_to_plugin(&self.plugin_id, &payload);
+    }
 
-        let mut wasm_plugins = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.wasm_plugins.write())
-        });
-
-        for plugin_id in subscribers.iter() {
-            // 只投递给已激活插件
-            if !self.is_activated_block(plugin_id) {
-                continue;
-            }
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
-                if let Err(e) = wasm_plugin.on_message(topic, "session-manager", &payload) {
-                    tracing::error!(
-                        "SessionLifecycle: dispatch to WASM plugin '{}' failed: {}",
-                        plugin_id, e
-                    );
-                }
-            }
-        }
+    fn plugin_id(&self) -> Option<&str> {
+        Some(&self.plugin_id)
     }
 }
 
 impl PluginHost {
-    /// 注册插件为会话生命周期事件订阅者
-    ///
-    /// 由 WASM 插件在 activate 时通过 host_session_lifecycle_subscribe Host Function 调用
-    pub async fn subscribe_session_lifecycle(&self, plugin_id: &str) {
-        let mut subscribers = self.session_lifecycle_subscribers.write().await;
-        if subscribers.insert(plugin_id.to_string()) {
-            tracing::info!("Plugin '{}' subscribed to session lifecycle events", plugin_id);
+    /// 将会话生命周期事件分发给指定插件的 on_session_lifecycle 回调
+    pub fn dispatch_lifecycle_to_plugin(&self, plugin_id: &str, payload: &serde_json::Value) {
+        if !self.is_activated_block(plugin_id) {
+            return;
         }
-    }
 
-    /// 取消插件的会话生命周期事件订阅
-    pub async fn unsubscribe_session_lifecycle(&self, plugin_id: &str) {
-        let mut subscribers = self.session_lifecycle_subscribers.write().await;
-        if subscribers.remove(plugin_id) {
-            tracing::info!("Plugin '{}' unsubscribed from session lifecycle events", plugin_id);
-        }
+        let wasm_plugins = self.wasm_plugins.clone();
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            let mut wasm_plugins = wasm_plugins.write().await;
+            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                if let Err(e) = wasm_plugin.on_session_lifecycle(payload) {
+                    tracing::error!(
+                        "SessionLifecycle: dispatch to plugin '{}' failed: {}",
+                        plugin_id, e
+                    );
+                }
+            }
+        });
     }
 
     /// 阻塞式检查插件是否已激活（用于同步分发场景）
     fn is_activated_block(&self, plugin_id: &str) -> bool {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.plugins.read())
+        let plugins = self.plugins.clone();
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            let plugins = plugins.read().await;
+            plugins.get(plugin_id)
+                .map(|p| matches!(p.state, PluginState::Activated))
+                .unwrap_or(false)
         })
-        .get(plugin_id)
-        .map(|p| matches!(p.state, PluginState::Activated))
-        .unwrap_or(false)
     }
 }
 
@@ -1012,7 +1039,6 @@ impl Clone for PluginHost {
             wasm_plugins: self.wasm_plugins.clone(),
             wasm_host_ctx: self.wasm_host_ctx.clone(),
             message_bus: self.message_bus.clone(),
-            session_lifecycle_subscribers: self.session_lifecycle_subscribers.clone(),
         }
     }
 }
@@ -1021,21 +1047,23 @@ impl Clone for PluginHost {
 
 impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
-        let mut wasm_plugins = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.wasm_plugins.write())
-        });
-        if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
-            wasm_plugin.on_message(&msg.topic, &msg.sender, &msg.payload)?;
-        }
-        Ok(())
+        let wasm_plugins = self.wasm_plugins.clone();
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            let mut wasm_plugins = wasm_plugins.write().await;
+            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                wasm_plugin.on_message(&msg.topic, &msg.sender, &msg.payload)?;
+            }
+            Ok(())
+        })
     }
 
     fn is_activated(&self, plugin_id: &str) -> bool {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.plugins.read())
+        let plugins = self.plugins.clone();
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            let plugins = plugins.read().await;
+            plugins.get(plugin_id)
+                .map(|p| matches!(p.state, PluginState::Activated))
+                .unwrap_or(false)
         })
-        .get(plugin_id)
-        .map(|p| matches!(p.state, PluginState::Activated))
-        .unwrap_or(false)
     }
 }

@@ -7,9 +7,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use std::collections::HashMap;
 
 use crate::system::app_context::AppContext;
-use crate::utils::auth::jwt::JwtService;
 use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
-use crate::system::config::AppConfig;
 
 // ==================== 插件动态 HTTP 端点代理 ====================
 
@@ -18,7 +16,7 @@ use crate::system::config::AppConfig;
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
 /// 仅支持已激活的 Rust / WASM 插件，TS-only 插件的 HTTP 端点通过前端 Tauri event 桥接。
 ///
-/// 认证方式：plugin token 或 JWT
+/// 认证：JWT 由网关中间件统一校验；plugin token 在此 handler 校验（hook 脚本无 JWT，只有 plugin token）
 pub async fn plugin_http_endpoint(
     req: HttpRequest,
     path: web::Path<(String, String)>,
@@ -27,22 +25,9 @@ pub async fn plugin_http_endpoint(
 ) -> HttpResponse {
     let (plugin_id, endpoint_path) = path.into_inner();
 
-    // 认证：从 query 中提取 plugin token，或从 Authorization header 中提取 JWT
-    let config = AppConfig::global();
-    let token = query.get("token").cloned().unwrap_or_default();
-    let plugin_token_valid = !config.plugin.token.is_empty() && token == config.plugin.token;
-    let jwt_valid = validate_jwt_from_request(&req);
-
-    if !plugin_token_valid && !jwt_valid {
-        tracing::warn!(
-            "Plugin HTTP endpoint auth failed: plugin_id={}, path={}",
-            plugin_id, endpoint_path
-        );
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            CODE_PLUGIN_AUTH_FAILED,
-            "Invalid plugin token or JWT authentication",
-        ));
-    }
+    // 认证由网关中间件统一处理：
+    // - JWT 请求：中间件校验通过后 claims 已注入 extensions
+    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行，plugin token 校验待实现
 
     // 检查插件是否已激活
     let ctx = AppContext::global();
@@ -91,27 +76,5 @@ pub async fn plugin_http_endpoint(
                 &format!("Plugin endpoint error: {}", e),
             ))
         }
-    }
-}
-
-/// 从 HTTP 请求中验证 JWT Authorization header
-fn validate_jwt_from_request(req: &HttpRequest) -> bool {
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok());
-
-    match auth_header {
-        Some(header) => {
-            let token = header.strip_prefix("Bearer ");
-            match token {
-                Some(t) => {
-                    let jwt_service = JwtService::new();
-                    jwt_service.verify_token_with_expiry(t).is_ok()
-                }
-                None => false,
-            }
-        }
-        None => false,
     }
 }

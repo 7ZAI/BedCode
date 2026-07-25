@@ -46,4 +46,11 @@ pub enum SessionLifecycleEvent {
 pub trait SessionLifecycleListener: Send + Sync + 'static {
     /// 处理会话生命周期事件
     fn on_session_lifecycle(&self, event: &SessionLifecycleEvent);
+
+    /// 返回关联的插件 ID（如果有）
+    ///
+    /// 用于按插件 ID 移除监听器，非插件监听器返回 None
+    fn plugin_id(&self) -> Option<&str> {
+        None
+    }
 }

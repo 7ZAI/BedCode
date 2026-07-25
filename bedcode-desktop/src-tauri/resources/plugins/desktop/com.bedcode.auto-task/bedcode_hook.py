@@ -21,6 +21,11 @@
     BEDCODE_PORT        - HTTP API 端口（默认 8765）
     BEDCODE_SESSION_ID  - BedCode PTY 会话 ID（由 pty_process.rs 启动时注入）
 
+生效条件:
+    仅当 BEDCODE_SESSION_ID 环境变量存在时 hook 才生效。
+    BedCode 启动的 PTY 终端会自动注入此变量，外部终端不会设置，
+    因此 hook 只在 BedCode 管理的终端中激活，不影响外部终端使用。
+
 状态机:
     SessionStart        → idle
     UserPromptSubmit    → in_progress
@@ -691,6 +696,11 @@ def main():
         print("Usage: python3 bedcode_hook.py <command>", file=sys.stderr)
         print("Commands: {}".format(", ".join(COMMAND_HANDLERS.keys())), file=sys.stderr)
         sys.exit(1)
+
+    # 仅在 BedCode 启动的 PTY 终端中生效
+    # BEDCODE_SESSION_ID 由 pty_process.rs 启动时注入，外部终端不会设置此变量
+    if not os.environ.get("BEDCODE_SESSION_ID", ""):
+        sys.exit(0)
 
     command = sys.argv[1]
     if command not in COMMAND_HANDLERS:

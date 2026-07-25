@@ -8,6 +8,7 @@
 use crate::utils::auth::PairingCode;
 use crate::db::Database;
 use crate::Result;
+use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
@@ -16,6 +17,17 @@ use tokio::sync::Mutex;
 use crate::server::services::pairing_service::PairingService;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::mobile::remote::PairingService;
+
+/// 运行中会话摘要信息，用于窗口关闭确认弹窗
+#[derive(Debug, Clone, Serialize)]
+pub struct RunningSessionInfo {
+    /// 会话 ID
+    pub id: String,
+    /// 会话名称
+    pub name: String,
+    /// 会话状态（Running / Starting / WaitingInput）
+    pub status: String,
+}
 
 // ==================== Pairing Commands ====================
 
@@ -149,4 +161,17 @@ pub fn get_local_ip_addresses() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// ==================== Window Close Commands ====================
+
+/// 用户确认关闭窗口（前端确认弹窗后调用）
+///
+/// 使用 destroy() 直接销毁窗口，不再次触发 CloseRequested
+#[tauri::command]
+pub fn confirm_window_close(app_handle: tauri::AppHandle) -> Result<()> {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        window.destroy().map_err(|e| crate::AppError::Internal(e.to_string()))?;
+    }
+    Ok(())
 }

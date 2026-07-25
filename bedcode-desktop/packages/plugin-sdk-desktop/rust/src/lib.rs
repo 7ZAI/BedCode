@@ -33,6 +33,8 @@ pub struct BusMessage {
 pub mod wasm;
 #[cfg(feature = "wasm")]
 pub mod wasm_host;
+#[cfg(feature = "test-plugin")]
+pub mod test_plugin;
 
 pub use command::{PluginCommand, PluginCommandEntry};
 pub use context::RustPluginContext;

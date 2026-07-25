@@ -28,6 +28,29 @@ fn find_task_by_claude_sid(host: &WasmHost, claude_sid: &str) -> Option<Value> {
     result.as_array()?.first().cloned()
 }
 
+/// 查询 session 映射 — 按 claude_sid 查找 bedcode_session_id
+fn find_mapping_by_claude_sid(host: &WasmHost, claude_sid: &str) -> Option<String> {
+    let sql = format!(
+        "SELECT session_id FROM session_mapping WHERE claude_sid = '{}'",
+        claude_sid.replace('\'', "''")
+    );
+    let result = host.plugin_db_query(&sql)?;
+    result.as_array()?.first()?.get("session_id")?.as_str().map(|s| s.to_string())
+}
+
+/// 存储 claude_sid ↔ bedcode_session_id 映射
+///
+/// 使用 INSERT OR REPLACE 确保映射始终是最新的
+fn upsert_session_mapping(host: &WasmHost, claude_sid: &str, session_id: &str) {
+    let sql = format!(
+        "INSERT OR REPLACE INTO session_mapping (claude_sid, session_id, created_at) \
+         VALUES ('{}', '{}', datetime('now'))",
+        claude_sid.replace('\'', "''"),
+        session_id.replace('\'', "''"),
+    );
+    host.plugin_db_execute(&sql);
+}
+
 // ==================== HTTP 端点处理 ====================
 
 /// 处理 HTTP 端点请求
@@ -129,8 +152,17 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         );
         let affected = host.plugin_db_execute(&sql);
         host.log_debug(&format!("UPDATE task_history: affected={}", affected));
+    } else if status == "idle" {
+        // idle 状态不创建任务记录，只存储 session 映射
+        // SessionStart 时还没有任务，映射关系在 session_mapping 表中维护
+        if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
+            upsert_session_mapping(host, session_id, bedcode_sid);
+            host.log_info(&format!("Session mapping stored: claude_sid={} → bedcode_sid={}", session_id, bedcode_sid));
+        }
+        // idle 状态无需广播任务变更，直接返回
+        return ok_response();
     } else {
-        // 创建新记录
+        // 非 idle 且无已有记录 → 创建新任务（UserPromptSubmit 首次推送时）
         let questions_str = questions
             .map(|q| serde_json::to_string(q).unwrap_or_default().replace('\'', "''"))
             .unwrap_or_default();
@@ -154,6 +186,11 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         );
         let affected = host.plugin_db_execute(&sql);
         host.log_debug(&format!("INSERT task_history: affected={}", affected));
+
+        // 同步存储 session 映射
+        if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
+            upsert_session_mapping(host, session_id, bedcode_sid);
+        }
     }
 
     // 广播状态变更到移动端
@@ -188,34 +225,22 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
 }
 
 /// POST /session-mode — 设置会话自动授权模式
-fn handle_set_session_mode(host: &WasmHost, body: &Value, query: &Value) -> Value {
-    host.log_debug(&format!("session-mode POST body: {}, query: {}", body, query));
+fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    host.log_debug(&format!("session-mode POST body: {}", body));
 
     let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
     let auto_approve = body.get("auto_approve").and_then(|v| v.as_bool()).unwrap_or(false);
-    let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
-
-    host.log_debug(&format!(
-        "session-mode POST parsed: session_id={}, auto_approve={}, has_token={}",
-        session_id, auto_approve, !token.is_empty()
-    ));
 
     if session_id.is_empty() {
         host.log_warn("session-mode POST rejected: empty session_id");
         return error_response(400, "Missing session_id");
     }
 
-    // 双认证：plugin token 或 query 中的 token
-    let token_valid = validate_token(host, token) || validate_token_from_query(host, query);
-    if !token_valid {
-        host.log_warn(&format!("session-mode POST auth failed: session_id={}, body_token_len={}, query_token={:?}",
-            session_id, token.len(), query.get("token").and_then(|v| v.as_str()).map(|t| t.len())));
-        return error_response(403, "Invalid plugin token or JWT authentication");
-    }
+    // 认证由 Web 服务网关层（plugin_controller）完成，此处不再重复校验
 
-    // 更新任务历史表中的 auto_approve 字段
+    // 更新任务历史表中的 auto_approve 字段（子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY）
     let sql = format!(
-        "UPDATE task_history SET auto_approve = {}, updated_at = datetime('now') WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+        "UPDATE task_history SET auto_approve = {}, updated_at = datetime('now') WHERE id = (SELECT id FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1)",
         if auto_approve { 1 } else { 0 },
         session_id.replace('\'', "''")
     );
@@ -244,23 +269,13 @@ fn handle_get_session_mode(host: &WasmHost, query: &Value) -> Value {
     host.log_debug(&format!("session-mode GET query: {}", query));
 
     let session_id = query.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-    let token = query.get("token").and_then(|v| v.as_str()).unwrap_or("");
-
-    host.log_debug(&format!(
-        "session-mode GET parsed: session_id={}, has_token={}",
-        session_id, !token.is_empty()
-    ));
 
     if session_id.is_empty() {
         host.log_warn("session-mode GET rejected: empty session_id");
         return error_response(400, "Missing session_id");
     }
 
-    // 验证 plugin token
-    if !validate_token(host, token) {
-        host.log_warn(&format!("session-mode GET auth failed: session_id={}, token_len={}", session_id, token.len()));
-        return error_response(403, "Invalid plugin token");
-    }
+    // 认证由 Web 服务网关层（plugin_controller）完成，此处不再重复校验
 
     // 解析 Claude Code session_id → BedCode PTY session_id
     let resolved_id = resolve_session_id(host, session_id);
@@ -283,34 +298,17 @@ fn handle_get_session_mode(host: &WasmHost, query: &Value) -> Value {
 
 // ==================== 辅助函数 ====================
 
-/// 验证 plugin token
-fn validate_token(host: &WasmHost, token: &str) -> bool {
-    if token.is_empty() {
-        host.log_debug("validate_token: empty token provided");
-        return false;
-    }
-    let config_token = host.config_get("plugin.token").unwrap_or_default();
-    if config_token.is_empty() {
-        host.log_warn("validate_token: no plugin.token configured in host config");
-        return false;
-    }
-    let valid = token == config_token;
-    if !valid {
-        host.log_debug(&format!("validate_token: mismatch (input_len={}, config_len={})", token.len(), config_token.len()));
-    }
-    valid
-}
-
-/// 从 query 参数中验证 token
-fn validate_token_from_query(host: &WasmHost, query: &Value) -> bool {
-    let token = query.get("token").and_then(|v| v.as_str()).unwrap_or("");
-    validate_token(host, token)
-}
-
 /// 解析 Claude Code session_id → BedCode PTY session_id
 ///
-/// 从任务历史表查找 claude_sid → session_id 映射
+/// 优先从 session_mapping 表查找映射，fallback 到 task_history 表
 fn resolve_session_id(host: &WasmHost, claude_session_id: &str) -> String {
+    // 优先查 session_mapping 表
+    if let Some(mapped) = find_mapping_by_claude_sid(host, claude_session_id) {
+        host.log_debug(&format!("resolve_session_id: found in session_mapping: {} → {}", claude_session_id, mapped));
+        return mapped;
+    }
+
+    // fallback: 从 task_history 查找
     find_task_by_claude_sid(host, claude_session_id)
         .and_then(|row| row.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
         .filter(|s| !s.is_empty())
@@ -351,8 +349,9 @@ pub fn list_task_history(host: &WasmHost, session_id: &str) -> anyhow::Result<Va
 pub fn set_auto_mode(host: &WasmHost, session_id: &str, auto_approve: bool) -> anyhow::Result<Value> {
     host.log_debug(&format!("set_auto_mode: session_id={}, auto_approve={}", session_id, auto_approve));
 
+    // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
     let sql = format!(
-        "UPDATE task_history SET auto_approve = {}, updated_at = datetime('now') WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1",
+        "UPDATE task_history SET auto_approve = {}, updated_at = datetime('now') WHERE id = (SELECT id FROM task_history WHERE session_id = '{}' ORDER BY created_at DESC LIMIT 1)",
         if auto_approve { 1 } else { 0 },
         session_id.replace('\'', "''")
     );

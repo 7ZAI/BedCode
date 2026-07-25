@@ -265,15 +265,16 @@ impl WasmHost {
 
     // ==================== Session Lifecycle ====================
 
-    /// 订阅会话生命周期事件
+    /// 注册会话生命周期监听器
     ///
-    /// 调用后，当会话创建/停止时会通过 on_message 回调接收事件：
-    /// - topic="session:creating": 会话创建前（同步阻塞）
-    /// - topic="session:created": 会话创建后
-    /// - topic="session:stopping": 会话停止前
-    /// - topic="session:stopped": 会话停止后
-    pub fn session_lifecycle_subscribe(&self) -> bool {
-        unsafe { host_session_lifecycle_subscribe() == 0 }
+    /// 调用后，宿主为该插件创建一个 SessionLifecycleListener 并注册到 SessionManager。
+    /// 生命周期事件通过 on_session_lifecycle 回调接收（不走消息总线）：
+    /// - event_type="creating": 会话创建前（同步阻塞）
+    /// - event_type="created": 会话创建后
+    /// - event_type="stopping": 会话停止前
+    /// - event_type="stopped": 会话停止后
+    pub fn session_lifecycle_register(&self) -> bool {
+        unsafe { host_session_lifecycle_register() == 0 }
     }
 
     // ==================== Notification ====================
@@ -350,8 +351,8 @@ extern "C" {
     fn host_bus_subscribe(topic_ptr: u32, topic_len: u32) -> i32;
     /// 消息总线：取消订阅 — 返回 0 成功，-1 失败
     fn host_bus_unsubscribe(topic_ptr: u32, topic_len: u32) -> i32;
-    /// 会话生命周期：订阅 — 返回 0 成功，-1 失败
-    fn host_session_lifecycle_subscribe() -> i32;
+    /// 会话生命周期：注册监听器 — 返回 0 成功，-1 失败
+    fn host_session_lifecycle_register() -> i32;
 }
 
 // ==================== WASM Memory Helpers ====================
@@ -388,5 +389,21 @@ pub fn wasm_read_string(ptr: u32, len: u32) -> String {
     unsafe {
         let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
         String::from_utf8_lossy(slice).into_owned()
+    }
+}
+
+/// 将 (ptr, len) 结果写入 WASM 线性内存中的 out_ptr 位置（8 字节: ptr:u32 + len:u32）
+///
+/// 用于 wasm_entry! 宏生成的导出函数，将返回值通过 out_ptr 输出参数传递给宿主，
+/// 而非 Rust 元组返回值（C ABI 会将元组拆解为额外指针参数，导致签名不匹配）。
+pub fn wasm_write_result_to_out_ptr(out_ptr: u32, ptr: u32, len: u32) {
+    if out_ptr == 0 {
+        return;
+    }
+    // SAFETY: out_ptr 由宿主传入，指向 WASM 线性内存中的 8 字节有效区域
+    unsafe {
+        let out = out_ptr as *mut u8;
+        std::ptr::copy_nonoverlapping(ptr.to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(len.to_le_bytes().as_ptr(), out.add(4), 4);
     }
 }

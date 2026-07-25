@@ -9,7 +9,6 @@
 //! 由宿主 plugin_http_endpoint 调用本插件的 _http_endpoint command。
 
 mod hooks;
-mod token;
 mod state;
 mod queue;
 
@@ -41,6 +40,19 @@ CREATE INDEX IF NOT EXISTS idx_task_history_session_id ON task_history(session_i
 CREATE INDEX IF NOT EXISTS idx_task_history_created_at ON task_history(created_at);
 "#;
 
+/// Claude Code session ↔ BedCode PTY session 映射表建表 SQL
+///
+/// SessionStart 时仅存储映射关系，不创建空壳任务记录。
+/// UserPromptSubmit 时才真正创建 task_history 行，此时 name 有值。
+const SESSION_MAPPING_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS session_mapping (
+    claude_sid  TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_mapping_session ON session_mapping(session_id);
+"#;
+
 struct AutoTaskPlugin;
 
 impl WasmPlugin for AutoTaskPlugin {
@@ -60,7 +72,6 @@ impl WasmPlugin for AutoTaskPlugin {
             "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "session:read", "fs:read", "fs:write", "ui:sidebar"],
             "contributes": {
                 "commands": [
-                    { "id": "auto-task.setup-project-hooks", "title": "Setup Project Hooks" },
                     { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
                     { "id": "auto-task.get-task-status", "title": "Get Task Status" },
                     { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
@@ -78,8 +89,7 @@ impl WasmPlugin for AutoTaskPlugin {
                     "onStartup": true,
                     "onShutdown": true
                 },
-                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"],
-                "subscribes": ["session:creating"]
+                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"]
             }
         });
         serde_json::from_value(json).expect("Invalid manifest JSON")
@@ -89,12 +99,12 @@ impl WasmPlugin for AutoTaskPlugin {
         let host = WasmHost::new(Self::ID);
         host.log_info("Auto Task plugin activated");
 
-        // 订阅会话生命周期事件
-        // 会话创建前会收到 session:creating 事件，用于自动设置项目 hooks
-        if host.session_lifecycle_subscribe() {
-            host.log_info("Subscribed to session lifecycle events");
+        // 注册会话生命周期监听器
+        // 会话创建前会收到 creating 事件，用于自动设置项目 hooks
+        if host.session_lifecycle_register() {
+            host.log_info("Registered session lifecycle listener");
         } else {
-            host.log_error("Failed to subscribe to session lifecycle events");
+            host.log_error("Failed to register session lifecycle listener");
         }
 
         Ok(())
@@ -124,31 +134,6 @@ impl WasmPlugin for AutoTaskPlugin {
                 } else {
                     Ok(state::handle_http_endpoint(&host, method, path, &body, &query))
                 }
-            }
-            "setup-project-hooks" => {
-                let working_dir = args.get("working_dir")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let port = args.get("port")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(8765) as u16;
-                let token = args.get("token")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let resource_dir = args.get("resource_dir")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let result = hooks::ensure_project_hooks(&host, &working_dir, port, &token, &resource_dir);
-
-                Ok(serde_json::json!({
-                    "success": result.success,
-                    "message": result.message,
-                    "skipped": result.skipped,
-                }))
             }
             "cleanup-project-hooks" => {
                 let working_dir = args.get("working_dir")
@@ -206,18 +191,20 @@ impl WasmPlugin for AutoTaskPlugin {
         // 1. 清理旧版全局 hooks
         hooks::cleanup_global_hooks(&host);
 
-        // 2. Token 校验并通知前端
-        let token_result = token::ensure_token(&host);
-        if token_result.success {
-            host.notify("Auto Task", &token_result.message);
-        }
-
-        // 3. 初始化插件独立数据库（建表 + 索引）
+        // 2. 初始化插件独立数据库（建表 + 索引）
         let affected = host.plugin_db_execute(TASK_HISTORY_SCHEMA);
         if affected < 0 {
             host.log_error("Failed to initialize task_history table");
         } else {
             host.log_info("task_history table initialized");
+        }
+
+        // 3. 初始化 session 映射表
+        let affected = host.plugin_db_execute(SESSION_MAPPING_SCHEMA);
+        if affected < 0 {
+            host.log_error("Failed to initialize session_mapping table");
+        } else {
+            host.log_info("session_mapping table initialized");
         }
 
         // 4. 初始化任务队列表
@@ -237,12 +224,16 @@ impl WasmPlugin for AutoTaskPlugin {
         Ok(())
     }
 
-    fn on_message(topic: &str, _sender: &str, payload: &serde_json::Value) -> anyhow::Result<()> {
-        match topic {
-            "session:creating" => {
+    fn on_session_lifecycle(event: &serde_json::Value) -> anyhow::Result<()> {
+        let event_type = event.get("event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        match event_type {
+            "creating" => {
                 let host = WasmHost::new(Self::ID);
 
-                let command = payload.get("command")
+                let command = event.get("command")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -251,19 +242,31 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Ok(());
                 }
 
-                let working_dir = payload.get("working_dir")
+                let working_dir = event.get("working_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // resource_dir 由宿主注入，指向插件安装目录（包含 bedcode_hook.py）
+                let resource_dir = event.get("resource_dir")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
 
                 // 读取宿主配置（port + token）
+                // token 必须非空，否则 hooks 中的 BEDCODE_TOKEN 环境变量为空，hook 脚本无法推送状态
                 let port = host.config_get("network.port")
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(8765);
                 let token = host.config_get("plugin.token")
                     .unwrap_or_default();
 
-                let result = hooks::ensure_project_hooks(&host, &working_dir, port, &token, "");
+                if token.is_empty() {
+                    host.log_error("Session lifecycle: plugin token not available, hooks require BEDCODE_TOKEN for HTTP push");
+                    return Ok(());
+                }
+
+                let result = hooks::ensure_project_hooks(&host, &working_dir, port, &token, &resource_dir);
 
                 if result.success {
                     host.log_info(&format!("Session lifecycle: hooks setup for {}", working_dir));

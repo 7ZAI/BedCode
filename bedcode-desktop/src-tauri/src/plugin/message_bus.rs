@@ -69,86 +69,84 @@ impl MessageBus {
     ///
     /// 同步投递给所有订阅了该 topic 的插件（不投递给发送者自己）
     pub fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
-        let dispatcher = {
-            // 使用 block_in_place + block_on 读取 tokio RwLock
-            let guard = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.dispatcher.read())
-            });
-            guard.clone()
-        };
-        let Some(dispatcher) = dispatcher else {
-            tracing::warn!("MessageBus: dispatcher not set, message dropped");
-            return;
-        };
+        let dispatcher_arc = self.dispatcher.clone();
+        let subscribers_arc = self.subscribers.clone();
 
-        let subscribers = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.subscribers.read())
-        });
-        let Some(subs) = subscribers.get(topic) else {
-            tracing::debug!("MessageBus: no subscribers for topic '{}', message dropped", topic);
-            return;
-        };
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            let dispatcher = {
+                let guard = dispatcher_arc.read().await;
+                guard.clone()
+            };
+            let Some(dispatcher) = dispatcher else {
+                tracing::warn!("MessageBus: dispatcher not set, message dropped");
+                return;
+            };
 
-        let msg = BusMessage {
-            topic: topic.to_string(),
-            sender: sender.to_string(),
-            payload,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-        };
+            let subscribers = subscribers_arc.read().await;
+            let Some(subs) = subscribers.get(topic) else {
+                tracing::debug!("MessageBus: no subscribers for topic '{}', message dropped", topic);
+                return;
+            };
 
-        let mut delivered = 0;
-        for sub in subs.iter() {
-            match sub {
-                BusSubscriber::Wasm { plugin_id } => {
-                    // 不投递给自己
-                    if plugin_id == sender {
-                        continue;
+            let msg = BusMessage {
+                topic: topic.to_string(),
+                sender: sender.to_string(),
+                payload,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            };
+
+            let mut delivered = 0;
+            for sub in subs.iter() {
+                match sub {
+                    BusSubscriber::Wasm { plugin_id } => {
+                        if plugin_id == sender {
+                            continue;
+                        }
+                        if !dispatcher.is_activated(plugin_id) {
+                            tracing::warn!(
+                                "MessageBus: subscriber '{}' not activated, skipping",
+                                plugin_id
+                            );
+                            continue;
+                        }
+                        if let Err(e) = dispatcher.dispatch_to_wasm(plugin_id, &msg) {
+                            tracing::error!(
+                                "MessageBus: dispatch to WASM plugin '{}' failed: {}",
+                                plugin_id,
+                                e
+                            );
+                        } else {
+                            delivered += 1;
+                        }
                     }
-                    // 只投递给已激活插件
-                    if !dispatcher.is_activated(plugin_id) {
-                        tracing::warn!(
-                            "MessageBus: subscriber '{}' not activated, skipping",
-                            plugin_id
-                        );
-                        continue;
-                    }
-                    if let Err(e) = dispatcher.dispatch_to_wasm(plugin_id, &msg) {
-                        tracing::error!(
-                            "MessageBus: dispatch to WASM plugin '{}' failed: {}",
-                            plugin_id,
-                            e
-                        );
-                    } else {
-                        delivered += 1;
-                    }
-                }
-                BusSubscriber::Static { plugin_id, handler } => {
-                    if plugin_id == sender {
-                        continue;
-                    }
-                    if let Err(e) = handler.on_message(&msg) {
-                        tracing::error!(
-                            "MessageBus: handler for static plugin '{}' failed: {}",
-                            plugin_id,
-                            e
-                        );
-                    } else {
-                        delivered += 1;
+                    BusSubscriber::Static { plugin_id, handler } => {
+                        if plugin_id == sender {
+                            continue;
+                        }
+                        if let Err(e) = handler.on_message(&msg) {
+                            tracing::error!(
+                                "MessageBus: handler for static plugin '{}' failed: {}",
+                                plugin_id,
+                                e
+                            );
+                        } else {
+                            delivered += 1;
+                        }
                     }
                 }
             }
-        }
 
-        tracing::debug!(
-            "MessageBus: published topic='{}' sender='{}' delivered={}/{}",
-            topic,
-            sender,
-            delivered,
-            subs.len()
-        );
+            tracing::debug!(
+                "MessageBus: published topic='{}' sender='{}' delivered={}/{}",
+                topic,
+                sender,
+                delivered,
+                subs.len()
+            );
+        });
     }
 
     /// 订阅 topic（WASM 插件）

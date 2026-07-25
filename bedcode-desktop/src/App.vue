@@ -7,19 +7,36 @@
 
     <!-- File System Auth Dialog -->
     <FsAuthDialog />
+
+    <!-- Exit Confirm Dialog -->
+    <ExitConfirmModal
+      v-model:visible="showExitConfirm"
+      :sessions="runningSessions"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+/**
+ * BedCode Desktop - Root Component
+ */
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import DesktopLayout from '@/components/DesktopLayout.vue'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
+import ExitConfirmModal from '@/components/ExitConfirmModal.vue'
 import { useGlobalNotifications } from '@/composables/useGlobalNotifications'
 import { ToastContainer } from '@/composables/useToast'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
+
+interface RunningSession {
+  id: string
+  name: string
+  status: string
+}
 
 const router = useRouter()
 
@@ -37,14 +54,26 @@ useKeyboardShortcuts([
   { key: '2', ctrl: true, handler: () => router.push('/devices') },
 ])
 
-onMounted(() => {
+// 退出确认弹窗状态
+const showExitConfirm = ref(false)
+const runningSessions = ref<RunningSession[]>([])
+let unlistenCloseRequested: UnlistenFn | null = null
+
+onMounted(async () => {
   setupTheme()
   setupFontSize()
   startGlobalNotifications()
+
+  // 监听窗口关闭请求事件（有运行中会话时后端发送）
+  unlistenCloseRequested = await listen<RunningSession[]>('window-close-requested', (event) => {
+    runningSessions.value = event.payload
+    showExitConfirm.value = true
+  })
 })
 
 onUnmounted(() => {
   cleanupTheme()
   stopGlobalNotifications()
+  unlistenCloseRequested?.()
 })
 </script>

@@ -249,6 +249,12 @@ pub fn lifecycle_registry() -> &'static LifecycleRegistry {
 pub fn register_core_lifecycle_hooks() {
     let registry = lifecycle_registry();
 
+    // PluginHost 通知插件启动 — 优先级 10，最早执行
+    registry.on_startup("plugin-host-startup", 10, || async {
+        let ctx = crate::system::app_context::AppContext::global();
+        ctx.plugin_host().notify_startup().await;
+    });
+
     // SessionManager — 优先级 10，最先清理（停止所有 PTY 进程）
     registry.on_shutdown("session-manager", 10, || async {
         let ctx = crate::system::app_context::AppContext::global();

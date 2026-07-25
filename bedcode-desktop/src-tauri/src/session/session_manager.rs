@@ -152,6 +152,19 @@ impl SessionManager {
         listeners.push(listener);
     }
 
+    /// 移除指定插件的生命周期监听器
+    ///
+    /// 插件停用时调用，移除该插件注册的 PluginLifecycleListener
+    pub async fn remove_lifecycle_listener(&self, plugin_id: &str) {
+        let mut listeners = self.lifecycle_listeners.write().await;
+        let before = listeners.len();
+        listeners.retain(|l| l.plugin_id() != Some(plugin_id));
+        let removed = before - listeners.len();
+        if removed > 0 {
+            tracing::info!("Removed {} lifecycle listener(s) for plugin '{}'", removed, plugin_id);
+        }
+    }
+
     /// 分发会话生命周期事件
     ///
     /// 同步遍历所有已注册的监听器并调用

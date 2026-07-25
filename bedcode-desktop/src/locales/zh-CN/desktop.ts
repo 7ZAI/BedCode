@@ -55,6 +55,9 @@ export default {
       startTime: '启动时间',
       stopTime: '停止时间',
       runTime: '运行时间: {time}',
+      confirmExitTitle: '确认退出',
+      confirmExitMsg: '以下 {count} 个会话仍在运行，退出后将终止所有运行中的进程。',
+      confirmExitForce: '强制退出',
     },
     form: {
       name: '名称',

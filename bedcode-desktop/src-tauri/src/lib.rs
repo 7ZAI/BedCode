@@ -19,6 +19,7 @@ pub mod utils;
 
 pub use system::{AppError, Result, AppConfig, AppContext};
 use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+use commands::system::RunningSessionInfo;
 
 // ==================== Application Setup ====================
 
@@ -190,19 +191,22 @@ pub fn run() {
             // 初始化日志系统（依赖已加载的 LogConfig）
             init_logging(app.handle(), &app_config.log)?;
 
-            // 初始化全局配置单例
+            let mut app_config = app_config;
+
+            // 确保 plugin token 存在且合法（在 init 之前，OnceLock 不可重设）
+            // 首次启动 token 为空时自动生成，并持久化到配置文件避免每次启动重新生成
+            if app_config.plugin.token.is_empty() {
+                app_config.ensure_valid_token();
+                if let Err(e) = app_config.save_to(&config_path) {
+                    tracing::warn!("Failed to persist generated plugin token: {}", e);
+                }
+            }
+
+            // 初始化全局配置单例（OnceLock 只能设置一次，须在 token 生成后调用）
             crate::system::config::AppConfig::init(app_config.clone());
 
             // 同步 PowerManager 开关状态到配置值
             crate::system::power::power_manager().set_enabled(app_config.network.prevent_sleep);
-
-            let mut app_config = app_config;
-
-            // 确保 plugin token 存在（基础功能，不依赖插件）
-            if app_config.plugin.token.is_empty() {
-                app_config.ensure_valid_token();
-                crate::system::config::AppConfig::init(app_config.clone());
-            }
 
             // 保存 resource_dir 供后续会话创建时使用
             let resource_dir = app_handle
@@ -274,12 +278,6 @@ pub fn run() {
             );
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
-            // 注册 PluginHost 为 SessionManager 的生命周期监听器
-            // PluginHost 将会话生命周期事件桥接到 MessageBus，供插件订阅
-            tauri::async_runtime::block_on(async {
-                session_manager.register_lifecycle_listener(Box::new((*plugin_host).clone())).await;
-            });
-            tracing::info!("PluginHost registered as SessionLifecycleListener");
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
@@ -412,17 +410,60 @@ pub fn run() {
             setup_tray(app_handle)?;
 
             let window = app_handle.get_webview_window("main").expect("Failed to get main window");
+            let close_window = window.clone();
+            let close_app_handle = app_handle.clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    // 检查生命周期钩子是否允许关闭（如存在运行中会话则阻止）
-                    let should_close = tauri::async_runtime::block_on(async {
-                        system::lifecycle::lifecycle_registry()
+                    // 始终先阻止默认关闭，避免 block_on 死锁
+                    // 在同步回调中使用 block_on 会在 Tokio 运行时繁忙时死锁，
+                    // 因此改为先阻止关闭，再 spawn 异步任务检查钩子
+                    api.prevent_close();
+
+                    let win = close_window.clone();
+                    let ah = close_app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let should_close = system::lifecycle::lifecycle_registry()
                             .run_window_close_hooks()
-                            .await
+                            .await;
+
+                        if should_close {
+                            // 无运行中会话，直接关闭
+                            if let Err(e) = win.destroy() {
+                                tracing::error!("Failed to destroy window: {}", e);
+                            }
+                        } else {
+                            // 有运行中会话，通知前端弹窗确认
+                            let ctx = system::app_context::AppContext::global();
+                            let sm = ctx.session_manager();
+                            let sessions = sm.list_sessions().await;
+                            let running: Vec<_> = sessions
+                                .iter()
+                                .filter(|s| matches!(
+                                    s.status,
+                                    enums::SessionStatus::Running
+                                    | enums::SessionStatus::Starting
+                                    | enums::SessionStatus::WaitingInput
+                                ))
+                                .map(|s| RunningSessionInfo {
+                                    id: s.id.clone(),
+                                    name: s.name.clone(),
+                                    status: format!("{:?}", s.status),
+                                })
+                                .collect();
+
+                            tracing::info!(
+                                "Window close requested with {} running session(s), emitting to frontend",
+                                running.len()
+                            );
+
+                            if let Err(e) = ah.emit(
+                                system::constants::event::WINDOW_CLOSE_REQUESTED,
+                                &running,
+                            ) {
+                                tracing::error!("Failed to emit window-close-requested: {}", e);
+                            }
+                        }
                     });
-                    if !should_close {
-                        api.prevent_close();
-                    }
                 }
             });
 
@@ -488,6 +529,7 @@ pub fn run() {
             commands::system::get_app_version,
             commands::system::get_startup_time,
             commands::system::get_local_ip_addresses,
+            commands::system::confirm_window_close,
             commands::devices::get_connected_devices,
             // Plugin
             commands::plugin::plugin_list_loaded,
@@ -576,7 +618,16 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
                 }
             }
             "quit" => {
-                app.exit(0);
+                // 尝试关闭主窗口（触发 CloseRequested → 生命周期钩子 → 确认弹窗）
+                // 如果窗口已隐藏，先显示再关闭
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.close();
+                } else {
+                    // 无窗口时直接退出
+                    app.exit(0);
+                }
             }
             _ => {}
         })

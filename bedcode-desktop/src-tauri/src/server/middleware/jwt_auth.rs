@@ -1,44 +1,42 @@
-//! JWT Authentication Middleware for Actix Web
+//! HTTP 网关中间件 — JWT 认证
 //!
-//! 从 Authorization header 提取 Bearer token 并验证 JWT
-//! 验证通过后将 claims 存入 request extensions
+//! 挂载在 /api scope 上，统一拦截认证：
+//! - /api/auth/* — 放行（公开路由，配对/登录）
+//! - /api/plugin/* — 优先校验 JWT，无 JWT 时放行给 handler 自行校验 plugin token
+//! - 其余 /api/* — 必须通过 JWT 校验
+//!
+//! 校验通过后将 JwtClaims 注入 request extensions，handler 通过 get_claims_from_request 提取。
 
-use actix_web::{dev::ServiceRequest, Error, HttpMessage};
-use actix_web::error::ErrorUnauthorized;
-use crate::utils::auth::jwt::{JwtService, JwtClaims};
+use actix_web::HttpMessage;
 
-/// JWT 认证验证器
-///
-/// 从 Authorization: Bearer <token> 提取并验证 JWT
-/// 验证成功后将 JwtClaims 注入 request extensions
-pub fn validate_jwt(req: &ServiceRequest) -> Result<JwtClaims, Error> {
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ErrorUnauthorized("Missing Authorization header"))?;
-
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| ErrorUnauthorized("Invalid Authorization format, expected Bearer <token>"))?;
-
-    let jwt_service = JwtService::new();
-    let claims = jwt_service
-        .verify_token_with_expiry(token)
-        .map_err(|e| {
-            let msg = match e {
-                crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
-                _ => "Invalid token",
-            };
-            ErrorUnauthorized(msg)
-        })?;
-
-    req.extensions_mut().insert(claims.clone());
-
-    Ok(claims)
-}
+use crate::utils::auth::jwt::{JwtClaims, JwtService};
 
 /// 从 request extensions 提取 JWT claims
+///
+/// 供 handler 使用，中间件校验通过后 claims 已注入
 pub fn get_claims_from_request(req: &actix_web::HttpRequest) -> Option<JwtClaims> {
     req.extensions().get::<JwtClaims>().cloned()
+}
+
+/// 从 Authorization header 提取并验证 JWT
+///
+/// 返回 Some(claims) 表示校验通过，None 表示无 token 或校验失败
+pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<JwtClaims> {
+    let auth_header = req.headers().get("Authorization")?.to_str().ok()?;
+    let token = auth_header.strip_prefix("Bearer ")?;
+    let jwt_service = JwtService::new();
+    jwt_service.verify_token_with_expiry(token).ok()
+}
+
+/// 判断请求路径是否属于公开路由（无需认证）
+pub fn is_public_path(path: &str) -> bool {
+    path.starts_with("/api/auth/") || path == "/api/health" || path == "/health"
+}
+
+/// 判断请求路径是否属于插件端点
+///
+/// 插件端点支持 JWT 或 plugin token 两种认证方式。
+/// 中间件只校验 JWT；plugin token 校验由 plugin_controller handler 自行完成。
+pub fn is_plugin_path(path: &str) -> bool {
+    path.starts_with("/api/plugin/")
 }
