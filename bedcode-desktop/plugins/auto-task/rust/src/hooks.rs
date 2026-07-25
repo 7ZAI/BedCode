@@ -2,7 +2,7 @@
 //!
 //! 管理 Claude Code hooks 配置：
 //! - ensure_project_hooks() — 会话启动前为项目配置 hooks
-//! - cleanup_project_hooks() — 清理指定项目的 BedCode hooks
+//! - cleanup_project_hooks() — 清理指定项目的插件 hooks
 //! - cleanup_global_hooks() — 清理旧版全局 hooks
 
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -28,7 +28,7 @@ pub fn ensure_project_hooks(
 ) -> ProjectHooksResult {
     let claude_dir_name = ".claude";
     let settings_file = "settings.json";
-    let hook_script_name = "bedcode_hook.py";
+    let hook_script_name = "auto_task_hook.py";
 
     let project_path = working_dir.to_string();
     let claude_dir = format!("{}/{}", project_path, claude_dir_name);
@@ -40,9 +40,9 @@ pub fn ensure_project_hooks(
         None => serde_json::json!({}),
     };
 
-    // 检查项目是否已有 BedCode hooks 且端口/token 匹配
+    // 检查项目是否已有插件 hooks 且端口/token 匹配
     let needs_update = match settings.get("hooks") {
-        Some(hooks) if is_bedcode_hooks_configured(hooks) => {
+        Some(hooks) if is_plugin_hooks_configured(hooks) => {
             // hooks 存在，但需要验证端口和 token 是否与当前值匹配
             !is_hooks_port_token_matching(hooks, port, token)
         }
@@ -50,15 +50,15 @@ pub fn ensure_project_hooks(
     };
 
     if !needs_update {
-        host.log_info("Project already has BedCode hooks with matching config, skipping");
+        host.log_info("Project already has plugin hooks with matching config, skipping");
         return ProjectHooksResult {
             success: true,
-            message: "项目已配置 BedCode hooks 且配置匹配".to_string(),
+            message: "项目已配置插件 hooks 且配置匹配".to_string(),
             skipped: true,
         };
     }
 
-    host.log_info(&format!("Updating BedCode hooks (port={}, token={}...)", port, &token[..token.len().min(8)]));
+    host.log_info(&format!("Updating plugin hooks (port={}, token={}...)", port, &token[..token.len().min(8)]));
 
     // 2. 复制 hook 脚本到项目 .claude/ 目录
     let hook_script_path = format!("{}/{}", claude_dir, hook_script_name);
@@ -70,7 +70,7 @@ pub fn ensure_project_hooks(
     // 3. 构建 hooks 配置并写入项目 settings.json
     let hooks_config = build_hooks_config(port, token, &hook_script_path);
 
-    // 合并 hooks：保留非 BedCode hooks，添加 BedCode hooks
+    // 合并 hooks：保留非插件 hooks，添加插件 hooks
     let existing_hooks = settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
     let merged_hooks = merge_hooks(&existing_hooks, &hooks_config);
     settings["hooks"] = merged_hooks;
@@ -104,7 +104,7 @@ pub fn ensure_project_hooks(
     }
 }
 
-/// 清理指定项目的 BedCode hooks
+/// 清理指定项目的插件 hooks
 pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooksResult {
     let settings_path = format!("{}/.claude/settings.json", working_dir);
 
@@ -130,15 +130,15 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
         }
     };
 
-    if !is_bedcode_hooks_configured(hooks) {
+    if !is_plugin_hooks_configured(hooks) {
         return ProjectHooksResult {
             success: true,
-            message: "项目无 BedCode hooks".to_string(),
+            message: "项目无插件 hooks".to_string(),
             skipped: true,
         };
     }
 
-    let cleaned_hooks = remove_bedcode_hooks(hooks);
+    let cleaned_hooks = remove_plugin_hooks(hooks);
 
     if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
         settings.as_object_mut().map(|o| o.remove("hooks"));
@@ -158,10 +158,10 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
     };
 
     if host.fs_write(&settings_path, &content) {
-        host.log_info(&format!("Cleaned BedCode hooks from project: {}", working_dir));
+        host.log_info(&format!("Cleaned plugin hooks from project: {}", working_dir));
         ProjectHooksResult {
             success: true,
-            message: "项目 BedCode hooks 已清理".to_string(),
+            message: "项目插件 hooks 已清理".to_string(),
             skipped: false,
         }
     } else {
@@ -173,7 +173,7 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
     }
 }
 
-/// 清理全局 ~/.claude/settings.json 中的 BedCode hooks
+/// 清理全局 ~/.claude/settings.json 中的插件 hooks
 pub fn cleanup_global_hooks(host: &WasmHost) {
     let home_dir = match host.config_get("home_dir") {
         Some(d) => d,
@@ -198,11 +198,11 @@ pub fn cleanup_global_hooks(host: &WasmHost) {
         None => return,
     };
 
-    if !is_bedcode_hooks_configured(hooks) {
+    if !is_plugin_hooks_configured(hooks) {
         return;
     }
 
-    let cleaned_hooks = remove_bedcode_hooks(hooks);
+    let cleaned_hooks = remove_plugin_hooks(hooks);
 
     if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
         settings.as_object_mut().map(|o| o.remove("hooks"));
@@ -212,7 +212,7 @@ pub fn cleanup_global_hooks(host: &WasmHost) {
 
     if let Ok(content) = serde_json::to_string_pretty(&settings) {
         if host.fs_write(&settings_path, &content) {
-            host.log_info("Cleaned up BedCode hooks from global settings.json");
+            host.log_info("Cleaned up plugin hooks from global settings.json");
         }
     }
 }
@@ -375,21 +375,21 @@ fn build_hooks_config(port: u16, token: &str, hook_script_path: &str) -> serde_j
     })
 }
 
-/// 检查 hooks 配置是否包含 BedCode hook 命令
-fn is_bedcode_hooks_configured(hooks: &serde_json::Value) -> bool {
+/// 检查 hooks 配置是否包含插件 hook 命令
+fn is_plugin_hooks_configured(hooks: &serde_json::Value) -> bool {
     let hooks_obj = match hooks.as_object() {
         Some(obj) => obj,
         None => return false,
     };
 
-    // 检查任意事件类型中是否包含 bedcode_hook.py
+    // 检查任意事件类型中是否包含 auto_task_hook.py
     for (_event_type, events) in hooks_obj {
         if let Some(events_arr) = events.as_array() {
             for event in events_arr {
                 if let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) {
                     for hook in hook_list {
                         if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
-                            if cmd.contains("bedcode_hook.py") {
+                            if cmd.contains("auto_task_hook.py") {
                                 return true;
                             }
                         }
@@ -402,8 +402,8 @@ fn is_bedcode_hooks_configured(hooks: &serde_json::Value) -> bool {
     false
 }
 
-/// 移除所有 BedCode 相关的 hook 条目
-fn remove_bedcode_hooks(hooks: &serde_json::Value) -> serde_json::Value {
+/// 移除所有插件相关的 hook 条目
+fn remove_plugin_hooks(hooks: &serde_json::Value) -> serde_json::Value {
     let mut result = serde_json::json!({});
 
     if let Some(hooks_obj) = hooks.as_object() {
@@ -419,7 +419,7 @@ fn remove_bedcode_hooks(hooks: &serde_json::Value) -> serde_json::Value {
                                 hook_list.iter().all(|h| {
                                     h.get("command")
                                         .and_then(|v| v.as_str())
-                                        .map(|cmd| !cmd.contains("bedcode_hook.py"))
+                                        .map(|cmd| !cmd.contains("auto_task_hook.py"))
                                         .unwrap_or(true)
                                 })
                             })
@@ -438,40 +438,40 @@ fn remove_bedcode_hooks(hooks: &serde_json::Value) -> serde_json::Value {
     result
 }
 
-/// 合并 hooks 配置：保留非 BedCode hooks，替换 BedCode 相关的 hooks
-fn merge_hooks(existing: &serde_json::Value, bedcode_hooks: &serde_json::Value) -> serde_json::Value {
+/// 合并 hooks 配置：保留非插件 hooks，替换插件相关的 hooks
+fn merge_hooks(existing: &serde_json::Value, plugin_hooks: &serde_json::Value) -> serde_json::Value {
     let mut result = serde_json::json!({});
 
-    if let (Some(existing_obj), Some(bedcode_obj)) = (existing.as_object(), bedcode_hooks.as_object()) {
-        // 先放入 BedCode hooks
-        for (key, value) in bedcode_obj {
+    if let (Some(existing_obj), Some(plugin_obj)) = (existing.as_object(), plugin_hooks.as_object()) {
+        // 先放入插件 hooks
+        for (key, value) in plugin_obj {
             result[key] = value.clone();
         }
 
-        // 合并已有 hooks：BedCode 事件类型追加非 BedCode 条目，非 BedCode 事件类型直接保留
+        // 合并已有 hooks：插件事件类型追加非插件条目，非插件事件类型直接保留
         for (key, value) in existing_obj {
-            if bedcode_obj.contains_key(key) {
+            if plugin_obj.contains_key(key) {
                 if let Some(existing_events) = value.as_array() {
-                    let mut merged_events = match bedcode_obj.get(key).and_then(|v| v.as_array()) {
+                    let mut merged_events = match plugin_obj.get(key).and_then(|v| v.as_array()) {
                         Some(arr) => arr.clone(),
                         None => vec![],
                     };
 
                     for event in existing_events {
-                        let is_bedcode_event = event
+                        let is_plugin_event = event
                             .get("hooks")
                             .and_then(|v| v.as_array())
                             .map(|hooks| {
                                 hooks.iter().any(|h| {
                                     h.get("command")
                                         .and_then(|v| v.as_str())
-                                        .map(|cmd| cmd.contains("bedcode_hook.py"))
+                                        .map(|cmd| cmd.contains("auto_task_hook.py"))
                                         .unwrap_or(false)
                                 })
                             })
                             .unwrap_or(false);
 
-                        if !is_bedcode_event {
+                        if !is_plugin_event {
                             merged_events.push(event.clone());
                         }
                     }
@@ -483,7 +483,7 @@ fn merge_hooks(existing: &serde_json::Value, bedcode_hooks: &serde_json::Value) 
             }
         }
     } else {
-        result = bedcode_hooks.clone();
+        result = plugin_hooks.clone();
     }
 
     result
@@ -507,7 +507,7 @@ fn is_hooks_port_token_matching(hooks: &serde_json::Value, port: u16, token: &st
                 if let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) {
                     for hook in hook_list {
                         if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
-                            if cmd.contains("bedcode_hook.py") {
+                            if cmd.contains("auto_task_hook.py") {
                                 // 检查命令中的环境变量前缀是否匹配
                                 if !cmd.starts_with(&expected_prefix) {
                                     return false;

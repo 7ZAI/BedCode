@@ -5,15 +5,15 @@
 跨平台（Windows/macOS/Linux），零外部依赖（仅标准库）。
 
 用法:
-    python3 bedcode_hook.py session-start       # SessionStart hook
-    python3 bedcode_hook.py user-prompt-submit  # UserPromptSubmit hook
-    python3 bedcode_hook.py pre-tool-use        # PreToolUse hook (权限请求 + AskUserQuestion)
-    python3 bedcode_hook.py post-tool-use       # PostToolUse hook
-    python3 bedcode_hook.py post-tool-use-fail  # PostToolUseFailure hook
-    python3 bedcode_hook.py notification        # Notification hook
-    python3 bedcode_hook.py stop                # Stop hook
-    python3 bedcode_hook.py subagent-stop       # SubagentStop hook
-    python3 bedcode_hook.py session-end         # SessionEnd hook
+    python3 auto_task_hook.py session-start       # SessionStart hook
+    python3 auto_task_hook.py user-prompt-submit  # UserPromptSubmit hook
+    python3 auto_task_hook.py pre-tool-use        # PreToolUse hook (权限请求 + AskUserQuestion)
+    python3 auto_task_hook.py post-tool-use       # PostToolUse hook
+    python3 auto_task_hook.py post-tool-use-fail  # PostToolUseFailure hook
+    python3 auto_task_hook.py notification        # Notification hook
+    python3 auto_task_hook.py stop                # Stop hook
+    python3 auto_task_hook.py subagent-stop       # SubagentStop hook
+    python3 auto_task_hook.py session-end         # SessionEnd hook
 
 环境变量:
     CLAUDE_PROJECT_DIR  - 项目根目录（Claude Code 自动设置）
@@ -692,8 +692,16 @@ COMMAND_HANDLERS = {
 
 
 def main():
+    # Windows 中文系统默认编码为 GBK/CP936，而 Claude Code 通过 stdin 传入 UTF-8 编码的 JSON。
+    # 必须在读取 stdin 之前强制 UTF-8，否则中文字符会被错误解码为乱码
+    # （如 "你好" UTF-8 字节 E4 BD A0 E5 A5 BD 被按 GBK 解码为 "浣犲ソ"）
+    if sys.platform == "win32":
+        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+
     if len(sys.argv) < 2:
-        print("Usage: python3 bedcode_hook.py <command>", file=sys.stderr)
+        print("Usage: python3 auto_task_hook.py <command>", file=sys.stderr)
         print("Commands: {}".format(", ".join(COMMAND_HANDLERS.keys())), file=sys.stderr)
         sys.exit(1)
 

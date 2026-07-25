@@ -10,7 +10,7 @@ Monitor Claude Code sessions through the BedCode desktop app.
 ## How It Works
 
 Hooks 通过全局 `~/.claude/settings.json` 配置，BedCode 桌面端启动时自动注入。
-Hook 脚本自动复制到 `~/.claude/bedcode_hook.py`，全局生效。
+Hook 脚本自动复制到 `~/.claude/auto_task_hook.py`，全局生效。
 
 1. **SessionStart**: 当 Claude Code 启动新会话时，hook 记录会话信息并推送 `idle` 状态到桌面端
 
@@ -41,7 +41,7 @@ Hook 脚本自动复制到 `~/.claude/bedcode_hook.py`，全局生效。
 
 ```
 scripts/
-├── bedcode_hook.py      # Hook 脚本（Python，零外部依赖）
+├── auto_task_hook.py      # Hook 脚本（Python，零外部依赖）
 └── README.md            # 本文件
 ```
 
@@ -58,7 +58,7 @@ Hooks 配置位于全局 `~/.claude/settings.json`，由 BedCode 桌面端启动
       "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "BEDCODE_PORT=8765 BEDCODE_TOKEN=xxx python \"~/.claude/bedcode_hook.py\" session-start",
+        "command": "BEDCODE_PORT=8765 BEDCODE_TOKEN=xxx python \"~/.claude/auto_task_hook.py\" session-start",
         "timeout": 5
       }]
     }]

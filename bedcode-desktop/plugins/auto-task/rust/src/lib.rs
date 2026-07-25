@@ -247,7 +247,7 @@ impl WasmPlugin for AutoTaskPlugin {
                     .unwrap_or("")
                     .to_string();
 
-                // resource_dir 由宿主注入，指向插件安装目录（包含 bedcode_hook.py）
+                // resource_dir 由宿主注入，指向插件安装目录（包含 auto_task_hook.py）
                 let resource_dir = event.get("resource_dir")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")

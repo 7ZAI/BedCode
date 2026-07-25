@@ -87,7 +87,7 @@ temp/
 .claude/settings.json
 .claude/settings.local.json
 .claude/*.log.*
-.claude/bedcode_hook.py
+.claude/auto_task_hook.py
 
 # Superpowers temporary files (brainstorm state, etc.)
 .superpowers/brainstorm/

@@ -73,20 +73,20 @@ function copyArtifacts() {
     console.log(`[build] Copied WASM (release): ${RUST_LIB_NAME}.wasm`)
   }
 
-  // 复制 bedcode_hook.py
-  const hookSource = resolve(ROOT, 'scripts/bedcode_hook.py')
+  // 复制 auto_task_hook.py
+  const hookSource = resolve(ROOT, 'scripts/auto_task_hook.py')
   if (existsSync(hookSource)) {
-    cpSync(hookSource, resolve(RESOURCES_DIR, 'bedcode_hook.py'))
-    console.log('[build] Copied bedcode_hook.py')
+    cpSync(hookSource, resolve(RESOURCES_DIR, 'auto_task_hook.py'))
+    console.log('[build] Copied auto_task_hook.py')
   } else {
-    console.warn('[build] WARNING: bedcode_hook.py not found in scripts/')
+    console.warn('[build] WARNING: auto_task_hook.py not found in scripts/')
   }
 
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   console.log(`[build]   - index.js`)
   console.log(`[build]   - plugin.json`)
   console.log(`[build]   - ${RUST_LIB_NAME}.wasm`)
-  console.log(`[build]   - bedcode_hook.py`)
+  console.log(`[build]   - auto_task_hook.py`)
 }
 
 // ==================== Main ====================
