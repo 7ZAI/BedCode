@@ -43,6 +43,7 @@ CLAUDE.md
 ehthumbs.db
 Thumbs.db
 desktop.ini
+*.stackdump
 
 # Logs
 logs/
