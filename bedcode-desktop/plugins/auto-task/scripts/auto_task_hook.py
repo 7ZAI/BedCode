@@ -17,7 +17,6 @@
 
 环境变量:
     CLAUDE_PROJECT_DIR  - 项目根目录（Claude Code 自动设置）
-    BEDCODE_TOKEN       - HTTP API 认证 token（存在时才推送状态）
     BEDCODE_PORT        - HTTP API 端口（默认 8765）
     BEDCODE_SESSION_ID  - BedCode PTY 会话 ID（由 pty_process.rs 启动时注入）
 
@@ -131,14 +130,8 @@ def setup_logging():
 def push_task_status(session_id, status, reason, logger, questions=None, bedcode_session_id=None, task_name=None):
     """推送任务状态到 BedCode 桌面端 HTTP API。
 
-    仅在 BEDCODE_TOKEN 环境变量存在时推送。
     失败不阻塞主流程，仅记录日志。
     """
-    token = os.environ.get("BEDCODE_TOKEN", "")
-    if not token:
-        logger.debug("BEDCODE_TOKEN not set, skip HTTP push")
-        return
-
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
     url = "http://localhost:{}{}/task-status".format(port, PLUGIN_API_PREFIX)
 
@@ -146,7 +139,6 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
         "session_id": session_id,
         "status": status,
         "reason": reason or "",
-        "token": token,
     }
     # BedCode PTY 会话 ID：用于关联 Claude Code session 和 BedCode PTY session
     if bedcode_session_id:
@@ -182,14 +174,9 @@ def query_session_mode(session_id, logger):
     返回 True 表示自动授权模式，False 表示手动模式。
     查询失败默认返回 False（手动模式，安全优先）。
     """
-    token = os.environ.get("BEDCODE_TOKEN", "")
-    if not token:
-        logger.debug("BEDCODE_TOKEN not set, skip session mode query")
-        return False
-
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}{}/session-mode?session_id={}&token={}".format(
-        port, PLUGIN_API_PREFIX, session_id, token
+    url = "http://localhost:{}{}/session-mode?session_id={}".format(
+        port, PLUGIN_API_PREFIX, session_id
     )
 
     logger.info("HTTP GET {} session_id={}".format(url, session_id))
@@ -216,14 +203,9 @@ def query_task_status(session_id, logger):
     用于终止 hook 判断当前状态，避免盲目覆盖。
     查询失败返回 None（未知状态，由调用方决定默认行为）。
     """
-    token = os.environ.get("BEDCODE_TOKEN", "")
-    if not token:
-        logger.debug("BEDCODE_TOKEN not set, skip task status query")
-        return None
-
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}{}/task-status?session_id={}&token={}".format(
-        port, PLUGIN_API_PREFIX, session_id, token
+    url = "http://localhost:{}{}/task-status?session_id={}".format(
+        port, PLUGIN_API_PREFIX, session_id
     )
 
     logger.debug("HTTP GET {} session_id={}".format(url, session_id))

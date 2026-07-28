@@ -1,4 +1,12 @@
 //! 插件系统相关常量
+//!
+//! 共享常量定义在 SDK `bedcode-plugin-api`（单一事实来源），此处 re-export；
+//! 本模块仅保留宿主专有常量
+
+/// 共享常量（Claude Code 目录名 / 设置文件 / hook 脚本 / 端口环境变量）
+pub use bedcode_plugin_api::constants::{
+    CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE, ENV_BEDCODE_PORT, HOOK_SCRIPT_NAME,
+};
 
 /// 插件回调超时（秒）
 ///
@@ -10,20 +18,13 @@ pub const PLUGIN_CALLBACK_TIMEOUT_SECS: u64 = 5;
 /// 同一插件在防抖窗口内只触发一次重载，避免 cargo build 连续写入多次触发
 pub const PLUGIN_RELOAD_DEBOUNCE_MS: u64 = 500;
 
-/// Claude Code 配置目录名
-pub const CLAUDE_CONFIG_DIR_NAME: &str = ".claude";
+/// 插件 HTTP 代理连接超时（秒）
+pub const PLUGIN_HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Claude Code 设置文件名
-pub const CLAUDE_SETTINGS_FILE: &str = "settings.json";
-
-/// BedCode Hook 脚本文件名
-pub const HOOK_SCRIPT_NAME: &str = "auto_task_hook.py";
-
-/// 环境变量：BedCode 服务器端口
-pub const ENV_BEDCODE_PORT: &str = "BEDCODE_PORT";
-
-/// 环境变量：BedCode 认证 Token
-pub const ENV_BEDCODE_TOKEN: &str = "BEDCODE_TOKEN";
+/// 插件 HTTP 代理非流式请求总超时（秒）
+///
+/// 流式请求不设总超时（长连接不应被截断），仅受连接超时约束
+pub const PLUGIN_HTTP_TIMEOUT_SECS: u64 = 120;
 
 /// 环境变量：BedCode PTY 会话 ID
 pub const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";

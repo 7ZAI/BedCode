@@ -6,6 +6,11 @@
 use bedcode_plugin_api::WasmHost;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "native")]
+use bedcode_plugin_api::host::HostEvents;
+#[cfg(feature = "wasm")]
+use bedcode_plugin_api::host::HostHttp;
+
 /// API 格式
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -129,21 +134,21 @@ struct OllamaMessage {
 /// 向前端 emit 流式 chunk（native 模式使用，WASM 模式由宿主直接推流）
 #[cfg(feature = "native")]
 fn emit_chunk(event_name: &str, chunk: &str) {
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
     let payload = serde_json::json!({ "chunk": chunk });
     host.emit_event(event_name, &payload);
 }
 
 #[cfg(feature = "native")]
 fn emit_done(event_name: &str) {
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
     let payload = serde_json::json!({ "done": true });
     host.emit_event(event_name, &payload);
 }
 
 #[cfg(feature = "native")]
 fn emit_error(event_name: &str, error: &str) {
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
     let payload = serde_json::json!({ "error": error, "done": true });
     host.emit_event(event_name, &payload);
 }
@@ -230,7 +235,7 @@ fn chat_stream_openai_wasm(
 ) -> anyhow::Result<()> {
     let event_name = format!("ai-chatbox:stream:{}", stream_id);
     let model = effective_model(provider);
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
 
     let request = serde_json::json!({
         "method": "POST",
@@ -250,7 +255,7 @@ fn chat_stream_openai_wasm(
     });
 
     host.http_fetch(&request)
-        .ok_or_else(|| anyhow::anyhow!("http_fetch failed for streaming request"))?;
+        .map_err(|e| anyhow::anyhow!("http_fetch failed for streaming request: {}", e))?;
 
     // http_fetch stream:true 立即返回，宿主 spawn tokio 任务解析 SSE 并逐 chunk 推送
     Ok(())
@@ -262,7 +267,7 @@ fn chat_complete_openai_wasm(
     messages: &[ChatMessage],
 ) -> anyhow::Result<String> {
     let model = effective_model(provider);
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
 
     let request = serde_json::json!({
         "method": "POST",
@@ -280,7 +285,8 @@ fn chat_complete_openai_wasm(
     });
 
     let result = host.http_fetch(&request)
-        .ok_or_else(|| anyhow::anyhow!("http_fetch failed for non-streaming request"))?;
+        .map_err(|e| anyhow::anyhow!("http_fetch failed for non-streaming request: {}", e))?
+        .ok_or_else(|| anyhow::anyhow!("http_fetch returned empty result"))?;
 
     let status = result.get("status").and_then(|s| s.as_u64()).unwrap_or(0);
     if status != 200 {

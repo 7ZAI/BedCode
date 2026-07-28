@@ -191,18 +191,7 @@ pub fn run() {
             // 初始化日志系统（依赖已加载的 LogConfig）
             init_logging(app.handle(), &app_config.log)?;
 
-            let mut app_config = app_config;
-
-            // 确保 plugin token 存在且合法（在 init 之前，OnceLock 不可重设）
-            // 首次启动 token 为空时自动生成，并持久化到配置文件避免每次启动重新生成
-            if app_config.plugin.token.is_empty() {
-                app_config.ensure_valid_token();
-                if let Err(e) = app_config.save_to(&config_path) {
-                    tracing::warn!("Failed to persist generated plugin token: {}", e);
-                }
-            }
-
-            // 初始化全局配置单例（OnceLock 只能设置一次，须在 token 生成后调用）
+            // 初始化全局配置单例
             crate::system::config::AppConfig::init(app_config.clone());
 
             // 同步 PowerManager 开关状态到配置值
@@ -273,7 +262,7 @@ pub fn run() {
             let app_handle_arc = Arc::new(app_handle.clone());
             let plugin_host = Arc::new(
                 tauri::async_runtime::block_on(
-                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), app_handle_arc.clone())
+                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), config_manager.clone(), app_handle_arc.clone())
                 )
             );
             // 注入消息总线 dispatcher（两阶段初始化）

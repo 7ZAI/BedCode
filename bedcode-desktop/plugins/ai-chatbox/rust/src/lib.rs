@@ -8,6 +8,7 @@ mod commands;
 mod db;
 mod terminal;
 
+use bedcode_plugin_api::host::HostLog;
 use bedcode_plugin_api::{WasmPlugin, WasmHost};
 use bedcode_plugin_api::types::PluginManifest;
 
@@ -60,28 +61,28 @@ impl WasmPlugin for AiChatboxPlugin {
     }
 
     fn activate() -> anyhow::Result<()> {
-        let host = WasmHost::new(Self::ID);
+        let host = WasmHost;
         db::init(&host)?;
         host.log_info("Plugin activated (wasm)");
         Ok(())
     }
 
     fn deactivate() -> anyhow::Result<()> {
-        let host = WasmHost::new(Self::ID);
+        let host = WasmHost;
         host.log_info("Plugin deactivated (wasm)");
         Ok(())
     }
 
-    fn invoke_command(name: &str, args_json: &str) -> anyhow::Result<serde_json::Value> {
+    fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         match name {
-            "ai-chatbox.chat-stream" => commands::chat_stream(args_json),
-            "ai-chatbox.chat-complete" => commands::chat_complete(args_json),
-            "ai-chatbox.optimize-prompt" => commands::optimize_prompt(args_json),
-            "ai-chatbox.list-conversations" => commands::list_conversations(args_json),
-            "ai-chatbox.get-messages" => commands::get_messages(args_json),
-            "ai-chatbox.save-conversation" => commands::save_conversation(args_json),
-            "ai-chatbox.save-message" => commands::save_message(args_json),
-            "ai-chatbox.delete-conversation" => commands::delete_conversation(args_json),
+            "ai-chatbox.chat-stream" => commands::chat_stream(args),
+            "ai-chatbox.chat-complete" => commands::chat_complete(args),
+            "ai-chatbox.optimize-prompt" => commands::optimize_prompt(args),
+            "ai-chatbox.list-conversations" => commands::list_conversations(args),
+            "ai-chatbox.get-messages" => commands::get_messages(args),
+            "ai-chatbox.save-conversation" => commands::save_conversation(args),
+            "ai-chatbox.save-message" => commands::save_message(args),
+            "ai-chatbox.delete-conversation" => commands::delete_conversation(args),
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
         }
     }

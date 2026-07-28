@@ -5,16 +5,18 @@ description = "BedCode Plugin API — trait definitions and shared types for Bed
 authors = ["binblink"]
 edition = "2021"
 
+[lib]
+# rlib：宿主与插件以依赖方式链接；
+# cdylib：test-plugin feature 编译到 wasm32 时生成 .wasm 产物（供宿主 ABI 测试加载）
+crate-type = ["lib", "cdylib"]
+
 [features]
 default = []
+# 启用 WasmPlugin trait / wasm_entry! 宏 / WasmHost 绑定（WASM 插件必开）
 wasm = []
-test-plugin = ["wasm"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
-async-trait = "0.1"
 inventory = "0.3"
-tokio = { version = "1", features = ["sync"] }

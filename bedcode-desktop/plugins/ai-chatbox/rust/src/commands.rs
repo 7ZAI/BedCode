@@ -1,12 +1,12 @@
 //! Command Handlers
 //!
 //! ai-chatbox 插件的自定义 Tauri command 处理函数
-//! 每个函数接收 JSON 参数字符串，返回 JSON Value
+//! 每个函数接收类型化 JSON 参数（SDK 宏已从 ABI 字符串解析），返回 JSON Value
 //! native 模式使用 tokio::spawn/block_in_place，WASM 模式同步调用
 
 use crate::ai_client::{self, ApiProvider, ChatMessage};
 use crate::db;
-use bedcode_plugin_api::WasmHost;
+use bedcode_plugin_api::{CommandArgs, WasmHost};
 
 /// 生成 RFC 3339 格式的时间戳（替代 chrono，避免 WASM 兼容问题）
 fn now_rfc3339() -> String {
@@ -56,21 +56,17 @@ fn is_leap(year: u64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// 获取 WasmHost 实例
+/// 获取 WasmHost 实例（无状态 unit struct）
 fn host() -> WasmHost {
-    WasmHost::new("com.bedcode.ai-chatbox")
+    WasmHost
 }
 
 /// 流式聊天：启动异步任务，通过事件推送 chunks
-pub fn chat_stream(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let stream_id = args["streamId"].as_str().unwrap_or("").to_string();
-    let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
-    let messages: Vec<ChatMessage> = serde_json::from_value(args["messages"].clone())?;
-
-    if stream_id.is_empty() {
-        return Err(anyhow::anyhow!("Missing streamId"));
-    }
+pub fn chat_stream(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let stream_id = args.str("streamId").ok_or_else(|| anyhow::anyhow!("Missing streamId"))?;
+    let provider: ApiProvider = serde_json::from_value(args.value_owned("provider").unwrap_or(serde_json::Value::Null))?;
+    let messages: Vec<ChatMessage> = serde_json::from_value(args.value_owned("messages").unwrap_or(serde_json::Value::Null))?;
 
     // native 模式：spawn 异步任务，立即返回 stream_id
     #[cfg(feature = "native")]
@@ -91,10 +87,10 @@ pub fn chat_stream(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 非流式聊天（用于短回复场景）
-pub fn chat_complete(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
-    let messages: Vec<ChatMessage> = serde_json::from_value(args["messages"].clone())?;
+pub fn chat_complete(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let provider: ApiProvider = serde_json::from_value(args.value_owned("provider").unwrap_or(serde_json::Value::Null))?;
+    let messages: Vec<ChatMessage> = serde_json::from_value(args.value_owned("messages").unwrap_or(serde_json::Value::Null))?;
 
     #[cfg(feature = "native")]
     let result = {
@@ -114,10 +110,10 @@ pub fn chat_complete(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 提示词优化
-pub fn optimize_prompt(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
-    let prompt = args["prompt"].as_str().unwrap_or("").to_string();
+pub fn optimize_prompt(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let provider: ApiProvider = serde_json::from_value(args.value_owned("provider").unwrap_or(serde_json::Value::Null))?;
+    let prompt = args.str_or("prompt", "");
 
     let system_prompt = "你是一个专业的终端提示词优化器。用户会给你一段终端命令或提示词，\
         你需要将其优化为更精确、更有效的版本。保持原始意图，但改进表达方式。\
@@ -146,59 +142,49 @@ pub fn optimize_prompt(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 列出所有对话
-pub fn list_conversations(_args_json: &str) -> anyhow::Result<serde_json::Value> {
+pub fn list_conversations(_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let conversations = db::list_conversations(&host())?;
     Ok(serde_json::json!({ "conversations": conversations }))
 }
 
 /// 获取对话消息
-pub fn get_messages(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let conversation_id = args["conversationId"].as_str().unwrap_or("").to_string();
-
-    if conversation_id.is_empty() {
-        return Err(anyhow::anyhow!("Missing conversationId"));
-    }
+pub fn get_messages(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let conversation_id = args.str("conversationId")
+        .ok_or_else(|| anyhow::anyhow!("Missing conversationId"))?;
 
     let messages = db::get_messages(&host(), &conversation_id)?;
     Ok(serde_json::json!({ "messages": messages }))
 }
 
 /// 保存对话
-pub fn save_conversation(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let conv: db::ConversationMeta = serde_json::from_value(args["conversation"].clone())?;
+pub fn save_conversation(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let conv: db::ConversationMeta = serde_json::from_value(args.value_owned("conversation").unwrap_or(serde_json::Value::Null))?;
 
     db::save_conversation(&host(), &conv)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
 /// 保存消息
-pub fn save_message(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let conversation_id = args["conversationId"].as_str().unwrap_or("").to_string();
-    let role = args["role"].as_str().unwrap_or("").to_string();
-    let content = args["content"].as_str().unwrap_or("").to_string();
-    let timestamp = args["timestamp"].as_str()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| now_rfc3339());
-
-    if conversation_id.is_empty() || role.is_empty() {
-        return Err(anyhow::anyhow!("Missing conversationId or role"));
-    }
+pub fn save_message(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let conversation_id = args.str("conversationId")
+        .ok_or_else(|| anyhow::anyhow!("Missing conversationId or role"))?;
+    let role = args.str("role")
+        .ok_or_else(|| anyhow::anyhow!("Missing conversationId or role"))?;
+    let content = args.str_or("content", "");
+    let timestamp = args.str("timestamp").unwrap_or_else(now_rfc3339);
 
     db::save_message(&host(), &conversation_id, &role, &content, &timestamp)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
 /// 删除对话
-pub fn delete_conversation(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
-    let conversation_id = args["conversationId"].as_str().unwrap_or("").to_string();
-
-    if conversation_id.is_empty() {
-        return Err(anyhow::anyhow!("Missing conversationId"));
-    }
+pub fn delete_conversation(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let args = CommandArgs::new(args);
+    let conversation_id = args.str("conversationId")
+        .ok_or_else(|| anyhow::anyhow!("Missing conversationId"))?;
 
     db::delete_conversation(&host(), &conversation_id)?;
     Ok(serde_json::json!({ "success": true }))

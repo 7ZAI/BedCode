@@ -9,9 +9,9 @@ use crate::plugin::permission::PermissionManager;
 use crate::plugin::registry::PluginRegistry;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
-use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedWasmPlugin, PluginServices, WasmHostContext, WasmRuntime};
 use crate::db::Database;
-use crate::session::{SessionManager, SessionLifecycleEvent, SessionLifecycleListener};
+use crate::session::{SessionConfigManager, SessionManager, SessionLifecycleEvent, SessionLifecycleListener};
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
 use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
@@ -53,11 +53,13 @@ impl PluginHost {
     /// * `db` - 数据库实例
     /// * `plugins_dir` - 插件目录
     /// * `session_manager` - 会话管理器
+    /// * `config_manager` - 会话配置管理器
     /// * `app_handle` - Tauri AppHandle
     pub async fn new(
         db: Arc<Mutex<Database>>,
         plugins_dir: &Path,
         session_manager: Arc<SessionManager>,
+        config_manager: Arc<SessionConfigManager>,
         app_handle: Arc<tauri::AppHandle>,
     ) -> Self {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
@@ -68,14 +70,8 @@ impl PluginHost {
 
         // 构建 WASM 运行时和宿主上下文
         let wasm_runtime = Arc::new(
-            WasmRuntime::new(
-                db.clone(),
-                storage.clone(),
-                session_manager.clone(),
-                app_handle.clone(),
-                permission.clone(),
-            )
-            .expect("Failed to initialize WASM runtime"),
+            WasmRuntime::new(storage.clone(), Some(app_handle.clone()))
+                .expect("Failed to initialize WASM runtime"),
         );
 
         // 创建消息总线（dispatcher 延迟注入，在 init_message_bus 中设置）
@@ -86,7 +82,8 @@ impl PluginHost {
             Arc::new(Mutex::new(HashMap::new())),
             storage.clone(),
             session_manager,
-            app_handle,
+            config_manager,
+            Some(app_handle),
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
@@ -195,9 +192,9 @@ impl PluginHost {
             message_bus,
         };
 
-        // 两阶段初始化：将 PluginHost 自身注入 WasmHostContext
-        // 必须在 auto_activate 之前完成，否则 host_session_lifecycle_register 无法获取 plugin_host
-        host.wasm_host_ctx().set_plugin_host(host.clone()).await;
+        // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
+        // 必须在 auto_activate 之前完成，否则 host_session_lifecycle_register 无法获取宿主服务
+        host.wasm_host_ctx().set_services(Arc::new(host.clone())).await;
 
         // 注册所有已加载插件的 manifest contributes 到 registry
         host.register_manifest_contributions().await;
@@ -945,44 +942,47 @@ impl SessionLifecycleListener for PluginLifecycleListener {
                 .unwrap_or_default()
         });
 
-        let payload = match event {
+        // 宿主事件 → SDK 类型化枚举（与插件侧 on_session_lifecycle 接收的类型一致），
+        // 穷尽 match：任一端新增变体时编译失败，强制同步
+        use bedcode_plugin_api::events::SessionLifecycleEvent as SdkLifecycleEvent;
+
+        let sdk_event = match event {
             SessionLifecycleEvent::Creating { config_id, command, working_dir, source_device } => {
-                serde_json::json!({
-                    "event_type": "creating",
-                    "config_id": config_id,
-                    "command": command,
-                    "working_dir": working_dir,
-                    "source_device": source_device,
-                    "resource_dir": resource_dir,
-                })
+                SdkLifecycleEvent::Creating {
+                    config_id: config_id.clone(),
+                    command: command.clone(),
+                    working_dir: working_dir.clone(),
+                    source_device: source_device.clone(),
+                    resource_dir: resource_dir.clone(),
+                }
             }
             SessionLifecycleEvent::Created { session_id, config_id, name, working_dir } => {
-                serde_json::json!({
-                    "event_type": "created",
-                    "session_id": session_id,
-                    "config_id": config_id,
-                    "name": name,
-                    "working_dir": working_dir,
-                    "resource_dir": resource_dir,
-                })
+                SdkLifecycleEvent::Created {
+                    session_id: session_id.clone(),
+                    config_id: config_id.clone(),
+                    name: name.clone(),
+                    working_dir: working_dir.clone(),
+                    resource_dir: resource_dir.clone(),
+                }
             }
             SessionLifecycleEvent::Stopping { session_id, source_device } => {
-                serde_json::json!({
-                    "event_type": "stopping",
-                    "session_id": session_id,
-                    "source_device": source_device,
-                    "resource_dir": resource_dir,
-                })
+                SdkLifecycleEvent::Stopping {
+                    session_id: session_id.clone(),
+                    source_device: source_device.clone(),
+                    resource_dir: resource_dir.clone(),
+                }
             }
             SessionLifecycleEvent::Stopped { session_id, source_device } => {
-                serde_json::json!({
-                    "event_type": "stopped",
-                    "session_id": session_id,
-                    "source_device": source_device,
-                    "resource_dir": resource_dir,
-                })
+                SdkLifecycleEvent::Stopped {
+                    session_id: session_id.clone(),
+                    source_device: source_device.clone(),
+                    resource_dir: resource_dir.clone(),
+                }
             }
         };
+
+        // serde 表示即线协议；序列化失败（理论上不可能）退化为空对象，插件侧按协议错误处理
+        let payload = serde_json::to_value(&sdk_event).unwrap_or_else(|_| serde_json::json!({}));
 
         self.plugin_host.dispatch_lifecycle_to_plugin(&self.plugin_id, &payload);
     }
@@ -1022,6 +1022,22 @@ impl PluginHost {
                 .map(|p| matches!(p.state, PluginState::Activated))
                 .unwrap_or(false)
         })
+    }
+}
+
+// ==================== PluginServices Implementation ====================
+
+impl PluginServices for PluginHost {
+    fn register_session_lifecycle_listener(
+        &self,
+        plugin_id: String,
+        session_manager: Arc<SessionManager>,
+    ) {
+        // host function 处于同步上下文，通过 block_on_async 完成异步注册
+        let listener = PluginLifecycleListener::new(plugin_id, self.clone());
+        crate::plugin::wasm_runtime::block_on_async(
+            session_manager.register_lifecycle_listener(Arc::new(listener)),
+        );
     }
 }
 

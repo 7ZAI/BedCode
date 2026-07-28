@@ -65,6 +65,9 @@ impl SyncEventHandler {
             DesktopSyncEvent::SessionModeChanged { session_id, auto_approve } => {
                 self.handle_session_mode_changed(&session_id, auto_approve).await;
             }
+            DesktopSyncEvent::TaskQueueChanged { session_id, queue_count, action } => {
+                self.handle_task_queue_changed(&session_id, queue_count, &action).await;
+            }
         }
     }
 
@@ -259,6 +262,18 @@ impl SyncEventHandler {
         };
 
         // 模式变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理任务队列变更事件
+    async fn handle_task_queue_changed(&self, session_id: &str, queue_count: i64, action: &str) {
+        let payload = SyncPayload::TaskQueueChanged {
+            session_id: session_id.to_string(),
+            queue_count,
+            action: action.to_string(),
+        };
+
+        // 队列变更广播给所有客户端
         self.broadcast_sync_data(payload, None).await;
     }
 

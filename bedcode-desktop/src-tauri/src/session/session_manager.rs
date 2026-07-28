@@ -62,7 +62,7 @@ pub struct SessionManager {
     /// 资源目录路径（用于项目级 hooks 脚本复制）
     resource_dir: Arc<PathBuf>,
     /// 会话生命周期监听器注册表
-    lifecycle_listeners: Arc<RwLock<Vec<Box<dyn SessionLifecycleListener>>>>,
+    lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn SessionLifecycleListener>>>>,
 }
 
 impl SessionManager {
@@ -146,7 +146,7 @@ impl SessionManager {
     /// 注册会话生命周期监听器
     ///
     /// 监听器在会话关键生命周期节点被调用（Creating/Created/Stopping/Stopped）
-    pub async fn register_lifecycle_listener(&self, listener: Box<dyn SessionLifecycleListener>) {
+    pub async fn register_lifecycle_listener(&self, listener: Arc<dyn SessionLifecycleListener>) {
         let mut listeners = self.lifecycle_listeners.write().await;
         tracing::info!("SessionLifecycleListener registered (total: {})", listeners.len() + 1);
         listeners.push(listener);
@@ -167,11 +167,17 @@ impl SessionManager {
 
     /// 分发会话生命周期事件
     ///
-    /// 同步遍历所有已注册的监听器并调用
-    /// Creating 事件会阻塞直到所有监听器处理完成
+    /// 先克隆监听器快照并释放读锁，再逐个同步调用。
+    /// Creating 事件会阻塞直到所有监听器处理完成。
+    ///
+    /// 不能持锁调用：监听器回调（插件生命周期注册/插件 activate 链路）
+    /// 可能反向获取其他锁（如 wasm_plugins），与 activate_plugin 的锁序相反，
+    /// 持读锁调用会形成 ABBA 死锁
     async fn dispatch_lifecycle_event(&self, event: SessionLifecycleEvent) {
-        let listeners = self.lifecycle_listeners.read().await;
-        for listener in listeners.iter() {
+        let listeners: Vec<Arc<dyn SessionLifecycleListener>> = {
+            self.lifecycle_listeners.read().await.iter().cloned().collect()
+        };
+        for listener in &listeners {
             listener.on_session_lifecycle(&event);
         }
     }

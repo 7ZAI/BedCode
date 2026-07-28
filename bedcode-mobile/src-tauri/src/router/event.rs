@@ -124,6 +124,16 @@ pub enum MobileEvent {
         session_id: String,
         auto_approve: bool,
     },
+
+    // === 任务队列同步事件 ===
+    /// 会话任务队列变更
+    SyncTaskQueueChanged {
+        session_id: String,
+        /// 变更后的待执行任务数量
+        queue_count: i64,
+        /// 触发动作：add / remove / clear / dequeue
+        action: String,
+    },
 }
 
 // ==================== Event Forwarding ====================
@@ -294,6 +304,18 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
             let _ = app.emit("ws_sync_session_mode_changed", serde_json::json!({
                 "session_id": session_id,
                 "auto_approve": auto_approve,
+            }));
+        }
+
+        MobileEvent::SyncTaskQueueChanged { session_id, queue_count, action } => {
+            tracing::info!(
+                "[EventForwarder] SyncTaskQueueChanged: session_id={}, count={}, action={}",
+                session_id, queue_count, action
+            );
+            let _ = app.emit("ws_sync_task_queue_changed", serde_json::json!({
+                "session_id": session_id,
+                "queue_count": queue_count,
+                "action": action,
             }));
         }
 

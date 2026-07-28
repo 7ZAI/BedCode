@@ -67,12 +67,26 @@ impl MessageBus {
 
     /// 发布消息
     ///
-    /// 同步投递给所有订阅了该 topic 的插件（不投递给发送者自己）
+    /// 异步投递给所有订阅了该 topic 的插件（不投递给发送者自己）。
+    ///
+    /// 从同步 host function 上下文调用时，spawn 独立任务投递，
+    /// 避免 block_on_async 嵌套（dispatch_to_wasm 内部的同步↔异步桥接
+    /// 已在独立任务中，不再与发布方形成嵌套阻塞）
     pub fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
         let dispatcher_arc = self.dispatcher.clone();
         let subscribers_arc = self.subscribers.clone();
+        let topic_owned = topic.to_string();
+        let sender_owned = sender.to_string();
 
-        crate::plugin::wasm_runtime::block_on_async(async move {
+        // host function 与 PluginHost 均在 runtime 上下文内调用，try_current 理论上不会失败
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(topic = %topic, "MessageBus: no runtime context, message dropped");
+            return;
+        };
+
+        handle.spawn(async move {
+            let topic = topic_owned;
+            let sender = sender_owned;
             let dispatcher = {
                 let guard = dispatcher_arc.read().await;
                 guard.clone()
@@ -83,7 +97,7 @@ impl MessageBus {
             };
 
             let subscribers = subscribers_arc.read().await;
-            let Some(subs) = subscribers.get(topic) else {
+            let Some(subs) = subscribers.get(&topic) else {
                 tracing::debug!("MessageBus: no subscribers for topic '{}', message dropped", topic);
                 return;
             };
@@ -102,7 +116,7 @@ impl MessageBus {
             for sub in subs.iter() {
                 match sub {
                     BusSubscriber::Wasm { plugin_id } => {
-                        if plugin_id == sender {
+                        if plugin_id == &sender {
                             continue;
                         }
                         if !dispatcher.is_activated(plugin_id) {
@@ -123,7 +137,7 @@ impl MessageBus {
                         }
                     }
                     BusSubscriber::Static { plugin_id, handler } => {
-                        if plugin_id == sender {
+                        if plugin_id == &sender {
                             continue;
                         }
                         if let Err(e) = handler.on_message(&msg) {

@@ -72,4 +72,14 @@ pub enum SyncPayload {
         session_id: String,
         auto_approve: bool,
     },
+
+    // === 任务队列同步 ===
+    /// 会话任务队列变更
+    TaskQueueChanged {
+        session_id: String,
+        /// 变更后的待执行任务数量
+        queue_count: i64,
+        /// 触发动作：add / remove / clear / dequeue
+        action: String,
+    },
 }

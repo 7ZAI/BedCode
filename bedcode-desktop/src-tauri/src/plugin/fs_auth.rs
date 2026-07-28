@@ -52,15 +52,17 @@ pub struct FsAuthChecker {
     storage: Arc<PluginStorage>,
     /// 待处理的弹窗授权请求
     pending_requests: Arc<Mutex<Vec<PendingRequest>>>,
-    /// Tauri AppHandle（用于发送弹窗事件）
-    app_handle: Arc<tauri::AppHandle>,
+    /// Tauri AppHandle（用于发送弹窗事件；无头上下文如测试中为 None，弹窗层直接拒绝）
+    app_handle: Option<Arc<tauri::AppHandle>>,
 }
 
 impl FsAuthChecker {
     /// 创建文件访问校验器
+    ///
+    /// `app_handle` 为 None 时（无头/测试上下文）弹窗授权层不可用，直接拒绝
     pub fn new(
         storage: Arc<PluginStorage>,
-        app_handle: Arc<tauri::AppHandle>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> Self {
         // 路径白名单：.claude/ 子目录（Claude Code 配置目录）
         // 不在此处硬编码绝对路径，运行时动态匹配路径后缀
@@ -216,7 +218,17 @@ impl FsAuthChecker {
             "operation": operation.to_string(),
         });
 
-        if let Err(e) = self.app_handle.emit("plugin:fs-auth-request", payload) {
+        // 无头上下文（测试）没有 AppHandle，无法弹窗，保守拒绝
+        let Some(app_handle) = self.app_handle.as_ref() else {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                path = %path,
+                "fs_auth: no app_handle in headless context, denying auth request"
+            );
+            return false;
+        };
+
+        if let Err(e) = app_handle.emit("plugin:fs-auth-request", payload) {
             tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
             return false;
         }

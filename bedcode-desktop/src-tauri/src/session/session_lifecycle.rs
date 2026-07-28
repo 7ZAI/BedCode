@@ -37,7 +37,7 @@ pub enum SessionLifecycleEvent {
 /// 会话生命周期监听器
 ///
 /// 外部模块实现此 trait 并注册到 SessionManager，即可感知会话生命周期变化。
-/// 注册方式：`session_manager.register_lifecycle_listener(Box::new(MyListener))`
+/// 注册方式：`session_manager.register_lifecycle_listener(Arc::new(MyListener))`
 ///
 /// 调用保证：
 /// - `Creating` 事件同步阻塞分发，监听器处理完成后 SessionManager 才继续创建 PTY

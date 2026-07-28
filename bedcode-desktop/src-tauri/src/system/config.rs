@@ -5,9 +5,6 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-use crate::system::constants::auth::MIN_PLUGIN_TOKEN_LEN;
-
 /// 全局配置单例
 static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
@@ -56,7 +53,6 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
     ("log.max_files", "日志文件最大保留数量（0 = 不限制）"),
     ("log.console_in_release", "Release 模式是否启用控制台输出（调试用，默认关闭）"),
-    ("plugin.token", "HTTP API 认证 token - 插件推送任务状态时需携带此 token，为空时跳过验证（开发模式）"),
 ];
 
 /// 配置 key 的分组顺序，控制写入文件时的排列
@@ -116,9 +112,6 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "log.max_files",
         "log.console_in_release",
     ]),
-    ("插件配置", &[
-        "plugin.token",
-    ]),
 ];
 
 /// 应用配置
@@ -141,9 +134,6 @@ pub struct AppConfig {
     /// 日志配置
     #[serde(default)]
     pub log: LogConfig,
-    /// 插件配置
-    #[serde(default)]
-    pub plugin: PluginConfig,
 }
 
 /// 网络配置
@@ -401,23 +391,6 @@ impl Default for LogConfig {
     }
 }
 
-/// 插件配置
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PluginConfig {
-    /// HTTP API 认证 token - 插件推送任务状态时需携带此 token
-    /// 为空时跳过验证（开发模式）
-    #[serde(default)]
-    pub token: String,
-}
-
-impl Default for PluginConfig {
-    fn default() -> Self {
-        Self {
-            token: String::new(),
-        }
-    }
-}
-
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -427,7 +400,6 @@ impl Default for AppConfig {
             channels: ChannelsConfig::default(),
             terminal: TerminalConfig::default(),
             log: LogConfig::default(),
-            plugin: PluginConfig::default(),
         }
     }
 }
@@ -462,32 +434,6 @@ impl AppConfig {
     /// 应在应用启动时调用，传入从文件加载的配置
     pub fn init(config: AppConfig) {
         let _ = CONFIG_INSTANCE.set(config);
-    }
-
-    /// 确保 plugin token 合法，不合法则生成新 token
-    ///
-    /// 合法条件：非空、长度 >= 16、纯 ASCII
-    /// 返回 true 表示新生成了 token
-    pub fn ensure_valid_token(&mut self) -> bool {
-        let is_valid = !self.plugin.token.is_empty()
-            && self.plugin.token.len() >= MIN_PLUGIN_TOKEN_LEN
-            && self.plugin.token.is_ascii();
-
-        if !is_valid {
-            self.plugin.token = Self::generate_token();
-            tracing::info!(
-                "Generated new plugin token (len={})",
-                self.plugin.token.len()
-            );
-            true
-        } else {
-            false
-        }
-    }
-
-    /// 生成随机 token（UUID v4 去连字符，32 字符 hex）
-    fn generate_token() -> String {
-        uuid::Uuid::new_v4().to_string().replace('-', "")
     }
 
     /// 保存配置到指定路径
@@ -562,9 +508,6 @@ impl AppConfig {
                 max_files: parse_value(props, "log.max_files", default_log_max_files()),
                 console_in_release: parse_value(props, "log.console_in_release", false),
             },
-            plugin: PluginConfig {
-                token: parse_value(props, "plugin.token", String::new()),
-            },
         }
     }
 
@@ -636,7 +579,6 @@ impl AppConfig {
         map.insert("log.rotation".to_string(), self.log.rotation.clone());
         map.insert("log.max_files".to_string(), self.log.max_files.to_string());
         map.insert("log.console_in_release".to_string(), self.log.console_in_release.to_string());
-        map.insert("plugin.token".to_string(), self.plugin.token.clone());
         map
     }
 }
@@ -753,17 +695,6 @@ channels.output_broadcast_capacity=2048
         assert_eq!(config.ui.terminal_theme, config2.ui.terminal_theme);
         assert_eq!(config.channels.output_broadcast_capacity, config2.channels.output_broadcast_capacity);
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
-    }
-
-    #[test]
-    fn test_ensure_valid_token() {
-        let mut config = AppConfig::default();
-        // 空 token 应生成新 token
-        assert!(config.ensure_valid_token());
-        assert!(config.plugin.token.len() >= MIN_PLUGIN_TOKEN_LEN);
-
-        // 合法 token 不应重新生成
-        assert!(!config.ensure_valid_token());
     }
 
     #[test]

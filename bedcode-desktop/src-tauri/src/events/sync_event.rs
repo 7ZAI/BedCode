@@ -76,6 +76,54 @@ pub enum DesktopSyncEvent {
         session_id: String,
         auto_approve: bool,
     },
+
+    // === 任务队列相关 ===
+    /// 会话任务队列变更（由 auto-task 插件发布）
+    TaskQueueChanged {
+        session_id: String,
+        /// 变更后的待执行任务数量
+        queue_count: i64,
+        /// 触发动作：add / remove / clear / dequeue
+        action: String,
+    },
 }
 
 impl AppEvent for DesktopSyncEvent {}
+
+impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
+    /// 插件 SDK 类型化同步事件 → 内部事件总线事件
+    ///
+    /// 穷尽 match：SDK `SyncEvent` 新增变体时此处编译失败，强制同步
+    fn from(event: bedcode_plugin_api::events::SyncEvent) -> Self {
+        use bedcode_plugin_api::events::SyncEvent;
+        match event {
+            SyncEvent::TaskStatusChanged {
+                session_id,
+                task_status,
+                task_reason,
+                task_questions,
+            } => DesktopSyncEvent::TaskStatusChanged {
+                session_id,
+                task_status,
+                task_reason,
+                task_questions,
+            },
+            SyncEvent::SessionModeChanged {
+                session_id,
+                auto_approve,
+            } => DesktopSyncEvent::SessionModeChanged {
+                session_id,
+                auto_approve,
+            },
+            SyncEvent::TaskQueueChanged {
+                session_id,
+                queue_count,
+                action,
+            } => DesktopSyncEvent::TaskQueueChanged {
+                session_id,
+                queue_count,
+                action,
+            },
+        }
+    }
+}

@@ -11,8 +11,3 @@ pub const PAIRING_CODE_TTL_SECS: u64 = 60;
 
 /// QR Token 随机字节数（128-bit = 32 hex 字符）
 pub const QR_TOKEN_BYTES: usize = 16;
-
-/// 插件 Token 最小合法长度
-///
-/// Token 长度 >= 此值且纯 ASCII 才视为合法
-pub const MIN_PLUGIN_TOKEN_LEN: usize = 16;

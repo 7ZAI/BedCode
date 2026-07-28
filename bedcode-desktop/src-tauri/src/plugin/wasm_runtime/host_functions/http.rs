@@ -1,121 +1,153 @@
-//! WASM Host Utilities
-//!
-//! 宿主侧工具函数 — SQL 表名校验、数据库列转换、HTTP 代理执行
-//! 从原 host_context.rs 迁移核心逻辑，适配 WASM Host Function 调用模式
+//! HTTP 代理域 Host Functions（宿主代发请求，支持 SSE 流式推流）
 
-use regex::Regex;
+use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
+use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::system::constants::plugin::{PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_TIMEOUT_SECS};
 use serde::Deserialize;
+use std::sync::LazyLock;
+use std::time::Duration;
 use tauri::Emitter;
 
-// ==================== SQL Table Name Validation ====================
+/// 非流式 HTTP 客户端（连接超时 + 总超时，全宿主复用连接池）
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_default()
+});
 
-/// 验证 SQL 语句中的表名是否以插件专属前缀开头
-///
-/// WASM 插件只能操作 `plugin_{sanitized_id}_` 前缀的表，
-/// 防止插件读写宿主或其他插件的数据表
-///
-/// # Table Name Extraction
-/// 从 SQL 中提取表名，覆盖常见 DML/DDL 语句：
-/// - CREATE TABLE / INSERT INTO / UPDATE / DELETE FROM
-/// - SELECT ... FROM / ALTER TABLE / DROP TABLE
-///
-/// # Sanitization
-/// plugin_id 中的 `.` 和 `-` 替换为 `_`，确保表名前缀合法
-pub fn validate_sql_table_prefix(plugin_id: &str, sql: &str) -> crate::Result<()> {
-    let sanitized_id = plugin_id.replace('.', "_").replace('-', "_");
-    let expected_prefix = format!("plugin_{}_", sanitized_id);
+/// 流式 HTTP 客户端（仅连接超时，不设总超时 — SSE 长连接不应被截断）
+static HTTP_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_default()
+});
 
-    let table_names = extract_table_names(sql);
+/// HTTP 代理：发起 HTTP 请求
+///
+/// 参数：(request_json_ptr, request_json_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+///
+/// request_json 格式：
+/// ```json
+/// {
+///   "method": "POST",
+///   "url": "https://api.example.com/v1/chat",
+///   "headers": { "Authorization": "Bearer xxx", "Content-Type": "application/json" },
+///   "body": "{...}",
+///   "stream": true,
+///   "streamEvent": "ai-chatbox:stream:xxx"
+/// }
+/// ```
+///
+/// 流式模式：宿主 spawn tokio 任务执行 HTTP 请求，逐 chunk 通过 emit_event 推送，
+/// http_fetch 立即返回 stream_id
+/// 非流式模式：block_on 执行，返回完整响应
+pub(super) fn host_http_fetch(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    req_ptr: u32,
+    req_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
 
-    for table in table_names {
-        if !table.starts_with(&expected_prefix) {
-            return Err(crate::AppError::Plugin(format!(
-                "SQL table name '{}' does not match required prefix '{}' for plugin '{}'",
-                table, expected_prefix, plugin_id
-            )));
+    let request_json = match read_wasm_string_consume(&mut caller, req_ptr, req_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to read request JSON");
+            return -1;
         }
-    }
+    };
 
-    Ok(())
-}
+    // 解析请求
+    let request: serde_json::Value = match serde_json::from_str(&request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: invalid request JSON");
+            return -1;
+        }
+    };
 
-/// 从 SQL 语句中提取表名
-///
-/// 使用正则匹配常见 SQL 关键字后的表名标识符
-fn extract_table_names(sql: &str) -> Vec<String> {
-    let mut tables = Vec::new();
+    let is_stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let patterns = [
-        r#"(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bINSERT\s+INTO\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bUPDATE\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bDELETE\s+FROM\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bFROM\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bJOIN\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bALTER\s+TABLE\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"\[]?(\w+)[`"\]]?"#,
-    ];
+    if is_stream {
+        // 流式模式：spawn 后台任务，立即返回 stream_id
+        let stream_id = uuid::Uuid::new_v4().to_string();
+        let stream_event = request
+            .get("streamEvent")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&stream_id)
+            .to_string();
 
-    for pattern in &patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            for cap in re.captures_iter(sql) {
-                if let Some(m) = cap.get(1) {
-                    let name = m.as_str().to_string();
-                    if !tables.contains(&name) {
-                        tables.push(name);
+        // 流式推送依赖前端事件通道，无头上下文不可用
+        let Some(app_handle) = host_ctx.app_handle.clone() else {
+            tracing::error!(plugin_id = %plugin_id, "host_http_fetch: streaming requires app_handle");
+            return -1;
+        };
+
+        let plugin_id_clone = plugin_id.clone();
+        let stream_event_clone = stream_event.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = execute_streaming_http(
+                &request,
+                &app_handle,
+                &stream_event_clone,
+                &plugin_id_clone,
+            )
+            .await
+            {
+                tracing::error!(
+                    error = %e,
+                    plugin_id = %plugin_id_clone,
+                    stream_event = %stream_event_clone,
+                    "Streaming HTTP request failed"
+                );
+                // 发送错误事件通知插件
+                let _ = app_handle.emit(
+                    &stream_event_clone,
+                    serde_json::json!({ "error": e.to_string(), "done": true }),
+                );
+            }
+        });
+
+        let result_json = serde_json::json!({
+            "streamId": stream_id,
+            "streamEvent": stream_event,
+        });
+        let result_str = serde_json::to_string(&result_json).unwrap_or_default();
+        match write_wasm_string(&mut caller, &result_str) {
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => -1,
+        }
+    } else {
+        // 非流式模式：同步执行 HTTP 请求
+        match block_on_async(execute_http_request(&request)) {
+            Ok(response) => {
+                let result_str = match serde_json::to_string(&response) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: response serialization failed");
+                        return -1;
+                    }
+                };
+                match write_wasm_string(&mut caller, &result_str) {
+                    Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+                    None => {
+                        tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to write result to WASM memory");
+                        -1
                     }
                 }
             }
-        }
-    }
-
-    tables
-}
-
-// ==================== Database Column Conversion ====================
-
-/// 将 rusqlite 行的指定列转换为 serde_json::Value
-///
-/// 按类型优先级尝试读取：i64 -> f64 -> String -> bool -> blob -> Null
-/// rusqlite 的 FromSql 支持 i64/f64/String/bool 等，但不支持 serde_json::Value
-pub fn column_to_json(row: &rusqlite::Row<'_>, col_index: usize) -> serde_json::Value {
-    // 先尝试整数
-    if let Ok(v) = row.get::<_, i64>(col_index) {
-        // 区分整数和浮点数：如果该列实际是 REAL 类型，i64 读取可能截断
-        if let Ok(fv) = row.get::<_, f64>(col_index) {
-            if (fv as i64) as f64 != fv {
-                return serde_json::Value::Number(
-                    serde_json::Number::from_f64(fv).unwrap_or(serde_json::Number::from(0)),
-                );
+            Err(e) => {
+                tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: HTTP request failed");
+                -1
             }
         }
-        return serde_json::Value::Number(serde_json::Number::from(v));
     }
-    // 尝试浮点数
-    if let Ok(v) = row.get::<_, f64>(col_index) {
-        return serde_json::Value::Number(
-            serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
-        );
-    }
-    // 尝试字符串
-    if let Ok(v) = row.get::<_, String>(col_index) {
-        return serde_json::Value::String(v);
-    }
-    // 尝试布尔值
-    if let Ok(v) = row.get::<_, bool>(col_index) {
-        return serde_json::Value::Bool(v);
-    }
-    // 尝试 blob（Vec<u8>）— 转为 hex 字符串
-    if let Ok(v) = row.get::<_, Vec<u8>>(col_index) {
-        use std::fmt::Write;
-        let mut hex = String::with_capacity(v.len() * 2);
-        for byte in &v {
-            write!(hex, "{:02x}", byte).unwrap();
-        }
-        return serde_json::Value::String(hex);
-    }
-    // NULL 或无法识别的类型
-    serde_json::Value::Null
 }
 
 // ==================== SSE Parsing Structures ====================
@@ -143,11 +175,9 @@ struct OpenAiSseDelta {
 /// 宿主代为执行 HTTP 请求，返回完整响应
 /// request 格式：{ "method", "url", "headers", "body" }
 /// response 格式：{ "status", "body", "headers" }
-pub async fn execute_http_request(
+async fn execute_http_request(
     request: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    use futures_util::StreamExt;
-
     let method = request
         .get("method")
         .and_then(|v| v.as_str())
@@ -159,8 +189,7 @@ pub async fn execute_http_request(
     let headers = request.get("headers").and_then(|v| as_string_map(v));
     let body = request.get("body").and_then(|v| v.as_str());
 
-    let client = reqwest::Client::new();
-    let mut req_builder = client.request(method.parse()?, url);
+    let mut req_builder = HTTP_CLIENT.request(method.parse()?, url);
 
     if let Some(hdrs) = &headers {
         for (key, value) in hdrs {
@@ -197,7 +226,7 @@ pub async fn execute_http_request(
 ///
 /// 当请求中包含 `sseFormat` 字段时，宿主解析 SSE 事件并提取 content delta 后 emit，
 /// 否则 emit 原始 chunk 数据
-pub async fn execute_streaming_http(
+async fn execute_streaming_http(
     request: &serde_json::Value,
     app_handle: &tauri::AppHandle,
     stream_event: &str,
@@ -220,8 +249,7 @@ pub async fn execute_streaming_http(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let client = reqwest::Client::new();
-    let mut req_builder = client.request(method.parse()?, url);
+    let mut req_builder = HTTP_STREAM_CLIENT.request(method.parse()?, url);
 
     if let Some(hdrs) = &headers {
         for (key, value) in hdrs {
@@ -310,7 +338,9 @@ pub async fn execute_streaming_http(
 
 /// 解析 SSE 事件并提取 content delta 推送到前端
 ///
-/// 按 `\n\n` 分割 SSE 事件，根据 format 解析 data 行中的 JSON，
+/// SSE 规范允许 `\n\n`、`\r\n\r\n`、`\r\r` 三种事件分隔符，
+/// 取缓冲区中最先出现的分隔符切分（部分服务端使用 CRLF 行尾）；
+/// 根据 format 解析 data 行中的 JSON，
 /// 提取文本增量后以 `{ chunk, done: false }` 格式 emit
 fn parse_and_emit_sse(
     buffer: &mut String,
@@ -318,9 +348,23 @@ fn parse_and_emit_sse(
     app_handle: &tauri::AppHandle,
     stream_event: &str,
 ) {
-    while let Some(pos) = buffer.find("\n\n") {
+    loop {
+        // 查找最先出现的事件分隔符：(位置, 分隔符字节长度)
+        let separator = [
+            buffer.find("\r\n\r\n").map(|p| (p, 4)),
+            buffer.find("\n\n").map(|p| (p, 2)),
+            buffer.find("\r\r").map(|p| (p, 2)),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(pos, _)| *pos);
+
+        let Some((pos, sep_len)) = separator else {
+            break;
+        };
+
         let event_text = buffer[..pos].to_string();
-        buffer.drain(..pos + 2);
+        buffer.drain(..pos + sep_len);
 
         for line in event_text.lines() {
             if let Some(data) = line.strip_prefix("data: ") {
@@ -370,86 +414,4 @@ fn as_string_map(value: &serde_json::Value) -> Option<std::collections::HashMap<
         }
     }
     Some(map)
-}
-
-// ==================== Tests ====================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sanitize_plugin_id() {
-        let sanitized = "com.example.my-plugin".replace('.', "_").replace('-', "_");
-        assert_eq!(sanitized, "com_example_my_plugin");
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_valid() {
-        let result = validate_sql_table_prefix(
-            "com.example.my-plugin",
-            "INSERT INTO plugin_com_example_my_plugin_data (id, name) VALUES (1, 'test')",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_invalid() {
-        let result = validate_sql_table_prefix(
-            "com.example.my-plugin",
-            "INSERT INTO sessions (id) VALUES ('abc')",
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_multiple_tables() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "SELECT * FROM plugin_my_plugin_data JOIN sessions ON sessions.id = plugin_my_plugin_data.session_id",
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_create_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "CREATE TABLE IF NOT EXISTS plugin_my_plugin_cache (key TEXT PRIMARY KEY, value TEXT)",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_drop_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "DROP TABLE IF EXISTS plugin_my_plugin_cache",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_alter_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "ALTER TABLE plugin_my_plugin_cache ADD COLUMN updated_at TEXT",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_extract_table_names() {
-        let tables = extract_table_names(
-            "INSERT INTO users (id) VALUES (1); SELECT * FROM orders",
-        );
-        assert!(tables.contains(&"users".to_string()));
-        assert!(tables.contains(&"orders".to_string()));
-    }
-
-    #[test]
-    fn test_extract_table_names_quoted() {
-        let tables = extract_table_names("INSERT INTO `my-table` (id) VALUES (1)");
-        assert!(tables.contains(&"my".to_string()));
-    }
 }

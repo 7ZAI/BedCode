@@ -2,7 +2,8 @@
 //!
 //! 挂载在 /api scope 上，统一拦截认证：
 //! - /api/auth/* — 放行（公开路由，配对/登录）
-//! - /api/plugin/* — 优先校验 JWT，无 JWT 时放行给 handler 自行校验 plugin token
+//! - /api/plugin/* — 优先校验 JWT，无 JWT 时放行（hook 脚本等本地调用方无 JWT，
+//!   端点安全性由 hook 仅在 BedCode 注入环境变量的 PTY 中生效 + 本地网络信任保证）
 //! - 其余 /api/* — 必须通过 JWT 校验
 //!
 //! 校验通过后将 JwtClaims 注入 request extensions，handler 通过 get_claims_from_request 提取。
@@ -35,8 +36,8 @@ pub fn is_public_path(path: &str) -> bool {
 
 /// 判断请求路径是否属于插件端点
 ///
-/// 插件端点支持 JWT 或 plugin token 两种认证方式。
-/// 中间件只校验 JWT；plugin token 校验由 plugin_controller handler 自行完成。
+/// 插件端点优先走 JWT 校验；无 JWT 的本地调用方（如 Claude Code hook 脚本）放行，
+/// handler 仅校验插件激活状态。
 pub fn is_plugin_path(path: &str) -> bool {
     path.starts_with("/api/plugin/")
 }

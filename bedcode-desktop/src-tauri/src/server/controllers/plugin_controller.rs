@@ -16,7 +16,8 @@ use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FA
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
 /// 仅支持已激活的 Rust / WASM 插件，TS-only 插件的 HTTP 端点通过前端 Tauri event 桥接。
 ///
-/// 认证：JWT 由网关中间件统一校验；plugin token 在此 handler 校验（hook 脚本无 JWT，只有 plugin token）
+/// 认证：JWT 由网关中间件统一校验；无 JWT 的本地调用方（如 hook 脚本）由中间件放行，
+/// 此 handler 仅校验插件激活状态
 pub async fn plugin_http_endpoint(
     req: HttpRequest,
     path: web::Path<(String, String)>,
@@ -27,7 +28,7 @@ pub async fn plugin_http_endpoint(
 
     // 认证由网关中间件统一处理：
     // - JWT 请求：中间件校验通过后 claims 已注入 extensions
-    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行，plugin token 校验待实现
+    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行，依赖本地网络信任
 
     // 检查插件是否已激活
     let ctx = AppContext::global();

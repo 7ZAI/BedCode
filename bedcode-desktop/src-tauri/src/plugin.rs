@@ -11,7 +11,6 @@ pub mod permission;
 pub mod registry;
 pub mod storage;
 pub mod types;
-pub mod wasm_host;
 pub mod wasm_runtime;
 #[cfg(debug_assertions)]
 pub mod watcher;
