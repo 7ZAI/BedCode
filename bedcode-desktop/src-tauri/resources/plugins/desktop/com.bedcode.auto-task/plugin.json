@@ -8,7 +8,7 @@
   "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_auto_task",
-  "permissions": ["storage", "terminal:input", "terminal:output", "session:read", "broadcast", "fs:read", "fs:write", "ui:sidebar"],
+  "permissions": ["storage", "terminal:input", "terminal:output", "terminal:observe", "session:read", "broadcast", "fs:read", "fs:write", "ui:sidebar"],
   "contributes": {
     "commands": [
       { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },

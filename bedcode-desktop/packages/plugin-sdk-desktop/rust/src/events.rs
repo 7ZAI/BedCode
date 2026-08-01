@@ -69,6 +69,28 @@ pub enum SessionLifecycleEvent {
     },
 }
 
+/// 提交输入行事件（宿主 → 插件）
+///
+/// 用户在终端会话中完成输入并提交（回车触发）时，由宿主 SessionManager
+/// 从原始输入字节流重建出完整文本行后分发。插件通过
+/// `session_input_register()` 注册后，经
+/// [`WasmPlugin::on_input_submitted`](crate::wasm::WasmPlugin::on_input_submitted)
+/// 回调接收，不走消息总线。
+///
+/// 纯观察通知：异步分发、无顺序保证，回调出错或超时不影响输入本身。
+/// 宿主不做语义过滤——空提交（空行回车）同样触发，是否忽略由插件决定。
+/// 注册需要 `terminal:observe` 权限。见 ADR 0001。
+///
+/// 线协议：`{ "session_id": "...", "text": "..." }`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct InputSubmittedEvent {
+    /// PTY 会话 ID
+    pub session_id: String,
+    /// 提交的输入行内容（仅普通输入；多行粘贴时含换行符）
+    pub text: String,
+}
+
 /// 同步事件（插件 → 宿主 → 移动端客户端）
 ///
 /// 通过 `HostEvents::broadcast_sync` 发布，宿主转发给所有已认证的

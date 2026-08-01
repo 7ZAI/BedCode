@@ -19,10 +19,12 @@ use crate::session::{
         DefaultStatusDetector, StatusDetector,
     },
     event_bus::{DefaultSessionEventBus, SessionEventBus},
+    input_line::{SessionInputListener, SubmittedLineTracker},
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
 };
+use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::enums::{SessionStatus, SessionType};
 use crate::Result;
 use chrono::Utc;
@@ -63,6 +65,10 @@ pub struct SessionManager {
     resource_dir: Arc<PathBuf>,
     /// 会话生命周期监听器注册表
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn SessionLifecycleListener>>>>,
+    /// 会话输入监听器注册表（提交输入行观察，见 ADR 0001）
+    input_listeners: Arc<RwLock<Vec<Arc<dyn SessionInputListener>>>>,
+    /// 提交输入行重建器（每会话字节流缓冲区）
+    submitted_line_tracker: SubmittedLineTracker,
 }
 
 impl SessionManager {
@@ -117,6 +123,7 @@ impl SessionManager {
         let status_detector = Arc::new(DefaultStatusDetector::new());
         let running = Arc::new(AtomicBool::new(true));
         let lifecycle_listeners = Arc::new(RwLock::new(Vec::new()));
+        let input_listeners = Arc::new(RwLock::new(Vec::new()));
 
         Self {
             pty_registry,
@@ -132,6 +139,8 @@ impl SessionManager {
             sync_tx: RwLock::new(None),
             resource_dir,
             lifecycle_listeners,
+            input_listeners,
+            submitted_line_tracker: SubmittedLineTracker::new(),
         }
     }
 
@@ -180,6 +189,56 @@ impl SessionManager {
         for listener in &listeners {
             listener.on_session_lifecycle(&event);
         }
+    }
+
+    /// 注册会话输入监听器
+    ///
+    /// 监听器在用户提交输入行（回车触发）时收到异步通知。
+    /// 插件侧注册需 `terminal:observe` 权限（门禁在 host function 层）
+    pub async fn register_input_listener(&self, listener: Arc<dyn SessionInputListener>) {
+        let mut listeners = self.input_listeners.write().await;
+        tracing::info!("SessionInputListener registered (total: {})", listeners.len() + 1);
+        listeners.push(listener);
+    }
+
+    /// 移除指定插件的输入监听器
+    ///
+    /// 插件停用时调用，移除该插件注册的 PluginInputListener
+    pub async fn remove_input_listener(&self, plugin_id: &str) {
+        let mut listeners = self.input_listeners.write().await;
+        let before = listeners.len();
+        listeners.retain(|l| l.plugin_id() != Some(plugin_id));
+        let removed = before - listeners.len();
+        if removed > 0 {
+            tracing::info!("Removed {} input listener(s) for plugin '{}'", removed, plugin_id);
+        }
+    }
+
+    /// 异步分发提交输入行事件
+    ///
+    /// 纯观察语义（见 ADR 0001）：每个监听器独立 spawn 分发，
+    /// fire-and-forget、错误隔离（error boundary 兜底 panic），
+    /// 不 await 回调、不阻塞输入路径、无顺序保证
+    async fn dispatch_input_submitted(&self, session_id: String, text: String) {
+        // 快照后立即释放读锁：回调可能反向获取其他锁，持锁分发有 ABBA 死锁风险
+        // （与 dispatch_lifecycle_event 同理）
+        let listeners: Vec<Arc<dyn SessionInputListener>> = {
+            self.input_listeners.read().await.iter().cloned().collect()
+        };
+        for listener in listeners {
+            let sid = session_id.clone();
+            let text = text.clone();
+            spawn_with_error_boundary("input_submitted_dispatch", async move {
+                listener.on_input_submitted(&sid, &text);
+            });
+        }
+
+        // 分发到 Rust 静态插件的 TerminalHandler::on_input_submitted（与监听器相同的隔离语义）
+        // WASM 插件经各自的 PluginInputListener 接收，两条路径互不重叠
+        let plugin_host = crate::system::app_context::AppContext::global().plugin_host();
+        spawn_with_error_boundary("input_submitted_terminal_handlers", async move {
+            plugin_host.process_input_submitted(&session_id, &text).await;
+        });
     }
 
     /// 发布同步事件
@@ -411,6 +470,7 @@ impl SessionManager {
         let session_info = self.session_info.clone();
         let status_tx = self.event_bus.status_sender();
         let pty_registry = self.pty_registry.clone();
+        let line_tracker = self.submitted_line_tracker.clone();
         let sid = session_id.to_string();
 
         tokio::spawn(async move {
@@ -421,6 +481,9 @@ impl SessionManager {
                         crate::pty::PtySessionStatus::Error => SessionStatus::Error(None),
                         _ => SessionStatus::Stopped,
                     };
+
+                    // PTY 已退出：清理该会话的输入行缓冲区（残余内容不补发，见 ADR 0001）
+                    line_tracker.remove_session(&sid);
 
                     session_info.update_status_with_time(&sid, session_status.clone()).await;
 
@@ -576,6 +639,13 @@ impl SessionManager {
             plugin_host.process_terminal_input(session_id, data).await
         };
 
+        // 提交输入行重建 + 异步观察分发（见 ADR 0001）：
+        // 观察修改后的最终数据（与 PTY 实际接收一致）；分发为 fire-and-forget，
+        // 监听器故障不影响写入，空提交同样通知（宿主不做语义过滤）
+        for line in self.submitted_line_tracker.feed(session_id, &processed_data) {
+            self.dispatch_input_submitted(session_id.to_string(), line).await;
+        }
+
         self.pty_registry.write_input(session_id, &processed_data).await?;
 
         // 更新会话状态为 Running
@@ -627,6 +697,9 @@ impl SessionManager {
         if let Err(e) = self.pty_registry.kill(session_id).await {
             tracing::warn!("Failed to kill PTY for session {}: {}", session_id, e);
         }
+
+        // 清理输入行缓冲区（残余内容不补发，见 ADR 0001）
+        self.submitted_line_tracker.remove_session(session_id);
 
         // 更新会话状态
         let session_name = self
@@ -690,6 +763,9 @@ impl SessionManager {
         // 从各注册表移除（PTY 的缓存会随 PTY 一起被清理）
         let _ = self.pty_registry.remove(session_id).await;
         let _ = self.session_info.remove(session_id).await;
+
+        // 清理输入行缓冲区（restart 经此路径重建同 ID 会话，从干净状态开始）
+        self.submitted_line_tracker.remove_session(session_id);
 
         // 发布同步事件：会话删除
         self.publish_sync_event(DesktopSyncEvent::SessionRemoved {

@@ -264,6 +264,15 @@ impl HostSession for WasmHost {
             Err(HostError::call_failed("session_lifecycle_register"))
         }
     }
+
+    fn session_input_register(&self) -> Result<(), HostError> {
+        let status = unsafe { host_session_input_register() };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("session_input_register"))
+        }
+    }
 }
 
 // ==================== HostEvents ====================
@@ -508,6 +517,8 @@ extern "C" {
     fn host_bus_unsubscribe(topic_ptr: u32, topic_len: u32) -> i32;
     /// 会话生命周期：注册监听器 — 返回 0 成功，-1 失败
     fn host_session_lifecycle_register() -> i32;
+    /// 会话输入：注册提交输入行监听器 — 返回 0 成功，-1 失败（含权限拒绝）
+    fn host_session_input_register() -> i32;
 }
 
 // ==================== WASM Memory Helpers ====================

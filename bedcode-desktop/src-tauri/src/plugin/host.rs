@@ -11,7 +11,7 @@ use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, PluginServices, WasmHostContext, WasmRuntime};
 use crate::db::Database;
-use crate::session::{SessionConfigManager, SessionManager, SessionLifecycleEvent, SessionLifecycleListener};
+use crate::session::{SessionConfigManager, SessionManager, SessionInputListener, SessionLifecycleEvent, SessionLifecycleListener};
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
 use crate::system::constants::event;
 use bedcode_plugin_api::{PluginState, PluginCommandEntry};
@@ -554,10 +554,11 @@ impl PluginHost {
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-        // 移除该插件的会话生命周期监听器
+        // 移除该插件的会话生命周期监听器与输入监听器
         {
             let session_manager = self.wasm_host_ctx().session_manager_arc();
             session_manager.remove_lifecycle_listener(plugin_id).await;
+            session_manager.remove_input_listener(plugin_id).await;
         }
 
         let mut plugins = self.plugins.write().await;
@@ -902,6 +903,17 @@ impl PluginHost {
         }
         result
     }
+
+    /// 将提交输入行分发给 Rust 插件的 TerminalHandler 观察回调（见 ADR 0001）
+    ///
+    /// 与 `process_terminal_input`（逐块同步修改）互补：纯观察、不修改、
+    /// 由 SessionManager 在异步错误隔离任务中调用
+    pub async fn process_input_submitted(&self, session_id: &str, text: &str) {
+        let handlers = self.rust_terminal_handlers.read().await;
+        for handler in handlers.iter() {
+            handler.on_input_submitted(session_id, text);
+        }
+    }
 }
 
 // ==================== PluginLifecycleListener ====================
@@ -992,6 +1004,46 @@ impl SessionLifecycleListener for PluginLifecycleListener {
     }
 }
 
+// ==================== PluginInputListener ====================
+
+/// 插件专属的提交输入行监听器（见 ADR 0001）
+///
+/// 每个 WASM 插件在 activate 时通过 host_session_input_register 注册
+///（需 `terminal:observe` 权限）。收到提交输入行后，构造 SDK 类型化
+/// `InputSubmittedEvent`（serde 表示即线协议），调用插件的
+/// `__bedcode_on_input_submitted` 导出函数。
+pub struct PluginInputListener {
+    /// 插件 ID
+    plugin_id: String,
+    /// 插件宿主（Arc 内部，Clone 成本低）
+    plugin_host: PluginHost,
+}
+
+impl PluginInputListener {
+    /// 创建插件输入监听器
+    pub fn new(plugin_id: String, plugin_host: PluginHost) -> Self {
+        Self { plugin_id, plugin_host }
+    }
+}
+
+impl SessionInputListener for PluginInputListener {
+    fn on_input_submitted(&self, session_id: &str, text: &str) {
+        // 宿主事件 → SDK 类型化结构体（与插件侧 on_input_submitted 接收的类型一致），
+        // serde 表示即线协议；序列化失败（理论上不可能）退化为空对象
+        let event = bedcode_plugin_api::events::InputSubmittedEvent {
+            session_id: session_id.to_string(),
+            text: text.to_string(),
+        };
+        let payload = serde_json::to_value(&event).unwrap_or_else(|_| serde_json::json!({}));
+
+        self.plugin_host.dispatch_input_to_plugin(&self.plugin_id, &payload);
+    }
+
+    fn plugin_id(&self) -> Option<&str> {
+        Some(&self.plugin_id)
+    }
+}
+
 impl PluginHost {
     /// 将会话生命周期事件分发给指定插件的 on_session_lifecycle 回调
     pub fn dispatch_lifecycle_to_plugin(&self, plugin_id: &str, payload: &serde_json::Value) {
@@ -1006,6 +1058,29 @@ impl PluginHost {
                 if let Err(e) = wasm_plugin.on_session_lifecycle(payload) {
                     tracing::error!(
                         "SessionLifecycle: dispatch to plugin '{}' failed: {}",
+                        plugin_id, e
+                    );
+                }
+            }
+        });
+    }
+
+    /// 将提交输入行事件分发给指定插件的 on_input_submitted 回调（见 ADR 0001）
+    ///
+    /// 由 PluginInputListener 在 SessionManager spawn 的错误隔离任务中调用；
+    /// 分发失败仅记录日志，不影响输入本身
+    pub fn dispatch_input_to_plugin(&self, plugin_id: &str, payload: &serde_json::Value) {
+        if !self.is_activated_block(plugin_id) {
+            return;
+        }
+
+        let wasm_plugins = self.wasm_plugins.clone();
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            let mut wasm_plugins = wasm_plugins.write().await;
+            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                if let Err(e) = wasm_plugin.on_input_submitted(payload) {
+                    tracing::error!(
+                        "InputSubmitted: dispatch to plugin '{}' failed: {}",
                         plugin_id, e
                     );
                 }
@@ -1037,6 +1112,18 @@ impl PluginServices for PluginHost {
         let listener = PluginLifecycleListener::new(plugin_id, self.clone());
         crate::plugin::wasm_runtime::block_on_async(
             session_manager.register_lifecycle_listener(Arc::new(listener)),
+        );
+    }
+
+    fn register_session_input_listener(
+        &self,
+        plugin_id: String,
+        session_manager: Arc<SessionManager>,
+    ) {
+        // host function 处于同步上下文，通过 block_on_async 完成异步注册
+        let listener = PluginInputListener::new(plugin_id, self.clone());
+        crate::plugin::wasm_runtime::block_on_async(
+            session_manager.register_input_listener(Arc::new(listener)),
         );
     }
 }

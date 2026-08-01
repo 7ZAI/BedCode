@@ -44,7 +44,7 @@ pub mod wasm_host;
 pub use args::CommandArgs;
 pub use command::{PluginCommand, PluginCommandEntry};
 pub use context::RustPluginContext;
-pub use events::{PluginQuestion, PluginQuestionOption, SessionLifecycleEvent, SyncEvent};
+pub use events::{InputSubmittedEvent, PluginQuestion, PluginQuestionOption, SessionLifecycleEvent, SyncEvent};
 pub use host::{ConfigKey, HostApi, HostError};
 pub use permission::PermissionManager;
 pub use terminal::TerminalHandler;

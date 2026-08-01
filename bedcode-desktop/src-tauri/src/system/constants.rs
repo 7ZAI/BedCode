@@ -10,3 +10,4 @@ pub mod mdns;
 pub mod network;
 pub mod plugin;
 pub mod server;
+pub mod terminal;

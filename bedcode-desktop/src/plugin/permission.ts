@@ -9,6 +9,7 @@
 const VALID_PERMISSIONS = new Set([
   'terminal:input',
   'terminal:output',
+  'terminal:observe',
   'session:read',
   'session:write',
   'ui:sidebar',
@@ -25,6 +26,7 @@ const VALID_PERMISSIONS = new Set([
 const PERMISSION_API_MAP: Record<string, string[]> = {
   'terminal:input': ['terminal.sendInput', 'terminal.onInput'],
   'terminal:output': ['terminal.onOutput'],
+  'terminal:observe': ['terminal.onInputSubmitted'],
   'session:read': ['session.list', 'session.get', 'session.onStatusChange'],
   'session:write': ['session.create', 'session.stop'],
   'ui:sidebar': ['ui.registerSidebarPanel'],

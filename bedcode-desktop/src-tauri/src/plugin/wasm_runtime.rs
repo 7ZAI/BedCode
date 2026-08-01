@@ -90,6 +90,13 @@ pub trait PluginServices: Send + Sync + 'static {
         plugin_id: String,
         session_manager: Arc<SessionManager>,
     );
+
+    /// 为指定插件创建并注册提交输入行监听器到 SessionManager（见 ADR 0001）
+    fn register_session_input_listener(
+        &self,
+        plugin_id: String,
+        session_manager: Arc<SessionManager>,
+    );
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -460,6 +467,41 @@ impl LoadedWasmPlugin {
         let status = results[0].unwrap_i32();
         if status != 0 {
             tracing::warn!("WASM on_session_lifecycle() returned non-zero status: {}", status);
+        }
+        Ok(())
+    }
+
+    /// 调用插件的提交输入行事件导出函数（可选，见 ADR 0001）
+    ///
+    /// 纯观察通知：由 SessionManager 在异步错误隔离任务中经
+    /// PluginInputListener 触发，调用失败仅记录日志，不影响输入本身
+    pub fn on_input_submitted(
+        &mut self,
+        payload: &serde_json::Value,
+    ) -> crate::Result<()> {
+        let Ok(func) = self.get_export_func(abi::export::ON_INPUT_SUBMITTED) else {
+            return Ok(());
+        };
+
+        let payload_str = serde_json::to_string(payload).unwrap_or_default();
+        let (payload_ptr, payload_len) = self.write_string_to_memory(&payload_str)?;
+
+        let mut results = [wasmtime::Val::I32(0)];
+        func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(payload_ptr as i32),
+                wasmtime::Val::I32(payload_len as i32),
+            ],
+            &mut results,
+        )
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("WASM on_input_submitted() call failed: {}", e))
+        })?;
+
+        let status = results[0].unwrap_i32();
+        if status != 0 {
+            tracing::warn!("WASM on_input_submitted() returned non-zero status: {}", status);
         }
         Ok(())
     }

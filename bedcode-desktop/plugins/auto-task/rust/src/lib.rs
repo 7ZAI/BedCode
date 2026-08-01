@@ -12,7 +12,7 @@ mod hooks;
 mod state;
 mod queue;
 
-use bedcode_plugin_api::events::SessionLifecycleEvent;
+use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
 use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession};
 use bedcode_plugin_api::{CommandArgs, WasmHost, WasmPlugin};
 use bedcode_plugin_api::types::PluginManifest;
@@ -76,7 +76,7 @@ impl WasmPlugin for AutoTaskPlugin {
             "sandbox": "inline",
             "pluginType": "rust-ts",
             "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "session:read", "fs:read", "fs:write", "ui:sidebar"],
+            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "terminal:observe", "session:read", "fs:read", "fs:write", "ui:sidebar"],
             "contributes": {
                 "commands": [
                     { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
@@ -107,6 +107,13 @@ impl WasmPlugin for AutoTaskPlugin {
         match host.session_lifecycle_register() {
             Ok(()) => host.log_info("Registered session lifecycle listener"),
             Err(e) => host.log_error(&format!("Failed to register session lifecycle listener: {}", e)),
+        }
+
+        // 注册提交输入行监听器（需要 terminal:observe 权限，见 ADR 0001）
+        // 用户提交输入（回车触发）时异步收到重建后的完整输入行
+        match host.session_input_register() {
+            Ok(()) => host.log_info("Registered session input listener"),
+            Err(e) => host.log_error(&format!("Failed to register session input listener: {}", e)),
         }
 
         Ok(())
@@ -274,6 +281,26 @@ impl WasmPlugin for AutoTaskPlugin {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn on_input_submitted(event: &InputSubmittedEvent) -> anyhow::Result<()> {
+        let host = WasmHost;
+
+        // 业务侧过滤：宿主不做语义过滤（空提交同样通知），空行回车直接忽略
+        if event.text.trim().is_empty() {
+            return Ok(());
+        }
+
+        host.log_info(&format!(
+            "InputSubmitted: session={}, len={}, text={:?}",
+            event.session_id,
+            event.text.len(),
+            event.text
+        ));
+
+        // TODO(auto-task): 基于提交输入行的业务处理（如任务队列指令解析、输入审计统计）。
+        // 当前仅观察日志；注意回调中避免调用 terminal_send 造成自触发循环（见 ADR 0001）
         Ok(())
     }
 }

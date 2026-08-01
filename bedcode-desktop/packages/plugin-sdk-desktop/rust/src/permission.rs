@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 /// 所有合法权限常量
 pub const PERMISSION_TERMINAL_INPUT: &str = "terminal:input";
 pub const PERMISSION_TERMINAL_OUTPUT: &str = "terminal:output";
+/// 终端输入观察：注册提交输入行监听器（输入内容可能含密码等敏感信息，需显式授权，见 ADR 0001）
+pub const PERMISSION_TERMINAL_OBSERVE: &str = "terminal:observe";
 pub const PERMISSION_SESSION_READ: &str = "session:read";
 pub const PERMISSION_SESSION_WRITE: &str = "session:write";
 pub const PERMISSION_UI_SIDEBAR: &str = "ui:sidebar";
@@ -24,6 +26,7 @@ pub const PERMISSION_BROADCAST: &str = "broadcast";
 static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_INPUT,
     PERMISSION_TERMINAL_OUTPUT,
+    PERMISSION_TERMINAL_OBSERVE,
     PERMISSION_SESSION_READ,
     PERMISSION_SESSION_WRITE,
     PERMISSION_UI_SIDEBAR,
@@ -41,6 +44,7 @@ static VALID_PERMISSIONS: &[&str] = &[
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_TERMINAL_INPUT, &["terminal.sendInput", "terminal.onInput"]),
     (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput"]),
+    (PERMISSION_TERMINAL_OBSERVE, &["terminal.onInputSubmitted"]),
     (PERMISSION_SESSION_READ, &["session.list", "session.get", "session.onStatusChange"]),
     (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
     (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel"]),

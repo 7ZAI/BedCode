@@ -5,7 +5,7 @@
 //!
 //! 插件开发者只需实现 WasmPlugin trait，然后调用 wasm_entry!(MyPlugin)
 
-use crate::events::SessionLifecycleEvent;
+use crate::events::{InputSubmittedEvent, SessionLifecycleEvent};
 use crate::types::PluginManifest;
 use crate::BusMessage;
 
@@ -65,6 +65,16 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_session_lifecycle(_event: &SessionLifecycleEvent) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// 接收提交输入行事件（可选，默认忽略）
+    ///
+    /// 由宿主 SessionManager 异步分发（需先调用 `session_input_register()`
+    /// 注册并获得 `terminal:observe` 授权），不走消息总线。
+    /// 纯观察通知：回调出错不影响输入本身。
+    /// 事件为类型化结构体（宏已从 JSON 载荷解析）
+    fn on_input_submitted(_event: &InputSubmittedEvent) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// 自动生成 WASM 导出函数 + 线性内存分配器
@@ -83,6 +93,7 @@ pub trait WasmPlugin: Send + Sync + 'static {
 /// - `__bedcode_on_shutdown() -> ()` — 关闭回调
 /// - `__bedcode_on_message(topic, sender, payload) -> i32` — 消息总线消息
 /// - `__bedcode_on_session_lifecycle(payload) -> i32` — 会话生命周期事件
+/// - `__bedcode_on_input_submitted(payload) -> i32` — 提交输入行事件
 ///
 /// # WASM ABI 约定
 ///
@@ -350,6 +361,40 @@ macro_rules! wasm_entry {
                     $crate::host::HostLog::log_error(
                         &host,
                         &format!("on_session_lifecycle failed: {}", e),
+                    );
+                    -1
+                }
+            }
+        }
+
+        /// 接收提交输入行事件（异步观察，返回值仅用于宿主侧错误日志）
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_input_submitted(
+            payload_ptr: u32,
+            payload_len: u32,
+        ) -> i32 {
+            let payload_str = $crate::wasm_host::wasm_read_string(payload_ptr, payload_len);
+            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
+            $crate::wasm_host::wasm_dealloc_string(payload_ptr, payload_len);
+            // ABI JSON 字符串 → 类型化 InputSubmittedEvent（解析失败视为协议错误）
+            let event: $crate::events::InputSubmittedEvent = match serde_json::from_str(&payload_str) {
+                Ok(e) => e,
+                Err(e) => {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(
+                        &host,
+                        &format!("on_input_submitted: invalid event payload: {}", e),
+                    );
+                    return -1;
+                }
+            };
+            match <$plugin_type>::on_input_submitted(&event) {
+                Ok(()) => 0,
+                Err(e) => {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(
+                        &host,
+                        &format!("on_input_submitted failed: {}", e),
                     );
                     -1
                 }

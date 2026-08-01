@@ -32,7 +32,9 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///
 /// - v1: 初始版本（27 个 host functions + 11 个插件导出）
 /// - v2: 新增 4 个参数绑定 SQL host functions（*_params），消灭插件侧手写转义
-pub const ABI_VERSION: u32 = 2;
+/// - v3: 新增提交输入行观察扩展点（host function `SESSION_INPUT_REGISTER`
+///   + 可选导出 `ON_INPUT_SUBMITTED`），见 ADR 0001
+pub const ABI_VERSION: u32 = 3;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -58,6 +60,8 @@ pub mod export {
     pub const ON_MESSAGE: &str = "__bedcode_on_message";
     /// 接收会话生命周期事件（可选导出）
     pub const ON_SESSION_LIFECYCLE: &str = "__bedcode_on_session_lifecycle";
+    /// 接收提交输入行事件（可选导出，异步观察，不影响输入本身）
+    pub const ON_INPUT_SUBMITTED: &str = "__bedcode_on_input_submitted";
     /// ABI 版本协商（v2 起导出；缺失视为 v1 兼容插件）
     pub const ABI_VERSION: &str = "__bedcode_abi_version";
     /// 内存回收器（v2 起导出；缺失时宿主跳过回收，退化为 v1 行为）
@@ -107,6 +111,8 @@ pub mod import {
     pub const SESSION_CONFIG_LIST: &str = "host_session_config_list";
     /// 会话生命周期：注册监听器
     pub const SESSION_LIFECYCLE_REGISTER: &str = "host_session_lifecycle_register";
+    /// 会话输入：注册提交输入行监听器（需要 terminal:observe 权限）
+    pub const SESSION_INPUT_REGISTER: &str = "host_session_input_register";
 
     // === Event / Broadcast ===
     /// 事件：向前端发送 Tauri 事件（无返回值）
@@ -171,6 +177,7 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::SESSION_GET, 3, 1),
     (import::SESSION_CONFIG_LIST, 1, 1),
     (import::SESSION_LIFECYCLE_REGISTER, 0, 1),
+    (import::SESSION_INPUT_REGISTER, 0, 1),
     (import::EMIT_EVENT, 4, 0),
     (import::BROADCAST_SYNC, 2, 0),
     (import::NOTIFY, 4, 1),
@@ -204,6 +211,7 @@ pub const PLUGIN_EXPORT_SIGNATURES: &[(&str, usize, usize)] = &[
     (export::ON_SHUTDOWN, 0, 0),
     (export::ON_MESSAGE, 6, 1),
     (export::ON_SESSION_LIFECYCLE, 2, 1),
+    (export::ON_INPUT_SUBMITTED, 2, 1),
     (export::ABI_VERSION, 0, 1),
     (export::DEALLOCATE, 2, 0),
 ];
