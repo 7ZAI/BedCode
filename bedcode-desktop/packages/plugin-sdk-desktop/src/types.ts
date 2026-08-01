@@ -105,8 +105,12 @@ export interface FileHandlerContribution {
 export interface SidebarPanelDescriptor {
   id: string
   title: string
-  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24） */
+  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24）
+   * 与宿主内置菜单共用同一图标体系，可包含多个 M 子路径组合成完整图标 */
   icon?: string
+  /** 菜单排序值，升序排列（越小越靠前），缺省为 100。
+   * 插件菜单整体显示在宿主内置菜单之后，此值仅决定插件菜单之间的相对顺序 */
+  order?: number
   component: any
 }
 
@@ -114,6 +118,10 @@ export interface SidebarPanelDescriptor {
 export interface ToolboxPageDescriptor {
   id: string
   title: string
+  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24） */
+  icon?: string
+  /** 菜单排序值，升序排列（越小越靠前），缺省为 100 */
+  order?: number
   component: any
 }
 

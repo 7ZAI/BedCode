@@ -7,6 +7,9 @@
 import type { Disposable, PluginContext } from './types'
 import { ref, type Ref } from 'vue'
 
+/** 插件视图默认排序值 — 插件未指定 order 时使用，留出区间供插件前后插入 */
+const DEFAULT_VIEW_ORDER = 100
+
 /** 注册的视图组件 */
 interface RegisteredView {
   pluginId: string
@@ -14,6 +17,8 @@ interface RegisteredView {
   viewType: string
   title: string
   icon?: string
+  /** 排序值，升序排列（越小越靠前），同值保持注册顺序 */
+  order: number
   component: any
 }
 
@@ -89,7 +94,7 @@ class PluginRegistryClass {
   readonly titleBarItems: Ref<RegisteredTitleBarItem[]> = ref([])
 
   /** 注册视图 */
-  registerView(pluginId: string, viewType: string, panel: { id: string; title: string; icon?: string; component: any }): Disposable {
+  registerView(pluginId: string, viewType: string, panel: { id: string; title: string; icon?: string; order?: number; component: any }): Disposable {
     const key = `${pluginId}:${panel.id}`
     const entry: RegisteredView = {
       pluginId,
@@ -97,6 +102,7 @@ class PluginRegistryClass {
       viewType,
       title: panel.title,
       icon: panel.icon,
+      order: panel.order ?? DEFAULT_VIEW_ORDER,
       component: panel.component,
     }
     this.views.set(key, entry)
@@ -301,6 +307,8 @@ class PluginRegistryClass {
 
   private updateReactiveViews() {
     const views = [...this.views.values()]
+    // 按 order 升序排序（sort 为稳定排序，同 order 保持注册先后）
+    views.sort((a, b) => a.order - b.order)
     this.sidebarViews.value = views.filter(v => v.viewType === 'sidebar')
     this.toolboxViews.value = views.filter(v => v.viewType === 'toolbox')
   }

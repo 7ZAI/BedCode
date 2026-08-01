@@ -164,48 +164,44 @@ const { isResizing, dragWidth, onResizeStart } = useSidebarResize()
           </router-link>
         </li>
         </template>
+
+        <!-- 插件侧边栏面板：与宿主菜单同列表渲染（无分隔线），按 order 升序排列 -->
+        <li v-for="view in sidebarPlugins" :key="`plugin-${view.pluginId}-${view.viewId}`">
+          <router-link
+            :to="`/plugin/sidebar/${view.pluginId}/${view.viewId}`"
+            class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
+            :class="[
+              $route.path === `/plugin/sidebar/${view.pluginId}/${view.viewId}`
+                ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
+              collapsed && 'justify-center px-0'
+            ]"
+            :title="collapsed ? view.title : undefined"
+          >
+            <svg v-if="view.icon" class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="view.icon" />
+            </svg>
+            <svg v-else class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
+            </svg>
+            <span
+              class="whitespace-nowrap overflow-hidden"
+              :class="!isResizing && 'transition-[opacity] duration-200'"
+              :style="{ opacity: collapsed ? 0 : 1, width: collapsed ? 0 : 'auto' }"
+            >{{ view.title }}</span>
+          </router-link>
+        </li>
       </ul>
 
-      <!-- Plugin Sidebar Panels -->
-      <div v-if="sidebarPlugins.length > 0" class="mt-4 pt-4 border-t border-[var(--border)]">
-        <ul class="space-y-1">
-          <li v-for="view in sidebarPlugins" :key="view.viewId">
-            <router-link
-              :to="`/plugin/sidebar/${view.pluginId}/${view.viewId}`"
-              class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
-              :class="[
-                $route.path === `/plugin/sidebar/${view.pluginId}/${view.viewId}`
-                  ? 'bg-brand-light text-brand font-medium border-l-[3px] border-brand pl-[9px]'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
-                collapsed && 'justify-center px-0'
-              ]"
-              :title="collapsed ? view.title : undefined"
-            >
-              <svg v-if="view.icon" class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="view.icon" />
-              </svg>
-              <svg v-else class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
-              </svg>
-              <span
-                class="whitespace-nowrap overflow-hidden"
-                :class="!isResizing && 'transition-[opacity] duration-200'"
-                :style="{ opacity: collapsed ? 0 : 1, width: collapsed ? 0 : 'auto' }"
-              >{{ view.title }}</span>
-            </router-link>
-          </li>
-        </ul>
-      </div>
-
-      <!-- Plugin Toolbox Panels -->
-      <div v-if="toolboxPlugins.length > 0" class="mt-4 pt-4 border-t border-[var(--border)]">
+      <!-- 插件工具箱面板：仅用分组标题区分，不使用横线分隔 -->
+      <div v-if="toolboxPlugins.length > 0" class="mt-4">
         <h4
           class="px-3.5 mb-2 text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap overflow-hidden"
           :class="!isResizing && 'transition-[opacity] duration-200'"
           :style="{ opacity: collapsed ? 0 : 1, height: collapsed ? 0 : 'auto' }"
         >{{ $t('desktop.plugin.toolboxPanels') }}</h4>
         <ul class="space-y-1">
-          <li v-for="view in toolboxPlugins" :key="view.viewId">
+          <li v-for="view in toolboxPlugins" :key="`plugin-${view.pluginId}-${view.viewId}`">
             <router-link
               :to="`/plugin/toolbox/${view.pluginId}/${view.viewId}`"
               class="flex items-center gap-3 h-11 px-3.5 rounded-nav transition-all duration-200"
