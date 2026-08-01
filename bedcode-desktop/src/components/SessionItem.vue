@@ -1,5 +1,9 @@
 <template>
-  <div class="bg-card rounded-card shadow-card hover:shadow-card-hover transition-all duration-200 overflow-hidden">
+  <div
+    :class="flat
+      ? 'bg-transparent rounded-none shadow-none hover:shadow-none'
+      : 'bg-card rounded-card shadow-card hover:shadow-card-hover transition-all duration-200 overflow-hidden'"
+  >
     <!-- Session Header -->
     <div
       class="flex items-center gap-4 px-6 py-5 cursor-pointer"
@@ -139,6 +143,8 @@ const { t } = useI18n()
 const props = defineProps<{
   session: SessionInfo
   showTerminal?: boolean
+  /** 内嵌到其他卡片时去除自身卡片样式 */
+  flat?: boolean
 }>()
 
 const emit = defineEmits<{

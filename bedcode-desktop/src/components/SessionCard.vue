@@ -70,8 +70,8 @@
       </div>
     </div>
 
-    <!-- Expandable Running Sessions -->
-    <div v-if="runningSessions.length > 0" class="border-t border-[var(--border)]">
+    <!-- Expandable Session Management Area -->
+    <div v-if="configSessions.length > 0" class="border-t border-[var(--border)]">
       <div
         class="flex items-center gap-2 px-6 py-2.5 cursor-pointer text-[var(--text-secondary)] text-sm hover:bg-[var(--bg-hover)] transition-colors duration-200"
         @click.stop="toggleExpand"
@@ -84,57 +84,22 @@
         >
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
         </svg>
-        <span>{{ $t('desktop.session.runningSessions', { count: runningSessions.length }) }}</span>
+        <span>{{ $t('desktop.session.sessions', { count: configSessions.length }) }}</span>
       </div>
 
-      <!-- Running Sessions List -->
+      <!-- Session Management List -->
       <div v-if="isExpanded" class="bg-[var(--bg-hover)]/30">
-        <div
-          v-for="session in runningSessions"
+        <SessionItem
+          v-for="session in configSessions"
           :key="session.id"
-          class="flex items-center justify-between px-6 py-3 border-t border-[var(--border)] first:border-t-0 hover:bg-[var(--bg-hover)] cursor-pointer transition-colors duration-200"
-          @click="$emit('viewSession', session)"
-        >
-          <div class="flex items-center gap-3">
-            <!-- Status Indicator -->
-            <div
-              :class="[
-                'w-2 h-2 rounded-full',
-                session.status === 'running' ? 'bg-green-500' :
-                session.status === 'waitingInput' ? 'bg-amber-500' :
-                session.status === 'error' ? 'bg-red-500' : 'bg-[var(--text-tertiary)]'
-              ]"
-            ></div>
-            <span class="text-[var(--text-primary)] text-sm">{{ session.name }}</span>
-            <span
-              v-if="session.sessionType"
-              class="inline-flex items-center h-6 px-2 rounded-tag text-[11px] font-medium bg-[var(--color-primary-light)] text-blue-600 dark:text-blue-400"
-            >
-              PTY
-            </span>
-            <span
-              v-if="session.taskStatus"
-              :class="[
-                'inline-flex items-center h-6 px-2 rounded-tag text-[11px] font-medium',
-                taskStatusBadgeClass(session.taskStatus)
-              ]"
-            >
-              {{ taskStatusText(session.taskStatus) }}
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-[var(--text-tertiary)] text-sm">{{ getSessionTime(session) }}</span>
-            <button
-              class="w-8 h-8 rounded-btn flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--color-danger-light)] hover:text-red-600 dark:hover:text-red-400 transition-all duration-200"
-              @click.stop="$emit('stopSession', session.id)"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+          :session="session"
+          flat
+          class="border-t border-[var(--border)] first:border-t-0"
+          @view="emit('viewSession', session)"
+          @stop="emit('stopSession', session)"
+          @restart="emit('restartSession', session)"
+          @delete="emit('deleteSession', session)"
+        />
       </div>
     </div>
   </div>
@@ -144,76 +109,67 @@
 /**
  * SessionCard - 会话配置卡片
  *
- * 卡片式设计，pill 环境标签，运行中会话展开列表
+ * 卡片式设计，pill 环境标签，折叠区域展示该配置下的会话管理列表
  */
-import { ref, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { ref, computed, watch } from 'vue'
 import type { SessionConfig, SessionInfo } from '@/stores/session'
 import Button from '@/components/Button.vue'
-
-const { t } = useI18n()
+import SessionItem from '@/components/SessionItem.vue'
 
 const props = defineProps<{
   config: SessionConfig
   sessions: SessionInfo[]
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'start'): void
   (e: 'edit'): void
   (e: 'delete'): void
   (e: 'viewSession', session: SessionInfo): void
-  (e: 'stopSession', sessionId: string): void
+  (e: 'stopSession', session: SessionInfo): void
+  (e: 'restartSession', session: SessionInfo): void
+  (e: 'deleteSession', session: SessionInfo): void
 }>()
 
 const isExpanded = ref(false)
 
-// 筛选出该配置下运行中的会话
-const runningSessions = computed(() => {
-  return props.sessions.filter(s =>
-    s.configId === props.config.id &&
-    s.status !== 'stopped'
-  )
+// 该配置下的所有会话（含已停止，支持重启/删除）
+const configSessions = computed(() => {
+  return props.sessions.filter(s => (s.configId || s.config_id) === props.config.id)
 })
+
+// 运行中的会话数量（用于头部状态提示）
+const runningSessions = computed(() => {
+  return configSessions.value.filter(s => s.status !== 'stopped')
+})
+
+// 记录已见过的会话 id，新会话启动后自动展开折叠区域
+const knownSessionIds = new Set<string>()
+let isInitialized = false
+
+watch(
+  () => configSessions.value,
+  (list) => {
+    let hasNew = false
+    for (const s of list) {
+      if (!knownSessionIds.has(s.id)) {
+        knownSessionIds.add(s.id)
+        hasNew = true
+      }
+    }
+    // 首次挂载只记录已有会话，避免页面加载时全部展开
+    if (!isInitialized) {
+      isInitialized = true
+      return
+    }
+    if (hasNew) {
+      isExpanded.value = true
+    }
+  },
+  { immediate: true }
+)
 
 function toggleExpand() {
   isExpanded.value = !isExpanded.value
-}
-
-function taskStatusText(status: string): string {
-  switch (status) {
-    case 'idle': return t('common.status.idle')
-    case 'in_progress': return t('common.status.inProgress')
-    case 'asking': return t('common.status.asking')
-    case 'completed': return t('common.status.completed')
-    case 'interrupted': return t('common.status.interrupted')
-    default: return status
-  }
-}
-
-function taskStatusBadgeClass(status: string): string {
-  switch (status) {
-    case 'idle': return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
-    case 'in_progress': return 'bg-[var(--color-primary-light)] text-blue-600 dark:text-blue-400'
-    case 'asking': return 'bg-[var(--color-warning-light)] text-amber-600 dark:text-amber-400'
-    case 'completed': return 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400'
-    case 'interrupted': return 'bg-[var(--color-danger-light)] text-red-600 dark:text-red-400'
-    default: return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
-  }
-}
-
-function getSessionTime(session: SessionInfo): string {
-  const start = session.startedAt || session.createdAt
-  if (!start) return '--'
-
-  const startTime = new Date(start).getTime()
-  const now = Date.now()
-  const diff = Math.floor((now - startTime) / 1000)
-
-  if (diff < 60) return t('common.time.secondsAgo', { n: diff })
-  if (diff < 3600) return t('common.time.minutesSecondsAgo', { m: Math.floor(diff / 60), s: diff % 60 })
-  const hours = Math.floor(diff / 3600)
-  const minutes = Math.floor((diff % 3600) / 60)
-  return t('common.time.hoursMinutesAgo', { h: hours, m: minutes })
 }
 </script>

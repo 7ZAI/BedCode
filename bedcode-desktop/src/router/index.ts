@@ -7,13 +7,8 @@ const router = createRouter({
     { path: '/', redirect: '/sessions' },
     {
       path: '/sessions',
-      name: 'sessions',
+      name: 'session',
       component: () => import('@/views/SessionsConfigView.vue'),
-    },
-    {
-      path: '/session-manager',
-      name: 'session-manager',
-      component: () => import('@/views/SessionManagerView.vue'),
     },
     {
       path: '/server',

@@ -2,7 +2,7 @@ import { shallowRef } from 'vue'
 import i18n from '@/locales'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { emit, listen, emitTo, type UnlistenFn } from '@tauri-apps/api/event'
 import type { SessionInfo } from '@/composables/useDesktopCommands'
 
 // Re-export from model
@@ -87,24 +87,27 @@ export function useSessionWindows() {
     }
 
     // 获取主窗口
+    // Tauri 的 innerSize/outerSize/outerPosition 返回物理像素，
+    // 而 WebviewWindow 创建参数（width/height/x/y）需要逻辑像素，
+    // 高分屏（缩放 > 1）下不转换会导致终端窗口被放大 scaleFactor 倍
     const mainWindow = getCurrentWindow()
-    const mainPosition = await mainWindow.outerPosition()
-    const mainSize = await mainWindow.outerSize()
-    const mainInnerSize = await mainWindow.innerSize()
+    const scaleFactor = await mainWindow.scaleFactor()
+    const mainPosition = (await mainWindow.outerPosition()).toLogical(scaleFactor)
+    const mainSize = (await mainWindow.outerSize()).toLogical(scaleFactor)
+    const mainInnerSize = (await mainWindow.innerSize()).toLogical(scaleFactor)
 
-    console.log('[useSessionWindows] Main window position:', mainPosition)
-    console.log('[useSessionWindows] Main window size (outerSize):', mainSize)
-    console.log('[useSessionWindows] Main window size (innerSize):', mainInnerSize)
+    console.log('[useSessionWindows] Main window position (logical):', mainPosition)
+    console.log('[useSessionWindows] Main window size (outerSize, logical):', mainSize)
+    console.log('[useSessionWindows] Main window size (innerSize, logical):', mainInnerSize)
 
     // 计算终端窗口位置（紧贴主窗口右侧）
     // 使用 innerSize 确保与主窗口内容区高度一致
-    // 高度减少 100px，避免窗口过高
-    const terminalWidth = Math.floor(mainInnerSize.width * 0.4)
-    const terminalHeight = mainInnerSize.height - 100
+    const terminalWidth = Math.floor(mainInnerSize.width * 0.6)
+    const terminalHeight = mainInnerSize.height
 
     console.log('[useSessionWindows] Terminal window size - width:', terminalWidth, 'height:', terminalHeight)
 
-    // 计算新窗口位置，确保不超过屏幕边界
+    // 计算新窗口位置，确保不超过屏幕边界（window.screen 为逻辑像素）
     let terminalX = mainPosition.x + mainSize.width
     const screenWidth = window.screen.width
 
@@ -118,8 +121,11 @@ export function useSessionWindows() {
       terminalX = Math.floor((screenWidth - terminalWidth) / 2)
     }
 
+    const windowLabel = `terminal-${session.id}`
+
     // 创建终端窗口 - 使用独立的 terminal.html 页面
-    const terminalWindow = new WebviewWindow(`terminal-${session.id}`, {
+    // 先隐藏创建，等页面内容就绪后再显示，避免加载过程中的闪屏
+    const terminalWindow = new WebviewWindow(windowLabel, {
       url: `/terminal-window/${session.id}`,
       title: i18n.global.t('common.misc.terminalTitle', { name: session.name }),
       width: terminalWidth,
@@ -131,10 +137,63 @@ export function useSessionWindows() {
       alwaysOnTop: false,
       skipTaskbar: false,
       center: false,
+      visible: false,
+      backgroundColor: '#111827',
     })
+
+    let unlistenReady: UnlistenFn | null = null
+    let readyTimeout: number | null = null
+    let readyShown = false
+
+    /**
+     * 显示终端窗口并通知页面播放显现动画
+     */
+    async function showTerminalWindow() {
+      if (readyShown) return
+      readyShown = true
+      if (unlistenReady) {
+        unlistenReady()
+        unlistenReady = null
+      }
+      if (readyTimeout !== null) {
+        window.clearTimeout(readyTimeout)
+        readyTimeout = null
+      }
+      await terminalWindow.show()
+      await terminalWindow.setFocus()
+      // 通知终端页面播放显现动画
+      try {
+        await emitTo(windowLabel, 'terminal-show', { sessionId: session.id })
+      } catch (e) {
+        console.error('[useSessionWindows] Emit terminal-show error:', e)
+      }
+    }
+
+    // 兜底：页面未能发出就绪事件时，超时后仍然显示窗口
+    readyTimeout = window.setTimeout(() => {
+      showTerminalWindow()
+    }, 4000)
+
+    // 页面内容就绪后立即显示（并清除兜底超时）
+    unlistenReady = await listen<{ sessionId: string }>('terminal-ready', (event) => {
+      if (event.payload.sessionId !== session.id) return
+      showTerminalWindow()
+    })
+
+    const cleanup = () => {
+      if (unlistenReady) {
+        unlistenReady()
+        unlistenReady = null
+      }
+      if (readyTimeout !== null) {
+        window.clearTimeout(readyTimeout)
+        readyTimeout = null
+      }
+    }
 
     // 监听窗口关闭事件
     terminalWindow.once('tauri://close-requested', () => {
+      cleanup()
       windows.value.delete(session.id)
     })
 
@@ -149,6 +208,7 @@ export function useSessionWindows() {
 
     // 监听窗口创建失败
     terminalWindow.once('tauri://error', (e) => {
+      cleanup()
       console.error('[useSessionWindows] Window creation error:', e)
       windows.value.delete(session.id)
     })

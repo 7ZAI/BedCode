@@ -1,6 +1,7 @@
 export default {
   desktop: {
     sidebar: {
+      session: 'Session',
       sessionConfig: 'Session Config',
       sessionManager: 'Session Manager',
       server: 'Server',
@@ -18,6 +19,7 @@ export default {
       goToConfig: 'Go to Session Config',
       noSessions: 'No sessions',
       noSessionsHint: 'Start a session from the Session Config page',
+      sessions: 'Sessions ({count})',
       runningSessions: 'Running Sessions ({count})',
       confirmStop: 'Confirm Stop Session',
       confirmStopMsg: 'Are you sure you want to stop session "{name}"?',

@@ -1,5 +1,8 @@
 <template>
-  <div class="h-screen flex flex-col bg-slate-100 dark:bg-dark-900">
+  <div
+    class="h-screen flex flex-col bg-slate-100 dark:bg-dark-900"
+    :class="isShown ? 'animate-fade-slide-up' : 'opacity-0'"
+  >
     <!-- Header with title, font size, theme, and window controls -->
     <header class="bg-white dark:bg-dark-800 border-b border-slate-200 dark:border-dark-700 px-3 h-10 shrink-0 flex items-center justify-between" data-tauri-drag-region>
       <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-dark-300" data-tauri-drag-region>
@@ -105,7 +108,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TerminalPreview from '@/components/TerminalPreview.vue'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import type { SessionInfo } from '@/composables/useTauri'
@@ -121,6 +124,7 @@ const sessionName = ref('')
 const session = ref<SessionInfo | null>(null)
 const isMaximized = ref(false)
 const isLoading = ref(true)
+const isShown = ref(false)  // 是否已允许显示（由主窗口在内容就绪后通知）
 const isSnapped = ref(false)  // 是否已贴靠
 const snapDirection = ref<'left' | 'right' | null>(null)  // 贴靠方向
 
@@ -148,6 +152,8 @@ let lastTerminalWindowPos = { x: 0, y: 0 }
 let unlistenMainMoved: UnlistenFn | null = null
 let unlistenMainResized: UnlistenFn | null = null
 let unlistenSnapped: UnlistenFn | null = null
+let unlistenShow: UnlistenFn | null = null
+let unlistenFocus: UnlistenFn | null = null
 
 async function loadSessionInfo() {
   isLoading.value = true
@@ -163,6 +169,8 @@ async function loadSessionInfo() {
     sessionName.value = t('desktop.terminal.defaultName')
   } finally {
     isLoading.value = false
+    // 通知主窗口内容已就绪，可显示窗口（避免加载闪屏）
+    emit('terminal-ready', { sessionId: sessionId.value }).catch(() => {})
   }
 }
 
@@ -322,7 +330,21 @@ async function closeWindow() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // 先注册显示事件监听，再加载会话，避免与主窗口的显示通知产生竞态
+  unlistenShow = await listen<{ sessionId: string }>('terminal-show', (event) => {
+    if (event.payload.sessionId === sessionId.value) {
+      isShown.value = true
+    }
+  })
+
+  // 兜底：窗口获得焦点时也触发显现动画
+  unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {
+    if (focused) {
+      isShown.value = true
+    }
+  })
+
   loadSessionInfo()
 })
 
@@ -330,6 +352,8 @@ onUnmounted(() => {
   if (unlistenMainMoved) unlistenMainMoved()
   if (unlistenMainResized) unlistenMainResized()
   if (unlistenSnapped) unlistenSnapped()
+  if (unlistenShow) unlistenShow()
+  if (unlistenFocus) unlistenFocus()
 })
 </script>
 

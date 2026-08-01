@@ -18,7 +18,7 @@ describe('Router Configuration', () => {
       const route = router.getRoutes().find((r) => r.path === '/sessions')
 
       expect(route).toBeDefined()
-      expect(route?.name).toBe('sessions')
+      expect(route?.name).toBe('session')
     })
 
     it('should have devices route', () => {
@@ -69,7 +69,7 @@ describe('Router Configuration', () => {
   describe('route structure', () => {
     it('should have correct route names', () => {
       const expectedNames = [
-        'sessions',
+        'session',
         'devices',
         'settings',
         'mobile-devices',
