@@ -16,6 +16,7 @@ build/
 
 AGENTS.md
 CLAUDE.md
+CONTEXT.md
 
 # Tauri / Rust
 **/target/
