@@ -6,6 +6,7 @@
 //!
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
+use bedcode_plugin_api::constants::{EVENT_SESSION_MODE_CHANGED, EVENT_TASK_QUEUE_CHANGED};
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
     HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostTerminal,
@@ -476,12 +477,12 @@ pub fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
         auto_approve: true,
     });
 
-    let _ = host.bus_publish("session:mode-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "auto_approve": true,
     }));
     // 通知前端 UI（事件名与前端 context.events.on 监听一致）
-    host.emit_event("session:mode-changed", &serde_json::json!({
+    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "autoApprove": true,
     }));
@@ -503,12 +504,12 @@ pub fn ensure_auto_mode_off(host: &WasmHost, session_id: &str) {
         auto_approve: false,
     });
 
-    let _ = host.bus_publish("session:mode-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "auto_approve": false,
     }));
     // 通知前端 UI（事件名与前端 context.events.on 监听一致）
-    host.emit_event("session:mode-changed", &serde_json::json!({
+    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "autoApprove": false,
     }));
@@ -524,13 +525,13 @@ pub fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i
         action: action.to_string(),
     });
 
-    let _ = host.bus_publish("task:queue-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_TASK_QUEUE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "queue_count": queue_count,
         "action": action,
     }));
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
-    host.emit_event("task:queue-changed", &serde_json::json!({
+    host.emit_event(EVENT_TASK_QUEUE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "queue_count": queue_count,
         "action": action,

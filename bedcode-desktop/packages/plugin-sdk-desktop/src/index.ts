@@ -50,3 +50,10 @@ export {
   getRouter,
   getPluginContext,
 } from './runtime'
+
+// 事件名常量导出（与 Rust SDK constants.rs 同步）
+export {
+  EVENT_TASK_STATUS_CHANGED,
+  EVENT_SESSION_MODE_CHANGED,
+  EVENT_TASK_QUEUE_CHANGED,
+} from './constants'

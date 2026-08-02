@@ -5,6 +5,7 @@
 //!
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
+use bedcode_plugin_api::constants::{EVENT_SESSION_MODE_CHANGED, EVENT_TASK_STATUS_CHANGED};
 use bedcode_plugin_api::events::{PluginQuestion, SyncEvent};
 use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession};
 use bedcode_plugin_api::http_response;
@@ -160,12 +161,12 @@ pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
         task_reason: Some("User submitted input".to_string()),
         task_questions: None,
     });
-    let _ = host.bus_publish("task:status-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_TASK_STATUS_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "task_status": "in_progress",
     }));
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
-    host.emit_event("task:status-changed", &serde_json::json!({
+    host.emit_event(EVENT_TASK_STATUS_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "taskStatus": "in_progress",
         "taskReason": "User submitted input",
@@ -324,12 +325,12 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     });
 
     // 通过消息总线通知其他插件任务状态变更
-    let _ = host.bus_publish("task:status-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_TASK_STATUS_CHANGED, &serde_json::json!({
         "session_id": resolved_session_id,
         "task_status": status,
     }));
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
-    host.emit_event("task:status-changed", &serde_json::json!({
+    host.emit_event(EVENT_TASK_STATUS_CHANGED, &serde_json::json!({
         "session_id": resolved_session_id,
         "taskStatus": status,
         "taskReason": reason,
@@ -373,12 +374,12 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
     host.log_debug(&format!("broadcast_sync: SessionModeChanged for session_id={}", session_id));
 
     // 通过消息总线通知其他插件会话模式变更
-    let _ = host.bus_publish("session:mode-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "auto_approve": auto_approve,
     }));
     // 通知前端 UI（事件名与前端 context.events.on 监听一致，载荷用前端约定的 camelCase）
-    host.emit_event("session:mode-changed", &serde_json::json!({
+    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "autoApprove": auto_approve,
     }));
@@ -505,7 +506,7 @@ pub fn set_auto_mode(host: &WasmHost, session_id: &str, auto_approve: bool) -> a
     let _ = host.plugin_db_execute_params(sql, &sql_params![auto_approve, session_id]);
 
     // 通知前端模式变更（事件名必须与前端 context.events.on 监听一致，此前 camelCase 事件名无人监听）
-    host.emit_event("session:mode-changed", &serde_json::json!({
+    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "autoApprove": auto_approve,
     }));
@@ -519,7 +520,7 @@ pub fn set_auto_mode(host: &WasmHost, session_id: &str, auto_approve: bool) -> a
     host.log_debug(&format!("broadcast_sync: SessionModeChanged for session_id={}", session_id));
 
     // 通过消息总线通知其他插件会话模式变更
-    let _ = host.bus_publish("session:mode-changed", &serde_json::json!({
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
         "auto_approve": auto_approve,
     }));
