@@ -225,6 +225,12 @@ impl SessionManager {
         let listeners: Vec<Arc<dyn SessionInputListener>> = {
             self.input_listeners.read().await.iter().cloned().collect()
         };
+        tracing::debug!(
+            "dispatch_input_submitted session_id={}, text_len={}, input_listeners={}",
+            session_id,
+            text.len(),
+            listeners.len()
+        );
         for listener in listeners {
             let sid = session_id.clone();
             let text = text.clone();
@@ -642,7 +648,14 @@ impl SessionManager {
         // 提交输入行重建 + 异步观察分发（见 ADR 0001）：
         // 观察修改后的最终数据（与 PTY 实际接收一致）；分发为 fire-and-forget，
         // 监听器故障不影响写入，空提交同样通知（宿主不做语义过滤）
-        for line in self.submitted_line_tracker.feed(session_id, &processed_data) {
+        let submitted_lines = self.submitted_line_tracker.feed(session_id, &processed_data);
+        tracing::debug!(
+            "[SessionManager] write_input line-rebuild session_id={}, data_len={}, submitted_lines={}",
+            session_id,
+            processed_data.len(),
+            submitted_lines.len()
+        );
+        for line in submitted_lines {
             self.dispatch_input_submitted(session_id.to_string(), line).await;
         }
 

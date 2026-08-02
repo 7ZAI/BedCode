@@ -108,8 +108,8 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
         let console_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stdout)
             .with_ansi(true)
-            .with_target(true)
-            .pretty()
+            .fmt_fields(tracing_subscriber::fmt::format::PrettyFields::new())
+            .event_format(system::logging::ConsoleFormatter::new())
             .with_filter(console_filter);
 
         tracing_subscriber::registry()

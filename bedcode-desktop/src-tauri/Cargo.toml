@@ -55,6 +55,8 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
+# ANSI 样式（控制台日志格式化器使用；与 tracing-subscriber 传递依赖同版本）
+nu-ansi-term = "0.50"
 
 # File watching
 notify = "6"
