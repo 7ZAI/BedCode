@@ -117,6 +117,7 @@ export default {
       defaultName: 'Terminal',
       theme: 'Terminal Theme',
       fontSize: 'Font Size',
+      settings: 'Settings',
       clearScreen: 'Clear Screen',
       refreshFormat: 'Refresh Format',
       minimize: 'Minimize',

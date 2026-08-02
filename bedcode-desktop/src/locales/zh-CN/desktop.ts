@@ -117,6 +117,7 @@ export default {
       defaultName: '终端',
       theme: '终端主题',
       fontSize: '字体大小',
+      settings: '设置',
       clearScreen: '清屏',
       refreshFormat: '刷新格式',
       minimize: '最小化',

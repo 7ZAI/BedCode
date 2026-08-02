@@ -1,9 +1,9 @@
 <template>
   <div
-    class="h-screen flex flex-col bg-slate-100 dark:bg-dark-900"
+    class="h-screen relative overflow-hidden flex flex-col bg-slate-100 dark:bg-dark-900"
     :class="isShown ? 'animate-fade-slide-up' : 'opacity-0'"
   >
-    <!-- Header with title, font size, theme, and window controls -->
+    <!-- Header with title, settings, actions, and window controls -->
     <header class="bg-white dark:bg-dark-800 border-b border-slate-200 dark:border-dark-700 px-3 h-10 shrink-0 flex items-center justify-between" data-tauri-drag-region>
       <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-dark-300" data-tauri-drag-region>
         <div
@@ -16,52 +16,39 @@
       </div>
 
       <div class="flex items-center gap-1.5" data-tauri-drag-region>
-        <!-- Theme Switch -->
-        <select
-          v-if="terminalPreviewRef"
-          :value="terminalPreviewRef.terminalTheme"
-          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-1.5 py-0.5 text-xs text-slate-700 dark:text-white shadow-xs dark:shadow-none"
-          :title="t('desktop.terminal.theme')"
-          @change="terminalPreviewRef!.terminalTheme = ($event.target as HTMLSelectElement).value"
-          @click.stop
+        <!-- Settings Button -->
+        <button
+          @click.stop="isSettingsOpen = !isSettingsOpen"
+          class="p-1.5 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors"
+          :class="{ 'bg-slate-200 dark:bg-dark-600': isSettingsOpen }"
+          :title="t('desktop.terminal.settings')"
           @mousedown.stop
         >
-          <option v-for="(name, key) in terminalPreviewRef?.themeNames ?? {}" :key="key" :value="key">
-            {{ name }}
-          </option>
-        </select>
-
-        <!-- Font Size -->
-        <select
-          v-if="terminalPreviewRef"
-          :value="terminalPreviewRef.fontSize"
-          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-1.5 py-0.5 text-xs text-slate-700 dark:text-white shadow-xs dark:shadow-none"
-          :title="t('desktop.terminal.fontSize')"
-          @change="terminalPreviewRef!.fontSize = Number(($event.target as HTMLSelectElement).value)"
-          @click.stop
-          @mousedown.stop
-        >
-          <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
-            {{ size }}px
-          </option>
-        </select>
+          <svg class="w-4 h-4 text-slate-500 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
 
         <!-- Clear Button -->
-        <button @click="terminalPreviewRef?.clearTerminal()" class="p-1 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.clearScreen')">
-          <svg class="w-3.5 h-3.5 text-slate-500 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="terminalPreviewRef?.clearTerminal()" class="p-1.5 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.clearScreen')">
+          <svg class="w-4 h-4 text-slate-500 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
         </button>
 
         <!-- Refresh Format Button -->
-        <button @click="terminalPreviewRef?.refreshTerminal()" class="p-1 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.refreshFormat')">
-          <svg class="w-3.5 h-3.5 text-slate-500 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="terminalPreviewRef?.refreshTerminal()" class="p-1.5 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors" :title="t('desktop.terminal.refreshFormat')">
+          <svg class="w-4 h-4 text-slate-500 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </button>
 
         <!-- Plugin Toolbar Extension -->
         <PluginTerminalToolbar />
+
+        <!-- Plugin TitleBar Extension -->
+        <PluginTitleBarItems />
 
         <!-- Divider -->
         <div class="w-px h-4 bg-slate-200 dark:bg-dark-600 mx-0.5"></div>
@@ -99,6 +86,64 @@
 
     <!-- Terminal Preview Component -->
     <TerminalPreview v-else ref="terminalPreviewRef" :session="session" :show-input="true" :show-header="false" />
+
+    <!-- 设置面板遮罩：点击关闭 -->
+    <transition name="settings-backdrop">
+      <div
+        v-if="isSettingsOpen"
+        class="absolute inset-0 top-10 z-20 bg-black/25"
+        @click="isSettingsOpen = false"
+      ></div>
+    </transition>
+
+    <!-- 设置面板：从右侧滑出 -->
+    <transition name="settings-panel">
+      <aside
+        v-if="isSettingsOpen"
+        class="absolute top-10 right-0 bottom-0 z-30 w-64 flex flex-col bg-white dark:bg-dark-800 border-l border-slate-200 dark:border-dark-700 shadow-xl"
+      >
+        <div class="h-10 shrink-0 px-4 flex items-center justify-between border-b border-slate-200 dark:border-dark-700">
+          <span class="text-sm font-medium text-slate-700 dark:text-white">{{ t('desktop.terminal.settings') }}</span>
+          <button
+            class="p-1 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors"
+            :title="t('desktop.terminal.close')"
+            @click="isSettingsOpen = false"
+          >
+            <svg class="w-3.5 h-3.5 text-slate-500 dark:text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+          <!-- 终端主题 -->
+          <div>
+            <label class="block text-xs font-medium mb-1.5 text-slate-500 dark:text-dark-400">{{ t('desktop.terminal.theme') }}</label>
+            <select
+              v-model="settingsTheme"
+              class="w-full bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1.5 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
+              @click.stop
+              @mousedown.stop
+            >
+              <option v-for="(name, key) in themeOptions" :key="key" :value="key">{{ name }}</option>
+            </select>
+          </div>
+
+          <!-- 字体大小 -->
+          <div>
+            <label class="block text-xs font-medium mb-1.5 text-slate-500 dark:text-dark-400">{{ t('desktop.terminal.fontSize') }}</label>
+            <select
+              v-model="settingsFontSize"
+              class="w-full bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1.5 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
+              @click.stop
+              @mousedown.stop
+            >
+              <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">{{ size }}px</option>
+            </select>
+          </div>
+        </div>
+      </aside>
+    </transition>
   </div>
 </template>
 
@@ -111,6 +156,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TerminalPreview from '@/components/TerminalPreview.vue'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
+import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
 import type { SessionInfo } from '@/composables/useTauri'
 
 const { t } = useI18n()
@@ -130,6 +176,26 @@ const snapDirection = ref<'left' | 'right' | null>(null)  // 贴靠方向
 
 // TerminalPreview 组件引用，访问暴露的 fontSize/terminalTheme 等
 const terminalPreviewRef = ref<InstanceType<typeof TerminalPreview> | null>(null)
+
+// 设置面板是否打开
+const isSettingsOpen = ref(false)
+
+// 设置面板绑定的主题/字体大小（读写 TerminalPreview 暴露的 ref，与终端实时同步）
+const settingsTheme = computed({
+  get: () => terminalPreviewRef.value?.terminalTheme ?? 'dracula',
+  set: (value: string) => {
+    if (terminalPreviewRef.value) terminalPreviewRef.value.terminalTheme = value
+  },
+})
+
+const settingsFontSize = computed({
+  get: () => terminalPreviewRef.value?.fontSize ?? 12,
+  set: (value: number) => {
+    if (terminalPreviewRef.value) terminalPreviewRef.value.fontSize = value
+  },
+})
+
+const themeOptions = computed(() => terminalPreviewRef.value?.themeNames ?? {})
 
 // 会话状态颜色（与 TerminalPreview 中的逻辑一致）
 const statusColor = computed(() => {
@@ -330,7 +396,16 @@ async function closeWindow() {
   }
 }
 
+function handleKeydown(e: KeyboardEvent) {
+  // Esc 关闭设置面板
+  if (e.key === 'Escape' && isSettingsOpen.value) {
+    isSettingsOpen.value = false
+  }
+}
+
 onMounted(async () => {
+  // Esc 关闭设置面板
+  window.addEventListener('keydown', handleKeydown)
   // 先注册显示事件监听，再加载会话，避免与主窗口的显示通知产生竞态
   unlistenShow = await listen<{ sessionId: string }>('terminal-show', (event) => {
     if (event.payload.sessionId === sessionId.value) {
@@ -349,6 +424,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
   if (unlistenMainMoved) unlistenMainMoved()
   if (unlistenMainResized) unlistenMainResized()
   if (unlistenSnapped) unlistenSnapped()
@@ -360,7 +436,25 @@ onUnmounted(() => {
 <style scoped>
 :deep(.xterm) {
   height: 100%;
-  padding: 8px;
+}
+
+/* 设置面板滑出过渡：will-change 提升为独立合成层，避免动画期间页面抖动 */
+.settings-panel-enter-active,
+.settings-panel-leave-active {
+  transition: transform 0.25s ease;
+  will-change: transform;
+}
+
+.settings-panel-enter-from,
+.settings-panel-leave-to {
+  transform: translateX(100%);
+}
+
+/* 设置面板遮罩淡入淡出 */
+.settings-backdrop-enter-active,
+.settings-backdrop-leave-active {
+  transition: opacity 0.2s ease;
+  will-change: opacity;
 }
 
 :deep(.xterm-viewport) {

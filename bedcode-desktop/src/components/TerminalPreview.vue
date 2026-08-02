@@ -751,7 +751,6 @@ defineExpose({
 <style scoped>
 :deep(.xterm) {
   height: 100%;
-  padding: 8px;
 }
 
 :deep(.xterm-viewport) {
