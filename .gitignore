@@ -26,9 +26,13 @@ CONTEXT.md
 *.pdb
 **/bedcode-desktop/plugins/auto-task/scripts/__pycache__
 
+# 插件编译产物（WASM / index.js / plugin.json）由各插件 build 脚本生成，不入库
+**/src-tauri/resources/plugins/
+
 # IDE and editors
 .idea/
 .claude/
+.pi/
 .vscode/
 .VSCodeCounter/
 *.swp
@@ -91,6 +95,9 @@ temp/
 .claude/settings.local.json
 .claude/*.log.*
 .claude/auto_task_hook.py
+
+# Pi session files (local, not for commit)
+.pi/sessions/
 
 # Superpowers temporary files (brainstorm state, etc.)
 .superpowers/brainstorm/
