@@ -9,6 +9,8 @@ import { ref, onMounted, onUnmounted, inject, computed } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 const context = inject<PluginContext>('pluginContext')!
+// i18n：与 AutoTaskModal 一致，经 context.i18n 自动加插件 ID 前缀
+const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 // ==================== State ====================
 
@@ -40,12 +42,12 @@ const selectedSessionId = ref('')
 // ==================== Computed ====================
 
 const statusLabel: Record<string, string> = {
-  idle: '空闲',
-  in_progress: '执行中',
-  asking: '等待输入',
-  completed: '已完成',
-  interrupted: '已中断',
-  pending: '待执行',
+  idle: t('idle'),
+  in_progress: t('inProgress'),
+  asking: t('asking'),
+  completed: t('completed'),
+  interrupted: t('interrupted'),
+  pending: t('pending'),
 }
 
 const statusColor: Record<string, string> = {
@@ -154,7 +156,9 @@ function formatTime(isoStr: string | null): string {
   if (!isoStr) return '-'
   try {
     const d = new Date(isoStr.replace(' ', 'T'))
-    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    // 跟随宿主当前语言（zh-CN / en），避免硬编码 zh-CN
+    const locale = context.i18n.getI18n()?.global?.locale?.value ?? 'zh-CN'
+    return d.toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
   } catch {
     return isoStr
   }
@@ -170,12 +174,12 @@ function selectSession(sessionId: string) {
   <div class="h-full flex flex-col bg-[var(--bg-primary)]">
     <!-- Header -->
     <div class="px-4 py-3 border-b border-[var(--border)] flex-shrink-0">
-      <h2 class="text-sm font-semibold text-[var(--text-primary)]">任务历史</h2>
+      <h2 class="text-sm font-semibold text-[var(--text-primary)]">{{ t('historyTitle') }}</h2>
     </div>
 
     <!-- Loading -->
     <div v-if="loading" class="flex-1 flex items-center justify-center">
-      <span class="text-sm text-[var(--text-tertiary)]">加载中...</span>
+      <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
     </div>
 
     <div v-else class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
@@ -194,7 +198,7 @@ function selectSession(sessionId: string) {
       <!-- Task Queue -->
       <div v-if="queue.length > 0">
         <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-          待执行队列 ({{ queue.length }})
+          {{ t('queueTitle', { count: queue.length }) }}
         </h3>
         <div class="space-y-1">
           <div
@@ -211,7 +215,7 @@ function selectSession(sessionId: string) {
       <!-- History -->
       <div v-if="historyTasks.length > 0">
         <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-          历史记录
+          {{ t('historySectionTitle') }}
         </h3>
         <div class="space-y-1">
           <div
@@ -237,8 +241,8 @@ function selectSession(sessionId: string) {
         <svg class="w-12 h-12 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
         </svg>
-        <p class="text-sm text-[var(--text-tertiary)]">暂无任务记录</p>
-        <p class="text-xs text-[var(--text-tertiary)] mt-1">启动会话后任务将自动记录</p>
+        <p class="text-sm text-[var(--text-tertiary)]">{{ t('emptyHistory') }}</p>
+        <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('emptyHistoryHint') }}</p>
       </div>
     </div>
   </div>
