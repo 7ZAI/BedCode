@@ -18,6 +18,11 @@ interface PluginNotifyPayload {
   body: string
 }
 
+interface PluginErrorPayload {
+  plugin_id: string
+  error: string
+}
+
 const app = createApp(App)
 
 app.use(createPinia())
@@ -51,6 +56,15 @@ listen<PluginNotifyPayload>('plugin:notify', (event) => {
   } else {
     toast.info(title)
   }
+})
+
+// 监听插件自检失败事件（由 host_mark_plugin_error Host Function 发送）
+// 插件启动配置失败（如 hooks 脚本拷贝失败）→ 弹窗提示，启用状态由插件管理页刷新
+listen<PluginErrorPayload>('plugin:error', (event) => {
+  const { plugin_id, error } = event.payload
+  const toast = useToast()
+  console.error(`[Plugin] ${plugin_id} self-check failed:`, error)
+  toast.error(i18n.global.t('desktop.plugin.selfCheckFailed', { plugin: plugin_id, error }))
 })
 
 app.mount('#app')

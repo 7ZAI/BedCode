@@ -804,12 +804,18 @@ impl PluginHost {
         args: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
         // 为需要 resource_dir 的命令自动注入插件 extension_path
+        // （剥离 verbatim 前缀，保证插件侧正斜杠拼接可用，见 loader.rs strip_verbatim_prefix）
         let mut enriched_args = args;
         if enriched_args.get("resource_dir").is_none() {
             let plugins = self.plugins.read().await;
             if let Some(loaded) = plugins.get(plugin_id) {
                 enriched_args.as_object_mut().map(|obj| {
-                    obj.insert("resource_dir".to_string(), serde_json::Value::String(loaded.extension_path.clone()));
+                    obj.insert(
+                        "resource_dir".to_string(),
+                        serde_json::Value::String(crate::plugin::loader::strip_verbatim_prefix(
+                            &loaded.extension_path,
+                        )),
+                    );
                 });
             }
         }
@@ -910,6 +916,12 @@ impl PluginHost {
     /// 由 SessionManager 在异步错误隔离任务中调用
     pub async fn process_input_submitted(&self, session_id: &str, text: &str) {
         let handlers = self.rust_terminal_handlers.read().await;
+        tracing::debug!(
+            "process_input_submitted session_id={}, text_len={}, rust_handlers={}",
+            session_id,
+            text.len(),
+            handlers.len()
+        );
         for handler in handlers.iter() {
             handler.on_input_submitted(session_id, text);
         }
@@ -945,12 +957,14 @@ impl PluginLifecycleListener {
 impl SessionLifecycleListener for PluginLifecycleListener {
     fn on_session_lifecycle(&self, event: &SessionLifecycleEvent) {
         // 获取插件的 extension_path 作为 resource_dir 注入 payload
+        // （剥离 verbatim 前缀，保证插件侧正斜杠拼接可用，见 loader.rs strip_verbatim_prefix）
         let plugins = self.plugin_host.plugins.clone();
         let plugin_id = self.plugin_id.clone();
         let resource_dir = crate::plugin::wasm_runtime::block_on_async(async move {
             let plugins = plugins.read().await;
-            plugins.get(&plugin_id)
-                .map(|p| p.extension_path.clone())
+            plugins
+                .get(&plugin_id)
+                .map(|p| crate::plugin::loader::strip_verbatim_prefix(&p.extension_path))
                 .unwrap_or_default()
         });
 
@@ -1028,6 +1042,12 @@ impl PluginInputListener {
 
 impl SessionInputListener for PluginInputListener {
     fn on_input_submitted(&self, session_id: &str, text: &str) {
+        tracing::debug!(
+            "PluginInputListener on_input_submitted plugin_id={}, session_id={}, text_len={}",
+            self.plugin_id,
+            session_id,
+            text.len()
+        );
         // 宿主事件 → SDK 类型化结构体（与插件侧 on_input_submitted 接收的类型一致），
         // serde 表示即线协议；序列化失败（理论上不可能）退化为空对象
         let event = bedcode_plugin_api::events::InputSubmittedEvent {
@@ -1071,8 +1091,20 @@ impl PluginHost {
     /// 分发失败仅记录日志，不影响输入本身
     pub fn dispatch_input_to_plugin(&self, plugin_id: &str, payload: &serde_json::Value) {
         if !self.is_activated_block(plugin_id) {
+            // 插件未处于 Activated 状态（Loaded/Deactivated/Error）：事件被此门禁静默丢弃，
+            // 是输入分发链路上唯一无日志的断点，记录 debug 便于定位
+            tracing::debug!(
+                "InputSubmitted: drop event for plugin '{}': plugin not in Activated state",
+                plugin_id
+            );
             return;
         }
+
+        tracing::debug!(
+            "InputSubmitted: dispatch to plugin '{}', payload={}",
+            plugin_id,
+            payload
+        );
 
         let wasm_plugins = self.wasm_plugins.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
@@ -1084,6 +1116,12 @@ impl PluginHost {
                         plugin_id, e
                     );
                 }
+            } else {
+                // WASM 实例缺失（如模块加载失败/热重载后未实例化）
+                tracing::debug!(
+                    "InputSubmitted: wasm plugin '{}' not found in wasm_plugins map",
+                    plugin_id
+                );
             }
         });
     }
@@ -1125,6 +1163,28 @@ impl PluginServices for PluginHost {
         crate::plugin::wasm_runtime::block_on_async(
             session_manager.register_input_listener(Arc::new(listener)),
         );
+    }
+
+    fn mark_plugin_error(&self, plugin_id: String, error: String) {
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            // 1. 置插件状态为 Error（未激活，插件管理页显示未启用）
+            self.mark_error(&plugin_id, error.clone()).await;
+            tracing::error!("[PluginHost] Plugin {} self-check failed: {}", plugin_id, error);
+
+            // 2. 持久化激活状态（Error 不计入激活，重启后仍为未启用）
+            self.persist_activation_state().await;
+
+            // 3. 通知前端：弹窗提示 + 刷新插件列表状态
+            let _ = crate::system::app_context::AppContext::global()
+                .app_handle()
+                .emit(
+                    crate::system::constants::event::PLUGIN_ERROR,
+                    serde_json::json!({
+                        "plugin_id": plugin_id,
+                        "error": error,
+                    }),
+                );
+        });
     }
 }
 

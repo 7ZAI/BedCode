@@ -53,7 +53,10 @@ impl PluginLoader {
             match Self::load_manifest(&manifest_path) {
                 Ok(manifest) => {
                     let plugin_id = manifest.id.clone();
-                    let extension_path = path.to_string_lossy().to_string();
+                    // Windows read_dir 返回带 \\?\ verbatim 前缀的路径，该形式不允许
+                    // 正斜杠拼接（插件用 "{resource_dir}/{file}" 拼接会触发
+                    // ERROR_INVALID_NAME os error 123），统一剥离为常规路径
+                    let extension_path = strip_verbatim_prefix(&path.to_string_lossy());
 
                     // TS-only 插件强制设置 plugin_type
                     let manifest = manifest;
@@ -138,6 +141,17 @@ impl PluginLoader {
     }
 }
 
+/// 剥离 Windows verbatim 路径前缀（`\\?\`）
+///
+/// Windows `read_dir` 返回带 `\\?\` 前缀的路径。该形式严格要求反斜杠分隔，
+/// 插件侧用 `format!("{}/{}", resource_dir, file)` 拼接正斜杠会触发
+/// `ERROR_INVALID_NAME`（os error 123）。统一剥离为常规路径后，
+/// 正斜杠/反斜杠均可正常使用。非 Windows 平台原样返回。
+///
+/// 唯一实现；`PluginHost` 注入 `resource_dir` 时复用（见 host.rs）。
+pub(crate) fn strip_verbatim_prefix(path: &str) -> String {
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

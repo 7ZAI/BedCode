@@ -23,8 +23,10 @@ mod lifecycle;
 mod log;
 pub(super) mod memory;
 mod session;
+mod status;
 mod storage;
 mod terminal;
+mod wsl_fs;
 
 use crate::plugin::wasm_runtime::{WasmHostContext, WasmPluginState};
 use bedcode_plugin_api::abi;
@@ -89,10 +91,14 @@ pub(super) fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> c
     register!(abi::import::LOG_WARN, log::host_log_warn);
     register!(abi::import::LOG_ERROR, log::host_log_error);
 
+    // 插件状态
+    register!(abi::import::MARK_PLUGIN_ERROR, status::host_mark_plugin_error);
+
     // 文件系统
     register!(abi::import::FS_READ, fs::host_fs_read);
     register!(abi::import::FS_WRITE, fs::host_fs_write);
     register!(abi::import::FS_COPY, fs::host_fs_copy);
+    register!(abi::import::FS_DELETE, fs::host_fs_delete);
 
     // 配置读取
     register!(abi::import::CONFIG_GET, config::host_config_get);

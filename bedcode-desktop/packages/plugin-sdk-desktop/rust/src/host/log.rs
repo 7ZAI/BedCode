@@ -15,4 +15,10 @@ pub trait HostLog {
 
     /// error 级别：失败与异常处理
     fn log_error(&self, message: &str);
+
+    /// 标记插件自身为错误状态
+    ///
+    /// 用于不可恢复的配置失败（如 hooks 脚本拷贝失败）。宿主会：
+    /// 置插件状态为 Error、持久化激活状态（视为未启用）、通知前端弹窗。
+    fn mark_plugin_error(&self, error: &str);
 }

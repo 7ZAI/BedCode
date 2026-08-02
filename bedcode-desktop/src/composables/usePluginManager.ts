@@ -58,9 +58,13 @@ export function usePluginManager() {
   const plugins = ref<PluginInfo[]>([])
   const loading = ref(false)
   const expandedId = ref<string | null>(null)
+  // 正在切换启停的插件 id（用于 Toggle loading 遮罩与防重复点击）
+  const togglingId = ref<string | null>(null)
 
   // 开发模式热重载事件监听
   let devReloadUnlisten: UnlistenFn | null = null
+  // 插件自检失败事件监听（状态刷新）
+  let errorUnlisten: UnlistenFn | null = null
 
   /** 加载插件列表 */
   async function loadPlugins(): Promise<void> {
@@ -83,6 +87,8 @@ export function usePluginManager() {
 
   /** 切换插件启用/停用 */
   async function togglePlugin(id: string, enable: boolean): Promise<boolean> {
+    if (togglingId.value) return false
+    togglingId.value = id
     console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
     try {
       if (enable) {
@@ -92,6 +98,9 @@ export function usePluginManager() {
       }
       // 重新加载列表以获取最新状态
       await loadPlugins()
+      const name = plugins.value.find(p => p.id === id)?.name || id
+      const key = enable ? 'desktop.plugin.enabledSuccess' : 'desktop.plugin.disabledSuccess'
+      toast.success(t(key, { name }))
       console.log(`[PluginManager] togglePlugin(${id}) succeeded`)
       return true
     } catch (e: any) {
@@ -99,6 +108,8 @@ export function usePluginManager() {
       console.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
       toast.error(t(key, { error: e.message || 'Unknown error' }))
       return false
+    } finally {
+      togglingId.value = null
     }
   }
 
@@ -125,17 +136,25 @@ export function usePluginManager() {
       await pluginLoader.reloadPlugin(pluginId)
       await loadPlugins()
     })
+
+    // 插件自检失败（host_mark_plugin_error）后状态已变更，刷新列表让启用开关同步
+    errorUnlisten = await listen<{ plugin_id: string; error: string }>('plugin:error', async () => {
+      await loadPlugins()
+    })
   })
 
   onUnmounted(() => {
     devReloadUnlisten?.()
     devReloadUnlisten = null
+    errorUnlisten?.()
+    errorUnlisten = null
   })
 
   return {
     plugins,
     loading,
     expandedId,
+    togglingId,
     loadPlugins,
     togglePlugin,
     toggleExpand,

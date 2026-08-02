@@ -34,7 +34,9 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 /// - v2: 新增 4 个参数绑定 SQL host functions（*_params），消灭插件侧手写转义
 /// - v3: 新增提交输入行观察扩展点（host function `SESSION_INPUT_REGISTER`
 ///   + 可选导出 `ON_INPUT_SUBMITTED`），见 ADR 0001
-pub const ABI_VERSION: u32 = 3;
+/// - v4: 新增插件状态上报扩展点（host function `MARK_PLUGIN_ERROR`），
+///   插件自检失败（如 hooks 配置失败）时上报宿主标记错误并通知前端
+pub const ABI_VERSION: u32 = 4;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -133,6 +135,8 @@ pub mod import {
     pub const FS_WRITE: &str = "host_fs_write";
     /// 文件系统：复制文件
     pub const FS_COPY: &str = "host_fs_copy";
+    /// 文件系统：删除文件（文件不存在视为成功）
+    pub const FS_DELETE: &str = "host_fs_delete";
 
     // === Config ===
     /// 配置：读取白名单配置项（out_ptr 输出）
@@ -147,6 +151,10 @@ pub mod import {
     pub const LOG_WARN: &str = "host_log_warn";
     /// 日志：error（无返回值）
     pub const LOG_ERROR: &str = "host_log_error";
+
+    // === Plugin Status ===
+    /// 插件状态：标记插件为错误状态（宿主置 Error + 持久化未启用 + 通知前端）
+    pub const MARK_PLUGIN_ERROR: &str = "host_mark_plugin_error";
 
     // === Message Bus ===
     /// 消息总线：发布消息
@@ -185,11 +193,13 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::FS_READ, 3, 1),
     (import::FS_WRITE, 4, 1),
     (import::FS_COPY, 4, 1),
+    (import::FS_DELETE, 2, 1),
     (import::CONFIG_GET, 3, 1),
     (import::LOG_INFO, 2, 0),
     (import::LOG_DEBUG, 2, 0),
     (import::LOG_WARN, 2, 0),
     (import::LOG_ERROR, 2, 0),
+    (import::MARK_PLUGIN_ERROR, 2, 0),
     (import::BUS_PUBLISH, 4, 1),
     (import::BUS_SUBSCRIBE, 2, 1),
     (import::BUS_UNSUBSCRIBE, 2, 1),

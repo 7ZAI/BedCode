@@ -97,6 +97,13 @@ pub trait PluginServices: Send + Sync + 'static {
         plugin_id: String,
         session_manager: Arc<SessionManager>,
     );
+
+    /// 标记插件为错误状态
+    ///
+    /// 宿主置插件状态为 Error、持久化激活状态（视为未启用）并通知前端弹窗。
+    /// 由 `host_mark_plugin_error` Host Function 转发，插件自身检测到
+    /// 不可恢复配置失败（如 hooks 脚本拷贝失败）时调用。
+    fn mark_plugin_error(&self, plugin_id: String, error: String);
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -480,6 +487,12 @@ impl LoadedWasmPlugin {
         payload: &serde_json::Value,
     ) -> crate::Result<()> {
         let Ok(func) = self.get_export_func(abi::export::ON_INPUT_SUBMITTED) else {
+            // 旧版 WASM 产物（b5449a6 之前）不含此导出，原实现静默 no-op 会掩盖
+            // "hooks 正常但输入不触发"的产物版本不匹配问题，记录 debug 便于排查
+            tracing::debug!(
+                "WASM plugin missing export '{}', skip on_input_submitted",
+                abi::export::ON_INPUT_SUBMITTED
+            );
             return Ok(());
         };
 

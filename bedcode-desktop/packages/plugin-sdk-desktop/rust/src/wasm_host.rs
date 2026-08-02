@@ -362,6 +362,16 @@ impl HostFs for WasmHost {
             Err(HostError::call_failed("fs_copy"))
         }
     }
+
+    fn fs_delete(&self, path: &str) -> Result<(), HostError> {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let status = unsafe { host_fs_delete(path_ptr, path_len) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("fs_delete"))
+        }
+    }
 }
 
 // ==================== HostLog ====================
@@ -385,6 +395,11 @@ impl HostLog for WasmHost {
     fn log_error(&self, message: &str) {
         let (ptr, len) = wasm_alloc_string(message);
         unsafe { host_log_error(ptr, len) }
+    }
+
+    fn mark_plugin_error(&self, error: &str) {
+        let (ptr, len) = wasm_alloc_string(error);
+        unsafe { host_mark_plugin_error(ptr, len) }
     }
 }
 
@@ -495,6 +510,8 @@ extern "C" {
     fn host_fs_write(path_ptr: u32, path_len: u32, data_ptr: u32, data_len: u32) -> i32;
     /// 文件系统：复制文件 — 返回 0 成功，-1 失败
     fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
+    /// 文件系统：删除文件 — 返回 0 成功（含文件不存在），-1 失败
+    fn host_fs_delete(path_ptr: u32, path_len: u32) -> i32;
     /// 配置：读取配置项 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
     fn host_config_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
     /// 日志：info
@@ -505,6 +522,8 @@ extern "C" {
     fn host_log_warn(msg_ptr: u32, msg_len: u32);
     /// 日志：error
     fn host_log_error(msg_ptr: u32, msg_len: u32);
+    /// 插件状态：标记错误（无返回值）
+    fn host_mark_plugin_error(err_ptr: u32, err_len: u32);
     /// 广播：同步事件到所有客户端
     fn host_broadcast_sync(payload_ptr: u32, payload_len: u32);
     /// 通知：发送系统通知 — 返回 0 成功，-1 失败

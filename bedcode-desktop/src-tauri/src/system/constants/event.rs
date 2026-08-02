@@ -20,5 +20,8 @@ pub const LIFECYCLE_SHUTDOWN: &str = "lifecycle:shutdown";
 /// 插件开发模式热重载通知
 pub const PLUGIN_DEV_RELOAD: &str = "plugin:dev-reload";
 
+/// 插件自检失败标记（host_mark_plugin_error）— 前端弹窗提示 + 刷新启用状态
+pub const PLUGIN_ERROR: &str = "plugin:error";
+
 /// 窗口关闭请求 — 有运行中会话时发送到前端，请求用户确认
 pub const WINDOW_CLOSE_REQUESTED: &str = "window-close-requested";

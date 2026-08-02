@@ -16,4 +16,7 @@ pub trait HostFs {
 
     /// 复制文件（自动创建目标父目录）
     fn fs_copy(&self, src: &str, dst: &str) -> Result<(), HostError>;
+
+    /// 删除文件；文件不存在视为成功（幂等，用于清理场景）
+    fn fs_delete(&self, path: &str) -> Result<(), HostError>;
 }
