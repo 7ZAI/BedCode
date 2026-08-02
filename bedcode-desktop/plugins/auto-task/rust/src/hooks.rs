@@ -27,22 +27,70 @@ pub fn ensure_project_hooks(
     port: u16,
     resource_dir: &str,
 ) -> ProjectHooksResult {
+    host.log_debug(&format!(
+        "ensure_project_hooks: enter working_dir={:?} port={} resource_dir={:?}",
+        working_dir, port, resource_dir
+    ));
+
     let claude_dir = format!("{}/{}", working_dir, CLAUDE_CONFIG_DIR_NAME);
     let settings_path = format!("{}/{}", claude_dir, CLAUDE_SETTINGS_FILE);
+    let hook_script_path = format!("{}/{}", claude_dir, HOOK_SCRIPT_NAME);
+    let source_script = format!("{}/{}", resource_dir, HOOK_SCRIPT_NAME);
+    host.log_debug(&format!(
+        "ensure_project_hooks: paths claude_dir={:?} settings={:?} hook_script={:?} source_script={:?}",
+        claude_dir, settings_path, hook_script_path, source_script
+    ));
 
     // 1. 读取现有 settings.json
-    let mut settings: serde_json::Value = match host.fs_read(&settings_path) {
-        Ok(Some(content)) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
-        _ => serde_json::json!({}),
+    let settings_read = host.fs_read(&settings_path);
+    host.log_debug(&format!(
+        "ensure_project_hooks: fs_read settings.json => {:?}",
+        settings_read.as_ref().map(|r| r.as_ref().map(|c| c.len()))
+    ));
+    let mut settings: serde_json::Value = match settings_read {
+        Ok(Some(content)) => match serde_json::from_str(&content) {
+            Ok(val) => val,
+            Err(e) => {
+                // 已存在但解析失败：视为空配置继续，避免覆盖损坏文件时静默丢弃用户内容
+                host.log_warn(&format!(
+                    "ensure_project_hooks: settings.json parse failed, treating as empty: {}",
+                    e
+                ));
+                serde_json::json!({})
+            }
+        },
+        Ok(None) => {
+            host.log_debug("ensure_project_hooks: settings.json not found, starting empty");
+            serde_json::json!({})
+        }
+        Err(e) => {
+            host.log_warn(&format!(
+                "ensure_project_hooks: fs_read settings.json failed: {}",
+                e
+            ));
+            serde_json::json!({})
+        }
     };
 
     // 检查项目是否已有插件 hooks 且端口匹配
     let needs_update = match settings.get("hooks") {
         Some(hooks) if is_plugin_hooks_configured(hooks) => {
             // hooks 存在，但需要验证端口是否与当前值匹配
-            !is_hooks_port_matching(hooks, port)
+            let port_matches = is_hooks_port_matching(hooks, port);
+            host.log_debug(&format!(
+                "ensure_project_hooks: existing plugin hooks found, port_matching={}",
+                port_matches
+            ));
+            !port_matches
         }
-        _ => true,
+        Some(_) => {
+            host.log_debug("ensure_project_hooks: hooks present but no plugin hook entry, needs update");
+            true
+        }
+        None => {
+            host.log_debug("ensure_project_hooks: no hooks key in settings.json, needs update");
+            true
+        }
     };
 
     if !needs_update {
@@ -57,10 +105,30 @@ pub fn ensure_project_hooks(
     host.log_info(&format!("Updating plugin hooks (port={})", port));
 
     // 2. 复制 hook 脚本到项目 .claude/ 目录
-    let hook_script_path = format!("{}/{}", claude_dir, HOOK_SCRIPT_NAME);
-    let source_script = format!("{}/{}", resource_dir, HOOK_SCRIPT_NAME);
-    if let Err(e) = host.fs_copy(&source_script, &hook_script_path) {
-        host.log_warn(&format!("Failed to copy {} to project {}: {}", HOOK_SCRIPT_NAME, CLAUDE_CONFIG_DIR_NAME, e));
+    host.log_debug(&format!(
+        "ensure_project_hooks: fs_copy {:?} -> {:?}",
+        source_script, hook_script_path
+    ));
+    match host.fs_copy(&source_script, &hook_script_path) {
+        Ok(()) => host.log_debug(&format!(
+            "ensure_project_hooks: fs_copy ok, hook script copied to {:?}",
+            hook_script_path
+        )),
+        Err(e) => {
+            // 拷贝失败 = 配置失败：settings.json 即使写入也会引用不存在的脚本，
+            // 直接视为启动失败，上报宿主标记插件错误（状态 Error + 未启用 + 前端弹窗）
+            let msg = format!(
+                "hook script copy failed: src={:?} dst={:?} err={}",
+                source_script, hook_script_path, e
+            );
+            host.log_error(&format!("ensure_project_hooks: {}", msg));
+            host.mark_plugin_error(&format!("auto-task: {}", msg));
+            return ProjectHooksResult {
+                success: false,
+                message: format!("复制 hook 脚本失败: {}", e),
+                skipped: false,
+            };
+        }
     }
 
     // 3. 构建 hooks 配置并写入项目 settings.json
@@ -75,7 +143,9 @@ pub fn ensure_project_hooks(
     let content = match serde_json::to_string_pretty(&settings) {
         Ok(c) => c,
         Err(e) => {
-            host.log_error(&format!("Failed to serialize settings.json: {}", e));
+            let msg = format!("settings.json serialize failed: {}", e);
+            host.log_error(&format!("ensure_project_hooks: {}", msg));
+            host.mark_plugin_error(&format!("auto-task: {}", msg));
             return ProjectHooksResult {
                 success: false,
                 message: format!("序列化 settings.json 失败: {}", e),
@@ -83,7 +153,16 @@ pub fn ensure_project_hooks(
             };
         }
     };
+    host.log_debug(&format!(
+        "ensure_project_hooks: fs_write settings.json len={} path={:?}",
+        content.len(),
+        settings_path
+    ));
     if let Err(e) = host.fs_write(&settings_path, &content) {
+        // settings.json 配置失败 = 启动失败，上报宿主标记插件错误
+        let msg = format!("settings.json write failed: path={:?} err={}", settings_path, e);
+        host.log_error(&format!("ensure_project_hooks: {}", msg));
+        host.mark_plugin_error(&format!("auto-task: {}", msg));
         return ProjectHooksResult {
             success: false,
             message: format!("写入项目 settings.json 失败: {}", e),
@@ -186,72 +265,75 @@ pub struct AllProjectHooksResult {
 }
 
 /// 清理指定项目的插件 hooks
+///
+/// 1. 从 settings.json 移除插件 hook 条目（**只移除 BedCode 相关，保留用户自己的 hooks 与其他配置**）
+/// 2. 删除项目 `.claude/auto_task_hook.py` 脚本（幂等，文件不存在视为成功）
 pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooksResult {
-    let settings_path = format!("{}/{}/{}", working_dir, CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE);
+    let claude_dir = format!("{}/{}", working_dir, CLAUDE_CONFIG_DIR_NAME);
+    let settings_path = format!("{}/{}", claude_dir, CLAUDE_SETTINGS_FILE);
+    let hook_script_path = format!("{}/{}", claude_dir, HOOK_SCRIPT_NAME);
 
+    // 1. 清理 settings.json 中的插件 hooks，保留用户自己的配置
     let mut settings: serde_json::Value = match host.fs_read(&settings_path) {
         Ok(Some(content)) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
-        _ => {
-            return ProjectHooksResult {
-                success: true,
-                message: "项目无 .claude/settings.json，无需清理".to_string(),
-                skipped: true,
-            };
-        }
+        _ => serde_json::json!({}),
     };
 
-    let hooks = match settings.get("hooks") {
-        Some(h) => h,
-        None => {
-            return ProjectHooksResult {
-                success: true,
-                message: "项目无 hooks 配置".to_string(),
-                skipped: true,
-            };
-        }
-    };
+    let mut had_plugin_hooks = false;
+    if let Some(hooks) = settings.get("hooks").cloned() {
+        if is_plugin_hooks_configured(&hooks) {
+            had_plugin_hooks = true;
 
-    if !is_plugin_hooks_configured(hooks) {
-        return ProjectHooksResult {
+            // 仅移除含 auto_task_hook.py 的条目，用户自定义 hooks 原样保留
+            let cleaned_hooks = remove_plugin_hooks(&hooks);
+            if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+                settings.as_object_mut().map(|o| o.remove("hooks"));
+            } else {
+                settings["hooks"] = cleaned_hooks;
+            }
+
+            match serde_json::to_string_pretty(&settings) {
+                Ok(content) => {
+                    if let Err(e) = host.fs_write(&settings_path, &content) {
+                        return ProjectHooksResult {
+                            success: false,
+                            message: format!("写入 settings.json 失败: {}", e),
+                            skipped: false,
+                        };
+                    }
+                }
+                Err(e) => {
+                    return ProjectHooksResult {
+                        success: false,
+                        message: format!("序列化 settings.json 失败: {}", e),
+                        skipped: false,
+                    };
+                }
+            }
+        }
+    }
+
+    // 2. 删除项目中的 hook 脚本（无论 settings 是否还有插件条目，脚本可能残留）
+    if let Err(e) = host.fs_delete(&hook_script_path) {
+        host.log_warn(&format!(
+            "Failed to delete hook script {}: {}",
+            hook_script_path, e
+        ));
+    }
+
+    if had_plugin_hooks {
+        host.log_info(&format!("Cleaned plugin hooks from project: {}", working_dir));
+        ProjectHooksResult {
+            success: true,
+            message: "项目插件 hooks 已清理".to_string(),
+            skipped: false,
+        }
+    } else {
+        ProjectHooksResult {
             success: true,
             message: "项目无插件 hooks".to_string(),
             skipped: true,
-        };
-    }
-
-    let cleaned_hooks = remove_plugin_hooks(hooks);
-
-    if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-        settings.as_object_mut().map(|o| o.remove("hooks"));
-    } else {
-        settings["hooks"] = cleaned_hooks;
-    }
-
-    let content = match serde_json::to_string_pretty(&settings) {
-        Ok(c) => c,
-        Err(e) => {
-            return ProjectHooksResult {
-                success: false,
-                message: format!("序列化 settings.json 失败: {}", e),
-                skipped: false,
-            };
         }
-    };
-
-    match host.fs_write(&settings_path, &content) {
-        Ok(()) => {
-            host.log_info(&format!("Cleaned plugin hooks from project: {}", working_dir));
-            ProjectHooksResult {
-                success: true,
-                message: "项目插件 hooks 已清理".to_string(),
-                skipped: false,
-            }
-        }
-        Err(e) => ProjectHooksResult {
-            success: false,
-            message: format!("写入 settings.json 失败: {}", e),
-            skipped: false,
-        },
     }
 }
 

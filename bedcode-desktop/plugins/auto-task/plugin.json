@@ -8,7 +8,7 @@
   "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_auto_task",
-  "permissions": ["storage", "terminal:input", "terminal:output", "terminal:observe", "session:read", "broadcast", "fs:read", "fs:write", "ui:sidebar"],
+  "permissions": ["storage", "terminal:input", "terminal:output", "terminal:observe", "session:read", "broadcast", "fs:read", "fs:write", "ui:sidebar", "ui:input"],
   "contributes": {
     "commands": [
       { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
@@ -19,7 +19,9 @@
       { "id": "auto-task.list-queue", "title": "List Task Queue" },
       { "id": "auto-task.clear-queue", "title": "Clear Task Queue" },
       { "id": "auto-task.list-task-history", "title": "List Task History" },
-      { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" }
+      { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" },
+      { "id": "auto-task.update-task", "title": "Update Task Prompt" },
+      { "id": "auto-task.reorder-queue", "title": "Reorder Task Queue" }
     ],
     "views": [
       { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" }

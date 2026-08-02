@@ -164,6 +164,12 @@ pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
         "session_id": session_id,
         "task_status": "in_progress",
     }));
+    // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
+    host.emit_event("task:status-changed", &serde_json::json!({
+        "session_id": session_id,
+        "taskStatus": "in_progress",
+        "taskReason": "User submitted input",
+    }));
 }
 
 // ==================== HTTP 端点处理 ====================
@@ -322,6 +328,12 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         "session_id": resolved_session_id,
         "task_status": status,
     }));
+    // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
+    host.emit_event("task:status-changed", &serde_json::json!({
+        "session_id": resolved_session_id,
+        "taskStatus": status,
+        "taskReason": reason,
+    }));
 
     host.log_info(&format!("Task status updated: claude_sid={} bedcode_sid={} status={}", session_id, resolved_session_id, status));
 
@@ -364,6 +376,11 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
     let _ = host.bus_publish("session:mode-changed", &serde_json::json!({
         "session_id": session_id,
         "auto_approve": auto_approve,
+    }));
+    // 通知前端 UI（事件名与前端 context.events.on 监听一致，载荷用前端约定的 camelCase）
+    host.emit_event("session:mode-changed", &serde_json::json!({
+        "session_id": session_id,
+        "autoApprove": auto_approve,
     }));
 
     host.log_info(&format!("Session mode set: session_id={}, auto_approve={}", session_id, auto_approve));
@@ -487,12 +504,12 @@ pub fn set_auto_mode(host: &WasmHost, session_id: &str, auto_approve: bool) -> a
         WHERE id = (SELECT id FROM task_history WHERE session_id = ?2 ORDER BY created_at DESC LIMIT 1)";
     let _ = host.plugin_db_execute_params(sql, &sql_params![auto_approve, session_id]);
 
-    // 通知前端模式变更
-    host.emit_event("session:modeChanged", &serde_json::json!({
+    // 通知前端模式变更（事件名必须与前端 context.events.on 监听一致，此前 camelCase 事件名无人监听）
+    host.emit_event("session:mode-changed", &serde_json::json!({
         "session_id": session_id,
         "autoApprove": auto_approve,
     }));
-    host.log_debug(&format!("emit_event: session:modeChanged for session_id={}", session_id));
+    host.log_debug(&format!("emit_event: session:mode-changed for session_id={}", session_id));
 
     // 广播到移动端
     host.broadcast_sync(&SyncEvent::SessionModeChanged {

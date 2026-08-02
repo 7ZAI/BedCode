@@ -20,12 +20,14 @@ auto-task/
 │       ├── lib.rs       # WASM 入口 + 命令路由 + 数据库建表
 │       ├── state.rs     # 任务状态与自动授权模式管理（HTTP 端点处理）
 │       ├── queue.rs     # 任务队列管理（添加、删除、调度、自动模式切换）
-│       ├── hooks.rs     # Claude Code 项目 hooks 管理（安装/清理）
-│       └── token.rs     # 插件 Token 校验
+│       └── hooks.rs     # Claude Code 项目 hooks 管理（安装/清理）
 ├── scripts/
 │   ├── build.js         # 统一构建脚本（Vite + Cargo WASM + 复制产物）
 │   └── auto_task_hook.py  # Claude Code hook 脚本（推送任务状态到 HTTP 端点）
 ├── src/                 # TS 前端源码
+│   ├── components/      # TaskHistoryView（侧边栏历史）、AutoTaskModal（队列弹窗）
+│   ├── i18n/            # 插件翻译表（zh-CN / en，MessageSchema 编译期校验同步）
+│   └── state.ts         # 插件前端共享状态（弹窗可见性）
 ├── dist/                # Vite 构建产物
 └── vite.config.ts       # Vite 配置
 ```
@@ -78,6 +80,9 @@ bedcode-desktop/src-tauri/resources/plugins/desktop/com.bedcode.auto-task/
 └── auto_task_hook.py                       # Claude Code hook 脚本
 ```
 
+> 产物目录（`**/src-tauri/resources/plugins/`）已加入 .gitignore，不入库；
+> 由 `scripts/build.js` 生成，打包/运行前需先执行构建。
+
 手动复制 WASM（Debug 构建）：
 
 ```bash
@@ -114,6 +119,23 @@ cp rust/target/wasm32-unknown-unknown/debug/bedcode_plugin_auto_task.wasm \
 | GET | `task-queue/list` | 查询队列 |
 | POST | `task-queue/clear` | 清空队列 |
 
+## 命令（WASM invoke_command）
+
+| 命令 | 用途 |
+|------|------|
+| `auto-task.add-task` | 添加任务到队列（空队列时自动开启自动模式并立即调度） |
+| `auto-task.remove-task` | 从队列删除待执行任务（删空后退出自动模式） |
+| `auto-task.clear-queue` | 清空队列并退出自动模式 |
+| `auto-task.update-task` | 编辑待执行任务的 prompt（仅 pending 状态可改） |
+| `auto-task.reorder-queue` | 按给定 id 顺序重排队列（id 集合必须与 pending 集合一致） |
+| `auto-task.list-task-queue` | 查询会话队列 |
+| `auto-task.list-task-history` | 查询会话任务历史 |
+| `auto-task.get-task-status` | 查询会话任务状态 |
+| `auto-task.set-auto-mode` | 设置会话自动授权模式 |
+| `auto-task.cleanup-project-hooks` | 清理项目 hooks（保留用户自定义 hooks） |
+
+> 命令 ID 与 manifest `contributes.commands[].id` 全名一致，前端按全名调用。
+
 ## 插件权限
 
 | 权限 | 用途 |
@@ -125,6 +147,7 @@ cp rust/target/wasm32-unknown-unknown/debug/bedcode_plugin_auto_task.wasm \
 | `session:read` | 读取会话信息 |
 | `fs:read` / `fs:write` | 读写项目 hooks 文件 |
 | `ui:sidebar` | 侧边栏任务历史视图 |
+| `ui:input` | 终端工具栏按钮（打开队列弹窗） |
 
 ## 生命周期钩子
 
@@ -132,12 +155,15 @@ cp rust/target/wasm32-unknown-unknown/debug/bedcode_plugin_auto_task.wasm \
 |------|----------|------|
 | `onStartup` | 插件启动 | 清理旧版全局 hooks、初始化数据库表 |
 | `onShutdown` | 插件关闭 | 日志记录 |
-| `onSessionLifecycle(creating)` | Claude 会话创建 Claude 会话前 | 自动安装项目 `.claude/hooks.json` |
+| `onSessionLifecycle(creating)` | Claude 会话创建前 | 自动安装项目 `.claude/settings.json` hooks |
 
-## 消息总线 Topic
+## 事件通道
 
-| Topic | 用途 |
-|-------|------|
-| `task:status-changed` | 任务状态变更通知 |
-| `session:mode-changed` | 会话自动授权模式变更通知 |
-| `task:queue-changed` | 任务队列变更通知 |
+同一事件名经三条通道投递，消费方各取所需：
+
+| Topic | 消息总线（插件间） | emit_event（前端 UI） | broadcast_sync（移动端） |
+|-------|:---:|:---:|:---:|
+| `task:status-changed` | ✓ | ✓ | ✓ |
+| `session:mode-changed` | ✓ | ✓ | ✓ |
+| `task:queue-changed` | ✓ | ✓ | ✓ |
+

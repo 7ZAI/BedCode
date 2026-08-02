@@ -44,20 +44,19 @@ pub fn add_task(host: &WasmHost, session_id: &str, prompt: &str) -> (String, i64
     let position = max_pos + 1;
 
     // 生成 ID 并插入
-    let id_sql = "SELECT lower(hex(randomblob(16)))";
+    // 宿主 plugin_db_query 返回的是对象行数组（[{"col": value}]），按列名取值；
+    // 不要写成行内数组（row.as_array()），否则解析失败会落入下方回退分支
+    let id_sql = "SELECT lower(hex(randomblob(16))) AS id";
     let id = host
         .plugin_db_query(id_sql)
         .ok()
         .flatten()
         .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|row| row.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .and_then(|row| row.get("id").and_then(|v| v.as_str().map(|s| s.to_string())))
         .unwrap_or_else(|| {
-            // fallback: 用时间戳生成
-            format!("{:x}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis())
+            // wasm32-unknown-unknown 无系统时钟，SystemTime::now() 会 panic（unreachable trap）；
+            // 回退用会话+位置组合，天然唯一且无时间依赖
+            format!("fallback-{}-{}", session_id, position)
         });
 
     let _ = host.plugin_db_execute_params(
@@ -112,6 +111,86 @@ pub fn clear_queue(host: &WasmHost, session_id: &str) -> i32 {
         &sql_params![session_id],
     )
     .unwrap_or(-1)
+}
+
+/// 编辑待执行任务的 prompt 内容（仅 pending 状态可改）
+///
+/// 返回是否找到并更新成功。已出队/已执行的任务不可编辑。
+pub fn update_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str) -> bool {
+    let affected = host
+        .plugin_db_execute_params(
+            "UPDATE task_queue SET prompt = ?1, updated_at = datetime('now') \
+             WHERE id = ?2 AND session_id = ?3 AND status = 'pending'",
+            &sql_params![prompt, task_id, session_id],
+        )
+        .unwrap_or(-1);
+    if affected > 0 {
+        host.log_info(&format!("Task updated: id={} session_id={}", task_id, session_id));
+        true
+    } else {
+        false
+    }
+}
+
+/// 按给定顺序重排待执行任务的 position
+///
+/// ordered_ids 必须是该会话全部 pending 任务的 id 集合（顺序可任意），
+/// 数量与 id 集合不一致时拒绝执行，避免与并发修改产生数据不一致。
+pub fn reorder_queue(host: &WasmHost, session_id: &str, ordered_ids: &[String]) -> bool {
+    // 取当前全部 pending 任务
+    let tasks = list_queue(host, session_id);
+    if tasks.len() != ordered_ids.len() {
+        host.log_warn(&format!(
+            "reorder_queue: id count mismatch session_id={} current={} given={}",
+            session_id,
+            tasks.len(),
+            ordered_ids.len()
+        ));
+        return false;
+    }
+
+    // 校验 id 集合一致（顺序不限，逐一出列检查）
+    let mut remaining_ids: Vec<&str> = tasks
+        .iter()
+        .filter_map(|t| t.get("id").and_then(|v| v.as_str()))
+        .collect();
+    for id in ordered_ids {
+        match remaining_ids.iter().position(|c| c == id) {
+            Some(idx) => {
+                remaining_ids.remove(idx);
+            }
+            None => {
+                host.log_warn(&format!("reorder_queue: unknown task id={}", id));
+                return false;
+            }
+        }
+    }
+    if !remaining_ids.is_empty() {
+        host.log_warn("reorder_queue: ordered_ids missing some pending tasks");
+        return false;
+    }
+
+    // 按新顺序重写 position（每行独立更新，失败即中止并记录日志，不做静默忽略）
+    for (idx, id) in ordered_ids.iter().enumerate() {
+        let affected = host
+            .plugin_db_execute_params(
+                "UPDATE task_queue SET position = ?1, updated_at = datetime('now') \
+                 WHERE id = ?2 AND session_id = ?3",
+                &sql_params![idx as i64, id, session_id],
+            )
+            .unwrap_or(-1);
+        if affected <= 0 {
+            host.log_warn(&format!("reorder_queue: failed to set position for id={}", id));
+            return false;
+        }
+    }
+
+    host.log_info(&format!(
+        "reorder_queue: session_id={} reordered {} tasks",
+        session_id,
+        ordered_ids.len()
+    ));
+    true
 }
 
 /// 统计指定会话的 pending 任务数量
@@ -202,11 +281,11 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     let remaining = (queue.len() as i64).saturating_sub(1);
     broadcast_queue_changed(host, session_id, remaining, "dequeue");
 
-    // 如果还有剩余任务，确保自动模式开启
+    // 只要队列仍有剩余任务就保持自动模式开启；
+    // 最后一个任务出队后也不立即关闭——刚出队的任务正在执行，仍需要自动授权，
+    // 待其到达终态时由本函数空队列分支（队列已空）关闭自动模式，形成完整闭环
     if remaining > 0 {
         ensure_auto_mode_on(host, session_id);
-    } else {
-        ensure_auto_mode_off(host, session_id);
     }
 }
 
@@ -370,7 +449,7 @@ fn reorder_positions(host: &WasmHost, session_id: &str) {
 }
 
 /// 确保自动模式开启
-fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
+pub fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
     // 先尝试更新已有记录
     // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
     let affected = host
@@ -401,12 +480,17 @@ fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
         "session_id": session_id,
         "auto_approve": true,
     }));
+    // 通知前端 UI（事件名与前端 context.events.on 监听一致）
+    host.emit_event("session:mode-changed", &serde_json::json!({
+        "session_id": session_id,
+        "autoApprove": true,
+    }));
 
     host.log_debug(&format!("Auto mode ON for session_id={}", session_id));
 }
 
 /// 确保自动模式关闭
-fn ensure_auto_mode_off(host: &WasmHost, session_id: &str) {
+pub fn ensure_auto_mode_off(host: &WasmHost, session_id: &str) {
     // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
     let _ = host.plugin_db_execute_params(
         "UPDATE task_history SET auto_approve = 0, updated_at = datetime('now') \
@@ -423,12 +507,17 @@ fn ensure_auto_mode_off(host: &WasmHost, session_id: &str) {
         "session_id": session_id,
         "auto_approve": false,
     }));
+    // 通知前端 UI（事件名与前端 context.events.on 监听一致）
+    host.emit_event("session:mode-changed", &serde_json::json!({
+        "session_id": session_id,
+        "autoApprove": false,
+    }));
 
     host.log_debug(&format!("Auto mode OFF for session_id={}", session_id));
 }
 
 /// 广播队列变更事件
-fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i64, action: &str) {
+pub fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i64, action: &str) {
     host.broadcast_sync(&SyncEvent::TaskQueueChanged {
         session_id: session_id.to_string(),
         queue_count,
@@ -436,6 +525,12 @@ fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i64, 
     });
 
     let _ = host.bus_publish("task:queue-changed", &serde_json::json!({
+        "session_id": session_id,
+        "queue_count": queue_count,
+        "action": action,
+    }));
+    // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
+    host.emit_event("task:queue-changed", &serde_json::json!({
         "session_id": session_id,
         "queue_count": queue_count,
         "action": action,

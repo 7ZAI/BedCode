@@ -76,14 +76,19 @@ impl WasmPlugin for AutoTaskPlugin {
             "sandbox": "inline",
             "pluginType": "rust-ts",
             "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "terminal:observe", "session:read", "fs:read", "fs:write", "ui:sidebar"],
+            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "terminal:observe", "session:read", "fs:read", "fs:write", "ui:sidebar", "ui:input"],
             "contributes": {
                 "commands": [
                     { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
                     { "id": "auto-task.get-task-status", "title": "Get Task Status" },
                     { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
                     { "id": "auto-task.list-task-history", "title": "List Task History" },
-                    { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" }
+                    { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" },
+                    { "id": "auto-task.add-task", "title": "Add Task to Queue" },
+                    { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
+                    { "id": "auto-task.clear-queue", "title": "Clear Task Queue" },
+                    { "id": "auto-task.update-task", "title": "Update Task Prompt" },
+                    { "id": "auto-task.reorder-queue", "title": "Reorder Task Queue" }
                 ],
                 "views": [
                     { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" }
@@ -183,6 +188,130 @@ impl WasmPlugin for AutoTaskPlugin {
                 let auto_approve = args.bool_or("auto_approve", false);
                 state::set_auto_mode(&host, &session_id, auto_approve)
             }
+            "auto-task.add-task" => {
+                let session_id = args.str_or("session_id", "");
+                let prompt = args.str_or("prompt", "");
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("add-task: missing session_id"));
+                }
+                if prompt.is_empty() {
+                    return Err(anyhow::anyhow!("add-task: missing prompt"));
+                }
+
+                // 队列从空变为非空时自动开启自动授权模式
+                let count_before = queue::pending_count(&host, &session_id);
+                let (task_id, position) = queue::add_task(&host, &session_id, &prompt);
+
+                if count_before == 0 {
+                    queue::ensure_auto_mode_on(&host, &session_id);
+                    // 会话空闲（无活动任务）时立即调度第一个任务，实现"添加即执行"的闭环
+                    // try_dispatch_next 仅在队列非空时出队，不会与运行中的任务重复发送
+                    if !state::has_active_task(&host, &session_id) {
+                        queue::try_dispatch_next(&host, &session_id);
+                    }
+                }
+
+                let count_after = queue::pending_count(&host, &session_id);
+                queue::broadcast_queue_changed(&host, &session_id, count_after, "add");
+
+                Ok(serde_json::json!({ "task_id": task_id, "position": position }))
+            }
+            "auto-task.remove-task" => {
+                let session_id = args.str_or("session_id", "");
+                let task_id = args.str_or("task_id", "");
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("remove-task: missing session_id"));
+                }
+                if task_id.is_empty() {
+                    return Err(anyhow::anyhow!("remove-task: missing task_id"));
+                }
+
+                let removed = queue::remove_task(&host, &session_id, &task_id);
+                if !removed {
+                    return Err(anyhow::anyhow!("remove-task: task not found: {}", task_id));
+                }
+
+                // 删除后无 pending 任务则退出自动模式
+                let remaining = queue::pending_count(&host, &session_id);
+                if remaining == 0 {
+                    queue::ensure_auto_mode_off(&host, &session_id);
+                }
+                queue::broadcast_queue_changed(&host, &session_id, remaining, "remove");
+
+                Ok(serde_json::json!({ "removed": true }))
+            }
+            "auto-task.clear-queue" => {
+                let session_id = args.str_or("session_id", "");
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("clear-queue: missing session_id"));
+                }
+
+                let cleared = queue::clear_queue(&host, &session_id);
+                queue::ensure_auto_mode_off(&host, &session_id);
+                queue::broadcast_queue_changed(&host, &session_id, 0, "clear");
+
+                Ok(serde_json::json!({ "cleared": cleared }))
+            }
+            "auto-task.update-task" => {
+                let session_id = args.str_or("session_id", "");
+                let task_id = args.str_or("task_id", "");
+                let prompt = args.str_or("prompt", "");
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("update-task: missing session_id"));
+                }
+                if task_id.is_empty() {
+                    return Err(anyhow::anyhow!("update-task: missing task_id"));
+                }
+                if prompt.is_empty() {
+                    return Err(anyhow::anyhow!("update-task: missing prompt"));
+                }
+
+                let updated = queue::update_task(&host, &session_id, &task_id, &prompt);
+                if !updated {
+                    return Err(anyhow::anyhow!("update-task: task not found or not pending: {}", task_id));
+                }
+
+                let remaining = queue::pending_count(&host, &session_id);
+                queue::broadcast_queue_changed(&host, &session_id, remaining, "update");
+
+                Ok(serde_json::json!({ "updated": true }))
+            }
+            "auto-task.reorder-queue" => {
+                let session_id = args.str_or("session_id", "");
+                let task_ids: Vec<String> = args
+                    .value("task_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("reorder-queue: missing session_id"));
+                }
+                if task_ids.is_empty() {
+                    return Err(anyhow::anyhow!("reorder-queue: missing task_ids"));
+                }
+
+                let reordered = queue::reorder_queue(&host, &session_id, &task_ids);
+                if !reordered {
+                    return Err(anyhow::anyhow!(
+                        "reorder-queue: id set mismatch for session {}",
+                        session_id
+                    ));
+                }
+
+                let remaining = queue::pending_count(&host, &session_id);
+                queue::broadcast_queue_changed(&host, &session_id, remaining, "reorder");
+
+                Ok(serde_json::json!({ "reordered": true }))
+            }
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
         }
     }
@@ -209,13 +338,33 @@ impl WasmPlugin for AutoTaskPlugin {
 
         // 2.1 迁移：移除旧版 task_history.name 列（标题字段）
         // 旧库的 name 列为 NOT NULL，新 INSERT 不再写入会触发约束错误；
-        // SQLite 3.35+ 支持 DROP COLUMN，fresh 库（无此列）报错时忽略即可
-        match host.plugin_db_execute("ALTER TABLE task_history DROP COLUMN name") {
-            Ok(_) => host.log_info("task_history migration: dropped legacy 'name' column"),
-            Err(e) => host.log_debug(&format!(
-                "task_history migration: drop 'name' skipped (likely fresh table): {}",
-                e
-            )),
+        // 先通过 PRAGMA table_info 确认列存在再 DROP：宿主 plugin_db_execute
+        // 对失败语句会记 ERROR 日志，不能把可预期的"无此列"场景当作错误处理
+        let legacy_name_column_exists = host
+            .plugin_db_query("PRAGMA table_info(task_history)")
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_array().cloned())
+            .map(|rows| {
+                rows.iter().any(|row| {
+                    row.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|n| n == "name")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
+        if legacy_name_column_exists {
+            match host.plugin_db_execute("ALTER TABLE task_history DROP COLUMN name") {
+                Ok(_) => host.log_info("task_history migration: dropped legacy 'name' column"),
+                Err(e) => host.log_warn(&format!(
+                    "task_history migration: failed to drop 'name' column: {}",
+                    e
+                )),
+            }
+        } else {
+            host.log_debug("task_history migration: 'name' column not present, skip drop");
         }
 
         // 3. 初始化 session 映射表
@@ -267,8 +416,17 @@ impl WasmPlugin for AutoTaskPlugin {
             SessionLifecycleEvent::Creating { command, working_dir, resource_dir, .. } => {
                 let host = WasmHost;
 
+                host.log_debug(&format!(
+                    "on_session_lifecycle: Creating event command={:?} working_dir={:?} resource_dir={:?}",
+                    command, working_dir, resource_dir
+                ));
+
                 // 只为 Claude 命令设置 hooks
                 if !command.to_lowercase().contains("claude") {
+                    host.log_debug(&format!(
+                        "on_session_lifecycle: command {:?} does not contain 'claude', skip hooks setup",
+                        command
+                    ));
                     return Ok(());
                 }
 
@@ -279,8 +437,16 @@ impl WasmPlugin for AutoTaskPlugin {
                     .flatten()
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(8765);
+                host.log_debug(&format!(
+                    "on_session_lifecycle: claude session detected, using port={}",
+                    port
+                ));
 
                 let result = hooks::ensure_project_hooks(&host, working_dir, port, resource_dir);
+                host.log_debug(&format!(
+                    "on_session_lifecycle: ensure_project_hooks result success={} skipped={} message={:?}",
+                    result.success, result.skipped, result.message
+                ));
 
                 if result.success {
                     host.log_info(&format!("Session lifecycle: hooks setup for {}", working_dir));
