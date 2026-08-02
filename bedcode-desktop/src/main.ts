@@ -59,7 +59,7 @@ listen<PluginNotifyPayload>('plugin:notify', (event) => {
 })
 
 // 监听插件自检失败事件（由 host_mark_plugin_error Host Function 发送）
-// 插件启动配置失败（如 hooks 脚本拷贝失败）→ 弹窗提示，启用状态由插件管理页刷新
+// 配置失败（如 hooks 脚本拷贝失败）→ 弹窗提示，插件状态不变
 listen<PluginErrorPayload>('plugin:error', (event) => {
   const { plugin_id, error } = event.payload
   const toast = useToast()

@@ -100,9 +100,9 @@ pub trait PluginServices: Send + Sync + 'static {
 
     /// 标记插件为错误状态
     ///
-    /// 宿主置插件状态为 Error、持久化激活状态（视为未启用）并通知前端弹窗。
+    /// 仅通知前端弹窗提示，不改变插件状态（保持激活，会话照常运行）。
     /// 由 `host_mark_plugin_error` Host Function 转发，插件自身检测到
-    /// 不可恢复配置失败（如 hooks 脚本拷贝失败）时调用。
+    /// 配置失败（如 hooks 脚本拷贝失败）时调用。
     fn mark_plugin_error(&self, plugin_id: String, error: String);
 }
 

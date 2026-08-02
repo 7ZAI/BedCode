@@ -115,8 +115,8 @@ pub fn ensure_project_hooks(
             hook_script_path
         )),
         Err(e) => {
-            // 拷贝失败 = 配置失败：settings.json 即使写入也会引用不存在的脚本，
-            // 直接视为启动失败，上报宿主标记插件错误（状态 Error + 未启用 + 前端弹窗）
+            // 拷贝失败：上报宿主弹窗提示；不阻塞会话创建（hooks 未装齐时
+            // 任务调度能力受限，但会话照常启动，插件保持激活）
             let msg = format!(
                 "hook script copy failed: src={:?} dst={:?} err={}",
                 source_script, hook_script_path, e
@@ -159,7 +159,7 @@ pub fn ensure_project_hooks(
         settings_path
     ));
     if let Err(e) = host.fs_write(&settings_path, &content) {
-        // settings.json 配置失败 = 启动失败，上报宿主标记插件错误
+        // settings.json 配置失败：上报宿主弹窗提示，不阻塞会话创建
         let msg = format!("settings.json write failed: path={:?} err={}", settings_path, e);
         host.log_error(&format!("ensure_project_hooks: {}", msg));
         host.mark_plugin_error(&format!("auto-task: {}", msg));

@@ -6,42 +6,49 @@
 //! 通过 `wsl.exe` 桥接读写可自动启动发行版（wsl.exe 会按需启动 Stopped 的发行版），
 //! 保证任意状态下 WSL 文件可访问，同时支持 Windows 路径 ↔ WSL 路径的跨域复制
 //! （hook 脚本安装场景：源为插件安装目录，目标为 WSL 项目 .claude/）。
+//!
+//! 所有 `wsl.exe` 子进程均带超时（`WSL_CMD_TIMEOUT`）：发行版冷启动或异常状态下
+//! wsl.exe 可能长时间无响应，无超时的阻塞等待会悬挂调用方（如插件停用路径的
+//! hooks 清理会逐项目 spawn wsl.exe）。超时后返回错误并终止子进程。
 
-use crate::process::create_command;
-use std::io::Write;
-use std::process::Stdio;
+use crate::plugin::wasm_runtime::block_on_async;
 
-/// 判断路径是否为 WSL UNC 路径（兼容 / 与 \ 分隔符混合）
-pub fn is_wsl_unc_path(path: &str) -> bool {
-    let normalized = path.replace('/', "\\");
-    normalized.starts_with("\\\\wsl.localhost\\") || normalized.starts_with("\\\\wsl$\\")
+/// wsl.exe 子进程超时：发行版冷启动（数秒）加桥接命令余量；超时即失败，避免调用方悬挂
+const WSL_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 构造 wsl.exe 命令（`-d <distro> -- <args>`；Windows 下隐藏窗口，与 create_command 一致）
+fn wsl_command(distro: &str, args: &[&str]) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("wsl.exe");
+    cmd.arg("-d").arg(distro).arg("--").args(args);
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW = 0x08000000（tokio::process::Command 固有方法）
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
 }
 
-/// 从 WSL UNC 路径解析发行版名称与 WSL 内部路径
-///
-/// `\\wsl.localhost\Ubuntu\home\binblink\project\blink` → `("Ubuntu", "/home/binblink/project/blink")`
-pub fn parse_wsl_unc_path(path: &str) -> Option<(String, String)> {
-    let normalized = path.replace('/', "\\");
-    let rest = if normalized.starts_with("\\\\wsl.localhost\\") {
-        &normalized["\\\\wsl.localhost\\".len()..]
-    } else if normalized.starts_with("\\\\wsl$\\") {
-        &normalized["\\\\wsl$\\".len()..]
-    } else {
-        return None;
-    };
-
-    let (distro, inner) = rest.split_once('\\')?;
-    if distro.is_empty() || inner.is_empty() {
-        return None;
-    }
-    Some((distro.to_string(), format!("/{}", inner.replace('\\', "/"))))
+/// 执行 wsl.exe 命令并等待完成；超时后终止子进程并返回错误（不悬挂调用方）
+fn run_wsl_output(distro: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+    let mut cmd = wsl_command(distro, args);
+    // stdin 置空：避免 wsl.exe 继承调用方 stdin 后在无输入时阻塞
+    cmd.stdin(std::process::Stdio::null());
+    let distro_owned = distro.to_string();
+    block_on_async(async move {
+        match tokio::time::timeout(WSL_CMD_TIMEOUT, cmd.output()).await {
+            Ok(result) => result,
+            // timeout 会 drop output() 未来，tokio 默认 KillOnDrop 终止子进程
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("wsl.exe timed out (distro={})", distro_owned),
+            )),
+        }
+    })
 }
 
 /// 通过 wsl.exe 读取文件原始字节（等价于 std::fs::read）
 pub fn read_bytes_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<Vec<u8>> {
-    let output = create_command("wsl.exe")
-        .args(["-d", distro, "--", "cat", wsl_path])
-        .output()?;
+    let output = run_wsl_output(distro, &["cat", wsl_path])?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -73,9 +80,7 @@ pub fn write_bytes_via_wsl(distro: &str, wsl_path: &str, content: &[u8]) -> std:
     // 1. 创建父目录（Rust 侧计算 dirname，避免 shell 引号问题）
     if let Some(parent) = wsl_path.rsplit_once('/').map(|(d, _)| d) {
         if !parent.is_empty() {
-            let mkdir = create_command("wsl.exe")
-                .args(["-d", distro, "--", "mkdir", "-p", parent])
-                .output()?;
+            let mkdir = run_wsl_output(distro, &["mkdir", "-p", parent])?;
             if !mkdir.status.success() {
                 let stderr = String::from_utf8_lossy(&mkdir.stderr);
                 return Err(std::io::Error::new(
@@ -87,19 +92,39 @@ pub fn write_bytes_via_wsl(distro: &str, wsl_path: &str, content: &[u8]) -> std:
     }
 
     // 2. tee 从 stdin 写入目标文件（路径作为普通参数传递）
-    let mut child = create_command("wsl.exe")
-        .args(["-d", distro, "--", "tee", wsl_path])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut cmd = wsl_command(distro, &["tee", wsl_path]);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
 
-    if let Some(mut stdin) = child.stdin.take() {
-        // 写入后显式 drop 关闭 stdin，让 tee 收到 EOF
-        stdin.write_all(content)?;
-    }
+    let content_owned = content.to_vec();
+    let distro_owned = distro.to_string();
+    let wsl_path_owned = wsl_path.to_string();
+    let result: std::io::Result<std::process::Output> = block_on_async(async move {
+        let write_fut = async {
+            let mut child = cmd.spawn()?;
+            // 写入后显式 drop 关闭 stdin，让 tee 收到 EOF
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(&content_owned).await?;
+                drop(stdin);
+            }
+            child.wait_with_output().await
+        };
+        match tokio::time::timeout(WSL_CMD_TIMEOUT, write_fut).await {
+            Ok(result) => result,
+            // 超时后 write_fut 被 drop，tokio 默认 KillOnDrop 终止子进程
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "wsl.exe write timed out (distro={}, path={})",
+                    distro_owned, wsl_path_owned
+                ),
+            )),
+        }
+    });
+    let output = result?;
 
-    let output = child.wait_with_output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(std::io::Error::new(
@@ -113,9 +138,7 @@ pub fn write_bytes_via_wsl(distro: &str, wsl_path: &str, content: &[u8]) -> std:
 /// 通过 wsl.exe 删除文件（等价于 std::fs::remove_file，文件不存在视为成功）
 pub fn delete_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<()> {
     // rm -f 对不存在的文件不报错，天然幂等
-    let output = create_command("wsl.exe")
-        .args(["-d", distro, "--", "rm", "-f", wsl_path])
-        .output()?;
+    let output = run_wsl_output(distro, &["rm", "-f", wsl_path])?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(std::io::Error::new(
@@ -124,6 +147,32 @@ pub fn delete_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// 判断路径是否为 WSL UNC 路径（兼容 / 与 \ 分隔符混合）
+pub fn is_wsl_unc_path(path: &str) -> bool {
+    let normalized = path.replace('/', "\\");
+    normalized.starts_with("\\\\wsl.localhost\\") || normalized.starts_with("\\\\wsl$\\")
+}
+
+/// 从 WSL UNC 路径解析发行版名称与 WSL 内部路径
+///
+/// `\\wsl.localhost\Ubuntu\home\binblink\project\blink` → `("Ubuntu", "/home/binblink/project/blink")`
+pub fn parse_wsl_unc_path(path: &str) -> Option<(String, String)> {
+    let normalized = path.replace('/', "\\");
+    let rest = if normalized.starts_with("\\\\wsl.localhost\\") {
+        &normalized["\\\\wsl.localhost\\".len()..]
+    } else if normalized.starts_with("\\\\wsl$\\") {
+        &normalized["\\\\wsl$\\".len()..]
+    } else {
+        return None;
+    };
+
+    let (distro, inner) = rest.split_once('\\')?;
+    if distro.is_empty() || inner.is_empty() {
+        return None;
+    }
+    Some((distro.to_string(), format!("/{}", inner.replace('\\', "/"))))
 }
 
 #[cfg(test)]

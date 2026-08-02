@@ -55,6 +55,9 @@ export function usePluginManager() {
   const toast = useToast()
   const t = i18n.global.t
 
+  // 启停操作总超时：后端激活/停用含 hooks 清理（wsl.exe 桥接最长约 15s）与 fs 授权弹窗（30s），给足余量
+  const TOGGLE_TIMEOUT_MS = 30000
+
   const plugins = ref<PluginInfo[]>([])
   const loading = ref(false)
   const expandedId = ref<string | null>(null)
@@ -63,8 +66,6 @@ export function usePluginManager() {
 
   // 开发模式热重载事件监听
   let devReloadUnlisten: UnlistenFn | null = null
-  // 插件自检失败事件监听（状态刷新）
-  let errorUnlisten: UnlistenFn | null = null
 
   /** 加载插件列表 */
   async function loadPlugins(): Promise<void> {
@@ -90,12 +91,18 @@ export function usePluginManager() {
     if (togglingId.value) return false
     togglingId.value = id
     console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      if (enable) {
-        await pluginLoader.activate(id)
-      } else {
-        await pluginLoader.deactivate(id)
-      }
+      const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(t('desktop.plugin.toggleTimeout'))),
+          TOGGLE_TIMEOUT_MS,
+        )
+      })
+      // Tauri invoke 无超时机制，前端兜底：后端挂起（如 wsl.exe 桥接异常）时
+      // 超时即报错并收起 loading，避免 spinner 无限转圈
+      await Promise.race([op, timeout])
       // 重新加载列表以获取最新状态
       await loadPlugins()
       const name = plugins.value.find(p => p.id === id)?.name || id
@@ -109,6 +116,7 @@ export function usePluginManager() {
       toast.error(t(key, { error: e.message || 'Unknown error' }))
       return false
     } finally {
+      clearTimeout(timer)
       togglingId.value = null
     }
   }
@@ -136,18 +144,11 @@ export function usePluginManager() {
       await pluginLoader.reloadPlugin(pluginId)
       await loadPlugins()
     })
-
-    // 插件自检失败（host_mark_plugin_error）后状态已变更，刷新列表让启用开关同步
-    errorUnlisten = await listen<{ plugin_id: string; error: string }>('plugin:error', async () => {
-      await loadPlugins()
-    })
   })
 
   onUnmounted(() => {
     devReloadUnlisten?.()
     devReloadUnlisten = null
-    errorUnlisten?.()
-    errorUnlisten = null
   })
 
   return {

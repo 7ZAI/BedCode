@@ -153,7 +153,7 @@ pub mod import {
     pub const LOG_ERROR: &str = "host_log_error";
 
     // === Plugin Status ===
-    /// 插件状态：标记插件为错误状态（宿主置 Error + 持久化未启用 + 通知前端）
+    /// 插件状态：标记插件为错误状态（宿主仅弹窗提示前端，不改插件状态）
     pub const MARK_PLUGIN_ERROR: &str = "host_mark_plugin_error";
 
     // === Message Bus ===

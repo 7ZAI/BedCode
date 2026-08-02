@@ -1167,14 +1167,10 @@ impl PluginServices for PluginHost {
 
     fn mark_plugin_error(&self, plugin_id: String, error: String) {
         crate::plugin::wasm_runtime::block_on_async(async move {
-            // 1. 置插件状态为 Error（未激活，插件管理页显示未启用）
-            self.mark_error(&plugin_id, error.clone()).await;
+            // 仅通知前端弹窗提示：不置 Error、不持久化，插件保持激活，会话照常运行。
+            // hooks 安装失败等自检错误属可恢复/局部问题，不应因此禁用整个插件。
             tracing::error!("[PluginHost] Plugin {} self-check failed: {}", plugin_id, error);
 
-            // 2. 持久化激活状态（Error 不计入激活，重启后仍为未启用）
-            self.persist_activation_state().await;
-
-            // 3. 通知前端：弹窗提示 + 刷新插件列表状态
             let _ = crate::system::app_context::AppContext::global()
                 .app_handle()
                 .emit(
