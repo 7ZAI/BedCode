@@ -27,15 +27,16 @@ Hook 脚本自动复制到 `~/.claude/auto_task_hook.py`，全局生效。
 
 4. **Logging**: 所有 hook 事件和 HTTP 请求记录到 `.claude/bedcode-plugin.log`，按天轮转保留 7 天
 
-5. **HTTP Push**: 任务状态变更推送到 `POST /plugin/task-status`（需设置 `BEDCODE_TOKEN`）
+5. **HTTP Push**: 任务状态变更推送到 `POST /api/plugin/com.bedcode.auto-task/task-status`。端点由网关中间件对 `/api/plugin/*` 路径本地放行（无凭证），hook 仅在 BedCode 注入 `BEDCODE_SESSION_ID` 的 PTY 中生效，信任边界为本地网络
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `BEDCODE_SESSION_ID` | Auto | - | BedCode PTY 会话 ID（由 pty_process.rs 注入到进程环境变量） |
-| `BEDCODE_TOKEN` | Optional | - | HTTP API 认证 token（BedCode 桌面端自动注入） |
-| `BEDCODE_PORT` | Optional | `8765` | HTTP API 端口（BedCode 桌面端自动注入） |
+| `BEDCODE_SESSION_ID` | Auto | - | BedCode PTY 会话 ID（由 pty_process.rs 注入到进程环境变量）。hook 仅在此变量存在时生效，并随每次状态推送携带，宿主据此关联任务行 |
+| `BEDCODE_PORT` | Auto | `8765` | HTTP API 端口（由插件 hooks.rs 注入到 hook 命令环境变量） |
+
+> 认证说明：历史版本曾使用 `BEDCODE_TOKEN` 做 HTTP API 认证，现已被移除——网关中间件对 `/api/plugin/*` 路径放行、handler 不校验凭证，仅检查插件激活状态。服务监听 `0.0.0.0`，插件端点对局域网内设备可达，安全性依赖本地网络信任。
 
 ## Files
 
@@ -58,7 +59,7 @@ Hooks 配置位于全局 `~/.claude/settings.json`，由 BedCode 桌面端启动
       "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "BEDCODE_PORT=8765 BEDCODE_TOKEN=xxx python \"~/.claude/auto_task_hook.py\" session-start",
+        "command": "BEDCODE_PORT=8765 python \"~/.claude/auto_task_hook.py\" session-start",
         "timeout": 5
       }]
     }]
