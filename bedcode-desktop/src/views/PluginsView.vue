@@ -91,12 +91,22 @@
               </span>
 
               <!-- Toggle -->
-              <div class="flex justify-center" @click.stop>
-                <Toggle
-                  v-if="plugin.pluginType !== 'rust'"
-                  :modelValue="isActivated(plugin.state)"
-                  @update:modelValue="(val: boolean) => handleToggle(plugin.id, val)"
-                />
+              <div class="relative flex justify-center" @click.stop>
+                <template v-if="plugin.pluginType !== 'rust'">
+                  <Toggle
+                    :modelValue="isActivated(plugin.state)"
+                    :disabled="togglingId === plugin.id"
+                    @update:modelValue="(val: boolean) => handleToggle(plugin.id, val)"
+                  />
+                  <!-- loading 遮罩：切换进行中覆盖，防重复点击并给出视觉反馈 -->
+                  <div
+                    v-if="togglingId === plugin.id"
+                    class="absolute inset-0 flex items-center justify-center rounded-full"
+                    style="background: rgba(0, 0, 0, 0.18)"
+                  >
+                    <Spinner size="sm" color="dark" />
+                  </div>
+                </template>
                 <span v-else class="text-xs text-[var(--text-tertiary)]">
                   {{ $t('desktop.plugin.alwaysOn') }}
                 </span>
@@ -169,6 +179,7 @@
 import { onMounted } from 'vue'
 import Toggle from '@/components/Toggle.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import Spinner from '@/components/Spinner.vue'
 import { usePluginManager } from '@/composables/usePluginManager'
 import type { PluginState } from '@/plugin/types'
 
@@ -176,6 +187,7 @@ const {
   plugins,
   loading,
   expandedId,
+  togglingId,
   loadPlugins,
   togglePlugin,
   toggleExpand,
