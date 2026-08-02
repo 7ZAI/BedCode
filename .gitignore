@@ -24,6 +24,7 @@ CONTEXT.md
 **/src-tauri/bedcode.db
 **/src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb
+**/bedcode-desktop/plugins/auto-task/scripts/__pycache__
 
 # IDE and editors
 .idea/

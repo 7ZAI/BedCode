@@ -127,13 +127,28 @@ def setup_logging():
 # ==================== HTTP Helpers ====================
 
 
-def push_task_status(session_id, status, reason, logger, questions=None, bedcode_session_id=None, task_name=None):
+def push_task_status(session_id, status, reason, logger, questions=None, bedcode_session_id=None):
     """推送任务状态到 BedCode 桌面端 HTTP API。
 
     失败不阻塞主流程，仅记录日志。
+
+    注意：不再携带任务名称/内容 —— 任务记录的创建已移交宿主的
+    on_input_submitted 会话扩展方法（避免 Claude Code 输入 hook 双重写表），
+    此接口只负责更新已有任务行的状态。
+
+    session_id 是 Claude Code 会话 ID；bedcode_session_id 是 BedCode PTY 会话 ID
+    （由宿主注入环境变量，默认读取 BEDCODE_SESSION_ID）。两者同时携带，
+    宿主才能把状态更新关联到 on_input_submitted 创建的任务行
+    （该行以 bedcode 会话 ID 作为 session_id 键控）。
     """
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
     url = "http://localhost:{}{}/task-status".format(port, PLUGIN_API_PREFIX)
+
+    # 未显式传入时从环境读取 BedCode PTY 会话 ID：
+    # 除 SessionStart 外的所有事件（UserPromptSubmit/PreToolUse/Stop/SessionEnd）
+    # 都必须携带，否则宿主无法定位任务行
+    if bedcode_session_id is None:
+        bedcode_session_id = os.environ.get("BEDCODE_SESSION_ID", "") or None
 
     payload_dict = {
         "session_id": session_id,
@@ -145,9 +160,6 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
         payload_dict["bedcode_session_id"] = bedcode_session_id
     if questions:
         payload_dict["questions"] = questions
-    # 任务名称：UserPromptSubmit 时将 prompt 作为任务名称
-    if task_name:
-        payload_dict["name"] = task_name
 
     payload = json.dumps(payload_dict).encode("utf-8")
 
@@ -419,7 +431,10 @@ def handle_user_prompt_submit(data, logger):
 
     用户提交新 prompt 时触发，标记任务进入执行状态。
     这是"对话任务开始执行"的精确信号。
-    将 prompt 内容作为任务名称推送，便于桌面端/移动端展示当前任务。
+
+    任务记录的创建已由宿主的 on_input_submitted 会话扩展方法完成
+    （用户按下回车时写入 task_history），此 hook 不再携带任务内容写表，
+    仅推送状态变更，避免与宿主双重写表。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -429,14 +444,12 @@ def handle_user_prompt_submit(data, logger):
     prompt = data.get("prompt", "")
     # 截断过长的 prompt 用于 reason
     prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
-    # 任务名称：取 prompt 第一行，截断到 80 字符
-    task_name = prompt.split("\n")[0][:80]
 
     logger.info(
         "HOOK user_prompt_submit: session_id={} prompt={}".format(session_id, prompt_preview)
     )
 
-    push_task_status(session_id, "in_progress", "User submitted: {}".format(prompt_preview), logger, task_name=task_name)
+    push_task_status(session_id, "in_progress", "User submitted: {}".format(prompt_preview), logger)
 
 
 def handle_pre_tool_use(data, logger):

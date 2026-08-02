@@ -14,7 +14,7 @@ const context = inject<PluginContext>('pluginContext')!
 
 interface TaskRecord {
   id: string
-  name: string
+  description: string | null
   status: string
   session_id: string
   auto_approve: number
@@ -187,7 +187,7 @@ function selectSession(sessionId: string) {
             {{ statusLabel[currentTask.status] || currentTask.status }}
           </span>
         </div>
-        <p class="text-sm text-[var(--text-primary)] truncate">{{ currentTask.name || currentTask.session_id }}</p>
+        <p class="text-sm text-[var(--text-primary)] truncate">{{ currentTask.description || currentTask.session_id }}</p>
         <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ formatTime(currentTask.started_at || currentTask.created_at) }}</p>
       </div>
 
@@ -222,7 +222,7 @@ function selectSession(sessionId: string) {
           >
             <div class="w-2 h-2 rounded-full flex-shrink-0" :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"></div>
             <div class="flex-1 min-w-0">
-              <p class="text-sm text-[var(--text-primary)] truncate">{{ task.name || task.session_id }}</p>
+              <p class="text-sm text-[var(--text-primary)] truncate">{{ task.description || task.session_id }}</p>
               <p class="text-xs text-[var(--text-tertiary)]">{{ formatTime(task.completed_at || task.created_at) }}</p>
             </div>
             <span class="text-xs flex-shrink-0" :class="statusColor[task.status]">

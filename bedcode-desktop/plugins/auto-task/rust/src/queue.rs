@@ -383,9 +383,10 @@ fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
 
     // 如果该 session 还没有 task_history 记录，插入一条语义合理的记录
     // 队列调度时任务确实在执行中，所以 status='in_progress' 而非 idle
+    // 任务内容写入 description 字段（name 字段已从任务表移除）
     if affected == 0 {
         let _ = host.plugin_db_execute_params(
-            "INSERT INTO task_history (id, name, status, session_id, auto_approve, started_at, created_at, updated_at) \
+            "INSERT INTO task_history (id, description, status, session_id, auto_approve, started_at, created_at, updated_at) \
              VALUES (lower(hex(randomblob(16))), 'Auto Task', 'in_progress', ?1, 1, datetime('now'), datetime('now'), datetime('now'))",
             &sql_params![session_id],
         );

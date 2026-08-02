@@ -156,7 +156,7 @@ const _sfc_main = /* @__PURE__ */ defineComponent({
                 class: normalizeClass(["text-xs font-medium", statusColor[currentTask.value.status] || "text-blue-500"])
               }, toDisplayString(statusLabel[currentTask.value.status] || currentTask.value.status), 3)
             ]),
-            createElementVNode("p", _hoisted_6, toDisplayString(currentTask.value.name || currentTask.value.session_id), 1),
+            createElementVNode("p", _hoisted_6, toDisplayString(currentTask.value.description || currentTask.value.session_id), 1),
             createElementVNode("p", _hoisted_7, toDisplayString(formatTime(currentTask.value.started_at || currentTask.value.created_at)), 1)
           ])) : createCommentVNode("", true),
           queue.value.length > 0 ? (openBlock(), createElementBlock("div", _hoisted_8, [
@@ -186,7 +186,7 @@ const _sfc_main = /* @__PURE__ */ defineComponent({
                     class: normalizeClass(["w-2 h-2 rounded-full flex-shrink-0", statusDot[task.status] || "bg-[var(--text-tertiary)]"])
                   }, null, 2),
                   createElementVNode("div", _hoisted_16, [
-                    createElementVNode("p", _hoisted_17, toDisplayString(task.name || task.session_id), 1),
+                    createElementVNode("p", _hoisted_17, toDisplayString(task.description || task.session_id), 1),
                     createElementVNode("p", _hoisted_18, toDisplayString(formatTime(task.completed_at || task.created_at)), 1)
                   ]),
                   createElementVNode("span", {

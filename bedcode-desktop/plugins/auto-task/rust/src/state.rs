@@ -6,7 +6,7 @@
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
 use bedcode_plugin_api::events::{PluginQuestion, SyncEvent};
-use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase};
+use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession};
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -61,6 +61,111 @@ fn upsert_session_mapping(host: &WasmHost, claude_sid: &str, session_id: &str) {
     );
 }
 
+/// 查询 session 映射 — 按 bedcode_session_id 查找 claude_sid（反向查询）
+fn find_claude_sid_by_session(host: &WasmHost, bedcode_sid: &str) -> Option<String> {
+    let result = host
+        .plugin_db_query_params(
+            "SELECT claude_sid FROM session_mapping WHERE session_id = ?1",
+            &sql_params![bedcode_sid],
+        )
+        .ok()
+        .flatten()?;
+    result.as_array()?.first()?.get("claude_sid")?.as_str().map(|s| s.to_string())
+}
+
+// ==================== 会话输入 → 任务创建 ====================
+
+/// 判断会话启动命令是否为 Claude Code
+///
+/// 两步查询：session_get 取 SessionInfo.config_id（camelCase 序列化），
+/// 再在 session_config_list 中匹配对应配置的 command。
+/// 命令如 `claude` / `claude.exe` 或完整路径均视为 Claude 会话。
+pub fn session_command_is_claude(host: &WasmHost, session_id: &str) -> bool {
+    // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
+    let config_id = match host.session_get(session_id) {
+        Ok(Some(info)) => info
+            .get("configId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    };
+    let config_id = match config_id {
+        Some(id) => id,
+        None => return false,
+    };
+
+    // 2. session_config_list 查找对应配置的启动命令
+    let command = match host.session_config_list() {
+        Ok(Some(configs)) => configs
+            .as_array()
+            .and_then(|arr| {
+                arr.iter().find(|c| {
+                    c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str())
+                })
+            })
+            .and_then(|c| c.get("command").and_then(|v| v.as_str()).map(|s| s.to_string())),
+        _ => None,
+    };
+
+    command
+        .map(|c| c.to_lowercase().contains("claude"))
+        .unwrap_or(false)
+}
+
+/// 判断会话当前是否有进行中的任务
+///
+/// 以 task_history 最新一条记录为准：状态为终态（completed/interrupted）、
+/// idle 或无记录时视为无当前任务，可以创建新任务。
+pub fn has_active_task(host: &WasmHost, session_id: &str) -> bool {
+    find_task_by_session(host, session_id)
+        .and_then(|row| row.get("status").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .map(|status| !matches!(status.as_str(), "completed" | "interrupted" | "idle"))
+        .unwrap_or(false)
+}
+
+/// 从提交的输入行创建任务记录（宿主 on_input_submitted 会话扩展调用）
+///
+/// 仅 Claude 会话且无当前任务时调用。输入作为任务内容写入 description 字段，
+/// 状态置为 in_progress（输入已提交执行）。写表职责从 Claude Code 输入 hook
+/// 移交到宿主侧，避免 hook 与宿主双重写表。
+///
+/// 同时反向查 session_mapping 写入 claude_sid：这样任务行同时带 claude_sid
+/// 和 bedcode session_id 双键，后续 hook 的状态推送（只带 claude_sid 或
+/// 只带 bedcode_session_id）都能命中该行。
+pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
+    let claude_sid = find_claude_sid_by_session(host, session_id);
+
+    let sql = "INSERT INTO task_history (id, description, status, session_id, claude_sid, started_at, created_at, updated_at) \
+               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, datetime('now'), datetime('now'), datetime('now'))";
+    // claude_sid 映射缺失时绑定 NULL（SessionStart 之前就提交输入等边缘场景）
+    let claude_sid_param = claude_sid
+        .as_ref()
+        .map(|s| serde_json::Value::String(s.clone()))
+        .unwrap_or(serde_json::Value::Null);
+    match host.plugin_db_execute_params(sql, &sql_params![input, session_id, claude_sid_param]) {
+        Ok(affected) => host.log_info(&format!(
+            "Task created from input: session_id={} claude_sid={:?} len={} affected={}",
+            session_id, claude_sid, input.len(), affected
+        )),
+        Err(e) => host.log_error(&format!(
+            "Failed to create task from input: session_id={} err={}",
+            session_id, e
+        )),
+    }
+
+    // 广播状态变更到移动端 + 消息总线通知其他插件
+    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
+        session_id: session_id.to_string(),
+        task_status: "in_progress".to_string(),
+        task_reason: Some("User submitted input".to_string()),
+        task_questions: None,
+    });
+    let _ = host.bus_publish("task:status-changed", &serde_json::json!({
+        "session_id": session_id,
+        "task_status": "in_progress",
+    }));
+}
+
 // ==================== HTTP 端点处理 ====================
 
 /// 处理 HTTP 端点请求
@@ -94,11 +199,10 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     let reason = body.get("reason").and_then(|v| v.as_str());
     let questions = body.get("questions");
     let bedcode_session_id = body.get("bedcode_session_id").and_then(|v| v.as_str());
-    let task_name = body.get("name").and_then(|v| v.as_str());
 
     host.log_debug(&format!(
-        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}, name={:?}",
-        session_id, status, reason, questions.is_some(), bedcode_session_id, task_name
+        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}",
+        session_id, status, reason, questions.is_some(), bedcode_session_id
     ));
 
     if session_id.is_empty() {
@@ -113,12 +217,18 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         return http_response::error(400, &format!("Invalid task status: {}. Must be one of: {}", status, valid_statuses.join(", ")));
     }
 
-    // 解析 bedcode_session_id
-    let resolved_session_id = bedcode_session_id.filter(|s| !s.is_empty()).unwrap_or(session_id);
+    // 解析 bedcode_session_id：显式携带优先；否则经 session_mapping 表把 claude_sid 解析成 bedcode sid
+    // （宿主 on_input_submitted 创建的行以 bedcode sid 作为 session_id 键控，
+    //   仅带 claude_sid 的推送必须经映射解析才能命中）
+    let resolved_session_id = bedcode_session_id
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| resolve_session_id(host, session_id));
 
-    // 查找已有任务记录
+    // 查找已有任务记录：优先按 claude_sid（宿主建行时已反向写入），
+    // 兜底按解析后的 bedcode sid（兼容建行时映射缺失的旧数据）
     let existing = find_task_by_claude_sid(host, session_id)
-        .or_else(|| find_task_by_session(host, resolved_session_id));
+        .or_else(|| find_task_by_session(host, &resolved_session_id));
 
     if let Some(row) = existing {
         // 终态保护：completed / interrupted 不应被后续事件降级
@@ -159,14 +269,6 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             clauses.push(format!("claude_sid = {}", push_param(&mut params, Value::String(session_id.to_string()))));
         }
 
-        // 更新任务名称：仅在当前 name 为空且新 name 不为空时更新
-        if let Some(name) = task_name.filter(|n| !n.is_empty()) {
-            let current_name = row.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if current_name.is_empty() {
-                clauses.push(format!("name = {}", push_param(&mut params, Value::String(name.to_string()))));
-            }
-        }
-
         // 状态转换时更新时间戳（SQL 函数，无绑定参数）
         match status {
             "in_progress" => clauses.push("started_at = datetime('now')".to_string()),
@@ -197,35 +299,12 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         // idle 状态无需广播任务变更，直接返回
         return http_response::ok();
     } else {
-        // 非 idle 且无已有记录 → 创建新任务（UserPromptSubmit 首次推送时）
-        // questions 以 JSON 字符串存储（宿主对数组/对象参数自动序列化绑定）
-        let questions_val = questions
-            .map(|q| serde_json::to_value(q).unwrap_or(Value::String(String::new())))
-            .unwrap_or_else(|| Value::String(String::new()));
-        let reason_val = reason
-            .map(|r| Value::String(r.to_string()))
-            .unwrap_or_else(|| Value::String(String::new()));
-        let name_val = Value::String(task_name.filter(|n| !n.is_empty()).unwrap_or("").to_string());
-
-        let sql = "INSERT INTO task_history (id, name, status, session_id, claude_sid, exit_reason, questions, created_at, updated_at) \
-             VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))";
-        let params = vec![
-            name_val,
-            Value::String(status.to_string()),
-            Value::String(resolved_session_id.to_string()),
-            Value::String(session_id.to_string()),
-            reason_val,
-            questions_val,
-        ];
-        match host.plugin_db_execute_params(sql, &params) {
-            Ok(affected) => host.log_debug(&format!("INSERT task_history: affected={}", affected)),
-            Err(e) => host.log_error(&format!("INSERT task_history failed: {}", e)),
-        }
-
-        // 同步存储 session 映射
-        if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
-            upsert_session_mapping(host, session_id, bedcode_sid);
-        }
+        // 无已有记录：任务行创建已移交宿主 on_input_submitted 会话扩展，
+        // Claude Code 输入 hook 不再负责写表，此处仅记录日志避免静默忽略
+        host.log_debug(&format!(
+            "task-status: session_id={} has no task row, skip write (host session extension owns creation)",
+            session_id
+        ));
     }
 
     // 广播状态变更到移动端（类型化 SyncEvent，serde 表示即线协议）
@@ -249,7 +328,7 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     // 任务终态时检查队列，尝试调度下一个任务
     // idle 不触发：仅表示"无任务运行"，SessionStart 时推送 idle，此时不应出队
     if matches!(status, "completed" | "interrupted") {
-        crate::queue::try_dispatch_next(host, resolved_session_id);
+        crate::queue::try_dispatch_next(host, &resolved_session_id);
     }
 
     http_response::ok()
@@ -382,12 +461,12 @@ pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Valu
 pub fn list_task_history(host: &WasmHost, session_id: &str) -> anyhow::Result<Value> {
     let (sql, params): (&str, Vec<Value>) = if session_id.is_empty() {
         (
-            "SELECT id, name, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history ORDER BY created_at DESC LIMIT 100",
+            "SELECT id, description, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history ORDER BY created_at DESC LIMIT 100",
             vec![],
         )
     } else {
         (
-            "SELECT id, name, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 100",
+            "SELECT id, description, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 100",
             sql_params![session_id],
         )
     };

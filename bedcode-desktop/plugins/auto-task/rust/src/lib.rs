@@ -25,7 +25,6 @@ const TASK_HISTORY_SCHEMA: &[&str] = &[
     r#"
 CREATE TABLE IF NOT EXISTS task_history (
     id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
     description     TEXT,
     status          TEXT NOT NULL DEFAULT 'pending',
     agent           TEXT,
@@ -49,7 +48,8 @@ CREATE TABLE IF NOT EXISTS task_history (
 /// Claude Code session ↔ BedCode PTY session 映射表建表 SQL（按语句拆分）
 ///
 /// SessionStart 时仅存储映射关系，不创建空壳任务记录。
-/// UserPromptSubmit 时才真正创建 task_history 行，此时 name 有值。
+/// 任务行由宿主 on_input_submitted 会话扩展在用户提交输入时创建，
+/// 输入作为任务内容写入 description 字段。
 const SESSION_MAPPING_SCHEMA: &[&str] = &[
     r#"
 CREATE TABLE IF NOT EXISTS session_mapping (
@@ -207,6 +207,17 @@ impl WasmPlugin for AutoTaskPlugin {
         }
         host.log_info("task_history table initialized");
 
+        // 2.1 迁移：移除旧版 task_history.name 列（标题字段）
+        // 旧库的 name 列为 NOT NULL，新 INSERT 不再写入会触发约束错误；
+        // SQLite 3.35+ 支持 DROP COLUMN，fresh 库（无此列）报错时忽略即可
+        match host.plugin_db_execute("ALTER TABLE task_history DROP COLUMN name") {
+            Ok(_) => host.log_info("task_history migration: dropped legacy 'name' column"),
+            Err(e) => host.log_debug(&format!(
+                "task_history migration: drop 'name' skipped (likely fresh table): {}",
+                e
+            )),
+        }
+
         // 3. 初始化 session 映射表
         for stmt in SESSION_MAPPING_SCHEMA {
             match host.plugin_db_execute(stmt) {
@@ -299,8 +310,24 @@ impl WasmPlugin for AutoTaskPlugin {
             event.text
         ));
 
-        // TODO(auto-task): 基于提交输入行的业务处理（如任务队列指令解析、输入审计统计）。
-        // 当前仅观察日志；注意回调中避免调用 terminal_send 造成自触发循环（见 ADR 0001）
+        // 仅在 Claude Code 会话中把输入当作任务：非 claude 启动命令的会话直接忽略
+        if !state::session_command_is_claude(&host, &event.session_id) {
+            host.log_debug(&format!(
+                "InputSubmitted: session={} is not a claude session, skip task creation",
+                event.session_id
+            ));
+            return Ok(());
+        }
+
+        // 会话已有进行中的任务则不再创建：队列调度由插件自身 terminal_send 投递输入，
+        // 此时最新记录已置为 in_progress，依赖此检查避免自触发循环（见 ADR 0001）
+        if state::has_active_task(&host, &event.session_id) {
+            return Ok(());
+        }
+
+        // 把输入作为当前任务写入任务历史（写表职责已从 Claude Code 输入 hook 移交宿主）
+        state::create_task_from_input(&host, &event.session_id, &event.text);
+
         Ok(())
     }
 }

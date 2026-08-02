@@ -54,7 +54,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
 
     // /api scope — 挂载 JWT 网关中间件
-    // 中间件内部按路径区分：/api/auth/* 公开放行，/api/plugin/* 允许 plugin token，其余要求 JWT
+    // 中间件内部按路径区分：/api/auth/* 公开放行；/api/plugin/* 有 JWT 则校验、
+    // 无 JWT 直接放行（hook 脚本等调用方无法持有 JWT，handler 仅校验插件激活状态）；
+    // 其余要求 JWT
     cfg.service(
         web::scope("/api")
             .wrap_fn(|req, srv| {
@@ -76,7 +78,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     return srv.call(req);
                 }
 
-                // 插件端点：无 JWT 时放行给 handler 自行校验 plugin token
+                // 插件端点：无 JWT 时放行（handler 不校验任何凭证，仅检查插件激活状态；
+                // 信任边界：服务监听 0.0.0.0，插件端点对局域网内任意设备可达）
                 if is_plugin_path(&path) {
                     return srv.call(req);
                 }

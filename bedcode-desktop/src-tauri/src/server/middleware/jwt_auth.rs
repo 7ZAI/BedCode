@@ -2,9 +2,13 @@
 //!
 //! 挂载在 /api scope 上，统一拦截认证：
 //! - /api/auth/* — 放行（公开路由，配对/登录）
-//! - /api/plugin/* — 优先校验 JWT，无 JWT 时放行（hook 脚本等本地调用方无 JWT，
-//!   端点安全性由 hook 仅在 BedCode 注入环境变量的 PTY 中生效 + 本地网络信任保证）
+//! - /api/plugin/* — 优先校验 JWT，无 JWT 时放行（hook 脚本由插件注入 PTY 环境、
+//!   无法持有 JWT；handler 不校验任何凭证，仅检查插件激活状态）
 //! - 其余 /api/* — 必须通过 JWT 校验
+//!
+//! 信任边界：服务监听 BIND_ADDRESS（0.0.0.0），局域网内任意设备均可无凭证调用
+//! 已激活插件的 HTTP 端点（含写操作）。插件端点的安全增益只能来自插件自身的
+//! 业务校验，本中间件对此不提供保护。
 //!
 //! 校验通过后将 JwtClaims 注入 request extensions，handler 通过 get_claims_from_request 提取。
 

@@ -28,7 +28,9 @@ pub async fn plugin_http_endpoint(
 
     // 认证由网关中间件统一处理：
     // - JWT 请求：中间件校验通过后 claims 已注入 extensions
-    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行，依赖本地网络信任
+    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行；
+    //   本 handler 不校验任何凭证（历史 BEDCODE_TOKEN 凭证从未被宿主校验，已移除），
+    //   仅校验插件激活状态。服务监听 0.0.0.0，插件端点对局域网可达
 
     // 检查插件是否已激活
     let ctx = AppContext::global();
