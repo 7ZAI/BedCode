@@ -8,6 +8,7 @@ pub mod constants;
 pub mod error;
 pub mod error_boundary;
 pub mod lifecycle;
+pub mod logging;
 pub mod power;
 
 pub use app_context::AppContext;
