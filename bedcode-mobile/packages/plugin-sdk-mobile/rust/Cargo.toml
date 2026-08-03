@@ -11,8 +11,5 @@ inventory = "0.3"
 
 [features]
 default = []
-wasm = ["wasm-bindgen"]
-
-[dependencies.wasm-bindgen]
-version = "0.2"
-optional = true
+# WASM 插件必开：启用 WasmPlugin trait / wasm_entry! 宏 / WasmHost 绑定
+wasm = []

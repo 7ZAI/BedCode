@@ -7,8 +7,11 @@
 //! 启用 `wasm` feature 后，额外提供 `WasmPlugin` trait 和 `wasm_entry!` 宏，
 //! 用于编译为 WASM 模块的插件。
 
+pub mod abi;
+pub mod args;
 pub mod command;
 pub mod context;
+pub mod host;
 pub mod permission;
 pub mod terminal;
 pub mod traits;
@@ -34,8 +37,10 @@ pub mod wasm;
 #[cfg(feature = "wasm")]
 pub mod wasm_host;
 
+pub use args::CommandArgs;
 pub use command::{PluginCommand, PluginCommandEntry};
 pub use context::RustPluginContext;
+pub use host::{HostApi, HostBus, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog, HostSession, HostStorage, HostTerminal};
 pub use permission::PermissionManager;
 pub use terminal::TerminalHandler;
 pub use traits::{BedcodePlugin, BedcodePluginEntry};
