@@ -33,6 +33,11 @@ export type {
   I18nAPI,
   LifecycleAPI,
   LoggerAPI,
+  DialogAPI,
+  DialogOptions,
+  DialogResult,
+  NotificationAPI,
+  StatusAPI,
   PluginContext,
   PluginModule,
 } from '@bedcode/plugin-sdk-mobile'
@@ -50,4 +55,6 @@ export interface PluginInfo {
   state: import('@bedcode/plugin-sdk-mobile').PluginState
   contributes: import('@bedcode/plugin-sdk-mobile').MobilePluginContributes
   source: string
+  /** 插件目录路径（含 plugin.json），前端经 asset protocol 加载前端模块 */
+  extensionPath: string
 }

@@ -4,6 +4,9 @@
 
     <!-- Global Toast Container -->
     <ToastContainer />
+
+    <!-- Plugin Dialog Host -->
+    <PluginDialogHost />
   </div>
 </template>
 
@@ -14,6 +17,7 @@ import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import { ToastContainer } from '@/composables/useToast'
+import PluginDialogHost from '@/plugin/PluginDialogHost.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
 // mDNS 广播暂时禁用：移动端目前不需要被发现，避免扫描到自身

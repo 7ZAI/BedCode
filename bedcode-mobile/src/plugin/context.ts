@@ -17,6 +17,9 @@ import type {
   I18nAPI,
   LifecycleAPI,
   LoggerAPI,
+  DialogAPI,
+  NotificationAPI,
+  StatusAPI,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
@@ -26,6 +29,7 @@ import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
 import * as pluginEvents from './events'
 import { getPluginRegistry } from './registry'
+import { getSharedModule } from './shared-runtime'
 
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
@@ -223,6 +227,46 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     error(message: string): void { pluginCmds.pluginLog(info.id, 'error', message) },
   }
 
+  // ==================== DialogAPI ====================
+  const dialogs: DialogAPI = {
+    showDialog(options) {
+      return getSharedModule('dialogs').showDialog(options)
+    },
+    showConfirm(options) {
+      return getSharedModule('dialogs').showConfirm(options)
+    },
+    showPrompt(options) {
+      return getSharedModule('dialogs').showPrompt(options)
+    },
+    showToast(message, type = 'info') {
+      getSharedModule('dialogs').showToast(message, type)
+    },
+  }
+
+  // ==================== NotificationAPI ====================
+  const notifications: NotificationAPI = {
+    async notify(title, body) {
+      const { sendNotification, isPermissionGranted, requestPermission } = await import(
+        '@tauri-apps/plugin-notification',
+      )
+      if (!(await isPermissionGranted())) {
+        const granted = await requestPermission()
+        if (!granted) return
+      }
+      sendNotification({ title, body })
+    },
+  }
+
+  // ==================== StatusAPI ====================
+  const status: StatusAPI = {
+    async reportReady() {
+      return pluginCmds.pluginReportReady(info.id)
+    },
+    async reportError(error) {
+      return pluginCmds.pluginMarkError(info.id, error)
+    },
+  }
+
   return {
     id: info.id,
     commands,
@@ -234,6 +278,9 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     i18n,
     lifecycle,
     logger,
+    dialogs,
+    notifications,
+    status,
     _disposables: disposables,
   }
 }

@@ -30,7 +30,7 @@
                 class="preset-chip"
                 :disabled="!activeSessionId"
                 @click="handleAddFromPreset(task)"
-              >{{ task.title }}</button>
+              >{{ task.content }}</button>
             </div>
           </div>
 
@@ -297,6 +297,9 @@ async function handleClear() {
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .preset-chip:hover {

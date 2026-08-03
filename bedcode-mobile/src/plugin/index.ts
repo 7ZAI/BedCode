@@ -11,6 +11,7 @@ export type * from './types'
 
 import { initSharedRuntime } from './shared-runtime'
 import { pluginLoader } from './loader'
+import { pluginDialogHost } from './dialog-host'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 
 /**
@@ -24,8 +25,8 @@ export async function initPluginSystem(
   router: any,
   i18n: any,
 ): Promise<void> {
-  // 1. 初始化共享运行时
-  await initSharedRuntime(app, pinia, router, i18n, { usePresetTasks })
+  // 1. 初始化共享运行时（含对话框服务）
+  await initSharedRuntime(app, pinia, router, i18n, { usePresetTasks }, pluginDialogHost)
 
   // 2. 加载所有已激活插件的前端模块
   await pluginLoader.loadAll()

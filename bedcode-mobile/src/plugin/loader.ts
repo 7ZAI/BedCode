@@ -6,6 +6,7 @@
  */
 
 import type { PluginInfo, PluginModule, PluginContext } from './types'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import * as pluginCmds from './commands'
 import { createPluginContext } from './context'
 import { clearPluginEvents } from './events'
@@ -110,9 +111,9 @@ class PluginLoaderClass {
   /** 加载前端模块（内部方法） */
   private async loadFrontend(manifest: PluginInfo): Promise<void> {
     try {
-      // 插件代码编译进主 bundle，通过 tauri://localhost/ 协议提供
-      // Android 上自动变为 http://tauri.localhost/
-      const module = await this.importWithTimeout(manifest.main)
+      // 经 Tauri asset protocol 从插件目录直读前端模块
+      // Android 上自动变为 http://tauri.localhost/，与桌面端 convertFileSrc 方案一致
+      const module = await this.importWithTimeout(this.convertFileUrl(manifest.extensionPath, manifest.main))
 
       const context = createPluginContext(manifest)
       await this.activateWithTimeout(module, context)
@@ -126,17 +127,21 @@ class PluginLoaderClass {
     }
   }
 
+  /** 将插件路径转换为可导入的 URL（通过 Tauri asset protocol） */
+  private convertFileUrl(extensionPath: string, main: string): string {
+    const filePath = `${extensionPath}/${main}`.replace(/\\/g, '/')
+    return convertFileSrc(filePath)
+  }
+
   /** 带超时的动态导入 */
-  private async importWithTimeout(mainPath: string): Promise<PluginModule> {
+  private async importWithTimeout(url: string): Promise<PluginModule> {
     let timer: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Import timeout: ${mainPath}`)), IMPORT_TIMEOUT)
+      timer = setTimeout(() => reject(new Error(`Import timeout: ${url}`)), IMPORT_TIMEOUT)
     })
     try {
-      // manifest.main = "plugins/com.bedcode.ai-chatbox/index.js"
-      // 编译进主 bundle 后通过 http://tauri.localhost/ 协议提供
       return await Promise.race([
-        import(/* @vite-ignore */ `/${mainPath}`),
+        import(/* @vite-ignore */ url),
         timeout,
       ])
     } finally {

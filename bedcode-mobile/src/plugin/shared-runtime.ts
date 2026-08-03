@@ -14,6 +14,7 @@ export async function initSharedRuntime(
   router: any,
   i18n: any,
   presetTasks: any,
+  dialogs: any,
 ): Promise<void> {
   const vue = await import('vue')
   ;(window as any)[SHARED_KEY] = {
@@ -22,6 +23,7 @@ export async function initSharedRuntime(
     router,
     i18n,
     presetTasks,
+    dialogs,
   }
 }
 
