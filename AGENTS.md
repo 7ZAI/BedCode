@@ -203,7 +203,7 @@ git config core.hooksPath scripts/hooks
 
 ### 受保护路径
 
-`docs/`、`AGENTS.md`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置（`agents/`、`extensions/`、`prompts/`、`settings.json`）。定义在 `scripts/doc-tracking.sh` 的 `PROTECTED_PATHS`，与 `.gitignore` 对应段落保持同步。
+`docs/`、`AGENTS.md`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置（`agents/`、`extensions/`、`prompts/`、`settings.json`）、`.scratch/`（issue 文档）。定义在 `scripts/doc-tracking.sh` 的 `PROTECTED_PATHS`，与 `.gitignore` 对应段落保持同步。
 
 ### 行为规则
 

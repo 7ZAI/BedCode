@@ -1,7 +1,7 @@
 #!/bin/sh
 # 分支级文档跟踪助手（doc-tracking）
 #
-# 背景：文档/配置文件（docs/、AGENTS.md、CLAUDE.md、CONTEXT.md、.pi 配置）只在跟踪分支
+# 背景：文档/配置文件（docs/、AGENTS.md、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch issue 文档）只在跟踪分支
 # （默认 dev）入库；其他分支（master / uat / milestone 等）不跟踪。
 # .gitignore 已忽略这些路径，因此非跟踪分支剔除后它们在工作区中保持"被忽略"
 # 状态，来回切换分支不会冲突。
@@ -23,7 +23,7 @@ TRACKING_BRANCHES="${DOC_TRACKING_BRANCHES:-dev}"
 # 受保护路径，与 .gitignore 的 Documentation / IDE 段落对应。
 # 注意：.pi 只跟踪配置（agents/extensions/prompts/settings.json），
 # .pi/sessions/ 会话日志始终忽略、不入库（勿执行 git add -f .pi 整目录）。
-PROTECTED_PATHS="docs AGENTS.md CLAUDE.md CONTEXT.md .pi"
+PROTECTED_PATHS="docs AGENTS.md CLAUDE.md CONTEXT.md .pi .scratch"
 
 # ==================== 工具函数 ====================
 
