@@ -325,10 +325,15 @@ impl HostBus for WasmHost {
 // ==================== WASM Import Declarations ====================
 //
 // 这些 extern "C" 声明在编译为 WASM 时对应宿主在 wasmtime Linker 中
-// 注册的 "bedcode" 命名空间下的 host functions。
+// 注册的 abi::NAMESPACE（"bedcode"）命名空间下的 host functions。
 // v3 起返回 (ptr, len) 结果的函数通过 out_ptr 输出（8 字节: ptr + len），
 // 返回 i32 状态码（0 成功，非 0 失败）—— 消除元组返回的 FFI-safe 警告。
+//
+// #[link(wasm_import_module)] 确保 WASM 模块从 "bedcode" 命名空间导入，
+// 而非默认的 "env" 命名空间 —— 与宿主 Linker 注册命名空间一致
+// （缺少该属性会导致实例化失败：unknown import `env::host_*`）。
 
+#[link(wasm_import_module = "bedcode")]
 extern "C" {
     /// 存储：获取值 — 结果写入 out_ptr，返回 0 成功
     fn host_storage_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
