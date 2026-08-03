@@ -32,6 +32,11 @@ export type {
   I18nAPI,
   LifecycleAPI,
   LoggerAPI,
+  DialogOptions,
+  DialogResult,
+  DialogAPI,
+  NotificationAPI,
+  StatusAPI,
   PluginContext,
   PluginModule,
 } from './types'

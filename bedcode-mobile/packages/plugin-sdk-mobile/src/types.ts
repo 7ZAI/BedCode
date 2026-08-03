@@ -159,6 +159,59 @@ export interface LoggerAPI {
   error(message: string): void
 }
 
+// ==================== 对话框 ====================
+
+/** 对话框选项 */
+export interface DialogOptions {
+  title?: string
+  message?: string
+  /** 视觉风格（默认 info） */
+  variant?: 'info' | 'warning' | 'danger'
+  confirmText?: string
+  cancelText?: string
+  /** showPrompt 时：输入框 placeholder */
+  inputPlaceholder?: string
+  /** showPrompt 时：输入框默认值 */
+  inputValue?: string
+  /** 是否可点击背景关闭（默认 false） */
+  dismissible?: boolean
+}
+
+/** 对话框结果 */
+export interface DialogResult {
+  action: 'confirm' | 'cancel'
+  value?: string
+}
+
+/** 对话框 API — 宿主渲染移动端样式弹窗 */
+export interface DialogAPI {
+  /** 通用对话框：返回用户操作结果 */
+  showDialog(options: DialogOptions): Promise<DialogResult>
+  /** 确认框：返回是否确认 */
+  showConfirm(options: DialogOptions): Promise<boolean>
+  /** 输入框：返回输入值；取消返回 null */
+  showPrompt(options: DialogOptions): Promise<string | null>
+  /** 轻提示（宿主 toast） */
+  showToast(message: string, type?: 'info' | 'success' | 'warning' | 'error'): void
+}
+
+// ==================== 通知 ====================
+
+/** 系统通知 API — 走宿主 tauri-plugin-notification */
+export interface NotificationAPI {
+  notify(title: string, body?: string): Promise<void>
+}
+
+// ==================== 状态上报 ====================
+
+/** 插件状态上报 API — 启用时通过生命周期函数上报启动成功/失败 */
+export interface StatusAPI {
+  /** 显式上报启动成功（activate 隐式成功之外的自愈通道：Error → Activated） */
+  reportReady(): Promise<void>
+  /** 上报启动/运行失败，宿主置 Error 状态并持久化未启用 */
+  reportError(error: string): Promise<void>
+}
+
 // ==================== PluginContext API ====================
 
 /** 命令注册表 */
@@ -231,6 +284,12 @@ export interface PluginContext {
   readonly i18n: I18nAPI
   readonly lifecycle: LifecycleAPI
   readonly logger: LoggerAPI
+  /** 对话框（弹窗扩展性） */
+  readonly dialogs: DialogAPI
+  /** 系统通知 */
+  readonly notifications: NotificationAPI
+  /** 生命周期状态上报（启用成功/失败） */
+  readonly status: StatusAPI
   readonly _disposables: Disposable[]
 }
 
