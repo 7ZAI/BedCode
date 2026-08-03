@@ -137,7 +137,7 @@
           class="flex items-center justify-between cursor-pointer active:opacity-80 transition-colors"
           @click="router.push({ name: 'mobile-plugins' })"
         >
-          <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('mobile.plugin.title') }}</span>
+          <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold tracking-wider uppercase">{{ $t('mobile.plugin.title') }}</h3>
           <svg class="w-4 h-4 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
