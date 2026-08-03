@@ -11,11 +11,7 @@ anyhow = "1"
 
 [features]
 default = []
-wasm = ["wasm-bindgen", "bedcode-plugin-api-mobile/wasm"]
-
-[dependencies.wasm-bindgen]
-version = "0.2"
-optional = true
+wasm = ["bedcode-plugin-api-mobile/wasm"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

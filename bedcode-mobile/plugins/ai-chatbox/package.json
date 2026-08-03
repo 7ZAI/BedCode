@@ -4,10 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:frontend": "vite build",
-    "build:rust": "cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release",
-    "build": "node scripts/build.js",
-    "dev": "node scripts/build.js --watch"
+    "build": "bedcode-plugin build",
+    "package": "bedcode-plugin package"
   },
   "dependencies": {
     "@bedcode/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"

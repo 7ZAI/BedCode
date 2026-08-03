@@ -56,12 +56,11 @@ fn is_leap(year: u64) -> bool {
 
 /// 获取 WasmHost 实例
 fn host() -> WasmHost {
-    WasmHost::new("com.bedcode.ai-chatbox")
+    WasmHost
 }
 
 /// 流式聊天：WASM 模式同步调用 http_fetch stream:true
-pub fn chat_stream(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn chat_stream(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let stream_id = args["streamId"].as_str().unwrap_or("").to_string();
     let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
     let messages: Vec<ChatMessage> = serde_json::from_value(args["messages"].clone())?;
@@ -75,8 +74,7 @@ pub fn chat_stream(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 非流式聊天
-pub fn chat_complete(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn chat_complete(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
     let messages: Vec<ChatMessage> = serde_json::from_value(args["messages"].clone())?;
 
@@ -85,8 +83,7 @@ pub fn chat_complete(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 提示词优化
-pub fn optimize_prompt(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn optimize_prompt(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let provider: ApiProvider = serde_json::from_value(args["provider"].clone())?;
     let prompt = args["prompt"].as_str().unwrap_or("").to_string();
 
@@ -104,14 +101,13 @@ pub fn optimize_prompt(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 列出所有对话
-pub fn list_conversations(_args_json: &str) -> anyhow::Result<serde_json::Value> {
+pub fn list_conversations(_args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let conversations = db::list_conversations(&host())?;
     Ok(serde_json::json!({ "conversations": conversations }))
 }
 
 /// 获取对话消息
-pub fn get_messages(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn get_messages(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let conversation_id = args["conversationId"].as_str().unwrap_or("").to_string();
 
     if conversation_id.is_empty() {
@@ -123,8 +119,7 @@ pub fn get_messages(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 保存对话
-pub fn save_conversation(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn save_conversation(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let conv: db::ConversationMeta = serde_json::from_value(args["conversation"].clone())?;
 
     db::save_conversation(&host(), &conv)?;
@@ -132,8 +127,7 @@ pub fn save_conversation(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 保存消息
-pub fn save_message(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn save_message(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let conversation_id = args["conversationId"].as_str().unwrap_or("").to_string();
     let role = args["role"].as_str().unwrap_or("").to_string();
     let content = args["content"].as_str().unwrap_or("").to_string();
@@ -150,8 +144,7 @@ pub fn save_message(args_json: &str) -> anyhow::Result<serde_json::Value> {
 }
 
 /// 删除对话
-pub fn delete_conversation(args_json: &str) -> anyhow::Result<serde_json::Value> {
-    let args: serde_json::Value = serde_json::from_str(args_json)?;
+pub fn delete_conversation(args: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let conversation_id = args["conversationId"].as_str().unwrap_or("").to_string();
 
     if conversation_id.is_empty() {

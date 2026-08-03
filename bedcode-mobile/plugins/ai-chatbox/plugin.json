@@ -7,7 +7,7 @@
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
-  "permissions": ["ui:toolbox", "ui:navtab", "storage", "terminal:input", "terminal:output", "session:read"],
+  "permissions": ["ui:toolbox", "ui:navtab", "storage", "terminal:input", "terminal:output", "session:read", "network:http"],
   "contributes": {
     "commands": [
       { "id": "ai-chatbox.chat-stream", "title": "Chat Stream" },

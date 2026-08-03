@@ -7,7 +7,7 @@
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_auto_task",
-  "permissions": ["ui:terminalToolbar", "storage", "session:read"],
+  "permissions": ["ui:input", "storage", "session:read"],
   "contributes": {
     "commands": [
       { "id": "auto-task.list-queue", "title": "List Task Queue" },

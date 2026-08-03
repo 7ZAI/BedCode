@@ -3,7 +3,7 @@
 //! ai-chatbox 插件的自定义数据库表操作
 //! 所有表名以 plugin_com_bedcode_ai_chatbox_ 为前缀，确保宿主校验通过
 
-use bedcode_plugin_api_mobile::WasmHost;
+use bedcode_plugin_api_mobile::{HostDatabase, HostLog, WasmHost};
 use serde::{Deserialize, Serialize};
 
 /// 对话元数据
@@ -69,15 +69,11 @@ pub fn init(host: &WasmHost) -> anyhow::Result<()> {
         TABLE_MESSAGES, TABLE_CONVERSATIONS
     );
 
-    let result1 = host.db_execute(&sql1);
-    if result1 < 0 {
-        return Err(anyhow::anyhow!("Failed to create conversations table: error code {}", result1));
-    }
+    host.db_execute(&sql1)
+        .map_err(|e| anyhow::anyhow!("Failed to create conversations table: {}", e))?;
 
-    let result2 = host.db_execute(&sql2);
-    if result2 < 0 {
-        return Err(anyhow::anyhow!("Failed to create messages table: error code {}", result2));
-    }
+    host.db_execute(&sql2)
+        .map_err(|e| anyhow::anyhow!("Failed to create messages table: {}", e))?;
 
     host.log_info("Custom DB tables initialized");
     Ok(())
@@ -91,7 +87,8 @@ pub fn list_conversations(host: &WasmHost) -> anyhow::Result<Vec<ConversationMet
     );
 
     let rows = host.db_query(&sql)
-        .ok_or_else(|| anyhow::anyhow!("Failed to query conversations"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to query conversations: {}", e))?
+        .unwrap_or_default();
 
     let conversations: Vec<ConversationMeta> = serde_json::from_value(rows)
         .unwrap_or_default();
@@ -107,7 +104,8 @@ pub fn get_messages(host: &WasmHost, conversation_id: &str) -> anyhow::Result<Ve
     );
 
     let rows = host.db_query(&sql)
-        .ok_or_else(|| anyhow::anyhow!("Failed to query messages"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to query messages: {}", e))?
+        .unwrap_or_default();
 
     let messages: Vec<ChatMessageRecord> = serde_json::from_value(rows)
         .unwrap_or_default();
@@ -127,10 +125,8 @@ pub fn save_conversation(host: &WasmHost, conv: &ConversationMeta) -> anyhow::Re
         sql_value(&conv.provider_name)
     );
 
-    let result = host.db_execute(&sql);
-    if result < 0 {
-        return Err(anyhow::anyhow!("Failed to save conversation: error code {}", result));
-    }
+    host.db_execute(&sql)
+        .map_err(|e| anyhow::anyhow!("Failed to save conversation: {}", e))?;
     Ok(())
 }
 
@@ -145,10 +141,8 @@ pub fn save_message(host: &WasmHost, conversation_id: &str, role: &str, content:
         sql_value(&timestamp)
     );
 
-    let result = host.db_execute(&sql);
-    if result < 0 {
-        return Err(anyhow::anyhow!("Failed to save message: error code {}", result));
-    }
+    host.db_execute(&sql)
+        .map_err(|e| anyhow::anyhow!("Failed to save message: {}", e))?;
     Ok(())
 }
 
@@ -159,16 +153,15 @@ pub fn delete_conversation(host: &WasmHost, conversation_id: &str) -> anyhow::Re
         TABLE_MESSAGES,
         sql_value(&conversation_id)
     );
-    host.db_execute(&sql_msgs);
+    host.db_execute(&sql_msgs)
+        .map_err(|e| anyhow::anyhow!("Failed to delete messages: {}", e))?;
 
     let sql_conv = format!(
         "DELETE FROM {} WHERE id = {}",
         TABLE_CONVERSATIONS,
         sql_value(&conversation_id)
     );
-    let result = host.db_execute(&sql_conv);
-    if result < 0 {
-        return Err(anyhow::anyhow!("Failed to delete conversation: error code {}", result));
-    }
+    host.db_execute(&sql_conv)
+        .map_err(|e| anyhow::anyhow!("Failed to delete conversation: {}", e))?;
     Ok(())
 }

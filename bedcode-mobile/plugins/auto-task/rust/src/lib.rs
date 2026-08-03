@@ -3,7 +3,7 @@
 //! 移动端自动任务队列管理的 Rust 后端
 //! 极简实现：仅 activate/deactivate 日志，业务逻辑由 TS 前端通过 HTTP API 完成
 
-use bedcode_plugin_api_mobile::{WasmHost, WasmPlugin};
+use bedcode_plugin_api_mobile::{HostLog, WasmHost, WasmPlugin};
 use bedcode_plugin_api_mobile::types::PluginManifest;
 
 struct AutoTaskPlugin;
@@ -21,7 +21,7 @@ impl WasmPlugin for AutoTaskPlugin {
             "main": "index.js",
             "pluginType": "wasm",
             "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["ui:terminalToolbar", "storage", "session:read"],
+            "permissions": ["ui:input", "storage", "session:read"],
             "contributes": {
                 "commands": [
                     { "id": "auto-task.list-queue", "title": "List Task Queue" },
@@ -48,18 +48,18 @@ impl WasmPlugin for AutoTaskPlugin {
     }
 
     fn activate() -> anyhow::Result<()> {
-        let host = WasmHost::new(Self::ID);
+        let host = WasmHost;
         host.log_info("Auto Task plugin activated (mobile)");
         Ok(())
     }
 
     fn deactivate() -> anyhow::Result<()> {
-        let host = WasmHost::new(Self::ID);
+        let host = WasmHost;
         host.log_info("Auto Task plugin deactivated (mobile)");
         Ok(())
     }
 
-    fn invoke_command(name: &str, _args_json: &str) -> anyhow::Result<serde_json::Value> {
+    fn invoke_command(name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         // 移动端不执行命令，业务逻辑由 TS 前端通过 HTTP API 完成
         Err(anyhow::anyhow!("Unknown command: {}", name))
     }

@@ -2,7 +2,7 @@
 //!
 //! WASM 模式仅支持 OpenAI 格式，通过 WasmHost::http_fetch 代理 HTTP 请求
 
-use bedcode_plugin_api_mobile::WasmHost;
+use bedcode_plugin_api_mobile::{HostHttp, WasmHost};
 use serde::{Deserialize, Serialize};
 
 /// API 格式
@@ -103,7 +103,7 @@ fn chat_stream_openai_wasm(
 ) -> anyhow::Result<()> {
     let event_name = format!("ai-chatbox:stream:{}", stream_id);
     let model = effective_model(provider);
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
 
     let request = serde_json::json!({
         "method": "POST",
@@ -123,7 +123,7 @@ fn chat_stream_openai_wasm(
     });
 
     host.http_fetch(&request)
-        .ok_or_else(|| anyhow::anyhow!("http_fetch failed for streaming request"))?;
+        .map_err(|e| anyhow::anyhow!("http_fetch failed for streaming request: {}", e))?;
 
     Ok(())
 }
@@ -133,7 +133,7 @@ fn chat_complete_openai_wasm(
     messages: &[ChatMessage],
 ) -> anyhow::Result<String> {
     let model = effective_model(provider);
-    let host = WasmHost::new("com.bedcode.ai-chatbox");
+    let host = WasmHost;
 
     let request = serde_json::json!({
         "method": "POST",
@@ -151,7 +151,8 @@ fn chat_complete_openai_wasm(
     });
 
     let result = host.http_fetch(&request)
-        .ok_or_else(|| anyhow::anyhow!("http_fetch failed for non-streaming request"))?;
+        .map_err(|e| anyhow::anyhow!("http_fetch failed for non-streaming request: {}", e))?
+        .ok_or_else(|| anyhow::anyhow!("http_fetch returned no result"))?;
 
     let status = result.get("status").and_then(|s| s.as_u64()).unwrap_or(0);
     if status != 200 {
