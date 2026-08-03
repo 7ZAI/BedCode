@@ -28,10 +28,12 @@ CONTEXT.md
 
 # 插件编译产物（WASM / index.js / plugin.json）由各插件 build 脚本生成，不入库
 **/src-tauri/resources/plugins/
+**/src-tauri/gen/android/app/src/main/assets/resources/plugins/
 
 # IDE and editors
 .idea/
 .claude/
+.scratch/
 .pi/
 .vscode/
 .VSCodeCounter/
