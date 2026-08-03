@@ -259,12 +259,12 @@ function closeDialog() {
 }
 
 /** TaskEditDialog 保存回调：区分新增/编辑 */
-async function handleSaveTask(data: PresetTask | { title: string; content: string }) {
+async function handleSaveTask(data: PresetTask | { content: string }) {
   if ('id' in data) {
     // 编辑模式：data 是完整 PresetTask
     await updateTask(data)
   } else {
-    // 新增模式：data 是 { title, content }
+    // 新增模式：data 是 { content }
     await addTask(data)
   }
   closeDialog()

@@ -3,15 +3,10 @@
     class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-3.5 shadow-[var(--mobile-card-shadow)] active:scale-[0.98] transition-all duration-150"
     @click="$emit('tap')"
   >
-    <!-- Row 1: Title -->
-    <div class="flex items-start justify-between gap-2 mb-1.5">
-      <h4 class="text-sm font-semibold text-[var(--mobile-text-primary)] line-clamp-1 flex-1">{{ task.title }}</h4>
-    </div>
+    <!-- 任务内容：单行显示，超出省略 -->
+    <p class="text-sm font-semibold text-[var(--mobile-text-primary)] truncate mb-1.5 leading-relaxed" :title="task.content">{{ task.content }}</p>
 
-    <!-- Row 2: Content preview -->
-    <p class="text-xs text-[var(--mobile-text-muted)] line-clamp-2 mb-2 leading-relaxed">{{ task.content }}</p>
-
-    <!-- Row 3: Date + Action menu -->
+    <!-- Row: Date + Action menu -->
     <div class="flex items-center justify-between">
       <span class="text-[10px] text-[var(--mobile-text-disabled)]">{{ formattedDate }}</span>
 
@@ -77,7 +72,7 @@
 /**
  * PresetTaskCard - 预设任务卡片
  *
- * 展示任务标题、内容预览和操作菜单
+ * 直接展示任务内容（单行省略），下方为日期和操作菜单
  * 菜单通过 Teleport 定位到 body，自动检测上方/下方空间选择最佳位置
  */
 

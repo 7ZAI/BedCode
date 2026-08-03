@@ -68,17 +68,6 @@
           </div>
 
           <div class="space-y-4 flex-1 overflow-y-auto min-h-0">
-            <div>
-              <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">{{ t('mobile.toolbox.taskTitle') }}</label>
-              <input
-                ref="titleInput"
-                v-model="form.title"
-                type="text"
-                :placeholder="t('mobile.toolbox.taskTitlePlaceholder')"
-                class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2.5 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors"
-              />
-            </div>
-
             <div class="flex-1 min-h-0 flex flex-col">
               <div class="flex items-center justify-between mb-1">
                 <label class="text-[var(--mobile-text-muted)] text-sm">{{ t('mobile.toolbox.taskContent') }}</label>
@@ -94,6 +83,7 @@
                 </button>
               </div>
               <textarea
+                ref="contentTextarea"
                 v-model="form.content"
                 :placeholder="t('mobile.toolbox.taskContentPlaceholder')"
                 rows="8"
@@ -111,8 +101,8 @@
             </button>
             <button
               class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150"
-              :class="{ 'opacity-50': !form.title || !form.content }"
-              :disabled="!form.title || !form.content"
+              :class="{ 'opacity-50': !form.content }"
+              :disabled="!form.content"
               @click="handleSave"
             >
               {{ t('common.button.save') }}
@@ -181,8 +171,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 保存：新增时传 { title, content }，编辑时传完整 PresetTask */
-  save: [data: PresetTask | { title: string; content: string }]
+  /** 保存：新增时传 { content }，编辑时传完整 PresetTask */
+  save: [data: PresetTask | { content: string }]
   close: []
 }>()
 
@@ -208,8 +198,8 @@ function insertAiTemplate() {
 
 // ==================== 表单状态 ====================
 
-const titleInput = ref<HTMLInputElement | null>(null)
-const form = ref({ title: '', content: '' })
+const contentTextarea = ref<HTMLTextAreaElement | null>(null)
+const form = ref({ content: '' })
 const showDirDropdown = ref(false)
 const selectedDir = ref<string | null>(null)
 const showFileExplorer = ref(false)
@@ -224,9 +214,9 @@ const effectiveProjectDir = computed(() => !!props.lockedDir || props.projectDir
 watch(() => props.visible, (val) => {
   if (val) {
     if (props.task) {
-      form.value = { title: props.task.title, content: props.task.content }
+      form.value = { content: props.task.content }
     } else {
-      form.value = { title: '', content: '' }
+      form.value = { content: '' }
     }
     // 非锁定模式才重置用户选择
     if (!props.lockedDir) {
@@ -234,8 +224,8 @@ watch(() => props.visible, (val) => {
     }
     showDirDropdown.value = false
     showFileExplorer.value = false
-    // 自动聚焦标题输入框
-    nextTick(() => titleInput.value?.focus())
+    // 自动聚焦任务内容输入框
+    nextTick(() => contentTextarea.value?.focus())
   }
 })
 
@@ -274,18 +264,17 @@ const fileExplorerSessionId = computed(() => {
 // ==================== 保存 ====================
 
 function handleSave() {
-  if (!form.value.title || !form.value.content) return
+  if (!form.value.content.trim()) return
 
   if (props.task) {
     // 编辑模式：返回更新后的完整 PresetTask
     emit('save', {
       ...props.task,
-      title: form.value.title,
       content: form.value.content,
     } as PresetTask)
   } else {
     // 新增模式：返回表单数据
-    emit('save', { title: form.value.title, content: form.value.content })
+    emit('save', { content: form.value.content })
   }
 }
 </script>

@@ -113,7 +113,6 @@ export interface TerminalIncrementalOutput {
 /** 预设任务 */
 export interface PresetTask {
   id: string
-  title: string
   content: string
   createdAt: string
   updatedAt: string

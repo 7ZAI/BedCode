@@ -91,7 +91,7 @@ function openEditDialog(task: PresetTask) {
 }
 
 /** TaskEditDialog 保存回调 */
-async function handleEditSave(data: PresetTask | { title: string; content: string }) {
+async function handleEditSave(data: PresetTask | { content: string }) {
   if ('id' in data) {
     await updateTask(data)
   } else {
@@ -134,7 +134,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
             >
               <div class="task-item-main">
                 <div class="task-info" @click="toggleExpand(task.id)">
-                  <span class="task-title">{{ task.title }}</span>
                   <span class="task-content-preview">{{ task.content }}</span>
                 </div>
                 <!-- 发送按钮 -->
@@ -331,17 +330,9 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   opacity: 0.8;
 }
 
-.task-title {
+.task-content-preview {
   font-size: clamp(0.8125rem, 0.875rem, 1rem);
   color: var(--mobile-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-content-preview {
-  font-size: clamp(0.6875rem, 0.75rem, 0.875rem);
-  color: var(--mobile-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -7,25 +7,33 @@
       class="p-4 flex items-center gap-2"
     >
       <div
-        class="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer active:bg-[var(--mobile-accent)]/5 rounded-lg -ml-1 px-1 py-0.5"
+        class="flex-1 min-w-0 cursor-pointer active:bg-[var(--mobile-accent)]/5 rounded-lg -ml-1 px-1 py-0.5"
         @click="expanded = !expanded"
       >
-        <!-- 运行中指示器 -->
-        <div
-          v-if="runningCount > 0"
-          class="w-2 h-2 rounded-full bg-[var(--mobile-success)] shadow-[0_0_6px_rgba(16,185,129,0.5)] animate-pulse shrink-0"
-        />
-        <p class="font-medium text-[var(--mobile-text-primary)] truncate">{{ config.name }}</p>
-        <span
-          :class="[
-            'text-xs px-2 py-0.5 rounded-full border shrink-0',
-            config.environment === 'wsl2'
-              ? 'bg-[var(--mobile-tag-wsl-bg)] border-[var(--mobile-tag-wsl-border)] text-[var(--mobile-tag-wsl-color)]'
-              : 'bg-[var(--mobile-tag-win-bg)] border-[var(--mobile-tag-win-border)] text-[var(--mobile-tag-win-color)]'
-          ]"
-        >
-          {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
-        </span>
+        <div class="flex items-center gap-2.5">
+          <!-- 运行中指示器 -->
+          <div
+            v-if="runningCount > 0"
+            class="w-2 h-2 rounded-full bg-[var(--mobile-success)] shadow-[0_0_6px_rgba(16,185,129,0.5)] animate-pulse shrink-0"
+          />
+          <p class="font-medium text-[var(--mobile-text-primary)] truncate">{{ config.name }}</p>
+          <span
+            :class="[
+              'text-xs px-2 py-0.5 rounded-full border shrink-0',
+              config.environment === 'wsl2'
+                ? 'bg-[var(--mobile-tag-wsl-bg)] border-[var(--mobile-tag-wsl-border)] text-[var(--mobile-tag-wsl-color)]'
+                : 'bg-[var(--mobile-tag-win-bg)] border-[var(--mobile-tag-win-border)] text-[var(--mobile-tag-win-color)]'
+            ]"
+          >
+            {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
+          </span>
+        </div>
+
+        <!-- 启动命令（折叠态也展示） -->
+        <div v-if="config.command" class="flex items-center gap-1.5 mt-1.5 min-w-0">
+          <span class="text-xs text-[var(--mobile-text-muted)] shrink-0">{{ t('mobile.sessionConfig.command') }}</span>
+          <code class="text-xs text-[var(--mobile-text-secondary)] truncate font-mono">{{ config.command }}</code>
+        </div>
       </div>
 
       <!-- 启动按钮 -->

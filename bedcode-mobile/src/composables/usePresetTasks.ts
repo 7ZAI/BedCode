@@ -18,10 +18,9 @@ function loadFromStorage(): PresetTask[] {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw) as PresetTask[]
-    // 兼容旧数据：移除 type/status 字段
+    // 兼容旧数据：只保留必要字段，忽略历史遗留的 title 等字段
     return parsed.map(t => ({
       id: t.id,
-      title: t.title,
       content: t.content,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
@@ -42,11 +41,10 @@ export async function load() {
 }
 
 /** 添加预设任务 */
-export async function addTask(input: { title: string; content: string }) {
+export async function addTask(input: { content: string }) {
   const now = new Date().toISOString()
   const task: PresetTask = {
     id: crypto.randomUUID(),
-    title: input.title,
     content: input.content,
     createdAt: now,
     updatedAt: now,
