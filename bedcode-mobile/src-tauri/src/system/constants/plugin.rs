@@ -23,6 +23,18 @@ pub const WASM_FILE_EXT: &str = ".wasm";
 /// 插件 manifest 文件名
 pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
 
+/// 插件来源标记文件名（插件目录内，内容形如 `apk-asset:1.1.11` / `file-install` / `remote-download`）
+pub const PLUGIN_SOURCE_MARKER: &str = ".bedcode-source";
+
+/// 来源标记：APK 内置（内容含 app 版本，用于升级刷新）
+pub const SOURCE_APK_ASSET: &str = "apk-asset";
+
+/// 来源标记：本地文件安装
+pub const SOURCE_FILE_INSTALL: &str = "file-install";
+
+/// 来源标记：远程 URL 安装
+pub const SOURCE_REMOTE_DOWNLOAD: &str = "remote-download";
+
 /// APK assets 中内置插件目录
 pub const APK_PLUGINS_DIR: &str = "plugins";
 

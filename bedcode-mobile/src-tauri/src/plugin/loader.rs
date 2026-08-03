@@ -3,7 +3,6 @@
 //! APK assets 内置插件解压 + app_data_dir 插件扫描
 //! 解析 plugin.json，编译并实例化 WASM 模块
 
-use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::*;
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::*;
@@ -16,21 +15,76 @@ use std::sync::Arc;
 pub struct PluginLoader;
 
 impl PluginLoader {
-    /// 解压 APK assets 中的内置插件到 app_data_dir
+    /// 解压内置插件到 app_data_dir/plugins
     ///
-    /// 仅在首次启动或版本变更时解压，已存在的文件跳过
-    pub fn extract_apk_plugins(app_data_dir: &Path, _app_handle: &tauri::AppHandle) -> crate::Result<()> {
+    /// Android：经 Kotlin PluginAssetExtractor 从 APK assets 解压（按来源标记跳过已解压）。
+    /// 非 Android（桌面 dev 窗口）：从源码 resources/plugins/mobile 复制（仅 debug 构建）。
+    pub async fn extract_apk_plugins(
+        app_data_dir: &Path,
+        app_version: &str,
+    ) -> crate::Result<()> {
         let plugins_data_dir = app_data_dir.join(PLUGIN_DATA_DIR);
         fs::create_dir_all(&plugins_data_dir)?;
 
-        // Android 平台：通过 AssetManager 解压 assets/plugins/ 到 plugins_data_dir
         #[cfg(target_os = "android")]
         {
-            // Android AssetManager 访问需要通过 JNI 或 tauri asset protocol
-            // 预留接口，后续 Android 集成时完善
-            tracing::info!("[PluginLoader] Android asset extraction (placeholder)");
+            crate::plugin::android_plugins::extract_bundled_plugins(app_version).await?;
         }
 
+        #[cfg(not(target_os = "android"))]
+        {
+            Self::dev_copy_plugins(&plugins_data_dir, app_version)?;
+        }
+
+        Ok(())
+    }
+
+    /// 桌面 dev 模式：从源码资源目录复制内置插件（仅 debug 构建）
+    ///
+    /// 移动端应用以桌面窗口开发时没有 APK assets，
+    /// 从 CARGO_MANIFEST_DIR/resources/plugins/mobile 复制，标记逻辑与 Android 一致。
+    #[cfg(not(target_os = "android"))]
+    fn dev_copy_plugins(plugins_data_dir: &Path, app_version: &str) -> crate::Result<()> {
+        if !cfg!(debug_assertions) {
+            return Ok(());
+        }
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .map_err(|_| crate::AppError::Plugin("CARGO_MANIFEST_DIR not set".to_string()))?;
+        let src_root = Path::new(&manifest_dir)
+            .join("resources")
+            .join("plugins")
+            .join("mobile");
+        if !src_root.exists() {
+            return Ok(());
+        }
+
+        let expected = format!("{}:{}", SOURCE_APK_ASSET, app_version);
+        let mut copied = 0;
+        for entry in fs::read_dir(&src_root)? {
+            let entry = entry?;
+            let id = entry.file_name().to_string_lossy().to_string();
+            if id.starts_with('.') || !entry.path().is_dir() {
+                continue;
+            }
+            let dest = plugins_data_dir.join(&id);
+            let marker = dest.join(PLUGIN_SOURCE_MARKER);
+            if marker.exists()
+                && fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .trim()
+                    == expected
+            {
+                continue;
+            }
+            if dest.exists() {
+                fs::remove_dir_all(&dest)?;
+            }
+            copy_dir_all(&entry.path(), &dest)?;
+            fs::write(&marker, &expected)?;
+            copied += 1;
+            tracing::info!("[PluginLoader] Dev-copied builtin plugin: {}", id);
+        }
+        tracing::info!(copied, "[PluginLoader] Dev plugin copy complete");
         Ok(())
     }
 
@@ -85,7 +139,7 @@ impl PluginLoader {
                     let plugin_id = manifest.id.clone();
                     let extension_path = path.to_string_lossy().to_string();
 
-                    let source = PluginSource::ApkAsset;
+                    let source = Self::detect_source(&path);
 
                     // WASM 插件：编译 + 实例化
                     if manifest.plugin_type == PluginType::Wasm && !manifest.rust_library.is_empty() {
@@ -93,7 +147,19 @@ impl PluginLoader {
                         if wasm_file.exists() {
                             match wasm_runtime.compile_module_from_file(&wasm_file) {
                                 Ok(module) => {
-                                    match wasm_runtime.instantiate(&module, &plugin_id, wasm_host_ctx.clone()) {
+                                    // 与 SDK PermissionManager::grant_permissions 语义一致：storage 默认授予
+                                    let mut granted: std::collections::HashSet<String> =
+                                        manifest.permissions.iter().cloned().collect();
+                                    granted.insert(
+                                        bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE
+                                            .to_string(),
+                                    );
+                                    match wasm_runtime.instantiate(
+                                        &module,
+                                        &plugin_id,
+                                        wasm_host_ctx.clone(),
+                                        granted,
+                                    ) {
                                         Ok(loaded_wasm) => {
                                             tracing::info!(
                                                 "[PluginLoader] WASM plugin loaded: {} v{}",
@@ -152,6 +218,25 @@ impl PluginLoader {
         (plugins, wasm_plugins)
     }
 
+    /// 根据 .bedcode-source 标记判断插件来源
+    fn detect_source(plugin_dir: &Path) -> PluginSource {
+        let marker = plugin_dir.join(PLUGIN_SOURCE_MARKER);
+        if let Ok(content) = fs::read_to_string(&marker) {
+            let content = content.trim();
+            if content.starts_with(SOURCE_APK_ASSET) {
+                return PluginSource::ApkAsset;
+            }
+            if content == SOURCE_FILE_INSTALL {
+                return PluginSource::FileInstall;
+            }
+            if content == SOURCE_REMOTE_DOWNLOAD {
+                return PluginSource::RemoteDownload;
+            }
+        }
+        // 无标记（历史产物）按内置处理
+        PluginSource::ApkAsset
+    }
+
     /// 解析单个 plugin.json
     fn load_manifest(path: &std::path::PathBuf) -> crate::Result<PluginManifest> {
         let content = fs::read_to_string(path)
@@ -186,4 +271,20 @@ impl PluginLoader {
 
         Ok(manifest)
     }
+}
+
+/// 递归复制目录（dev 插件复制用）
+fn copy_dir_all(src: &Path, dest: &Path) -> crate::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }

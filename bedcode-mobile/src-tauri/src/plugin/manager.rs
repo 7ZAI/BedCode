@@ -101,11 +101,49 @@ impl PluginManager {
     ///
     /// 必须在 Tokio 运行时上下文中调用（Engine 创建需要 Handle）
     pub fn init_wasm_runtime(&self) -> crate::Result<()> {
-        let runtime = Arc::new(WasmRuntime::new(
-            self.plugin_db.clone(),
-            self.storage.clone(),
-            self.app_handle.clone(),
-        )?);
+        let runtime = Arc::new(WasmRuntime::new()?);
+
+        // 插件状态上报回调：置 Error + 持久化未启用 + 前端通知
+        let plugins = self.plugins.clone();
+        let settings = self.settings.clone();
+        let app_handle = self.app_handle.clone();
+        let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> =
+            Arc::new(move |plugin_id, error| {
+                let plugins = plugins.clone();
+                let settings = settings.clone();
+                let app_handle = app_handle.clone();
+                let pid = plugin_id.to_string();
+                let err = error.to_string();
+                // async block 需要独占所有权，外层克隆供 emit/日志使用
+                let pid_clone = pid.clone();
+                let err_clone = err.clone();
+
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        // 置 Error 状态
+                        let mut map = plugins.write().await;
+                        if let Some(p) = map.get_mut(&pid_clone) {
+                            p.state = PluginState::Error { error: err_clone.clone() };
+                        }
+                        drop(map);
+
+                        // 持久化未启用（下次启动不再自动激活）
+                        if let Err(e) = settings.set(format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, &pid_clone), "false".to_string()).await {
+                            tracing::warn!(plugin_id = %pid_clone, error = %e, "Failed to persist disabled state after plugin error");
+                        }
+                    });
+                });
+
+                // 通知前端
+                if let Err(e) = app_handle.emit("plugin:error", serde_json::json!({
+                    "pluginId": pid,
+                    "error": err,
+                })) {
+                    tracing::error!(plugin_id = %pid, error = %e, "Failed to emit plugin:error event");
+                }
+
+                tracing::info!(plugin_id = %pid, error = %err, "Plugin reported error, marked Error and disabled");
+            });
 
         let host_ctx = Arc::new(WasmHostContext::new(
             self.plugin_db.clone(),
@@ -113,7 +151,11 @@ impl PluginManager {
             self.app_handle.clone(),
             self.fs_auth.clone(),
             self.message_bus.clone(),
+            status_reporter,
         ));
+
+        // 校验宿主 ABI 注册与 SDK 签名表一致（启动期暴露契约漂移）
+        runtime.verify_abi(host_ctx.clone())?;
 
         let _ = self.wasm_runtime.set(runtime);
         let _ = self.wasm_host_ctx.set(host_ctx);
@@ -310,6 +352,69 @@ impl PluginManager {
         if let Some(plugin) = plugins.get_mut(plugin_id) {
             plugin.state = PluginState::Error { error };
         }
+    }
+
+    /// 插件显式上报启动成功
+    ///
+    /// Error → Activated 自愈（插件修复配置后重新上报）；
+    /// Loaded → Activated（前端未走标准 activate 流程时兜底）。
+    /// 已激活状态保持不动。
+    pub async fn report_ready(&self, plugin_id: &str) -> Result<()> {
+        let mut plugins = self.plugins.write().await;
+        let plugin = plugins
+            .get_mut(plugin_id)
+            .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
+
+        if plugin.state != PluginState::Activated {
+            plugin.state = PluginState::Activated;
+            tracing::info!(plugin_id = %plugin_id, "Plugin reported ready, state set to Activated");
+        }
+        Ok(())
+    }
+
+    /// 卸载插件（仅用户安装的插件；内置插件拒绝）
+    ///
+    /// 停用 → 移除运行时实例 → 清理启用偏好与插件存储 → 删除插件目录
+    pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {
+        {
+            let plugins = self.plugins.read().await;
+            let plugin = plugins.get(plugin_id).ok_or_else(|| {
+                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
+            })?;
+            if plugin.source == PluginSource::ApkAsset {
+                return Err(crate::AppError::Plugin(format!(
+                    "Builtin plugin cannot be uninstalled: {}",
+                    plugin_id
+                )));
+            }
+        }
+
+        // 停用（若激活）并清理消息总线订阅
+        self.deactivate(plugin_id).await?;
+
+        // 移除 WASM 实例与插件记录
+        self.wasm_plugins.write().await.remove(plugin_id);
+        self.plugins.write().await.remove(plugin_id);
+
+        // 清理启用偏好与插件存储
+        let enabled_key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
+        if let Err(e) = self.settings.remove(&enabled_key).await {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to remove enabled setting on uninstall");
+        }
+        if let Err(e) = self.storage().clear_plugin(plugin_id).await {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");
+        }
+
+        // 删除插件目录
+        let plugin_dir = self.plugins_dir.join(plugin_id);
+        if plugin_dir.exists() {
+            std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
+                crate::AppError::Plugin(format!("Failed to remove plugin dir: {}", e))
+            })?;
+        }
+
+        tracing::info!(plugin_id = %plugin_id, "Plugin uninstalled");
+        Ok(())
     }
 
     /// 获取存储管理器引用

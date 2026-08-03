@@ -84,6 +84,16 @@ pub async fn plugin_mark_error(
     Ok(())
 }
 
+/// 插件显式上报启动成功（Error → Activated 自愈）
+#[tauri::command]
+pub async fn plugin_report_ready(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.report_ready(&plugin_id).await
+}
+
 // ==================== Plugin Storage Commands ====================
 
 /// 获取插件存储值
@@ -120,19 +130,19 @@ pub async fn plugin_storage_delete(
     manager.storage().delete(&plugin_id, &key).await
 }
 
-// ==================== Plugin Download Commands ====================
+// ==================== Plugin Download & Install Commands ====================
 
-/// 下载并安装远程插件
+/// 下载并安装远程 zip 插件包
 #[tauri::command]
 pub async fn plugin_download(
     app_handle: tauri::AppHandle,
-    manifest_url: String,
+    zip_url: String,
 ) -> Result<String> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     let plugins_dir = manager.plugins_dir().clone();
 
     let plugin_id = crate::plugin::downloader::PluginDownloader::download_and_install(
-        &manifest_url,
+        &zip_url,
         &plugins_dir,
     )
     .await?;
@@ -141,6 +151,37 @@ pub async fn plugin_download(
     manager.scan_and_load().await;
 
     Ok(plugin_id)
+}
+
+/// 从本地 zip 插件包安装
+#[tauri::command]
+pub async fn plugin_install_from_file(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<String> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    let plugins_dir = manager.plugins_dir().clone();
+
+    let plugin_id = crate::plugin::downloader::PluginDownloader::install_from_file(
+        &path,
+        &plugins_dir,
+    )
+    .await?;
+
+    // 重新扫描并加载
+    manager.scan_and_load().await;
+
+    Ok(plugin_id)
+}
+
+/// 卸载插件（仅用户安装的插件；内置插件拒绝）
+#[tauri::command]
+pub async fn plugin_uninstall(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.uninstall(&plugin_id).await
 }
 
 /// 重新加载 WASM 插件（热重载）

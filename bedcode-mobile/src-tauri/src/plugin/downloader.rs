@@ -1,130 +1,192 @@
-//! Plugin Downloader（移动端）
+//! Plugin Downloader / Installer（移动端）
 //!
-//! 远程插件下载 + SHA256 校验 + 安装到 app_data_dir
+//! 插件包（zip）统一安装：本地文件或远程 URL → 解压 → wasm_hash 校验 → 写来源标记 → 移动到插件目录
+//! 分发单元为单个 zip（内含 plugin.json、index.js 与可选的 .wasm）
 
 use crate::system::constants::plugin::*;
 use crate::Result;
+use std::io::Read;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 
-/// 插件下载器
+/// 插件下载安装器
 pub struct PluginDownloader;
 
 impl PluginDownloader {
-    /// 下载并安装远程插件
+    /// 从本地 zip 插件包安装
     ///
-    /// 1. 下载 manifest JSON
-    /// 2. 校验必填字段
-    /// 3. 下载 WASM 文件和前端资源到临时目录
-    /// 4. SHA256 校验
+    /// 1. 打开 zip，校验 plugin.json 必填字段
+    /// 2. 解压到临时目录（路径穿越防护）
+    /// 3. wasm_hash 校验（manifest 声明时）
+    /// 4. 写来源标记（file-install）
     /// 5. 移动到 app_data_dir/plugins/{plugin_id}/
-    pub async fn download_and_install(
-        manifest_url: &str,
-        plugins_dir: &Path,
-    ) -> Result<String> {
+    pub async fn install_from_file(zip_path: &str, plugins_dir: &Path) -> Result<String> {
+        let zip_path = Path::new(zip_path);
+        if !zip_path.exists() {
+            return Err(crate::AppError::Plugin(format!(
+                "Plugin package not found: {}",
+                zip_path.display()
+            )));
+        }
+        Self::install_zip(zip_path, plugins_dir, SOURCE_FILE_INSTALL).await
+    }
+
+    /// 下载并安装远程 zip 插件包
+    ///
+    /// 下载 zip 到临时文件后复用 install_zip，来源标记为 remote-download
+    pub async fn download_and_install(zip_url: &str, plugins_dir: &Path) -> Result<String> {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(PLUGIN_DOWNLOAD_CONNECT_TIMEOUT_SECS))
             .read_timeout(std::time::Duration::from_secs(PLUGIN_DOWNLOAD_READ_TIMEOUT_SECS))
             .build()
             .map_err(|e| crate::AppError::Plugin(format!("Failed to create HTTP client: {}", e)))?;
 
-        // 1. 下载 manifest
-        tracing::info!("[PluginDownloader] Downloading manifest from: {}", manifest_url);
-        let manifest_str = client
-            .get(manifest_url)
+        tracing::info!("[PluginDownloader] Downloading plugin package from: {}", zip_url);
+        let response = client
+            .get(zip_url)
             .send()
             .await
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to download manifest: {}", e)))?
-            .text()
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to download plugin package: {}", e)))?;
+        if !response.status().is_success() {
+            return Err(crate::AppError::Plugin(format!(
+                "Download '{}' returned status {}",
+                zip_url,
+                response.status()
+            )));
+        }
+        let bytes = response
+            .bytes()
             .await
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to read manifest response: {}", e)))?;
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to read download response: {}", e)))?;
 
+        // 写入临时文件后走统一安装流程
+        let temp_zip = plugins_dir
+            .join(PLUGIN_DOWNLOAD_TEMP_DIR)
+            .join("download.zip");
+        if let Some(parent) = temp_zip.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let mut file = tokio::fs::File::create(&temp_zip).await?;
+        file.write_all(&bytes).await?;
+        drop(file);
+
+        let result = Self::install_zip(&temp_zip, plugins_dir, SOURCE_REMOTE_DOWNLOAD).await;
+        let _ = tokio::fs::remove_file(&temp_zip).await;
+        result
+    }
+
+    /// zip 解压安装（file-install / remote-download 共用）
+    async fn install_zip(
+        zip_path: &Path,
+        plugins_dir: &Path,
+        source: &str,
+    ) -> Result<String> {
+        // 1. 打开 zip
+        let file = std::fs::File::open(zip_path)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to open plugin package: {}", e)))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| crate::AppError::Plugin(format!("Invalid plugin package: {}", e)))?;
+
+        // 2. 读取并校验 manifest
+        let mut manifest_str = String::new();
+        archive
+            .by_name(PLUGIN_MANIFEST_FILE)
+            .map_err(|e| crate::AppError::Plugin(format!("Plugin package missing plugin.json: {}", e)))?
+            .read_to_string(&mut manifest_str)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to read plugin.json: {}", e)))?;
         let manifest: crate::plugin::types::PluginManifest = serde_json::from_str(&manifest_str)
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to parse manifest JSON: {}", e)))?;
-
-        // 2. 校验必填字段
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
         if manifest.id.is_empty() {
-            return Err(crate::AppError::Plugin("Remote manifest missing id".to_string()));
+            return Err(crate::AppError::Plugin("plugin.json missing id field".to_string()));
         }
         if manifest.name.is_empty() {
-            return Err(crate::AppError::Plugin("Remote manifest missing name".to_string()));
+            return Err(crate::AppError::Plugin("plugin.json missing name field".to_string()));
+        }
+        if manifest.version.is_empty() {
+            return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
         }
 
         let plugin_id = manifest.id.clone();
-        let base_url = Self::base_url(manifest_url);
-
-        // 3. 创建临时目录
         let temp_dir = plugins_dir.join(PLUGIN_DOWNLOAD_TEMP_DIR).join(&plugin_id);
+
+        // 3. 解压到临时目录
+        if temp_dir.exists() {
+            tokio::fs::remove_dir_all(&temp_dir).await?;
+        }
         tokio::fs::create_dir_all(&temp_dir).await?;
 
-        // 4. 下载 WASM 文件
-        if !manifest.rust_library.is_empty() {
-            let wasm_filename = format!("{}{}", manifest.rust_library, WASM_FILE_EXT);
-            let wasm_url = format!("{}/{}", base_url, wasm_filename);
-            let wasm_dest = temp_dir.join(&wasm_filename);
-
-            tracing::info!("[PluginDownloader] Downloading WASM: {}", wasm_url);
-            Self::download_file(&client, &wasm_url, &wasm_dest).await?;
-
-            // SHA256 校验
-            if !manifest.wasm_hash.is_empty() {
-                Self::verify_sha256(&wasm_dest, &manifest.wasm_hash).await?;
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).map_err(|e| {
+                crate::AppError::Plugin(format!("Failed to read plugin package entry: {}", e))
+            })?;
+            let name = entry.name().to_string();
+            if entry.is_dir() {
+                continue;
             }
-        }
-
-        // 5. 下载前端资源
-        if !manifest.main.is_empty() {
-            let js_url = format!("{}/{}", base_url, manifest.main);
-            let js_dest = temp_dir.join(&manifest.main);
-
-            if let Some(parent) = js_dest.parent() {
+            if !Self::is_safe_zip_name(&name) {
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin package contains unsafe path: {}",
+                    name
+                )));
+            }
+            let dest = temp_dir.join(&name);
+            if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-
-            tracing::info!("[PluginDownloader] Downloading JS: {}", js_url);
-            Self::download_file(&client, &js_url, &js_dest).await?;
+            let mut out = std::fs::File::create(&dest).map_err(|e| {
+                crate::AppError::Plugin(format!("Failed to create '{}': {}", name, e))
+            })?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| crate::AppError::Plugin(format!("Failed to extract '{}': {}", name, e)))?;
         }
 
-        // 6. 写入 manifest
-        let manifest_dest = temp_dir.join(PLUGIN_MANIFEST_FILE);
-        tokio::fs::write(&manifest_dest, &manifest_str).await?;
+        // 4. wasm_hash 校验（manifest 声明时）
+        if !manifest.rust_library.is_empty() && !manifest.wasm_hash.is_empty() {
+            let wasm_path = temp_dir.join(format!("{}{}", manifest.rust_library, WASM_FILE_EXT));
+            if !wasm_path.exists() {
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin package missing WASM file: {}{}",
+                    manifest.rust_library, WASM_FILE_EXT
+                )));
+            }
+            Self::verify_sha256(&wasm_path, &manifest.wasm_hash).await?;
+        }
 
-        // 7. 移动到最终目录
+        // 5. 写来源标记
+        let marker = temp_dir.join(PLUGIN_SOURCE_MARKER);
+        tokio::fs::write(&marker, source).await?;
+
+        // 6. 移动到最终目录（替换已存在的同 id 插件）
         let final_dir = plugins_dir.join(&plugin_id);
         if final_dir.exists() {
             tokio::fs::remove_dir_all(&final_dir).await?;
         }
         tokio::fs::rename(&temp_dir, &final_dir).await?;
 
-        tracing::info!("[PluginDownloader] Plugin '{}' installed to {:?}", plugin_id, final_dir);
+        tracing::info!(
+            "[PluginDownloader] Plugin '{}' installed to {:?} (source: {})",
+            plugin_id, final_dir, source
+        );
         Ok(plugin_id)
     }
 
-    /// 下载单个文件
-    async fn download_file(client: &reqwest::Client, url: &str, dest: &Path) -> Result<()> {
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to download '{}': {}", url, e)))?;
-
-        if !response.status().is_success() {
-            return Err(crate::AppError::Plugin(format!(
-                "Download '{}' returned status {}",
-                url,
-                response.status()
-            )));
+    /// zip 条目路径安全校验：拒绝绝对路径、盘符、.. 路径穿越
+    fn is_safe_zip_name(name: &str) -> bool {
+        if name.starts_with('/') || name.starts_with('\\') {
+            return false;
         }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to read download response: {}", e)))?;
-
-        let mut file = tokio::fs::File::create(dest).await?;
-        file.write_all(&bytes).await?;
-
-        Ok(())
+        if name.contains(':') {
+            return false;
+        }
+        // 规范化后检查是否有 .. 段
+        let normalized = name.replace('\\', "/");
+        if normalized
+            .split('/')
+            .any(|seg| seg == ".." || seg == ".")
+        {
+            return false;
+        }
+        true
     }
 
     /// SHA256 校验
@@ -142,15 +204,6 @@ impl PluginDownloader {
 
         tracing::info!("[PluginDownloader] SHA256 verified for {:?}", file_path);
         Ok(())
-    }
-
-    /// 从 manifest URL 推导基础 URL
-    fn base_url(manifest_url: &str) -> String {
-        if let Some(pos) = manifest_url.rfind('/') {
-            manifest_url[..pos].to_string()
-        } else {
-            manifest_url.to_string()
-        }
     }
 }
 

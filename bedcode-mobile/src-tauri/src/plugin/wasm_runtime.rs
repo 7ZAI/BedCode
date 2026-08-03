@@ -4,11 +4,17 @@
 //! 管理 Engine/Linker/Store/Instance 生命周期
 //! 注册宿主 Host Functions 供 WASM 插件调用
 //!
+//! ABI v3（与 SDK `abi.rs` 对齐）：结果传递走 out_ptr（8 字节: ptr + len），
+//! 参数/结果内存经 `__bedcode_allocate` / `__bedcode_deallocate` 配对回收；
+//! 实例化时协商 `__bedcode_abi_version`，高于宿主支持版本拒绝加载；
+//! 启动时 `verify_abi` 校验 Linker 注册与 `HOST_FN_SIGNATURES` 一致。
+//!
 //! 与桌面端差异：
 //! - WasmHostContext 无 session_manager 和 permission
 //! - 新增 host_notify（移动端系统通知）
 //! - host_terminal_send 通过 WebSocket 转发到桌面端
 //! - host_session_list/host_session_get 为空操作（保持 ABI 兼容）
+//! - 新增 host_mark_plugin_error（插件生命周期失败上报，置 Error + 持久化未启用）
 
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::wasm_host;
@@ -43,6 +49,8 @@ pub struct WasmPluginState {
     host_ctx: Arc<WasmHostContext>,
     /// Tokio 运行时句柄（供 Host Function block_on 使用）
     runtime_handle: tokio::runtime::Handle,
+    /// 插件已授予权限（来自 manifest.permissions，host function 调用前校验）
+    granted_permissions: std::collections::HashSet<String>,
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -59,6 +67,10 @@ pub struct WasmHostContext {
     pub fs_auth: Arc<crate::plugin::fs_auth::FsAuthChecker>,
     /// 消息总线
     pub message_bus: Arc<crate::plugin::message_bus::MessageBus>,
+    /// 插件状态上报回调（`host_mark_plugin_error` 触发）
+    ///
+    /// 由 PluginManager 注入：置 Error 状态 + 持久化未启用 + 前端通知
+    pub status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync>,
 }
 
 /// 已加载的 WASM 插件
@@ -76,11 +88,7 @@ impl WasmRuntime {
     ///
     /// 初始化 Engine、Linker，注册所有 Host Functions
     /// 必须在 Tokio 运行时上下文中调用（需要 Handle 供 Host Function 使用）
-    pub fn new(
-        db: Arc<Mutex<rusqlite::Connection>>,
-        storage: Arc<PluginStorage>,
-        app_handle: Arc<tauri::AppHandle>,
-    ) -> crate::Result<Self> {
+    pub fn new() -> crate::Result<Self> {
         let runtime_handle = tokio::runtime::Handle::current();
 
         let engine = Engine::default();
@@ -117,11 +125,13 @@ impl WasmRuntime {
         module: &Module,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
+        granted_permissions: std::collections::HashSet<String>,
     ) -> crate::Result<LoadedWasmPlugin> {
         let state = WasmPluginState {
             plugin_id: plugin_id.to_string(),
             host_ctx,
             runtime_handle: self.runtime_handle.clone(),
+            granted_permissions,
         };
         let mut store = Store::new(&self.engine, state);
 
@@ -144,11 +154,71 @@ impl WasmRuntime {
                 ))
             })?;
 
+        // ABI 版本协商：插件要求的版本高于宿主支持时拒绝加载，避免静默契约漂移
+        if let Some(func) = instance.get_func(&mut store, bedcode_plugin_api_mobile::abi::export::ABI_VERSION) {
+            let mut results = [wasmtime::Val::I32(0)];
+            func.call(&mut store, &[], &mut results).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "Failed to read ABI version from plugin '{}': {}",
+                    plugin_id, e
+                ))
+            })?;
+            let plugin_abi = results[0].unwrap_i32() as u32;
+            if plugin_abi > bedcode_plugin_api_mobile::abi::ABI_VERSION {
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin '{}' requires ABI v{}, but host supports v{}",
+                    plugin_id,
+                    plugin_abi,
+                    bedcode_plugin_api_mobile::abi::ABI_VERSION
+                )));
+            }
+        }
+
         Ok(LoadedWasmPlugin {
             instance,
             store,
             memory,
         })
+    }
+
+    /// 校验 Linker 实际注册的 host functions 与 SDK ABI 签名表一致
+    ///
+    /// 契约单一事实来源：`bedcode_plugin_api_mobile::abi::HOST_FN_SIGNATURES`。
+    /// 任何名称/参数数/返回值数漂移在启动期即暴露，而非运行时静默失败。
+    /// 由 PluginManager 在注入 WasmHostContext 后调用。
+    pub fn verify_abi(&self, host_ctx: Arc<WasmHostContext>) -> crate::Result<()> {
+        use bedcode_plugin_api_mobile::abi::{HOST_FN_SIGNATURES, NAMESPACE};
+
+        let state = WasmPluginState {
+            plugin_id: "__abi_verify__".to_string(),
+            host_ctx,
+            runtime_handle: self.runtime_handle.clone(),
+            granted_permissions: std::collections::HashSet::new(),
+        };
+        let mut store = Store::new(&self.engine, state);
+
+        for (name, arg_count, result_count) in HOST_FN_SIGNATURES {
+            let ext = self.linker.get(&mut store, NAMESPACE, name).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "ABI contract violation: failed to resolve host function '{}': {}",
+                    name, e
+                ))
+            })?;
+            let func = ext.into_func().ok_or_else(|| {
+                crate::AppError::Plugin(format!(
+                    "ABI contract violation: host function '{}' is not a function",
+                    name
+                ))
+            })?;
+            let ty = func.ty(&store);
+            if ty.params().len() != *arg_count || ty.results().len() != *result_count {
+                return Err(crate::AppError::Plugin(format!(
+                    "ABI contract violation: host function '{}' signature mismatch (expected {}/{} args/results, got {}/{})",
+                    name, arg_count, result_count, ty.params().len(), ty.results().len()
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -181,9 +251,9 @@ impl LoadedWasmPlugin {
     ) -> crate::Result<String> {
         let (name_ptr, name_len) = self.write_string_to_memory(command_name)?;
         let (args_ptr, args_len) = self.write_string_to_memory(args_json)?;
+        let out_ptr = self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
 
-        let func = self.get_export_func("__bedcode_invoke_command")?;
-        let mut results = [wasmtime::Val::I32(0), wasmtime::Val::I32(0)];
+        let func = self.get_export_func(bedcode_plugin_api_mobile::abi::export::INVOKE_COMMAND)?;
         func.call(
             &mut self.store,
             &[
@@ -191,17 +261,20 @@ impl LoadedWasmPlugin {
                 wasmtime::Val::I32(name_len as i32),
                 wasmtime::Val::I32(args_ptr as i32),
                 wasmtime::Val::I32(args_len as i32),
+                wasmtime::Val::I32(out_ptr as i32),
             ],
-            &mut results,
+            &mut [],
         )
         .map_err(|e| {
             crate::AppError::Plugin(format!("WASM invoke_command() call failed: {}", e))
         })?;
 
-        let ptr = results[0].unwrap_i32() as u32;
-        let len = results[1].unwrap_i32() as u32;
-
-        self.read_string_from_memory(ptr, len)
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        let result = self.read_string_from_memory(ptr, len);
+        // 读取完毕，回收插件分配的结果缓冲区与 out_ptr 本身，防止线性内存单调增长
+        self.dealloc_plugin_memory(ptr, len);
+        self.dealloc_plugin_memory(out_ptr, bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32);
+        result
     }
 
     /// 调用插件的 on_terminal_input 导出函数
@@ -212,9 +285,9 @@ impl LoadedWasmPlugin {
     ) -> crate::Result<Option<String>> {
         let (sid_ptr, sid_len) = self.write_string_to_memory(session_id)?;
         let (text_ptr, text_len) = self.write_string_to_memory(text)?;
+        let out_ptr = self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
 
-        let func = self.get_export_func("__bedcode_on_terminal_input")?;
-        let mut results = [wasmtime::Val::I32(0), wasmtime::Val::I32(0)];
+        let func = self.get_export_func(bedcode_plugin_api_mobile::abi::export::ON_TERMINAL_INPUT)?;
         func.call(
             &mut self.store,
             &[
@@ -222,21 +295,23 @@ impl LoadedWasmPlugin {
                 wasmtime::Val::I32(sid_len as i32),
                 wasmtime::Val::I32(text_ptr as i32),
                 wasmtime::Val::I32(text_len as i32),
+                wasmtime::Val::I32(out_ptr as i32),
             ],
-            &mut results,
+            &mut [],
         )
         .map_err(|e| {
             crate::AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e))
         })?;
 
-        let ptr = results[0].unwrap_i32() as u32;
-        let len = results[1].unwrap_i32() as u32;
-
-        if ptr == 0 && len == 0 {
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        let result = if ptr == 0 && len == 0 {
             Ok(None)
         } else {
             self.read_string_from_memory(ptr, len).map(Some)
-        }
+        };
+        self.dealloc_plugin_memory(ptr, len);
+        self.dealloc_plugin_memory(out_ptr, bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32);
+        result
     }
 
     /// 调用插件的 on_terminal_output 导出函数
@@ -247,9 +322,9 @@ impl LoadedWasmPlugin {
     ) -> crate::Result<Option<String>> {
         let (sid_ptr, sid_len) = self.write_string_to_memory(session_id)?;
         let (data_ptr, data_len) = self.write_string_to_memory(data)?;
+        let out_ptr = self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
 
-        let func = self.get_export_func("__bedcode_on_terminal_output")?;
-        let mut results = [wasmtime::Val::I32(0), wasmtime::Val::I32(0)];
+        let func = self.get_export_func(bedcode_plugin_api_mobile::abi::export::ON_TERMINAL_OUTPUT)?;
         func.call(
             &mut self.store,
             &[
@@ -257,35 +332,40 @@ impl LoadedWasmPlugin {
                 wasmtime::Val::I32(sid_len as i32),
                 wasmtime::Val::I32(data_ptr as i32),
                 wasmtime::Val::I32(data_len as i32),
+                wasmtime::Val::I32(out_ptr as i32),
             ],
-            &mut results,
+            &mut [],
         )
         .map_err(|e| {
             crate::AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e))
         })?;
 
-        let ptr = results[0].unwrap_i32() as u32;
-        let len = results[1].unwrap_i32() as u32;
-
-        if ptr == 0 && len == 0 {
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        let result = if ptr == 0 && len == 0 {
             Ok(None)
         } else {
             self.read_string_from_memory(ptr, len).map(Some)
-        }
+        };
+        self.dealloc_plugin_memory(ptr, len);
+        self.dealloc_plugin_memory(out_ptr, bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32);
+        result
     }
 
     /// 获取插件的 manifest JSON
     pub fn get_manifest(&mut self) -> crate::Result<String> {
-        let func = self.get_export_func("__bedcode_manifest")?;
-        let mut results = [wasmtime::Val::I32(0), wasmtime::Val::I32(0)];
-        func.call(&mut self.store, &[], &mut results).map_err(|e| {
-            crate::AppError::Plugin(format!("WASM manifest() call failed: {}", e))
-        })?;
+        let out_ptr = self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
 
-        let ptr = results[0].unwrap_i32() as u32;
-        let len = results[1].unwrap_i32() as u32;
+        let func = self.get_export_func(bedcode_plugin_api_mobile::abi::export::MANIFEST)?;
+        func.call(&mut self.store, &[wasmtime::Val::I32(out_ptr as i32)], &mut [])
+            .map_err(|e| {
+                crate::AppError::Plugin(format!("WASM manifest() call failed: {}", e))
+            })?;
 
-        self.read_string_from_memory(ptr, len)
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        let result = self.read_string_from_memory(ptr, len);
+        self.dealloc_plugin_memory(ptr, len);
+        self.dealloc_plugin_memory(out_ptr, bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32);
+        result
     }
 
     /// 调用生命周期事件回调（可选导出，不存在则跳过）
@@ -304,19 +384,17 @@ impl LoadedWasmPlugin {
             PluginLifecycleEvent::AppStartup
             | PluginLifecycleEvent::AppShutdown
             | PluginLifecycleEvent::AuthSuccess => {
-                let mut results = [wasmtime::Val::I32(0)];
-                func.call(&mut self.store, &[], &mut results)
+                func.call(&mut self.store, &[], &mut [])
                     .map_err(|e| crate::AppError::Plugin(format!(
                         "WASM {} call failed: {}", export_name, e
                     )))?;
             }
             PluginLifecycleEvent::Disconnect { reason } => {
                 let (ptr, len) = self.write_string_to_memory(reason)?;
-                let mut results = [wasmtime::Val::I32(0)];
                 func.call(&mut self.store, &[
                     wasmtime::Val::I32(ptr as i32),
                     wasmtime::Val::I32(len as i32),
-                ], &mut results)
+                ], &mut [])
                     .map_err(|e| crate::AppError::Plugin(format!(
                         "WASM {} call failed: {}", export_name, e
                     )))?;
@@ -324,11 +402,10 @@ impl LoadedWasmPlugin {
             PluginLifecycleEvent::SessionCreated { session_id }
             | PluginLifecycleEvent::SessionStopped { session_id } => {
                 let (ptr, len) = self.write_string_to_memory(session_id)?;
-                let mut results = [wasmtime::Val::I32(0)];
                 func.call(&mut self.store, &[
                     wasmtime::Val::I32(ptr as i32),
                     wasmtime::Val::I32(len as i32),
-                ], &mut results)
+                ], &mut [])
                     .map_err(|e| crate::AppError::Plugin(format!(
                         "WASM {} call failed: {}", export_name, e
                     )))?;
@@ -337,16 +414,20 @@ impl LoadedWasmPlugin {
             | PluginLifecycleEvent::TerminalOutput { session_id, data } => {
                 let (sid_ptr, sid_len) = self.write_string_to_memory(session_id)?;
                 let (data_ptr, data_len) = self.write_string_to_memory(data)?;
-                let mut results = [wasmtime::Val::I32(0)];
+                let out_ptr = self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
                 func.call(&mut self.store, &[
                     wasmtime::Val::I32(sid_ptr as i32),
                     wasmtime::Val::I32(sid_len as i32),
                     wasmtime::Val::I32(data_ptr as i32),
                     wasmtime::Val::I32(data_len as i32),
-                ], &mut results)
+                    wasmtime::Val::I32(out_ptr as i32),
+                ], &mut [])
                     .map_err(|e| crate::AppError::Plugin(format!(
                         "WASM {} call failed: {}", export_name, e
                     )))?;
+                let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+                self.dealloc_plugin_memory(ptr, len);
+                self.dealloc_plugin_memory(out_ptr, bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32);
             }
         }
         Ok(())
@@ -475,6 +556,72 @@ impl LoadedWasmPlugin {
             crate::AppError::Plugin(format!("WASM read_string: invalid UTF-8: {}", e))
         })
     }
+
+    /// 通过插件的 `__bedcode_allocate` 导出函数分配线性内存（供 out_ptr 使用）
+    fn allocate_memory(&mut self, size: usize) -> crate::Result<u32> {
+        let alloc_func = self
+            .instance
+            .get_func(&mut self.store, bedcode_plugin_api_mobile::abi::export::ALLOCATE)
+            .ok_or_else(|| {
+                crate::AppError::Plugin(
+                    "WASM module missing required export '__bedcode_allocate'".to_string(),
+                )
+            })?;
+        let mut alloc_results = [wasmtime::Val::I32(0)];
+        alloc_func
+            .call(&mut self.store, &[wasmtime::Val::I32(size as i32)], &mut alloc_results)
+            .map_err(|e| crate::AppError::Plugin(format!("WASM allocate() call failed: {}", e)))?;
+        let ptr = alloc_results[0].unwrap_i32() as u32;
+        if ptr == 0 {
+            return Err(crate::AppError::Plugin(
+                "WASM allocate() returned null pointer".to_string(),
+            ));
+        }
+        Ok(ptr)
+    }
+
+    /// 从 out_ptr（8 字节: ptr + len）读取结果对
+    fn read_result_from_out_ptr(&self, out_ptr: u32) -> crate::Result<(u32, u32)> {
+        let memory_data = self.memory.data(&self.store);
+        let start = out_ptr as usize;
+        let end = start + bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE;
+        if end > memory_data.len() {
+            return Err(crate::AppError::Plugin(format!(
+                "WASM read_result: out_ptr {} + {} exceeds memory size {}",
+                out_ptr,
+                bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE,
+                memory_data.len()
+            )));
+        }
+        let mut ptr_bytes = [0u8; 4];
+        let mut len_bytes = [0u8; 4];
+        ptr_bytes.copy_from_slice(&memory_data[start..start + 4]);
+        len_bytes.copy_from_slice(&memory_data[start + 4..end]);
+        Ok((u32::from_le_bytes(ptr_bytes), u32::from_le_bytes(len_bytes)))
+    }
+
+    /// 回收插件线性内存中由 `__bedcode_allocate` / `wasm_alloc_string` 分配的缓冲区
+    ///
+    /// 旧插件未导出 `__bedcode_deallocate` 时跳过回收，退化 v1 行为
+    fn dealloc_plugin_memory(&mut self, ptr: u32, len: u32) {
+        if ptr == 0 || len == 0 {
+            return;
+        }
+        let Some(func) = self
+            .instance
+            .get_func(&mut self.store, bedcode_plugin_api_mobile::abi::export::DEALLOCATE)
+        else {
+            return;
+        };
+        let _ = func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(ptr as i32),
+                wasmtime::Val::I32(len as i32),
+            ],
+            &mut [],
+        );
+    }
 }
 
 impl WasmHostContext {
@@ -485,6 +632,7 @@ impl WasmHostContext {
         app_handle: Arc<tauri::AppHandle>,
         fs_auth: Arc<crate::plugin::fs_auth::FsAuthChecker>,
         message_bus: Arc<crate::plugin::message_bus::MessageBus>,
+        status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync>,
     ) -> Self {
         Self {
             db,
@@ -492,6 +640,7 @@ impl WasmHostContext {
             app_handle,
             fs_auth,
             message_bus,
+            status_reporter,
         }
     }
 }
@@ -583,6 +732,11 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
         .func_wrap("bedcode", "host_bus_unsubscribe", host_bus_unsubscribe)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_bus_unsubscribe: {}", e)))?;
 
+    // 插件状态上报
+    linker
+        .func_wrap("bedcode", "host_mark_plugin_error", host_mark_plugin_error)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_mark_plugin_error: {}", e)))?;
+
     Ok(())
 }
 
@@ -635,10 +789,46 @@ fn write_wasm_string(
     Some((ptr, len as u32))
 }
 
+/// 检查插件是否拥有指定权限（host function 调用前校验）
+///
+/// 权限来自 manifest.permissions（实例化时注入 WasmPluginState）。
+/// 校验失败返回 false，调用方记录日志并拒绝执行。
+fn has_permission(caller: &wasmtime::Caller<'_, WasmPluginState>, permission: &str) -> bool {
+    caller.data().granted_permissions.contains(permission)
+}
+
+/// 将 (ptr, len) 结果写入 WASM 线性内存的 out_ptr 位置（8 字节: ptr + len，小端序）
+///
+/// ABI v3：返回 (ptr, len) 的结果通过 out_ptr 输出参数传递，而非元组返回值
+fn write_result_to_out_ptr(
+    caller: &mut wasmtime::Caller<'_, WasmPluginState>,
+    out_ptr: u32,
+    ptr: u32,
+    len: u32,
+) -> bool {
+    let memory = match caller.get_export("memory") {
+        Some(e) => match e.into_memory() {
+            Some(m) => m,
+            None => return false,
+        },
+        None => return false,
+    };
+    let data = memory.data_mut(caller);
+    let start = out_ptr as usize;
+    let end = start + bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE;
+    if end > data.len() {
+        return false;
+    }
+    data[start..start + 4].copy_from_slice(&ptr.to_le_bytes());
+    data[start + 4..end].copy_from_slice(&len.to_le_bytes());
+    true
+}
+
 // ==================== Host Function Implementations ====================
 //
 // 移动端 Host Function 约定：
-// - 无权限校验（移动端无 PermissionManager）
+// - 敏感 host function 调用前按 manifest.permissions 校验（has_permission），
+//   通用/插件自身状态类（emit_event / notify / log_* / mark_plugin_error）不校验
 // - host_terminal_send 通过 WebSocket 转发到桌面端
 // - host_notify 调用 tauri-plugin-notification
 // - host_session_list/get 为空操作
@@ -647,15 +837,20 @@ fn host_storage_get(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     key_ptr: u32,
     key_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_storage_get: permission denied (storage)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_storage_get: failed to read key");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -671,21 +866,30 @@ fn host_storage_get(
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_get: JSON serialization failed");
-                    return (0, 0);
+                    return -1;
                 }
             };
             match write_wasm_string(&mut caller, &json_str) {
-                Some((ptr, len)) => (ptr, len),
+                Some((ptr, len)) => {
+                    if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                        0
+                    } else {
+                        -1
+                    }
+                }
                 None => {
                     tracing::error!(plugin_id = %plugin_id, "host_storage_get: failed to write result to WASM memory");
-                    (0, 0)
+                    -1
                 }
             }
         }
-        Ok(None) => (0, 0),
+        Ok(None) => {
+            let _ = write_result_to_out_ptr(&mut caller, out_ptr, 0, 0);
+            0
+        }
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, key = %key, "host_storage_get: storage error");
-            (0, 0)
+            -1
         }
     }
 }
@@ -698,6 +902,10 @@ fn host_storage_set(
     val_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_storage_set: permission denied (storage)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
@@ -743,6 +951,10 @@ fn host_storage_delete(
     key_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_storage_delete: permission denied (storage)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
@@ -772,6 +984,10 @@ fn host_db_execute(
     sql_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_db_execute: permission denied (storage)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let sql = match read_wasm_string(&mut caller, sql_ptr, sql_len) {
@@ -808,21 +1024,26 @@ fn host_db_query(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     sql_ptr: u32,
     sql_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_db_query: permission denied (storage)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let sql = match read_wasm_string(&mut caller, sql_ptr, sql_len) {
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to read SQL");
-            return (0, 0);
+            return -1;
         }
     };
 
     if let Err(e) = wasm_host::validate_sql_table_prefix(&plugin_id, &sql) {
         tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: table name validation failed");
-        return (0, 0);
+        return -1;
     }
 
     let db = host_ctx.db.clone();
@@ -871,20 +1092,26 @@ fn host_db_query(
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: JSON serialization failed");
-                    return (0, 0);
+                    return -1;
                 }
             };
             match write_wasm_string(&mut caller, &json_str) {
-                Some((ptr, len)) => (ptr, len),
+                Some((ptr, len)) => {
+                    if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                        0
+                    } else {
+                        -1
+                    }
+                }
                 None => {
                     tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to write result to WASM memory");
-                    (0, 0)
+                    -1
                 }
             }
         }
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: SQL query failed");
-            (0, 0)
+            -1
         }
     }
 }
@@ -898,6 +1125,10 @@ fn host_terminal_send(
     data_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_INPUT) {
+        tracing::warn!(plugin_id = %plugin_id, "host_terminal_send: permission denied (terminal:input)");
+        return -1;
+    }
 
     let session_id = match read_wasm_string(&mut caller, sid_ptr, sid_len) {
         Some(s) => s,
@@ -974,15 +1205,20 @@ fn host_http_fetch(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     req_ptr: u32,
     req_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_NETWORK_HTTP) {
+        tracing::warn!(plugin_id = %plugin_id, "host_http_fetch: permission denied (network:http)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let request_json = match read_wasm_string(&mut caller, req_ptr, req_len) {
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to read request JSON");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -990,7 +1226,7 @@ fn host_http_fetch(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: invalid request JSON");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -1035,8 +1271,14 @@ fn host_http_fetch(
         });
         let result_str = serde_json::to_string(&result_json).unwrap_or_default();
         match write_wasm_string(&mut caller, &result_str) {
-            Some((ptr, len)) => (ptr, len),
-            None => (0, 0),
+            Some((ptr, len)) => {
+                if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                    0
+                } else {
+                    -1
+                }
+            }
+            None => -1,
         }
     } else {
         let handle = caller.data().runtime_handle.clone();
@@ -1048,20 +1290,26 @@ fn host_http_fetch(
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: response serialization failed");
-                        return (0, 0);
+                        return -1;
                     }
                 };
                 match write_wasm_string(&mut caller, &result_str) {
-                    Some((ptr, len)) => (ptr, len),
+                    Some((ptr, len)) => {
+                        if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                            0
+                        } else {
+                            -1
+                        }
+                    }
                     None => {
                         tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to write result to WASM memory");
-                        (0, 0)
+                        -1
                     }
                 }
             }
             Err(e) => {
                 tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: HTTP request failed");
-                (0, 0)
+                -1
             }
         }
     }
@@ -1111,20 +1359,29 @@ fn host_notify(
 /// 会话列表：移动端空操作，保持 ABI 兼容
 fn host_session_list_noop(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     match write_wasm_string(&mut caller, "[]") {
-        Some((ptr, len)) => (ptr, len),
-        None => (0, 0),
+        Some((ptr, len)) => {
+            if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                0
+            } else {
+                -1
+            }
+        }
+        None => -1,
     }
 }
 
 /// 会话获取：移动端空操作，保持 ABI 兼容
 fn host_session_get_noop(
-    _caller: wasmtime::Caller<'_, WasmPluginState>,
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
     _sid_ptr: u32,
     _sid_len: u32,
-) -> (u32, u32) {
-    (0, 0)
+    out_ptr: u32,
+) -> i32 {
+    let _ = write_result_to_out_ptr(&mut caller, out_ptr, 0, 0);
+    0
 }
 
 // ==================== Logging ====================
@@ -1160,15 +1417,20 @@ fn host_fs_read(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     path_ptr: u32,
     path_len: u32,
-) -> (u32, u32) {
+    out_ptr: u32,
+) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_READ) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_read: permission denied (fs:read)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
         Some(s) => s,
         None => {
             tracing::error!(plugin_id = %plugin_id, "host_fs_read: failed to read path");
-            return (0, 0);
+            return -1;
         }
     };
 
@@ -1179,20 +1441,26 @@ fn host_fs_read(
     });
     if !allowed {
         tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_read: access denied by fs_auth");
-        return (0, 0);
+        return -1;
     }
 
     match std::fs::read_to_string(&path) {
         Ok(content) => match write_wasm_string(&mut caller, &content) {
-            Some((ptr, len)) => (ptr, len),
+            Some((ptr, len)) => {
+                if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                    0
+                } else {
+                    -1
+                }
+            }
             None => {
                 tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_read: failed to write result to WASM memory");
-                (0, 0)
+                -1
             }
         },
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_read: file read failed");
-            (0, 0)
+            -1
         }
     }
 }
@@ -1206,6 +1474,10 @@ fn host_fs_write(
     data_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_WRITE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_write: permission denied (fs:write)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
@@ -1261,6 +1533,12 @@ fn host_fs_copy(
     dst_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_READ)
+        || !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_WRITE)
+    {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_copy: permission denied (fs:read+fs:write)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let src = match read_wasm_string(&mut caller, src_ptr, src_len) {
@@ -1327,6 +1605,10 @@ fn host_bus_publish(
     payload_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_BUS) {
+        tracing::warn!(plugin_id = %plugin_id, "host_bus_publish: permission denied (bus)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
@@ -1364,6 +1646,10 @@ fn host_bus_subscribe(
     topic_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_BUS) {
+        tracing::warn!(plugin_id = %plugin_id, "host_bus_subscribe: permission denied (bus)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
@@ -1389,6 +1675,10 @@ fn host_bus_unsubscribe(
     topic_len: u32,
 ) -> i32 {
     let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_BUS) {
+        tracing::warn!(plugin_id = %plugin_id, "host_bus_unsubscribe: permission denied (bus)");
+        return -1;
+    }
     let host_ctx = caller.data().host_ctx.clone();
 
     let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
@@ -1405,4 +1695,27 @@ fn host_bus_unsubscribe(
         handle.block_on(bus.unsubscribe(&plugin_id, &topic))
     });
     0
+}
+
+/// 插件状态上报：标记插件为错误状态
+///
+/// 插件自检失败（如 API 配置无效）时调用。宿主置 Error 状态、
+/// 持久化启用状态为 false，并通知前端。
+fn host_mark_plugin_error(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    msg_ptr: u32,
+    msg_len: u32,
+) {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let msg = match read_wasm_string(&mut caller, msg_ptr, msg_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_mark_plugin_error: failed to read message");
+            return;
+        }
+    };
+
+    (host_ctx.status_reporter)(&plugin_id, &msg);
 }

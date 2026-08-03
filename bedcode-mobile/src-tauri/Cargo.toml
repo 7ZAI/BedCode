@@ -78,6 +78,9 @@ regex = "1"
 # SHA256 hash (plugin download verification)
 sha2 = "0.10"
 
+# ZIP archive (plugin package install)
+zip = "4.6"
+
 # Android logging
 log = "0.4"
 android_logger = "0.14"

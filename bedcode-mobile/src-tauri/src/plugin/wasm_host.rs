@@ -146,8 +146,6 @@ struct OpenAiSseDelta {
 pub async fn execute_http_request(
     request: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    use futures_util::StreamExt;
-
     let method = request
         .get("method")
         .and_then(|v| v.as_str())

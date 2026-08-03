@@ -81,8 +81,17 @@ impl PluginStorage {
                 fs::create_dir_all(parent)?;
             }
             let content = serde_json::to_string(store)?;
-            let content = serde_json::to_string(store)?;
             fs::write(path, content)?;
+        }
+        Ok(())
+    }
+
+    /// 删除插件全部存储
+    pub async fn clear_plugin(&self, plugin_id: &str) -> Result<()> {
+        self.caches.write().await.remove(plugin_id);
+        let path = self.storage_path(plugin_id);
+        if path.exists() {
+            std::fs::remove_file(path)?;
         }
         Ok(())
     }

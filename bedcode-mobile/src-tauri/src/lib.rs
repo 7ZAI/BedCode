@@ -49,7 +49,8 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(crate::plugin::android_plugins::init())
+        .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
+        .plugin(crate::plugin::android_plugins::foreground_service_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
@@ -81,20 +82,23 @@ pub fn run() {
             let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
 
-            // 解压 APK assets 中的内置插件
-            if let Err(e) = crate::plugin::loader::PluginLoader::extract_apk_plugins(
-                &app_data_dir, &app_handle
-            ) {
-                tracing::warn!("Failed to extract APK plugins: {}", e);
-            }
-
-            // 异步：初始化 WASM 运行时 + 扫描加载 + 自动激活
+            // 异步：解压内置插件 → 初始化 WASM 运行时 → 扫描加载 → 自动激活
             // 使用 tauri::async_runtime::spawn 而非 tokio::spawn，
             // 因为 setup 闭包不在 Tokio 运行时上下文中执行，tokio::spawn 会 panic
             {
                 let pm = plugin_manager;
                 let ah = app_handle.clone();
+                let app_version = app.package_info().version.to_string();
+                let app_data_dir_for_extract = app_data_dir.clone();
                 tauri::async_runtime::spawn(async move {
+                    // 解压内置插件（Android：Kotlin 桥；桌面 dev：源码资源目录复制）
+                    if let Err(e) = crate::plugin::loader::PluginLoader::extract_apk_plugins(
+                        &app_data_dir_for_extract,
+                        &app_version,
+                    ).await {
+                        tracing::warn!("Failed to extract bundled plugins: {}", e);
+                    }
+
                     // 在 Tokio 运行时上下文中初始化 WASM 运行时
                     if let Err(e) = pm.init_wasm_runtime() {
                         tracing::error!("Failed to init WASM runtime: {}", e);
@@ -185,10 +189,13 @@ pub fn run() {
             crate::plugin::commands::plugin_is_enabled,
             crate::plugin::commands::plugin_set_enabled,
             crate::plugin::commands::plugin_mark_error,
+            crate::plugin::commands::plugin_report_ready,
             crate::plugin::commands::plugin_storage_get,
             crate::plugin::commands::plugin_storage_set,
             crate::plugin::commands::plugin_storage_delete,
             crate::plugin::commands::plugin_download,
+            crate::plugin::commands::plugin_install_from_file,
+            crate::plugin::commands::plugin_uninstall,
             crate::plugin::commands::reload_wasm_plugin,
             // File System Auth Commands
             crate::plugin::commands::plugin_fs_auth_respond,

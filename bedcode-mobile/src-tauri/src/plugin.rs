@@ -15,5 +15,5 @@ pub mod types;
 pub mod wasm_host;
 pub mod wasm_runtime;
 
-pub use android_plugins::init;
+pub use android_plugins::{asset_extractor_plugin, foreground_service_plugin};
 pub use registry::builtin_manifests;

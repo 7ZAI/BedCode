@@ -98,6 +98,14 @@ impl SettingsManager {
         Ok(())
     }
 
+    /// 移除设置项（不存在时静默成功）
+    pub async fn remove(&self, key: &str) -> Result<()> {
+        let mut settings = self.settings.write().await;
+        settings.settings.remove(key);
+        settings.save(&self.path)?;
+        Ok(())
+    }
+
     /// 获取所有设置
     pub async fn get_all(&self) -> Result<Vec<(String, String)>> {
         let settings = self.settings.read().await;

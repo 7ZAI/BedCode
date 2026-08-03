@@ -16,6 +16,8 @@ pub enum PluginSource {
     ApkAsset,
     /// 远程下载插件
     RemoteDownload,
+    /// 本地文件安装插件
+    FileInstall,
     /// 仅前端注册（无 WASM 模块）
     FrontendOnly,
 }
@@ -62,17 +64,18 @@ impl PluginLifecycleEvent {
         }
     }
 
-    /// 返回 WASM 导出函数名
+    /// 返回 WASM 导出函数名（与 SDK abi 常量保持一致）
     pub fn wasm_export_name(&self) -> &'static str {
+        use bedcode_plugin_api_mobile::abi::export;
         match self {
-            Self::AppStartup => "__bedcode_on_app_startup",
-            Self::AppShutdown => "__bedcode_on_app_shutdown",
-            Self::AuthSuccess => "__bedcode_on_auth_success",
-            Self::Disconnect { .. } => "__bedcode_on_disconnect",
-            Self::SessionCreated { .. } => "__bedcode_on_session_created",
-            Self::SessionStopped { .. } => "__bedcode_on_session_stopped",
-            Self::TerminalInput { .. } => "__bedcode_on_terminal_input",
-            Self::TerminalOutput { .. } => "__bedcode_on_terminal_output",
+            Self::AppStartup => export::ON_STARTUP,
+            Self::AppShutdown => export::ON_SHUTDOWN,
+            Self::AuthSuccess => export::ON_AUTH_SUCCESS,
+            Self::Disconnect { .. } => export::ON_DISCONNECT,
+            Self::SessionCreated { .. } => export::ON_SESSION_CREATED,
+            Self::SessionStopped { .. } => export::ON_SESSION_STOPPED,
+            Self::TerminalInput { .. } => export::ON_TERMINAL_INPUT,
+            Self::TerminalOutput { .. } => export::ON_TERMINAL_OUTPUT,
         }
     }
 
@@ -125,6 +128,8 @@ pub struct MobilePluginInfo {
     pub contributes: bedcode_plugin_api_mobile::types::PluginContributes,
     /// 插件来源
     pub source: String,
+    /// 插件目录路径（含 plugin.json 的目录），前端经 asset protocol 加载前端模块
+    pub extension_path: String,
 }
 
 impl From<&LoadedPlugin> for MobilePluginInfo {
@@ -132,6 +137,7 @@ impl From<&LoadedPlugin> for MobilePluginInfo {
         let source_str = match &p.source {
             PluginSource::ApkAsset => "apk-asset",
             PluginSource::RemoteDownload => "remote-download",
+            PluginSource::FileInstall => "file-install",
             PluginSource::FrontendOnly => "frontend-only",
         };
         MobilePluginInfo {
@@ -146,6 +152,7 @@ impl From<&LoadedPlugin> for MobilePluginInfo {
             state: p.state.clone(),
             contributes: p.manifest.contributes.clone(),
             source: source_str.to_string(),
+            extension_path: p.extension_path.clone(),
         }
     }
 }

@@ -24,6 +24,8 @@
     "tauri:android:build:all": "tauri android build",
     "target:size": "node scripts/check-target-size.js",
     "target:clean": "cd src-tauri && cargo clean",
+    "plugins:build": "node scripts/plugin-build.js",
+    "build:all": "npm run plugins:build && npm run build",
     "prebuild": "node scripts/check-target-size.js"
   },
   "dependencies": {
