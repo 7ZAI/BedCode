@@ -130,6 +130,7 @@ export default {
       restartSession: 'Restart Session',
       deleteSession: 'Delete Session',
       scrollToBottom: 'Scroll to Bottom',
+      historyTruncated: 'Terminal history is too long, the earliest output was truncated',
     },
     server: {
       title: 'Server Management',

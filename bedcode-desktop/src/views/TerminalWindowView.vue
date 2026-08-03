@@ -1,7 +1,8 @@
 <template>
   <div
     class="h-screen relative overflow-hidden flex flex-col bg-slate-100 dark:bg-dark-900"
-    :class="isShown ? 'animate-fade-slide-up' : 'opacity-0'"
+    :class="isShown ? (revealDone ? 'opacity-100' : 'animate-fade-slide-up') : 'opacity-0'"
+    @animationend="onRevealEnd"
   >
     <!-- Header with title, settings, actions, and window controls -->
     <header class="bg-white dark:bg-dark-800 border-b border-slate-200 dark:border-dark-700 px-3 h-10 shrink-0 flex items-center justify-between" data-tauri-drag-region>
@@ -171,6 +172,7 @@ const session = ref<SessionInfo | null>(null)
 const isMaximized = ref(false)
 const isLoading = ref(true)
 const isShown = ref(false)  // 是否已允许显示（由主窗口在内容就绪后通知）
+const revealDone = ref(false)  // 进入动画是否已结束（结束后移除残留 transform）
 const isSnapped = ref(false)  // 是否已贴靠
 const snapDirection = ref<'left' | 'right' | null>(null)  // 贴靠方向
 
@@ -400,6 +402,18 @@ function handleKeydown(e: KeyboardEvent) {
   // Esc 关闭设置面板
   if (e.key === 'Escape' && isSettingsOpen.value) {
     isSettingsOpen.value = false
+  }
+}
+
+/**
+ * 窗口进入动画结束后，切换到无 transform 状态（opacity-100）。
+ * 动画 fill-mode:both 会让 transform: translateY(0) 永久残留在根节点，
+ * 使包裹 WebGL 画布的外层长期处于独立合成层，WebView2 合成器滚动时可能
+ * 缓存旧帧导致重影；动画结束后移除 transform 消除该触发点。
+ */
+function onRevealEnd(e: AnimationEvent) {
+  if (e.animationName === 'fade-slide-up' && isShown.value) {
+    revealDone.value = true
   }
 }
 

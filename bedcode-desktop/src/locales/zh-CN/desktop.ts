@@ -130,6 +130,7 @@ export default {
       restartSession: '重启会话',
       deleteSession: '删除会话',
       scrollToBottom: '滚动到底部',
+      historyTruncated: '终端历史过长，最早输出已被截断',
     },
     server: {
       title: '服务器管理',

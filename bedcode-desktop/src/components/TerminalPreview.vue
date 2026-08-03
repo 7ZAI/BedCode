@@ -75,9 +75,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { SessionInfo } from '@/stores/session'
 import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
+import { useToast } from '@/composables/useToast'
 import Button from '@/components/Button.vue'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { usePtyOutput } from '@/composables/usePtyOutput'
@@ -87,6 +89,7 @@ import {
   destroySessionCache,
   resizeHiddenTerminal
 } from '@/composables/useGlobalTerminal'
+import { pendingReplayEvents, advanceWatermark } from '@/utils/ptyReplay'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -120,6 +123,9 @@ const props = withDefaults(defineProps<Props>(), {
   showHeader: true,
 })
 
+const { t } = useI18n()
+const toast = useToast()
+
 const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
@@ -139,6 +145,9 @@ const isUserScrolling = ref(false)
 // rAF 节流：防止快速连续 scrollToBottom 调用导致 WebGL 重影
 // 多次输出事件在同一帧内触发时，只执行一次 scrollToBottom
 let pendingScrollRaf = 0
+
+// 滚动后强制重绘可见区：清除 WebGL 渲染器滚动遗留的重影纹理行
+let pendingScrollRefreshRaf = 0
 
 // xterm onScroll 取消监听（IDisposable 接口）
 let scrollDisposable: import('@xterm/xterm').IDisposable | null = null
@@ -179,6 +188,9 @@ usePtyOutput(sessionId, (data: string, index: number) => {
 
   if (terminal) {
     terminal.write(data)
+    // 只在实际写入终端时推进水位：历史回放会跳过 <= 水位的重叠事件，
+    // 避免窗口打开时同一批输出被实时流与历史回放各写一次（重复行）
+    lastReplayedIndex = advanceWatermark(lastReplayedIndex, index)
     if (!isUserScrolling.value) {
       scrollToBottom()
     }
@@ -543,6 +555,15 @@ function handleScroll() {
   const viewportBottom = viewportTop + terminal.rows
   const totalLines = buffer.length
   isUserScrolling.value = viewportBottom < totalLines - 1
+
+  // WebGL 渲染器在滚动时可能残留上一帧的纹理行（重影）。
+  // 每帧至多一次强制重绘可见区，从 buffer 重新生成，清除残留。
+  if (!pendingScrollRefreshRaf) {
+    pendingScrollRefreshRaf = requestAnimationFrame(() => {
+      pendingScrollRefreshRaf = 0
+      terminal?.refresh(0, terminal.rows - 1)
+    })
+  }
 }
 
 /// 用户点击"回到底部"按钮：重置滚动状态并滚到底
@@ -637,15 +658,26 @@ onMounted(async () => {
         startSeq: null,
       })
 
+      // 环形缓冲回卷检测：minSeq > 0 说明会话开头输出已被环形缓冲淘汰，
+      // 当前历史不完整（最早输出不可恢复），提示用户而非静默缺失
+      if (history.minSeq > 0) {
+        console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minSeq=${history.minSeq}，会话开头输出不可用`)
+        toast.warning(t('desktop.terminal.historyTruncated'))
+      }
+
       if (history.events.length > 0) {
         // 逐个事件解码并写入 xterm + 全局缓存
         // 不合并为单次写入，避免隐藏 xterm 实例处理超长字符串时卡顿
-        for (const event of history.events) {
+        // 跳过已由实时流写入的重叠事件（index <= 水位），避免重复行
+        const { events: pending, nextWatermark } = pendingReplayEvents(history.events, lastReplayedIndex)
+        for (const event of pending) {
           const data = decodeBase64(event.data)
           terminal.write(data)
           terminalHistory.append(data)
+          lastReplayedIndex = advanceWatermark(lastReplayedIndex, event.index)
         }
-        lastReplayedIndex = history.maxSeq
+        // 水位不倒退（实时流可能已推进到更高 index）
+        lastReplayedIndex = Math.max(lastReplayedIndex, nextWatermark, history.maxSeq)
         scrollToBottom()
       }
     } catch (e) {
@@ -704,6 +736,12 @@ onUnmounted(() => {
   if (pendingScrollRaf) {
     cancelAnimationFrame(pendingScrollRaf)
     pendingScrollRaf = 0
+  }
+
+  // 清理滚动后重绘 rAF
+  if (pendingScrollRefreshRaf) {
+    cancelAnimationFrame(pendingScrollRefreshRaf)
+    pendingScrollRefreshRaf = 0
   }
 
   // 清理 resize rAF

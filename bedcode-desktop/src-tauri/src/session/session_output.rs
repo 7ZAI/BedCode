@@ -281,6 +281,27 @@ impl SubscriberState {
         self.sent_seq.store(sent_seq, Ordering::SeqCst);
         self.active.store(true, Ordering::SeqCst);
     }
+
+    /// 排空 pending 缓冲，跳过已含在历史快照中的事件（index <= snapshot_max_seq）
+    ///
+    /// 订阅流程"插入占位 → 读取历史快照"之间存在一个微小的竞态窗口：
+    /// 该窗口内 on_output() 可能把新事件同时写进输出队列（进入历史快照）
+    /// 并缓存进 pending（因占位 subscriber 尚未 active）。若不跳过，这些事件
+    /// 会被历史发送与 pending 排空各发一次，订阅者终端出现重复输出。
+    async fn drain_pending(&self, snapshot_max_seq: u64) {
+        let mut pending = self.pending.write().await;
+        for event in pending.drain(..) {
+            if event.index <= snapshot_max_seq {
+                continue;
+            }
+            if let Err(e) = self.send_queue.send(event.clone()).await {
+                tracing::warn!(
+                    "[SessionOutputManager] Failed to send pending to {}: {}",
+                    self.client_id, e
+                );
+            }
+        }
+    }
 }
 
 /// 订阅响应
@@ -396,16 +417,8 @@ impl SessionOutputManager {
             if need_drain {
                 let mut subscribers = self.subscribers.write().await;
                 if let Some(sub) = subscribers.get(client_id) {
-                    let mut pending = sub.pending.write().await;
-                    for event in pending.drain(..) {
-                        if let Err(e) = sub.send_queue.send(event.clone()).await {
-                            tracing::warn!(
-                                "[SessionOutputManager] Failed to send pending to {}: {}",
-                                client_id, e
-                            );
-                        }
-                    }
-                    drop(pending);
+                    // 跳过历史快照（max_seq 之前）已发送的事件，避免重复输出
+                    sub.drain_pending(max_seq).await;
 
                     // 读取最新 max_seq，此时 on_output 被写锁阻塞，max_seq 不会继续增长
                     let current_max = self.output_queue.read().await.max_seq();
@@ -880,6 +893,26 @@ mod tests {
         manager.on_output(make_event(5)).await;
         let e = rx.recv().await.unwrap();
         assert_eq!(e.index, 5);
+    }
+
+    /// 验证 pending 排空跳过历史快照中已发送的事件：
+    /// "占位→历史快照"窗口内的事件同时在历史与 pending 中，不能重复发送
+    #[tokio::test]
+    async fn test_drain_pending_skips_history_overlap() {
+        let (tx, mut rx) = mpsc::channel(100);
+        let sub = SubscriberState::new("client-1".to_string(), tx);
+
+        // 模拟占位→快照窗口：事件 3、4 在占位后被 push，同时进入 pending；
+        // 历史快照已包含 index <= 3 的事件（snapshot_max_seq = 3）
+        sub.pending.write().await.push(make_event(3));
+        sub.pending.write().await.push(make_event(4));
+
+        sub.drain_pending(3).await;
+
+        // 只应发送 index 4；index 3 已在历史快照中发送过，不能重复
+        let e = rx.recv().await.unwrap();
+        assert_eq!(e.index, 4);
+        assert!(rx.try_recv().is_err());
     }
 
     /// 验证 inactive 期间 on_output 缓存到 pending
