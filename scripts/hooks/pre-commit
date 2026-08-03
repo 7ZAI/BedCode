@@ -1,0 +1,3 @@
+#!/bin/sh
+# pre-commit：非跟踪分支（master 等）提交前自动剔除文档文件，防止泄漏入库
+sh "$(dirname "$0")/../doc-tracking.sh" untrack pre-commit
