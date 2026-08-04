@@ -59,13 +59,26 @@
           class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 flex items-center gap-3 shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)] active:scale-[0.99] transition-all duration-300 text-left group"
           @click="activePluginView = view"
         >
-          <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] text-xl">
-            🧩
-          </div>
-          <div class="flex-1 min-w-0">
-            <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-primary)] truncate">{{ view.title }}</p>
-            <p class="text-[var(--mobile-text-muted)] text-sm truncate mt-0.5">{{ t('mobile.toolbox.pluginEntry') }}</p>
-          </div>
+          <!-- 插件自定义入口卡片（自带状态角标）；缺省用宿主统一卡片 -->
+          <PluginViewHost
+            v-if="view.entry"
+            :plugin-id="view.pluginId"
+            :component="view.entry"
+            class="flex-1 min-w-0"
+          />
+          <template v-else>
+            <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] text-xl">
+              <!-- icon 以 M 开头视为 SVG path d，否则按 emoji 文本渲染；缺省 🧩 -->
+              <svg v-if="isSvgIcon(view.icon)" class="w-6 h-6 text-[var(--mobile-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="view.icon" />
+              </svg>
+              <span v-else>{{ view.icon ?? '🧩' }}</span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-primary)] truncate">{{ view.title }}</p>
+              <p class="text-[var(--mobile-text-muted)] text-sm truncate mt-0.5">{{ t('mobile.toolbox.pluginEntry') }}</p>
+            </div>
+          </template>
           <svg class="w-5 h-5 flex-shrink-0 text-[var(--mobile-text-disabled)] group-hover:text-[var(--mobile-accent)] transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
@@ -108,6 +121,11 @@ const presetEntryDesc = computed(() =>
     ? t('mobile.toolbox.presetEntryCount', { count: taskCount.value })
     : t('mobile.toolbox.presetEntryEmpty')
 )
+
+/** 判断 icon 是否为 SVG path d（以 M 开头视为路径数据） */
+function isSvgIcon(icon?: string): boolean {
+  return typeof icon === 'string' && icon.startsWith('M')
+}
 
 onMounted(async () => {
   await load()

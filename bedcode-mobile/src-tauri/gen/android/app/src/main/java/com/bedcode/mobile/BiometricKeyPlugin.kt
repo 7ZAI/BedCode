@@ -167,11 +167,11 @@ class BiometricKeyPlugin(private val activity: Activity) : Plugin(activity) {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         try {
                             val crypto = result.cryptoObject
-                            if (crypto == null || crypto.signature == null) {
+                            val signer = crypto?.signature
+                            if (signer == null) {
                                 resultFail(invoke, "Biometric result missing signature crypto")
                                 return
                             }
-                            val signer = crypto.signature
                             signer.update(args.message.toByteArray(Charsets.UTF_8))
                             val der = signer.sign()
                             val raw = derToRaw(der)

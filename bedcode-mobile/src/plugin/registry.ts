@@ -13,7 +13,11 @@ interface RegisteredToolboxView {
   pluginId: string
   viewId: string
   title: string
+  /** 入口图标：emoji 或 SVG path d 字符串，缺省 🧩 */
+  icon?: string
   component: any
+  /** 插件自定义入口卡片组件（缺省时宿主用统一卡片渲染） */
+  entry?: any
 }
 
 /** 注册的导航 Tab */
@@ -64,7 +68,9 @@ class PluginRegistryClass {
       pluginId,
       viewId: page.id,
       title: page.title,
+      icon: page.icon,
       component: page.component,
+      entry: page.entry,
     })
     this.updateReactiveToolboxViews()
     return {

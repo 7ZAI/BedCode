@@ -40,6 +40,13 @@ export type {
   StatusAPI,
   PluginContext,
   PluginModule,
+  UploadRequestMeta,
+  UploadHookDecision,
+  MountOptions,
+  FileServiceMount,
+  PeerMountAnnouncement,
+  PeerFileServiceInfo,
+  FileServiceAPI,
 } from '@bedcode/plugin-sdk-mobile'
 
 /** 插件信息（从后端获取，含 source 字段） */

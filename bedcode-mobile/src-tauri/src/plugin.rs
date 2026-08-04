@@ -11,6 +11,7 @@ pub mod manager;
 pub mod message_bus;
 pub mod registry;
 pub mod storage;
+pub mod transfer;
 pub mod types;
 pub mod wasm_host;
 pub mod wasm_runtime;

@@ -14,14 +14,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
-tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
 tauri-plugin-edge-to-edge = "0.3.3"
 tauri-plugin-http = "2"
-# 生物识别（官方，Android/iOS）
-tauri-plugin-biometric = "2.3.2"
 # 设备 ID（Android ANDROID_ID / iOS identifierForVendor）
 tauri-plugin-machine-uid = "0.1.3"
 

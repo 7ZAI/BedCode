@@ -9,6 +9,7 @@ use crate::connection::manager::ConnectionManager;
 use crate::auth::AuthManager;
 use crate::session::SessionManager;
 use crate::plugin::manager::PluginManager;
+use crate::file_service::FileService;
 
 // ==================== Global Token ====================
 
@@ -86,4 +87,14 @@ pub fn init_plugin_manager(manager: Arc<PluginManager>) -> Arc<PluginManager> {
 /// 如果 init_plugin_manager 未调用则 panic
 pub fn get_plugin_manager() -> Arc<PluginManager> {
     PLUGIN_MANAGER.get().expect("PluginManager not initialized").clone()
+}
+
+// ==================== File Service ====================
+
+/// 获取文件服务单例（内网文件传输插件规格阶段 2）
+///
+/// OnceLock 惰性初始化（实现在 `file_service::get_file_service`）；
+/// 首次调用必须在 tokio runtime 上下文内（启动上传会话 sweeper）
+pub fn get_file_service() -> Arc<FileService> {
+    crate::file_service::get_file_service()
 }

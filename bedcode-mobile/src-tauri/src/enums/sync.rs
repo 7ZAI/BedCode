@@ -82,4 +82,17 @@ pub enum SyncPayload {
         /// 触发动作：add / remove / clear / dequeue
         action: String,
     },
+
+    // === 文件服务同步（桌面 → 移动，内网文件传输插件规格阶段 2） ===
+    /// 桌面侧插件挂载点可用性变更（mount/unmount/update_roots 后由宿主自动发出）
+    ///
+    /// 与桌面端 `enums/sync.rs` 同名变体保持同构
+    FileServiceChanged {
+        plugin_id: String,
+        mount_path: String,
+        /// true = 挂载可用（mount/update_roots），false = 已摘除（unmount）
+        available: bool,
+        /// 挂载支持的操作集合（unmount 时为空）
+        operations: Vec<bedcode_plugin_api_mobile::FileOperation>,
+    },
 }

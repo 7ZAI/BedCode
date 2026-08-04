@@ -130,6 +130,43 @@ pub struct MobilePluginInfo {
     pub source: String,
     /// 插件目录路径（含 plugin.json 的目录），前端经 asset protocol 加载前端模块
     pub extension_path: String,
+    /// 插件图标：emoji 或相对插件目录的图片路径，缺省时前端生成字母头像回退
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// 插件目录总大小（字节），目录不存在时为 0
+    pub size_bytes: u64,
+    /// 安装时间（unix 毫秒），取 plugin.json 的 mtime；无法获取时为 null
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_at: Option<i64>,
+}
+
+/// 递归统计目录总大小（字节），路径不存在或不可读时返回已累计部分
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return 0,
+    };
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if file_type.is_file() {
+            total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        } else if file_type.is_dir() {
+            total += dir_size(&entry.path());
+        }
+    }
+    total
+}
+
+/// 以 plugin.json 的 mtime 近似安装时间（unix 毫秒）
+fn manifest_installed_at(extension_path: &str) -> Option<i64> {
+    let manifest = std::path::Path::new(extension_path).join("plugin.json");
+    let mtime = std::fs::metadata(&manifest).ok()?.modified().ok()?;
+    let since_epoch = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(since_epoch.as_millis() as i64)
 }
 
 impl From<&LoadedPlugin> for MobilePluginInfo {
@@ -153,6 +190,9 @@ impl From<&LoadedPlugin> for MobilePluginInfo {
             contributes: p.manifest.contributes.clone(),
             source: source_str.to_string(),
             extension_path: p.extension_path.clone(),
+            icon: p.manifest.icon.clone(),
+            size_bytes: dir_size(std::path::Path::new(&p.extension_path)),
+            installed_at: manifest_installed_at(&p.extension_path),
         }
     }
 }

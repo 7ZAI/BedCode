@@ -19,6 +19,15 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'fs:read': ['fs.read', 'fs.copy'],
   'fs:write': ['fs.write', 'fs.copy'],
   'bus': ['bus.publish', 'bus.subscribe', 'bus.unsubscribe'],
+  'fileservice': [
+    'fileService.mount',
+    'fileService.unmount',
+    'fileService.updateRoots',
+    'fileService.getPeer',
+    'fileService.pickDirectory',
+  ],
+  // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
+  'transfer': [],
 }
 
 /** 检查权限列表是否允许调用指定 API 方法 */

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tauri::Emitter;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// 插件生命周期管理器
 pub struct PluginManager {
@@ -25,7 +25,10 @@ pub struct PluginManager {
     /// WASM 运行时（延迟初始化，必须在 Tokio 上下文中创建）
     wasm_runtime: OnceLock<Arc<WasmRuntime>>,
     /// 已加载的 WASM 插件实例
-    wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
+    ///
+    /// 每插件独立 Mutex：map 守卫只短持有（查找/增删），同步执行 WASM 期间
+    /// 仅持有单插件实例锁，避免持 map 守卫执行 WASM 导致 host function 重入死锁
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
     /// WASM 宿主上下文（延迟初始化）
     wasm_host_ctx: OnceLock<Arc<WasmHostContext>>,
     /// 插件键值存储
@@ -99,8 +102,9 @@ impl PluginManager {
 
     /// 延迟初始化 WASM 运行时
     ///
-    /// 必须在 Tokio 运行时上下文中调用（Engine 创建需要 Handle）
-    pub fn init_wasm_runtime(&self) -> crate::Result<()> {
+    /// 必须在 Tokio 运行时上下文中调用（Engine 创建需要 Handle）。
+    /// async：内部需 await 注入 dispatcher，禁止在运行时内使用 block_on（会 panic）
+    pub async fn init_wasm_runtime(&self) -> crate::Result<()> {
         let runtime = Arc::new(WasmRuntime::new()?);
 
         // 插件状态上报回调：置 Error + 持久化未启用 + 前端通知
@@ -165,9 +169,7 @@ impl PluginManager {
             plugins: self.plugins.clone(),
             wasm_plugins: self.wasm_plugins.clone(),
         });
-        let bus = self.message_bus.clone();
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(bus.set_dispatcher(dispatcher));
+        self.message_bus.set_dispatcher(dispatcher).await;
 
         Ok(())
     }
@@ -200,7 +202,7 @@ impl PluginManager {
 
         let mut current_wasm = self.wasm_plugins.write().await;
         for (id, wasm_plugin) in wasm_plugins {
-            current_wasm.insert(id, wasm_plugin);
+            current_wasm.insert(id, Arc::new(TokioMutex::new(wasm_plugin)));
         }
     }
 
@@ -225,94 +227,154 @@ impl PluginManager {
     }
 
     /// 激活插件
+    ///
+    /// 锁约定：执行 WASM 导出函数期间不持有 plugins / wasm_plugins map 守卫
+    /// （仅持单插件实例锁），避免 WASM 回调 host function 重入取 map 锁死锁。
     pub async fn activate(&self, plugin_id: &str, _app_handle: &tauri::AppHandle) -> Result<()> {
+        // 1. 检查状态与插件类型（短锁）
+        let plugin_type = {
+            let mut plugins = self.plugins.write().await;
+            let plugin = plugins
+                .get_mut(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
+
+            if plugin.state == PluginState::Activated {
+                return Ok(());
+            }
+            plugin.manifest.plugin_type.clone()
+        };
+
+        if plugin_type != PluginType::Wasm {
+            // TS-only 插件：仅标记状态
+            let mut plugins = self.plugins.write().await;
+            if let Some(plugin) = plugins.get_mut(plugin_id) {
+                plugin.state = PluginState::Activated;
+            }
+            tracing::info!(plugin_id = %plugin_id, "Plugin activated (ts-only)");
+            return Ok(());
+        }
+
+        // 2. WASM 插件：取实例句柄（短锁），执行 activate 导出（不持 map 守卫）
+        let wasm_plugin = {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            wasm_plugins.get(plugin_id).cloned()
+        };
+
+        let Some(wasm_plugin) = wasm_plugin else {
+            // WASM 实例不存在，仅标记前端激活
+            let mut plugins = self.plugins.write().await;
+            if let Some(plugin) = plugins.get_mut(plugin_id) {
+                plugin.state = PluginState::Activated;
+            }
+            tracing::info!(plugin_id = %plugin_id, "Plugin activated (frontend only, no WASM instance)");
+            return Ok(());
+        };
+
+        let result = {
+            let mut loaded = wasm_plugin.lock().await;
+            loaded.activate()
+        };
+
+        // 3. 根据执行结果更新状态（短锁）
         let mut plugins = self.plugins.write().await;
         let plugin = plugins
             .get_mut(plugin_id)
             .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
 
-        if plugin.state == PluginState::Activated {
-            return Ok(());
-        }
-
-        // WASM 插件：调用 activate 导出函数
-        if plugin.manifest.plugin_type == PluginType::Wasm {
-            let mut wasm_plugins = self.wasm_plugins.write().await;
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
-                match wasm_plugin.activate() {
-                    Ok(0) => {
-                        plugin.state = PluginState::Activated;
-                        tracing::info!(plugin_id = %plugin_id, "WASM plugin activated");
-                    }
-                    Ok(code) => {
-                        let error = format!("WASM activate() returned error code: {}", code);
-                        plugin.state = PluginState::Error { error: error.clone() };
-                        return Err(crate::AppError::Plugin(error));
-                    }
-                    Err(e) => {
-                        plugin.state = PluginState::Error { error: e.to_string() };
-                        return Err(e);
-                    }
-                }
-            } else {
-                // WASM 实例不存在，仅标记前端激活
+        match result {
+            Ok(0) => {
                 plugin.state = PluginState::Activated;
-                tracing::info!(plugin_id = %plugin_id, "Plugin activated (frontend only, no WASM instance)");
+                tracing::info!(plugin_id = %plugin_id, "WASM plugin activated");
+                Ok(())
             }
-        } else {
-            // TS-only 插件：仅标记状态
-            plugin.state = PluginState::Activated;
-            tracing::info!(plugin_id = %plugin_id, "Plugin activated (ts-only)");
+            Ok(code) => {
+                let error = format!("WASM activate() returned error code: {}", code);
+                plugin.state = PluginState::Error { error: error.clone() };
+                Err(crate::AppError::Plugin(error))
+            }
+            Err(e) => {
+                plugin.state = PluginState::Error { error: e.to_string() };
+                Err(e)
+            }
         }
-
-        Ok(())
     }
 
     /// 停用插件
+    ///
+    /// 锁约定同 activate：执行 WASM deactivate 导出期间不持 map 守卫
     pub async fn deactivate(&self, plugin_id: &str) -> Result<()> {
-        let mut plugins = self.plugins.write().await;
-        let plugin = plugins
-            .get_mut(plugin_id)
-            .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
+        // 1. 检查状态与插件类型（短锁）
+        let plugin_type = {
+            let mut plugins = self.plugins.write().await;
+            let plugin = plugins
+                .get_mut(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
 
-        if plugin.state != PluginState::Activated {
-            return Ok(());
-        }
+            if plugin.state != PluginState::Activated {
+                return Ok(());
+            }
+            plugin.manifest.plugin_type.clone()
+        };
 
-        // WASM 插件：调用 deactivate 导出函数
-        if plugin.manifest.plugin_type == PluginType::Wasm {
-            let mut wasm_plugins = self.wasm_plugins.write().await;
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
-                if let Err(e) = wasm_plugin.deactivate() {
+        // 2. WASM 插件：取实例句柄（短锁），执行 deactivate 导出（不持 map 守卫）
+        if plugin_type == PluginType::Wasm {
+            let wasm_plugin = {
+                let wasm_plugins = self.wasm_plugins.read().await;
+                wasm_plugins.get(plugin_id).cloned()
+            };
+            if let Some(wasm_plugin) = wasm_plugin {
+                let result = {
+                    let mut loaded = wasm_plugin.lock().await;
+                    loaded.deactivate()
+                };
+                if let Err(e) = result {
                     tracing::warn!(plugin_id = %plugin_id, error = %e, "WASM plugin deactivate failed");
                 }
             }
         }
 
-        // 清理消息总线订阅
-        let bus = self.message_bus.clone();
-        let pid = plugin_id.to_string();
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(bus.remove_all_subscriptions(&pid));
+        // 3. 清理消息总线订阅（async 上下文直接 await，禁止 block_on）
+        self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-        plugin.state = PluginState::Deactivated;
+        // 3.5 摘除文件服务挂载（规格：“停用插件 = 服务消失”；卸载同经 deactivate 触发）
+        // 末个挂载摘除时停服务 + Withdraw，否则重新公告
+        {
+            let fs = crate::state::get_file_service();
+            fs.registry.unmount_plugin(plugin_id).await;
+            fs.after_unmount().await;
+        }
+
+        // 4. 更新状态（短锁）
+        let mut plugins = self.plugins.write().await;
+        if let Some(plugin) = plugins.get_mut(plugin_id) {
+            plugin.state = PluginState::Deactivated;
+        }
         tracing::info!(plugin_id = %plugin_id, "Plugin deactivated");
         Ok(())
     }
 
     /// 调用 WASM 插件命令
+    ///
+    /// 取实例句柄后 drop map 守卫，命令执行期间仅持单插件实例锁
     pub async fn invoke_command(
         &self,
         plugin_id: &str,
         command_name: &str,
         args_json: &str,
     ) -> Result<String> {
-        let mut wasm_plugins = self.wasm_plugins.write().await;
-        let wasm_plugin = wasm_plugins
-            .get_mut(plugin_id)
-            .ok_or_else(|| crate::AppError::Plugin(format!("WASM plugin not found: {}", plugin_id)))?;
+        let wasm_plugin = {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            wasm_plugins.get(plugin_id).cloned()
+        };
+        let Some(wasm_plugin) = wasm_plugin else {
+            return Err(crate::AppError::Plugin(format!(
+                "WASM plugin not found: {}",
+                plugin_id
+            )));
+        };
 
-        wasm_plugin.invoke_command(command_name, args_json)
+        let mut loaded = wasm_plugin.lock().await;
+        loaded.invoke_command(command_name, args_json)
     }
 
     /// 返回所有已加载插件信息
@@ -325,6 +387,24 @@ impl PluginManager {
     pub async fn get_info(&self, plugin_id: &str) -> Option<MobilePluginInfo> {
         let plugins = self.plugins.read().await;
         plugins.get(plugin_id).map(|p| MobilePluginInfo::from(p))
+    }
+
+    /// 插件是否处于 Activated 状态（Tauri command 身份校验用）
+    pub async fn is_activated(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins
+            .get(plugin_id)
+            .map(|p| p.state == PluginState::Activated)
+            .unwrap_or(false)
+    }
+
+    /// 插件是否持有指定权限（加载时从 manifest 解析并过滤为合法权限集）
+    pub async fn has_permission(&self, plugin_id: &str, permission: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins
+            .get(plugin_id)
+            .map(|p| p.granted_permissions.contains(permission))
+            .unwrap_or(false)
     }
 
     /// 查询插件启用状态
@@ -453,54 +533,82 @@ impl PluginManager {
         self.wasm_host_ctx.get().expect("WasmHostContext not initialized")
     }
 
+    /// 调用 WASM 插件的上传策略钩子（`on_upload_request` 导出）
+    ///
+    /// 返回插件写入的决定 JSON；插件未加载/导出缺失/调用失败返回 None
+    /// （调用方 registry 据此 fail-closed 拒绝上传）。
+    /// 锁约定同 activate：执行导出期间不持 wasm_plugins map 守卫
+    pub async fn call_upload_hook(&self, plugin_id: &str, meta_json: &str) -> Option<String> {
+        let wasm_plugin = {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            wasm_plugins.get(plugin_id).cloned()
+        }?;
+        let mut loaded = wasm_plugin.lock().await;
+        match loaded.call_upload_hook(meta_json) {
+            Ok(json) => Some(json),
+            Err(e) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "upload hook export call failed"
+                );
+                None
+            }
+        }
+    }
+
     /// 分发生命周期事件到所有已激活插件
     ///
-    /// 1. 遍历所有已激活的 WASM 插件，检查声明后调用导出函数
+    /// 1. 快照目标插件（短锁）→ drop map 守卫 → 逐个锁单插件实例调用导出函数
     /// 2. 通过 app_handle.emit() 发射 Tauri 事件给前端 TS 插件
     pub async fn dispatch_lifecycle_event(&self, event: PluginLifecycleEvent) {
         let event_name = event.name();
 
-        // 快速检查：是否有任何 WASM 插件声明了该事件
-        let plugins = self.plugins.read().await;
-        let any_wasm_declared = plugins.values().any(|p| {
-            p.state == PluginState::Activated
-                && p.manifest.plugin_type == PluginType::Wasm
-                && p.manifest.contributes.lifecycle.as_ref()
-                    .map(|l| l.is_declared(event_name))
-                    .unwrap_or(false)
-        });
+        // 快照：声明了该事件的已激活 WASM 插件 id + 实例句柄（短锁）
+        let targets: Vec<(String, Option<Arc<TokioMutex<LoadedWasmPlugin>>>)> = {
+            let ids: Vec<String> = {
+                let plugins = self.plugins.read().await;
+                plugins
+                    .values()
+                    .filter(|p| {
+                        p.state == PluginState::Activated
+                            && p.manifest.plugin_type == PluginType::Wasm
+                            && p.manifest.contributes.lifecycle.as_ref()
+                                .map(|l| l.is_declared(event_name))
+                                .unwrap_or(false)
+                    })
+                    .map(|p| p.manifest.id.clone())
+                    .collect()
+            };
 
-        if any_wasm_declared {
-            // WASM 插件回调
-            for (id, plugin) in plugins.iter() {
-                if plugin.state != PluginState::Activated {
-                    continue;
-                }
-                if plugin.manifest.plugin_type != PluginType::Wasm {
-                    continue;
-                }
-                if !plugin.manifest.contributes.lifecycle.as_ref()
-                    .map(|l| l.is_declared(event_name))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
+            if ids.is_empty() {
+                Vec::new()
+            } else {
+                let wasm_plugins = self.wasm_plugins.read().await;
+                ids.into_iter()
+                    .map(|id| {
+                        let handle = wasm_plugins.get(&id).cloned();
+                        (id, handle)
+                    })
+                    .collect()
+            }
+        };
 
-                let mut wasm_plugins = self.wasm_plugins.write().await;
-                if let Some(wasm_plugin) = wasm_plugins.get_mut(id) {
-                    if let Err(e) = wasm_plugin.call_lifecycle_event(&event) {
-                        tracing::warn!(
-                            plugin_id = %id,
-                            event = %event_name,
-                            error = %e,
-                            "WASM lifecycle callback failed"
-                        );
-                    }
-                }
+        // WASM 插件回调（不持 map 守卫）
+        for (id, wasm_plugin) in targets {
+            let Some(wasm_plugin) = wasm_plugin else {
+                continue;
+            };
+            let mut loaded = wasm_plugin.lock().await;
+            if let Err(e) = loaded.call_lifecycle_event(&event) {
+                tracing::warn!(
+                    plugin_id = %id,
+                    event = %event_name,
+                    error = %e,
+                    "WASM lifecycle callback failed"
+                );
             }
         }
-
-        drop(plugins);
 
         // 前端 Tauri 事件发射
         self.emit_frontend_event(&event);
@@ -525,18 +633,31 @@ impl PluginManager {
 /// 独立结构体避免 PluginManager 直接实现 trait 导致的生命周期问题
 struct PluginManagerDispatcher {
     plugins: Arc<RwLock<HashMap<String, LoadedPlugin>>>,
-    wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
 }
 
 impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
+    /// 投递总线消息给 WASM 插件
+    ///
+    /// 由投递 worker 任务调用：短读 map 取实例句柄 → drop map 守卫 →
+    /// 持单插件锁执行 on_bus_message。投递串行进行，慢插件会推迟后续投递
+    /// （换取全局顺序与无死锁）。
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
-        let mut wasm_plugins = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.wasm_plugins.write())
+        let wasm_plugin = {
+            let map = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.wasm_plugins.read())
+            });
+            map.get(plugin_id).cloned()
+        };
+        let Some(wasm_plugin) = wasm_plugin else {
+            tracing::warn!("PluginManagerDispatcher: WASM plugin '{}' not loaded, message dropped", plugin_id);
+            return Ok(());
+        };
+
+        let mut loaded = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(wasm_plugin.lock())
         });
-        if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
-            wasm_plugin.on_bus_message(msg)?;
-        }
-        Ok(())
+        Ok(loaded.on_bus_message(msg)?)
     }
 
     fn is_activated(&self, plugin_id: &str) -> bool {

@@ -16,7 +16,7 @@ function namespacedEvent(pluginId: string, event: string): string {
   return `${pluginId}::${event}`
 }
 
-/** 注册事件监听 */
+/** 注册事件监听 — 同时注册内存总线与 Tauri listen */
 export function on(pluginId: string, event: string, handler: EventHandler): Disposable {
   const key = namespacedEvent(pluginId, event)
   let set = handlers.get(key)
@@ -26,12 +26,29 @@ export function on(pluginId: string, event: string, handler: EventHandler): Disp
   }
   set.add(handler)
 
+  // 桥接 Rust 侧 app_handle.emit() 发送的事件（WASM 宿主 emit_event 亦走此通道）。
+  // 事件名为完整名称（如 plugin:file-transfer:tasks-changed），经 Tauri 事件系统到达前端，
+  // 转发给内存总线中的 handler；Tauri API 不可用时（如测试环境）静默降级。
+  let tauriUnlisten: (() => void) | null = null
+  import('@tauri-apps/api/event')
+    .then(({ listen }) => {
+      listen(event, (tauriEvent: any) => {
+        handler(tauriEvent.payload)
+      }).then(unlisten => {
+        tauriUnlisten = unlisten
+      })
+    })
+    .catch(() => {
+      // 非 Tauri 环境：仅走内存总线
+    })
+
   return {
     dispose() {
       set!.delete(handler)
       if (set!.size === 0) {
         handlers.delete(key)
       }
+      tauriUnlisten?.()
     },
   }
 }

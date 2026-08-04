@@ -22,7 +22,7 @@ use crate::state::get_connection_manager;
 use crate::connection::request::TerminalRequest;
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use wasmtime::{Engine, Instance, Linker, Memory, Module, Store};
 
@@ -366,6 +366,40 @@ impl LoadedWasmPlugin {
         self.dealloc_plugin_memory(ptr, len);
         self.dealloc_plugin_memory(out_ptr, bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32);
         result
+    }
+
+    /// 调用上传策略钩子导出（ABI v4，可选导出；不存在返回 Err，调用方 fail-closed）
+    ///
+    /// 入参 meta_json 为 UploadRequestMeta JSON，返回插件写入 out_ptr 的决定 JSON
+    pub fn call_upload_hook(&mut self, meta_json: &str) -> crate::Result<String> {
+        let (meta_ptr, meta_len) = self.write_string_to_memory(meta_json)?;
+        let out_ptr =
+            self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
+
+        let func = self
+            .get_export_func(bedcode_plugin_api_mobile::abi::export::ON_UPLOAD_REQUEST)?;
+        func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(meta_ptr as i32),
+                wasmtime::Val::I32(meta_len as i32),
+                wasmtime::Val::I32(out_ptr as i32),
+            ],
+            &mut [],
+        )
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e))
+        })?;
+
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        let result = self.read_string_from_memory(ptr, len)?;
+        // 回收插件分配的决定缓冲区与 out_ptr 本身，防止线性内存单调增长
+        self.dealloc_plugin_memory(ptr, len);
+        self.dealloc_plugin_memory(
+            out_ptr,
+            bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32,
+        );
+        Ok(result)
     }
 
     /// 调用生命周期事件回调（可选导出，不存在则跳过）
@@ -720,6 +754,9 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_fs_copy", host_fs_copy)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_copy: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_fs_exists", host_fs_exists)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_exists: {}", e)))?;
 
     // 消息总线
     linker
@@ -736,6 +773,33 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_mark_plugin_error", host_mark_plugin_error)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_mark_plugin_error: {}", e)))?;
+
+    // 文件服务（ABI v4，内网文件传输插件规格阶段 2）
+    linker
+        .func_wrap("bedcode", "host_filesrv_mount", host_filesrv_mount)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_mount: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_unmount", host_filesrv_unmount)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_unmount: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_update_roots", host_filesrv_update_roots)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_update_roots: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_get_peer", host_filesrv_get_peer)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_get_peer: {}", e)))?;
+
+    // 传输引擎（ABI v4）
+    linker
+        .func_wrap("bedcode", "host_transfer_start", host_transfer_start)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_transfer_start: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_transfer_cancel", host_transfer_cancel)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_transfer_cancel: {}", e)))?;
+
+    // 配置读取（ABI v5）
+    linker
+        .func_wrap("bedcode", "host_config_get", host_config_get)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_config_get: {}", e)))?;
 
     Ok(())
 }
@@ -1594,6 +1658,44 @@ fn host_fs_copy(
     }
 }
 
+/// 文件系统：检查文件是否存在
+///
+/// 返回：1 存在，0 不存在，-1 错误
+fn host_fs_exists(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_READ) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_exists: permission denied (fs:read)");
+        return -1;
+    }
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_exists: failed to read path");
+            return -1;
+        }
+    };
+
+    // 访问校验
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Read),
+        )
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_exists: access denied by fs_auth");
+        return -1;
+    }
+
+    if std::path::Path::new(&path).exists() { 1 } else { 0 }
+}
+
 // ==================== Message Bus Host Functions ====================
 
 /// 消息总线：发布消息
@@ -1718,4 +1820,482 @@ fn host_mark_plugin_error(
     };
 
     (host_ctx.status_reporter)(&plugin_id, &msg);
+}
+
+// ==================== File Service & Transfer Host Functions（ABI v4） ====================
+//
+// 内网文件传输插件规格阶段 2：文件服务挂载注册 + 传输引擎。
+// 与桌面端 host_functions/file_service.rs + transfer.rs 同语义（移动端独立实现）。
+
+/// 文件服务：挂载
+///
+/// 参数：(opts_ptr, opts_len, out_ptr) — opts 为 MountOptions JSON
+/// 返回：0 成功（MountResult JSON 写入 out_ptr），-1 失败（权限/fs 授权/参数错误）
+fn host_filesrv_mount(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    opts_ptr: u32,
+    opts_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_mount: permission denied (fileservice)");
+        return -1;
+    }
+
+    let opts_str = match read_wasm_string(&mut caller, opts_ptr, opts_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_mount: failed to read options");
+            return -1;
+        }
+    };
+
+    let options: bedcode_plugin_api_mobile::MountOptions = match serde_json::from_str(&opts_str) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_mount: invalid MountOptions JSON");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let mount_path = options.mount_path.clone();
+    let handle = caller.data().runtime_handle.clone();
+    let mount_result = tokio::task::block_in_place(|| {
+        handle.block_on(fs.registry.mount(
+            &plugin_id,
+            options,
+            crate::file_service::registry::HookTarget::Wasm,
+        ))
+    });
+
+    match mount_result {
+        Ok(entry) => {
+            let result = bedcode_plugin_api_mobile::MountResult {
+                mount_path: entry.mount_path.clone(),
+                // 移动端无 /api 前缀：/{plugin_id}/{mount}/**
+                base_path: format!("/{}/{}", entry.plugin_id, entry.mount_path),
+            };
+            let result_json = match serde_json::to_string(&result) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_mount: serialize MountResult failed");
+                    return -1;
+                }
+            };
+
+            // 首个挂载会启动 HTTP 服务；挂载变更后立即公告（异步，不阻塞 WASM 调用；
+            // 错误边界包装：announce/ensure_started panic 不致 release 构建闪退）
+            crate::system::error_boundary::spawn_with_error_boundary(
+                "filesrv_wasm_after_mount",
+                async move {
+                    fs.after_mount_changed().await;
+                },
+            );
+
+            match write_wasm_string(&mut caller, &result_json) {
+                Some((ptr, len)) => {
+                    if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                        0
+                    } else {
+                        -1
+                    }
+                }
+                None => {
+                    tracing::error!(plugin_id = %plugin_id, mount = %mount_path, "host_filesrv_mount: failed to write result");
+                    -1
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "host_filesrv_mount: mount failed");
+            -1
+        }
+    }
+}
+
+/// 文件服务：卸载挂载点
+///
+/// 参数：(mp_ptr, mp_len)
+/// 返回：0 成功，-1 失败（权限/挂载不存在）
+fn host_filesrv_unmount(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    mp_ptr: u32,
+    mp_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_unmount: permission denied (fileservice)");
+        return -1;
+    }
+
+    let mount_path = match read_wasm_string(&mut caller, mp_ptr, mp_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_unmount: failed to read mount path");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let result = tokio::task::block_in_place(|| {
+        handle.block_on(fs.registry.unmount(&plugin_id, &mount_path))
+    });
+
+    match result {
+        Ok(()) => {
+            // 末个挂载摘除时停服务 + Withdraw，否则重新公告
+            crate::system::error_boundary::spawn_with_error_boundary(
+                "filesrv_wasm_after_unmount",
+                async move {
+                    fs.after_unmount().await;
+                },
+            );
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, mount = %mount_path, error = %e, "host_filesrv_unmount: unmount failed");
+            -1
+        }
+    }
+}
+
+/// 文件服务：更新挂载点允许目录根（roots 为 JSON 数组字符串）
+///
+/// 参数：(mp_ptr, mp_len, roots_ptr, roots_len)
+/// 返回：0 成功，-1 失败（权限/挂载不存在/fs 授权/参数错误）
+fn host_filesrv_update_roots(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    mp_ptr: u32,
+    mp_len: u32,
+    roots_ptr: u32,
+    roots_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_update_roots: permission denied (fileservice)");
+        return -1;
+    }
+
+    let mount_path = match read_wasm_string(&mut caller, mp_ptr, mp_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_update_roots: failed to read mount path");
+            return -1;
+        }
+    };
+    let roots_str = match read_wasm_string(&mut caller, roots_ptr, roots_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_update_roots: failed to read roots");
+            return -1;
+        }
+    };
+    let roots: Vec<String> = match serde_json::from_str(&roots_str) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_update_roots: invalid roots JSON");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let result = tokio::task::block_in_place(|| {
+        handle.block_on(fs.registry.update_roots(&plugin_id, &mount_path, roots))
+    });
+
+    match result {
+        Ok(()) => {
+            // 目录变更即时生效：重新公告（挂载集合未变，公告幂等）
+            crate::system::error_boundary::spawn_with_error_boundary(
+                "filesrv_wasm_after_update_roots",
+                async move {
+                    fs.after_mount_changed().await;
+                },
+            );
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, mount = %mount_path, error = %e, "host_filesrv_update_roots: update failed");
+            -1
+        }
+    }
+}
+
+/// 文件服务：获取对端文件服务信息
+///
+/// 参数：(peer_ptr, peer_len, out_ptr)
+/// 返回：0 成功（PeerFileService JSON 写入 out_ptr；(0,0) 表示未公告），-1 失败
+fn host_filesrv_get_peer(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    peer_ptr: u32,
+    peer_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_get_peer: permission denied (fileservice)");
+        return -1;
+    }
+
+    let peer_id = match read_wasm_string(&mut caller, peer_ptr, peer_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_get_peer: failed to read peer id");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let peer = tokio::task::block_in_place(|| handle.block_on(fs.registry.get_peer(&peer_id)));
+
+    let Some(peer) = peer else {
+        // 未公告：out_ptr 写 (0,0)，插件侧 SDK 映射为 Ok(None)
+        return if write_result_to_out_ptr(&mut caller, out_ptr, 0, 0) { 0 } else { -1 };
+    };
+
+    let json = match serde_json::to_string(&peer) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, peer_id = %peer_id, "host_filesrv_get_peer: serialize failed");
+            return -1;
+        }
+    };
+    match write_wasm_string(&mut caller, &json) {
+        Some((ptr, len)) => {
+            if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                0
+            } else {
+                -1
+            }
+        }
+        None => {
+            tracing::error!(plugin_id = %plugin_id, peer_id = %peer_id, "host_filesrv_get_peer: failed to write result");
+            -1
+        }
+    }
+}
+
+/// 传输引擎：启动传输任务
+///
+/// 参数：(req_ptr, req_len, out_ptr) — req 为 TransferRequest JSON
+/// 返回：0 成功（task_id 写入 out_ptr），-1 失败（权限/fs 授权/参数错误）
+fn host_transfer_start(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    req_ptr: u32,
+    req_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_TRANSFER) {
+        tracing::warn!(plugin_id = %plugin_id, "host_transfer_start: permission denied (transfer)");
+        return -1;
+    }
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let req_str = match read_wasm_string(&mut caller, req_ptr, req_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_transfer_start: failed to read request");
+            return -1;
+        }
+    };
+
+    let request: bedcode_plugin_api_mobile::TransferRequest = match serde_json::from_str(&req_str) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_transfer_start: invalid TransferRequest JSON");
+            return -1;
+        }
+    };
+
+    // 本地路径 fs 授权：下载 = 写授权，上传 = 读授权
+    let handle = caller.data().runtime_handle.clone();
+    let authorized = tokio::task::block_in_place(|| {
+        handle.block_on(crate::plugin::transfer::check_local_path_authorized(
+            &plugin_id, &request,
+        ))
+    });
+    if !authorized {
+        tracing::error!(
+            plugin_id = %plugin_id,
+            local_path = %request.local_path,
+            "host_transfer_start: local path not authorized by user"
+        );
+        return -1;
+    }
+
+    let task_id = crate::plugin::transfer::spawn_transfer(
+        request,
+        host_ctx.app_handle.clone(),
+        host_ctx.message_bus.clone(),
+    );
+
+    match write_wasm_string(&mut caller, &task_id) {
+        Some((ptr, len)) => {
+            if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                0
+            } else {
+                -1
+            }
+        }
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_transfer_start: failed to write task_id");
+            -1
+        }
+    }
+}
+
+/// 传输引擎：取消传输任务
+///
+/// 参数：(task_ptr, task_len)
+/// 返回：0 成功；任务不存在（已完成/未知）也返回 0（幂等），记录 debug 日志
+fn host_transfer_cancel(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    task_ptr: u32,
+    task_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_TRANSFER) {
+        tracing::warn!(plugin_id = %plugin_id, "host_transfer_cancel: permission denied (transfer)");
+        return -1;
+    }
+
+    let task_id = match read_wasm_string(&mut caller, task_ptr, task_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_transfer_cancel: failed to read task id");
+            return -1;
+        }
+    };
+
+    let handle = caller.data().runtime_handle.clone();
+    let cancelled = tokio::task::block_in_place(|| {
+        handle.block_on(crate::plugin::transfer::cancel_transfer(&task_id))
+    });
+    if cancelled {
+        tracing::info!(plugin_id = %plugin_id, task_id = %task_id, "transfer cancel requested");
+    } else {
+        tracing::debug!(
+            plugin_id = %plugin_id,
+            task_id = %task_id,
+            "host_transfer_cancel: task not active (already finished or unknown)"
+        );
+    }
+    0
+}
+
+// ==================== Config Host Function（ABI v5） ====================
+
+/// 配置：读取宿主配置项
+///
+/// 参数：(key_ptr, key_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+///
+/// 白名单 = SDK `ConfigKey` 枚举本身：`from_str` 过滤非法 key，
+/// value match 穷尽所有变体 —— 新增配置项时编译器强制补实现，
+/// 结构性杜绝"白名单声明了但实现缺失"的漂移
+fn host_config_get(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    key_ptr: u32,
+    key_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+
+    let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_config_get: failed to read key");
+            return -1;
+        }
+    };
+
+    // 白名单校验：仅接受 ConfigKey 枚举覆盖的 key
+    let Some(config_key) = bedcode_plugin_api_mobile::ConfigKey::from_str(&key) else {
+        tracing::warn!(plugin_id = %plugin_id, key = %key, "host_config_get: key not in whitelist");
+        return -1;
+    };
+
+    // 穷尽 match：新增 ConfigKey 变体必须在此补实现（编译错误兜底）
+    let value = match config_key {
+        bedcode_plugin_api_mobile::ConfigKey::AppDownloadsDir => {
+            match resolve_downloads_dir(&caller) {
+                Some(path) => path,
+                None => {
+                    tracing::error!(plugin_id = %plugin_id, "host_config_get: downloads dir not available");
+                    return -1;
+                }
+            }
+        }
+    };
+
+    match write_wasm_string(&mut caller, &value) {
+        Some((ptr, len)) => {
+            if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
+                0
+            } else {
+                -1
+            }
+        }
+        None => {
+            tracing::error!(plugin_id = %plugin_id, key = %key, "host_config_get: failed to write result to WASM memory");
+            -1
+        }
+    }
+}
+
+/// 解析下载目录路径
+///
+/// 策略（按优先级）：
+/// 1. Kotlin 桥：`getExternalFilesDir(DIRECTORY_DOWNLOADS)`（外部私有目录，免权限）
+/// 2. 兜底：`app_data_dir()/Downloads`（内部存储，注释说明局限）
+/// 目录不存在时惰性创建
+fn resolve_downloads_dir(caller: &wasmtime::Caller<'_, WasmPluginState>) -> Option<String> {
+    let host_ctx = caller.data().host_ctx.clone();
+    let handle = caller.data().runtime_handle.clone();
+
+    // 首选：Kotlin 桥获取外部私有下载目录
+    let external_path = tokio::task::block_in_place(|| {
+        handle.block_on(crate::plugin::android_plugins::get_external_downloads_dir())
+    });
+
+    let path = if let Some(ext_path) = external_path {
+        tracing::debug!(path = %ext_path, "resolve_downloads_dir: using external private downloads dir");
+        std::path::PathBuf::from(ext_path)
+    } else {
+        // 兜底：app_data_dir()/Downloads（内部存储目录，文件管理器不可见；
+        // 外部存储不可用时的降级方案）
+        let fallback = tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                host_ctx.app_handle.path().app_data_dir().ok()
+            })
+        });
+        match fallback {
+            Some(data_dir) => {
+                let path = data_dir.join("Downloads");
+                tracing::debug!(path = %path.display(), "resolve_downloads_dir: using app_data_dir/Downloads fallback");
+                path
+            }
+            None => {
+                tracing::error!("resolve_downloads_dir: neither external storage nor app_data_dir available");
+                return None;
+            }
+        }
+    };
+
+    // 惰性创建目录
+    if !path.exists() {
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            tracing::error!(error = %e, path = %path.display(), "resolve_downloads_dir: failed to create directory");
+            return None;
+        }
+        tracing::info!(path = %path.display(), "resolve_downloads_dir: created downloads directory");
+    }
+
+    Some(path.to_string_lossy().to_string())
 }

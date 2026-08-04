@@ -36,6 +36,8 @@ pub fn message_type_key(msg: &Message) -> &'static str {
         Message::SessionConfig { .. } => "SessionConfig",
         Message::ClientDisconnected { .. } => "ClientDisconnected",
         Message::SessionEvent { .. } => "SessionEvent",
+        // 移动端仅为发送方（Announce/Withdraw → 桌面）；登记路由名供日志/fallback 使用
+        Message::FileService { .. } => "FileService",
     }
 }
 

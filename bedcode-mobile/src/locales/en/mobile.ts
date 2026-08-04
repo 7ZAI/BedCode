@@ -381,6 +381,7 @@ export default {
       detailTitle: 'Plugin Details',
       enable: 'Enable',
       disable: 'Disable',
+      noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
       noDescription: 'No description',
       statExtensions: 'Extensions',
       sectionIntro: 'Overview',

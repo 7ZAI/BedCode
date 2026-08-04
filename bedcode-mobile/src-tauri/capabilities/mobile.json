@@ -12,7 +12,6 @@
     "core:webview:default",
     "dialog:default",
     "os:default",
-    "shell:allow-open",
     "notification:default",
     "os:default",
     {
@@ -28,7 +27,6 @@
     "edge-to-edge:allow-get-keyboard-info",
     "edge-to-edge:allow-show-keyboard",
     "edge-to-edge:allow-hide-keyboard",
-    "biometric:default",
     "machine-uid:default"
   ]
 }

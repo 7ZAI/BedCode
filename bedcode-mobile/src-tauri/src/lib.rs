@@ -44,7 +44,7 @@ pub fn run() {
     tracing::info!("Building Tauri application...");
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
@@ -54,13 +54,10 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())
+        .plugin(crate::plugin::android_plugins::downloads_dir_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
-
-            // 生物识别插件仅 Android/iOS 可用，桌面编译时 cfg 剔除
-            #[cfg(mobile)]
-            app.handle().plugin(tauri_plugin_biometric::Builder::new().build());
 
             let app_handle = app.handle();
 
@@ -110,6 +107,16 @@ pub fn run() {
                     if let Err(e) = pm.init_wasm_runtime().await {
                         tracing::error!("Failed to init WASM runtime: {}", e);
                         return;
+                    }
+
+                    // 种子内置受信任插件白名单（幂等：已存在则跳过）
+                    // - auto-task: 自动化任务插件
+                    // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页
+                    //   显式配置，信任模型 = 配对 + 用户显式目录白名单
+                    for trusted_plugin in &["com.bedcode.auto-task", "com.bedcode.file-transfer"] {
+                        if let Err(e) = pm.fs_auth().add_plugin_whitelist(trusted_plugin).await {
+                            tracing::warn!(plugin_id = %trusted_plugin, error = %e, "Failed to seed plugin whitelist");
+                        }
                     }
 
                     pm.scan_and_load().await;
@@ -217,6 +224,14 @@ pub fn run() {
             crate::plugin::commands::plugin_fs_remove_plugin_whitelist,
             crate::plugin::commands::plugin_fs_get_plugin_whitelist,
             crate::plugin::commands::plugin_log,
+            crate::plugin::commands::plugin_invoke,
+            // File Service Commands（插件 TS 通道）
+            crate::plugin::commands::plugin_filesrv_mount,
+            crate::plugin::commands::plugin_filesrv_update_roots,
+            crate::plugin::commands::plugin_filesrv_dispose,
+            crate::plugin::commands::plugin_filesrv_respond_upload_request,
+            crate::plugin::commands::plugin_filesrv_get_peer,
+            crate::plugin::commands::plugin_pick_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

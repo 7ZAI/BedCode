@@ -2,11 +2,17 @@
 //!
 //! 插件间 Topic 消息总线 — 发布/订阅模式通信
 //! 通过 MessageDispatcher trait 解耦与 PluginManager 的循环引用
+//!
+//! 投递模型：`publish()`（同步，WASM host function 调用）只做
+//! 「快照订阅列表（短锁）→ 投递任务入队」，实际投递由 `set_dispatcher`
+//! 时启动的投递 worker 任务串行完成。这样发布方不会在持锁状态下阻塞
+//! 等待订阅者，避免「执行 WASM → 发布 → 投递 → 重入取锁」的死锁环。
+//! 代价：全局投递串行，慢插件的 on_bus_message 会推迟后续投递。
 
 use bedcode_plugin_api_mobile::BusMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 // ==================== MessageDispatcher Trait ====================
 
@@ -29,15 +35,34 @@ pub trait BusMessageHandler: Send + Sync + 'static {
 
 // ==================== BusSubscriber ====================
 
-/// 订阅者
+/// 订阅者（Arc handler 使订阅列表可廉价快照克隆）
+#[derive(Clone)]
 pub enum BusSubscriber {
     /// WASM 插件订阅者 — 通过 MessageDispatcher 投递
     Wasm { plugin_id: String },
     /// 静态注册插件订阅者 — 通过 Rust callback 投递
     Static {
         plugin_id: String,
-        handler: Box<dyn BusMessageHandler>,
+        handler: Arc<dyn BusMessageHandler>,
     },
+}
+
+impl BusSubscriber {
+    fn plugin_id(&self) -> &str {
+        match self {
+            BusSubscriber::Wasm { plugin_id } => plugin_id,
+            BusSubscriber::Static { plugin_id, .. } => plugin_id,
+        }
+    }
+}
+
+// ==================== DeliveryJob ====================
+
+/// 投递任务：发布时刻的订阅者快照 + 消息体
+struct DeliveryJob {
+    /// 已过滤发送者自己
+    subs: Vec<BusSubscriber>,
+    msg: BusMessage,
 }
 
 // ==================== MessageBus ====================
@@ -48,45 +73,71 @@ pub struct MessageBus {
     subscribers: Arc<RwLock<HashMap<String, Vec<BusSubscriber>>>>,
     /// 消息投递器（由 PluginManager 注入，两阶段初始化）
     dispatcher: Arc<RwLock<Option<Arc<dyn MessageDispatcher>>>>,
+    /// 投递任务发送端（publish 入队）
+    delivery_tx: mpsc::UnboundedSender<DeliveryJob>,
+    /// 投递 worker 接收端（set_dispatcher 时 take 一次并启动 worker）
+    delivery_rx: Mutex<Option<mpsc::UnboundedReceiver<DeliveryJob>>>,
 }
 
 impl MessageBus {
-    /// 创建消息总线（dispatcher 延迟注入）
+    /// 创建消息总线（dispatcher 延迟注入，投递 worker 随 set_dispatcher 启动）
     pub fn new() -> Self {
+        let (delivery_tx, delivery_rx) = mpsc::unbounded_channel();
         Self {
             subscribers: Arc::new(RwLock::new(HashMap::new())),
             dispatcher: Arc::new(RwLock::new(None)),
+            delivery_tx,
+            delivery_rx: Mutex::new(Some(delivery_rx)),
         }
     }
 
     /// 注入消息投递器（PluginManager 构造完成后调用一次）
+    ///
+    /// 同时启动投递 worker 任务（必须在 Tokio 运行时上下文中调用）。
+    /// worker 启动前发布的消息缓存在队列中，启动后立即投递。
     pub async fn set_dispatcher(&self, dispatcher: Arc<dyn MessageDispatcher>) {
-        let mut d = self.dispatcher.write().await;
-        *d = Some(dispatcher);
+        *self.dispatcher.write().await = Some(dispatcher);
+
+        // 启动投递 worker（仅一次，take 后为 None）
+        if let Some(mut rx) = self.delivery_rx.lock().await.take() {
+            let dispatcher_slot = self.dispatcher.clone();
+            tokio::spawn(async move {
+                while let Some(job) = rx.recv().await {
+                    let disp = dispatcher_slot.read().await.clone();
+                    let Some(disp) = disp else {
+                        tracing::warn!("MessageBus: dispatcher not set, message dropped");
+                        continue;
+                    };
+                    deliver_job(disp.as_ref(), job);
+                }
+            });
+        }
     }
 
     /// 发布消息
     ///
-    /// 同步投递给所有订阅了该 topic 的插件（不投递给发送者自己）
+    /// 快照订阅者（短锁，drop 守卫）→ 过滤发送者 → 入队由 worker 异步投递。
+    /// 同步调用方（WASM host function）不会被订阅者的执行阻塞。
+    /// 从 WASM host function 调用时要求处于 Tokio 多线程运行时工作线程。
     pub fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
-        let dispatcher = {
-            let guard = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.dispatcher.read())
+        // 快照该 topic 的订阅者并过滤发送者自己；守卫快照完成即 drop
+        let subs: Vec<BusSubscriber> = {
+            let snapshot = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let map = self.subscribers.read().await;
+                    map.get(topic).cloned().unwrap_or_default()
+                })
             });
-            guard.clone()
-        };
-        let Some(dispatcher) = dispatcher else {
-            tracing::warn!("MessageBus: dispatcher not set, message dropped");
-            return;
+            snapshot
+                .into_iter()
+                .filter(|s| s.plugin_id() != sender)
+                .collect()
         };
 
-        let subscribers = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.subscribers.read())
-        });
-        let Some(subs) = subscribers.get(topic) else {
+        if subs.is_empty() {
             tracing::debug!("MessageBus: no subscribers for topic '{}', message dropped", topic);
             return;
-        };
+        }
 
         let msg = BusMessage {
             topic: topic.to_string(),
@@ -98,36 +149,12 @@ impl MessageBus {
                 .as_millis() as u64,
         };
 
-        let mut delivered = 0;
-        for sub in subs.iter() {
-            match sub {
-                BusSubscriber::Wasm { plugin_id } => {
-                    if plugin_id == sender { continue; }
-                    if !dispatcher.is_activated(plugin_id) {
-                        tracing::warn!("MessageBus: subscriber '{}' not activated, skipping", plugin_id);
-                        continue;
-                    }
-                    if let Err(e) = dispatcher.dispatch_to_wasm(plugin_id, &msg) {
-                        tracing::error!("MessageBus: dispatch to WASM plugin '{}' failed: {}", plugin_id, e);
-                    } else {
-                        delivered += 1;
-                    }
-                }
-                BusSubscriber::Static { plugin_id, handler } => {
-                    if plugin_id == sender { continue; }
-                    if let Err(e) = handler.on_message(&msg) {
-                        tracing::error!("MessageBus: handler for static plugin '{}' failed: {}", plugin_id, e);
-                    } else {
-                        delivered += 1;
-                    }
-                }
-            }
+        if let Err(e) = self.delivery_tx.send(DeliveryJob { subs, msg }) {
+            tracing::error!(
+                "MessageBus: delivery worker unavailable, topic '{}' message dropped: {}",
+                topic, e
+            );
         }
-
-        tracing::debug!(
-            "MessageBus: published topic='{}' sender='{}' delivered={}/{}",
-            topic, sender, delivered, subs.len()
-        );
     }
 
     /// 订阅 topic（WASM 插件）
@@ -147,7 +174,7 @@ impl MessageBus {
         &self,
         plugin_id: &str,
         topic: &str,
-        handler: Box<dyn BusMessageHandler>,
+        handler: Arc<dyn BusMessageHandler>,
     ) {
         let mut subscribers = self.subscribers.write().await;
         let subs = subscribers.entry(topic.to_string()).or_default();
@@ -163,10 +190,7 @@ impl MessageBus {
         let mut subscribers = self.subscribers.write().await;
         if let Some(subs) = subscribers.get_mut(topic) {
             let before = subs.len();
-            subs.retain(|s| match s {
-                BusSubscriber::Wasm { plugin_id: pid } => pid != plugin_id,
-                BusSubscriber::Static { plugin_id: pid, .. } => pid != plugin_id,
-            });
+            subs.retain(|s| s.plugin_id() != plugin_id);
             if subs.len() < before {
                 tracing::info!("MessageBus: plugin '{}' unsubscribed from '{}'", plugin_id, topic);
             }
@@ -174,18 +198,50 @@ impl MessageBus {
     }
 
     /// 移除插件的所有订阅（停用时调用）
+    ///
+    /// 已入队但尚未投递的消息中若包含该插件，投递时按快照投递；
+    /// WASM 实例已移除时 dispatcher 会丢弃并告警。
     pub async fn remove_all_subscriptions(&self, plugin_id: &str) {
         let mut subscribers = self.subscribers.write().await;
         for (topic, subs) in subscribers.iter_mut() {
             let before = subs.len();
-            subs.retain(|s| match s {
-                BusSubscriber::Wasm { plugin_id: pid } => pid != plugin_id,
-                BusSubscriber::Static { plugin_id: pid, .. } => pid != plugin_id,
-            });
+            subs.retain(|s| s.plugin_id() != plugin_id);
             if subs.len() < before {
                 tracing::debug!("MessageBus: removed plugin '{}' from topic '{}'", plugin_id, topic);
             }
         }
         subscribers.retain(|_, subs| !subs.is_empty());
     }
+}
+
+/// 投递单个任务（投递 worker 任务内执行）
+fn deliver_job(disp: &dyn MessageDispatcher, job: DeliveryJob) {
+    let mut delivered = 0;
+    for sub in job.subs.iter() {
+        match sub {
+            BusSubscriber::Wasm { plugin_id } => {
+                if !disp.is_activated(plugin_id) {
+                    tracing::warn!("MessageBus: subscriber '{}' not activated, skipping", plugin_id);
+                    continue;
+                }
+                if let Err(e) = disp.dispatch_to_wasm(plugin_id, &job.msg) {
+                    tracing::error!("MessageBus: dispatch to WASM plugin '{}' failed: {}", plugin_id, e);
+                } else {
+                    delivered += 1;
+                }
+            }
+            BusSubscriber::Static { plugin_id, handler } => {
+                if let Err(e) = handler.on_message(&job.msg) {
+                    tracing::error!("MessageBus: handler for static plugin '{}' failed: {}", plugin_id, e);
+                } else {
+                    delivered += 1;
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        "MessageBus: published topic='{}' sender='{}' delivered={}/{}",
+        job.msg.topic, job.msg.sender, delivered, job.subs.len()
+    );
 }

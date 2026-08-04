@@ -20,6 +20,11 @@ import type {
   DialogAPI,
   NotificationAPI,
   StatusAPI,
+  FileServiceAPI,
+  FileServiceMount,
+  MountOptions,
+  PeerFileServiceInfo,
+  UploadRequestMeta,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
@@ -30,6 +35,14 @@ import * as pluginCmds from './commands'
 import * as pluginEvents from './events'
 import { getPluginRegistry } from './registry'
 import { getSharedModule } from './shared-runtime'
+
+/** Webview 上传策略钩子事件载荷（宿主 emit，camelCase 与 Rust 侧一致） */
+interface UploadHookEventPayload {
+  requestId: string
+  pluginId: string
+  mountPath: string
+  meta: UploadRequestMeta
+}
 
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
@@ -58,7 +71,14 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     async execute(id: string, ...args: any[]): Promise<any> {
       const handler = commandHandlers.get(id)
       if (handler) return handler(...args)
-      throw new Error(`Command not found: ${id}`)
+      // 本地 handler 查不到时回退到 WASM 命令桥（宿主 PluginManager.invoke_command）；
+      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）统一掩盖成 Command not found
+      try {
+        return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
+      } catch (e: any) {
+        const detail = e?.message ? ` (${e.message})` : ''
+        throw new Error(`Command not found: ${id}${detail}`)
+      }
     },
   }
 
@@ -152,6 +172,113 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
     async delete(key: string): Promise<void> {
       return pluginCmds.pluginStorageDelete(info.id, key)
+    },
+  }
+
+  // ==================== FileServiceAPI ====================
+
+  /** 检查 fileservice 权限，失败时抛 i18n 文案错误 */
+  function requireFileservicePermission(apiMethod: string): void {
+    if (!hasPermissionForApi(permissions, apiMethod)) {
+      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
+      const message = hostI18n
+        ? hostI18n.global.t('mobile.plugin.noFileservicePermission', { plugin: info.id })
+        : 'mobile.plugin.noFileservicePermission'
+      throw new Error(message)
+    }
+  }
+
+  const fileService: FileServiceAPI = {
+    async mount(options: MountOptions): Promise<FileServiceMount> {
+      requireFileservicePermission('fileService.mount')
+
+      const hook = options.onUploadRequest
+      // 构造线上传输选项：剥离函数，只序列化数据字段
+      const wireOptions: Record<string, unknown> = {
+        mountPath: options.mountPath,
+        roots: options.roots,
+        operations: options.operations,
+      }
+      const result = await pluginCmds.pluginFilesrvMount(info.id, wireOptions)
+
+      // 若插件提供了上传策略钩子，建立 Tauri 事件监听
+      let hookUnlisten: (() => void) | null = null
+      if (hook) {
+        try {
+          const { listen } = await import('@tauri-apps/api/event')
+          hookUnlisten = await listen<UploadHookEventPayload>(
+            'filesrv:upload_request',
+            async (event) => {
+              const payload = event.payload
+              // 宿主全局 emit，必须过滤属于当前插件 + 当前挂载点的事件
+              if (payload.pluginId !== info.id || payload.mountPath !== result.mountPath) return
+
+              try {
+                const decision = await hook(payload.meta)
+                await pluginCmds.pluginFilesrvRespondUploadRequest(
+                  info.id,
+                  payload.requestId,
+                  decision.allow,
+                  decision.reason,
+                )
+              } catch (err) {
+                console.error(`[FileService] upload hook error for ${info.id}:`, err)
+                // fail-closed：hook 异常一律拒绝，回填失败只记 debug
+                try {
+                  await pluginCmds.pluginFilesrvRespondUploadRequest(
+                    info.id,
+                    payload.requestId,
+                    false,
+                    'hook-error',
+                  )
+                } catch (respondErr) {
+                  console.debug('[FileService] respond after hook-error failed (likely timed out):', respondErr)
+                }
+              }
+            },
+          )
+        } catch (listenErr) {
+          // 非 Tauri 环境（如单元测试）降级：不影响 mount 本身
+          console.warn('[FileService] failed to establish upload hook listener:', listenErr)
+        }
+      }
+
+      // 封装 unlisten 为 Disposable，随插件 deactivate 清理
+      const hookDisposable: Disposable = {
+        dispose() {
+          if (hookUnlisten) {
+            hookUnlisten()
+            hookUnlisten = null
+          }
+        },
+      }
+      disposables.push(hookDisposable)
+
+      let disposed = false
+      return {
+        mountPath: result.mountPath,
+        async updateRoots(roots: string[]): Promise<void> {
+          requireFileservicePermission('fileService.updateRoots')
+          return pluginCmds.pluginFilesrvUpdateRoots(info.id, result.mountPath, roots)
+        },
+        async dispose(): Promise<void> {
+          if (disposed) return
+          disposed = true
+          requireFileservicePermission('fileService.unmount')
+          hookDisposable.dispose()
+          return pluginCmds.pluginFilesrvDispose(info.id, result.mountPath)
+        },
+      }
+    },
+
+    async getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null> {
+      requireFileservicePermission('fileService.getPeer')
+      return pluginCmds.pluginFilesrvGetPeer(info.id, peerId)
+    },
+
+    async pickDirectory(): Promise<string | null> {
+      requireFileservicePermission('fileService.pickDirectory')
+      return pluginCmds.pluginPickDirectory(info.id)
     },
   }
 
@@ -275,6 +402,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     ui,
     events,
     storage,
+    fileService,
     i18n,
     lifecycle,
     logger,

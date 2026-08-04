@@ -3,7 +3,7 @@
 //! Android 平台专用命令
 
 use crate::Result;
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// 使用系统浏览器打开 URL
 #[tauri::command]
@@ -13,8 +13,8 @@ pub async fn open_url_in_browser(
 ) -> Result<()> {
     tracing::info!("Opening URL in browser: {}", url);
     app_handle
-        .shell()
-        .open(&url, None)
+        .opener()
+        .open_url(url, None::<&str>)
         .map_err(|e| crate::system::error::AppError::Internal(e.to_string()))?;
     Ok(())
 }

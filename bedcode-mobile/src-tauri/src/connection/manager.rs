@@ -246,6 +246,15 @@ impl ConnectionManager {
                             } else {
                                 tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
                             }
+
+                            // 清理桌面端 peer 记录并推送 online=false（双通道）
+                            // 无论手动/意外断开均执行：对端文件服务已不可达，
+                            // 插件需感知下线以暂停传输/触发重连续传
+                            if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
+                                let fs = crate::state::get_file_service();
+                                fs.registry.remove_peer(&peer_id).await;
+                            }
+
                             break;
                         }
                         _ => {}
@@ -311,6 +320,14 @@ impl ConnectionManager {
         // 重置重连标记，确保进行中的重连循环退出
         self.is_reconnecting.store(false, Ordering::SeqCst);
         tracing::info!("Disconnecting...");
+
+        // 在清除 target 之前主动移除桌面 peer 记录并推送 online=false
+        // （remove_peer 幂等：monitor 循环后续再调一次无害）
+        // 必须先于 target 清除执行，否则 desktop_peer_id() 读不到地址
+        if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
+            let fs = crate::state::get_file_service();
+            fs.registry.remove_peer(&peer_id).await;
+        }
 
         // 断开 WebSocket
         if let Some(client) = self.client.read().await.as_ref() {

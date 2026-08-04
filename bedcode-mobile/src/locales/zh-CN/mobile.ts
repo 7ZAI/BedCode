@@ -381,6 +381,7 @@ export default {
       detailTitle: '插件详情',
       enable: '启用',
       disable: '停用',
+      noFileservicePermission: '插件 {plugin} 缺少 fileservice 权限',
       noDescription: '暂无描述',
       statExtensions: '扩展点',
       sectionIntro: '简介',

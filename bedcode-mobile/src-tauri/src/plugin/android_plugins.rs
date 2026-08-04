@@ -80,6 +80,52 @@ pub async fn extract_bundled_plugins(_app_version: &str) -> crate::Result<u32> {
 /// 已注册的 BiometricKeyPlugin 句柄（仅 Android 平台使用）
 static BIOMETRIC_KEY_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
+/// 已注册的 DownloadsDirPlugin 句柄（仅 Android 平台使用）
+static DOWNLOADS_DIR_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
+
+/// 注册 DownloadsDirPlugin（Android 外部私有下载目录路径获取）
+///
+/// gen/android 重建恢复清单：DownloadsDirPlugin.kt 须恢复
+pub fn downloads_dir_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    Builder::new("downloads-dir")
+        .setup(|_app, api| {
+            #[cfg(target_os = "android")]
+            {
+                let handle = api.register_android_plugin("com.bedcode.mobile", "DownloadsDirPlugin")?;
+                let _ = DOWNLOADS_DIR_HANDLE.set(handle);
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = api;
+            Ok(())
+        })
+        .build()
+}
+
+/// 获取 Android 外部私有下载目录绝对路径
+///
+/// 通过 Kotlin DownloadsDirPlugin 调用 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`。
+/// 外部存储不可用或非 Android 平台返回 None。
+#[cfg(target_os = "android")]
+pub async fn get_external_downloads_dir() -> Option<String> {
+    let handle = DOWNLOADS_DIR_HANDLE.get()?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("getDownloadsDir", serde_json::json!({}))
+        .await
+        .ok()?;
+    let path = response.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
+}
+
+/// 非 Android 平台外部下载目录不可用
+#[cfg(not(target_os = "android"))]
+pub async fn get_external_downloads_dir() -> Option<String> {
+    None
+}
+
 /// 注册 BiometricKeyPlugin（生物认证密钥：Android Keystore 生成/签名/删除）
 pub fn biometric_key_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     Builder::new("biometric-key")
@@ -138,7 +184,7 @@ pub async fn biometric_delete_key(fingerprint: &str) -> crate::Result<()> {
     })?;
     let payload = serde_json::json!({ "alias": biometric_alias(fingerprint) });
     handle
-        .run_mobile_plugin_async("deleteKey", payload)
+        .run_mobile_plugin_async::<()>("deleteKey", payload)
         .await
         .map_err(|e| crate::AppError::Plugin(format!("Failed to delete biometric key: {}", e)))?;
     Ok(())
