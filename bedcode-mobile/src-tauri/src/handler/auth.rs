@@ -30,6 +30,10 @@ impl ClientRouteHandler for AuthHandler {
                                 crate::plugin::types::PluginLifecycleEvent::AuthSuccess
                             ).await;
                         }
+
+                        // 重发文件服务 Announce（含重连场景：桌面侧 peer 记录
+                        // 已随 WS 断连清理清空，不重发对端将永远看不到服务）
+                        crate::state::get_file_service().resend_if_active().await;
                     }
                 }
                 AuthStage::VerifyCode => {

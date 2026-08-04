@@ -296,6 +296,8 @@ import { ref, computed, onMounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/composables/useMobileConnection'
+import { useMobileSettings } from '@/composables/useMobileSettings'
+import { wsGetBiometricKeyStatus } from '@/composables/useMobileCommands'
 import { useToast } from '@/composables/useToast'
 import BottomSheet from '@/components/BottomSheet.vue'
 import PairingInput from '@/components/PairingInput.vue'
@@ -305,6 +307,7 @@ import SessionConfigCard, { type SessionConfigSummary } from '@/components/Sessi
 
 const router = useRouter()
 const connection = useMobileConnection()
+const { settings: mobileSettings } = useMobileSettings()
 const toast = useToast()
 const { t } = useI18n()
 
@@ -579,6 +582,35 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
       }
     } else {
       console.log('[DevicesView] startConnection: Step 2 skipped (skipPairing=false, must pair)')
+    }
+
+    // Step 2.5: 优先认证方式为生物认证时，尝试生物认证登录（仅已绑定设备）
+    if (mobileSettings.value.preferredAuthMethod === 'biometric') {
+      const keyStatus = await wsGetBiometricKeyStatus().catch(() => null)
+      const canBiometric = keyStatus?.deviceSupported && keyStatus?.hasKey
+      if (canBiometric) {
+        console.log('[DevicesView] startConnection: Step 2.5 biometric authentication...')
+        showPairingLoading.value = true
+        try {
+          const bioOk = await connection.authenticateWithBiometric()
+          if (bioOk) {
+            pendingDevice.value = null
+            connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+            await connection.loadSessionConfigs()
+            return
+          }
+          // 已绑定但生物认证失败/取消 → 终止连接（不降级）
+          connectionError.value = t('mobile.connection.biometricFailed')
+          toast.error(t('mobile.connection.biometricFailed'))
+          await connection.disconnect()
+          return
+        } finally {
+          showPairingLoading.value = false
+        }
+      } else {
+        // 未绑定 → 临时降级到配对码
+        toast.info(t('mobile.connection.biometricDegraded'))
+      }
     }
 
     // Step 3: Need to pair - 带超时保护，避免卡住

@@ -4,6 +4,7 @@ pub mod auth;
 pub mod commands;
 pub mod connection;
 pub mod enums;
+pub mod file_service;
 pub mod handler;
 pub mod model;
 pub mod plugin;
@@ -49,11 +50,17 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_machine_uid::init())
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
+        .plugin(crate::plugin::android_plugins::biometric_key_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
+
+            // 生物识别插件仅 Android/iOS 可用，桌面编译时 cfg 剔除
+            #[cfg(mobile)]
+            app.handle().plugin(tauri_plugin_biometric::Builder::new().build());
 
             let app_handle = app.handle();
 
@@ -100,7 +107,7 @@ pub fn run() {
                     }
 
                     // 在 Tokio 运行时上下文中初始化 WASM 运行时
-                    if let Err(e) = pm.init_wasm_runtime() {
+                    if let Err(e) = pm.init_wasm_runtime().await {
                         tracing::error!("Failed to init WASM runtime: {}", e);
                         return;
                     }
@@ -139,6 +146,10 @@ pub fn run() {
             commands::auth::ws_request_pairing,
             commands::auth::ws_verify_pairing_code,
             commands::auth::ws_authenticate_with_qr,
+            commands::auth::ws_authenticate_with_biometric,
+            commands::auth::ws_bind_biometric_credential,
+            commands::auth::ws_unbind_biometric_credential,
+            commands::auth::ws_get_biometric_key_status,
             // Session Commands
             commands::session::ws_load_sessions,
             commands::session::ws_join_session,

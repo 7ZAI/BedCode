@@ -97,3 +97,51 @@ pub async fn ws_authenticate_with_qr(app_handle: AppHandle, token: String) -> Re
 
     Ok(None)
 }
+
+/// 生物认证登录（挑战-应答握手）
+#[tauri::command]
+pub async fn ws_authenticate_with_biometric(app_handle: AppHandle) -> Result<Option<AuthCredentials>> {
+    let auth = get_auth_manager();
+    let result = auth.authenticate_with_biometric().await?;
+
+    if result {
+        event::emit_pairing_verified(&app_handle);
+        event::emit_paired(&app_handle);
+        return Ok(auth.get_credentials().await);
+    }
+
+    Ok(None)
+}
+
+/// 绑定生物凭证：本地生成密钥对并注册公钥到桌面端（需已认证连接）
+#[tauri::command]
+pub async fn ws_bind_biometric_credential() -> Result<bool> {
+    let auth = get_auth_manager();
+    auth.bind_biometric_credential().await
+}
+
+/// 解绑生物凭证：删除本地密钥并通知桌面端清空公钥（需已认证连接）
+#[tauri::command]
+pub async fn ws_unbind_biometric_credential() -> Result<bool> {
+    let auth = get_auth_manager();
+    auth.unbind_biometric_credential().await
+}
+
+/// 生物认证密钥状态（设备支持 + 本地密钥已生成）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BiometricKeyStatus {
+    pub device_supported: bool,
+    pub has_key: bool,
+}
+
+/// 查询生物认证密钥状态
+#[tauri::command]
+pub async fn ws_get_biometric_key_status() -> Result<BiometricKeyStatus> {
+    let auth = get_auth_manager();
+    let device_supported = auth.is_biometric_supported().await?;
+    let has_key = auth.has_biometric_key().await?;
+    Ok(BiometricKeyStatus {
+        device_supported,
+        has_key,
+    })
+}

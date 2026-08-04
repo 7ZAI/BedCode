@@ -20,6 +20,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
 tauri-plugin-edge-to-edge = "0.3.3"
 tauri-plugin-http = "2"
+# 生物识别（官方，Android/iOS）
+tauri-plugin-biometric = "2.3.2"
+# 设备 ID（Android ANDROID_ID / iOS identifierForVendor）
+tauri-plugin-machine-uid = "0.1.3"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
@@ -71,6 +75,12 @@ wasmtime = "46"
 
 # HTTP client (WASM plugin HTTP proxy + remote download)
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+
+# 传输引擎工具（CancellationToken 取消 + ReaderStream 文件流，与桌面端 transfer 同语义）
+tokio-util = { version = "0.7", features = ["io"] }
+
+# 独立 HTTP 文件服务（插件 fileservice 能力，仅 HTTP 明文，无 TLS/compression 需求）
+actix-web = { version = "4", default-features = false }
 
 # Regex for SQL table name extraction
 regex = "1"

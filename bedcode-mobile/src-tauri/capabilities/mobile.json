@@ -27,6 +27,8 @@
     "edge-to-edge:allow-get-safe-area-insets",
     "edge-to-edge:allow-get-keyboard-info",
     "edge-to-edge:allow-show-keyboard",
-    "edge-to-edge:allow-hide-keyboard"
+    "edge-to-edge:allow-hide-keyboard",
+    "biometric:default",
+    "machine-uid:default"
   ]
 }

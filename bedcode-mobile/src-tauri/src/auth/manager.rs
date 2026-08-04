@@ -333,4 +333,202 @@ impl AuthManager {
         *self.status.write().await = AuthStatus::Failed("QR authentication failed".to_string());
         Ok(false)
     }
+
+    /// 生物认证登录（挑战-应答握手）
+    ///
+    /// 1. 发送 BiometricRequest 获取一次性挑战值
+    /// 2. 弹系统生物识别，认证通过后解锁 Keystore 私钥签名
+    /// 3. 回传签名（BiometricVerify），桌面端验签后签发 JWT
+    pub async fn authenticate_with_biometric(&self) -> Result<bool> {
+        if !self.connection.is_connected().await {
+            return Err(crate::AppError::WebSocket("Not connected".to_string()));
+        }
+
+        *self.status.write().await = AuthStatus::Authenticating;
+
+        let device_id = self.device_id.read().await.clone();
+        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
+        let fingerprint = self.device_fingerprint.read().await.clone();
+
+        // 1. 请求挑战值
+        let request = AuthRequest::biometric_request(&device_id, &device_name, &fingerprint);
+        let response = self.connection.send_and_wait(&request, timeouts::BIO_AUTH).await?;
+
+        let nonce = match ResponseParser::parse_auth_response(&response) {
+            Some(AuthStage::BiometricChallenge) => {
+                if let Message::Auth { payload, .. } = &response {
+                    payload.challenge_nonce.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            }
+            Some(AuthStage::Failed) => {
+                let reason = if let Message::Auth { payload, .. } = &response {
+                    payload.error.clone().unwrap_or_else(|| "Biometric authentication failed".to_string())
+                } else {
+                    "Biometric authentication failed".to_string()
+                };
+                *self.status.write().await = AuthStatus::Failed(reason.clone());
+                tracing::warn!("[authenticate_with_biometric] Desktop rejected: {}", reason);
+                return Ok(false);
+            }
+            _ => {
+                *self.status.write().await = AuthStatus::Failed("Unexpected biometric response".to_string());
+                return Ok(false);
+            }
+        };
+        if nonce.is_empty() {
+            *self.status.write().await = AuthStatus::Failed("Missing challenge nonce".to_string());
+            return Ok(false);
+        }
+
+        // 2. 生物认证解锁私钥并签名挑战值
+        let signature = match crate::plugin::android_plugins::biometric_sign(&fingerprint, &nonce).await {
+            Ok(sig) => sig,
+            Err(e) => {
+                tracing::warn!("[authenticate_with_biometric] Biometric sign failed: {}", e);
+                *self.status.write().await = AuthStatus::Failed(format!("Biometric authentication failed: {}", e));
+                return Ok(false);
+            }
+        };
+
+        // 3. 回传签名验证
+        let verify = AuthRequest::biometric_verify(&device_id, &device_name, &fingerprint, &nonce, &signature);
+        let response = self.connection.send_and_wait(&verify, timeouts::BIO_AUTH).await?;
+
+        match ResponseParser::parse_auth_response(&response) {
+            Some(AuthStage::Authenticated) => {
+                let pairing_id = if let Message::Auth { payload, .. } = &response {
+                    payload.device_id.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let session_token = if let Message::Auth { payload, .. } = &response {
+                    payload.session_token.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                let creds = AuthCredentials {
+                    pairing_id: pairing_id.clone(),
+                    fingerprint,
+                    session_token: session_token.clone(),
+                };
+
+                self.set_credentials(creds).await;
+                *self.status.write().await = AuthStatus::Authenticated;
+                self.connection.set_paired().await;
+                tracing::info!("[authenticate_with_biometric] Biometric authentication successful");
+                Ok(true)
+            }
+            Some(AuthStage::Failed) => {
+                let reason = if let Message::Auth { payload, .. } = &response {
+                    payload.error.clone().unwrap_or_else(|| "Biometric verification failed".to_string())
+                } else {
+                    "Biometric verification failed".to_string()
+                };
+                tracing::warn!("[authenticate_with_biometric] Verification failed: {}", reason);
+                *self.status.write().await = AuthStatus::Failed(reason);
+                Ok(false)
+            }
+            _ => {
+                *self.status.write().await = AuthStatus::Failed("Unexpected verification response".to_string());
+                Ok(false)
+            }
+        }
+    }
+
+    /// 绑定生物凭证：本地生成密钥对，公钥注册到桌面端（需已认证连接）
+    ///
+    /// 返回桌面端是否接受绑定
+    pub async fn bind_biometric_credential(&self) -> Result<bool> {
+        if !self.connection.is_connected().await {
+            return Err(crate::AppError::WebSocket("Not connected".to_string()));
+        }
+
+        let fingerprint = self.device_fingerprint.read().await.clone();
+
+        // 1. 本地生成密钥对（私钥存 Keystore，需生物认证解锁）
+        let public_key = match crate::plugin::android_plugins::biometric_generate_keypair(&fingerprint).await {
+            Ok(pk) => pk,
+            Err(e) => {
+                tracing::error!("[bind_biometric_credential] Key generation failed: {}", e);
+                return Err(e);
+            }
+        };
+
+        // 2. 通过已认证连接把公钥注册到桌面端
+        let message = AuthRequest::exchange_biometric_credential(&fingerprint, &public_key);
+        let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
+            Ok(r) => r,
+            Err(e) => {
+                // 注册失败时清理本地密钥，避免留下孤儿公钥/私钥
+                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
+                return Err(e);
+            }
+        };
+
+        match ResponseParser::parse_auth_response(&response) {
+            Some(AuthStage::Authenticated) => {
+                tracing::info!("[bind_biometric_credential] Credential bound to desktop");
+                Ok(true)
+            }
+            Some(AuthStage::Failed) => {
+                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
+                tracing::warn!("[bind_biometric_credential] Desktop rejected binding");
+                Ok(false)
+            }
+            _ => {
+                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
+                Ok(false)
+            }
+        }
+    }
+
+    /// 解绑生物凭证：删除本地密钥 + 通知桌面端清空公钥（需已认证连接）
+    pub async fn unbind_biometric_credential(&self) -> Result<bool> {
+        if !self.connection.is_connected().await {
+            return Err(crate::AppError::WebSocket("Not connected".to_string()));
+        }
+
+        let fingerprint = self.device_fingerprint.read().await.clone();
+
+        // 1. 通知桌面端清空公钥
+        let message = AuthRequest::exchange_biometric_credential(&fingerprint, "");
+        let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tracing::warn!("[unbind_biometric_credential] Desktop notification failed: {}", e);
+                // 桌面端通知失败仍继续删除本地密钥，避免本地密钥悬空
+                None
+            }
+        };
+
+        // 2. 删除本地密钥
+        if let Err(e) = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await {
+            tracing::warn!("[unbind_biometric_credential] Failed to delete local key: {}", e);
+        }
+
+        match response {
+            Some(Message::Auth { payload, .. }) if payload.stage == AuthStage::Authenticated => {
+                tracing::info!("[unbind_biometric_credential] Credential unbound");
+                Ok(true)
+            }
+            _ => {
+                tracing::warn!("[unbind_biometric_credential] Desktop did not confirm unbind");
+                Ok(false)
+            }
+        }
+    }
+
+    /// 检查本地生物认证密钥是否存在
+    pub async fn has_biometric_key(&self) -> Result<bool> {
+        let fingerprint = self.device_fingerprint.read().await.clone();
+        crate::plugin::android_plugins::biometric_has_key(&fingerprint).await
+    }
+
+    /// 设备是否支持生物认证密钥
+    pub async fn is_biometric_supported(&self) -> Result<bool> {
+        crate::plugin::android_plugins::biometric_device_supported().await
+    }
 }

@@ -5,196 +5,29 @@
       <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('settings.title') }}</h1>
     </header>
 
-    <!-- Settings List -->
-    <div class="flex-1 overflow-auto">
-      <!-- Connection Settings -->
-      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.connection.title') }}</h3>
-
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.autoReconnect') }}</span>
-            <Toggle v-model="settings.autoReconnect" />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.keepAlive') }}</span>
-            <Toggle v-model="settings.keepAlive" />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.reconnectInterval') }}</span>
-            <input
-              v-model.number="settings.reconnectInterval"
-              type="number"
-              min="1"
-              max="60"
-              class="w-16 bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-2 py-1 text-right text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-            />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.defaultPort') }}</span>
-            <input
-              v-model.number="settings.defaultPort"
-              type="number"
-              min="1"
-              max="65535"
-              class="w-20 bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-2 py-1 text-right text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- Notification Settings -->
-      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.notification.title') }}</h3>
-
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnWaiting') }}</span>
-            <Toggle v-model="settings.notifyOnWaiting" />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyOnConnection') }}</span>
-            <Toggle v-model="settings.notifyOnConnection" />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.vibrate') }}</span>
-            <Toggle v-model="settings.vibrate" />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.notifyInBackground') }}</span>
-            <Toggle v-model="settings.notifyInBackground" />
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.notification.soundOnTaskComplete') }}</span>
-            <Toggle v-model="settings.soundOnTaskComplete" />
-          </div>
-        </div>
-      </div>
-
-      <!-- Appearance Settings -->
-      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.appearance.title') }}</h3>
-
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.theme') }}</span>
-            <select
-              v-model="themeMode"
-              class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1.5 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-            >
-              <option value="dark">{{ $t('settings.appearance.darkMode') }}</option>
-              <option value="light">{{ $t('settings.appearance.lightMode') }}</option>
-              <option value="system">{{ $t('settings.appearance.followSystem') }}</option>
-            </select>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.language') }}</span>
-            <select
-              v-model="currentLanguage"
-              class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1.5 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-            >
-              <option value="zh-CN">中文</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.fontSize') }}</span>
-            <select
-              v-model="settings.fontSize"
-              class="bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-3 py-1 text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-            >
-              <option value="small">{{ $t('settings.appearance.fontSmall') }}</option>
-              <option value="medium">{{ $t('settings.appearance.fontMedium') }}</option>
-              <option value="large">{{ $t('settings.appearance.fontLarge') }}</option>
-            </select>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.appearance.terminalCacheCount') }}</span>
-            <input
-              v-model.number="settings.maxCachedTerminals"
-              type="number"
-              min="1"
-              max="50"
-              class="w-16 bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-2 py-1 text-right text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- Plugin Manager -->
-      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <div
-          class="flex items-center justify-between cursor-pointer active:opacity-80 transition-colors"
-          @click="router.push({ name: 'mobile-plugins' })"
+    <div class="flex-1 overflow-y-auto overflow-x-hidden">
+      <!-- Category Entries -->
+      <nav class="p-4 space-y-2.5">
+        <button
+          v-for="cat in categories"
+          :key="cat.key"
+          class="w-full flex items-center gap-3 px-4 py-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl hover:border-[var(--mobile-border-hover)] active:opacity-80 transition-all duration-200"
+          @click="router.push({ name: cat.route })"
         >
-          <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold tracking-wider uppercase">{{ $t('mobile.plugin.title') }}</h3>
-          <svg class="w-4 h-4 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <span class="cat-icon" :class="cat.iconClass">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="cat.iconPath" />
+            </svg>
+          </span>
+          <span class="flex-1 min-w-0 text-left text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
+          <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
-        </div>
-      </div>
-
-      <!-- About -->
-      <div class="px-4 py-3 border-b border-[var(--mobile-border)]">
-        <h3 class="text-[var(--mobile-accent)]/80 text-[0.9375rem] font-semibold mb-3 tracking-wider uppercase">{{ $t('settings.about.title') }}</h3>
-
-        <div class="space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-[var(--mobile-text-muted)]">{{ $t('settings.about.currentVersion') }}</span>
-            <span class="text-[var(--mobile-text-disabled)]">v{{ appVersion }}</span>
-          </div>
-
-          <button
-            class="w-full text-left text-[var(--mobile-text-muted)] py-2 hover:text-[var(--mobile-accent)] transition-colors"
-            @click="openGitHub"
-          >
-            {{ $t('settings.about.githubRepo') }}
-          </button>
-
-          <!-- 检查更新 -->
-          <div class="space-y-2">
-            <!-- 检查按钮 -->
-            <button
-              v-if="updateStatus === 'idle' || updateStatus === 'latest' || updateStatus === 'failed'"
-              class="w-full text-left py-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-              @click="handleCheckUpdate"
-            >
-              {{ getUpdateStatusText() }}
-            </button>
-
-            <!-- 检查中 -->
-            <span v-if="updateStatus === 'checking'" class="flex items-center gap-2 py-2 text-[var(--mobile-text-muted)]">
-              <span class="inline-block w-3 h-3 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
-              {{ $t('settings.about.checkingUpdate') }}
-            </span>
-
-            <!-- 发现新版本 - 打开浏览器下载 -->
-            <button
-              v-if="updateStatus === 'available' && updateInfo"
-              class="w-full bg-[var(--mobile-accent)]/15 border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/25 transition-colors"
-              @click="handleDownloadUpdate"
-            >
-              {{ $t('settings.about.downloadUpdate') }} ({{ updateInfo.version }})
-            </button>
-
-            <!-- 失败时显示错误 -->
-            <p v-if="updateStatus === 'failed'" class="text-xs text-[var(--mobile-error)]">{{ errorMessage }}</p>
-          </div>
-        </div>
-      </div>
+        </button>
+      </nav>
 
       <!-- Footer Actions -->
-      <div class="px-4 py-4 space-y-2">
+      <div class="px-4 pb-4 space-y-2">
         <button
           class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-sm text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
           @click="resetSettings"
@@ -209,22 +42,6 @@
         </button>
       </div>
     </div>
-
-    <!-- Browser Confirm Modal -->
-    <Teleport to="body">
-      <Transition name="center-modal">
-      <div v-if="showBrowserConfirm" class="confirm-modal-overlay mobile-ui" @click.self="cancelOpenBrowser">
-        <div class="confirm-modal modal-panel">
-          <p class="confirm-text">{{ $t('settings.browser.confirmOpen') }}</p>
-          <p class="confirm-url text-xs text-[var(--mobile-text-muted)] mt-1 mb-4 break-all">{{ pendingUrl }}</p>
-          <div class="confirm-buttons">
-            <button class="confirm-btn cancel" @click="cancelOpenBrowser">{{ $t('common.button.cancel') }}</button>
-            <button class="confirm-btn confirm" @click="confirmOpenBrowser">{{ $t('common.button.open') }}</button>
-          </div>
-        </div>
-      </div>
-      </Transition>
-    </Teleport>
 
     <!-- Confirm Dialog (Reset / Clear Data) -->
     <Teleport to="body">
@@ -245,128 +62,92 @@
 
 <script setup lang="ts">
 /**
- * 设置视图 - 移动端设置页面
- * 支持连接、通知、外观等设置，以及语言切换
+ * 设置主页 - 分类入口导航（TikTok 风格）
+ *
+ * 主页只展示设置分类入口，真正的设置项在各分类二级页面。
+ * 设置状态由 useMobileSettings 模块级单例共享，二级页面与主页数据一致。
+ * 前台服务相关的 watcher 保留在主页（主页常驻于滑动容器中，始终挂载）。
  */
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { useForegroundService } from '@/composables/useForegroundService'
-import { useSettingsStore } from '@/stores/settings'
-import { useI18nStore } from '@/stores/i18n'
+import { useMobileSettings } from '@/composables/useMobileSettings'
 import { clearAuthCredentials } from '@/composables/useMobileCommands'
 import { clearAllTasks } from '@/composables/usePresetTasks'
-import { useUpdateChecker } from '@/composables/useUpdateChecker'
-import { useToast } from '@/composables/useToast'
-import Toggle from '@/components/Toggle.vue'
-import { invoke } from '@tauri-apps/api/core'
 
 const { t } = useI18n()
 const router = useRouter()
 const connection = useMobileConnection()
-const settingsStore = useSettingsStore()
-const i18nStore = useI18nStore()
-const toast = useToast()
+const { settings, loadSettings, resetSettings: applyResetSettings } = useMobileSettings()
 const { startService, stopService, updateNotification } = useForegroundService()
-const { status: updateStatus, errorMessage, updateInfo, checkForUpdate, getUpdateStatusText } = useUpdateChecker()
 
-/** 应用版本号，由 Vite 编译时从 tauri.conf.json 注入 */
-const appVersion = __APP_VERSION__
+// ==================== Category Entries ====================
 
-const currentLanguage = computed({
-  get: () => settingsStore.settings.ui.language || 'zh-CN',
-  set: (value: string) => i18nStore.setLanguage(value),
-})
+/** 设置分类入口配置 */
+interface SettingsCategory {
+  key: string
+  /** i18n 标签 key */
+  labelKey: string
+  /** 目标路由名 */
+  route: string
+  /** SVG path（项目标准线性图标） */
+  iconPath: string
+  /** 图标配色类（scoped 样式） */
+  iconClass: string
+}
+
+const categories: SettingsCategory[] = [
+  {
+    key: 'connection',
+    labelKey: 'settings.connection.title',
+    route: 'mobile-settings-connection',
+    iconPath: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0',
+    iconClass: 'cat-connection',
+  },
+  {
+    key: 'notification',
+    labelKey: 'settings.notification.title',
+    route: 'mobile-settings-notifications',
+    iconPath: 'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9',
+    iconClass: 'cat-notification',
+  },
+  {
+    key: 'authentication',
+    labelKey: 'settings.authentication.title',
+    route: 'mobile-settings-authentication',
+    iconPath: 'M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 8a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4',
+    iconClass: 'cat-authentication',
+  },
+  {
+    key: 'appearance',
+    labelKey: 'settings.appearance.title',
+    route: 'mobile-settings-appearance',
+    iconPath: 'M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01',
+    iconClass: 'cat-appearance',
+  },
+  {
+    key: 'plugins',
+    labelKey: 'mobile.plugin.title',
+    route: 'mobile-plugins',
+    iconPath: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
+    iconClass: 'cat-plugins',
+  },
+  {
+    key: 'about',
+    labelKey: 'settings.about.title',
+    route: 'mobile-settings-about',
+    iconPath: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+    iconClass: 'cat-about',
+  },
+]
 
 // 使用统一的连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 
-// 当前设备名称
-const currentDeviceName = computed(() => connection.currentDevice.value?.name || '')
-
-// 移动端本地设置（用于 UI 控制）
-interface MobileSettings {
-  autoReconnect: boolean
-  keepAlive: boolean
-  reconnectInterval: number
-  defaultPort: number
-  notifyOnWaiting: boolean
-  notifyOnConnection: boolean
-  notifyInBackground: boolean
-  vibrate: boolean
-  soundOnTaskComplete: boolean
-  fontSize: 'small' | 'medium' | 'large'
-  maxCachedTerminals: number
-}
-
-const defaultMobileSettings: MobileSettings = {
-  autoReconnect: true,
-  keepAlive: true,
-  reconnectInterval: 5,
-  defaultPort: 8765,
-  notifyOnWaiting: true,
-  notifyOnConnection: true,
-  notifyInBackground: true,
-  vibrate: true,
-  soundOnTaskComplete: true,
-  fontSize: 'medium',
-  maxCachedTerminals: 10,
-}
-
-const settings = ref<MobileSettings>({ ...defaultMobileSettings })
-
-// 主题模式 - 直接绑定到 settingsStore
-const themeMode = computed({
-  get: () => settingsStore.settings.ui.theme,
-  set: (value: string) => {
-    settingsStore.saveSettings({
-      ui: {
-        ...settingsStore.settings.ui,
-        theme: value
-      }
-    })
-  }
-})
-
-// 字体大小映射
-const fontSizeMap = {
-  small: 12,
-  medium: 14,
-  large: 16
-}
-
-onMounted(async () => {
-  // 先等待 settingsStore 加载完成
-  await settingsStore.loadSettings()
-
-  // 加载已保存的设置
-  const saved = localStorage.getItem('mobile-settings')
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved)
-      settings.value = { ...defaultMobileSettings, ...parsed }
-    } catch (e) {
-      console.error('Failed to load settings:', e)
-    }
-  }
-
-  // 尝试从后端加载移动端设置并同步
-  try {
-    const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
-    for (const s of dbSettings) {
-      if (s.key.startsWith('mobile.')) {
-        const settingKey = s.key.replace('mobile.', '')
-        const value = s.value === 'true' ? true : s.value === 'false' ? false : isNaN(Number(s.value)) ? s.value : Number(s.value)
-        ;(settings.value as any)[settingKey] = value
-      }
-    }
-  } catch {
-    // Backend may not be available
-  }
-
-  // 同步到 settingsStore（使设置生效）
-  syncToSettingsStore()
+onMounted(() => {
+  loadSettings()
 })
 
 // ==================== Foreground Service Integration ====================
@@ -398,55 +179,12 @@ watch(isConnected, async (connected) => {
   }
 })
 
-// 将移动端设置同步到全局 settingsStore
-function syncToSettingsStore() {
-  // 字体大小映射到终端字体大小
-  const terminalFontSize = fontSizeMap[settings.value.fontSize]
-
-  settingsStore.saveSettings({
-    ui: {
-      ...settingsStore.settings.ui,
-      terminal_font_size: terminalFontSize,
-    }
-  })
-}
-
-function saveSettings() {
-  // 保存到本地存储
-  localStorage.setItem('mobile-settings', JSON.stringify(settings.value))
-
-  // 同步到全局 settingsStore（使设置生效）
-  syncToSettingsStore()
-
-  // 同时保存到后端数据库
-  for (const [key, value] of Object.entries(settings.value)) {
-    invoke('set_db_setting', {
-      key: `mobile.${key}`,
-      value: String(value),
-    }).catch(() => {})
-  }
-}
+// ==================== Actions ====================
 
 function resetSettings() {
   showConfirmDialog(
     t('settings.actions.resetSettingsConfirm'),
-    async () => {
-      // 重置移动端本地设置为默认值
-      settings.value = { ...defaultMobileSettings }
-      // 重置主题为跟随系统
-      await settingsStore.saveSettings({
-        ui: {
-          ...settingsStore.settings.ui,
-          theme: 'system',
-        }
-      })
-      // 重置语言为中文
-      await i18nStore.setLanguage('zh-CN')
-      // 重置终端字体大小
-      syncToSettingsStore()
-      // 保存到 localStorage 和后端
-      saveSettings()
-    }
+    applyResetSettings
   )
 }
 
@@ -518,50 +256,53 @@ async function executeConfirm() {
     }
   }
 }
-
-// 系统浏览器打开链接的确认弹窗状态
-const showBrowserConfirm = ref(false)
-const pendingUrl = ref('')
-
-function openGitHub() {
-  pendingUrl.value = 'https://github.com/7ZAI/BedCode'
-  showBrowserConfirm.value = true
-}
-
-async function confirmOpenBrowser() {
-  if (pendingUrl.value) {
-    try {
-      await invoke('open_url_in_browser', { url: pendingUrl.value })
-    } catch (e) {
-      console.error('Failed to open URL:', e)
-    }
-  }
-  showBrowserConfirm.value = false
-  pendingUrl.value = ''
-}
-
-function cancelOpenBrowser() {
-  showBrowserConfirm.value = false
-  pendingUrl.value = ''
-}
-
-async function handleCheckUpdate() {
-  await checkForUpdate()
-}
-
-/** 发现新版本后，打开浏览器下载 APK */
-function handleDownloadUpdate() {
-  if (updateInfo.value) {
-    pendingUrl.value = updateInfo.value.downloadUrl
-    showBrowserConfirm.value = true
-  }
-}
-
-// Auto-save settings
-watch(settings, saveSettings, { deep: true })
 </script>
 
 <style scoped>
+/* 分类入口图标容器 */
+.cat-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* 分类图标配色：装饰性强调色，明暗主题下保持一致 */
+.cat-connection {
+  color: var(--mobile-accent);
+  background-color: color-mix(in srgb, var(--mobile-accent) 14%, transparent);
+}
+
+.cat-notification {
+  color: var(--mobile-warning);
+  background-color: color-mix(in srgb, var(--mobile-warning) 14%, transparent);
+}
+
+/* 认证设置：生物识别指纹，与 --mobile-success 同源 */
+.cat-authentication {
+  color: var(--mobile-success);
+  background-color: color-mix(in srgb, var(--mobile-success) 14%, transparent);
+}
+
+.cat-appearance {
+  /* Dracula 紫，与 --mobile-shortcut-color 同源 */
+  color: #bd93f9;
+  background-color: color-mix(in srgb, #bd93f9 14%, transparent);
+}
+
+.cat-plugins {
+  color: var(--mobile-success);
+  background-color: color-mix(in srgb, var(--mobile-success) 14%, transparent);
+}
+
+.cat-about {
+  color: var(--mobile-text-muted);
+  background-color: var(--mobile-bg-elevated);
+}
+
 .confirm-modal-overlay {
   position: fixed;
   top: 0;
@@ -589,10 +330,6 @@ watch(settings, saveSettings, { deep: true })
   font-size: clamp(0.875rem, 1rem, 1.125rem);
   color: var(--mobile-text-primary);
   margin: 0;
-}
-
-.confirm-url {
-  color: var(--mobile-accent);
 }
 
 .confirm-buttons {

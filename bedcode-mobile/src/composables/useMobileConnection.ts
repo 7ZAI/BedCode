@@ -13,6 +13,7 @@ import {
   wsIsConnected,
   wsReconnect,
   wsAuthenticate,
+  wsAuthenticateWithBiometric,
   wsRequestPairing,
   wsVerifyPairingCode,
   wsJoinSession,
@@ -787,6 +788,23 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
 }
 
 /**
+ * 生物认证登录（挑战-应答握手），成功后保存凭据
+ */
+export async function authenticateWithBiometric(): Promise<boolean> {
+  try {
+    const creds = await wsAuthenticateWithBiometric()
+    if (creds) {
+      saveCredentials(creds)
+      return true
+    }
+    return false
+  } catch (error) {
+    console.error('[MobileConnection] Biometric authentication failed:', error)
+    return false
+  }
+}
+
+/**
  * 加载会话配置列表
  */
 export async function loadSessionConfigs(): Promise<any[]> {
@@ -1096,6 +1114,7 @@ export function useMobileConnection() {
     cancelConnection,
     disconnect,
     authenticate,
+    authenticateWithBiometric,
     requestPairing,
     verifyPairingCode,
     loadSessionConfigs,

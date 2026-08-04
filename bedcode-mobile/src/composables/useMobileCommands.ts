@@ -127,6 +127,39 @@ export async function wsAuthenticateWithQr(token: string): Promise<AuthCredentia
   return await invoke('ws_authenticate_with_qr', { token })
 }
 
+/**
+ * 生物认证登录（挑战-应答握手，弹系统生物识别）
+ */
+export async function wsAuthenticateWithBiometric(): Promise<AuthCredentials | null> {
+  return await invoke('ws_authenticate_with_biometric')
+}
+
+/**
+ * 绑定生物凭证：本地生成密钥对并注册公钥到桌面端（需已认证连接）
+ */
+export async function wsBindBiometricCredential(): Promise<boolean> {
+  return await invoke('ws_bind_biometric_credential')
+}
+
+/**
+ * 解绑生物凭证：删除本地密钥并通知桌面端清空公钥（需已认证连接）
+ */
+export async function wsUnbindBiometricCredential(): Promise<boolean> {
+  return await invoke('ws_unbind_biometric_credential')
+}
+
+/**
+ * 生物认证密钥状态（设备支持 + 本地密钥已生成）
+ */
+export interface BiometricKeyStatus {
+  deviceSupported: boolean
+  hasKey: boolean
+}
+
+export async function wsGetBiometricKeyStatus(): Promise<BiometricKeyStatus> {
+  return await invoke('ws_get_biometric_key_status')
+}
+
 // ==================== Session Commands ====================
 
 /**
