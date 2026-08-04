@@ -36,7 +36,9 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///   + 可选导出 `ON_INPUT_SUBMITTED`），见 ADR 0001
 /// - v4: 新增插件状态上报扩展点（host function `MARK_PLUGIN_ERROR`），
 ///   插件自检失败（如 hooks 配置失败）时上报宿主标记错误并通知前端
-pub const ABI_VERSION: u32 = 4;
+/// - v5: 新增通用文件服务能力（host functions `FILESRV_*` / `TRANSFER_*`
+///   + 可选导出 `ON_UPLOAD_REQUEST` 上传策略钩子），见内网文件传输插件规格
+pub const ABI_VERSION: u32 = 5;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -64,6 +66,11 @@ pub mod export {
     pub const ON_SESSION_LIFECYCLE: &str = "__bedcode_on_session_lifecycle";
     /// 接收提交输入行事件（可选导出，异步观察，不影响输入本身）
     pub const ON_INPUT_SUBMITTED: &str = "__bedcode_on_input_submitted";
+    /// 上传请求策略钩子（可选导出，v5 起；决定写入 out_ptr）
+    ///
+    /// 宿主在上传会话创建时调用一次（写任何字节前），2 秒超时；
+    /// 缺失/超时/异常一律 fail-closed 拒绝上传
+    pub const ON_UPLOAD_REQUEST: &str = "__bedcode_on_upload_request";
     /// ABI 版本协商（v2 起导出；缺失视为 v1 兼容插件）
     pub const ABI_VERSION: &str = "__bedcode_abi_version";
     /// 内存回收器（v2 起导出；缺失时宿主跳过回收，退化为 v1 行为）
@@ -137,6 +144,8 @@ pub mod import {
     pub const FS_COPY: &str = "host_fs_copy";
     /// 文件系统：删除文件（文件不存在视为成功）
     pub const FS_DELETE: &str = "host_fs_delete";
+    /// 文件系统：检查文件是否存在（返回 i32: 1=存在, 0=不存在, -1=错误）
+    pub const FS_EXISTS: &str = "host_fs_exists";
 
     // === Config ===
     /// 配置：读取白名单配置项（out_ptr 输出）
@@ -163,6 +172,22 @@ pub mod import {
     pub const BUS_SUBSCRIBE: &str = "host_bus_subscribe";
     /// 消息总线：取消订阅
     pub const BUS_UNSUBSCRIBE: &str = "host_bus_unsubscribe";
+
+    // === File Service（v5） ===
+    /// 文件服务：挂载（MountOptions JSON → out_ptr 输出 MountResult JSON）
+    pub const FILESRV_MOUNT: &str = "host_filesrv_mount";
+    /// 文件服务：卸载挂载点
+    pub const FILESRV_UNMOUNT: &str = "host_filesrv_unmount";
+    /// 文件服务：更新挂载点允许目录根
+    pub const FILESRV_UPDATE_ROOTS: &str = "host_filesrv_update_roots";
+    /// 文件服务：获取对端文件服务信息（out_ptr 输出）
+    pub const FILESRV_GET_PEER: &str = "host_filesrv_get_peer";
+
+    // === Transfer（v5） ===
+    /// 传输引擎：启动传输任务（TransferRequest JSON → out_ptr 输出 task_id）
+    pub const TRANSFER_START: &str = "host_transfer_start";
+    /// 传输引擎：取消传输任务
+    pub const TRANSFER_CANCEL: &str = "host_transfer_cancel";
 }
 
 /// 宿主导入函数签名表 — (名称, 参数个数, 返回值个数)
@@ -194,6 +219,7 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::FS_WRITE, 4, 1),
     (import::FS_COPY, 4, 1),
     (import::FS_DELETE, 2, 1),
+    (import::FS_EXISTS, 2, 1),
     (import::CONFIG_GET, 3, 1),
     (import::LOG_INFO, 2, 0),
     (import::LOG_DEBUG, 2, 0),
@@ -203,6 +229,12 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::BUS_PUBLISH, 4, 1),
     (import::BUS_SUBSCRIBE, 2, 1),
     (import::BUS_UNSUBSCRIBE, 2, 1),
+    (import::FILESRV_MOUNT, 3, 1),
+    (import::FILESRV_UNMOUNT, 2, 1),
+    (import::FILESRV_UPDATE_ROOTS, 4, 1),
+    (import::FILESRV_GET_PEER, 3, 1),
+    (import::TRANSFER_START, 3, 1),
+    (import::TRANSFER_CANCEL, 2, 1),
 ];
 
 /// 插件导出函数签名表 — (名称, 参数个数, 返回值个数)
@@ -222,6 +254,7 @@ pub const PLUGIN_EXPORT_SIGNATURES: &[(&str, usize, usize)] = &[
     (export::ON_MESSAGE, 6, 1),
     (export::ON_SESSION_LIFECYCLE, 2, 1),
     (export::ON_INPUT_SUBMITTED, 2, 1),
+    (export::ON_UPLOAD_REQUEST, 3, 1),
     (export::ABI_VERSION, 0, 1),
     (export::DEALLOCATE, 2, 0),
 ];

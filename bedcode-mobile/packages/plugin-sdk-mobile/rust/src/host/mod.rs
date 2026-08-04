@@ -12,24 +12,30 @@
 //! 详细错误原因记录在宿主日志（完整错误透传见 ABI v2 计划）。
 
 pub mod bus;
+pub mod config;
 pub mod database;
 pub mod events;
+pub mod file_service;
 pub mod fs;
 pub mod http;
 pub mod log;
 pub mod session;
 pub mod storage;
 pub mod terminal;
+pub mod transfer;
 
 pub use bus::HostBus;
+pub use config::{ConfigKey, HostConfig};
 pub use database::HostDatabase;
 pub use events::HostEvents;
+pub use file_service::HostFileService;
 pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
 pub use session::HostSession;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
+pub use transfer::HostTransfer;
 
 /// 宿主调用错误
 ///
@@ -98,6 +104,9 @@ pub trait HostApi:
     + HostFs
     + HostLog
     + HostBus
+    + HostFileService
+    + HostTransfer
+    + HostConfig
 {
 }
 
@@ -111,5 +120,8 @@ impl<T> HostApi for T where
         + HostFs
         + HostLog
         + HostBus
+        + HostFileService
+        + HostTransfer
+        + HostConfig
 {
 }

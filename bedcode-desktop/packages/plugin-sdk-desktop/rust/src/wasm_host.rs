@@ -9,9 +9,10 @@
 //! 插件侧无需持有 —— `WasmHost` 是无状态 unit struct。
 
 use crate::host::{
-    ConfigKey, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog,
-    HostPluginDatabase, HostSession, HostStorage, HostTerminal,
+    ConfigKey, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService, HostFs,
+    HostHttp, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTerminal, HostTransfer,
 };
+use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest};
 
 /// 宿主 API 绑定（WASM 插件侧）
 ///
@@ -372,6 +373,16 @@ impl HostFs for WasmHost {
             Err(HostError::call_failed("fs_delete"))
         }
     }
+
+    fn fs_exists(&self, path: &str) -> Result<bool, HostError> {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let result = unsafe { host_fs_exists(path_ptr, path_len) };
+        match result {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(HostError::call_failed("fs_exists")),
+        }
+    }
 }
 
 // ==================== HostLog ====================
@@ -454,6 +465,94 @@ impl HostConfig for WasmHost {
     }
 }
 
+// ==================== HostFileService ====================
+
+impl HostFileService for WasmHost {
+    fn filesrv_mount(&self, options: &MountOptions) -> Result<MountResult, HostError> {
+        let opts_str = serde_json::to_string(options)
+            .map_err(|e| HostError::custom(-1, format!("filesrv_mount: serialize options failed: {}", e)))?;
+        let (opts_ptr, opts_len) = wasm_alloc_string(&opts_str);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_filesrv_mount(opts_ptr, opts_len, out.as_mut_ptr() as u32) };
+        if status != 0 {
+            return Err(HostError::call_failed("filesrv_mount"));
+        }
+        if out[0] == 0 && out[1] == 0 {
+            return Err(HostError::call_failed("filesrv_mount"));
+        }
+        let json_str = read_and_free_result(out[0], out[1]);
+        serde_json::from_str(&json_str)
+            .map_err(|e| HostError::custom(-1, format!("filesrv_mount: invalid JSON from host: {}", e)))
+    }
+
+    fn filesrv_unmount(&self, mount_path: &str) -> Result<(), HostError> {
+        let (mp_ptr, mp_len) = wasm_alloc_string(mount_path);
+        let status = unsafe { host_filesrv_unmount(mp_ptr, mp_len) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_unmount"))
+        }
+    }
+
+    fn filesrv_update_roots(&self, mount_path: &str, roots: &[String]) -> Result<(), HostError> {
+        let (mp_ptr, mp_len) = wasm_alloc_string(mount_path);
+        let roots_str = serde_json::to_string(roots).unwrap_or_else(|_| "[]".to_string());
+        let (roots_ptr, roots_len) = wasm_alloc_string(&roots_str);
+        let status = unsafe { host_filesrv_update_roots(mp_ptr, mp_len, roots_ptr, roots_len) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_update_roots"))
+        }
+    }
+
+    fn filesrv_get_peer(&self, peer_id: &str) -> Result<Option<PeerFileService>, HostError> {
+        let (peer_ptr, peer_len) = wasm_alloc_string(peer_id);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_filesrv_get_peer(peer_ptr, peer_len, out.as_mut_ptr() as u32) };
+        if status != 0 {
+            return Err(HostError::call_failed("filesrv_get_peer"));
+        }
+        if out[0] == 0 && out[1] == 0 {
+            return Ok(None);
+        }
+        let json_str = read_and_free_result(out[0], out[1]);
+        serde_json::from_str(&json_str)
+            .map(Some)
+            .map_err(|e| HostError::custom(-1, format!("filesrv_get_peer: invalid JSON from host: {}", e)))
+    }
+}
+
+// ==================== HostTransfer ====================
+
+impl HostTransfer for WasmHost {
+    fn transfer_start(&self, request: &TransferRequest) -> Result<String, HostError> {
+        let req_str = serde_json::to_string(request)
+            .map_err(|e| HostError::custom(-1, format!("transfer_start: serialize request failed: {}", e)))?;
+        let (req_ptr, req_len) = wasm_alloc_string(&req_str);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_transfer_start(req_ptr, req_len, out.as_mut_ptr() as u32) };
+        if status != 0 {
+            return Err(HostError::call_failed("transfer_start"));
+        }
+        if out[0] == 0 && out[1] == 0 {
+            return Err(HostError::call_failed("transfer_start"));
+        }
+        Ok(read_and_free_result(out[0], out[1]))
+    }
+
+    fn transfer_cancel(&self, task_id: &str) -> Result<(), HostError> {
+        let (task_ptr, task_len) = wasm_alloc_string(task_id);
+        let status = unsafe { host_transfer_cancel(task_ptr, task_len) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("transfer_cancel"))
+        }
+    }
+}
+
 // ==================== WASM Import Declarations ====================
 //
 // 这些 extern "C" 声明在编译为 WASM 时对应宿主在 wasmtime Linker 中
@@ -512,6 +611,8 @@ extern "C" {
     fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
     /// 文件系统：删除文件 — 返回 0 成功（含文件不存在），-1 失败
     fn host_fs_delete(path_ptr: u32, path_len: u32) -> i32;
+    /// 文件系统：检查文件是否存在 — 返回 1 存在，0 不存在，-1 错误
+    fn host_fs_exists(path_ptr: u32, path_len: u32) -> i32;
     /// 配置：读取配置项 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
     fn host_config_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
     /// 日志：info
@@ -538,6 +639,18 @@ extern "C" {
     fn host_session_lifecycle_register() -> i32;
     /// 会话输入：注册提交输入行监听器 — 返回 0 成功，-1 失败（含权限拒绝）
     fn host_session_input_register() -> i32;
+    /// 文件服务：挂载 — MountOptions JSON → out_ptr 输出 MountResult JSON，返回 0 成功 -1 失败
+    fn host_filesrv_mount(opts_ptr: u32, opts_len: u32, out_ptr: u32) -> i32;
+    /// 文件服务：卸载挂载点 — 返回 0 成功，-1 失败
+    fn host_filesrv_unmount(mp_ptr: u32, mp_len: u32) -> i32;
+    /// 文件服务：更新允许目录根（roots 为 JSON 数组字符串）— 返回 0 成功，-1 失败
+    fn host_filesrv_update_roots(mp_ptr: u32, mp_len: u32, roots_ptr: u32, roots_len: u32) -> i32;
+    /// 文件服务：获取对端信息 — out_ptr 输出 PeerFileService JSON（(0,0) 表示未公告）
+    fn host_filesrv_get_peer(peer_ptr: u32, peer_len: u32, out_ptr: u32) -> i32;
+    /// 传输引擎：启动任务 — TransferRequest JSON → out_ptr 输出 task_id，返回 0 成功 -1 失败
+    fn host_transfer_start(req_ptr: u32, req_len: u32, out_ptr: u32) -> i32;
+    /// 传输引擎：取消任务 — 返回 0 成功，-1 失败
+    fn host_transfer_cancel(task_ptr: u32, task_len: u32) -> i32;
 }
 
 // ==================== WASM Memory Helpers ====================

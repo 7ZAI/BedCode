@@ -17,6 +17,10 @@ pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BUS: &str = "bus";
+/// 文件服务：挂载受控文件服务端点（与桌面端同名权限，见内网文件传输插件规格）
+pub const PERMISSION_FILESERVICE: &str = "fileservice";
+/// 传输引擎：发起断点续传的文件上传/下载任务
+pub const PERMISSION_TRANSFER: &str = "transfer";
 
 static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_INPUT,
@@ -32,6 +36,8 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FS_READ,
     PERMISSION_FS_WRITE,
     PERMISSION_BUS,
+    PERMISSION_FILESERVICE,
+    PERMISSION_TRANSFER,
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
@@ -48,6 +54,14 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
     (PERMISSION_BUS, &["bus.publish", "bus.subscribe", "bus.unsubscribe"]),
+    (PERMISSION_FILESERVICE, &[
+        "fileService.mount",
+        "fileService.unmount",
+        "fileService.updateRoots",
+        "fileService.getPeer",
+        "fileService.pickDirectory",
+    ]),
+    (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
 ];
 
 pub struct PermissionManager {

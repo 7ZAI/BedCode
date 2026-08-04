@@ -21,6 +21,10 @@ pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BROADCAST: &str = "broadcast";
+/// 文件服务：挂载受控文件服务端点（/api/plugins/{pluginId}/{mount}/**）
+pub const PERMISSION_FILESERVICE: &str = "fileservice";
+/// 传输引擎：发起断点续传的文件上传/下载任务
+pub const PERMISSION_TRANSFER: &str = "transfer";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -38,6 +42,8 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FS_READ,
     PERMISSION_FS_WRITE,
     PERMISSION_BROADCAST,
+    PERMISSION_FILESERVICE,
+    PERMISSION_TRANSFER,
 ];
 
 /// 权限到 API 方法的映射
@@ -56,6 +62,14 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_BROADCAST, &["broadcast.sync"]),
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
+    (PERMISSION_FILESERVICE, &[
+        "fileService.mount",
+        "fileService.unmount",
+        "fileService.updateRoots",
+        "fileService.getPeer",
+        "fileService.pickDirectory",
+    ]),
+    (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
 ];
 
 /// 权限管理器

@@ -31,6 +31,17 @@ pub trait WasmPlugin: Send + Sync + 'static {
 
     /// 收到总线消息回调（可选，默认忽略）
     fn on_bus_message(_msg: &crate::BusMessage) -> anyhow::Result<()> { Ok(()) }
+
+    /// 上传请求策略钩子（可选，默认 fail-closed 拒绝）
+    ///
+    /// 宿主在文件服务上传会话创建时调用一次（写任何字节前），
+    /// 同步阻塞上传握手，宿主外层 2 秒超时。「同名即拒」等策略
+    /// 由插件在此实现（目标目录存在同名文件 → deny("duplicate-name")）。
+    ///
+    /// 默认拒绝：插件未覆盖此方法时，所有上传都会被拒绝（fail-closed，安全优先）
+    fn on_upload_request(_meta: &crate::types::UploadRequestMeta) -> crate::types::UploadHookDecision {
+        crate::types::UploadHookDecision::deny("plugin does not implement on_upload_request")
+    }
 }
 
 /// 自动生成 WASM 导出函数 + 线性内存分配器/回收器
@@ -49,6 +60,7 @@ pub trait WasmPlugin: Send + Sync + 'static {
 /// - `__bedcode_on_disconnect(reason, reason_len)` — 连接断开
 /// - `__bedcode_on_session_created(sid, sid_len)` / `__bedcode_on_session_stopped(sid, sid_len)`
 /// - `__bedcode_on_bus_message(topic, topic_len, sender, sender_len, payload, payload_len, timestamp) -> i32`
+/// - `__bedcode_on_upload_request(meta_ptr, meta_len, out_ptr) -> i32` — 上传策略钩子，决定写入 out_ptr
 ///
 /// # WASM ABI 约定
 ///
@@ -262,6 +274,40 @@ macro_rules! wasm_entry {
                     1
                 }
             }
+        }
+
+        /// 上传请求策略钩子 — 决定 JSON 写入 out_ptr（8 字节: ptr + len）
+        ///
+        /// fail-closed：入参解析失败时直接拒绝，不调用插件逻辑。
+        /// 返回值仅用于宿主侧错误日志，拒绝语义完全由决定 JSON 表达
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_upload_request(
+            meta_ptr: u32,
+            meta_len: u32,
+            out_ptr: u32,
+        ) -> i32 {
+            let meta_str = $crate::wasm_host::wasm_read_string(meta_ptr, meta_len);
+            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
+            $crate::wasm_host::wasm_dealloc_string(meta_ptr, meta_len);
+
+            let decision = match serde_json::from_str::<$crate::types::UploadRequestMeta>(&meta_str) {
+                Ok(meta) => <$plugin_type>::on_upload_request(&meta),
+                Err(e) => {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(
+                        &host,
+                        &format!("on_upload_request: invalid meta payload: {}", e),
+                    );
+                    $crate::types::UploadHookDecision::deny("invalid upload request meta")
+                }
+            };
+
+            // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
+            let json = serde_json::to_string(&decision)
+                .unwrap_or_else(|_| r#"{"allow":false,"reason":"serialize decision failed"}"#.to_string());
+            let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&json);
+            $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
+            0
         }
     };
 }

@@ -16,52 +16,8 @@ impl WasmPlugin for AiChatboxPlugin {
     const ID: &'static str = "com.bedcode.ai-chatbox";
 
     fn manifest() -> PluginManifest {
-        let json = serde_json::json!({
-            "id": "com.bedcode.ai-chatbox",
-            "name": "AI Chatbox",
-            "version": "1.0.0",
-            "description": "AI 大模型对话与终端提示词优化",
-            "author": "BedCode",
-            "main": "index.js",
-            "pluginType": "wasm",
-            "rustLibrary": "bedcode_plugin_ai_chatbox",
-            "permissions": ["ui:toolbox", "ui:navtab", "storage", "terminal:input", "terminal:output", "session:read", "network:http"],
-            "contributes": {
-                "commands": [
-                    { "id": "ai-chatbox.chat-stream", "title": "AI Chat Stream" },
-                    { "id": "ai-chatbox.chat-complete", "title": "AI Chat Complete" },
-                    { "id": "ai-chatbox.optimize-prompt", "title": "Optimize Prompt" },
-                    { "id": "ai-chatbox.list-conversations", "title": "List Conversations" },
-                    { "id": "ai-chatbox.get-messages", "title": "Get Messages" },
-                    { "id": "ai-chatbox.save-conversation", "title": "Save Conversation" },
-                    { "id": "ai-chatbox.save-message", "title": "Save Message" },
-                    { "id": "ai-chatbox.delete-conversation", "title": "Delete Conversation" }
-                ],
-                "views": [
-                    { "id": "ai-chatbox.toolbox", "type": "toolbox", "title": "AI 对话", "component": "ChatView" }
-                ],
-                "navTab": {
-                    "id": "ai-chatbox.navtab",
-                    "title": "AI",
-                    "icon": "💬",
-                    "component": "ChatView",
-                    "order": 10
-                },
-                "terminal": {
-                    "inputHandlers": ["on_terminal_input"],
-                    "outputParsers": []
-                },
-                "configuration": {
-                    "title": "AI Chatbox Settings",
-                    "properties": {
-                        "apiProviders": { "type": "string", "title": "API Providers (JSON)", "description": "JSON array of API provider configs", "default": "[]" },
-                        "activeProvider": { "type": "string", "title": "Active Provider ID", "default": "" },
-                        "activeModel": { "type": "string", "title": "Active Model", "default": "" }
-                    }
-                }
-            }
-        });
-        serde_json::from_value(json).expect("Invalid manifest JSON")
+        // plugin.json 为 manifest 单一事实来源（bedcode-plugin build/package 时自动填充）
+        serde_json::from_str(include_str!("../../plugin.json")).expect("plugin.json must be valid PluginManifest")
     }
 
     fn activate() -> anyhow::Result<()> {

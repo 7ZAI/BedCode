@@ -37,6 +37,13 @@ export type {
   DialogAPI,
   NotificationAPI,
   StatusAPI,
+  UploadRequestMeta,
+  UploadHookDecision,
+  MountOptions,
+  FileServiceMount,
+  PeerMountAnnouncement,
+  PeerFileServiceInfo,
+  FileServiceAPI,
   PluginContext,
   PluginModule,
 } from './types'

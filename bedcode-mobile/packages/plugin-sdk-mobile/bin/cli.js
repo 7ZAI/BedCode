@@ -26,6 +26,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { crc32 } from 'node:zlib'
+import { generateManifest } from './manifest-gen.js'
 
 const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATE_DIR = join(SDK_ROOT, 'template')
@@ -259,6 +260,29 @@ function cmdCreate(positional, flags) {
   console.log(`  npm run package      # 打包 dist/${id}.zip 插件包`)
 }
 
+// ==================== 命令：manifest（自动填充） ====================
+
+function cmdManifest(flags) {
+  const cwd = process.cwd()
+  const check = flags.check === true
+  try {
+    const { changed, report } = generateManifest(cwd, { check })
+    if (!changed) {
+      console.log('[bedcode-plugin] plugin.json 已是最新，无需更新')
+      return
+    }
+    for (const line of report) console.log(`[bedcode-plugin]   ${line}`)
+    if (check) {
+      console.log('[bedcode-plugin] --check 模式：plugin.json 与源码不一致（未写入）')
+      process.exit(1)
+    }
+    console.log('[bedcode-plugin] plugin.json 已根据源码自动填充')
+  } catch (e) {
+    console.error(`[bedcode-plugin] manifest 生成失败: ${e.message}`)
+    process.exit(1)
+  }
+}
+
 // ==================== 命令：build ====================
 
 function cmdBuild(flags) {
@@ -275,6 +299,18 @@ function cmdBuild(flags) {
   const frontendOnly = flags['frontend-only'] === true
   const rustOnly = flags['rust-only'] === true
   const resourcesDir = flags['resources-dir']
+
+  // 0. 根据源码自动填充 contributes/permissions（构建前同步，保证产物与源码一致）
+  try {
+    const { changed, report } = generateManifest(cwd)
+    if (changed) {
+      for (const line of report) console.log(`[bedcode-plugin]   ${line}`)
+      console.log('[bedcode-plugin] plugin.json 已自动填充')
+    }
+  } catch (e) {
+    console.error(`[bedcode-plugin] manifest 自动填充失败: ${e.message}`)
+    process.exit(1)
+  }
 
   const distMain = join(cwd, 'dist', main || 'index.js')
   const wasmPath = hasWasm
@@ -345,6 +381,18 @@ function cmdPackage(flags) {
   const { id, main, rustLibrary, pluginType } = manifest
   const hasWasm = pluginType === 'wasm' && rustLibrary
 
+  // 打包前自动填充，保证 zip 内 plugin.json 与源码一致
+  try {
+    const { changed, report } = generateManifest(cwd)
+    if (changed) {
+      for (const line of report) console.log(`[bedcode-plugin]   ${line}`)
+      console.log('[bedcode-plugin] plugin.json 已自动填充')
+    }
+  } catch (e) {
+    console.error(`[bedcode-plugin] manifest 自动填充失败: ${e.message}`)
+    process.exit(1)
+  }
+
   const distDir = join(cwd, 'dist')
   const distMain = join(distDir, main || 'index.js')
   const wasmPath = hasWasm
@@ -390,6 +438,7 @@ function main() {
     console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>]')
     console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
     console.log('  bedcode-plugin package [-o <file>]')
+    console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')
     process.exit(0)
   }
 
@@ -402,6 +451,9 @@ function main() {
       break
     case 'package':
       cmdPackage(flags)
+      break
+    case 'manifest':
+      cmdManifest(flags)
       break
     default:
       console.error(`未知命令: ${cmd}（运行 bedcode-plugin --help 查看用法）`)

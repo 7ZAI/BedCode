@@ -19,4 +19,7 @@ pub trait HostFs {
 
     /// 删除文件；文件不存在视为成功（幂等，用于清理场景）
     fn fs_delete(&self, path: &str) -> Result<(), HostError>;
+
+    /// 检查文件是否存在；路径不可访问返回 `Ok(false)`
+    fn fs_exists(&self, path: &str) -> Result<bool, HostError>;
 }

@@ -35,7 +35,11 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///   on_app_startup/on_app_shutdown 导出名漂移（宿主曾用错误名字查找）
 /// - v3: 结果传递改为 out_ptr（对齐桌面端），新增 `__bedcode_abi_version` /
 ///   `__bedcode_deallocate`，消除元组返回的 FFI-safe 警告与线性内存泄漏
-pub const ABI_VERSION: u32 = 3;
+/// - v4: 新增通用文件服务能力（host functions `FILESRV_*` / `TRANSFER_*`
+///   + 可选导出 `ON_UPLOAD_REQUEST` 上传策略钩子），与桌面端 ABI v5 同构，
+///   见内网文件传输插件规格（移动端 ABI 基线从 v3 起算，故为 v4）
+/// - v5: 新增 `host_config_get` 宿主配置读取能力（`AppDownloadsDir` 下载目录）
+pub const ABI_VERSION: u32 = 5;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -71,6 +75,12 @@ pub mod export {
     pub const ON_SESSION_STOPPED: &str = "__bedcode_on_session_stopped";
     /// 接收消息总线消息（可选导出，返回 0 成功，非 0 失败）
     pub const ON_BUS_MESSAGE: &str = "__bedcode_on_bus_message";
+    /// 上传请求策略钩子（可选导出，v4 起；决定写入 out_ptr）
+    ///
+    /// 宿主在上传会话创建时调用一次（写任何字节前），2 秒超时；
+    /// 缺失/超时/异常一律 fail-closed 拒绝上传。
+    /// 与桌面端 SDK `abi::export::ON_UPLOAD_REQUEST` 同名同义
+    pub const ON_UPLOAD_REQUEST: &str = "__bedcode_on_upload_request";
 }
 
 /// 宿主导入函数名（宿主在 Linker 中注册，`WasmHost` 调用）
@@ -111,6 +121,8 @@ pub mod import {
     pub const FS_WRITE: &str = "host_fs_write";
     /// 文件系统：复制文件
     pub const FS_COPY: &str = "host_fs_copy";
+    /// 文件系统：检查文件是否存在（返回 i32: 1=存在, 0=不存在, -1=错误）
+    pub const FS_EXISTS: &str = "host_fs_exists";
     /// 消息总线：发布消息
     pub const BUS_PUBLISH: &str = "host_bus_publish";
     /// 消息总线：订阅 topic
@@ -119,6 +131,28 @@ pub mod import {
     pub const BUS_UNSUBSCRIBE: &str = "host_bus_unsubscribe";
     /// 插件状态：标记插件为错误状态（宿主置 Error + 持久化未启用 + 通知前端）
     pub const MARK_PLUGIN_ERROR: &str = "host_mark_plugin_error";
+
+    // === File Service（v4） ===
+    /// 文件服务：挂载（MountOptions JSON → out_ptr 输出 MountResult JSON）
+    ///
+    /// 与桌面端 SDK `abi::import::FILESRV_MOUNT` 同名同签名
+    pub const FILESRV_MOUNT: &str = "host_filesrv_mount";
+    /// 文件服务：卸载挂载点
+    pub const FILESRV_UNMOUNT: &str = "host_filesrv_unmount";
+    /// 文件服务：更新挂载点允许目录根
+    pub const FILESRV_UPDATE_ROOTS: &str = "host_filesrv_update_roots";
+    /// 文件服务：获取对端文件服务信息（out_ptr 输出）
+    pub const FILESRV_GET_PEER: &str = "host_filesrv_get_peer";
+
+    // === Transfer（v4） ===
+    /// 传输引擎：启动传输任务（TransferRequest JSON → out_ptr 输出 task_id）
+    pub const TRANSFER_START: &str = "host_transfer_start";
+    /// 传输引擎：取消传输任务
+    pub const TRANSFER_CANCEL: &str = "host_transfer_cancel";
+
+    // === Config（v5） ===
+    /// 配置：读取宿主配置项（key 字符串 → out_ptr 输出 value 字符串）
+    pub const CONFIG_GET: &str = "host_config_get";
 }
 
 /// 宿主导入函数签名表 — (名称, 参数个数, 返回值个数)
@@ -144,10 +178,18 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::FS_READ, 3, 1),
     (import::FS_WRITE, 4, 1),
     (import::FS_COPY, 4, 1),
+    (import::FS_EXISTS, 2, 1),
     (import::BUS_PUBLISH, 4, 1),
     (import::BUS_SUBSCRIBE, 2, 1),
     (import::BUS_UNSUBSCRIBE, 2, 1),
     (import::MARK_PLUGIN_ERROR, 2, 0),
+    (import::FILESRV_MOUNT, 3, 1),
+    (import::FILESRV_UNMOUNT, 2, 1),
+    (import::FILESRV_UPDATE_ROOTS, 4, 1),
+    (import::FILESRV_GET_PEER, 3, 1),
+    (import::TRANSFER_START, 3, 1),
+    (import::TRANSFER_CANCEL, 2, 1),
+    (import::CONFIG_GET, 3, 1),
 ];
 
 /// 插件导出函数签名表 — (名称, 参数个数, 返回值个数)
@@ -170,4 +212,5 @@ pub const PLUGIN_EXPORT_SIGNATURES: &[(&str, usize, usize)] = &[
     (export::ON_SESSION_CREATED, 2, 0),
     (export::ON_SESSION_STOPPED, 2, 0),
     (export::ON_BUS_MESSAGE, 7, 1),
+    (export::ON_UPLOAD_REQUEST, 3, 1),
 ];

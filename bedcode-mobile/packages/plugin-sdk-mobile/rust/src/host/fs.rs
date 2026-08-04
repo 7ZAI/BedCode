@@ -16,4 +16,7 @@ pub trait HostFs {
 
     /// 复制文件（自动创建目标父目录）
     fn fs_copy(&self, src: &str, dst: &str) -> Result<(), HostError>;
+
+    /// 检查文件是否存在；路径不可访问返回 `Ok(false)`
+    fn fs_exists(&self, path: &str) -> Result<bool, HostError>;
 }

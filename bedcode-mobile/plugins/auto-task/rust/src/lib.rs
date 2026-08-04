@@ -12,39 +12,8 @@ impl WasmPlugin for AutoTaskPlugin {
     const ID: &'static str = "com.bedcode.auto-task";
 
     fn manifest() -> PluginManifest {
-        let json = serde_json::json!({
-            "id": "com.bedcode.auto-task",
-            "name": "Auto Task",
-            "version": "1.0.0",
-            "description": "Auto task queue management",
-            "author": "BedCode",
-            "main": "index.js",
-            "pluginType": "wasm",
-            "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["ui:input", "storage", "session:read"],
-            "contributes": {
-                "commands": [
-                    { "id": "auto-task.list-queue", "title": "List Task Queue" },
-                    { "id": "auto-task.add-task", "title": "Add Task to Queue" },
-                    { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
-                    { "id": "auto-task.clear-queue", "title": "Clear Task Queue" }
-                ],
-                "terminal": {
-                    "inputHandlers": [],
-                    "outputParsers": [],
-                    "toolbarItems": [
-                        { "id": "auto-task-toolbar", "title": "Auto Task", "icon": "📋" }
-                    ]
-                },
-                "lifecycle": {
-                    "onAuthSuccess": true,
-                    "onDisconnect": true,
-                    "onSessionCreated": true,
-                    "onSessionStopped": true
-                }
-            }
-        });
-        serde_json::from_value(json).expect("Invalid manifest JSON")
+        // plugin.json 为 manifest 单一事实来源（bedcode-plugin build/package 时自动填充）
+        serde_json::from_str(include_str!("../../plugin.json")).expect("plugin.json must be valid PluginManifest")
     }
 
     fn activate() -> anyhow::Result<()> {

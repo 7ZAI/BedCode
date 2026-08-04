@@ -11,19 +11,8 @@ impl WasmPlugin for {{STRUCT}} {
     const ID: &'static str = "{{ID}}";
 
     fn manifest() -> PluginManifest {
-        let json = serde_json::json!({
-            "id": "{{ID}}",
-            "name": "{{NAME}}",
-            "version": "0.1.0",
-            "description": "",
-            "author": "{{AUTHOR}}",
-            "main": "index.js",
-            "pluginType": "wasm",
-            "rustLibrary": "{{CRATE}}",
-            "permissions": ["storage"],
-            "contributes": {}
-        });
-        serde_json::from_value(json).expect("Invalid manifest JSON")
+        // plugin.json 为 manifest 单一事实来源（bedcode-plugin build/package 时自动填充）
+        serde_json::from_str(include_str!("../../plugin.json")).expect("plugin.json must be valid PluginManifest")
     }
 
     fn activate() -> anyhow::Result<()> {

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "",
   "author": "{{AUTHOR}}",
+  "icon": "",
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "{{CRATE}}",

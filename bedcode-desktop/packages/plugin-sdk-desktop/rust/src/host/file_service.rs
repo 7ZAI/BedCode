@@ -1,0 +1,29 @@
+//! 宿主能力：文件服务（受控目录挂载为 HTTP 端点）
+//!
+//! 插件通过此能力将用户配置的允许目录挂载到宿主现有 HTTP 服务上
+//! （/api/plugins/{pluginId}/{mountPath}/**，自动经过宿主鉴权），
+//! 宿主强制目录沙箱与上传策略钩子，插件无法绕过。
+
+use super::HostError;
+use crate::types::{MountOptions, MountResult, PeerFileService};
+
+/// 插件文件服务宿主能力
+///
+/// 需要 `fileservice` 权限（未声明则拒绝挂载）。
+/// 挂载随插件生命周期：deactivate/停用/卸载时宿主自动摘除。
+pub trait HostFileService {
+    /// 挂载文件服务
+    ///
+    /// roots 必须存在、是目录、通过宿主 fs 授权，否则失败；
+    /// 重复/嵌套 root 由宿主去重取最外层
+    fn filesrv_mount(&self, options: &MountOptions) -> Result<MountResult, HostError>;
+
+    /// 卸载挂载点（mount_path 为本插件此前挂载的名称）
+    fn filesrv_unmount(&self, mount_path: &str) -> Result<(), HostError>;
+
+    /// 更新挂载点的允许目录根（目录变更即时生效，校验规则同 mount）
+    fn filesrv_update_roots(&self, mount_path: &str, roots: &[String]) -> Result<(), HostError>;
+
+    /// 获取对端文件服务信息；对端未公告返回 `Ok(None)`
+    fn filesrv_get_peer(&self, peer_id: &str) -> Result<Option<PeerFileService>, HostError>;
+}

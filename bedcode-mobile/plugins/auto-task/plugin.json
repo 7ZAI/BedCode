@@ -4,22 +4,43 @@
   "version": "1.0.0",
   "description": "Auto task queue management",
   "author": "BedCode",
+  "icon": "📋",
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_auto_task",
-  "permissions": ["ui:input", "storage", "session:read"],
+  "permissions": [
+    "session:read",
+    "storage",
+    "ui:input"
+  ],
   "contributes": {
     "commands": [
-      { "id": "auto-task.list-queue", "title": "List Task Queue" },
-      { "id": "auto-task.add-task", "title": "Add Task to Queue" },
-      { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
-      { "id": "auto-task.clear-queue", "title": "Clear Task Queue" }
+      {
+        "id": "auto-task.list-queue",
+        "title": "List Task Queue"
+      },
+      {
+        "id": "auto-task.add-task",
+        "title": "Add Task to Queue"
+      },
+      {
+        "id": "auto-task.remove-task",
+        "title": "Remove Task from Queue"
+      },
+      {
+        "id": "auto-task.clear-queue",
+        "title": "Clear Task Queue"
+      }
     ],
     "terminal": {
       "inputHandlers": [],
       "outputParsers": [],
       "toolbarItems": [
-        { "id": "auto-task-toolbar", "title": "Auto Task", "icon": "📋" }
+        {
+          "id": "auto-task-toolbar",
+          "title": "Auto Task",
+          "icon": "📋"
+        }
       ]
     },
     "lifecycle": {
