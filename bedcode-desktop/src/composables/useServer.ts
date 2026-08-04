@@ -58,8 +58,10 @@ export interface TimestampedMetrics {
 
 const MAX_HISTORY = 60
 
+/** 服务器状态单例 — 所有 useServer() 调用者共享，确保 Sidebar / ServerView 等组件状态同步 */
+const status = ref<ServerStatus>('stopped')
+
 export function useServer() {
-  const status = ref<ServerStatus>('stopped')
   const port = ref(8765)
   const autoStart = ref(true)
   const localIps = ref<string[]>([])

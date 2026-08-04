@@ -8,6 +8,8 @@ export default {
       devicePairing: 'Device Pairing',
       settings: 'Settings',
       serviceRunning: 'Service Running',
+      serviceStopped: 'Service Stopped',
+      serviceStarting: 'Service Starting',
       collapse: 'Collapse Sidebar',
       expand: 'Expand Sidebar',
     },

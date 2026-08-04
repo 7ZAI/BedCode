@@ -3,14 +3,58 @@
  * 桌面端侧边栏 — 导航和插件面板
  * 支持折叠/展开：折叠时只显示图标，展开时显示图标+文字
  */
+import { onMounted, onUnmounted, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getPluginRegistry } from '@/plugin/registry'
 import { collapsed, toggleSidebar, useSidebarResize, COLLAPSED_WIDTH, EXPANDED_WIDTH } from '@/composables/useSidebar'
+import { useServer } from '@/composables/useServer'
 
+const { t } = useI18n()
 const pluginRegistry = getPluginRegistry()
 const sidebarPlugins = pluginRegistry.sidebarViews
 const toolboxPlugins = pluginRegistry.toolboxViews
 
 const { isResizing, dragWidth, onResizeStart } = useSidebarResize()
+const { status, loadStatus } = useServer()
+
+/** 状态轮询定时器 — 轻量级 get_server_status，检测后台崩溃等外部状态变化 */
+let statusTimer: ReturnType<typeof setInterval> | null = null
+
+onMounted(async () => {
+  await loadStatus()
+  statusTimer = setInterval(loadStatus, 5000)
+})
+
+onUnmounted(() => {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null }
+})
+
+/** 状态指示圆点颜色 */
+const statusDotClass = computed(() => {
+  switch (status.value) {
+    case 'running': return 'bg-green-500'
+    case 'starting': return 'bg-yellow-500'
+    default: return 'bg-gray-400'
+  }
+})
+
+/** 状态文本（i18n） */
+const statusText = computed(() => {
+  switch (status.value) {
+    case 'running': return t('desktop.sidebar.serviceRunning')
+    case 'starting': return t('desktop.sidebar.serviceStarting')
+    default: return t('desktop.sidebar.serviceStopped')
+  }
+})
+
+/** WebSocket 副状态文本（技术术语，保留英文） */
+const wsStatusText = computed(() => {
+  switch (status.value) {
+    case 'running': return 'WebSocket Active'
+    case 'starting': return 'WebSocket Starting'
+    default: return 'WebSocket Inactive'
+  }
+})
 </script>
 
 <template>
@@ -235,18 +279,18 @@ const { isResizing, dragWidth, onResizeStart } = useSidebarResize()
     <div class="p-3">
       <div class="px-3.5 py-3.5 bg-[var(--bg-hover)]/50 rounded-nav overflow-hidden">
         <div class="flex items-center gap-2 text-sm">
-          <div class="w-[7px] h-[7px] rounded-full bg-green-500 flex-shrink-0"></div>
+          <div class="w-[7px] h-[7px] rounded-full flex-shrink-0 transition-colors duration-200" :class="statusDotClass"></div>
           <span
             class="text-[var(--text-primary)] font-medium text-xs whitespace-nowrap overflow-hidden"
             :class="!isResizing && 'transition-[opacity] duration-200'"
             :style="{ opacity: collapsed ? 0 : 1, width: collapsed ? 0 : 'auto' }"
-          >{{ $t('desktop.sidebar.serviceRunning') }}</span>
+          >{{ statusText }}</span>
         </div>
         <div
           class="text-[11px] text-[var(--text-tertiary)] ml-[15px] mt-0.5 whitespace-nowrap overflow-hidden"
           :class="!isResizing && 'transition-[opacity] duration-200'"
           :style="{ opacity: collapsed ? 0 : 1, height: collapsed ? 0 : 'auto' }"
-        >WebSocket Active</div>
+        >{{ wsStatusText }}</div>
       </div>
     </div>
 

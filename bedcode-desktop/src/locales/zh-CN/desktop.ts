@@ -8,6 +8,8 @@ export default {
       devicePairing: '设备配对',
       settings: '设置',
       serviceRunning: '服务运行中',
+      serviceStopped: '服务已停止',
+      serviceStarting: '服务启动中',
       collapse: '收起侧边栏',
       expand: '展开侧边栏',
     },

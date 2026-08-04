@@ -6,7 +6,7 @@
     </header>
 
     <div class="flex-1 overflow-auto p-6 px-8">
-      <div class="max-w-2xl mx-auto space-y-4">
+      <div class="max-w-4xl mx-auto space-y-4">
         <!-- Network Settings -->
         <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up">
           <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.network.title') }}</h3>
