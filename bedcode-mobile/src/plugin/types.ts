@@ -57,4 +57,10 @@ export interface PluginInfo {
   source: string
   /** 插件目录路径（含 plugin.json），前端经 asset protocol 加载前端模块 */
   extensionPath: string
+  /** 插件图标：emoji 或相对插件目录的图片路径，缺省时前端生成字母头像回退 */
+  icon?: string
+  /** 插件目录总大小（字节） */
+  sizeBytes: number
+  /** 安装时间（unix 毫秒），内置插件可能为 null */
+  installedAt?: number
 }

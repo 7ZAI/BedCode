@@ -1,5 +1,143 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="relative h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+    <!-- ==================== 详情页 ==================== -->
+    <Transition name="detail">
+      <div v-if="detailPlugin" class="absolute inset-0 z-40 flex flex-col bg-[var(--mobile-bg-primary)]">
+        <!-- Header -->
+        <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 py-3 flex items-center gap-3">
+          <button
+            class="flex-shrink-0 p-1 -ml-1 text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] active:opacity-80 transition-colors"
+            @click="detailPlugin = null"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <h1 class="flex-1 text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('mobile.plugin.detailTitle') }}</h1>
+        </header>
+
+        <div class="flex-1 overflow-y-auto">
+          <!-- Hero：图标 + 名称 + 作者/版本 + 状态 -->
+          <div class="px-5 pt-6 pb-5 flex items-center gap-4">
+            <PluginIcon
+              :icon="detailPlugin.icon"
+              :name="detailPlugin.name"
+              :plugin-id="detailPlugin.id"
+              :extension-path="detailPlugin.extensionPath"
+              size="lg"
+            />
+            <div class="flex-1 min-w-0">
+              <h2 class="text-lg font-semibold text-[var(--mobile-text-primary)] truncate">{{ detailPlugin.name }}</h2>
+              <p class="text-xs mt-0.5 text-[var(--mobile-text-muted)]">
+                {{ detailPlugin.author || '-' }} · v{{ detailPlugin.version }}
+              </p>
+              <span
+                class="inline-flex items-center gap-1.5 mt-2 px-1.5 py-0.5 rounded-tag text-[11px] font-medium"
+                :class="stateBadgeClass(detailPlugin.state)"
+              >
+                {{ $t(getStateKey(detailPlugin.state)) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- 操作按钮 -->
+          <div class="px-5 grid grid-cols-2 gap-3">
+            <button
+              class="py-2.5 rounded-xl text-sm font-medium active:opacity-80 transition-opacity disabled:opacity-50"
+              :class="pluginEnabledStates[detailPlugin.id]
+                ? 'bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)]'
+                : 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'"
+              :disabled="installing"
+              @click="handlePluginToggle(detailPlugin.id, !pluginEnabledStates[detailPlugin.id])"
+            >
+              {{ pluginEnabledStates[detailPlugin.id] ? $t('mobile.plugin.disable') : $t('mobile.plugin.enable') }}
+            </button>
+            <button
+              v-if="!isBuiltin(detailPlugin.source)"
+              class="py-2.5 rounded-xl text-sm font-medium bg-[var(--mobile-danger-bg)] text-[var(--mobile-danger-color)] active:opacity-80 transition-opacity disabled:opacity-50"
+              :disabled="installing"
+              @click="requestUninstall(detailPlugin)"
+            >
+              {{ $t('mobile.plugin.uninstall') }}
+            </button>
+            <!-- 内置插件不可卸载，用来源标签占位保持两列对齐 -->
+            <div
+              v-else
+              class="py-2.5 rounded-xl text-sm font-medium bg-[var(--mobile-input-bg)] text-[var(--mobile-text-muted)] flex items-center justify-center"
+            >
+              {{ $t('mobile.plugin.sourceBuiltin') }}
+            </div>
+          </div>
+
+          <!-- 统计条 -->
+          <div class="mx-5 mt-5 grid grid-cols-3 rounded-xl border border-[var(--mobile-border)] overflow-hidden bg-[var(--mobile-bg-secondary)]">
+            <div class="py-3 text-center border-r border-[var(--mobile-border)]">
+              <div class="text-sm font-semibold text-[var(--mobile-text-primary)]">{{ getContributionChips(detailPlugin).length }}</div>
+              <div class="text-[11px] mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.statExtensions') }}</div>
+            </div>
+            <div class="py-3 text-center border-r border-[var(--mobile-border)]">
+              <div class="text-sm font-semibold text-[var(--mobile-text-primary)]">{{ detailPlugin.permissions.length }}</div>
+              <div class="text-[11px] mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.permissions') }}</div>
+            </div>
+            <div class="py-3 text-center">
+              <div class="text-sm font-semibold text-[var(--mobile-text-primary)]">{{ formatBytes(detailPlugin.sizeBytes) }}</div>
+              <div class="text-[11px] mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.size') }}</div>
+            </div>
+          </div>
+
+          <!-- 折叠区域 -->
+          <div class="px-5 mt-6 pb-8 space-y-3">
+            <!-- 简介 -->
+            <CollapseSection :title="$t('mobile.plugin.sectionIntro')" emoji="📄">
+              <p class="px-4 pb-4 text-sm leading-relaxed text-[var(--mobile-text-secondary)]">
+                {{ detailPlugin.description || $t('mobile.plugin.noDescription') }}
+              </p>
+            </CollapseSection>
+
+            <!-- 扩展点 -->
+            <CollapseSection :title="$t('mobile.plugin.sectionContributes')" emoji="🧩" :badge="getContributionChips(detailPlugin).length">
+              <div class="px-4 pb-4 flex flex-wrap gap-2">
+                <span
+                  v-for="chip in getContributionChips(detailPlugin)"
+                  :key="chip.key"
+                  class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]"
+                >
+                  {{ chip.emoji }} {{ $t(chip.labelKey, chip.params ?? {}) }}
+                </span>
+                <span v-if="getContributionChips(detailPlugin).length === 0" class="text-xs text-[var(--mobile-text-muted)]">-</span>
+              </div>
+            </CollapseSection>
+
+            <!-- 权限 -->
+            <CollapseSection :title="$t('mobile.plugin.permissions')" emoji="🛡️" :badge="detailPlugin.permissions.length">
+              <div class="px-4 pb-2 border-t border-[var(--mobile-border)] divide-y divide-[var(--mobile-border)]">
+                <div v-for="perm in detailPlugin.permissions" :key="perm" class="flex items-center gap-3 py-3">
+                  <span class="w-4 h-4 flex items-center justify-center text-xs flex-shrink-0">{{ getPermissionMeta(perm).emoji }}</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-xs font-medium text-[var(--mobile-text-primary)]">{{ getPermissionMeta(perm).title }}</div>
+                    <div class="text-xs text-[var(--mobile-text-muted)]">{{ getPermissionMeta(perm).desc }}</div>
+                  </div>
+                  <span class="font-mono text-[11px] text-[var(--mobile-text-disabled)] flex-shrink-0">{{ perm }}</span>
+                </div>
+                <div v-if="detailPlugin.permissions.length === 0" class="py-3 text-xs text-[var(--mobile-text-muted)]">-</div>
+              </div>
+            </CollapseSection>
+
+            <!-- 详细信息（默认折叠） -->
+            <CollapseSection :title="$t('mobile.plugin.sectionDetails')" emoji="ℹ️" :default-open="false">
+              <div class="px-4 pb-3 border-t border-[var(--mobile-border)] text-xs">
+                <div v-for="row in getDetailRows(detailPlugin)" :key="row.key" class="grid py-2.5 border-b border-[var(--mobile-border)] last:border-b-0" style="grid-template-columns: 84px 1fr">
+                  <span class="text-[var(--mobile-text-muted)]">{{ row.label }}</span>
+                  <span class="break-all" :class="row.mono ? 'font-mono' : ''" style="color: var(--mobile-text-secondary)">{{ row.value }}</span>
+                </div>
+              </div>
+            </CollapseSection>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ==================== 列表页 ==================== -->
     <!-- Header -->
     <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center gap-3">
       <button
@@ -13,14 +151,14 @@
       <h1 class="flex-1 text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('mobile.plugin.title') }}</h1>
       <!-- 安装入口 -->
       <button
-        class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-[var(--mobile-accent)] text-white active:opacity-80 transition-opacity"
+        class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity"
         :disabled="installing"
         @click="showInstallSheet = true"
       >
         <svg v-if="!installing" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
         </svg>
-        <div v-else class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+        <div v-else class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
       </button>
     </header>
 
@@ -28,75 +166,64 @@
     <div class="flex-1 overflow-y-auto">
       <!-- Empty state -->
       <div v-if="plugins.length === 0" class="flex flex-col items-center justify-center h-full px-8 text-center">
-        <svg class="w-12 h-12 text-[var(--mobile-text-disabled)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-        </svg>
-        <p class="text-[var(--mobile-text-disabled)] text-sm">{{ $t('mobile.plugin.noPlugins') }}</p>
-        <p class="text-[var(--mobile-text-muted)] text-xs mt-2">{{ $t('mobile.plugin.noPluginsHint') }}</p>
+        <div class="w-16 h-16 rounded-2xl bg-[var(--mobile-bg-tertiary)] border border-[var(--mobile-border)] flex items-center justify-center text-3xl mb-4">🧩</div>
+        <p class="text-[var(--mobile-text-muted)] text-sm">{{ $t('mobile.plugin.noPlugins') }}</p>
+        <p class="text-[var(--mobile-text-disabled)] text-xs mt-2">{{ $t('mobile.plugin.noPluginsHint') }}</p>
       </div>
 
-      <!-- Plugin cards -->
-      <div v-else class="p-4 space-y-3">
-        <div
-          v-for="plugin in plugins"
-          :key="plugin.id"
-          class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl overflow-hidden"
-        >
-          <!-- Plugin row -->
-          <div
-            class="flex items-center gap-3 px-4 py-3 cursor-pointer active:opacity-80 transition-colors"
-            @click="expandedPlugin = expandedPlugin === plugin.id ? null : plugin.id"
-          >
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
-                <!-- 状态徽章 -->
-                <span
-                  class="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-tag text-[10px] font-medium"
-                  :class="stateBadgeClass(plugin.state)"
-                >
-                  {{ $t(getStateKey(plugin.state)) }}
-                </span>
-              </div>
-              <!-- 描述或错误信息 -->
-              <div class="text-xs mt-0.5 truncate text-[var(--mobile-text-muted)]">
-                <template v-if="isErrorState(plugin.state)">
-                  <span class="text-[var(--mobile-danger-color)]">⚠ {{ getErrorMessage(plugin.state) }}</span>
-                </template>
-                <template v-else>
-                  {{ plugin.description || plugin.id }}
-                </template>
-              </div>
-              <div class="text-xs text-[var(--mobile-text-muted)] mt-0.5">
-                v{{ plugin.version }} · {{ getSourceLabel(plugin.source) }}
-              </div>
-            </div>
-            <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
-          </div>
-
-          <!-- Expanded details -->
-          <Transition name="expand">
-            <div v-if="expandedPlugin === plugin.id" class="px-4 pb-3 pt-0 border-t border-[var(--mobile-border)]">
-              <div class="space-y-1.5 pt-3 text-xs text-[var(--mobile-text-muted)]">
-                <div>{{ $t('mobile.plugin.id') }}: <span class="font-mono text-[var(--mobile-text-secondary)]">{{ plugin.id }}</span></div>
-                <div>{{ $t('mobile.plugin.source') }}: {{ getSourceLabel(plugin.source) }}</div>
-                <div>{{ $t('mobile.plugin.version') }}: {{ plugin.version }}</div>
-                <div>{{ $t('mobile.plugin.author') }}: {{ plugin.author || '-' }}</div>
-                <div>{{ $t('mobile.plugin.permissions') }}: {{ plugin.permissions.join(', ') || '-' }}</div>
-                <div>{{ $t('mobile.plugin.extensions') }}: {{ getPluginExtensions(plugin) }}</div>
-              </div>
-              <!-- 卸载（仅用户安装的插件） -->
-              <button
-                v-if="!isBuiltin(plugin.source)"
-                class="mt-3 w-full py-2 rounded-lg bg-[var(--mobile-danger-bg)] text-[var(--mobile-danger-color)] text-sm font-medium active:opacity-80 transition-opacity"
-                @click="requestUninstall(plugin)"
-              >
-                {{ $t('mobile.plugin.uninstall') }}
-              </button>
-            </div>
-          </Transition>
+      <template v-else>
+        <!-- 摘要行 -->
+        <div class="px-4 pt-3 pb-1 text-xs text-[var(--mobile-text-muted)]">
+          {{ $t('mobile.plugin.summary', { total: plugins.length, enabled: enabledCount }) }}
         </div>
-      </div>
+
+        <!-- Plugin cards -->
+        <div class="p-4 pt-2 space-y-3">
+          <div
+            v-for="plugin in plugins"
+            :key="plugin.id"
+            class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            :class="isErrorState(plugin.state) ? 'border-[var(--mobile-danger-color)]/25' : 'border-[var(--mobile-border)]'"
+            :style="!pluginEnabledStates[plugin.id] && !isErrorState(plugin.state) ? 'opacity: .8' : ''"
+            @click="openDetail(plugin)"
+          >
+            <div class="flex items-start gap-3">
+              <PluginIcon
+                :icon="plugin.icon"
+                :name="plugin.name"
+                :plugin-id="plugin.id"
+                :extension-path="plugin.extensionPath"
+              />
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
+                  <!-- 状态徽章 -->
+                  <span
+                    class="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-tag text-[11px] font-medium"
+                    :class="stateBadgeClass(plugin.state)"
+                  >
+                    <span
+                      v-if="plugin.state.state === 'Activated'"
+                      class="w-1.5 h-1.5 rounded-full bg-[var(--mobile-success)]"
+                    ></span>
+                    {{ $t(getStateKey(plugin.state)) }}
+                  </span>
+                </div>
+                <!-- 描述或错误信息 -->
+                <p v-if="isErrorState(plugin.state)" class="text-xs mt-1 leading-relaxed text-[var(--mobile-danger-color)]">
+                  ⚠ {{ getErrorMessage(plugin.state) }}
+                </p>
+                <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">
+                  {{ plugin.description || $t('mobile.plugin.noDescription') }}
+                </p>
+              </div>
+              <div @click.stop>
+                <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- 安装弹层 -->
@@ -134,7 +261,7 @@
                 />
               </div>
               <button
-                class="mt-3 w-full py-2.5 rounded-xl bg-[var(--mobile-accent)] text-white text-sm font-medium active:opacity-80 transition-opacity disabled:opacity-50"
+                class="mt-3 w-full py-2.5 rounded-xl bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] text-sm font-medium active:opacity-80 transition-opacity disabled:opacity-50"
                 :disabled="installing || !installUrl.trim()"
                 @click="handleInstallUrl"
               >
@@ -172,16 +299,18 @@
 /**
  * PluginView - 插件管理页面
  *
- * 独立页面，从设置页跳转进入
- * 展示已安装插件列表（状态徽章/来源）、启用/禁用、详情展开、
- * 安装（文件/URL）与卸载（仅用户安装的插件）
+ * 独立页面，从设置页跳转进入。两级视图：
+ * - 列表页：插件卡片（图标/名称/状态徽章/描述/开关）+ 安装入口
+ * - 详情页：Hero + 操作按钮 + 统计条 + 折叠区域（简介/扩展点/权限/详细信息）
  */
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import Toggle from '@/components/Toggle.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import PluginIcon from '@/components/PluginIcon.vue'
+import CollapseSection from '@/components/CollapseSection.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   pluginListLoaded,
@@ -200,12 +329,17 @@ const toast = useToast()
 
 const plugins = ref<PluginInfo[]>([])
 const pluginEnabledStates = ref<Record<string, boolean>>({})
-const expandedPlugin = ref<string | null>(null)
+const detailPlugin = ref<PluginInfo | null>(null)
 const showInstallSheet = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
 const uninstallTarget = ref<PluginInfo | null>(null)
 const showUninstallConfirm = ref(false)
+
+/** 已启用插件数（列表页摘要行） */
+const enabledCount = computed(() =>
+  plugins.value.filter((p) => pluginEnabledStates.value[p.id]).length
+)
 
 onMounted(loadPlugins)
 
@@ -218,9 +352,18 @@ async function loadPlugins(): Promise<void> {
       states[p.id] = await pluginIsEnabled(p.id)
     }
     pluginEnabledStates.value = states
+    // 详情页打开时用最新数据同步，避免状态变更后引用过期
+    if (detailPlugin.value) {
+      detailPlugin.value = plugins.value.find((p) => p.id === detailPlugin.value?.id) ?? null
+    }
   } catch {
     toast.error(t('mobile.plugin.loadFailed'))
   }
+}
+
+/** 打开详情（用列表最新数据的副本，避免状态变更时引用过期） */
+function openDetail(plugin: PluginInfo): void {
+  detailPlugin.value = plugin
 }
 
 /** 切换启用/停用：持久化偏好 + 联动激活/停用 */
@@ -293,7 +436,7 @@ async function confirmUninstall(): Promise<void> {
   try {
     await pluginUninstall(plugin.id)
     toast.success(t('mobile.plugin.uninstallSuccess', { name: plugin.name }))
-    expandedPlugin.value = null
+    detailPlugin.value = null
     await loadPlugins()
   } catch (e: any) {
     toast.error(t('mobile.plugin.uninstallFailed', { error: e.message || String(e) }))
@@ -351,33 +494,100 @@ function isBuiltin(source: string): boolean {
   return source === 'apk-asset'
 }
 
-/** 扩展点摘要 */
-function getPluginExtensions(plugin: PluginInfo): string {
-  const parts: string[] = []
-  if (plugin.contributes.views.length > 0) parts.push('toolbox')
-  if (plugin.contributes.navTab) parts.push('navTab')
-  if (plugin.contributes.terminal) parts.push('terminal')
-  if (plugin.contributes.settings) parts.push('settings')
-  return parts.join(', ') || '-'
+/** 扩展点摘要 chips */
+interface ContributionChip {
+  key: string
+  emoji: string
+  labelKey: string
+  params?: Record<string, unknown>
+}
+
+function getContributionChips(plugin: PluginInfo): ContributionChip[] {
+  const chips: ContributionChip[] = []
+  const c = plugin.contributes
+  if (c.views.length > 0) chips.push({ key: 'toolbox', emoji: '🧰', labelKey: 'mobile.plugin.chip.toolboxPage' })
+  if (c.navTab) chips.push({ key: 'navTab', emoji: '📑', labelKey: 'mobile.plugin.chip.navTab' })
+  if (c.terminal) chips.push({ key: 'terminal', emoji: '⌨️', labelKey: 'mobile.plugin.chip.terminal' })
+  if (c.settings) chips.push({ key: 'settings', emoji: '⚙️', labelKey: 'mobile.plugin.chip.settings' })
+  if (c.commands.length > 0) {
+    chips.push({ key: 'commands', emoji: '🔧', labelKey: 'mobile.plugin.chip.commands', params: { count: c.commands.length } })
+  }
+  if (c.configuration) chips.push({ key: 'configuration', emoji: '🎛️', labelKey: 'mobile.plugin.chip.configuration' })
+  if (c.lifecycle) chips.push({ key: 'lifecycle', emoji: '🔄', labelKey: 'mobile.plugin.chip.lifecycle' })
+  return chips
+}
+
+/** 权限元数据：emoji + 本地化标题/说明（未知权限回退原始字符串） */
+const PERMISSION_META: Record<string, { emoji: string; titleKey: string; descKey: string }> = {
+  storage: { emoji: '💾', titleKey: 'mobile.plugin.perm.storage.title', descKey: 'mobile.plugin.perm.storage.desc' },
+  'terminal:input': { emoji: '⌨️', titleKey: 'mobile.plugin.perm.terminalInput.title', descKey: 'mobile.plugin.perm.terminalInput.desc' },
+  'terminal:output': { emoji: '📺', titleKey: 'mobile.plugin.perm.terminalOutput.title', descKey: 'mobile.plugin.perm.terminalOutput.desc' },
+  'session:read': { emoji: '📄', titleKey: 'mobile.plugin.perm.sessionRead.title', descKey: 'mobile.plugin.perm.sessionRead.desc' },
+  'session:write': { emoji: '✏️', titleKey: 'mobile.plugin.perm.sessionWrite.title', descKey: 'mobile.plugin.perm.sessionWrite.desc' },
+  'ui:toolbox': { emoji: '🧰', titleKey: 'mobile.plugin.perm.uiToolbox.title', descKey: 'mobile.plugin.perm.uiToolbox.desc' },
+  'ui:navtab': { emoji: '📑', titleKey: 'mobile.plugin.perm.uiNavtab.title', descKey: 'mobile.plugin.perm.uiNavtab.desc' },
+  'ui:settings': { emoji: '⚙️', titleKey: 'mobile.plugin.perm.uiSettings.title', descKey: 'mobile.plugin.perm.uiSettings.desc' },
+  'ui:input': { emoji: '🔤', titleKey: 'mobile.plugin.perm.uiInput.title', descKey: 'mobile.plugin.perm.uiInput.desc' },
+  'network:http': { emoji: '🌐', titleKey: 'mobile.plugin.perm.networkHttp.title', descKey: 'mobile.plugin.perm.networkHttp.desc' },
+  'fs:read': { emoji: '📂', titleKey: 'mobile.plugin.perm.fsRead.title', descKey: 'mobile.plugin.perm.fsRead.desc' },
+  'fs:write': { emoji: '📝', titleKey: 'mobile.plugin.perm.fsWrite.title', descKey: 'mobile.plugin.perm.fsWrite.desc' },
+  bus: { emoji: '📩', titleKey: 'mobile.plugin.perm.bus.title', descKey: 'mobile.plugin.perm.bus.desc' },
+}
+
+function getPermissionMeta(perm: string): { emoji: string; title: string; desc: string } {
+  const meta = PERMISSION_META[perm]
+  if (!meta) return { emoji: '🔐', title: perm, desc: t('mobile.plugin.perm.unknown') }
+  return { emoji: meta.emoji, title: t(meta.titleKey), desc: t(meta.descKey) }
+}
+
+/** 详细信息行（标签列固定宽度对齐） */
+function getDetailRows(plugin: PluginInfo): { key: string; label: string; value: string; mono?: boolean }[] {
+  return [
+    { key: 'id', label: t('mobile.plugin.id'), value: plugin.id, mono: true },
+    { key: 'source', label: t('mobile.plugin.source'), value: getSourceLabel(plugin.source) },
+    { key: 'type', label: t('mobile.plugin.type'), value: plugin.pluginType },
+    { key: 'main', label: t('mobile.plugin.entry'), value: plugin.main || '-', mono: true },
+    { key: 'size', label: t('mobile.plugin.size'), value: formatBytes(plugin.sizeBytes) },
+    { key: 'installedAt', label: t('mobile.plugin.installedAt'), value: formatTime(plugin.installedAt) },
+  ]
+}
+
+/** 字节数格式化 */
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '-'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}
+
+/** unix 毫秒时间戳格式化，缺失时显示 '-' */
+function formatTime(ms?: number): string {
+  if (!ms) return '-'
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 </script>
 
 <style scoped>
-.expand-enter-active,
-.expand-leave-active {
-  transition: all 0.2s ease;
-  overflow: hidden;
+/* 详情页切换过渡 */
+.detail-enter-active,
+.detail-leave-active {
+  transition: all 0.25s ease;
 }
 
-.expand-enter-from,
-.expand-leave-to {
+.detail-enter-from {
   opacity: 0;
-  max-height: 0;
+  transform: translateX(24px);
 }
 
-.expand-enter-to,
-.expand-leave-from {
-  opacity: 1;
-  max-height: 260px;
+.detail-leave-to {
+  opacity: 0;
+  transform: translateX(24px);
 }
 </style>
