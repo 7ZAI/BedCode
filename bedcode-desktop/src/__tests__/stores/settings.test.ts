@@ -36,7 +36,7 @@ describe('Settings Store', () => {
       const store = useSettingsStore()
 
       expect(store.settings.ui.theme).toBe('system')
-      expect(store.settings.ui.terminal_font_size).toBe(14)
+      expect(store.settings.ui.terminal_font_size).toBe(12)
       expect(store.settings.ui.terminal_font_family).toBe('Consolas')
       expect(store.settings.ui.show_preview).toBe(true)
     })

@@ -68,7 +68,7 @@ describe('Toggle Component', () => {
       })
 
       const toggle = wrapper.find('.w-10.h-6')
-      expect(toggle.classes()).toContain('bg-primary-600')
+      expect(toggle.classes()).toContain('bg-brand')
     })
 
     it('should apply inactive background class when unchecked', () => {
@@ -79,7 +79,7 @@ describe('Toggle Component', () => {
       })
 
       const toggle = wrapper.find('.w-10.h-6')
-      expect(toggle.classes()).toContain('bg-dark-600')
+      expect(toggle.classes()).toContain('bg-[var(--border)]')
     })
 
     it('should position toggle correctly when checked', () => {

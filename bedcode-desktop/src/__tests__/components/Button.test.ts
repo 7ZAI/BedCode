@@ -37,7 +37,7 @@ describe('Button Component', () => {
       }
     })
 
-    expect(wrapper.classes()).toContain('bg-primary-600')
+    expect(wrapper.classes()).toContain('bg-brand')
   })
 
   it('should be disabled when disabled prop is true', () => {
@@ -78,7 +78,7 @@ describe('Button Component', () => {
       }
     })
 
-    expect(wrapper.classes()).toContain('py-3')
+    expect(wrapper.classes()).toContain('px-6')
   })
 
   it('should render with icon slot', () => {

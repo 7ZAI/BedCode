@@ -85,7 +85,8 @@ describe('Tooltip Component', () => {
       }
     })
 
-    // tooltip 内容初始不可见（v-if="visible"，visible 初始�?false�?    const tooltipContent = wrapper.find('.fixed.z-50')
+    // tooltip 内容初始不可见（v-if="visible"，visible 初始值为 false）
+    const tooltipContent = wrapper.find('.fixed.z-50')
     expect(tooltipContent.exists()).toBe(false)
   })
 
@@ -121,7 +122,8 @@ describe('Tooltip Component', () => {
     vi.advanceTimersByTime(100)
     await wrapper.vm.$nextTick()
 
-    // tooltip 应该�?body 中渲�?    const tooltip = document.querySelector('.fixed.z-50')
+    // tooltip 应该渲染到 body 中
+    const tooltip = document.querySelector('.fixed.z-50')
     expect(tooltip).toBeTruthy()
   })
 
@@ -150,8 +152,8 @@ describe('Tooltip Component', () => {
 
     const tooltip = document.querySelector('.fixed.z-50')
     expect(tooltip).toBeTruthy()
-    expect(tooltip?.classList.contains('bg-dark-700')).toBe(true)
-    expect(tooltip?.classList.contains('rounded-lg')).toBe(true)
+    expect(tooltip?.classList.contains('bg-card')).toBe(true)
+    expect(tooltip?.classList.contains('rounded-btn')).toBe(true)
   })
 
   it('should render tooltip content text', async () => {
