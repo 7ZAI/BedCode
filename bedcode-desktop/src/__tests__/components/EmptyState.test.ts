@@ -45,7 +45,7 @@ describe('EmptyState Component', () => {
       }
     })
 
-    // 默认图标是空文件�?SVG
+    // 默认图标是空文件�?SVG
     expect(wrapper.find('svg').exists()).toBe(true)
   })
 
@@ -109,7 +109,7 @@ describe('EmptyState Component', () => {
     })
 
     const button = wrapper.find('button')
-    expect(button.classes()).toContain('bg-primary-600')
+    expect(button.classes()).toContain('bg-brand')
   })
 
   it('should apply secondary variant to action button', () => {
@@ -122,7 +122,7 @@ describe('EmptyState Component', () => {
     })
 
     const button = wrapper.find('button')
-    expect(button.classes()).toContain('bg-dark-700')
+    expect(button.classes()).toContain('bg-card')
   })
 
   it('should apply danger variant to action button', () => {
@@ -135,7 +135,7 @@ describe('EmptyState Component', () => {
     })
 
     const button = wrapper.find('button')
-    expect(button.classes()).toContain('bg-red-600')
+    expect(button.classes()).toContain('text-red-600')
   })
 
   it('should apply ghost variant to action button', () => {

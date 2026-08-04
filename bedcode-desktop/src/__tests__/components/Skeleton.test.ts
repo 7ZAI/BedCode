@@ -6,10 +6,10 @@ describe('Skeleton Component', () => {
   it('should render with default shape (text)', () => {
     const wrapper = mount(Skeleton)
 
-    expect(wrapper.find('.bg-dark-700').exists()).toBe(true)
     expect(wrapper.find('.animate-pulse').exists()).toBe(true)
-    expect(wrapper.find('.bg-dark-700').classes()).toContain('h-4')
-    expect(wrapper.find('.bg-dark-700').classes()).toContain('w-full')
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
+    expect(wrapper.find('.animate-pulse').classes()).toContain('h-4')
+    expect(wrapper.find('.animate-pulse').classes()).toContain('w-full')
   })
 
   it('should render circle shape', () => {
@@ -19,7 +19,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    expect(wrapper.find('.bg-dark-700').classes()).toContain('rounded-full')
+    expect(wrapper.find('.animate-pulse').classes()).toContain('rounded-full')
   })
 
   it('should render rect shape', () => {
@@ -29,8 +29,8 @@ describe('Skeleton Component', () => {
       }
     })
 
-    // rect shape 没有额外�?shape class
-    expect(wrapper.find('.bg-dark-700').exists()).toBe(true)
+    // rect shape 没有额外�?shape class
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
   })
 
   it('should apply custom width', () => {
@@ -40,7 +40,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     expect(skeleton.attributes('style')).toContain('width: 200px')
   })
 
@@ -51,7 +51,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     expect(skeleton.attributes('style')).toContain('height: 50px')
   })
 
@@ -62,7 +62,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     expect(skeleton.attributes('style')).toContain('width: 100px')
   })
 
@@ -73,7 +73,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     expect(skeleton.attributes('style')).toContain('height: 32px')
   })
 
@@ -85,7 +85,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     const style = skeleton.attributes('style')
     expect(style).toContain('width: 150px')
     expect(style).toContain('height: 20px')
@@ -100,7 +100,9 @@ describe('Skeleton Component', () => {
   it('should have bg-dark-700 class', () => {
     const wrapper = mount(Skeleton)
 
-    expect(wrapper.find('.bg-dark-700').exists()).toBe(true)
+    // 基础类：浅色使用 bg-slate-200，深色模式使用 dark:bg-dark-700
+    expect(wrapper.find('.animate-pulse').classes()).toContain('bg-slate-200')
+    expect(wrapper.find('.animate-pulse').classes()).toContain('dark:bg-dark-700')
   })
 
   it('should have rounded class for text shape', () => {
@@ -110,7 +112,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    expect(wrapper.find('.bg-dark-700').classes()).toContain('rounded')
+    expect(wrapper.find('.animate-pulse').classes()).toContain('rounded')
   })
 
   it('should use default size for circle when no dimensions specified', () => {
@@ -120,7 +122,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     expect(skeleton.classes()).toContain('w-10')
     expect(skeleton.classes()).toContain('h-10')
   })
@@ -134,7 +136,7 @@ describe('Skeleton Component', () => {
       }
     })
 
-    const skeleton = wrapper.find('.bg-dark-700')
+    const skeleton = wrapper.find('.animate-pulse')
     expect(skeleton.attributes('style')).toContain('width: 50px')
     expect(skeleton.attributes('style')).toContain('height: 50px')
   })
