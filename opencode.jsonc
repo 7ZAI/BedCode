@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 项目专属配置：仅影响 opencode，不涉及 .pi/ .claude/ 等其他 agent
+  "mcp": {
+    "codegraph": {
+      "type": "local",
+      // Windows 上 codegraph 是 .cmd shim，需经 cmd /c 启动
+      "command": ["cmd", "/c", "codegraph", "serve", "--mcp"],
+      "enabled": true
+    }
+  }
+}
