@@ -30,6 +30,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Security
 rand = "0.8"
 jsonwebtoken = "9"
+# 生物凭证验签（EC P-256 / ECDSA-SHA256，与移动端 Keystore 生成的密钥配套）
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 # Encoding
 encoding_rs = "0.8"
@@ -92,6 +94,8 @@ async-trait = "0.1"
 # WebSocket
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+# 传输引擎：CancellationToken 取消语义 + ReaderStream 文件流式上传
+tokio-util = { version = "0.7", features = ["io"] }
 dirs = "6.0.0"
 
 # Actix Web (HTTP + WS server)
@@ -100,6 +104,8 @@ actix = "0.13"
 actix-web-actors = "4"
 actix-rt = "2"
 actix-cors = "0.7"
+# 插件文件服务下载端点（NamedFile 提供原生 Range/206/HEAD 支持）
+actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"

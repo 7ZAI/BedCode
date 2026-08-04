@@ -8,14 +8,33 @@ use crate::server::services::pairing_service::PairingService;
 use crate::utils::auth::qr_token::QrTokenManager;
 use crate::server::ws::WebSocketManager;
 use crate::utils::auth::JwtService;
+use crate::utils::auth::biometric::verify_biometric_signature;
+use crate::system::app_context::AppContext;
 use crate::system::constants::event;
-use crate::db::Database;
+use crate::db::{Database, connection_method, connection_result};
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
+
+/// 记录连接历史事件（未配对设备忽略）
+async fn record_history(
+    db: &Arc<Mutex<Database>>,
+    fingerprint: &str,
+    auth_method: &str,
+    result: &str,
+    address: Option<&str>,
+) {
+    if fingerprint.is_empty() {
+        return;
+    }
+    let db_guard = db.lock().await;
+    if let Err(e) = db_guard.record_connection_event_by_fingerprint(fingerprint, auth_method, result, address) {
+        tracing::warn!(fingerprint = %fingerprint, error = %e, "Failed to record connection history");
+    }
+}
 
 
 /// 处理认证消息
@@ -106,6 +125,9 @@ pub async fn handle_auth(
                     }
                 }
 
+                // 记录连接历史（配对码认证成功）
+                record_history(db, &fingerprint, connection_method::PAIRING_CODE, connection_result::SUCCESS, Some(&address)).await;
+
                 if let Some(handle) = app_handle {
                     let _ = handle.emit(event::DEVICE_CONNECTED, &DeviceConnectionEvent {
                         addr: addr.to_string(),
@@ -141,6 +163,11 @@ pub async fn handle_auth(
                     "Invalid or expired pairing code"
                 };
 
+                // 记录连接历史（配对码认证失败）
+                let address = format!("{}", addr);
+                let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
+                record_history(db, &fingerprint, connection_method::PAIRING_CODE, connection_result::FAILED, Some(&address)).await;
+
                 Ok(Some(Message::Auth {
                     message_id: request_message_id,
                 expect_response: false,
@@ -166,6 +193,9 @@ pub async fn handle_auth(
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!("JWT verification failed: {:?}", e);
+                    // 记录连接历史（JWT 静默重连失败）
+                    let address = format!("{}", addr);
+                    record_history(db, &fingerprint, connection_method::JWT, connection_result::FAILED, Some(&address)).await;
                     return Ok(Some(Message::error_with_id(&request_message_id, "INVALID_TOKEN", "Invalid or expired token")));
                 }
             };
@@ -177,6 +207,10 @@ pub async fn handle_auth(
             if let Some(name) = &payload.device_name {
                 ws_manager.set_device_name(&addr, Some(name.clone())).await;
             }
+
+            // 记录连接历史（JWT 静默重连成功）
+            let address = format!("{}", addr);
+            record_history(db, &fingerprint, connection_method::JWT, connection_result::SUCCESS, Some(&address)).await;
 
             // 更新配对设备的 last_seen 和 connect_count
             if !fingerprint.is_empty() {
@@ -249,6 +283,9 @@ pub async fn handle_auth(
                         }
                     }
 
+                    // 记录连接历史（QR 认证成功）
+                    record_history(db, &device_fingerprint, connection_method::QR, connection_result::SUCCESS, Some(&address)).await;
+
                     if let Some(handle) = app_handle {
                         let _ = handle.emit(event::DEVICE_CONNECTED, &DeviceConnectionEvent {
                             addr: addr.to_string(),
@@ -271,15 +308,17 @@ pub async fn handle_auth(
                     device_fingerprint: Some(device_fingerprint),
                     session_token: Some(session_token),
                     device_name: Some(device_name),
-                    pairing_code: None,
-                    error: None,
-                    qr_token: None,
+                    ..Default::default()
                 },
             };
                     Ok(Some(response))
                 }
                 Err(e) => {
                     tracing::warn!(addr = %addr, error = %e, "QR token verification failed");
+                    // 记录连接历史（QR 认证失败）
+                    let address = format!("{}", addr);
+                    let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
+                    record_history(db, &fingerprint, connection_method::QR, connection_result::FAILED, Some(&address)).await;
                     let error_msg = e.to_string();
                     let user_message = if error_msg.contains("expired") {
                         "二维码已过期，请重新生成".to_string()
@@ -301,17 +340,184 @@ pub async fn handle_auth(
                         payload: AuthPayload {
                             stage: AuthStage::QrFailed,
                             error: Some(user_message),
-                            device_id: None,
-                            device_fingerprint: None,
-                            session_token: None,
-                            device_name: None,
-                            pairing_code: None,
-                            qr_token: None,
+                            ..Default::default()
                         },
                     };
                     Ok(Some(response))
                 }
             }
+        }
+
+        AuthStage::ExchangeCertificate => {
+            let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
+            let public_key = payload.public_key.clone().unwrap_or_default();
+            let address = format!("{}", addr);
+
+            // 仅允许已认证连接管理生物凭证（绑定/解绑）
+            let authenticated = ws_manager.get_client_by_addr(&addr).await
+                .map(|c| c.authenticated)
+                .unwrap_or(false);
+            if !authenticated {
+                tracing::warn!(addr = %addr, "ExchangeCertificate rejected: connection not authenticated");
+                return Ok(Some(Message::error_with_id(&request_message_id, "NOT_AUTHENTICATED", "Connection not authenticated")));
+            }
+
+            let pairing = {
+                let db_guard = db.lock().await;
+                db_guard.get_pairing_by_fingerprint(&fingerprint)?
+            };
+            let Some(pairing) = pairing else {
+                tracing::warn!(fingerprint = %fingerprint, "ExchangeCertificate rejected: device not paired");
+                return Ok(Some(Message::error_with_id(&request_message_id, "NOT_PAIRED", "Device not paired")));
+            };
+
+            {
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.update_pairing_public_key(&pairing.id, &public_key) {
+                    tracing::error!(pairing_id = %pairing.id, error = %e, "Failed to update pairing public key");
+                    return Ok(Some(Message::error_with_id(&request_message_id, "DB_ERROR", "Failed to update credential")));
+                }
+            }
+
+            let is_binding = !public_key.is_empty();
+            tracing::info!(pairing_id = %pairing.id, binding = is_binding, "Biometric credential updated");
+
+            Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                expect_response: false,
+                session_id: None,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
+                payload: AuthPayload {
+                    stage: AuthStage::Authenticated,
+                    device_id: Some(pairing.id),
+                    device_fingerprint: Some(fingerprint),
+                    error: None,
+                    ..Default::default()
+                },
+            }))
+        }
+
+        AuthStage::BiometricRequest => {
+            let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
+            let address = format!("{}", addr);
+
+            // 校验设备已配对且已绑定公钥
+            let binding_ready = {
+                let db_guard = db.lock().await;
+                match db_guard.get_pairing_by_fingerprint(&fingerprint)? {
+                    Some(p) => !p.public_key.is_empty(),
+                    None => false,
+                }
+            };
+
+            if !binding_ready {
+                tracing::warn!(fingerprint = %fingerprint, addr = %addr, "BiometricRequest rejected: no bound credential");
+                record_history(db, &fingerprint, connection_method::BIOMETRIC, connection_result::FAILED, Some(&address)).await;
+                return Ok(Some(Message::error_with_id(&request_message_id, "CREDENTIAL_NOT_BOUND", "Biometric credential not bound")));
+            }
+
+            // 下发一次性挑战值（按连接地址管理，60s 过期）
+            let nonce = AppContext::global().biometric_challenges().generate(&addr.to_string()).await;
+            tracing::info!(addr = %addr, "Biometric challenge issued");
+
+            Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                expect_response: false,
+                session_id: None,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
+                payload: AuthPayload {
+                    stage: AuthStage::BiometricChallenge,
+                    device_id: payload.device_id,
+                    device_fingerprint: Some(fingerprint),
+                    challenge_nonce: Some(nonce),
+                    error: None,
+                    ..Default::default()
+                },
+            }))
+        }
+
+        AuthStage::BiometricVerify => {
+            let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();
+            let nonce = payload.challenge_nonce.clone().unwrap_or_default();
+            let signature = payload.signature.clone().unwrap_or_default();
+            let address = format!("{}", addr);
+            let addr_key = addr.to_string();
+
+            // 1. 校验并消费挑战值（绑定连接、单次、未过期）
+            if let Err(e) = AppContext::global().biometric_challenges().verify_and_consume(&addr_key, &nonce).await {
+                tracing::warn!(addr = %addr, error = %e, "BiometricVerify rejected: challenge invalid");
+                record_history(db, &fingerprint, connection_method::BIOMETRIC, connection_result::FAILED, Some(&address)).await;
+                return Ok(Some(Message::error_with_id(&request_message_id, "CHALLENGE_INVALID", &e.to_string())));
+            }
+
+            // 2. 取配对记录与绑定的公钥
+            let pairing = {
+                let db_guard = db.lock().await;
+                db_guard.get_pairing_by_fingerprint(&fingerprint)?
+            };
+            let Some(pairing) = pairing else {
+                tracing::warn!(fingerprint = %fingerprint, "BiometricVerify rejected: device not paired");
+                record_history(db, &fingerprint, connection_method::BIOMETRIC, connection_result::FAILED, Some(&address)).await;
+                return Ok(Some(Message::error_with_id(&request_message_id, "NOT_PAIRED", "Device not paired")));
+            };
+            if pairing.public_key.is_empty() {
+                tracing::warn!(fingerprint = %fingerprint, "BiometricVerify rejected: no bound credential");
+                record_history(db, &fingerprint, connection_method::BIOMETRIC, connection_result::FAILED, Some(&address)).await;
+                return Ok(Some(Message::error_with_id(&request_message_id, "CREDENTIAL_NOT_BOUND", "Biometric credential not bound")));
+            }
+
+            // 3. 验签（生物认证通过后由安全硬件签名）
+            if let Err(e) = verify_biometric_signature(&pairing.public_key, &nonce, &signature) {
+                tracing::warn!(fingerprint = %fingerprint, error = %e, "BiometricVerify rejected: signature verification failed");
+                record_history(db, &fingerprint, connection_method::BIOMETRIC, connection_result::FAILED, Some(&address)).await;
+                return Ok(Some(Message::error_with_id(&request_message_id, "SIGNATURE_INVALID", "Signature verification failed")));
+            }
+
+            // 4. 验签通过：签发 JWT 并完成认证
+            let device_name = payload.device_name.clone().unwrap_or_else(|| pairing.device_name.clone());
+            let session_token = jwt_service.generate_token(
+                pairing.id.clone(),
+                Some(device_name.clone()),
+                Some(fingerprint.clone()),
+            ).map_err(|e| crate::AppError::Auth(e.to_string()))?;
+
+            ws_manager.set_authenticated(&addr, Some(pairing.id.clone()), Some(fingerprint.clone())).await;
+            if let Some(ref name) = payload.device_name {
+                ws_manager.set_device_name(&addr, Some(name.clone())).await;
+            }
+
+            record_history(db, &fingerprint, connection_method::BIOMETRIC, connection_result::SUCCESS, Some(&address)).await;
+
+            if let Some(handle) = app_handle {
+                let _ = handle.emit(event::DEVICE_CONNECTED, &DeviceConnectionEvent {
+                    addr: address.clone(),
+                    device_id: pairing.id.clone(),
+                    device_name: payload.device_name.clone(),
+                    fingerprint: Some(fingerprint.clone()),
+                    event: "authenticated".to_string(),
+                });
+            }
+
+            tracing::info!(pairing_id = %pairing.id, addr = %address, "Device authenticated via biometric");
+
+            Ok(Some(Message::Auth {
+                message_id: request_message_id,
+                expect_response: false,
+                session_id: None,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                token: String::new(),
+                payload: AuthPayload {
+                    stage: AuthStage::Authenticated,
+                    device_id: Some(pairing.id),
+                    device_fingerprint: Some(fingerprint),
+                    session_token: Some(session_token),
+                    auth_method: Some(connection_method::BIOMETRIC.to_string()),
+                    error: None,
+                    ..Default::default()
+                },
+            }))
         }
 
         _ => Ok(Some(Message::error_with_id(&request_message_id, "INVALID_AUTH_STAGE", "Invalid auth stage"))),

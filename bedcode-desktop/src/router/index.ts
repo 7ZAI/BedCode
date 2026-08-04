@@ -21,6 +21,11 @@ const router = createRouter({
       component: () => import('@/views/DevicesView.vue'),
     },
     {
+      path: '/devices/:id/history',
+      name: 'device-history',
+      component: () => import('@/views/ConnectionHistoryView.vue'),
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),

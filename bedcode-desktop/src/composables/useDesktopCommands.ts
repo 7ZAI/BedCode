@@ -256,6 +256,35 @@ export async function removePairedDevice(deviceId: string): Promise<void> {
   return await invoke('remove_paired_device', { id: deviceId })
 }
 
+// ==================== Connection History Commands ====================
+
+/**
+ * 获取设备连接历史
+ */
+export async function listConnectionHistory(deviceId: string): Promise<ConnectionHistoryEntry[]> {
+  return await invoke('list_connection_history', { deviceId })
+}
+
+/**
+ * 删除设备连接历史
+ */
+export async function deleteConnectionHistory(deviceId: string): Promise<void> {
+  return await invoke('delete_connection_history', { deviceId })
+}
+
+/**
+ * 设备连接历史条目（与后端 ConnectionHistory 序列化字段对应）
+ */
+export interface ConnectionHistoryEntry {
+  id: number
+  deviceId: string
+  authMethod: string
+  result: string
+  address: string | null
+  connectedAt: string
+  disconnectedAt: string | null
+}
+
 // ==================== QR Commands ====================
 
 /**
@@ -465,6 +494,10 @@ export function useDesktopCommands() {
     clearPairingCode,
     listPairedDevices,
     removePairedDevice,
+
+    // Connection History
+    listConnectionHistory,
+    deleteConnectionHistory,
 
     // QR
     generateQrCode,

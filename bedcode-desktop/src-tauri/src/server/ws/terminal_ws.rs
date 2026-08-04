@@ -124,10 +124,23 @@ impl Actor for TerminalWs {
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("Terminal WS disconnected: {}", self.session.addr);
 
-        // 注销 WsSessionRegistry + 取消所有订阅
+        // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录
         let client_id = self.session.addr.to_string();
         let sessions: Vec<String> = self.session.subscribed_sessions.iter().cloned().collect();
+        // 断连清理：移除该设备公告的文件服务（避免插件访问已不可达的端点）
+        let device_id = self.session.device_id.clone();
+        // 断连清理：清除该连接的生物认证挑战值 + 回填连接历史断开时间
+        let socket_addr = self.session.addr;
         actix::spawn(async move {
+            let app_ctx = crate::system::app_context::AppContext::global();
+            app_ctx.biometric_challenges().clear(&socket_addr.to_string()).await;
+            if let Some(device_id) = device_id.clone() {
+                let db_guard = app_ctx.db().lock().await;
+                if let Err(e) = db_guard.close_open_connection_event(&device_id) {
+                    tracing::warn!(device_id = %device_id, error = %e, "Failed to close connection history");
+                }
+            }
+
             use crate::server::ws::registry::WsSessionRegistry;
             let registry = WsSessionRegistry::global();
             registry.unregister(&client_id).await;
@@ -135,6 +148,13 @@ impl Actor for TerminalWs {
             let global_manager = GlobalOutputManager::global();
             for session_id in sessions {
                 global_manager.unsubscribe(&session_id, &client_id).await;
+            }
+
+            if let Some(device_id) = device_id {
+                app_ctx
+                    .file_service()
+                    .remove_peer(&device_id)
+                    .await;
             }
         });
 
@@ -219,15 +239,78 @@ impl TerminalWs {
                 }
                 self.handle_session_control(payload, message_id, expect_response, ctx);
             }
+            Message::FileService { payload, message_id, .. } => {
+                // 文件服务控制面（移动端 → 桌面，规格阶段 2）：
+                // Announce → 登记对端文件服务；Withdraw → 移除
+                if !self.session.authenticated {
+                    let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
+                    if let Ok(json) = error.to_json() {
+                        metrics.inc_ws_sent();
+                        ctx.text(json);
+                    }
+                    return;
+                }
+                self.handle_file_service(payload);
+            }
             _ => {
                 tracing::debug!("Unsupported WS message type from {}", self.session.addr);
             }
         }
     }
 
+    /// 处理文件服务控制面消息（仅已认证连接可调用）
+    ///
+    /// - Announce：取连接 peer_addr IP + 载荷 → 写入 FileServiceRegistry.peers（key=device_id）
+    /// - Withdraw：移除对端记录
+    fn handle_file_service(&self, payload: crate::enums::FileServicePayload) {
+        use crate::enums::FileServicePayload;
+
+        let Some(device_id) = self.session.device_id.clone() else {
+            tracing::warn!(addr = %self.session.addr, "file service message from connection without device_id, ignored");
+            return;
+        };
+        let file_service = crate::system::app_context::AppContext::global().file_service().clone();
+
+        match payload {
+            FileServicePayload::Announce { port, token, mounts } => {
+                // IP 取连接 peer_addr（移动端 bind 0.0.0.0，公告不含 IP）
+                let ip = self.session.addr.ip().to_string();
+                let info = bedcode_plugin_api::PeerFileService {
+                    ip: ip.clone(),
+                    port,
+                    token,
+                    mounts: mounts
+                        .into_iter()
+                        .map(|m| bedcode_plugin_api::PeerMountAnnouncement {
+                            plugin_id: m.plugin_id,
+                            mount_path: m.mount_path,
+                            operations: m.operations,
+                        })
+                        .collect(),
+                };
+                tracing::info!(
+                    device_id = %device_id,
+                    ip = %ip,
+                    port = port,
+                    "mobile file service announced"
+                );
+                actix::spawn(async move {
+                    file_service.set_peer(&device_id, info).await;
+                });
+            }
+            FileServicePayload::Withdraw {} => {
+                tracing::info!(device_id = %device_id, "mobile file service withdrawn");
+                actix::spawn(async move {
+                    file_service.remove_peer(&device_id).await;
+                });
+            }
+        }
+    }
+
     /// 处理认证消息 — 根据阶段路由到不同处理器
     ///
-    /// - RequestPairing / VerifyCode / QrConnect → auth_service::handle_auth（配对流程）
+    /// - RequestPairing / VerifyCode / QrConnect / ExchangeCertificate / BiometricRequest / BiometricVerify
+    ///   → auth_service::handle_auth（配对/生物认证流程）
     /// - Authenticated（JWT re-auth）→ 内联 JWT 验证（快速路径，无需异步）
     fn handle_auth(
         &mut self,
@@ -236,10 +319,13 @@ impl TerminalWs {
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         match payload.stage {
-            // 配对流程：需要异步调用 auth_service（涉及 PairingService、QrTokenManager 等）
+            // 配对/生物认证流程：需要异步调用 auth_service（涉及 PairingService、QrTokenManager 等）
             crate::enums::AuthStage::RequestPairing
             | crate::enums::AuthStage::VerifyCode
-            | crate::enums::AuthStage::QrConnect => {
+            | crate::enums::AuthStage::QrConnect
+            | crate::enums::AuthStage::ExchangeCertificate
+            | crate::enums::AuthStage::BiometricRequest
+            | crate::enums::AuthStage::BiometricVerify => {
                 self.handle_auth_pairing(payload, message_id, ctx);
             }
             // JWT 重新认证：同步路径，直接验证 JWT token

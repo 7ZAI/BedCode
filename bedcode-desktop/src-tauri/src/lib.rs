@@ -267,6 +267,15 @@ pub fn run() {
             );
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
+            // 文件服务注册表已在 PluginHost::new() 内创建（早于插件 auto-activate，
+            // 激活时挂载可用）；此处注入宿主引用并启动后台 sweeper（两阶段收尾）
+            tauri::async_runtime::block_on(async {
+                plugin_host
+                    .file_service()
+                    .set_plugin_host(plugin_host.clone())
+                    .await;
+                plugin_host.file_service().start_background_tasks();
+            });
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
@@ -295,6 +304,7 @@ pub fn run() {
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
                 .plugin_host(plugin_host.clone())
+                .file_service(plugin_host.file_service().clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
@@ -501,6 +511,8 @@ pub fn run() {
             commands::system::clear_pairing_code,
             commands::system::list_paired_devices,
             commands::system::remove_paired_device,
+            commands::system::list_connection_history,
+            commands::system::delete_connection_history,
             // QR Code
             commands::qr::generate_qr_code,
             commands::qr::clear_qr_code,
@@ -513,6 +525,7 @@ pub fn run() {
             // Settings
             commands::system::get_app_settings,
             commands::system::save_app_settings,
+            commands::system::set_terminal_bg_image,
             // Utility
             commands::system::ping,
             commands::system::get_app_version,

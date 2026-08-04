@@ -186,6 +186,13 @@
                 {{ isDeviceOnline(device) ? t('desktop.device.connected') : t('desktop.device.offline') }}
               </span>
 
+              <Button variant="ghost" size="sm" @click="viewHistory(device.id)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span class="ml-1">{{ t('desktop.device.historyView') }}</span>
+              </Button>
+
               <Button variant="ghost" size="sm" @click="removeDevice(device.id)">
                 <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -212,6 +219,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDeviceStore } from '@/stores/device'
 import { useSettingsStore } from '@/stores/settings'
@@ -225,6 +233,7 @@ import { useToast } from '@/composables/useToast'
 import QRCode from 'qrcode'
 
 const { t } = useI18n()
+const router = useRouter()
 const deviceStore = useDeviceStore()
 const settingsStore = useSettingsStore()
 const pairing = usePairing()
@@ -484,6 +493,10 @@ function cancelPairing() {
 async function removeDevice(deviceId: string) {
   pendingDeviceId.value = deviceId
   showRemoveDeviceDialog.value = true
+}
+
+function viewHistory(deviceId: string) {
+  router.push(`/devices/${deviceId}/history`)
 }
 
 async function confirmRemoveDevice() {
