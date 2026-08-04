@@ -1,0 +1,43 @@
+{
+  "id": "com.bedcode.file-transfer",
+  "name": "File Transfer",
+  "version": "1.0.0",
+  "description": "内网文件传输",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "wasm",
+  "rustLibrary": "bedcode_plugin_file_transfer",
+  "permissions": ["storage", "fileservice", "transfer", "network:http", "bus", "broadcast", "ui:sidebar", "fs:read", "fs:write"],
+  "contributes": {
+    "commands": [
+      { "id": "file-transfer.list-tasks", "title": "List Tasks" },
+      { "id": "file-transfer.list-remote", "title": "List Remote Files" },
+      { "id": "file-transfer.enqueue", "title": "Enqueue Transfer" },
+      { "id": "file-transfer.pause", "title": "Pause Transfer" },
+      { "id": "file-transfer.resume", "title": "Resume Transfer" },
+      { "id": "file-transfer.cancel", "title": "Cancel Transfer" },
+      { "id": "file-transfer.resume-all", "title": "Resume All Transfers" },
+      { "id": "file-transfer.retry", "title": "Retry Transfer" },
+      { "id": "file-transfer.set-concurrency", "title": "Set Concurrency" },
+      { "id": "file-transfer.get-settings", "title": "Get Settings" },
+      { "id": "file-transfer.set-settings", "title": "Set Settings" },
+      { "id": "file-transfer.pick-download-dir", "title": "Pick Download Directory" },
+      { "id": "file-transfer.mount-local", "title": "Mount Local Directory" },
+      { "id": "file-transfer.update-roots", "title": "Update Mount Roots" }
+    ],
+    "views": [
+      {
+        "id": "file-transfer.sidebar",
+        "type": "sidebar",
+        "title": "文件传输",
+        "component": "FileTransferView",
+        "icon": "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+      }
+    ],
+    "configuration": {
+      "title": "File Transfer Settings",
+      "properties": {}
+    }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "id": "com.bedcode.file-transfer",
+  "name": "File Transfer",
+  "version": "1.0.0",
+  "description": "内网文件传输",
+  "author": "BedCode",
+  "icon": "📁",
+  "main": "index.js",
+  "pluginType": "wasm",
+  "rustLibrary": "bedcode_plugin_file_transfer",
+  "permissions": [
+    "broadcast",
+    "bus",
+    "fileservice",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "storage",
+    "transfer",
+    "ui:settings",
+    "ui:toolbox"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "file-transfer.list-tasks",
+        "title": "List Tasks"
+      },
+      {
+        "id": "file-transfer.list-remote",
+        "title": "List Remote Files"
+      },
+      {
+        "id": "file-transfer.enqueue",
+        "title": "Enqueue Transfer"
+      },
+      {
+        "id": "file-transfer.pause",
+        "title": "Pause Transfer"
+      },
+      {
+        "id": "file-transfer.resume",
+        "title": "Resume Transfer"
+      },
+      {
+        "id": "file-transfer.cancel",
+        "title": "Cancel Transfer"
+      },
+      {
+        "id": "file-transfer.resume-all",
+        "title": "Resume All Transfers"
+      },
+      {
+        "id": "file-transfer.retry",
+        "title": "Retry Transfer"
+      },
+      {
+        "id": "file-transfer.set-concurrency",
+        "title": "Set Concurrency"
+      },
+      {
+        "id": "file-transfer.get-settings",
+        "title": "Get Settings"
+      },
+      {
+        "id": "file-transfer.set-settings",
+        "title": "Set Settings"
+      },
+      {
+        "id": "file-transfer.pick-download-dir",
+        "title": "Pick Download Directory"
+      },
+      {
+        "id": "file-transfer.mount-local",
+        "title": "Mount Local Directory"
+      },
+      {
+        "id": "file-transfer.update-roots",
+        "title": "Update Mount Roots"
+      }
+    ],
+    "views": [
+      {
+        "type": "toolbox",
+        "id": "file-transfer.toolbox",
+        "title": "文件传输",
+        "component": "FileTransferView",
+        "icon": "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4",
+        "entry": "ToolboxEntry"
+      }
+    ],
+    "configuration": {
+      "title": "File Transfer Settings",
+      "properties": {}
+    },
+    "settings": {
+      "id": "file-transfer.settings",
+      "section": "file-transfer",
+      "component": "SettingsSection"
+    }
+  }
+}

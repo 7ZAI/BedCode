@@ -1,0 +1,95 @@
+/**
+ * File Transfer 插件全局样式 (Mobile)
+ *
+ * 经 index.ts 以 `?inline` 导入并注入 document.head（宿主不加载插件 dist/style.css）。
+ * 含：状态四色体系（spec 9.3）、状态 chip/进度条、bottom sheet 动画、
+ * 触控目标流式缩放（clamp，兼容手机/平板）。
+ */
+
+/* ==================== 工具箱入口渐变图标 ==================== */
+.ft-entry-icon {
+  width: 3rem;
+  height: 3rem;
+  color: var(--mobile-text-on-accent);
+  background: linear-gradient(135deg, var(--mobile-accent), #bd93f9);
+}
+
+/* ==================== 状态四色体系（spec 9.3） ==================== */
+/* 状态文本色（chip / 文案） */
+.ft-color-active { color: var(--mobile-accent); }
+.ft-color-queued { color: var(--mobile-text-muted); }
+.ft-color-paused { color: var(--mobile-warning); }
+.ft-color-completed { color: var(--mobile-success); }
+.ft-color-failed { color: var(--mobile-error); }
+.ft-color-rejected { color: #bd93f9; }
+.ft-color-cancelled { color: var(--mobile-text-disabled); }
+
+/* 进度条底色（按状态着色） */
+.ft-progress-active { background-color: var(--mobile-accent); }
+.ft-progress-queued { background-color: var(--mobile-text-muted); }
+.ft-progress-paused { background-color: var(--mobile-warning); }
+.ft-progress-completed { background-color: var(--mobile-success); }
+.ft-progress-failed { background-color: var(--mobile-error); }
+.ft-progress-rejected { background-color: #bd93f9; }
+.ft-progress-cancelled { background-color: var(--mobile-text-disabled); }
+
+/* 状态 chip 基底：底色由 currentColor 12% 派生（随状态色自动变化） */
+.ft-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 0.5rem;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* ==================== 任务卡操作按钮 ==================== */
+.ft-btn-accent {
+  background: color-mix(in srgb, var(--mobile-accent) 14%, transparent);
+  color: var(--mobile-accent);
+}
+.ft-btn-neutral {
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+/* ==================== 触控目标流式缩放（手机 ~360px / 平板 ~768px+） ==================== */
+.ft-touch-btn {
+  min-height: clamp(2.25rem, 2.5rem + (100vw - 400px) / 800 * 0.25rem, 2.75rem);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ==================== 队列 bottom sheet 动画 ==================== */
+.ft-sheet-enter-active,
+.ft-sheet-leave-active {
+  transition: opacity 0.25s ease;
+}
+.ft-sheet-enter-from,
+.ft-sheet-leave-to {
+  opacity: 0;
+}
+.ft-sheet-enter-active .ft-sheet-panel {
+  animation: ft-slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ft-sheet-leave-active .ft-sheet-panel {
+  animation: ft-slide-down 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 面板最大高度：小屏防溢出，平板展示更多任务 */
+.ft-sheet-panel {
+  max-height: 78dvh;
+}
+
+@keyframes ft-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes ft-slide-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}

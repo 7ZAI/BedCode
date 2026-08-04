@@ -1,0 +1,558 @@
+/**
+ * File Transfer 插件样式
+ *
+ * 宿主 Vite 构建只扫描 src/（tailwind content），不会为插件 SFC 里的
+ * Tailwind 类生成样式，且插件 lib 构建产出的独立 CSS 文件不被宿主加载
+ * （build.js 仅拷贝 index.js）。因此本文件经 `?inline` 内联并在插件
+ * activate 时注入 style 标签，全部引用宿主 CSS 变量（bg / text / color
+ * 三组 token），跟随宿主明暗主题，不写死颜色。类名统一 `ft-` 前缀避免与宿主冲突。
+ */
+
+.ft-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ==================== 顶栏 ==================== */
+
+.ft-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  height: 46px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.ft-peer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tag);
+  font-size: 12px;
+  color: var(--text-primary);
+  max-width: 200px;
+}
+
+.ft-peer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-peer-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ft-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ft-dot--online {
+  background: var(--color-success);
+}
+
+.ft-dot--offline {
+  background: var(--text-tertiary);
+}
+
+.ft-spacer {
+  flex: 1;
+}
+
+.ft-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.ft-btn:hover {
+  border-color: var(--color-primary);
+}
+
+.ft-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ft-btn--primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.ft-btn--primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.ft-btn-text {
+  margin-left: 2px;
+}
+
+/* ==================== 双栏主体 ==================== */
+
+.ft-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.ft-browse {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ft-queue {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* ==================== 面包屑 ==================== */
+
+.ft-crumbbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-x: auto;
+}
+
+.ft-crumb {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-nav);
+  white-space: nowrap;
+}
+
+.ft-crumb:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.ft-crumb--current {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.ft-crumb-sep {
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+/* ==================== 目录表格 ==================== */
+
+.ft-table-wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.ft-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ft-table th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  text-align: left;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 11px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.ft-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ft-table tbody tr {
+  cursor: default;
+}
+
+.ft-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.ft-table tbody tr.ft-row--sel td {
+  background: var(--color-primary-light);
+}
+
+.ft-fname {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ft-fname-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-ico {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ft-dim {
+  color: var(--text-tertiary);
+}
+
+.ft-check {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.ft-check--disabled {
+  opacity: 0;
+}
+
+.ft-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 32px 16px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.ft-empty-ico {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.ft-empty-action {
+  margin-top: 8px;
+}
+
+/* ==================== 队列面板 ==================== */
+
+.ft-queue-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.ft-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ft-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+/* 四色体系（spec §9.3）：传输中/已暂停/失败/同名被拒 + 排队灰 */
+.ft-chip--active {
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
+}
+
+.ft-chip--queued {
+  background: color-mix(in srgb, var(--text-secondary) 15%, transparent);
+  color: var(--text-secondary);
+}
+
+.ft-chip--pause {
+  background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  color: var(--color-warning);
+}
+
+.ft-chip--fail {
+  background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+  color: var(--color-danger);
+}
+
+.ft-chip--reject {
+  /* 宿主无紫色 token，同名被拒沿用原型紫色 #a78bfa */
+  background: color-mix(in srgb, #a78bfa 15%, transparent);
+  color: #a78bfa;
+}
+
+.ft-resume-all {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.ft-summary-speed {
+  font-size: 11px;
+  color: var(--color-success);
+  flex-shrink: 0;
+}
+
+.ft-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ft-task {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 10px 12px;
+}
+
+.ft-task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ft-task-dir {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.ft-task-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.ft-mini-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  flex-shrink: 0;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.ft-mini-btn:hover {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.ft-pbar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.ft-pbar-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.ft-pbar-fill--pause {
+  background: var(--color-warning);
+}
+
+.ft-task-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ft-task-reason {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* ==================== 设置面板（覆盖层） ==================== */
+
+.ft-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  background: color-mix(in srgb, var(--bg-page) 70%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.ft-settings {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+.ft-settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ft-settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-settings-row--push {
+  margin-top: 8px;
+}
+
+.ft-settings-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.ft-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ft-root-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ft-root-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  font-size: 12px;
+}
+
+.ft-root-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Consolas, Monaco, monospace;
+  color: var(--text-primary);
+}
+
+.ft-dir-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.ft-dir-value--empty {
+  color: var(--text-tertiary);
+}
+
+.ft-select {
+  padding: 5px 10px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  font-size: 12px;
+  outline: none;
+}
+
+.ft-warning {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-warning-light);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+  border-radius: var(--radius-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ft-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}

@@ -1,0 +1,132 @@
+<script setup lang="ts">
+/**
+ * RemoteFileTable — 远端目录表格（左侧栏）
+ *
+ * 面包屑导航 + 复选框多选 + 类型图标 + 名称/大小/修改时间。
+ * 目录不可勾选（双击进入），仅文件参与下载选择。纯展示组件，
+ * 目录状态全部来自 props，交互经 emit 交给父级 composable。
+ */
+import { computed, inject } from 'vue'
+import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { RemoteEntry } from '../types'
+import type { Crumb } from '../composables/useRemoteFs'
+import { formatBytes, formatModified } from '../utils/format'
+
+const context = inject<PluginContext>('pluginContext')!
+const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
+
+const props = defineProps<{
+  entries: RemoteEntry[]
+  loading: boolean
+  /** 目录不可用的 i18n key（空 = 无错误） */
+  errorKey: string
+  breadcrumb: Crumb[]
+  selectedNames: string[]
+}>()
+
+const emit = defineEmits<{
+  (e: 'enter', entry: RemoteEntry): void
+  (e: 'navigate', index: number): void
+  (e: 'toggle', name: string): void
+  (e: 'toggleAll'): void
+}>()
+
+/** 是否全部文件已被选中（表头全选框状态） */
+const allSelected = computed(() => {
+  const fileNames = props.entries.filter(e => !e.isDir)
+  return fileNames.length > 0 && fileNames.every(e => props.selectedNames.includes(e.name))
+})
+
+/** 当前是否根目录（面包屑仅剩根节点） */
+const isRoot = computed(() => props.breadcrumb.length <= 1)
+
+/** 文件类型图标（emoji，与原型 Variant A 视觉一致；目录用文件夹） */
+function fileIcon(entry: RemoteEntry): string {
+  if (entry.isDir) return '📁'
+  const name = entry.name.toLowerCase()
+  if (/\.(mp3|flac|wav|m4a|aac|ogg|wma)$/.test(name)) return '🎵'
+  if (/\.(mp4|mkv|avi|mov|wmv|flv|webm)$/.test(name)) return '🎬'
+  if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|heic)$/.test(name)) return '🖼️'
+  if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(name)) return '📦'
+  return '📄'
+}
+
+/** 双击行：目录进入，文件无操作 */
+function onRowDblClick(entry: RemoteEntry): void {
+  if (entry.isDir) emit('enter', entry)
+}
+</script>
+
+<template>
+  <div class="ft-browse">
+    <!-- 面包屑导航 -->
+    <div class="ft-crumbbar">
+      <button
+        v-for="(crumb, i) in breadcrumb"
+        :key="crumb.path"
+        class="ft-crumb"
+        :class="{ 'ft-crumb--current': i === breadcrumb.length - 1 }"
+        @click="emit('navigate', i)"
+      >
+        {{ i === 0 ? t(crumb.name) : crumb.name }}
+      </button>
+      <span class="ft-crumb-sep">/</span>
+    </div>
+
+    <!-- 加载 / 错误 / 空态 -->
+    <div v-if="loading" class="ft-loading">{{ t('transfer.table.loading') }}</div>
+    <div v-else-if="errorKey" class="ft-empty">{{ t(errorKey) }}</div>
+    <div v-else-if="entries.length === 0" class="ft-empty">
+      <!-- 根目录空 = 对方尚未设置共享目录（spec §8 默认安全），子目录空 = 普通空目录 -->
+      {{ isRoot ? t('transfer.peer.noSharedRoots') : t('transfer.table.empty') }}
+    </div>
+
+    <!-- 目录表格 -->
+    <div v-else class="ft-table-wrap">
+      <table class="ft-table">
+        <thead>
+          <tr>
+            <th style="width: 32px">
+              <input
+                type="checkbox"
+                class="ft-check"
+                :checked="allSelected"
+                @change="emit('toggleAll')"
+              />
+            </th>
+            <th>{{ t('transfer.table.name') }}</th>
+            <th style="width: 90px">{{ t('transfer.table.size') }}</th>
+            <th style="width: 130px">{{ t('transfer.table.modified') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="entry in entries"
+            :key="entry.name"
+            :class="{ 'ft-row--sel': !entry.isDir && selectedNames.includes(entry.name) }"
+            @dblclick="onRowDblClick(entry)"
+          >
+            <td>
+              <input
+                type="checkbox"
+                class="ft-check"
+                :class="{ 'ft-check--disabled': entry.isDir }"
+                :disabled="entry.isDir"
+                :checked="!entry.isDir && selectedNames.includes(entry.name)"
+                @change="emit('toggle', entry.name)"
+              />
+            </td>
+            <td>
+              <div class="ft-fname">
+                <span class="ft-ico">{{ fileIcon(entry) }}</span>
+                <span class="ft-fname-text">{{ entry.name }}</span>
+              </div>
+            </td>
+            <td class="ft-dim">{{ entry.isDir ? '—' : formatBytes(entry.size) }}</td>
+            <td class="ft-dim">{{ formatModified(entry.mtime) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</template>
