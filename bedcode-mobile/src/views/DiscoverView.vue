@@ -67,7 +67,7 @@
                 </svg>
               </div>
               <div>
-                <p class="font-medium text-[var(--mobile-text-primary)]">{{ service.device_name }}</p>
+                <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-primary)]">{{ service.device_name }}</p>
                 <p class="text-[var(--mobile-text-disabled)] text-xs">{{ service.address }}:{{ service.port }}</p>
               </div>
             </div>
@@ -86,14 +86,14 @@
     <div class="p-4 border-t border-[var(--mobile-border)] pb-safe">
       <button
         v-if="isScanning"
-        class="w-full py-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all"
+        class="w-full py-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-sm rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all"
         @click="stopScan"
       >
         {{ t('mobile.discover.stopScan') }}
       </button>
       <button
         v-else
-        class="w-full py-3 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-all"
+        class="w-full py-3 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] text-sm rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 transition-all"
         @click="startScan"
       >
         {{ t('mobile.discover.restartScan') }}

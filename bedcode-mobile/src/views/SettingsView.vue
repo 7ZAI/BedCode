@@ -35,7 +35,7 @@
           {{ $t('settings.actions.resetSettings') }}
         </button>
         <button
-          class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
+          class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] text-sm py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
           @click="clearData"
         >
           {{ $t('settings.actions.clearAllData') }}
@@ -327,7 +327,7 @@ async function executeConfirm() {
 }
 
 .confirm-text {
-  font-size: clamp(0.875rem, 1rem, 1.125rem);
+  font-size: 1rem;
   color: var(--mobile-text-primary);
   margin: 0;
 }
@@ -340,9 +340,9 @@ async function executeConfirm() {
 
 .confirm-btn {
   flex: 1;
-  padding: clamp(0.625rem, 0.75rem, 1rem);
+  padding: 0.75rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.8125rem, 0.875rem, 1rem);
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

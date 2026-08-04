@@ -61,7 +61,7 @@
           </svg>
           <div v-else class="w-3 h-3 rounded-full bg-[var(--mobile-success)] shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
           <div>
-            <p class="text-[var(--mobile-success)] text-sm font-medium">{{ currentDevice.name }}</p>
+            <p class="text-[var(--mobile-success)] text-[0.9375rem] font-medium">{{ currentDevice.name }}</p>
             <p class="text-[var(--mobile-success)]/70 text-xs">{{ currentDevice.address }}</p>
           </div>
         </div>
@@ -81,7 +81,7 @@
       <!-- Session Configs (when connected) -->
       <div v-if="isConnected">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium tracking-wider uppercase">{{ t('mobile.connection.sessionConfig') }}</h3>
+          <h3 class="text-[var(--mobile-accent)]/80 text-[0.6875rem] font-semibold tracking-wider uppercase">{{ t('mobile.connection.sessionConfig') }}</h3>
           <button
             class="p-2 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
             :class="{ 'opacity-50': isRefreshing }"
@@ -147,7 +147,7 @@
       <!-- Connection History (when not connected) -->
       <div v-else>
         <!-- Connection History Section -->
-        <h3 class="text-[var(--mobile-accent)]/80 text-sm font-medium mb-3 flex items-center justify-between tracking-wider uppercase">
+        <h3 class="text-[var(--mobile-accent)]/80 text-[0.6875rem] font-semibold mb-3 flex items-center justify-between tracking-wider uppercase">
           <span>{{ t('mobile.connection.connectionHistory') }}</span>
           <button
             v-if="connectionHistory.length > 0"
@@ -176,7 +176,7 @@
                 </svg>
               </div>
               <div>
-                <p class="font-medium text-[var(--mobile-text-secondary)]">{{ item.name || item.address }}</p>
+                <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-secondary)]">{{ item.name || item.address }}</p>
                 <p class="text-[var(--mobile-text-disabled)] text-xs">{{ item.address }}</p>
               </div>
             </div>
@@ -197,7 +197,7 @@
     <div v-if="!isConnected" class="flex-shrink-0 p-4 border-t border-[var(--mobile-border)] space-y-3 bg-[var(--mobile-bg-primary)]" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
       <!-- QR Connect Button -->
       <button
-        class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all flex items-center justify-center gap-2"
+        class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-accent)] text-sm py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all flex items-center justify-center gap-2"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="$router.push({ name: 'mobile-scan' })"
@@ -210,7 +210,7 @@
 
       <!-- Manual Connect Button -->
       <button
-        class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:bg-[var(--mobile-bg-secondary)] transition-all flex items-center justify-center gap-2"
+        class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)] text-sm py-3 rounded-xl font-medium hover:bg-[var(--mobile-bg-secondary)] transition-all flex items-center justify-center gap-2"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="showManualConnect = true"

@@ -17,7 +17,7 @@
 
     <!-- Info -->
     <div class="flex-1 min-w-0">
-      <p class="font-medium text-[var(--mobile-text-primary)] truncate">{{ device.name }}</p>
+      <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-primary)] truncate">{{ device.name }}</p>
       <p class="text-[var(--mobile-text-muted)] text-sm truncate">
         <template v-if="isDiscovered">
           {{ device.address }}:{{ device.port }}

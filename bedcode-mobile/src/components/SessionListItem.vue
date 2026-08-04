@@ -75,12 +75,12 @@
 
     <!-- Session Info -->
     <div class="flex-1 min-w-0">
-      <p class="text-[var(--mobile-text-primary)] text-sm font-medium truncate">{{ name }}</p>
+      <p class="text-[var(--mobile-text-primary)] text-[0.9375rem] font-medium truncate">{{ name }}</p>
       <div class="flex items-center gap-2 mt-0.5">
         <p class="text-[var(--mobile-text-muted)] text-xs truncate">{{ workingDir }}</p>
         <span
           v-if="sessionType"
-          class="inline-flex items-center h-5 px-1.5 rounded-tag text-[10px] font-medium bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] flex-shrink-0"
+          class="inline-flex items-center h-5 px-1.5 rounded-tag text-[11px] font-medium bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] flex-shrink-0"
         >
           {{ sessionType }}
         </span>

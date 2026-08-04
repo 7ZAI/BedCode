@@ -20,7 +20,7 @@
       <!-- Content -->
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
-          <p class="font-semibold text-[var(--mobile-text-primary)] truncate text-base">
+          <p class="font-semibold text-[var(--mobile-text-primary)] truncate text-[0.9375rem]">
             {{ session.name }}
           </p>
         </div>
