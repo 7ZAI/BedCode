@@ -45,16 +45,16 @@
 ## 4. 宿主通用文件服务能力（两端各自实现，不建共享 crate）
 
 ### 4.1 SDK 接口（两端同构）
-
+ 
 ```ts
 // manifest 权限：fileservice（未声明则拒绝挂载）
-const mount = await context.fileService.mount({
-  mountPath: 'files',                     // 宿主暴露为 /plugins/{pluginId}/files/**
+const mount = await context.fileService.mount({ 
+  mountPath: 'files',                     // 宿主暴露为 /pl ugins/{pluginId}/files/**
   roots: string[],                        // 允许目录根（绝对路径，来自插件 storage）
-  operations: ('list' | 'download' | 'upload')[],
+  operations: ('list' | 'download' | 'upload')[], 
   onUploadRequest: (meta: { relativePath: string; size: number })
       => Promise<{ allow: boolean; reason?: string }>   // 策略钩子
-})
+}) 
 await mount.updateRoots(newRoots)         // 目录变更即时生效
 mount.dispose()                           // deactivate 时摘除
 ```

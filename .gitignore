@@ -33,7 +33,6 @@ CONTEXT.md
 # IDE and editors
 .idea/
 .claude/
-.scratch/
 .pi/
 .vscode/
 .VSCodeCounter/
