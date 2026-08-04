@@ -29,6 +29,10 @@ export interface Settings {
     max_cached_terminals?: number
     // 是否在后台时发送通知
     notify_in_background?: boolean
+    // 终端背景图片文件名（位于应用数据目录，空/未设置表示不启用）
+    terminal_bg_image?: string | null
+    // 终端背景图片不透明度（0-100，越小图片越淡）
+    terminal_bg_opacity?: number
   }
 }
 
@@ -52,6 +56,8 @@ const defaultSettings: Settings = {
     language: 'zh-CN',
     max_cached_terminals: 10,
     notify_in_background: true,
+    terminal_bg_image: undefined,
+    terminal_bg_opacity: 30,
   },
 }
 

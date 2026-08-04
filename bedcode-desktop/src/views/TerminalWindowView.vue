@@ -142,6 +142,53 @@
               <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">{{ size }}px</option>
             </select>
           </div>
+
+          <!-- 背景图片 -->
+          <div>
+            <label class="block text-xs font-medium mb-1.5 text-slate-500 dark:text-dark-400">{{ t('desktop.terminal.bgImage') }}</label>
+            <div class="flex items-center gap-1.5">
+              <button
+                @click.stop="pickBgImage"
+                class="flex-1 px-2 py-1.5 text-xs rounded border border-slate-200 dark:border-dark-600 bg-slate-100 dark:bg-dark-700 text-slate-700 dark:text-white hover:bg-slate-200 dark:hover:bg-dark-600 transition-colors"
+              >
+                {{ t('desktop.terminal.bgImageSelect') }}
+              </button>
+              <button
+                v-if="hasBgImage"
+                @click.stop="removeBgImage"
+                class="px-2 py-1.5 text-xs rounded border border-slate-200 dark:border-dark-600 bg-slate-100 dark:bg-dark-700 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                :title="t('desktop.terminal.bgImageRemove')"
+              >
+                {{ t('desktop.terminal.bgImageRemove') }}
+              </button>
+            </div>
+
+            <!-- 当前图片回显：只显示文件名（最后一个路径分隔符后的内容） -->
+            <div
+              v-if="hasBgImage"
+              class="mt-1.5 px-2 py-1 rounded bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 text-xs text-slate-600 dark:text-dark-300 truncate"
+              :title="bgImageName"
+            >
+              {{ bgImageName }}
+            </div>
+
+            <!-- 图片不透明度：实时预览，防抖持久化 -->
+            <div v-if="hasBgImage" class="mt-2">
+              <div class="flex items-center justify-between text-xs text-slate-500 dark:text-dark-400 mb-1">
+                <span>{{ t('desktop.terminal.bgImageOpacity') }}</span>
+                <span>{{ settingsBgOpacity }}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                v-model.number="settingsBgOpacity"
+                class="w-full accent-primary-500 cursor-pointer"
+                @click.stop
+              />
+            </div>
+          </div>
         </div>
       </aside>
     </transition>
@@ -155,6 +202,9 @@ import { useRoute } from 'vue-router'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/plugin-dialog'
+import { useSettingsStore } from '@/stores/settings'
+import { useToast } from '@/composables/useToast'
 import TerminalPreview from '@/components/TerminalPreview.vue'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
@@ -162,6 +212,8 @@ import type { SessionInfo } from '@/composables/useTauri'
 
 const { t } = useI18n()
 const appWindow = getCurrentWindow()
+const settingsStore = useSettingsStore()
+const toast = useToast()
 
 const SNAP_THRESHOLD = 15  // 贴靠阈值（像素）
 
@@ -198,6 +250,72 @@ const settingsFontSize = computed({
 })
 
 const themeOptions = computed(() => terminalPreviewRef.value?.themeNames ?? {})
+
+// ==================== Background Image ====================
+
+/** 选择背景图片时允许的图片扩展名 */
+const BG_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']
+
+const hasBgImage = computed(() => !!settingsStore.settings.ui.terminal_bg_image)
+
+/** 当前背景图片名（只回显最后一个路径分隔符后的内容） */
+const bgImageName = computed(() => {
+  const v = settingsStore.settings.ui.terminal_bg_image
+  if (!v) return ''
+  return v.split(/[\\/]/).pop() || v
+})
+
+// 不透明度滑块：直接变更 store 状态实时预览（TerminalPreview 监听 store），防抖后持久化
+const settingsBgOpacity = computed({
+  get: () => settingsStore.settings.ui.terminal_bg_opacity ?? 30,
+  set: (value: number) => {
+    settingsStore.settings.ui.terminal_bg_opacity = value
+    scheduleBgSettingsSave()
+  },
+})
+
+let bgSaveTimeout: ReturnType<typeof setTimeout> | null = null
+function scheduleBgSettingsSave() {
+  if (bgSaveTimeout) clearTimeout(bgSaveTimeout)
+  bgSaveTimeout = setTimeout(() => {
+    settingsStore.saveSettings({ ui: { ...settingsStore.settings.ui } })
+  }, 300)
+}
+
+/** 选择系统图片文件并设为终端背景（复制到应用数据目录，避免原图移动/删除后失效） */
+async function pickBgImage() {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: t('desktop.terminal.bgImage'), extensions: BG_IMAGE_EXTENSIONS }],
+    })
+    if (!selected || typeof selected !== 'string') return
+    const fileName = await invoke<string | null>('set_terminal_bg_image', { sourcePath: selected })
+    if (fileName) {
+      // 设置中存原始文件名用于回显，实际复制文件由后端统一命名为 terminal_bg.<ext>
+      const displayName = selected.split(/[\\/]/).pop() || fileName
+      await settingsStore.saveSettings({
+        ui: { ...settingsStore.settings.ui, terminal_bg_image: displayName },
+      })
+    }
+  } catch (e) {
+    console.error('[TerminalWindowView] Failed to set background image:', e)
+    toast.error(t('desktop.terminal.bgImageSetFailed'))
+  }
+}
+
+/** 移除终端背景图片 */
+async function removeBgImage() {
+  try {
+    await invoke('set_terminal_bg_image', { sourcePath: null })
+    await settingsStore.saveSettings({
+      ui: { ...settingsStore.settings.ui, terminal_bg_image: '' },
+    })
+  } catch (e) {
+    console.error('[TerminalWindowView] Failed to remove background image:', e)
+    toast.error(t('desktop.terminal.bgImageSetFailed'))
+  }
+}
 
 // 会话状态颜色（与 TerminalPreview 中的逻辑一致）
 const statusColor = computed(() => {
@@ -439,6 +557,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  if (bgSaveTimeout) {
+    clearTimeout(bgSaveTimeout)
+    bgSaveTimeout = null
+  }
   if (unlistenMainMoved) unlistenMainMoved()
   if (unlistenMainResized) unlistenMainResized()
   if (unlistenSnapped) unlistenSnapped()

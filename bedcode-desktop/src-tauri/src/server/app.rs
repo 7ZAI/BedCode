@@ -45,6 +45,83 @@ async fn health_check() -> HttpResponse {
     }))
 }
 
+/// 背景图片扩展名 → Content-Type 映射
+fn terminal_bg_content_type(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        _ => "application/octet-stream",
+    }
+}
+
+/// 终端背景图片静态端点 — 公开，无需 JWT（CSS background-image 无法携带认证头）
+///
+/// 返回应用数据目录中的 `terminal_bg.<ext>`；未设置时返回 404。
+/// 仅扫描白名单扩展名的固定前缀文件，不接受任意路径参数，无目录穿越风险。
+/// 图片为用户自选的壁纸，不含敏感信息，局域网可见可接受。
+async fn terminal_bg_image() -> HttpResponse {
+    use crate::system::constants::terminal::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX};
+    use tauri::Manager;
+
+    let data_dir = match crate::system::app_context::AppContext::global()
+        .app_handle()
+        .path()
+        .app_data_dir()
+    {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::error!("解析应用数据目录失败: {e}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    // 扫描目录找到当前背景图片（扩展名在选图时可能变化，不能写死）
+    let entries = match tokio::fs::read_dir(&data_dir).await {
+        Ok(entries) => entries,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    let prefix = format!("{TERMINAL_BG_FILE_PREFIX}.");
+    let mut found: Option<std::path::PathBuf> = None;
+    let mut iter = entries;
+    while let Ok(Some(entry)) = iter.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if let Some(ext) = name.strip_prefix(&prefix) {
+            if TERMINAL_BG_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
+                found = Some(entry.path());
+                break;
+            }
+        }
+    }
+
+    let Some(path) = found else {
+        return HttpResponse::NotFound().finish();
+    };
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => HttpResponse::Ok()
+            .content_type(terminal_bg_content_type(&ext))
+            // 前端通过 ?t= 时间戳防缓存，服务端不额外下发长缓存头
+            .insert_header(("Cache-Control", "no-cache"))
+            .body(bytes),
+        Err(e) => {
+            tracing::error!("读取终端背景图片失败 {}: {e}", path.display());
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 /// 构建路由配置
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 终端端点
@@ -52,6 +129,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
+
+    // 终端背景图片（公开，无需 JWT；CSS background-image 无法携带认证头）
+    cfg.route("/static/terminal-bg", web::get().to(terminal_bg_image));
 
     // /api scope — 挂载 JWT 网关中间件
     // 中间件内部按路径区分：/api/auth/* 公开放行；/api/plugin/* 有 JWT 则校验、

@@ -55,7 +55,13 @@
     </header>
 
     <!-- Terminal Container (xterm.js) -->
-    <div ref="terminalContainerRef" class="flex-1 overflow-hidden relative">
+    <div ref="terminalContainerRef" class="flex-1 overflow-hidden relative" :style="{ backgroundColor: containerBgColor }">
+      <!-- 终端背景图片层：渲染在 xterm 画布下方，不透明度由设置控制 -->
+      <div
+        v-if="bgImageUrl"
+        class="absolute inset-0 pointer-events-none bg-cover bg-center"
+        :style="{ backgroundImage: `url('${bgImageUrl}')`, opacity: bgOpacity / 100 }"
+      ></div>
       <!-- 滚动到底部指示器：用户向上滚动时显示，点击回到底部 -->
       <transition name="scroll-indicator">
         <button
@@ -131,6 +137,12 @@ const settingsStore = useSettingsStore()
 const terminalContainerRef = ref<HTMLElement | null>(null)
 const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
 const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'dracula')
+
+// 背景图片：设置中存原始文件名（仅用于判断是否启用与回显），
+// 实际图片由本地服务器 /static/terminal-bg 端点提供
+const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
+const bgOpacity = ref<number>(settingsStore.settings.ui.terminal_bg_opacity ?? 30)
+const bgImageUrl = ref('')
 
 // xterm.js 实例（组件内）
 let terminal: Terminal | null = null
@@ -368,8 +380,63 @@ const themeNames: Record<string, string> = {
 }
 
 function getTheme() {
-  return terminalThemes[terminalTheme.value] || terminalThemes.default
+  const base = terminalThemes[terminalTheme.value] || terminalThemes.default
+  // 背景图片启用时终端背景设为全透明，让图片层透出
+  if (bgImageUrl.value) {
+    return { ...base, background: 'rgba(0, 0, 0, 0)' }
+  }
+  return base
 }
+
+/** 终端容器底色：背景图片启用时 xterm 背景透明，由容器补上主题背景色 */
+const containerBgColor = computed(() => {
+  const base = terminalThemes[terminalTheme.value] || terminalThemes.default
+  return (base as { background: string }).background
+})
+
+/** 解析背景图片 URL：本地服务器静态端点提供图片（先查实际运行端口，?t= 时间戳防缓存） */
+async function resolveBgImageUrl() {
+  if (!bgImage.value) {
+    bgImageUrl.value = ''
+    return
+  }
+  try {
+    const status = await invoke<{ port: number }>('get_server_status')
+    // 端口为 0 表示服务器尚未启动，回退到配置端口（服务器可能稍后启动）
+    const port = status.port || settingsStore.settings.network.port
+    const url = `http://127.0.0.1:${port}/static/terminal-bg?t=${Date.now()}`
+    // 预加载校验：图片不可达（服务器未启动/404 等）时不启用透明主题，
+    // 避免终端背景已切为全透明、图片却加载不出来，看起来像丢失了背景色
+    await new Promise<void>((resolve, reject) => {
+      const probe = new Image()
+      probe.onload = () => resolve()
+      probe.onerror = () => reject(new Error(`background image not loadable: ${url}`))
+      probe.src = url
+    })
+    bgImageUrl.value = url
+  } catch (e) {
+    console.error('[TerminalPreview] Failed to resolve background image URL:', e)
+    bgImageUrl.value = ''
+  }
+}
+
+// 外部设置变化同步背景图片配置
+watch(() => settingsStore.settings.ui.terminal_bg_image, (v) => {
+  bgImage.value = v || ''
+})
+watch(() => settingsStore.settings.ui.terminal_bg_opacity, (v) => {
+  if (v != null) bgOpacity.value = v
+})
+
+// 背景图片变化：重新解析 URL 并刷新终端主题（透明/不透明切换）
+watch(bgImage, () => {
+  resolveBgImageUrl()
+})
+watch([bgImageUrl, bgOpacity], () => {
+  if (terminal) {
+    terminal.options.theme = getTheme()
+  }
+})
 
 function initWebGL(terminal: Terminal): boolean {
   try {
@@ -423,6 +490,9 @@ function initTerminal() {
     cursorWidth: 1,
     scrollback: 10000,
     allowProposedApi: true,
+    // 允许背景透明：必须在 open() 前设置，否则渲染器会把 rgba 背景强制转为不透明，
+    // 导致背景图片层被终端背景色遮盖
+    allowTransparency: true,
   })
 
   fitAddon = new FitAddon()
@@ -640,6 +710,13 @@ onMounted(async () => {
 
   initTerminal()
 
+  // 初始化背景图片（在 initTerminal 之后，仅影响后续主题刷新；
+  // 首次挂载时若已有背景图，通过一次主题刷新生效）
+  await resolveBgImageUrl()
+  if (terminal) {
+    terminal.options.theme = getTheme()
+  }
+
   // 监听 AI 插件请求当前终端输入
   pluginEventOn('__host__', 'ai-chatbox:getCurrentInput', () => {
     pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
@@ -789,11 +866,24 @@ defineExpose({
 <style scoped>
 :deep(.xterm) {
   height: 100%;
+  /* 保证 xterm 画布位于背景图片层之上 */
+  position: relative;
+  z-index: 1;
 }
 
 :deep(.xterm-viewport) {
   border-radius: 0;
   overflow-x: hidden;
+}
+
+/* xterm.css 默认为 .xterm-viewport 设置 background-color:#000（不透明黑）。
+   xterm 6 中滚动已由 .xterm-scrollable-element 接管，但该元素仍是覆盖整个
+   终端区域的定位层，位于背景图片层之上、渲染画布之下。置为透明后背景图片
+   才能透出；未设置背景图片时主题背景色由画布/滚动层绘制，此覆盖无副作用。
+   选择器带 .xterm 前缀，优先级高于 xterm.css 的 `.xterm .xterm-viewport`，
+   不依赖样式表加载顺序。 */
+:deep(.xterm .xterm-viewport) {
+  background-color: transparent;
 }
 
 :deep(.xterm-viewport)::-webkit-scrollbar {

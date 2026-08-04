@@ -34,6 +34,8 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.terminal_theme", "终端配色主题名"),
     ("ui.show_preview", "是否显示终端预览"),
     ("ui.language", "语言偏好（zh-CN / en）"),
+    ("ui.terminal_bg_image", "终端背景图片文件名（位于应用数据目录，留空表示不启用）"),
+    ("ui.terminal_bg_opacity", "终端背景图片不透明度（0-100，越小图片越淡）"),
     ("channels.output_broadcast_capacity", "PTY 输出事件广播容量 - 用于转发终端输出到前端"),
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
     ("channels.restart_broadcast_capacity", "会话重启事件广播容量 - 用于通知会话重启"),
@@ -86,6 +88,8 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "ui.terminal_theme",
         "ui.show_preview",
         "ui.language",
+        "ui.terminal_bg_image",
+        "ui.terminal_bg_opacity",
     ]),
     ("Channel 容量配置", &[
         "channels.output_broadcast_capacity",
@@ -256,6 +260,12 @@ pub struct UiConfig {
     /// 语言偏好（zh-CN / en）
     #[serde(default = "default_language")]
     pub language: String,
+    /// 终端背景图片文件名（位于应用数据目录，None 表示不启用）
+    #[serde(default)]
+    pub terminal_bg_image: Option<String>,
+    /// 终端背景图片不透明度（0-100，越小图片越淡）
+    #[serde(default = "default_terminal_bg_opacity")]
+    pub terminal_bg_opacity: u8,
 }
 
 fn default_terminal_theme() -> String {
@@ -264,6 +274,10 @@ fn default_terminal_theme() -> String {
 
 fn default_language() -> String {
     "zh-CN".to_string()
+}
+
+fn default_terminal_bg_opacity() -> u8 {
+    30
 }
 
 impl Default for UiConfig {
@@ -275,6 +289,8 @@ impl Default for UiConfig {
             terminal_theme: default_terminal_theme(),
             show_preview: true,
             language: default_language(),
+            terminal_bg_image: None,
+            terminal_bg_opacity: default_terminal_bg_opacity(),
         }
     }
 }
@@ -482,6 +498,8 @@ impl AppConfig {
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
                 show_preview: parse_value(props, "ui.show_preview", true),
                 language: parse_value(props, "ui.language", default_language()),
+                terminal_bg_image: parse_optional(props, "ui.terminal_bg_image"),
+                terminal_bg_opacity: parse_value(props, "ui.terminal_bg_opacity", default_terminal_bg_opacity()),
             },
             channels: ChannelsConfig {
                 output_broadcast_capacity: parse_value(props, "channels.output_broadcast_capacity", 2048),
@@ -560,6 +578,8 @@ impl AppConfig {
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());
         map.insert("ui.show_preview".to_string(), self.ui.show_preview.to_string());
         map.insert("ui.language".to_string(), self.ui.language.clone());
+        map.insert("ui.terminal_bg_image".to_string(), self.ui.terminal_bg_image.clone().unwrap_or_default());
+        map.insert("ui.terminal_bg_opacity".to_string(), self.ui.terminal_bg_opacity.to_string());
         map.insert("channels.output_broadcast_capacity".to_string(), self.channels.output_broadcast_capacity.to_string());
         map.insert("channels.status_broadcast_capacity".to_string(), self.channels.status_broadcast_capacity.to_string());
         map.insert("channels.restart_broadcast_capacity".to_string(), self.channels.restart_broadcast_capacity.to_string());
@@ -665,6 +685,8 @@ channels.output_broadcast_capacity=2048
         assert_eq!(config.session.default_environment, "windows");
         assert_eq!(config.ui.theme, "system");
         assert_eq!(config.ui.terminal_theme, "dracula");
+        assert_eq!(config.ui.terminal_bg_image, None);
+        assert_eq!(config.ui.terminal_bg_opacity, 30);
     }
 
     #[test]
@@ -693,6 +715,8 @@ channels.output_broadcast_capacity=2048
         assert_eq!(config.session.default_environment, config2.session.default_environment);
         assert_eq!(config.ui.theme, config2.ui.theme);
         assert_eq!(config.ui.terminal_theme, config2.ui.terminal_theme);
+        assert_eq!(config.ui.terminal_bg_image, config2.ui.terminal_bg_image);
+        assert_eq!(config.ui.terminal_bg_opacity, config2.ui.terminal_bg_opacity);
         assert_eq!(config.channels.output_broadcast_capacity, config2.channels.output_broadcast_capacity);
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
     }
@@ -738,6 +762,22 @@ channels.output_broadcast_capacity=2048
         let config = AppConfig::from_properties(&props);
         assert_eq!(config.session.default_wsl_distro, None);
         assert_eq!(config.session.default_command, Some("claude".to_string()));
+    }
+
+    #[test]
+    fn test_terminal_bg_image_from_properties() {
+        let mut props = HashMap::new();
+        props.insert("ui.terminal_bg_image".to_string(), "terminal_bg.png".to_string());
+        props.insert("ui.terminal_bg_opacity".to_string(), "45".to_string());
+        let config = AppConfig::from_properties(&props);
+        assert_eq!(config.ui.terminal_bg_image, Some("terminal_bg.png".to_string()));
+        assert_eq!(config.ui.terminal_bg_opacity, 45);
+
+        // 空字符串视为未设置
+        let mut props = HashMap::new();
+        props.insert("ui.terminal_bg_image".to_string(), String::new());
+        let config = AppConfig::from_properties(&props);
+        assert_eq!(config.ui.terminal_bg_image, None);
     }
 
     #[test]
