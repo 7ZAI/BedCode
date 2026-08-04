@@ -323,6 +323,108 @@ html:not(.dark) .mobile-app {
   opacity: 0;
 }
 
+/* ==================== 设置二级页面 ==================== */
+
+/* 分组标题 */
+.settings-section-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mobile-text-muted);
+  padding-left: 0.25rem;
+  margin: 0;
+}
+
+/* 设置项分组卡片：行与行之间用分隔线 */
+.settings-group {
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.25rem;
+  padding: 0.75rem 1rem;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid var(--mobile-border);
+}
+
+button.settings-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+button.settings-row:active {
+  background: var(--mobile-bg-elevated);
+}
+
+.settings-label {
+  font-size: 0.9375rem;
+  color: var(--mobile-text-primary);
+}
+
+.settings-desc {
+  font-size: 0.75rem;
+  color: var(--mobile-text-muted);
+  margin-top: 0.125rem;
+}
+
+.settings-value {
+  font-size: 0.875rem;
+  color: var(--mobile-text-secondary);
+}
+
+/* 下拉选择器：隐藏原生箭头，用统一的 chevron */
+.settings-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 7.5rem;
+  padding: 0.4375rem 2rem 0.4375rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--mobile-text-primary);
+  background-color: var(--mobile-input-bg);
+  border: 1px solid var(--mobile-input-border);
+  border-radius: 0.625rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 1rem;
+  transition: border-color 0.15s ease;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--mobile-accent);
+}
+
+/* 数字输入框 */
+.settings-number-input {
+  width: 4.5rem;
+  padding: 0.4375rem 0.5rem;
+  font-size: 0.875rem;
+  text-align: center;
+  color: var(--mobile-text-primary);
+  background: var(--mobile-input-bg);
+  border: 1px solid var(--mobile-input-border);
+  border-radius: 0.625rem;
+  transition: border-color 0.15s ease;
+}
+
+.settings-number-input:focus {
+  outline: none;
+  border-color: var(--mobile-accent);
+}
+
 /* ==================== Modal Transitions ==================== */
 
 /* Center Modal: scale + fade */

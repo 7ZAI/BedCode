@@ -20,8 +20,9 @@ export interface MobileSettings {
   notifyInBackground: boolean
   vibrate: boolean
   soundOnTaskComplete: boolean
-  fontSize: 'small' | 'medium' | 'large'
-  maxCachedTerminals: number
+  fontSize: 'normal' | 'large' | 'xlarge'
+  /** 最大可同时打开的终端数量 */
+  maxOpenTerminals: number
   /** 优先认证方式：配对码 / 生物认证 */
   preferredAuthMethod: 'pairing_code' | 'biometric'
 }
@@ -36,16 +37,23 @@ export const defaultMobileSettings: MobileSettings = {
   notifyInBackground: true,
   vibrate: true,
   soundOnTaskComplete: true,
-  fontSize: 'medium',
-  maxCachedTerminals: 10,
+  fontSize: 'normal',
+  maxOpenTerminals: 5,
   preferredAuthMethod: 'pairing_code',
 }
 
-/** 字体大小映射到终端字体大小 */
+/** 字体大小映射到终端字体大小（正常 = 旧版“中”，向上提供大、超大两档） */
 const fontSizeMap = {
-  small: 12,
-  medium: 14,
+  normal: 14,
   large: 16,
+  xlarge: 18,
+}
+
+/** 旧版三档字体大小迁移到新档位 */
+const legacyFontSizeMap: Record<string, MobileSettings['fontSize']> = {
+  small: 'normal',
+  medium: 'normal',
+  large: 'large',
 }
 
 // 模块级单例状态，跨设置主页与二级页面共享
@@ -93,7 +101,12 @@ async function loadSettings(): Promise<void> {
     if (saved) {
       try {
         const parsed = JSON.parse(saved)
-        settings.value = { ...defaultMobileSettings, ...parsed }
+        // 旧字段 maxCachedTerminals（终端缓存数量）迁移到 maxOpenTerminals
+        const { maxCachedTerminals, ...rest } = parsed
+        settings.value = { ...defaultMobileSettings, ...rest }
+        if (rest.maxOpenTerminals == null && typeof maxCachedTerminals === 'number') {
+          settings.value.maxOpenTerminals = maxCachedTerminals
+        }
       } catch (e) {
         console.error('Failed to load settings:', e)
       }
@@ -102,9 +115,16 @@ async function loadSettings(): Promise<void> {
     // 尝试从后端加载移动端设置并同步
     try {
       const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
+      // DB 中同时存在新旧 key 时只用新 key，避免旧行覆盖用户已修改的新值
+      const hasMaxOpenTerminals = dbSettings.some(s => s.key === 'mobile.maxOpenTerminals')
       for (const s of dbSettings) {
         if (s.key.startsWith('mobile.')) {
-          const settingKey = s.key.replace('mobile.', '')
+          let settingKey = s.key.replace('mobile.', '')
+          // 旧字段兼容：终端缓存数量 → 最大可打开终端数量（已有新 key 时跳过旧行）
+          if (settingKey === 'maxCachedTerminals') {
+            if (hasMaxOpenTerminals) continue
+            settingKey = 'maxOpenTerminals'
+          }
           const value = s.value === 'true' ? true : s.value === 'false' ? false : isNaN(Number(s.value)) ? s.value : Number(s.value)
           ;(settings.value as any)[settingKey] = value
         }
@@ -113,11 +133,23 @@ async function loadSettings(): Promise<void> {
       // Backend may not be available
     }
 
+    // 迁移旧版设置值（字体档位、终端数量范围）
+    migrateLegacySettings()
+
     // 同步到 settingsStore（使设置生效）
     syncToSettingsStore()
   })()
 
   return loadPromise
+}
+
+/** 归一化旧版设置值：字体档位迁移到新三档，终端数量限制在 1-20 */
+function migrateLegacySettings() {
+  const fs = settings.value.fontSize as string
+  if (!['normal', 'large', 'xlarge'].includes(fs)) {
+    settings.value.fontSize = legacyFontSizeMap[fs] ?? 'normal'
+  }
+  settings.value.maxOpenTerminals = Math.min(20, Math.max(1, Math.round(settings.value.maxOpenTerminals || defaultMobileSettings.maxOpenTerminals)))
 }
 
 /** 重置为默认设置（主题恢复跟随系统、语言恢复中文），并立即持久化 */

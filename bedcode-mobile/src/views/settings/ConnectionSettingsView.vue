@@ -1,37 +1,47 @@
 <template>
   <SettingsSubPage :title="$t('settings.connection.title')">
-    <div class="px-4 py-4 space-y-4">
-      <div class="flex items-center justify-between">
-        <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.autoReconnect') }}</span>
-        <Toggle v-model="settings.autoReconnect" />
-      </div>
+    <div class="px-4 py-4 space-y-5">
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ $t('settings.connection.reconnectSection') }}</h2>
+        <div class="settings-group">
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.autoReconnect') }}</span>
+            <Toggle v-model="settings.autoReconnect" />
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.keepAlive') }}</span>
+            <Toggle v-model="settings.keepAlive" />
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.reconnectInterval') }}</span>
+            <input
+              v-model.number="settings.reconnectInterval"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="60"
+              class="settings-number-input shrink-0"
+            />
+          </div>
+        </div>
+      </section>
 
-      <div class="flex items-center justify-between">
-        <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.keepAlive') }}</span>
-        <Toggle v-model="settings.keepAlive" />
-      </div>
-
-      <div class="flex items-center justify-between">
-        <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.reconnectInterval') }}</span>
-        <input
-          v-model.number="settings.reconnectInterval"
-          type="number"
-          min="1"
-          max="60"
-          class="w-16 bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-2 py-1 text-right text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-        />
-      </div>
-
-      <div class="flex items-center justify-between">
-        <span class="text-sm text-[var(--mobile-text-secondary)]">{{ $t('settings.connection.defaultPort') }}</span>
-        <input
-          v-model.number="settings.defaultPort"
-          type="number"
-          min="1"
-          max="65535"
-          class="w-20 bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-lg px-2 py-1 text-right text-sm text-[var(--mobile-text-primary)] focus:border-[var(--mobile-accent)] focus:outline-none transition-colors"
-        />
-      </div>
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ $t('settings.connection.networkSection') }}</h2>
+        <div class="settings-group">
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.defaultPort') }}</span>
+            <input
+              v-model.number="settings.defaultPort"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              max="65535"
+              class="settings-number-input shrink-0"
+            />
+          </div>
+        </div>
+      </section>
     </div>
   </SettingsSubPage>
 </template>

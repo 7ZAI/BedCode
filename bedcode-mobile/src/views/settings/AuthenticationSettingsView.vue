@@ -1,9 +1,9 @@
 <template>
   <SettingsSubPage :title="$t('settings.authentication.title')">
-    <div class="px-4 py-4 space-y-4">
+    <div class="px-4 py-4 space-y-5">
       <!-- 优先认证方式 -->
       <section class="space-y-2">
-        <p class="text-sm font-medium text-[var(--mobile-text-primary)]">{{ $t('settings.authentication.preferredMethod') }}</p>
+        <h2 class="settings-section-title">{{ $t('settings.authentication.preferredMethod') }}</h2>
         <div class="flex gap-2.5">
           <button
             v-for="method in authMethods"
@@ -11,7 +11,7 @@
             class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-sm font-medium transition-all duration-200 active:opacity-80"
             :class="settings.preferredAuthMethod === method.value
               ? 'bg-[var(--mobile-accent)]/15 border-[var(--mobile-accent)] text-[var(--mobile-accent)]'
-              : 'bg-[var(--mobile-bg-secondary)] border-[var(--mobile-border)] text-[var(--mobile-text-secondary)]'"
+              : 'bg-[var(--mobile-bg-elevated)] border-[var(--mobile-border)] text-[var(--mobile-text-secondary)]'"
             @click="settings.preferredAuthMethod = method.value"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -24,7 +24,7 @@
       </section>
 
       <!-- 生物认证密钥 -->
-      <section class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 space-y-3">
+      <section class="settings-group p-4 space-y-3">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2.5">
             <span class="flex-shrink-0 flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--mobile-accent)]/12 text-[var(--mobile-accent)]">

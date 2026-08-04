@@ -1,47 +1,59 @@
 <template>
   <SettingsSubPage :title="$t('settings.about.title')">
-    <div class="px-4 py-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <span class="text-[var(--mobile-text-muted)]">{{ $t('settings.about.currentVersion') }}</span>
-        <span class="text-[var(--mobile-text-disabled)]">v{{ appVersion }}</span>
-      </div>
-
-      <button
-        class="w-full text-left text-[var(--mobile-text-muted)] py-2 hover:text-[var(--mobile-accent)] transition-colors"
-        @click="openGitHub"
-      >
-        {{ $t('settings.about.githubRepo') }}
-      </button>
+    <div class="px-4 py-4 space-y-5">
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ $t('settings.about.infoSection') }}</h2>
+        <div class="settings-group">
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.about.currentVersion') }}</span>
+            <span class="settings-value">v{{ appVersion }}</span>
+          </div>
+          <button class="settings-row" @click="openGitHub">
+            <span class="settings-label">{{ $t('settings.about.githubRepo') }}</span>
+            <svg class="w-4 h-4 shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      </section>
 
       <!-- 检查更新 -->
-      <div class="space-y-2">
-        <!-- 检查按钮 -->
-        <button
-          v-if="updateStatus === 'idle' || updateStatus === 'latest' || updateStatus === 'failed'"
-          class="w-full text-left py-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
-          @click="handleCheckUpdate"
-        >
-          {{ getUpdateStatusText() }}
-        </button>
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ $t('settings.about.updateSection') }}</h2>
+        <div class="settings-group">
+          <!-- 空闲/已是最新/失败：可点击检查 -->
+          <button
+            v-if="updateStatus === 'idle' || updateStatus === 'latest' || updateStatus === 'failed'"
+            class="settings-row"
+            @click="handleCheckUpdate"
+          >
+            <span class="settings-label">{{ getUpdateStatusText() }}</span>
+            <svg class="w-4 h-4 shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
 
-        <!-- 检查中 -->
-        <span v-if="updateStatus === 'checking'" class="flex items-center gap-2 py-2 text-[var(--mobile-text-muted)]">
-          <span class="inline-block w-3 h-3 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
-          {{ $t('settings.about.checkingUpdate') }}
-        </span>
+          <!-- 检查中 -->
+          <div v-if="updateStatus === 'checking'" class="settings-row">
+            <span class="settings-label text-[var(--mobile-text-muted)]">{{ $t('settings.about.checkingUpdate') }}</span>
+            <span class="inline-block w-4 h-4 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
+          </div>
+
+          <!-- 失败时显示错误 -->
+          <div v-if="updateStatus === 'failed' && errorMessage" class="settings-row">
+            <span class="text-xs text-[var(--mobile-error)]">{{ errorMessage }}</span>
+          </div>
+        </div>
 
         <!-- 发现新版本 - 打开浏览器下载 -->
         <button
           v-if="updateStatus === 'available' && updateInfo"
-          class="w-full bg-[var(--mobile-accent)]/15 border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/25 transition-colors"
+          class="w-full bg-[var(--mobile-accent)]/15 border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-3 rounded-xl text-sm font-medium active:bg-[var(--mobile-accent)]/25 transition-colors"
           @click="handleDownloadUpdate"
         >
           {{ $t('settings.about.downloadUpdate') }} ({{ updateInfo.version }})
         </button>
-
-        <!-- 失败时显示错误 -->
-        <p v-if="updateStatus === 'failed'" class="text-xs text-[var(--mobile-error)]">{{ errorMessage }}</p>
-      </div>
+      </section>
     </div>
 
     <!-- Browser Confirm Modal -->
@@ -141,7 +153,7 @@ function handleDownloadUpdate() {
 }
 
 .confirm-text {
-  font-size: clamp(0.875rem, 1rem, 1.125rem);
+  font-size: 1rem;
   color: var(--mobile-text-primary);
   margin: 0;
 }
@@ -158,9 +170,9 @@ function handleDownloadUpdate() {
 
 .confirm-btn {
   flex: 1;
-  padding: clamp(0.625rem, 0.75rem, 1rem);
+  padding: 0.75rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.8125rem, 0.875rem, 1rem);
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
