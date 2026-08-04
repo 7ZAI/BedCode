@@ -121,7 +121,7 @@ impl MessageBus {
                         }
                         if !dispatcher.is_activated(plugin_id) {
                             tracing::warn!(
-                                "MessageBus: subscriber '{}' not activated, skipping",
+                                "MessageBus: subscriber '{}' not  activated, skipping",
                                 plugin_id
                             );
                             continue;

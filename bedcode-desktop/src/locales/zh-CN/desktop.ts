@@ -258,6 +258,7 @@ export default {
       fsAuthAllow: '允许',
       fsAuthDeny: '拒绝',
       alwaysOn: '始终启用',
+      noFileservicePermission: '插件 {plugin} 缺少 fileservice 权限',
       toolboxPanels: '工具箱',
       aiChatbox: {
         noProvider: '未配置模型',

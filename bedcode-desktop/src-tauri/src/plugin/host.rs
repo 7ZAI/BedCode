@@ -44,6 +44,8 @@ pub struct PluginHost {
     wasm_host_ctx: Arc<WasmHostContext>,
     /// 消息总线
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
+    /// 文件服务注册表（宿主通用文件服务能力，规格第 4 节）
+    file_service: Arc<crate::plugin::file_service::FileServiceRegistry>,
 }
 
 impl PluginHost {
@@ -76,6 +78,14 @@ impl PluginHost {
 
         // 创建消息总线（dispatcher 延迟注入，在 init_message_bus 中设置）
         let message_bus = Arc::new(crate::plugin::message_bus::MessageBus::new());
+
+        // 文件服务注册表：必须在 auto_activate 之前创建 ——
+        // 插件激活时可能立即调用 host_filesrv_mount；宿主引用待 PluginHost
+        // Arc 化后经 set_plugin_host 两阶段注入
+        let file_service = crate::plugin::file_service::FileServiceRegistry::new(
+            wasm_runtime.fs_auth().clone(),
+            Some(app_handle.clone()),
+        );
 
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db.clone(),
@@ -190,6 +200,7 @@ impl PluginHost {
             wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
             wasm_host_ctx,
             message_bus,
+            file_service,
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -297,6 +308,11 @@ impl PluginHost {
     /// 获取消息总线引用
     pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
         &self.message_bus
+    }
+
+    /// 获取文件服务注册表（宿主通用文件服务能力）
+    pub fn file_service(&self) -> &Arc<crate::plugin::file_service::FileServiceRegistry> {
+        &self.file_service
     }
 
     /// 初始化消息总线 dispatcher（必须在 new() 之后调用）
@@ -554,6 +570,9 @@ impl PluginHost {
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
+        // 摘除文件服务挂载（fail-closed：停用插件 = 服务消失，规格 8 节）
+        self.file_service.unmount_plugin(plugin_id).await;
+
         // 移除该插件的会话生命周期监听器与输入监听器
         {
             let session_manager = self.wasm_host_ctx().session_manager_arc();
@@ -579,6 +598,51 @@ impl PluginHost {
         }
 
         Ok(())
+    }
+
+    /// 调用 WASM 插件的上传策略钩子（fail-closed，规格 4.2 节）
+    ///
+    /// 供 FileServiceRegistry 在上传会话创建时调用：锁 wasm_plugins →
+    /// LoadedWasmPlugin::on_upload_request(meta_json) → 解析返回的决定。
+    /// 插件未加载 / 未导出钩子 / 调用失败 / 决定 JSON 非法时一律拒绝。
+    /// （2 秒超时由调用方 registry 用 tokio::time::timeout 包裹）
+    pub async fn call_upload_hook(
+        &self,
+        plugin_id: &str,
+        meta_json: &str,
+    ) -> bedcode_plugin_api::UploadHookDecision {
+        use bedcode_plugin_api::UploadHookDecision;
+
+        let mut wasm_plugins = self.wasm_plugins.write().await;
+        let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) else {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "call_upload_hook: wasm plugin not loaded, denying (fail-closed)"
+            );
+            return UploadHookDecision::deny("wasm plugin not loaded");
+        };
+
+        match wasm_plugin.on_upload_request(meta_json) {
+            Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
+                Ok(decision) => decision,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        plugin_id = %plugin_id,
+                        "call_upload_hook: invalid decision JSON from plugin, denying (fail-closed)"
+                    );
+                    UploadHookDecision::deny("invalid upload hook decision")
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    plugin_id = %plugin_id,
+                    "call_upload_hook: plugin hook call failed, denying (fail-closed)"
+                );
+                UploadHookDecision::deny("upload hook call failed")
+            }
+        }
     }
 
     /// 热重载 WASM 插件（开发模式）
@@ -1198,6 +1262,7 @@ impl Clone for PluginHost {
             wasm_plugins: self.wasm_plugins.clone(),
             wasm_host_ctx: self.wasm_host_ctx.clone(),
             message_bus: self.message_bus.clone(),
+            file_service: self.file_service.clone(),
         }
     }
 }

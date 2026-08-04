@@ -551,6 +551,13 @@ pub fn run() {
             commands::plugin::plugin_list_rust_commands,
             commands::plugin::plugin_dev_reload,
             commands::plugin::plugin_fs_auth_respond,
+            // File Service (Plugin)
+            commands::file_service::plugin_filesrv_mount,
+            commands::file_service::plugin_filesrv_update_roots,
+            commands::file_service::plugin_filesrv_dispose,
+            commands::file_service::plugin_filesrv_respond_upload_request,
+            commands::file_service::plugin_filesrv_get_peer,
+            commands::file_service::plugin_pick_directory,
             // Server
             commands::server::server_start,
             commands::server::server_stop,

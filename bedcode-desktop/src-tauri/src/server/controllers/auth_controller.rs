@@ -58,6 +58,19 @@ pub async fn verify_pairing_code(
 
     if !is_valid {
         tracing::warn!(device_name = ?body.device_name, "Pairing code verification failed");
+        // 记录连接历史（配对码认证失败）
+        {
+            let db = ctx.db();
+            let db_guard = db.lock().await;
+            if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+                &body.fingerprint,
+                crate::db::connection_method::PAIRING_CODE,
+                crate::db::connection_result::FAILED,
+                Some(&body.address),
+            ) {
+                tracing::warn!(error = %e, "Failed to record connection history");
+            }
+        }
         let current_code = pairing_service.get_current_code().await;
         let msg = if current_code.is_none() {
             "No pairing code available. Please generate a new code."
@@ -87,6 +100,20 @@ pub async fn verify_pairing_code(
         let db_guard = db.lock().await;
         if let Err(e) = db_guard.add_pairing(&display_name, &body.fingerprint, "", Some(&body.address)) {
             tracing::warn!(device_name = %body.device_name, error = %e, "Failed to record pairing");
+        }
+    }
+
+    // 记录连接历史（配对码认证成功）
+    {
+        let db = ctx.db();
+        let db_guard = db.lock().await;
+        if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+            &body.fingerprint,
+            crate::db::connection_method::PAIRING_CODE,
+            crate::db::connection_result::SUCCESS,
+            Some(&body.address),
+        ) {
+            tracing::warn!(error = %e, "Failed to record connection history");
         }
     }
 
@@ -149,6 +176,20 @@ pub async fn qr_connect(
                 }
             }
 
+            // 记录连接历史（QR 认证成功）
+            {
+                let db = ctx.db();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+                    &fingerprint,
+                    crate::db::connection_method::QR,
+                    crate::db::connection_result::SUCCESS,
+                    Some(&address),
+                ) {
+                    tracing::warn!(error = %e, "Failed to record connection history");
+                }
+            }
+
             let _ = app_handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
                 addr: address,
                 device_id,
@@ -165,6 +206,19 @@ pub async fn qr_connect(
         }
         Err(e) => {
             tracing::warn!(error = %e, "QR token verification failed");
+            // 记录连接历史（QR 认证失败）
+            {
+                let db = ctx.db();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+                    &body.fingerprint,
+                    crate::db::connection_method::QR,
+                    crate::db::connection_result::FAILED,
+                    Some(&body.address),
+                ) {
+                    tracing::warn!(error = %e, "Failed to record connection history");
+                }
+            }
             let error_msg = e.to_string();
             let user_msg = if error_msg.contains("expired") {
                 "二维码已过期，请重新生成"
@@ -190,6 +244,21 @@ pub async fn reauthenticate(
 
     match jwt_service.verify_token_with_expiry(&body.session_token) {
         Ok(claims) => {
+            // 记录连接历史（JWT 静默重连成功）
+            if let Some(ref fp) = claims.fingerprint {
+                let ctx = AppContext::global();
+                let db = ctx.db();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+                    fp,
+                    crate::db::connection_method::JWT,
+                    crate::db::connection_result::SUCCESS,
+                    None,
+                ) {
+                    tracing::warn!(error = %e, "Failed to record connection history");
+                }
+            }
+
             // 更新配对设备的 last_seen 和 connect_count
             if let Some(ref fp) = claims.fingerprint {
                 let ctx = AppContext::global();
@@ -220,6 +289,20 @@ pub async fn reauthenticate(
         }
         Err(e) => {
             tracing::warn!(error = ?e, "Reauth JWT verification failed");
+            // 记录连接历史（JWT 静默重连失败）
+            {
+                let ctx = AppContext::global();
+                let db = ctx.db();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+                    &body.fingerprint,
+                    crate::db::connection_method::JWT,
+                    crate::db::connection_result::FAILED,
+                    None,
+                ) {
+                    tracing::warn!(error = %e, "Failed to record connection history");
+                }
+            }
             let msg = match e {
                 crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
                 _ => "Invalid token",

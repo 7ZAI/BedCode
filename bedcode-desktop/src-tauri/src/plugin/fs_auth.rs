@@ -69,8 +69,12 @@ impl FsAuthChecker {
         let path_whitelist = Vec::new();
 
         // 插件白名单：受信任的内置插件
+        // - auto-task: 自动化任务插件，操作预配置目录
+        // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页显式配置，
+        //   信任模型 = 配对 + 用户显式配置的目录白名单，插件自身第一方可信
         let mut plugin_whitelist = HashSet::new();
         plugin_whitelist.insert("com.bedcode.auto-task".to_string());
+        plugin_whitelist.insert("com.bedcode.file-transfer".to_string());
 
         Self {
             path_whitelist,

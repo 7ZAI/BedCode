@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::server::controllers::{
     auth_controller, session_controller, config_controller, file_controller,
-    plugin_controller, git_controller,
+    file_service_controller, plugin_controller, git_controller,
 };
 use crate::server::ws::terminal_ws::TerminalWs;
 use crate::system::constants::server::{
@@ -196,6 +196,19 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/git/branches", web::get().to(git_controller::get_branches))
             .route("/git/status", web::get().to(git_controller::get_status))
             .route("/git/checkout", web::post().to(git_controller::checkout))
+            // 插件文件服务（复数 /plugins，走正常 JWT 校验；
+            // 单数 /api/plugin/* 是插件动态端点代理，两者互不影响）
+            .service(
+                web::scope("/plugins/{plugin_id}")
+                    .route("/{mount}/list", web::get().to(file_service_controller::list_dir))
+                    .route("/{mount}/file", web::get().to(file_service_controller::download_file))
+                    .route("/{mount}/file", web::head().to(file_service_controller::head_file))
+                    .route("/{mount}/upload", web::post().to(file_service_controller::create_upload))
+                    .route("/{mount}/upload/{sid}", web::put().to(file_service_controller::append_upload))
+                    .route("/{mount}/upload/{sid}", web::get().to(file_service_controller::query_upload))
+                    .route("/{mount}/upload/{sid}", web::delete().to(file_service_controller::cancel_upload))
+                    .route("/{mount}/upload/{sid}/complete", web::post().to(file_service_controller::complete_upload)),
+            )
             // 插件动态 HTTP 端点代理 — 中间件允许 JWT 或 plugin token
             .route("/plugin/{plugin_id}/{path:.*}", web::route().to(plugin_controller::plugin_http_endpoint))
     );

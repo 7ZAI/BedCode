@@ -9,3 +9,5 @@ pub mod qr_token;
 pub use jwt::*;
 pub use pairing::*;
 pub use qr_token::*;
+pub mod biometric;
+pub use biometric::*;

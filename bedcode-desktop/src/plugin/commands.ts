@@ -5,7 +5,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import type { PluginInfo } from './types'
+import type { PluginInfo, PeerFileServiceInfo } from './types'
 
 /** Registry entry types from Rust backend */
 export interface CommandEntry {
@@ -126,4 +126,69 @@ export async function pluginDevReload(pluginId: string): Promise<void> {
 /** 获取插件激活状态映射（plugin_id → is_activated） */
 export async function pluginGetActivatedState(): Promise<Record<string, boolean>> {
   return await invoke<Record<string, boolean>>('plugin_get_activated_state')
+}
+
+// ==================== File Service ====================
+
+/** 文件服务挂载结果（与 SDK Rust MountResult camelCase 对应） */
+export interface FileSrvMountResult {
+  mountPath: string
+  basePath: string
+}
+
+/** 挂载文件服务（TS 通道；options 为不含 onUploadRequest 函数的 MountOptions） */
+export async function pluginFilesrvMount(
+  pluginId: string,
+  options: Record<string, unknown>,
+): Promise<FileSrvMountResult> {
+  return await invoke<FileSrvMountResult>('plugin_filesrv_mount', {
+    pluginId,
+    optionsJson: JSON.stringify(options),
+  })
+}
+
+/** 更新挂载点的允许目录根 */
+export async function pluginFilesrvUpdateRoots(
+  pluginId: string,
+  mountPath: string,
+  roots: string[],
+): Promise<void> {
+  return await invoke('plugin_filesrv_update_roots', {
+    pluginId,
+    mountPath,
+    rootsJson: JSON.stringify(roots),
+  })
+}
+
+/** 摘除挂载点（对应 TS SDK mount.dispose()） */
+export async function pluginFilesrvDispose(pluginId: string, mountPath: string): Promise<void> {
+  return await invoke('plugin_filesrv_dispose', { pluginId, mountPath })
+}
+
+/** 回填 Webview 上传策略钩子决定 */
+export async function pluginFilesrvRespondUploadRequest(
+  pluginId: string,
+  requestId: string,
+  allow: boolean,
+  reason?: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_respond_upload_request', {
+    pluginId,
+    requestId,
+    allow,
+    reason: reason ?? null,
+  })
+}
+
+/** 获取对端文件服务信息（未公告返回 null） */
+export async function pluginFilesrvGetPeer(
+  pluginId: string,
+  peerId: string,
+): Promise<PeerFileServiceInfo | null> {
+  return await invoke<PeerFileServiceInfo | null>('plugin_filesrv_get_peer', { pluginId, peerId })
+}
+
+/** 系统目录选择对话框（用户取消返回 null） */
+export async function pluginPickDirectory(pluginId: string): Promise<string | null> {
+  return await invoke<string | null>('plugin_pick_directory', { pluginId })
 }

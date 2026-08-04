@@ -519,6 +519,44 @@ impl LoadedWasmPlugin {
         Ok(())
     }
 
+    /// 调用插件的上传策略钩子导出函数（可选，ABI v5）
+    ///
+    /// 返回插件的 UploadHookDecision JSON。插件未导出该函数、返回空结果
+    /// 或调用失败时返回 Err，由调用方按 fail-closed 语义拒绝上传
+    pub fn on_upload_request(&mut self, meta_json: &str) -> crate::Result<String> {
+        // 可选导出：未实现钩子的插件（或旧版 ABI 产物）返回错误 → 宿主拒绝上传
+        let func = self.get_export_func(abi::export::ON_UPLOAD_REQUEST)?;
+
+        let (meta_ptr, meta_len) = self.write_string_to_memory(meta_json)?;
+        let out_ptr = self.allocate_memory(8)?;
+
+        func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(meta_ptr as i32),
+                wasmtime::Val::I32(meta_len as i32),
+                wasmtime::Val::I32(out_ptr as i32),
+            ],
+            &mut [],
+        )
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e))
+        })?;
+
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        self.dealloc_plugin_memory(out_ptr, abi::RESULT_PAIR_SIZE as u32);
+
+        if ptr == 0 && len == 0 {
+            return Err(crate::AppError::Plugin(
+                "WASM on_upload_request() returned empty decision".to_string(),
+            ));
+        }
+
+        let result = self.read_string_from_memory(ptr, len);
+        self.dealloc_plugin_memory(ptr, len);
+        result
+    }
+
     /// 获取插件的 manifest JSON
     pub fn get_manifest(&mut self) -> crate::Result<String> {
         let out_ptr = self.allocate_memory(8)?;

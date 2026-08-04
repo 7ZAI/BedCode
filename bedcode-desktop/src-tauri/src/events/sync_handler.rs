@@ -68,6 +68,9 @@ impl SyncEventHandler {
             DesktopSyncEvent::TaskQueueChanged { session_id, queue_count, action } => {
                 self.handle_task_queue_changed(&session_id, queue_count, &action).await;
             }
+            DesktopSyncEvent::FileServiceChanged { plugin_id, mount_path, available, operations } => {
+                self.handle_file_service_changed(&plugin_id, &mount_path, available, operations).await;
+            }
         }
     }
 
@@ -274,6 +277,25 @@ impl SyncEventHandler {
         };
 
         // 队列变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理文件服务挂载可用性变更事件（桌面宿主自动发出，不经插件）
+    async fn handle_file_service_changed(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        available: bool,
+        operations: Vec<bedcode_plugin_api::FileOperation>,
+    ) {
+        let payload = SyncPayload::FileServiceChanged {
+            plugin_id: plugin_id.to_string(),
+            mount_path: mount_path.to_string(),
+            available,
+            operations,
+        };
+
+        // 挂载可用性广播给所有客户端（移动端插件经 sync:file_service 订阅）
         self.broadcast_sync_data(payload, None).await;
     }
 

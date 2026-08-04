@@ -284,3 +284,50 @@ pub(super) fn host_fs_delete(
         }
     }
 }
+
+/// 文件系统：检查文件是否存在
+///
+/// 参数：(path_ptr, path_len)
+/// 返回：1 存在，0 不存在，-1 错误（权限拒绝或内存读取失败）
+pub(super) fn host_fs_exists(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string_consume(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_exists: failed to read path");
+            return -1;
+        }
+    };
+
+    // 权限校验（存在性检查属于读操作）
+    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_READ, "host_fs_exists") {
+        return -1;
+    }
+
+    // 访问校验
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(fs_auth.check(&plugin_id, &path, FsOp::Read));
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_exists: access denied by fs_auth");
+        return -1;
+    }
+
+    // 支持 WSL UNC 路径
+    if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(&path) {
+        match wsl_fs::exists_via_wsl(&distro, &wsl_path) {
+            Ok(exists) => return if exists { 1 } else { 0 },
+            Err(e) => {
+                tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_exists: WSL check failed");
+                return -1;
+            }
+        }
+    }
+
+    if std::path::Path::new(&path).exists() { 1 } else { 0 }
+}

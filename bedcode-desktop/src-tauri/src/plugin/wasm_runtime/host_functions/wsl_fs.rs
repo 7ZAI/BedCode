@@ -149,6 +149,12 @@ pub fn delete_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 通过 wsl.exe 检查文件是否存在（`test -e`）
+pub fn exists_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<bool> {
+    let output = run_wsl_output(distro, &["test", "-e", wsl_path])?;
+    Ok(output.status.success())
+}
+
 /// 判断路径是否为 WSL UNC 路径（兼容 / 与 \ 分隔符混合）
 pub fn is_wsl_unc_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\");

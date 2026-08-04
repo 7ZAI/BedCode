@@ -86,6 +86,18 @@ pub enum DesktopSyncEvent {
         /// 触发动作：add / remove / clear / dequeue
         action: String,
     },
+
+    // === 文件服务相关（内网文件传输插件规格阶段 2） ===
+    /// 桌面侧插件挂载点可用性变更（宿主在 registry mount/unmount/update_roots
+    /// 成功后自动发出，不经插件；移动端经 SyncData 接收后转 MessageBus）
+    FileServiceChanged {
+        plugin_id: String,
+        mount_path: String,
+        /// true = 挂载可用（mount/update_roots），false = 已摘除（unmount）
+        available: bool,
+        /// 挂载支持的操作集合（unmount 时为空）
+        operations: Vec<bedcode_plugin_api::FileOperation>,
+    },
 }
 
 impl AppEvent for DesktopSyncEvent {}

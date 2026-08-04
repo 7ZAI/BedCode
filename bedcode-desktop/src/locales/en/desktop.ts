@@ -258,6 +258,7 @@ export default {
       fsAuthAllow: 'Allow',
       fsAuthDeny: 'Deny',
       alwaysOn: 'Always on',
+      noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
       toolboxPanels: 'Toolbox',
       aiChatbox: {
         noProvider: 'No model configured',

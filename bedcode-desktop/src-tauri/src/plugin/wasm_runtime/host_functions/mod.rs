@@ -5,7 +5,8 @@
 //! 2. 提供跨域共享的辅助：线性内存读写（[`memory`]）、统一权限守卫（[`check_permission`]）
 //!
 //! 各 Host Function 的实现按功能域拆分到子模块，与 SDK `host/*` trait 一一对应：
-//! storage / database / terminal / session / events / http / log / fs / config / bus / lifecycle
+//! storage / database / terminal / session / events / http / log / fs / config / bus /
+//! lifecycle / file_service / transfer
 //!
 //! 所有 Host Function 签名约定：
 //! - 字符串参数以 (ptr, len) 对传递，指向 WASM 线性内存
@@ -17,6 +18,7 @@ mod bus;
 mod config;
 mod database;
 mod events;
+pub(super) mod file_service;
 mod fs;
 mod http;
 mod lifecycle;
@@ -26,6 +28,7 @@ mod session;
 mod status;
 mod storage;
 mod terminal;
+pub(super) mod transfer;
 mod wsl_fs;
 
 use crate::plugin::wasm_runtime::{WasmHostContext, WasmPluginState};
@@ -99,6 +102,7 @@ pub(super) fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> c
     register!(abi::import::FS_WRITE, fs::host_fs_write);
     register!(abi::import::FS_COPY, fs::host_fs_copy);
     register!(abi::import::FS_DELETE, fs::host_fs_delete);
+    register!(abi::import::FS_EXISTS, fs::host_fs_exists);
 
     // 配置读取
     register!(abi::import::CONFIG_GET, config::host_config_get);
@@ -107,6 +111,16 @@ pub(super) fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> c
     register!(abi::import::BUS_PUBLISH, bus::host_bus_publish);
     register!(abi::import::BUS_SUBSCRIBE, bus::host_bus_subscribe);
     register!(abi::import::BUS_UNSUBSCRIBE, bus::host_bus_unsubscribe);
+
+    // 文件服务（v5）
+    register!(abi::import::FILESRV_MOUNT, file_service::host_filesrv_mount);
+    register!(abi::import::FILESRV_UNMOUNT, file_service::host_filesrv_unmount);
+    register!(abi::import::FILESRV_UPDATE_ROOTS, file_service::host_filesrv_update_roots);
+    register!(abi::import::FILESRV_GET_PEER, file_service::host_filesrv_get_peer);
+
+    // 传输引擎（v5）
+    register!(abi::import::TRANSFER_START, transfer::host_transfer_start);
+    register!(abi::import::TRANSFER_CANCEL, transfer::host_transfer_cancel);
 
     Ok(())
 }

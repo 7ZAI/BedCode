@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::enums::auth::AuthPayload;
 use crate::enums::control::{SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
+use crate::enums::file_service::FileServicePayload;
 use crate::enums::special_key::KeyCombo;
 use crate::enums::summary::SessionSummary;
 use crate::enums::SyncPayload;
@@ -202,6 +203,24 @@ pub enum Message {
         /// 认证令牌
         #[serde(default = "default_token")]
         token: String,
+    },
+
+    /// 文件服务控制面消息 (移动端 → 桌面端，内网文件传输插件规格阶段 2)
+    ///
+    /// 承载移动文件服务的 Announce（端口/token/挂载公告）与 Withdraw（服务撤回）。
+    /// 与移动端 `model/message.rs` 的同名变体双写互引：两端
+    /// 新增/变更字段必须同步
+    #[serde(rename = "file_service")]
+    FileService {
+        #[serde(default = "generate_message_id")]
+        message_id: String,
+        #[serde(default)]
+        expect_response: bool,
+        timestamp: i64,
+        /// 认证令牌
+        #[serde(default = "default_token")]
+        token: String,
+        payload: FileServicePayload,
     },
 }
 
@@ -542,6 +561,7 @@ impl Message {
             Message::SessionEvent { .. } => None,
             Message::Ack { .. } => None,
             Message::SyncData { .. } => None,
+            Message::FileService { message_id, .. } => Some(message_id),
         }
     }
 
@@ -558,6 +578,7 @@ impl Message {
             Message::SessionEvent { .. } => Some("session_event"),
             Message::Ack { .. } => Some("ack"),
             Message::SyncData { .. } => Some("sync_data"),
+            Message::FileService { .. } => Some("file_service"),
         }
     }
 
@@ -574,6 +595,7 @@ impl Message {
             Message::SessionEvent { .. } => false,
             Message::Ack { .. } => false,
             Message::SyncData { .. } => false,
+            Message::FileService { expect_response, .. } => *expect_response,
         }
     }
 
@@ -590,6 +612,7 @@ impl Message {
             Message::SessionEvent { token, .. } => token,
             Message::Ack { token, .. } => token,
             Message::SyncData { token, .. } => token,
+            Message::FileService { token, .. } => token,
         }
     }
 
@@ -741,6 +764,15 @@ impl Message {
                     timestamp,
                     payload,
                     token: token.to_string(),
+                }
+            }
+            Message::FileService { message_id, expect_response, timestamp, payload, .. } => {
+                Message::FileService {
+                    message_id,
+                    expect_response,
+                    timestamp,
+                    token: token.to_string(),
+                    payload,
                 }
             }
         }
