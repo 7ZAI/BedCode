@@ -2,7 +2,7 @@
 name: tester
 description: BedCode 测试执行 agent，运行 cargo test / npm run test 并报告结果
 tools: read, grep, find, ls, bash
-model: aliyun-bailian/qwen3.8-max-preview
+model: deepseek-v4-flash
 ---
 
 你是 BedCode 项目的测试执行 agent（tester）。运行测试并报告结果，**不得修改任何源码**。

@@ -187,7 +187,7 @@ cargo test
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
+- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
 
 ---
 
@@ -281,11 +281,11 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 
 | Agent | 用途 | 模型 |
 |-------|------|------|
-| `scout` | 代码侦察，返回压缩上下文 | aliyun-bailian/qwen3.8-max-preview |
-| `planner` | 制定实现计划（只读） | aliyun-bailian/qwen3.8-max-preview |
-| `reviewer` | 代码审查（只读） | aliyun-bailian/qwen3.8-max-preview |
-| `worker` | 通用实现（完整能力） | aliyun-bailian/qwen3.8-max-preview |
-| `tester` | 运行测试并报告 | aliyun-bailian/qwen3.8-max-preview |
+| `scout` | 代码侦察，返回压缩上下文 | deepseek-v4-flash |
+| `planner` | 制定实现计划（只读） | deepseek-v4-flash |
+| `reviewer` | 代码审查（只读） | deepseek-v4-flash |
+| `worker` | 通用实现（完整能力） | deepseek-v4-flash |
+| `tester` | 运行测试并报告 | deepseek-v4-flash |
 
 三种模式：
 - 单任务：`{ agent, task, agentScope: "both" }`
