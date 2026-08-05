@@ -165,6 +165,7 @@ export function useTerminalScroll(
     // 如果在渲染未完成时再次 scrollToLine，新旧帧内容会同时可见（重影）
     // 使用 rAF 节流确保每帧最多执行一次 scrollToLine，
     // 并在 scrollToLine 后等待渲染完成再允许下一次滚动
+    // 配合 terminal.smoothScrollDuration = 0 关闭补间动画，避免多帧重叠
     if (!pendingScrollRaf) {
       pendingScrollRaf = requestAnimationFrame(() => {
         pendingScrollRaf = 0

@@ -149,6 +149,7 @@ import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
@@ -481,6 +482,11 @@ async function initTerminal() {
     disableStdin: true,
     // 移动端滚动灵敏度
     scrollSensitivity: 0.8,
+    // 禁用 xterm 内部平滑滚动动画：
+    // smoothScrollDuration 默认非 0，scrollToLine 会触发多帧动画，
+    // 在 WebGL 双缓冲下出现新旧帧重叠（重影）。移动端由自定义触摸滚动接管，
+    // 直接跳转到目标行即可，无需补间动画。
+    smoothScrollDuration: 0,
   })
 
   terminalRef.value = term
@@ -490,6 +496,14 @@ async function initTerminal() {
   fitAddonRef.value = addon
   term.loadAddon(addon)
   term.loadAddon(new WebLinksAddon())
+
+  // Unicode11 addon：启用 Unicode 11 字符宽度计算
+  // TUI 应用（opencode 等）大量使用 box-drawing 字符（╔═╗║╚╝）和 emoji，
+  // 不加载此 addon 时 xterm 默认字符宽度表为 Unicode 5，
+  // 部分新字符的列宽计算错误会导致光标位置漂移、上一个写入的字符部分残留（重影）
+  const unicode11 = new Unicode11Addon()
+  term.loadAddon(unicode11)
+  term.unicode.activeVersion = '11'
 
   // WebGL renderer — 后台加载，带上下文丢失恢复
   let webglAddon: InstanceType<typeof import('@xterm/addon-webgl').WebglAddon> | null = null

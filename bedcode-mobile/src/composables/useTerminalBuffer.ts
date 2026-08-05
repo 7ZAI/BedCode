@@ -9,11 +9,26 @@ import {
   wsJoinSession,
   wsLeaveSession,
 } from '@/composables/useMobileCommands'
+import { createWriteCoalescer } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
 
 // ==================== Types ====================
 
 export type { OutputPayload } from '@/stores/terminalBuffer'
+
+// ==================== Write Coalescer ====================
+//
+// 为什么需要 rAF 合并写入：
+// - TUI 应用（opencode、Claude Code、vim、htop 等）在一次屏幕刷新内会发出大量
+//   cursor 定位 + 字符写入的连续转义序列，每个 WS 消息触发一次 terminal.write()
+//   都会让 xterm 调度一次 render。
+// - xterm.js WebGL 渲染器使用双缓冲，多个异步 render 在同一帧内排队时
+//   会出现「前一帧部分内容 + 当前帧新内容」同时可见（鬼影/重影）。
+// - 参考 xterm.js 官方推荐：DEC Mode 2026 (Synchronized Output) 是在一次刷新内
+//   收集多次修改、只渲染一次的协议机制。但 PTY 应用不一定发出 BSU/ESU 序列。
+// - 在前端按 rAF 合并多次 terminal.write() 等价于应用了同步输出语义：
+//   同一帧内所有写入只产生一次 render commit，避免双缓冲竞态。
+// 实现见 @/composables/writeCoalescer
 
 // ==================== Composable ====================
 
@@ -30,10 +45,23 @@ export function useTerminalBuffer() {
     const buffer = store.getBuffer(sessionId)
     if (!buffer || buffer.chunks.length === 0) return
 
-    // 逐 chunk 写入，xterm.write() 内部异步处理但调用同步
-    for (const chunk of buffer.chunks) {
-      terminal.write(chunk)
+    // 合并所有 chunks 为单次写入，避免长历史触发多次 render 引起重影
+    let totalBytes = 0
+    for (const chunk of buffer.chunks) totalBytes += chunk.byteLength
+    if (totalBytes === 0) return
+
+    if (buffer.chunks.length === 1) {
+      terminal.write(buffer.chunks[0])
+      return
     }
+
+    const combined = new Uint8Array(totalBytes)
+    let offset = 0
+    for (const chunk of buffer.chunks) {
+      combined.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    terminal.write(combined)
   }
 
   /**
@@ -43,13 +71,13 @@ export function useTerminalBuffer() {
    * @param terminal - xterm Terminal 实例
    */
   function registerRealtimeHandler(sessionId: string, terminal: Terminal) {
+    const writeCoalescer = createWriteCoalescer(terminal)
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array, _payload: OutputPayload) => {
-        if (terminal) {
-          terminal.write(data)
-        }
+        writeCoalescer(data)
       },
       onClear: () => {
+        writeCoalescer.dispose()
         if (terminal) {
           terminal.clear()
         }
