@@ -123,6 +123,8 @@ pub mod import {
     pub const FS_COPY: &str = "host_fs_copy";
     /// 文件系统：检查文件是否存在（返回 i32: 1=存在, 0=不存在, -1=错误）
     pub const FS_EXISTS: &str = "host_fs_exists";
+    /// 文件系统：删除文件（返回 i32: 0=成功，-1=失败；不存在视为成功）
+    pub const FS_DELETE: &str = "host_fs_delete";
     /// 消息总线：发布消息
     pub const BUS_PUBLISH: &str = "host_bus_publish";
     /// 消息总线：订阅 topic
@@ -179,6 +181,7 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::FS_WRITE, 4, 1),
     (import::FS_COPY, 4, 1),
     (import::FS_EXISTS, 2, 1),
+    (import::FS_DELETE, 2, 1),
     (import::BUS_PUBLISH, 4, 1),
     (import::BUS_SUBSCRIBE, 2, 1),
     (import::BUS_UNSUBSCRIBE, 2, 1),

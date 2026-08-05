@@ -55,6 +55,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())
         .plugin(crate::plugin::android_plugins::downloads_dir_plugin())
+        .plugin(crate::plugin::android_plugins::file_delete_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");

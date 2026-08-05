@@ -757,6 +757,9 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_fs_exists", host_fs_exists)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_exists: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_fs_delete", host_fs_delete)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_delete: {}", e)))?;
 
     // 消息总线
     linker
@@ -1694,6 +1697,75 @@ fn host_fs_exists(
     }
 
     if std::path::Path::new(&path).exists() { 1 } else { 0 }
+}
+
+/// 文件系统：删除文件
+///
+/// 返回：0 成功（文件不存在也视为成功），-1 失败。
+/// Android 平台经 Kotlin FileDeletePlugin 删除（分区存储兼容）；
+/// 非 Android 平台（桌面 dev 场景）直接 std::fs。
+fn host_fs_delete(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    path_ptr: u32,
+    path_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_WRITE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_delete: permission denied (fs:write)");
+        return -1;
+    }
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let path = match read_wasm_string(&mut caller, path_ptr, path_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_delete: failed to read path");
+            return -1;
+        }
+    };
+
+    // 访问校验
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Write))
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_delete: access denied by fs_auth");
+        return -1;
+    }
+
+    // 幂等：不存在视为成功（与桌面端 host_fs_delete 语义一致）
+    if !std::path::Path::new(&path).exists() {
+        return 0;
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let path_clone = path.clone();
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(crate::plugin::android_plugins::delete_file(&path_clone))
+        });
+        return match result {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_delete: android delete failed");
+                -1
+            }
+        };
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        match std::fs::remove_file(&path) {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_delete: file delete failed");
+                -1
+            }
+        }
+    }
 }
 
 // ==================== Message Bus Host Functions ====================

@@ -258,6 +258,17 @@ impl HostFs for WasmHost {
             _ => Err(HostError::call_failed("fs_exists")),
         }
     }
+
+    fn fs_delete(&self, path: &str) -> Result<(), HostError> {
+        let (path_ptr, path_len) = wasm_alloc_string(path);
+        let status = unsafe { host_fs_delete(path_ptr, path_len) };
+        wasm_dealloc_string(path_ptr, path_len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("fs_delete"))
+        }
+    }
 }
 
 // ==================== HostLog ====================
@@ -491,6 +502,8 @@ extern "C" {
     fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
     /// 文件系统：检查文件是否存在 — 返回 1 存在，0 不存在，-1 错误
     fn host_fs_exists(path_ptr: u32, path_len: u32) -> i32;
+    /// 文件系统：删除文件 — 返回 0 成功（不存在也视为成功），-1 失败
+    fn host_fs_delete(path_ptr: u32, path_len: u32) -> i32;
     /// 消息总线：发布消息 — 返回 0 成功，-1 失败
     fn host_bus_publish(topic_ptr: u32, topic_len: u32, payload_ptr: u32, payload_len: u32) -> i32;
     /// 消息总线：订阅 topic — 返回 0 成功，-1 失败
