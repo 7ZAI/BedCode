@@ -4,6 +4,8 @@
  * Kept in sync with zh-CN at compile time via the plugin's messages index.
  */
 
+import type { MessageSchema } from './messages'
+
 export default {
   // ==================== Toolbox entry ====================
   'transfer.toolbox.title': 'File Transfer',

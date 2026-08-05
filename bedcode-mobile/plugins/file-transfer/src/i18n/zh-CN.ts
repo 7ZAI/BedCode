@@ -5,6 +5,8 @@
  * 规范：{domain}.{section}.{key}，spec §10 四键在错误/设置区。
  */
 
+import type { MessageSchema } from './messages'
+
 export default {
   // ==================== 工具箱入口 ====================
   'transfer.toolbox.title': '文件传输',
