@@ -48,6 +48,13 @@ const router = createRouter({
       component: () => import('@/views/CodeExplorerView.vue'),
       meta: { standAlone: true },
     },
+    // PROTOTYPE — 移动端 UI 重设计原型（一次性，选型后删除，见 src/prototype/README.md）
+    {
+      path: '/prototype/mobile-ui',
+      name: 'prototype-mobile-ui',
+      component: () => import('@/prototype/PrototypeMobileUi.vue'),
+      meta: { standAlone: true },
+    },
     {
       path: '/mobile/settings',
       name: 'mobile-settings',

@@ -17,7 +17,7 @@
     </main>
 
     <!-- Bottom Navigation (hide on terminal view) -->
-    <MobileNav v-if="!isTerminalRoute" />
+    <MobileNav v-if="!isTerminalRoute && !isPrototypeRoute" />
   </div>
   <!-- 安全区域初始化前的占位，避免内容在状态栏下闪现 -->
   <div v-else class="h-[100dvh] mobile-app mobile-ui bg-[var(--mobile-bg-primary)]" />
@@ -33,6 +33,9 @@ const route = useRoute()
 const isTerminalRoute = computed(() => {
   return route.name === 'mobile-terminal'
 })
+
+// PROTOTYPE: 原型路由自带导航栏，隐藏内置底部导航（原型删除时一并移除）
+const isPrototypeRoute = computed(() => route.path.startsWith('/prototype'))
 
 // 从 App.vue inject 的安全区域信息
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
