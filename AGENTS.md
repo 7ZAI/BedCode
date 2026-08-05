@@ -51,12 +51,16 @@ cd bedcode-mobile && npm run tauri:android:dev
 # Mobile Build
 cd bedcode-mobile && npm run tauri:android:build
 
-# Frontend Test
-cd bedcode-desktop && npm run test
+# Frontend Test（必须用 test:run，禁止 npm run test）
+cd bedcode-desktop && npm run test:run
 
 # Rust Test
 cargo test
 ```
+
+> **前端测试规范**：`npm run test` 等于 `vitest`（watch 模式），执行完不退出、会一直挂着监听文件变化。
+> 统一使用 `npm run test:run`（即 `vitest run`，一次性跑完并退出），也可直接 `npx vitest run`。
+> 注意 `vite` 命令本身是 dev server / 构建工具，不执行测试，不能替代 vitest。
 
 编译前检查 `src-tauri/target` 目录大小，超过 15GB 执行 `cargo clean`。
 
@@ -250,7 +254,7 @@ sh scripts/doc-tracking.sh untrack && git commit
 ## Done When
 
 - 所有修改的 Rust 代码 `cargo test` 通过
-- 所有修改的前端代码 `npm run test` 通过
+- 所有修改的前端代码 `npm run test:run`（vitest run）通过
 - i18n key 同步出现在 zh-CN 和 en 文件中
 - 公开项有文档注释
 - 错误处理使用 `AppError` 而非裸字符串
