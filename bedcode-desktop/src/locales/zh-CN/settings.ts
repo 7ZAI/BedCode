@@ -19,7 +19,7 @@ export default {
     },
     ui: {
       title: '界面设置',
-      terminalFontSize: '终端字体大小',
+      fontSize: '字体大小',
     },
     appearance: {
       title: '外观',

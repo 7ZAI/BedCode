@@ -88,20 +88,20 @@
               </div>
             </div>
 
-            <!-- 终端字体大小 -->
+            <!-- 全局字体大小（终端字体在终端设置中独立配置） -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.ui.terminalFontSize') }}</span>
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.ui.fontSize') }}</span>
               <div class="flex items-center gap-3 w-60">
                 <input
                   type="range"
                   min="10"
                   max="24"
                   step="1"
-                  :value="settingsStore.settings.ui.terminal_font_size"
+                  :value="settingsStore.settings.ui.font_size"
                   class="flex-1 h-1 appearance-none bg-[var(--border-strong)] cursor-pointer accent-[var(--color-primary)]"
-                  @input="settingsStore.settings.ui.terminal_font_size = Number(($event.target as HTMLInputElement).value)"
+                  @input="settingsStore.settings.ui.font_size = Number(($event.target as HTMLInputElement).value)"
                 />
-                <span class="wb-mono text-[var(--text-secondary)] w-10 text-right">{{ settingsStore.settings.ui.terminal_font_size }}px</span>
+                <span class="wb-mono text-[var(--text-secondary)] w-10 text-right">{{ settingsStore.settings.ui.font_size }}px</span>
               </div>
             </div>
           </div>

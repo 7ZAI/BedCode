@@ -19,7 +19,7 @@ export default {
     },
     ui: {
       title: 'UI Settings',
-      terminalFontSize: 'Terminal Font Size',
+      fontSize: 'Font Size',
     },
     appearance: {
       title: 'Appearance',

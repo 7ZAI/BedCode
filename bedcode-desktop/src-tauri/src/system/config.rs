@@ -29,6 +29,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("session.default_command", "默认启动命令"),
     ("session.session_timeout", "会话超时时间（秒）- 无活动自动关闭"),
     ("ui.theme", "主题（light / dark / system）"),
+    ("ui.font_size", "全局界面字体大小（终端字体在终端设置中独立配置）"),
     ("ui.terminal_font_size", "终端字体大小"),
     ("ui.terminal_font_family", "终端字体名称"),
     ("ui.terminal_theme", "终端配色主题名"),
@@ -83,6 +84,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
     ]),
     ("UI 界面配置", &[
         "ui.theme",
+        "ui.font_size",
         "ui.terminal_font_size",
         "ui.terminal_font_family",
         "ui.terminal_theme",
@@ -251,6 +253,9 @@ pub struct UiConfig {
     /// 色板（warm 暖调工作台，未来可扩展 cool 等；缺省回 warm）
     #[serde(default = "default_theme_palette")]
     pub theme_palette: String,
+    /// 全局界面字体大小（终端字体在终端设置中独立配置）
+    #[serde(default = "default_font_size")]
+    pub font_size: u8,
     /// 终端字体大小
     pub terminal_font_size: u8,
     /// 终端字体名称
@@ -279,6 +284,10 @@ fn default_theme_palette() -> String {
     "warm".to_string()
 }
 
+fn default_font_size() -> u8 {
+    12
+}
+
 fn default_language() -> String {
     "zh-CN".to_string()
 }
@@ -292,6 +301,7 @@ impl Default for UiConfig {
         Self {
             theme: "system".to_string(),
             theme_palette: default_theme_palette(),
+            font_size: default_font_size(),
             terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
             terminal_theme: default_terminal_theme(),
@@ -502,6 +512,11 @@ impl AppConfig {
             ui: UiConfig {
                 theme: parse_value(props, "ui.theme", "system".to_string()),
                 theme_palette: parse_value(props, "ui.theme_palette", default_theme_palette()),
+                // 旧版本无 ui.font_size 键（当时共用 terminal_font_size），缺失时以其值迁移兜底
+                font_size: props
+                    .contains_key("ui.font_size")
+                    .then(|| parse_value(props, "ui.font_size", default_font_size()))
+                    .unwrap_or(parse_value(props, "ui.terminal_font_size", default_font_size())),
                 terminal_font_size: parse_value(props, "ui.terminal_font_size", 12),
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
@@ -583,6 +598,7 @@ impl AppConfig {
         map.insert("session.session_timeout".to_string(), self.session.session_timeout.to_string());
         map.insert("ui.theme".to_string(), self.ui.theme.clone());
         map.insert("ui.theme_palette".to_string(), self.ui.theme_palette.clone());
+        map.insert("ui.font_size".to_string(), self.ui.font_size.to_string());
         map.insert("ui.terminal_font_size".to_string(), self.ui.terminal_font_size.to_string());
         map.insert("ui.terminal_font_family".to_string(), self.ui.terminal_font_family.clone());
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());

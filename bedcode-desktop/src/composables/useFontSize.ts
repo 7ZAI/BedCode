@@ -22,12 +22,12 @@ export function useFontSize() {
   const settingsStore = useSettingsStore()
 
   function setupFontSize() {
-    const fontSize = settingsStore.settings.ui.terminal_font_size || 14
+    const fontSize = settingsStore.settings.ui.font_size || 12
     applyFontSize(fontSize)
   }
 
-  // 监听字体大小设置变化
-  watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
+  // 监听全局字体大小设置变化（终端字体由终端设置独立控制，不在此列）
+  watch(() => settingsStore.settings.ui.font_size, (newSize) => {
     if (newSize) {
       applyFontSize(newSize)
     }
