@@ -28,6 +28,7 @@ mod session;
 mod status;
 mod storage;
 mod terminal;
+mod timer;
 pub(super) mod transfer;
 mod wsl_fs;
 
@@ -79,6 +80,10 @@ pub(super) fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> c
     register!(abi::import::SESSION_CONFIG_LIST, session::host_session_config_list);
     register!(abi::import::SESSION_LIFECYCLE_REGISTER, lifecycle::host_session_lifecycle_register);
     register!(abi::import::SESSION_INPUT_REGISTER, lifecycle::host_session_input_register);
+    register!(abi::import::SESSION_CREATE, session::host_session_create);
+
+    // 定时器（v6）
+    register!(abi::import::TIMER_REGISTER, timer::host_timer_register);
 
     // 事件 / 广播 / 通知
     register!(abi::import::EMIT_EVENT, events::host_emit_event);

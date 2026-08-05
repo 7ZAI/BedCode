@@ -46,6 +46,11 @@ pub struct PluginHost {
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
     /// 文件服务注册表（宿主通用文件服务能力，规格第 4 节）
     file_service: Arc<crate::plugin::file_service::FileServiceRegistry>,
+    /// 插件定时器（plugin_id → tokio 任务句柄，v6 ADR 0003）
+    ///
+    /// 重复注册替换旧句柄；插件停用/应用关闭时中止。
+    /// 用 std Mutex：仅短时间的 map 操作，不跨 await 持锁
+    plugin_timers: Arc<std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 }
 
 impl PluginHost {
@@ -201,6 +206,7 @@ impl PluginHost {
             wasm_host_ctx,
             message_bus,
             file_service,
+            plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -529,6 +535,18 @@ impl PluginHost {
     }
 
     /// 停用插件
+    /// 中止指定插件的定时器（停用时调用，v6 ADR 0003）
+    fn abort_plugin_timer(&self, plugin_id: &str) {
+        let mut timers = self
+            .plugin_timers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(handle) = timers.remove(plugin_id) {
+            handle.abort();
+            tracing::info!("[PluginHost] Timer aborted for '{}'", plugin_id);
+        }
+    }
+
     pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] deactivate_plugin({}, persist={})", plugin_id, persist);
 
@@ -566,6 +584,9 @@ impl PluginHost {
         // 统一清理：取消注册和撤销权限
         self.registry.unregister_plugin(plugin_id).await;
         self.permission.revoke_all(plugin_id);
+
+        // 中止插件定时器（若有）：停用后不再到点回调
+        self.abort_plugin_timer(plugin_id);
 
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
@@ -1246,6 +1267,60 @@ impl PluginServices for PluginHost {
                 );
         });
     }
+
+    fn register_plugin_timer(&self, plugin_id: String, interval_secs: u64, command: String) {
+        // 重复注册替换旧定时器：先中止旧任务再插入新句柄，
+        // 同一插件仅保留一个定时器实例
+        let mut timers = self
+            .plugin_timers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(old) = timers.remove(&plugin_id) {
+            old.abort();
+        }
+
+        let host = self.clone();
+        let pid = plugin_id.clone();
+        let cmd = command.clone();
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            // 首个 tick 立即触发：跳过，从下一个周期开始（避免注册瞬间就回调）
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+
+                let now = chrono::Utc::now();
+                let args = serde_json::json!({
+                    "now_ms": now.timestamp_millis(),
+                    // 与 SQLite datetime('now') 同格式（UTC，无时区后缀），
+                    // 便于插件在 SQL 中直接字符串比较到期时间
+                    "now_utc": now.format("%Y-%m-%d %H:%M:%S").to_string(),
+                });
+
+                // 到点调用插件 command；插件未激活/已卸载时返回 Err，
+                // 属预期内路径（定时器中止前的空窗期），仅记 debug 日志
+                match host.invoke_rust_command(&pid, &cmd, args).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::debug!(
+                            plugin_id = %pid,
+                            command = %cmd,
+                            error = %e,
+                            "[PluginHost] timer tick skipped"
+                        );
+                    }
+                }
+            }
+        });
+
+        timers.insert(plugin_id.clone(), handle);
+        drop(timers);
+
+        tracing::info!(
+            "[PluginHost] Timer started for '{}': interval={}s command={}",
+            plugin_id, interval_secs, command
+        );
+    }
 }
 
 // 通过 Arc 共享内部状态实现 Clone
@@ -1263,6 +1338,7 @@ impl Clone for PluginHost {
             wasm_host_ctx: self.wasm_host_ctx.clone(),
             message_bus: self.message_bus.clone(),
             file_service: self.file_service.clone(),
+            plugin_timers: self.plugin_timers.clone(),
         }
     }
 }

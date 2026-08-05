@@ -104,6 +104,12 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 由 `host_mark_plugin_error` Host Function 转发，插件自身检测到
     /// 配置失败（如 hooks 脚本拷贝失败）时调用。
     fn mark_plugin_error(&self, plugin_id: String, error: String);
+
+    /// 为指定插件注册宿主周期定时器（v6，ADR 0003）
+    ///
+    /// 宿主按 interval_secs 到点调用插件的 command（附当前时间参数），
+    /// 幂等判断归插件。重复注册替换该插件已有定时器。
+    fn register_plugin_timer(&self, plugin_id: String, interval_secs: u64, command: String);
 }
 
 /// 宿主上下文（注入到 WasmPluginState）

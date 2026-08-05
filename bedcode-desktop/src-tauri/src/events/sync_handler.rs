@@ -68,6 +68,9 @@ impl SyncEventHandler {
             DesktopSyncEvent::TaskQueueChanged { session_id, queue_count, action } => {
                 self.handle_task_queue_changed(&session_id, queue_count, &action).await;
             }
+            DesktopSyncEvent::TaskScheduledChanged { job_id, status, action } => {
+                self.handle_task_scheduled_changed(&job_id, &status, &action).await;
+            }
             DesktopSyncEvent::FileServiceChanged { plugin_id, mount_path, available, operations } => {
                 self.handle_file_service_changed(&plugin_id, &mount_path, available, operations).await;
             }
@@ -277,6 +280,17 @@ impl SyncEventHandler {
         };
 
         // 队列变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理定时自动任务变更事件（广播给所有客户端，供移动端刷新列表）
+    async fn handle_task_scheduled_changed(&self, job_id: &str, status: &str, action: &str) {
+        let payload = SyncPayload::TaskScheduledChanged {
+            job_id: job_id.to_string(),
+            status: status.to_string(),
+            action: action.to_string(),
+        };
+
         self.broadcast_sync_data(payload, None).await;
     }
 

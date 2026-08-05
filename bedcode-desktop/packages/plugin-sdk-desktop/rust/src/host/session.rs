@@ -34,4 +34,11 @@ pub trait HostSession {
     /// 异步投递重建后的完整输入行。需要 `terminal:observe` 权限，
     /// 未授权时返回错误
     fn session_input_register(&self) -> Result<(), HostError>;
+
+    /// 按会话配置创建新会话（v6，需要 `session:write` 权限）
+    ///
+    /// 成功返回新会话的 session_id；会话创建完成后宿主分发 `Created`
+    /// 生命周期事件（带 session_id + config_id），已注册生命周期监听器的
+    /// 插件可据此感知新会话就绪（定时自动任务的会话就绪信号，见 ADR 0003）
+    fn session_create(&self, config_id: &str) -> Result<String, HostError>;
 }

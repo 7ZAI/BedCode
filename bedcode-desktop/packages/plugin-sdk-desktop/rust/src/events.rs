@@ -96,7 +96,7 @@ pub struct InputSubmittedEvent {
 /// 通过 `HostEvents::broadcast_sync` 发布，宿主转发给所有已认证的
 /// WebSocket 客户端（移动端）。
 ///
-/// 线协议：`{ "type": "TaskStatusChanged" | "SessionModeChanged" | "TaskQueueChanged", ...字段 }`
+/// 线协议：`{ "type": "TaskStatusChanged" | "SessionModeChanged" | "TaskQueueChanged" | "TaskScheduledChanged", ...字段 }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SyncEvent {
@@ -127,6 +127,15 @@ pub enum SyncEvent {
         /// 变更后的待执行任务数量
         queue_count: i64,
         /// 触发动作：add / remove / clear / dequeue
+        action: String,
+    },
+    /// 定时自动任务变更（v6，ADR 0003）
+    TaskScheduledChanged {
+        /// 定时任务 ID
+        job_id: String,
+        /// 变更后的任务状态：pending / creating / executed / failed / missed
+        status: String,
+        /// 触发动作：create / delete / trigger / missed / failed
         action: String,
     },
 }

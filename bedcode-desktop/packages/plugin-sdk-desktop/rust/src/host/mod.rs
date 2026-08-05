@@ -23,6 +23,7 @@ pub mod log;
 pub mod session;
 pub mod storage;
 pub mod terminal;
+pub mod timer;
 pub mod transfer;
 
 pub use bus::HostBus;
@@ -36,6 +37,7 @@ pub use log::HostLog;
 pub use session::HostSession;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
+pub use timer::HostTimer;
 pub use transfer::HostTransfer;
 
 /// 宿主调用错误
@@ -109,6 +111,7 @@ pub trait HostApi:
     + HostConfig
     + HostFileService
     + HostTransfer
+    + HostTimer
 {
 }
 
@@ -126,5 +129,6 @@ impl<T> HostApi for T where
         + HostConfig
         + HostFileService
         + HostTransfer
+        + HostTimer
 {
 }

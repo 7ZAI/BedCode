@@ -45,4 +45,59 @@ export interface MessageSchema {
   historySectionTitle: string
   emptyHistory: string
   emptyHistoryHint: string
+  // ==================== 双 Tab 视图 ====================
+  tabsRecords: string
+  tabsScheduled: string
+  // ==================== 任务记录筛选 ====================
+  filterStatus: string
+  filterAgent: string
+  filterSource: string
+  filterSince: string
+  filterUntil: string
+  filterReset: string
+  // ==================== 统计条 ====================
+  statsTitle: string
+  statsTotal: string
+  statsSuccessRate: string
+  statsAvgDuration: string
+  durationSeconds: string
+  durationMinutes: string
+  durationHours: string
+  // ==================== 分页 ====================
+  paginationRange: string
+  paginationPrev: string
+  paginationNext: string
+  // ==================== 行内详情 ====================
+  detailAgent: string
+  detailSource: string
+  detailCreated: string
+  detailStarted: string
+  detailCompleted: string
+  detailWorkingDir: string
+  detailExitReason: string
+  detailDescription: string
+  // ==================== 当前任务 ====================
+  currentTaskTitle: string
+  // ==================== 定时任务 ====================
+  scheduledEmpty: string
+  scheduledEmptyHint: string
+  scheduledNew: string
+  scheduledName: string
+  scheduledConfig: string
+  scheduledConfigPlaceholder: string
+  scheduledTriggerAt: string
+  scheduledUtcHint: string
+  scheduledPrompts: string
+  scheduledPromptPlaceholder: string
+  scheduledAddPrompt: string
+  scheduledRemovePrompt: string
+  scheduledCreate: string
+  scheduledCreateFailed: string
+  scheduledDeleteFailed: string
+  scheduledFormInvalid: string
+  scheduledStatusCreating: string
+  scheduledStatusExecuted: string
+  scheduledStatusFailed: string
+  scheduledStatusMissed: string
+  scheduledError: string
 }

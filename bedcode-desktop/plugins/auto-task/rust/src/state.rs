@@ -13,6 +13,8 @@ use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::Value;
 
+use crate::agent;
+
 // ==================== 查询辅助函数 ====================
 
 /// 查询任务历史行 — 按 session_id 查找最新一条
@@ -76,41 +78,41 @@ fn find_claude_sid_by_session(host: &WasmHost, bedcode_sid: &str) -> Option<Stri
 
 // ==================== 会话输入 → 任务创建 ====================
 
-/// 判断会话启动命令是否为 Claude Code
-///
-/// 两步查询：session_get 取 SessionInfo.config_id（camelCase 序列化），
-/// 再在 session_config_list 中匹配对应配置的 command。
-/// 命令如 `claude` / `claude.exe` 或完整路径均视为 Claude 会话。
-pub fn session_command_is_claude(host: &WasmHost, session_id: &str) -> bool {
+/// 查询会话启动命令（config_id → session_config_list 匹配 command）
+fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
     // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
-    let config_id = match host.session_get(session_id) {
-        Ok(Some(info)) => info
-            .get("configId")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        _ => None,
-    };
-    let config_id = match config_id {
-        Some(id) => id,
-        None => return false,
-    };
+    let config_id = host.session_get(session_id)
+        .ok()
+        .flatten()
+        .and_then(|info| info.get("configId").and_then(|v| v.as_str()).map(|s| s.to_string()))?;
 
     // 2. session_config_list 查找对应配置的启动命令
-    let command = match host.session_config_list() {
-        Ok(Some(configs)) => configs
-            .as_array()
-            .and_then(|arr| {
-                arr.iter().find(|c| {
-                    c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str())
+    host.session_config_list()
+        .ok()
+        .flatten()
+        .and_then(|configs| {
+            configs
+                .as_array()
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str()))
                 })
-            })
-            .and_then(|c| c.get("command").and_then(|v| v.as_str()).map(|s| s.to_string())),
-        _ => None,
-    };
+                .and_then(|c| c.get("command").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        })
+}
 
-    command
-        .map(|c| c.to_lowercase().contains("claude"))
-        .unwrap_or(false)
+/// 检测会话的执行 agent（CLI 级，见 agent::detect_agent）
+///
+/// 会话不存在或配置无命令时返回 "unknown"
+pub fn session_agent(host: &WasmHost, session_id: &str) -> &'static str {
+    session_command(host, session_id)
+        .map(|cmd| agent::detect_agent(&cmd))
+        .unwrap_or("unknown")
+}
+
+/// 判断会话启动命令是否为 Claude Code
+pub fn session_command_is_claude(host: &WasmHost, session_id: &str) -> bool {
+    session_agent(host, session_id) == "claude"
 }
 
 /// 判断会话当前是否有进行中的任务
@@ -124,6 +126,89 @@ pub fn has_active_task(host: &WasmHost, session_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 判断会话是否存在终态任务记录（completed/interrupted）
+///
+/// 队列调度的上下文判断依据：无终态记录 = 全新会话，首个任务无需
+/// 上下文清理（clear）；有终态记录 = 会话已有上下文，执行前先清理
+pub fn has_terminal_task(host: &WasmHost, session_id: &str) -> bool {
+    host.plugin_db_query_params(
+        "SELECT COUNT(*) AS cnt FROM task_history WHERE session_id = ?1 AND status IN ('completed', 'interrupted')",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+    .and_then(|row| row.get("cnt").and_then(|v| v.as_i64()))
+    .unwrap_or(0)
+        > 0
+}
+
+/// 写入任务行（队列出队 / 定时触发调度共用）
+///
+/// 出队时由插件直接创建任务记录（description = 任务发起输入），
+/// 不再依赖输入行重建（见 ADR-0004：`/clear` 与 prompt 拆行提交的时序
+/// 竞争会导致任务内容错误）。auto_approve 由调度方决定（队列任务恒为 true）。
+pub fn create_task_from_dispatch(
+    host: &WasmHost,
+    session_id: &str,
+    prompt: &str,
+    agent: &str,
+    source: &str,
+) {
+    insert_task_row(host, session_id, prompt, agent, source, true);
+
+    // 调度触发的任务同样广播状态变更（移动端/UI 需要感知任务开始）
+    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
+        session_id: session_id.to_string(),
+        task_status: "in_progress".to_string(),
+        task_reason: Some(format!("Dispatched from {}", source)),
+        task_questions: None,
+    });
+    let _ = host.bus_publish(EVENT_TASK_STATUS_CHANGED, &serde_json::json!({
+        "session_id": session_id,
+        "task_status": "in_progress",
+    }));
+    host.emit_event(EVENT_TASK_STATUS_CHANGED, &serde_json::json!({
+        "session_id": session_id,
+        "taskStatus": "in_progress",
+        "taskReason": format!("Dispatched from {}", source),
+    }));
+}
+
+/// 插入任务行的内部实现
+fn insert_task_row(
+    host: &WasmHost,
+    session_id: &str,
+    input: &str,
+    agent: &str,
+    source: &str,
+    auto_approve: bool,
+) {
+    let claude_sid = find_claude_sid_by_session(host, session_id);
+
+    let sql = "INSERT INTO task_history \
+               (id, description, status, agent, source, session_id, claude_sid, auto_approve, started_at, created_at, updated_at) \
+               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'), datetime('now'))";
+    // claude_sid 映射缺失时绑定 NULL（SessionStart 之前就提交输入等边缘场景）
+    let claude_sid_param = claude_sid
+        .as_ref()
+        .map(|s| serde_json::Value::String(s.clone()))
+        .unwrap_or(serde_json::Value::Null);
+    match host.plugin_db_execute_params(
+        sql,
+        &sql_params![input, agent, source, session_id, claude_sid_param, auto_approve],
+    ) {
+        Ok(affected) => host.log_info(&format!(
+            "Task row inserted: session_id={} agent={} source={} len={} affected={}",
+            session_id, agent, source, input.len(), affected
+        )),
+        Err(e) => host.log_error(&format!(
+            "Failed to insert task row: session_id={} source={} err={}",
+            session_id, source, e
+        )),
+    }
+}
+
 /// 从提交的输入行创建任务记录（宿主 on_input_submitted 会话扩展调用）
 ///
 /// 仅 Claude 会话且无当前任务时调用。输入作为任务内容写入 description 字段，
@@ -134,25 +219,8 @@ pub fn has_active_task(host: &WasmHost, session_id: &str) -> bool {
 /// 和 bedcode session_id 双键，后续 hook 的状态推送（只带 claude_sid 或
 /// 只带 bedcode_session_id）都能命中该行。
 pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
-    let claude_sid = find_claude_sid_by_session(host, session_id);
-
-    let sql = "INSERT INTO task_history (id, description, status, session_id, claude_sid, started_at, created_at, updated_at) \
-               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, datetime('now'), datetime('now'), datetime('now'))";
-    // claude_sid 映射缺失时绑定 NULL（SessionStart 之前就提交输入等边缘场景）
-    let claude_sid_param = claude_sid
-        .as_ref()
-        .map(|s| serde_json::Value::String(s.clone()))
-        .unwrap_or(serde_json::Value::Null);
-    match host.plugin_db_execute_params(sql, &sql_params![input, session_id, claude_sid_param]) {
-        Ok(affected) => host.log_info(&format!(
-            "Task created from input: session_id={} claude_sid={:?} len={} affected={}",
-            session_id, claude_sid, input.len(), affected
-        )),
-        Err(e) => host.log_error(&format!(
-            "Failed to create task from input: session_id={} err={}",
-            session_id, e
-        )),
-    }
+    let agent_name = session_agent(host, session_id);
+    insert_task_row(host, session_id, input, agent_name, "user", false);
 
     // 广播状态变更到移动端 + 消息总线通知其他插件
     host.broadcast_sync(&SyncEvent::TaskStatusChanged {
@@ -303,6 +371,12 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             upsert_session_mapping(host, session_id, bedcode_sid);
             host.log_info(&format!("Session mapping stored: claude_sid={} → bedcode_sid={}", session_id, bedcode_sid));
         }
+
+        // 新会话就绪信号（SessionStart → idle）：驱动队列 waiting 态调度。
+        // 上下文清理（/clear）后 Claude Code 重建会话，此处收到新会话的 idle
+        // 推送，即 ADR-0004 约定的"新会话就绪"时机，可安全下发排队任务。
+        crate::queue::on_session_idle(host, &resolved_session_id);
+
         // idle 状态无需广播任务变更，直接返回
         return http_response::ok();
     } else {
@@ -473,27 +547,176 @@ pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Valu
     }))
 }
 
+/// 任务历史查询筛选条件（字段均为可选，空/None 不参与过滤）
+pub struct TaskHistoryFilter {
+    pub session_id: Option<String>,
+    pub status: Option<String>,
+    pub agent: Option<String>,
+    pub source: Option<String>,
+    /// created_at 下界（ISO 时间字符串，含）
+    pub since: Option<String>,
+    /// created_at 上界（ISO 时间字符串，含）
+    pub until: Option<String>,
+    /// 分页大小，默认 100，上限 500
+    pub limit: i64,
+    /// 分页偏移
+    pub offset: i64,
+}
+
+impl Default for TaskHistoryFilter {
+    fn default() -> Self {
+        Self {
+            session_id: None,
+            status: None,
+            agent: None,
+            source: None,
+            since: None,
+            until: None,
+            limit: 100,
+            offset: 0,
+        }
+    }
+}
+
+impl TaskHistoryFilter {
+    /// 组装 WHERE 子句与绑定参数（全部参数绑定，无手写转义）
+    fn build_where(&self) -> (String, Vec<Value>) {
+        let mut clauses: Vec<String> = Vec::new();
+        let mut params: Vec<Value> = Vec::new();
+        let add = |clauses: &mut Vec<String>, params: &mut Vec<Value>, col: &str, v: &Option<String>| {
+            if let Some(val) = v {
+                if !val.is_empty() {
+                    params.push(Value::String(val.clone()));
+                    clauses.push(format!("{} = ?{}", col, params.len()));
+                }
+            }
+        };
+        add(&mut clauses, &mut params, "session_id", &self.session_id);
+        add(&mut clauses, &mut params, "status", &self.status);
+        add(&mut clauses, &mut params, "agent", &self.agent);
+        add(&mut clauses, &mut params, "source", &self.source);
+        if let Some(since) = &self.since {
+            if !since.is_empty() {
+                params.push(Value::String(since.clone()));
+                clauses.push(format!("created_at >= ?{}", params.len()));
+            }
+        }
+        if let Some(until) = &self.until {
+            if !until.is_empty() {
+                params.push(Value::String(until.clone()));
+                clauses.push(format!("created_at <= ?{}", params.len()));
+            }
+        }
+        let where_sql = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        (where_sql, params)
+    }
+}
+
 /// 查询任务历史记录（供插件内部 command 使用）
 ///
-/// 可选 session_id 过滤，无则返回所有会话记录
-pub fn list_task_history(host: &WasmHost, session_id: &str) -> anyhow::Result<Value> {
-    let (sql, params): (&str, Vec<Value>) = if session_id.is_empty() {
-        (
-            "SELECT id, description, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history ORDER BY created_at DESC LIMIT 100",
-            vec![],
-        )
-    } else {
-        (
-            "SELECT id, description, status, session_id, auto_approve, exit_reason, created_at, started_at, completed_at FROM task_history WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 100",
-            sql_params![session_id],
-        )
-    };
-    let rows = host.plugin_db_query_params(sql, &params)
+/// 支持 session_id/status/agent/source/时间范围筛选与分页，
+/// 返回字段含 agent、source（P1 起开始填充）
+pub fn list_task_history(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow::Result<Value> {
+    let (where_sql, mut params) = filter.build_where();
+
+    // 分页：limit 上限 500，防止前端误传大值拖垮查询
+    let limit = filter.limit.clamp(1, 500);
+    let offset = filter.offset.max(0);
+    params.push(Value::Number(limit.into()));
+    let limit_ph = format!("?{}", params.len());
+    params.push(Value::Number(offset.into()));
+    let offset_ph = format!("?{}", params.len());
+
+    let sql = format!(
+        "SELECT id, description, status, agent, source, session_id, claude_sid, working_dir, \
+         auto_approve, exit_reason, created_at, started_at, completed_at, input_tokens, output_tokens \
+         FROM task_history{} ORDER BY created_at DESC LIMIT {} OFFSET {}",
+        where_sql, limit_ph, offset_ph
+    );
+    let rows = host
+        .plugin_db_query_params(&sql, &params)
         .ok()
         .flatten()
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
-    Ok(serde_json::json!({ "tasks": rows }))
+
+    // 同条件统计总数，供前端分页展示
+    let count_sql = format!("SELECT COUNT(*) AS cnt FROM task_history{}", where_sql);
+    let count_params: Vec<Value> = params[..params.len() - 2].to_vec();
+    let total = host
+        .plugin_db_query_params(&count_sql, &count_params)
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+        .and_then(|row| row.get("cnt").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+
+    Ok(serde_json::json!({
+        "tasks": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }))
+}
+
+/// 任务历史统计聚合（同筛选条件）
+///
+/// 返回：总数、各状态数、成功率（终态中 completed 占比）、
+/// 平均耗时（秒，有 started_at + completed_at 的终态任务）
+pub fn task_history_stats(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow::Result<Value> {
+    let (where_sql, params) = filter.build_where();
+
+    let rows = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT status, COUNT(*) AS cnt, \
+                 AVG(CASE WHEN status IN ('completed', 'interrupted') AND started_at IS NOT NULL AND completed_at IS NOT NULL \
+                     THEN (julianday(completed_at) - julianday(started_at)) * 86400.0 END) AS avg_duration \
+                 FROM task_history{} GROUP BY status",
+                where_sql
+            ),
+            &params,
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let mut by_status = serde_json::Map::new();
+    let mut total: i64 = 0;
+    let mut completed: i64 = 0;
+    let mut terminal: i64 = 0;
+    let mut duration_sum: f64 = 0.0;
+    let mut duration_count: i64 = 0;
+    for row in &rows {
+        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        let cnt = row.get("cnt").and_then(|v| v.as_i64()).unwrap_or(0);
+        by_status.insert(status.clone(), Value::Number(cnt.into()));
+        total += cnt;
+        if status == "completed" {
+            completed += cnt;
+        }
+        if status == "completed" || status == "interrupted" {
+            terminal += cnt;
+        }
+        if let Some(avg) = row.get("avg_duration").and_then(|v| v.as_f64()) {
+            duration_sum += avg * cnt as f64;
+            duration_count += cnt;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "total": total,
+        "by_status": by_status,
+        "completed": completed,
+        "terminal": terminal,
+        "success_rate": if terminal > 0 { completed as f64 / terminal as f64 } else { 0.0 },
+        "avg_duration_seconds": if duration_count > 0 { duration_sum / duration_count as f64 } else { 0.0 },
+    }))
 }
 
 /// 设置自动授权模式（供插件内部 command 使用）

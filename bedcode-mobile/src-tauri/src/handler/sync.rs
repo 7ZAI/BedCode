@@ -97,6 +97,14 @@ impl ClientRouteHandler for SyncHandler {
                         action,
                     });
                 }
+                SyncPayload::TaskScheduledChanged { job_id, status, action } => {
+                    tracing::info!("[SyncHandler] TaskScheduledChanged: job_id={}, status={}, action={}", job_id, status, action);
+                    ctx.emit(MobileEvent::SyncTaskScheduledChanged {
+                        job_id,
+                        status,
+                        action,
+                    });
+                }
                 SyncPayload::FileServiceChanged { plugin_id, mount_path, available, operations } => {
                     tracing::info!("[SyncHandler] FileServiceChanged: plugin_id={}, mount={}, available={}", plugin_id, mount_path, available);
 

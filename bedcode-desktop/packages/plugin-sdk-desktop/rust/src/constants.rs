@@ -23,3 +23,6 @@ pub const EVENT_SESSION_MODE_CHANGED: &str = "session:mode-changed";
 
 /// 插件 UI 事件：任务队列变更
 pub const EVENT_TASK_QUEUE_CHANGED: &str = "task:queue-changed";
+
+/// 插件 UI 事件：定时自动任务变更（创建/触发/状态更新，v6 ADR 0003）
+pub const EVENT_TASK_SCHEDULED_CHANGED: &str = "task:scheduled-changed";

@@ -83,6 +83,16 @@ pub enum SyncPayload {
         action: String,
     },
 
+    // === 定时自动任务同步（v6，ADR 0003） ===
+    /// 定时自动任务变更（与桌面端 enums/sync.rs 同名变体保持同构）
+    TaskScheduledChanged {
+        job_id: String,
+        /// 变更后的状态：pending / creating / executed / failed / missed
+        status: String,
+        /// 触发动作：create / delete / trigger / missed / failed
+        action: String,
+    },
+
     // === 文件服务同步（桌面 → 移动，内网文件传输插件规格阶段 2） ===
     /// 桌面侧插件挂载点可用性变更（mount/unmount/update_roots 后由宿主自动发出）
     ///

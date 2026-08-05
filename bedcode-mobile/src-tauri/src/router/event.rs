@@ -135,6 +135,16 @@ pub enum MobileEvent {
         action: String,
     },
 
+    // === 定时自动任务同步事件（v6，ADR 0003） ===
+    /// 定时自动任务变更
+    SyncTaskScheduledChanged {
+        job_id: String,
+        /// 变更后的状态：pending / creating / executed / failed / missed
+        status: String,
+        /// 触发动作：create / delete / trigger / missed / failed
+        action: String,
+    },
+
     // === 文件服务同步事件（桌面 → 移动，内网文件传输插件规格阶段 2） ===
     /// 桌面侧插件挂载点可用性变更
     SyncFileServiceChanged {
@@ -324,6 +334,18 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
             let _ = app.emit("ws_sync_task_queue_changed", serde_json::json!({
                 "session_id": session_id,
                 "queue_count": queue_count,
+                "action": action,
+            }));
+        }
+
+        MobileEvent::SyncTaskScheduledChanged { job_id, status, action } => {
+            tracing::info!(
+                "[EventForwarder] SyncTaskScheduledChanged: job_id={}, status={}, action={}",
+                job_id, status, action
+            );
+            let _ = app.emit("ws_sync_task_scheduled_changed", serde_json::json!({
+                "job_id": job_id,
+                "status": status,
                 "action": action,
             }));
         }

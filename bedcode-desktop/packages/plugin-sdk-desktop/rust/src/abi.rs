@@ -38,7 +38,9 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///   插件自检失败（如 hooks 配置失败）时上报宿主标记错误并通知前端
 /// - v5: 新增通用文件服务能力（host functions `FILESRV_*` / `TRANSFER_*`
 ///   + 可选导出 `ON_UPLOAD_REQUEST` 上传策略钩子），见内网文件传输插件规格
-pub const ABI_VERSION: u32 = 5;
+/// - v6: 新增会话创建与宿主定时器（host functions `SESSION_CREATE` /
+///   `TIMER_REGISTER`），支撑插件定时自动任务，见 ADR 0003
+pub const ABI_VERSION: u32 = 6;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -122,6 +124,13 @@ pub mod import {
     pub const SESSION_LIFECYCLE_REGISTER: &str = "host_session_lifecycle_register";
     /// 会话输入：注册提交输入行监听器（需要 terminal:observe 权限）
     pub const SESSION_INPUT_REGISTER: &str = "host_session_input_register";
+    /// 会话：按配置创建新会话（out_ptr 输出 session_id，需要 session:write 权限）
+    pub const SESSION_CREATE: &str = "host_session_create";
+
+    // === Timer ===
+    /// 定时器：注册周期回调（宿主按 interval 到点调用插件指定 command，
+    /// 附当前时间参数；幂等判断归插件，见 ADR 0003）
+    pub const TIMER_REGISTER: &str = "host_timer_register";
 
     // === Event / Broadcast ===
     /// 事件：向前端发送 Tauri 事件（无返回值）
@@ -211,6 +220,8 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::SESSION_CONFIG_LIST, 1, 1),
     (import::SESSION_LIFECYCLE_REGISTER, 0, 1),
     (import::SESSION_INPUT_REGISTER, 0, 1),
+    (import::SESSION_CREATE, 3, 1),
+    (import::TIMER_REGISTER, 3, 1),
     (import::EMIT_EVENT, 4, 0),
     (import::BROADCAST_SYNC, 2, 0),
     (import::NOTIFY, 4, 1),

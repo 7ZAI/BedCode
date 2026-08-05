@@ -25,6 +25,8 @@ pub const PERMISSION_BROADCAST: &str = "broadcast";
 pub const PERMISSION_FILESERVICE: &str = "fileservice";
 /// 传输引擎：发起断点续传的文件上传/下载任务
 pub const PERMISSION_TRANSFER: &str = "transfer";
+/// 定时器：注册宿主周期回调（到点调用插件 command，见 ADR 0003）
+pub const PERMISSION_TIMER: &str = "timer:schedule";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -44,6 +46,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_BROADCAST,
     PERMISSION_FILESERVICE,
     PERMISSION_TRANSFER,
+    PERMISSION_TIMER,
 ];
 
 /// 权限到 API 方法的映射
@@ -71,6 +74,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "fileService.pickFiles",
     ]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
+    (PERMISSION_TIMER, &["timer.register"]),
 ];
 
 /// 权限管理器

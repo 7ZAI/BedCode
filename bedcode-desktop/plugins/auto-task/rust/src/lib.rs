@@ -11,9 +11,11 @@
 mod hooks;
 mod state;
 mod queue;
+mod agent;
+mod scheduled;
 
 use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
-use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession};
+use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession, HostTimer};
 use bedcode_plugin_api::{CommandArgs, WasmHost, WasmPlugin};
 use bedcode_plugin_api::types::PluginManifest;
 
@@ -35,6 +37,8 @@ CREATE TABLE IF NOT EXISTS task_history (
     exit_reason     TEXT,
     questions       TEXT,
     auto_approve    INTEGER DEFAULT 0,
+    input_tokens    INTEGER,
+    output_tokens   INTEGER,
     created_at      TEXT NOT NULL,
     started_at      TEXT,
     completed_at    TEXT,
@@ -60,6 +64,29 @@ CREATE TABLE IF NOT EXISTS session_mapping (
     "CREATE INDEX IF NOT EXISTS idx_session_mapping_session ON session_mapping(session_id)",
 ];
 
+/// 定时自动任务表建表 SQL（按语句拆分）
+///
+/// 一次性定时任务：指定时刻新建会话（config_id）执行一组 prompt（JSON 数组）。
+/// 状态机：pending（待触发）→ creating（会话已创建，等 Created 事件入队）
+/// → executed（prompts 已入队）；failed（会话创建失败）/ missed（错过不补跑）。
+/// session_id 列关联触发时创建的会话，是 Created 事件的匹配键。
+const SCHEDULED_JOBS_SCHEMA: &[&str] = &[
+    r#"
+CREATE TABLE IF NOT EXISTS scheduled_jobs (
+    id          TEXT PRIMARY KEY,
+    name        TEXT,
+    config_id   TEXT NOT NULL,
+    trigger_at  TEXT NOT NULL,
+    prompts     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    session_id  TEXT,
+    created_at  TEXT NOT NULL,
+    executed_at TEXT,
+    error       TEXT
+)"#,
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_status ON scheduled_jobs(status, trigger_at)",
+];
+
 struct AutoTaskPlugin;
 
 impl WasmPlugin for AutoTaskPlugin {
@@ -76,19 +103,25 @@ impl WasmPlugin for AutoTaskPlugin {
             "sandbox": "inline",
             "pluginType": "rust-ts",
             "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "terminal:observe", "session:read", "fs:read", "fs:write", "ui:sidebar", "ui:input"],
+            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "terminal:observe", "session:read", "session:write", "timer:schedule", "fs:read", "fs:write", "ui:sidebar", "ui:input"],
             "contributes": {
                 "commands": [
                     { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
                     { "id": "auto-task.get-task-status", "title": "Get Task Status" },
                     { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
                     { "id": "auto-task.list-task-history", "title": "List Task History" },
+                    { "id": "auto-task.task-history-stats", "title": "Task History Statistics" },
                     { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" },
                     { "id": "auto-task.add-task", "title": "Add Task to Queue" },
                     { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
                     { "id": "auto-task.clear-queue", "title": "Clear Task Queue" },
                     { "id": "auto-task.update-task", "title": "Update Task Prompt" },
-                    { "id": "auto-task.reorder-queue", "title": "Reorder Task Queue" }
+                    { "id": "auto-task.reorder-queue", "title": "Reorder Task Queue" },
+                    { "id": "auto-task.list-session-configs", "title": "List Session Configs" },
+                    { "id": "auto-task.list-scheduled-jobs", "title": "List Scheduled Jobs" },
+                    { "id": "auto-task.create-scheduled-job", "title": "Create Scheduled Job" },
+                    { "id": "auto-task.delete-scheduled-job", "title": "Delete Scheduled Job" },
+                    { "id": "auto-task.scheduler-tick", "title": "Scheduler Tick" }
                 ],
                 "views": [
                     { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" }
@@ -97,7 +130,7 @@ impl WasmPlugin for AutoTaskPlugin {
                     "onStartup": true,
                     "onShutdown": true
                 },
-                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed"]
+                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed", "task:scheduled-changed"]
             }
         });
         serde_json::from_value(json).expect("Invalid manifest JSON")
@@ -154,6 +187,8 @@ impl WasmPlugin for AutoTaskPlugin {
                 // 队列端点路由
                 if let Some(queue_path) = path.strip_prefix("task-queue/") {
                     Ok(queue::handle_queue_http(&host, &method, queue_path, &body, &query))
+                } else if let Some(scheduled_path) = path.strip_prefix("scheduled-jobs/") {
+                    Ok(scheduled::handle_scheduled_http(&host, &method, scheduled_path, &body, &query))
                 } else {
                     Ok(state::handle_http_endpoint(&host, &method, &path, &body, &query))
                 }
@@ -175,8 +210,12 @@ impl WasmPlugin for AutoTaskPlugin {
                 state::get_task_status(&host, &session_id)
             }
             "auto-task.list-task-history" => {
-                let session_id = args.str_or("session_id", "");
-                state::list_task_history(&host, &session_id)
+                let filter = task_history_filter_from_args(&args);
+                state::list_task_history(&host, &filter)
+            }
+            "auto-task.task-history-stats" => {
+                let filter = task_history_filter_from_args(&args);
+                state::task_history_stats(&host, &filter)
             }
             "auto-task.list-task-queue" => {
                 let session_id = args.str_or("session_id", "");
@@ -205,8 +244,8 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 if count_before == 0 {
                     queue::ensure_auto_mode_on(&host, &session_id);
-                    // 会话空闲（无活动任务）时立即调度第一个任务，实现"添加即执行"的闭环
-                    // try_dispatch_next 仅在队列非空时出队，不会与运行中的任务重复发送
+                    // 会话空闲（无活动任务且无 waiting 项）时立即调度第一个任务，
+                    // 实现"添加即执行"的闭环；waiting 项存在时由 idle 推送驱动，不重复调度
                     if !state::has_active_task(&host, &session_id) {
                         queue::try_dispatch_next(&host, &session_id);
                     }
@@ -312,6 +351,77 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 Ok(serde_json::json!({ "reordered": true }))
             }
+            "auto-task.list-session-configs" => {
+                // 供前端定时任务表单选择会话配置（含 name/workingDir/command）
+                let configs = host
+                    .session_config_list()
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default();
+                Ok(serde_json::json!({ "configs": configs }))
+            }
+            "auto-task.list-scheduled-jobs" => {
+                let jobs = scheduled::list_jobs(&host);
+                Ok(serde_json::json!({ "jobs": jobs }))
+            }
+            "auto-task.create-scheduled-job" => {
+                let name = args.str_or("name", "");
+                let config_id = args.str_or("config_id", "");
+                let trigger_at = args.str_or("trigger_at", "");
+                let prompts: Vec<String> = args
+                    .value("prompts")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if config_id.is_empty() {
+                    return Err(anyhow::anyhow!("create-scheduled-job: missing config_id"));
+                }
+                if trigger_at.is_empty() {
+                    return Err(anyhow::anyhow!("create-scheduled-job: missing trigger_at"));
+                }
+                if prompts.is_empty() {
+                    return Err(anyhow::anyhow!("create-scheduled-job: missing prompts"));
+                }
+
+                match scheduled::create_job_with_broadcast(&host, &name, &config_id, &trigger_at, &prompts) {
+                    Some(job_id) => Ok(serde_json::json!({ "job_id": job_id })),
+                    None => Err(anyhow::anyhow!(
+                        "create-scheduled-job: failed to create job for config {}",
+                        config_id
+                    )),
+                }
+            }
+            "auto-task.delete-scheduled-job" => {
+                let job_id = args.str_or("job_id", "");
+                if job_id.is_empty() {
+                    return Err(anyhow::anyhow!("delete-scheduled-job: missing job_id"));
+                }
+                if scheduled::delete_job_with_broadcast(&host, &job_id) {
+                    Ok(serde_json::json!({ "deleted": true }))
+                } else {
+                    Err(anyhow::anyhow!(
+                        "delete-scheduled-job: job not found or not pending: {}",
+                        job_id
+                    ))
+                }
+            }
+            "auto-task.scheduler-tick" => {
+                // 宿主定时器到点回调（ADR 0003）：now_utc 与 SQLite datetime('now')
+                // 同格式（UTC），WASM 无系统时钟，插件全部时间判断以宿主注入为准
+                let now_utc = args.str_or("now_utc", "");
+                if now_utc.is_empty() {
+                    return Err(anyhow::anyhow!("scheduler-tick: missing now_utc"));
+                }
+                scheduled::handle_scheduler_tick(&host, &now_utc);
+                Ok(serde_json::json!({ "ticked": true }))
+            }
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
         }
     }
@@ -391,6 +501,46 @@ impl WasmPlugin for AutoTaskPlugin {
         }
         host.log_info("task_queue table initialized");
 
+        // 4.1 迁移：旧库 task_queue 无 dispatch_attempts 列（调度重试计数），按需补建
+        ensure_column(&host, "task_queue", "dispatch_attempts", "ALTER TABLE task_queue ADD COLUMN dispatch_attempts INTEGER NOT NULL DEFAULT 0");
+
+        // 4.2 迁移：task_queue.source 列（queue / scheduled，定时任务 v6 引入）
+        ensure_column(&host, "task_queue", "source", "ALTER TABLE task_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'queue'");
+
+        // 4.3 迁移：task_history 预留 token 统计列（v1 不解析，JSONL 深化需求回填）
+        ensure_column(&host, "task_history", "input_tokens", "ALTER TABLE task_history ADD COLUMN input_tokens INTEGER");
+        ensure_column(&host, "task_history", "output_tokens", "ALTER TABLE task_history ADD COLUMN output_tokens INTEGER");
+
+        // 5. 初始化定时自动任务表
+        for stmt in SCHEDULED_JOBS_SCHEMA {
+            match host.plugin_db_execute(stmt) {
+                Ok(_) => {}
+                Err(e) => {
+                    host.log_error(&format!("Failed to initialize scheduled_jobs table: {}", e));
+                    break;
+                }
+            }
+        }
+        host.log_info("scheduled_jobs table initialized");
+
+        // 5.1 迁移：旧库 scheduled_jobs 无 session_id 列（触发时会话关联键）
+        ensure_column(&host, "scheduled_jobs", "session_id", "ALTER TABLE scheduled_jobs ADD COLUMN session_id TEXT");
+
+        // 6. 启动恢复 + 定时器注册（定时自动任务，ADR 0003）
+        // 重启前处于 creating 态的任务：其会话已随上次进程退出而丢失，
+        // 无法等到 Created 事件，标记 failed 避免永久卡在中间态
+        scheduled::recover_creating_jobs(&host);
+
+        // 宿主周期定时器：到点回调 scheduler-tick command（附当前时间），
+        // 到期/错过判定全部在插件侧以 DB trigger_at 完成（幂等归插件）
+        match host.timer_register(scheduled::SCHEDULER_INTERVAL_SECS, "auto-task.scheduler-tick") {
+            Ok(()) => host.log_info(&format!(
+                "Scheduler timer registered: interval={}s",
+                scheduled::SCHEDULER_INTERVAL_SECS
+            )),
+            Err(e) => host.log_error(&format!("Failed to register scheduler timer: {}", e)),
+        }
+
         Ok(())
     }
 
@@ -456,6 +606,17 @@ impl WasmPlugin for AutoTaskPlugin {
                     host.log_warn(&format!("Session lifecycle: hooks setup failed for {}: {}", working_dir, result.message));
                 }
             }
+            // Created：会话创建完成（PTY 已启动），定时自动任务的会话就绪信号：
+            // 按 session_id 匹配处于 creating 态的定时任务，把 prompts 注入队列
+            // （创建时机与字段见 ADR 0003）
+            SessionLifecycleEvent::Created { session_id, config_id, .. } => {
+                let host = WasmHost;
+                host.log_debug(&format!(
+                    "on_session_lifecycle: Created event session_id={} config_id={}",
+                    session_id, config_id
+                ));
+                scheduled::handle_session_created(&host, session_id, config_id);
+            }
             _ => {}
         }
         Ok(())
@@ -475,6 +636,17 @@ impl WasmPlugin for AutoTaskPlugin {
             event.text.len(),
             event.text
         ));
+
+        // 命令过滤（ADR-0004）：以 / 开头的提交行是 CLI 命令（如 /clear、/model），
+        // 不产生任务记录。白名单预留（未来 /skills 等任务型命令放行）
+        if agent::is_command_input(&event.text) {
+            host.log_debug(&format!(
+                "InputSubmitted: session={} input is a command, skip task creation: {:?}",
+                event.session_id,
+                event.text.trim_start().chars().take(32).collect::<String>()
+            ));
+            return Ok(());
+        }
 
         // 仅在 Claude Code 会话中把输入当作任务：非 claude 启动命令的会话直接忽略
         if !state::session_command_is_claude(&host, &event.session_id) {
@@ -499,3 +671,56 @@ impl WasmPlugin for AutoTaskPlugin {
 }
 
 bedcode_plugin_api::wasm_entry!(AutoTaskPlugin);
+
+// ==================== 辅助函数 ====================
+
+/// 按需补建表列（幂等迁移）：PRAGMA table_info 确认列不存在才执行 ALTER，
+/// 避免可预期的"duplicate column"错误污染宿主 ERROR 日志
+fn ensure_column(host: &bedcode_plugin_api::wasm_host::WasmHost, table: &str, column: &str, alter_sql: &str) {
+    use bedcode_plugin_api::host::HostPluginDatabase;
+
+    let exists = host
+        .plugin_db_query(&format!("PRAGMA table_info({})", table))
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .map(|rows| {
+            rows.iter().any(|row| {
+                row.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|n| n == column)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+
+    if exists {
+        host.log_debug(&format!("migration: {}.{} already exists, skip", table, column));
+        return;
+    }
+
+    match host.plugin_db_execute(alter_sql) {
+        Ok(_) => host.log_info(&format!("migration: added {}.{}", table, column)),
+        Err(e) => host.log_warn(&format!("migration: failed to add {}.{}: {}", table, column, e)),
+    }
+}
+
+/// 从命令参数组装任务历史查询筛选条件
+///
+/// 支持字段：session_id / status / agent / source / since / until / limit / offset
+fn task_history_filter_from_args(args: &bedcode_plugin_api::CommandArgs) -> state::TaskHistoryFilter {
+    let opt = |key: &str| -> Option<String> {
+        let v = args.str_or(key, "");
+        if v.is_empty() { None } else { Some(v) }
+    };
+    state::TaskHistoryFilter {
+        session_id: opt("session_id"),
+        status: opt("status"),
+        agent: opt("agent"),
+        source: opt("source"),
+        since: opt("since"),
+        until: opt("until"),
+        limit: args.value("limit").and_then(|v| v.as_i64()).unwrap_or(100),
+        offset: args.value("offset").and_then(|v| v.as_i64()).unwrap_or(0),
+    }
+}

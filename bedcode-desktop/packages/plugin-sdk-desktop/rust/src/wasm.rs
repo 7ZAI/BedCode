@@ -153,6 +153,10 @@ macro_rules! wasm_entry {
         /// - 宿主在读取完插件传入的字符串后调用（host function 参数回收）
         /// - 插件侧在读取完宿主写入的参数/结果后调用（导出函数参数与 out_ptr 回收）
         /// - 宿主在读取完插件返回的结果后调用（导出函数结果回收）
+        ///
+        /// 仅 wasm32 target 导出：原生构建（cargo test）由 SDK 的 native_link_stubs
+        /// 提供同名实现，避免重复符号
+        #[cfg(target_arch = "wasm32")]
         #[no_mangle]
         pub extern "C" fn __bedcode_deallocate(ptr: u32, len: u32) {
             if ptr == 0 || len == 0 {

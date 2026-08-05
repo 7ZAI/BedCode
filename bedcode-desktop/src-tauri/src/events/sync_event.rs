@@ -87,6 +87,17 @@ pub enum DesktopSyncEvent {
         action: String,
     },
 
+    // === 定时自动任务相关（v6，ADR 0003） ===
+    /// 定时自动任务变更（由 auto-task 插件发布）
+    TaskScheduledChanged {
+        /// 定时任务 ID
+        job_id: String,
+        /// 变更后的状态：pending / creating / executed / failed / missed
+        status: String,
+        /// 触发动作：create / delete / trigger / missed / failed
+        action: String,
+    },
+
     // === 文件服务相关（内网文件传输插件规格阶段 2） ===
     /// 桌面侧插件挂载点可用性变更（宿主在 registry mount/unmount/update_roots
     /// 成功后自动发出，不经插件；移动端经 SyncData 接收后转 MessageBus）
@@ -134,6 +145,15 @@ impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
             } => DesktopSyncEvent::TaskQueueChanged {
                 session_id,
                 queue_count,
+                action,
+            },
+            SyncEvent::TaskScheduledChanged {
+                job_id,
+                status,
+                action,
+            } => DesktopSyncEvent::TaskScheduledChanged {
+                job_id,
+                status,
                 action,
             },
         }

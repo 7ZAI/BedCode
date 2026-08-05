@@ -705,7 +705,9 @@ def handle_session_end(data, logger):
 
     会话结束时触发，根据 reason 和当前状态判断终态：
     - resume → 不推送（会话恢复，非终止）
-    - prompt_input_exit / clear / logout / bypass_permissions_disabled → interrupted
+    - prompt_input_exit / clear / logout / bypass_permissions_disabled → 先查当前状态，
+      终态或 idle 则跳过（/clear 是上下文清理副作用，不得改写前一任务终态），
+      否则 interrupted
     - other + 当前已完成 → 不覆盖（Stop 已正确标记 completed）
     - other + 当前 idle → 不推送（无任务运行，无需标记）
     - other + 其他状态 → interrupted（保守处理）
@@ -723,6 +725,16 @@ def handle_session_end(data, logger):
         return
 
     if reason in SESSION_END_INTERRUPT_REASONS:
+        # 已知副作用场景：/clear 会触发 SessionEnd(reason=clear)，此时前一任务
+        # 通常已 completed。无守卫地推 interrupted 会把正常完成状态翻成中断，
+        # 与 "other" 分支同样先查当前状态：终态或 idle 一律跳过
+        current = query_task_status(session_id, logger)
+        if current in TERMINAL_STATUSES or current in ("idle", None):
+            logger.info(
+                "HOOK session_end: session_id={} reason={} skipped, current status '{}' "
+                "is terminal or idle".format(session_id, reason, current)
+            )
+            return
         status = "interrupted"
         status_reason = "Session ended: {}".format(reason)
     elif reason == "other":

@@ -274,6 +274,33 @@ impl HostSession for WasmHost {
             Err(HostError::call_failed("session_input_register"))
         }
     }
+
+    fn session_create(&self, config_id: &str) -> Result<String, HostError> {
+        let (cid_ptr, cid_len) = wasm_alloc_string(config_id);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_session_create(cid_ptr, cid_len, out.as_mut_ptr() as u32) };
+        if status != 0 {
+            return Err(HostError::call_failed("session_create"));
+        }
+        if out[0] == 0 && out[1] == 0 {
+            return Err(HostError::custom(-1, "session_create: host returned empty session_id"));
+        }
+        Ok(read_and_free_result(out[0], out[1]))
+    }
+}
+
+// ==================== HostTimer ====================
+
+impl crate::host::HostTimer for WasmHost {
+    fn timer_register(&self, interval_secs: u64, command: &str) -> Result<(), HostError> {
+        let (cmd_ptr, cmd_len) = wasm_alloc_string(command);
+        let status = unsafe { host_timer_register(interval_secs as u32, cmd_ptr, cmd_len) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("timer_register"))
+        }
+    }
 }
 
 // ==================== HostEvents ====================
@@ -639,6 +666,10 @@ extern "C" {
     fn host_session_lifecycle_register() -> i32;
     /// 会话输入：注册提交输入行监听器 — 返回 0 成功，-1 失败（含权限拒绝）
     fn host_session_input_register() -> i32;
+    /// 会话：按配置创建新会话 — out_ptr 输出 session_id，返回 0 成功 -1 失败
+    fn host_session_create(cid_ptr: u32, cid_len: u32, out_ptr: u32) -> i32;
+    /// 定时器：注册周期回调 — 返回 0 成功，-1 失败
+    fn host_timer_register(interval_secs: u32, cmd_ptr: u32, cmd_len: u32) -> i32;
     /// 文件服务：挂载 — MountOptions JSON → out_ptr 输出 MountResult JSON，返回 0 成功 -1 失败
     fn host_filesrv_mount(opts_ptr: u32, opts_len: u32, out_ptr: u32) -> i32;
     /// 文件服务：卸载挂载点 — 返回 0 成功，-1 失败
@@ -729,5 +760,115 @@ pub fn wasm_write_result_to_out_ptr(out_ptr: u32, ptr: u32, len: u32) {
         let out = out_ptr as *mut u8;
         std::ptr::copy_nonoverlapping(ptr.to_le_bytes().as_ptr(), out, 4);
         std::ptr::copy_nonoverlapping(len.to_le_bytes().as_ptr(), out.add(4), 4);
+    }
+}
+
+// ==================== Native Link Stubs ====================
+
+// 非 wasm32 target（原生 cargo test）下，上方 extern "C" 声明的宿主 import 符号不存在：
+// Linux/macOS 对 cdylib 未定义符号宽容，Windows 链接器则直接报错，导致插件
+// 单元测试无法在 Windows 原生构建。这里提供 stub 实现仅用于满足链接：
+// - 带返回值的函数统一返回失败值（-1），单元测试只测纯逻辑函数，不会实际调用宿主能力
+// - wasm32 编译时本模块不参与，import 仍由宿主 Linker 解析
+#[cfg(not(target_arch = "wasm32"))]
+mod native_link_stubs {
+    #[no_mangle]
+    pub extern "C" fn host_storage_get(_key_ptr: u32, _key_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_storage_set(_key_ptr: u32, _key_len: u32, _val_ptr: u32, _val_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_storage_delete(_key_ptr: u32, _key_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_db_execute(_sql_ptr: u32, _sql_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_db_query(_sql_ptr: u32, _sql_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_db_execute_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_db_query_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_plugin_db_execute(_sql_ptr: u32, _sql_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_plugin_db_query(_sql_ptr: u32, _sql_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_plugin_db_execute_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_plugin_db_query_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_terminal_send(_sid_ptr: u32, _sid_len: u32, _data_ptr: u32, _data_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_list(_out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_get(_sid_ptr: u32, _sid_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_config_list(_out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_emit_event(_name_ptr: u32, _name_len: u32, _payload_ptr: u32, _payload_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_http_fetch(_req_ptr: u32, _req_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_fs_read(_path_ptr: u32, _path_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_fs_write(_path_ptr: u32, _path_len: u32, _data_ptr: u32, _data_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_fs_copy(_src_ptr: u32, _src_len: u32, _dst_ptr: u32, _dst_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_fs_delete(_path_ptr: u32, _path_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_fs_exists(_path_ptr: u32, _path_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_config_get(_key_ptr: u32, _key_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_log_info(_msg_ptr: u32, _msg_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_log_debug(_msg_ptr: u32, _msg_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_log_warn(_msg_ptr: u32, _msg_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_log_error(_msg_ptr: u32, _msg_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_mark_plugin_error(_err_ptr: u32, _err_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_broadcast_sync(_payload_ptr: u32, _payload_len: u32) {}
+    #[no_mangle]
+    pub extern "C" fn host_notify(_title_ptr: u32, _title_len: u32, _body_ptr: u32, _body_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_bus_publish(_topic_ptr: u32, _topic_len: u32, _payload_ptr: u32, _payload_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_bus_subscribe(_topic_ptr: u32, _topic_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_bus_unsubscribe(_topic_ptr: u32, _topic_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_lifecycle_register() -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_input_register() -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_create(_cid_ptr: u32, _cid_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_timer_register(_interval_secs: u32, _cmd_ptr: u32, _cmd_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_filesrv_mount(_opts_ptr: u32, _opts_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_filesrv_unmount(_mp_ptr: u32, _mp_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_filesrv_update_roots(_mp_ptr: u32, _mp_len: u32, _roots_ptr: u32, _roots_len: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_filesrv_get_peer(_peer_ptr: u32, _peer_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_transfer_start(_req_ptr: u32, _req_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_transfer_cancel(_task_ptr: u32, _task_len: u32) -> i32 { -1 }
+
+    /// 内存回收 stub：与 wasm_entry! 宏生成版本同 Layout（len, 1）配对释放。
+    /// 原生测试中 wasm_entry! 的同名定义被 cfg 排除（避免重复符号），由此 stub 接管
+    #[no_mangle]
+    pub extern "C" fn __bedcode_deallocate(ptr: u32, len: u32) {
+        if ptr == 0 || len == 0 {
+            return;
+        }
+        if let Ok(layout) = std::alloc::Layout::from_size_align(len as usize, 1) {
+            // SAFETY: ptr 由 wasm_alloc_string / __bedcode_allocate 以相同 Layout 分配
+            unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
+        }
     }
 }
