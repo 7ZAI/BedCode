@@ -56,11 +56,18 @@
 
     <!-- Terminal Container (xterm.js) -->
     <div ref="terminalContainerRef" class="flex-1 overflow-hidden relative" :style="{ backgroundColor: containerBgColor }">
-      <!-- 终端背景图片层：渲染在 xterm 画布下方，不透明度由设置控制 -->
+      <!-- 终端背景图片层：渲染在 xterm 画布下方，不透明度由设置控制；
+           铺满容器（cover + center），窗口调整大小时背景自适应缩放 -->
       <div
         v-if="bgImageUrl"
-        class="absolute inset-0 pointer-events-none bg-cover bg-center"
-        :style="{ backgroundImage: `url('${bgImageUrl}')`, opacity: bgOpacity / 100 }"
+        class="absolute inset-0 pointer-events-none"
+        :style="{
+          backgroundImage: `url('${bgImageUrl}')`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+          opacity: bgOpacity / 100,
+        }"
       ></div>
       <!-- 滚动到底部指示器：用户向上滚动时显示，点击回到底部 -->
       <transition name="scroll-indicator">
