@@ -354,16 +354,48 @@ pub fn resume_all(
 }
 
 /// retry：重试失败的任务
+///
+/// duplicate-name 拒绝（下载方向）先清理本地目标与残留 .part，
+/// 否则重试必然再次同名被拒（spec §7.4）；上传方向远端文件不可删
+/// （spec 禁止删除远端），重试前需用户在对端处理。
 pub fn retry(
     state: &mut PluginState,
-    host: &(impl HostStorage + HostEvents + HostLog),
+    host: &(impl HostStorage + HostEvents + HostLog + HostFs),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
+    let (direction, reason, local_path) = {
+        let task = state.tasks.get_mut(task_id)
+            .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
+        if task.state != TaskState::Failed && task.state != TaskState::Rejected {
+            return Err(anyhow::anyhow!("task not failed/rejected: {}", task_id));
+        }
+        (
+            task.direction,
+            task.reason.clone(),
+            task.local_path.clone(),
+        )
+    };
+
+    // duplicate-name（下载）：清理本地目标文件与残留 .part，使重试可成功；
+    // 上传方向远端文件不可删（spec 禁止删除远端），重试前需用户在对端处理
+    if direction == Direction::Download
+        && reason.as_deref() == Some("duplicate-name")
+        && !local_path.is_empty()
+    {
+        // 目标文件 = .part 路径去掉后缀（enqueue 预检与 rename 冲突均源于目标存在）
+        let final_path = local_path.strip_suffix(".part").unwrap_or(&local_path);
+        for p in [final_path, local_path.as_str()] {
+            if let Err(e) = host.fs_delete(p) {
+                host.log_warn(&format!(
+                    "retry: delete {} for duplicate-name failed (ignored): {}",
+                    p, e
+                ));
+            }
+        }
+    }
+
     let task = state.tasks.get_mut(task_id)
         .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
-    if task.state != TaskState::Failed && task.state != TaskState::Rejected {
-        return Err(anyhow::anyhow!("task not failed/rejected: {}", task_id));
-    }
     task.transition(TaskState::Queued)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     task.reason = None;
@@ -959,10 +991,14 @@ fn urlencoded(s: &str) -> String {
 
 /// 删除 .part 临时文件（幂等）
 ///
-/// 已知缺口：移动端 SDK HostFs 无 fs_delete 能力，WASM 环境无法删除文件；
-/// 故为 no-op（.part 残留不影响功能，下次续传从偏移重建）。
-/// 注：桌面端同函数走 host.fs_delete 真实删除，两端差异源于 SDK 能力。
-fn delete_part_file(_host: &impl HostFs, _path: &str) {}
+/// 移动端 SDK HostFs 自 fs_delete 落地后已具备删除能力（Android 走
+/// Kotlin FileDeletePlugin，非 Android 平台宿主 std::fs），与桌面端对齐。
+fn delete_part_file(host: &(impl HostFs + HostLog), path: &str) {
+    if let Err(e) = host.fs_delete(path) {
+        // 幂等场景文件可能已不存在，debug 级即可
+        host.log_debug(&format!("delete .part {} failed (ignored): {}", path, e));
+    }
+}
 
 /// 保存设置到 storage
 fn save_settings(host: &impl HostStorage, settings: &Settings) {

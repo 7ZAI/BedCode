@@ -354,16 +354,48 @@ pub fn resume_all(
 }
 
 /// retry：重试失败的任务
+///
+/// duplicate-name 拒绝（下载方向）先清理本地目标与残留 .part，
+/// 否则重试必然再次同名被拒（spec §7.4）；上传方向远端文件不可删
+/// （spec 禁止删除远端），重试前需用户在对端处理。
 pub fn retry(
     state: &mut PluginState,
-    host: &(impl HostStorage + HostEvents + HostLog),
+    host: &(impl HostStorage + HostEvents + HostLog + HostFs),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
+    let (direction, reason, local_path) = {
+        let task = state.tasks.get_mut(task_id)
+            .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
+        if task.state != TaskState::Failed && task.state != TaskState::Rejected {
+            return Err(anyhow::anyhow!("task not failed/rejected: {}", task_id));
+        }
+        (
+            task.direction,
+            task.reason.clone(),
+            task.local_path.clone(),
+        )
+    };
+
+    // duplicate-name（下载）：清理本地目标文件与残留 .part，使重试可成功；
+    // 上传方向远端文件不可删（spec 禁止删除远端），重试前需用户在对端处理
+    if direction == Direction::Download
+        && reason.as_deref() == Some("duplicate-name")
+        && !local_path.is_empty()
+    {
+        // 目标文件 = .part 路径去掉后缀（enqueue 预检与 rename 冲突均源于目标存在）
+        let final_path = local_path.strip_suffix(".part").unwrap_or(&local_path);
+        for p in [final_path, local_path.as_str()] {
+            if let Err(e) = host.fs_delete(p) {
+                host.log_warn(&format!(
+                    "retry: delete {} for duplicate-name failed (ignored): {}",
+                    p, e
+                ));
+            }
+        }
+    }
+
     let task = state.tasks.get_mut(task_id)
         .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
-    if task.state != TaskState::Failed && task.state != TaskState::Rejected {
-        return Err(anyhow::anyhow!("task not failed/rejected: {}", task_id));
-    }
     task.transition(TaskState::Queued)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     task.reason = None;
