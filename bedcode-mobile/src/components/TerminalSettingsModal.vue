@@ -319,7 +319,7 @@ function handleConfirm() {
 .theme-btn.active {
   border-color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
-  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
+  box-shadow: 0 0 12px var(--mobile-accent-muted);
 }
 
 .theme-preview {
@@ -411,6 +411,6 @@ function handleConfirm() {
 }
 
 .settings-footer-btn.confirm:hover {
-  background: #00b8e6;
+  opacity: 0.9;
 }
 </style>

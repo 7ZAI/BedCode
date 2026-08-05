@@ -209,6 +209,7 @@ function handleConfirm() {
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: color 0.2s ease;
 }
 
 .close-btn:hover {
