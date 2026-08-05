@@ -128,9 +128,14 @@ pub async fn ws_unbind_biometric_credential() -> Result<bool> {
 }
 
 /// 生物认证密钥状态（设备支持 + 本地密钥已生成）
+///
+/// camelCase 序列化与前端 TS 接口对齐（同 commands/session.rs 约定）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BiometricKeyStatus {
     pub device_supported: bool,
+    /// BiometricManager 结果码：0=SUCCESS 1=HW_UNAVAILABLE 11=NONE_ENROLLED 12=NO_HARDWARE；-1=未知/插件异常
+    pub device_reason: i32,
     pub has_key: bool,
 }
 
@@ -138,10 +143,11 @@ pub struct BiometricKeyStatus {
 #[tauri::command]
 pub async fn ws_get_biometric_key_status() -> Result<BiometricKeyStatus> {
     let auth = get_auth_manager();
-    let device_supported = auth.is_biometric_supported().await?;
+    let (device_supported, device_reason) = auth.is_biometric_supported().await?;
     let has_key = auth.has_biometric_key().await?;
     Ok(BiometricKeyStatus {
         device_supported,
+        device_reason,
         has_key,
     })
 }

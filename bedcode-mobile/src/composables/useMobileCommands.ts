@@ -153,6 +153,8 @@ export async function wsUnbindBiometricCredential(): Promise<boolean> {
  */
 export interface BiometricKeyStatus {
   deviceSupported: boolean
+  /** BiometricManager 结果码：0=SUCCESS 1=HW_UNAVAILABLE 11=NONE_ENROLLED 12=NO_HARDWARE；-1=未知/插件异常 */
+  deviceReason: number
   hasKey: boolean
 }
 

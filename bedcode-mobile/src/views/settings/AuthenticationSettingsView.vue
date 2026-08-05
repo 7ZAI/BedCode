@@ -64,7 +64,8 @@
         </button>
 
         <p v-if="!hasKey && deviceSupported" class="text-xs text-[var(--mobile-text-muted)]">{{ $t('settings.authentication.bindHint') }}</p>
-        <p v-if="!deviceSupported" class="text-xs text-[var(--mobile-warning)]">{{ $t('settings.authentication.unsupported') }}</p>
+        <p v-if="statusError" class="text-xs text-[var(--mobile-error)]">{{ $t('settings.authentication.statusError') }}</p>
+        <p v-if="!deviceSupported && !statusError" class="text-xs text-[var(--mobile-warning)]">{{ $t(unsupportedReasonKey) }}</p>
       </section>
     </div>
   </SettingsSubPage>
@@ -117,15 +118,34 @@ const authMethods: AuthMethodOption[] = [
 // ==================== 生物凭证状态 ====================
 
 const deviceSupported = ref(false)
+const deviceReason = ref(-1)
 const hasKey = ref(false)
 const busy = ref(false)
+// 检测调用本身失败（插件未注册/原生异常）时与"设备不支持"区分开，避免误导
+const statusError = ref(false)
+
+// BiometricManager 结果码 → 不支持原因文案 key
+const unsupportedReasonKey = computed(() => {
+  switch (deviceReason.value) {
+    case 1:
+      return 'settings.authentication.unsupportedUnavailable'
+    case 11:
+      return 'settings.authentication.unsupportedNotEnrolled'
+    case 12:
+      return 'settings.authentication.unsupportedNoHardware'
+    default:
+      return 'settings.authentication.unsupported'
+  }
+})
 
 const statusLabel = computed(() => {
-  if (!deviceSupported.value) return t('settings.authentication.unsupported')
+  if (statusError.value) return t('settings.authentication.statusError')
+  if (!deviceSupported.value) return t(unsupportedReasonKey.value)
   return hasKey.value ? t('settings.authentication.bound') : t('settings.authentication.unbound')
 })
 
 const statusClass = computed(() => {
+  if (statusError.value) return 'bg-[var(--mobile-error)]/12 text-[var(--mobile-error)]'
   if (!deviceSupported.value) return 'bg-[var(--mobile-warning)]/12 text-[var(--mobile-warning)]'
   return hasKey.value
     ? 'bg-[var(--mobile-success)]/12 text-[var(--mobile-success)]'
@@ -135,10 +155,13 @@ const statusClass = computed(() => {
 async function refreshStatus() {
   try {
     const status = await wsGetBiometricKeyStatus()
+    statusError.value = false
     deviceSupported.value = status.deviceSupported
+    deviceReason.value = status.deviceReason
     hasKey.value = status.hasKey
   } catch (e) {
     console.warn('[AuthSettings] Failed to load biometric key status:', e)
+    statusError.value = true
   }
 }
 
@@ -171,11 +194,30 @@ async function toggleBind() {
     }
   } catch (e) {
     console.error('[AuthSettings] Biometric toggle failed:', e)
-    toast.error(hasKey.value ? t('settings.authentication.unbindFailed') : t('settings.authentication.bindFailed'))
+    // 原生生物识别错误映射为友好 i18n 文案（纯中文，不带 Plugin error: 前缀）
+    toast.error(hasKey.value ? t('settings.authentication.unbindFailed') : biometricErrorText(e))
   } finally {
     busy.value = false
     await refreshStatus()
   }
+}
+
+// 将原生生物识别错误（系统文案，含 Plugin error: 前缀）映射为友好 i18n 文案
+function biometricErrorText(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  // Android 指纹/人脸暂停（失败次数过多）
+  if (/尝试次数过多|too many|lockout|paused|暂停/i.test(msg)) {
+    return t('settings.authentication.bindLocked')
+  }
+  // 用户取消弹窗
+  if (/cancel|取消/i.test(msg)) {
+    return t('settings.authentication.bindCancelled')
+  }
+  // 生物特征录入变更导致密钥失效（需重新绑定）
+  if (/invalidated|失效/i.test(msg)) {
+    return t('settings.authentication.bindInvalidated')
+  }
+  return t('settings.authentication.bindFailed')
 }
 
 onMounted(refreshStatus)

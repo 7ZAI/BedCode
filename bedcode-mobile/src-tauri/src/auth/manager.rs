@@ -438,8 +438,11 @@ impl AuthManager {
         }
     }
 
-    /// 绑定生物凭证：本地生成密钥对，公钥注册到桌面端（需已认证连接）
+    /// 绑定生物凭证：生成密钥对 + 生物门卫自检，通过后注册公钥到桌面端（需已认证连接）
     ///
+    /// 自检：生成密钥后立即弹一次指纹/人脸，对本地随机挑战签名并验签——
+    /// 确认“合法主人”确实能解锁这把钥匙，通过后才把公钥注册到桌面端。
+    /// 避免“绑定时从未验证主人”：否则任何人拿到已配对手机都能注册钥匙。
     /// 返回桌面端是否接受绑定
     pub async fn bind_biometric_credential(&self) -> Result<bool> {
         if !self.connection.is_connected().await {
@@ -457,7 +460,32 @@ impl AuthManager {
             }
         };
 
-        // 2. 通过已认证连接把公钥注册到桌面端
+        // 2. 生物门卫自检：弹指纹/人脸签名本地随机挑战并验签。
+        //    取消/失败/验签不通过 → 删除本地密钥，绑定中止（不向桌面端注册）
+        {
+            use rand::RngCore;
+            let mut bytes = [0u8; 16];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            let nonce = hex::encode(bytes);
+
+            let signature = match crate::plugin::android_plugins::biometric_sign(&fingerprint, &nonce).await {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::warn!("[bind_biometric_credential] Biometric self-check cancelled/failed: {}", e);
+                    let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
+                    return Err(e);
+                }
+            };
+
+            if let Err(e) = verify_biometric_signature(&public_key, &nonce, &signature) {
+                tracing::error!("[bind_biometric_credential] Biometric self-check signature invalid: {}", e);
+                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
+                return Err(crate::AppError::Auth("Biometric self-check failed".to_string()));
+            }
+            tracing::info!("[bind_biometric_credential] Biometric self-check passed (owner verified)");
+        }
+
+        // 3. 通过已认证连接把公钥注册到桌面端
         let message = AuthRequest::exchange_biometric_credential(&fingerprint, &public_key);
         let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
             Ok(r) => r,
@@ -527,8 +555,79 @@ impl AuthManager {
         crate::plugin::android_plugins::biometric_has_key(&fingerprint).await
     }
 
-    /// 设备是否支持生物认证密钥
-    pub async fn is_biometric_supported(&self) -> Result<bool> {
+    /// 设备是否支持生物认证密钥（硬件可用 + 已录入生物特征）
+    ///
+    /// 返回 (是否支持, BiometricManager 结果码)
+    pub async fn is_biometric_supported(&self) -> Result<(bool, i32)> {
         crate::plugin::android_plugins::biometric_device_supported().await
+    }
+}
+
+/// 验证生物认证签名（绑定自检用，与桌面端 verify_biometric_signature 算法一致）
+///
+/// - `public_key_spki_b64`: 绑定公钥（SPKI X.509 DER，base64）
+/// - `message`: 被签名的消息（挑战值 hex 字符串的 UTF-8 字节）
+/// - `signature_b64`: 签名（原始 r||s 格式，base64）
+fn verify_biometric_signature(
+    public_key_spki_b64: &str,
+    message: &str,
+    signature_b64: &str,
+) -> Result<()> {
+    use base64::Engine;
+    use p256::ecdsa::signature::Verifier;
+    use p256::ecdsa::{Signature, VerifyingKey};
+    use p256::pkcs8::DecodePublicKey;
+
+    let spki_der = base64::engine::general_purpose::STANDARD
+        .decode(public_key_spki_b64)
+        .map_err(|e| crate::AppError::Auth(format!("Invalid public key encoding: {}", e)))?;
+
+    let verifying_key = VerifyingKey::from_public_key_der(&spki_der)
+        .map_err(|e| crate::AppError::Auth(format!("Invalid public key: {}", e)))?;
+
+    let raw_sig = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64)
+        .map_err(|e| crate::AppError::Auth(format!("Invalid signature encoding: {}", e)))?;
+
+    let signature = Signature::from_slice(&raw_sig)
+        .map_err(|e| crate::AppError::Auth(format!("Invalid signature: {}", e)))?;
+
+    verifying_key
+        .verify(message.as_bytes(), &signature)
+        .map_err(|_| crate::AppError::Auth("Biometric signature verification failed".to_string()))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+    use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::SigningKey;
+    use p256::pkcs8::EncodePublicKey;
+
+    /// 与桌面端 test_verify_signature_roundtrip 对称：验证 SPKI 公钥 + hex 消息 + r||s 签名
+    #[test]
+    fn test_verify_biometric_signature_roundtrip() {
+        let signing_key = SigningKey::random(&mut rand::thread_rng());
+        let verifying_key = signing_key.verifying_key();
+
+        let spki_der = verifying_key.to_public_key_der().expect("encode public key");
+        let spki_b64 = base64::engine::general_purpose::STANDARD.encode(spki_der.as_bytes());
+
+        let message = "0123456789abcdef0123456789abcdef";
+        let signature: p256::ecdsa::Signature = signing_key.sign(message.as_bytes());
+        let (r, s) = signature.split_scalars();
+        let mut raw = r.to_bytes().to_vec();
+        raw.extend_from_slice(&s.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+
+        assert!(verify_biometric_signature(&spki_b64, message, &sig_b64).is_ok());
+        // 篡改消息应失败
+        assert!(verify_biometric_signature(&spki_b64, "tampered", &sig_b64).is_err());
+        // 篡改签名应失败
+        let bad_sig = base64::engine::general_purpose::STANDARD.encode(&raw[..63]);
+        assert!(verify_biometric_signature(&spki_b64, message, &bad_sig).is_err());
     }
 }

@@ -95,6 +95,7 @@ android_logger = "0.14"
 
 # Plugin SDK (Mobile)
 bedcode-plugin-api-mobile = { path = "../packages/plugin-sdk-mobile/rust" }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
 tempfile = "3"

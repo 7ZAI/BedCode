@@ -71,7 +71,10 @@ class BiometricKeyPlugin(private val activity: Activity) : Plugin(activity) {
                 // 每次签名都必须重新生物认证（不设置 validity duration）
                 .setUserAuthenticationRequired(true)
                 .setInvalidatedByBiometricEnrollment(true)
-            // API 30+ 明确限定仅强生物特征（指纹/人脸），不含 PIN 等设备凭据
+            // API 30+ 明确限定仅生物特征（指纹/人脸），不含 PIN 等设备凭据。
+            // 注意：Keystore 层只有 AUTH_BIOMETRIC_STRONG / AUTH_DEVICE_CREDENTIAL 两个选项；
+            // 且按 Android CDD，仅强生物特征（Class 3）允许与 Keystore 集成做加密运算，
+            // 弱生物特征（摄像头人脸等）无法解锁此类密钥，故不能用 weak 降级。
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                 specBuilder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
             }
@@ -122,16 +125,25 @@ class BiometricKeyPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /// 设备是否支持生物认证密钥（硬件可用 + 已录入生物特征）
+    ///
+    /// 仅检查强生物特征（Class 3）：按 Android CDD，Keystore 加密运算只能由强生物特征解锁，
+    /// 弱生物特征（摄像头人脸等）无法与 Keystore 集成。reason 为 BiometricManager 结果码，
+    /// 供 UI 展示具体不支持原因。
     @Command
     fun isDeviceSupported(invoke: Invoke) {
         val result = JSObject()
         try {
             val biometricManager = BiometricManager.from(activity)
             val canAuth = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            // 结果码：0=SUCCESS 1=HW_UNAVAILABLE 11=NONE_ENROLLED 12=NO_HARDWARE
+            android.util.Log.d(TAG, "isDeviceSupported canAuthenticate=$canAuth")
             result.put("supported", canAuth == BiometricManager.BIOMETRIC_SUCCESS)
+            result.put("reason", canAuth)
             invoke.resolve(result)
         } catch (e: Exception) {
+            android.util.Log.e(TAG, "isDeviceSupported failed: ${e.message}")
             result.put("supported", false)
+            result.put("reason", -1)
             invoke.resolve(result)
         }
     }
@@ -215,23 +227,18 @@ class BiometricKeyPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /// ASN.1 DER → 原始 r||s（P-256 各 32 字节）
+    ///
+    /// DER 布局: 30 <总长> 02 <rlen> <r> 02 <slen> <s>。
+    /// readDerInt 内部会跳过 tag 与长度字节；P-256 签名各段长度恒为单字节（总长 < 128），
+    /// 因此 offset=2 后直接指向 r 的 tag，无需再跳长度。
     private fun derToRaw(der: ByteArray): ByteArray {
-        var offset = 2 // 跳过 0x30 与总长度
-        offset = skipDerLength(der, offset)
+        var offset = 2 // 跳过 0x30 与总长度字节，此时指向 r 的 tag
         val r = readDerInt(der, offset)
-        offset = r.second
-        offset = skipDerLength(der, offset)
-        val s = readDerInt(der, offset)
+        val s = readDerInt(der, r.second)
 
         val rFixed = toFixedLength(r.first, SCALAR_BYTES)
         val sFixed = toFixedLength(s.first, SCALAR_BYTES)
         return rFixed + sFixed
-    }
-
-    /// 跳过 DER 长度字节（仅支持单字节长度，P-256 签名定长足够）
-    private fun skipDerLength(der: ByteArray, offset: Int): Int {
-        val len = der[offset].toInt() and 0xFF
-        return if (len and 0x80 != 0) offset + 1 + (len and 0x7F) else offset + 1
     }
 
     /// 读取 DER INTEGER（含 0x02 与长度），返回（去前导零后的值，下一个偏移）

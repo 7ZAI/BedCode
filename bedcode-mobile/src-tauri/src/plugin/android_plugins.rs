@@ -209,6 +209,14 @@ pub async fn biometric_generate_keypair(fingerprint: &str) -> crate::Result<Stri
         .run_mobile_plugin_async("generateKeyPair", payload)
         .await
         .map_err(|e| crate::AppError::Plugin(format!("Failed to generate biometric key: {}", e)))?;
+    // Kotlin 端失败时透传具体原因（如 Keystore 异常）
+    if response.get("success").and_then(|v| v.as_bool()).unwrap_or(true) == false {
+        let reason = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown key generation error");
+        return Err(crate::AppError::Plugin(format!("Biometric key generation failed: {}", reason)));
+    }
     response.get("publicKey").and_then(|v| v.as_str()).map(String::from)
         .ok_or_else(|| crate::AppError::Plugin("Missing publicKey in biometric response".to_string()))
 }
@@ -226,6 +234,15 @@ pub async fn biometric_sign(fingerprint: &str, message_hex: &str) -> crate::Resu
         .run_mobile_plugin_async("sign", payload)
         .await
         .map_err(|e| crate::AppError::Plugin(format!("Failed to sign with biometric key: {}", e)))?;
+    // Kotlin 端失败（用户取消 / 认证失败 / 异常）时透传具体原因（系统文案，已是用户语言），
+    // 不再加英文包装前缀，避免 toast 出现 "Plugin error: Biometric sign failed: ..." 中英混杂
+    if response.get("success").and_then(|v| v.as_bool()).unwrap_or(true) == false {
+        let reason = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown biometric error");
+        return Err(crate::AppError::Plugin(reason.to_string()));
+    }
     response.get("signature").and_then(|v| v.as_str()).map(String::from)
         .ok_or_else(|| crate::AppError::Plugin("Missing signature in biometric response".to_string()))
 }
@@ -259,8 +276,10 @@ pub async fn biometric_has_key(fingerprint: &str) -> crate::Result<bool> {
 }
 
 /// 检查设备是否支持生物认证密钥（硬件 + 已录入生物特征）
+///
+/// 返回 (是否支持, BiometricManager 结果码)：原因码供 UI 展示具体不支持原因。
 #[cfg(target_os = "android")]
-pub async fn biometric_device_supported() -> crate::Result<bool> {
+pub async fn biometric_device_supported() -> crate::Result<(bool, i32)> {
     let handle = BIOMETRIC_KEY_HANDLE.get().ok_or_else(|| {
         crate::AppError::Plugin("BiometricKeyPlugin not registered".to_string())
     })?;
@@ -268,7 +287,15 @@ pub async fn biometric_device_supported() -> crate::Result<bool> {
         .run_mobile_plugin_async("isDeviceSupported", serde_json::json!({}))
         .await
         .map_err(|e| crate::AppError::Plugin(format!("Failed to check biometric support: {}", e)))?;
-    Ok(response.get("supported").and_then(|v| v.as_bool()).unwrap_or(false))
+    let supported = response
+        .get("supported")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let reason = response
+        .get("reason")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1) as i32;
+    Ok((supported, reason))
 }
 
 /// 生成 Keystore 别名（指纹哈希，避免非法字符并保证长度稳定）
@@ -300,6 +327,6 @@ pub async fn biometric_has_key(_fingerprint: &str) -> crate::Result<bool> {
 }
 
 #[cfg(not(target_os = "android"))]
-pub async fn biometric_device_supported() -> crate::Result<bool> {
-    Ok(false)
+pub async fn biometric_device_supported() -> crate::Result<(bool, i32)> {
+    Ok((false, -1))
 }
