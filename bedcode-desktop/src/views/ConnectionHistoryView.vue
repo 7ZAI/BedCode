@@ -30,6 +30,7 @@
       >
         {{ t('desktop.device.historyClear') }}
       </button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-auto px-6 py-6">

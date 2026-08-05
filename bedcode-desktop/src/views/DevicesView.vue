@@ -24,117 +24,169 @@
     </div>
 
     <div class="flex-1 overflow-auto px-6 py-6 space-y-6">
-      <!-- ==================== 配对区：二维码 + 配对码 + IP 选择 ==================== -->
+      <!-- ==================== PAIRING · QR + 配对码 ==================== -->
       <section>
-        <h3 class="wb-section-title">PAIRING · {{ displayIp }}:{{ port }}</h3>
-        <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 grid gap-6 md:grid-cols-2">
-          <!-- 二维码 -->
-          <div>
-            <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
-            <p class="text-[12px] text-[var(--text-secondary)] mt-1">{{ t('desktop.device.qrDesc') }}</p>
-            <div class="mt-4 flex items-start gap-4">
+        <div class="flex items-baseline justify-between mb-2">
+          <h3 class="wb-section-title">{{ t('desktop.device.sectionPairing') }}</h3>
+          <span class="text-[11px] text-[var(--text-tertiary)]">{{ t('desktop.device.networkHint') }}</span>
+        </div>
+        <div class="grid gap-4 md:grid-cols-2">
+          <!-- ==================== QR 码卡片 ==================== -->
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5">
+            <div class="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
+                <p class="text-[12px] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.qrDesc') }}</p>
+              </div>
+              <span v-if="qr.hasQr.value" class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
+                {{ t('desktop.device.qrValidity') }} {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
+              </span>
+            </div>
+
+            <div class="flex items-center gap-4">
               <!-- 白底衬底保证二维码在暗色模式下可读 -->
-              <div class="shrink-0 inline-block bg-white p-2 rounded-lg border border-[var(--border)]">
+              <div class="shrink-0 inline-block bg-white p-2.5 rounded-lg border border-[var(--border)]">
                 <canvas ref="qrCanvasRef" class="block"></canvas>
               </div>
-              <div class="min-w-0 text-[12px] space-y-1.5 pt-1">
+              <div class="min-w-0 flex-1">
                 <template v-if="qr.hasQr.value">
-                  <p class="text-[var(--text-secondary)]">{{ t('desktop.device.qrHint') }}</p>
-                  <p class="text-[var(--text-secondary)]">
-                    {{ t('desktop.device.qrValidity') }}
-                    <span class="wb-mono font-medium text-[var(--text-primary)]">{{ qr.remainingSeconds.value }}</span>
-                    {{ t('common.time.seconds') }}
+                  <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+                    {{ t('desktop.device.qrHint') }}
                   </p>
-                  <p class="text-[11px] text-[var(--text-tertiary)]">{{ t('desktop.device.qrSingleUse') }}</p>
-                  <div class="flex items-center gap-2 pt-1">
-                    <button class="wb-btn-ghost !h-6 !px-2 text-[11px]" @click="qr.clearQr()">
-                      {{ t('common.button.cancel') }}
-                    </button>
-                    <button class="wb-btn-ghost !h-6 !px-2 text-[11px]" :disabled="qr.isLoading.value" @click="qr.generateQr(selectedIp || undefined)">
-                      {{ t('common.button.refresh') }}
-                    </button>
-                  </div>
+                  <p class="text-[11px] text-[var(--text-tertiary)] mt-1.5">
+                    {{ t('desktop.device.qrSingleUse') }}
+                  </p>
                 </template>
                 <template v-else>
-                  <p class="text-[var(--text-secondary)]">{{ t('desktop.device.qrHint') }}</p>
-                  <button class="wb-btn-ghost !h-6 !px-2 text-[11px]" :disabled="qr.isLoading.value" @click="qr.generateQr(selectedIp || undefined)">
-                    {{ t('desktop.device.generateQr') }}
-                  </button>
+                  <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+                    {{ t('desktop.device.qrHint') }}
+                  </p>
+                  <p class="text-[11px] text-[var(--text-tertiary)] mt-1.5">
+                    {{ t('desktop.device.qrPlaceholder') }}
+                  </p>
                 </template>
+                <div class="flex items-center gap-2 mt-3">
+                  <button
+                    v-if="qr.hasQr.value"
+                    class="wb-btn-ghost !h-7 !px-2.5 text-[11px]"
+                    @click="qr.clearQr()"
+                  >
+                    {{ t('common.button.cancel') }}
+                  </button>
+                  <button
+                    class="wb-btn-ghost !h-7 !px-2.5 text-[11px]"
+                    :disabled="qr.isLoading.value"
+                    @click="qr.generateQr(selectedIp || undefined)"
+                  >
+                    {{ qr.hasQr.value ? t('common.button.refresh') : t('desktop.device.generateQr') }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- 配对码 -->
-          <div class="md:border-l md:border-[var(--border)] md:pl-6">
-            <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
-            <p class="text-[12px] text-[var(--text-secondary)] mt-1">{{ t('desktop.device.pairingCodeDesc') }}</p>
-            <div v-if="!pairingCode" class="mt-4">
-              <p class="text-[12px] text-[var(--text-secondary)] mb-2">{{ t('desktop.device.pairingCodeHint') }}</p>
-              <button class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                </svg>
-                {{ t('desktop.device.generateCode') }}
-              </button>
+          <!-- ==================== 配对码卡片 ==================== -->
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5">
+            <div class="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
+                <p class="text-[12px] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.pairingCodeDesc') }}</p>
+              </div>
+              <span v-if="pairingCode" class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
+                {{ remainingSeconds }}{{ t('common.time.seconds') }}
+              </span>
             </div>
-            <div v-else class="mt-4">
-              <p class="text-[12px] text-[var(--text-secondary)] mb-2">{{ t('desktop.device.pairingCodeHint') }}</p>
-              <p class="text-4xl font-mono font-bold tracking-[0.2em] text-[var(--text-primary)]">{{ pairingCode.code }}</p>
-              <p class="text-[12px] text-[var(--text-secondary)] mt-3">
-                {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
-              </p>
-              <button class="wb-btn-ghost !h-6 !px-2 text-[11px] mt-3" @click="cancelPairing">
-                {{ t('common.button.cancel') }}
-              </button>
-            </div>
-          </div>
 
-          <!-- IP 选择 + 端口 -->
-          <div class="md:col-span-2 border-t border-[var(--border)] pt-4 flex items-center gap-3 flex-wrap">
-            <span class="text-[12px] text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
-            <select
-              :value="selectedIp || ''"
-              class="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-card)] wb-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
-              @change="onIpSelect(($event.target as HTMLSelectElement).value)"
-            >
-              <option v-if="!selectedIp" value="" disabled>{{ t('desktop.device.notSelected') }}</option>
-              <option v-for="ip in ipv4Addresses" :key="ip" :value="ip">{{ ip }}</option>
-            </select>
-            <span class="wb-mono text-[12px] text-[var(--text-tertiary)]">:{{ port }}</span>
-            <span v-if="ipv4Addresses.length === 0" class="text-[12px] text-[var(--text-tertiary)]">{{ t('desktop.device.noIpv4') }}</span>
+            <div v-if="!pairingCode" class="flex items-center gap-4">
+              <div class="shrink-0 w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border)] flex flex-col items-center justify-center text-center px-3 gap-1.5">
+                <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <p class="text-[11px] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.pairingCodeHint') }}
+                </p>
+                <div class="flex items-center gap-2 mt-3">
+                  <button class="wb-btn-primary !h-7 !px-2.5 text-[11px]" :disabled="isLoading" @click="generateCode">
+                    {{ t('desktop.device.generateCode') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="flex items-center gap-4">
+              <div class="shrink-0 w-[168px] h-[168px] rounded-lg border border-[var(--border)] bg-[var(--bg-page)] flex items-center justify-center">
+                <p class="text-[2.25rem] font-mono font-bold tracking-[0.2em] text-[var(--text-primary)] select-all break-all text-center">
+                  {{ pairingCode.code }}
+                </p>
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.pairingCodeHint') }}
+                </p>
+                <p class="text-[11px] text-[var(--text-tertiary)] mt-1.5">
+                  {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
+                </p>
+                <div class="flex items-center gap-2 mt-3">
+                  <button class="wb-btn-ghost !h-7 !px-2.5 text-[11px]" @click="cancelPairing">
+                    {{ t('common.button.cancel') }}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
+        </div>
+
+        <!-- ==================== 网络信息条 ==================== -->
+        <div class="mt-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2.5 flex items-center gap-3 flex-wrap">
+          <span class="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+            {{ t('desktop.device.networkTitle') }}
+          </span>
+          <span class="text-[var(--border)]">|</span>
+          <span class="text-[12px] text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
+          <select
+            :value="selectedIp || ''"
+            class="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-page)] wb-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+            @change="onIpSelect(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-if="!selectedIp" value="" disabled>{{ t('desktop.device.notSelected') }}</option>
+            <option v-for="ip in ipv4Addresses" :key="ip" :value="ip">{{ ip }}</option>
+          </select>
+          <span class="text-[var(--border)]">·</span>
+          <span class="text-[12px] text-[var(--text-secondary)]">{{ t('desktop.device.websocketPort') }}</span>
+          <span class="wb-mono text-[12px] text-[var(--text-primary)]">{{ port }}</span>
+          <span v-if="ipv4Addresses.length === 0" class="text-[12px] text-[var(--text-tertiary)] ml-auto">
+            {{ t('desktop.device.noIpv4') }}
+          </span>
         </div>
       </section>
 
       <!-- ==================== ONLINE 分区 ==================== -->
       <section>
-        <h3 class="wb-section-title">ONLINE · {{ onlineDevices.length }}</h3>
+        <h3 class="wb-section-title">
+          {{ t('desktop.device.sectionOnline') }} <span class="text-[var(--text-tertiary)]">·</span> {{ onlineDevices.length }}
+        </h3>
         <p v-if="onlineDevices.length === 0" class="wb-mono text-[12px] text-[var(--text-tertiary)] px-1 py-2">
           {{ t('common.misc.noData') }}
         </p>
         <div v-else class="space-y-2">
-          <div
+          <article
             v-for="device in onlineDevices"
             :key="device.id"
-            class="flex items-center justify-between gap-4 px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
+            class="px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
           >
             <div class="flex items-center gap-3 min-w-0">
-              <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--color-success)]"></span>
-              <div class="min-w-0">
-                <p class="text-[13px] font-medium text-[var(--text-primary)] truncate">{{ device.deviceName }}</p>
-                <p class="text-[11px] text-[var(--text-tertiary)] truncate mt-0.5">
-                  {{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}
-                  <template v-if="device.lastSeen"> · {{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</template>
-                  · {{ t('desktop.device.connectCount', { count: device.connectCount }) }}
-                </p>
-              </div>
-            </div>
-            <div class="flex items-center gap-3 shrink-0">
-              <div class="text-right">
-                <p class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</p>
-                <p class="wb-mono text-[11px] mt-0.5 text-green-600 dark:text-green-400">{{ t('desktop.device.connected') }}</p>
-              </div>
+              <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--color-success)] animate-pulse"></span>
+              <p class="flex-1 min-w-0 text-[13px] font-medium text-[var(--text-primary)] truncate">{{ device.deviceName }}</p>
+              <span class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]"></span>
+                {{ t('desktop.device.connected') }}
+              </span>
+              <span class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</span>
               <button
                 class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
                 @click="viewHistory(device.id)"
@@ -148,38 +200,41 @@
                 {{ t('common.button.remove') }}
               </button>
             </div>
-          </div>
+            <div class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-tertiary)]">
+              <span>{{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}</span>
+              <template v-if="device.lastSeen">
+                <span class="text-[var(--border)]">·</span>
+                <span>{{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</span>
+              </template>
+              <span class="text-[var(--border)]">·</span>
+              <span>{{ t('desktop.device.connectCount', { count: device.connectCount }) }}</span>
+            </div>
+          </article>
         </div>
       </section>
 
       <!-- ==================== OFFLINE 分区 ==================== -->
       <section>
-        <h3 class="wb-section-title">OFFLINE · {{ offlineDevices.length }}</h3>
+        <h3 class="wb-section-title">
+          {{ t('desktop.device.sectionOffline') }} <span class="text-[var(--text-tertiary)]">·</span> {{ offlineDevices.length }}
+        </h3>
         <p v-if="offlineDevices.length === 0" class="wb-mono text-[12px] text-[var(--text-tertiary)] px-1 py-2">
           {{ t('common.misc.noData') }}
         </p>
         <div v-else class="space-y-2">
-          <div
+          <article
             v-for="device in offlineDevices"
             :key="device.id"
-            class="flex items-center justify-between gap-4 px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
+            class="px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
           >
             <div class="flex items-center gap-3 min-w-0">
               <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--text-tertiary)]"></span>
-              <div class="min-w-0">
-                <p class="text-[13px] font-medium text-[var(--text-secondary)] truncate">{{ device.deviceName }}</p>
-                <p class="text-[11px] text-[var(--text-tertiary)] truncate mt-0.5">
-                  {{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}
-                  <template v-if="device.lastSeen"> · {{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</template>
-                  · {{ t('desktop.device.connectCount', { count: device.connectCount }) }}
-                </p>
-              </div>
-            </div>
-            <div class="flex items-center gap-3 shrink-0">
-              <div class="text-right">
-                <p class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</p>
-                <p class="wb-mono text-[11px] mt-0.5 text-[var(--text-tertiary)]">{{ t('desktop.device.offline') }}</p>
-              </div>
+              <p class="flex-1 min-w-0 text-[13px] font-medium text-[var(--text-secondary)] truncate">{{ device.deviceName }}</p>
+              <span class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--bg-hover)] text-[var(--text-tertiary)]">
+                <span class="w-1.5 h-1.5 rounded-full bg-[var(--text-tertiary)]"></span>
+                {{ t('desktop.device.offline') }}
+              </span>
+              <span class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</span>
               <button
                 class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
                 @click="viewHistory(device.id)"
@@ -193,7 +248,16 @@
                 {{ t('common.button.remove') }}
               </button>
             </div>
-          </div>
+            <div class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-tertiary)]">
+              <span>{{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}</span>
+              <template v-if="device.lastSeen">
+                <span class="text-[var(--border)]">·</span>
+                <span>{{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</span>
+              </template>
+              <span class="text-[var(--border)]">·</span>
+              <span>{{ t('desktop.device.connectCount', { count: device.connectCount }) }}</span>
+            </div>
+          </article>
         </div>
       </section>
     </div>
@@ -214,11 +278,12 @@
 <script setup lang="ts">
 /**
  * 设备视图 — 桌面端设备配对与设备列表
- * Warm Workbench 风格：PAIRING 配对区 + ONLINE/OFFLINE 分区；QR/配对码/实时在线全为真实逻辑
+ * Warm Workbench 风格：PAIRING（QR/配对码双卡 + 网络条）+ ONLINE/OFFLINE 设备卡
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import i18n from '@/locales'
 import { useDeviceStore } from '@/stores/device'
 import { useSettingsStore } from '@/stores/settings'
 import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo, type PairingCodeInfo } from '@/composables/useTauri'
@@ -346,13 +411,13 @@ onMounted(async () => {
   // 尝试恢复现有二维码（不重新生成）
   const qrRestored = await qr.restoreQr(selectedIp.value || undefined)
   if (qrRestored) {
-    console.log('Restored active QR token')
+    console.log('[DevicesView] restored active QR token')
   }
 
   // 检查是否有活跃的配对码，若有则自动恢复显示
   const hasActiveCode = await pairing.checkCurrentCode()
   if (hasActiveCode && pairing.pairingCode.value) {
-    console.log('Restoring active pairing code:', pairing.pairingCode.value)
+    console.log('[DevicesView] restoring active pairing code:', pairing.pairingCode.value)
     pairingCode.value = pairing.pairingCode.value
     // 使用后端返回的剩余时间（expires_in 已是实际剩余时间）
     remainingSeconds.value = pairing.pairingCode.value.expires_in
@@ -372,7 +437,7 @@ onMounted(async () => {
 
     // 当有设备连接成功后，清除已使用的配对码并刷新显示
     if (pairingCode.value) {
-      console.log('Device connected, clearing pairing code...')
+      console.log('[DevicesView] device connected, clearing pairing code')
       pairing.clearCode()
       pairingCode.value = null
       remainingSeconds.value = 0
@@ -385,7 +450,7 @@ onMounted(async () => {
 
   // 监听 QR token 被消耗事件，自动重新生成二维码
   qrTokenConsumedListener = await listen('qr-token-consumed', () => {
-    console.log('QR token consumed, regenerating QR code...')
+    console.log('[DevicesView] QR token consumed, regenerating')
     qr.generateQr(selectedIp.value || undefined)
     toast.success(t('desktop.device.deviceConnected'))
   })
@@ -404,7 +469,7 @@ onMounted(async () => {
   pairingCodeListener = await listen<{ code: string; expires_in: number; device_name?: string }>(
     'pairing-code-generated',
     (event) => {
-      console.log('Received pairing-code-generated event:', event.payload)
+      console.log('[DevicesView] received pairing-code-generated event:', event.payload)
       pairingCode.value = {
         code: event.payload.code,
         expires_in: event.payload.expires_in,
@@ -469,7 +534,7 @@ async function generateCode() {
       toast.error(t('desktop.device.codeGenerateFailedNoCode'))
     }
   } catch (e) {
-    console.error('生成配对码失败:', e)
+    console.error('[DevicesView] generate pairing code failed:', e)
     toast.error(t('desktop.device.codeGenerateFailed'))
   } finally {
     isLoading.value = false
@@ -504,20 +569,26 @@ async function confirmRemoveDevice() {
   pendingDeviceId.value = null
 }
 
-function formatDate(dateStr: string): string {
-  if (!dateStr || dateStr === '') {
-    return t('common.status.unknown')
-  }
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) {
-    return t('common.status.unknown')
-  }
-  return date.toLocaleDateString('zh-CN', {
+/** 跟随当前 i18n locale 格式化日期 */
+const dateFormatter = computed(() => {
+  const locale = i18n.global.locale.value === 'en' ? 'en-US' : 'zh-CN'
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   })
+})
+
+function formatDate(dateStr: string): string {
+  if (!dateStr) {
+    return t('common.status.unknown')
+  }
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) {
+    return t('common.status.unknown')
+  }
+  return dateFormatter.value.format(date)
 }
 </script>

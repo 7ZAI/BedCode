@@ -77,35 +77,47 @@
           </li>
         </ul>
       </template>
-
-      <!-- ==================== SECTION: STATUS ==================== -->
-      <template v-if="!collapsed">
-        <h4 class="wb-sidebar-section px-2 mt-6 mb-2">{{ $t('desktop.sidebar.status') }}</h4>
-        <div class="px-2.5 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)]">
-          <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full flex-shrink-0 transition-colors duration-200" :class="statusDotClass"></span>
-            <span class="text-xs font-medium text-[var(--text-primary)]">{{ statusText }}</span>
-          </div>
-          <div class="wb-mono text-[11px] text-[var(--text-tertiary)] mt-2 space-y-1">
-            <div class="flex justify-between"><span>port</span><span class="text-[var(--text-secondary)]">{{ port }}</span></div>
-            <div class="flex justify-between"><span>ws</span><span class="text-[var(--text-secondary)]">{{ wsShort }}</span></div>
-          </div>
-        </div>
-      </template>
     </nav>
 
-    <!-- 底部折叠按钮 -->
-    <div class="p-2 border-t border-[var(--border)]" :class="collapsed ? 'flex justify-center' : ''">
-      <button
-        class="w-full h-7 flex items-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
-        :class="collapsed ? 'justify-center' : 'justify-end px-2.5'"
-        :title="collapsed ? $t('desktop.sidebar.expand') : $t('desktop.sidebar.collapse')"
-        @click="toggleSidebar()"
+    <!-- 底部状态条 + 折叠/展开按钮 -->
+    <div class="p-2 border-t border-[var(--border)]">
+      <!-- 展开状态：状态文字 + 折叠按钮 -->
+      <div
+        v-if="!collapsed"
+        class="flex items-center gap-2 px-1.5 h-8 rounded-md hover:bg-[var(--bg-hover)] transition-colors"
       >
-        <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="collapsed && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
+        <span
+          class="w-2 h-2 rounded-full flex-shrink-0 transition-colors duration-200"
+          :class="statusDotClass"
+        ></span>
+        <span class="flex-1 min-w-0 text-xs font-medium text-[var(--text-secondary)] truncate">{{ statusText }}</span>
+        <button
+          class="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+          :title="$t('desktop.sidebar.collapse')"
+          @click="toggleSidebar()"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+      </div>
+      <!-- 折叠状态：仅指示灯 + 展开按钮 -->
+      <div v-else class="flex flex-col items-center gap-1">
+        <span
+          class="w-2 h-2 rounded-full transition-colors duration-200"
+          :class="statusDotClass"
+          :title="statusText"
+        ></span>
+        <button
+          class="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+          :title="$t('desktop.sidebar.expand')"
+          @click="toggleSidebar()"
+        >
+          <svg class="w-3.5 h-3.5 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- 拖拽 resize handle（保留原有功能） -->
@@ -118,8 +130,8 @@
 
 <script setup lang="ts">
 /**
- * 桌面端侧边栏 — Warm Workbench 风格：Navigation/Plugins/Status 分组，240px 可折叠
- * 保留折叠/拖拽 resize/状态轮询/插件面板功能
+ * 桌面端侧边栏 — Warm Workbench 风格：Navigation/Plugins 分组，240px 可折叠
+ * 状态指示并入底部状态条；保留折叠/拖拽 resize/状态轮询/插件面板功能
  */
 import { onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
@@ -135,7 +147,7 @@ const sidebarPlugins = pluginRegistry.sidebarViews
 const toolboxPlugins = pluginRegistry.toolboxViews
 
 const { isResizing, dragWidth, onResizeStart } = useSidebarResize()
-const { status, port, loadStatus } = useServer()
+const { status, loadStatus } = useServer()
 
 /** 状态轮询定时器 — 轻量级 get_server_status，检测后台崩溃等外部状态变化 */
 let statusTimer: ReturnType<typeof setInterval> | null = null
@@ -206,15 +218,6 @@ const statusText = computed(() => {
     case 'running': return t('desktop.sidebar.serviceRunning')
     case 'starting': return t('desktop.sidebar.serviceStarting')
     default: return t('desktop.sidebar.serviceStopped')
-  }
-})
-
-/** WebSocket 短标签（技术术语，保留英文） */
-const wsShort = computed(() => {
-  switch (status.value) {
-    case 'running': return 'active'
-    case 'starting': return 'starting'
-    default: return 'inactive'
   }
 })
 </script>
