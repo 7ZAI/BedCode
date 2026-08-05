@@ -263,6 +263,31 @@ sh scripts/doc-tracking.sh untrack && git commit
 
 ## Agent skills
 
+### Skills 共享布局
+
+统一 skills 目录为项目根 **`.agents/skills/`**（唯一真源，git 跟踪），供 pi / OpenCode / Codex / Claude Code 共享：
+
+| 工具 | 读取方式 |
+|------|----------|
+| pi | 原生读取项目级 `.agents/skills/`（cwd 起向上到 git root），零配置 |
+| OpenCode | 原生读取 `.agents/skills/`，零配置 |
+| Codex | 原生读取 `.agents/skills/`（CWD → 父目录 → repo root），零配置 |
+| Claude Code | 只读 `.claude/skills/`，需桥接链接，见下 |
+
+当前 skills：`logo-generator`、`taste-skill-v1`（frontmatter name `design-taste-frontend-v1`）、`frontend-styles`。
+
+**新增/修改 skill**：直接在 `.agents/skills/<name>/` 操作，所有工具自动生效（Claude Code 若已跑过桥接脚本，junction 指向同一目录也即时生效）。
+
+**clone 后每台机器执行一次**（Claude Code 桥接）：
+
+```bash
+sh scripts/sync-skills.sh
+```
+
+脚本为 `.agents/skills/` 下每个含 `SKILL.md` 的目录在 `.claude/skills/` 创建链接：Windows 用目录 junction（`mklink /J`，无需管理员权限），Unix 用 symlink。幂等，可重复执行；`.claude/` 已在 `.gitignore`，链接不入库。
+
+> 历史副本说明：`.pi/skills/` 下保留指向真源的 symlink 以兼容旧配置；`~/.claude/skills/frontend-styles` 为个人全局副本，与项目内同名 skill 共存时 Claude Code 以个人级优先，如需严格单一来源可删除个人副本。
+
 ### Issue tracker
 
 Issues live as markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
