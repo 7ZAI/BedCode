@@ -169,6 +169,8 @@ export default {
     server: {
       title: '服务器管理',
       config: '服务器配置',
+      sectionStatus: '状态',
+      sectionNetwork: '网络',
       port: '端口',
       portHint: '修改端口后需重启服务器生效',
       localIp: '本地 IP',

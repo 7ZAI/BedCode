@@ -45,6 +45,16 @@ export default {
           light: 'var(--color-primary-light)',
         },
       },
+      /* 字号统一走 --ui-scale 等比缩放（默认像素值与 Tailwind 原生一致，scale=1 时外观不变） */
+      fontSize: {
+        xs: 'calc(12px * var(--ui-scale))',
+        sm: 'calc(14px * var(--ui-scale))',
+        base: 'calc(16px * var(--ui-scale))',
+        lg: 'calc(18px * var(--ui-scale))',
+        xl: 'calc(20px * var(--ui-scale))',
+        '2xl': 'calc(24px * var(--ui-scale))',
+        '3xl': 'calc(30px * var(--ui-scale))',
+      },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['Consolas', 'Monaco', 'monospace'],

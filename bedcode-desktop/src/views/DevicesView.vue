@@ -3,8 +3,8 @@
     <!-- ==================== 工具栏页头：左标题+IP:端口，右刷新/生成 ==================== -->
     <div class="wb-toolbar">
       <div class="flex items-center gap-3">
-        <h2 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.title') }}</h2>
-        <span class="wb-mono text-[12px] text-[var(--text-tertiary)]">{{ displayIp }}:{{ port }}</span>
+        <h2 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.title') }}</h2>
+        <span class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ displayIp }}:{{ port }}</span>
       </div>
       <div class="flex items-center gap-2">
         <PluginPageToolbar target="devices" />
@@ -28,54 +28,58 @@
       <section>
         <div class="flex items-baseline justify-between mb-2">
           <h3 class="wb-section-title">{{ t('desktop.device.sectionPairing') }}</h3>
-          <span class="text-[11px] text-[var(--text-tertiary)]">{{ t('desktop.device.networkHint') }}</span>
+          <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('desktop.device.networkHint') }}</span>
         </div>
         <div class="grid gap-4 md:grid-cols-2">
           <!-- ==================== QR 码卡片 ==================== -->
-          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5">
-            <div class="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
-                <p class="text-[12px] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.qrDesc') }}</p>
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
+            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.qrDesc') }}</p>
               </div>
-              <span v-if="qr.hasQr.value" class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+              <span v-if="qr.hasQr.value" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
                 <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                {{ t('desktop.device.qrValidity') }} {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
+                {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
               </span>
             </div>
 
-            <div class="flex items-center gap-4">
-              <!-- 白底衬底保证二维码在暗色模式下可读 -->
-              <div class="shrink-0 inline-block bg-white p-2.5 rounded-lg border border-[var(--border)]">
-                <canvas ref="qrCanvasRef" class="block"></canvas>
+            <!-- 主体：固定 168×168 可视区（与配对码卡片对齐）+ 说明与操作 -->
+            <div class="flex items-center gap-4 flex-1">
+              <div
+                class="shrink-0 w-[168px] h-[168px] rounded-lg flex items-center justify-center overflow-hidden"
+                :class="qr.hasQr.value
+                  ? 'bg-white border border-[var(--border)]'
+                  : 'bg-[var(--bg-page)] border border-dashed border-[var(--border-strong)]'"
+              >
+                <!-- 白底衬底保证二维码在暗色模式下可读 -->
+                <canvas v-show="qr.hasQr.value" ref="qrCanvasRef" class="block"></canvas>
+                <div v-if="!qr.hasQr.value" class="flex flex-col items-center justify-center text-center px-3 gap-1.5">
+                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.75 6.75h.008v.008H6.75V6.75zM6.75 16.5h.008v.008H6.75V16.5zM16.5 6.75h.008v.008H16.5V6.75zM13.5 13.5h.008v.008H13.5V13.5zM13.5 19.5h.008v.008H13.5V19.5zM19.5 13.5h.008v.008H19.5V13.5zM19.5 19.5h.008v.008H19.5V19.5zM16.5 16.5h.008v.008H16.5V16.5z" />
+                  </svg>
+                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.qrPlaceholder') }}</p>
+                </div>
               </div>
-              <div class="min-w-0 flex-1">
-                <template v-if="qr.hasQr.value">
-                  <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
-                    {{ t('desktop.device.qrHint') }}
-                  </p>
-                  <p class="text-[11px] text-[var(--text-tertiary)] mt-1.5">
-                    {{ t('desktop.device.qrSingleUse') }}
-                  </p>
-                </template>
-                <template v-else>
-                  <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
-                    {{ t('desktop.device.qrHint') }}
-                  </p>
-                  <p class="text-[11px] text-[var(--text-tertiary)] mt-1.5">
-                    {{ t('desktop.device.qrPlaceholder') }}
-                  </p>
-                </template>
-                <div class="flex items-center gap-2 mt-3">
+              <div class="min-w-0 flex-1 flex flex-col self-stretch py-1">
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.qrHint') }}
+                </p>
+                <p v-if="qr.hasQr.value" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
+                  {{ t('desktop.device.qrSingleUse') }}
+                </p>
+                <div class="flex items-center gap-2 mt-auto pt-3">
                   <button
                     v-if="qr.hasQr.value"
-                    class="wb-btn-ghost !h-7 !px-2.5 text-[11px]"
+                    class="wb-btn-ghost"
                     @click="qr.clearQr()"
                   >
                     {{ t('common.button.cancel') }}
                   </button>
                   <button
-                    class="wb-btn-ghost !h-7 !px-2.5 text-[11px]"
+                    class="wb-btn-primary"
                     :disabled="qr.isLoading.value"
                     @click="qr.generateQr(selectedIp || undefined)"
                   >
@@ -87,53 +91,48 @@
           </div>
 
           <!-- ==================== 配对码卡片 ==================== -->
-          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5">
-            <div class="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
-                <p class="text-[12px] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.pairingCodeDesc') }}</p>
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
+            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.pairingCodeDesc') }}</p>
               </div>
-              <span v-if="pairingCode" class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+              <span v-if="pairingCode" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
                 <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
                 {{ remainingSeconds }}{{ t('common.time.seconds') }}
               </span>
             </div>
 
-            <div v-if="!pairingCode" class="flex items-center gap-4">
-              <div class="shrink-0 w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border)] flex flex-col items-center justify-center text-center px-3 gap-1.5">
-                <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-                <p class="text-[11px] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
-              </div>
-              <div class="min-w-0 flex-1">
-                <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
-                  {{ t('desktop.device.pairingCodeHint') }}
-                </p>
-                <div class="flex items-center gap-2 mt-3">
-                  <button class="wb-btn-primary !h-7 !px-2.5 text-[11px]" :disabled="isLoading" @click="generateCode">
-                    {{ t('desktop.device.generateCode') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="flex items-center gap-4">
-              <div class="shrink-0 w-[168px] h-[168px] rounded-lg border border-[var(--border)] bg-[var(--bg-page)] flex items-center justify-center">
-                <p class="text-[2.25rem] font-mono font-bold tracking-[0.2em] text-[var(--text-primary)] select-all break-all text-center">
+            <!-- 主体：固定 168×168 可视区（与 QR 卡片对齐）+ 说明与操作 -->
+            <div class="flex items-center gap-4 flex-1">
+              <div
+                class="shrink-0 w-[168px] h-[168px] rounded-lg flex items-center justify-center overflow-hidden bg-[var(--bg-page)]"
+                :class="pairingCode ? 'border border-[var(--border)]' : 'border border-dashed border-[var(--border-strong)]'"
+              >
+                <p v-if="pairingCode" class="font-mono text-[calc(28px*var(--ui-scale))] font-bold tracking-[0.15em] text-[var(--text-primary)] select-all break-all text-center px-2">
                   {{ pairingCode.code }}
                 </p>
+                <div v-else class="flex flex-col items-center justify-center text-center px-3 gap-1.5">
+                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
+                </div>
               </div>
-              <div class="min-w-0 flex-1">
-                <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+              <div class="min-w-0 flex-1 flex flex-col self-stretch py-1">
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
                   {{ t('desktop.device.pairingCodeHint') }}
                 </p>
-                <p class="text-[11px] text-[var(--text-tertiary)] mt-1.5">
+                <p v-if="pairingCode" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
                   {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
                 </p>
-                <div class="flex items-center gap-2 mt-3">
-                  <button class="wb-btn-ghost !h-7 !px-2.5 text-[11px]" @click="cancelPairing">
+                <div class="flex items-center gap-2 mt-auto pt-3">
+                  <button v-if="pairingCode" class="wb-btn-ghost" @click="cancelPairing">
                     {{ t('common.button.cancel') }}
+                  </button>
+                  <button v-else class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
+                    {{ t('desktop.device.generateCode') }}
                   </button>
                 </div>
               </div>
@@ -143,23 +142,23 @@
 
         <!-- ==================== 网络信息条 ==================== -->
         <div class="mt-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2.5 flex items-center gap-3 flex-wrap">
-          <span class="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+          <span class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
             {{ t('desktop.device.networkTitle') }}
           </span>
           <span class="text-[var(--border)]">|</span>
-          <span class="text-[12px] text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
+          <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
           <select
             :value="selectedIp || ''"
-            class="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-page)] wb-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+            class="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-page)] wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
             @change="onIpSelect(($event.target as HTMLSelectElement).value)"
           >
             <option v-if="!selectedIp" value="" disabled>{{ t('desktop.device.notSelected') }}</option>
             <option v-for="ip in ipv4Addresses" :key="ip" :value="ip">{{ ip }}</option>
           </select>
           <span class="text-[var(--border)]">·</span>
-          <span class="text-[12px] text-[var(--text-secondary)]">{{ t('desktop.device.websocketPort') }}</span>
-          <span class="wb-mono text-[12px] text-[var(--text-primary)]">{{ port }}</span>
-          <span v-if="ipv4Addresses.length === 0" class="text-[12px] text-[var(--text-tertiary)] ml-auto">
+          <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.device.websocketPort') }}</span>
+          <span class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)]">{{ port }}</span>
+          <span v-if="ipv4Addresses.length === 0" class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] ml-auto">
             {{ t('desktop.device.noIpv4') }}
           </span>
         </div>
@@ -170,7 +169,7 @@
         <h3 class="wb-section-title">
           {{ t('desktop.device.sectionOnline') }} <span class="text-[var(--text-tertiary)]">·</span> {{ onlineDevices.length }}
         </h3>
-        <p v-if="onlineDevices.length === 0" class="wb-mono text-[12px] text-[var(--text-tertiary)] px-1 py-2">
+        <p v-if="onlineDevices.length === 0" class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] px-1 py-2">
           {{ t('common.misc.noData') }}
         </p>
         <div v-else class="space-y-2">
@@ -181,26 +180,26 @@
           >
             <div class="flex items-center gap-3 min-w-0">
               <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--color-success)] animate-pulse"></span>
-              <p class="flex-1 min-w-0 text-[13px] font-medium text-[var(--text-primary)] truncate">{{ device.deviceName }}</p>
-              <span class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+              <p class="flex-1 min-w-0 text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate">{{ device.deviceName }}</p>
+              <span class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
                 <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]"></span>
                 {{ t('desktop.device.connected') }}
               </span>
-              <span class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</span>
+              <span class="wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{ device.address }}</span>
               <button
-                class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+                class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
                 @click="viewHistory(device.id)"
               >
                 {{ t('desktop.device.historyView') }}
               </button>
               <button
-                class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[11px] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
+                class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
                 @click="removeDevice(device.id)"
               >
                 {{ t('common.button.remove') }}
               </button>
             </div>
-            <div class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-tertiary)]">
+            <div class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
               <span>{{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}</span>
               <template v-if="device.lastSeen">
                 <span class="text-[var(--border)]">·</span>
@@ -218,7 +217,7 @@
         <h3 class="wb-section-title">
           {{ t('desktop.device.sectionOffline') }} <span class="text-[var(--text-tertiary)]">·</span> {{ offlineDevices.length }}
         </h3>
-        <p v-if="offlineDevices.length === 0" class="wb-mono text-[12px] text-[var(--text-tertiary)] px-1 py-2">
+        <p v-if="offlineDevices.length === 0" class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] px-1 py-2">
           {{ t('common.misc.noData') }}
         </p>
         <div v-else class="space-y-2">
@@ -229,26 +228,26 @@
           >
             <div class="flex items-center gap-3 min-w-0">
               <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--text-tertiary)]"></span>
-              <p class="flex-1 min-w-0 text-[13px] font-medium text-[var(--text-secondary)] truncate">{{ device.deviceName }}</p>
-              <span class="wb-mono text-[11px] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--bg-hover)] text-[var(--text-tertiary)]">
+              <p class="flex-1 min-w-0 text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-secondary)] truncate">{{ device.deviceName }}</p>
+              <span class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--bg-hover)] text-[var(--text-tertiary)]">
                 <span class="w-1.5 h-1.5 rounded-full bg-[var(--text-tertiary)]"></span>
                 {{ t('desktop.device.offline') }}
               </span>
-              <span class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</span>
+              <span class="wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{ device.address }}</span>
               <button
-                class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+                class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
                 @click="viewHistory(device.id)"
               >
                 {{ t('desktop.device.historyView') }}
               </button>
               <button
-                class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[11px] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
+                class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
                 @click="removeDevice(device.id)"
               >
                 {{ t('common.button.remove') }}
               </button>
             </div>
-            <div class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-tertiary)]">
+            <div class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
               <span>{{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}</span>
               <template v-if="device.lastSeen">
                 <span class="text-[var(--border)]">·</span>
@@ -264,7 +263,7 @@
 
     <!-- 移除设备确认 -->
     <Modal v-model="showRemoveDeviceDialog" :title="t('desktop.device.confirmRemove')" size="sm">
-      <p class="text-[var(--text-primary)] text-[13px]">{{ t('desktop.device.confirmRemoveMsg') }}</p>
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">{{ t('desktop.device.confirmRemoveMsg') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <button class="wb-btn-ghost" @click="showRemoveDeviceDialog = false">{{ t('common.button.cancel') }}</button>
@@ -358,7 +357,7 @@ watch(
         token: data.token,
       })
       await QRCode.toCanvas(qrCanvasRef.value, qrContent, {
-        width: 168,
+        width: 148,
         margin: 2,
         color: {
           dark: '#000000',

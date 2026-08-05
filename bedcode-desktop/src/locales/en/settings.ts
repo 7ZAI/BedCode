@@ -19,7 +19,6 @@ export default {
     },
     ui: {
       title: 'UI Settings',
-      fontSize: 'Font Size',
     },
     appearance: {
       title: 'Appearance',
@@ -34,8 +33,9 @@ export default {
       language: 'Language',
       fontSize: 'Font Size',
       fontSmall: 'Small',
-      fontMedium: 'Medium',
+      fontNormal: 'Normal',
       fontLarge: 'Large',
+      fontXl: 'Extra Large',
       terminalCacheCount: 'Terminal Cache Count',
     },
     connection: {

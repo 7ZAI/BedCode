@@ -17,7 +17,7 @@
           {{ deviceName || t('desktop.device.historyTitle') }}
         </h2>
         <!-- 统计计数 -->
-        <span v-if="!isLoading && history.length > 0" class="wb-mono text-[11px] text-[var(--text-tertiary)] whitespace-nowrap">
+        <span v-if="!isLoading && history.length > 0" class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] whitespace-nowrap">
           {{ history.length }} total · <span class="text-green-700 dark:text-green-400">{{ successCount }} ok</span> · <span class="text-red-700 dark:text-red-400">{{ failCount }} fail</span>
         </span>
       </div>
@@ -79,7 +79,7 @@
               </span>
               <span
                 :class="[
-                  'wb-mono text-[11px] w-12 text-right shrink-0',
+                  'wb-mono text-[calc(11px*var(--ui-scale))] w-12 text-right shrink-0',
                   entry.result === 'success' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'
                 ]"
               >
@@ -93,7 +93,7 @@
 
     <!-- 清空确认对话框 -->
     <Modal v-model="showClearDialog" :title="t('desktop.device.historyClear')" size="sm">
-      <p class="text-[var(--text-primary)] text-[13px]">{{ t('desktop.device.historyClearConfirm') }}</p>
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">{{ t('desktop.device.historyClearConfirm') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <button class="wb-btn-ghost" @click="showClearDialog = false">{{ t('common.button.cancel') }}</button>

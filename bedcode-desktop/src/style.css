@@ -33,12 +33,15 @@
   --keyboard-height: 0px;
   --keyboard-visible: 0;
 
-  /* 动态字体大小（由 useFontSize composable 通过 JS 动态更新） */
-  --font-size-xs: 10px;
-  --font-size-sm: 12px;
-  --font-size-base: 14px;
-  --font-size-lg: 16px;
-  --font-size-xl: 18px;
+  /* 界面文字缩放比例（由 useFontSize composable 动态更新，1 = "正常"档位，12px 基准） */
+  --ui-scale: 1;
+
+  /* 动态字体大小：各档以"正常"档位实际像素为基准，随 --ui-scale 等比缩放 */
+  --font-size-xs: calc(9px * var(--ui-scale));
+  --font-size-sm: calc(10px * var(--ui-scale));
+  --font-size-base: calc(12px * var(--ui-scale));
+  --font-size-lg: calc(14px * var(--ui-scale));
+  --font-size-xl: calc(16px * var(--ui-scale));
 
   /* Backgrounds */
   --bg-page: #F5F4F0;
@@ -88,11 +91,11 @@
   --page-padding-y: 24px;
 
   /* Typography */
-  --font-size-title: 14px;
-  --font-size-card-title: 14px;
-  --font-size-body: 13px;
-  --font-size-label: 12px;
-  --font-size-tag: 11px;
+  --font-size-title: calc(14px * var(--ui-scale));
+  --font-size-card-title: calc(14px * var(--ui-scale));
+  --font-size-body: calc(13px * var(--ui-scale));
+  --font-size-label: calc(12px * var(--ui-scale));
+  --font-size-tag: calc(11px * var(--ui-scale));
 
   /* Component Sizes */
   --input-height: 36px;
@@ -336,7 +339,7 @@ body {
 
 /* 小号全大写 section 标题（ENABLED · 2 等） */
 .wb-section-title {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-scale));
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -346,7 +349,7 @@ body {
 
 /* 侧边栏分组标签（Navigation / Plugins / Status） */
 .wb-sidebar-section {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-scale));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -358,7 +361,7 @@ body {
 .wb-btn-ghost {
   height: 28px;
   padding: 0 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   font-weight: 500;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -382,7 +385,7 @@ body {
 .wb-btn-primary {
   height: 28px;
   padding: 0 14px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-scale));
   font-weight: 500;
   border-radius: 6px;
   background: var(--color-primary);
@@ -405,7 +408,7 @@ body {
 /* 技术值（端口/地址/路径/命令）等宽字 */
 .wb-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-scale));
 }
 
 /* ==================== Animation ==================== */

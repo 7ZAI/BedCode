@@ -19,7 +19,6 @@ export default {
     },
     ui: {
       title: '界面设置',
-      fontSize: '字体大小',
     },
     appearance: {
       title: '外观',
@@ -34,8 +33,9 @@ export default {
       language: '语言',
       fontSize: '字体大小',
       fontSmall: '小',
-      fontMedium: '中',
+      fontNormal: '正常',
       fontLarge: '大',
+      fontXl: '超大',
       terminalCacheCount: '终端缓存数量',
     },
     connection: {

@@ -12,10 +12,10 @@
       <div class="flex items-center gap-3 min-w-0" data-tauri-drag-region>
         <div class="flex items-center gap-2 min-w-0 shrink-0" data-tauri-drag-region>
           <span :class="['w-2 h-2 rounded-full shrink-0', statusColor]" data-tauri-drag-region></span>
-          <span class="wb-mono text-[13px] font-semibold text-[var(--text-primary)] truncate" data-tauri-drag-region>
+          <span class="wb-mono text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate" data-tauri-drag-region>
             {{ sessionName }}
           </span>
-          <span class="text-[10.5px] font-semibold tracking-[0.08em] uppercase shrink-0" :class="statusLabelClass" data-tauri-drag-region>
+          <span class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase shrink-0" :class="statusLabelClass" data-tauri-drag-region>
             {{ statusText }}
           </span>
         </div>
@@ -23,7 +23,7 @@
         <!-- 会话信息：cwd / 命令（mono 小字） -->
         <div
           v-if="config"
-          class="hidden sm:flex items-center gap-2 min-w-0 wb-mono text-[12.5px] text-[var(--text-secondary)]"
+          class="hidden sm:flex items-center gap-2 min-w-0 wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
           data-tauri-drag-region
         >
           <span v-if="workingDir" class="truncate max-w-64" :title="workingDir">{{ workingDir }}</span>
@@ -36,7 +36,7 @@
         <PluginPageToolbar target="terminal" />
         <!-- 停止会话 -->
         <button
-          class="wb-btn-primary !h-6 !px-2.5 !text-[11px] uppercase"
+          class="wb-btn-primary !h-6 !px-2.5 !text-[calc(11px*var(--ui-scale))] uppercase"
           @click="stopSession"
         >
           {{ t('common.button.stop') }}
@@ -99,7 +99,7 @@
 
     <!-- 加载态 -->
     <div v-if="isLoading" class="flex-1 flex items-center justify-center">
-      <p class="wb-mono text-[12px] text-[var(--text-secondary)]">{{ t('desktop.terminal.loadingSession') }}</p>
+      <p class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.terminal.loadingSession') }}</p>
     </div>
 
     <!-- 终端区 -->
@@ -109,10 +109,10 @@
     <footer class="h-6 shrink-0 flex items-center justify-between px-3 border-t border-[var(--border)] bg-[var(--bg-card)]">
       <div class="flex items-center gap-2">
         <span :class="['w-1.5 h-1.5 rounded-full', statusColor]"></span>
-        <span class="text-[10.5px] font-semibold tracking-[0.08em] uppercase" :class="statusLabelClass">{{ statusText }}</span>
+        <span class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase" :class="statusLabelClass">{{ statusText }}</span>
       </div>
-      <div class="flex items-center gap-1.5 wb-mono text-[11px] text-[var(--text-secondary)]">
-        <span class="text-[10.5px] tracking-[0.08em] text-[var(--text-tertiary)]">{{ t('desktop.server.uptime').toUpperCase() }}</span>
+      <div class="flex items-center gap-1.5 wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)]">
+        <span class="text-[calc(10.5px*var(--ui-scale))] tracking-[0.08em] text-[var(--text-tertiary)]">{{ t('desktop.server.uptime').toUpperCase() }}</span>
         <span class="text-[var(--text-primary)]">{{ uptimeText }}</span>
       </div>
     </footer>
@@ -133,7 +133,7 @@
         class="absolute top-10 right-0 bottom-0 z-30 w-64 flex flex-col bg-[var(--bg-card)] border-l border-[var(--border)] shadow-xl"
       >
         <div class="h-10 shrink-0 px-4 flex items-center justify-between border-b border-[var(--border)]">
-          <span class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.terminal.settings') }}</span>
+          <span class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.terminal.settings') }}</span>
           <button
             class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
             :title="t('desktop.terminal.close')"
@@ -151,7 +151,7 @@
             <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">{{ t('desktop.terminal.theme') }}</label>
             <select
               v-model="settingsTheme"
-              class="w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+              class="w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
               @click.stop
               @mousedown.stop
             >
@@ -164,7 +164,7 @@
             <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">{{ t('desktop.terminal.fontSize') }}</label>
             <select
               v-model="settingsFontSize"
-              class="w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+              class="w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
               @click.stop
               @mousedown.stop
             >

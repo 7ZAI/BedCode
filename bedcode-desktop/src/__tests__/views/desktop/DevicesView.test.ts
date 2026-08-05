@@ -160,7 +160,7 @@ describe('DevicesView', () => {
     await flushPromises()
 
     // 自动选择首个 IPv4 并展示端口
-    expect(wrapper.text()).toContain('PAIRING')
+    expect(wrapper.text()).toContain('设备配对')
     expect(wrapper.text()).toContain('192.168.1.100')
     expect(wrapper.text()).toContain(':8765')
   })
@@ -169,7 +169,7 @@ describe('DevicesView', () => {
     const { wrapper } = mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('ONLINE · 0')
+    expect(wrapper.text()).toContain('在线 · 0')
     expect(wrapper.text()).toContain('暂无数据')
   })
 

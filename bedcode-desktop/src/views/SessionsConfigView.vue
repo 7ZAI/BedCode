@@ -6,7 +6,7 @@
         <svg class="w-4 h-4 text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <h2 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.sidebar.session') }}</h2>
+        <h2 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.sidebar.session') }}</h2>
       </div>
       <div class="flex items-center gap-2">
         <PluginPageToolbar target="sessions" />
@@ -64,12 +64,12 @@
                 <!-- 卡片头：名称 + 环境/自启动标签 -->
                 <div class="flex items-center gap-2">
                   <h4 class="text-sm font-semibold text-[var(--text-primary)] truncate flex-1">{{ config.name }}</h4>
-                  <span class="wb-mono text-[10.5px] uppercase px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)] flex-shrink-0">
+                  <span class="wb-mono text-[calc(10.5px*var(--ui-scale))] uppercase px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)] flex-shrink-0">
                     {{ config.environment === 'wsl2' ? 'wsl2' : 'win' }}
                   </span>
                   <span
                     v-if="cfgAutoStart(config)"
-                    class="wb-mono text-[10.5px] uppercase px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)] flex-shrink-0"
+                    class="wb-mono text-[calc(10.5px*var(--ui-scale))] uppercase px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)] flex-shrink-0"
                   >auto</span>
                 </div>
 
@@ -100,7 +100,7 @@
                   >
                     <span :class="['w-1.5 h-1.5 rounded-full flex-shrink-0', statusDot(session.status)]"></span>
                     <span class="text-[var(--text-primary)] truncate">{{ session.name }}</span>
-                    <span class="wb-mono text-[11px] text-[var(--text-secondary)] flex-shrink-0">
+                    <span class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] flex-shrink-0">
                       {{ isRunningStatus(session.status) ? runTimeText(session) : formatDateTime(session.startedAt || session.createdAt || session.created_at || '') }}
                     </span>
                     <span class="flex-1"></span>
@@ -146,7 +146,7 @@
                     {{ t('common.button.start') }}
                   </button>
                   <span class="flex-1"></span>
-                  <span v-if="runningOf(config).length > 0" class="wb-mono text-[11px] text-green-600 dark:text-green-400 flex items-center gap-1.5">
+                  <span v-if="runningOf(config).length > 0" class="wb-mono text-[calc(11px*var(--ui-scale))] text-green-600 dark:text-green-400 flex items-center gap-1.5">
                     <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
                     {{ runningOf(config).length }}
                   </span>
@@ -174,11 +174,11 @@
               >
                 <span :class="['w-2 h-2 rounded-full flex-shrink-0', statusDot(session.status)]"></span>
                 <span class="text-xs font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="viewSession(session)">{{ session.name }}</span>
-                <span class="text-[11px] text-[var(--text-secondary)] flex-shrink-0">{{ statusText(session.status) }}</span>
+                <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] flex-shrink-0">{{ statusText(session.status) }}</span>
                 <span class="flex-1"></span>
-                <span class="wb-mono text-[11.5px] text-[var(--text-secondary)] flex-shrink-0">{{ runTimeText(session) }}</span>
+                <span class="wb-mono text-[calc(11.5px*var(--ui-scale))] text-[var(--text-secondary)] flex-shrink-0">{{ runTimeText(session) }}</span>
                 <button
-                  class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-red-600 dark:hover:text-red-400 transition-colors flex-shrink-0"
+                  class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-red-600 dark:hover:text-red-400 transition-colors flex-shrink-0"
                   @click="confirmStopSession(session)"
                 >
                   {{ t('common.button.stop') }}
@@ -207,7 +207,7 @@
 
     <!-- 删除配置确认 -->
     <Modal v-model="showDeleteConfirmDialog" :title="t('desktop.session.confirmDelete')" size="sm">
-      <p class="text-[var(--text-primary)] text-[13px]">{{ t('desktop.session.confirmDeleteMsg') }}</p>
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">{{ t('desktop.session.confirmDeleteMsg') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <button class="wb-btn-ghost" @click="showDeleteConfirmDialog = false">{{ t('common.button.cancel') }}</button>
@@ -218,7 +218,7 @@
 
     <!-- 停止会话确认 -->
     <Modal v-model="showStopConfirmDialog" :title="t('desktop.session.confirmStop')" size="sm">
-      <p class="text-[var(--text-primary)] text-[13px]">{{ t('desktop.session.confirmStopMsg', { name: pendingSession?.name }) }}</p>
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">{{ t('desktop.session.confirmStopMsg', { name: pendingSession?.name }) }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
           <button class="wb-btn-ghost" @click="showStopConfirmDialog = false">{{ t('common.button.cancel') }}</button>
@@ -229,7 +229,7 @@
 
     <!-- 删除会话确认 -->
     <Modal v-model="showDeleteSessionConfirmDialog" :title="t('desktop.session.confirmDeleteSession')" size="sm">
-      <p class="text-[var(--text-primary)] text-[13px]">
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">
         {{ t('desktop.session.confirmDeleteRunning', { name: pendingSession?.name }) }}
       </p>
       <template #footer>

@@ -169,6 +169,8 @@ export default {
     server: {
       title: 'Server Management',
       config: 'Server Configuration',
+      sectionStatus: 'Status',
+      sectionNetwork: 'Network',
       port: 'Port',
       portHint: 'Restart required after port change',
       localIp: 'Local IP',

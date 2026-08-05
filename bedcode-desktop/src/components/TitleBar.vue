@@ -8,7 +8,7 @@
       <div class="w-6 h-6 rounded-md bg-[#1C1917] dark:bg-[#FAF9F7] flex items-center justify-center">
         <span class="text-xs font-bold leading-none text-[#FAF9F7] dark:text-[#1C1917]">B</span>
       </div>
-      <span class="text-[13px] font-semibold tracking-tight text-[var(--text-primary)]">BedCode</span>
+      <span class="text-[calc(13px*var(--ui-scale))] font-semibold tracking-tight text-[var(--text-primary)]">BedCode</span>
     </div>
 
     <!-- 插件标题栏扩展点 -->

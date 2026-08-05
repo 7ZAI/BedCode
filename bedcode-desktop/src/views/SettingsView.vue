@@ -7,7 +7,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
-        <h2 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('settings.title') }}</h2>
+        <h2 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('settings.title') }}</h2>
       </div>
       <div class="flex items-center gap-2">
         <PluginPageToolbar target="settings" />
@@ -26,7 +26,7 @@
           <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
             <!-- 主题：分段控件 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.appearance.theme') }}</span>
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.appearance.theme') }}</span>
               <div class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0">
                 <button
                   v-for="opt in themeOptions"
@@ -45,7 +45,7 @@
             <!-- 主题色板：调色台（色板卡片，切换即时生效） -->
             <div class="px-5 py-3.5 flex items-start justify-between gap-6">
               <div class="flex-shrink-0">
-                <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.appearance.palette') }}</span>
+                <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.appearance.palette') }}</span>
                 <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.appearance.paletteDesc') }}</p>
               </div>
               <div class="flex items-start gap-2 flex-wrap justify-end">
@@ -65,14 +65,14 @@
                     <span class="w-4 h-4 rounded-[3px] border border-black/5" :style="{ background: opt.swatches.card }"></span>
                     <span class="w-4 h-4 rounded-[3px] border border-black/5" :style="{ background: opt.swatches.primary }"></span>
                   </div>
-                  <p class="text-[10px] text-[var(--text-secondary)] mt-1.5 text-center truncate">{{ opt.label }}</p>
+                  <p class="text-[calc(10px*var(--ui-scale))] text-[var(--text-secondary)] mt-1.5 text-center truncate">{{ opt.label }}</p>
                 </button>
               </div>
             </div>
 
             <!-- 语言：分段控件 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.appearance.language') }}</span>
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.appearance.language') }}</span>
               <div class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0">
                 <button
                   v-for="opt in languageOptions"
@@ -88,20 +88,38 @@
               </div>
             </div>
 
-            <!-- 全局字体大小（终端字体在终端设置中独立配置） -->
+            <!-- 全局字体大小（终端字体在终端设置中独立配置）：小/正常/大/超大 档位间无级滑动 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.ui.fontSize') }}</span>
-              <div class="flex items-center gap-3 w-60">
-                <input
-                  type="range"
-                  min="10"
-                  max="24"
-                  step="1"
-                  :value="settingsStore.settings.ui.font_size"
-                  class="flex-1 h-1 appearance-none bg-[var(--border-strong)] cursor-pointer accent-[var(--color-primary)]"
-                  @input="settingsStore.settings.ui.font_size = Number(($event.target as HTMLInputElement).value)"
-                />
-                <span class="wb-mono text-[var(--text-secondary)] w-10 text-right">{{ settingsStore.settings.ui.font_size }}px</span>
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.appearance.fontSize') }}</span>
+              <div class="w-64 flex-shrink-0">
+                <div class="flex items-center gap-3">
+                  <div class="flex-1">
+                    <input
+                      type="range"
+                      :min="MIN_FONT_SIZE"
+                      :max="MAX_FONT_SIZE"
+                      step="0.1"
+                      :value="settingsStore.settings.ui.font_size"
+                      class="w-full h-1 appearance-none bg-[var(--border-strong)] cursor-pointer accent-[var(--color-primary)]"
+                      @input="settingsStore.settings.ui.font_size = Number(($event.target as HTMLInputElement).value)"
+                    />
+                    <!-- 档位标签：点击跳到对应档位 -->
+                    <div class="flex justify-between mt-1.5">
+                      <button
+                        v-for="lvl in fontSizeLevels"
+                        :key="lvl.value"
+                        class="text-[calc(10px*var(--ui-scale))] transition-colors"
+                        :class="fontSizeLevelValue === lvl.value
+                          ? 'text-[var(--text-primary)] font-medium'
+                          : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'"
+                        @click="settingsStore.settings.ui.font_size = lvl.value"
+                      >
+                        {{ t(lvl.key) }}
+                      </button>
+                    </div>
+                  </div>
+                  <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] w-12 text-right flex-shrink-0">{{ fontSizeLevelLabel }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -113,7 +131,7 @@
           <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
             <!-- WebSocket 端口 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.network.websocketPort') }}</span>
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.network.websocketPort') }}</span>
               <input
                 type="number"
                 :value="settingsStore.settings.network.port"
@@ -125,7 +143,7 @@
             <!-- 防止休眠：方角开关 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div>
-                <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.network.preventSleep') }}</span>
+                <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.network.preventSleep') }}</span>
                 <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.network.preventSleepDesc') }}</p>
               </div>
               <button
@@ -150,7 +168,7 @@
           <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
             <!-- 默认执行环境：分段控件 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.session.defaultEnvironment') }}</span>
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.session.defaultEnvironment') }}</span>
               <div class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0">
                 <button
                   v-for="opt in environmentOptions"
@@ -168,7 +186,7 @@
 
             <!-- 默认启动命令 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
-              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.session.defaultCommand') }}</span>
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.session.defaultCommand') }}</span>
               <input
                 type="text"
                 :value="settingsStore.settings.session.default_command || ''"
@@ -185,7 +203,7 @@
           <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px]">
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div>
-                <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.qr.validity') }}</span>
+                <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.qr.validity') }}</span>
                 <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.qr.validityDesc') }}</p>
               </div>
               <input
@@ -205,7 +223,7 @@
           <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-5 py-4">
             <div class="flex items-center justify-between gap-4">
               <div class="flex items-center gap-2">
-                <span class="text-[13px] font-semibold text-[var(--text-primary)]">BedCode</span>
+                <span class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">BedCode</span>
                 <span class="wb-mono text-[var(--text-secondary)]">v{{ appVersion || '—' }}</span>
               </div>
               <div class="flex items-center gap-3">
@@ -250,6 +268,7 @@ import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import i18n from '@/locales'
 import { getAppVersion } from '@/composables/useDesktopCommands'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
+import { MIN_FONT_SIZE, MAX_FONT_SIZE, NORMAL_FONT_SIZE } from '@/composables/useFontSize'
 import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
@@ -261,6 +280,29 @@ const { status: updateStatus, downloadProgress, errorMessage, checkForUpdate, do
 
 const appVersion = ref('')
 const qrTokenTtl = ref(300)
+
+// ==================== 字体大小档位 ====================
+// 档位间可无级滑动，点击下方标签跳到对应档位；值以 px 存储（12 = 正常）
+const fontSizeLevels = [
+  { value: MIN_FONT_SIZE, key: 'settings.appearance.fontSmall' },
+  { value: NORMAL_FONT_SIZE, key: 'settings.appearance.fontNormal' },
+  { value: 14, key: 'settings.appearance.fontLarge' },
+  { value: MAX_FONT_SIZE, key: 'settings.appearance.fontXl' },
+]
+
+/** 当前值最接近的档位（用于高亮标签） */
+const fontSizeLevelValue = computed(() => {
+  const size = settingsStore.settings.ui.font_size || NORMAL_FONT_SIZE
+  return fontSizeLevels.reduce((a, b) =>
+    Math.abs(b.value - size) < Math.abs(a.value - size) ? b : a,
+  ).value
+})
+
+/** 当前档位文案（小 / 正常 / 大 / 超大） */
+const fontSizeLevelLabel = computed(() => {
+  const level = fontSizeLevels.find((l) => l.value === fontSizeLevelValue.value)
+  return level ? t(level.key) : ''
+})
 
 const environmentOptions = computed(() => [
   { value: 'windows', label: i18n.global.t('desktop.form.windowsNative') },

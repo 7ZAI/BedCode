@@ -3,8 +3,8 @@
     <!-- ==================== 工具栏页头：左标题+计数，右刷新 ==================== -->
     <div class="wb-toolbar">
       <div class="flex items-center gap-2.5">
-        <h1 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h1>
-        <span class="text-[11px] text-[var(--text-tertiary)]">{{ enabledPlugins.length }}/{{ plugins.length }} {{ $t('desktop.plugin.enabled') }}</span>
+        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h1>
+        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ enabledPlugins.length }}/{{ plugins.length }} {{ $t('desktop.plugin.enabled') }}</span>
       </div>
       <button class="wb-btn-ghost" :disabled="loading" @click="loadPlugins()">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27,8 +27,8 @@
 
         <!-- ==================== 空态 ==================== -->
         <div v-else-if="!loading && plugins.length === 0" class="py-16 text-center">
-          <p class="text-[13px] font-medium text-[var(--text-primary)]">{{ $t('desktop.plugin.noPlugins') }}</p>
-          <p class="text-[12px] text-[var(--text-secondary)] mt-1">{{ $t('desktop.plugin.noPluginsHint') }}</p>
+          <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ $t('desktop.plugin.noPlugins') }}</p>
+          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-1">{{ $t('desktop.plugin.noPluginsHint') }}</p>
         </div>
 
         <!-- ==================== ENABLED / DISABLED 分区 ==================== -->
@@ -44,10 +44,10 @@
                 <span class="w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="text-[13px] font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="toggleExpand(plugin.id)">{{ plugin.name }}</span>
+                    <span class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="toggleExpand(plugin.id)">{{ plugin.name }}</span>
                     <span class="wb-mono text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
                   </div>
-                  <div class="text-[12px] text-[var(--text-secondary)] truncate mt-0.5">{{ plugin.description }}</div>
+                  <div class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] truncate mt-0.5">{{ plugin.description }}</div>
                 </div>
                 <router-link
                   v-if="isActivated(plugin.state)"
@@ -66,7 +66,7 @@
                 >
                   <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full translate-x-5 transition-transform"></span>
                 </button>
-                <span v-else class="text-[12px] text-[var(--text-tertiary)] shrink-0">{{ $t('desktop.plugin.alwaysOn') }}</span>
+                <span v-else class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0">{{ $t('desktop.plugin.alwaysOn') }}</span>
               </div>
             </div>
           </section>
@@ -82,13 +82,13 @@
                 <span class="w-2 h-2 rounded-full shrink-0" :class="isErrorState(plugin.state) ? 'bg-red-500' : 'bg-[var(--text-tertiary)]'"></span>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="text-[13px] font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="toggleExpand(plugin.id)">{{ plugin.name }}</span>
+                    <span class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="toggleExpand(plugin.id)">{{ plugin.name }}</span>
                     <span class="wb-mono text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
-                    <span class="wb-mono text-[11px] shrink-0" :class="isErrorState(plugin.state) ? 'text-red-600 dark:text-red-400' : 'text-[var(--text-tertiary)]'">
+                    <span class="wb-mono text-[calc(11px*var(--ui-scale))] shrink-0" :class="isErrorState(plugin.state) ? 'text-red-600 dark:text-red-400' : 'text-[var(--text-tertiary)]'">
                       {{ isErrorState(plugin.state) ? getErrorMessage(plugin.state) : $t(getStateKey(plugin.state)) }}
                     </span>
                   </div>
-                  <div class="text-[12px] text-[var(--text-secondary)] truncate mt-0.5">{{ plugin.description }}</div>
+                  <div class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] truncate mt-0.5">{{ plugin.description }}</div>
                 </div>
                 <!-- DISABLED 分区内插件均未激活，配置入口不可用 -->
                 <span class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.config') }}</span>
@@ -115,20 +115,20 @@
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-3">
               <div>
-                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">ID</div>
+                <div class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">ID</div>
                 <div class="wb-mono text-[var(--text-primary)]">{{ expandedPlugin.id }}</div>
               </div>
               <div v-if="expandedPlugin.author">
-                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Author</div>
-                <div class="text-[12px] text-[var(--text-primary)]">{{ expandedPlugin.author }}</div>
+                <div class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Author</div>
+                <div class="text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)]">{{ expandedPlugin.author }}</div>
               </div>
               <div>
-                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
+                <div class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
                 <div class="flex items-center gap-2">
                   <code class="wb-mono text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-1 rounded-[6px] truncate max-w-[280px]">{{ expandedPlugin.extensionPath }}</code>
                   <button
                     @click="copyPath(expandedPlugin.extensionPath)"
-                    class="text-[12px] text-[var(--color-primary)] hover:underline shrink-0"
+                    class="text-[calc(12px*var(--ui-scale))] text-[var(--color-primary)] hover:underline shrink-0"
                   >
                     {{ $t('desktop.plugin.copyPath') }}
                   </button>
@@ -137,21 +137,21 @@
             </div>
             <div class="space-y-3">
               <div>
-                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Permissions</div>
+                <div class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Permissions</div>
                 <div class="flex flex-wrap gap-1">
                   <span
                     v-for="perm in expandedPlugin.permissions"
                     :key="perm"
-                    class="wb-mono text-[10.5px] px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)]"
+                    class="wb-mono text-[calc(10.5px*var(--ui-scale))] px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)]"
                   >
                     {{ perm }}
                   </span>
-                  <span v-if="expandedPlugin.permissions.length === 0" class="text-[12px] text-[var(--text-tertiary)]">—</span>
+                  <span v-if="expandedPlugin.permissions.length === 0" class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">—</span>
                 </div>
               </div>
               <div>
-                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Contributes</div>
-                <div class="text-[12px] text-[var(--text-primary)]">{{ getContributesSummary(expandedPlugin) }}</div>
+                <div class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Contributes</div>
+                <div class="text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)]">{{ getContributesSummary(expandedPlugin) }}</div>
               </div>
             </div>
           </div>

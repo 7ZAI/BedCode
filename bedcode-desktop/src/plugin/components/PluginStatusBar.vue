@@ -24,7 +24,7 @@ const items = registry.statusbarItems
 
 <style scoped>
 .plugin-icon {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-scale));
   line-height: 1;
 }
 </style>
