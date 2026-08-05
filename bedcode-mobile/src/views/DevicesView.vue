@@ -232,6 +232,17 @@
       @cancel="handleCancelConnection"
     />
 
+    <!-- Auth Method Dialog（JWT 失效后选择生物认证 / 配对码） -->
+    <AuthMethodDialog
+      v-model="showAuthDialog"
+      :can-biometric="authBiometricAvailable"
+      :error="authDialogError"
+      :loading="authDialogLoading"
+      :default-method="mobileSettings.preferredAuthMethod === 'biometric' ? 'biometric' : 'pairing'"
+      @confirm="handleAuthMethod"
+      @close="handleAuthDialogClose"
+    />
+
     <!-- Pairing Dialog -->
     <PairingInput
       v-model="showPairing"
@@ -301,6 +312,7 @@ import { wsGetBiometricKeyStatus } from '@/composables/useMobileCommands'
 import { useToast } from '@/composables/useToast'
 import BottomSheet from '@/components/BottomSheet.vue'
 import PairingInput from '@/components/PairingInput.vue'
+import AuthMethodDialog from '@/components/AuthMethodDialog.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
 import SessionConfigCard, { type SessionConfigSummary } from '@/components/SessionConfigCard.vue'
@@ -361,6 +373,12 @@ const showPairingLoading = ref(false)  // 全局遮罩 loading（配对请求时
 const isPairing = ref(false)
 const pairingError = ref('')
 const connectionError = ref('')
+
+// 认证方式选择弹窗（JWT 失效后：生物认证 / 配对码二选一，可切换）
+const showAuthDialog = ref(false)
+const authBiometricAvailable = ref(false)
+const authDialogError = ref('')
+const authDialogLoading = ref(false)
 
 const isRefreshing = ref(false)
 const startingConfigId = ref<string | null>(null)
@@ -584,58 +602,13 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
       console.log('[DevicesView] startConnection: Step 2 skipped (skipPairing=false, must pair)')
     }
 
-    // Step 2.5: 优先认证方式为生物认证时，尝试生物认证登录（仅已绑定设备）
-    if (mobileSettings.value.preferredAuthMethod === 'biometric') {
-      const keyStatus = await wsGetBiometricKeyStatus().catch(() => null)
-      const canBiometric = keyStatus?.deviceSupported && keyStatus?.hasKey
-      if (canBiometric) {
-        console.log('[DevicesView] startConnection: Step 2.5 biometric authentication...')
-        showPairingLoading.value = true
-        try {
-          const bioOk = await connection.authenticateWithBiometric()
-          if (bioOk) {
-            pendingDevice.value = null
-            connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
-            await connection.loadSessionConfigs()
-            return
-          }
-          // 已绑定但生物认证失败/取消 → 终止连接（不降级）
-          connectionError.value = t('mobile.connection.biometricFailed')
-          toast.error(t('mobile.connection.biometricFailed'))
-          await connection.disconnect()
-          return
-        } finally {
-          showPairingLoading.value = false
-        }
-      } else {
-        // 未绑定 → 临时降级到配对码
-        toast.info(t('mobile.connection.biometricDegraded'))
-      }
-    }
-
-    // Step 3: Need to pair - 带超时保护，避免卡住
-    console.log('[DevicesView] startConnection: Step 3 requestPairing...')
-    showPairingLoading.value = true  // 显示全局遮罩 loading
-    try {
-      const pairingTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(t('mobile.connection.pairingTimeout'))), 15000)
-      )
-      await Promise.race([
-        connection.requestPairing(),
-        pairingTimeout,
-      ])
-      console.log('[DevicesView] startConnection: Step 3 done, showPairing=true')
-      showPairing.value = true
-      connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
-    } catch (pairingError) {
-      // 配对失败或超时时断开连接
-      console.error('[DevicesView] Pairing failed:', pairingError)
-      connectionError.value = String(pairingError)
-      toast.error(String(pairingError))
-      await connection.disconnect()
-    } finally {
-      showPairingLoading.value = false  // 隐藏全局遮罩 loading
-    }
+    // Step 2.5: JWT 认证失败（或手动连接）→ 认证方式选择弹窗。
+    // 生物认证与配对码触发时机一致，弹窗内可切换；设置决定默认显示的方式。
+    const keyStatus = await wsGetBiometricKeyStatus().catch(() => null)
+    authBiometricAvailable.value = !!(keyStatus?.deviceSupported && keyStatus?.hasKey)
+    authDialogError.value = ''
+    console.log('[DevicesView] startConnection: Step 2.5 auth method selection, canBiometric=', authBiometricAvailable.value)
+    showAuthDialog.value = true
   } catch (error) {
     connectionError.value = String(error)
     console.error('[DevicesView] startConnection failed:', error)
@@ -667,6 +640,64 @@ async function handleCancelConnection() {
   await connection.cancelConnection()
   connection.isConnecting.value = false
   connectionError.value = t('mobile.connection.userCancelled')
+}
+
+// 认证方式选择弹窗：确认后执行对应认证流程
+async function handleAuthMethod(method: 'biometric' | 'pairing') {
+  const device = pendingDevice.value
+  if (!device) return
+  showAuthDialog.value = false
+
+  if (method === 'biometric') {
+    // 生物认证：弹指纹/人脸签名挑战值，成功后建立连接
+    console.log('[DevicesView] Auth method: biometric')
+    authDialogLoading.value = true
+    try {
+      const bioOk = await connection.authenticateWithBiometric()
+      if (bioOk) {
+        pendingDevice.value = null
+        connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+        await connection.loadSessionConfigs()
+        return
+      }
+      // 生物认证失败/取消 → 回到选择弹窗，可切换配对码
+      authDialogError.value = t('mobile.connection.biometricFailed')
+      showAuthDialog.value = true
+    } catch (e) {
+      console.error('[DevicesView] Biometric auth error:', e)
+      authDialogError.value = String(e)
+      showAuthDialog.value = true
+    } finally {
+      authDialogLoading.value = false
+    }
+  } else {
+    // 配对码：请求配对码后进入输入弹窗
+    console.log('[DevicesView] Auth method: pairing code')
+    showPairingLoading.value = true
+    try {
+      const pairingTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(t('mobile.connection.pairingTimeout'))), 15000)
+      )
+      await Promise.race([connection.requestPairing(), pairingTimeout])
+      showPairing.value = true
+      connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+    } catch (pairingError) {
+      // 配对失败或超时时断开连接
+      console.error('[DevicesView] Pairing failed:', pairingError)
+      connectionError.value = String(pairingError)
+      toast.error(String(pairingError))
+      await connection.disconnect()
+    } finally {
+      showPairingLoading.value = false
+    }
+  }
+}
+
+// 用户关闭认证选择弹窗 → 断开连接，保持前后端状态一致
+function handleAuthDialogClose() {
+  authDialogError.value = ''
+  connectionError.value = t('mobile.connection.userCancelled')
+  connection.disconnect()
 }
 
 // Verify pairing code

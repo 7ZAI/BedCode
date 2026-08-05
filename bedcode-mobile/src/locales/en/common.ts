@@ -21,6 +21,7 @@ export default {
       retry: 'Retry',
       clear: 'Clear',
       copy: 'Copy',
+      loading: 'Loading...',
     },
     status: {
       connected: 'Connected',
