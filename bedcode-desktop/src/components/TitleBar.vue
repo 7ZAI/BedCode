@@ -5,9 +5,22 @@
   >
     <!-- 左：logo + 名称 -->
     <div class="flex items-center gap-3 px-4" data-tauri-drag-region>
-      <div class="w-6 h-6 rounded-md bg-[#1C1917] dark:bg-[#FAF9F7] flex items-center justify-center">
-        <span class="text-xs font-bold leading-none text-[#FAF9F7] dark:text-[#1C1917]">B</span>
-      </div>
+      <!-- 品牌图标：内联 src-tauri/icons/icon.svg，填充色随 light/dark 主题切换（浅色=深底浅纹，夜间=浅底深纹） -->
+      <svg
+        class="w-6 h-6 flex-shrink-0 [--logo-bg-start:#2E2A22] [--logo-bg-end:#0A0907] [--logo-fg:#FFFFFF] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#1C1917]"
+        viewBox="0 0 100 100"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="titlebar-logo-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="var(--logo-bg-start)" />
+            <stop offset="100%" stop-color="var(--logo-bg-end)" />
+          </linearGradient>
+        </defs>
+        <rect width="100" height="100" rx="18" fill="url(#titlebar-logo-bg)" />
+        <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" fill="var(--logo-fg)" />
+        <path d="M 51 60 L 84 62 L 53 65 Z" fill="var(--logo-fg)" />
+      </svg>
       <span class="text-[calc(13px*var(--ui-scale))] font-semibold tracking-tight text-[var(--text-primary)]">BedCode</span>
     </div>
 
