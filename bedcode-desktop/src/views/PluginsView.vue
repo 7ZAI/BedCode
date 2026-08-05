@@ -1,167 +1,157 @@
 <template>
-  <div class="h-full flex flex-col">
-    <!-- Header -->
-    <header class="bg-page px-8 h-14 flex items-center justify-between">
-      <h2 class="text-[var(--font-size-title)] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h2>
-      <button
-        @click="loadPlugins()"
-        :disabled="loading"
-        class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] rounded-btn transition-all duration-200 disabled:opacity-50"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+    <!-- ==================== 工具栏页头：左标题+计数，右刷新 ==================== -->
+    <div class="wb-toolbar">
+      <div class="flex items-center gap-2.5">
+        <h1 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h1>
+        <span class="text-[11px] text-[var(--text-tertiary)]">{{ enabledPlugins.length }}/{{ plugins.length }} {{ $t('desktop.plugin.enabled') }}</span>
+      </div>
+      <button class="wb-btn-ghost" :disabled="loading" @click="loadPlugins()">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
         {{ $t('desktop.plugin.refresh') }}
       </button>
-    </header>
+      <PluginPageToolbar target="plugins" />
+    </div>
 
-    <div class="flex-1 overflow-auto p-6">
-      <div class="max-w-3xl mx-auto">
-        <!-- Empty State -->
-        <EmptyState
-          v-if="!loading && plugins.length === 0"
-          :title="$t('desktop.plugin.noPlugins')"
-          :description="$t('desktop.plugin.noPluginsHint')"
-        />
-
-        <!-- Plugin Table -->
-        <div v-else class="bg-card rounded-card shadow-card overflow-hidden animate-fade-slide-up">
-          <!-- Table Header -->
-          <div class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-6 py-3 bg-[var(--bg-hover)]/50 text-xs font-semibold text-[var(--text-secondary)] border-b border-[var(--border)] items-center">
-            <span>{{ $t('desktop.plugin.title') }}</span>
-            <span>{{ $t('desktop.plugin.version') }}</span>
-            <span>{{ $t('desktop.plugin.state') }}</span>
-            <span></span>
-            <span>{{ $t('desktop.plugin.enabled') }}</span>
+    <div class="flex-1 overflow-auto p-5">
+      <div class="max-w-4xl mx-auto">
+        <!-- ==================== 加载态：骨架 ==================== -->
+        <div v-if="loading && plugins.length === 0" class="space-y-6">
+          <div v-for="i in 2" :key="i">
+            <div class="h-3 w-32 rounded animate-pulse bg-[var(--bg-hover)] mb-2"></div>
+            <div class="h-16 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"></div>
           </div>
+        </div>
 
-          <!-- Plugin Rows -->
-          <div v-for="plugin in plugins" :key="plugin.id">
-            <!-- Row -->
-            <div
-              class="grid grid-cols-[2fr_80px_80px_72px_56px] gap-2 px-6 py-3.5 text-sm items-center cursor-pointer transition-all duration-200 border-b border-[var(--border)] last:border-b-0"
-              :class="[
-                isErrorState(plugin.state) ? 'bg-[var(--color-danger-light)]' : '',
-                expandedId === plugin.id ? 'bg-brand-light/30' : 'hover:bg-[var(--bg-hover)]'
-              ]"
-              @click="toggleExpand(plugin.id)"
-            >
-              <!-- Plugin Name + Description -->
-              <div class="min-w-0">
-                <div class="flex items-center gap-1.5">
-                  <svg class="w-3 h-3 text-[var(--text-tertiary)] shrink-0 transition-transform" :class="{ 'rotate-90': expandedId === plugin.id }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                  </svg>
-                  <span class="font-medium truncate text-[var(--text-primary)]">
-                    {{ plugin.name }}
-                  </span>
-                </div>
-                <div class="text-xs mt-0.5 pl-4.5 truncate text-[var(--text-secondary)]">
-                  <template v-if="isErrorState(plugin.state)">
-                    ⚠ {{ getErrorMessage(plugin.state) }}
-                  </template>
-                  <template v-else>
-                    {{ plugin.description }}
-                  </template>
-                </div>
-              </div>
+        <!-- ==================== 空态 ==================== -->
+        <div v-else-if="!loading && plugins.length === 0" class="py-16 text-center">
+          <p class="text-[13px] font-medium text-[var(--text-primary)]">{{ $t('desktop.plugin.noPlugins') }}</p>
+          <p class="text-[12px] text-[var(--text-secondary)] mt-1">{{ $t('desktop.plugin.noPluginsHint') }}</p>
+        </div>
 
-              <!-- Version -->
-              <span class="text-[var(--text-secondary)] text-xs">{{ plugin.version }}</span>
-
-              <!-- State Badge -->
-              <span
-                class="inline-flex items-center h-6 px-2.5 rounded-tag text-[11px] font-medium"
-                :class="stateBadgeClass(plugin.state)"
+        <!-- ==================== ENABLED / DISABLED 分区 ==================== -->
+        <template v-else>
+          <section v-if="enabledPlugins.length > 0" class="mb-6">
+            <h2 class="wb-section-title">ENABLED · {{ enabledPlugins.length }}</h2>
+            <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden">
+              <div
+                v-for="plugin in enabledPlugins"
+                :key="plugin.id"
+                class="px-4 py-3 flex items-center gap-3"
               >
-                {{ $t(getStateKey(plugin.state)) }}
-              </span>
-
-              <!-- Config Link -->
-              <router-link
-                v-if="isActivated(plugin.state)"
-                :to="`/plugins/${plugin.id}/config`"
-                class="text-xs text-brand hover:underline"
-                @click.stop
-              >
-                {{ $t('desktop.plugin.config') }}
-              </router-link>
-              <span v-else class="text-xs text-[var(--text-tertiary)] cursor-default">
-                {{ $t('desktop.plugin.config') }}
-              </span>
-
-              <!-- Toggle -->
-              <div class="relative flex justify-center" @click.stop>
-                <template v-if="plugin.pluginType !== 'rust'">
-                  <Toggle
-                    :modelValue="isActivated(plugin.state)"
-                    :disabled="togglingId === plugin.id"
-                    @update:modelValue="(val: boolean) => handleToggle(plugin.id, val)"
-                  />
-                  <!-- loading 遮罩：切换进行中覆盖，防重复点击并给出视觉反馈 -->
-                  <div
-                    v-if="togglingId === plugin.id"
-                    class="absolute inset-0 flex items-center justify-center rounded-full"
-                    style="background: rgba(0, 0, 0, 0.18)"
-                  >
-                    <Spinner size="sm" color="dark" />
+                <span class="w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[13px] font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="toggleExpand(plugin.id)">{{ plugin.name }}</span>
+                    <span class="wb-mono text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
                   </div>
-                </template>
-                <span v-else class="text-xs text-[var(--text-tertiary)]">
-                  {{ $t('desktop.plugin.alwaysOn') }}
-                </span>
+                  <div class="text-[12px] text-[var(--text-secondary)] truncate mt-0.5">{{ plugin.description }}</div>
+                </div>
+                <router-link
+                  v-if="isActivated(plugin.state)"
+                  :to="`/plugins/${plugin.id}/config`"
+                  class="h-7 px-3 text-xs font-medium rounded-[6px] border border-[var(--border)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors shrink-0 flex items-center"
+                >
+                  {{ $t('desktop.plugin.config') }}
+                </router-link>
+                <!-- 工作台风格开关：点击关闭插件；rust 插件始终启用不可关闭 -->
+                <button
+                  v-if="plugin.pluginType !== 'rust'"
+                  class="relative w-10 h-5 rounded-full transition-colors shrink-0 bg-[var(--color-primary)]"
+                  :class="{ 'opacity-50 cursor-not-allowed': togglingId === plugin.id }"
+                  :disabled="togglingId === plugin.id"
+                  @click="handleToggle(plugin.id, false)"
+                >
+                  <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full translate-x-5 transition-transform"></span>
+                </button>
+                <span v-else class="text-[12px] text-[var(--text-tertiary)] shrink-0">{{ $t('desktop.plugin.alwaysOn') }}</span>
               </div>
             </div>
+          </section>
 
-            <!-- Expanded Detail -->
-            <div
-              v-if="expandedId === plugin.id"
-              class="px-6 py-3 bg-[var(--bg-hover)]/30 border-b border-[var(--border)]"
-            >
-              <div class="grid grid-cols-2 gap-4">
-                <!-- Left Column -->
-                <div class="space-y-3">
-                  <div>
-                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">ID</div>
-                    <div class="text-xs text-[var(--text-primary)] font-mono">{{ plugin.id }}</div>
+          <section v-if="disabledPlugins.length > 0">
+            <h2 class="wb-section-title">DISABLED · {{ disabledPlugins.length }}</h2>
+            <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden">
+              <div
+                v-for="plugin in disabledPlugins"
+                :key="plugin.id"
+                class="px-4 py-3 flex items-center gap-3"
+              >
+                <span class="w-2 h-2 rounded-full shrink-0" :class="isErrorState(plugin.state) ? 'bg-red-500' : 'bg-[var(--text-tertiary)]'"></span>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[13px] font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="toggleExpand(plugin.id)">{{ plugin.name }}</span>
+                    <span class="wb-mono text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
+                    <span class="wb-mono text-[11px] shrink-0" :class="isErrorState(plugin.state) ? 'text-red-600 dark:text-red-400' : 'text-[var(--text-tertiary)]'">
+                      {{ isErrorState(plugin.state) ? getErrorMessage(plugin.state) : $t(getStateKey(plugin.state)) }}
+                    </span>
                   </div>
-                  <div v-if="plugin.author">
-                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">Author</div>
-                    <div class="text-xs text-[var(--text-primary)]">{{ plugin.author }}</div>
-                  </div>
-                  <div>
-                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
-                    <div class="flex items-center gap-2">
-                      <code class="text-xs text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-1 rounded-input truncate max-w-[280px]">{{ plugin.extensionPath }}</code>
-                      <button
-                        @click="copyPath(plugin.extensionPath)"
-                        class="text-xs text-brand hover:underline shrink-0"
-                      >
-                        {{ $t('desktop.plugin.copyPath') }}
-                      </button>
-                    </div>
-                  </div>
+                  <div class="text-[12px] text-[var(--text-secondary)] truncate mt-0.5">{{ plugin.description }}</div>
                 </div>
-                <!-- Right Column -->
-                <div class="space-y-3">
-                  <div>
-                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">Permissions</div>
-                    <div class="flex flex-wrap gap-1">
-                      <span
-                        v-for="perm in plugin.permissions"
-                        :key="perm"
-                        class="text-[10px] bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded"
-                      >
-                        {{ perm }}
-                      </span>
-                      <span v-if="plugin.permissions.length === 0" class="text-xs text-[var(--text-tertiary)]">—</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-xs font-medium text-[var(--text-secondary)] mb-1">Contributes</div>
-                    <div class="text-xs text-[var(--text-primary)]">{{ getContributesSummary(plugin) }}</div>
-                  </div>
+                <!-- DISABLED 分区内插件均未激活，配置入口不可用 -->
+                <span class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.config') }}</span>
+                <button
+                  v-if="plugin.pluginType !== 'rust'"
+                  class="relative w-10 h-5 rounded-full transition-colors shrink-0 bg-[var(--border)]"
+                  :class="{ 'opacity-50 cursor-not-allowed': togglingId === plugin.id }"
+                  :disabled="togglingId === plugin.id"
+                  @click="handleToggle(plugin.id, true)"
+                >
+                  <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full translate-x-0 transition-transform"></span>
+                </button>
+                <span v-else class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.alwaysOn') }}</span>
+              </div>
+            </div>
+          </section>
+        </template>
+
+        <!-- ==================== 展开详情（点击插件名展开） ==================== -->
+        <div
+          v-if="expandedPlugin"
+          class="mt-6 bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] p-4"
+        >
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-3">
+              <div>
+                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">ID</div>
+                <div class="wb-mono text-[var(--text-primary)]">{{ expandedPlugin.id }}</div>
+              </div>
+              <div v-if="expandedPlugin.author">
+                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Author</div>
+                <div class="text-[12px] text-[var(--text-primary)]">{{ expandedPlugin.author }}</div>
+              </div>
+              <div>
+                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">{{ $t('desktop.plugin.copyPath') }}</div>
+                <div class="flex items-center gap-2">
+                  <code class="wb-mono text-[var(--text-primary)] bg-[var(--bg-hover)] px-2 py-1 rounded-[6px] truncate max-w-[280px]">{{ expandedPlugin.extensionPath }}</code>
+                  <button
+                    @click="copyPath(expandedPlugin.extensionPath)"
+                    class="text-[12px] text-[var(--color-primary)] hover:underline shrink-0"
+                  >
+                    {{ $t('desktop.plugin.copyPath') }}
+                  </button>
                 </div>
+              </div>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Permissions</div>
+                <div class="flex flex-wrap gap-1">
+                  <span
+                    v-for="perm in expandedPlugin.permissions"
+                    :key="perm"
+                    class="wb-mono text-[10.5px] px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)]"
+                  >
+                    {{ perm }}
+                  </span>
+                  <span v-if="expandedPlugin.permissions.length === 0" class="text-[12px] text-[var(--text-tertiary)]">—</span>
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)] mb-1">Contributes</div>
+                <div class="text-[12px] text-[var(--text-primary)]">{{ getContributesSummary(expandedPlugin) }}</div>
               </div>
             </div>
           </div>
@@ -173,15 +163,12 @@
 
 <script setup lang="ts">
 /**
- * 插件视图 - 桌面端插件管理页面
- * 显示所有已安装插件，支持启用/停用切换和详情展开
+ * 插件视图 — 桌面端插件管理页面
+ * Warm Workbench 风格：工具栏页头 + ENABLED/DISABLED 分区列表，展开详情保留
  */
-import { onMounted } from 'vue'
-import Toggle from '@/components/Toggle.vue'
-import EmptyState from '@/components/EmptyState.vue'
-import Spinner from '@/components/Spinner.vue'
+import { computed, onMounted } from 'vue'
 import { usePluginManager } from '@/composables/usePluginManager'
-import type { PluginState } from '@/plugin/types'
+import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 
 const {
   plugins,
@@ -199,16 +186,12 @@ const {
   getContributesSummary,
 } = usePluginManager()
 
-/** 状态徽章样式 — pill tag */
-function stateBadgeClass(state: PluginState): string {
-  if (isActivated(state)) {
-    return 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400'
-  }
-  if (isErrorState(state)) {
-    return 'bg-[var(--color-danger-light)] text-red-600 dark:text-red-400'
-  }
-  return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
-}
+/** 已激活 → ENABLED 分区；其余（已加载/已停用/错误）→ DISABLED 分区 */
+const enabledPlugins = computed(() => plugins.value.filter(p => isActivated(p.state)))
+const disabledPlugins = computed(() => plugins.value.filter(p => !isActivated(p.state)))
+
+/** 当前展开详情的插件 */
+const expandedPlugin = computed(() => plugins.value.find(p => p.id === expandedId.value) ?? null)
 
 /** 处理切换，失败时恢复 UI 状态由 composable 内部处理 */
 async function handleToggle(id: string, enable: boolean): Promise<void> {

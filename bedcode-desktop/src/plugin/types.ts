@@ -192,6 +192,16 @@ export interface TitleBarItemDescriptor {
   onClick?: () => void
 }
 
+/** 页面工具栏项描述符 — 注入到指定页面的工具栏页头右操作区 */
+export interface PageToolbarItemDescriptor {
+  /** 目标页面标识：sessions / devices / history / plugins / plugin-config / server / settings / terminal */
+  target: 'sessions' | 'devices' | 'history' | 'plugins' | 'plugin-config' | 'server' | 'settings' | 'terminal'
+  id: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
 /** 文件处理器描述符 */
 export interface FileHandlerDescriptor {
   id: string
@@ -237,6 +247,7 @@ export interface UIRegistry {
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
+  registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
 }
 

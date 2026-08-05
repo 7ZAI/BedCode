@@ -19,6 +19,8 @@ export interface Settings {
   }
   ui: {
     theme: string
+    // 色板（warm 暖调工作台，未来可扩展）
+    theme_palette?: string
     terminal_font_size: number
     terminal_font_family: string
     terminal_theme: string
@@ -49,6 +51,7 @@ const defaultSettings: Settings = {
   },
   ui: {
     theme: 'system',
+    theme_palette: 'warm',
     terminal_font_size: 12,
     terminal_font_family: 'Consolas',
     terminal_theme: 'dracula',

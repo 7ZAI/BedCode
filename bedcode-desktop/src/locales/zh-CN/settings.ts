@@ -24,6 +24,10 @@ export default {
     appearance: {
       title: '外观',
       theme: '主题',
+      palette: '主题色板',
+      paletteWarm: '暖调工作台',
+      paletteCool: '冷灰调',
+      paletteDesc: '全局配色风格，切换即时生效',
       lightMode: '浅色模式',
       darkMode: '深色模式',
       followSystem: '跟随系统',

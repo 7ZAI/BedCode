@@ -136,7 +136,7 @@ describe('DevicesView', () => {
     const { wrapper } = mountView()
     await flushPromises()
 
-    expect(wrapper.find('header').exists()).toBe(true)
+    expect(wrapper.find('.wb-toolbar').exists()).toBe(true)
     expect(wrapper.find('h2').text()).toContain('设备配对')
   })
 
@@ -155,19 +155,22 @@ describe('DevicesView', () => {
     expect(wrapper.text()).toContain('生成配对码')
   })
 
-  it('should show network info section', async () => {
+  it('should show pairing section with ip/port selector', async () => {
     const { wrapper } = mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('网络信息')
-    expect(wrapper.text()).toContain('WebSocket 端口')
+    // 自动选择首个 IPv4 并展示端口
+    expect(wrapper.text()).toContain('PAIRING')
+    expect(wrapper.text()).toContain('192.168.1.100')
+    expect(wrapper.text()).toContain(':8765')
   })
 
   it('should show empty paired devices state', async () => {
     const { wrapper } = mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂无已配对设备')
+    expect(wrapper.text()).toContain('ONLINE · 0')
+    expect(wrapper.text()).toContain('暂无数据')
   })
 
   it('should display pairing code when generated', async () => {
@@ -253,20 +256,20 @@ describe('DevicesView', () => {
     wrapper.vm.$forceUpdate()
     await flushPromises()
 
-    // 设备卡片上的"移除"按钮只有 SVG 无文本，而"历史"按钮含文本
-    const textlessButtons = wrapper.findAll('button').filter((b) => b.text().trim() === '')
-    expect(textlessButtons.length).toBeGreaterThan(0)
-    await textlessButtons[0].trigger('click')
+    // 设备行的"移除"按钮（带文本）
+    const removeRowBtn = wrapper.findAll('button').find((b) => b.text().includes('移除'))
+    expect(removeRowBtn).toBeDefined()
+    await removeRowBtn!.trigger('click')
     await flushPromises()
 
     // 确认移除对话框打开
     expect(wrapper.find('.modal').exists()).toBe(true)
 
-    // 点击确认移除
+    // 点击确认移除（modal 内的"移除"按钮）
     const commands = await import('@/composables/useDesktopCommands')
-    const removeBtn = wrapper.findAll('button').find((b) => b.text().includes('移除'))
-    expect(removeBtn).toBeDefined()
-    await removeBtn!.trigger('click')
+    const confirmBtn = wrapper.findAll('.modal button').find((b) => b.text().includes('移除'))
+    expect(confirmBtn).toBeDefined()
+    await confirmBtn!.trigger('click')
     await flushPromises()
 
     expect(commands.removePairedDevice).toHaveBeenCalledWith('device-1')

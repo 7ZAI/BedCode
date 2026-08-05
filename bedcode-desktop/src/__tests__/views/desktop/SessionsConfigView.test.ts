@@ -66,20 +66,6 @@ vi.mock('@/components/Modal.vue', () => ({
   },
 }))
 
-vi.mock('@/components/SessionCard.vue', () => ({
-  default: {
-    template: [
-      '<div class="session-card">',
-      '<span class="config-name">{{ config.name }}</span>',
-      '<button class="edit-btn" @click="$emit(\'edit\', config)">edit</button>',
-      '<button class="delete-btn" @click="$emit(\'delete\', config.id)">delete</button>',
-      '</div>',
-    ].join(''),
-    props: ['config', 'sessions'],
-    emits: ['start', 'edit', 'delete', 'view-session', 'stop-session', 'restart-session', 'delete-session'],
-  },
-}))
-
 vi.mock('@/components/SessionForm.vue', () => ({
   default: {
     template: '<form @submit.prevent="$emit(\'save\', { name: \'New\', environment: \'windows\', wslDistro: \'\', workingDir: \'\', command: \'claude\', autoStart: false })"><slot /></form>',
@@ -115,7 +101,7 @@ describe('SessionsConfigView', () => {
     const { wrapper } = mountView()
     await flushPromises()
 
-    expect(wrapper.find('header').exists()).toBe(true)
+    expect(wrapper.find('.wb-toolbar').exists()).toBe(true)
     expect(wrapper.find('h2').text()).toContain('会话')
   })
 
@@ -140,7 +126,7 @@ describe('SessionsConfigView', () => {
     expect(wrapper.find('.modal').exists()).toBe(true)
   })
 
-  it('should render session cards when configs exist', async () => {
+  it('should render config cards when configs exist', async () => {
     const { wrapper, pinia } = mountView()
     await flushPromises()
 
@@ -161,9 +147,10 @@ describe('SessionsConfigView', () => {
     wrapper.vm.$forceUpdate()
     await flushPromises()
 
-    const cards = wrapper.findAll('.session-card')
-    expect(cards).toHaveLength(1)
-    expect(cards[0].text()).toContain('Test Session')
+    // 配置卡片展示名称/工作目录/命令（mono 技术值）
+    expect(wrapper.text()).toContain('Test Session')
+    expect(wrapper.text()).toContain('C:\\test')
+    expect(wrapper.text()).toContain('claude')
   })
 
   it('should call store loadConfigs on mount', async () => {
@@ -201,10 +188,10 @@ describe('SessionsConfigView Integration', () => {
     wrapper.vm.$forceUpdate()
     await flushPromises()
 
-    // 触发 SessionCard 的 edit 事件
-    const editBtn = wrapper.find('.edit-btn')
-    expect(editBtn.exists()).toBe(true)
-    await editBtn.trigger('click')
+    // 触发配置卡片上的"编辑"按钮
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('编辑'))
+    expect(editBtn).toBeDefined()
+    await editBtn!.trigger('click')
     await flushPromises()
 
     // 编辑对话框应打开
@@ -231,8 +218,9 @@ describe('SessionsConfigView Integration', () => {
     wrapper.vm.$forceUpdate()
     await flushPromises()
 
-    const deleteBtn = wrapper.find('.delete-btn')
-    await deleteBtn.trigger('click')
+    const deleteBtn = wrapper.findAll('button').find((b) => b.text().includes('删除'))
+    expect(deleteBtn).toBeDefined()
+    await deleteBtn!.trigger('click')
     await flushPromises()
 
     // 删除确认对话框打开

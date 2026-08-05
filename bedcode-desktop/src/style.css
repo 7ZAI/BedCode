@@ -4,7 +4,13 @@
 
 /* ==================== Design Tokens ==================== */
 
-/* 浅色模式 */
+/*
+ * 色板机制：亮度（light/dark/system）由 :root.dark 切换；色板（warm/cool...）由
+ * :root[data-palette='xxx'] 切换（useTheme 设置）。默认色板 warm（暖调工作台）。
+ * 新增色板 = 加一组 [data-palette='xxx'] 变量覆盖 + 设置页选项，无需改其他代码。
+ */
+
+/* 浅色模式 · 默认色板 warm（暖调工作台） */
 :root {
   color-scheme: light;
 
@@ -35,87 +41,148 @@
   --font-size-xl: 18px;
 
   /* Backgrounds */
-  --bg-page: #E8E9EE;
-  --bg-sidebar: #F4F5F8;
-  --bg-card: #FFFFFF;
-  --bg-hover: #F3F4F6;
-  --bg-input: #FFFFFF;
+  --bg-page: #F5F4F0;
+  --bg-sidebar: #EFEDE7;
+  --bg-card: #FDFCFA;
+  --bg-hover: #E7E4DC;
+  --bg-input: #FDFCFA;
 
   /* Text */
-  --text-primary: #111827;
-  --text-secondary: #6B7280;
-  --text-tertiary: #9CA3AF;
+  --text-primary: #26231B;
+  --text-secondary: #7C7565;
+  --text-tertiary: #ABA492;
 
   /* Border */
-  --border: #E5E7EB;
-  --border-input: #94A3B8;
+  --border: #E4E1D8;
+  --border-strong: #D6D2C4;
+  --border-input: #D6D2C4;
 
-  /* Brand Colors */
-  --color-primary: #3B82F6;
-  --color-primary-hover: #2563EB;
-  --color-primary-light: #EFF6FF;
+  /* Brand Colors（强调色只用于主按钮/选中态/链接） */
+  --color-primary: #1D1A14;
+  --color-primary-hover: #0F0D09;
+  --color-primary-light: #EFEDE5;
+  --color-primary-contrast: #FDFCFA;
   --color-success: #22C55E;
-  --color-success-light: #DCFCE7;
+  --color-success-light: rgba(34, 197, 94, 0.14);
   --color-warning: #F59E0B;
-  --color-warning-light: #FEF3C7;
+  --color-warning-light: rgba(245, 158, 11, 0.16);
   --color-danger: #EF4444;
-  --color-danger-light: #FEE2E2;
+  --color-danger-light: rgba(239, 68, 68, 0.12);
 
   /* Radius */
-  --radius-card: 14px;
-  --radius-button: 10px;
-  --radius-input: 10px;
-  --radius-tag: 999px;
-  --radius-nav: 10px;
+  --radius-card: 10px;
+  --radius-button: 8px;
+  --radius-input: 8px;
+  --radius-tag: 6px;
+  --radius-nav: 8px;
 
-  /* Shadow */
-  --shadow-card: 0 4px 20px rgba(15, 23, 42, 0.06);
-  --shadow-card-hover: 0 8px 30px rgba(15, 23, 42, 0.10);
-  --shadow-input-focus: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  /* Shadow（卡片无阴影，最多 hover 微阴影） */
+  --shadow-card: 0 1px 2px rgba(38, 35, 27, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(38, 35, 27, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(29, 26, 20, 0.08);
 
   /* Layout */
   --sidebar-width: 240px;
-  --header-height: 56px;
-  --page-padding-x: 32px;
+  --header-height: 48px;
+  --page-padding-x: 24px;
   --page-padding-y: 24px;
 
   /* Typography */
-  --font-size-title: 18px;
-  --font-size-card-title: 16px;
-  --font-size-body: 14px;
+  --font-size-title: 14px;
+  --font-size-card-title: 14px;
+  --font-size-body: 13px;
   --font-size-label: 12px;
-  --font-size-tag: 12px;
+  --font-size-tag: 11px;
 
   /* Component Sizes */
-  --input-height: 44px;
-  --button-height: 40px;
-  --tag-height: 28px;
-  --nav-item-height: 44px;
-  --action-button-size: 36px;
+  --input-height: 36px;
+  --button-height: 32px;
+  --tag-height: 24px;
+  --nav-item-height: 40px;
+  --action-button-size: 32px;
 }
 
-/* 深色模式 */
+/* 深色模式 · 默认色板 warm */
 :root.dark {
   color-scheme: dark;
 
-  --bg-page: #080E1A;
-  --bg-sidebar: #15202E;
-  --bg-card: #1E293B;
-  --bg-hover: #334155;
-  --bg-input: #1E293B;
-  --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-  --text-tertiary: #64748B;
-  --border: #334155;
-  --border-input: #475569;
-  --color-primary-light: rgba(59, 130, 246, 0.15);
+  --bg-page: #15130F;
+  --bg-sidebar: #191712;
+  --bg-card: #1D1A15;
+  --bg-hover: #2A261E;
+  --bg-input: #1D1A15;
+  --text-primary: #ECE8DC;
+  --text-secondary: #9C9482;
+  --text-tertiary: #6B6455;
+  --border: #2E2A22;
+  --border-strong: #3C372B;
+  --border-input: #3C372B;
+  --color-primary: #ECE8DC;
+  --color-primary-hover: #F5F2EA;
+  --color-primary-light: rgba(236, 232, 220, 0.12);
+  --color-primary-contrast: #15130F;
   --color-success-light: rgba(34, 197, 94, 0.15);
   --color-warning-light: rgba(245, 158, 11, 0.15);
   --color-danger-light: rgba(239, 68, 68, 0.15);
-  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.2);
-  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.3);
-  --shadow-input-focus: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-input-focus: 0 0 0 3px rgba(236, 232, 220, 0.12);
 }
+
+/* ==================== 色板：cool（冷灰调） ==================== */
+/* 新增色板 = 在此加一组 [data-palette='xxx'] 变量覆盖 + 设置页调色台选项 */
+
+:root[data-palette='cool'] {
+  --bg-page: #F3F5F7;
+  --bg-sidebar: #ECEEF2;
+  --bg-card: #FBFCFD;
+  --bg-hover: #E4E8EE;
+  --bg-input: #FBFCFD;
+
+  --text-primary: #1F2937;
+  --text-secondary: #6B7280;
+  --text-tertiary: #9CA3AF;
+
+  --border: #E2E6EC;
+  --border-strong: #C9D1DC;
+  --border-input: #C9D1DC;
+
+  --color-primary: #2563EB;
+  --color-primary-hover: #1D4ED8;
+  --color-primary-light: rgba(37, 99, 235, 0.1);
+  --color-primary-contrast: #FFFFFF;
+
+  --shadow-card: 0 1px 2px rgba(31, 41, 55, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(31, 41, 55, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+:root.dark[data-palette='cool'] {
+  --bg-page: #0F172A;
+  --bg-sidebar: #131C2E;
+  --bg-card: #1A2438;
+  --bg-hover: #26334D;
+  --bg-input: #1A2438;
+
+  --text-primary: #E2E8F0;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #64748B;
+
+  --border: #283548;
+  --border-strong: #3B4A63;
+  --border-input: #3B4A63;
+
+  --color-primary: #93C5FD;
+  --color-primary-hover: #BFDBFE;
+  --color-primary-light: rgba(147, 197, 253, 0.12);
+  --color-primary-contrast: #0F172A;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-input-focus: 0 0 0 3px rgba(147, 197, 253, 0.15);
+}
+
+/* 默认色板 warm 已直接写入 :root / :root.dark，无需重复块 */
 
 /* ==================== 桌面端字体大小 ==================== */
 
@@ -251,6 +318,94 @@ body {
   font-family: theme('fontFamily.mono');
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ==================== Warm Workbench 通用样式 ==================== */
+
+/* 页面工具栏页头：48px，左标题右操作，底部 1px 实线 */
+.wb-toolbar {
+  height: var(--header-height);
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+/* 小号全大写 section 标题（ENABLED · 2 等） */
+.wb-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+/* 侧边栏分组标签（Navigation / Plugins / Status） */
+.wb-sidebar-section {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* 次要操作按钮（ghost） */
+.wb-btn-ghost {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.wb-btn-ghost:hover {
+  background: var(--bg-hover);
+}
+
+.wb-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 主操作按钮（近黑/近白实底） */
+.wb-btn-primary {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 150ms ease;
+}
+
+.wb-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.wb-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 技术值（端口/地址/路径/命令）等宽字 */
+.wb-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
 }
 
 /* ==================== Animation ==================== */

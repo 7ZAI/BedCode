@@ -27,6 +27,7 @@ import type {
   InputExtensionDescriptor,
   TerminalToolbarItemDescriptor,
   TitleBarItemDescriptor,
+  PageToolbarItemDescriptor,
   FileHandlerDescriptor,
 } from './types'
 import { hasPermissionForApi } from './permission'
@@ -170,6 +171,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requirePermission('ui.registerTitleBarItem')
       const registry = getPluginRegistry()
       const disposable = registry.registerTitleBarItem(info.id, item)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable {
+      requirePermission('ui.registerPageToolbarItem')
+      const registry = getPluginRegistry()
+      const disposable = registry.registerPageToolbarItem(info.id, item)
       disposables.push(disposable)
       return disposable
     },

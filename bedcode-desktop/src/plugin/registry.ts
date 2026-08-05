@@ -58,6 +58,17 @@ interface RegisteredTitleBarItem {
   onClick?: () => void
 }
 
+/** 注册的页面工具栏项（注入到指定页面的工具栏页头） */
+interface RegisteredPageToolbarItem {
+  pluginId: string
+  id: string
+  /** 目标页面标识：sessions / devices / history / plugins / plugin-config / server / settings / terminal */
+  target: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
 /** 注册的文件处理器 */
 interface RegisteredFileHandler {
   pluginId: string
@@ -80,6 +91,7 @@ class PluginRegistryClass {
   private inputExtensions = new Map<string, RegisteredInputExtension>()
   private terminalToolbarItemsMap = new Map<string, RegisteredTerminalToolbarItem>()
   private titleBarItemsMap = new Map<string, RegisteredTitleBarItem>()
+  private pageToolbarItemsMap = new Map<string, RegisteredPageToolbarItem>()
   private fileHandlers = new Map<string, RegisteredFileHandler>()
   private httpEndpoints = new Map<string, RegisteredHttpEndpoint>()
   /** 插件上下文映射，供 PluginViewHost provide 给组件树 */
@@ -92,6 +104,7 @@ class PluginRegistryClass {
   readonly inputExts: Ref<RegisteredInputExtension[]> = ref([])
   readonly terminalToolbarItems: Ref<RegisteredTerminalToolbarItem[]> = ref([])
   readonly titleBarItems: Ref<RegisteredTitleBarItem[]> = ref([])
+  readonly pageToolbarItems: Ref<RegisteredPageToolbarItem[]> = ref([])
 
   /** 注册视图 */
   registerView(pluginId: string, viewType: string, panel: { id: string; title: string; icon?: string; order?: number; component: any }): Disposable {
@@ -200,6 +213,27 @@ class PluginRegistryClass {
     }
   }
 
+  /** 注册页面工具栏项 */
+  registerPageToolbarItem(pluginId: string, item: { target: string; id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+    const key = `${item.target}:${pluginId}:${item.id}`
+    const entry: RegisteredPageToolbarItem = {
+      pluginId,
+      id: item.id,
+      target: item.target,
+      label: item.label,
+      icon: item.icon,
+      onClick: item.onClick,
+    }
+    this.pageToolbarItemsMap.set(key, entry)
+    this.updateReactivePageToolbar()
+    return {
+      dispose: () => {
+        this.pageToolbarItemsMap.delete(key)
+        this.updateReactivePageToolbar()
+      },
+    }
+  }
+
   /** 注册文件处理器 */
   registerFileHandler(pluginId: string, handler: { id: string; extensions: string[]; component: any }): Disposable {
     const key = `${pluginId}:${handler.id}`
@@ -292,6 +326,13 @@ class PluginRegistryClass {
     }
     this.updateReactiveTitleBarItems()
 
+    for (const key of [...this.pageToolbarItemsMap.keys()]) {
+      if (key.startsWith(`${pluginId}:`)) {
+        this.pageToolbarItemsMap.delete(key)
+      }
+    }
+    this.updateReactivePageToolbar()
+
     for (const key of [...this.fileHandlers.keys()]) {
       if (key.startsWith(`${pluginId}:`)) {
         this.fileHandlers.delete(key)
@@ -327,6 +368,10 @@ class PluginRegistryClass {
 
   private updateReactiveTitleBarItems() {
     this.titleBarItems.value = [...this.titleBarItemsMap.values()]
+  }
+
+  private updateReactivePageToolbar() {
+    this.pageToolbarItems.value = [...this.pageToolbarItemsMap.values()]
   }
 }
 

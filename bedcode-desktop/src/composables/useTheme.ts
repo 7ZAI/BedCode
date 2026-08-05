@@ -20,6 +20,11 @@ function applyTheme(theme: string) {
   }
 }
 
+/** 应用色板（warm/cool...）：data-palette 属性驱动 CSS 变量组切换 */
+function applyPalette(palette: string) {
+  document.documentElement.dataset.palette = palette || 'warm'
+}
+
 function setupTheme() {
   const settingsStore = useSettingsStore()
   const theme = settingsStore.settings.ui.theme
@@ -31,6 +36,7 @@ function setupTheme() {
   }
 
   applyTheme(theme)
+  applyPalette(settingsStore.settings.ui.theme_palette ?? 'warm')
 }
 
 function cleanupTheme() {
@@ -48,6 +54,11 @@ export function useTheme() {
     cleanupTheme()
     applyTheme(newTheme)
     setupTheme()
+  })
+
+  // 监听色板设置变化
+  watch(() => settingsStore.settings.ui.theme_palette, (newPalette) => {
+    applyPalette(newPalette ?? 'warm')
   })
 
   // 主题切换通过 :root.dark CSS 变量自动生效，无需 dark: 前缀

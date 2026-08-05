@@ -248,6 +248,9 @@ impl Default for SessionConfig {
 pub struct UiConfig {
     /// 主题（light/dark/system）
     pub theme: String,
+    /// 色板（warm 暖调工作台，未来可扩展 cool 等；缺省回 warm）
+    #[serde(default = "default_theme_palette")]
+    pub theme_palette: String,
     /// 终端字体大小
     pub terminal_font_size: u8,
     /// 终端字体名称
@@ -272,6 +275,10 @@ fn default_terminal_theme() -> String {
     "dracula".to_string()
 }
 
+fn default_theme_palette() -> String {
+    "warm".to_string()
+}
+
 fn default_language() -> String {
     "zh-CN".to_string()
 }
@@ -284,6 +291,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: "system".to_string(),
+            theme_palette: default_theme_palette(),
             terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
             terminal_theme: default_terminal_theme(),
@@ -493,6 +501,7 @@ impl AppConfig {
             },
             ui: UiConfig {
                 theme: parse_value(props, "ui.theme", "system".to_string()),
+                theme_palette: parse_value(props, "ui.theme_palette", default_theme_palette()),
                 terminal_font_size: parse_value(props, "ui.terminal_font_size", 12),
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
@@ -573,6 +582,7 @@ impl AppConfig {
         map.insert("session.default_command".to_string(), self.session.default_command.clone().unwrap_or_default());
         map.insert("session.session_timeout".to_string(), self.session.session_timeout.to_string());
         map.insert("ui.theme".to_string(), self.ui.theme.clone());
+        map.insert("ui.theme_palette".to_string(), self.ui.theme_palette.clone());
         map.insert("ui.terminal_font_size".to_string(), self.ui.terminal_font_size.to_string());
         map.insert("ui.terminal_font_family".to_string(), self.ui.terminal_font_family.clone());
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());

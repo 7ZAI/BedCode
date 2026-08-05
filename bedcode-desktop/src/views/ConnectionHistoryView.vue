@@ -1,104 +1,102 @@
 <template>
-  <div class="h-full flex flex-col">
-    <!-- Header -->
-    <header class="bg-page px-8 h-14 flex items-center gap-4">
-      <button
-        @click="router.push('/devices')"
-        class="flex items-center gap-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-        </svg>
-        {{ t('desktop.device.historyBack') }}
-      </button>
-      <h2 class="text-[var(--font-size-title)] font-semibold text-[var(--text-primary)]">
-        {{ t('desktop.device.historyTitle') }}
-      </h2>
-      <span v-if="deviceName" class="text-[var(--text-tertiary)] text-sm">{{ deviceName }}</span>
-    </header>
-
-    <div class="flex-1 overflow-auto p-6">
-      <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up">
-        <div class="flex items-center justify-between mb-5">
-          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">
-            {{ t('desktop.device.historyTitle') }}
-          </h3>
-          <Button
-            v-if="history.length > 0"
-            variant="ghost"
-            size="sm"
-            @click="showClearDialog = true"
-          >
-            {{ t('desktop.device.historyClear') }}
-          </Button>
-        </div>
-
-        <div v-if="isLoading" class="text-center py-12 text-[var(--text-tertiary)]">
-          {{ t('common.status.loading') }}
-        </div>
-
-        <div v-else-if="history.length === 0" class="text-center py-12">
-          <svg class="w-12 h-12 mx-auto text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+    <!-- ==================== 工具栏页头：左返回+设备名+统计，右清空 ==================== -->
+    <div class="wb-toolbar">
+      <div class="flex items-center gap-3 min-w-0">
+        <button
+          class="flex items-center gap-1 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+          @click="router.push('/devices')"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19l-7-7 7-7" />
           </svg>
-          <p class="text-[var(--text-secondary)]">{{ t('desktop.device.historyEmpty') }}</p>
-        </div>
+          {{ t('desktop.device.historyBack') }}
+        </button>
+        <span class="text-[var(--text-tertiary)]">/</span>
+        <h2 class="text-sm font-semibold text-[var(--text-primary)] truncate">
+          {{ deviceName || t('desktop.device.historyTitle') }}
+        </h2>
+        <!-- 统计计数 -->
+        <span v-if="!isLoading && history.length > 0" class="wb-mono text-[11px] text-[var(--text-tertiary)] whitespace-nowrap">
+          {{ history.length }} total · <span class="text-green-700 dark:text-green-400">{{ successCount }} ok</span> · <span class="text-red-700 dark:text-red-400">{{ failCount }} fail</span>
+        </span>
+      </div>
+      <div class="flex items-center gap-2">
+        <PluginPageToolbar target="history" />
+        <button
+          v-if="history.length > 0"
+          class="wb-btn-ghost"
+        @click="showClearDialog = true"
+      >
+        {{ t('desktop.device.historyClear') }}
+      </button>
+    </div>
 
-        <div v-else class="space-y-3">
-          <div
-            v-for="entry in history"
-            :key="entry.id"
-            class="flex items-center justify-between p-4 bg-[var(--bg-hover)]/50 rounded-input"
-          >
-            <div class="flex items-center gap-3 min-w-0">
+    <div class="flex-1 overflow-auto px-6 py-6">
+      <!-- 加载态 -->
+      <div v-if="isLoading" class="flex flex-col items-center justify-center py-20">
+        <svg class="w-5 h-5 animate-spin text-[var(--text-secondary)] mb-3" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v2a6 6 0 00-6 6H4z"></path>
+        </svg>
+        <p class="wb-mono text-xs text-[var(--text-secondary)]">{{ t('common.status.loading') }}</p>
+      </div>
+
+      <!-- 空态 -->
+      <div v-else-if="history.length === 0" class="flex flex-col items-center justify-center py-20">
+        <svg class="w-7 h-7 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="wb-mono text-xs text-[var(--text-secondary)]">{{ t('desktop.device.historyEmpty') }}</p>
+      </div>
+
+      <!-- 按日期分组的 section -->
+      <div v-else class="space-y-6 max-w-3xl">
+        <section v-for="group in groups" :key="group.date">
+          <!-- 小号全大写 letterspacing 分组标题 -->
+          <h3 class="wb-section-title font-mono tracking-[0.12em]">
+            {{ group.date }} · {{ group.entries.length }}
+          </h3>
+          <div class="border border-[var(--border)] rounded-[10px] bg-[var(--bg-card)] divide-y divide-[var(--border)] overflow-hidden">
+            <div
+              v-for="entry in group.entries"
+              :key="entry.id"
+              class="px-4 py-3 flex items-center gap-3 hover:bg-[var(--bg-hover)] transition-colors"
+            >
               <span
                 :class="[
-                  'w-2.5 h-2.5 rounded-full shrink-0',
+                  'w-2 h-2 rounded-full shrink-0',
                   entry.result === 'success' ? 'bg-green-500' : 'bg-red-400'
                 ]"
               ></span>
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span
-                    :class="[
-                      'text-xs px-2.5 py-0.5 rounded-tag font-medium',
-                      methodBadgeClass(entry.authMethod)
-                    ]"
-                  >
-                    {{ methodLabel(entry.authMethod) }}
-                  </span>
-                  <span
-                    :class="[
-                      'text-xs px-2.5 py-0.5 rounded-tag font-medium',
-                      entry.result === 'success'
-                        ? 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400'
-                        : 'bg-[var(--color-danger-light)] text-red-500'
-                    ]"
-                  >
-                    {{ resultLabel(entry.result) }}
-                  </span>
-                </div>
-                <div class="flex items-center gap-3 text-[var(--text-tertiary)] text-xs mt-1.5">
-                  <span>{{ t('desktop.device.historyConnectedAt') }} {{ formatTime(entry.connectedAt) }}</span>
-                  <span v-if="entry.disconnectedAt">|</span>
-                  <span v-if="entry.disconnectedAt">{{ t('desktop.device.historyDisconnectedAt') }} {{ formatTime(entry.disconnectedAt) }}</span>
-                  <span v-if="entry.address">|</span>
-                  <span v-if="entry.address" class="font-mono">{{ entry.address }}</span>
-                </div>
-              </div>
+              <span class="text-xs font-medium text-[var(--text-primary)] w-16 shrink-0">{{ methodLabel(entry.authMethod) }}</span>
+              <span class="wb-mono text-[var(--text-secondary)] truncate flex-1 min-w-0">
+                {{ entry.address ?? '—' }}
+              </span>
+              <span class="wb-mono text-[var(--text-tertiary)] tabular-nums whitespace-nowrap">
+                {{ clockTime(entry.connectedAt) }}<template v-if="entry.disconnectedAt"> → {{ clockTime(entry.disconnectedAt) }}</template>
+              </span>
+              <span
+                :class="[
+                  'wb-mono text-[11px] w-12 text-right shrink-0',
+                  entry.result === 'success' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'
+                ]"
+              >
+                {{ resultLabel(entry.result) }}
+              </span>
             </div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
 
-    <!-- Clear Confirm Dialog -->
+    <!-- 清空确认对话框 -->
     <Modal v-model="showClearDialog" :title="t('desktop.device.historyClear')" size="sm">
-      <p class="text-[var(--text-primary)]">{{ t('desktop.device.historyClearConfirm') }}</p>
+      <p class="text-[var(--text-primary)] text-[13px]">{{ t('desktop.device.historyClearConfirm') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showClearDialog = false">{{ t('common.button.cancel') }}</Button>
-          <Button variant="danger" @click="confirmClearHistory">{{ t('common.button.clear') }}</Button>
+          <button class="wb-btn-ghost" @click="showClearDialog = false">{{ t('common.button.cancel') }}</button>
+          <button class="wb-btn-primary" :class="{ 'bg-[var(--color-danger)]': true }" @click="confirmClearHistory">{{ t('common.button.clear') }}</button>
         </div>
       </template>
     </Modal>
@@ -107,10 +105,8 @@
 
 <script setup lang="ts">
 /**
- * ConnectionHistoryView - 桌面端设备连接历史
- *
- * 展示单个已配对设备的连接历史（认证方式、结果、连接/断开时间），
- * 支持一键清空。数据来自 list_connection_history / delete_connection_history 命令。
+ * ConnectionHistoryView — 桌面端设备连接历史
+ * Warm Workbench 风格：工具栏统计 + 按日期分组列表；清空走真实删除 + 确认对话框
  */
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -118,8 +114,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDeviceStore } from '@/stores/device'
 import { useDesktopCommands, type ConnectionHistoryEntry } from '@/composables/useDesktopCommands'
 import { useToast } from '@/composables/useToast'
-import Button from '@/components/Button.vue'
 import Modal from '@/components/Modal.vue'
+import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -138,6 +134,29 @@ const history = ref<ConnectionHistoryEntry[]>([])
 const isLoading = ref(false)
 const showClearDialog = ref(false)
 
+const successCount = computed(() => history.value.filter(e => e.result === 'success').length)
+const failCount = computed(() => history.value.length - successCount.value)
+
+/** 按连接日期分组，保持原列表顺序（后端已按时间倒序） */
+const groups = computed(() => {
+  const map = new Map<string, ConnectionHistoryEntry[]>()
+  for (const entry of history.value) {
+    const key = dayKey(entry.connectedAt)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(entry)
+  }
+  return Array.from(map.entries()).map(([date, entries]) => ({ date, entries }))
+})
+
+function dayKey(timeStr: string): string {
+  const date = new Date(timeStr)
+  if (isNaN(date.getTime())) return t('common.status.unknown')
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 function methodLabel(method: string): string {
   const keyMap: Record<string, string> = {
     pairing_code: 'historyMethodPairingCode',
@@ -154,30 +173,10 @@ function resultLabel(result: string): string {
     : t('desktop.device.historyResultFailed')
 }
 
-function methodBadgeClass(method: string): string {
-  switch (method) {
-    case 'biometric':
-      return 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400'
-    case 'qr':
-      return 'bg-[var(--bg-hover)] text-blue-600 dark:text-blue-400'
-    case 'pairing_code':
-      return 'bg-[var(--color-warning-light)] text-amber-600 dark:text-amber-400'
-    default:
-      return 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
-  }
-}
-
-function formatTime(timeStr: string): string {
+function clockTime(timeStr: string): string {
   const date = new Date(timeStr)
   if (isNaN(date.getTime())) return t('common.status.unknown')
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 async function loadHistory() {

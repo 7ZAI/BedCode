@@ -1,154 +1,236 @@
 <template>
-  <div class="h-full flex flex-col">
-    <!-- Header -->
-    <header class="bg-page px-8 h-14 flex items-center">
-      <h2 class="text-[var(--font-size-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.title') }}</h2>
-    </header>
+  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+    <!-- ==================== 工具栏页头 ==================== -->
+    <div class="wb-toolbar">
+      <div class="flex items-center gap-2.5">
+        <svg class="w-4 h-4 text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        <h2 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('settings.title') }}</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <PluginPageToolbar target="settings" />
+        <button class="wb-btn-ghost" @click="handleCheckUpdate">
+          {{ getUpdateStatusText() }}
+        </button>
+      </div>
+    </div>
 
-    <div class="flex-1 overflow-auto p-6 px-8">
-      <div class="max-w-4xl mx-auto space-y-4">
-        <!-- Network Settings -->
-        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up">
-          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.network.title') }}</h3>
-          <div class="mt-5 space-y-4">
-            <Input
-              :model-value="settingsStore.settings.network.port"
-              type="number"
-              :label="$t('settings.network.websocketPort')"
-              @update:model-value="settingsStore.settings.network.port = Number($event)"
-            />
-            <div class="flex items-center justify-between">
-              <div>
-                <span class="text-[var(--text-primary)] text-sm">{{ $t('settings.network.preventSleep') }}</span>
-                <p class="text-[var(--text-tertiary)] text-xs mt-0.5">{{ $t('settings.network.preventSleepDesc') }}</p>
+    <!-- 内容区：按功能分 section，section 间 24px -->
+    <div class="flex-1 overflow-auto px-6 py-6">
+      <div class="max-w-3xl mx-auto space-y-6">
+        <!-- ==================== APPEARANCE ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.ui.title') }}</h3>
+          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
+            <!-- 主题：分段控件 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.appearance.theme') }}</span>
+              <div class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0">
+                <button
+                  v-for="opt in themeOptions"
+                  :key="opt.value"
+                  class="h-8 px-3 text-xs font-medium transition-colors"
+                  :class="themeValue === opt.value
+                    ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'"
+                  @click="themeValue = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
               </div>
-              <Toggle
-                :model-value="settingsStore.settings.network.prevent_sleep ?? true"
-                @update:model-value="settingsStore.settings.network.prevent_sleep = $event"
-              />
             </div>
-          </div>
-        </div>
 
-        <!-- Session Defaults -->
-        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 50ms">
-          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.session.title') }}</h3>
-          <div class="mt-5 grid grid-cols-2 gap-4">
-            <Select
-              :model-value="settingsStore.settings.session.default_environment || 'windows'"
-              :label="$t('settings.session.defaultEnvironment')"
-              :options="environmentOptions"
-              @update:model-value="settingsStore.settings.session.default_environment = String($event)"
-            />
-            <Input
-              :model-value="settingsStore.settings.session.default_command || ''"
-              type="text"
-              :label="$t('settings.session.defaultCommand')"
-              @update:model-value="settingsStore.settings.session.default_command = String($event)"
-            />
-          </div>
-        </div>
-
-        <!-- QR Code Settings -->
-        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 100ms">
-          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.qr.title') }}</h3>
-          <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ $t('settings.qr.validityDesc') }}</p>
-          <div class="flex items-center justify-between">
-            <div>
-              <span class="text-[var(--text-primary)]">{{ $t('settings.qr.validity') }}</span>
+            <!-- 主题色板：调色台（色板卡片，切换即时生效） -->
+            <div class="px-5 py-3.5 flex items-start justify-between gap-6">
+              <div class="flex-shrink-0">
+                <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.appearance.palette') }}</span>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.appearance.paletteDesc') }}</p>
+              </div>
+              <div class="flex items-start gap-2 flex-wrap justify-end">
+                <button
+                  v-for="opt in paletteOptions"
+                  :key="opt.value"
+                  class="w-[84px] rounded-[8px] border p-1.5 transition-colors"
+                  :class="paletteValue === opt.value
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary-light)]'
+                    : 'border-[var(--border-strong)] hover:border-[var(--text-tertiary)]'"
+                  :title="opt.label"
+                  @click="paletteValue = opt.value"
+                >
+                  <!-- 色块预览：页面底 / 卡片底 / 强调色（取色板自身色值，预览切换后效果） -->
+                  <div class="flex gap-1">
+                    <span class="w-4 h-4 rounded-[3px] border border-black/5" :style="{ background: opt.swatches.page }"></span>
+                    <span class="w-4 h-4 rounded-[3px] border border-black/5" :style="{ background: opt.swatches.card }"></span>
+                    <span class="w-4 h-4 rounded-[3px] border border-black/5" :style="{ background: opt.swatches.primary }"></span>
+                  </div>
+                  <p class="text-[10px] text-[var(--text-secondary)] mt-1.5 text-center truncate">{{ opt.label }}</p>
+                </button>
+              </div>
             </div>
-            <Input
-              :model-value="qrTokenTtl"
-              type="number"
-              class="w-24"
-              @update:model-value="qrTokenTtl = Number($event)"
-              @blur="saveQrTokenTtl"
-            />
-          </div>
-        </div>
 
-        <!-- UI Settings -->
-        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 150ms">
-          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.ui.title') }}</h3>
-          <div class="mt-5 space-y-4">
-            <Select
-              :model-value="settingsStore.settings.ui.theme"
-              :label="$t('settings.appearance.theme')"
-              :options="themeOptions"
-              @update:model-value="settingsStore.settings.ui.theme = String($event)"
-            />
-            <Select
-              :model-value="currentLanguage"
-              :label="$t('settings.appearance.language')"
-              :options="languageOptions"
-              @update:model-value="currentLanguage = String($event)"
-            />
-            <div>
-              <label class="text-xs font-medium text-[var(--text-secondary)] mb-2 block">{{ $t('settings.ui.terminalFontSize') }}</label>
-              <div class="flex items-center gap-4">
+            <!-- 语言：分段控件 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.appearance.language') }}</span>
+              <div class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0">
+                <button
+                  v-for="opt in languageOptions"
+                  :key="opt.value"
+                  class="h-8 px-4 text-xs font-medium transition-colors"
+                  :class="currentLanguage === opt.value
+                    ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'"
+                  @click="currentLanguage = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 终端字体大小 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.ui.terminalFontSize') }}</span>
+              <div class="flex items-center gap-3 w-60">
                 <input
                   type="range"
                   min="10"
                   max="24"
                   step="1"
                   :value="settingsStore.settings.ui.terminal_font_size"
+                  class="flex-1 h-1 appearance-none bg-[var(--border-strong)] cursor-pointer accent-[var(--color-primary)]"
                   @input="settingsStore.settings.ui.terminal_font_size = Number(($event.target as HTMLInputElement).value)"
-                  class="flex-1 h-1.5 rounded-full appearance-none cursor-pointer
-                    bg-[var(--border)]
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:duration-150 [&::-webkit-slider-thumb]:hover:scale-125
-                    [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-brand [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-sm"
                 />
-                <span class="text-sm text-[var(--text-secondary)] font-mono w-12 text-right">{{ settingsStore.settings.ui.terminal_font_size }}px</span>
+                <span class="wb-mono text-[var(--text-secondary)] w-10 text-right">{{ settingsStore.settings.ui.terminal_font_size }}px</span>
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- About -->
-        <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 200ms">
-          <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ $t('settings.about.title') }}</h3>
-          <div class="mt-5 flex items-center justify-between">
-            <div class="text-[var(--text-primary)]">
-              <p>BedCode</p>
-              <p class="text-[var(--text-secondary)] text-sm">{{ $t('common.misc.version') }} {{ appVersion }}</p>
+        <!-- ==================== NETWORK ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.network.title') }}</h3>
+          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
+            <!-- WebSocket 端口 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.network.websocketPort') }}</span>
+              <input
+                type="number"
+                :value="settingsStore.settings.network.port"
+                class="h-8 w-28 px-2.5 rounded-[6px] wb-mono text-right bg-[var(--bg-page)] border border-[var(--border-strong)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+                @input="settingsStore.settings.network.port = Number(($event.target as HTMLInputElement).value)"
+              />
             </div>
-            <!-- 检查更新按钮 -->
-            <Button
-              v-if="updateStatus === 'idle' || updateStatus === 'latest' || updateStatus === 'failed'"
-              variant="secondary"
-              @click="handleCheckUpdate"
-            >
-              <template #icon>
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </template>
-              {{ getUpdateStatusText() }}
-            </Button>
-            <!-- 发现新版本 - 安装按钮 -->
-            <Button
-              v-else-if="updateStatus === 'available'"
-              variant="primary"
-              @click="handleInstallUpdate"
-            >
-              {{ $t('settings.about.downloadUpdate') }}
-            </Button>
-            <!-- 下载中 -->
-            <div v-else-if="updateStatus === 'downloading'" class="flex items-center gap-3">
-              <div class="w-32 h-2 bg-[var(--bg-hover)] rounded-full overflow-hidden">
-                <div
-                  class="h-full bg-brand rounded-full transition-all duration-300"
-                  :style="{ width: downloadPercent + '%' }"
-                />
+
+            <!-- 防止休眠：方角开关 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <div>
+                <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.network.preventSleep') }}</span>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.network.preventSleepDesc') }}</p>
               </div>
-              <span class="text-sm text-[var(--text-secondary)]">{{ downloadPercent }}%</span>
+              <button
+                class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
+                :class="preventSleep ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
+                role="switch"
+                :aria-checked="preventSleep"
+                @click="preventSleep = !preventSleep"
+              >
+                <span
+                  class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
+                  :class="preventSleep ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
+                />
+              </button>
             </div>
-            <!-- 其他状态 -->
-            <span v-else class="text-sm text-[var(--text-secondary)]">{{ getUpdateStatusText() }}</span>
           </div>
-          <!-- 失败时显示重试 -->
-          <p v-if="updateStatus === 'failed'" class="mt-2 text-xs text-red-500">{{ errorMessage }}</p>
-        </div>
+        </section>
+
+        <!-- ==================== SESSION ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.session.title') }}</h3>
+          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
+            <!-- 默认执行环境：分段控件 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.session.defaultEnvironment') }}</span>
+              <div class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0">
+                <button
+                  v-for="opt in environmentOptions"
+                  :key="opt.value"
+                  class="h-8 px-4 text-xs font-medium wb-mono transition-colors"
+                  :class="defaultEnvironment === opt.value
+                    ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'"
+                  @click="defaultEnvironment = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 默认启动命令 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.session.defaultCommand') }}</span>
+              <input
+                type="text"
+                :value="settingsStore.settings.session.default_command || ''"
+                class="h-8 w-56 px-2.5 rounded-[6px] wb-mono bg-[var(--bg-page)] border border-[var(--border-strong)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+                @input="settingsStore.settings.session.default_command = ($event.target as HTMLInputElement).value"
+              />
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== QR CODE ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.qr.title') }}</h3>
+          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px]">
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <div>
+                <span class="text-[13px] text-[var(--text-primary)]">{{ t('settings.qr.validity') }}</span>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.qr.validityDesc') }}</p>
+              </div>
+              <input
+                type="number"
+                :value="qrTokenTtl"
+                class="h-8 w-28 px-2.5 rounded-[6px] wb-mono text-right bg-[var(--bg-page)] border border-[var(--border-strong)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+                @input="qrTokenTtl = Number(($event.target as HTMLInputElement).value)"
+                @blur="saveQrTokenTtl"
+              />
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== ABOUT ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.about.title') }}</h3>
+          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-5 py-4">
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex items-center gap-2">
+                <span class="text-[13px] font-semibold text-[var(--text-primary)]">BedCode</span>
+                <span class="wb-mono text-[var(--text-secondary)]">v{{ appVersion || '—' }}</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <!-- 下载进度 -->
+                <template v-if="updateStatus === 'downloading'">
+                  <div class="w-32 h-1.5 bg-[var(--border)] overflow-hidden">
+                    <div class="h-full bg-[var(--color-primary)] transition-all duration-300" :style="{ width: downloadPercent + '%' }" />
+                  </div>
+                  <span class="wb-mono text-[var(--text-secondary)]">{{ downloadPercent }}%</span>
+                </template>
+                <button
+                  v-else-if="updateStatus === 'available'"
+                  class="wb-btn-primary"
+                  @click="handleInstallUpdate"
+                >
+                  {{ t('settings.about.downloadUpdate') }}
+                </button>
+                <span v-else-if="updateStatus !== 'idle' && updateStatus !== 'latest' && updateStatus !== 'failed'" class="text-xs text-[var(--text-secondary)]">
+                  {{ getUpdateStatusText() }}
+                </span>
+              </div>
+            </div>
+            <p v-if="updateStatus === 'failed'" class="mt-2 text-xs text-red-500">{{ errorMessage }}</p>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -156,22 +238,21 @@
 
 <script setup lang="ts">
 /**
- * 设置视图 - 桌面端设置页面
- * 支持网络、会话、QR码、界面等设置，以及语言切换和更新检查
+ * 设置视图 — 桌面端设置页面
+ * Warm Workbench 风格：分段控件 + 方角开关 + section 分组；支持多主题色板预留
  */
 import { onMounted, ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { useQrCodeApi } from '@/composables/useTauri'
-import Input from '@/components/Input.vue'
-import Select from '@/components/Select.vue'
-import Button from '@/components/Button.vue'
-import Toggle from '@/components/Toggle.vue'
+import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import i18n from '@/locales'
 import { getAppVersion } from '@/composables/useDesktopCommands'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import { useToast } from '@/composables/useToast'
 
+const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const qrApi = useQrCodeApi()
@@ -179,6 +260,7 @@ const toast = useToast()
 const { status: updateStatus, downloadProgress, errorMessage, checkForUpdate, downloadAndInstall, getUpdateStatusText } = useUpdateChecker()
 
 const appVersion = ref('')
+const qrTokenTtl = ref(300)
 
 const environmentOptions = computed(() => [
   { value: 'windows', label: i18n.global.t('desktop.form.windowsNative') },
@@ -191,17 +273,51 @@ const themeOptions = computed(() => [
   { value: 'system', label: i18n.global.t('settings.appearance.followSystem') },
 ])
 
+// 主题色板：调色台选项（色板值 + 展示色块，色块取色板自身色值以便预览切换后效果）
+const paletteOptions = computed(() => [
+  {
+    value: 'warm',
+    label: i18n.global.t('settings.appearance.paletteWarm'),
+    swatches: { page: '#F5F4F0', card: '#FDFCFA', primary: '#1D1A14' },
+  },
+  {
+    value: 'cool',
+    label: i18n.global.t('settings.appearance.paletteCool'),
+    swatches: { page: '#F3F5F7', card: '#FBFCFD', primary: '#2563EB' },
+  },
+])
+
 const languageOptions = [
   { value: 'zh-CN', label: '中文' },
   { value: 'en', label: 'English' },
 ]
 
+// 直接读写 store，主题切换由 useTheme 全局监听即时生效
+const themeValue = computed({
+  get: () => settingsStore.settings.ui.theme,
+  set: (value: string) => { settingsStore.settings.ui.theme = value },
+})
+
+// 色板切换由 useTheme 监听 data-palette 即时生效
+const paletteValue = computed({
+  get: () => settingsStore.settings.ui.theme_palette || 'warm',
+  set: (value: string) => { settingsStore.settings.ui.theme_palette = value },
+})
+
+const defaultEnvironment = computed({
+  get: () => settingsStore.settings.session.default_environment || 'windows',
+  set: (value: string) => { settingsStore.settings.session.default_environment = value },
+})
+
+const preventSleep = computed({
+  get: () => settingsStore.settings.network.prevent_sleep ?? true,
+  set: (value: boolean) => { settingsStore.settings.network.prevent_sleep = value },
+})
+
 const currentLanguage = computed({
   get: () => settingsStore.settings.ui.language || 'zh-CN',
   set: (value: string) => i18nStore.setLanguage(value),
 })
-
-const qrTokenTtl = ref(300)
 
 async function loadQrTokenTtl() {
   qrTokenTtl.value = await qrApi.getQrTokenTtl()
@@ -213,21 +329,22 @@ async function saveQrTokenTtl() {
   await qrApi.setQrTokenTtl(val)
 }
 
+// 防抖保存逻辑（防止由保存触发的循环更新）
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
-let isSaving = false  // 防止循环保存
+let isSaving = false
 
 watch(
   () => settingsStore.settings,
   () => {
-    if (isSaving) return  // 跳过由保存触发的更新
+    if (isSaving) return
     if (saveTimeout) clearTimeout(saveTimeout)
     saveTimeout = setTimeout(() => {
       isSaving = true
       settingsStore.saveSettings(settingsStore.settings)
-      setTimeout(() => { isSaving = false }, 100)  // 100ms 后重置标志
+      setTimeout(() => { isSaving = false }, 100)
     }, 500)
   },
-  { deep: true }
+  { deep: true },
 )
 
 onMounted(async () => {
@@ -242,11 +359,9 @@ onMounted(async () => {
 
 async function handleCheckUpdate() {
   const update = await checkForUpdate()
-  if (update) {
-    // 有新版本，UI 自动切换为 "available" 状态，显示安装按钮
-  } else if (updateStatus.value === 'latest') {
+  if (!update && updateStatus.value === 'latest') {
     toast.info(i18n.global.t('settings.about.alreadyLatest'))
-  } else if (updateStatus.value === 'failed') {
+  } else if (!update && updateStatus.value === 'failed') {
     toast.error(i18n.global.t('settings.about.checkFailed'))
   }
 }

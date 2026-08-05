@@ -24,6 +24,10 @@ export default {
     appearance: {
       title: 'Appearance',
       theme: 'Theme',
+      palette: 'Color Palette',
+      paletteWarm: 'Warm Workbench',
+      paletteCool: 'Cool Slate',
+      paletteDesc: 'Global color style, switches instantly',
       lightMode: 'Light Mode',
       darkMode: 'Dark Mode',
       followSystem: 'Follow System',

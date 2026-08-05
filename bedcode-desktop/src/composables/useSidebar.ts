@@ -10,7 +10,7 @@ const collapsed = ref(false)
 /** 侧边栏宽度阈值：拖拽低于此值自动折叠，高于此值自动展开 */
 const COLLAPSE_THRESHOLD = 120
 const EXPANDED_WIDTH = 240
-const COLLAPSED_WIDTH = 64
+const COLLAPSED_WIDTH = 56
 
 /** 切换折叠/展开 */
 export function toggleSidebar() {

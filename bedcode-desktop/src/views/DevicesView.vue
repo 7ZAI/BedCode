@@ -1,216 +1,210 @@
 <template>
-  <div class="h-full flex flex-col">
-    <!-- Header -->
-    <header class="bg-page px-8 h-14 flex items-center">
-      <h2 class="text-[var(--font-size-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.title') }}</h2>
-    </header>
-
-    <div class="flex-1 overflow-auto p-6">
-      <!-- QR Code Section -->
-      <div class="bg-card rounded-card p-6 shadow-card mb-6 animate-fade-slide-up">
-        <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h3>
-        <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ t('desktop.device.qrDesc') }}</p>
-
-        <div v-if="!qr.hasQr.value" class="text-center py-4">
-          <Button variant="secondary" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
-            <template #icon>
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
-              </svg>
-            </template>
-            {{ t('desktop.device.generateQr') }}
-          </Button>
-        </div>
-
-        <div v-else class="text-center py-4">
-          <p class="text-[var(--text-secondary)] mb-4">{{ t('desktop.device.qrHint') }}</p>
-
-          <!-- QR Code Canvas -->
-          <div class="inline-block bg-white p-4 rounded-lg mb-4">
-            <canvas ref="qrCanvasRef" class="w-48 h-48"></canvas>
-          </div>
-
-          <p class="text-[var(--text-secondary)] text-sm mb-2">
-            {{ t('desktop.device.qrValidity') }}
-            <span class="text-brand font-medium">{{ qr.remainingSeconds.value }}</span> {{ t('common.time.seconds') }}
-          </p>
-
-          <p class="text-[var(--text-tertiary)] text-xs">
-            {{ t('desktop.device.qrSingleUse') }}
-          </p>
-
-          <div class="flex items-center justify-center gap-3 mt-4">
-            <Button variant="ghost" size="sm" @click="qr.clearQr()">
-              {{ t('common.button.cancel') }}
-            </Button>
-            <Button variant="ghost" size="sm" @click="qr.generateQr(selectedIp || undefined)" :loading="qr.isLoading.value">
-              {{ t('common.button.refresh') }}
-            </Button>
-          </div>
-        </div>
+  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+    <!-- ==================== 工具栏页头：左标题+IP:端口，右刷新/生成 ==================== -->
+    <div class="wb-toolbar">
+      <div class="flex items-center gap-3">
+        <h2 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.title') }}</h2>
+        <span class="wb-mono text-[12px] text-[var(--text-tertiary)]">{{ displayIp }}:{{ port }}</span>
       </div>
-
-      <!-- Pairing Section -->
-      <div class="bg-card rounded-card p-6 shadow-card mb-6 animate-fade-slide-up" style="animation-delay: 50ms">
-        <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h3>
-        <p class="text-[var(--text-secondary)] text-[13px] mt-1 mb-5">{{ t('desktop.device.pairingCodeDesc') }}</p>
-
-        <div v-if="!pairingCode" class="text-center py-4">
-          <p class="text-[var(--text-secondary)] mb-4">{{ t('desktop.device.pairingCodeDesc') }}</p>
-          <Button variant="primary" @click="generateCode" :loading="isLoading">
-            <template #icon>
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-              </svg>
-            </template>
-            {{ t('desktop.device.generateCode') }}
-          </Button>
-        </div>
-
-        <div v-else class="text-center py-4">
-          <p class="text-[var(--text-secondary)] mb-4">{{ t('desktop.device.pairingCodeHint') }}</p>
-
-          <!-- Pairing Code Display -->
-          <div class="text-5xl font-mono font-bold text-brand tracking-widest mb-4">
-            {{ pairingCode.code }}
-          </div>
-
-          <p class="text-[var(--text-secondary)] text-sm mb-6">
-            {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
-          </p>
-
-          <Button variant="ghost" size="sm" @click="cancelPairing">
-            {{ t('common.button.cancel') }}
-          </Button>
-        </div>
-      </div>
-
-      <!-- Network Info -->
-      <div class="bg-card rounded-card p-6 shadow-card mb-6 animate-fade-slide-up" style="animation-delay: 100ms">
-        <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.networkTitle') }}</h3>
-        <div class="space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-[var(--text-secondary)]">{{ t('desktop.device.websocketPort') }}</span>
-            <span class="font-mono text-[var(--text-primary)]">{{ port }}</span>
-          </div>
-          <div class="flex flex-col gap-2">
-            <div class="flex items-center justify-between">
-              <span class="text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
-              <div class="flex items-center gap-2">
-                <span class="font-mono text-sm bg-[var(--bg-hover)] px-2 py-1 rounded-input text-[var(--text-primary)]">
-                  {{ displayIp }}
-                </span>
-                <button
-                  @click="showIpSelector = true"
-                  class="text-sm text-brand hover:text-[var(--color-primary-hover)]"
-                >
-                  {{ t('desktop.device.select') }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- IP Selector Modal -->
-      <Modal v-model="showIpSelector" :title="t('desktop.device.selectIpTitle')">
-        <div class="space-y-2">
-          <p class="text-sm text-[var(--text-secondary)] mb-4">{{ t('desktop.device.selectIpDesc') }}</p>
-          <div
-            v-for="ip in ipv4Addresses"
-            :key="ip"
-            @click="selectIp(ip)"
-            :class="[
-              'p-3 rounded-input cursor-pointer border transition-colors',
-              selectedIp === ip
-                ? 'border-brand bg-brand-light'
-                : 'border-[var(--border)] hover:border-brand'
-            ]"
-          >
-            <span class="font-mono">{{ ip }}</span>
-          </div>
-          <p v-if="ipv4Addresses.length === 0" class="text-[var(--text-tertiary)] text-center py-4">
-            {{ t('desktop.device.noIpv4') }}
-          </p>
-        </div>
-        <div class="mt-4 flex justify-end">
-          <Button variant="ghost" @click="showIpSelector = false">{{ t('common.button.cancel') }}</Button>
-        </div>
-      </Modal>
-
-      <!-- Paired Devices -->
-      <div class="bg-card rounded-card p-6 shadow-card animate-fade-slide-up" style="animation-delay: 150ms">
-        <h3 class="text-[var(--font-size-card-title)] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairedTitle') }}</h3>
-
-        <div v-if="deviceStore.pairedDevices.length === 0" class="text-center py-8">
-          <svg class="w-12 h-12 mx-auto text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+      <div class="flex items-center gap-2">
+        <PluginPageToolbar target="devices" />
+        <button class="wb-btn-ghost" @click="refreshDevices">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
           </svg>
-          <p class="text-[var(--text-secondary)]">{{ t('desktop.device.noPaired') }}</p>
-        </div>
-
-        <div v-else class="space-y-3">
-          <div
-            v-for="device in deviceStore.pairedDevices"
-            :key="device.id"
-            class="flex items-center justify-between p-4 bg-[var(--bg-hover)]/50 rounded-input"
-          >
-            <div class="flex items-center gap-4">
-              <!-- Status Indicator (live WebSocket status) -->
-              <div
-                :class="[
-                  'w-3 h-3 rounded-full shrink-0',
-                  isDeviceOnline(device) ? 'bg-green-500 animate-pulse' : 'bg-dark-500'
-                ]"
-              ></div>
-
-              <div>
-                <p class="font-medium">{{ device.deviceName }}</p>
-                <div class="flex items-center gap-3 text-[var(--text-tertiary)] text-xs mt-1">
-                  <span>{{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}</span>
-                  <span v-if="device.lastSeen" class="text-[var(--text-tertiary)]">|</span>
-                  <span v-if="device.lastSeen">{{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</span>
-                  <span class="text-[var(--text-tertiary)]">|</span>
-                  <span>{{ t('desktop.device.connectCount', { count: device.connectCount }) }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-3">
-              <span
-                :class="[
-                  'text-xs px-2.5 py-1 rounded-tag font-medium',
-                  isDeviceOnline(device) ? 'bg-[var(--color-success-light)] text-green-600 dark:text-green-400' : 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
-                ]"
-              >
-                {{ isDeviceOnline(device) ? t('desktop.device.connected') : t('desktop.device.offline') }}
-              </span>
-
-              <Button variant="ghost" size="sm" @click="viewHistory(device.id)">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span class="ml-1">{{ t('desktop.device.historyView') }}</span>
-              </Button>
-
-              <Button variant="ghost" size="sm" @click="removeDevice(device.id)">
-                <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </Button>
-            </div>
-          </div>
-        </div>
+          {{ t('common.button.refresh') }}
+        </button>
+        <button class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+          {{ t('desktop.device.generateCode') }}
+        </button>
       </div>
     </div>
 
-    <!-- Remove Device Confirm Dialog -->
+    <div class="flex-1 overflow-auto px-6 py-6 space-y-6">
+      <!-- ==================== 配对区：二维码 + 配对码 + IP 选择 ==================== -->
+      <section>
+        <h3 class="wb-section-title">PAIRING · {{ displayIp }}:{{ port }}</h3>
+        <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 grid gap-6 md:grid-cols-2">
+          <!-- 二维码 -->
+          <div>
+            <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
+            <p class="text-[12px] text-[var(--text-secondary)] mt-1">{{ t('desktop.device.qrDesc') }}</p>
+            <div class="mt-4 flex items-start gap-4">
+              <!-- 白底衬底保证二维码在暗色模式下可读 -->
+              <div class="shrink-0 inline-block bg-white p-2 rounded-lg border border-[var(--border)]">
+                <canvas ref="qrCanvasRef" class="block"></canvas>
+              </div>
+              <div class="min-w-0 text-[12px] space-y-1.5 pt-1">
+                <template v-if="qr.hasQr.value">
+                  <p class="text-[var(--text-secondary)]">{{ t('desktop.device.qrHint') }}</p>
+                  <p class="text-[var(--text-secondary)]">
+                    {{ t('desktop.device.qrValidity') }}
+                    <span class="wb-mono font-medium text-[var(--text-primary)]">{{ qr.remainingSeconds.value }}</span>
+                    {{ t('common.time.seconds') }}
+                  </p>
+                  <p class="text-[11px] text-[var(--text-tertiary)]">{{ t('desktop.device.qrSingleUse') }}</p>
+                  <div class="flex items-center gap-2 pt-1">
+                    <button class="wb-btn-ghost !h-6 !px-2 text-[11px]" @click="qr.clearQr()">
+                      {{ t('common.button.cancel') }}
+                    </button>
+                    <button class="wb-btn-ghost !h-6 !px-2 text-[11px]" :disabled="qr.isLoading.value" @click="qr.generateQr(selectedIp || undefined)">
+                      {{ t('common.button.refresh') }}
+                    </button>
+                  </div>
+                </template>
+                <template v-else>
+                  <p class="text-[var(--text-secondary)]">{{ t('desktop.device.qrHint') }}</p>
+                  <button class="wb-btn-ghost !h-6 !px-2 text-[11px]" :disabled="qr.isLoading.value" @click="qr.generateQr(selectedIp || undefined)">
+                    {{ t('desktop.device.generateQr') }}
+                  </button>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- 配对码 -->
+          <div class="md:border-l md:border-[var(--border)] md:pl-6">
+            <h4 class="text-[13px] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
+            <p class="text-[12px] text-[var(--text-secondary)] mt-1">{{ t('desktop.device.pairingCodeDesc') }}</p>
+            <div v-if="!pairingCode" class="mt-4">
+              <p class="text-[12px] text-[var(--text-secondary)] mb-2">{{ t('desktop.device.pairingCodeHint') }}</p>
+              <button class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                {{ t('desktop.device.generateCode') }}
+              </button>
+            </div>
+            <div v-else class="mt-4">
+              <p class="text-[12px] text-[var(--text-secondary)] mb-2">{{ t('desktop.device.pairingCodeHint') }}</p>
+              <p class="text-4xl font-mono font-bold tracking-[0.2em] text-[var(--text-primary)]">{{ pairingCode.code }}</p>
+              <p class="text-[12px] text-[var(--text-secondary)] mt-3">
+                {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
+              </p>
+              <button class="wb-btn-ghost !h-6 !px-2 text-[11px] mt-3" @click="cancelPairing">
+                {{ t('common.button.cancel') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- IP 选择 + 端口 -->
+          <div class="md:col-span-2 border-t border-[var(--border)] pt-4 flex items-center gap-3 flex-wrap">
+            <span class="text-[12px] text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
+            <select
+              :value="selectedIp || ''"
+              class="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-card)] wb-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+              @change="onIpSelect(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-if="!selectedIp" value="" disabled>{{ t('desktop.device.notSelected') }}</option>
+              <option v-for="ip in ipv4Addresses" :key="ip" :value="ip">{{ ip }}</option>
+            </select>
+            <span class="wb-mono text-[12px] text-[var(--text-tertiary)]">:{{ port }}</span>
+            <span v-if="ipv4Addresses.length === 0" class="text-[12px] text-[var(--text-tertiary)]">{{ t('desktop.device.noIpv4') }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== ONLINE 分区 ==================== -->
+      <section>
+        <h3 class="wb-section-title">ONLINE · {{ onlineDevices.length }}</h3>
+        <p v-if="onlineDevices.length === 0" class="wb-mono text-[12px] text-[var(--text-tertiary)] px-1 py-2">
+          {{ t('common.misc.noData') }}
+        </p>
+        <div v-else class="space-y-2">
+          <div
+            v-for="device in onlineDevices"
+            :key="device.id"
+            class="flex items-center justify-between gap-4 px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
+          >
+            <div class="flex items-center gap-3 min-w-0">
+              <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--color-success)]"></span>
+              <div class="min-w-0">
+                <p class="text-[13px] font-medium text-[var(--text-primary)] truncate">{{ device.deviceName }}</p>
+                <p class="text-[11px] text-[var(--text-tertiary)] truncate mt-0.5">
+                  {{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}
+                  <template v-if="device.lastSeen"> · {{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</template>
+                  · {{ t('desktop.device.connectCount', { count: device.connectCount }) }}
+                </p>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 shrink-0">
+              <div class="text-right">
+                <p class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</p>
+                <p class="wb-mono text-[11px] mt-0.5 text-green-600 dark:text-green-400">{{ t('desktop.device.connected') }}</p>
+              </div>
+              <button
+                class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+                @click="viewHistory(device.id)"
+              >
+                {{ t('desktop.device.historyView') }}
+              </button>
+              <button
+                class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[11px] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
+                @click="removeDevice(device.id)"
+              >
+                {{ t('common.button.remove') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== OFFLINE 分区 ==================== -->
+      <section>
+        <h3 class="wb-section-title">OFFLINE · {{ offlineDevices.length }}</h3>
+        <p v-if="offlineDevices.length === 0" class="wb-mono text-[12px] text-[var(--text-tertiary)] px-1 py-2">
+          {{ t('common.misc.noData') }}
+        </p>
+        <div v-else class="space-y-2">
+          <div
+            v-for="device in offlineDevices"
+            :key="device.id"
+            class="flex items-center justify-between gap-4 px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
+          >
+            <div class="flex items-center gap-3 min-w-0">
+              <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--text-tertiary)]"></span>
+              <div class="min-w-0">
+                <p class="text-[13px] font-medium text-[var(--text-secondary)] truncate">{{ device.deviceName }}</p>
+                <p class="text-[11px] text-[var(--text-tertiary)] truncate mt-0.5">
+                  {{ t('desktop.device.pairedAt', { date: formatDate(device.pairedAt) }) }}
+                  <template v-if="device.lastSeen"> · {{ t('desktop.device.lastSeen', { date: formatDate(device.lastSeen) }) }}</template>
+                  · {{ t('desktop.device.connectCount', { count: device.connectCount }) }}
+                </p>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 shrink-0">
+              <div class="text-right">
+                <p class="wb-mono text-[12.5px] text-[var(--text-primary)]">{{ device.address }}</p>
+                <p class="wb-mono text-[11px] mt-0.5 text-[var(--text-tertiary)]">{{ t('desktop.device.offline') }}</p>
+              </div>
+              <button
+                class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[11px] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+                @click="viewHistory(device.id)"
+              >
+                {{ t('desktop.device.historyView') }}
+              </button>
+              <button
+                class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[11px] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
+                @click="removeDevice(device.id)"
+              >
+                {{ t('common.button.remove') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 移除设备确认 -->
     <Modal v-model="showRemoveDeviceDialog" :title="t('desktop.device.confirmRemove')" size="sm">
-      <p class="text-[var(--text-primary)]">{{ t('desktop.device.confirmRemoveMsg') }}</p>
+      <p class="text-[var(--text-primary)] text-[13px]">{{ t('desktop.device.confirmRemoveMsg') }}</p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showRemoveDeviceDialog = false">{{ t('common.button.cancel') }}</Button>
-          <Button variant="danger" @click="confirmRemoveDevice">{{ t('common.button.remove') }}</Button>
+          <button class="wb-btn-ghost" @click="showRemoveDeviceDialog = false">{{ t('common.button.cancel') }}</button>
+          <button class="wb-btn-primary bg-[var(--color-danger)]" @click="confirmRemoveDevice">{{ t('common.button.remove') }}</button>
         </div>
       </template>
     </Modal>
@@ -218,6 +212,10 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 设备视图 — 桌面端设备配对与设备列表
+ * Warm Workbench 风格：PAIRING 配对区 + ONLINE/OFFLINE 分区；QR/配对码/实时在线全为真实逻辑
+ */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -227,8 +225,8 @@ import { usePairing, useNetwork, useConnectedDevices, type DeviceConnectionInfo,
 import type { PairedDevice } from '@/stores/device'
 import { useQrCode } from '@/composables/useQrCode'
 import { listen } from '@tauri-apps/api/event'
-import Button from '@/components/Button.vue'
 import Modal from '@/components/Modal.vue'
+import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { useToast } from '@/composables/useToast'
 import QRCode from 'qrcode'
 
@@ -241,53 +239,48 @@ const network = useNetwork()
 const connected = useConnectedDevices()
 const toast = useToast()
 
-// 从配置获取端口
+// 从配置获取端口与 QR host
 const port = computed(() => settingsStore.settings.network.port)
 const qrHost = computed(() => settingsStore.settings.network.qr_host)
 
-// 显示的 IP（优先使用配置的 qr_host，否则显示 "未选择"）
+// 显示的 IP（优先使用配置的 qr_host，否则显示"未选择"）
 const displayIp = computed(() => qrHost.value || t('desktop.device.notSelected'))
 
 // 选中的 IP 用于 QR 码生成（从配置初始化）
 const selectedIp = ref<string | null>(qrHost.value || null)
 
-// 选择 IP 地址并保存到配置
-async function selectIp(ip: string) {
-  selectedIp.value = ip
-  showIpSelector.value = false
-  // 保存到配置
-  await settingsStore.saveSettings({
-    network: { ...settingsStore.settings.network, qr_host: ip }
-  })
-}
-
-// Real-time connected device fingerprints (from WebSocket events)
+// 实时在线设备指纹（来自 WebSocket 事件）
 const connectedFingerprints = ref<Set<string>>(new Set())
 
-// 检查设备是否实时在线（通过 fingerprint 匹配数据库 pairings 记录）
-function isDeviceOnline(device: PairedDevice): boolean {
-  return connectedFingerprints.value.has(device.deviceFingerprint)
-}
-
 const isLoading = ref(false)
-const showIpSelector = ref(false)
 const pairingCode = ref<PairingCodeInfo | null>(null)
 const remainingSeconds = ref(0)
+const showRemoveDeviceDialog = ref(false)
+const pendingDeviceId = ref<string | null>(null)
 
 const localAddresses = computed(() => network.localAddresses.value)
 
-// 分类 IP 地址
+// 分类 IPv4 地址
 const ipv4Addresses = computed(() => {
   return localAddresses.value.filter(ip => ip.includes('.'))
 })
 
-let countdownInterval: ReturnType<typeof setInterval> | null = null
-let pairingCodeListener: (() => void) | null = null
+/** 设备是否实时在线（通过 fingerprint 匹配） */
+function isDeviceOnline(device: PairedDevice): boolean {
+  return connectedFingerprints.value.has(device.deviceFingerprint)
+}
+
+const onlineDevices = computed(() => deviceStore.pairedDevices.filter(d => isDeviceOnline(d)))
+const offlineDevices = computed(() => deviceStore.pairedDevices.filter(d => !isDeviceOnline(d)))
 
 const qr = useQrCode()
 const qrCanvasRef = ref<HTMLCanvasElement | null>(null)
-const showRemoveDeviceDialog = ref(false)
-const pendingDeviceId = ref<string | null>(null)
+
+let countdownInterval: ReturnType<typeof setInterval> | null = null
+let pairingCodeListener: (() => void) | null = null
+let deviceConnectedListener: (() => void) | null = null
+let deviceDisconnectedListener: (() => void) | null = null
+let qrTokenConsumedListener: (() => void) | null = null
 
 // 当 QR 数据变化时渲染 Canvas
 watch(
@@ -300,7 +293,7 @@ watch(
         token: data.token,
       })
       await QRCode.toCanvas(qrCanvasRef.value, qrContent, {
-        width: 192,
+        width: 168,
         margin: 2,
         color: {
           dark: '#000000',
@@ -309,12 +302,28 @@ watch(
       })
     }
   },
-  { flush: 'post' }
+  { flush: 'post' },
 )
 
-let deviceConnectedListener: (() => void) | null = null
-let deviceDisconnectedListener: (() => void) | null = null
-let qrTokenConsumedListener: (() => void) | null = null
+/** 选择 IP 并保存到配置（同步更新 QR 载荷） */
+async function onIpSelect(ip: string) {
+  selectedIp.value = ip
+  await settingsStore.saveSettings({
+    network: { ...settingsStore.settings.network, qr_host: ip },
+  })
+}
+
+/** 刷新设备列表与在线状态 */
+async function refreshDevices() {
+  await deviceStore.loadPairedDevices()
+  await connected.loadConnectedDevices()
+  const fingerprints = new Set<string>(
+    connected.connectedDevices.value
+      .map((d: any) => d.fingerprint)
+      .filter((fp: string | undefined): fp is string => !!fp),
+  )
+  connectedFingerprints.value = fingerprints
+}
 
 onMounted(async () => {
   await settingsStore.loadSettings()
@@ -325,20 +334,14 @@ onMounted(async () => {
   if (!settingsStore.settings.network.qr_host && ipv4Addresses.value.length > 0) {
     selectedIp.value = ipv4Addresses.value[0]
     await settingsStore.saveSettings({
-      network: { ...settingsStore.settings.network, qr_host: selectedIp.value }
+      network: { ...settingsStore.settings.network, qr_host: selectedIp.value },
     })
   } else {
     selectedIp.value = qrHost.value || null
   }
 
-  // Load initial connected device list
-  await connected.loadConnectedDevices()
-  const fingerprints = new Set<string>(
-    connected.connectedDevices.value
-      .map((d: any) => d.fingerprint)
-      .filter((fp: string | undefined): fp is string => !!fp)
-  )
-  connectedFingerprints.value = fingerprints
+  // 加载初始在线设备列表
+  await refreshDevices()
 
   // 尝试恢复现有二维码（不重新生成）
   const qrRestored = await qr.restoreQr(selectedIp.value || undefined)
@@ -356,7 +359,7 @@ onMounted(async () => {
     startCountdown()
   }
 
-  // Listen for real-time device connection events
+  // 监听设备连接事件
   deviceConnectedListener = await listen<DeviceConnectionInfo>('device-connected', async (event) => {
     // 通过 fingerprint 追踪在线设备，而非 device_id
     const fp = (event.payload as any).fingerprint
@@ -386,6 +389,8 @@ onMounted(async () => {
     qr.generateQr(selectedIp.value || undefined)
     toast.success(t('desktop.device.deviceConnected'))
   })
+
+  // 监听设备断开事件
   deviceDisconnectedListener = await listen<DeviceConnectionInfo>('device-disconnected', (event) => {
     const fp = (event.payload as any).fingerprint
     if (fp) {
@@ -395,7 +400,7 @@ onMounted(async () => {
     }
   })
 
-  // 监听配对码自动生成事件
+  // 监听配对码自动生成事件（移动端发起配对请求时后端生成）
   pairingCodeListener = await listen<{ code: string; expires_in: number; device_name?: string }>(
     'pairing-code-generated',
     (event) => {
@@ -409,7 +414,7 @@ onMounted(async () => {
       startCountdown()
 
       toast.info(t('desktop.device.pairingRequest', { code: event.payload.code }))
-    }
+    },
   )
 })
 
@@ -417,22 +422,14 @@ onUnmounted(() => {
   if (countdownInterval) {
     clearInterval(countdownInterval)
   }
-  if (pairingCodeListener) {
-    pairingCodeListener()
-  }
-  if (deviceConnectedListener) {
-    deviceConnectedListener()
-  }
-  if (deviceDisconnectedListener) {
-    deviceDisconnectedListener()
-  }
-  if (qrTokenConsumedListener) {
-    qrTokenConsumedListener()
-  }
+  if (pairingCodeListener) pairingCodeListener()
+  if (deviceConnectedListener) deviceConnectedListener()
+  if (deviceDisconnectedListener) deviceDisconnectedListener()
+  if (qrTokenConsumedListener) qrTokenConsumedListener()
   // 不清除 QR 码和配对码，保持状态以便下次进入页面时恢复
 })
 
-// 启动配对码倒计时
+/** 配对码倒计时 */
 function startCountdown() {
   if (countdownInterval) {
     clearInterval(countdownInterval)
@@ -453,8 +450,8 @@ function startCountdown() {
   }, 1000)
 }
 
+/** 生成配对码（后端真实生成） */
 async function generateCode() {
-  // 清除之前的倒计时
   if (countdownInterval) {
     clearInterval(countdownInterval)
     countdownInterval = null
@@ -479,8 +476,8 @@ async function generateCode() {
   }
 }
 
+/** 取消配对码 */
 function cancelPairing() {
-  // 通知后端清除配对码
   pairing.clearCode()
   pairingCode.value = null
   remainingSeconds.value = 0
@@ -490,7 +487,7 @@ function cancelPairing() {
   }
 }
 
-async function removeDevice(deviceId: string) {
+function removeDevice(deviceId: string) {
   pendingDeviceId.value = deviceId
   showRemoveDeviceDialog.value = true
 }
