@@ -335,6 +335,11 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requireFileservicePermission('fileService.pickDirectory')
       return pluginCmds.pluginPickDirectory(info.id)
     },
+
+    async pickFiles(): Promise<string[]> {
+      requireFileservicePermission('fileService.pickFiles')
+      return pluginCmds.pluginPickFiles(info.id)
+    },
   }
 
   // ==================== I18nAPI ====================

@@ -16,6 +16,7 @@ const en: MessageSchema = {
   'transfer.peer.noSharedRoots': "Peer hasn't shared any folders yet",
 
   // ==================== Top bar ====================
+  'transfer.topbar.sendToPhone': 'Send to phone…',
   'transfer.topbar.downloadSelected': 'Download selected ({count})',
   'transfer.topbar.refresh': 'Refresh',
   'transfer.topbar.settings': 'Settings',

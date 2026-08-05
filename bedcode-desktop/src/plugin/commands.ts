@@ -192,3 +192,8 @@ export async function pluginFilesrvGetPeer(
 export async function pluginPickDirectory(pluginId: string): Promise<string | null> {
   return await invoke<string | null>('plugin_pick_directory', { pluginId })
 }
+
+/** 系统多文件选择对话框（上传方向用；用户取消返回空数组） */
+export async function pluginPickFiles(pluginId: string): Promise<string[]> {
+  return await invoke<string[]>('plugin_pick_files', { pluginId })
+}

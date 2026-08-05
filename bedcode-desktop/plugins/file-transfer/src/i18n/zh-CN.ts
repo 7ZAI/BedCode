@@ -16,6 +16,7 @@ const zhCN: MessageSchema = {
   'transfer.peer.noSharedRoots': '对方尚未设置共享目录',
 
   // ==================== 顶栏 ====================
+  'transfer.topbar.sendToPhone': '发送到手机…',
   'transfer.topbar.downloadSelected': '下载所选 ({count})',
   'transfer.topbar.refresh': '刷新',
   'transfer.topbar.settings': '设置',

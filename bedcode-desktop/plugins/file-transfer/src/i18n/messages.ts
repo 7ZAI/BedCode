@@ -18,6 +18,7 @@ export interface MessageSchema {
   'transfer.peer.noSharedRoots': string
 
   // ==================== 顶栏 ====================
+  'transfer.topbar.sendToPhone': string
   'transfer.topbar.downloadSelected': string
   'transfer.topbar.refresh': string
   'transfer.topbar.settings': string

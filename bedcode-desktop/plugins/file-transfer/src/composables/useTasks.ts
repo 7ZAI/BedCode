@@ -148,6 +148,35 @@ export function useTasks(context: PluginContext) {
     return ok
   }
 
+  /**
+   * 批量入队上传（本地文件 → 对端共享根目录，spec §9.1「发送到手机」）
+   *
+   * remotePath 为目标相对路径（仅文件名，上传到对端当前挂载根）；
+   * 逐个入队，单个失败不中断整批。
+   */
+  async function enqueueUpload(
+    localFiles: string[],
+    peer: { id: string; name: string },
+  ): Promise<number> {
+    let ok = 0
+    for (const localPath of localFiles) {
+      const name = localPath.split(/[\\/]/).pop() ?? localPath
+      try {
+        await context.commands.execute('file-transfer.enqueue', {
+          direction: 'upload',
+          peerId: peer.id,
+          peerName: peer.name,
+          remotePath: name,
+          localPath,
+        })
+        ok++
+      } catch (e) {
+        console.error(`[File Transfer] upload enqueue failed for "${localPath}":`, e)
+      }
+    }
+    return ok
+  }
+
   async function pause(id: string): Promise<void> {
     await context.commands.execute('file-transfer.pause', { taskId: id })
   }
@@ -229,6 +258,7 @@ export function useTasks(context: PluginContext) {
     totalSpeed,
     refresh,
     enqueueDownload,
+    enqueueUpload,
     pause,
     resume,
     cancel,

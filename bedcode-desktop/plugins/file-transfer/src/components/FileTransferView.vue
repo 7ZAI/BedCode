@@ -20,7 +20,7 @@ const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const { peer, start: startPeer, stop: stopPeer } = usePeer(context)
-const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, refresh: refreshTasks, pause, resume, cancel, retry, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
+const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, refresh: refreshTasks, pause, resume, cancel, retry, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
 const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency } = useSettings(context)
 const {
   entries,
@@ -79,6 +79,18 @@ async function handleRefresh(): Promise<void> {
   await Promise.all([refreshTasks(), refreshDir()])
 }
 
+/** 发送到手机：弹本地多文件选择 → 入队上传（对端根目录） */
+async function handleUpload(): Promise<void> {
+  if (!peer.value.online) return
+  const files = await context.fileService.pickFiles()
+  if (!files.length) return
+  const ok = await enqueueUpload(files, { id: peer.value.id, name: peerDisplayName.value })
+  if (ok < files.length) {
+    // 部分失败（如对端同名拒绝）时刷新任务列表让用户看到 rejected 原因
+    void refreshTasks()
+  }
+}
+
 /** 对端上/下线驱动目录加载/清空 */
 watch(
   () => peer.value.online,
@@ -118,6 +130,9 @@ onUnmounted(() => {
         </span>
       </div>
       <div class="ft-spacer"></div>
+      <button class="ft-btn" :disabled="!peer.online" @click="handleUpload">
+        📤<span class="ft-btn-text">{{ t('transfer.topbar.sendToPhone') }}</span>
+      </button>
       <button class="ft-btn ft-btn--primary" :disabled="!canDownload" @click="handleDownload">
         {{ t('transfer.topbar.downloadSelected', { count: selectedCount }) }}
       </button>

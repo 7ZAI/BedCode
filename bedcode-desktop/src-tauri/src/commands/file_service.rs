@@ -206,3 +206,50 @@ pub async fn plugin_pick_directory(
         ))),
     }
 }
+
+/// 弹出系统多文件选择对话框（上传方向“发送到手机”用）
+///
+/// 返回所选文件的绝对路径列表（用户取消返回空数组）；
+/// 同样要求 fileservice 权限，避免未授权插件探测本地路径
+#[tauri::command]
+pub async fn plugin_pick_files(
+    plugin_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    app_handle: tauri::AppHandle,
+) -> crate::Result<Vec<String>> {
+    require_fileservice(&plugin_host, &plugin_id, "plugin_pick_files").await?;
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_files(move |selection| {
+        if tx.send(selection).is_err() {
+            tracing::debug!("plugin_pick_files: receiver dropped before dialog completed");
+        }
+    });
+    match rx.await {
+        Ok(Some(paths)) => {
+            let mut result = Vec::with_capacity(paths.len());
+            for file_path in paths {
+                let path = file_path.into_path().map_err(|e| {
+                    crate::AppError::InvalidInput(format!(
+                        "plugin_pick_files: failed to convert selected path for plugin '{}': {}",
+                        plugin_id, e
+                    ))
+                })?;
+                let s = path.to_str().ok_or_else(|| {
+                    crate::AppError::InvalidInput(format!(
+                        "plugin_pick_files: selected path is not valid UTF-8 for plugin '{}'",
+                        plugin_id
+                    ))
+                })?;
+                result.push(s.to_string());
+            }
+            Ok(result)
+        }
+        // 用户取消选择
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(crate::AppError::Plugin(format!(
+            "plugin_pick_files: dialog channel closed for plugin '{}': {}",
+            plugin_id, e
+        ))),
+    }
+}

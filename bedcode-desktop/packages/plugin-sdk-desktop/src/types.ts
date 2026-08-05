@@ -297,6 +297,8 @@ export interface FileServiceAPI {
   getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null>
   /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null） */
   pickDirectory(): Promise<string | null>
+  /** 弹出系统多文件选择对话框（上传方向用；用户取消返回空数组） */
+  pickFiles(): Promise<string[]>
 }
 
 /** 国际化 API — 插件访问宿主 i18n 能力 */

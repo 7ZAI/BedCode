@@ -68,6 +68,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "fileService.updateRoots",
         "fileService.getPeer",
         "fileService.pickDirectory",
+        "fileService.pickFiles",
     ]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
 ];
