@@ -2,19 +2,22 @@
   <div class="relative h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- ==================== 详情页 ==================== -->
     <Transition name="detail">
-      <div v-if="detailPlugin" class="absolute inset-0 z-40 flex flex-col bg-[var(--mobile-bg-primary)]">
+      <div v-if="detailPlugin" class="absolute inset-0 z-40 flex flex-col" style="background: var(--mobile-bg-primary)">
         <!-- Header -->
-        <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 py-3 flex items-center gap-3">
-          <button
-            class="flex-shrink-0 p-1 -ml-1 text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] active:opacity-80 transition-colors"
-            @click="detailPlugin = null"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <h1 class="flex-1 text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('mobile.plugin.detailTitle') }}</h1>
-        </header>
+        <div class="page-header flex-shrink-0">
+          <div class="flex items-center gap-3">
+            <button
+              class="flex-shrink-0 p-1 -ml-1 transition-colors active:opacity-80"
+              style="color: var(--mobile-text-secondary)"
+              @click="detailPlugin = null"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <h1 class="flex-1 page-title">{{ $t('mobile.plugin.detailTitle') }}</h1>
+          </div>
+        </div>
 
         <div class="flex-1 overflow-y-auto">
           <!-- Hero：图标 + 名称 + 作者/版本 + 状态 -->
@@ -139,43 +142,45 @@
 
     <!-- ==================== 列表页 ==================== -->
     <!-- Header -->
-    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center gap-3">
-      <button
-        class="flex-shrink-0 p-1 -ml-1 text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] active:opacity-80 transition-colors"
-        @click="router.back()"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-      <h1 class="flex-1 text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('mobile.plugin.title') }}</h1>
-      <!-- 安装入口 -->
-      <button
-        class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity"
-        :disabled="installing"
-        @click="showInstallSheet = true"
-      >
-        <svg v-if="!installing" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-        </svg>
-        <div v-else class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-      </button>
-    </header>
+    <div class="page-header flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button
+          class="flex-shrink-0 p-1 -ml-1 transition-colors active:opacity-80"
+          style="color: var(--mobile-text-secondary)"
+          @click="router.back()"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <div class="flex-1">
+          <h1 class="page-title">{{ $t('mobile.plugin.title') }}</h1>
+          <p class="page-subtitle">{{ $t('mobile.plugin.summary', { total: plugins.length, enabled: enabledCount }) }}</p>
+        </div>
+        <button
+          class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl text-white active:opacity-80 transition-opacity"
+          style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
+          :disabled="installing"
+          @click="showInstallSheet = true"
+        >
+          <svg v-if="!installing" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+          <div v-else class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+        </button>
+      </div>
+    </div>
 
     <!-- Plugin List -->
-    <div class="flex-1 overflow-y-auto">
+    <div class="flex-1 overflow-y-auto px-4 pb-8">
       <!-- Empty state -->
       <div v-if="plugins.length === 0" class="flex flex-col items-center justify-center h-full px-8 text-center">
-        <div class="w-16 h-16 rounded-2xl bg-[var(--mobile-bg-tertiary)] border border-[var(--mobile-border)] flex items-center justify-center text-3xl mb-4">🧩</div>
-        <p class="text-[var(--mobile-text-muted)] text-sm">{{ $t('mobile.plugin.noPlugins') }}</p>
-        <p class="text-[var(--mobile-text-disabled)] text-xs mt-2">{{ $t('mobile.plugin.noPluginsHint') }}</p>
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border)">🧩</div>
+        <p class="group-row-sub">{{ $t('mobile.plugin.noPlugins') }}</p>
+        <p class="text-xs mt-2" style="color: var(--mobile-text-disabled)">{{ $t('mobile.plugin.noPluginsHint') }}</p>
       </div>
 
       <template v-else>
-        <!-- 摘要行 -->
-        <div class="px-4 pt-3 pb-1 text-xs text-[var(--mobile-text-muted)]">
-          {{ $t('mobile.plugin.summary', { total: plugins.length, enabled: enabledCount }) }}
-        </div>
 
         <!-- Plugin cards -->
         <div class="p-4 pt-2 space-y-3">

@@ -1,61 +1,68 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="h-full flex flex-col" style="background: var(--mobile-bg-primary)">
     <!-- Header -->
-    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between gap-2">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.session.title') }}</h1>
-      <!-- Mock Terminal Toggle (DEV only) -->
-      <button
-        v-if="mockTerminal.isDev"
-        class="p-2 rounded-lg transition-colors"
-        :class="mockTerminal.enabled.value ? 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)] hover:bg-[var(--mobile-border)]'"
-        @click="mockTerminal.toggle()"
-        :title="t('mobile.session.mockToggle')"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-      </button>
-      <button
-        v-if="isConnected"
-        class="p-2 rounded-lg hover:bg-[var(--mobile-border)] transition-colors"
-        @click="refreshSessions"
-        :title="t('mobile.session.refresh')"
-      >
-        <svg
-          class="w-5 h-5 text-[var(--mobile-accent)]"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
-    </header>
+    <div class="page-header flex-shrink-0">
+      <div class="page-header-row">
+        <div>
+          <h1 class="page-title">{{ t('mobile.session.title') }}</h1>
+          <p class="page-subtitle">
+            {{ t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length }) }}
+          </p>
+        </div>
+        <div class="flex items-center gap-1">
+          <button
+            v-if="mockTerminal.isDev"
+            class="p-2 rounded-lg transition-colors active:opacity-80"
+            :class="mockTerminal.enabled.value ? 'chip-cyan' : ''"
+            style="color: var(--mobile-text-muted)"
+            @click="mockTerminal.toggle()"
+            :title="t('mobile.session.mockToggle')"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
+          <button
+            v-if="isConnected"
+            class="p-2 rounded-lg transition-colors active:opacity-80"
+            style="color: var(--mobile-accent)"
+            @click="refreshSessions"
+            :title="t('mobile.session.refresh')"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Content -->
-    <div class="flex-1 overflow-auto">
-      <!-- Sessions list -->
-      <div class="p-4 space-y-3">
-        <!-- 未连接提示 -->
-        <div v-if="!isConnected" class="text-center text-[var(--mobile-text-muted)] py-4 mb-4 border-b border-[var(--mobile-border)]">
-          <p class="text-sm">{{ t('mobile.session.notConnected') }}</p>
+    <div class="flex-1 overflow-auto px-4 pb-8">
+      <!-- 未连接提示 -->
+      <div v-if="!isConnected" class="text-center py-8">
+        <p class="group-row-sub">{{ t('mobile.session.notConnected') }}</p>
+      </div>
+
+      <template v-else>
+        <!-- Mock Terminal Session (DEV only) -->
+        <div v-if="mockTerminal.isDev && mockTerminal.enabled.value" class="mb-4">
+          <div class="group-card">
+            <SessionCard
+              :session="mockSession"
+              @click="handleMockSessionClick"
+              @stop=""
+              @delete=""
+            />
+          </div>
         </div>
 
-        <!-- Mock Terminal Session (DEV only) -->
-        <SessionCard
-          v-if="mockTerminal.isDev && mockTerminal.enabled.value"
-          :session="mockSession"
-          @click="handleMockSessionClick"
-          @stop=""
-          @delete=""
-        />
-
         <!-- 真实会话列表 -->
-        <template v-if="isConnected">
-          <div v-if="realSessions.length === 0" class="text-center text-[var(--mobile-text-muted)] py-4">
-            {{ t('mobile.session.noSessions') }}
-          </div>
+        <div v-if="realSessions.length === 0" class="text-center py-8">
+          <p class="group-row-sub">{{ t('mobile.session.noSessions') }}</p>
+        </div>
 
+        <div v-else class="group-card">
           <SessionCard
             v-for="session in realSessions"
             :key="session.id"
@@ -64,16 +71,11 @@
             @stop="handleStopSession(session)"
             @delete="handleDeleteSession(session)"
           />
-        </template>
-      </div>
+        </div>
+      </template>
     </div>
 
-    <!-- Connection info -->
-    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border-t border-[var(--mobile-border)]">
-      <span class="text-[var(--mobile-text-muted)] text-xs font-medium">{{ t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length }) }}</span>
-    </div>
-
-    <!-- Loading Overlay: 跳转终端期间显示 -->
+    <!-- Loading Overlay -->
     <transition name="mobile-loading-fade">
       <div v-if="isNavigating" class="mobile-loading-overlay">
         <div class="mobile-loading-spinner"></div>
@@ -83,7 +85,7 @@
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" :title="t('mobile.session.confirmStop')" size="sm">
-      <p class="text-[var(--mobile-text-secondary)]">
+      <p style="color: var(--mobile-text-secondary)">
         {{ t('mobile.session.confirmStopMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
@@ -96,7 +98,7 @@
 
     <!-- Delete Confirmation Modal -->
     <Modal v-model="showDeleteConfirm" :title="t('mobile.session.confirmDelete')" size="sm">
-      <p class="text-[var(--mobile-text-secondary)]">
+      <p style="color: var(--mobile-text-secondary)">
         {{ t('mobile.session.confirmDeleteMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>

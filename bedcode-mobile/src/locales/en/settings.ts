@@ -1,6 +1,8 @@
 export default {
   settings: {
     title: 'Settings',
+    general: 'General',
+    dangerZone: 'Danger Zone',
     network: {
       title: 'Network Settings',
       websocketPort: 'WebSocket Port',

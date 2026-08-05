@@ -1,46 +1,52 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="h-full flex flex-col" style="background: var(--mobile-bg-primary)">
     <!-- Header -->
-    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ $t('settings.title') }}</h1>
-    </header>
+    <div class="page-header flex-shrink-0">
+      <h1 class="page-title">{{ $t('settings.title') }}</h1>
+    </div>
 
-    <div class="flex-1 overflow-y-auto overflow-x-hidden">
+    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8 space-y-6">
       <!-- Category Entries -->
-      <nav class="p-4 space-y-2.5">
-        <button
-          v-for="cat in categories"
-          :key="cat.key"
-          class="w-full flex items-center gap-3 px-4 py-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl hover:border-[var(--mobile-border-hover)] active:opacity-80 transition-all duration-200"
-          @click="router.push({ name: cat.route })"
-        >
-          <span class="cat-icon" :class="cat.iconClass">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="cat.iconPath" />
+      <section>
+        <h2 class="group-section-title">{{ $t('settings.general') || '通用' }}</h2>
+        <div class="group-card">
+          <button
+            v-for="cat in categories"
+            :key="cat.key"
+            class="group-row group-row-btn"
+            @click="router.push({ name: cat.route })"
+          >
+            <span class="icon-chip" :class="cat.iconClass">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="cat.iconPath" />
+              </svg>
+            </span>
+            <span class="flex-1 min-w-0 text-left group-row-title truncate">{{ $t(cat.labelKey) }}</span>
+            <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
-          </span>
-          <span class="flex-1 min-w-0 text-left text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
-          <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      </nav>
+          </button>
+        </div>
+      </section>
 
       <!-- Footer Actions -->
-      <div class="px-4 pb-4 space-y-2">
-        <button
-          class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-input-border)] text-sm text-[var(--mobile-text-secondary)] py-3 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 transition-colors"
-          @click="resetSettings"
-        >
-          {{ $t('settings.actions.resetSettings') }}
-        </button>
-        <button
-          class="w-full bg-[var(--mobile-error-muted)] border border-[var(--mobile-error-muted)] text-[var(--mobile-error)] text-sm py-3 rounded-xl font-medium hover:bg-[var(--mobile-error)]/20 transition-colors"
-          @click="clearData"
-        >
-          {{ $t('settings.actions.clearAllData') }}
-        </button>
-      </div>
+      <section>
+        <h2 class="group-section-title">{{ $t('settings.dangerZone') || '危险操作' }}</h2>
+        <div class="group-card">
+          <button
+            class="group-row group-row-btn"
+            @click="resetSettings"
+          >
+            <span class="flex-1 text-left group-row-label">{{ $t('settings.actions.resetSettings') }}</span>
+          </button>
+          <button
+            class="group-row group-row-btn"
+            @click="clearData"
+          >
+            <span class="flex-1 text-left font-medium" style="font-size: 0.9375rem; color: var(--mobile-chip-red)">{{ $t('settings.actions.clearAllData') }}</span>
+          </button>
+        </div>
+      </section>
     </div>
 
     <!-- Confirm Dialog (Reset / Clear Data) -->
@@ -259,48 +265,34 @@ async function executeConfirm() {
 </script>
 
 <style scoped>
-/* 分类入口图标容器 */
-.cat-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 0.75rem;
-  flex-shrink: 0;
-}
-
-/* 分类图标配色：装饰性强调色，明暗主题下保持一致 */
 .cat-connection {
-  color: var(--mobile-accent);
-  background-color: color-mix(in srgb, var(--mobile-accent) 14%, transparent);
+  color: var(--mobile-chip-cyan);
+  background-color: var(--mobile-chip-cyan-bg);
 }
 
 .cat-notification {
-  color: var(--mobile-warning);
-  background-color: color-mix(in srgb, var(--mobile-warning) 14%, transparent);
+  color: var(--mobile-chip-amber);
+  background-color: var(--mobile-chip-amber-bg);
 }
 
-/* 认证设置：生物识别指纹，与 --mobile-success 同源 */
 .cat-authentication {
-  color: var(--mobile-success);
-  background-color: color-mix(in srgb, var(--mobile-success) 14%, transparent);
+  color: var(--mobile-chip-emerald);
+  background-color: var(--mobile-chip-emerald-bg);
 }
 
 .cat-appearance {
-  /* Dracula 紫，与 --mobile-shortcut-color 同源 */
-  color: #bd93f9;
-  background-color: color-mix(in srgb, #bd93f9 14%, transparent);
+  color: var(--mobile-chip-violet);
+  background-color: var(--mobile-chip-violet-bg);
 }
 
 .cat-plugins {
-  color: var(--mobile-success);
-  background-color: color-mix(in srgb, var(--mobile-success) 14%, transparent);
+  color: var(--mobile-chip-emerald);
+  background-color: var(--mobile-chip-emerald-bg);
 }
 
 .cat-about {
-  color: var(--mobile-text-muted);
-  background-color: var(--mobile-bg-elevated);
+  color: var(--mobile-chip-zinc);
+  background-color: var(--mobile-chip-zinc-bg);
 }
 
 .confirm-modal-overlay {
@@ -309,7 +301,7 @@ async function executeConfirm() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--mobile-overlay-heavy);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -318,7 +310,8 @@ async function executeConfirm() {
 }
 
 .confirm-modal {
-  background: var(--mobile-bg-secondary);
+  background: var(--mobile-group-bg);
+  border: 1px solid var(--mobile-group-border);
   border-radius: 1rem;
   padding: 1.5rem;
   width: 100%;
@@ -349,13 +342,12 @@ async function executeConfirm() {
 }
 
 .confirm-btn.cancel {
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-group-border);
   color: var(--mobile-text-muted);
 }
 
 .confirm-btn.cancel:hover {
-  background: var(--mobile-bg-hover);
   color: var(--mobile-text-primary);
 }
 

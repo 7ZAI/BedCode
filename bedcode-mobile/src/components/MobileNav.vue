@@ -1,30 +1,29 @@
 <template>
   <nav
-    class="bg-[var(--mobile-nav-bg)] backdrop-blur-xl border-t border-[var(--mobile-nav-border)]"
-    :style="navStyle"
+    class="backdrop-blur-xl"
+    style="background: var(--mobile-nav-bg); border-top: 1px solid var(--mobile-group-border)"
+    :style="[navStyle, { borderTop: '1px solid var(--mobile-group-border)' }]"
   >
-    <!-- 顶部发光效果 -->
-    <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--mobile-accent)]/30 to-transparent"></div>
-
     <div class="flex justify-around relative">
       <button
         v-for="item in navItems"
         :key="item.pageIndex"
-        class="flex flex-col items-center gap-0.5 px-4 pt-1.5 pb-1 rounded-xl transition-all duration-300 relative"
+        class="flex flex-col items-center gap-0.5 px-4 pt-1.5 pb-1 rounded-xl transition-colors relative"
         :class="[
           currentPage === item.pageIndex
             ? 'text-[var(--mobile-nav-active)]'
-            : 'text-[var(--mobile-nav-inactive)] hover:text-[var(--mobile-text-secondary)]'
+            : ''
         ]"
+        :style="currentPage !== item.pageIndex ? { color: 'var(--mobile-nav-inactive)' } : {}"
         @click="navigateTo(item)"
       >
-        <!-- 活跃指示器 -->
-        <div
-          v-if="currentPage === item.pageIndex"
-          class="absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-[var(--mobile-nav-active)] rounded-full shadow-[0_0_8px_rgba(34,211,238,0.5)]"
-        ></div>
-        <component :is="item.icon" class="w-6 h-6 transition-transform duration-200" :class="currentPage === item.pageIndex ? 'scale-110' : ''" />
-        <span class="text-xs font-medium">{{ item.label }}</span>
+        <component :is="item.icon" class="w-[22px] h-[22px]" />
+        <span class="text-[10px] font-medium">{{ item.label }}</span>
+        <span
+          v-if="item.pageIndex >= 4"
+          class="absolute mt-[-3px] ml-[18px] w-1.5 h-1.5 rounded-full"
+          style="background: var(--mobile-chip-emerald)"
+        ></span>
       </button>
     </div>
   </nav>

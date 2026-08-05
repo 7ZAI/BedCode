@@ -3,11 +3,11 @@
     <Transition name="toast">
       <div
         v-if="visible"
-        class="fixed z-[9999] flex items-center gap-3 rounded-lg shadow-lg border toast-root"
-        :class="[typeClass, positionClass]"
+        class="fixed z-[9999] flex items-center gap-3 rounded-xl toast-root"
+        :class="positionClass"
+        style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); backdrop-filter: blur(16px)"
       >
-        <!-- Icon -->
-        <div class="flex-shrink-0">
+        <span class="icon-chip toast-chip" :class="chipClass">
           <svg v-if="type === 'success'" class="toast-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
           </svg>
@@ -20,16 +20,15 @@
           <svg v-else class="toast-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-        </div>
+        </span>
 
-        <!-- Message -->
-        <span class="toast-message">{{ message }}</span>
+        <span class="toast-message flex-1 min-w-0">{{ message }}</span>
 
-        <!-- Close Button -->
         <button
           v-if="closable"
+          class="flex-shrink-0 ml-1 p-1 rounded-lg transition-colors active:opacity-80"
+          style="color: var(--mobile-text-muted)"
           @click="close()"
-          class="flex-shrink-0 ml-2 hover:opacity-75"
         >
           <svg class="toast-close-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -61,16 +60,12 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits(['close'])
 const visible = ref(false)
 
-const typeClass = computed(() => {
+const chipClass = computed(() => {
   switch (props.type) {
-    case 'success':
-      return 'bg-[var(--mobile-success)] text-white'
-    case 'error':
-      return 'bg-[var(--mobile-error)] text-white'
-    case 'warning':
-      return 'bg-[var(--mobile-warning)] text-white'
-    default:
-      return 'bg-[var(--mobile-bg-card)] border-[var(--mobile-border)] text-[var(--mobile-text-primary)]'
+    case 'success': return 'chip-emerald'
+    case 'error': return 'chip-red'
+    case 'warning': return 'chip-amber'
+    default: return 'chip-cyan'
   }
 })
 
@@ -106,11 +101,17 @@ onMounted(() => {
 <style scoped>
 .toast-root {
   --toast-icon: clamp(0.875rem, 1rem + (100vw - 360px) / 840 * 0.375rem, 1.375rem);
-  --toast-font: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.1875rem, 0.875rem);
+  --toast-font: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem);
   --toast-px: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 0.375rem, 1rem);
-  --toast-py: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.375rem, 0.875rem);
+  --toast-py: clamp(0.375rem, 0.5rem + (100vw - 360px) / 840 * 0.375rem, 0.75rem);
   padding: var(--toast-py) var(--toast-px);
   max-width: clamp(240px, 75vw, 400px);
+}
+
+.toast-chip {
+  width: calc(var(--toast-icon) + 0.75rem);
+  height: calc(var(--toast-icon) + 0.75rem);
+  border-radius: 0.5rem;
 }
 
 .toast-icon {
@@ -121,7 +122,7 @@ onMounted(() => {
 .toast-message {
   font-size: var(--toast-font);
   font-weight: 500;
-  min-width: 0;
+  color: var(--mobile-row-title);
   overflow-wrap: break-word;
 }
 

@@ -1,31 +1,35 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="h-full flex flex-col" style="background: var(--mobile-bg-primary)">
     <!-- Header -->
-    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center gap-3">
-      <button
-        class="flex-shrink-0 p-1 -ml-1 text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] active:opacity-80 transition-colors"
-        @click="router.back()"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-      <h1 class="flex-1 text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.toolbox.presetTasks') }}</h1>
-    </header>
+    <div class="page-header flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button
+          class="flex-shrink-0 p-1 -ml-1 transition-colors active:opacity-80"
+          style="color: var(--mobile-text-secondary)"
+          @click="router.back()"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <h1 class="flex-1 page-title">{{ t('mobile.toolbox.presetTasks') }}</h1>
+      </div>
+    </div>
 
     <!-- Task List -->
-    <div class="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24">
+    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24">
       <!-- Empty state -->
       <div
         v-if="tasks.length === 0"
-        class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-6 text-center shadow-[var(--mobile-card-shadow)]"
+        class="group-card p-6 text-center"
       >
-        <svg class="w-10 h-10 mx-auto mb-3 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-10 h-10 mx-auto mb-3" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
         </svg>
-        <p class="text-[var(--mobile-text-disabled)] text-sm mb-3">{{ t('mobile.toolbox.noTasks') }}</p>
+        <p class="group-row-sub mb-3">{{ t('mobile.toolbox.noTasks') }}</p>
         <button
-          class="text-sm text-[var(--mobile-accent)] hover:text-cyan-300 active:opacity-80 transition-colors"
+          class="text-sm transition-colors active:opacity-80"
+          style="color: var(--mobile-accent)"
           @click="openAddDialog"
         >
           {{ t('mobile.toolbox.addTask') }}
@@ -33,7 +37,7 @@
       </div>
 
       <!-- Card list -->
-      <div v-else class="space-y-2.5">
+      <div v-else class="group-card">
         <PresetTaskCard
           v-for="task in tasks"
           :key="task.id"
@@ -47,9 +51,10 @@
     </div>
 
     <!-- Bottom Add Button -->
-    <div class="flex-shrink-0 p-4 bg-gradient-to-t from-[var(--mobile-bg-primary)] via-[var(--mobile-bg-primary)] to-transparent">
+    <div class="flex-shrink-0 p-4">
       <button
-        class="w-full py-3 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] text-sm rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
         @click="openAddDialog"
       >
         {{ t('mobile.toolbox.addTask') }}
@@ -73,28 +78,30 @@
     <Teleport to="body">
       <Transition name="bottom-sheet">
         <div v-if="showSessionPicker" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
-          <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showSessionPicker = false"></div>
-          <div class="relative w-full max-w-[clamp(280px,384px,440px)] bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl modal-panel">
-            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-4">{{ t('mobile.toolbox.selectSession') }}</h3>
+          <div class="absolute inset-0" style="background: var(--mobile-overlay-heavy)" @click="showSessionPicker = false"></div>
+          <div class="relative w-full max-w-[clamp(280px,384px,440px)] rounded-2xl p-6 shadow-xl modal-panel" style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border)">
+            <h3 class="page-title text-lg mb-4">{{ t('mobile.toolbox.selectSession') }}</h3>
 
             <div v-if="activeSessions.length === 0" class="text-center py-4">
-              <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.toolbox.noActiveSessions') }}</p>
+              <p class="group-row-sub">{{ t('mobile.toolbox.noActiveSessions') }}</p>
             </div>
 
             <div v-else class="space-y-2 max-h-60 overflow-y-auto">
               <button
                 v-for="session in activeSessions"
                 :key="session.id"
-                class="w-full text-left px-4 py-3 rounded-xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-primary)] hover:border-[var(--mobile-accent)]/30 active:opacity-80 transition-colors"
+                class="w-full text-left px-4 py-3 rounded-xl transition-colors active:opacity-80"
+                style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-group-border)"
                 @click="confirmExecute(session.id)"
               >
-                <p class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)]">{{ session.name }}</p>
-                <p class="text-xs text-[var(--mobile-text-muted)] mt-0.5">{{ session.id.slice(0, 8) }}</p>
+                <p class="group-row-title">{{ session.name }}</p>
+                <p class="group-row-sub font-mono mt-0.5">{{ session.id.slice(0, 8) }}</p>
               </button>
             </div>
 
             <button
-              class="w-full mt-4 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-sm py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 active:opacity-80 transition-colors"
+              class="w-full mt-4 h-10 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+              style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
               @click="showSessionPicker = false"
             >
               {{ t('common.button.cancel') }}
@@ -108,21 +115,23 @@
     <Teleport to="body">
       <Transition name="center-modal">
         <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
-          <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showConfirmDialog = false"></div>
-          <div class="relative w-full max-w-[clamp(280px,384px,440px)] bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl modal-panel">
-            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-2">{{ t('mobile.toolbox.confirmExecute') }}</h3>
-            <p class="text-sm text-[var(--mobile-text-muted)] mb-1">{{ t('mobile.toolbox.willSendToTerminal') }}</p>
-            <p class="text-sm text-[var(--mobile-text-primary)] bg-[var(--mobile-bg-primary)] rounded-lg p-3 mb-4 line-clamp-3">{{ pendingTask?.content }}</p>
+          <div class="absolute inset-0" style="background: var(--mobile-overlay-heavy)" @click="showConfirmDialog = false"></div>
+          <div class="relative w-full max-w-[clamp(280px,384px,440px)] rounded-2xl p-6 shadow-xl modal-panel" style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border)">
+            <h3 class="page-title text-lg mb-2">{{ t('mobile.toolbox.confirmExecute') }}</h3>
+            <p class="text-sm mb-1" style="color: var(--mobile-text-muted)">{{ t('mobile.toolbox.willSendToTerminal') }}</p>
+            <p class="text-sm rounded-lg p-3 mb-4 line-clamp-3" style="color: var(--mobile-row-title); background: var(--mobile-bg-primary)">{{ pendingTask?.content }}</p>
 
             <div class="flex gap-3">
               <button
-                class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-sm py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 active:opacity-80 transition-colors"
+                class="flex-1 h-10 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+                style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
                 @click="showConfirmDialog = false"
               >
                 {{ t('common.button.cancel') }}
               </button>
               <button
-                class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] text-sm py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150"
+                class="flex-1 h-10 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+                style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
                 @click="doExecute"
               >
                 {{ t('mobile.toolbox.execute') }}

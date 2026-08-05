@@ -1,203 +1,202 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="h-full flex flex-col" style="background: var(--mobile-bg-primary)">
     <!-- Header -->
-    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.connection.title') }}</h1>
-      <button
-        class="text-sm text-[var(--mobile-accent)] hover:text-[var(--mobile-accent)]/80 transition-colors"
-        :class="{ 'opacity-50': connection.isConnecting.value }"
-        :disabled="connection.isConnecting.value"
-        @click="$router.push({ name: 'mobile-discover' })"
-      >
-        {{ t('mobile.connection.discoverDevices') }}
-      </button>
-    </header>
-
-    <!-- Connection Status Banner -->
-    <Transition name="fade">
-    <div
-      v-if="connectionStatus === 'connecting' || connectionStatus === 'connected' || connectionStatus === 'pairing' || connectionStatus === 'error'"
-      class="flex-shrink-0 px-4 py-3 bg-[var(--mobile-bg-secondary)] border-b border-[var(--mobile-border)]"
-    >
-      <div class="flex items-center gap-3">
-        <!-- Connecting spinner -->
-        <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
-        <!-- Success icon (connected) -->
-        <svg v-else-if="connectionStatus === 'connected'" class="w-5 h-5 text-[var(--mobile-success)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-        </svg>
-        <!-- Error icon -->
-        <svg v-else-if="connectionStatus === 'error'" class="w-5 h-5 text-[var(--mobile-error)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-        </svg>
-        <!-- Pairing icon -->
-        <div v-else-if="connectionStatus === 'pairing'" class="w-5 h-5 bg-[var(--mobile-accent-secondary)] rounded-full flex items-center justify-center">
-          <span class="text-xs text-[var(--mobile-accent)] font-bold">?</span>
-        </div>
-
-        <span class="text-sm" :class="{
-          'text-[var(--mobile-text-muted)]': connectionStatus === 'connecting',
-          'text-[var(--mobile-success)]': connectionStatus === 'connected',
-          'text-[var(--mobile-error)]': connectionStatus === 'error',
-          'text-[var(--mobile-accent)]': connectionStatus === 'pairing',
-        }">
-          {{ connectionStatusText }}
-        </span>
-      </div>
-    </div>
-    </Transition>
-
-    <!-- Connected Banner -->
-    <Transition name="config-list">
-    <div
-      v-if="isConnected && currentDevice"
-      class="flex-shrink-0 mx-4 mt-4 p-3 bg-[var(--mobile-success-connected-bg)] border border-[var(--mobile-success-connected-border)] rounded-xl backdrop-blur-sm shadow-[var(--mobile-card-shadow-connected)]"
-    >
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <!-- 已认证显示盾牌图标，未认证显示绿点 -->
-          <svg v-if="connectionStatus === 'paired'" class="w-5 h-5 text-[var(--mobile-success)] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-          </svg>
-          <div v-else class="w-3 h-3 rounded-full bg-[var(--mobile-success)] shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
-          <div>
-            <p class="text-[var(--mobile-success)] text-[0.9375rem] font-medium">{{ currentDevice.name }}</p>
-            <p class="text-[var(--mobile-success)]/70 text-xs">{{ currentDevice.address }}</p>
-          </div>
+    <div class="page-header flex-shrink-0">
+      <div class="page-header-row">
+        <div>
+          <h1 class="page-title">{{ t('mobile.connection.title') }}</h1>
+          <p class="page-subtitle">
+            <template v-if="isConnected && currentDevice">
+              {{ currentDevice.name }} · {{ currentDevice.address }}
+            </template>
+            <template v-else>
+              {{ connectionStatusText }}
+            </template>
+          </p>
         </div>
         <button
-          class="px-3 py-1.5 bg-[var(--mobile-error-muted)] border text-[var(--mobile-error)] text-sm rounded-lg hover:bg-[var(--mobile-error)]/20 transition-colors"
-          style="border-color: color-mix(in srgb, var(--mobile-error) 40%, transparent)"
-          @click="handleDisconnect"
+          class="text-[13px] font-medium pb-1 transition-colors active:opacity-80"
+          style="color: var(--mobile-accent)"
+          :class="{ 'opacity-50': connection.isConnecting.value }"
+          :disabled="connection.isConnecting.value"
+          @click="$router.push({ name: 'mobile-discover' })"
         >
-          {{ t('mobile.connection.disconnect') }}
+          {{ t('mobile.connection.discoverDevices') }}
         </button>
       </div>
     </div>
-    </Transition>
 
     <!-- Main Content -->
-    <div class="flex-1 overflow-y-auto overflow-x-hidden p-4 min-h-0">
-      <!-- Session Configs (when connected) -->
-      <div v-if="isConnected">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-[var(--mobile-accent)]/80 text-[0.6875rem] font-semibold tracking-wider uppercase">{{ t('mobile.connection.sessionConfig') }}</h3>
-          <button
-            class="p-2 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
-            :class="{ 'opacity-50': isRefreshing }"
-            :disabled="isRefreshing"
-            @click="refreshConfigs"
-            :title="t('mobile.connection.refreshConfig')"
-          >
-            <svg
-              class="w-5 h-5 text-[var(--mobile-accent)]"
-              :class="{ 'animate-spin': isRefreshing }"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 min-h-0">
+      <!-- Connection Status (connecting / error) -->
+      <Transition name="fade">
+      <div
+        v-if="connectionStatus === 'connecting' || connectionStatus === 'error'"
+        class="mb-4"
+      >
+        <div class="group-card">
+          <div class="group-row">
+            <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" style="color: var(--mobile-accent)" />
+            <svg v-else class="w-5 h-5" style="color: var(--mobile-chip-red)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
             </svg>
-          </button>
-        </div>
-
-        <!-- Loading -->
-        <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-2">
-          <div v-for="i in 3" :key="i" class="bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl p-4 animate-pulse">
-            <div class="flex items-start justify-between">
-              <div class="flex-1">
-                <div class="h-5 w-32 bg-[var(--mobile-accent-muted)] rounded mb-2"></div>
-                <div class="flex items-center gap-2">
-                  <div class="h-5 w-16 bg-[var(--mobile-accent-muted)] rounded-full"></div>
-                  <div class="h-4 w-20 bg-[var(--mobile-accent-muted)] rounded"></div>
-                </div>
-                <div class="h-4 w-48 bg-[var(--mobile-accent-muted)] rounded mt-2"></div>
-                <div class="h-3 w-36 bg-[var(--mobile-accent-muted)] rounded mt-1"></div>
-              </div>
-              <div class="h-8 w-16 bg-[var(--mobile-accent-muted)] rounded-lg"></div>
-            </div>
+            <span class="group-row-sub">{{ connectionStatusText }}</span>
           </div>
         </div>
-
-        <!-- Empty -->
-        <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-[var(--mobile-accent)]/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-          <p class="text-[var(--mobile-text-muted)]">{{ t('mobile.connection.noConfig') }}</p>
-          <p class="text-[var(--mobile-text-disabled)] text-sm mt-2">{{ t('mobile.connection.noConfigHint') }}</p>
-        </div>
-
-        <!-- Config List -->
-        <TransitionGroup name="config-list" tag="div" class="space-y-2">
-          <SessionConfigCard
-            v-for="config in sessionConfigs"
-            :key="config.id"
-            :config="config"
-            :active-sessions="activeSessions"
-            :is-starting="startingConfigId === config.id"
-            @start="handleStartSession"
-            @navigate-to-files="handleNavigateToFiles"
-            @session-click="handleSessionClick"
-            @stop-session="handleStopSession"
-          />
-        </TransitionGroup>
       </div>
+      </Transition>
 
-      <!-- Connection History (when not connected) -->
-      <div v-else>
-        <!-- Connection History Section -->
-        <h3 class="text-[var(--mobile-accent)]/80 text-[0.6875rem] font-semibold mb-3 flex items-center justify-between tracking-wider uppercase">
-          <span>{{ t('mobile.connection.connectionHistory') }}</span>
-          <button
-            v-if="connectionHistory.length > 0"
-            class="text-[var(--mobile-text-muted)] text-xs hover:text-[var(--mobile-accent)] transition-colors"
-            @click="clearHistory"
-          >
-            {{ t('mobile.connection.clearHistory') }}
-          </button>
-        </h3>
-
-        <div v-if="connectionHistory.length === 0" class="text-center py-8">
-          <p class="text-[var(--mobile-text-disabled)] text-sm">{{ t('mobile.connection.noHistory') }}</p>
-        </div>
-
-        <TransitionGroup name="config-list" tag="div" class="space-y-2">
-          <div
-            v-for="item in connectionHistory"
-            :key="item.address"
-            class="flex items-center justify-between p-3 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border)] rounded-xl shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-active)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-all cursor-pointer"
-            @click="handleConnectFromHistory(item)"
-          >
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-full bg-[var(--mobile-accent-muted)] border border-[var(--mobile-border-hover)] flex items-center justify-center">
-                <svg class="w-5 h-5 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <!-- Connected: Session Configs -->
+      <div v-if="isConnected" class="pb-8 space-y-6">
+        <!-- Connected device info -->
+        <section v-if="currentDevice">
+          <h2 class="group-section-title">{{ t('mobile.connection.currentConnection') || '当前连接' }}</h2>
+          <div class="group-card">
+            <div class="group-row">
+              <span class="icon-chip chip-emerald">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="group-row-title">{{ currentDevice.name }}</div>
+                <div class="group-row-sub font-mono">{{ currentDevice.address }}</div>
               </div>
-              <div>
-                <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-secondary)]">{{ item.name || item.address }}</p>
-                <p class="text-[var(--mobile-text-disabled)] text-xs">{{ item.address }}</p>
-              </div>
+              <span class="status-badge badge-emerald">
+                <span class="status-dot dot-emerald"></span>
+                {{ connectionStatus === 'paired' ? (t('mobile.connection.authenticated') || '已配对') : (t('mobile.connection.paired') || '已配对') }}
+              </span>
             </div>
+            <button class="group-row group-row-btn" @click="handleDisconnect">
+              <span class="icon-chip chip-red">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+              </span>
+              <span class="flex-1 text-left font-medium" style="font-size: 0.9375rem; color: var(--mobile-chip-red)">{{ t('mobile.connection.disconnect') }}</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Session Configs -->
+        <section>
+          <div class="flex items-center justify-between px-1 mb-2">
+            <h2 class="group-section-title !mb-0">{{ t('mobile.connection.sessionConfig') }}</h2>
             <button
-              class="p-2 text-[var(--mobile-text-disabled)] hover:text-[var(--mobile-error)] transition-colors"
-              @click.stop="removeFromHistory(item.address)"
+              class="p-1 rounded-lg transition-colors active:opacity-80"
+              style="color: var(--mobile-text-muted)"
+              :class="{ 'opacity-50': isRefreshing }"
+              :disabled="isRefreshing"
+              @click="refreshConfigs"
+              :title="t('mobile.connection.refreshConfig')"
             >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              <svg
+                class="w-4 h-4"
+                :class="{ 'animate-spin': isRefreshing }"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
           </div>
-        </TransitionGroup>
+
+          <!-- Loading -->
+          <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-2">
+            <div v-for="i in 3" :key="i" class="group-card p-4 animate-pulse">
+              <div class="flex items-start gap-3">
+                <div class="w-9 h-9 rounded-lg" style="background: var(--mobile-chip-zinc-bg)"></div>
+                <div class="flex-1">
+                  <div class="h-4 w-32 rounded mb-2" style="background: var(--mobile-chip-zinc-bg)"></div>
+                  <div class="h-3 w-48 rounded" style="background: var(--mobile-chip-zinc-bg)"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Empty -->
+          <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="text-center py-12">
+            <svg class="w-12 h-12 mx-auto mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <p class="group-row-sub">{{ t('mobile.connection.noConfig') }}</p>
+            <p class="text-sm mt-2" style="color: var(--mobile-text-disabled)">{{ t('mobile.connection.noConfigHint') }}</p>
+          </div>
+
+          <!-- Config List -->
+          <TransitionGroup name="config-list" tag="div" class="space-y-2">
+            <SessionConfigCard
+              v-for="config in sessionConfigs"
+              :key="config.id"
+              :config="config"
+              :active-sessions="activeSessions"
+              :is-starting="startingConfigId === config.id"
+              @start="handleStartSession"
+              @navigate-to-files="handleNavigateToFiles"
+              @session-click="handleSessionClick"
+              @stop-session="handleStopSession"
+            />
+          </TransitionGroup>
+        </section>
+      </div>
+
+      <!-- Not Connected: History + Actions -->
+      <div v-else class="pb-8 space-y-6">
+        <!-- Connection History -->
+        <section>
+          <div class="flex items-center justify-between px-1 mb-2">
+            <h2 class="group-section-title !mb-0">{{ t('mobile.connection.connectionHistory') }}</h2>
+            <button
+              v-if="connectionHistory.length > 0"
+              class="text-xs transition-colors active:opacity-80"
+              style="color: var(--mobile-text-muted)"
+              @click="clearHistory"
+            >
+              {{ t('mobile.connection.clearHistory') }}
+            </button>
+          </div>
+
+          <div v-if="connectionHistory.length === 0" class="text-center py-8">
+            <p class="text-sm" style="color: var(--mobile-text-disabled)">{{ t('mobile.connection.noHistory') }}</p>
+          </div>
+
+          <TransitionGroup v-else name="config-list" tag="div" class="group-card">
+            <div
+              v-for="item in connectionHistory"
+              :key="item.address"
+              class="group-row group-row-btn cursor-pointer"
+              @click="handleConnectFromHistory(item)"
+            >
+              <span class="icon-chip chip-cyan">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="group-row-title">{{ item.name || item.address }}</div>
+                <div class="group-row-sub font-mono">{{ item.address }}</div>
+              </div>
+              <button
+                class="p-1.5 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
+                style="color: var(--mobile-text-disabled)"
+                @click.stop="removeFromHistory(item.address)"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </TransitionGroup>
+        </section>
       </div>
     </div>
 
     <!-- Action Buttons (when not connected) -->
-    <div v-if="!isConnected" class="flex-shrink-0 p-4 border-t border-[var(--mobile-border)] space-y-3 bg-[var(--mobile-bg-primary)]" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
-      <!-- QR Connect Button -->
+    <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
       <button
-        class="w-full bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-accent)] text-sm py-3 rounded-xl font-medium hover:bg-[var(--mobile-accent-muted)] transition-all flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="$router.push({ name: 'mobile-scan' })"
@@ -207,10 +206,9 @@
         </svg>
         {{ t('mobile.connection.scanConnect') }}
       </button>
-
-      <!-- Manual Connect Button -->
       <button
-        class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)] text-sm py-3 rounded-xl font-medium hover:bg-[var(--mobile-bg-secondary)] transition-all flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        style="background: var(--mobile-group-bg); color: var(--mobile-text-secondary); border: 1px solid var(--mobile-group-border)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="showManualConnect = true"
@@ -232,7 +230,7 @@
       @cancel="handleCancelConnection"
     />
 
-    <!-- Auth Method Dialog（JWT 失效后选择生物认证 / 配对码） -->
+    <!-- Auth Method Dialog -->
     <AuthMethodDialog
       v-model="showAuthDialog"
       :can-biometric="authBiometricAvailable"
@@ -253,7 +251,7 @@
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" :title="t('mobile.connection.confirmStop')" size="sm">
-      <p class="text-[var(--mobile-text-disabled)]">
+      <p style="color: var(--mobile-text-disabled)">
         {{ t('mobile.connection.confirmStopMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
@@ -266,7 +264,7 @@
 
     <!-- Disconnect Confirmation Modal -->
     <Modal v-model="showDisconnectConfirm" :title="t('mobile.connection.disconnect')" size="sm">
-      <p class="text-[var(--mobile-text-disabled)]">
+      <p style="color: var(--mobile-text-disabled)">
         {{ t('mobile.connection.confirmDisconnectMsg') }}
       </p>
       <template #footer>
@@ -277,16 +275,17 @@
       </template>
     </Modal>
 
-    <!-- 全局遮罩 Loading（配对请求时显示） -->
+    <!-- 全局遮罩 Loading -->
     <Teleport to="body">
       <Transition name="fade">
         <div
           v-if="showPairingLoading"
-          class="fixed inset-0 z-[9999] flex items-center justify-center bg-[var(--mobile-overlay)] backdrop-blur-sm mobile-ui"
+          class="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm mobile-ui"
+          style="background: var(--mobile-overlay)"
         >
-          <div class="bg-[var(--mobile-bg-card)] rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]">
-            <div class="w-10 h-10 border-4 border-[var(--mobile-accent)] border-t-transparent rounded-full animate-spin" />
-            <p class="text-[var(--mobile-text-secondary)] text-sm font-medium">{{ t('mobile.connection.pairingRequest') }}</p>
+          <div class="rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]" style="background: var(--mobile-group-bg)">
+            <div class="w-10 h-10 border-4 border-current border-t-transparent rounded-full animate-spin" style="color: var(--mobile-accent)" />
+            <p class="text-sm font-medium" style="color: var(--mobile-text-secondary)">{{ t('mobile.connection.pairingRequest') }}</p>
           </div>
         </div>
       </Transition>

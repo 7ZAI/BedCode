@@ -11,6 +11,7 @@ export default {
       disconnect: 'Disconnect',
       confirmDisconnectMsg: 'Are you sure you want to disconnect? All remote sessions will be terminated.',
       sessionConfig: 'Session Config',
+      currentConnection: 'Current Connection',
       refreshConfig: 'Refresh Config',
       noConfig: 'No session configs',
       noConfigHint: 'Create session configs on desktop',
@@ -278,6 +279,7 @@ export default {
       command: 'Command',
       projectDir: 'Project Dir',
       runningCount: '{count} running',
+      viewSession: 'View',
     },
     presetTask: {
       send: 'Send',
@@ -303,6 +305,9 @@ export default {
     },
     toolbox: {
       title: 'Toolbox',
+      subtitle: 'Tasks & plugin tools',
+      tools: 'Tools',
+      pluginViews: 'Plugin Views',
       presetTasks: 'Preset Tasks',
       presetEntryCount: '{count} tasks, tap to manage or quick-execute',
       presetEntryEmpty: 'Save frequent commands, send to terminal with one tap',

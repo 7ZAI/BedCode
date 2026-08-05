@@ -11,6 +11,7 @@ export default {
       disconnect: '断开',
       confirmDisconnectMsg: '确定要断开与当前设备的连接吗？所有远程会话将终止。',
       sessionConfig: '会话配置',
+      currentConnection: '当前连接',
       refreshConfig: '刷新配置',
       noConfig: '暂无会话配置',
       noConfigHint: '请在桌面端创建会话配置',
@@ -278,6 +279,7 @@ export default {
       command: '启动命令',
       projectDir: '工程目录',
       runningCount: '{count} 个运行中',
+      viewSession: '查看',
     },
     presetTask: {
       send: '发送',
@@ -303,6 +305,9 @@ export default {
     },
     toolbox: {
       title: '工具箱',
+      subtitle: '任务与插件工具入口',
+      tools: '工具',
+      pluginViews: '插件视图',
       presetTasks: '预设任务',
       presetEntryCount: '共 {count} 个任务，点击管理或快速执行',
       presetEntryEmpty: '保存常用指令，一键发送到终端',

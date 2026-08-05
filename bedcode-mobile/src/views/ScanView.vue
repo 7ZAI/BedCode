@@ -1,17 +1,20 @@
 <template>
-  <div class="h-full w-full bg-[var(--mobile-bg-primary)] flex flex-col">
+  <div class="h-full w-full flex flex-col" style="background: var(--mobile-bg-primary)">
     <!-- Header -->
-    <header class="bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center gap-3">
-      <button
-        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
-        @click="goBack"
-      >
-        <svg class="w-5 h-5 text-[var(--mobile-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-      <h2 class="text-lg font-semibold text-[var(--mobile-text-primary)]">{{ t('mobile.scan.title') }}</h2>
-    </header>
+    <div class="page-header flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button
+          class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
+          style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
+          @click="goBack"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <h1 class="page-title">{{ t('mobile.scan.title') }}</h1>
+      </div>
+    </div>
 
     <!-- Scanner area -->
     <div class="flex-1 relative overflow-hidden">
@@ -28,42 +31,43 @@
         v-show="!isConnecting && !errorMessage"
         class="absolute inset-0 pointer-events-none flex items-center justify-center"
       >
-        <div class="w-64 h-64 border-2 border-[var(--mobile-accent)]/50 rounded-2xl relative">
-          <!-- Corner accents -->
-          <div class="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-[var(--mobile-accent)] rounded-tl-lg"></div>
-          <div class="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-[var(--mobile-accent)] rounded-tr-lg"></div>
-          <div class="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-[var(--mobile-accent)] rounded-bl-lg"></div>
-          <div class="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-[var(--mobile-accent)] rounded-br-lg"></div>
+        <div class="w-64 h-64 rounded-2xl relative" style="border: 2px solid color-mix(in srgb, var(--mobile-accent) 50%, transparent)">
+          <div class="absolute -top-1 -left-1 w-8 h-8 rounded-tl-lg" style="border-top: 4px solid var(--mobile-accent); border-left: 4px solid var(--mobile-accent)"></div>
+          <div class="absolute -top-1 -right-1 w-8 h-8 rounded-tr-lg" style="border-top: 4px solid var(--mobile-accent); border-right: 4px solid var(--mobile-accent)"></div>
+          <div class="absolute -bottom-1 -left-1 w-8 h-8 rounded-bl-lg" style="border-bottom: 4px solid var(--mobile-accent); border-left: 4px solid var(--mobile-accent)"></div>
+          <div class="absolute -bottom-1 -right-1 w-8 h-8 rounded-br-lg" style="border-bottom: 4px solid var(--mobile-accent); border-right: 4px solid var(--mobile-accent)"></div>
         </div>
       </div>
 
-      <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-[var(--mobile-text-muted)] text-sm">
+      <p v-show="!isConnecting && !errorMessage" class="absolute bottom-12 left-0 right-0 text-center text-sm" style="color: var(--mobile-text-muted)">
         {{ t('mobile.scan.scanHint') }}
       </p>
 
       <!-- Connecting state -->
-      <div v-if="isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-[var(--mobile-overlay-heavy)]">
-        <div class="animate-spin rounded-full h-12 w-12 border-2 border-[var(--mobile-accent)] border-t-transparent mb-4"></div>
-        <p class="text-[var(--mobile-text-secondary)] text-lg mb-2">{{ connectingStep }}</p>
-        <p class="text-[var(--mobile-text-muted)] text-sm">{{ connectingDetail }}</p>
+      <div v-if="isConnecting" class="absolute inset-0 flex flex-col items-center justify-center" style="background: var(--mobile-overlay-heavy)">
+        <div class="animate-spin rounded-full h-12 w-12 border-2 border-current border-t-transparent mb-4" style="color: var(--mobile-accent)"></div>
+        <p class="text-lg mb-2" style="color: var(--mobile-text-secondary)">{{ connectingStep }}</p>
+        <p class="text-sm" style="color: var(--mobile-text-muted)">{{ connectingDetail }}</p>
       </div>
 
       <!-- Error state -->
-      <div v-if="errorMessage && !isConnecting" class="absolute inset-0 flex flex-col items-center justify-center bg-[var(--mobile-overlay-heavy)]">
-        <svg class="w-16 h-16 text-[var(--mobile-error)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div v-if="errorMessage && !isConnecting" class="absolute inset-0 flex flex-col items-center justify-center" style="background: var(--mobile-overlay-heavy)">
+        <svg class="w-12 h-12 mb-4" style="color: var(--mobile-chip-red)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
         </svg>
-        <p class="text-[var(--mobile-error)] text-lg mb-2">{{ t('mobile.scan.connectFailed') }}</p>
-        <p class="text-[var(--mobile-text-muted)] text-sm text-center px-8 mb-6">{{ errorMessage }}</p>
+        <p class="text-lg mb-2" style="color: var(--mobile-chip-red)">{{ t('mobile.scan.connectFailed') }}</p>
+        <p class="text-sm text-center px-8 mb-6" style="color: var(--mobile-text-muted)">{{ errorMessage }}</p>
         <div class="flex gap-3">
           <button
-            class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] rounded-lg hover:border-[var(--mobile-accent)]/40 transition-colors"
+            class="px-4 py-2 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+            style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
             @click="goBack"
           >
             {{ t('mobile.scan.back') }}
           </button>
           <button
-            class="px-4 py-2 bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] rounded-lg hover:bg-[var(--mobile-accent)]/20 transition-colors"
+            class="px-4 py-2 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+            style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 30%, transparent)"
             @click="retry"
           >
             {{ t('mobile.scan.rescan') }}
