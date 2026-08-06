@@ -2,7 +2,7 @@ export default {
   settings: {
     title: 'Settings',
     general: 'General',
-    dangerZone: 'Danger Zone',
+    dangerZone: 'Reset',
     network: {
       title: 'Network Settings',
       websocketPort: 'WebSocket Port',

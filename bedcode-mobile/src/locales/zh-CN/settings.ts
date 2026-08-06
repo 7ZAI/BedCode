@@ -2,7 +2,7 @@ export default {
   settings: {
     title: '设置',
     general: '通用',
-    dangerZone: '危险操作',
+    dangerZone: '重置',
     network: {
       title: '网络设置',
       websocketPort: 'WebSocket 端口',
