@@ -45,6 +45,8 @@ export interface MobilePluginContributes {
   terminal?: TerminalContribution
   navTab?: NavTabContribution
   settings?: SettingsContribution
+  /** 动态路由扩展点（activate 时经 ui.registerRoute 注册，宿主 addRoute） */
+  routes?: RouteContribution[]
   configuration?: PluginConfiguration
   lifecycle?: LifecycleContribution
 }
@@ -76,6 +78,13 @@ export interface NavTabContribution {
 /** 设置页扩展点 */
 export interface SettingsContribution {
   section: string
+  component: string
+}
+
+/** 路由扩展点声明（manifest 声明，宿主按 id 命名空间挂载动态路由） */
+export interface RouteContribution {
+  id: string
+  title?: string
   component: string
 }
 
@@ -156,6 +165,17 @@ export interface SettingsSectionDescriptor {
   pluginId: string
   section: string
   component: any
+}
+
+/** 插件路由描述符：整体路由由插件决定（openPage 跳转）；id 即路径段，可含 '/' 支持深路径 */
+export interface PluginRouteDescriptor {
+  /** 路由 id（路径段），宿主挂到 /mobile/plugins/{pluginId}/{id} */
+  id: string
+  /** 宿主页头标题（header 为真时展示） */
+  title?: string
+  component: any
+  /** 是否渲染宿主页头（back + title），默认 true；false 时插件自带布局 */
+  header?: boolean
 }
 
 /** 日志 API */
@@ -246,6 +266,12 @@ export interface UIRegistry {
   registerNavTab(tab: NavTabDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
   registerSettingsSection(section: SettingsSectionDescriptor): Disposable
+  /** 动态注册插件路由（宿主 addRoute 至 /mobile/plugins/{pluginId}/{id}；Disposable.dispose = removeRoute 撤销） */
+  registerRoute(route: PluginRouteDescriptor): Disposable
+  /** 整体跳转到本插件已注册路由；返回入口页用 goBack 或宿主页头返回按钮 */
+  openPage(routeId: string): void
+  /** 返回上一页（router.back） */
+  goBack(): void
 }
 
 /** 事件 API */
@@ -330,9 +356,13 @@ export interface FileServiceAPI {
   /** 获取对端文件服务信息（对端 = 桌面端；未公告返回 null） */
   getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null>
   /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null）。
-   * 注意：Android/iOS 无目录选择能力，此方法会 reject（错误文案含 fall back 提示），
-   * 插件应捕获后改用手动路径输入（如 dialogs.showPrompt） */
+   * Android 使用 SAF 目录树选择器并解析为真实路径；不支持的 provider
+   * （云盘/SD 卡等）或 iOS 会 reject，插件应捕获后改用手动路径输入（如 dialogs.showPrompt） */
   pickDirectory(): Promise<string | null>
+  /** 弹出系统文件选择对话框（上传本地文件用；用户取消返回 null）。
+   * Android 使用 SAF 文件选择器并解析为真实路径；不支持的 provider 或 iOS 会 reject，
+   * 插件应捕获后改用手动路径输入 */
+  pickFile(): Promise<string | null>
 }
 
 /** 国际化 API */

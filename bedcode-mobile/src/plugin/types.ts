@@ -24,6 +24,8 @@ export type {
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
+  PluginRouteDescriptor,
+  RouteContribution,
   CommandRegistry,
   TerminalAPI,
   SessionAPI,

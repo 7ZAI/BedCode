@@ -116,13 +116,18 @@ class PluginLoaderClass {
       const module = await this.importWithTimeout(this.convertFileUrl(manifest.extensionPath, manifest.main))
 
       const context = createPluginContext(manifest)
+      // 关键：先注册 context 再激活 —— activate 内 registerToolboxPage 等会立即更新响应式
+      // 注册表，宿主可能随之渲染插件组件（如 ToolboxView 入口卡），必须保证
+      // PluginViewHost provide 能取到 context，否则插件组件 inject 得到 undefined 崩溃
+      getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      getPluginRegistry().setContext(manifest.id, context)
       console.log(`[PluginLoader] Plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      // 激活失败：摘除激活期间可能残留的注册（含动态路由），避免半激活状态
+      getPluginRegistry().clearPlugin(manifest.id)
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
   }

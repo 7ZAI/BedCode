@@ -42,6 +42,7 @@ const REGISTER_PERMISSIONS = {
   registerToolboxPage: 'ui:toolbox',
   registerNavTab: 'ui:navtab',
   registerSettingsSection: 'ui:settings',
+  registerRoute: 'ui:route',
 }
 
 // ==================== 文件收集 ====================
@@ -266,6 +267,13 @@ export function generateManifest(cwd, { check = false } = {}) {
     )
     permissions.add(REGISTER_PERMISSIONS.registerSettingsSection)
     report.push(`contributes.settings ← ${contributes.settings.id}`)
+  }
+  const routes = findRegisterCalls(frontendSource, 'registerRoute')
+  if (routes.length > 0) {
+    const old = indexById(contributes.routes)
+    contributes.routes = routes.map((s) => mergeEntry(s, old.get(s.id)))
+    permissions.add(REGISTER_PERMISSIONS.registerRoute)
+    report.push(`contributes.routes ← ${contributes.routes.map((v) => v.id).join(', ')}`)
   }
 
   for (const rule of FRONTEND_PERMISSION_RULES) {

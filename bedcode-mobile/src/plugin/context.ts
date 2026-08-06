@@ -29,11 +29,13 @@ import type {
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
+  PluginRouteDescriptor,
 } from './types'
 import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
 import * as pluginEvents from './events'
 import { getPluginRegistry } from './registry'
+import { registerPluginRoute, openPluginRoute } from './routes'
 import { getSharedModule } from './shared-runtime'
 
 /** Webview 上传策略钩子事件载荷（宿主 emit，camelCase 与 Rust 侧一致） */
@@ -146,6 +148,20 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       const disposable = registry.registerSettingsSection(info.id, section)
       disposables.push(disposable)
       return disposable
+    },
+    registerRoute(route: PluginRouteDescriptor): Disposable {
+      requirePermission('ui.registerRoute')
+      const disposable = registerPluginRoute(info.id, route)
+      disposables.push(disposable)
+      return disposable
+    },
+    openPage(routeId: string): void {
+      requirePermission('ui.openPage')
+      openPluginRoute(info.id, routeId)
+    },
+    goBack(): void {
+      requirePermission('ui.goBack')
+      getSharedModule('router').back()
     },
   }
 
@@ -279,6 +295,11 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     async pickDirectory(): Promise<string | null> {
       requireFileservicePermission('fileService.pickDirectory')
       return pluginCmds.pluginPickDirectory(info.id)
+    },
+
+    async pickFile(): Promise<string | null> {
+      requireFileservicePermission('fileService.pickFile')
+      return pluginCmds.pluginPickFile(info.id)
     },
   }
 

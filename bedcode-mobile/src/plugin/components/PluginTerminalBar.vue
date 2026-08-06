@@ -5,7 +5,12 @@
       @click="handleClick(item)"
       :title="item.label"
     >
-      <span v-if="item.icon" class="text-sm">{{ item.icon }}</span>
+      <!-- SVG path：Heroicons outline 风格，viewBox=0 0 24 24 -->
+      <svg v-if="item.icon && isSvgPath(item.icon)" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="item.icon" />
+      </svg>
+      <!-- Emoji fallback -->
+      <span v-else-if="item.icon" class="text-sm">{{ item.icon }}</span>
       <span v-else class="text-xs">{{ item.label }}</span>
     </button>
   </template>
@@ -30,6 +35,11 @@ import AutoTaskPanelHost from '@/plugin/auto-task/AutoTaskPanelHost.vue'
 const toolbarItems = getPluginRegistry().terminalToolbarItems
 const { activeSessionId } = useMobileConnection()
 const showAutoTaskPanel = ref(false)
+
+/** 判断 icon 字符串是否为 SVG path data（以 M/m 开头，非 emoji） */
+function isSvgPath(icon: string): boolean {
+  return /^[Mm]\d/.test(icon.trim())
+}
 
 function handleClick(item: any) {
   if (item.id === 'auto-task-toolbar') {

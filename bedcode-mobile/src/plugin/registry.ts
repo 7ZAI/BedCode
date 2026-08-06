@@ -5,7 +5,7 @@
  * 响应式数据供宿主 UI 组件消费
  */
 
-import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, SettingsSectionDescriptor } from './types'
+import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, SettingsSectionDescriptor, PluginRouteDescriptor } from './types'
 import { ref, type Ref } from 'vue'
 
 /** 注册的工具箱视图 */
@@ -47,12 +47,24 @@ interface RegisteredSettingsSection {
   component: any
 }
 
+/** 注册的插件路由（宿主 addRoute 至 /mobile/plugins/{pluginId}/{routeId}） */
+interface RegisteredPluginRoute {
+  pluginId: string
+  routeId: string
+  title?: string
+  header: boolean
+  component: any
+  /** vue-router removeRoute 闭包（由 route-host 注入），clearPlugin/Disposable 时摘除动态路由 */
+  removeRoute?: () => void
+}
+
 /** 前端插件注册表 */
 class PluginRegistryClass {
   private toolboxViewsMap = new Map<string, RegisteredToolboxView>()
   private navTabsMap = new Map<string, RegisteredNavTab>()
   private terminalToolbarMap = new Map<string, RegisteredTerminalToolbarItem>()
   private settingsSectionsMap = new Map<string, RegisteredSettingsSection>()
+  private routesMap = new Map<string, RegisteredPluginRoute>()
   private contexts = new Map<string, PluginContext>()
 
   /** 响应式数据供 Vue 组件使用 */
@@ -60,6 +72,7 @@ class PluginRegistryClass {
   readonly navTabs: Ref<RegisteredNavTab[]> = ref([])
   readonly terminalToolbarItems: Ref<RegisteredTerminalToolbarItem[]> = ref([])
   readonly settingsSections: Ref<RegisteredSettingsSection[]> = ref([])
+  readonly routes: Ref<RegisteredPluginRoute[]> = ref([])
 
   /** 注册工具箱页面 */
   registerToolboxPage(pluginId: string, page: ToolboxPageDescriptor): Disposable {
@@ -138,6 +151,32 @@ class PluginRegistryClass {
     }
   }
 
+  /** 注册插件路由（路由表由 route-host addRoute，此处仅存记录；返回记录供注入 removeRoute） */
+  registerPluginRoute(pluginId: string, route: PluginRouteDescriptor): RegisteredPluginRoute {
+    const key = `${pluginId}:${route.id}`
+    const rec: RegisteredPluginRoute = {
+      pluginId,
+      routeId: route.id,
+      title: route.title,
+      header: route.header ?? true,
+      component: route.component,
+    }
+    this.routesMap.set(key, rec)
+    this.updateReactiveRoutes()
+    return rec
+  }
+
+  /** 撤销插件路由记录（动态路由摘除由调用方负责 removeRoute） */
+  unregisterPluginRoute(pluginId: string, routeId: string): void {
+    this.routesMap.delete(`${pluginId}:${routeId}`)
+    this.updateReactiveRoutes()
+  }
+
+  /** 获取插件路由记录 */
+  getPluginRoute(pluginId: string, routeId: string): RegisteredPluginRoute | undefined {
+    return this.routesMap.get(`${pluginId}:${routeId}`)
+  }
+
   /** 获取工具箱视图组件 */
   getToolboxViewComponent(pluginId: string, viewId: string): any {
     return this.toolboxViewsMap.get(`${pluginId}:${viewId}`)?.component
@@ -176,6 +215,15 @@ class PluginRegistryClass {
       if (key.startsWith(`${pluginId}:`)) this.settingsSectionsMap.delete(key)
     }
     this.updateReactiveSettingsSections()
+
+    // 插件路由：摘除宿主动态路由（removeRoute）并清理记录
+    for (const [key, rec] of [...this.routesMap.entries()]) {
+      if (key.startsWith(`${pluginId}:`)) {
+        rec.removeRoute?.()
+        this.routesMap.delete(key)
+      }
+    }
+    this.updateReactiveRoutes()
   }
 
   private updateReactiveToolboxViews() {
@@ -194,6 +242,10 @@ class PluginRegistryClass {
 
   private updateReactiveSettingsSections() {
     this.settingsSections.value = [...this.settingsSectionsMap.values()]
+  }
+
+  private updateReactiveRoutes() {
+    this.routes.value = [...this.routesMap.values()]
   }
 }
 

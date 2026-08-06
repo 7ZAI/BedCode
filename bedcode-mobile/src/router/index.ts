@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { pluginLoader } from '@/plugin/loader'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -46,13 +47,6 @@ const router = createRouter({
       path: '/mobile/files/:id',
       name: 'mobile-files',
       component: () => import('@/views/CodeExplorerView.vue'),
-      meta: { standAlone: true },
-    },
-    // PROTOTYPE — 移动端 UI 重设计原型（一次性，选型后删除，见 src/prototype/README.md）
-    {
-      path: '/prototype/mobile-ui',
-      name: 'prototype-mobile-ui',
-      component: () => import('@/prototype/PrototypeMobileUi.vue'),
       meta: { standAlone: true },
     },
     {
@@ -108,6 +102,20 @@ const router = createRouter({
       component: () => import('@/views/DiscoverView.vue'),
     },
   ],
+})
+
+// 插件动态路由守卫：深度链接/插件停用后残留导航时懒激活插件（activate 内 registerRoute 完成 addRoute）。
+// 插件已激活时直接放行；激活成功需重导航命中刚注册的动态路由（vue-router 守卫中 addRoute 不影响当前导航匹配）。
+const pluginRouteActivateTried = new Set<string>()
+router.beforeEach(async (to) => {
+  const pluginRoute = to.meta.pluginRoute as { pluginId: string } | undefined
+  if (!pluginRoute?.pluginId) return
+  if (pluginLoader.getActivePlugin(pluginRoute.pluginId)) return
+  if (pluginRouteActivateTried.has(pluginRoute.pluginId)) return
+  pluginRouteActivateTried.add(pluginRoute.pluginId)
+  await pluginLoader.activate(pluginRoute.pluginId)
+  // 激活成功（动态路由已注册）则重导航命中；失败放行，页面展示加载失败兜底
+  if (pluginLoader.getActivePlugin(pluginRoute.pluginId)) return to.fullPath
 })
 
 export default router

@@ -6,7 +6,7 @@ import i18n from './locales'
 import { initPlatform } from '@/composables/usePlatform'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
-// import { initPluginSystem } from '@/plugin'
+import { initPluginSystem } from '@/plugin'
 import './style.css'
 import './styles/mobile.css'
 
@@ -31,13 +31,13 @@ Promise.all([
   i18nStore.initLanguage()
   console.log('[Init] Platform and settings pre-loaded')
 
-  // // 设置就绪后初始化插件系统
-  // try {
-  //   await initPluginSystem(app, pinia, router, i18n)
-  //   console.log('[Init] Plugin system initialized')
-  // } catch (e) {
-  //   console.error('[Init] Plugin system init failed:', e)
-  // }
+  // 设置就绪后初始化插件系统
+  try {
+    await initPluginSystem(app, pinia, router, i18n)
+    console.log('[Init] Plugin system initialized')
+  } catch (e) {
+    console.error('[Init] Plugin system init failed:', e)
+  }
 
   app.mount('#app')
 })
