@@ -30,11 +30,18 @@
     UserPromptSubmit    → in_progress
     PreToolUse(AskUser) → asking
     Notification(perm)  → asking
+    Notification(idle_prompt) → 不推送（响应完毕，终态由 Stop hook 负责）
     PostToolUse         → in_progress
     PostToolUseFailure  → in_progress / interrupted
     Stop                → completed / interrupted（根据当前状态判断）
-    SubagentStop        → completed / interrupted（根据当前状态判断）
+    SubagentStop        → in_progress（子 agent 完成 ≠ 主任务完成，不判终态）
     SessionEnd          → interrupted / 不推送（根据 reason 和当前状态判断）
+
+HTTP 说明:
+    所有请求固定使用 127.0.0.1（Windows localhost 的 IPv6 回退会卡 ~2 秒，
+    且 Stop 的 GET+POST 背靠背请求会因此并发竞态，completed 推送被宿主
+    中间件以 Content-Type 错误静默丢弃 → 队列永不调度下一任务）。
+    completed/interrupted 为调度链唯一触发信号，push 失败自动重试 3 次。
 
 终态保护:
     completed / interrupted 为终态，后续事件不覆盖（防止 Stop 与 SessionEnd 冲突）
@@ -55,7 +62,15 @@ from urllib.error import URLError
 # ==================== Constants ====================
 
 BEDCODE_PORT_DEFAULT = 8765
+# 必须用 127.0.0.1 而非 localhost：Windows 上 localhost 同时解析为 ::1(IPv6) 和
+# 127.0.0.1(IPv4)，而宿主服务器只绑定 IPv4 —— 每次连接先尝试 ::1 再回退，实测
+# 耗时 ~2 秒；Stop hook 的 GET+POST 背靠背请求因此并发卡顿，POST 到达宿主时帧损坏
+# 被中间件以 "Content type error" 静默丢弃（completed 推送丢失 → 队列永不调度下一任务）
+HOST = "127.0.0.1"
 HTTP_TIMEOUT_SECONDS = 3
+# 终态推送（completed/interrupted）一旦丢失会中断队列调度链，必须重试保证送达
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_DELAY_SECONDS = 0.5
 LOG_RETENTION_DAYS = 7
 PLUGIN_ID = "com.bedcode.auto-task"
 PLUGIN_API_PREFIX = "/api/plugin/{}".format(PLUGIN_ID)
@@ -75,9 +90,14 @@ SESSION_END_INTERRUPT_REASONS = {"prompt_input_exit", "clear", "logout", "bypass
 
 # Notification type → 任务状态映射
 # permission_prompt: Claude 等待权限确认
-# idle_prompt: Claude 空闲等待用户输入
 # elicitation_dialog: Claude 弹出交互对话框
-NOTIFICATION_ASKING_TYPES = {"permission_prompt", "idle_prompt", "elicitation_dialog"}
+# idle_prompt: Claude 响应完毕、空闲等待下一条输入 —— 不属于"向用户提问"，
+#              终态由 Stop hook 负责；若在此推 asking 会命中最新一行任务
+#              （可能是队列刚调度的下一个任务，in_progress 非终态不受保护），
+#              把运行中的任务错误显示为"等待输入"，故单独跳过状态推送
+NOTIFICATION_ASKING_TYPES = {"permission_prompt", "elicitation_dialog"}
+# 响应完成但空闲等待输入的 notification 类型（仅记录日志，不推送状态）
+NOTIFICATION_IDLE_TYPES = {"idle_prompt"}
 
 # AskUserQuestion 自动回复策略：推荐标记关键词（不区分大小写）
 # Claude Code 在推荐选项的 label 中会包含这些关键词，如 "Yes (Recommended)"
@@ -142,7 +162,7 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
     （该行以 bedcode 会话 ID 作为 session_id 键控）。
     """
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}{}/task-status".format(port, PLUGIN_API_PREFIX)
+    url = "http://{}:{}{}/task-status".format(HOST, port, PLUGIN_API_PREFIX)
 
     # 未显式传入时从环境读取 BedCode PTY 会话 ID：
     # 除 SessionStart 外的所有事件（UserPromptSubmit/PreToolUse/Stop/SessionEnd）
@@ -150,10 +170,17 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
     if bedcode_session_id is None:
         bedcode_session_id = os.environ.get("BEDCODE_SESSION_ID", "") or None
 
+    # 事件发生时刻（UTC，毫秒精度、固定宽度）：
+    # 与宿主 SQLite strftime('%Y-%m-%d %H:%M:%S.%f')（毫秒 3 位）格式完全一致，
+    # 字符串字典序比较绝对正确。宿主据此拒绝迟到的旧事件推送 ——
+    # HTTP 推送可能被阻塞乱序到达，若无此字段，旧状态可能覆盖已应用的新状态
+    now_utc = datetime.now(timezone.utc)
+    event_time = now_utc.strftime("%Y-%m-%d %H:%M:%S") + ".{:03d}".format(now_utc.microsecond // 1000)
     payload_dict = {
         "session_id": session_id,
         "status": status,
         "reason": reason or "",
+        "event_time": event_time,
     }
     # BedCode PTY 会话 ID：用于关联 Claude Code session 和 BedCode PTY session
     if bedcode_session_id:
@@ -165,18 +192,30 @@ def push_task_status(session_id, status, reason, logger, questions=None, bedcode
 
     logger.info("HTTP POST {} session_id={} status={}".format(url, session_id, status))
 
-    try:
-        req = Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
-            body = resp.read().decode("utf-8")
-            logger.info("HTTP response: {} {}".format(resp.status, body[:200]))
-    except (URLError, OSError) as e:
-        logger.warning("HTTP push failed: {}".format(e))
+    # 终态推送（completed/interrupted）是队列调度的唯一触发信号，丢失即卡死调度链；
+    # 对瞬时故障（超时/连接重置/中间件拒绝）重试，避免静默丢终态
+    for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+        try:
+            req = Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
+                body = resp.read().decode("utf-8")
+                logger.info("HTTP response: {} {}".format(resp.status, body[:200]))
+                return
+        except (URLError, OSError) as e:
+            if attempt < HTTP_RETRY_ATTEMPTS:
+                logger.warning(
+                    "HTTP push failed (attempt {}/{}): {}".format(attempt, HTTP_RETRY_ATTEMPTS, e)
+                )
+                time.sleep(HTTP_RETRY_DELAY_SECONDS)
+            else:
+                logger.warning(
+                    "HTTP push failed after {} attempts: {}".format(HTTP_RETRY_ATTEMPTS, e)
+                )
 
 
 def query_session_mode(session_id, logger):
@@ -187,8 +226,8 @@ def query_session_mode(session_id, logger):
     查询失败默认返回 False（手动模式，安全优先）。
     """
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}{}/session-mode?session_id={}".format(
-        port, PLUGIN_API_PREFIX, session_id
+    url = "http://{}:{}{}/session-mode?session_id={}".format(
+        HOST, port, PLUGIN_API_PREFIX, session_id
     )
 
     logger.info("HTTP GET {} session_id={}".format(url, session_id))
@@ -216,8 +255,8 @@ def query_task_status(session_id, logger):
     查询失败返回 None（未知状态，由调用方决定默认行为）。
     """
     port = os.environ.get("BEDCODE_PORT", str(BEDCODE_PORT_DEFAULT))
-    url = "http://localhost:{}{}/task-status?session_id={}".format(
-        port, PLUGIN_API_PREFIX, session_id
+    url = "http://{}:{}{}/task-status?session_id={}".format(
+        HOST, port, PLUGIN_API_PREFIX, session_id
     )
 
     logger.debug("HTTP GET {} session_id={}".format(url, session_id))
@@ -603,6 +642,14 @@ def handle_notification(data, logger):
         questions_data = extract_notification_questions(data)
         reason = "Waiting for user action: {}".format(notification_type)
         push_task_status(session_id, "asking", reason, logger, questions=questions_data)
+    elif notification_type in NOTIFICATION_IDLE_TYPES:
+        # Claude 响应完毕、空闲等待下一条输入：终态由 Stop hook 负责，
+        # 此处不推送（推 asking 会误伤队列刚调度的下一任务，见常量注释）
+        logger.info(
+            "notification: type={} is response-complete idle, skip status push (Stop hook owns terminal state)".format(
+                notification_type
+            )
+        )
     elif notification_type in ("auth_success", "elicitation_complete", "elicitation_response"):
         # 用户已完成交互 → in_progress
         push_task_status(session_id, "in_progress", "User responded: {}".format(notification_type), logger)
@@ -661,43 +708,26 @@ def handle_subagent_stop(data, logger):
     """处理 SubagentStop 事件。
 
     子 agent 完成响应时触发。
-    子 agent 完成不等于主任务完成，主 agent 还会继续，所以保持 in_progress。
-    仅 stop_hook_active=false 时标记 completed（所有 agent 均已停止）。
+    子 agent 完成不等于主任务完成，主 agent 还会继续工作，一律保持 in_progress；
+    终态（completed/interrupted）只由主 agent 的 Stop / SessionEnd 判定。
+    若在此标记 completed，会在主 agent 仍在工作时提前终态：任务提前显示完成，
+    且队列调度（try_dispatch_next）被提前触发，下一任务与当前任务并发执行。
     """
     session_id = data.get("session_id", "")
     if not session_id:
         logger.error("subagent_stop: missing session_id, data keys={}".format(list(data.keys())))
         sys.exit(2)
 
-    stop_hook_active = data.get("stop_hook_active", False)
     agent_type = data.get("agent_type", "")
-
-    if stop_hook_active:
-        status = "in_progress"
-        reason = "Subagent stop hook triggered continuation"
-    else:
-        current = query_task_status(session_id, logger)
-        if current in TERMINAL_STATUSES:
-            logger.info(
-                "HOOK subagent_stop: session_id={} skipped, already in terminal status '{}'".format(
-                    session_id, current
-                )
-            )
-            return
-        elif current == "asking":
-            status = "interrupted"
-            reason = "Subagent stopped while waiting for user input"
-        else:
-            status = "completed"
-            reason = "Subagent ({}) completed".format(agent_type) if agent_type else "Subagent completed"
+    reason = "Subagent ({}) completed".format(agent_type) if agent_type else "Subagent completed"
 
     logger.info(
-        "HOOK subagent_stop: session_id={} agent_type={} status={}".format(
-            session_id, agent_type, status
+        "HOOK subagent_stop: session_id={} agent_type={} status=in_progress".format(
+            session_id, agent_type
         )
     )
 
-    push_task_status(session_id, status, reason, logger)
+    push_task_status(session_id, "in_progress", reason, logger)
 
 
 def handle_session_end(data, logger):
@@ -705,7 +735,9 @@ def handle_session_end(data, logger):
 
     会话结束时触发，根据 reason 和当前状态判断终态：
     - resume → 不推送（会话恢复，非终止）
-    - prompt_input_exit / clear / logout / bypass_permissions_disabled → interrupted
+    - prompt_input_exit / clear / logout / bypass_permissions_disabled → 先查当前状态，
+      终态或 idle 则跳过（/clear 是上下文清理副作用，不得改写前一任务终态），
+      否则 interrupted
     - other + 当前已完成 → 不覆盖（Stop 已正确标记 completed）
     - other + 当前 idle → 不推送（无任务运行，无需标记）
     - other + 其他状态 → interrupted（保守处理）
@@ -723,6 +755,16 @@ def handle_session_end(data, logger):
         return
 
     if reason in SESSION_END_INTERRUPT_REASONS:
+        # 已知副作用场景：/clear 会触发 SessionEnd(reason=clear)，此时前一任务
+        # 通常已 completed。无守卫地推 interrupted 会把正常完成状态翻成中断，
+        # 与 "other" 分支同样先查当前状态：终态或 idle 一律跳过
+        current = query_task_status(session_id, logger)
+        if current in TERMINAL_STATUSES or current in ("idle", None):
+            logger.info(
+                "HOOK session_end: session_id={} reason={} skipped, current status '{}' "
+                "is terminal or idle".format(session_id, reason, current)
+            )
+            return
         status = "interrupted"
         status_reason = "Session ended: {}".format(reason)
     elif reason == "other":
