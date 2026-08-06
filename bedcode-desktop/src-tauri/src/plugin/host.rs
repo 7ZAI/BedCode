@@ -102,6 +102,8 @@ impl PluginHost {
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
+            // 注册表早于 auto-activate 注入宿主上下文，插件激活阶段挂载可用
+            file_service.clone(),
         ));
 
         // 1. 收集静态注册的 Rust 插件

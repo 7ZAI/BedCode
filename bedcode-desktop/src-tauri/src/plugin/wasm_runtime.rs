@@ -10,6 +10,7 @@
 mod host_functions;
 
 use crate::db::Database;
+use crate::plugin::file_service::FileServiceRegistry;
 use crate::plugin::fs_auth::FsAuthChecker;
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::storage::PluginStorage;
@@ -129,6 +130,11 @@ pub struct WasmHostContext {
     permission: Arc<PermissionManager>,
     fs_auth: Arc<FsAuthChecker>,
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
+    /// 文件服务注册表（挂载/沙箱/上传会话/钩子分发）
+    ///
+    /// 在 PluginHost::new() 中早于插件 auto-activate 创建并注入，插件激活阶段
+    /// （AppContext 全局可能尚未初始化）host_filesrv_mount 即可用
+    file_service: Arc<FileServiceRegistry>,
     /// 插件宿主服务（两阶段初始化，避免 PluginHost 与 WasmHostContext 类型互引）
     plugin_services: Arc<RwLock<Option<Arc<dyn PluginServices>>>>,
 }
@@ -750,6 +756,7 @@ impl WasmHostContext {
         permission: Arc<PermissionManager>,
         fs_auth: Arc<FsAuthChecker>,
         message_bus: Arc<crate::plugin::message_bus::MessageBus>,
+        file_service: Arc<FileServiceRegistry>,
     ) -> Self {
         Self {
             db,
@@ -761,6 +768,7 @@ impl WasmHostContext {
             permission,
             fs_auth,
             message_bus,
+            file_service,
             plugin_services: Arc::new(RwLock::new(None)),
         }
     }
@@ -782,6 +790,11 @@ impl WasmHostContext {
     /// 获取消息总线引用
     pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
         &self.message_bus
+    }
+
+    /// 获取文件服务注册表引用
+    pub fn file_service(&self) -> &Arc<FileServiceRegistry> {
+        &self.file_service
     }
 
     /// 获取 SessionManager 的 Arc 引用
@@ -921,6 +934,7 @@ mod tests {
     /// emit/数据目录类能力在测试中不被调用路径覆盖
     fn setup_wasm_plugin() -> (WasmRuntime, LoadedWasmPlugin) {
         use crate::db::Database;
+        use crate::plugin::file_service::FileServiceRegistry;
         use crate::plugin::message_bus::MessageBus;
         use crate::plugin::permission::PermissionManager;
         use crate::plugin::storage::PluginStorage;
@@ -972,6 +986,9 @@ mod tests {
             // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
             let wasm_runtime = WasmRuntime::new(storage.clone(), None).unwrap();
 
+            // 文件服务注册表与宿主上下文同步构造（headless：无 AppHandle）
+            let file_service = FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), None);
+
             let host_ctx = Arc::new(WasmHostContext::new(
                 db,
                 Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -982,6 +999,7 @@ mod tests {
                 permission,
                 wasm_runtime.fs_auth().clone(),
                 message_bus,
+                file_service,
             ));
 
             let module = wasm_runtime.compile_module(&wasm_bytes).unwrap();

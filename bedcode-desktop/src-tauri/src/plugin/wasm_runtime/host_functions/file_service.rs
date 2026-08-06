@@ -1,33 +1,21 @@
 //! 文件服务域 Host Functions（挂载/卸载/更新根目录/对端信息）
 //!
-//! 注册表在 AppContext 全局单例中（插件宿主构造后注入），
-//! host function 通过 `AppContext::try_global()` 惰性获取 ——
-//! 无头测试上下文未初始化时返回错误而非 panic。
+//! 注册表经 [`WasmHostContext`] 注入（在 PluginHost::new() 中早于插件
+//! auto-activate 创建并注入），host function 直接从 caller 的宿主上下文获取 ——
+//! 不依赖 AppContext 全局单例（其初始化晚于插件激活，激活期挂载会失败）。
 //! 挂载的上传策略钩子目标记为 Wasm（WASM 插件导出 __bedcode_on_upload_request）
 
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
 use crate::plugin::file_service::HookTarget;
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
-use crate::system::app_context::AppContext;
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use bedcode_plugin_api::permission::PERMISSION_FILESERVICE;
 use bedcode_plugin_api::{MountOptions, MountResult};
 
-/// 获取文件服务注册表（未初始化时记日志返回 None）
+/// 获取文件服务注册表（经宿主上下文注入，激活期始终可用）
 fn file_service_registry(
-    plugin_id: &str,
-    api: &str,
-) -> Option<std::sync::Arc<crate::plugin::file_service::FileServiceRegistry>> {
-    match AppContext::try_global() {
-        Some(ctx) => Some(ctx.file_service().clone()),
-        None => {
-            tracing::error!(
-                plugin_id = %plugin_id,
-                "{}: AppContext not initialized, file service unavailable",
-                api
-            );
-            None
-        }
-    }
+    host_ctx: &WasmHostContext,
+) -> std::sync::Arc<crate::plugin::file_service::FileServiceRegistry> {
+    host_ctx.file_service().clone()
 }
 
 /// 文件服务：挂载
@@ -64,9 +52,7 @@ pub(super) fn host_filesrv_mount(
         return -1;
     }
 
-    let Some(registry) = file_service_registry(&plugin_id, "host_filesrv_mount") else {
-        return -1;
-    };
+    let registry = file_service_registry(&host_ctx);
 
     let mount_path = options.mount_path.clone();
     match block_on_async(registry.mount(&plugin_id, options, HookTarget::Wasm)) {
@@ -122,9 +108,7 @@ pub(super) fn host_filesrv_unmount(
         return -1;
     }
 
-    let Some(registry) = file_service_registry(&plugin_id, "host_filesrv_unmount") else {
-        return -1;
-    };
+    let registry = file_service_registry(&host_ctx);
 
     match block_on_async(registry.unmount(&plugin_id, &mount_path)) {
         Ok(()) => 0,
@@ -182,9 +166,7 @@ pub(super) fn host_filesrv_update_roots(
         return -1;
     }
 
-    let Some(registry) = file_service_registry(&plugin_id, "host_filesrv_update_roots") else {
-        return -1;
-    };
+    let registry = file_service_registry(&host_ctx);
 
     match block_on_async(registry.update_roots(&plugin_id, &mount_path, roots)) {
         Ok(()) => 0,
@@ -221,9 +203,7 @@ pub(super) fn host_filesrv_get_peer(
         return -1;
     }
 
-    let Some(registry) = file_service_registry(&plugin_id, "host_filesrv_get_peer") else {
-        return -1;
-    };
+    let registry = file_service_registry(&host_ctx);
 
     match block_on_async(registry.get_peer(&peer_id)) {
         Some(info) => {
