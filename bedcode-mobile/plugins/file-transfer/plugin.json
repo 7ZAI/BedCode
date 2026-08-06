@@ -103,7 +103,8 @@
       {
         "id": "settings",
         "title": "文件传输设置",
-        "component": "SettingsPage"
+        "component": "SettingsPage",
+        "header": false
       }
     ]
   }
