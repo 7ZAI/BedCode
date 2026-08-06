@@ -32,6 +32,20 @@ rand = "0.8"
 jsonwebtoken = "9"
 # 生物凭证验签（EC P-256 / ECDSA-SHA256，与移动端 Keystore 生成的密钥配套）
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# 通用加密/解密工具（HTTP 加密、非对称加密、文件加密传输）
+# aes-gcm：对称 AEAD（AES-256-GCM），用于 HTTP 报文与文件分块加密
+aes-gcm = "0.10"
+# chacha20poly1305：备选对称 AEAD，性能不依赖 AES-NI
+chacha20poly1305 = "0.10"
+# x25519-dalek：椭圆曲线 Diffie-Hellman 密钥协商（端到端加密 ECDH）；
+# static_secrets 启用可复用的长期密钥对（StaticSecret），便于持久化私钥
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# rsa：常规非对称加密（RSA-OAEP / PSS 签名；pem 启用 PKCS#8/#1 编解码）
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+# sha2：SHA-256 摘要
+sha2 = "0.10"
+# hkdf：密钥派生（HKDF-SHA256）
+hkdf = "0.12"
 
 # Encoding
 encoding_rs = "0.8"
