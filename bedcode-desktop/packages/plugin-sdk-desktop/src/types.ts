@@ -29,6 +29,8 @@ export interface PluginManifest {
   pluginType: PluginType
   /** cdylib 动态库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
+  /** 插件图标：图片路径（相对插件目录）或内联 SVG 标记 */
+  icon?: string
   permissions: string[]
   contributes: PluginContributes
 }
@@ -353,9 +355,18 @@ export interface PluginInfo {
   main: string
   sandbox: string
   pluginType: PluginType
+  /** cdylib 动态库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
   permissions: string[]
   state: PluginState
   extensionPath: string
   contributes: PluginContributes
+  /** 插件图标（manifest.icon 透传，可为空） */
+  icon?: string
+  /** 插件来源：builtin / scanned / wasm */
+  source: string
+  /** 插件目录总大小（字节） */
+  sizeBytes: number
+  /** 安装时间（unix 毫秒，plugin.json mtime） */
+  installedAt?: number
 }

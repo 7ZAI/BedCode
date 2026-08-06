@@ -93,47 +93,8 @@ impl WasmPlugin for AutoTaskPlugin {
     const ID: &'static str = "com.bedcode.auto-task";
 
     fn manifest() -> PluginManifest {
-        let json = serde_json::json!({
-            "id": "com.bedcode.auto-task",
-            "name": "Auto Task",
-            "version": "1.0.0",
-            "description": "Claude Code 任务状态同步与自动授权",
-            "author": "BedCode",
-            "main": "index.js",
-            "sandbox": "inline",
-            "pluginType": "rust-ts",
-            "rustLibrary": "bedcode_plugin_auto_task",
-            "permissions": ["storage", "broadcast", "terminal:input", "terminal:output", "terminal:observe", "session:read", "session:write", "timer:schedule", "fs:read", "fs:write", "ui:sidebar", "ui:input"],
-            "contributes": {
-                "commands": [
-                    { "id": "auto-task.cleanup-project-hooks", "title": "Cleanup Project Hooks" },
-                    { "id": "auto-task.get-task-status", "title": "Get Task Status" },
-                    { "id": "auto-task.set-auto-mode", "title": "Set Auto Mode" },
-                    { "id": "auto-task.list-task-history", "title": "List Task History" },
-                    { "id": "auto-task.task-history-stats", "title": "Task History Statistics" },
-                    { "id": "auto-task.list-task-queue", "title": "List Task Queue by Session" },
-                    { "id": "auto-task.add-task", "title": "Add Task to Queue" },
-                    { "id": "auto-task.remove-task", "title": "Remove Task from Queue" },
-                    { "id": "auto-task.clear-queue", "title": "Clear Task Queue" },
-                    { "id": "auto-task.update-task", "title": "Update Task Prompt" },
-                    { "id": "auto-task.reorder-queue", "title": "Reorder Task Queue" },
-                    { "id": "auto-task.list-session-configs", "title": "List Session Configs" },
-                    { "id": "auto-task.list-scheduled-jobs", "title": "List Scheduled Jobs" },
-                    { "id": "auto-task.create-scheduled-job", "title": "Create Scheduled Job" },
-                    { "id": "auto-task.delete-scheduled-job", "title": "Delete Scheduled Job" },
-                    { "id": "auto-task.scheduler-tick", "title": "Scheduler Tick" }
-                ],
-                "views": [
-                    { "id": "auto-task.history", "type": "sidebar", "title": "任务历史", "component": "TaskHistoryView", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" }
-                ],
-                "lifecycle": {
-                    "onStartup": true,
-                    "onShutdown": true
-                },
-                "provides": ["task:status-changed", "session:mode-changed", "task:queue-changed", "task:scheduled-changed"]
-            }
-        });
-        serde_json::from_value(json).expect("Invalid manifest JSON")
+        serde_json::from_str(include_str!("../../plugin.json"))
+            .expect("plugin.json must be valid PluginManifest")
     }
 
     fn activate() -> anyhow::Result<()> {

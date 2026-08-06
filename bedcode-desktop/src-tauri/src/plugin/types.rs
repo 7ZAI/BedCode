@@ -8,6 +8,7 @@ use bedcode_plugin_api::{
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
+use std::path::Path;
 
 /// 已加载插件的内部表示
 pub struct LoadedPlugin {
@@ -31,6 +32,17 @@ pub enum PluginSource {
     Wasm,
 }
 
+impl PluginSource {
+    /// 序列化为前端友好字符串
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::StaticRegistry => "builtin",
+            Self::FileScan => "scanned",
+            Self::Wasm => "wasm",
+        }
+    }
+}
+
 /// 插件信息（返回给前端的精简版本）
 ///
 /// 从 bedcode_plugin_api::PluginInfo 扩展，添加桌面端特有字段
@@ -51,6 +63,16 @@ pub struct DesktopPluginInfo {
     pub state: PluginState,
     pub extension_path: String,
     pub contributes: PluginContributes,
+    /// 插件图标（manifest.icon 透传，可为空）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// 插件来源
+    pub source: String,
+    /// 插件目录总大小（字节）
+    pub size_bytes: u64,
+    /// 安装时间（unix 毫秒，plugin.json mtime）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_at: Option<i64>,
 }
 
 impl From<&LoadedPlugin> for DesktopPluginInfo {
@@ -69,6 +91,42 @@ impl From<&LoadedPlugin> for DesktopPluginInfo {
             state: p.state.clone(),
             extension_path: p.extension_path.clone(),
             contributes: p.manifest.contributes.clone(),
+            icon: p.manifest.icon.clone(),
+            source: p.source.as_str().to_string(),
+            size_bytes: dir_size(Path::new(&p.extension_path)),
+            installed_at: manifest_installed_at(&p.extension_path),
         }
     }
+}
+
+/// 递归计算目录总大小（字节），路径不存在或不可读时返回 0
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(ft) if ft.is_file() => {
+                    total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                }
+                Ok(ft) if ft.is_dir() => {
+                    total += dir_size(&entry.path());
+                }
+                _ => {}
+            }
+        }
+    }
+    total
+}
+
+/// 以 plugin.json 的 mtime 近似安装时间（unix 毫秒）
+fn manifest_installed_at(extension_path: &str) -> Option<i64> {
+    let manifest_path = Path::new(extension_path).join("plugin.json");
+    std::fs::metadata(manifest_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
+        })
 }

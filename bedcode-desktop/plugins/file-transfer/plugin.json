@@ -6,25 +6,78 @@
   "author": "BedCode",
   "main": "index.js",
   "sandbox": "inline",
-  "pluginType": "wasm",
+  "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_file_transfer",
-  "permissions": ["storage", "fileservice", "transfer", "network:http", "bus", "broadcast", "ui:sidebar", "fs:read", "fs:write"],
+  "icon": "icon.svg",
+  "permissions": [
+    "broadcast",
+    "bus",
+    "fileservice",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "storage",
+    "transfer",
+    "ui:sidebar"
+  ],
   "contributes": {
     "commands": [
-      { "id": "file-transfer.list-tasks", "title": "List Tasks" },
-      { "id": "file-transfer.list-remote", "title": "List Remote Files" },
-      { "id": "file-transfer.enqueue", "title": "Enqueue Transfer" },
-      { "id": "file-transfer.pause", "title": "Pause Transfer" },
-      { "id": "file-transfer.resume", "title": "Resume Transfer" },
-      { "id": "file-transfer.cancel", "title": "Cancel Transfer" },
-      { "id": "file-transfer.resume-all", "title": "Resume All Transfers" },
-      { "id": "file-transfer.retry", "title": "Retry Transfer" },
-      { "id": "file-transfer.set-concurrency", "title": "Set Concurrency" },
-      { "id": "file-transfer.get-settings", "title": "Get Settings" },
-      { "id": "file-transfer.set-settings", "title": "Set Settings" },
-      { "id": "file-transfer.pick-download-dir", "title": "Pick Download Directory" },
-      { "id": "file-transfer.mount-local", "title": "Mount Local Directory" },
-      { "id": "file-transfer.update-roots", "title": "Update Mount Roots" }
+      {
+        "id": "file-transfer.list-tasks",
+        "title": "List Tasks"
+      },
+      {
+        "id": "file-transfer.list-remote",
+        "title": "List Remote Files"
+      },
+      {
+        "id": "file-transfer.enqueue",
+        "title": "Enqueue Transfer"
+      },
+      {
+        "id": "file-transfer.pause",
+        "title": "Pause Transfer"
+      },
+      {
+        "id": "file-transfer.resume",
+        "title": "Resume Transfer"
+      },
+      {
+        "id": "file-transfer.cancel",
+        "title": "Cancel Transfer"
+      },
+      {
+        "id": "file-transfer.resume-all",
+        "title": "Resume All Transfers"
+      },
+      {
+        "id": "file-transfer.retry",
+        "title": "Retry Transfer"
+      },
+      {
+        "id": "file-transfer.set-concurrency",
+        "title": "Set Concurrency"
+      },
+      {
+        "id": "file-transfer.get-settings",
+        "title": "Get Settings"
+      },
+      {
+        "id": "file-transfer.set-settings",
+        "title": "Set Settings"
+      },
+      {
+        "id": "file-transfer.pick-download-dir",
+        "title": "Pick Download Directory"
+      },
+      {
+        "id": "file-transfer.mount-local",
+        "title": "Mount Local Directory"
+      },
+      {
+        "id": "file-transfer.update-roots",
+        "title": "Update Mount Roots"
+      }
     ],
     "views": [
       {

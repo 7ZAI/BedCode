@@ -36,6 +36,11 @@ const router = createRouter({
       component: () => import('@/views/PluginsView.vue'),
     },
     {
+      path: '/plugins/:id',
+      name: 'plugin-detail',
+      component: () => import('@/views/PluginDetailView.vue'),
+    },
+    {
       path: '/plugins/:id/config',
       name: 'plugin-config',
       component: () => import('@/views/PluginConfigView.vue'),

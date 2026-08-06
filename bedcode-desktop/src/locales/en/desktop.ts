@@ -271,6 +271,72 @@ export default {
       alwaysOn: 'Always on',
       noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
       toolboxPanels: 'Toolbox',
+      // ==================== Detail page additions ====================
+      togglingEnable: 'Enabling {name}...',
+      togglingDisable: 'Disabling {name}...',
+      noDescription: 'No description available',
+      openDetail: 'View Details',
+      goConfig: 'Configure',
+      backToList: 'Back to Plugins',
+      detailTitle: 'Plugin Details',
+      // Contribution chips
+      chip: {
+        sidebar: 'Sidebar',
+        toolbox: 'Toolbox',
+        statusbar: 'Status Bar',
+        commands: 'Commands ({count})',
+        terminal: 'Terminal',
+        toolProviders: 'Tool Providers ({count})',
+        fileHandlers: 'File Handlers ({count})',
+        configuration: 'Configurable',
+        lifecycle: 'Lifecycle',
+      },
+      // Permission metadata
+      perm: {
+        unknown: 'Unknown permission',
+        storage: { title: 'Storage', desc: 'Read/write plugin local storage' },
+        'terminal:input': { title: 'Terminal Input', desc: 'Send input to terminal sessions' },
+        'terminal:output': { title: 'Terminal Output', desc: 'Listen to terminal output' },
+        'terminal:observe': { title: 'Terminal Observe', desc: 'Observe terminal input submissions' },
+        'session:read': { title: 'Session Read', desc: 'Read session list and status' },
+        'session:write': { title: 'Session Write', desc: 'Create, stop or modify sessions' },
+        'ui:sidebar': { title: 'Sidebar Panel', desc: 'Register panels in sidebar' },
+        'ui:input': { title: 'Input Extension', desc: 'Extend terminal input area' },
+        'ui:toolbox': { title: 'Toolbox Page', desc: 'Register pages in toolbox' },
+        'network:http': { title: 'HTTP Network', desc: 'Make HTTP requests' },
+        'fs:read': { title: 'File Read', desc: 'Read local file system' },
+        'fs:write': { title: 'File Write', desc: 'Write to local file system' },
+        fileservice: { title: 'File Service', desc: 'Mount file service endpoints' },
+        broadcast: { title: 'Broadcast', desc: 'Broadcast events to other plugins' },
+      },
+      // Stats bar
+      stat: {
+        extensions: 'Extensions',
+        permissions: 'Permissions',
+        size: 'Size',
+      },
+      // Collapse sections
+      section: {
+        intro: 'Introduction',
+        contributes: 'Contributions',
+        permissions: 'Permissions',
+        details: 'Details',
+      },
+      // Detail info rows
+      detail: {
+        id: 'ID',
+        source: 'Source',
+        type: 'Type',
+        entry: 'Entry',
+        size: 'Size',
+        installedAt: 'Installed',
+      },
+      // Source labels
+      source: {
+        builtin: 'Built-in',
+        scanned: 'File Scan',
+        wasm: 'WASM',
+      },
       aiChatbox: {
         noProvider: 'No model configured',
         configureModel: 'Configure Model',

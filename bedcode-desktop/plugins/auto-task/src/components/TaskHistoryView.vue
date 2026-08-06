@@ -1,15 +1,16 @@
 <script setup lang="ts">
 /**
- * 任务历史视图 — 双 Tab 侧边栏视图
+ * 任务历史视图 — 三 Tab 侧边栏视图
  *
- * Tab1 任务记录：筛选条（状态/agent/来源/时间范围）+ 统计条 + 当前任务/队列区段
+ * Tab1 任务记录：筛选条（状态/agent/来源/时间范围）+ 当前任务/队列区段
  *               + 分页任务列表 + 行内详情展开
  * Tab2 定时任务：新建表单（会话配置/触发时间/prompts 列表）+ 任务列表 + 删除
+ * Tab3 统计：筛选条件下任务统计（状态分布 / 完成数 / 终态数 / 成功率 / 平均耗时）
  *
  * 通过 inject('pluginContext') 获取 PluginContext，
  * 调用 Rust 后端命令查询数据，监听事件实时更新
  */
-import { ref, onMounted, onUnmounted, inject, computed } from 'vue'
+import { ref, onMounted, onUnmounted, inject, computed, watch } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -75,7 +76,7 @@ interface HistoryStats {
 
 // ==================== State ====================
 
-type TabKey = 'records' | 'scheduled'
+type TabKey = 'records' | 'scheduled' | 'stats'
 const activeTab = ref<TabKey>('records')
 
 // Tab1 任务记录
@@ -165,6 +166,7 @@ function scheduledStatusBadge(status: string): string {
 const tabs: { key: TabKey; label: string }[] = [
   { key: 'records', label: t('tabsRecords') },
   { key: 'scheduled', label: t('tabsScheduled') },
+  { key: 'stats', label: t('tabsStats') },
 ]
 
 // ==================== 筛选选项与统计 ====================
@@ -275,6 +277,13 @@ function onFilterChanged() {
   offset.value = 0
   refreshRecords()
 }
+
+// 切到统计 tab 时加载最新统计（筛选变化时 refreshRecords 已联动刷新）
+watch(activeTab, (tab) => {
+  if (tab === 'stats') {
+    loadStats()
+  }
+})
 
 function resetFilters() {
   filterStatus.value = ''
@@ -503,68 +512,44 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- 筛选条（任务记录 / 统计 共用，定时任务不显示） -->
+    <div v-if="activeTab !== 'scheduled'" class="px-4 pt-3 flex-shrink-0 space-y-2">
+      <div class="grid grid-cols-3 gap-1.5">
+        <select v-model="filterStatus" :class="controlCls" @change="onFilterChanged">
+          <option value="">{{ t('filterStatus') }}</option>
+          <option v-for="s in statusOptions.slice(1)" :key="s" :value="s">{{ statusLabel[s] || s }}</option>
+        </select>
+        <select v-model="filterAgent" :class="controlCls" @change="onFilterChanged">
+          <option value="">{{ t('filterAgent') }}</option>
+          <option v-for="a in agentOptions.slice(1)" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <select v-model="filterSource" :class="controlCls" @change="onFilterChanged">
+          <option value="">{{ t('filterSource') }}</option>
+          <option v-for="s in sourceOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
+        </select>
+      </div>
+      <div class="grid grid-cols-2 gap-1.5">
+        <div>
+          <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterSince') }}</label>
+          <input v-model="filterSince" type="datetime-local" :class="controlCls" @change="onFilterChanged" />
+        </div>
+        <div>
+          <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterUntil') }}</label>
+          <input v-model="filterUntil" type="datetime-local" :class="controlCls" @change="onFilterChanged" />
+        </div>
+      </div>
+      <div class="flex justify-end">
+        <button
+          class="text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200"
+          @click="resetFilters"
+        >
+          {{ t('filterReset') }}
+        </button>
+      </div>
+    </div>
+
     <!-- Tab1 任务记录 -->
     <div v-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
-      <!-- 筛选条 -->
-      <div class="px-4 pt-3 flex-shrink-0 space-y-2">
-        <div class="grid grid-cols-3 gap-1.5">
-          <select v-model="filterStatus" :class="controlCls" @change="onFilterChanged">
-            <option value="">{{ t('filterStatus') }}</option>
-            <option v-for="s in statusOptions.slice(1)" :key="s" :value="s">{{ statusLabel[s] || s }}</option>
-          </select>
-          <select v-model="filterAgent" :class="controlCls" @change="onFilterChanged">
-            <option value="">{{ t('filterAgent') }}</option>
-            <option v-for="a in agentOptions.slice(1)" :key="a" :value="a">{{ a }}</option>
-          </select>
-          <select v-model="filterSource" :class="controlCls" @change="onFilterChanged">
-            <option value="">{{ t('filterSource') }}</option>
-            <option v-for="s in sourceOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
-          </select>
-        </div>
-        <div class="grid grid-cols-2 gap-1.5">
-          <div>
-            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterSince') }}</label>
-            <input v-model="filterSince" type="datetime-local" :class="controlCls" @change="onFilterChanged" />
-          </div>
-          <div>
-            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterUntil') }}</label>
-            <input v-model="filterUntil" type="datetime-local" :class="controlCls" @change="onFilterChanged" />
-          </div>
-        </div>
-        <div class="flex justify-end">
-          <button
-            class="text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200"
-            @click="resetFilters"
-          >
-            {{ t('filterReset') }}
-          </button>
-        </div>
-      </div>
-
-      <!-- 统计条 -->
-      <div v-if="stats" class="px-4 pt-2 flex-shrink-0">
-        <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-[var(--text-secondary)] font-medium">{{ t('statsTitle') }}</span>
-            <span class="text-[var(--text-primary)]">{{ t('statsTotal') }}: {{ stats.total }}</span>
-          </div>
-          <div v-if="statusStatsList.length" class="flex flex-wrap gap-1.5 mt-1.5">
-            <span
-              v-for="s in statusStatsList"
-              :key="s.key"
-              class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[calc(11px*var(--ui-scale))] bg-[var(--bg-hover)] text-[var(--text-secondary)]"
-            >
-              <span class="w-1.5 h-1.5 rounded-full" :class="statusDot[s.key]"></span>
-              {{ s.label }} {{ s.count }}
-            </span>
-          </div>
-          <div class="flex items-center gap-3 mt-1.5 text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)]">
-            <span>{{ t('statsSuccessRate') }}: <span class="text-[var(--text-primary)]">{{ formatPercent(stats.success_rate) }}</span></span>
-            <span>{{ t('statsAvgDuration') }}: <span class="text-[var(--text-primary)]">{{ formatDuration(stats.avg_duration_seconds) }}</span></span>
-          </div>
-        </div>
-      </div>
-
       <!-- 滚动内容：当前任务 / 队列 / 列表 -->
       <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
         <!-- 当前任务 -->
@@ -827,6 +812,74 @@ onUnmounted(() => {
               {{ t('delete') }}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab3 统计 -->
+    <div v-if="activeTab === 'stats'" class="flex-1 overflow-y-auto px-4 py-3">
+      <!-- 加载中 -->
+      <div v-if="!stats" class="flex justify-center py-8">
+        <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
+      </div>
+
+      <!-- 统计卡片 -->
+      <div v-else class="space-y-3">
+        <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-medium text-[var(--text-secondary)]">{{ t('statsTitle') }}</span>
+            <span class="text-sm font-semibold text-[var(--text-primary)]">{{ t('statsTotal') }}: {{ stats.total }}</span>
+          </div>
+
+          <!-- 状态分布 -->
+          <div v-if="statusStatsList.length" class="flex flex-wrap gap-1.5 mt-2">
+            <span
+              v-for="s in statusStatsList"
+              :key="s.key"
+              class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[calc(11px*var(--ui-scale))] bg-[var(--bg-hover)] text-[var(--text-secondary)]"
+            >
+              <span class="w-1.5 h-1.5 rounded-full" :class="statusDot[s.key]"></span>
+              {{ s.label }} {{ s.count }}
+            </span>
+          </div>
+          <div v-else class="text-xs text-[var(--text-tertiary)] mt-2">-</div>
+
+          <!-- 核心指标 -->
+          <div class="grid grid-cols-2 gap-2 mt-3">
+            <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('statsCompleted') }}</div>
+              <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">{{ stats.completed }}</div>
+            </div>
+            <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('statsTerminal') }}</div>
+              <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">{{ stats.terminal }}</div>
+            </div>
+            <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('statsSuccessRate') }}</div>
+              <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">{{ formatPercent(stats.success_rate) }}</div>
+            </div>
+            <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('statsAvgDuration') }}</div>
+              <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">{{ formatDuration(stats.avg_duration_seconds) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 无数据提示 -->
+        <div
+          v-if="stats.total === 0"
+          class="flex flex-col items-center justify-center py-10"
+        >
+          <svg class="w-12 h-12 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055zM20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"
+            />
+          </svg>
+          <p class="text-sm text-[var(--text-tertiary)]">{{ t('emptyHistory') }}</p>
+          <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('emptyHistoryHint') }}</p>
         </div>
       </div>
     </div>

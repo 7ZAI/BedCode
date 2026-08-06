@@ -271,6 +271,72 @@ export default {
       alwaysOn: '始终启用',
       noFileservicePermission: '插件 {plugin} 缺少 fileservice 权限',
       toolboxPanels: '工具箱',
+      // ==================== 详情页新增 ====================
+      togglingEnable: '正在启用 {name}...',
+      togglingDisable: '正在停用 {name}...',
+      noDescription: '暂无描述',
+      openDetail: '查看详情',
+      goConfig: '前往配置',
+      backToList: '返回插件列表',
+      detailTitle: '插件详情',
+      // 扩展点 chips
+      chip: {
+        sidebar: '侧边栏',
+        toolbox: '工具箱',
+        statusbar: '状态栏',
+        commands: '命令 ({count})',
+        terminal: '终端处理',
+        toolProviders: '工具提供者 ({count})',
+        fileHandlers: '文件处理 ({count})',
+        configuration: '可配置',
+        lifecycle: '生命周期',
+      },
+      // 权限元数据
+      perm: {
+        unknown: '未知权限',
+        storage: { title: '存储', desc: '读写插件本地存储' },
+        'terminal:input': { title: '终端输入', desc: '向终端会话发送输入' },
+        'terminal:output': { title: '终端输出', desc: '监听终端输出内容' },
+        'terminal:observe': { title: '终端观察', desc: '观察终端输入提交事件' },
+        'session:read': { title: '会话读取', desc: '读取会话列表与状态' },
+        'session:write': { title: '会话写入', desc: '创建、停止或修改会话' },
+        'ui:sidebar': { title: '侧边栏面板', desc: '在侧边栏注册面板' },
+        'ui:input': { title: '输入扩展', desc: '扩展终端输入区域功能' },
+        'ui:toolbox': { title: '工具箱页面', desc: '在工具箱注册页面' },
+        'network:http': { title: 'HTTP 网络', desc: '发起 HTTP 请求' },
+        'fs:read': { title: '文件读取', desc: '读取本地文件系统' },
+        'fs:write': { title: '文件写入', desc: '写入本地文件系统' },
+        fileservice: { title: '文件服务', desc: '挂载文件服务端点' },
+        broadcast: { title: '广播消息', desc: '向其他插件广播事件' },
+      },
+      // 统计条
+      stat: {
+        extensions: '扩展点',
+        permissions: '权限',
+        size: '大小',
+      },
+      // 折叠区
+      section: {
+        intro: '简介',
+        contributes: '扩展点',
+        permissions: '权限',
+        details: '详细信息',
+      },
+      // 详细信息行
+      detail: {
+        id: 'ID',
+        source: '来源',
+        type: '类型',
+        entry: '入口',
+        size: '大小',
+        installedAt: '安装时间',
+      },
+      // 来源标签
+      source: {
+        builtin: '内置',
+        scanned: '文件扫描',
+        wasm: 'WASM',
+      },
       aiChatbox: {
         noProvider: '未配置模型',
         configureModel: '配置模型',

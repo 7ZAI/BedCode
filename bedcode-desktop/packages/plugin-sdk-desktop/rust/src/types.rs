@@ -40,6 +40,9 @@ pub struct PluginManifest {
     /// 仅 rust-ts 类型插件使用，宿主根据平台自动添加后缀
     #[serde(default)]
     pub rust_library: String,
+    /// 插件图标：图片路径（相对插件目录）或内联 SVG 标记
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 fn default_sandbox() -> String {

@@ -13,6 +13,7 @@ import { execSync } from 'child_process'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { platform } from 'os'
+import { generateManifest } from '../packages/plugin-sdk-desktop/bin/manifest-gen.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -54,6 +55,21 @@ console.log(`\n=== Plugin Build: ${targetPlugin} ===\n`)
 // 委托给插件的构建脚本
 const pluginDir = resolve(ROOT, config.pluginDir)
 console.log(`Running plugin build in: ${pluginDir}`)
+
+// 构建前：按源码自动填充 plugin.json 的 contributes/permissions
+// （与插件源码单一真源约定，保证产物与源码一致）
+try {
+  const { changed, report } = generateManifest(pluginDir)
+  if (changed) {
+    console.log('[plugin-build] plugin.json 已根据源码自动填充:')
+    for (const line of report) console.log(`  ${line}`)
+  } else {
+    console.log('[plugin-build] plugin.json 已是最新，无需更新')
+  }
+} catch (e) {
+  console.error(`[plugin-build] manifest 自动填充失败: ${e.message}`)
+  process.exit(1)
+}
 
 try {
   const npmCmd = IS_WIN ? 'npm.cmd' : 'npm'

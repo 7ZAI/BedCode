@@ -8,17 +8,51 @@
   "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
-  "permissions": ["ui:sidebar", "ui:input", "storage", "terminal:input", "terminal:output", "session:read"],
+  "icon": "icon.svg",
+  "permissions": [
+    "broadcast",
+    "network:http",
+    "session:read",
+    "storage",
+    "terminal:input",
+    "terminal:output",
+    "ui:input",
+    "ui:sidebar"
+  ],
   "contributes": {
     "commands": [
-      { "id": "ai-chatbox.chat-stream", "title": "Chat Stream" },
-      { "id": "ai-chatbox.chat-complete", "title": "Chat Complete" },
-      { "id": "ai-chatbox.optimize-prompt", "title": "Optimize Prompt" },
-      { "id": "ai-chatbox.list-conversations", "title": "List Conversations" },
-      { "id": "ai-chatbox.get-messages", "title": "Get Messages" },
-      { "id": "ai-chatbox.save-conversation", "title": "Save Conversation" },
-      { "id": "ai-chatbox.save-message", "title": "Save Message" },
-      { "id": "ai-chatbox.delete-conversation", "title": "Delete Conversation" }
+      {
+        "id": "ai-chatbox.chat-stream",
+        "title": "Chat Stream"
+      },
+      {
+        "id": "ai-chatbox.chat-complete",
+        "title": "Chat Complete"
+      },
+      {
+        "id": "ai-chatbox.optimize-prompt",
+        "title": "Optimize Prompt"
+      },
+      {
+        "id": "ai-chatbox.list-conversations",
+        "title": "List Conversations"
+      },
+      {
+        "id": "ai-chatbox.get-messages",
+        "title": "Get Messages"
+      },
+      {
+        "id": "ai-chatbox.save-conversation",
+        "title": "Save Conversation"
+      },
+      {
+        "id": "ai-chatbox.save-message",
+        "title": "Save Message"
+      },
+      {
+        "id": "ai-chatbox.delete-conversation",
+        "title": "Delete Conversation"
+      }
     ],
     "views": [
       {
@@ -29,8 +63,12 @@
       }
     ],
     "terminal": {
-      "inputHandlers": ["on_terminal_input"],
-      "outputParsers": []
+      "inputHandlers": [
+        "on_terminal_input"
+      ],
+      "outputParsers": [
+        "on_terminal_output"
+      ]
     },
     "configuration": {
       "title": "AI Chatbox Settings",

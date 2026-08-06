@@ -48,6 +48,7 @@ export interface MessageSchema {
   // ==================== 双 Tab 视图 ====================
   tabsRecords: string
   tabsScheduled: string
+  tabsStats: string
   // ==================== 任务记录筛选 ====================
   filterStatus: string
   filterAgent: string
@@ -60,6 +61,8 @@ export interface MessageSchema {
   statsTotal: string
   statsSuccessRate: string
   statsAvgDuration: string
+  statsCompleted: string
+  statsTerminal: string
   durationSeconds: string
   durationMinutes: string
   durationHours: string

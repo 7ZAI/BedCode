@@ -58,6 +58,12 @@ export {
   getPluginContext,
 } from './runtime'
 
+// 配置约定导出
+export {
+  PLUGIN_CONFIG_STORAGE_KEY,
+  defineConfiguration,
+} from './config'
+
 // 事件名常量导出（与 Rust SDK constants.rs 同步）
 export {
   EVENT_TASK_STATUS_CHANGED,
