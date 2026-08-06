@@ -2,13 +2,13 @@ export default {
   desktop: {
     sidebar: {
       session: 'Session',
+      terminalSession: 'Terminal Session',
       sessionConfig: 'Session Config',
       sessionManager: 'Session Manager',
       server: 'Server',
       devicePairing: 'Device Pairing',
       settings: 'Settings',
       navigation: 'Navigation',
-      plugins: 'Plugins',
       serviceRunning: 'Service Running',
       serviceStopped: 'Service Stopped',
       serviceStarting: 'Service Starting',

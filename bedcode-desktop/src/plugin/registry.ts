@@ -7,8 +7,10 @@
 import type { Disposable, PluginContext } from './types'
 import { ref, type Ref } from 'vue'
 
-/** 插件视图默认排序值 — 插件未指定 order 时使用，留出区间供插件前后插入 */
-const DEFAULT_VIEW_ORDER = 100
+/** 插件视图默认排序值 — 插件未指定 order 时使用。
+ * 600 位于全部内置菜单项（会话 100 / 服务器 200 / 设备 300 / 插件 400 / 设置 700）之后，
+ * 插件菜单默认排在宿主内置菜单之后（设置之前）；显式指定 order 可插入任意内置项之间 */
+const DEFAULT_VIEW_ORDER = 600
 
 /** 注册的视图组件 */
 interface RegisteredView {

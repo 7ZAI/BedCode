@@ -2,13 +2,13 @@ export default {
   desktop: {
     sidebar: {
       session: '会话',
+      terminalSession: '终端会话',
       sessionConfig: '会话配置',
       sessionManager: '会话管理',
       server: '服务器',
       devicePairing: '设备配对',
       settings: '设置',
       navigation: '导航',
-      plugins: '插件',
       serviceRunning: '服务运行中',
       serviceStopped: '服务已停止',
       serviceStarting: '服务启动中',
