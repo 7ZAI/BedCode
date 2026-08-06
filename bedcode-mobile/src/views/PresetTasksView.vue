@@ -63,6 +63,7 @@
 
     <!-- Add/Edit Dialog -->
     <TaskEditDialog
+      v-if="showDialog"
       :visible="showDialog"
       :task="editingTask"
       :is-connected="isConnected"
@@ -151,15 +152,18 @@
  * 从工具箱入口进入：任务卡片列表、新增/编辑、选择会话执行、确认执行
  */
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 import { useToast } from '@/composables/useToast'
 import PresetTaskCard from '@/components/PresetTaskCard.vue'
-import TaskEditDialog from '@/components/TaskEditDialog.vue'
 import type { PresetTask } from '@/composables/model'
+
+// 懒加载：TaskEditDialog 内部依赖 FileExplorer → shiki 高亮引擎，静态引入会在首次进入本页时
+// 加载整个 shiki（45 语言 + 8 主题 + WASM）导致明显卡顿，改为打开弹窗时才加载
+const TaskEditDialog = defineAsyncComponent(() => import('@/components/TaskEditDialog.vue'))
 
 const router = useRouter()
 const connection = useMobileConnection()

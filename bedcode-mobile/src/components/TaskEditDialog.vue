@@ -211,6 +211,8 @@ const effectiveDir = computed(() => props.lockedDir || selectedDir.value)
 const effectiveProjectDir = computed(() => !!props.lockedDir || props.projectDirs.length > 0)
 
 // 弹窗打开时初始化表单
+// immediate：父组件可能通过 v-if 在 visible=true 时挂载本组件（懒加载场景），
+// 此时 watch 不会因 visible 变化触发，需在挂载时立即初始化
 watch(() => props.visible, (val) => {
   if (val) {
     if (props.task) {
@@ -227,7 +229,7 @@ watch(() => props.visible, (val) => {
     // 自动聚焦任务内容输入框
     nextTick(() => contentTextarea.value?.focus())
   }
-})
+}, { immediate: true })
 
 // ==================== 目录选择 ====================
 
@@ -254,11 +256,12 @@ const fileExplorerSessionId = computed(() => {
     return props.activeSessionId
   }
   const matchedConfig = props.sessionConfigs.find((c: any) => c.working_dir === dir)
-  if (!matchedConfig) return ''
+  if (!matchedConfig) return props.activeSessionId
   const session = props.activeSessions.find(
     (s: any) => s.config_id === matchedConfig.id || s.configId === matchedConfig.id
   )
-  return session?.id || ''
+  // 优先使用活跃会话 id；无可运行会话时回退到 config_id，桌面端文件 API 支持直接用 config_id 浏览
+  return session?.id || matchedConfig.id
 })
 
 // ==================== 保存 ====================
