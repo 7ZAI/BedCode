@@ -56,6 +56,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())
         .plugin(crate::plugin::android_plugins::downloads_dir_plugin())
         .plugin(crate::plugin::android_plugins::file_delete_plugin())
+        .plugin(crate::plugin::android_plugins::saf_picker_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
@@ -233,6 +234,7 @@ pub fn run() {
             crate::plugin::commands::plugin_filesrv_respond_upload_request,
             crate::plugin::commands::plugin_filesrv_get_peer,
             crate::plugin::commands::plugin_pick_directory,
+            crate::plugin::commands::plugin_pick_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

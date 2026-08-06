@@ -531,21 +531,113 @@ async fn pick_directory_native(
     }
 }
 
-/// 移动端（Android/iOS）：系统选择器无目录选择能力，返回明确错误供插件降级
-#[cfg(any(target_os = "android", target_os = "ios"))]
+/// 移动端（Android）：经 Kotlin SafPickerPlugin 弹 SAF 目录树选择器，
+/// 解析为真实路径（主存储/SD 卡/downloads raw:）；不支持的 provider 返回错误供插件降级
+#[cfg(target_os = "android")]
+async fn pick_directory_native(
+    plugin_id: &str,
+    _app_handle: &tauri::AppHandle,
+) -> Result<Option<String>> {
+    crate::plugin::android_plugins::pick_directory_android()
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("{}: {}", plugin_id, e)))
+}
+
+/// 移动端（iOS）：系统选择器无目录选择能力，返回明确错误供插件降级
+#[cfg(target_os = "ios")]
 async fn pick_directory_native(
     plugin_id: &str,
     _app_handle: &tauri::AppHandle,
 ) -> Result<Option<String>> {
     tracing::warn!(
         plugin_id = %plugin_id,
-        "plugin_pick_directory: directory picker unavailable on mobile platforms"
+        "plugin_pick_directory: directory picker unavailable on iOS"
     );
     Err(crate::AppError::InvalidInput(format!(
         "plugin_pick_directory: directory picker is not available on this platform (plugin '{}'); fall back to manual path input",
         plugin_id
     )))
 }
+
+// ==================== Plugin File Picker ====================
+
+/// 弹出系统文件选择对话框（插件上传本地文件用；用户取消返回 null）
+#[tauri::command]
+pub async fn plugin_pick_file(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<Option<String>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_pick_file").await?;
+    pick_file_native(&plugin_id, &app_handle).await
+}
+
+/// 桌面：tauri-plugin-dialog 系统文件选择对话框
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn pick_file_native(
+    plugin_id: &str,
+    app_handle: &tauri::AppHandle,
+) -> Result<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_file(move |selection| {
+        // 接收端仍在 await 时才有效；命令被取消时发送失败，记日志即可
+        if tx.send(selection).is_err() {
+            tracing::debug!("plugin_pick_file: receiver dropped before dialog completed");
+        }
+    });
+    match rx.await {
+        Ok(Some(file_path)) => {
+            let path = file_path.into_path().map_err(|e| {
+                crate::AppError::InvalidInput(format!(
+                    "plugin_pick_file: failed to convert selected path for plugin '{}': {}",
+                    plugin_id, e
+                ))
+            })?;
+            path.to_str().map(|s| Some(s.to_string())).ok_or_else(|| {
+                crate::AppError::InvalidInput(format!(
+                    "plugin_pick_file: selected path is not valid UTF-8 for plugin '{}'",
+                    plugin_id
+                ))
+            })
+        }
+        // 用户取消选择
+        Ok(None) => Ok(None),
+        Err(e) => Err(crate::AppError::Plugin(format!(
+            "plugin_pick_file: dialog channel closed for plugin '{}': {}",
+            plugin_id, e
+        ))),
+    }
+}
+
+/// 移动端（Android）：经 Kotlin SafPickerPlugin 弹 SAF 文件选择器，
+/// 优先 _data 列直读真实路径，否则按 externalstorage/downloads raw: 解析
+#[cfg(target_os = "android")]
+async fn pick_file_native(
+    plugin_id: &str,
+    _app_handle: &tauri::AppHandle,
+) -> Result<Option<String>> {
+    crate::plugin::android_plugins::pick_file_android()
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("{}: {}", plugin_id, e)))
+}
+
+/// 移动端（iOS）：系统文档选择器未接入，返回明确错误供插件降级
+#[cfg(target_os = "ios")]
+async fn pick_file_native(
+    plugin_id: &str,
+    _app_handle: &tauri::AppHandle,
+) -> Result<Option<String>> {
+    tracing::warn!(
+        plugin_id = %plugin_id,
+        "plugin_pick_file: file picker unavailable on iOS"
+    );
+    Err(crate::AppError::InvalidInput(format!(
+        "plugin_pick_file: file picker is not available on this platform (plugin '{}'); fall back to manual path input",
+        plugin_id
+    )))
+}
+
 
 // ==================== Plugin Command Invoke ====================
 
