@@ -63,13 +63,13 @@
                     <div v-if="prop.description" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-0.5">{{ prop.description }}</div>
                   </div>
                   <button
-                    class="relative w-10 h-5 rounded-full transition-colors shrink-0"
-                    :class="configValues[key] ? 'bg-[var(--color-primary)]' : 'bg-[var(--border)]'"
+                    class="relative w-10 h-5 rounded-[4px] border transition-colors shrink-0"
+                    :class="configValues[key] ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
                     @click="configValues[key] = !configValues[key]"
                   >
                     <span
-                      class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"
-                      :class="configValues[key] ? 'translate-x-5' : 'translate-x-0'"
+                      class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
+                      :class="configValues[key] ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
                     ></span>
                   </button>
                 </div>

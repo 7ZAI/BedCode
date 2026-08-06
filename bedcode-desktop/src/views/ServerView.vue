@@ -102,13 +102,13 @@
           <div class="flex items-center justify-between h-12">
             <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.server.autoStart') }}</span>
             <button
-              class="relative w-10 h-5 rounded-full transition-colors"
-              :class="autoStart ? 'bg-[var(--color-primary)]' : 'bg-[var(--border)]'"
+              class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
+              :class="autoStart ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
               @click="handleAutoStartToggle(!autoStart)"
             >
               <span
-                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"
-                :class="autoStart ? 'translate-x-5' : 'translate-x-0'"
+                class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
+                :class="autoStart ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
               ></span>
             </button>
           </div>
@@ -139,13 +139,13 @@
               </div>
               <button
                 v-if="field.type === 'toggle'"
-                class="relative w-10 h-5 rounded-full transition-colors"
-                :class="(advConfig as any)[field.key] ? 'bg-[var(--color-primary)]' : 'bg-[var(--border)]'"
+                class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
+                :class="(advConfig as any)[field.key] ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
                 @click="(advConfig as any)[field.key] = !(advConfig as any)[field.key]"
               >
                 <span
-                  class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"
-                  :class="(advConfig as any)[field.key] ? 'translate-x-5' : 'translate-x-0'"
+                  class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
+                  :class="(advConfig as any)[field.key] ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
                 ></span>
               </button>
               <input
@@ -232,10 +232,12 @@ const {
 /** 首次加载未完成时显示骨架屏 */
 const initializing = ref(true)
 
-const portInput = computed({
-  get: () => port.value,
-  set: (v: number) => { port.value = v },
-})
+const portInput = ref(8765)
+
+/** 后端端口刷新后同步输入框（loadStatus / updatePort 等操作完成后调用） */
+function syncPortInput() {
+  portInput.value = port.value
+}
 
 const statusText = computed(() => {
   switch (status.value) {
@@ -351,9 +353,12 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`
 }
 
-/** 启动服务器 */
+/** 启动服务器（先提交输入框中未应用的端口） */
 async function handleStart() {
   try {
+    if (portInput.value !== port.value) {
+      await updatePort(portInput.value)
+    }
     await startServer()
     toast.success(t('desktop.server.startSuccess'))
     startPolling()
@@ -389,6 +394,9 @@ async function handleRestart() {
       }
     }
     await restartServer()
+    // 同步服务器实际端口，避免重启后页面仍显示旧端口
+    await loadStatus()
+    syncPortInput()
     toast.success(t('desktop.server.restartSuccess'))
     startPolling()
   } catch (e: any) {
@@ -466,6 +474,7 @@ onMounted(async () => {
   try {
     await loadStatus()
     await loadNetworkConfig()
+    syncPortInput()
     if (status.value === 'running') {
       startPolling()
     }
