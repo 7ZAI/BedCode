@@ -26,3 +26,6 @@ pub const EVENT_TASK_QUEUE_CHANGED: &str = "task:queue-changed";
 
 /// 插件 UI 事件：定时自动任务变更（创建/触发/状态更新，v6 ADR 0003）
 pub const EVENT_TASK_SCHEDULED_CHANGED: &str = "task:scheduled-changed";
+
+/// 插件 UI 事件：预设任务变更（创建/删除/加入队列，仅桌面端，不广播移动端）
+pub const EVENT_TASK_PRESET_CHANGED: &str = "task:preset-changed";

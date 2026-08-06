@@ -571,6 +571,41 @@ fn handle_get_session_mode(host: &WasmHost, query: &Value) -> Value {
     }))
 }
 
+/// GET /session-settings — 查询会话设置（auto_execute + auto_answer）
+fn handle_get_session_settings_http(host: &WasmHost, query: &Value) -> Value {
+    let session_id = query.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+
+    let resolved_id = resolve_session_id(host, session_id);
+    let (auto_execute, auto_answer) = session_flags(host, &resolved_id);
+
+    http_response::ok_with_data(serde_json::json!({
+        "session_id": session_id,
+        "auto_execute": auto_execute,
+        "auto_answer": auto_answer,
+    }))
+}
+
+/// GET /task-history/current — 查询会话当前任务（最新一条历史记录）
+fn handle_get_current_task(host: &WasmHost, query: &Value) -> Value {
+    let session_id = query.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+
+    let resolved_id = resolve_session_id(host, session_id);
+    let task = find_task_by_session(host, &resolved_id);
+
+    http_response::ok_with_data(serde_json::json!({
+        "session_id": session_id,
+        "task": task,
+    }))
+}
+
 // ==================== 辅助函数 ====================
 
 /// 解析 Claude Code session_id → BedCode PTY session_id
