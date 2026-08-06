@@ -66,7 +66,9 @@ const pages = computed<PageConfig[]>(() => {
   ]
 
   const pluginPages: PageConfig[] = pluginRegistry.navTabs.value.map(tab => ({
-    name: `plugin-nav-${tab.id}`,
+    // name 同时充当 v-for key，拼入 pluginId 保证跨插件唯一（避免两个插件 tab.id 相同导致
+    // Vue 复用 DOM 节点/组件实例，引发 provide 的 PluginContext 错乱）
+    name: `plugin-nav-${tab.pluginId}-${tab.id}`,
     component: tab.component,
     pluginId: tab.pluginId,
   }))

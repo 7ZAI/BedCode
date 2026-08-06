@@ -57,7 +57,7 @@
           <div class="group-card">
             <button
               v-for="view in pluginRegistry.toolboxViews.value"
-              :key="view.viewId"
+              :key="`${view.pluginId}:${view.viewId}`"
               class="group-row group-row-btn"
               @click="activePluginView = view"
             >

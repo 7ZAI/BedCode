@@ -17,7 +17,9 @@
         <main class="flex-1 overflow-hidden bg-page">
           <router-view v-slot="{ Component }">
             <Transition name="page" mode="out-in">
-              <component :is="Component" />
+              <!-- :key 强制路由参数变化（如插件侧边栏 A→B）时重建组件实例，
+                   避免 vue-router 复用实例导致 provide('pluginContext') 停留在旧插件 context -->
+              <component :is="Component" :key="$route.fullPath" />
             </Transition>
           </router-view>
         </main>

@@ -18,7 +18,7 @@
         <ul class="max-h-64 overflow-y-auto">
           <li
             v-for="cmd in filteredCommands"
-            :key="cmd.command_id"
+            :key="`${cmd.plugin_id}:${cmd.command_id}`"
             class="px-4 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-sm text-[var(--text-secondary)]"
             @click="executeCommand(cmd)"
           >

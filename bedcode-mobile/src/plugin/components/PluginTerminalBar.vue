@@ -1,5 +1,5 @@
 <template>
-  <template v-for="item in toolbarItems" :key="item.id">
+  <template v-for="item in toolbarItems" :key="`${item.pluginId}:${item.id}`">
     <button
       class="tool-btn"
       @click="handleClick(item)"

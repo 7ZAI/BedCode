@@ -2,7 +2,7 @@
   <div v-if="items.length > 0" class="flex items-center gap-2">
     <button
       v-for="item in items"
-      :key="item.id"
+      :key="`${item.pluginId}:${item.id}`"
       class="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
       @click="item.onClick?.()"
     >

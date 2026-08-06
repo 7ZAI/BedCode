@@ -355,8 +355,8 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${info.id}.${key}`] = value
       }
-      const existing = hostI18n.global.getLocaleMessage(locale)
-      hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
+      // 直接合并新消息，vue-i18n 会自动与现有消息深度合并
+      hostI18n.global.mergeLocaleMessage(locale, prefixed)
     },
     t(key: string, params?: Record<string, any>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n

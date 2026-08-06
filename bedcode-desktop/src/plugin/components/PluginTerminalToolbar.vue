@@ -3,7 +3,7 @@
     <div class="w-px h-4 bg-slate-200 dark:bg-dark-600 mx-1"></div>
     <Button
       v-for="item in items"
-      :key="item.id"
+      :key="`${item.pluginId}:${item.id}`"
       variant="ghost"
       size="sm"
       :title="item.label"

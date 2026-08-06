@@ -14,7 +14,7 @@
  *
  * 解析插件注册的视图组件并提供 PluginContext 给子组件树
  */
-import { computed, provide } from 'vue'
+import { computed, provide, watch } from 'vue'
 import { getPluginRegistry } from '../registry'
 
 const props = defineProps<{
@@ -30,6 +30,18 @@ const context = registry.getContext(props.pluginId)
 if (context) {
   provide('pluginContext', context)
 }
+
+// 双保险：vue-router 切换同一路由记录（/plugin/sidebar/:pluginId/:viewId）时会复用
+// 组件实例且 setup 不重跑，此处 watch 参数变化重新 provide，避免子组件拿到旧插件 context
+watch(
+  () => [props.pluginId, props.viewId],
+  () => {
+    const ctx = registry.getContext(props.pluginId)
+    if (ctx) {
+      provide('pluginContext', ctx)
+    }
+  }
+)
 
 const resolvedComponent = computed(() =>
   registry.getViewComponent(props.pluginId, props.viewId)
