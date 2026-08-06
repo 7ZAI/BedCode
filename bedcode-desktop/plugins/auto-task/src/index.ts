@@ -8,13 +8,107 @@
  * - 终端工具栏按钮（registerTerminalToolbarItem）→ 打开自动任务队列弹窗
  * - 侧边栏任务历史视图（registerSidebarPanel）
  */
-import { createApp, type App } from 'vue'
+import { createApp, type App, watch } from 'vue'
 import TaskHistoryView from './components/TaskHistoryView.vue'
 import AutoTaskModal from './components/AutoTaskModal.vue'
 import autoTaskModalCss from './components/auto-task-modal.css?inline'
+// 开源 Vue3 日期/时间选择组件（替代原生 datetime-local 控件，样式可随主题定制）
+import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
+// 宿主 OS 平台：自动任务投递的输入提交符按平台选择（Windows=CR，Linux=LF），
+// 通过 @tauri-apps/plugin-os 读取（同步 API，宿主已注册该插件）
+import { platform } from '@tauri-apps/plugin-os'
 import { autoTaskModalVisible } from './state'
 import { messages } from './i18n'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+
+// ==================== Datepicker 主题定制 ====================
+
+// 日期选择器与宿主主题融合：跟随应用的设计变量（bg-card / border / primary 等），
+// 深色模式由 Datepicker 的 dark prop 切换 .dp__theme_dark，此处覆盖其默认深色变量
+const DATEPICKER_THEME_OVERRIDES = `
+/* 输入框与宿主控件保持一致（controlCls 同规格：高 32px、圆角 6px、跟随设计变量） */
+.dp__main {
+  width: 100%;
+}
+.dp__input_wrap {
+  width: 100%;
+}
+.dp__input {
+  height: 32px;
+  min-height: 32px;
+  font-size: 12px;
+  border-radius: 6px;
+  border-color: var(--border-input);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+.dp__input:hover {
+  border-color: var(--border-input);
+}
+.dp__input:focus {
+  border-color: var(--color-primary);
+}
+.dp__input::placeholder {
+  color: var(--text-tertiary);
+}
+.dp__theme_dark {
+  --dp-background-color: var(--bg-card);
+  --dp-text-color: var(--text-primary);
+  --dp-hover-color: var(--bg-hover);
+  --dp-hover-text-color: var(--text-primary);
+  --dp-hover-icon-color: var(--text-primary);
+  --dp-border-color: var(--border);
+  --dp-border-color-hover: var(--border-input);
+  --dp-primary-color: var(--color-primary);
+  --dp-primary-disabled-color: var(--color-primary);
+  --dp-primary-text-color: #fff;
+  --dp-secondary-color: var(--text-tertiary);
+  --dp-success-color: var(--color-primary);
+  --dp-icon-color: var(--text-secondary);
+  --dp-disabled-color: var(--text-tertiary);
+  --dp-disabled-border-color: var(--border);
+  --dp-font-family: inherit;
+  --dp-border-radius: 6px;
+  --dp-font-size: 12px;
+  --dp-preview-font-size: 12px;
+  --dp-time-picker-height: 170px;
+}
+.dp__menu {
+  font-size: 12px;
+}
+`
+
+// ==================== UI 注册（标题随宿主语言切换重注册） ====================
+
+let sidebarDisposable: { dispose(): void } | null = null
+let toolbarDisposable: { dispose(): void } | null = null
+let stopLocaleWatch: (() => void) | null = null
+
+/**
+ * 注册侧边栏面板 + 终端工具栏按钮
+ *
+ * 注册时标题被静态捕获（宿主 labelKey 非 i18n key，不随 vue-i18n 自动更新），
+ * 语言切换时先释放旧注册再重新注册，菜单/路由显示文本即时刷新。
+ */
+function registerPluginUi(context: PluginContext) {
+  sidebarDisposable?.dispose()
+  toolbarDisposable?.dispose()
+
+  sidebarDisposable = context.ui.registerSidebarPanel({
+    id: 'auto-task.history',
+    title: context.i18n.t('historyTitle'),
+    icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01',
+    component: TaskHistoryView,
+  })
+
+  toolbarDisposable = context.ui.registerTerminalToolbarItem({
+    id: 'auto-task.open-modal',
+    label: context.i18n.t('title'),
+    onClick: () => {
+      autoTaskModalVisible.value = true
+    },
+  })
+}
 
 // ==================== 弹窗挂载管理 ====================
 
@@ -40,6 +134,14 @@ function unmountModal() {
 }
 
 export async function activate(context: PluginContext): Promise<void> {
+  // 上报宿主平台：WASM 调度按平台选择终端输入提交符（Windows=CR，Linux=LF），
+  // 见 rust/src/queue.rs input_submit_char。失败仅告警，不影响插件激活（默认回退 CR）
+  try {
+    await context.commands.execute('auto-task.set-platform', { platform: platform() })
+  } catch (e) {
+    console.warn('[AutoTask] failed to report host platform:', e)
+  }
+
   // 注册 i18n 消息（自动添加插件 ID 前缀），必须在弹窗组件 setup 前完成
   // 翻译表维护在 src/i18n/ 独立文件，构建期由 Vite 编译内联进 bundle（无运行时文件读取）
   for (const [locale, msgs] of Object.entries(messages)) {
@@ -54,22 +156,24 @@ export async function activate(context: PluginContext): Promise<void> {
     document.head.appendChild(styleEl)
   }
 
-  // 注册侧边栏面板 — 任务历史（标题经 i18n 解析，注册时取当前语言）
-  context.ui.registerSidebarPanel({
-    id: 'auto-task.history',
-    title: context.i18n.t('historyTitle'),
-    icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01',
-    component: TaskHistoryView,
-  })
+  // 注入日期选择器样式（基础样式 + 主题覆盖，同样运行时注入）
+  if (!document.getElementById('auto-task-datepicker-style')) {
+    const styleEl = document.createElement('style')
+    styleEl.id = 'auto-task-datepicker-style'
+    styleEl.textContent = datepickerCss + DATEPICKER_THEME_OVERRIDES
+    document.head.appendChild(styleEl)
+  }
 
-  // 注册终端工具栏按钮 — 打开自动任务队列弹窗
-  context.ui.registerTerminalToolbarItem({
-    id: 'auto-task.open-modal',
-    label: context.i18n.t('title'),
-    onClick: () => {
-      autoTaskModalVisible.value = true
-    },
-  })
+  // 注册侧边栏面板 + 终端工具栏按钮（标题随宿主语言切换重注册，见 registerPluginUi）
+  registerPluginUi(context)
+
+  // 宿主语言切换时重注册菜单项：面板/按钮标题在注册时被静态捕获（labelKey 非 i18n key），
+  // 不随 vue-i18n 自动更新，需监听 locale 变化后重新注册刷新菜单/路由显示文本
+  const hostI18n = context.i18n.getI18n()
+  stopLocaleWatch = watch(
+    () => hostI18n?.global?.locale?.value,
+    () => registerPluginUi(context),
+  )
 
   // 挂载自动任务弹窗（i18n 已注册，组件 setup 可正常取文案）
   mountModal(context)
@@ -98,7 +202,9 @@ export async function activate(context: PluginContext): Promise<void> {
 }
 
 export async function deactivate(): Promise<void> {
+  stopLocaleWatch?.()
   unmountModal()
   document.getElementById('auto-task-modal-style')?.remove()
+  document.getElementById('auto-task-datepicker-style')?.remove()
   console.log('[Auto Task] Plugin deactivated')
 }

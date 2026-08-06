@@ -14,8 +14,10 @@ export interface MessageSchema {
   completed: string
   interrupted: string
   pending: string
-  autoMode: string
-  autoModeHint: string
+  autoExecute: string
+  autoExecuteHint: string
+  autoAnswer: string
+  autoAnswerHint: string
   inputPlaceholder: string
   add: string
   clearQueue: string
@@ -45,10 +47,32 @@ export interface MessageSchema {
   historySectionTitle: string
   emptyHistory: string
   emptyHistoryHint: string
-  // ==================== 双 Tab 视图 ====================
+  // ==================== Tab 视图 ====================
+  tabsCurrent: string
   tabsRecords: string
   tabsScheduled: string
   tabsStats: string
+  // ==================== 当前任务 Tab ====================
+  currentTaskTitle: string
+  executingTaskTitle: string
+  queueCount: string
+  createTaskTitle: string
+  createTaskSession: string
+  createTaskSessionPlaceholder: string
+  createTaskPromptPlaceholder: string
+  createTaskSubmit: string
+  createTaskFailed: string
+  noRunningSessions: string
+  noRunningSessionsHint: string
+  // ==================== 预设任务 ====================
+  presetTitle: string
+  saveAsPreset: string
+  createTaskNoSessionHint: string
+  addToQueue: string
+  presetAddHint: string
+  createPresetFailed: string
+  addPresetFailed: string
+  deletePresetFailed: string
   // ==================== 任务记录筛选 ====================
   filterStatus: string
   filterAgent: string
@@ -79,8 +103,6 @@ export interface MessageSchema {
   detailWorkingDir: string
   detailExitReason: string
   detailDescription: string
-  // ==================== 当前任务 ====================
-  currentTaskTitle: string
   // ==================== 定时任务 ====================
   scheduledEmpty: string
   scheduledEmptyHint: string

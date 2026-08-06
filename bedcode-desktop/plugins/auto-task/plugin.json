@@ -46,12 +46,40 @@
         "title": "List Task Queue by Session"
       },
       {
+        "id": "auto-task.list-running-sessions",
+        "title": "List Running Sessions"
+      },
+      {
+        "id": "auto-task.set-platform",
+        "title": "Set Host Platform"
+      },
+      {
         "id": "auto-task.set-auto-mode",
         "title": "Set Auto Mode"
       },
       {
+        "id": "auto-task.get-session-settings",
+        "title": "Get Session Settings"
+      },
+      {
         "id": "auto-task.add-task",
         "title": "Add Task to Queue"
+      },
+      {
+        "id": "auto-task.list-preset-tasks",
+        "title": "List Preset Tasks"
+      },
+      {
+        "id": "auto-task.create-preset-task",
+        "title": "Create Preset Task"
+      },
+      {
+        "id": "auto-task.delete-preset-task",
+        "title": "Delete Preset Task"
+      },
+      {
+        "id": "auto-task.add-preset-to-queue",
+        "title": "Add Preset Task to Queue"
       },
       {
         "id": "auto-task.remove-task",
@@ -107,7 +135,8 @@
       "task:status-changed",
       "session:mode-changed",
       "task:queue-changed",
-      "task:scheduled-changed"
+      "task:scheduled-changed",
+      "task:preset-changed"
     ]
   }
 }

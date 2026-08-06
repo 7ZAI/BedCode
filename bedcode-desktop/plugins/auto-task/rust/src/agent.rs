@@ -14,7 +14,7 @@
 pub struct AgentProfile {
     /// agent CLI 名称（写入 task_history.agent 字段）
     pub name: &'static str,
-    /// 上下文清理命令（含换行，可直接 terminal_send）；None 表示未适配
+    /// 上下文清理命令本体（不含提交符；投递时由调用方按宿主平台拼接 `\r` / `\n`）；None 表示未适配
     pub clear_command: Option<&'static str>,
 }
 
@@ -22,7 +22,7 @@ pub struct AgentProfile {
 pub const AGENT_PROFILES: &[AgentProfile] = &[
     AgentProfile {
         name: "claude",
-        clear_command: Some("/clear\n"),
+        clear_command: Some("/clear"),
     },
     AgentProfile {
         name: "codex",
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn clear_command_registry() {
-        assert_eq!(clear_command_for("claude"), Some("/clear\n"));
+        assert_eq!(clear_command_for("claude"), Some("/clear"));
         assert_eq!(clear_command_for("codex"), None);
         assert_eq!(clear_command_for("unknown"), None);
     }

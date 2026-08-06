@@ -11,8 +11,8 @@
 
 .at-modal {
   width: 100%;
-  max-width: 28rem;
-  max-height: 80vh;
+  max-width: 38rem;
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
   background: var(--bg-card);
@@ -435,4 +435,45 @@
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
+}
+/* 预设任务区（无会话时在侧边栏创建，弹窗内可选入当前会话队列） */
+.at-presets {
+  padding: 0 1rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.at-presets-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.375rem;
+}
+
+.at-presets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 8rem;
+  overflow-y: auto;
+}
+
+.at-preset-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3125rem 0.5rem;
+  border-radius: 0.375rem;
+  background: var(--bg-hover);
+}
+
+.at-preset-prompt {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

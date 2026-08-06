@@ -12,6 +12,7 @@ use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::agent;
 
@@ -155,7 +156,7 @@ pub fn create_task_from_dispatch(
     agent: &str,
     source: &str,
 ) {
-    insert_task_row(host, session_id, prompt, agent, source, true);
+    insert_task_row(host, session_id, prompt, agent, source);
 
     // 调度触发的任务同样广播状态变更（移动端/UI 需要感知任务开始）
     host.broadcast_sync(&SyncEvent::TaskStatusChanged {
@@ -176,19 +177,22 @@ pub fn create_task_from_dispatch(
 }
 
 /// 插入任务行的内部实现
+///
+/// auto_approve 取会话当前的 auto_answer 开关（自动应答）：开启则新任务行
+/// 标记为可自动应答（hook 据此自动回答提问），关闭则标记手动，随会话设置同步。
 fn insert_task_row(
     host: &WasmHost,
     session_id: &str,
     input: &str,
     agent: &str,
     source: &str,
-    auto_approve: bool,
 ) {
     let claude_sid = find_claude_sid_by_session(host, session_id);
+    let (_, auto_answer) = session_flags(host, session_id);
 
     let sql = "INSERT INTO task_history \
-               (id, description, status, agent, source, session_id, claude_sid, auto_approve, started_at, created_at, updated_at) \
-               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'), datetime('now'))";
+               (id, description, status, agent, source, session_id, claude_sid, auto_approve, event_time, started_at, created_at, updated_at) \
+               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%d %H:%M:%f', 'now'), datetime('now'), datetime('now'), datetime('now'))";
     // claude_sid 映射缺失时绑定 NULL（SessionStart 之前就提交输入等边缘场景）
     let claude_sid_param = claude_sid
         .as_ref()
@@ -196,11 +200,11 @@ fn insert_task_row(
         .unwrap_or(serde_json::Value::Null);
     match host.plugin_db_execute_params(
         sql,
-        &sql_params![input, agent, source, session_id, claude_sid_param, auto_approve],
+        &sql_params![input, agent, source, session_id, claude_sid_param, auto_answer],
     ) {
         Ok(affected) => host.log_info(&format!(
-            "Task row inserted: session_id={} agent={} source={} len={} affected={}",
-            session_id, agent, source, input.len(), affected
+            "Task row inserted: session_id={} agent={} source={} len={} auto_answer={} affected={}",
+            session_id, agent, source, input.len(), auto_answer, affected
         )),
         Err(e) => host.log_error(&format!(
             "Failed to insert task row: session_id={} source={} err={}",
@@ -220,7 +224,7 @@ fn insert_task_row(
 /// 只带 bedcode_session_id）都能命中该行。
 pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
     let agent_name = session_agent(host, session_id);
-    insert_task_row(host, session_id, input, agent_name, "user", false);
+    insert_task_row(host, session_id, input, agent_name, "user");
 
     // 广播状态变更到移动端 + 消息总线通知其他插件
     host.broadcast_sync(&SyncEvent::TaskStatusChanged {
@@ -250,6 +254,8 @@ pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
 /// - GET /task-status → get_task_status
 /// - POST /session-mode → set_session_mode
 /// - GET /session-mode → get_session_mode
+/// - GET /session-settings → get_session_settings (auto_execute + auto_answer)
+/// - GET /task-history/current → get current task for session
 pub fn handle_http_endpoint(host: &WasmHost, method: &str, path: &str, body: &Value, query: &Value) -> Value {
     host.log_debug(&format!("handle_http_endpoint: {} {}", method, path));
 
@@ -258,6 +264,8 @@ pub fn handle_http_endpoint(host: &WasmHost, method: &str, path: &str, body: &Va
         ("GET", "task-status") => handle_get_task_status(host, query),
         ("POST", "session-mode") => handle_set_session_mode(host, body, query),
         ("GET", "session-mode") => handle_get_session_mode(host, query),
+        ("GET", "session-settings") => handle_get_session_settings_http(host, query),
+        ("GET", "task-history/current") => handle_get_current_task(host, query),
         _ => {
             host.log_warn(&format!("Unknown HTTP endpoint: {} {}", method, path));
             http_response::error(404, &format!("Not found: {} {}", method, path))
@@ -274,10 +282,13 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     let reason = body.get("reason").and_then(|v| v.as_str());
     let questions = body.get("questions");
     let bedcode_session_id = body.get("bedcode_session_id").and_then(|v| v.as_str());
+    // 事件发生时刻（脚本 UTC 时间戳，固定宽度字符串，字典序可比）：
+    // 宿主仅在 event_time >= 行内已应用事件时应用，拒绝迟到的旧事件覆盖新状态
+    let event_time = body.get("event_time").and_then(|v| v.as_str());
 
     host.log_debug(&format!(
-        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}",
-        session_id, status, reason, questions.is_some(), bedcode_session_id
+        "task-status parsed: session_id={}, status={}, reason={:?}, has_questions={}, bedcode_sid={:?}, event_time={:?}",
+        session_id, status, reason, questions.is_some(), bedcode_session_id, event_time
     ));
 
     if session_id.is_empty() {
@@ -312,9 +323,40 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         let is_current_terminal = matches!(current_status, "completed" | "interrupted");
         let is_new_terminal = matches!(status, "completed" | "interrupted");
         if is_current_terminal && !is_new_terminal {
+            // idle（新会话就绪，如 /clear 后重建）不受终态保护拦截：
+            // 仍需触发 on_session_idle 驱动 waiting 态任务调度，
+            // 否则任务永远卡在 waiting 直到超时取消
+            if status == "idle" {
+                host.log_info(&format!(
+                    "task-status: session_id={} terminal row exists ('{}'), idle triggers on_session_idle",
+                    session_id, current_status
+                ));
+                if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
+                    upsert_session_mapping(host, session_id, bedcode_sid);
+                }
+                crate::queue::on_session_idle(host, &resolved_session_id);
+                return http_response::ok();
+            }
             host.log_info(&format!(
                 "task-status: session_id={} skip, current '{}' is terminal, new '{}' is not",
                 session_id, current_status, status
+            ));
+            return http_response::ok();
+        }
+
+        // 时序保护：拒绝迟到的旧事件（event_time 早于行内已应用事件）。
+        // HTTP 推送可能被阻塞乱序到达（Stop 的 GET+POST 竞态、resume 后旧会话迟到推送等），
+        // 旧状态覆盖最新状态会导致任务状态回跳、队列调度错乱。
+        // 无 event_time（旧版脚本）或行无 event_time（迁移前数据）时不比较，保持兼容。
+        let row_event_time = row.get("event_time").and_then(|v| v.as_str()).unwrap_or("");
+        let incoming_event_time = event_time.unwrap_or("");
+        if !incoming_event_time.is_empty()
+            && !row_event_time.is_empty()
+            && incoming_event_time < row_event_time
+        {
+            host.log_info(&format!(
+                "task-status: session_id={} skip, stale event_time '{}' < row '{}' (current status '{}')",
+                session_id, incoming_event_time, row_event_time, current_status
             ));
             return http_response::ok();
         }
@@ -342,6 +384,11 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
             clauses.push(format!("session_id = {}", push_param(&mut params, Value::String(bedcode_sid.to_string()))));
             clauses.push(format!("claude_sid = {}", push_param(&mut params, Value::String(session_id.to_string()))));
+        }
+
+        // 推进时序保护基线（event_time 与脚本 payload 同格式，字符串字典序比较）
+        if !incoming_event_time.is_empty() {
+            clauses.push(format!("event_time = {}", push_param(&mut params, Value::String(incoming_event_time.to_string()))));
         }
 
         // 状态转换时更新时间戳（SQL 函数，无绑定参数）
@@ -435,30 +482,42 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
 
     // 认证由网关中间件统一处理（JWT 或本地放行），此处不重复校验
 
-    // 更新任务历史表中的 auto_approve 字段（子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY）
-    let sql = "UPDATE task_history SET auto_approve = ?1, updated_at = datetime('now') \
-        WHERE id = (SELECT id FROM task_history WHERE session_id = ?2 ORDER BY created_at DESC LIMIT 1)";
-    let _ = host.plugin_db_execute_params(sql, &sql_params![auto_approve, session_id]);
+    // 解析 Claude Code session_id → BedCode PTY session_id（与 GET 及 task-status 一致）：
+    // hook/移动端可能携带 claude_sid，不经解析会把开关写到错误的 session_settings 行，
+    // 导致前端按 bedcode sid 读取时开关状态不生效
+    let resolved_id = resolve_session_id(host, session_id);
+    host.log_debug(&format!("session-mode POST resolved: claude_sid={} → resolved_sid={}", session_id, resolved_id));
+
+    // 写入会话设置表（auto_answer 开关，兼容旧 hook 只传 auto_approve 的语义）
+    set_session_flags(host, &resolved_id, None, Some(auto_approve));
+
+    // 当前 auto_execute 值（本端点不改动它，事件载荷带上供前端开关保持显示一致）
+    let (auto_execute, _) = session_flags(host, &resolved_id);
 
     // 广播模式变更到移动端
     host.broadcast_sync(&SyncEvent::SessionModeChanged {
-        session_id: session_id.to_string(),
+        session_id: resolved_id.to_string(),
         auto_approve,
     });
-    host.log_debug(&format!("broadcast_sync: SessionModeChanged for session_id={}", session_id));
+    host.log_debug(&format!("broadcast_sync: SessionModeChanged for session_id={}", resolved_id));
 
     // 通过消息总线通知其他插件会话模式变更
     let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
+        "session_id": resolved_id,
         "auto_approve": auto_approve,
+        "auto_execute": auto_execute,
     }));
-    // 通知前端 UI（事件名与前端 context.events.on 监听一致，载荷用前端约定的 camelCase）
+    // 通知前端 UI（事件名与前端 context.events.on 监听一致，载荷用前端约定的 camelCase，
+    // 与 set_auto_mode 的 emit 保持同构，前端 onModeChanged 才能正确同步两个开关）
     host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
+        "session_id": resolved_id,
         "autoApprove": auto_approve,
+        "auto_answer": auto_approve,
+        "autoExecute": auto_execute,
+        "auto_execute": auto_execute,
     }));
 
-    host.log_info(&format!("Session mode set: session_id={}, auto_approve={}", session_id, auto_approve));
+    host.log_info(&format!("Session mode set: session_id={} resolved_sid={} auto_approve={}", session_id, resolved_id, auto_approve));
     http_response::ok()
 }
 
@@ -501,12 +560,8 @@ fn handle_get_session_mode(host: &WasmHost, query: &Value) -> Value {
     let resolved_id = resolve_session_id(host, session_id);
     host.log_debug(&format!("session-mode GET resolved: claude_sid={} → resolved_sid={}", session_id, resolved_id));
 
-    // 从任务历史表查询 auto_approve
-    let auto_approve = find_task_by_session(host, &resolved_id)
-        .and_then(|row| row.get("auto_approve").cloned())
-        .and_then(|v| v.as_i64())
-        .map(|v| v != 0)
-        .unwrap_or(false);
+    // 从会话设置表读取 auto_answer（自动应答开关）；旧数据回退读取 task_history.auto_approve
+    let (_, auto_approve) = session_flags(host, &resolved_id);
 
     host.log_debug(&format!("Session mode queried: claude_sid={} resolved_sid={} auto_approve={}", session_id, resolved_id, auto_approve));
 
@@ -719,34 +774,247 @@ pub fn task_history_stats(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow
     }))
 }
 
-/// 设置自动授权模式（供插件内部 command 使用）
-pub fn set_auto_mode(host: &WasmHost, session_id: &str, auto_approve: bool) -> anyhow::Result<Value> {
-    host.log_debug(&format!("set_auto_mode: session_id={}, auto_approve={}", session_id, auto_approve));
+/// 列出运行中的会话（含最新任务摘要与待执行队列数）
+///
+/// 供前端「当前任务」Tab 展示活动任务，并提供「选择运行中会话创建任务」的下拉选项。
+/// 过滤条件：会话状态为 Running / Starting / WaitingInput（存活会话），
+/// 已停止 / 停止中 / 错误 / 空闲会话不参与（无法向其投递任务）。
+/// 结果按活跃度排序：有活动任务 > 有待执行队列 > 其余，同档按名称排序。
+pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
+    // config_id → working_dir 映射（会话配置列表含路径信息，供前端展示会话标签）
+    let config_working_dirs: HashMap<String, String> = host
+        .session_config_list()
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| {
+            let id = c.get("id")?.as_str()?.to_string();
+            let wd = c.get("workingDir").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Some((id, wd))
+        })
+        .collect();
 
-    // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
-    let sql = "UPDATE task_history SET auto_approve = ?1, updated_at = datetime('now') \
-        WHERE id = (SELECT id FROM task_history WHERE session_id = ?2 ORDER BY created_at DESC LIMIT 1)";
-    let _ = host.plugin_db_execute_params(sql, &sql_params![auto_approve, session_id]);
+    let sessions = host
+        .session_list()
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
 
-    // 通知前端模式变更（事件名必须与前端 context.events.on 监听一致，此前 camelCase 事件名无人监听）
+    let mut result: Vec<Value> = sessions
+        .iter()
+        .filter_map(|s| {
+            // SessionInfo 序列化为 camelCase（见 session_event.rs）
+            let status = s.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            if !matches!(status, "Running" | "Starting" | "WaitingInput") {
+                return None;
+            }
+            let session_id = s.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if session_id.is_empty() {
+                return None;
+            }
+            let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let config_id = s.get("configId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let working_dir = config_working_dirs.get(&config_id).cloned().unwrap_or_default();
+
+            // 最新任务摘要（无记录时视为 idle）
+            let task = find_task_by_session(host, &session_id);
+            let task_status = task
+                .as_ref()
+                .and_then(|r| r.get("status"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("idle")
+                .to_string();
+            let description = task
+                .as_ref()
+                .and_then(|r| r.get("description"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let started_at = task
+                .as_ref()
+                .and_then(|r| r.get("started_at"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let queue_count = crate::queue::pending_count(host, &session_id);
+
+            Some(serde_json::json!({
+                "session_id": session_id,
+                "name": name,
+                "config_id": config_id,
+                "working_dir": working_dir,
+                "status": status,
+                "task_status": task_status,
+                "description": description,
+                "started_at": started_at,
+                "agent": session_agent(host, &session_id),
+                "queue_count": queue_count,
+            }))
+        })
+        .collect();
+
+    // 活跃度排序：活动任务 > 有待执行队列 > 其余
+    let activity = |v: &Value| -> u8 {
+        let ts = v.get("task_status").and_then(|x| x.as_str()).unwrap_or("");
+        let qc = v.get("queue_count").and_then(|x| x.as_i64()).unwrap_or(0);
+        if matches!(ts, "in_progress" | "asking") {
+            2
+        } else if qc > 0 {
+            1
+        } else {
+            0
+        }
+    };
+    result.sort_by(|a, b| {
+        activity(b).cmp(&activity(a)).then_with(|| {
+            let na = a.get("name").and_then(|x| x.as_str()).unwrap_or("").to_lowercase();
+            let nb = b.get("name").and_then(|x| x.as_str()).unwrap_or("").to_lowercase();
+            na.cmp(&nb)
+        })
+    });
+
+    result
+}
+
+/// 设置会话级开关（供插件内部 command 使用）
+///
+/// auto_execute（自动执行）与 auto_answer（自动应答）为两个独立开关，
+/// 任一为 None 时保持当前值。auto_execute 由关闭切换为开启且会话空闲时
+/// 立即调度队列（try_dispatch_next 内部以 auto_execute 为门，安全幂等）。
+pub fn set_auto_mode(
+    host: &WasmHost,
+    session_id: &str,
+    auto_execute: Option<bool>,
+    auto_answer: Option<bool>,
+) -> anyhow::Result<Value> {
+    host.log_debug(&format!(
+        "set_auto_mode: session_id={}, auto_execute={:?}, auto_answer={:?}",
+        session_id, auto_execute, auto_answer
+    ));
+
+    let (prev_execute, prev_answer) = session_flags(host, session_id);
+    let new_execute = auto_execute.unwrap_or(prev_execute);
+    let new_answer = auto_answer.unwrap_or(prev_answer);
+
+    set_session_flags(host, session_id, Some(new_execute), Some(new_answer));
+
+    // 通知前端模式变更（事件载荷同时携带两个开关 + 兼容旧字段 autoApprove）
     host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
-        "autoApprove": auto_approve,
+        "autoApprove": new_answer,
+        "auto_answer": new_answer,
+        "autoExecute": new_execute,
+        "auto_execute": new_execute,
     }));
-    host.log_debug(&format!("emit_event: session:mode-changed for session_id={}", session_id));
+    host.log_debug(&format!(
+        "emit_event: session:mode-changed for session_id={} (execute={}, answer={})",
+        session_id, new_execute, new_answer
+    ));
 
-    // 广播到移动端
+    // 广播到移动端（类型化事件仅含 auto_approve 字段，保持线协议兼容）
     host.broadcast_sync(&SyncEvent::SessionModeChanged {
         session_id: session_id.to_string(),
-        auto_approve,
+        auto_approve: new_answer,
     });
-    host.log_debug(&format!("broadcast_sync: SessionModeChanged for session_id={}", session_id));
 
     // 通过消息总线通知其他插件会话模式变更
     let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
         "session_id": session_id,
-        "auto_approve": auto_approve,
+        "auto_approve": new_answer,
+        "auto_execute": new_execute,
     }));
 
-    Ok(serde_json::json!({ "success": true }))
+    // 自动执行刚开启且会话空闲 → 立即调度队列中已积累的任务
+    if new_execute && !prev_execute && !has_active_task(host, session_id) {
+        crate::queue::try_dispatch_next(host, session_id);
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "auto_execute": new_execute,
+        "auto_answer": new_answer,
+    }))
+}
+
+// ==================== 会话级开关（session_settings 表） ====================
+
+/// 读取会话的 auto_execute（自动执行）与 auto_answer（自动应答）开关
+///
+/// session_settings 表为唯一事实来源；旧会话无该表记录时，
+/// auto_answer 回退读取 task_history 最新行的 auto_approve（旧版语义），
+/// auto_execute 默认关闭（旧版自动执行行为由手动开关取代）。
+pub fn session_flags(host: &WasmHost, session_id: &str) -> (bool, bool) {
+    let row = host
+        .plugin_db_query_params(
+            "SELECT auto_execute, auto_answer FROM session_settings WHERE session_id = ?1",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()));
+
+    match row {
+        Some(r) => (
+            r.get("auto_execute").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
+            r.get("auto_answer").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
+        ),
+        None => {
+            let legacy_answer = find_task_by_session(host, session_id)
+                .and_then(|row| row.get("auto_approve").and_then(|v| v.as_i64()))
+                .unwrap_or(0)
+                != 0;
+            (false, legacy_answer)
+        }
+    }
+}
+
+/// 会话是否开启自动执行（任务入队后自动调度）
+pub fn auto_execute_on(host: &WasmHost, session_id: &str) -> bool {
+    session_flags(host, session_id).0
+}
+
+/// 写入会话开关（部分更新：None 字段保持当前值）
+///
+/// 同时同步最新任务行的 auto_approve 字段，兼容旧 hook/移动端对
+/// task_history.auto_approve 的读取路径。
+pub fn set_session_flags(
+    host: &WasmHost,
+    session_id: &str,
+    auto_execute: Option<bool>,
+    auto_answer: Option<bool>,
+) {
+    let (cur_execute, cur_answer) = session_flags(host, session_id);
+    let new_execute = auto_execute.unwrap_or(cur_execute);
+    let new_answer = auto_answer.unwrap_or(cur_answer);
+
+    // INSERT OR REPLACE：按 session_id 覆盖，与 session_mapping 的 upsert 模式一致
+    let _ = host.plugin_db_execute_params(
+        "INSERT OR REPLACE INTO session_settings (session_id, auto_execute, auto_answer, updated_at) \
+         VALUES (?1, ?2, ?3, datetime('now'))",
+        &sql_params![session_id, new_execute, new_answer],
+    );
+
+    // 同步最新任务行的 auto_approve（子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY）
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_history SET auto_approve = ?1, updated_at = datetime('now') \
+         WHERE id = (SELECT id FROM task_history WHERE session_id = ?2 ORDER BY created_at DESC LIMIT 1)",
+        &sql_params![new_answer, session_id],
+    );
+
+    host.log_debug(&format!(
+        "session flags set: session_id={} auto_execute={} auto_answer={}",
+        session_id, new_execute, new_answer
+    ));
+}
+
+/// 查询会话开关（供前端弹窗初始化开关状态）
+pub fn get_session_settings(host: &WasmHost, session_id: &str) -> anyhow::Result<Value> {
+    let (auto_execute, auto_answer) = session_flags(host, session_id);
+    Ok(serde_json::json!({
+        "session_id": session_id,
+        "auto_execute": auto_execute,
+        "auto_answer": auto_answer,
+    }))
 }

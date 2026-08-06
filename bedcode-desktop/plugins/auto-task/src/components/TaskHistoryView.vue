@@ -1,16 +1,19 @@
 <script setup lang="ts">
 /**
- * 任务历史视图 — 三 Tab 侧边栏视图
+ * 任务历史视图 — 四 Tab 侧边栏视图
  *
- * Tab1 任务记录：筛选条（状态/agent/来源/时间范围）+ 当前任务/队列区段
- *               + 分页任务列表 + 行内详情展开
- * Tab2 定时任务：新建表单（会话配置/触发时间/prompts 列表）+ 任务列表 + 删除
- * Tab3 统计：筛选条件下任务统计（状态分布 / 完成数 / 终态数 / 成功率 / 平均耗时）
+ * Tab1 当前任务：创建新任务（选择运行中会话）+ 执行中的任务列表
+ *              + 执行任务（各会话待执行队列）
+ * Tab2 任务记录：筛选条（状态/agent/来源/时间范围）+ 分页任务列表 + 行内详情展开
+ * Tab3 定时任务：新建表单（会话配置/触发时间/prompts 列表）+ 任务列表 + 删除
+ * Tab4 统计：筛选条件下任务统计（状态分布 / 完成数 / 终态数 / 成功率 / 平均耗时）
  *
  * 通过 inject('pluginContext') 获取 PluginContext，
  * 调用 Rust 后端命令查询数据，监听事件实时更新
  */
 import { ref, onMounted, onUnmounted, inject, computed, watch } from 'vue'
+// 开源 Vue3 日期/时间选择组件（替代原生 datetime-local，样式随宿主主题定制）
+import Datepicker from '@vuepic/vue-datepicker'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -74,30 +77,60 @@ interface HistoryStats {
   avg_duration_seconds: number
 }
 
+/** 运行中的会话（后端 list-running-sessions 返回，queue 为前端按需加载） */
+interface RunningSession {
+  session_id: string
+  name: string
+  config_id: string
+  working_dir: string
+  status: string
+  task_status: string
+  description: string
+  started_at: string | null
+  agent: string
+  queue_count: number
+  queue: QueueItem[]
+}
+
+/** 预设任务（无会话/未选会话时创建，一次性消耗） */
+interface PresetItem {
+  id: string
+  prompt: string
+  created_at: string
+}
+
 // ==================== State ====================
 
-type TabKey = 'records' | 'scheduled' | 'stats'
-const activeTab = ref<TabKey>('records')
+type TabKey = 'current' | 'records' | 'scheduled' | 'stats'
+const activeTab = ref<TabKey>('current')
 
-// Tab1 任务记录
+// Tab1 当前任务
+const runningSessions = ref<RunningSession[]>([])
+const currentLoading = ref(false)
+const createSessionId = ref('')
+const createPrompt = ref('')
+const creatingTask = ref(false)
+const createError = ref('')
+// Tab1 预设任务（无会话/未选会话时创建，加入队列后自动移除）
+const presets = ref<PresetItem[]>([])
+const presetError = ref('')
+
+// Tab2 任务记录
 const tasks = ref<TaskRecord[]>([])
 const total = ref(0)
 const limit = 50
 const offset = ref(0)
 const loading = ref(false)
 const stats = ref<HistoryStats | null>(null)
-const currentTask = ref<TaskRecord | null>(null)
-const queue = ref<QueueItem[]>([])
-const selectedSessionId = ref('')
 const expandedId = ref<string | null>(null)
 
 const filterStatus = ref('')
 const filterAgent = ref('')
 const filterSource = ref('')
-const filterSince = ref('')
-const filterUntil = ref('')
+const filterSince = ref<Date | null>(null)
+const filterUntil = ref<Date | null>(null)
 
-// Tab2 定时任务
+// Tab3 定时任务
 const jobs = ref<ScheduledJob[]>([])
 const jobsLoading = ref(false)
 const configs = ref<SessionConfig[]>([])
@@ -105,7 +138,7 @@ const showForm = ref(false)
 const creatingJob = ref(false)
 const formName = ref('')
 const formConfigId = ref('')
-const formTriggerAt = ref('')
+const formTriggerAt = ref<Date | null>(null)
 const formPrompts = ref<string[]>([''])
 const errorMessage = ref('')
 
@@ -113,6 +146,34 @@ const errorMessage = ref('')
 const controlCls =
   'w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] ' +
   'text-xs text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)] transition-colors duration-200'
+
+// ==================== 日期选择器（@vuepic/vue-datepicker） ====================
+
+// 深色模式跟随宿主（documentElement.dark class，见宿主 useTheme composable），
+// MutationObserver 监听宿主主题切换，Datepicker 的 dark prop 随之联动
+const isDark = ref(document.documentElement.classList.contains('dark'))
+let themeObserver: MutationObserver | null = null
+
+// 输入/回填格式（date-fns token），与筛选条/定时任务的显示习惯一致
+const dateFormat = 'yyyy-MM-dd HH:mm'
+
+// 跟随宿主语言（zh-CN / en），供 Datepicker 渲染对应语言的日历与星期/月份文案
+const dateLocale = computed(() => context.i18n.getI18n()?.global?.locale?.value ?? 'zh-CN')
+
+// 筛选变化防抖：Datepicker 的 update:model-value 在手动输入时逐字符触发，
+// 聚合成一次重载避免高频请求（原生 datetime-local 的 change 语义在提交时触发一次）
+let filterDebounce: ReturnType<typeof setTimeout> | null = null
+
+// Date 对象 → UTC "YYYY-MM-DD HH:MM:SS"（与后端 SQLite datetime 同格式）
+function dateToUtc(d: Date | null | undefined): string {
+  if (!d || isNaN(d.getTime())) return ''
+  return d.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function onFilterChangedDebounced() {
+  if (filterDebounce) clearTimeout(filterDebounce)
+  filterDebounce = setTimeout(onFilterChanged, 300)
+}
 
 // ==================== 状态展示 ====================
 
@@ -164,12 +225,139 @@ function scheduledStatusBadge(status: string): string {
 }
 
 const tabs: { key: TabKey; label: string }[] = [
+  { key: 'current', label: t('tabsCurrent') },
   { key: 'records', label: t('tabsRecords') },
   { key: 'scheduled', label: t('tabsScheduled') },
   { key: 'stats', label: t('tabsStats') },
 ]
 
-// ==================== 筛选选项与统计 ====================
+// ==================== 当前任务（Tab1） ====================
+
+// 执行中的任务（in_progress / asking）
+const activeTasks = computed(() =>
+  runningSessions.value.filter((s) => ['in_progress', 'asking'].includes(s.task_status)),
+)
+// 有待执行队列的会话（执行任务区段）
+const executingSessions = computed(() => runningSessions.value.filter((s) => s.queue.length > 0))
+
+// 会话标签：名称/工作目录基名/会话短 ID 兜底，附 agent
+function sessionLabel(s: RunningSession): string {
+  const dir = baseName(s.working_dir)
+  const base = s.name || dir || (s.session_id ? s.session_id.slice(0, 8) : '')
+  return s.agent && s.agent !== 'unknown' ? `${base} · ${s.agent}` : base
+}
+
+async function loadRunningSessions() {
+  currentLoading.value = true
+  try {
+    const result: any = await context.commands.execute('auto-task.list-running-sessions')
+    const sessions: RunningSession[] = (result?.sessions ?? []).map((s: any) => ({
+      ...s,
+      queue: [],
+    }))
+
+    // 逐个加载待执行队列（仅当会话存在 pending 项，避免无谓请求）
+    await Promise.all(
+      sessions.map(async (s) => {
+        if ((s.queue_count ?? 0) > 0) {
+          try {
+            const q: any = await context.commands.execute('auto-task.list-task-queue', {
+              session_id: s.session_id,
+            })
+            s.queue = (q?.tasks as QueueItem[]) ?? []
+          } catch (e) {
+            console.error('[Auto Task] Failed to load queue for session:', s.session_id, e)
+          }
+        }
+        return s
+      }),
+    )
+    runningSessions.value = sessions
+
+    // 会话列表变化后修正下拉选中项：优先保留原选择，否则取第一个有活动任务/队列的会话
+    if (!sessions.some((s) => s.session_id === createSessionId.value)) {
+      const preferred =
+        sessions.find(
+          (s) => s.queue_count > 0 || ['in_progress', 'asking'].includes(s.task_status),
+        ) || sessions[0]
+      createSessionId.value = preferred?.session_id ?? ''
+    }
+  } catch (e) {
+    console.error('[Auto Task] Failed to load running sessions:', e)
+  } finally {
+    currentLoading.value = false
+  }
+}
+
+// 创建新任务：选了运行中的会话 → 加入该会话队列（空闲时立即执行）；
+// 未选会话/无运行会话 → 保存为预设任务（终端弹窗或选择会话后可加入队列）
+async function createTask() {
+  const prompt = createPrompt.value.trim()
+  if (!prompt) return
+  creatingTask.value = true
+  createError.value = ''
+  try {
+    if (createSessionId.value) {
+      await context.commands.execute('auto-task.add-task', {
+        session_id: createSessionId.value,
+        prompt,
+      })
+    } else {
+      await context.commands.execute('auto-task.create-preset-task', { prompt })
+    }
+    createPrompt.value = ''
+    // 立即刷新展示（事件广播会兜底刷新，这里先给用户即时反馈）
+    await loadRunningSessions()
+    if (!createSessionId.value) await loadPresets()
+  } catch (e) {
+    console.error('[Auto Task] Failed to create task:', e)
+    createError.value = createSessionId.value ? t('createTaskFailed') : t('createPresetFailed')
+  } finally {
+    creatingTask.value = false
+  }
+}
+
+// ==================== 预设任务（Tab1） ====================
+
+async function loadPresets() {
+  try {
+    const result: any = await context.commands.execute('auto-task.list-preset-tasks')
+    presets.value = (result?.presets as PresetItem[]) || []
+  } catch (e) {
+    console.error('[Auto Task] Failed to load presets:', e)
+    presetError.value = t('loadFailed')
+  }
+}
+
+// 把预设任务加入下拉所选会话的队列（一次性消耗，加入后预设自动移除）
+async function addPresetToSession(presetId: string) {
+  if (!createSessionId.value) return
+  presetError.value = ''
+  try {
+    await context.commands.execute('auto-task.add-preset-to-queue', {
+      session_id: createSessionId.value,
+      preset_id: presetId,
+    })
+    // 事件广播（queue/preset-changed）兜底，此处直接刷新即时反馈
+    await Promise.all([loadPresets(), loadRunningSessions()])
+  } catch (e) {
+    console.error('[Auto Task] Failed to add preset to queue:', e)
+    presetError.value = t('addPresetFailed')
+  }
+}
+
+async function deletePreset(presetId: string) {
+  presetError.value = ''
+  try {
+    await context.commands.execute('auto-task.delete-preset-task', { preset_id: presetId })
+    await loadPresets()
+  } catch (e) {
+    console.error('[Auto Task] Failed to delete preset:', e)
+    presetError.value = t('deletePresetFailed')
+  }
+}
+
+// ==================== 筛选选项与统计（Tab2/Tab4） ====================
 
 const statusOptions = ['', 'idle', 'in_progress', 'asking', 'completed', 'interrupted']
 const agentOptions = ['', 'claude', 'codex', 'opencode', 'pi', 'unknown']
@@ -187,15 +375,15 @@ const pageTo = computed(() => offset.value + tasks.value.length)
 const hasPrev = computed(() => offset.value > 0)
 const hasNext = computed(() => offset.value + tasks.value.length < total.value)
 
-// ==================== 数据加载（Tab1） ====================
+// ==================== 数据加载（Tab2 任务记录） ====================
 
 function buildFilter() {
   return {
     status: filterStatus.value || undefined,
     agent: filterAgent.value || undefined,
     source: filterSource.value || undefined,
-    since: localToUtc(filterSince.value) || undefined,
-    until: localToUtc(filterUntil.value) || undefined,
+    since: dateToUtc(filterSince.value) || undefined,
+    until: dateToUtc(filterUntil.value) || undefined,
   }
 }
 
@@ -225,51 +413,8 @@ async function loadStats() {
   }
 }
 
-// 当前任务：in_progress 优先，其次 asking，各取最新一条
-async function loadCurrentTask() {
-  for (const s of ['in_progress', 'asking']) {
-    try {
-      const result = await context.commands.execute('auto-task.list-task-history', {
-        status: s,
-        limit: 1,
-        offset: 0,
-      })
-      if (result?.tasks?.length) {
-        currentTask.value = result.tasks[0]
-        return
-      }
-    } catch (e) {
-      console.error('[Auto Task] Failed to load current task:', e)
-    }
-  }
-  currentTask.value = null
-}
-
-async function loadQueue(sessionId: string) {
-  if (!sessionId) {
-    queue.value = []
-    return
-  }
-  try {
-    const result = await context.commands.execute('auto-task.list-task-queue', { session_id: sessionId })
-    queue.value = result?.tasks ?? []
-  } catch (e) {
-    console.error('[Auto Task] Failed to load queue:', e)
-  }
-}
-
 async function refreshRecords() {
-  await Promise.all([loadTasks(), loadStats(), loadCurrentTask()])
-  // 队列区段优先展示当前任务所在会话；无活动任务时回退到列表首条
-  const targetSession = currentTask.value?.session_id || tasks.value[0]?.session_id || ''
-  if (targetSession && targetSession !== selectedSessionId.value) {
-    selectedSessionId.value = targetSession
-    await loadQueue(targetSession)
-  } else if (selectedSessionId.value) {
-    await loadQueue(selectedSessionId.value)
-  } else {
-    queue.value = []
-  }
+  await Promise.all([loadTasks(), loadStats()])
 }
 
 // 筛选变化：重置到第一页并重载（统计随筛选刷新）
@@ -278,19 +423,18 @@ function onFilterChanged() {
   refreshRecords()
 }
 
-// 切到统计 tab 时加载最新统计（筛选变化时 refreshRecords 已联动刷新）
+// 切到对应 tab 时加载最新数据（事件刷新可能因未挂载而遗漏）
 watch(activeTab, (tab) => {
-  if (tab === 'stats') {
-    loadStats()
-  }
+  if (tab === 'current') loadRunningSessions()
+  if (tab === 'stats') loadStats()
 })
 
 function resetFilters() {
   filterStatus.value = ''
   filterAgent.value = ''
   filterSource.value = ''
-  filterSince.value = ''
-  filterUntil.value = ''
+  filterSince.value = null
+  filterUntil.value = null
   onFilterChanged()
 }
 
@@ -308,16 +452,12 @@ function nextPage() {
   }
 }
 
-// 点击行：展开/收起详情，同时把该行会话设为队列区段的展示会话
+// 点击行：展开/收起详情
 function toggleTask(task: TaskRecord) {
   expandedId.value = expandedId.value === task.id ? null : task.id
-  if (task.session_id && task.session_id !== selectedSessionId.value) {
-    selectedSessionId.value = task.session_id
-    loadQueue(task.session_id)
-  }
 }
 
-// ==================== 数据加载（Tab2） ====================
+// ==================== 数据加载（Tab3 定时任务） ====================
 
 async function loadJobs() {
   jobsLoading.value = true
@@ -376,7 +516,7 @@ function removePrompt(idx: number) {
   }
 }
 
-const utcPreview = computed(() => (formTriggerAt.value ? localToUtc(formTriggerAt.value) : '-'))
+const utcPreview = computed(() => (formTriggerAt.value ? dateToUtc(formTriggerAt.value) : '-'))
 
 async function submitJob() {
   const prompts = formPrompts.value.map((p) => p.trim()).filter(Boolean)
@@ -390,14 +530,14 @@ async function submitJob() {
     const result = await context.commands.execute('auto-task.create-scheduled-job', {
       name: formName.value.trim() || undefined,
       config_id: formConfigId.value,
-      trigger_at: localToUtc(formTriggerAt.value),
+      trigger_at: dateToUtc(formTriggerAt.value),
       prompts,
     })
     if (result?.job_id) {
       // 成功：收起表单并清空，列表刷新即为反馈
       formName.value = ''
       formConfigId.value = ''
-      formTriggerAt.value = ''
+      formTriggerAt.value = null
       formPrompts.value = ['']
       showForm.value = false
       await loadJobs()
@@ -424,14 +564,6 @@ async function deleteJob(jobId: string) {
 }
 
 // ==================== 时间工具 ====================
-
-// 本地 datetime-local 值 → UTC "YYYY-MM-DD HH:MM:SS"（与后端 SQLite datetime 同格式）
-function localToUtc(localValue: string): string {
-  if (!localValue) return ''
-  const d = new Date(localValue)
-  if (isNaN(d.getTime())) return ''
-  return d.toISOString().replace('T', ' ').slice(0, 19)
-}
 
 // 后端时间均为 UTC "YYYY-MM-DD HH:MM:SS"，解析时补 Z 转本地时区显示
 function toDate(isoStr: string): Date | null {
@@ -473,21 +605,38 @@ function formatPercent(rate: number | undefined): string {
 let statusDisposable: { dispose(): void } | null = null
 let queueDisposable: { dispose(): void } | null = null
 let scheduledDisposable: { dispose(): void } | null = null
+let presetDisposable: { dispose(): void } | null = null
 
 onMounted(async () => {
-  await Promise.all([refreshRecords(), loadJobs(), loadConfigs()])
+  await Promise.all([refreshRecords(), loadJobs(), loadConfigs(), loadRunningSessions(), loadPresets()])
 
-  // status/queue 变更刷新 Tab1；scheduled 变更刷新 Tab2
-  statusDisposable = context.events.on('task:status-changed', () => refreshRecords())
-  queueDisposable = context.events.on('task:queue-changed', () => refreshRecords())
+  // 监听宿主深色模式切换（documentElement.dark class 变化）
+  themeObserver = new MutationObserver(() => {
+    isDark.value = document.documentElement.classList.contains('dark')
+  })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+
+  // status/queue 变更刷新当前任务 + 任务记录；scheduled 变更刷新定时任务；preset 变更刷新预设区
+  statusDisposable = context.events.on('task:status-changed', onLiveChanged)
+  queueDisposable = context.events.on('task:queue-changed', onLiveChanged)
   scheduledDisposable = context.events.on('task:scheduled-changed', () => loadJobs())
+  presetDisposable = context.events.on('task:preset-changed', () => loadPresets())
 })
 
 onUnmounted(() => {
+  if (filterDebounce) clearTimeout(filterDebounce)
+  themeObserver?.disconnect()
   statusDisposable?.dispose()
   queueDisposable?.dispose()
   scheduledDisposable?.dispose()
+  presetDisposable?.dispose()
 })
+
+// 任务状态/队列实时变更：任务记录（含统计）与当前任务 Tab 一起刷新
+function onLiveChanged() {
+  refreshRecords()
+  loadRunningSessions()
+}
 </script>
 
 <template>
@@ -512,82 +661,227 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 筛选条（任务记录 / 统计 共用，定时任务不显示） -->
-    <div v-if="activeTab !== 'scheduled'" class="px-4 pt-3 flex-shrink-0 space-y-2">
-      <div class="grid grid-cols-3 gap-1.5">
-        <select v-model="filterStatus" :class="controlCls" @change="onFilterChanged">
-          <option value="">{{ t('filterStatus') }}</option>
-          <option v-for="s in statusOptions.slice(1)" :key="s" :value="s">{{ statusLabel[s] || s }}</option>
-        </select>
-        <select v-model="filterAgent" :class="controlCls" @change="onFilterChanged">
-          <option value="">{{ t('filterAgent') }}</option>
-          <option v-for="a in agentOptions.slice(1)" :key="a" :value="a">{{ a }}</option>
-        </select>
-        <select v-model="filterSource" :class="controlCls" @change="onFilterChanged">
-          <option value="">{{ t('filterSource') }}</option>
-          <option v-for="s in sourceOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
-        </select>
-      </div>
-      <div class="grid grid-cols-2 gap-1.5">
-        <div>
-          <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterSince') }}</label>
-          <input v-model="filterSince" type="datetime-local" :class="controlCls" @change="onFilterChanged" />
-        </div>
-        <div>
-          <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterUntil') }}</label>
-          <input v-model="filterUntil" type="datetime-local" :class="controlCls" @change="onFilterChanged" />
-        </div>
-      </div>
-      <div class="flex justify-end">
-        <button
-          class="text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200"
-          @click="resetFilters"
-        >
-          {{ t('filterReset') }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Tab1 任务记录 -->
-    <div v-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
-      <!-- 滚动内容：当前任务 / 队列 / 列表 -->
+    <!-- Tab1 当前任务 -->
+    <div v-if="activeTab === 'current'" class="flex-1 flex flex-col min-h-0">
+      <!-- 滚动内容：创建任务 / 当前任务 / 执行任务 -->
       <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
-        <!-- 当前任务 -->
-        <div v-if="currentTask">
-          <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-            {{ t('currentTaskTitle') }}
-          </h3>
-          <div
-            class="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3"
-          >
-            <div class="flex items-center gap-2 mb-1">
-              <div class="w-2 h-2 rounded-full animate-pulse" :class="statusDot[currentTask.status] || 'bg-blue-500'"></div>
-              <span class="text-xs font-medium" :class="statusColor[currentTask.status] || 'text-blue-500'">
-                {{ statusLabel[currentTask.status] || currentTask.status }}
-              </span>
-            </div>
-            <p class="text-sm text-[var(--text-primary)] truncate">{{ currentTask.description || currentTask.session_id }}</p>
-            <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ formatTime(currentTask.started_at || currentTask.created_at) }}</p>
+        <!-- 创建新任务 -->
+        <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2">
+          <h3 class="text-xs font-semibold text-[var(--text-primary)]">{{ t('createTaskTitle') }}</h3>
+          <div>
+            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('createTaskSession') }}</label>
+            <select v-model="createSessionId" :class="controlCls" :disabled="currentLoading">
+              <option value="" disabled>{{ t('createTaskSessionPlaceholder') }}</option>
+              <option v-for="s in runningSessions" :key="s.session_id" :value="s.session_id">
+                {{ sessionLabel(s) }}
+              </option>
+            </select>
           </div>
+          <div class="flex items-center gap-1.5">
+            <input
+              v-model="createPrompt"
+              type="text"
+              :class="controlCls"
+              :placeholder="t('createTaskPromptPlaceholder')"
+              @keydown.enter="createTask"
+            />
+            <button
+              class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="creatingTask || !createPrompt.trim()"
+              @click="createTask"
+            >
+              {{ createSessionId ? t('createTaskSubmit') : t('saveAsPreset') }}
+            </button>
+          </div>
+          <!-- 未选会话时的去向提示：任务将保存为预设 -->
+          <p v-if="!createSessionId" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+            {{ t('createTaskNoSessionHint') }}
+          </p>
+          <p v-if="createError" class="text-xs text-red-500 break-words">{{ createError }}</p>
         </div>
 
-        <!-- 待执行队列 -->
-        <div v-if="queue.length > 0">
-          <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-            {{ t('queueTitle', { count: queue.length }) }}
+        <!-- 预设任务（常显：只要存在预设就展示，不随会话选择隐藏） -->
+        <div v-if="presets.length > 0" class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2">
+          <h3 class="text-xs font-semibold text-[var(--text-primary)]">
+            {{ t('presetTitle') }} ({{ presets.length }})
           </h3>
           <div class="space-y-1">
             <div
-              v-for="item in queue"
-              :key="item.id"
-              class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)] text-sm"
+              v-for="p in presets"
+              :key="p.id"
+              class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
             >
-              <span class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0">#{{ item.position }}</span>
-              <span class="text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
+              <span class="text-sm text-[var(--text-primary)] truncate flex-1 min-w-0">{{ p.prompt }}</span>
+              <button
+                class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                :class="
+                  createSessionId
+                    ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
+                    : 'bg-[var(--border)] text-[var(--text-tertiary)]'
+                "
+                :disabled="!createSessionId"
+                :title="createSessionId ? t('addToQueue') : t('presetAddHint')"
+                @click="addPresetToSession(p.id)"
+              >
+                {{ t('addToQueue') }}
+              </button>
+              <button
+                class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                :title="t('delete')"
+                @click="deletePreset(p.id)"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <p v-if="!createSessionId" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+            {{ t('presetAddHint') }}
+          </p>
+          <p v-if="presetError" class="text-xs text-red-500 break-words">{{ presetError }}</p>
+        </div>
+
+        <!-- 当前任务（执行中的任务） -->
+        <div v-if="activeTasks.length > 0">
+          <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
+            {{ t('currentTaskTitle') }}
+          </h3>
+          <div class="space-y-1.5">
+            <div
+              v-for="s in activeTasks"
+              :key="s.session_id"
+              class="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3"
+            >
+              <div class="flex items-center gap-2 mb-1">
+                <div class="w-2 h-2 rounded-full animate-pulse flex-shrink-0" :class="statusDot[s.task_status] || 'bg-blue-500'"></div>
+                <span class="text-xs font-medium flex-shrink-0" :class="statusColor[s.task_status] || 'text-blue-500'">
+                  {{ statusLabel[s.task_status] || s.task_status }}
+                </span>
+                <span class="text-xs text-[var(--text-tertiary)] truncate flex-1 min-w-0">{{ sessionLabel(s) }}</span>
+                <span v-if="s.queue_count > 0" class="text-xs text-[var(--text-secondary)] flex-shrink-0">
+                  {{ t('queueCount', { count: s.queue_count }) }}
+                </span>
+              </div>
+              <p class="text-sm text-[var(--text-primary)] break-words">{{ s.description || '-' }}</p>
+              <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ formatTime(s.started_at) }}</p>
             </div>
           </div>
         </div>
 
+        <!-- 执行任务（各会话待执行队列） -->
+        <div v-if="executingSessions.length > 0">
+          <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
+            {{ t('executingTaskTitle') }}
+          </h3>
+          <div class="space-y-2.5">
+            <div v-for="s in executingSessions" :key="s.session_id">
+              <p class="text-xs text-[var(--text-tertiary)] mb-1">
+                {{ sessionLabel(s) }} · {{ t('queueCount', { count: s.queue.length }) }}
+              </p>
+              <div class="space-y-1">
+                <div
+                  v-for="item in s.queue"
+                  :key="item.id"
+                  class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)] text-sm"
+                >
+                  <span class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0">#{{ item.position }}</span>
+                  <span class="text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 加载中 -->
+        <div v-if="currentLoading" class="flex justify-center py-4">
+          <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
+        </div>
+
+        <!-- 空状态：无运行会话且无预设任务时展示（有预设时由预设区替代） -->
+        <div
+          v-if="!currentLoading && runningSessions.length === 0 && presets.length === 0"
+          class="flex flex-col items-center justify-center py-12"
+        >
+          <svg class="w-12 h-12 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M13 10V3L4 14h7v7l9-11h-7z"
+            />
+          </svg>
+          <p class="text-sm text-[var(--text-tertiary)]">{{ t('noRunningSessions') }}</p>
+          <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('noRunningSessionsHint') }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab2 任务记录 -->
+    <div v-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
+      <!-- 筛选条 -->
+      <div class="px-4 pt-3 flex-shrink-0 space-y-2">
+        <div class="grid grid-cols-3 gap-1.5">
+          <select v-model="filterStatus" :class="controlCls" @change="onFilterChanged">
+            <option value="">{{ t('filterStatus') }}</option>
+            <option v-for="s in statusOptions.slice(1)" :key="s" :value="s">{{ statusLabel[s] || s }}</option>
+          </select>
+          <select v-model="filterAgent" :class="controlCls" @change="onFilterChanged">
+            <option value="">{{ t('filterAgent') }}</option>
+            <option v-for="a in agentOptions.slice(1)" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <select v-model="filterSource" :class="controlCls" @change="onFilterChanged">
+            <option value="">{{ t('filterSource') }}</option>
+            <option v-for="s in sourceOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-1.5">
+          <div>
+            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterSince') }}</label>
+            <Datepicker
+              v-model="filterSince"
+              :format="dateFormat"
+              :locale="dateLocale"
+              :dark="isDark"
+              :clearable="true"
+              :enable-time-picker="true"
+              :teleport="'body'"
+              :placeholder="t('filterSince')"
+              @update:model-value="onFilterChangedDebounced"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('filterUntil') }}</label>
+            <Datepicker
+              v-model="filterUntil"
+              :format="dateFormat"
+              :locale="dateLocale"
+              :dark="isDark"
+              :clearable="true"
+              :enable-time-picker="true"
+              :teleport="'body'"
+              :placeholder="t('filterUntil')"
+              @update:model-value="onFilterChangedDebounced"
+            />
+          </div>
+        </div>
+        <div class="flex justify-end">
+          <button
+            class="text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200"
+            @click="resetFilters"
+          >
+            {{ t('filterReset') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 滚动内容：分页任务列表 -->
+      <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
         <!-- 列表加载中 -->
         <div v-if="loading" class="flex justify-center py-4">
           <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
@@ -653,10 +947,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 空状态 -->
-        <div
-          v-if="!loading && tasks.length === 0 && !currentTask && queue.length === 0"
-          class="flex flex-col items-center justify-center py-12"
-        >
+        <div v-if="!loading && tasks.length === 0" class="flex flex-col items-center justify-center py-12">
           <svg class="w-12 h-12 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"
@@ -694,7 +985,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Tab2 定时任务 -->
+    <!-- Tab3 定时任务 -->
     <div v-if="activeTab === 'scheduled'" class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
       <!-- 新建/收起 -->
       <button
@@ -719,7 +1010,16 @@ onUnmounted(() => {
         </div>
         <div>
           <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledTriggerAt') }}</label>
-          <input v-model="formTriggerAt" type="datetime-local" :class="controlCls" />
+          <Datepicker
+            v-model="formTriggerAt"
+            :format="dateFormat"
+            :locale="dateLocale"
+            :dark="isDark"
+            :clearable="true"
+            :enable-time-picker="true"
+            :teleport="'body'"
+            :placeholder="t('scheduledTriggerAt')"
+          />
           <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
             {{ t('scheduledUtcHint', { time: utcPreview }) }}
           </p>
@@ -816,7 +1116,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Tab3 统计 -->
+    <!-- Tab4 统计 -->
     <div v-if="activeTab === 'stats'" class="flex-1 overflow-y-auto px-4 py-3">
       <!-- 加载中 -->
       <div v-if="!stats" class="flex justify-center py-8">
@@ -866,10 +1166,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 无数据提示 -->
-        <div
-          v-if="stats.total === 0"
-          class="flex flex-col items-center justify-center py-10"
-        >
+        <div v-if="stats.total === 0" class="flex flex-col items-center justify-center py-10">
           <svg class="w-12 h-12 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"

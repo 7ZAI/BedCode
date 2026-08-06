@@ -33,12 +33,23 @@ interface HistoryRecord {
   completed_at: string | null
 }
 
+interface PresetItem {
+  id: string
+  prompt: string
+  created_at: string
+}
+
 // ==================== State ====================
 
 const visible = autoTaskModalVisible
 const queue = ref<QueueItem[]>([])
 const currentTask = ref<HistoryRecord | null>(null)
-const autoMode = ref(false)
+// 预设任务（无会话时在侧边栏创建，弹窗内可选入当前会话队列，加入后自动移除）
+const presets = ref<PresetItem[]>([])
+const addingPresetId = ref<string | null>(null)
+// 两个独立开关：自动执行（入队任务自动调度） / 自动应答（Agent 提问自动回答）
+const autoExecute = ref(false)
+const autoAnswer = ref(false)
 const loading = ref(false)
 const manualInput = ref('')
 const editingId = ref<string | null>(null)
@@ -137,9 +148,53 @@ async function loadCurrentTask() {
     })
     const rows = (result?.tasks as HistoryRecord[]) || []
     currentTask.value = rows[0] || null
-    autoMode.value = rows[0]?.auto_approve === 1
   } catch (e) {
     console.error('[AutoTaskModal] Failed to load current task:', e)
+    showError(t('loadFailed'))
+  }
+}
+
+// 预设任务：全局列表（无会话/未选会话时在侧边栏创建）
+async function loadPresets() {
+  try {
+    const result: any = await context.commands.execute('auto-task.list-preset-tasks')
+    presets.value = (result?.presets as PresetItem[]) || []
+  } catch (e) {
+    console.error('[AutoTaskModal] Failed to load presets:', e)
+    showError(t('loadFailed'))
+  }
+}
+
+// 把预设任务加入当前会话队列（一次性消耗，加入后预设自动移除）
+async function addPreset(presetId: string) {
+  if (!sessionId.value || addingPresetId.value) return
+  addingPresetId.value = presetId
+  try {
+    await context.commands.execute('auto-task.add-preset-to-queue', {
+      session_id: sessionId.value,
+      preset_id: presetId,
+    })
+    // 事件广播（queue/preset-changed）兜底，此处直接刷新即时反馈
+    await Promise.all([loadPresets(), loadQueue()])
+  } catch (e) {
+    console.error('[AutoTaskModal] Failed to add preset to queue:', e)
+    showError(t('addPresetFailed'), e)
+  } finally {
+    addingPresetId.value = null
+  }
+}
+
+// 会话开关：auto_execute（自动执行）/ auto_answer（自动应答）
+async function loadSessionSettings() {
+  if (!sessionId.value) return
+  try {
+    const result: any = await context.commands.execute('auto-task.get-session-settings', {
+      session_id: sessionId.value,
+    })
+    autoExecute.value = result?.auto_execute === true
+    autoAnswer.value = result?.auto_answer === true
+  } catch (e) {
+    console.error('[AutoTaskModal] Failed to load session settings:', e)
     showError(t('loadFailed'))
   }
 }
@@ -148,7 +203,7 @@ async function refresh() {
   if (!sessionId.value) return
   loading.value = true
   try {
-    await Promise.all([loadQueue(), loadCurrentTask()])
+    await Promise.all([loadQueue(), loadCurrentTask(), loadSessionSettings(), loadPresets()])
   } finally {
     loading.value = false
   }
@@ -262,17 +317,38 @@ async function saveEdit() {
   }
 }
 
-async function toggleAutoMode() {
+async function toggleAutoExecute() {
   if (!sessionId.value) return
+  // 目标值必须在 await 前固化：后端 set_auto_mode 执行期间会同步发出
+  // session:mode-changed 事件，若事件先于 invoke 返回到达，autoExecute 已被
+  // 更新为 target，再用 !autoExecute.value 回写会把开关翻回旧值（开关看起来无变化）
+  const target = !autoExecute.value
   try {
     await context.commands.execute('auto-task.set-auto-mode', {
       session_id: sessionId.value,
-      auto_approve: !autoMode.value,
+      auto_execute: target,
     })
-    // 事件 session:mode-changed 会同步状态，此处直接更新避免闪烁
-    autoMode.value = !autoMode.value
+    // 事件 session:mode-changed 会同步状态，此处按 target 幂等回写，避免闪烁
+    autoExecute.value = target
   } catch (e) {
-    console.error('[AutoTaskModal] Failed to set auto mode:', e)
+    console.error('[AutoTaskModal] Failed to toggle auto execute:', e)
+    showError(t('modeFailed'), e)
+  }
+}
+
+async function toggleAutoAnswer() {
+  if (!sessionId.value) return
+  // 与 toggleAutoExecute 同理：目标值提前固化，避免事件与本地回写竞争翻转开关
+  const target = !autoAnswer.value
+  try {
+    await context.commands.execute('auto-task.set-auto-mode', {
+      session_id: sessionId.value,
+      auto_answer: target,
+    })
+    // 事件 session:mode-changed 会同步状态，此处按 target 幂等回写，避免闪烁
+    autoAnswer.value = target
+  } catch (e) {
+    console.error('[AutoTaskModal] Failed to toggle auto answer:', e)
     showError(t('modeFailed'), e)
   }
 }
@@ -283,13 +359,29 @@ function onQueueChanged() {
   if (visible.value) loadQueue()
 }
 
+function onPresetChanged() {
+  if (visible.value) loadPresets()
+}
+
 function onStatusChanged() {
   if (visible.value) loadCurrentTask()
 }
 
 function onModeChanged(data: any) {
   if (!visible.value || !data || data.session_id !== sessionId.value) return
-  autoMode.value = data.autoApprove === true || data.auto_approve === true
+  // 两个开关独立同步：autoExecute / autoAnswer（兼容旧字段 autoApprove）
+  if (typeof data.autoExecute === 'boolean' || typeof data.auto_execute === 'boolean') {
+    autoExecute.value = data.autoExecute === true || data.auto_execute === true
+  }
+  if (
+    typeof data.autoAnswer === 'boolean' ||
+    typeof data.auto_answer === 'boolean' ||
+    typeof data.autoApprove === 'boolean' ||
+    typeof data.auto_approve === 'boolean'
+  ) {
+    autoAnswer.value =
+      data.autoAnswer === true || data.auto_answer === true || data.autoApprove === true || data.auto_approve === true
+  }
 }
 
 // ==================== Lifecycle ====================
@@ -297,6 +389,7 @@ function onModeChanged(data: any) {
 let queueDisposable: { dispose(): void } | null = null
 let statusDisposable: { dispose(): void } | null = null
 let modeDisposable: { dispose(): void } | null = null
+let presetDisposable: { dispose(): void } | null = null
 
 // Esc 关闭弹窗
 function onKeydown(e: KeyboardEvent) {
@@ -315,6 +408,7 @@ onMounted(() => {
   queueDisposable = context.events.on('task:queue-changed', onQueueChanged)
   statusDisposable = context.events.on('task:status-changed', onStatusChanged)
   modeDisposable = context.events.on('session:mode-changed', onModeChanged)
+  presetDisposable = context.events.on('task:preset-changed', onPresetChanged)
 })
 
 onUnmounted(() => {
@@ -322,6 +416,7 @@ onUnmounted(() => {
   queueDisposable?.dispose()
   statusDisposable?.dispose()
   modeDisposable?.dispose()
+  presetDisposable?.dispose()
 })
 </script>
 
@@ -391,18 +486,35 @@ onUnmounted(() => {
           <span class="at-current-status" :style="{ color: statusColor.idle }">{{ t('idle') }}</span>
         </div>
 
-        <!-- 自动模式开关 -->
+        <!-- 自动执行开关：控制入队任务是否自动调度执行 -->
         <div class="at-mode-row">
           <div>
-            <p class="at-mode-label">{{ t('autoMode') }}</p>
-            <p class="at-mode-hint">{{ t('autoModeHint') }}</p>
+            <p class="at-mode-label">{{ t('autoExecute') }}</p>
+            <p class="at-mode-hint">{{ t('autoExecuteHint') }}</p>
           </div>
           <button
             role="switch"
-            :aria-checked="autoMode"
+            :aria-checked="autoExecute"
             class="at-toggle"
-            :class="{ 'at-toggle-on': autoMode }"
-            @click="toggleAutoMode"
+            :class="{ 'at-toggle-on': autoExecute }"
+            @click="toggleAutoExecute"
+          >
+            <span class="at-toggle-dot"></span>
+          </button>
+        </div>
+
+        <!-- 自动应答开关：控制 Agent 提问是否自动回答 -->
+        <div class="at-mode-row">
+          <div>
+            <p class="at-mode-label">{{ t('autoAnswer') }}</p>
+            <p class="at-mode-hint">{{ t('autoAnswerHint') }}</p>
+          </div>
+          <button
+            role="switch"
+            :aria-checked="autoAnswer"
+            class="at-toggle"
+            :class="{ 'at-toggle-on': autoAnswer }"
+            @click="toggleAutoAnswer"
           >
             <span class="at-toggle-dot"></span>
           </button>
@@ -422,6 +534,26 @@ onUnmounted(() => {
           <button class="at-btn at-btn-primary" :disabled="!manualInput.trim()" @click="handleAdd">
             {{ t('add') }}
           </button>
+        </div>
+
+        <!-- 预设任务：选择加入当前会话队列（加入后自动从预设中移除） -->
+        <div v-if="presets.length > 0" class="at-presets">
+          <p class="at-presets-title">{{ t('presetTitle') }} ({{ presets.length }})</p>
+          <div class="at-presets-list">
+            <div v-for="p in presets" :key="p.id" class="at-preset-item">
+              <span class="at-preset-prompt">{{ p.prompt }}</span>
+              <button
+                class="at-icon-btn at-icon-btn-primary"
+                :disabled="addingPresetId !== null"
+                :title="t('addToQueue')"
+                @click="addPreset(p.id)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 5v14m0 0l6-6m-6 6l-6-6" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- 队列列表 -->

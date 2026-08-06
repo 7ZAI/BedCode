@@ -13,9 +13,10 @@ mod state;
 mod queue;
 mod agent;
 mod scheduled;
+mod preset;
 
 use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
-use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession, HostTimer};
+use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTimer};
 use bedcode_plugin_api::{CommandArgs, WasmHost, WasmPlugin};
 use bedcode_plugin_api::types::PluginManifest;
 
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS task_history (
     exit_reason     TEXT,
     questions       TEXT,
     auto_approve    INTEGER DEFAULT 0,
+    event_time      TEXT,
     input_tokens    INTEGER,
     output_tokens   INTEGER,
     created_at      TEXT NOT NULL,
@@ -85,6 +87,23 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
     error       TEXT
 )"#,
     "CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_status ON scheduled_jobs(status, trigger_at)",
+];
+
+/// 会话级开关表建表 SQL（按语句拆分）
+///
+/// 两个独立开关：
+/// - auto_execute：自动执行 — 开启后入队任务自动调度执行；关闭时仅入队，
+///   可先添加多个任务再统一开启执行（手动控制入口：AutoTaskModal 弹窗）
+/// - auto_answer：自动应答 — 开启后 Agent 提问（权限请求 / AskUserQuestion）
+///   由 hook 自动回答；关闭时走 Claude Code 原生交互，用户手动回答
+const SESSION_SETTINGS_SCHEMA: &[&str] = &[
+    r#"
+CREATE TABLE IF NOT EXISTS session_settings (
+    session_id   TEXT PRIMARY KEY,
+    auto_execute INTEGER NOT NULL DEFAULT 0,
+    auto_answer  INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+)"#,
 ];
 
 struct AutoTaskPlugin;
@@ -183,10 +202,46 @@ impl WasmPlugin for AutoTaskPlugin {
                 let tasks = queue::list_queue(&host, &session_id);
                 Ok(serde_json::json!({ "tasks": tasks, "session_id": session_id }))
             }
+            "auto-task.list-running-sessions" => {
+                // 运行中的会话（含最新任务摘要），供前端「当前任务」Tab 展示与创建任务下拉选择
+                let sessions = state::list_running_sessions(&host);
+                Ok(serde_json::json!({ "sessions": sessions }))
+            }
+            "auto-task.set-platform" => {
+                // 前端在插件激活时通过 @tauri-apps/plugin-os 读取宿主平台并上报。
+                // queue.rs 调度据此选择终端输入提交符（Windows=CR，Linux=LF）
+                let platform = args.str_or("platform", "");
+                if platform.is_empty() {
+                    return Err(anyhow::anyhow!("set-platform: missing platform"));
+                }
+                // 白名单校验：仅接受宿主 OS 平台名，非法值直接拒绝
+                if !["windows", "linux", "macos", "android", "ios"].contains(&platform.as_str()) {
+                    return Err(anyhow::anyhow!("set-platform: unknown platform: {}", platform));
+                }
+                host.storage_set("platform", &serde_json::json!(platform))?;
+                host.log_info(&format!("Platform recorded: {}", platform));
+                Ok(serde_json::json!({ "platform": platform }))
+            }
             "auto-task.set-auto-mode" => {
                 let session_id = args.str_or("session_id", "");
-                let auto_approve = args.bool_or("auto_approve", false);
-                state::set_auto_mode(&host, &session_id, auto_approve)
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("set-auto-mode: missing session_id"));
+                }
+                // 两个独立开关：auto_execute（任务是否自动执行）与 auto_answer（Agent 提问是否自动回答），
+                // 均可单独设置；未提供的字段保持当前值（兼容旧调用方仅传 auto_approve）
+                let auto_execute = args.value("auto_execute").and_then(|v| v.as_bool());
+                let auto_answer = args
+                    .value("auto_answer")
+                    .and_then(|v| v.as_bool())
+                    .or_else(|| args.value("auto_approve").and_then(|v| v.as_bool()));
+                state::set_auto_mode(&host, &session_id, auto_execute, auto_answer)
+            }
+            "auto-task.get-session-settings" => {
+                let session_id = args.str_or("session_id", "");
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("get-session-settings: missing session_id"));
+                }
+                state::get_session_settings(&host, &session_id)
             }
             "auto-task.add-task" => {
                 let session_id = args.str_or("session_id", "");
@@ -199,21 +254,70 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Err(anyhow::anyhow!("add-task: missing prompt"));
                 }
 
-                // 队列从空变为非空时自动开启自动授权模式
-                let count_before = queue::pending_count(&host, &session_id);
                 let (task_id, position) = queue::add_task(&host, &session_id, &prompt);
 
-                if count_before == 0 {
-                    queue::ensure_auto_mode_on(&host, &session_id);
-                    // 会话空闲（无活动任务且无 waiting 项）时立即调度第一个任务，
-                    // 实现"添加即执行"的闭环；waiting 项存在时由 idle 推送驱动，不重复调度
-                    if !state::has_active_task(&host, &session_id) {
-                        queue::try_dispatch_next(&host, &session_id);
-                    }
+                // 自动执行开启且会话空闲时立即调度；关闭时仅入队（可先添加多个任务再统一执行），
+                // 调度链由会话 idle / 任务终态事件驱动（try_dispatch_next 内部以 auto_execute 为门）
+                if state::auto_execute_on(&host, &session_id) && !state::has_active_task(&host, &session_id) {
+                    queue::try_dispatch_next(&host, &session_id);
                 }
 
                 let count_after = queue::pending_count(&host, &session_id);
                 queue::broadcast_queue_changed(&host, &session_id, count_after, "add");
+
+                Ok(serde_json::json!({ "task_id": task_id, "position": position }))
+            }
+            "auto-task.list-preset-tasks" => {
+                // 预设任务列表（全局，创建时间倒序），供侧边栏「当前任务」Tab 与终端弹窗展示
+                let presets = preset::list_presets(&host);
+                Ok(serde_json::json!({ "presets": presets }))
+            }
+            "auto-task.create-preset-task" => {
+                let prompt = args.str_or("prompt", "");
+                if prompt.is_empty() {
+                    return Err(anyhow::anyhow!("create-preset-task: missing prompt"));
+                }
+
+                let preset_id = preset::create_preset(&host, &prompt);
+                preset::broadcast_preset_changed(&host, &preset_id, "create");
+
+                Ok(serde_json::json!({ "preset_id": preset_id }))
+            }
+            "auto-task.delete-preset-task" => {
+                let preset_id = args.str_or("preset_id", "");
+                if preset_id.is_empty() {
+                    return Err(anyhow::anyhow!("delete-preset-task: missing preset_id"));
+                }
+
+                if !preset::delete_preset(&host, &preset_id) {
+                    return Err(anyhow::anyhow!("delete-preset-task: preset not found: {}", preset_id));
+                }
+                preset::broadcast_preset_changed(&host, &preset_id, "delete");
+
+                Ok(serde_json::json!({ "deleted": true }))
+            }
+            "auto-task.add-preset-to-queue" => {
+                let session_id = args.str_or("session_id", "");
+                let preset_id = args.str_or("preset_id", "");
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("add-preset-to-queue: missing session_id"));
+                }
+                if preset_id.is_empty() {
+                    return Err(anyhow::anyhow!("add-preset-to-queue: missing preset_id"));
+                }
+
+                let (task_id, position) = preset::add_preset_to_queue(&host, &session_id, &preset_id)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+
+                // 与手动 add-task 同语义：自动执行开启且会话空闲时立即调度
+                if state::auto_execute_on(&host, &session_id) && !state::has_active_task(&host, &session_id) {
+                    queue::try_dispatch_next(&host, &session_id);
+                }
+
+                let count_after = queue::pending_count(&host, &session_id);
+                queue::broadcast_queue_changed(&host, &session_id, count_after, "add");
+                preset::broadcast_preset_changed(&host, &preset_id, "enqueue");
 
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
             }
@@ -233,11 +337,7 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Err(anyhow::anyhow!("remove-task: task not found: {}", task_id));
                 }
 
-                // 删除后无 pending 任务则退出自动模式
                 let remaining = queue::pending_count(&host, &session_id);
-                if remaining == 0 {
-                    queue::ensure_auto_mode_off(&host, &session_id);
-                }
                 queue::broadcast_queue_changed(&host, &session_id, remaining, "remove");
 
                 Ok(serde_json::json!({ "removed": true }))
@@ -250,7 +350,6 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let cleared = queue::clear_queue(&host, &session_id);
-                queue::ensure_auto_mode_off(&host, &session_id);
                 queue::broadcast_queue_changed(&host, &session_id, 0, "clear");
 
                 Ok(serde_json::json!({ "cleared": cleared }))
@@ -407,6 +506,18 @@ impl WasmPlugin for AutoTaskPlugin {
         }
         host.log_info("task_history table initialized");
 
+        // 2.0 初始化会话级开关表（auto_execute / auto_answer）
+        for stmt in SESSION_SETTINGS_SCHEMA {
+            match host.plugin_db_execute(stmt) {
+                Ok(_) => {}
+                Err(e) => {
+                    host.log_error(&format!("Failed to initialize session_settings table: {}", e));
+                    break;
+                }
+            }
+        }
+        host.log_info("session_settings table initialized");
+
         // 2.1 迁移：移除旧版 task_history.name 列（标题字段）
         // 旧库的 name 列为 NOT NULL，新 INSERT 不再写入会触发约束错误；
         // 先通过 PRAGMA table_info 确认列存在再 DROP：宿主 plugin_db_execute
@@ -471,6 +582,23 @@ impl WasmPlugin for AutoTaskPlugin {
         // 4.3 迁移：task_history 预留 token 统计列（v1 不解析，JSONL 深化需求回填）
         ensure_column(&host, "task_history", "input_tokens", "ALTER TABLE task_history ADD COLUMN input_tokens INTEGER");
         ensure_column(&host, "task_history", "output_tokens", "ALTER TABLE task_history ADD COLUMN output_tokens INTEGER");
+
+        // 4.3.1 迁移：task_history.event_time 列（事件发生时刻，时序保护基线）。
+        // 脚本每次推送携带 event_time，宿主仅在 event_time >= 行内已应用事件时应用，
+        // 拒绝网络阻塞导致的迟到旧事件覆盖最新状态（状态回跳 / 队列调度错乱）
+        ensure_column(&host, "task_history", "event_time", "ALTER TABLE task_history ADD COLUMN event_time TEXT");
+
+        // 4.4 初始化预设任务表（无会话/未选会话时创建的待投递任务，一次性消耗）
+        for stmt in preset::PRESET_TASKS_SCHEMA {
+            match host.plugin_db_execute(stmt) {
+                Ok(_) => {}
+                Err(e) => {
+                    host.log_error(&format!("Failed to initialize preset_tasks table: {}", e));
+                    break;
+                }
+            }
+        }
+        host.log_info("preset_tasks table initialized");
 
         // 5. 初始化定时自动任务表
         for stmt in SCHEDULED_JOBS_SCHEMA {

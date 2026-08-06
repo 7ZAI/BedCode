@@ -16,10 +16,10 @@
 //!
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
-use bedcode_plugin_api::constants::{EVENT_SESSION_MODE_CHANGED, EVENT_TASK_QUEUE_CHANGED};
+use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostTerminal,
+    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTerminal,
 };
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
@@ -32,6 +32,29 @@ use crate::agent;
 const WAITING_TIMEOUT_SECONDS: i64 = 60;
 /// waiting 态最大重试次数（首次 clear + 1 次重试）
 const MAX_DISPATCH_ATTEMPTS: i64 = 2;
+
+/// 自动任务投递输入的提交符（按宿主平台动态选择）
+///
+/// 投递输入必须以提交符结尾，agent（Claude Code）才会把它当作指令执行：
+/// - Windows（ConPTY）：Enter 键产生的字节是 `\r`（CR），Claude Code 只把 `\r` 识别为
+///   提交，`\n`（LF）仅是换行内容 —— 发 `\n` 会导致 prompt 被"输入"但任务永不开始执行
+/// - Linux / macOS：`\n`（LF）为传统终端提交符（Unix pty 对 `\r` 经 ICRNL 同样兼容）
+///
+/// 平台由前端在插件激活时通过 `@tauri-apps/plugin-os` 读取并调用
+/// `auto-task.set-platform` 上报到插件存储；未上报 / 未知平台回退 `\r`
+/// （Windows 必需，Unix 兼容，两端安全）。
+fn input_submit_char(host: &WasmHost) -> &'static str {
+    let platform = host
+        .storage_get("platform")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    match platform.as_deref() {
+        Some("windows") => "\r",
+        Some("linux") | Some("macos") => "\n",
+        _ => "\r",
+    }
+}
 
 /// 任务队列表建表 SQL（按语句拆分）
 ///
@@ -246,6 +269,16 @@ pub fn pending_count(host: &WasmHost, session_id: &str) -> i64 {
 pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     host.log_debug(&format!("try_dispatch_next: session_id={}", session_id));
 
+    // 自动执行关闭时不调度：仅入队等待，用户开启 auto_execute 后统一执行
+    // （手动模式用于先添加多个任务再一起执行；开启瞬间由 set_auto_mode 触发本入口）
+    if !crate::state::auto_execute_on(host, session_id) {
+        host.log_debug(&format!(
+            "try_dispatch_next: auto_execute off, hold dispatch for session_id={}",
+            session_id
+        ));
+        return;
+    }
+
     // 终态到达：上一轮下发的 executing 项归档为 done
     // （状态机把 done 延后到任务真正完成时，使队列视图能反映执行中的任务）
     let _ = host.plugin_db_execute_params(
@@ -269,9 +302,6 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     let queue = list_queue(host, session_id);
     if queue.is_empty() {
         host.log_debug(&format!("try_dispatch_next: no pending tasks for session_id={}", session_id));
-
-        // 队列空，退出自动模式
-        ensure_auto_mode_off(host, session_id);
         return;
     }
 
@@ -308,7 +338,7 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         "UPDATE task_queue SET status = 'waiting', dispatch_attempts = 1, updated_at = datetime('now') WHERE id = ?1",
         &sql_params![task_id],
     );
-    if let Err(e) = host.terminal_send(session_id, clear_command.unwrap_or("/clear\n")) {
+    if let Err(e) = host.terminal_send(session_id, &format!("{}{}", clear_command.unwrap_or("/clear"), input_submit_char(host))) {
         host.log_error(&format!("try_dispatch_next: terminal_send clear failed: {}", e));
         // clear 发送失败：回退 pending，下次终态触发时重试调度
         let _ = host.plugin_db_execute_params(
@@ -321,11 +351,6 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         "try_dispatch_next: task_id={} entering waiting, clear sent for session_id={}",
         task_id, session_id
     ));
-
-    // 队列仍有剩余任务则保持自动模式（waiting 项执行时仍需要自动授权）
-    if queue.len() > 1 {
-        ensure_auto_mode_on(host, session_id);
-    }
 }
 
 /// 新会话就绪回调（SessionStart → idle 推送时由 state.rs 调用）
@@ -372,7 +397,13 @@ fn dispatch_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str,
     // 出队直接写任务行（description=prompt、source 随队列项），不再依赖输入行重建
     crate::state::create_task_from_dispatch(host, session_id, prompt, agent_name, source);
 
-    if let Err(e) = host.terminal_send(session_id, prompt) {
+    // 投递输入必须以提交符结尾（按宿主平台动态选择，见 input_submit_char）：
+    // PTY 写入原样透传（宿主不会自动补提交符，见 SessionManager::write_input）。
+    // Windows ConPTY 下 Claude Code 只把 \r 识别为提交，\n 仅是换行内容；
+    // Linux 下 \n 为传统提交符。prompt 统一去尾部空白后拼提交符，避免重复换行。
+    // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
+    let input_line = format!("{}{}", prompt.trim_end(), input_submit_char(host));
+    if let Err(e) = host.terminal_send(session_id, &input_line) {
         host.log_error(&format!("dispatch_task: terminal_send failed: task_id={} err={}", task_id, e));
         // 发送失败：任务行已写入，标为中断避免假 in_progress 悬挂
         mark_latest_task_interrupted(host, session_id, "terminal_send failed on dispatch");
@@ -392,13 +423,6 @@ fn dispatch_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str,
     // executing 状态用于区分"已下发未完成"与"已完成"，避免重复下发。
     let remaining = pending_count(host, session_id);
     broadcast_queue_changed(host, session_id, remaining, "dequeue");
-
-    // 只要队列仍有剩余任务就保持自动模式开启；
-    // 最后一个任务出队后也不立即关闭——刚出队的任务正在执行，仍需要自动授权，
-    // 待其到达终态时由 try_dispatch_next 空队列分支关闭自动模式，形成完整闭环
-    if remaining > 0 {
-        ensure_auto_mode_on(host, session_id);
-    }
 }
 
 /// 将指定会话最新任务行标为 interrupted（调度失败兑底）
@@ -459,8 +483,8 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
                 &sql_params![attempts + 1, task_id],
             );
             let clear_command = agent::clear_command_for(crate::state::session_agent(host, session_id))
-                .unwrap_or("/clear\n");
-            if let Err(e) = host.terminal_send(session_id, clear_command) {
+                .unwrap_or("/clear");
+            if let Err(e) = host.terminal_send(session_id, &format!("{}{}", clear_command, input_submit_char(host))) {
                 host.log_error(&format!("check_waiting_timeouts: retry clear failed: task_id={} err={}", task_id, e));
             } else {
                 host.log_warn(&format!(
@@ -480,9 +504,6 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
             ));
             let remaining = pending_count(host, session_id);
             broadcast_queue_changed(host, session_id, remaining, "cancel");
-            if remaining == 0 {
-                ensure_auto_mode_off(host, session_id);
-            }
         }
     }
 }
@@ -496,6 +517,8 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
 /// - DELETE task-queue/remove → 删除任务
 /// - GET task-queue/list → 查询队列
 /// - POST task-queue/clear → 清空队列
+/// - POST task-queue/update → 更新任务内容
+/// - POST task-queue/reorder → 重排序队列
 pub fn handle_queue_http(host: &WasmHost, method: &str, path: &str, body: &Value, query: &Value) -> Value {
     host.log_debug(&format!("handle_queue_http: {} {}", method, path));
 
@@ -504,6 +527,8 @@ pub fn handle_queue_http(host: &WasmHost, method: &str, path: &str, body: &Value
         ("DELETE", "remove") => handle_remove(host, body, query),
         ("GET", "list") => handle_list(host, query),
         ("POST", "clear") => handle_clear(host, body, query),
+        ("POST", "update") => handle_update(host, body, query),
+        ("POST", "reorder") => handle_reorder(host, body, query),
         _ => {
             host.log_warn(&format!("Unknown queue endpoint: {} {}", method, path));
             http_response::error(404, &format!("Not found: {} {}", method, path))
@@ -525,19 +550,17 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
         return http_response::error(400, "Missing prompt");
     }
 
-    // 如果是第一个 pending 任务，自动开启自动模式
-    let count_before = pending_count(host, session_id);
-
+    // 入队（count_before 用于判断是否触发首次调度，此处仅保留日志语义）
     let (task_id, position) = add_task(host, session_id, prompt);
-
-    // 队列从空变为非空，自动开启自动模式
-    if count_before == 0 {
-        ensure_auto_mode_on(host, session_id);
-    }
 
     // 广播队列变更
     let count_after = pending_count(host, session_id);
     broadcast_queue_changed(host, session_id, count_after, "add");
+
+    // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）
+    if crate::state::auto_execute_on(host, session_id) && !crate::state::has_active_task(host, session_id) {
+        try_dispatch_next(host, session_id);
+    }
 
     http_response::ok_with_data(serde_json::json!({
         "task_id": task_id,
@@ -562,12 +585,8 @@ fn handle_remove(host: &WasmHost, body: &Value, _query: &Value) -> Value {
         return http_response::error(404, "Task not found");
     }
 
-    // 删除后无 pending 任务，退出自动模式
+    // 删除后广播队列变更
     let remaining = pending_count(host, session_id);
-    if remaining == 0 {
-        ensure_auto_mode_off(host, session_id);
-    }
-
     broadcast_queue_changed(host, session_id, remaining, "remove");
 
     http_response::ok()
@@ -600,11 +619,65 @@ fn handle_clear(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     }
 
     clear_queue(host, session_id);
-
-    // 清空后退出自动模式
-    ensure_auto_mode_off(host, session_id);
-
     broadcast_queue_changed(host, session_id, 0, "clear");
+
+    http_response::ok()
+}
+
+/// POST task-queue/update — 更新任务内容
+fn handle_update(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+    let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_id.is_empty() {
+        return http_response::error(400, "Missing task_id");
+    }
+    if prompt.is_empty() {
+        return http_response::error(400, "Missing prompt");
+    }
+
+    let updated = update_task(host, session_id, task_id, prompt);
+    if !updated {
+        return http_response::error(404, "Task not found or not pending");
+    }
+
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(host, session_id, remaining, "update");
+
+    http_response::ok()
+}
+
+/// POST task-queue/reorder — 重排序队列
+fn handle_reorder(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let task_ids: Vec<String> = body
+        .get("task_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_ids.is_empty() {
+        return http_response::error(400, "Missing task_ids");
+    }
+
+    let reordered = reorder_queue(host, session_id, &task_ids);
+    if !reordered {
+        return http_response::error(400, "Task ID set mismatch");
+    }
+
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(host, session_id, remaining, "reorder");
 
     http_response::ok()
 }
@@ -644,64 +717,6 @@ fn reorder_positions(host: &WasmHost, session_id: &str) {
             &sql_params![idx as i64, id],
         );
     }
-}
-
-/// 确保自动模式开启
-///
-/// 仅更新已有任务行的 auto_approve 字段；无任务行时不插入占位行
-/// （任务行由出队/输入创建，占位行会污染任务历史，见 ADR-0004）。
-/// 调度下发的任务行自带 auto_approve=1，不依赖此处的 UPDATE。
-pub fn ensure_auto_mode_on(host: &WasmHost, session_id: &str) {
-    // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
-    let _ = host.plugin_db_execute_params(
-        "UPDATE task_history SET auto_approve = 1, updated_at = datetime('now') \
-         WHERE id = (SELECT id FROM task_history WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 1)",
-        &sql_params![session_id],
-    );
-
-    host.broadcast_sync(&SyncEvent::SessionModeChanged {
-        session_id: session_id.to_string(),
-        auto_approve: true,
-    });
-
-    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "auto_approve": true,
-    }));
-    // 通知前端 UI（事件名与前端 context.events.on 监听一致）
-    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "autoApprove": true,
-    }));
-
-    host.log_debug(&format!("Auto mode ON for session_id={}", session_id));
-}
-
-/// 确保自动模式关闭
-pub fn ensure_auto_mode_off(host: &WasmHost, session_id: &str) {
-    // 子查询定位最新记录，SQLite 不支持 UPDATE ... ORDER BY
-    let _ = host.plugin_db_execute_params(
-        "UPDATE task_history SET auto_approve = 0, updated_at = datetime('now') \
-         WHERE id = (SELECT id FROM task_history WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 1)",
-        &sql_params![session_id],
-    );
-
-    host.broadcast_sync(&SyncEvent::SessionModeChanged {
-        session_id: session_id.to_string(),
-        auto_approve: false,
-    });
-
-    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "auto_approve": false,
-    }));
-    // 通知前端 UI（事件名与前端 context.events.on 监听一致）
-    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "autoApprove": false,
-    }));
-
-    host.log_debug(&format!("Auto mode OFF for session_id={}", session_id));
 }
 
 /// 广播队列变更事件
