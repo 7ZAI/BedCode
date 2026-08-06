@@ -38,7 +38,7 @@ const showAutoTaskPanel = ref(false)
 
 /** 判断 icon 字符串是否为 SVG path data（以 M/m 开头，非 emoji） */
 function isSvgPath(icon: string): boolean {
-  return /^[Mm]\d/.test(icon.trim())
+  return /^[Mm]\s*[\d.]/.test(icon.trim())
 }
 
 function handleClick(item: any) {
