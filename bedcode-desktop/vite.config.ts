@@ -16,6 +16,17 @@ export default defineConfig({
     host: host ? '0.0.0.0' : false,
     port: 1420,
     strictPort: true,
+    watch: {
+      // 排除巨型构建目录，避免 chokidar 扫描/监听数万文件霸占事件循环导致请求挂起
+      ignored: [
+        '**/src-tauri/target/**',
+        '**/src-tauri/gen/**',
+        '**/rust/target/**',
+        '**/dist/**',
+        '**/node_modules/**',
+        '**/.git/**',
+      ],
+    },
     hmr: host
       ? {
           protocol: 'ws',
