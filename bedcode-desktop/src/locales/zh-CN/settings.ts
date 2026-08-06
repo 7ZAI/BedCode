@@ -3,7 +3,8 @@ export default {
     title: '设置',
     network: {
       title: '网络设置',
-      websocketPort: 'WebSocket 端口',
+      defaultPort: '默认端口',
+      defaultPortDesc: '服务器启动时使用的端口，重启后生效',
       preventSleep: '防止系统休眠',
       preventSleepDesc: '服务器运行时阻止系统进入休眠状态（允许屏幕熄灭）',
     },

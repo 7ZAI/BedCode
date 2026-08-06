@@ -23,7 +23,7 @@ export default {
       goToConfig: 'Go to Session Config',
       noSessions: 'No sessions',
       noSessionsHint: 'Start a session from the Session Config page',
-      sessions: 'Sessions ({count})',
+      sessions: 'Terminal Configs ({count})',
       runningSessions: 'Running Sessions ({count})',
       confirmStop: 'Confirm Stop Session',
       confirmStopMsg: 'Are you sure you want to stop session "{name}"?',

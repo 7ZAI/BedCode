@@ -3,7 +3,8 @@ export default {
     title: 'Settings',
     network: {
       title: 'Network Settings',
-      websocketPort: 'WebSocket Port',
+      defaultPort: 'Default Port',
+      defaultPortDesc: 'The port used when the server starts; takes effect after restart',
       preventSleep: 'Prevent System Sleep',
       preventSleepDesc: 'Prevent the system from sleeping while the server is running (display sleep allowed)',
     },

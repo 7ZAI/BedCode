@@ -23,7 +23,7 @@ export default {
       goToConfig: '前往会话配置',
       noSessions: '暂无会话',
       noSessionsHint: '在"会话配置"页面启动会话',
-      sessions: '会话 ({count})',
+      sessions: '终端配置 ({count})',
       runningSessions: '运行中的会话 ({count})',
       confirmStop: '确认停止会话',
       confirmStopMsg: '确定要停止会话 "{name}" 吗？',
