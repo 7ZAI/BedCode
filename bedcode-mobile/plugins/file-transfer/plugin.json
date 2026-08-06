@@ -17,6 +17,7 @@
     "network:http",
     "storage",
     "transfer",
+    "ui:route",
     "ui:settings",
     "ui:toolbox"
   ],
@@ -97,6 +98,13 @@
       "id": "file-transfer.settings",
       "section": "file-transfer",
       "component": "SettingsSection"
-    }
+    },
+    "routes": [
+      {
+        "id": "settings",
+        "title": "文件传输设置",
+        "component": "SettingsPage"
+      }
+    ]
   }
 }

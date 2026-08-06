@@ -2,7 +2,8 @@
 /**
  * ToolboxEntry — 工具箱入口长条卡片 (Mobile)
  *
- * 渐变圆角图标（⇄）+ 标题 + 副标题 + 右侧实时状态角标。
+ * 由宿主 ToolboxView 以 `group-row group-row-btn` 容器渲染，本组件只填充内容：
+ *   icon-chip（渐变 ⇄）+ group-row-title + group-row-sub + 右侧状态角标。
  * 角标随 `plugin:file-transfer:tasks-changed` 刷新：对端在线且 N 传输中时显示数量，
  * 离线显示「未连接」文案。
  *
@@ -39,10 +40,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex items-center gap-3 min-w-0">
-    <!-- 渐变圆角图标 -->
-    <div class="ft-entry-icon flex-shrink-0 flex items-center justify-center rounded-xl border border-[var(--mobile-border)]">
-      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <!-- PluginViewHost 的 div 无 flex，需自行包裹 flex 容器对齐宿主 group-row 布局 -->
+  <div class="flex items-center gap-3 min-w-0 w-full">
+    <span class="icon-chip ft-entry-icon flex-shrink-0 flex items-center justify-center">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           stroke-linecap="round"
           stroke-linejoin="round"
@@ -50,33 +51,37 @@ onUnmounted(() => {
           d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
         />
       </svg>
-    </div>
-
+    </span>
     <div class="flex-1 min-w-0">
-      <p class="font-medium text-[0.9375rem] text-[var(--mobile-text-primary)] truncate">
-        {{ t('transfer.toolbox.title') }}
-      </p>
-      <p class="text-[var(--mobile-text-muted)] text-sm truncate mt-0.5">
-        {{ t('transfer.toolbox.subtitle') }}
-      </p>
+      <div class="group-row-title truncate">{{ t('transfer.toolbox.title') }}</div>
+      <div class="group-row-sub mt-0.5 truncate">{{ t('transfer.toolbox.subtitle') }}</div>
     </div>
 
     <!-- 右侧实时状态角标 -->
     <span
       v-if="activeCount > 0"
-      class="flex-shrink-0 inline-flex items-center h-6 px-2.5 rounded-full text-xs font-medium bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]"
+      class="status-badge badge-cyan flex-shrink-0"
     >
       {{ t('transfer.toolbox.activeCount', { count: activeCount }) }}
     </span>
     <span
       v-else-if="online"
-      class="flex-shrink-0 w-2 h-2 rounded-full bg-[var(--mobile-success)] shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+      class="flex-shrink-0 status-dot dot-emerald"
     ></span>
     <span
       v-else
-      class="flex-shrink-0 inline-flex items-center h-6 px-2.5 rounded-full text-xs font-medium bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-muted)]"
+      class="status-badge badge-zinc flex-shrink-0"
     >
       {{ t('transfer.toolbox.disconnected') }}
     </span>
   </div>
 </template>
+
+<style scoped>
+/* 工具箱入口渐变图标：复用宿主 icon-chip 尺寸，覆盖背景 */
+.ft-entry-icon {
+  color: var(--mobile-text-on-accent);
+  background: linear-gradient(135deg, var(--mobile-accent), #bd93f9);
+  border: none;
+}
+</style>

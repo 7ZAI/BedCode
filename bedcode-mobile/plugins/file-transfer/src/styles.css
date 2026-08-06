@@ -2,17 +2,16 @@
  * File Transfer 插件全局样式 (Mobile)
  *
  * 经 index.ts 以 `?inline` 导入并注入 document.head（宿主不加载插件 dist/style.css）。
- * 含：状态四色体系（spec 9.3）、状态 chip/进度条、bottom sheet 动画、
- * 触控目标流式缩放（clamp，兼容手机/平板）。
+ *
+ * 设计原则：
+ *   - 布局/间距/字号/卡片 全部复用宿主 CSS class（group-card / group-row / icon-chip /
+ *     settings-group / settings-row / settings-section-title / status-badge 等）
+ *   - 本文件只保留宿主无法覆盖的插件专属样式：
+ *     1. 状态四色体系（spec 9.3）— chip / 进度条着色
+ *     2. 任务卡操作按钮配色（accent / neutral）
+ *     3. Bottom sheet 滑入滑出动画
+ *     4. 触控目标流式缩放（clamp）
  */
-
-/* ==================== 工具箱入口渐变图标 ==================== */
-.ft-entry-icon {
-  width: 3rem;
-  height: 3rem;
-  color: var(--mobile-text-on-accent);
-  background: linear-gradient(135deg, var(--mobile-accent), #bd93f9);
-}
 
 /* ==================== 状态四色体系（spec 9.3） ==================== */
 /* 状态文本色（chip / 文案） */
@@ -40,7 +39,7 @@
   height: 1.25rem;
   padding: 0 0.5rem;
   border-radius: 9999px;
-  font-size: 11px;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800 * 0.0625rem, 0.75rem);
   font-weight: 500;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
@@ -78,11 +77,6 @@
 }
 .ft-sheet-leave-active .ft-sheet-panel {
   animation: ft-slide-down 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* 面板最大高度：小屏防溢出，平板展示更多任务 */
-.ft-sheet-panel {
-  max-height: 78dvh;
 }
 
 @keyframes ft-slide-up {

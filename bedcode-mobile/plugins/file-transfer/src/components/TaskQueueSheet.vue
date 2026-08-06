@@ -6,6 +6,9 @@
  *   传输中（蓝/绿）｜已暂停（琥珀，▶ 恢复）｜失败（红，重新排队）｜
  *   同名被拒（紫 chip）｜排队（灰）。
  * 任务卡内嵌进度条与暂停/恢复/取消/重新排队操作。
+ *
+ * 视觉语言统一：复用宿主 group-card / group-row / status-badge / icon-chip，
+ * 字号全部 clamp() 流式缩放。
  */
 import { computed } from 'vue'
 import type { Task } from '../types'
@@ -115,6 +118,18 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
   }
   return btns
 }
+
+/** 任务方向 → icon-chip 配色 */
+function directionChipClass(direction: string): string {
+  return direction === 'download' ? 'chip-cyan' : 'chip-amber'
+}
+
+/** 任务方向 → SVG path */
+function directionIconPath(direction: string): string {
+  return direction === 'download'
+    ? 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4'
+    : 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12'
+}
 </script>
 
 <template>
@@ -133,15 +148,15 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
 
           <!-- 标题行 -->
           <div class="flex-shrink-0 flex items-center gap-2 px-4 py-2">
-            <h3 class="flex-1 text-base font-semibold text-[var(--mobile-text-primary)]">
+            <h3 class="flex-1 ft-sheet-title text-[var(--mobile-text-primary)]">
               {{ t('transfer.queue.title') }}
             </h3>
-            <span v-if="activeCount > 0" class="text-xs text-[var(--mobile-accent)] font-medium">
+            <span v-if="activeCount > 0" class="status-badge badge-cyan">
               {{ t('transfer.queue.active', { count: activeCount }) }}
             </span>
             <button
               v-if="resumableCount > 0"
-              class="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] active:opacity-80"
+              class="flex-shrink-0 ft-resume-all-btn"
               @click="emit('resume-all')"
             >
               {{ t('transfer.task.resumeAll') }}
@@ -151,36 +166,20 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
           <!-- 任务卡列表 -->
           <div class="flex-1 overflow-y-auto min-h-0 px-4 pb-[calc(var(--safe-area-bottom,0px)+12px)]">
             <div v-if="tasks.length === 0" class="py-10 text-center">
-              <p class="text-sm text-[var(--mobile-text-muted)]">{{ t('transfer.task.empty') }}</p>
+              <p class="ft-task-empty">{{ t('transfer.task.empty') }}</p>
             </div>
 
-            <div v-for="task in tasks" :key="task.id" class="mb-3 rounded-xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)] p-3">
+            <div v-for="task in tasks" :key="task.id" class="group-card mb-3">
               <!-- 首行：方向图标 + 名称 + 状态 chip -->
-              <div class="flex items-center gap-2.5">
-                <div
-                  class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                  :class="task.direction === 'download' ? 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]' : 'bg-[var(--mobile-warning-muted)] text-[var(--mobile-warning)]'"
-                >
+              <div class="group-row" style="gap: 0.625rem">
+                <span class="icon-chip flex-shrink-0" :class="directionChipClass(task.direction)">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      v-if="task.direction === 'download'"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                    />
-                    <path
-                      v-else
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                    />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="directionIconPath(task.direction)" />
                   </svg>
-                </div>
+                </span>
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm text-[var(--mobile-text-primary)] truncate">{{ taskName(task) }}</p>
-                  <p class="text-xs text-[var(--mobile-text-muted)] mt-0.5 truncate">{{ taskMeta(task) }}</p>
+                  <p class="ft-task-name text-[var(--mobile-text-primary)] truncate">{{ taskName(task) }}</p>
+                  <p class="ft-task-meta mt-0.5 truncate">{{ taskMeta(task) }}</p>
                 </div>
                 <span
                   class="flex-shrink-0 ft-chip"
@@ -191,25 +190,27 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
               </div>
 
               <!-- 进度条（仅非终态） -->
-              <div v-if="!isTerminalState(task.state)" class="mt-2.5 h-1.5 rounded-full bg-[var(--mobile-bg-tertiary)] overflow-hidden">
-                <div
-                  class="h-full rounded-full transition-all duration-300"
-                  :class="TASK_STATE_PROGRESS_CLASS[task.state]"
-                  :style="{ width: taskPercent(task) + '%' }"
-                ></div>
+              <div v-if="!isTerminalState(task.state)" class="px-4 pb-3">
+                <div class="ft-progress-track">
+                  <div
+                    class="h-full rounded-full transition-all duration-300"
+                    :class="TASK_STATE_PROGRESS_CLASS[task.state]"
+                    :style="{ width: taskPercent(task) + '%' }"
+                  ></div>
+                </div>
               </div>
 
               <!-- 失败/拒绝原因 -->
-              <p v-if="taskReason(task)" class="mt-2 text-xs text-[var(--mobile-error)]">
-                {{ taskReason(task) }}
-              </p>
+              <div v-if="taskReason(task)" class="px-4 pb-2">
+                <p class="ft-task-reason">{{ taskReason(task) }}</p>
+              </div>
 
               <!-- 操作按钮 -->
-              <div v-if="actionButtons(task).length > 0" class="mt-2.5 flex gap-2">
+              <div v-if="actionButtons(task).length > 0" class="px-4 pb-3 flex gap-2">
                 <button
                   v-for="btn in actionButtons(task)"
                   :key="btn.key"
-                  class="flex-1 py-2 rounded-lg text-xs font-medium active:opacity-80 transition-opacity"
+                  class="flex-1 ft-task-action-btn"
                   :class="btn.color"
                   @click="btn.onClick"
                 >
@@ -223,3 +224,76 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
     </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+/* 面板最大高度：小屏防溢出，平板展示更多任务 */
+.ft-sheet-panel {
+  max-height: 78dvh;
+}
+
+/* 队列标题 */
+.ft-sheet-title {
+  font-size: clamp(0.9375rem, 1rem + (100vw - 360px) / 800 * 0.0625rem, 1.0625rem);
+  font-weight: 600;
+}
+
+/* 全部恢复按钮 */
+.ft-resume-all-btn {
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-weight: 500;
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
+  transition: opacity 0.15s ease;
+}
+
+.ft-resume-all-btn:active {
+  opacity: 0.8;
+}
+
+/* 空态文字 */
+.ft-task-empty {
+  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800 * 0.0625rem, 0.9375rem);
+  color: var(--mobile-text-muted);
+}
+
+/* 任务名称 */
+.ft-task-name {
+  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800 * 0.0625rem, 0.9375rem);
+  font-weight: 500;
+}
+
+/* 任务元信息 */
+.ft-task-meta {
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  color: var(--mobile-text-muted);
+}
+
+/* 进度条轨道 */
+.ft-progress-track {
+  height: 0.375rem;
+  border-radius: 9999px;
+  background: var(--mobile-bg-tertiary);
+  overflow: hidden;
+}
+
+/* 失败原因 */
+.ft-task-reason {
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  color: var(--mobile-error);
+}
+
+/* 操作按钮 */
+.ft-task-action-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+}
+
+.ft-task-action-btn:active {
+  opacity: 0.8;
+}
+</style>

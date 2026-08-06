@@ -13,6 +13,7 @@
 import FileTransferView from './components/FileTransferView.vue'
 import ToolboxEntry from './components/ToolboxEntry.vue'
 import SettingsSection from './components/SettingsSection.vue'
+import SettingsPage from './components/SettingsPage.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
@@ -42,7 +43,17 @@ export async function activate(context: PluginContext): Promise<void> {
     entry: ToolboxEntry,
   })
 
-  // 4. 设置区贡献（宿主 registry 支持；当前 SettingsView 尚未渲染插件设置区，
+  // 4. 设置二级页动态路由：宿主 addRoute 至 /mobile/plugins/{pluginId}/settings，
+  //    齿轮入口经 ui.openPage('settings') 整体跳转。
+  //    header: false — 插件自行渲染页头，避免与 ToolboxView 已有的 < 文件传输 页头重复
+  context.ui.registerRoute({
+    id: 'settings',
+    title: context.i18n.t('transfer.settings.title'),
+    component: SettingsPage,
+    header: false,
+  })
+
+  // 5. 设置区贡献（宿主 registry 支持；当前 SettingsView 尚未渲染插件设置区，
   //    插件内 FileTransferView 顶部齿轮亦入口 SettingsSection）
   context.ui.registerSettingsSection({
     id: 'file-transfer.settings',
