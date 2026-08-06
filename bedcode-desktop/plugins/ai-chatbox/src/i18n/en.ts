@@ -1,0 +1,13 @@
+import type { MessageSchema } from './messages'
+
+/**
+ * English translation
+ *
+ * Maintained in a standalone file; inlined into the bundle at build time by Vite.
+ */
+const en: MessageSchema = {
+  sidebarTitle: 'AI Chat',
+  toolbarLabel: 'AI Optimize',
+}
+
+export default en
