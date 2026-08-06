@@ -267,8 +267,10 @@ pub async fn start_http_server(
     Ok((handle, server))
 }
 
-// 注意：由于 Tauri crate-type = ["cdylib", "rlib"] 的限制，
-// Windows 上 cargo test 无法运行（STATUS_ENTRYPOINT_NOT_FOUND）。
+// 注意：由于 Tauri crate-type = ["cdylib", "rlib"] 的限制，Windows 上曾无法运行
+// cargo test（STATUS_ENTRYPOINT_NOT_FOUND）。
+// 已由 build.rs 通过 cargo:rustc-link-arg 将 resource.lib（tauri 默认清单）链接进
+// lib 单元测试二进制解决，cargo test --lib 可直接运行。
 // 连接链路测试通过手动运行桌面端 + curl/移动端实际连接来验证：
 //
 // 验证步骤：

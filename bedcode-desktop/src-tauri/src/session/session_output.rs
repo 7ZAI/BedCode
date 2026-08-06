@@ -935,6 +935,16 @@ mod tests {
             .await
             .insert("client-1".to_string(), subscriber);
 
+        // 模拟 subscribe 第二步：占位后先发历史快照（与 subscribe 实现一致），
+        // 否则接收端只收到 pending [3,4]，收不到历史 [0,1,2]，断言顺序不成立
+        {
+            let subs = manager.subscribers.read().await;
+            let sub = subs.get("client-1").unwrap();
+            for i in 0..3 {
+                sub.send_queue.send(make_event(i)).await.unwrap();
+            }
+        }
+
         // inactive 期间 on_output 应缓存到 pending
         manager.on_output(make_event(3)).await;
         manager.on_output(make_event(4)).await;
@@ -996,6 +1006,12 @@ mod tests {
             let sub = subs.get("client-1").unwrap();
             assert!(sub.is_active());
             assert_eq!(sub.sent_seq.load(Ordering::SeqCst), 2);
+        }
+
+        // 排空 subscribe 阶段已发送的历史事件，聚焦验证后续 on_output 无重复无丢失
+        for i in 0..3 {
+            let e = rx.recv().await.unwrap();
+            assert_eq!(e.index, i);
         }
 
         // 后续 on_output 正常接收，无重复无丢失

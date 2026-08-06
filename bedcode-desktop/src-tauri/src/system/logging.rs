@@ -267,7 +267,11 @@ mod tests {
             "magenta should only wrap the plugin tag, got:\n{out}"
         );
 
-        // 保留源文件定位行
-        assert!(out.contains("at "), "location line should be kept, got:\n{out}");
+        // 保留源文件定位行（"at" 被格式化器渲染为 ANSI 斜体样式，字面量 "at " 不出现，
+        // 改为断言定位行内容本身）
+        assert!(
+            out.contains("logging.rs:"),
+            "location line should be kept, got:\n{out}"
+        );
     }
 }

@@ -249,7 +249,9 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(1500));
 
-        let result = service.verify_token(&token);
+        // 用严格过期检查 API：verify_token 走 jsonwebtoken 默认 Validation（leeway=60s），
+        // 过期 60 秒内的 token 仍会通过，无法表达本测试的意图
+        let result = service.verify_token_with_expiry(&token);
         assert!(matches!(result, Err(JwtError::TokenExpired)));
     }
 }
