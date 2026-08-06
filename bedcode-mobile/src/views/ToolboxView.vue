@@ -25,66 +25,64 @@
     <template v-else>
       <div class="page-header flex-shrink-0">
         <h1 class="page-title">{{ t('mobile.toolbox.title') }}</h1>
-        <p class="page-subtitle">{{ t('mobile.toolbox.subtitle') || '任务与插件工具入口' }}</p>
+        <p class="page-subtitle">{{ t('mobile.toolbox.subtitle') }}</p>
       </div>
 
-      <div class="flex-1 overflow-y-auto px-4 pb-8 space-y-6">
-        <!-- 预设任务入口 -->
-        <section>
-          <h2 class="group-section-title">{{ t('mobile.toolbox.tools') || '工具' }}</h2>
-          <div class="group-card">
-            <button class="group-row group-row-btn" @click="router.push({ name: 'mobile-preset-tasks' })">
-              <span class="icon-chip chip-cyan">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+      <div class="flex-1 overflow-y-auto px-4 pb-8">
+        <div class="pt-2 space-y-3">
+          <!-- 预设任务入口 -->
+          <button
+            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            @click="router.push({ name: 'mobile-preset-tasks' })"
+          >
+            <div class="flex items-start gap-3">
+              <span class="toolbox-icon chip-cyan">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                 </svg>
               </span>
               <div class="flex-1 min-w-0">
-                <div class="group-row-title">{{ t('mobile.toolbox.presetTasks') }}</div>
-                <div class="group-row-sub mt-0.5">{{ presetEntryDesc }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ t('mobile.toolbox.presetTasks') }}</span>
+                  <span v-if="taskCount > 0" class="status-badge badge-cyan">{{ taskCount }}</span>
+                </div>
+                <p class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">{{ presetEntryDesc }}</p>
               </div>
-              <span v-if="taskCount > 0" class="status-badge badge-cyan">{{ taskCount }}</span>
-              <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
-        </section>
+            </div>
+          </button>
 
-        <!-- 插件工具箱视图入口 -->
-        <section v-if="pluginRegistry.toolboxViews.value.length > 0">
-          <h2 class="group-section-title">{{ t('mobile.toolbox.pluginViews') || '插件视图' }}</h2>
-          <div class="group-card">
-            <button
-              v-for="view in pluginRegistry.toolboxViews.value"
-              :key="`${view.pluginId}:${view.viewId}`"
-              class="group-row group-row-btn"
-              @click="activePluginView = view"
-            >
-              <PluginViewHost
-                v-if="view.entry"
-                :plugin-id="view.pluginId"
-                :component="view.entry"
-                class="flex-1 min-w-0"
-              />
-              <template v-else>
-                <span class="icon-chip chip-violet">
-                  <svg v-if="isSvgIcon(view.icon)" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="view.icon" />
+          <!-- 插件工具箱视图入口 -->
+          <button
+            v-for="view in pluginRegistry.toolboxViews.value"
+            :key="`${view.pluginId}:${view.viewId}`"
+            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            @click="activePluginView = view"
+          >
+            <PluginViewHost
+              v-if="view.entry"
+              :plugin-id="view.pluginId"
+              :component="view.entry"
+              class="flex-1 min-w-0"
+            />
+            <template v-else>
+              <div class="flex items-start gap-3">
+                <span class="toolbox-icon chip-violet">
+                  <svg v-if="isSvgIcon(view.icon)" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="view.icon" />
                   </svg>
-                  <span v-else class="text-base">{{ view.icon ?? '🧩' }}</span>
+                  <span v-else class="text-2xl">{{ view.icon ?? '🧩' }}</span>
                 </span>
                 <div class="flex-1 min-w-0">
-                  <div class="group-row-title truncate">{{ view.title }}</div>
-                  <div class="group-row-sub mt-0.5">{{ t('mobile.toolbox.pluginEntry') }}</div>
+                  <div class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ view.title }}</div>
+                  <p class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">{{ t('mobile.toolbox.pluginEntry') }}</p>
                 </div>
-              </template>
-              <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
-        </section>
+                <svg class="w-4 h-4 flex-shrink-0 mt-1" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </template>
+          </button>
+        </div>
       </div>
     </template>
   </div>
@@ -133,3 +131,16 @@ onMounted(async () => {
   await load()
 })
 </script>
+
+<style scoped>
+/* 工具箱图标容器：与 PluginIcon md 尺寸一致（48px, rounded-xl） */
+.toolbox-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+</style>

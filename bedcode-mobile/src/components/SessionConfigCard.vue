@@ -1,82 +1,86 @@
 <template>
-  <div class="group-card">
-    <div class="group-row items-start py-3.5">
-      <span
-        class="icon-chip"
-        :class="config.environment === 'wsl2' ? 'chip-violet' : 'chip-cyan'"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-      </span>
-      <div
-        class="flex-1 min-w-0 cursor-pointer"
-        @click="expanded = !expanded"
-      >
-        <div class="flex items-center gap-2">
-          <span class="group-row-title">{{ config.name }}</span>
-          <span
-            class="env-tag"
-            :class="config.environment === 'wsl2' ? 'env-wsl' : 'env-win'"
+  <div
+    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl overflow-hidden transition-all duration-300 hover:border-[var(--mobile-border-hover)]"
+  >
+    <div class="p-4">
+      <div class="flex items-start gap-3">
+        <span
+          class="config-icon"
+          :class="config.environment === 'wsl2' ? 'chip-violet' : 'chip-cyan'"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        </span>
+        <div
+          class="flex-1 min-w-0 cursor-pointer"
+          @click="expanded = !expanded"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ config.name }}</span>
+            <span
+              class="env-tag"
+              :class="config.environment === 'wsl2' ? 'env-wsl' : 'env-win'"
+            >
+              {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
+            </span>
+          </div>
+          <div v-if="config.command" class="flex items-center gap-1.5 mt-1.5 min-w-0">
+            <span class="text-xs text-[var(--mobile-text-muted)] shrink-0">{{ t('mobile.sessionConfig.command') }}</span>
+            <code class="text-xs font-mono text-[var(--mobile-text-muted)] truncate">{{ config.command }}</code>
+          </div>
+          <button
+            v-if="runningCount > 0"
+            class="mt-2 inline-flex items-center gap-1.5 text-xs font-medium"
+            style="color: var(--mobile-chip-emerald)"
+            @click.stop="$emit('sessionClick', runningSessions[0])"
           >
-            {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
-          </span>
-        </div>
-        <div v-if="config.command" class="flex items-center gap-1.5 mt-1.5 min-w-0">
-          <span class="group-row-sub shrink-0">{{ t('mobile.sessionConfig.command') }}</span>
-          <code class="group-row-sub font-mono truncate">{{ config.command }}</code>
+            <span class="status-dot dot-emerald"></span>
+            {{ t('mobile.sessionConfig.runningCount', { count: runningCount }) }} · {{ t('mobile.sessionConfig.viewSession') }}
+          </button>
         </div>
         <button
-          v-if="runningCount > 0"
-          class="mt-2 inline-flex items-center gap-1.5 text-xs font-medium"
-          style="color: var(--mobile-chip-emerald)"
-          @click.stop="$emit('sessionClick', runningSessions[0])"
+          v-if="!hasRunningSession"
+          class="flex-shrink-0 h-8 px-3.5 rounded-lg text-xs font-semibold active:opacity-80 transition-colors"
+          style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent)"
+          :class="{ 'opacity-50': isStarting }"
+          :disabled="isStarting"
+          @click.stop="$emit('start', config)"
         >
-          <span class="status-dot dot-emerald"></span>
-          {{ t('mobile.sessionConfig.runningCount', { count: runningCount }) }} · {{ t('mobile.sessionConfig.viewSession') }}
+          <div
+            v-if="isStarting"
+            class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"
+          />
+          <template v-else>{{ t('mobile.sessionConfig.start') }}</template>
         </button>
+        <svg
+          class="w-4 h-4 flex-shrink-0 transition-transform duration-200 cursor-pointer mt-1"
+          style="color: var(--mobile-row-sub)"
+          :class="{ 'rotate-180': expanded }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          @click="expanded = !expanded"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
       </div>
-      <button
-        v-if="!hasRunningSession"
-        class="flex-shrink-0 h-8 px-3.5 rounded-lg text-xs font-semibold active:opacity-80 transition-colors"
-        style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent)"
-        :class="{ 'opacity-50': isStarting }"
-        :disabled="isStarting"
-        @click.stop="$emit('start', config)"
-      >
-        <div
-          v-if="isStarting"
-          class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"
-        />
-        <template v-else>{{ t('mobile.sessionConfig.start') }}</template>
-      </button>
-      <svg
-        class="w-4 h-4 flex-shrink-0 transition-transform duration-200 cursor-pointer"
-        style="color: var(--mobile-row-sub)"
-        :class="{ 'rotate-180': expanded }"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        @click="expanded = !expanded"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-      </svg>
     </div>
 
     <transition name="slide">
-      <div v-if="expanded" style="border-top: 1px solid var(--mobile-group-divider)">
+      <div v-if="expanded" class="border-t border-[var(--mobile-border)]">
         <button
           class="w-full px-4 py-3 flex items-center gap-3 transition-colors active:opacity-80"
           @click.stop="$emit('navigateToFiles', config)"
         >
-          <span class="icon-chip chip-amber !w-8 !h-8 !rounded-lg">
+          <span class="config-icon-sm chip-amber">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
             </svg>
           </span>
           <div class="min-w-0 flex-1 text-left">
-            <span class="group-row-sub">{{ t('mobile.sessionConfig.projectDir') }}</span>
-            <p class="group-row-sub font-mono truncate mt-0.5">{{ config.working_dir }}</p>
+            <span class="text-xs text-[var(--mobile-text-muted)]">{{ t('mobile.sessionConfig.projectDir') }}</span>
+            <p class="text-xs font-mono text-[var(--mobile-text-muted)] truncate mt-0.5">{{ config.working_dir }}</p>
           </div>
         </button>
 
@@ -85,12 +89,12 @@
             v-for="session in runningSessions"
             :key="session.id"
             class="px-4 py-3 flex items-center justify-between transition-colors active:opacity-80"
-            style="border-top: 1px solid var(--mobile-group-divider)"
+            style="border-top: 1px solid var(--mobile-border)"
             @click.stop="$emit('sessionClick', session)"
           >
             <div class="flex items-center gap-3 min-w-0 cursor-pointer">
               <span class="status-dot dot-emerald"></span>
-              <span class="group-row-sub truncate">{{ session.name }}</span>
+              <span class="text-xs text-[var(--mobile-text-muted)] truncate">{{ session.name }}</span>
             </div>
             <button
               class="shrink-0 p-1.5 rounded-lg transition-colors active:opacity-80"

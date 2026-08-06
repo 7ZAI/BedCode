@@ -5,48 +5,46 @@
       <h1 class="page-title">{{ $t('settings.title') }}</h1>
     </div>
 
-    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8 space-y-6">
+    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
       <!-- Category Entries -->
-      <section>
-        <h2 class="group-section-title">{{ $t('settings.general') || '通用' }}</h2>
-        <div class="group-card">
-          <button
-            v-for="cat in categories"
-            :key="cat.key"
-            class="group-row group-row-btn"
-            @click="router.push({ name: cat.route })"
-          >
-            <span class="icon-chip" :class="cat.iconClass">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="cat.iconPath" />
+      <div class="pt-2 space-y-3">
+        <button
+          v-for="cat in categories"
+          :key="cat.key"
+          class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+          @click="router.push({ name: cat.route })"
+        >
+          <div class="flex items-center gap-3">
+            <span class="settings-icon" :class="cat.iconClass">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="cat.iconPath" />
               </svg>
             </span>
-            <span class="flex-1 min-w-0 text-left group-row-title truncate">{{ $t(cat.labelKey) }}</span>
+            <span class="flex-1 min-w-0 text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
             <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
-          </button>
-        </div>
-      </section>
+          </div>
+        </button>
+      </div>
 
       <!-- Footer Actions -->
-      <section>
-        <h2 class="group-section-title">{{ $t('settings.dangerZone') || '危险操作' }}</h2>
-        <div class="group-card">
-          <button
-            class="group-row group-row-btn"
-            @click="resetSettings"
-          >
-            <span class="flex-1 text-left group-row-label">{{ $t('settings.actions.resetSettings') }}</span>
-          </button>
-          <button
-            class="group-row group-row-btn"
-            @click="clearData"
-          >
-            <span class="flex-1 text-left font-medium" style="font-size: 0.9375rem; color: var(--mobile-chip-red)">{{ $t('settings.actions.clearAllData') }}</span>
-          </button>
-        </div>
-      </section>
+      <div class="mt-6 flex flex-col items-center gap-3">
+        <button
+          class="w-full max-w-xs py-3 rounded-xl text-[0.9375rem] font-medium text-center transition-opacity active:opacity-80"
+          style="background: var(--mobile-input-bg); color: var(--mobile-text-secondary)"
+          @click="resetSettings"
+        >
+          {{ $t('settings.actions.resetSettings') }}
+        </button>
+        <button
+          class="w-full max-w-xs py-3 rounded-xl text-[0.9375rem] font-medium text-center transition-opacity active:opacity-80"
+          style="color: var(--mobile-chip-red)"
+          @click="clearData"
+        >
+          {{ $t('settings.actions.clearAllData') }}
+        </button>
+      </div>
     </div>
 
     <!-- Confirm Dialog (Reset / Clear Data) -->
@@ -265,6 +263,17 @@ async function executeConfirm() {
 </script>
 
 <style scoped>
+/* 设置图标容器：与 PluginIcon md 尺寸一致（48px, rounded-xl） */
+.settings-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+
 .cat-connection {
   color: var(--mobile-chip-cyan);
   background-color: var(--mobile-chip-cyan-bg);

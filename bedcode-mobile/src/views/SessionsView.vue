@@ -6,7 +6,9 @@
         <div>
           <h1 class="page-title">{{ t('mobile.session.title') }}</h1>
           <p class="page-subtitle">
-            {{ t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length }) }}
+            {{ isConnected
+              ? t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length })
+              : t('mobile.session.notConnected') }}
           </p>
         </div>
         <div class="flex items-center gap-1">

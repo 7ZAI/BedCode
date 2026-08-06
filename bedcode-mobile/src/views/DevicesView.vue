@@ -47,43 +47,49 @@
       </Transition>
 
       <!-- Connected: Session Configs -->
-      <div v-if="isConnected" class="pb-8 space-y-6">
-        <!-- Connected device info -->
-        <section v-if="currentDevice">
-          <h2 class="group-section-title">{{ t('mobile.connection.currentConnection') || '当前连接' }}</h2>
-          <div class="group-card">
-            <div class="group-row">
-              <span class="icon-chip chip-emerald">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      <div v-if="isConnected" class="pb-8">
+        <div class="pt-2 space-y-3">
+          <!-- Connected device info -->
+          <div v-if="currentDevice" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 transition-all duration-300">
+            <div class="flex items-center gap-3">
+              <span class="device-icon chip-emerald">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </span>
               <div class="flex-1 min-w-0">
-                <div class="group-row-title">{{ currentDevice.name }}</div>
-                <div class="group-row-sub font-mono">{{ currentDevice.address }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ currentDevice.name }}</span>
+                  <span class="status-badge badge-emerald">
+                    <span class="status-dot dot-emerald"></span>
+                    {{ connectionStatus === 'paired' ? (t('mobile.connection.authenticated') || '已配对') : (t('mobile.connection.paired') || '已配对') }}
+                  </span>
+                </div>
+                <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ currentDevice.address }}</p>
               </div>
-              <span class="status-badge badge-emerald">
-                <span class="status-dot dot-emerald"></span>
-                {{ connectionStatus === 'paired' ? (t('mobile.connection.authenticated') || '已配对') : (t('mobile.connection.paired') || '已配对') }}
-              </span>
             </div>
-            <button class="group-row group-row-btn" @click="handleDisconnect">
-              <span class="icon-chip chip-red">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+          </div>
+
+          <!-- Disconnect button -->
+          <button
+            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            @click="handleDisconnect"
+          >
+            <div class="flex items-center gap-3">
+              <span class="device-icon chip-red">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                 </svg>
               </span>
-              <span class="flex-1 text-left font-medium" style="font-size: 0.9375rem; color: var(--mobile-chip-red)">{{ t('mobile.connection.disconnect') }}</span>
-            </button>
-          </div>
-        </section>
+              <span class="flex-1 text-[0.9375rem] font-medium" style="color: var(--mobile-chip-red)">{{ t('mobile.connection.disconnect') }}</span>
+            </div>
+          </button>
 
-        <!-- Session Configs -->
-        <section>
-          <div class="flex items-center justify-between px-1 mb-2">
-            <h2 class="group-section-title !mb-0">{{ t('mobile.connection.sessionConfig') }}</h2>
+          <!-- Session Configs header -->
+          <div class="flex items-center justify-between pt-2">
+            <span class="text-[0.8125rem] font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.sessionConfig') }}</span>
             <button
-              class="p-1 rounded-lg transition-colors active:opacity-80"
+              class="p-1.5 rounded-lg transition-colors active:opacity-80"
               style="color: var(--mobile-text-muted)"
               :class="{ 'opacity-50': isRefreshing }"
               :disabled="isRefreshing"
@@ -103,10 +109,10 @@
           </div>
 
           <!-- Loading -->
-          <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-2">
-            <div v-for="i in 3" :key="i" class="group-card p-4 animate-pulse">
+          <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-3">
+            <div v-for="i in 3" :key="i" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 animate-pulse">
               <div class="flex items-start gap-3">
-                <div class="w-9 h-9 rounded-lg" style="background: var(--mobile-chip-zinc-bg)"></div>
+                <div class="w-12 h-12 rounded-xl" style="background: var(--mobile-chip-zinc-bg)"></div>
                 <div class="flex-1">
                   <div class="h-4 w-32 rounded mb-2" style="background: var(--mobile-chip-zinc-bg)"></div>
                   <div class="h-3 w-48 rounded" style="background: var(--mobile-chip-zinc-bg)"></div>
@@ -125,7 +131,7 @@
           </div>
 
           <!-- Config List -->
-          <TransitionGroup name="config-list" tag="div" class="space-y-2">
+          <TransitionGroup name="config-list" tag="div" class="space-y-3">
             <SessionConfigCard
               v-for="config in sessionConfigs"
               :key="config.id"
@@ -138,15 +144,15 @@
               @stop-session="handleStopSession"
             />
           </TransitionGroup>
-        </section>
+        </div>
       </div>
 
       <!-- Not Connected: History + Actions -->
-      <div v-else class="pb-8 space-y-6">
-        <!-- Connection History -->
-        <section>
-          <div class="flex items-center justify-between px-1 mb-2">
-            <h2 class="group-section-title !mb-0">{{ t('mobile.connection.connectionHistory') }}</h2>
+      <div v-else class="pb-8">
+        <div class="pt-2 space-y-3">
+          <!-- Connection History header -->
+          <div class="flex items-center justify-between">
+            <span class="text-[0.8125rem] font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.connectionHistory') }}</span>
             <button
               v-if="connectionHistory.length > 0"
               class="text-xs transition-colors active:opacity-80"
@@ -161,41 +167,43 @@
             <p class="text-sm" style="color: var(--mobile-text-disabled)">{{ t('mobile.connection.noHistory') }}</p>
           </div>
 
-          <TransitionGroup v-else name="config-list" tag="div" class="group-card">
-            <div
+          <TransitionGroup v-else name="config-list" tag="div" class="space-y-3">
+            <button
               v-for="item in connectionHistory"
               :key="item.address"
-              class="group-row group-row-btn cursor-pointer"
+              class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
               @click="handleConnectFromHistory(item)"
             >
-              <span class="icon-chip chip-cyan">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-              </span>
-              <div class="flex-1 min-w-0">
-                <div class="group-row-title">{{ item.name || item.address }}</div>
-                <div class="group-row-sub font-mono">{{ item.address }}</div>
+              <div class="flex items-center gap-3">
+                <span class="device-icon chip-cyan">
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                </span>
+                <div class="flex-1 min-w-0">
+                  <div class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ item.name || item.address }}</div>
+                  <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ item.address }}</p>
+                </div>
+                <button
+                  class="p-1.5 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
+                  style="color: var(--mobile-text-disabled)"
+                  @click.stop="removeFromHistory(item.address)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
-              <button
-                class="p-1.5 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
-                style="color: var(--mobile-text-disabled)"
-                @click.stop="removeFromHistory(item.address)"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+            </button>
           </TransitionGroup>
-        </section>
+        </div>
       </div>
     </div>
 
     <!-- Action Buttons (when not connected) -->
     <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
       <button
-        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-[0.9375rem] font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
         style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
@@ -207,7 +215,7 @@
         {{ t('mobile.connection.scanConnect') }}
       </button>
       <button
-        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-[0.9375rem] font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
         style="background: var(--mobile-group-bg); color: var(--mobile-text-secondary); border: 1px solid var(--mobile-group-border)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
@@ -751,6 +759,17 @@ function handleNavigateToFiles(config: SessionConfigSummary) {
 </script>
 
 <style scoped>
+/* 设备图标容器：与 PluginIcon md 尺寸一致（48px, rounded-xl） */
+.device-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease;
