@@ -72,6 +72,9 @@ where
         // 时间戳：本地时间毫秒精度
         LocalMsTimer.format_time(&mut writer)?;
 
+        // 时间戳与级别之间保留空格，避免输出形如 `...27.869DEBUG` 粘连
+        writer.write_char(' ')?;
+
         let level = meta.level();
         let style = level_style(level);
 
@@ -253,6 +256,17 @@ mod tests {
         assert!(
             ts_re.is_match(&out),
             "timestamp should be local ms format, got:\n{out}"
+        );
+
+        // 时间戳与级别之间必须有空格（修复日志粘连：`27.869DEBUG`）
+        // 级别可能被 ANSI 颜色码包裹（\x1b[34mDEBUG\x1b[0m），正则允许颜色码穿插
+        let ts_level_re = regex::Regex::new(
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (?:\x1b\[[0-9;]*m)?(DEBUG| INFO| WARN|ERROR|TRACE)",
+        )
+        .expect("valid timestamp-level regex");
+        assert!(
+            ts_level_re.is_match(&out),
+            "timestamp should be followed by a space then level, got:\n{out}"
         );
 
         // 插件标签出现且被品红着色

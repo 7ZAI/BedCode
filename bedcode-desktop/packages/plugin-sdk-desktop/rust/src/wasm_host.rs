@@ -417,22 +417,31 @@ impl HostFs for WasmHost {
 impl HostLog for WasmHost {
     fn log_info(&self, message: &str) {
         let (ptr, len) = wasm_alloc_string(message);
-        unsafe { host_log_info(ptr, len) }
+        // track_caller：宿主日志记录插件真实调用点（file:line）而非宿主实现位置
+        let loc = std::panic::Location::caller();
+        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
+        unsafe { host_log_info(ptr, len, file_ptr, file_len, loc.line()) }
     }
 
     fn log_debug(&self, message: &str) {
         let (ptr, len) = wasm_alloc_string(message);
-        unsafe { host_log_debug(ptr, len) }
+        let loc = std::panic::Location::caller();
+        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
+        unsafe { host_log_debug(ptr, len, file_ptr, file_len, loc.line()) }
     }
 
     fn log_warn(&self, message: &str) {
         let (ptr, len) = wasm_alloc_string(message);
-        unsafe { host_log_warn(ptr, len) }
+        let loc = std::panic::Location::caller();
+        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
+        unsafe { host_log_warn(ptr, len, file_ptr, file_len, loc.line()) }
     }
 
     fn log_error(&self, message: &str) {
         let (ptr, len) = wasm_alloc_string(message);
-        unsafe { host_log_error(ptr, len) }
+        let loc = std::panic::Location::caller();
+        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
+        unsafe { host_log_error(ptr, len, file_ptr, file_len, loc.line()) }
     }
 
     fn mark_plugin_error(&self, error: &str) {
@@ -642,14 +651,14 @@ extern "C" {
     fn host_fs_exists(path_ptr: u32, path_len: u32) -> i32;
     /// 配置：读取配置项 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
     fn host_config_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
-    /// 日志：info
-    fn host_log_info(msg_ptr: u32, msg_len: u32);
+    /// 日志：info（附带插件调用点 file/line，宿主据此记录真实插件源码位置）
+    fn host_log_info(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
     /// 日志：debug
-    fn host_log_debug(msg_ptr: u32, msg_len: u32);
+    fn host_log_debug(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
     /// 日志：warn
-    fn host_log_warn(msg_ptr: u32, msg_len: u32);
+    fn host_log_warn(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
     /// 日志：error
-    fn host_log_error(msg_ptr: u32, msg_len: u32);
+    fn host_log_error(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
     /// 插件状态：标记错误（无返回值）
     fn host_mark_plugin_error(err_ptr: u32, err_len: u32);
     /// 广播：同步事件到所有客户端
