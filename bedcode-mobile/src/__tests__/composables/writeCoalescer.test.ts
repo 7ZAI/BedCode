@@ -6,8 +6,18 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createWriteCoalescer } from '@/composables/writeCoalescer'
+import { createWriteCoalescer, wrapSyncOutput } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
+
+// DEC Mode 2026 同步输出序列（与实现保持一致）
+const SYNC_PREFIX = Array.from(new TextEncoder().encode('\x1b[?2026h'))
+const SYNC_SUFFIX = Array.from(new TextEncoder().encode('\x1b[?2026l'))
+
+/** 断言写入的数据 = DEC 2026 包裹后的 payload */
+function expectWrapped(writeMock: ReturnType<typeof vi.fn>, payload: number[]) {
+  const written = writeMock.mock.calls[writeMock.mock.calls.length - 1][0] as Uint8Array
+  expect(Array.from(written)).toEqual([...SYNC_PREFIX, ...payload, ...SYNC_SUFFIX])
+}
 
 function makeMockTerminal(): Terminal {
   const writeMock = vi.fn()
@@ -16,6 +26,18 @@ function makeMockTerminal(): Terminal {
     element: document.createElement('div'),
   } as unknown as Terminal
 }
+
+describe('wrapSyncOutput', () => {
+  it('在数据前后包裹 DEC 2026 BSU/ESU 序列', () => {
+    const wrapped = wrapSyncOutput(new Uint8Array([65, 66, 67]))
+    expect(Array.from(wrapped)).toEqual([...SYNC_PREFIX, 65, 66, 67, ...SYNC_SUFFIX])
+  })
+
+  it('空数据也生成有效包裹', () => {
+    const wrapped = wrapSyncOutput(new Uint8Array(0))
+    expect(Array.from(wrapped)).toEqual([...SYNC_PREFIX, ...SYNC_SUFFIX])
+  })
+})
 
 describe('createWriteCoalescer', () => {
   let rafCallbacks: FrameRequestCallback[]
@@ -49,8 +71,7 @@ describe('createWriteCoalescer', () => {
 
     rafCallbacks[0](0)
     expect(term.write).toHaveBeenCalledTimes(1)
-    const combined = (term.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array
-    expect(Array.from(combined)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expectWrapped(term.write, [1, 2, 3, 4, 5, 6, 7, 8, 9])
   })
 
   it('flush 后下一帧再次入队可正常 flush', () => {
@@ -65,8 +86,7 @@ describe('createWriteCoalescer', () => {
     expect(rafCallbacks).toHaveLength(2)
     rafCallbacks[1](0)
     expect(term.write).toHaveBeenCalledTimes(2)
-    const second = (term.write as ReturnType<typeof vi.fn>).mock.calls[1][0] as Uint8Array
-    expect(Array.from(second)).toEqual([2, 3])
+    expectWrapped(term.write, [2, 3])
   })
 
   it('单次 write 也走 rAF，不直接调用', () => {

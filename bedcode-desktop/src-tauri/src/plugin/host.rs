@@ -355,7 +355,8 @@ impl PluginHost {
         let result = plugins.get(plugin_id)
             .map(|p| matches!(p.state, PluginState::Activated))
             .unwrap_or(false);
-        tracing::debug!("[PluginHost] is_activated({}) = {}", plugin_id, result);
+        // 高频校验路径（每插件 API 调用都会经过），仅 trace 级别可见，避免刷屏
+        tracing::trace!("[PluginHost] is_activated({}) = {}", plugin_id, result);
         result
     }
 

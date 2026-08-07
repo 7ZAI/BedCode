@@ -60,6 +60,8 @@ export function useTerminalScroll(
   // rAF 节流滚动
   let pendingScrollRaf = 0
   let pendingScrollLine = -1
+  // 滚动后强制重绘可见区：清除 WebGL 渲染器滚动遗留的重影纹理行（每帧至多一次）
+  let pendingScrollRefreshRaf = 0
   // 渲染帧同步：确保 scrollToLine 只在 xterm 渲染完成后执行
   // WebGL 渲染器双缓冲在渲染未完成时切换 viewport 会导致新旧帧同时可见
   let renderSyncRaf = 0
@@ -129,9 +131,44 @@ export function useTerminalScroll(
     return currentLine.value >= maxLine - 2
   }
 
+  /**
+   * 自动跟随输出滚动到底部（VSCode 式）
+   *
+   * - 触摸滚动期间忽略：用户已接管滚动，不被新输出拉回底部
+   * - rAF 节流：同帧多次调用只滚一次，输出持续增长时更新目标行
+   */
   function scrollToBottom() {
+    if (!terminalRef.value || isUserScrolling.value) return
+
+    const bufferLength = terminalRef.value.buffer.active.length
+    const rows = terminalRef.value.rows
+    const targetLine = Math.max(0, bufferLength - rows)
+
+    if (pendingScrollRaf) {
+      // 同帧已挂起滚动：输出可能已增长，只更新目标行
+      pendingScrollLine = targetLine
+      return
+    }
+
+    pendingScrollLine = targetLine
+    currentLine.value = targetLine
+    pendingScrollRaf = requestAnimationFrame(() => {
+      pendingScrollRaf = 0
+      const target = pendingScrollLine
+      pendingScrollLine = -1
+      // 执行时复查：触摸已接管则放弃自动滚动
+      if (terminalRef.value && target >= 0 && !isUserScrolling.value) {
+        terminalRef.value.scrollToLine(target)
+        scheduleScrollRefresh()
+      }
+    })
+  }
+
+  /** 用户点击"回到底部"：强制滚到底并恢复自动跟随（不受触摸状态影响） */
+  function scrollToBottomManual() {
     if (!terminalRef.value) return
 
+    isUserScrolling.value = false
     const bufferLength = terminalRef.value.buffer.active.length
     const rows = terminalRef.value.rows
     const targetLine = Math.max(0, bufferLength - rows)
@@ -141,12 +178,9 @@ export function useTerminalScroll(
       pendingScrollRaf = 0
     }
     pendingScrollLine = -1
-
     currentLine.value = targetLine
-    // 直接同步调用，scrollToBottom 通常不在高频调用场景
-    // 且需要立即响应（如新输出到达时）
     terminalRef.value.scrollToLine(targetLine)
-    isUserScrolling.value = false
+    scheduleScrollRefresh()
   }
 
   function syncViewportToLine(line: number) {
@@ -190,6 +224,17 @@ export function useTerminalScroll(
     }, 1200)
   }
 
+  /** 滚动后强制重绘可见区：清除 WebGL 渲染器滚动遗留的重影纹理行（每帧至多一次） */
+  function scheduleScrollRefresh() {
+    if (!terminalRef.value || pendingScrollRefreshRaf) return
+    pendingScrollRefreshRaf = requestAnimationFrame(() => {
+      pendingScrollRefreshRaf = 0
+      if (terminalRef.value) {
+        terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+      }
+    })
+  }
+
   // ==================== Touch Handlers ====================
 
   function onTouchStart(e: TouchEvent) {
@@ -229,6 +274,9 @@ export function useTerminalScroll(
     touchState.lastTime = Date.now()
     touchState.velocity = 0
     touchState.fractionalLine = 0
+
+    // 触摸即接管滚动：暂停输出自动跟随，避免手势被新输出拉回底部
+    isUserScrolling.value = true
 
     enableGpuHint()
 
@@ -410,16 +458,11 @@ export function useTerminalScroll(
     const col = Math.max(0, Math.min(Math.floor(relX / cellWidth), terminalRef.value.cols - 1))
 
     const bufferLine = terminalRef.value.buffer.active.viewportY + visibleRow
-    const lineData = terminalRef.value.buffer.active.getLine(bufferLine)
-    const lineLength = lineData?.length ?? 0
 
+    // 仅记录锚点，不立即选中：长按误触后直接抬起会自动退出选择模式
+    // （hasSelection=false），恢复滚动；拖动手指时才形成选区
     selectionStartLine = bufferLine
     selectionStartCol = col
-
-    const endCol = lineLength > 0 ? lineLength - 1 : 0
-    terminalRef.value.select(0, bufferLine, endCol + 1)
-    hasSelection.value = true
-    updateSelectionViewportRange()
   }
 
   function extendSelectionToTouch(touch: Touch) {
@@ -539,7 +582,9 @@ export function useTerminalScroll(
       scrollableElement.style.pointerEvents = 'none'
     }
 
-    cellHeight.value = computeCellHeight()
+    // 布局未就绪时 clientHeight 可能为 0，不覆盖旧值避免滚动永久失效
+    const h = computeCellHeight()
+    if (h > 0) cellHeight.value = h
 
     if (scrollContainerRef.value) {
       scrollContainerRef.value.addEventListener('touchstart', onTouchStart, { passive: true, capture: true })
@@ -547,18 +592,21 @@ export function useTerminalScroll(
       scrollContainerRef.value.addEventListener('touchend', onTouchEnd, { capture: true })
     }
 
+    // 输出自动跟随：内部已做触摸接管检查 + rAF 节流，
+    // 渲染期间滚动由 xterm 渲染服务统一提交，不与输出渲染竞争
     terminalRef.value.onLineFeed(() => {
-      if (!isUserScrolling.value) {
-        nextTick(() => scrollToBottom())
-      }
+      scrollToBottom()
     })
 
     terminalRef.value.onScroll((viewportY: number) => {
       currentLine.value = viewportY
+      scheduleScrollRefresh()
     })
 
     terminalRef.value.onResize(() => {
-      cellHeight.value = computeCellHeight()
+      // clientHeight 为 0 的中间态不覆盖旧值，避免滚动永久失效
+      const h = computeCellHeight()
+      if (h > 0) cellHeight.value = h
     })
 
     nextTick(() => scrollToBottom())
@@ -618,6 +666,10 @@ export function useTerminalScroll(
       cancelAnimationFrame(pendingScrollRaf)
       pendingScrollRaf = 0
     }
+    if (pendingScrollRefreshRaf) {
+      cancelAnimationFrame(pendingScrollRefreshRaf)
+      pendingScrollRefreshRaf = 0
+    }
     if (renderSyncRaf) {
       cancelAnimationFrame(renderSyncRaf)
       renderSyncRaf = 0
@@ -660,6 +712,7 @@ export function useTerminalScroll(
 
     // Methods
     scrollToBottom,
+    scrollToBottomManual,
     fitTerminal,
     setupViewportScroll,
     exitSelectionMode,

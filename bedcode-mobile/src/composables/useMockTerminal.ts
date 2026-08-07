@@ -24,6 +24,11 @@ const OUTPUT_INTERVAL_MS = 5000
 const MIN_LINES = 4
 const MAX_LINES = 8
 
+// DEC Mode 2026 同步输出序列：包裹写入让 xterm 缓存到下一帧统一渲染，
+// 避免 WebGL 渲染器逐块绘制产生的视觉撕裂/重影（xterm 6.0+ 支持）
+const SYNC_OUTPUT_START = '\x1b[?2026h'
+const SYNC_OUTPUT_END = '\x1b[?2026l'
+
 // ==================== Random Content ====================
 
 /** ANSI 颜色码 */
@@ -163,15 +168,15 @@ function writeRandomOutput(): void {
   for (let i = 0; i < lineCount; i++) {
     output += generateRandomLine() + '\r\n'
   }
-  terminalInstance.write(output)
+  terminalInstance.write(SYNC_OUTPUT_START + output + SYNC_OUTPUT_END)
 }
 
 /** 绑定终端实例并启动定时输出 */
 function startOutput(term: Terminal): void {
   terminalInstance = term
-  term.write('\x1b[1;36m--- Mock Terminal (DEV) ---\x1b[0m\r\n')
-  term.write('\x1b[90mSimulated terminal output for style testing.\x1b[0m\r\n')
-  term.write('\x1b[90mOutput every 5s, 4~8 lines each.\x1b[0m\r\n\r\n')
+  term.write(SYNC_OUTPUT_START + '\x1b[1;36m--- Mock Terminal (DEV) ---\x1b[0m\r\n' + SYNC_OUTPUT_END)
+  term.write(SYNC_OUTPUT_START + '\x1b[90mSimulated terminal output for style testing.\x1b[0m\r\n' + SYNC_OUTPUT_END)
+  term.write(SYNC_OUTPUT_START + '\x1b[90mOutput every 5s, 4~8 lines each.\x1b[0m\r\n\r\n' + SYNC_OUTPUT_END)
 
   if (outputTimer) clearInterval(outputTimer)
   outputTimer = setInterval(writeRandomOutput, OUTPUT_INTERVAL_MS)

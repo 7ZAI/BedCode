@@ -48,6 +48,9 @@ export type {
   FileServiceAPI,
   PluginContext,
   PluginModule,
+  MobileHttpResult,
+  MobileQueueTaskItem,
+  MobileHostApi,
 } from './types'
 
 export {
@@ -59,4 +62,5 @@ export {
   getRouter,
   getPluginContext,
   getPresetTasks,
+  getMobileApi,
 } from './runtime'

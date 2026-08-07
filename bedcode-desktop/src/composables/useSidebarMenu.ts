@@ -42,11 +42,11 @@ export interface SidebarMenuItemDescriptor {
 }
 
 /** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设置(700) 置于插件默认排序值(600) 之后，保证默认位于最末位 */
+ * 设备配对(100) 置于首位；设置(700) 置于插件默认排序值(600) 之后，保证默认位于最末位 */
 export const BUILTIN_MENU_ORDERS = {
-  sessions: 100,
-  server: 200,
-  devices: 300,
+  devices: 100,
+  sessions: 200,
+  server: 300,
   plugins: 400,
   settings: 700,
 } as const

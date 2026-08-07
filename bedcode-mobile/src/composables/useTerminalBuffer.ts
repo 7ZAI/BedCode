@@ -9,7 +9,7 @@ import {
   wsJoinSession,
   wsLeaveSession,
 } from '@/composables/useMobileCommands'
-import { createWriteCoalescer } from '@/composables/writeCoalescer'
+import { createWriteCoalescer, wrapSyncOutput } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
 
 // ==================== Types ====================
@@ -50,8 +50,10 @@ export function useTerminalBuffer() {
     for (const chunk of buffer.chunks) totalBytes += chunk.byteLength
     if (totalBytes === 0) return
 
+    // DEC Mode 2026 包裹：让 xterm 缓存整段历史到下一帧统一渲染，
+    // 避免 WebGL 渲染器逐块绘制长历史时产生视觉撕裂/重影
     if (buffer.chunks.length === 1) {
-      terminal.write(buffer.chunks[0])
+      terminal.write(wrapSyncOutput(buffer.chunks[0]))
       return
     }
 
@@ -61,7 +63,7 @@ export function useTerminalBuffer() {
       combined.set(chunk, offset)
       offset += chunk.byteLength
     }
-    terminal.write(combined)
+    terminal.write(wrapSyncOutput(combined))
   }
 
   /**

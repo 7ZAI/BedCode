@@ -37,7 +37,7 @@
         </div>
 
         <template v-else>
-          <!-- ==================== Hero：图标 + 名称 + 作者·版本 + 状态徽章 ==================== -->
+          <!-- ==================== Hero：图标 + 名称 + 作者·版本 + 状态徽章 + 操作列 ==================== -->
           <div class="flex items-center gap-4 pb-5 border-b border-[var(--border)]">
             <PluginIcon
               :icon="plugin.icon"
@@ -59,37 +59,36 @@
                 {{ $t(getStateKey(plugin.state)) }}
               </span>
             </div>
-          </div>
+            <!-- 操作列：启停 + 配置，上下并排 -->
+            <div class="flex flex-col gap-2 shrink-0">
+              <!-- 启停按钮 -->
+              <button
+                v-if="plugin.pluginType !== 'rust'"
+                class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium transition-colors flex items-center justify-center"
+                :class="isActivated(plugin.state)
+                  ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20'
+                  : 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'"
+                :disabled="!!togglingId"
+                @click="handleToggle(plugin.id, !isActivated(plugin.state))"
+              >
+                {{ isActivated(plugin.state) ? $t('desktop.plugin.disable') : $t('desktop.plugin.enabled') }}
+              </button>
+              <span v-else class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] bg-[var(--bg-hover)] flex items-center justify-center">
+                {{ $t('desktop.plugin.alwaysOn') }}
+              </span>
 
-          <!-- ==================== 操作行：启停 + 配置 ==================== -->
-          <div class="flex items-center gap-3 py-4 border-b border-[var(--border)]">
-            <!-- 启停按钮 -->
-            <button
-              v-if="plugin.pluginType !== 'rust'"
-              class="h-8 px-4 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium transition-colors"
-              :class="isActivated(plugin.state)
-                ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20'
-                : 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'"
-              :disabled="!!togglingId"
-              @click="handleToggle(plugin.id, !isActivated(plugin.state))"
-            >
-              {{ isActivated(plugin.state) ? $t('desktop.plugin.deactivated') : $t('desktop.plugin.enabled') }}
-            </button>
-            <span v-else class="h-8 px-4 rounded-[6px] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] bg-[var(--bg-hover)] flex items-center">
-              {{ $t('desktop.plugin.alwaysOn') }}
-            </span>
-
-            <!-- 配置按钮（仅激活 + 有 configuration 时可点） -->
-            <router-link
-              v-if="hasConfiguration(plugin)"
-              :to="`/plugins/${plugin.id}/config`"
-              class="h-8 px-4 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors flex items-center"
-            >
-              {{ $t('desktop.plugin.goConfig') }}
-            </router-link>
-            <span v-else class="h-8 px-4 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] flex items-center cursor-not-allowed">
-              {{ $t('desktop.plugin.goConfig') }}
-            </span>
+              <!-- 配置按钮（仅激活 + 有 configuration 时可点） -->
+              <router-link
+                v-if="hasConfiguration(plugin)"
+                :to="`/plugins/${plugin.id}/config`"
+                class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors flex items-center justify-center"
+              >
+                {{ $t('desktop.plugin.goConfig') }}
+              </router-link>
+              <span v-else class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] flex items-center justify-center cursor-not-allowed">
+                {{ $t('desktop.plugin.goConfig') }}
+              </span>
+            </div>
           </div>
 
           <!-- ==================== 统计条 ==================== -->
@@ -117,17 +116,8 @@
               </p>
             </CollapseSection>
 
-            <!-- 扩展点（默认展开） -->
-            <CollapseSection :title="$t('desktop.plugin.section.contributes')" emoji="🧩" :badge="getContributionChips(plugin).length" :default-open="true">
-              <template #action>
-                <button
-                  v-if="hasConfiguration(plugin)"
-                  class="text-[calc(11px*var(--ui-scale))] text-[var(--color-primary)] hover:underline shrink-0"
-                  @click.stop="$router.push(`/plugins/${plugin.id}/config`)"
-                >
-                  {{ $t('desktop.plugin.goConfig') }}
-                </button>
-              </template>
+            <!-- 扩展点（默认折叠） -->
+            <CollapseSection :title="$t('desktop.plugin.section.contributes')" emoji="🧩" :badge="getContributionChips(plugin).length" :default-open="false">
               <div class="px-1 pb-4 flex flex-wrap gap-2">
                 <span
                   v-for="chip in getContributionChips(plugin)"
@@ -140,8 +130,8 @@
               </div>
             </CollapseSection>
 
-            <!-- 权限（默认展开） -->
-            <CollapseSection :title="$t('desktop.plugin.section.permissions')" emoji="🛡️" :badge="plugin.permissions.length" :default-open="true">
+            <!-- 权限（默认折叠） -->
+            <CollapseSection :title="$t('desktop.plugin.section.permissions')" emoji="🛡️" :badge="plugin.permissions.length" :default-open="false">
               <div class="px-1 pb-3 divide-y divide-[var(--border)]">
                 <div v-for="perm in plugin.permissions" :key="perm" class="flex items-center gap-3 py-2.5">
                   <span class="w-4 h-4 flex items-center justify-center text-xs shrink-0">{{ getPermissionMeta(perm).emoji }}</span>

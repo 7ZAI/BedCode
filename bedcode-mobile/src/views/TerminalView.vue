@@ -50,7 +50,7 @@
                 <button
                   v-if="isUserScrolling && !isSelectionMode"
                   class="scroll-to-bottom-btn"
-                  @click="scrollToBottom"
+                  @click="scrollToBottomManual"
                   :title="t('mobile.terminal.scrollToBottom')"
                 >
                   <svg class="scroll-to-bottom-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -264,6 +264,7 @@ const {
   isUserScrolling,
   cellHeight,
   scrollToBottom,
+  scrollToBottomManual,
   fitTerminal,
   setupViewportScroll,
   exitSelectionMode,

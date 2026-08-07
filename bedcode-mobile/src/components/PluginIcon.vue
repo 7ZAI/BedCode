@@ -8,6 +8,13 @@
   <!-- 内联 SVG：manifest.icon 直接携带 <svg> 标记 -->
   <div v-else-if="kind === 'svg'" class="icon-tile svg-tile" :class="sizeClass" v-html="sanitizedSvg"></div>
 
+  <!-- 原始 SVG path data：Heroicons outline 风格，viewBox=0 0 24 24 -->
+  <div v-else-if="kind === 'path'" class="icon-tile svg-tile" :class="sizeClass">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="icon" />
+    </svg>
+  </div>
+
   <!-- emoji 图标 -->
   <div
     v-else-if="kind === 'emoji'"
@@ -29,8 +36,9 @@
  * 调用方只传 manifest 信息，四级回退逻辑全部隐藏在内：
  * 1. manifest.icon 为图片路径（png/jpg/webp/gif/svg）→ 经 asset protocol 加载
  * 2. manifest.icon 为内联 <svg> 标记 → 消毒后直接渲染（免图片文件）
- * 3. manifest.icon 为 emoji/短文本 → 直接渲染
- * 4. 无 icon 或图片加载失败 → 按插件 id 哈希生成渐变字母头像
+ * 3. manifest.icon 为原始 SVG path data（M/m 开头）→ 渲染为内联 <path>
+ * 4. manifest.icon 为 emoji/短文本 → 直接渲染
+ * 5. 无 icon 或图片加载失败 → 按插件 id 哈希生成渐变字母头像
  */
 import { computed, ref, watch } from 'vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -60,12 +68,16 @@ watch(() => [props.icon, props.extensionPath], () => {
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 
-/** 图标类型判定：图片路径 / 内联 SVG / emoji / 回退字母头像 */
-const kind = computed<'image' | 'svg' | 'emoji' | 'letter'>(() => {
+/** SVG path data 判定：Heroicons outline 风格 d 字符串（M/m 开头） */
+const SVG_PATH_RE = /^[Mm]\s*[\d.]/
+
+/** 图标类型判定：图片路径 / 内联 SVG / SVG path / emoji / 回退字母头像 */
+const kind = computed<'image' | 'svg' | 'path' | 'emoji' | 'letter'>(() => {
   const icon = props.icon?.trim()
   if (!icon) return 'letter'
   if (icon.startsWith('<svg')) return 'svg'
   if (IMAGE_EXT_RE.test(icon)) return 'image'
+  if (SVG_PATH_RE.test(icon)) return 'path'
   return 'emoji'
 })
 

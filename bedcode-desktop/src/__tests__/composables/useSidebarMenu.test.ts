@@ -35,11 +35,11 @@ describe('useSidebarMenu', () => {
     }
   })
 
-  it('默认只有内置菜单项，按内置 order 升序排列，设置位于最末位', () => {
+  it('默认只有内置菜单项，按内置 order 升序排列，设备配对位于首位、设置位于最末位', () => {
     const { menuItems } = useSidebarMenu()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['sessions', 'server', 'devices', 'plugins', 'settings'])
-    // 会话菜单项使用"终端会话" i18n key
-    expect(menuItems.value[0].labelKey).toBe('desktop.sidebar.terminalSession')
+    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'server', 'plugins', 'settings'])
+    // 设备配对菜单项使用"设备配对" i18n key
+    expect(menuItems.value[0].labelKey).toBe('desktop.sidebar.devicePairing')
     expect(menuItems.value[0].isI18nKey).toBe(true)
   })
 
@@ -49,21 +49,21 @@ describe('useSidebarMenu', () => {
 
     const { menuItems } = useSidebarMenu()
     const ids = menuItems.value.map((m) => m.id)
-    expect(ids).toEqual(['sessions', 'server', 'devices', 'plugins', 'plugin-p1-v1', 'plugin-p2-v2', 'settings'])
+    expect(ids).toEqual(['devices', 'sessions', 'server', 'plugins', 'plugin-p1-v1', 'plugin-p2-v2', 'settings'])
   })
 
   it('插件可通过 order 插入到任意内置菜单项之间', () => {
-    // order 150：位于"会话"(100) 与"服务器"(200) 之间
+    // order 150：位于"设备配对"(100) 与"终端会话"(200) 之间
     registerPluginView('p1', 'v1', 'sidebar', 150)
-    // order 350：位于"设备"(300) 与"插件"(400) 之间
+    // order 350：位于"服务器"(300) 与"插件"(400) 之间
     registerPluginView('p2', 'v2', 'toolbox', 350)
 
     const { menuItems } = useSidebarMenu()
     expect(menuItems.value.map((m) => m.id)).toEqual([
-      'sessions',
-      'plugin-p1-v1',
-      'server',
       'devices',
+      'plugin-p1-v1',
+      'sessions',
+      'server',
       'plugin-p2-v2',
       'plugins',
       'settings',
@@ -89,11 +89,11 @@ describe('useSidebarMenu', () => {
     disposables.push(custom)
 
     const { menuItems } = useSidebarMenu()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['sessions', 'server', 'custom', 'devices', 'plugins', 'settings'])
+    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'custom', 'server', 'plugins', 'settings'])
 
     // dispose 后菜单项移除
     custom.dispose()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['sessions', 'server', 'devices', 'plugins', 'settings'])
+    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'server', 'plugins', 'settings'])
   })
 
   it('自定义项支持 i18n key 与纯文本标题标记', () => {
@@ -113,8 +113,8 @@ describe('useSidebarMenu', () => {
 
     const { menuItems } = useSidebarMenu()
     const ids = menuItems.value.map((m) => m.id)
-    // 与"会话"同 order=100：内置在前，自定义次之，插件最后
-    expect(ids.indexOf('sessions')).toBeLessThan(ids.indexOf('custom'))
+    // 与"设备配对"同 order=100：内置在前，自定义次之，插件最后
+    expect(ids.indexOf('devices')).toBeLessThan(ids.indexOf('custom'))
     expect(ids.indexOf('custom')).toBeLessThan(ids.indexOf('plugin-p1-v1'))
   })
 })

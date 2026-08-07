@@ -49,7 +49,7 @@
       <!-- Connected: Session Configs -->
       <div v-if="isConnected" class="pb-8">
         <div class="pt-2 space-y-3">
-          <!-- Connected device info -->
+          <!-- Connected device info + disconnect（同行，断开按钮位于卡片右侧） -->
           <div v-if="currentDevice" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 transition-all duration-300">
             <div class="flex items-center gap-3">
               <span class="device-icon chip-emerald">
@@ -67,23 +67,18 @@
                 </div>
                 <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ currentDevice.address }}</p>
               </div>
+              <!-- 断开按钮：与连接信息同行，不独占一行 -->
+              <button
+                class="flex-shrink-0 h-11 px-3.5 rounded-xl flex items-center gap-1.5 chip-red font-medium text-[0.8125rem] transition-all duration-300 active:opacity-80 hover:opacity-90"
+                @click="handleDisconnect"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>{{ t('mobile.connection.disconnect') }}</span>
+              </button>
             </div>
           </div>
-
-          <!-- Disconnect button -->
-          <button
-            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
-            @click="handleDisconnect"
-          >
-            <div class="flex items-center gap-3">
-              <span class="device-icon chip-red">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                </svg>
-              </span>
-              <span class="flex-1 text-[0.9375rem] font-medium" style="color: var(--mobile-chip-red)">{{ t('mobile.connection.disconnect') }}</span>
-            </div>
-          </button>
 
           <!-- Session Configs header -->
           <div class="flex items-center justify-between pt-2">

@@ -26,7 +26,7 @@ const IMPORT_TIMEOUT = 5000
 class PluginLoaderClass {
   private plugins: Map<string, ActivePlugin> = new Map()
 
-  /** 应用启动时加载所有已激活插件的前端模块 */
+  /** 应用启动时加载所有已启用插件的前端模块 */
   async loadAll(): Promise<void> {
     const manifests = await pluginCmds.pluginListLoaded()
     console.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
@@ -38,9 +38,14 @@ class PluginLoaderClass {
         continue
       }
 
-      const isActivated = manifest.state.state === 'Activated'
-      if (!isActivated) {
-        console.log(`[PluginLoader] Plugin ${manifest.id} not activated (state: ${manifest.state.state}), skipping`)
+      // 以持久化启用状态为准，而非当前运行时激活状态。
+      // 原因：后端在 setup 的异步任务里自动激活已启用插件，前端首次查询
+      // plugin_list_loaded 时可能尚未完成，插件仍处于 Loaded 状态，若据此
+      // 跳过会导致重启后 UI 扩展点（工具箱/导航/设置/终端）丢失，直到手动
+      // 重开插件才恢复。启用状态是持久化存储，查询时立即可用，不受该竞态影响。
+      const isEnabled = await pluginCmds.pluginIsEnabled(manifest.id)
+      if (!isEnabled) {
+        console.log(`[PluginLoader] Plugin ${manifest.id} not enabled, skipping frontend load`)
         continue
       }
 

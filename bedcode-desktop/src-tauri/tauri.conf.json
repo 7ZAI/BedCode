@@ -62,7 +62,8 @@
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
-        "languages": ["SimpChinese", "English"]
+        "languages": ["SimpChinese", "English"],
+        "installerHooks": "nsis/icon-cache-refresh.nsh"
       }
     },
     "linux": {

@@ -15,8 +15,8 @@
           @click="router.push({ name: cat.route })"
         >
           <div class="flex items-center gap-3">
-            <span class="settings-icon" :class="cat.iconClass">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <span class="icon-chip" :class="cat.iconClass">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="cat.iconPath" />
               </svg>
             </span>
@@ -263,17 +263,6 @@ async function executeConfirm() {
 </script>
 
 <style scoped>
-/* 设置图标容器：与 PluginIcon md 尺寸一致（48px, rounded-xl） */
-.settings-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 3rem;
-  height: 3rem;
-  border-radius: 0.75rem;
-  flex-shrink: 0;
-}
-
 .cat-connection {
   color: var(--mobile-chip-cyan);
   background-color: var(--mobile-chip-cyan-bg);

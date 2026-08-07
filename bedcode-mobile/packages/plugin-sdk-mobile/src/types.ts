@@ -186,6 +186,69 @@ export interface LoggerAPI {
   error(message: string): void
 }
 
+// ==================== 移动端宿主能力 ====================
+
+/** HTTP API 结果（与宿主 useHttpApi 同构） */
+export interface MobileHttpResult<T = any> {
+  code: number
+  message: string
+  data?: T
+}
+
+/** 任务队列项（对端桌面端 AutoTask 插件） */
+export interface MobileQueueTaskItem {
+  id: string
+  prompt: string
+  position: number
+  status: string
+  created_at: string
+}
+
+/** 移动端宿主连接/HTTP 能力（共享运行时 mobileApi 模块）
+ *
+ * 经宿主 shared-runtime 暴露，供插件访问当前活动会话与对端桌面端 REST API。
+ * 队列接口为 AutoTask 插件专属端点（/api/plugin/com.bedcode.auto-task/...）。
+ */
+export interface MobileHostApi {
+  /** 当前活动会话 id（响应式 ref，可 watch / computed） */
+  activeSessionId: import('vue').Ref<string | null>
+  /** 查询任务队列 */
+  httpTaskQueueList(sessionId: string): Promise<MobileHttpResult<{
+    session_id: string
+    tasks: MobileQueueTaskItem[]
+    queue_count: number
+  }>>
+  /** 添加任务到队列 */
+  httpTaskQueueAdd(sessionId: string, prompt: string): Promise<MobileHttpResult>
+  /** 从队列删除任务 */
+  httpTaskQueueRemove(sessionId: string, taskId: string): Promise<MobileHttpResult>
+  /** 清空任务队列 */
+  httpTaskQueueClear(sessionId: string): Promise<MobileHttpResult>
+  /** 更新队列任务内容 */
+  httpTaskQueueUpdate(sessionId: string, taskId: string, prompt: string): Promise<MobileHttpResult>
+  /** 重排序任务队列 */
+  httpTaskQueueReorder(sessionId: string, taskIds: string[]): Promise<MobileHttpResult>
+  /** 查询会话设置（auto_execute / auto_answer） */
+  httpSessionSettings(sessionId: string): Promise<MobileHttpResult<{
+    session_id: string
+    auto_execute: boolean
+    auto_answer: boolean
+  }>>
+  /** 设置会话自动模式 */
+  httpSetSessionMode(sessionId: string, autoExecute?: boolean, autoAnswer?: boolean): Promise<MobileHttpResult>
+  /** 查询会话当前任务 */
+  httpCurrentTask(sessionId: string): Promise<MobileHttpResult<{
+    session_id: string
+    task: {
+      id: string
+      description: string | null
+      status: string
+      auto_approve: number
+      created_at: string
+    } | null
+  }>>
+}
+
 // ==================== 对话框 ====================
 
 /** 对话框选项 */

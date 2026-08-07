@@ -32,6 +32,9 @@ export function getRouter(): any { return getSharedModule('router') }
 /** 获取宿主预设任务 composable */
 export function getPresetTasks(): any { return getSharedModule('presetTasks') }
 
+/** 获取宿主移动端连接/HTTP 能力（MobileHostApi） */
+export function getMobileApi(): any { return getSharedModule('mobileApi') }
+
 /** 从 Vue inject 获取 PluginContext */
 export function getPluginContext(): PluginContext {
   const vue = getVue()

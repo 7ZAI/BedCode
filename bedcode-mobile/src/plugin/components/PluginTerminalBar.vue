@@ -2,7 +2,7 @@
   <template v-for="item in toolbarItems" :key="`${item.pluginId}:${item.id}`">
     <button
       class="tool-btn"
-      @click="handleClick(item)"
+      @click="item.onClick?.()"
       :title="item.label"
     >
       <!-- SVG path：Heroicons outline 风格，viewBox=0 0 24 24 -->
@@ -14,39 +14,20 @@
       <span v-else class="text-xs">{{ item.label }}</span>
     </button>
   </template>
-
-  <!-- Auto Task Panel -->
-  <AutoTaskPanelHost
-    :visible="showAutoTaskPanel"
-    :active-session-id="activeSessionId ?? ''"
-    @close="showAutoTaskPanel = false"
-  />
 </template>
 
 <script setup lang="ts">
 /**
- * PluginTerminalBar — 终端工具栏插件项渲染 + 面板管理
+ * PluginTerminalBar — 终端工具栏插件项渲染
+ * 点击直接回调插件注册的 onClick（面板等 UI 由插件自身挂载管理）
  */
-import { ref } from 'vue'
 import { getPluginRegistry } from '@/plugin/registry'
-import { useMobileConnection } from '@/composables/useMobileConnection'
-import AutoTaskPanelHost from '@/plugin/auto-task/AutoTaskPanelHost.vue'
 
 const toolbarItems = getPluginRegistry().terminalToolbarItems
-const { activeSessionId } = useMobileConnection()
-const showAutoTaskPanel = ref(false)
 
 /** 判断 icon 字符串是否为 SVG path data（以 M/m 开头，非 emoji） */
 function isSvgPath(icon: string): boolean {
   return /^[Mm]\s*[\d.]/.test(icon.trim())
-}
-
-function handleClick(item: any) {
-  if (item.id === 'auto-task-toolbar') {
-    showAutoTaskPanel.value = !showAutoTaskPanel.value
-  } else {
-    item.onClick?.()
-  }
 }
 </script>
 

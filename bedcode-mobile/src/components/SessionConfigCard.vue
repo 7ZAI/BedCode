@@ -40,7 +40,6 @@
           </button>
         </div>
         <button
-          v-if="!hasRunningSession"
           class="flex-shrink-0 h-8 px-3.5 rounded-lg text-xs font-semibold active:opacity-80 transition-colors"
           style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent)"
           :class="{ 'opacity-50': isStarting }"
@@ -152,7 +151,6 @@ const runningSessions = computed(() =>
 )
 
 const runningCount = computed(() => runningSessions.value.length)
-const hasRunningSession = computed(() => runningCount.value > 0)
 </script>
 
 <style scoped>

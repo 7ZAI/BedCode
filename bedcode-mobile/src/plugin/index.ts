@@ -13,6 +13,18 @@ import { initSharedRuntime } from './shared-runtime'
 import { pluginLoader } from './loader'
 import { pluginDialogHost } from './dialog-host'
 import { usePresetTasks } from '@/composables/usePresetTasks'
+import { useMobileConnection } from '@/composables/useMobileConnection'
+import {
+  httpTaskQueueList,
+  httpTaskQueueAdd,
+  httpTaskQueueRemove,
+  httpTaskQueueClear,
+  httpTaskQueueUpdate,
+  httpTaskQueueReorder,
+  httpSessionSettings,
+  httpSetSessionMode,
+  httpCurrentTask,
+} from '@/composables/useHttpApi'
 
 /**
  * 初始化插件系统
@@ -26,7 +38,28 @@ export async function initPluginSystem(
   i18n: any,
 ): Promise<void> {
   // 1. 初始化共享运行时（含对话框服务）
-  await initSharedRuntime(app, pinia, router, i18n, { usePresetTasks }, pluginDialogHost)
+  // mobileApi：移动端宿主连接/HTTP 能力（当前活动会话 + AutoTask 队列接口），
+  // 供插件前端经 SDK getMobileApi() 访问对端桌面端 REST API
+  await initSharedRuntime(
+    app,
+    pinia,
+    router,
+    i18n,
+    { usePresetTasks },
+    pluginDialogHost,
+    {
+      activeSessionId: useMobileConnection().activeSessionId,
+      httpTaskQueueList,
+      httpTaskQueueAdd,
+      httpTaskQueueRemove,
+      httpTaskQueueClear,
+      httpTaskQueueUpdate,
+      httpTaskQueueReorder,
+      httpSessionSettings,
+      httpSetSessionMode,
+      httpCurrentTask,
+    },
+  )
 
   // 2. 加载所有已激活插件的前端模块
   await pluginLoader.loadAll()

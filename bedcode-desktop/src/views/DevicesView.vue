@@ -44,7 +44,7 @@
 
     <div class="flex-1 overflow-auto px-6 py-5 space-y-6">
       <Transition name="tab-fade" mode="out-in">
-      <!-- ==================== Tab1 设备配对 · 网络信息 + QR + 配对码（各占一行） ==================== -->
+      <!-- ==================== Tab1 设备配对 · 网络信息 + 配对码 + QR（各占一行） ==================== -->
       <div v-if="activeTab === 'pairing'" class="space-y-5">
         <!-- ==================== 网络信息条（置顶） ==================== -->
         <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2.5 flex items-center gap-3 flex-wrap">
@@ -68,19 +68,86 @@
             {{ t('desktop.device.noIpv4') }}
           </span>
         </div>
-
-          <!-- ==================== QR 码卡片（内容居中，旧版样式） ==================== -->
+          <!-- ==================== 配对码卡片（内容居中，旧版样式） ==================== -->
           <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
-            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
-            <div class="flex items-start justify-between gap-3 mb-4">
+            <!-- 头部：标题 + 描述，右侧操作按钮 + 倒计时徽标 -->
+            <div class="flex items-center justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <button
+                  v-if="pairingCode"
+                  class="wb-btn-ghost !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  @click="cancelPairing"
+                >
+                  {{ t('common.button.cancel') }}
+                </button>
+                <button
+                  v-else
+                  class="wb-btn-primary !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  :disabled="isLoading"
+                  @click="generateCode"
+                >
+                  {{ t('desktop.device.generateCode') }}
+                </button>
+                <span v-if="pairingCode" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+                  <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
+                  {{ remainingSeconds }}{{ t('common.time.seconds') }}
+                </span>
+              </div>
+            </div>
+
+            <!-- 主体：配对码居中大字展示，下方说明 -->
+            <div class="flex flex-col items-center text-center">
+              <template v-if="pairingCode">
+                <p class="font-mono text-[calc(36px*var(--ui-scale))] font-bold tracking-[0.15em] text-[var(--text-primary)] select-all break-all text-center px-2 mb-4">
+                  {{ pairingCode.code }}
+                </p>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.pairingCodeHint') }}
+                </p>
+              </template>
+              <template v-else>
+                <div class="w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-page)] flex flex-col items-center justify-center text-center px-3 gap-1.5 mb-4">
+                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
+                </div>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.pairingCodeHint') }}
+                </p>
+              </template>
+            </div>
+          </div>
+           <!-- ==================== QR 码卡片（内容居中，旧版样式） ==================== -->
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
+            <!-- 头部：标题 + 描述，右侧操作按钮 + 倒计时徽标 -->
+            <div class="flex items-center justify-between gap-3 mb-4">
               <div class="min-w-0">
                 <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.qrDesc') }}</p>
               </div>
-              <span v-if="qr.hasQr.value" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
-                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
-              </span>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <button
+                  v-if="qr.hasQr.value"
+                  class="wb-btn-ghost !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  @click="qr.clearQr()"
+                >
+                  {{ t('common.button.cancel') }}
+                </button>
+                <button
+                  class="wb-btn-primary !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  :disabled="qr.isLoading.value"
+                  @click="qr.generateQr(selectedIp || undefined)"
+                >
+                  {{ qr.hasQr.value ? t('common.button.refresh') : t('desktop.device.generateQr') }}
+                </button>
+                <span v-if="qr.hasQr.value" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]">
+                  <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
+                  {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
+                </span>
+              </div>
             </div>
 
             <!-- 主体：二维码居中展示，下方说明与操作 -->
@@ -108,73 +175,6 @@
                 <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
                   {{ t('desktop.device.qrHint') }}
                 </p>
-              </template>
-              <div class="flex items-center justify-center gap-2 mt-4">
-                <button
-                  v-if="qr.hasQr.value"
-                  class="wb-btn-ghost"
-                  @click="qr.clearQr()"
-                >
-                  {{ t('common.button.cancel') }}
-                </button>
-                <button
-                  class="wb-btn-primary"
-                  :disabled="qr.isLoading.value"
-                  @click="qr.generateQr(selectedIp || undefined)"
-                >
-                  {{ qr.hasQr.value ? t('common.button.refresh') : t('desktop.device.generateQr') }}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- ==================== 配对码卡片（内容居中，旧版样式） ==================== -->
-          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
-            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
-            <div class="flex items-start justify-between gap-3 mb-4">
-              <div class="min-w-0">
-                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.pairingCodeDesc') }}</p>
-              </div>
-              <span v-if="pairingCode" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
-                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                {{ remainingSeconds }}{{ t('common.time.seconds') }}
-              </span>
-            </div>
-
-            <!-- 主体：配对码居中大字展示，下方说明与操作 -->
-            <div class="flex flex-col items-center text-center">
-              <template v-if="pairingCode">
-                <p class="font-mono text-[calc(36px*var(--ui-scale))] font-bold tracking-[0.15em] text-[var(--text-primary)] select-all break-all text-center px-2 mb-4">
-                  {{ pairingCode.code }}
-                </p>
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
-                  {{ t('desktop.device.pairingCodeHint') }}
-                </p>
-                <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
-                  {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
-                </p>
-                <div class="flex items-center justify-center gap-2 mt-4">
-                  <button class="wb-btn-ghost" @click="cancelPairing">
-                    {{ t('common.button.cancel') }}
-                  </button>
-                </div>
-              </template>
-              <template v-else>
-                <div class="w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-page)] flex flex-col items-center justify-center text-center px-3 gap-1.5 mb-4">
-                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
-                </div>
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
-                  {{ t('desktop.device.pairingCodeHint') }}
-                </p>
-                <div class="flex items-center justify-center gap-2 mt-4">
-                  <button class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
-                    {{ t('desktop.device.generateCode') }}
-                  </button>
-                </div>
               </template>
             </div>
           </div>

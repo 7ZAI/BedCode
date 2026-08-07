@@ -2,10 +2,26 @@
  * xterm 写入合并器
  *
  * 把同帧内多次 terminal.write() 合并为一次，避免 WebGL 双缓冲下新旧帧叠加（重影）。
- * 等价于 xterm 6.0 DEC Mode 2026 (Synchronized Output) 同步输出语义。
+ * 写入前用 DEC Mode 2026 (Synchronized Output) 序列包裹，让 xterm 缓存所有变化到
+ * 下一帧统一渲染，消除 WebGL 渲染器逐块绘制产生的视觉撕裂/重影（xterm 6.0+ 支持）。
  */
 
 import type { Terminal } from '@xterm/xterm'
+
+// DEC Mode 2026 同步输出序列：包裹一次写入，渲染器收到 ESU 前不刷新屏幕
+const SYNC_OUTPUT_START = new TextEncoder().encode('\x1b[?2026h')
+const SYNC_OUTPUT_END = new TextEncoder().encode('\x1b[?2026l')
+
+/**
+ * 用 DEC Mode 2026 同步输出序列包裹数据，让 xterm 缓存所有变化到下一帧统一绘制
+ */
+export function wrapSyncOutput(data: Uint8Array): Uint8Array {
+  const wrapped = new Uint8Array(SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length)
+  wrapped.set(SYNC_OUTPUT_START, 0)
+  wrapped.set(data, SYNC_OUTPUT_START.length)
+  wrapped.set(SYNC_OUTPUT_END, SYNC_OUTPUT_START.length + data.byteLength)
+  return wrapped
+}
 
 /** 累积字节超过此值时立即 flush，防止极端大块数据下 rAF 延迟影响响应 */
 const MAX_COALESCED_BYTES = 256 * 1024
@@ -46,7 +62,7 @@ export function createWriteCoalescer(terminal: Terminal): WriteCoalescer {
     pending = []
     totalBytes = 0
 
-    terminal.write(combined)
+    terminal.write(wrapSyncOutput(combined))
   }
 
   function write(data: Uint8Array) {
