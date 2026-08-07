@@ -85,6 +85,17 @@ pub fn list_tasks(state: &PluginState) -> serde_json::Value {
     serde_json::to_value(state.tasks.snapshot()).unwrap_or(serde_json::Value::Array(vec![]))
 }
 
+/// query-peer：主动询问对端文件服务状态
+///
+/// 经宿主 WS 控制面发送 Query；对端回复 Announce/Withdraw 后宿主注册表
+/// 更新并推送 `filesrv:peer_changed`，前端状态随之刷新。
+/// 用于对端状态事件遗漏（先挂载后连接/广播丢失）时主动恢复。
+pub fn query_peer(host: &impl HostFileService) -> anyhow::Result<serde_json::Value> {
+    host.filesrv_query_peer("")
+        .map_err(|e| anyhow::anyhow!("query-peer: {}", e))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// list-remote：列举对端目录
 pub fn list_remote(
     state: &PluginState,

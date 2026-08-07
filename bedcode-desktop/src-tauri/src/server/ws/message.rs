@@ -227,6 +227,17 @@ pub enum Message {
 // ==================== 辅助方法 ====================
 
 impl Message {
+    /// 创建文件服务控制面消息（桌面端 → 移动端：Query / 挂载快照补发）
+    pub fn file_service(payload: FileServicePayload) -> Self {
+        Message::FileService {
+            message_id: generate_message_id(),
+            expect_response: false,
+            timestamp: Utc::now().timestamp_millis(),
+            token: String::new(),
+            payload,
+        }
+    }
+
     /// 创建终端输出消息
     pub fn output(session_id: &str, data: &[u8], is_waiting: bool, index: usize) -> Self {
         Message::Terminal {

@@ -177,6 +177,22 @@ export function useTasks(context: PluginContext) {
   }
 
   /**
+   * 主动询问对端文件服务状态（防止状态事件遗漏时无法恢复）
+   *
+   * 经宿主 WS 控制面发 Query，对端回复后宿主推送 filesrv:peer_changed，
+   * peerOnline/peerId/peerName 自动刷新；失败静默（连接未建立时宿主直接忽略）。
+   */
+  async function queryPeer(): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.query-peer', {})
+      return true
+    } catch (e) {
+      console.error('[File Transfer] query-peer failed:', e)
+      return false
+    }
+  }
+
+  /**
    * 批量入队下载（逐个入队，单个失败不中断整批）。
    * 任一同名被拒即弹「无法上传」Material 对话框（context.dialogs）。
    */
@@ -390,6 +406,7 @@ export function useTasks(context: PluginContext) {
     refresh,
     enqueueDownload,
     enqueueUpload,
+    queryPeer,
     pause,
     resume,
     cancel,

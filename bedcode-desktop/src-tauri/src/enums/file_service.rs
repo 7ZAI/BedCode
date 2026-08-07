@@ -34,6 +34,12 @@ pub enum FileServicePayload {
     ///
     /// 连接已断开时移动端不发（桌面侧断连路径已自行清理 peer 记录）
     Withdraw {},
+    /// 询问对端当前文件服务状态（主动探测，数据载荷为空）
+    ///
+    /// 触发：插件主动发起（filesrv_query_peer host function），用于
+    /// 对端状态事件遗漏/未同步时主动恢复（如先挂载后连接、广播丢失）。
+    /// 响应：有挂载且服务运行 → Announce；否则 → Withdraw
+    Query {},
 }
 
 /// 单个挂载的公告信息
@@ -79,6 +85,17 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<FileServicePayload>(&json).unwrap(),
             FileServicePayload::Withdraw {}
+        ));
+    }
+
+    #[test]
+    fn test_query_wire_format() {
+        let payload = FileServicePayload::Query {};
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"action\":\"query\""));
+        assert!(matches!(
+            serde_json::from_str::<FileServicePayload>(&json).unwrap(),
+            FileServicePayload::Query {}
         ));
     }
 }

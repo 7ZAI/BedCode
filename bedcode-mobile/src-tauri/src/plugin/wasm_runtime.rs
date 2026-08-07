@@ -790,6 +790,9 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_filesrv_get_peer", host_filesrv_get_peer)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_get_peer: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_query_peer", host_filesrv_query_peer)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_query_peer: {}", e)))?;
 
     // 传输引擎（ABI v4）
     linker
@@ -2147,6 +2150,56 @@ fn host_filesrv_get_peer(
         }
         None => {
             tracing::error!(plugin_id = %plugin_id, peer_id = %peer_id, "host_filesrv_get_peer: failed to write result");
+            -1
+        }
+    }
+}
+
+/// 文件服务：主动询问对端状态（经 WS 控制面发送 Query）
+///
+/// 参数：(peer_ptr, peer_len) — 单连接场景忽略 peer_id，向当前连接发送；
+/// 对端回复 Announce/Withdraw 后由注册表推送 `filesrv:peer_changed`。
+/// 返回：0 成功（已发送），-1 失败（权限/未连接/发送失败）
+fn host_filesrv_query_peer(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    peer_ptr: u32,
+    peer_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_query_peer: permission denied (fileservice)");
+        return -1;
+    }
+
+    let peer_id = match read_wasm_string(&mut caller, peer_ptr, peer_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_query_peer: failed to read peer id");
+            return -1;
+        }
+    };
+
+    let conn = crate::state::get_connection_manager();
+    let handle = caller.data().runtime_handle.clone();
+    let result = tokio::task::block_in_place(|| {
+        handle.block_on(async {
+            if !conn.is_connected().await {
+                return Err(crate::AppError::WebSocket("not connected".to_string()));
+            }
+            conn.send(&crate::model::message::Message::file_service(
+                crate::enums::file_service::FileServicePayload::Query {},
+            ))
+            .await
+        })
+    });
+
+    match result {
+        Ok(_) => {
+            tracing::debug!(plugin_id = %plugin_id, peer_id = %peer_id, "file service query sent");
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "host_filesrv_query_peer: send failed");
             -1
         }
     }

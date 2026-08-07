@@ -558,6 +558,16 @@ impl HostFileService for WasmHost {
             .map(Some)
             .map_err(|e| HostError::custom(-1, format!("filesrv_get_peer: invalid JSON from host: {}", e)))
     }
+
+    fn filesrv_query_peer(&self, peer_id: &str) -> Result<(), HostError> {
+        let (peer_ptr, peer_len) = wasm_alloc_string(peer_id);
+        let status = unsafe { host_filesrv_query_peer(peer_ptr, peer_len) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_query_peer"))
+        }
+    }
 }
 
 // ==================== HostTransfer ====================
@@ -687,6 +697,8 @@ extern "C" {
     fn host_filesrv_update_roots(mp_ptr: u32, mp_len: u32, roots_ptr: u32, roots_len: u32) -> i32;
     /// 文件服务：获取对端信息 — out_ptr 输出 PeerFileService JSON（(0,0) 表示未公告）
     fn host_filesrv_get_peer(peer_ptr: u32, peer_len: u32, out_ptr: u32) -> i32;
+    /// 文件服务：主动询问对端状态 — 经 WS 控制面发送 Query，返回 0 成功 -1 失败
+    fn host_filesrv_query_peer(peer_ptr: u32, peer_len: u32) -> i32;
     /// 传输引擎：启动任务 — TransferRequest JSON → out_ptr 输出 task_id，返回 0 成功 -1 失败
     fn host_transfer_start(req_ptr: u32, req_len: u32, out_ptr: u32) -> i32;
     /// 传输引擎：取消任务 — 返回 0 成功，-1 失败
@@ -863,6 +875,8 @@ mod native_link_stubs {
     pub extern "C" fn host_filesrv_update_roots(_mp_ptr: u32, _mp_len: u32, _roots_ptr: u32, _roots_len: u32) -> i32 { -1 }
     #[no_mangle]
     pub extern "C" fn host_filesrv_get_peer(_peer_ptr: u32, _peer_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_filesrv_query_peer(_peer_ptr: u32, _peer_len: u32) -> i32 { -1 }
     #[no_mangle]
     pub extern "C" fn host_transfer_start(_req_ptr: u32, _req_len: u32, _out_ptr: u32) -> i32 { -1 }
     #[no_mangle]

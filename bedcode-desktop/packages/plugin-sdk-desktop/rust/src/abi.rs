@@ -191,6 +191,8 @@ pub mod import {
     pub const FILESRV_UPDATE_ROOTS: &str = "host_filesrv_update_roots";
     /// 文件服务：获取对端文件服务信息（out_ptr 输出）
     pub const FILESRV_GET_PEER: &str = "host_filesrv_get_peer";
+    /// 文件服务：主动询问对端状态（经 WS 控制面发送 Query，无输出）
+    pub const FILESRV_QUERY_PEER: &str = "host_filesrv_query_peer";
 
     // === Transfer（v5） ===
     /// 传输引擎：启动传输任务（TransferRequest JSON → out_ptr 输出 task_id）
@@ -244,6 +246,7 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::FILESRV_UNMOUNT, 2, 1),
     (import::FILESRV_UPDATE_ROOTS, 4, 1),
     (import::FILESRV_GET_PEER, 3, 1),
+    (import::FILESRV_QUERY_PEER, 2, 1),
     (import::TRANSFER_START, 3, 1),
     (import::TRANSFER_CANCEL, 2, 1),
 ];

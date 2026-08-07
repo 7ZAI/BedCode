@@ -22,6 +22,7 @@ export default {
   'transfer.topbar.settings': 'Settings',
   'transfer.topbar.closeSettings': 'Back',
   'transfer.topbar.refresh': 'Refresh',
+  'transfer.topbar.queryPeer': 'Re-detect peer',
   'transfer.topbar.downloadSelected': 'Download ({count} · {size})',
   'transfer.topbar.uploadFile': 'Upload file',
   'transfer.breadcrumb.home': 'Files',

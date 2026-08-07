@@ -20,6 +20,7 @@ export interface MessageSchema {
   'transfer.topbar.settings': string
   'transfer.topbar.closeSettings': string
   'transfer.topbar.refresh': string
+  'transfer.topbar.queryPeer': string
   'transfer.topbar.downloadSelected': string
   'transfer.topbar.uploadFile': string
   'transfer.breadcrumb.home': string

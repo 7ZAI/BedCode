@@ -6,6 +6,7 @@
 //! 钩子分发（规格 4.2）：仅在上传会话创建时调用一次，同步阻塞握手，
 //! 2 秒超时；超时/插件异常一律拒绝（fail-closed）。
 
+use crate::enums::file_service::MountAnnouncement;
 use crate::plugin::file_service::cipher::{PassthroughCipher, TransportCipher};
 use crate::plugin::file_service::sandbox;
 use crate::plugin::file_service::upload::{self, UploadSessionManager};
@@ -527,6 +528,23 @@ impl FileServiceRegistry {
         } else {
             tracing::debug!(peer_id = %peer_id, "remove_peer: not present, skip push");
         }
+    }
+
+    /// 当前全部挂载的公告清单（认证成功补发快照 / Query 响应使用）
+    ///
+    /// 与移动端 `mount_announcements` 同构，按 (plugin_id, mount_path) 排序保证稳定输出
+    pub async fn mount_announcements(&self) -> Vec<MountAnnouncement> {
+        let mounts = self.mounts.read().await;
+        let mut list: Vec<MountAnnouncement> = mounts
+            .iter()
+            .map(|((plugin_id, mount_path), entry)| MountAnnouncement {
+                plugin_id: plugin_id.clone(),
+                mount_path: mount_path.clone(),
+                operations: entry.operations.clone(),
+            })
+            .collect();
+        list.sort_by(|a, b| (&a.plugin_id, &a.mount_path).cmp(&(&b.plugin_id, &b.mount_path)));
+        list
     }
 
     /// 双通道推送对端在线状态变更（Tauri 事件 + 插件消息总线）

@@ -122,6 +122,7 @@ pub(super) fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> c
     register!(abi::import::FILESRV_UNMOUNT, file_service::host_filesrv_unmount);
     register!(abi::import::FILESRV_UPDATE_ROOTS, file_service::host_filesrv_update_roots);
     register!(abi::import::FILESRV_GET_PEER, file_service::host_filesrv_get_peer);
+    register!(abi::import::FILESRV_QUERY_PEER, file_service::host_filesrv_query_peer);
 
     // 传输引擎（v5）
     register!(abi::import::TRANSFER_START, transfer::host_transfer_start);

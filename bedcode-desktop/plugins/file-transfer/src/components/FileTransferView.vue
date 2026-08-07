@@ -20,7 +20,7 @@ const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const { peer, start: startPeer, stop: stopPeer } = usePeer(context)
-const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, refresh: refreshTasks, pause, resume, cancel, retry, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
+const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
 const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency } = useSettings(context)
 const {
   entries,
@@ -74,9 +74,9 @@ async function handleDownload(): Promise<void> {
   clearSelection()
 }
 
-/** 顶栏刷新：任务列表 + 当前目录 */
+/** 顶栏刷新：任务列表 + 当前目录 + 主动探测对端状态 */
 async function handleRefresh(): Promise<void> {
-  await Promise.all([refreshTasks(), refreshDir()])
+  await Promise.all([refreshTasks(), refreshDir(), queryPeer()])
 }
 
 /** 发送到手机：弹本地多文件选择 → 入队上传（对端根目录） */
@@ -108,6 +108,8 @@ onMounted(async () => {
   startPeer()
   startTasks()
   await Promise.all([loadSettings(), refreshTasks()])
+  // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）
+  void queryPeer()
   if (peer.value.online) await loadDir()
 })
 

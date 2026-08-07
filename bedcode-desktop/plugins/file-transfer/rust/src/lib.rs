@@ -133,6 +133,8 @@ impl WasmPlugin for FileTransferPlugin {
         match name {
             "file-transfer.list-tasks" => Ok(commands::list_tasks(&s)),
 
+            "file-transfer.query-peer" => commands::query_peer(&host),
+
             "file-transfer.list-remote" => commands::list_remote(&s, &host, &args),
 
             "file-transfer.enqueue" => {

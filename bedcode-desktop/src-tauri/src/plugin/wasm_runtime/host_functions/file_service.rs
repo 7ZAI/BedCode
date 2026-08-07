@@ -177,6 +177,52 @@ pub(super) fn host_filesrv_update_roots(
     }
 }
 
+/// 文件服务：主动询问对端状态（经 WS 控制面广播 Query）
+///
+/// 参数：(peer_id_ptr, peer_id_len) — peer_id 为空广播给全部已认证客户端
+/// （多设备场景幂等；定向发送暂不支持，WsSessionRegistry 无 device_id 索引）；
+/// 对端回复 Announce/Withdraw 后由注册表推送 `filesrv:peer_changed`。
+/// 返回：0 成功，-1 失败
+pub(super) fn host_filesrv_query_peer(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    peer_id_ptr: u32,
+    peer_id_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let peer_id = match read_wasm_string_consume(&mut caller, peer_id_ptr, peer_id_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_query_peer: failed to read peer id");
+            return -1;
+        }
+    };
+
+    if !super::check_permission(
+        &host_ctx,
+        &plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_query_peer",
+    ) {
+        return -1;
+    }
+
+    let payload = crate::enums::FileServicePayload::Query {};
+    let json = match crate::server::ws::message::Message::file_service(payload).to_json() {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_query_peer: serialize failed");
+            return -1;
+        }
+    };
+
+    let registry = crate::server::ws::registry::WsSessionRegistry::global();
+    block_on_async(registry.broadcast(json, None));
+    tracing::debug!(plugin_id = %plugin_id, peer_id = %peer_id, "file service query broadcast");
+    0
+}
+
 /// 文件服务：获取对端文件服务信息
 ///
 /// 参数：(peer_id_ptr, peer_id_len, out_ptr)

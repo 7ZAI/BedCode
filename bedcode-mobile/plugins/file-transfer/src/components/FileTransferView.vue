@@ -97,6 +97,8 @@ async function uploadFile(): Promise<void> {
 onMounted(() => {
   tasks.start()
   void fs.load('')
+  // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）
+  void tasks.queryPeer()
 })
 
 onUnmounted(() => {
@@ -120,6 +122,15 @@ onUnmounted(() => {
           {{ tasks.peerOnline.value ? t('transfer.peer.online') : t('transfer.peer.offline') }}
         </span>
       </div>
+      <button
+        class="flex-shrink-0 p-1 text-[var(--mobile-text-secondary)] active:opacity-80 transition-colors"
+        :title="t('transfer.topbar.queryPeer')"
+        @click="tasks.queryPeer()"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+        </svg>
+      </button>
       <button
         class="flex-shrink-0 p-1 text-[var(--mobile-text-secondary)] active:opacity-80 transition-colors"
         @click="uploadFile()"

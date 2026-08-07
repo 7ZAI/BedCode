@@ -27,6 +27,10 @@
         "title": "List Tasks"
       },
       {
+        "id": "file-transfer.query-peer",
+        "title": "Query Peer Status"
+      },
+      {
         "id": "file-transfer.list-remote",
         "title": "List Remote Files"
       },

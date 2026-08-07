@@ -12,7 +12,7 @@ use crate::router::{ClientRouteContext, MobileEvent, ClientRouteHandler};
 ///
 /// 移动端同时只连接一台桌面端，用地址区分足够唯一；前缀避免与其他
 /// 可能的 peer 源冲突（如未来多桌面场景）
-const DESKTOP_PEER_PREFIX: &str = "desktop:";
+pub(crate) const DESKTOP_PEER_PREFIX: &str = "desktop:";
 
 /// 同步数据消息处理器
 pub struct SyncHandler;

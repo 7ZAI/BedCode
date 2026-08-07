@@ -23,6 +23,7 @@ export default {
   'transfer.topbar.settings': '设置',
   'transfer.topbar.closeSettings': '返回',
   'transfer.topbar.refresh': '刷新',
+  'transfer.topbar.queryPeer': '重新检测对端',
   'transfer.topbar.downloadSelected': '下载到手机 ({count} 项 · {size})',
   'transfer.topbar.uploadFile': '上传文件',
   'transfer.breadcrumb.home': '文件',

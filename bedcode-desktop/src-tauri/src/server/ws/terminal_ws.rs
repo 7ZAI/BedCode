@@ -304,7 +304,26 @@ impl TerminalWs {
                     file_service.remove_peer(&device_id).await;
                 });
             }
+            FileServicePayload::Query {} => {
+                // 主动探测：向该客户端回复当前挂载快照（有挂载 → Announce；无 → Withdraw）
+                let addr = self.session.addr;
+                tracing::info!(device_id = %device_id, "file service query received, replying snapshot");
+                actix::spawn(async move {
+                    send_file_service_snapshot_to(addr).await;
+                });
+            }
         }
+    }
+
+    /// 认证成功后向该客户端补发当前文件服务挂载快照
+    ///
+    /// 修复先挂载后连接的场景：挂载广播发生在客户端连接之前会丢失，
+    /// 认证成功时补发一次，移动端经 FileServiceHandler 更新 peer 记录
+    pub(crate) fn push_file_service_snapshot(&self, _ctx: &mut ws::WebsocketContext<Self>) {
+        let addr = self.session.addr;
+        actix::spawn(async move {
+            send_file_service_snapshot_to(addr).await;
+        });
     }
 
     /// 处理认证消息 — 根据阶段路由到不同处理器
@@ -503,6 +522,9 @@ impl TerminalWs {
                     metrics.inc_ws_sent();
                     ctx.text(json);
                 }
+
+                // 补发文件服务挂载快照（JWT 重认证成功：修复先挂载后连接的广播丢失）
+                self.push_file_service_snapshot(ctx);
             }
             Err(e) => {
                 let msg = match e {
@@ -784,6 +806,9 @@ impl Handler<AuthResponse> for TerminalWs {
             self.session.device_name = msg.device_name.clone();
             self.session.fingerprint = msg.fingerprint.clone();
 
+            // 补发文件服务挂载快照（配对认证成功：修复先挂载后连接的广播丢失）
+            self.push_file_service_snapshot(ctx);
+
             // 注册到 WsSessionRegistry
             let client_id = self.session.addr.to_string();
             let device_name = msg.device_name.clone();
@@ -871,5 +896,39 @@ impl OutputBuffer {
         );
         self.data.clear();
         message.to_json().unwrap_or_default()
+    }
+}
+
+/// 向指定客户端发送当前文件服务挂载快照（认证成功补发 / Query 响应共用）
+///
+/// 有挂载 → Announce（port 取宿主 HTTP 端口，与 WS 同端口；token 为空，
+/// 移动端经其全局 token 兜底）；无挂载 → Withdraw（告知对端移除 peer 记录）
+async fn send_file_service_snapshot_to(addr: SocketAddr) {
+    use crate::enums::FileServicePayload;
+    use crate::server::ws::message::Message;
+    use crate::server::ws::registry::WsSessionRegistry;
+    use crate::system::app_context::AppContext;
+    use crate::system::config::AppConfig;
+
+    let ctx = AppContext::global();
+    let mounts = ctx.file_service().mount_announcements().await;
+    let payload = if mounts.is_empty() {
+        FileServicePayload::Withdraw {}
+    } else {
+        FileServicePayload::Announce {
+            port: AppConfig::global().network.port,
+            token: String::new(),
+            mounts,
+        }
+    };
+    let json = match Message::file_service(payload).to_json() {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, addr = %addr, "send_file_service_snapshot: serialize failed");
+            return;
+        }
+    };
+    if let Err(e) = WsSessionRegistry::global().send_to_addr(&addr, json).await {
+        tracing::warn!(addr = %addr, error = %e, "send_file_service_snapshot: send failed");
     }
 }

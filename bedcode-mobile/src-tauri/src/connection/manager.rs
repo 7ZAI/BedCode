@@ -19,7 +19,7 @@ use crate::state::get_global_token;
 use crate::Result;
 
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
-use crate::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler};
+use crate::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler, FileServiceHandler};
 
 use crate::system::constants::connection::{
     BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN,
@@ -57,6 +57,7 @@ fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusine
         .route("Terminal", Arc::new(TerminalHandler))
         .route("Auth", Arc::new(AuthHandler))
         .route("SyncData", Arc::new(SyncHandler))
+        .route("FileService", Arc::new(FileServiceHandler))
         .route("ServerClosed", Arc::new(SystemHandler))
         .route("Error", Arc::new(SystemHandler))
         .route("Ack", Arc::new(SystemHandler))

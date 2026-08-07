@@ -27,4 +27,11 @@ pub trait HostFileService {
 
     /// 获取对端文件服务信息；对端未公告返回 `Ok(None)`
     fn filesrv_get_peer(&self, peer_id: &str) -> Result<Option<PeerFileService>, HostError>;
+
+    /// 主动询问对端文件服务状态（经 WS 控制面发送 Query）
+    ///
+    /// 对端会回复 Announce/Withdraw，宿主注册表更新后经
+    /// `filesrv:peer_changed` 事件推送。peer_id 为空表示询问当前连接对端
+    ///（移动端单连接场景）。用于对端状态事件遗漏时主动恢复。
+    fn filesrv_query_peer(&self, peer_id: &str) -> Result<(), HostError>;
 }
