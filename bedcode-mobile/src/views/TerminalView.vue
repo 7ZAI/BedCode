@@ -156,7 +156,7 @@ import { useMobileConnection } from '@/composables/useMobileConnection'
 import { isMockSession, useMockTerminal } from '@/composables/useMockTerminal'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { wsResizeTerminal } from '@/composables/useMobileCommands'
-import { httpSendSessionInput } from '@/composables/useHttpApi'
+import { httpSendSessionInput, httpResizeSession } from '@/composables/useHttpApi'
 import { useOrientation } from '@/composables/useOrientation'
 import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
@@ -689,20 +689,38 @@ function clearTerminal() {
 
 // ==================== Refresh Terminal ====================
 
-function refreshTerminal() {
+/** 主动同步当前终端尺寸到桌面端 PTY（HTTP，带响应确认）
+ * 重连/会话激活后 PTY 重建为默认 80x24，容器尺寸未变化时 fit/onResize 都不会触发，
+ * 必须显式同步一次，否则输出按错误宽度换行导致格式混乱 */
+async function syncTerminalSizeToHost() {
+  if (!terminalRef.value || isMockSession(sessionId.value)) return
+  if (!isConnected.value || !isSessionActive.value) return
+  const { cols, rows } = terminalRef.value
+  if (cols <= 0 || rows <= 0) return
+  const result = await httpResizeSession(sessionId.value, cols, rows)
+  if (result.code !== 0) {
+    console.warn('[TerminalView] Sync size to host failed:', result.message)
+  }
+}
+
+async function refreshTerminal() {
   if (!fitAddonRef.value || !terminalRef.value) return
 
   fitAddonRef.value.fit()
-  if (isConnected.value && isSessionActive.value) {
-    wsResizeTerminal(sessionId.value, terminalRef.value.cols, terminalRef.value.rows).then(() => {
-      toast.success(t('mobile.terminal.refreshed'))
-    }).catch((e: Error) => {
-      console.warn('[TerminalView] Refresh resize failed:', e)
-      toast.error(t('mobile.terminal.refreshFailed'))
-    })
-  } else {
-    toast.success(t('mobile.terminal.refreshed'))
+  // 强制重绘可见区：fit 尺寸不变时不触发重排，WebGL 渲染残留需要手动刷新
+  if (terminalRef.value.rows > 0) {
+    terminalRef.value.refresh(0, terminalRef.value.rows - 1)
   }
+
+  if (isConnected.value && isSessionActive.value) {
+    const result = await httpResizeSession(sessionId.value, terminalRef.value.cols, terminalRef.value.rows)
+    if (result.code !== 0) {
+      console.warn('[TerminalView] Refresh resize failed:', result.message)
+      toast.error(t('mobile.terminal.refreshFailed'))
+      return
+    }
+  }
+  toast.success(t('mobile.terminal.refreshed'))
 }
 
 // ==================== Misc Handlers ====================
@@ -770,6 +788,7 @@ onMounted(async () => {
     }
   } else if (isSessionActive.value && isConnected.value) {
     await subscribeSession(sessionId.value)
+    syncTerminalSizeToHost()
   }
 
   isTerminalReady.value = true
@@ -797,6 +816,8 @@ watch(isSessionActive, async (active, prevActive) => {
   if (!sessionId.value || isMockSession(sessionId.value)) return
   if (active && !prevActive) {
     await subscribeSession(sessionId.value)
+    // 会话激活（含重连后）时 PTY 可能仍是默认尺寸，主动同步一次
+    syncTerminalSizeToHost()
   } else if (!active && prevActive) {
     await handleSessionStopped(sessionId.value)
   }
@@ -808,6 +829,8 @@ watch(isConnected, async (connected) => {
     handleDisconnect()
   } else if (connected && isSessionActive.value) {
     await subscribeSession(sessionId.value)
+    // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
+    syncTerminalSizeToHost()
   }
 })
 </script>
