@@ -247,7 +247,9 @@ mod tests {
             .generate_token("device-123".to_string(), None, None)
             .unwrap();
 
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // exp 以秒级截断（exp = 签发秒 + 1），1500ms 睡眠可能未跨秒导致 flaky；
+        // 睡 2.1s 确保越过 exp 边界（`exp < now` 需 now ≥ exp + 1s）
+        std::thread::sleep(std::time::Duration::from_millis(2100));
 
         // 用严格过期检查 API：verify_token 走 jsonwebtoken 默认 Validation（leeway=60s），
         // 过期 60 秒内的 token 仍会通过，无法表达本测试的意图

@@ -17,11 +17,25 @@ use crate::plugin::storage::PluginStorage;
 use crate::session::{SessionConfigManager, SessionManager};
 use bedcode_plugin_api::abi;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
-use wasmtime::{Engine, Instance, Linker, Memory, Module, Store};
+use wasmtime::{
+    Cache, CacheConfig, Config, Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store,
+};
+
+// ==================== Resource Limits & Interruption ====================
+
+/// epoch 递增周期（毫秒）：后台线程每周期推进一次全局纪元
+const EPOCH_TICK_MILLIS: u64 = 500;
+/// 每次 wasm 调用允许的 epoch tick 数（超时窗口 ≈ EPOCH_TICK_MILLIS × EPOCH_GRACE_TICKS，
+/// 放宽至 2s 避免误杀合法重计算；纯 guest 死循环最迟 2s 被 trap）
+const EPOCH_GRACE_TICKS: u64 = 4;
+/// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
+const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
+/// 单插件表元素上限
+const MAX_PLUGIN_TABLE_ENTRIES: usize = 1_000_000;
 
 // ==================== Async Blocking Helper ====================
 
@@ -66,6 +80,13 @@ pub struct WasmRuntime {
     linker: Linker<WasmPluginState>,
     /// 文件系统访问校验器
     fs_auth: Arc<FsAuthChecker>,
+    /// AOT 编译产物（`.cwasm`）缓存目录（宿主 cache 目录，非插件目录）
+    ///
+    /// 插件目录可被安装方/插件自身写入，若把反序列化产物放回插件目录，
+    /// 能写插件目录的攻击者可投放伪造产物触发宿主进程 UB
+    /// （`Module::deserialize_file` 是 unsafe，假定数据可信）。
+    /// 无 app_handle 时（无头/测试）为 None，禁用文件级 AOT 缓存。
+    aot_cache_dir: Option<PathBuf>,
 }
 
 /// 单个 WASM 插件实例的状态
@@ -77,6 +98,50 @@ pub struct WasmPluginState {
     plugin_id: String,
     /// 宿主上下文（注入宿主能力）
     host_ctx: Arc<WasmHostContext>,
+}
+
+/// 插件实例资源限制器
+///
+/// 直接借用 Store 状态（`Store::limiter` 的闭包返回本状态的可变引用），
+/// 限制单插件线性内存与表大小，防止失控/恶意插件耗尽宿主内存。
+impl ResourceLimiter for WasmPluginState {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        if desired > MAX_PLUGIN_MEMORY_BYTES {
+            tracing::warn!(
+                plugin_id = %self.plugin_id,
+                desired_bytes = desired,
+                max_bytes = MAX_PLUGIN_MEMORY_BYTES,
+                "WASM memory growth denied by resource limiter"
+            );
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        if desired > MAX_PLUGIN_TABLE_ENTRIES {
+            tracing::warn!(
+                plugin_id = %self.plugin_id,
+                desired_entries = desired,
+                max_entries = MAX_PLUGIN_TABLE_ENTRIES,
+                "WASM table growth denied by resource limiter"
+            );
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
 }
 
 /// 插件宿主服务抽象 — 解耦 WasmHostContext 与 PluginHost 的循环依赖
@@ -149,6 +214,14 @@ pub struct LoadedWasmPlugin {
     pub(crate) memory: Memory,
 }
 
+/// 根据 wasm 路径生成 AOT 缓存文件名（稳定 hash，避免路径字符/长度问题）
+fn aot_cache_key(path: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl WasmRuntime {
     /// 创建 WASM 运行时
     ///
@@ -160,15 +233,58 @@ impl WasmRuntime {
         storage: Arc<PluginStorage>,
         app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> crate::Result<Self> {
-        let engine = Engine::default();
+        let mut config = Config::new();
+        // 启用 epoch 中断：后台线程周期推进纪元，防止插件死循环无限阻塞宿主
+        config.epoch_interruption(true);
+        // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
+        match Cache::new(CacheConfig::new()) {
+            Ok(cache) => {
+                config.cache(Some(cache));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "WASM compile cache disabled");
+            }
+        }
+        let engine = Engine::new(&config).map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e))
+        })?;
         let mut linker = Linker::new(&engine);
 
         // 注册所有 Host Functions 到 "bedcode" 命名空间（实现见 host_functions 子模块）
         host_functions::register_host_functions(&mut linker)?;
 
+        // AOT 缓存目录：宿主 cache 目录（非插件目录，见结构体字段注释）。
+        // 须在 app_handle move 进 FsAuthChecker 之前取出
+        let aot_cache_dir = app_handle
+            .as_ref()
+            .and_then(|h| h.path().app_cache_dir().ok())
+            .map(|d| d.join("wasm-aot"));
+        if let Some(dir) = &aot_cache_dir {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "Failed to create AOT cache dir, AOT cache disabled"
+                );
+            }
+        }
+
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle));
 
-        Ok(Self { engine, linker, fs_auth })
+        // 后台线程周期递增 epoch：任何进行中的 wasm 调用超过超时窗口即被中断（trap）。
+        // spawn 失败降级为无中断（与未启用 epoch 时行为一致），不 panic
+        let epoch_engine = engine.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("wasmtime-epoch".to_string())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(EPOCH_TICK_MILLIS));
+                epoch_engine.increment_epoch();
+            })
+        {
+            tracing::warn!(error = %e, "Failed to spawn epoch thread, interruption disabled");
+        }
+
+        Ok(Self { engine, linker, fs_auth, aot_cache_dir })
     }
 
     /// 从字节流编译 WASM 模块
@@ -178,22 +294,92 @@ impl WasmRuntime {
         })
     }
 
-    /// 从文件编译 WASM 模块
+    /// 从文件编译 WASM 模块（带 AOT 缓存）
+    ///
+    /// 优先加载宿主 cache 目录中的 `.cwasm` 编译产物（wasm 源未变时跳过编译）；
+    /// 产物缺失/过期/与当前 Engine 不兼容（版本或特性变化）时重新编译并写回。
+    ///
+    /// 缓存文件以 wasm 路径 hash 命名，位于宿主 cache 目录而非插件目录：
+    /// 插件目录对安装方/插件可写，反序列化产物放在那里可被投毒
+    /// （`Module::deserialize_file` 是 unsafe，假定数据可信）。
     pub fn compile_module_from_file(&self, path: &Path) -> crate::Result<Module> {
-        Module::from_file(&self.engine, path).map_err(|e| {
+        // 无 AOT 缓存目录（无头/测试上下文）时退化为纯编译
+        let Some(cache_dir) = &self.aot_cache_dir else {
+            return Module::from_file(&self.engine, path).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "Failed to compile WASM module from '{}': {}",
+                    path.display(),
+                    e
+                ))
+            });
+        };
+
+        let cache_path = cache_dir.join(format!("{:016x}.cwasm", aot_cache_key(path)));
+
+        // 产物存在且不旧于 wasm 源时尝试直接反序列化
+        let cache_fresh = std::fs::metadata(path)
+            .and_then(|w| w.modified())
+            .ok()
+            .zip(std::fs::metadata(&cache_path).and_then(|c| c.modified()).ok())
+            .map(|(wasm_mtime, cache_mtime)| cache_mtime >= wasm_mtime)
+            .unwrap_or(false);
+
+        if cache_fresh {
+            // unsafe：产物为本机自写缓存；Engine 版本/特性不匹配时 deserialize 失败，
+            // 回退到完整编译路径
+            if let Ok(module) = unsafe { Module::deserialize_file(&self.engine, &cache_path) } {
+                tracing::debug!(
+                    path = %cache_path.display(),
+                    "Loaded WASM module from AOT cache"
+                );
+                return Ok(module);
+            }
+        }
+
+        let module = Module::from_file(&self.engine, path).map_err(|e| {
             crate::AppError::Plugin(format!(
                 "Failed to compile WASM module from '{}': {}",
                 path.display(),
                 e
             ))
-        })
+        })?;
+
+        // 写回 AOT 缓存：先写临时文件再 rename（原子替换，避免崩溃留半截产物）；
+        // 失败不阻断加载（下次启动重新编译）
+        match module.serialize() {
+            Ok(bytes) => {
+                // 目录可能尚未创建（无头/测试路径注入时），写前确保存在
+                if let Err(e) = std::fs::create_dir_all(cache_dir) {
+                    tracing::warn!(
+                        path = %cache_dir.display(),
+                        error = %e,
+                        "Failed to create AOT cache dir, will recompile next time"
+                    );
+                    return Ok(module);
+                }
+                let tmp_path = cache_path.with_extension("cwasm.tmp");
+                let write_result = std::fs::write(&tmp_path, &bytes)
+                    .and_then(|_| std::fs::rename(&tmp_path, &cache_path));
+                if let Err(e) = write_result {
+                    tracing::warn!(
+                        path = %cache_path.display(),
+                        error = %e,
+                        "Failed to write AOT cache, will recompile next time"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize module for AOT cache");
+            }
+        }
+
+        Ok(module)
     }
 
     /// 获取文件系统访问校验器引用
     pub fn fs_auth(&self) -> &Arc<FsAuthChecker> {
         &self.fs_auth
     }
-
     /// 获取 Host Function 注册表引用（仅测试用，用于校验 abi 签名契约）
     #[cfg(test)]
     pub fn linker(&self) -> &Linker<WasmPluginState> {
@@ -214,6 +400,11 @@ impl WasmRuntime {
             host_ctx,
         };
         let mut store = Store::new(&self.engine, state);
+
+        // 注册资源限制（内存/表超限拒绝增长）并配置 epoch 中断（wasm 死循环超时 trap）
+        store.limiter(|state| state as &mut dyn ResourceLimiter);
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(EPOCH_GRACE_TICKS);
 
         let instance = self
             .linker
@@ -605,6 +796,8 @@ impl LoadedWasmPlugin {
             return;
         };
         // 回收函数不会再回调 host，无递归风险；失败时静默降级（仅泄漏 guest 内存）
+        // 刷新 epoch 超时窗口：guest 回收函数也可能死循环
+        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
         let _ = func.call(
             &mut self.store,
             &[
@@ -620,6 +813,8 @@ impl LoadedWasmPlugin {
         &mut self,
         name: &str,
     ) -> crate::Result<wasmtime::Func> {
+        // 刷新 epoch 超时窗口：本次调用最多执行 EPOCH_GRACE_TICKS 个 tick
+        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
         self.instance
             .get_func(&mut self.store, name)
             .ok_or_else(|| {
@@ -676,6 +871,8 @@ impl LoadedWasmPlugin {
             })?;
 
         let mut alloc_results = [wasmtime::Val::I32(0)];
+        // 刷新 epoch 超时窗口：guest 分配器也可能死循环
+        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
         alloc_func
             .call(&mut self.store, &[wasmtime::Val::I32(size as i32)], &mut alloc_results)
             .map_err(|e| {
@@ -933,6 +1130,23 @@ mod tests {
     /// 无头构建（app_handle = None）：tao 事件循环不允许在测试线程创建，
     /// emit/数据目录类能力在测试中不被调用路径覆盖
     fn setup_wasm_plugin() -> (WasmRuntime, LoadedWasmPlugin) {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let wasm_bytes = build_test_wasm();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let module = wasm_runtime.compile_module(&wasm_bytes).unwrap();
+            let plugin = wasm_runtime.instantiate(&module, TEST_PLUGIN_ID, host_ctx).unwrap();
+            (wasm_runtime, plugin)
+        })
+    }
+
+    /// 创建 WasmRuntime + 完整 host function + 宿主上下文（不实例化插件）
+    ///
+    /// 供需要独立编译/实例化模块的测试（如 AOT 缓存）复用。
+    /// 无头构建（app_handle = None）：tao 事件循环不允许在测试线程创建，
+    /// emit/数据目录类能力在测试中不被调用路径覆盖；
+    /// AOT 缓存目录注入到系统临时目录，保证 compile_module_from_file 走缓存路径。
+    fn setup_wasm_runtime() -> (WasmRuntime, Arc<WasmHostContext>) {
         use crate::db::Database;
         use crate::plugin::file_service::FileServiceRegistry;
         use crate::plugin::message_bus::MessageBus;
@@ -940,8 +1154,6 @@ mod tests {
         use crate::plugin::storage::PluginStorage;
         use crate::session::{SessionConfigManager, SessionManager};
         use crate::system::config::AppConfig;
-
-        let wasm_bytes = build_test_wasm();
 
         // AppConfig 初始化
         static CONFIG_INIT: std::sync::Once = std::sync::Once::new();
@@ -984,7 +1196,11 @@ mod tests {
             let message_bus = Arc::new(MessageBus::new());
 
             // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
-            let wasm_runtime = WasmRuntime::new(storage.clone(), None).unwrap();
+            let mut wasm_runtime = WasmRuntime::new(storage.clone(), None).unwrap();
+            // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
+            wasm_runtime.aot_cache_dir = Some(
+                std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())),
+            );
 
             // 文件服务注册表与宿主上下文同步构造（headless：无 AppHandle）
             let file_service = FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), None);
@@ -1002,9 +1218,7 @@ mod tests {
                 file_service,
             ));
 
-            let module = wasm_runtime.compile_module(&wasm_bytes).unwrap();
-            let plugin = wasm_runtime.instantiate(&module, TEST_PLUGIN_ID, host_ctx).unwrap();
-            (wasm_runtime, plugin)
+            (wasm_runtime, host_ctx)
         })
     }
 
@@ -1077,6 +1291,74 @@ mod tests {
                 func_type.results().len()
             );
         }
+    }
+
+    // ==================== AOT 缓存测试 ====================
+
+    #[test]
+    fn test_compile_module_from_file_aot_cache() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+
+        // 用临时目录模拟插件 wasm 文件
+        let temp_dir = std::env::temp_dir().join(format!(
+            "bedcode_aot_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wasm_path = temp_dir.join("test_plugin.wasm");
+        let cache_path = std::env::temp_dir()
+            .join(format!("bedcode_aot_{}", std::process::id()))
+            .join(format!("{:016x}.cwasm", aot_cache_key(&wasm_path)));
+        std::fs::write(&wasm_path, build_test_wasm()).unwrap();
+
+        // 首次编译：生成 .cwasm 产物
+        let module = wasm_runtime
+            .compile_module_from_file(&wasm_path)
+            .expect("first compile should succeed");
+        assert!(cache_path.exists(), "AOT cache file should be written");
+
+        // 再次加载：应命中缓存（mtime 未变）
+        let cached = wasm_runtime
+            .compile_module_from_file(&wasm_path)
+            .expect("cached load should succeed");
+
+        // 两个 Module 都可正常实例化（功能等价）
+        for m in [module, cached] {
+            wasm_runtime
+                .instantiate(&m, TEST_PLUGIN_ID, host_ctx.clone())
+                .expect("module from cache should instantiate");
+        }
+
+        // 清理临时产物
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_compile_module_from_file_recompiles_on_stale() {
+        let (wasm_runtime, _plugin) = setup_wasm_plugin();
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "bedcode_aot_test_stale_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wasm_path = temp_dir.join("test_plugin.wasm");
+        let cache_path = std::env::temp_dir()
+            .join(format!("bedcode_aot_{}", std::process::id()))
+            .join(format!("{:016x}.cwasm", aot_cache_key(&wasm_path)));
+        std::fs::write(&wasm_path, build_test_wasm()).unwrap();
+
+        // 首次编译生成缓存
+        wasm_runtime.compile_module_from_file(&wasm_path).unwrap();
+
+        // 篡改缓存为无效字节：deserialize 应失败并回退到完整编译
+        std::fs::write(&cache_path, b"not a valid cwasm").unwrap();
+        let module = wasm_runtime
+            .compile_module_from_file(&wasm_path)
+            .expect("invalid cache should fall back to full compile");
+        assert!(module.get_export("memory").is_some());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     // ==================== 内存操作测试 ====================

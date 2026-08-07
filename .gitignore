@@ -120,3 +120,6 @@ temp/
 *.jks
 key.properties
 release.keystore
+
+# Firecrawl web-scrape cache
+.firecrawl/
