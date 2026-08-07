@@ -10,17 +10,22 @@
 //! pending ──(到期，session_create 失败)──▶ failed
 //! pending ──(超过宽限期仍未执行，如应用关闭期间到期)──▶ missed（不补跑）
 //! creating ──(应用重启，会话丢失)──▶ failed
+//! missed / failed ──(用户 reset：可改触发时间)──▶ pending（重新加入调度）
 //! ```
 //!
+//! 终态处置：missed / failed 为不可自动恢复的终态，用户可删除（清理）
+//! 或 reset（改触发时间后重新调度）；executed 保留为执行档案，不提供删除。
+//!
 //! 触发链路与常规自动任务共用队列调度：Created 事件到达后把 prompts
-//! 注入新会话队列（source='scheduled'），首轮任务由 Claude Code
-//! SessionStart 的 idle 推送驱动下发（新会话跳过上下文清理）。
+//! 注入新会话队列（source='scheduled'）并开启会话自动执行开关，
+//! 首轮任务由 Claude Code SessionStart 的 idle 推送驱动下发（新会话跳过上下文清理）。
 //!
 //! 时间基准：WASM 无系统时钟，所有时间比较使用宿主 scheduler-tick
 //! 回调注入的 `now_utc`（与 SQLite datetime('now') 同格式，字符串可直接比较）。
 //!
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
+use bedcode_plugin_api::constants::EVENT_SESSION_MODE_CHANGED;
 use bedcode_plugin_api::constants::EVENT_TASK_SCHEDULED_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
@@ -32,10 +37,14 @@ use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::Value;
 
 /// 调度器轮询间隔（秒）——宿主定时器按此周期回调 scheduler-tick
-pub const SCHEDULER_INTERVAL_SECS: u64 = 30;
+///
+/// 同时承担 waiting 态延迟 clear 的到点发送（见 queue::send_due_clears，
+/// 延迟窗口 CLEAR_DELAY_SECONDS = 2s），间隔取 1s 保证秒级粒度。
+pub const SCHEDULER_INTERVAL_SECS: u64 = 1;
 
 /// 到期宽限（秒）：到期后超过该时长仍未执行视为错过（应用当时未运行），
-/// 标 missed 不补跑。取值 = 2 × 轮询间隔，覆盖应用运行中的最大调度延迟
+/// 标 missed 不补跑。取值远大于轮询间隔（1s），覆盖应用关闭/重启期间的
+/// 调度空洞（轮询间隔缩短后宽限仍按原语义保留）
 const MISSED_GRACE_SECONDS: i64 = 120;
 
 // ==================== CRUD ====================
@@ -104,16 +113,47 @@ pub fn list_jobs(host: &WasmHost) -> Vec<Value> {
     .unwrap_or_default()
 }
 
-/// 删除定时任务（仅 pending 态可删；已触发/已终结的任务保留为执行档案）
+/// 删除定时任务
+///
+/// 可删状态：pending（未触发）、missed（错过）、failed（创建失败/重启丢失）——
+/// 后两者是不可自动恢复的终态，用户应能清理归档。
+/// executed 保留为执行档案（展示已完成的调度记录），creating 为瞬态（由状态机自终结）。
 pub fn delete_job(host: &WasmHost, job_id: &str) -> bool {
     let affected = host
         .plugin_db_execute_params(
-            "DELETE FROM scheduled_jobs WHERE id = ?1 AND status = 'pending'",
+            "DELETE FROM scheduled_jobs WHERE id = ?1 AND status IN ('pending', 'missed', 'failed')",
             &sql_params![job_id],
         )
         .unwrap_or(-1);
     if affected > 0 {
         host.log_info(&format!("Scheduled job deleted: id={}", job_id));
+        true
+    } else {
+        false
+    }
+}
+
+/// 重置定时任务：把终态（missed / failed）任务重新加入调度
+///
+/// 状态回 pending、清除错误/执行/会话关联；可选更新触发时间
+/// （trigger_at 为 None 时保留原值 —— 若原时间已过去，宽限期内会立即触发，
+/// 超过宽限期则再次标 missed，调用方应引导用户提供新时间）。
+/// 仅 missed / failed 可重置；pending 无需重置，executed 为档案，creating 为瞬态。
+pub fn reset_job(host: &WasmHost, job_id: &str, trigger_at: Option<&str>) -> bool {
+    let affected = host
+        .plugin_db_execute_params(
+            "UPDATE scheduled_jobs SET status = 'pending', \
+             trigger_at = COALESCE(?2, trigger_at), \
+             error = NULL, executed_at = NULL, session_id = NULL \
+             WHERE id = ?1 AND status IN ('missed', 'failed')",
+            &sql_params![job_id, trigger_at],
+        )
+        .unwrap_or(-1);
+    if affected > 0 {
+        host.log_info(&format!(
+            "Scheduled job reset: id={} trigger_at={:?}",
+            job_id, trigger_at
+        ));
         true
     } else {
         false
@@ -137,6 +177,16 @@ pub fn create_job_with_broadcast(
 pub fn delete_job_with_broadcast(host: &WasmHost, job_id: &str) -> bool {
     if delete_job(host, job_id) {
         broadcast_scheduled_changed(host, job_id, "deleted", "delete");
+        true
+    } else {
+        false
+    }
+}
+
+/// 重置定时任务并广播变更（供插件 command 与 HTTP 端点共用）
+pub fn reset_job_with_broadcast(host: &WasmHost, job_id: &str, trigger_at: Option<&str>) -> bool {
+    if reset_job(host, job_id, trigger_at) {
+        broadcast_scheduled_changed(host, job_id, "pending", "reset");
         true
     } else {
         false
@@ -272,6 +322,30 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
         crate::queue::add_task_with_source(host, session_id, prompt, "scheduled");
     }
 
+    // 开启会话自动执行：定时任务语义为无人值守自动执行，入队任务必须能自动调度。
+    // 不能调用 set_auto_mode —— 其副作用会立即 try_dispatch_next，而此刻 agent CLI
+    // 尚未就绪（SessionStart idle 未到达），terminal_send 的输入会丢失或导致重复下发；
+    // 首轮下发由 SessionStart 的 idle 推送驱动（on_session_idle → try_dispatch_next）。
+    // auto_answer 保持用户设置（默认关，可在会话弹窗手动开启自动应答权限请求）。
+    let (_, auto_answer) = crate::state::session_flags(host, session_id);
+    crate::state::set_session_flags(host, session_id, Some(true), None);
+    host.broadcast_sync(&SyncEvent::SessionModeChanged {
+        session_id: session_id.to_string(),
+        auto_approve: auto_answer,
+    });
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
+        "session_id": session_id,
+        "auto_approve": auto_answer,
+        "auto_execute": true,
+    }));
+    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
+        "session_id": session_id,
+        "autoApprove": auto_answer,
+        "auto_answer": auto_answer,
+        "autoExecute": true,
+        "auto_execute": true,
+    }));
+
     let _ = host.plugin_db_execute_params(
         "UPDATE scheduled_jobs SET status = 'executed', executed_at = datetime('now'), error = NULL \
          WHERE id = ?1",
@@ -316,7 +390,8 @@ pub fn recover_creating_jobs(host: &WasmHost) {
 ///
 /// - POST scheduled-jobs/create → 创建
 /// - GET scheduled-jobs/list → 列表
-/// - DELETE scheduled-jobs/remove → 删除（仅 pending）
+/// - DELETE scheduled-jobs/remove → 删除（pending / missed / failed）
+/// - POST scheduled-jobs/reset → 重置（missed / failed 重新加入调度，可改触发时间）
 pub fn handle_scheduled_http(host: &WasmHost, method: &str, path: &str, body: &Value, query: &Value) -> Value {
     host.log_debug(&format!("handle_scheduled_http: {} {}", method, path));
 
@@ -324,6 +399,7 @@ pub fn handle_scheduled_http(host: &WasmHost, method: &str, path: &str, body: &V
         ("POST", "create") => handle_create(host, body),
         ("GET", "list") => http_response::ok_with_data(serde_json::json!({ "jobs": list_jobs(host) })),
         ("DELETE", "remove") => handle_remove(host, body, query),
+        ("POST", "reset") => handle_reset(host, body),
         _ => {
             host.log_warn(&format!("Unknown scheduled endpoint: {} {}", method, path));
             http_response::error(404, &format!("Not found: {} {}", method, path))
@@ -382,7 +458,26 @@ fn handle_remove(host: &WasmHost, body: &Value, query: &Value) -> Value {
     if delete_job_with_broadcast(host, job_id) {
         http_response::ok()
     } else {
-        http_response::error(404, "Job not found or not deletable (only pending jobs can be deleted)")
+        http_response::error(404, "Job not found or not deletable (only pending/missed/failed jobs can be deleted)")
+    }
+}
+
+/// POST scheduled-jobs/reset — 重置 missed / failed 任务
+///
+/// body: { job_id, trigger_at? } — trigger_at 可选，缺省保留原触发时间
+fn handle_reset(host: &WasmHost, body: &Value) -> Value {
+    let job_id = body.get("job_id").and_then(|v| v.as_str()).unwrap_or("");
+    let trigger_at = body.get("trigger_at").and_then(|v| v.as_str());
+
+    if job_id.is_empty() {
+        return http_response::error(400, "Missing job_id");
+    }
+
+    let trigger_param = trigger_at.filter(|s| !s.is_empty());
+    if reset_job_with_broadcast(host, job_id, trigger_param) {
+        http_response::ok_with_data(serde_json::json!({ "job_id": job_id, "status": "pending" }))
+    } else {
+        http_response::error(404, "Job not found or not resettable (only missed/failed jobs can be reset)")
     }
 }
 

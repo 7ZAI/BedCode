@@ -33,9 +33,18 @@
     Notification(idle_prompt) → 不推送（响应完毕，终态由 Stop hook 负责）
     PostToolUse         → in_progress
     PostToolUseFailure  → in_progress / interrupted
-    Stop                → completed / interrupted（根据当前状态判断）
-    SubagentStop        → in_progress（子 agent 完成 ≠ 主任务完成，不判终态）
+    Stop                → completed / interrupted（根据当前状态判断）；
+                          background_tasks 有 running 项（v2.1.145+）→ in_progress
+                          （会话暂停等待后台任务完成，任务未结束）
+    SubagentStop        → 不推送（子 agent 成功/失败均不影响主任务状态，仅记录日志）
     SessionEnd          → interrupted / 不推送（根据 reason 和当前状态判断）
+
+    注意:
+        background_tasks 判定依赖 Claude Code ≥ 2.1.145（Stop 载荷携带该字段，
+        用于区分"会话真正结束"与"暂停等待后台任务"——子 agent / 后台 shell 运行中
+        主 turn 会提前结束并触发 Stop）。低于此版本的载荷无该字段，判定自动回退
+        为原行为（存在主任务未结束时提前 completed 的风险，宿主终态保护会锁死
+        任务行导致真实完成无法再同步）。
 
 HTTP 说明:
     所有请求固定使用 127.0.0.1（Windows localhost 的 IPv6 回退会卡 ~2 秒，
@@ -315,6 +324,13 @@ def extract_fields_from_raw_json(raw_text):
     m = re.search(r'"is_interrupt"\s*:\s*(true|false)', raw_text)
     if m:
         fields["is_interrupt"] = m.group(1) == "true"
+
+    # background_tasks: 数组内存在 pending/running 项时标记后台任务在运行
+    # （Stop 载荷含运行中的子 agent / 后台 shell 时，主 turn 结束 ≠ 任务完成）
+    # 数组非贪婪截取，超长被截断时可能漏检，此时按无后台任务处理（兼容旧行为）
+    m = re.search(r'"background_tasks"\s*:\s*\[(.*?)\]', raw_text, re.DOTALL)
+    if m and re.search(r'"status"\s*:\s*"(?:pending|running)"', m.group(1)):
+        fields["background_tasks"] = [{"status": "running"}]
 
     return fields
 
@@ -664,8 +680,17 @@ def handle_stop(data, logger):
     需结合当前状态判断终态：
     - 已在终态（completed/interrupted）→ 不覆盖，防止 Stop 与 SessionEnd 冲突
     - stop_hook_active=true → in_progress（hook 续行中）
+    - background_tasks 有 pending/running 项（Claude Code v2.1.145+）→ in_progress：
+      会话只是暂停等待后台任务（子 agent / 后台 shell）完成，任务并未结束。
+      主 agent 调用子 agent（Task 工具）后 turn 提前结束触发 Stop，此时推 completed
+      会提前终态：任务行被宿主终态保护锁死，后续 in_progress 全部被丢弃，
+      真正的完成再也无法同步（详见 863f6f79 会话实测）。
+      不依赖脚本侧跟踪子 agent 状态 —— Stop 载荷自带的 background_tasks 即为权威信号。
     - 当前 asking → interrupted（用户在等待输入时停止，视为中断）
     - 其他 → completed（正常完成）
+
+    中断判定不依赖子 agent：PostToolUseFailure(is_interrupt) / asking 态 Stop /
+    SessionEnd 中断 reason 各自独立处理，无子 agent 的任务同样覆盖。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -678,22 +703,40 @@ def handle_stop(data, logger):
         status = "in_progress"
         reason = "Stop hook triggered continuation"
     else:
-        current = query_task_status(session_id, logger)
-        if current in TERMINAL_STATUSES:
-            # 已在终态，Stop 是冗余信号（SessionEnd 或之前的 PostToolUseFailure 已标记）
+        # 后台任务（子 agent local_agent / 后台 shell local_bash 等）仍在运行：
+        # 会话暂停等待后台工作，不是任务完成。旧版 Claude Code 无此字段时为空列表，
+        # 走原有逻辑（兼容）
+        background_tasks = data.get("background_tasks") or []
+        running_bg = [
+            t for t in background_tasks
+            if isinstance(t, dict) and t.get("status") in ("pending", "running")
+        ]
+        if running_bg:
+            status = "in_progress"
+            reason = "Stopped, {} background task(s) still running".format(len(running_bg))
             logger.info(
-                "HOOK stop: session_id={} skipped, already in terminal status '{}'".format(
-                    session_id, current
+                "HOOK stop: session_id={} background tasks still running: {}".format(
+                    session_id,
+                    [t.get("description") or t.get("agent_type") or t.get("type") or "?" for t in running_bg],
                 )
             )
-            return
-        elif current == "asking":
-            # 从 asking 状态停止 = 用户拒绝回答 / 中断
-            status = "interrupted"
-            reason = "Stopped while waiting for user input"
         else:
-            status = "completed"
-            reason = "Task completed"
+            current = query_task_status(session_id, logger)
+            if current in TERMINAL_STATUSES:
+                # 已在终态，Stop 是冗余信号（SessionEnd 或之前的 PostToolUseFailure 已标记）
+                logger.info(
+                    "HOOK stop: session_id={} skipped, already in terminal status '{}'".format(
+                        session_id, current
+                    )
+                )
+                return
+            elif current == "asking":
+                # 从 asking 状态停止 = 用户拒绝回答 / 中断
+                status = "interrupted"
+                reason = "Stopped while waiting for user input"
+            else:
+                status = "completed"
+                reason = "Task completed"
 
     logger.info(
         "HOOK stop: session_id={} status={} stop_hook_active={}".format(
@@ -707,11 +750,14 @@ def handle_stop(data, logger):
 def handle_subagent_stop(data, logger):
     """处理 SubagentStop 事件。
 
-    子 agent 完成响应时触发。
-    子 agent 完成不等于主任务完成，主 agent 还会继续工作，一律保持 in_progress；
-    终态（completed/interrupted）只由主 agent 的 Stop / SessionEnd 判定。
-    若在此标记 completed，会在主 agent 仍在工作时提前终态：任务提前显示完成，
-    且队列调度（try_dispatch_next）被提前触发，下一任务与当前任务并发执行。
+    子 agent 完成响应时触发，仅记录日志，不推送任何任务状态。
+    子 agent 成功/失败均不代表主任务状态：
+    - 子 agent 完成 ≠ 主任务完成（主 agent 还会继续工作）
+    - 子 agent 失败 ≠ 主任务失败（主 agent 会处理结果继续执行）
+    主任务终态（completed/interrupted）只由主 agent 的 Stop / SessionEnd 判定。
+    若在此推送 in_progress，可能晚于主任务已推送的终态到达，把完成状态
+    降级回执行中（宿主终态保护虽能拦截，但脚本侧不应依赖宿主兜底），
+    且会推进 event_time 时序基线，干扰后续事件排序。
     """
     session_id = data.get("session_id", "")
     if not session_id:
@@ -719,15 +765,10 @@ def handle_subagent_stop(data, logger):
         sys.exit(2)
 
     agent_type = data.get("agent_type", "")
-    reason = "Subagent ({}) completed".format(agent_type) if agent_type else "Subagent completed"
-
     logger.info(
-        "HOOK subagent_stop: session_id={} agent_type={} status=in_progress".format(
-            session_id, agent_type
-        )
+        "HOOK subagent_stop: session_id={} agent_type={} skipped, no status push "
+        "(subagent does not affect main task)".format(session_id, agent_type)
     )
-
-    push_task_status(session_id, "in_progress", reason, logger)
 
 
 def handle_session_end(data, logger):

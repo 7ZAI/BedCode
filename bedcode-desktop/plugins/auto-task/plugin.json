@@ -114,6 +114,10 @@
         "title": "Delete Scheduled Job"
       },
       {
+        "id": "auto-task.reset-scheduled-job",
+        "title": "Reset Scheduled Job"
+      },
+      {
         "id": "auto-task.scheduler-tick",
         "title": "Scheduler Tick"
       }

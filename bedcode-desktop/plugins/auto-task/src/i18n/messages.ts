@@ -22,6 +22,7 @@ export interface MessageSchema {
   add: string
   clearQueue: string
   confirm: string
+  datepickerNow: string
   close: string
   loading: string
   emptyQueue: string
@@ -113,11 +114,13 @@ export interface MessageSchema {
   scheduledUtcHint: string
   scheduledPrompts: string
   scheduledPromptPlaceholder: string
-  scheduledAddPrompt: string
-  scheduledRemovePrompt: string
+  scheduledPromptsHint: string
   scheduledCreate: string
   scheduledCreateFailed: string
   scheduledDeleteFailed: string
+  scheduledReset: string
+  scheduledResetFailed: string
+  scheduledResetHint: string
   scheduledFormInvalid: string
   scheduledStatusCreating: string
   scheduledStatusExecuted: string

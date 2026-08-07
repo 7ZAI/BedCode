@@ -118,7 +118,7 @@ const presetError = ref('')
 // Tab2 任务记录
 const tasks = ref<TaskRecord[]>([])
 const total = ref(0)
-const limit = 50
+const limit = 15
 const offset = ref(0)
 const loading = ref(false)
 const stats = ref<HistoryStats | null>(null)
@@ -139,8 +139,12 @@ const creatingJob = ref(false)
 const formName = ref('')
 const formConfigId = ref('')
 const formTriggerAt = ref<Date | null>(null)
-const formPrompts = ref<string[]>([''])
+// 任务内容：textarea 每行一条，提交时按行拆分（支持批量粘贴多条）
+const formPromptsText = ref('')
 const errorMessage = ref('')
+// missed / failed 任务重新设置（重置回 pending，可选改触发时间）
+const resettingId = ref<string | null>(null)
+const resetTriggerAt = ref<Date | null>(null)
 
 // 输入/下拉框统一样式（与宿主 TerminalWindowView 的控件保持一致）
 const controlCls =
@@ -159,6 +163,11 @@ const dateFormat = 'yyyy-MM-dd HH:mm'
 
 // 跟随宿主语言（zh-CN / en），供 Datepicker 渲染对应语言的日历与星期/月份文案
 const dateLocale = computed(() => context.i18n.getI18n()?.global?.locale?.value ?? 'zh-CN')
+
+// Datepicker 底部操作按钮文本：v9 默认英文（Select/Cancel/Now），不跟随 locale，需按当前语言传入
+const dpSelectText = computed(() => t('confirm'))
+const dpCancelText = computed(() => t('cancel'))
+const dpNowLabel = computed(() => t('datepickerNow'))
 
 // 筛选变化防抖：Datepicker 的 update:model-value 在手动输入时逐字符触发，
 // 聚合成一次重载避免高频请求（原生 datetime-local 的 change 语义在提交时触发一次）
@@ -505,21 +514,17 @@ function configLabel(c: SessionConfig): string {
   return c.name ? `${c.name} (${base})` : base
 }
 
-function addPrompt() {
-  formPrompts.value.push('')
-}
-
-function removePrompt(idx: number) {
-  // 至少保留一个输入框
-  if (formPrompts.value.length > 1) {
-    formPrompts.value.splice(idx, 1)
-  }
-}
-
 const utcPreview = computed(() => (formTriggerAt.value ? dateToUtc(formTriggerAt.value) : '-'))
 
+// 重新设置面板的 UTC 预览（与新建表单同款提示）
+const resetUtcPreview = computed(() => (resetTriggerAt.value ? dateToUtc(resetTriggerAt.value) : '-'))
+
 async function submitJob() {
-  const prompts = formPrompts.value.map((p) => p.trim()).filter(Boolean)
+  // 每行一条任务，空行忽略；创建后按行顺序依次执行
+  const prompts = formPromptsText.value
+    .split('\n')
+    .map((p) => p.trim())
+    .filter(Boolean)
   if (!formConfigId.value || !formTriggerAt.value || prompts.length === 0) {
     errorMessage.value = t('scheduledFormInvalid')
     return
@@ -538,7 +543,7 @@ async function submitJob() {
       formName.value = ''
       formConfigId.value = ''
       formTriggerAt.value = null
-      formPrompts.value = ['']
+      formPromptsText.value = ''
       showForm.value = false
       await loadJobs()
     } else {
@@ -560,6 +565,40 @@ async function deleteJob(jobId: string) {
   } catch (e) {
     console.error('[Auto Task] Failed to delete scheduled job:', e)
     errorMessage.value = t('scheduledDeleteFailed')
+  }
+}
+
+// ==================== 重新设置（missed / failed → pending） ====================
+
+// 打开重置面板：默认预填当前时间（不改则重置后下一调度周期立即触发执行）
+function startReset(job: ScheduledJob) {
+  resettingId.value = job.id
+  resetTriggerAt.value = new Date()
+  errorMessage.value = ''
+}
+
+function cancelReset() {
+  resettingId.value = null
+  resetTriggerAt.value = null
+}
+
+async function resetJob(jobId: string) {
+  if (!resetTriggerAt.value) {
+    errorMessage.value = t('scheduledFormInvalid')
+    return
+  }
+  errorMessage.value = ''
+  try {
+    await context.commands.execute('auto-task.reset-scheduled-job', {
+      job_id: jobId,
+      trigger_at: dateToUtc(resetTriggerAt.value),
+    })
+    // 成功：关闭面板并刷新，任务回到 pending 重新参与调度
+    cancelReset()
+    await loadJobs()
+  } catch (e) {
+    console.error('[Auto Task] Failed to reset scheduled job:', e)
+    errorMessage.value = t('scheduledResetFailed')
   }
 }
 
@@ -824,7 +863,7 @@ function onLiveChanged() {
     </div>
 
     <!-- Tab2 任务日志 -->
-    <div v-else-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0 max-h-[70vh]">
+    <div v-else-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
       <!-- 筛选条 -->
       <div class="px-4 pt-3 flex-shrink-0 space-y-2">
         <div class="grid grid-cols-3 gap-1.5">
@@ -851,6 +890,9 @@ function onLiveChanged() {
               :dark="isDark"
               :clearable="true"
               :enable-time-picker="true"
+              :select-text="dpSelectText"
+              :cancel-text="dpCancelText"
+              :now-button-label="dpNowLabel"
               :teleport="'body'"
               :placeholder="t('filterSince')"
               @update:model-value="onFilterChangedDebounced"
@@ -865,6 +907,9 @@ function onLiveChanged() {
               :dark="isDark"
               :clearable="true"
               :enable-time-picker="true"
+              :select-text="dpSelectText"
+              :cancel-text="dpCancelText"
+              :now-button-label="dpNowLabel"
               :teleport="'body'"
               :placeholder="t('filterUntil')"
               @update:model-value="onFilterChangedDebounced"
@@ -888,13 +933,13 @@ function onLiveChanged() {
           <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
         </div>
 
-        <!-- 任务列表 -->
-        <div v-if="tasks.length > 0">
-          <div class="space-y-0.5">
+        <!-- 任务列表（卡片等高，撑满筛选区剩余高度） -->
+        <div v-if="tasks.length > 0" class="h-full">
+          <div class="flex flex-col gap-0.5 h-full">
             <div
               v-for="task in tasks"
               :key="task.id"
-              class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
+              class="flex-1 flex flex-col min-h-0 rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
               @click="toggleTask(task)"
             >
               <div class="flex items-center gap-2 px-2.5 py-1.5">
@@ -1015,6 +1060,9 @@ function onLiveChanged() {
             :dark="isDark"
             :clearable="true"
             :enable-time-picker="true"
+            :select-text="dpSelectText"
+            :cancel-text="dpCancelText"
+            :now-button-label="dpNowLabel"
             :teleport="'body'"
             :placeholder="t('scheduledTriggerAt')"
           />
@@ -1024,24 +1072,13 @@ function onLiveChanged() {
         </div>
         <div>
           <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledPrompts') }}</label>
-          <div class="space-y-1.5">
-            <div v-for="(p, idx) in formPrompts" :key="idx" class="flex items-center gap-1.5">
-              <input v-model="formPrompts[idx]" type="text" :class="controlCls" :placeholder="t('scheduledPromptPlaceholder')" />
-              <button
-                v-if="formPrompts.length > 1"
-                class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                :title="t('scheduledRemovePrompt')"
-                @click="removePrompt(idx)"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          </div>
-          <button class="mt-1.5 text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200" @click="addPrompt">
-            {{ t('scheduledAddPrompt') }}
-          </button>
+          <textarea
+            v-model="formPromptsText"
+            rows="3"
+            :class="controlCls + ' resize-y py-1.5 leading-5'"
+            :placeholder="t('scheduledPromptPlaceholder')"
+          />
+          <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">{{ t('scheduledPromptsHint') }}</p>
         </div>
         <button
           class="w-full h-8 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1093,7 +1130,25 @@ function onLiveChanged() {
             </p>
           </div>
           <p v-if="job.error" class="text-xs text-red-500 mt-1.5 break-words">{{ t('scheduledError') }}: {{ job.error }}</p>
-          <div v-if="job.status === 'pending'" class="flex justify-end mt-2">
+
+          <!-- 操作区：pending 可删除；missed/failed 可删除或重新设置（重置回 pending 重新调度） -->
+          <div v-if="['pending', 'missed', 'failed'].includes(job.status)" class="flex justify-end gap-1 mt-2">
+            <button
+              v-if="job.status !== 'pending'"
+              class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+              :title="t('scheduledReset')"
+              @click="startReset(job)"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M4 4v5h5M20 20v-5h-5M4.1 9a8 8 0 0115.4-1M19.9 15a8 8 0 01-15.4 1"
+                />
+              </svg>
+              {{ t('scheduledReset') }}
+            </button>
             <button
               class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-red-500 hover:bg-red-500/10 transition-colors duration-200"
               :title="t('delete')"
@@ -1109,6 +1164,44 @@ function onLiveChanged() {
               </svg>
               {{ t('delete') }}
             </button>
+          </div>
+
+          <!-- 重新设置面板：选择新触发时间（默认当前时间），确认后回到 pending 重新调度 -->
+          <div v-if="resettingId === job.id" class="mt-2 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-2.5 space-y-2">
+            <div>
+              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledTriggerAt') }}</label>
+              <Datepicker
+                v-model="resetTriggerAt"
+                :format="dateFormat"
+                :locale="dateLocale"
+                :dark="isDark"
+                :clearable="false"
+                :enable-time-picker="true"
+                :select-text="dpSelectText"
+                :cancel-text="dpCancelText"
+                :now-button-label="dpNowLabel"
+                :teleport="'body'"
+                :placeholder="t('scheduledTriggerAt')"
+              />
+              <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+                {{ t('scheduledResetHint') }}
+                {{ t('scheduledUtcHint', { time: resetUtcPreview }) }}
+              </p>
+            </div>
+            <div class="flex gap-1.5">
+              <button
+                class="flex-1 h-7 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
+                @click="resetJob(job.id)"
+              >
+                {{ t('confirm') }}
+              </button>
+              <button
+                class="flex-1 h-7 rounded-[6px] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                @click="cancelReset"
+              >
+                {{ t('cancel') }}
+              </button>
+            </div>
           </div>
         </div>
       </div>

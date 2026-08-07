@@ -3,14 +3,15 @@
 //! 每个会话维护独立的待执行任务队列，支持添加、删除、查询、清空操作。
 //!
 //! 调度状态机（ADR-0004）：
-//!
+
 //! ```text
-//! pending ──(会话已有上下文，需先 clear)──▶ waiting ──(SessionStart idle 到达)──▶ executing ──▶ done
+//! pending ──(会话已有上下文，需先 clear，延迟 2s 发送)──▶ waiting ──(SessionStart idle 到达)──▶ executing ──▶ done
 //! pending ──(全新会话，跳过 clear，直接下发)────────────────▶ executing ──▶ done
 //! waiting ──(超时 60s，重试一次 clear 后仍无响应)──▶ cancelled
 //! ```
 //!
-//! - waiting：clear 命令已发送，等待 Claude Code 重建会话后的 idle 推送（见 state.rs idle 分支）
+//! - waiting：clear 已计划（延迟 CLEAR_DELAY_SECONDS 由 scheduler-tick 发送，见
+//!   send_due_clears）或已发送，等待 Claude Code 重建会话后的 idle 推送（见 state.rs idle 分支）
 //! - 出队时由插件直接写任务行（description = prompt，source='queue'），
 //!   不再依赖输入行重建，避免 /clear 与 prompt 拆行提交的时序竞争
 //!
@@ -32,6 +33,12 @@ use crate::agent;
 const WAITING_TIMEOUT_SECONDS: i64 = 60;
 /// waiting 态最大重试次数（首次 clear + 1 次重试）
 const MAX_DISPATCH_ATTEMPTS: i64 = 2;
+/// clear 命令发送延迟（秒）
+///
+/// 任务终态到达后终端 UI 的输出渲染有一定延迟（WebSocket 输出缓冲合并），
+/// 立即发送 clear 会给人"上一任务还没执行完就被清屏"的错觉。
+/// 延迟 CLEAR_DELAY_SECONDS 再发送，给终端留出渲染输出的时间窗口。
+const CLEAR_DELAY_SECONDS: i64 = 2;
 
 /// 自动任务投递输入的提交符（按宿主平台动态选择）
 ///
@@ -70,6 +77,7 @@ CREATE TABLE IF NOT EXISTS task_queue (
     status            TEXT NOT NULL DEFAULT 'pending',
     dispatch_attempts INTEGER NOT NULL DEFAULT 0,
     source            TEXT NOT NULL DEFAULT 'queue',
+    clear_due_at      TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 )"#,
@@ -265,7 +273,8 @@ pub fn pending_count(host: &WasmHost, session_id: &str) -> i64 {
 /// 触发时机：任务终态推送（completed/interrupted）、队列从空变非空。
 /// 调度策略（ADR-0004 上下文清理语义）：
 /// - 会话无终态任务记录（全新会话）或 agent 无清理命令 → 跳过 clear 直接下发
-/// - 会话已有上下文 → 置 waiting + 发 clear_command，等新会话 idle 推送后再下发（见 on_session_idle）
+/// - 会话已有上下文 → 置 waiting + 登记延迟 clear（CLEAR_DELAY_SECONDS 后由
+///   send_due_clears 实际发送），等新会话 idle 推送后再下发（见 on_session_idle）
 pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     host.log_debug(&format!("try_dispatch_next: session_id={}", session_id));
 
@@ -333,30 +342,30 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         return;
     }
 
-    // 有上下文：置 waiting 并发送清理命令，等新会话 idle 到达后再下发 prompt
+    // 有上下文：置 waiting 并登记延迟发送时间（clear_due_at = now + 2s）。
+    // 实际发送由 scheduler-tick 的 send_due_clears 在到点后执行：
+    // 立即发送会让终端 UI 来不及渲染上一任务的输出，产生"任务未完成就被清屏"的错觉
+    let clear_due = format!("datetime('now', '+{} seconds')", CLEAR_DELAY_SECONDS);
     let _ = host.plugin_db_execute_params(
-        "UPDATE task_queue SET status = 'waiting', dispatch_attempts = 1, updated_at = datetime('now') WHERE id = ?1",
+        &format!(
+            "UPDATE task_queue SET status = 'waiting', dispatch_attempts = 1, \
+             clear_due_at = {}, updated_at = datetime('now') WHERE id = ?1",
+            clear_due
+        ),
         &sql_params![task_id],
     );
-    if let Err(e) = host.terminal_send(session_id, &format!("{}{}", clear_command.unwrap_or("/clear"), input_submit_char(host))) {
-        host.log_error(&format!("try_dispatch_next: terminal_send clear failed: {}", e));
-        // clear 发送失败：回退 pending，下次终态触发时重试调度
-        let _ = host.plugin_db_execute_params(
-            "UPDATE task_queue SET status = 'pending', updated_at = datetime('now') WHERE id = ?1",
-            &sql_params![task_id],
-        );
-        return;
-    }
     host.log_info(&format!(
-        "try_dispatch_next: task_id={} entering waiting, clear sent for session_id={}",
-        task_id, session_id
+        "try_dispatch_next: task_id={} entering waiting, clear scheduled in {}s for session_id={}",
+        task_id, CLEAR_DELAY_SECONDS, session_id
     ));
 }
 
 /// 新会话就绪回调（SessionStart → idle 推送时由 state.rs 调用）
 ///
-/// 有 waiting 项 → 立即下发（clear 已完成，新会话上下文已清空）；
-/// 无 waiting 项但有 pending 项 → 走常规调度（定时任务新建会话入队后首次就绪走此路径）。
+/// 有 waiting 项且 clear 已实际发送（clear_due_at 已置空）→ 立即下发；
+/// clear 仍在延迟窗口内 → 等 send_due_clears 到点发送后，Claude 重建会话的
+/// 下一次 idle 再下发。无 waiting 项但有 pending 项 → 走常规调度
+/// （定时任务新建会话入队后首次就绪走此路径）。
 /// 队列无任务时不做任何事（避免普通用户会话每次 SessionStart 都广播自动模式变更）。
 pub fn on_session_idle(host: &WasmHost, session_id: &str) {
     // 超时检查：若 waiting 已超时，先重试/取消再决定是否下发
@@ -376,6 +385,23 @@ pub fn on_session_idle(host: &WasmHost, session_id: &str) {
             host.log_warn(&format!("on_session_idle: malformed waiting task for session_id={}", session_id));
             return;
         }
+
+        // clear 仍在延迟窗口内（尚未实际发送）时不下发：
+        // 等 send_due_clears 到点发送 clear、Claude 重建会话后的 idle 再调度，
+        // 否则会在上一任务上下文未清理的情况下直接投递 prompt
+        let clear_pending = waiting
+            .get("clear_due_at")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if clear_pending {
+            host.log_debug(&format!(
+                "on_session_idle: task_id={} clear still pending, hold dispatch",
+                task_id
+            ));
+            return;
+        }
+
         let agent_name = crate::state::session_agent(host, session_id);
         dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
     } else {
@@ -438,7 +464,7 @@ fn mark_latest_task_interrupted(host: &WasmHost, session_id: &str, reason: &str)
 fn find_waiting_task(host: &WasmHost, session_id: &str) -> Option<Value> {
     let result = host
         .plugin_db_query_params(
-            "SELECT id, prompt, source, dispatch_attempts FROM task_queue \
+            "SELECT id, prompt, source, dispatch_attempts, clear_due_at FROM task_queue \
              WHERE session_id = ?1 AND status = 'waiting' \
              ORDER BY position ASC LIMIT 1",
             &sql_params![session_id],
@@ -448,11 +474,62 @@ fn find_waiting_task(host: &WasmHost, session_id: &str) -> Option<Value> {
     result.as_array()?.first().cloned()
 }
 
+/// 到点发送等待中的延迟 clear 命令（scheduler-tick 周期调用）
+///
+/// try_dispatch_next 置 waiting 时只登记 clear_due_at（now + 2s，见
+/// CLEAR_DELAY_SECONDS），实际写入终端的 clear 由本函数在到点后发送：
+/// 给终端 UI 留出渲染上一任务输出的时间，避免"任务未执行完就被清屏"的错觉。
+/// 发送成功把 clear_due_at 置空（on_session_idle 据此放行下发）并重置
+/// updated_at（超时计时从 clear 实际发送时刻起算）；失败回退 pending。
+pub fn send_due_clears(host: &WasmHost, now_utc: &str) {
+    let due = host
+        .plugin_db_query_params(
+            "SELECT id, session_id FROM task_queue \
+             WHERE status = 'waiting' AND clear_due_at IS NOT NULL AND clear_due_at <= ?1",
+            &sql_params![now_utc],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    for row in due {
+        let task_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if task_id.is_empty() || session_id.is_empty() {
+            continue;
+        }
+
+        let clear_command = agent::clear_command_for(crate::state::session_agent(host, &session_id))
+            .unwrap_or("/clear");
+        if let Err(e) = host.terminal_send(&session_id, &format!("{}{}", clear_command, input_submit_char(host))) {
+            host.log_error(&format!("send_due_clears: terminal_send clear failed: task_id={} err={}", task_id, e));
+            // clear 发送失败：回退 pending，下次终态触发时重试调度
+            let _ = host.plugin_db_execute_params(
+                "UPDATE task_queue SET status = 'pending', clear_due_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+                &sql_params![task_id],
+            );
+            continue;
+        }
+        // 发送成功：清空 clear_due_at 标记已发送，重置 updated_at 使超时计时
+        // 从 clear 实际发送时刻起算
+        let _ = host.plugin_db_execute_params(
+            "UPDATE task_queue SET clear_due_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+            &sql_params![task_id],
+        );
+        host.log_info(&format!(
+            "send_due_clears: clear sent for task_id={} session_id={}",
+            task_id, session_id
+        ));
+    }
+}
+
 /// 检查 waiting 态超时项（调度入口幂等调用）
 ///
 /// WASM 无系统时钟，超时判断全部由 SQLite 宿侧时间计算：
 /// updated_at 距当前超过 WAITING_TIMEOUT_SECONDS 视为超时。
-/// 未达最大重试次数 → 重发 clear（重置计时）；否则置 cancelled 并广播。
+/// 未达最大重试次数 → 重新登记延迟 clear（与首次一致，同样延迟
+/// CLEAR_DELAY_SECONDS，由 send_due_clears 到点发送）；否则置 cancelled 并广播。
 fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
     let overdue = host
         .plugin_db_query_params(
@@ -477,21 +554,19 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
         }
 
         if attempts < MAX_DISPATCH_ATTEMPTS {
-            // 重试一次 clear：重置计时，等待下一轮 idle/超时判定
+            // 重试一次 clear：重新登记延迟发送并重置计时，等待下一轮 idle/超时判定
+            let clear_due = format!("datetime('now', '+{} seconds')", CLEAR_DELAY_SECONDS);
             let _ = host.plugin_db_execute_params(
-                "UPDATE task_queue SET dispatch_attempts = ?1, updated_at = datetime('now') WHERE id = ?2",
+                &format!(
+                    "UPDATE task_queue SET dispatch_attempts = ?1, clear_due_at = {}, updated_at = datetime('now') WHERE id = ?2",
+                    clear_due
+                ),
                 &sql_params![attempts + 1, task_id],
             );
-            let clear_command = agent::clear_command_for(crate::state::session_agent(host, session_id))
-                .unwrap_or("/clear");
-            if let Err(e) = host.terminal_send(session_id, &format!("{}{}", clear_command, input_submit_char(host))) {
-                host.log_error(&format!("check_waiting_timeouts: retry clear failed: task_id={} err={}", task_id, e));
-            } else {
-                host.log_warn(&format!(
-                    "check_waiting_timeouts: waiting timeout, retry clear for task_id={} session_id={}",
-                    task_id, session_id
-                ));
-            }
+            host.log_warn(&format!(
+                "check_waiting_timeouts: waiting timeout, clear retry scheduled for task_id={} session_id={}",
+                task_id, session_id
+            ));
         } else {
             // 重试耗尽：取消任务并通知，后续 pending 由下一次终态/idle 触发调度
             let _ = host.plugin_db_execute_params(

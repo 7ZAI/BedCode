@@ -467,7 +467,25 @@ impl WasmPlugin for AutoTaskPlugin {
                     Ok(serde_json::json!({ "deleted": true }))
                 } else {
                     Err(anyhow::anyhow!(
-                        "delete-scheduled-job: job not found or not pending: {}",
+                        "delete-scheduled-job: job not found or not deletable: {}",
+                        job_id
+                    ))
+                }
+            }
+            "auto-task.reset-scheduled-job" => {
+                // 重置 missed / failed 定时任务：状态回 pending 重新加入调度，
+                // trigger_at 可选（缺省保留原触发时间，前端通常让用户改新时间）
+                let job_id = args.str_or("job_id", "");
+                if job_id.is_empty() {
+                    return Err(anyhow::anyhow!("reset-scheduled-job: missing job_id"));
+                }
+                let trigger_at = args.str_or("trigger_at", "");
+                let trigger_param = if trigger_at.is_empty() { None } else { Some(trigger_at.as_str()) };
+                if scheduled::reset_job_with_broadcast(&host, &job_id, trigger_param) {
+                    Ok(serde_json::json!({ "reset": true, "job_id": job_id, "status": "pending" }))
+                } else {
+                    Err(anyhow::anyhow!(
+                        "reset-scheduled-job: job not found or not resettable (only missed/failed): {}",
                         job_id
                     ))
                 }
@@ -480,6 +498,8 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Err(anyhow::anyhow!("scheduler-tick: missing now_utc"));
                 }
                 scheduled::handle_scheduler_tick(&host, &now_utc);
+                // 到点发送等待中的延迟 clear（waiting 态任务的上下文清理命令）
+                queue::send_due_clears(&host, &now_utc);
                 Ok(serde_json::json!({ "ticked": true }))
             }
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
@@ -578,6 +598,9 @@ impl WasmPlugin for AutoTaskPlugin {
 
         // 4.2 迁移：task_queue.source 列（queue / scheduled，定时任务 v6 引入）
         ensure_column(&host, "task_queue", "source", "ALTER TABLE task_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'queue'");
+
+        // 4.2.1 迁移：task_queue.clear_due_at 列（clear 延迟发送时刻，见 queue.rs send_due_clears）
+        ensure_column(&host, "task_queue", "clear_due_at", "ALTER TABLE task_queue ADD COLUMN clear_due_at TEXT");
 
         // 4.3 迁移：task_history 预留 token 统计列（v1 不解析，JSONL 深化需求回填）
         ensure_column(&host, "task_history", "input_tokens", "ALTER TABLE task_history ADD COLUMN input_tokens INTEGER");
