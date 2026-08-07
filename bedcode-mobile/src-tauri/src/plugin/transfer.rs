@@ -19,10 +19,9 @@ use bedcode_plugin_api_mobile::{
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 /// 进度推送间隔（规格：每 500ms）
@@ -33,7 +32,9 @@ const IO_BUFFER_SIZE: usize = 512 * 1024;
 /// 活跃传输任务表（task_id → 取消令牌）
 ///
 /// 任务完成/失败/取消后自行移除条目；cancel 查不到条目视为已完成。
-/// tokio Mutex/HashMap::new 非 const fn，经 OnceLock 惰性初始化
+/// 临界区均为同步短操作（insert/get/remove），用 std Mutex：
+/// 同步 host fn（start_transfer）可直接取锁，无需 block_in_place + block_on。
+/// HashMap::new 非 const fn，经 OnceLock 惰性初始化
 static TASKS: std::sync::OnceLock<Mutex<HashMap<String, CancellationToken>>> =
     std::sync::OnceLock::new();
 
@@ -84,13 +85,9 @@ pub fn spawn_transfer(
     let token = CancellationToken::new();
 
     // 先登记再 spawn：避免 cancel 早于任务注册到达而丢失取消语义
-    // （host fn 调用方在 block_on 中完成登记后才返回 task_id）
     let task_id_for_map = task_id.clone();
     let token_for_map = token.clone();
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { tasks().lock().await.insert(task_id_for_map, token_for_map) });
-    });
+    tasks().lock().unwrap().insert(task_id_for_map, token_for_map);
 
     let task_id_for_spawn = task_id.clone();
     spawn_with_error_boundary("plugin_transfer_task", async move {
@@ -102,7 +99,7 @@ pub fn spawn_transfer(
 
 /// 取消传输任务（任务不存在视为已完成，幂等返回 false）
 pub async fn cancel_transfer(task_id: &str) -> bool {
-    match tasks().lock().await.get(task_id).cloned() {
+    match tasks().lock().unwrap().get(task_id).cloned() {
         Some(token) => {
             token.cancel();
             true
@@ -184,7 +181,7 @@ async fn run_transfer(
     };
 
     reporter_token.cancel();
-    tasks().lock().await.remove(&task_id);
+    tasks().lock().unwrap().remove(&task_id);
 
     // 终局事件（携带最终偏移，插件据此持久化续传点）
     let final_bytes = transferred.load(Ordering::Relaxed);

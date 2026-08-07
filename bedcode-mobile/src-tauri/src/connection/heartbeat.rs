@@ -110,12 +110,14 @@ impl HeartbeatManager {
     }
 
     /// 记录 Pong 响应（收到服务器 Pong 时调用）
-    pub fn on_pong_received(&self) {
-        let mut last_pong = self.last_pong.blocking_write();
-        *last_pong = Some(std::time::Instant::now());
+    ///
+    /// 注意：必须在 async 上下文中调用（tokio RwLock 的 blocking_write 在
+    /// 运行时任务内会 panic，见 ws_client 接收循环调用点）
+    pub async fn on_pong_received(&self) {
+        *self.last_pong.write().await = Some(std::time::Instant::now());
 
         // 重置连续超时计数
-        *self.consecutive_timeouts.blocking_write() = 0;
+        *self.consecutive_timeouts.write().await = 0;
 
         let _ = self.event_tx.send(HeartbeatEvent::PongReceived {
             latency_ms: 0,
@@ -158,10 +160,6 @@ impl HeartbeatManager {
         *count
     }
 
-    /// 重置超时计数
-    pub fn reset_timeouts(&self) {
-        *self.consecutive_timeouts.blocking_write() = 0;
-    }
 }
 
 impl Default for HeartbeatManager {

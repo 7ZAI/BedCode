@@ -21,9 +21,8 @@ use crate::plugin::wasm_host;
 use crate::state::get_connection_manager;
 use crate::connection::request::TerminalRequest;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
-use tokio::sync::Mutex;
 use wasmtime::{Engine, Instance, Linker, Memory, Module, Store};
 
 /// WASM 插件运行时（全局共享）
@@ -58,6 +57,9 @@ pub struct WasmPluginState {
 /// 移动端无 SessionManager 和 PermissionManager
 pub struct WasmHostContext {
     /// 数据库（移动端直接使用 rusqlite::Connection）
+    ///
+    /// std Mutex：host fn 为同步上下文，SQL 执行亦为同步操作，
+    /// 无需经 tokio 锁 + block_in_place/block_on 绕行
     pub db: Arc<Mutex<rusqlite::Connection>>,
     /// 插件 KV 存储
     pub storage: Arc<PluginStorage>,
@@ -1075,19 +1077,18 @@ fn host_db_execute(
     }
 
     let db = host_ctx.db.clone();
-    let handle = caller.data().runtime_handle.clone();
-    match tokio::task::block_in_place(|| {
-        handle.block_on(async {
-            let conn = db.lock().await;
-            conn.execute(&sql, []).map_err(|e| e.to_string())
-        })
-    }) {
-        Ok(affected) => affected as i32,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_execute: SQL execution failed");
-            -1
+    // 作用域收窄 guard 生命周期：避免尾部表达式临时值悬垂（db 先于 guard drop）
+    let affected = {
+        let conn = db.lock().unwrap();
+        match conn.execute(&sql, []) {
+            Ok(affected) => affected as i32,
+            Err(e) => {
+                tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_execute: SQL execution failed");
+                -1
+            }
         }
-    }
+    };
+    affected
 }
 
 fn host_db_query(
@@ -1117,44 +1118,41 @@ fn host_db_query(
     }
 
     let db = host_ctx.db.clone();
-    let handle = caller.data().runtime_handle.clone();
-    let query_result: Result<serde_json::Value, String> = tokio::task::block_in_place(|| {
-        handle.block_on(async {
-            let conn = db.lock().await;
+    let query_result: Result<serde_json::Value, String> = (|| {
+        let conn = db.lock().unwrap();
 
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| format!("prepare: {}", e))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("prepare: {}", e))?;
 
-            let column_count = stmt.column_count();
-            let column_names: Vec<String> = (0..column_count)
-                .map(|i| {
-                    stmt.column_name(i)
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|_| format!("col{}", i))
-                })
-                .collect();
+        let column_count = stmt.column_count();
+        let column_names: Vec<String> = (0..column_count)
+            .map(|i| {
+                stmt.column_name(i)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_| format!("col{}", i))
+            })
+            .collect();
 
-            let rows: Vec<serde_json::Map<String, serde_json::Value>> = stmt
-                .query_map([], |row| {
-                    let mut map = serde_json::Map::new();
-                    for (i, col_name) in column_names.iter().enumerate() {
-                        let value = wasm_host::column_to_json(row, i);
-                        map.insert(col_name.clone(), value);
-                    }
-                    Ok(map)
-                })
-                .map_err(|e| format!("query_map: {}", e))?
-                .filter_map(|r| r.ok())
-                .collect();
+        let rows: Vec<serde_json::Map<String, serde_json::Value>> = stmt
+            .query_map([], |row| {
+                let mut map = serde_json::Map::new();
+                for (i, col_name) in column_names.iter().enumerate() {
+                    let value = wasm_host::column_to_json(row, i);
+                    map.insert(col_name.clone(), value);
+                }
+                Ok(map)
+            })
+            .map_err(|e| format!("query_map: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
 
-            Ok(serde_json::Value::Array(
-                rows.into_iter()
-                    .map(serde_json::Value::Object)
-                    .collect(),
-            ))
-        })
-    });
+        Ok(serde_json::Value::Array(
+            rows.into_iter()
+                .map(serde_json::Value::Object)
+                .collect(),
+        ))
+    })();
 
     match query_result {
         Ok(value) => {

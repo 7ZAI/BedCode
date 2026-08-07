@@ -2,6 +2,7 @@
 //!
 //! 插件生命周期管理 — WASM 动态加载、激活、停用、状态持久化
 
+use async_trait::async_trait;
 use crate::plugin::loader::PluginLoader;
 use crate::plugin::registry::builtin_manifests;
 use crate::plugin::storage::PluginStorage;
@@ -37,8 +38,8 @@ pub struct PluginManager {
     settings: Arc<SettingsManager>,
     /// 插件数据目录
     plugins_dir: PathBuf,
-    /// 插件数据库连接（WASM Host Function 使用）
-    plugin_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
+    /// 插件数据库连接（WASM Host Function 使用；std Mutex，见 lib.rs 创建处注释）
+    plugin_db: Arc<std::sync::Mutex<rusqlite::Connection>>,
     /// Tauri AppHandle
     app_handle: Arc<tauri::AppHandle>,
     /// 文件系统访问校验器
@@ -55,7 +56,7 @@ impl PluginManager {
     pub fn new(
         app_data_dir: &PathBuf,
         settings: Arc<SettingsManager>,
-        plugin_db: Arc<tokio::sync::Mutex<rusqlite::Connection>>,
+        plugin_db: Arc<std::sync::Mutex<rusqlite::Connection>>,
         app_handle: Arc<tauri::AppHandle>,
     ) -> Self {
         let storage = Arc::new(PluginStorage::new(app_data_dir));
@@ -636,17 +637,16 @@ struct PluginManagerDispatcher {
     wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
 }
 
+#[async_trait]
 impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
     /// 投递总线消息给 WASM 插件
     ///
-    /// 由投递 worker 任务调用：短读 map 取实例句柄 → drop map 守卫 →
+    /// 由投递 worker 任务调用（async 上下文）：短读 map 取实例句柄 → drop map 守卫 →
     /// 持单插件锁执行 on_bus_message。投递串行进行，慢插件会推迟后续投递
     /// （换取全局顺序与无死锁）。
-    fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
+    async fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
         let wasm_plugin = {
-            let map = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.wasm_plugins.read())
-            });
+            let map = self.wasm_plugins.read().await;
             map.get(plugin_id).cloned()
         };
         let Some(wasm_plugin) = wasm_plugin else {
@@ -654,17 +654,14 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
             return Ok(());
         };
 
-        let mut loaded = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(wasm_plugin.lock())
-        });
+        let mut loaded = wasm_plugin.lock().await;
         Ok(loaded.on_bus_message(msg)?)
     }
 
-    fn is_activated(&self, plugin_id: &str) -> bool {
-        let plugins = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.plugins.read())
-        });
-        plugins.get(plugin_id)
+    async fn is_activated(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins
+            .get(plugin_id)
             .map(|p| p.state == PluginState::Activated)
             .unwrap_or(false)
     }

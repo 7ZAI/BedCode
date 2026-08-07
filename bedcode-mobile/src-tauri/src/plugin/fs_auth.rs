@@ -106,16 +106,21 @@ impl FsAuthChecker {
 
     /// 处理用户授权回复
     pub async fn respond(&self, request_id: &str, allowed: bool, remember: bool) {
-        let mut pending = self.pending_requests.lock().await;
-        if let Some(idx) = pending.iter().position(|r| r.request_id == request_id) {
-            let request = pending.remove(idx);
-            if allowed && remember {
-                if let Err(e) = self.save_granted_path(&request.plugin_id, &request.path).await {
-                    tracing::warn!(error = %e, "fs_auth: failed to save granted path");
-                }
+        // 短锁：取回请求后立即释放，持久化 await 不持有 pending 锁
+        let request = {
+            let mut pending = self.pending_requests.lock().await;
+            match pending.iter().position(|r| r.request_id == request_id) {
+                Some(idx) => pending.remove(idx),
+                None => return,
             }
-            let _ = request.reply_tx.send(allowed);
+        };
+
+        if allowed && remember {
+            if let Err(e) = self.save_granted_path(&request.plugin_id, &request.path).await {
+                tracing::warn!(error = %e, "fs_auth: failed to save granted path");
+            }
         }
+        let _ = request.reply_tx.send(allowed);
     }
 
     // ==================== 路径白名单管理 ====================

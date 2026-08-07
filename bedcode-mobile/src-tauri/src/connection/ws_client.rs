@@ -164,9 +164,13 @@ impl WsClient {
         let heartbeat = self.heartbeat.clone();
 
         let (write, read) = stream.split();
+        // write（SplitSink）仅由 sender 任务独占访问：receiver 的 Ping/Pong 回复
+        // 经 ws_sender channel 转发，避免两个任务竞争同一把锁并在 send().await
+        // 期间持有它（对端停止读时背压会让另一任务无限等锁）
         let write = Arc::new(Mutex::new(write));
 
-        let write_for_receiver = write.clone();
+        // receiver 任务经此 channel 回 Pong（与公开 send 同队列，串行写）
+        let ws_sender = self.ws_sender.read().await.clone();
         let receiver_handle = {
             let running = running.clone();
 
@@ -236,15 +240,16 @@ impl WsClient {
                                     break;
                                 }
                                 Some(Ok(WsMsg::Ping(data))) => {
-                                    let mut write = write_for_receiver.lock().await;
-                                    if let Err(e) = write.send(WsMsg::Pong(data)).await {
+                                    // 经发送 channel 回复 Pong（write 由 sender 任务独占）
+                                    let Some(sender) = ws_sender.as_ref() else { break };
+                                    if let Err(e) = sender.send(WsMsg::Pong(data)).await {
                                         error!("[WsClient] Failed to send pong: {}", e);
                                         break;
                                     }
                                 }
                                 Some(Ok(WsMsg::Pong(_))) => {
                                     debug!("[WsClient] Received pong");
-                                    heartbeat.on_pong_received();
+                                    heartbeat.on_pong_received().await;
                                     let _ = event_tx.send(WsClientEvent::HeartbeatResponse);
                                 }
                                 Some(Err(e)) => {

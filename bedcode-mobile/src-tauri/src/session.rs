@@ -215,10 +215,4 @@ impl SessionManager {
             Err(crate::AppError::NotFound("No active session".to_string()))
         }
     }
-
-    /// 设置输入发送器
-    pub fn set_input_sender(&self, sender: tokio::sync::mpsc::Sender<String>) {
-        let mut guard = self.input_tx.blocking_write();
-        *guard = Some(sender);
-    }
 }

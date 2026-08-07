@@ -71,9 +71,10 @@ pub fn run() {
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
 
-            // 创建插件数据库连接（WASM Host Function 使用）
+            // 创建插件数据库连接（WASM Host Function 使用；
+            // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
             let db_path = app_data_dir.join("bedcode_plugins.db");
-            let plugin_db = Arc::new(tokio::sync::Mutex::new(
+            let plugin_db = Arc::new(std::sync::Mutex::new(
                 rusqlite::Connection::open(&db_path)
                     .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?
             ));
@@ -129,10 +130,10 @@ pub fn run() {
             let pairing_service = Arc::new(PairingService::new());
             app.manage(pairing_service);
 
-            // 初始化 mDNS 管理器
-            let mdns_discovery = Arc::new(tokio::sync::RwLock::new(crate::mdns::discovery::MdnsDiscovery::new()));
+            // 初始化 mDNS 管理器（内部字段级锁，实例不可变，无需外层 RwLock）
+            let mdns_discovery = Arc::new(crate::mdns::discovery::MdnsDiscovery::new());
             app.manage(mdns_discovery);
-            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(crate::mdns::advertiser::MdnsAdvertiser::new()));
+            let mdns_advertiser = Arc::new(crate::mdns::advertiser::MdnsAdvertiser::new());
             app.manage(mdns_advertiser);
 
             tracing::info!("BedCode Mobile started successfully!");
