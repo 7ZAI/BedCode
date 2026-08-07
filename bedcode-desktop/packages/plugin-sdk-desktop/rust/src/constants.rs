@@ -12,6 +12,15 @@ pub const CLAUDE_SETTINGS_FILE: &str = "settings.json";
 /// BedCode Hook 脚本文件名
 pub const HOOK_SCRIPT_NAME: &str = "auto_task_hook.py";
 
+/// pi 配置目录名（pi 扩展自动发现根目录）
+pub const PI_CONFIG_DIR_NAME: &str = ".pi";
+
+/// pi 扩展目录名（项目级扩展自动发现位置 `.pi/extensions/*.ts`）
+pub const PI_EXTENSIONS_DIR_NAME: &str = "extensions";
+
+/// BedCode pi 扩展文件名（状态同步 + 自动授权，随构建打包）
+pub const PI_HOOK_SCRIPT_NAME: &str = "pi_task_hook.ts";
+
 /// 环境变量：BedCode 服务器端口
 pub const ENV_BEDCODE_PORT: &str = "BEDCODE_PORT";
 

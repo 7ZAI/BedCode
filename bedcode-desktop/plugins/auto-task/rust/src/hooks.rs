@@ -1,21 +1,126 @@
-//! Hooks 配置管理
+//! 会话集成配置管理
 //!
-//! 管理 Claude Code hooks 配置：
-//! - ensure_project_hooks() — 会话启动前为项目配置 hooks
-//! - cleanup_project_hooks() — 清理指定项目的插件 hooks
-//! - cleanup_global_hooks() — 清理旧版全局 hooks
+//! 每个适配 agent 在项目目录部署自己的状态回传载体（由 AgentProfile
+//! 的 session_integration 驱动）：
+//! - claude：`.claude/settings.json` hooks + `auto_task_hook.py`
+//! - pi：`.pi/extensions/pi_task_hook.ts`（pi 自动发现，无需注册）
+//! - 其他 agent：未适配，不部署
+//!
+//! ensure_agent_integration() 为统一入口（会话创建前调用），
+//! cleanup_all_agent_integrations() 为统一清理入口（禁用/退出时调用）。
 
-use bedcode_plugin_api::constants::{CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE, HOOK_SCRIPT_NAME};
+use bedcode_plugin_api::constants::{
+    CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE, HOOK_SCRIPT_NAME, PI_CONFIG_DIR_NAME,
+    PI_EXTENSIONS_DIR_NAME, PI_HOOK_SCRIPT_NAME,
+};
 use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog, HostSession};
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde::{Deserialize, Serialize};
 
-/// 项目级 Hooks 配置结果
+use crate::agent::{self, SessionIntegration};
+
+/// 会话集成配置结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectHooksResult {
+pub struct AgentIntegrationResult {
     pub success: bool,
     pub message: String,
     pub skipped: bool,
+}
+
+/// 按 agent 能力分发部署：新增 agent 时在 SessionIntegration 增加枚举值，
+/// 并在本函数补充对应部署逻辑（调用方零改动）
+pub fn ensure_agent_integration(
+    host: &WasmHost,
+    agent_name: &str,
+    working_dir: &str,
+    port: u16,
+    resource_dir: &str,
+) -> AgentIntegrationResult {
+    match agent::session_integration_for(agent_name) {
+        SessionIntegration::ClaudeCodeHooks => {
+            ensure_project_hooks(host, working_dir, port, resource_dir)
+        }
+        SessionIntegration::PiExtension => {
+            ensure_pi_extension(host, working_dir, port, resource_dir)
+        }
+        SessionIntegration::None => {
+            host.log_debug(&format!(
+                "ensure_agent_integration: agent '{}' has no session integration, skip",
+                agent_name
+            ));
+            AgentIntegrationResult {
+                success: true,
+                message: format!("agent '{}' 未适配会话集成，跳过", agent_name),
+                skipped: true,
+            }
+        }
+    }
+}
+
+/// 按 agent 能力分发清理（禁用/应用退出/会话重建时移除项目内的部署文件）
+pub fn cleanup_agent_integration(
+    host: &WasmHost,
+    agent_name: &str,
+    working_dir: &str,
+) -> AgentIntegrationResult {
+    match agent::session_integration_for(agent_name) {
+        SessionIntegration::ClaudeCodeHooks => cleanup_project_hooks(host, working_dir),
+        SessionIntegration::PiExtension => cleanup_pi_extension(host, working_dir),
+        SessionIntegration::None => {
+            host.log_debug(&format!(
+                "cleanup_agent_integration: agent '{}' has no session integration, skip",
+                agent_name
+            ));
+            AgentIntegrationResult {
+                success: true,
+                message: format!("agent '{}' 未适配会话集成，跳过", agent_name),
+                skipped: true,
+            }
+        }
+    }
+}
+
+/// 清理指定项目的所有已适配 agent 集成（claude hooks + pi 扩展等）
+///
+/// 供 cleanup-project-hooks 命令使用：按项目维度清理，不依赖会话当前 agent。
+pub fn cleanup_project_all_integrations(
+    host: &WasmHost,
+    working_dir: &str,
+) -> AgentIntegrationResult {
+    if working_dir.is_empty() {
+        return AgentIntegrationResult {
+            success: false,
+            message: "working_dir 为空".to_string(),
+            skipped: false,
+        };
+    }
+
+    let mut cleaned = 0usize;
+    let mut failed = 0usize;
+    for profile in agent::AGENT_PROFILES {
+        if profile.session_integration == SessionIntegration::None {
+            continue;
+        }
+        let result = cleanup_agent_integration(host, profile.name, working_dir);
+        if result.skipped {
+            // 无部署文件视为已清理
+            cleaned += 1;
+        } else if result.success {
+            cleaned += 1;
+        } else {
+            failed += 1;
+            host.log_warn(&format!(
+                "cleanup_project_all_integrations: agent '{}' cleanup failed for {}: {}",
+                profile.name, working_dir, result.message
+            ));
+        }
+    }
+
+    AgentIntegrationResult {
+        success: failed == 0,
+        message: format!("清理 {} 个 agent 集成（失败 {}）", cleaned, failed),
+        skipped: cleaned == 0 && failed == 0,
+    }
 }
 
 /// 为项目配置 Claude Code hooks
@@ -26,7 +131,7 @@ pub fn ensure_project_hooks(
     working_dir: &str,
     port: u16,
     resource_dir: &str,
-) -> ProjectHooksResult {
+) -> AgentIntegrationResult {
     host.log_debug(&format!(
         "ensure_project_hooks: enter working_dir={:?} port={} resource_dir={:?}",
         working_dir, port, resource_dir
@@ -36,6 +141,16 @@ pub fn ensure_project_hooks(
     let settings_path = format!("{}/{}", claude_dir, CLAUDE_SETTINGS_FILE);
     let hook_script_path = format!("{}/{}", claude_dir, HOOK_SCRIPT_NAME);
     let source_script = format!("{}/{}", resource_dir, HOOK_SCRIPT_NAME);
+
+    if working_dir.is_empty() {
+        host.log_warn("ensure_project_hooks: empty working_dir");
+        return AgentIntegrationResult {
+            success: false,
+            message: "working_dir 为空".to_string(),
+            skipped: false,
+        };
+    }
+
     host.log_debug(&format!(
         "ensure_project_hooks: paths claude_dir={:?} settings={:?} hook_script={:?} source_script={:?}",
         claude_dir, settings_path, hook_script_path, source_script
@@ -84,7 +199,9 @@ pub fn ensure_project_hooks(
             !port_matches
         }
         Some(_) => {
-            host.log_debug("ensure_project_hooks: hooks present but no plugin hook entry, needs update");
+            host.log_debug(
+                "ensure_project_hooks: hooks present but no plugin hook entry, needs update",
+            );
             true
         }
         None => {
@@ -95,7 +212,7 @@ pub fn ensure_project_hooks(
 
     if !needs_update {
         host.log_info("Project already has plugin hooks with matching config, skipping");
-        return ProjectHooksResult {
+        return AgentIntegrationResult {
             success: true,
             message: "项目已配置插件 hooks 且配置匹配".to_string(),
             skipped: true,
@@ -123,7 +240,7 @@ pub fn ensure_project_hooks(
             );
             host.log_error(&format!("ensure_project_hooks: {}", msg));
             host.mark_plugin_error(&format!("auto-task: {}", msg));
-            return ProjectHooksResult {
+            return AgentIntegrationResult {
                 success: false,
                 message: format!("复制 hook 脚本失败: {}", e),
                 skipped: false,
@@ -135,7 +252,10 @@ pub fn ensure_project_hooks(
     let hooks_config = build_hooks_config(port, &hook_script_path);
 
     // 合并 hooks：保留非插件 hooks，添加插件 hooks
-    let existing_hooks = settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
+    let existing_hooks = settings
+        .get("hooks")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
     let merged_hooks = merge_hooks(&existing_hooks, &hooks_config);
     settings["hooks"] = merged_hooks;
 
@@ -146,7 +266,7 @@ pub fn ensure_project_hooks(
             let msg = format!("settings.json serialize failed: {}", e);
             host.log_error(&format!("ensure_project_hooks: {}", msg));
             host.mark_plugin_error(&format!("auto-task: {}", msg));
-            return ProjectHooksResult {
+            return AgentIntegrationResult {
                 success: false,
                 message: format!("序列化 settings.json 失败: {}", e),
                 skipped: false,
@@ -160,10 +280,13 @@ pub fn ensure_project_hooks(
     ));
     if let Err(e) = host.fs_write(&settings_path, &content) {
         // settings.json 配置失败：上报宿主弹窗提示，不阻塞会话创建
-        let msg = format!("settings.json write failed: path={:?} err={}", settings_path, e);
+        let msg = format!(
+            "settings.json write failed: path={:?} err={}",
+            settings_path, e
+        );
         host.log_error(&format!("ensure_project_hooks: {}", msg));
         host.mark_plugin_error(&format!("auto-task: {}", msg));
-        return ProjectHooksResult {
+        return AgentIntegrationResult {
             success: false,
             message: format!("写入项目 settings.json 失败: {}", e),
             skipped: false,
@@ -172,33 +295,34 @@ pub fn ensure_project_hooks(
 
     host.log_info(&format!("Project hooks configured in {}", settings_path));
 
-    ProjectHooksResult {
+    AgentIntegrationResult {
         success: true,
         message: "项目 Hooks 已配置".to_string(),
         skipped: false,
     }
 }
 
-/// 清理所有项目的插件 hooks
+/// 清理所有项目的全部 agent 集成（claude hooks + pi 扩展等）
 ///
-/// 遍历所有会话配置，对每个配置的 working_dir 调用 cleanup_project_hooks()。
+/// 遍历所有会话配置，对每个配置的 working_dir 按 AGENT_PROFILES 中已适配
+/// 的 agent 逐个清理（cleanup_agent_integration 按 profile 分发）。
 /// 同时清理全局 hooks。用于插件禁用（deactivate）和应用关闭（on_shutdown）时
-/// 确保所有残留的 hooks 配置被移除。
+/// 确保所有残留的集成配置被移除。
 ///
 /// # Returns
 /// 清理结果摘要：清理了多少个项目、跳过了多少、失败了多少
-pub fn cleanup_all_project_hooks(host: &WasmHost) -> AllProjectHooksResult {
-    let mut result = AllProjectHooksResult::default();
+pub fn cleanup_all_agent_integrations(host: &WasmHost) -> AllAgentIntegrationResult {
+    let mut result = AllAgentIntegrationResult::default();
 
     // 1. 清理全局 hooks
     cleanup_global_hooks(host);
-    host.log_info("cleanup_all_project_hooks: global hooks cleaned");
+    host.log_info("cleanup_all_agent_integrations: global hooks cleaned");
 
     // 2. 获取所有会话配置
     let configs = match host.session_config_list() {
         Ok(Some(value)) => value,
         _ => {
-            host.log_error("cleanup_all_project_hooks: failed to get session config list");
+            host.log_error("cleanup_all_agent_integrations: failed to get session config list");
             return result;
         }
     };
@@ -206,19 +330,20 @@ pub fn cleanup_all_project_hooks(host: &WasmHost) -> AllProjectHooksResult {
     let config_arr = match configs.as_array() {
         Some(arr) => arr,
         None => {
-            host.log_error("cleanup_all_project_hooks: session config list is not an array");
+            host.log_error("cleanup_all_agent_integrations: session config list is not an array");
             return result;
         }
     };
 
     host.log_info(&format!(
-        "cleanup_all_project_hooks: checking {} session config(s)",
+        "cleanup_all_agent_integrations: checking {} session config(s)",
         config_arr.len()
     ));
 
-    // 3. 遍历所有配置，清理每个项目的 hooks
+    // 3. 遍历所有配置，清理每个项目的全部 agent 集成
     for config in config_arr {
-        let working_dir = config.get("workingDir")
+        let working_dir = config
+            .get("workingDir")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
@@ -226,39 +351,44 @@ pub fn cleanup_all_project_hooks(host: &WasmHost) -> AllProjectHooksResult {
             continue;
         }
 
-        let cleanup_result = cleanup_project_hooks(host, working_dir);
+        for profile in agent::AGENT_PROFILES {
+            if profile.session_integration == SessionIntegration::None {
+                continue;
+            }
+            let cleanup_result = cleanup_agent_integration(host, profile.name, working_dir);
 
-        if cleanup_result.skipped {
-            result.skipped += 1;
-        } else if cleanup_result.success {
-            result.cleaned += 1;
-            host.log_info(&format!(
-                "cleanup_all_project_hooks: cleaned hooks for {}",
-                working_dir
-            ));
-        } else {
-            result.failed += 1;
-            host.log_warn(&format!(
-                "cleanup_all_project_hooks: failed to clean hooks for {}: {}",
-                working_dir, cleanup_result.message
-            ));
+            if cleanup_result.skipped {
+                result.skipped += 1;
+            } else if cleanup_result.success {
+                result.cleaned += 1;
+                host.log_info(&format!(
+                    "cleanup_all_agent_integrations: cleaned '{}' integration for {}",
+                    profile.name, working_dir
+                ));
+            } else {
+                result.failed += 1;
+                host.log_warn(&format!(
+                    "cleanup_all_agent_integrations: failed to clean '{}' integration for {}: {}",
+                    profile.name, working_dir, cleanup_result.message
+                ));
+            }
         }
     }
 
     host.log_info(&format!(
-        "cleanup_all_project_hooks: done (cleaned={}, skipped={}, failed={})",
+        "cleanup_all_agent_integrations: done (cleaned={}, skipped={}, failed={})",
         result.cleaned, result.skipped, result.failed
     ));
 
     result
 }
 
-/// 所有项目 hooks 清理结果摘要
+/// 所有项目集成清理结果摘要
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AllProjectHooksResult {
+pub struct AllAgentIntegrationResult {
     /// 成功清理的项目数
     pub cleaned: usize,
-    /// 跳过的项目数（无 hooks 或无需清理）
+    /// 跳过的项目数（无部署或无需清理）
     pub skipped: usize,
     /// 清理失败的项目数
     pub failed: usize,
@@ -268,7 +398,7 @@ pub struct AllProjectHooksResult {
 ///
 /// 1. 从 settings.json 移除插件 hook 条目（**只移除 BedCode 相关，保留用户自己的 hooks 与其他配置**）
 /// 2. 删除项目 `.claude/auto_task_hook.py` 脚本（幂等，文件不存在视为成功）
-pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooksResult {
+pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> AgentIntegrationResult {
     let claude_dir = format!("{}/{}", working_dir, CLAUDE_CONFIG_DIR_NAME);
     let settings_path = format!("{}/{}", claude_dir, CLAUDE_SETTINGS_FILE);
     let hook_script_path = format!("{}/{}", claude_dir, HOOK_SCRIPT_NAME);
@@ -286,7 +416,11 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
 
             // 仅移除含 auto_task_hook.py 的条目，用户自定义 hooks 原样保留
             let cleaned_hooks = remove_plugin_hooks(&hooks);
-            if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            if cleaned_hooks
+                .as_object()
+                .map(|o| o.is_empty())
+                .unwrap_or(true)
+            {
                 settings.as_object_mut().map(|o| o.remove("hooks"));
             } else {
                 settings["hooks"] = cleaned_hooks;
@@ -295,7 +429,7 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
             match serde_json::to_string_pretty(&settings) {
                 Ok(content) => {
                     if let Err(e) = host.fs_write(&settings_path, &content) {
-                        return ProjectHooksResult {
+                        return AgentIntegrationResult {
                             success: false,
                             message: format!("写入 settings.json 失败: {}", e),
                             skipped: false,
@@ -303,7 +437,7 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
                     }
                 }
                 Err(e) => {
-                    return ProjectHooksResult {
+                    return AgentIntegrationResult {
                         success: false,
                         message: format!("序列化 settings.json 失败: {}", e),
                         skipped: false,
@@ -322,14 +456,17 @@ pub fn cleanup_project_hooks(host: &WasmHost, working_dir: &str) -> ProjectHooks
     }
 
     if had_plugin_hooks {
-        host.log_info(&format!("Cleaned plugin hooks from project: {}", working_dir));
-        ProjectHooksResult {
+        host.log_info(&format!(
+            "Cleaned plugin hooks from project: {}",
+            working_dir
+        ));
+        AgentIntegrationResult {
             success: true,
             message: "项目插件 hooks 已清理".to_string(),
             skipped: false,
         }
     } else {
-        ProjectHooksResult {
+        AgentIntegrationResult {
             success: true,
             message: "项目无插件 hooks".to_string(),
             skipped: true,
@@ -347,7 +484,10 @@ pub fn cleanup_global_hooks(host: &WasmHost) {
         }
     };
 
-    let settings_path = format!("{}/{}/{}", home_dir, CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE);
+    let settings_path = format!(
+        "{}/{}/{}",
+        home_dir, CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE
+    );
 
     let mut settings: serde_json::Value = match host.fs_read(&settings_path) {
         Ok(Some(content)) => match serde_json::from_str(&content) {
@@ -368,7 +508,11 @@ pub fn cleanup_global_hooks(host: &WasmHost) {
 
     let cleaned_hooks = remove_plugin_hooks(hooks);
 
-    if cleaned_hooks.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+    if cleaned_hooks
+        .as_object()
+        .map(|o| o.is_empty())
+        .unwrap_or(true)
+    {
         settings.as_object_mut().map(|o| o.remove("hooks"));
     } else {
         settings["hooks"] = cleaned_hooks;
@@ -380,6 +524,207 @@ pub fn cleanup_global_hooks(host: &WasmHost) {
             Err(e) => host.log_warn(&format!("Failed to clean global settings.json: {}", e)),
         }
     }
+}
+
+// ==================== pi 扩展部署 ====================
+
+/// 为项目部署 pi 扩展（`.pi/extensions/pi_task_hook.ts`）
+///
+/// pi 项目级扩展自动发现 `.pi/extensions/*.ts`，无需注册配置；
+/// 扩展模板内嵌 BedCode 端口标记（`const BEDCODE_PORT = <port>`），
+/// 部署时按当前端口改写，端口变化时自动重新部署（幂等）。
+///
+/// 注意：pi 仅在项目被信任后加载项目级扩展（--approve / trust 流程），
+/// 首次启动需用户在终端确认信任，插件侧无法代答（与 claude hooks 不同：
+/// hooks 写入 settings.json 即生效，pi 扩展受 trust 门控）。
+pub fn ensure_pi_extension(
+    host: &WasmHost,
+    working_dir: &str,
+    port: u16,
+    resource_dir: &str,
+) -> AgentIntegrationResult {
+    host.log_debug(&format!(
+        "ensure_pi_extension: enter working_dir={:?} port={} resource_dir={:?}",
+        working_dir, port, resource_dir
+    ));
+
+    if working_dir.is_empty() {
+        host.log_warn("ensure_pi_extension: empty working_dir");
+        return AgentIntegrationResult {
+            success: false,
+            message: "working_dir 为空".to_string(),
+            skipped: false,
+        };
+    }
+
+    let target = format!(
+        "{}/{}/{}/{}",
+        working_dir, PI_CONFIG_DIR_NAME, PI_EXTENSIONS_DIR_NAME, PI_HOOK_SCRIPT_NAME
+    );
+    let source = format!("{}/{}", resource_dir, PI_HOOK_SCRIPT_NAME);
+    host.log_debug(&format!(
+        "ensure_pi_extension: paths target={:?} source={:?}",
+        target, source
+    ));
+
+    // 1. 已部署且端口匹配 → 跳过；端口变化 → 重新部署
+    match host.fs_read(&target) {
+        Ok(Some(existing)) => {
+            if pi_extension_port_matches(&existing, port) {
+                host.log_info(
+                    "ensure_pi_extension: extension already deployed with matching port, skipping",
+                );
+                return AgentIntegrationResult {
+                    success: true,
+                    message: "pi 扩展已部署且端口匹配".to_string(),
+                    skipped: true,
+                };
+            }
+            host.log_info(&format!(
+                "ensure_pi_extension: deployed extension port mismatch, redeploying (port={})",
+                port
+            ));
+        }
+        Ok(None) => {
+            host.log_debug("ensure_pi_extension: extension not deployed yet");
+        }
+        Err(e) => {
+            host.log_warn(&format!(
+                "ensure_pi_extension: fs_read existing extension failed: {}",
+                e
+            ));
+        }
+    }
+
+    // 2. 读取模板（插件资源目录随构建打包）
+    let template = match host.fs_read(&source) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            let msg = format!("pi extension template missing: {:?}", source);
+            host.log_error(&format!("ensure_pi_extension: {}", msg));
+            host.mark_plugin_error(&format!("auto-task: {}", msg));
+            return AgentIntegrationResult {
+                success: false,
+                message: format!("pi 扩展模板缺失: {}", source),
+                skipped: false,
+            };
+        }
+        Err(e) => {
+            let msg = format!(
+                "pi extension template read failed: src={:?} err={}",
+                source, e
+            );
+            host.log_error(&format!("ensure_pi_extension: {}", msg));
+            host.mark_plugin_error(&format!("auto-task: {}", msg));
+            return AgentIntegrationResult {
+                success: false,
+                message: format!("读取 pi 扩展模板失败: {}", e),
+                skipped: false,
+            };
+        }
+    };
+
+    // 3. 按当前端口改写模板内嵌端口并写入（fs_write 自动创建父目录）
+    let content = replace_pi_extension_port(&template, port);
+    match host.fs_write(&target, &content) {
+        Ok(()) => {
+            host.log_info(&format!("ensure_pi_extension: deployed to {:?}", target));
+            AgentIntegrationResult {
+                success: true,
+                message: "pi 扩展已部署".to_string(),
+                skipped: false,
+            }
+        }
+        Err(e) => {
+            let msg = format!("pi extension write failed: path={:?} err={}", target, e);
+            host.log_error(&format!("ensure_pi_extension: {}", msg));
+            host.mark_plugin_error(&format!("auto-task: {}", msg));
+            AgentIntegrationResult {
+                success: false,
+                message: format!("写入 pi 扩展失败: {}", e),
+                skipped: false,
+            }
+        }
+    }
+}
+
+/// 清理指定项目的 pi 扩展（幂等，文件不存在视为已清理）
+///
+/// 只删除 pi_task_hook.ts，不触碰 `.pi/extensions/` 目录下的用户自有扩展。
+pub fn cleanup_pi_extension(host: &WasmHost, working_dir: &str) -> AgentIntegrationResult {
+    let target = format!(
+        "{}/{}/{}/{}",
+        working_dir, PI_CONFIG_DIR_NAME, PI_EXTENSIONS_DIR_NAME, PI_HOOK_SCRIPT_NAME
+    );
+    host.log_debug(&format!("cleanup_pi_extension: target={:?}", target));
+
+    let exists = host.fs_exists(&target).unwrap_or(false);
+    if !exists {
+        host.log_debug("cleanup_pi_extension: extension not present, skipped");
+        return AgentIntegrationResult {
+            success: true,
+            message: "项目无 pi 扩展".to_string(),
+            skipped: true,
+        };
+    }
+
+    match host.fs_delete(&target) {
+        Ok(()) => {
+            host.log_info(&format!("cleanup_pi_extension: deleted {:?}", target));
+            AgentIntegrationResult {
+                success: true,
+                message: "项目 pi 扩展已清理".to_string(),
+                skipped: false,
+            }
+        }
+        Err(e) => {
+            host.log_warn(&format!(
+                "cleanup_pi_extension: failed to delete {:?}: {}",
+                target, e
+            ));
+            AgentIntegrationResult {
+                success: false,
+                message: format!("删除 pi 扩展失败: {}", e),
+                skipped: false,
+            }
+        }
+    }
+}
+
+/// 模板内端口改写：`const BEDCODE_PORT = <数字>` → 当前端口
+///
+/// 模板默认端口与运行时端口可能不同（宿主端口可配置），部署时替换；
+/// 找不到标记时原样返回（模板被篡改时降级为模板默认端口）。
+fn replace_pi_extension_port(content: &str, port: u16) -> String {
+    const MARKER: &str = "const BEDCODE_PORT = ";
+    match content.find(MARKER) {
+        Some(start) => {
+            let value_start = start + MARKER.len();
+            let digits_len = content[value_start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
+            if digits_len == 0 {
+                return content.to_string();
+            }
+            let end = value_start + digits_len;
+            format!("{}{}{}", &content[..value_start], port, &content[end..])
+        }
+        None => content.to_string(),
+    }
+}
+
+/// 检查已部署扩展内嵌端口是否与当前端口匹配（幂等跳过判定）
+fn pi_extension_port_matches(content: &str, port: u16) -> bool {
+    const MARKER: &str = "const BEDCODE_PORT = ";
+    content.find(MARKER).and_then(|start| {
+        let value_start = start + MARKER.len();
+        let digits: String = content[value_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse::<u16>().ok()
+    }) == Some(port)
 }
 
 /// 构建 hooks JSON 配置
@@ -399,10 +744,7 @@ fn build_hooks_config(port: u16, hook_script_path: &str) -> serde_json::Value {
         "{}python \"{}\" user-prompt-submit",
         env_prefix, hook_script_path
     );
-    let pre_tool_use_cmd = format!(
-        "{}python \"{}\" pre-tool-use",
-        env_prefix, hook_script_path
-    );
+    let pre_tool_use_cmd = format!("{}python \"{}\" pre-tool-use", env_prefix, hook_script_path);
     let post_tool_use_cmd = format!(
         "{}python \"{}\" post-tool-use",
         env_prefix, hook_script_path
@@ -411,22 +753,13 @@ fn build_hooks_config(port: u16, hook_script_path: &str) -> serde_json::Value {
         "{}python \"{}\" post-tool-use-fail",
         env_prefix, hook_script_path
     );
-    let notification_cmd = format!(
-        "{}python \"{}\" notification",
-        env_prefix, hook_script_path
-    );
-    let stop_cmd = format!(
-        "{}python \"{}\" stop",
-        env_prefix, hook_script_path
-    );
+    let notification_cmd = format!("{}python \"{}\" notification", env_prefix, hook_script_path);
+    let stop_cmd = format!("{}python \"{}\" stop", env_prefix, hook_script_path);
     let subagent_stop_cmd = format!(
         "{}python \"{}\" subagent-stop",
         env_prefix, hook_script_path
     );
-    let session_end_cmd = format!(
-        "{}python \"{}\" session-end",
-        env_prefix, hook_script_path
-    );
+    let session_end_cmd = format!("{}python \"{}\" session-end", env_prefix, hook_script_path);
 
     serde_json::json!({
         "SessionStart": [
@@ -604,10 +937,14 @@ fn remove_plugin_hooks(hooks: &serde_json::Value) -> serde_json::Value {
 }
 
 /// 合并 hooks 配置：保留非插件 hooks，替换插件相关的 hooks
-fn merge_hooks(existing: &serde_json::Value, plugin_hooks: &serde_json::Value) -> serde_json::Value {
+fn merge_hooks(
+    existing: &serde_json::Value,
+    plugin_hooks: &serde_json::Value,
+) -> serde_json::Value {
     let mut result = serde_json::json!({});
 
-    if let (Some(existing_obj), Some(plugin_obj)) = (existing.as_object(), plugin_hooks.as_object()) {
+    if let (Some(existing_obj), Some(plugin_obj)) = (existing.as_object(), plugin_hooks.as_object())
+    {
         // 先放入插件 hooks
         for (key, value) in plugin_obj {
             result[key] = value.clone();

@@ -1,7 +1,7 @@
 /**
  * Auto Task 插件入口
  *
- * Claude Code 任务状态同步与自动授权
+ * Agent 任务状态同步与自动授权（Claude Code hooks / pi 扩展）
  * Rust+TS 双层架构：Rust WASM 处理后端逻辑，TS 负责 UI 和 toast 通知
  *
  * UI 入口：

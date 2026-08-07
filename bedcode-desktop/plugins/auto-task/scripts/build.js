@@ -82,11 +82,21 @@ function copyArtifacts() {
     console.warn('[build] WARNING: auto_task_hook.py not found in scripts/')
   }
 
+  // 复制 pi_task_hook.ts（pi 扩展，部署到项目 .pi/extensions/）
+  const piHookSource = resolve(ROOT, 'scripts/pi_task_hook.ts')
+  if (existsSync(piHookSource)) {
+    cpSync(piHookSource, resolve(RESOURCES_DIR, 'pi_task_hook.ts'))
+    console.log('[build] Copied pi_task_hook.ts')
+  } else {
+    console.warn('[build] WARNING: pi_task_hook.ts not found in scripts/')
+  }
+
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   console.log(`[build]   - index.js`)
   console.log(`[build]   - plugin.json`)
   console.log(`[build]   - ${RUST_LIB_NAME}.wasm`)
   console.log(`[build]   - auto_task_hook.py`)
+  console.log(`[build]   - pi_task_hook.ts`)
 }
 
 // ==================== Main ====================

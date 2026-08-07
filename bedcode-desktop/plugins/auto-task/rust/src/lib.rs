@@ -8,17 +8,19 @@
 //! HTTP 端点通过 /api/plugin/com.bedcode.auto-task/{path} 代理路由，
 //! 由宿主 plugin_http_endpoint 调用本插件的 _http_endpoint command。
 
-mod hooks;
-mod state;
-mod queue;
 mod agent;
-mod scheduled;
+mod hooks;
 mod preset;
+mod queue;
+mod scheduled;
+mod state;
 
 use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
-use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTimer};
-use bedcode_plugin_api::{CommandArgs, WasmHost, WasmPlugin};
+use bedcode_plugin_api::host::{
+    ConfigKey, HostConfig, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTimer,
+};
 use bedcode_plugin_api::types::PluginManifest;
+use bedcode_plugin_api::{CommandArgs, WasmHost, WasmPlugin};
 
 /// 任务历史表建表 SQL（按语句拆分，初始化时逐条执行）
 ///
@@ -96,15 +98,13 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
 ///   可先添加多个任务再统一开启执行（手动控制入口：AutoTaskModal 弹窗）
 /// - auto_answer：自动应答 — 开启后 Agent 提问（权限请求 / AskUserQuestion）
 ///   由 hook 自动回答；关闭时走 Claude Code 原生交互，用户手动回答
-const SESSION_SETTINGS_SCHEMA: &[&str] = &[
-    r#"
+const SESSION_SETTINGS_SCHEMA: &[&str] = &[r#"
 CREATE TABLE IF NOT EXISTS session_settings (
     session_id   TEXT PRIMARY KEY,
     auto_execute INTEGER NOT NULL DEFAULT 0,
     auto_answer  INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT NOT NULL
-)"#,
-];
+)"#];
 
 struct AutoTaskPlugin;
 
@@ -124,7 +124,10 @@ impl WasmPlugin for AutoTaskPlugin {
         // 会话创建前会收到 creating 事件，用于自动设置项目 hooks
         match host.session_lifecycle_register() {
             Ok(()) => host.log_info("Registered session lifecycle listener"),
-            Err(e) => host.log_error(&format!("Failed to register session lifecycle listener: {}", e)),
+            Err(e) => host.log_error(&format!(
+                "Failed to register session lifecycle listener: {}",
+                e
+            )),
         }
 
         // 注册提交输入行监听器（需要 terminal:observe 权限，见 ADR 0001）
@@ -141,11 +144,11 @@ impl WasmPlugin for AutoTaskPlugin {
         let host = WasmHost;
         host.log_info("Auto Task plugin deactivated");
 
-        // 插件禁用时清理所有项目的 hooks 配置
-        // 避免残留的 hooks 在插件停用后仍被 Claude Code 调用
-        let result = hooks::cleanup_all_project_hooks(&host);
+        // 插件禁用时清理所有项目的 agent 集成配置（claude hooks + pi 扩展）
+        // 避免残留的集成在插件停用后仍被 agent 调用
+        let result = hooks::cleanup_all_agent_integrations(&host);
         host.log_info(&format!(
-            "Hooks cleanup on deactivate: cleaned={}, skipped={}, failed={}",
+            "Agent integration cleanup on deactivate: cleaned={}, skipped={}, failed={}",
             result.cleaned, result.skipped, result.failed
         ));
 
@@ -166,11 +169,21 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 // 队列端点路由
                 if let Some(queue_path) = path.strip_prefix("task-queue/") {
-                    Ok(queue::handle_queue_http(&host, &method, queue_path, &body, &query))
+                    Ok(queue::handle_queue_http(
+                        &host, &method, queue_path, &body, &query,
+                    ))
                 } else if let Some(scheduled_path) = path.strip_prefix("scheduled-jobs/") {
-                    Ok(scheduled::handle_scheduled_http(&host, &method, scheduled_path, &body, &query))
+                    Ok(scheduled::handle_scheduled_http(
+                        &host,
+                        &method,
+                        scheduled_path,
+                        &body,
+                        &query,
+                    ))
                 } else {
-                    Ok(state::handle_http_endpoint(&host, &method, &path, &body, &query))
+                    Ok(state::handle_http_endpoint(
+                        &host, &method, &path, &body, &query,
+                    ))
                 }
             }
             // 命令 ID 与 manifest contributes.commands 声明保持一致（全名含前缀）
@@ -178,7 +191,7 @@ impl WasmPlugin for AutoTaskPlugin {
             "auto-task.cleanup-project-hooks" => {
                 let working_dir = args.str_or("working_dir", "");
 
-                let result = hooks::cleanup_project_hooks(&host, &working_dir);
+                let result = hooks::cleanup_project_all_integrations(&host, &working_dir);
 
                 Ok(serde_json::json!({
                     "success": result.success,
@@ -216,7 +229,10 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
                 // 白名单校验：仅接受宿主 OS 平台名，非法值直接拒绝
                 if !["windows", "linux", "macos", "android", "ios"].contains(&platform.as_str()) {
-                    return Err(anyhow::anyhow!("set-platform: unknown platform: {}", platform));
+                    return Err(anyhow::anyhow!(
+                        "set-platform: unknown platform: {}",
+                        platform
+                    ));
                 }
                 host.storage_set("platform", &serde_json::json!(platform))?;
                 host.log_info(&format!("Platform recorded: {}", platform));
@@ -258,7 +274,9 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 // 自动执行开启且会话空闲时立即调度；关闭时仅入队（可先添加多个任务再统一执行），
                 // 调度链由会话 idle / 任务终态事件驱动（try_dispatch_next 内部以 auto_execute 为门）
-                if state::auto_execute_on(&host, &session_id) && !state::has_active_task(&host, &session_id) {
+                if state::auto_execute_on(&host, &session_id)
+                    && !state::has_active_task(&host, &session_id)
+                {
                     queue::try_dispatch_next(&host, &session_id);
                 }
 
@@ -290,7 +308,10 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 if !preset::delete_preset(&host, &preset_id) {
-                    return Err(anyhow::anyhow!("delete-preset-task: preset not found: {}", preset_id));
+                    return Err(anyhow::anyhow!(
+                        "delete-preset-task: preset not found: {}",
+                        preset_id
+                    ));
                 }
                 preset::broadcast_preset_changed(&host, &preset_id, "delete");
 
@@ -307,11 +328,14 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Err(anyhow::anyhow!("add-preset-to-queue: missing preset_id"));
                 }
 
-                let (task_id, position) = preset::add_preset_to_queue(&host, &session_id, &preset_id)
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let (task_id, position) =
+                    preset::add_preset_to_queue(&host, &session_id, &preset_id)
+                        .map_err(|e| anyhow::anyhow!(e))?;
 
                 // 与手动 add-task 同语义：自动执行开启且会话空闲时立即调度
-                if state::auto_execute_on(&host, &session_id) && !state::has_active_task(&host, &session_id) {
+                if state::auto_execute_on(&host, &session_id)
+                    && !state::has_active_task(&host, &session_id)
+                {
                     queue::try_dispatch_next(&host, &session_id);
                 }
 
@@ -371,7 +395,10 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 let updated = queue::update_task(&host, &session_id, &task_id, &prompt);
                 if !updated {
-                    return Err(anyhow::anyhow!("update-task: task not found or not pending: {}", task_id));
+                    return Err(anyhow::anyhow!(
+                        "update-task: task not found or not pending: {}",
+                        task_id
+                    ));
                 }
 
                 let remaining = queue::pending_count(&host, &session_id);
@@ -450,7 +477,13 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Err(anyhow::anyhow!("create-scheduled-job: missing prompts"));
                 }
 
-                match scheduled::create_job_with_broadcast(&host, &name, &config_id, &trigger_at, &prompts) {
+                match scheduled::create_job_with_broadcast(
+                    &host,
+                    &name,
+                    &config_id,
+                    &trigger_at,
+                    &prompts,
+                ) {
                     Some(job_id) => Ok(serde_json::json!({ "job_id": job_id })),
                     None => Err(anyhow::anyhow!(
                         "create-scheduled-job: failed to create job for config {}",
@@ -480,7 +513,11 @@ impl WasmPlugin for AutoTaskPlugin {
                     return Err(anyhow::anyhow!("reset-scheduled-job: missing job_id"));
                 }
                 let trigger_at = args.str_or("trigger_at", "");
-                let trigger_param = if trigger_at.is_empty() { None } else { Some(trigger_at.as_str()) };
+                let trigger_param = if trigger_at.is_empty() {
+                    None
+                } else {
+                    Some(trigger_at.as_str())
+                };
                 if scheduled::reset_job_with_broadcast(&host, &job_id, trigger_param) {
                     Ok(serde_json::json!({ "reset": true, "job_id": job_id, "status": "pending" }))
                 } else {
@@ -531,7 +568,10 @@ impl WasmPlugin for AutoTaskPlugin {
             match host.plugin_db_execute(stmt) {
                 Ok(_) => {}
                 Err(e) => {
-                    host.log_error(&format!("Failed to initialize session_settings table: {}", e));
+                    host.log_error(&format!(
+                        "Failed to initialize session_settings table: {}",
+                        e
+                    ));
                     break;
                 }
             }
@@ -574,7 +614,10 @@ impl WasmPlugin for AutoTaskPlugin {
             match host.plugin_db_execute(stmt) {
                 Ok(_) => {}
                 Err(e) => {
-                    host.log_error(&format!("Failed to initialize session_mapping table: {}", e));
+                    host.log_error(&format!(
+                        "Failed to initialize session_mapping table: {}",
+                        e
+                    ));
                     break;
                 }
             }
@@ -594,22 +637,52 @@ impl WasmPlugin for AutoTaskPlugin {
         host.log_info("task_queue table initialized");
 
         // 4.1 迁移：旧库 task_queue 无 dispatch_attempts 列（调度重试计数），按需补建
-        ensure_column(&host, "task_queue", "dispatch_attempts", "ALTER TABLE task_queue ADD COLUMN dispatch_attempts INTEGER NOT NULL DEFAULT 0");
+        ensure_column(
+            &host,
+            "task_queue",
+            "dispatch_attempts",
+            "ALTER TABLE task_queue ADD COLUMN dispatch_attempts INTEGER NOT NULL DEFAULT 0",
+        );
 
         // 4.2 迁移：task_queue.source 列（queue / scheduled，定时任务 v6 引入）
-        ensure_column(&host, "task_queue", "source", "ALTER TABLE task_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'queue'");
+        ensure_column(
+            &host,
+            "task_queue",
+            "source",
+            "ALTER TABLE task_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'queue'",
+        );
 
         // 4.2.1 迁移：task_queue.clear_due_at 列（clear 延迟发送时刻，见 queue.rs send_due_clears）
-        ensure_column(&host, "task_queue", "clear_due_at", "ALTER TABLE task_queue ADD COLUMN clear_due_at TEXT");
+        ensure_column(
+            &host,
+            "task_queue",
+            "clear_due_at",
+            "ALTER TABLE task_queue ADD COLUMN clear_due_at TEXT",
+        );
 
         // 4.3 迁移：task_history 预留 token 统计列（v1 不解析，JSONL 深化需求回填）
-        ensure_column(&host, "task_history", "input_tokens", "ALTER TABLE task_history ADD COLUMN input_tokens INTEGER");
-        ensure_column(&host, "task_history", "output_tokens", "ALTER TABLE task_history ADD COLUMN output_tokens INTEGER");
+        ensure_column(
+            &host,
+            "task_history",
+            "input_tokens",
+            "ALTER TABLE task_history ADD COLUMN input_tokens INTEGER",
+        );
+        ensure_column(
+            &host,
+            "task_history",
+            "output_tokens",
+            "ALTER TABLE task_history ADD COLUMN output_tokens INTEGER",
+        );
 
         // 4.3.1 迁移：task_history.event_time 列（事件发生时刻，时序保护基线）。
         // 脚本每次推送携带 event_time，宿主仅在 event_time >= 行内已应用事件时应用，
         // 拒绝网络阻塞导致的迟到旧事件覆盖最新状态（状态回跳 / 队列调度错乱）
-        ensure_column(&host, "task_history", "event_time", "ALTER TABLE task_history ADD COLUMN event_time TEXT");
+        ensure_column(
+            &host,
+            "task_history",
+            "event_time",
+            "ALTER TABLE task_history ADD COLUMN event_time TEXT",
+        );
 
         // 4.4 初始化预设任务表（无会话/未选会话时创建的待投递任务，一次性消耗）
         for stmt in preset::PRESET_TASKS_SCHEMA {
@@ -636,7 +709,12 @@ impl WasmPlugin for AutoTaskPlugin {
         host.log_info("scheduled_jobs table initialized");
 
         // 5.1 迁移：旧库 scheduled_jobs 无 session_id 列（触发时会话关联键）
-        ensure_column(&host, "scheduled_jobs", "session_id", "ALTER TABLE scheduled_jobs ADD COLUMN session_id TEXT");
+        ensure_column(
+            &host,
+            "scheduled_jobs",
+            "session_id",
+            "ALTER TABLE scheduled_jobs ADD COLUMN session_id TEXT",
+        );
 
         // 6. 启动恢复 + 定时器注册（定时自动任务，ADR 0003）
         // 重启前处于 creating 态的任务：其会话已随上次进程退出而丢失，
@@ -645,7 +723,10 @@ impl WasmPlugin for AutoTaskPlugin {
 
         // 宿主周期定时器：到点回调 scheduler-tick command（附当前时间），
         // 到期/错过判定全部在插件侧以 DB trigger_at 完成（幂等归插件）
-        match host.timer_register(scheduled::SCHEDULER_INTERVAL_SECS, "auto-task.scheduler-tick") {
+        match host.timer_register(
+            scheduled::SCHEDULER_INTERVAL_SECS,
+            "auto-task.scheduler-tick",
+        ) {
             Ok(()) => host.log_info(&format!(
                 "Scheduler timer registered: interval={}s",
                 scheduled::SCHEDULER_INTERVAL_SECS
@@ -660,11 +741,11 @@ impl WasmPlugin for AutoTaskPlugin {
         let host = WasmHost;
         host.log_info("Auto Task plugin on_shutdown");
 
-        // 应用关闭时清理所有项目的 hooks 配置
-        // 确保退出后不残留引用已停止服务的 hooks
-        let result = hooks::cleanup_all_project_hooks(&host);
+        // 应用关闭时清理所有项目的 agent 集成配置
+        // 确保退出后不残留引用已停止服务的集成
+        let result = hooks::cleanup_all_agent_integrations(&host);
         host.log_info(&format!(
-            "Hooks cleanup on shutdown: cleaned={}, skipped={}, failed={}",
+            "Agent integration cleanup on shutdown: cleaned={}, skipped={}, failed={}",
             result.cleaned, result.skipped, result.failed
         ));
 
@@ -673,9 +754,15 @@ impl WasmPlugin for AutoTaskPlugin {
 
     fn on_session_lifecycle(event: &SessionLifecycleEvent) -> anyhow::Result<()> {
         match event {
-            // creating：会话创建前（同步阻塞），为 Claude 会话准备项目级 hooks。
-            // resource_dir 由宿主注入，指向插件安装目录（包含 auto_task_hook.py）
-            SessionLifecycleEvent::Creating { command, working_dir, resource_dir, .. } => {
+            // creating：会话创建前（同步阻塞），按 agent 能力准备项目级集成
+            // （claude → .claude hooks；pi → .pi 扩展）。resource_dir 由宿主注入，
+            // 指向插件安装目录（包含 auto_task_hook.py / pi_task_hook.ts）
+            SessionLifecycleEvent::Creating {
+                command,
+                working_dir,
+                resource_dir,
+                ..
+            } => {
                 let host = WasmHost;
 
                 host.log_debug(&format!(
@@ -683,45 +770,66 @@ impl WasmPlugin for AutoTaskPlugin {
                     command, working_dir, resource_dir
                 ));
 
-                // 只为 Claude 命令设置 hooks
-                if !command.to_lowercase().contains("claude") {
+                // 识别执行 agent，未适配的 agent（无会话集成）跳过部署
+                let agent_name = agent::detect_agent(command);
+                if agent::session_integration_for(agent_name) == agent::SessionIntegration::None {
                     host.log_debug(&format!(
-                        "on_session_lifecycle: command {:?} does not contain 'claude', skip hooks setup",
-                        command
+                        "on_session_lifecycle: agent '{}' has no session integration, skip setup",
+                        agent_name
                     ));
                     return Ok(());
                 }
 
                 // 读取宿主配置（port）
-                // hook 脚本通过 HTTP 推送任务状态，端点由网关中间件本地放行，无需 token
-                let port = host.config_get(ConfigKey::NetworkPort)
+                // 集成脚本通过 HTTP 推送任务状态，端点由网关中间件本地放行，无需 token
+                let port = host
+                    .config_get(ConfigKey::NetworkPort)
                     .ok()
                     .flatten()
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(8765);
                 host.log_debug(&format!(
-                    "on_session_lifecycle: claude session detected, using port={}",
-                    port
+                    "on_session_lifecycle: agent '{}' detected, using port={}",
+                    agent_name, port
                 ));
 
-                let result = hooks::ensure_project_hooks(&host, working_dir, port, resource_dir);
+                let result = hooks::ensure_agent_integration(
+                    &host,
+                    agent_name,
+                    working_dir,
+                    port,
+                    resource_dir,
+                );
                 host.log_debug(&format!(
-                    "on_session_lifecycle: ensure_project_hooks result success={} skipped={} message={:?}",
+                    "on_session_lifecycle: ensure_agent_integration result success={} skipped={} message={:?}",
                     result.success, result.skipped, result.message
                 ));
 
                 if result.success {
-                    host.log_info(&format!("Session lifecycle: hooks setup for {}", working_dir));
+                    host.log_info(&format!(
+                        "Session lifecycle: integration setup for agent '{}' in {}",
+                        agent_name, working_dir
+                    ));
                 } else if result.skipped {
-                    host.log_debug(&format!("Session lifecycle: hooks skipped for {}", working_dir));
+                    host.log_debug(&format!(
+                        "Session lifecycle: integration skipped for agent '{}' in {}",
+                        agent_name, working_dir
+                    ));
                 } else {
-                    host.log_warn(&format!("Session lifecycle: hooks setup failed for {}: {}", working_dir, result.message));
+                    host.log_warn(&format!(
+                        "Session lifecycle: integration setup failed for agent '{}' in {}: {}",
+                        agent_name, working_dir, result.message
+                    ));
                 }
             }
             // Created：会话创建完成（PTY 已启动），定时自动任务的会话就绪信号：
             // 按 session_id 匹配处于 creating 态的定时任务，把 prompts 注入队列
             // （创建时机与字段见 ADR 0003）
-            SessionLifecycleEvent::Created { session_id, config_id, .. } => {
+            SessionLifecycleEvent::Created {
+                session_id,
+                config_id,
+                ..
+            } => {
                 let host = WasmHost;
                 host.log_debug(&format!(
                     "on_session_lifecycle: Created event session_id={} config_id={}",
@@ -760,11 +868,13 @@ impl WasmPlugin for AutoTaskPlugin {
             return Ok(());
         }
 
-        // 仅在 Claude Code 会话中把输入当作任务：非 claude 启动命令的会话直接忽略
-        if !state::session_command_is_claude(&host, &event.session_id) {
+        // 仅在完整支持自动任务的 agent 会话中把输入当作任务：
+        // 未适配 agent（codex/opencode/unknown）的会话直接忽略
+        let session_agent_name = state::session_agent(&host, &event.session_id);
+        if !agent::is_supported(session_agent_name) {
             host.log_debug(&format!(
-                "InputSubmitted: session={} is not a claude session, skip task creation",
-                event.session_id
+                "InputSubmitted: session={} agent '{}' is not supported, skip task creation",
+                event.session_id, session_agent_name
             ));
             return Ok(());
         }
@@ -788,7 +898,12 @@ bedcode_plugin_api::wasm_entry!(AutoTaskPlugin);
 
 /// 按需补建表列（幂等迁移）：PRAGMA table_info 确认列不存在才执行 ALTER，
 /// 避免可预期的"duplicate column"错误污染宿主 ERROR 日志
-fn ensure_column(host: &bedcode_plugin_api::wasm_host::WasmHost, table: &str, column: &str, alter_sql: &str) {
+fn ensure_column(
+    host: &bedcode_plugin_api::wasm_host::WasmHost,
+    table: &str,
+    column: &str,
+    alter_sql: &str,
+) {
     use bedcode_plugin_api::host::HostPluginDatabase;
 
     let exists = host
@@ -807,23 +922,35 @@ fn ensure_column(host: &bedcode_plugin_api::wasm_host::WasmHost, table: &str, co
         .unwrap_or(false);
 
     if exists {
-        host.log_debug(&format!("migration: {}.{} already exists, skip", table, column));
+        host.log_debug(&format!(
+            "migration: {}.{} already exists, skip",
+            table, column
+        ));
         return;
     }
 
     match host.plugin_db_execute(alter_sql) {
         Ok(_) => host.log_info(&format!("migration: added {}.{}", table, column)),
-        Err(e) => host.log_warn(&format!("migration: failed to add {}.{}: {}", table, column, e)),
+        Err(e) => host.log_warn(&format!(
+            "migration: failed to add {}.{}: {}",
+            table, column, e
+        )),
     }
 }
 
 /// 从命令参数组装任务历史查询筛选条件
 ///
 /// 支持字段：session_id / status / agent / source / since / until / limit / offset
-fn task_history_filter_from_args(args: &bedcode_plugin_api::CommandArgs) -> state::TaskHistoryFilter {
+fn task_history_filter_from_args(
+    args: &bedcode_plugin_api::CommandArgs,
+) -> state::TaskHistoryFilter {
     let opt = |key: &str| -> Option<String> {
         let v = args.str_or(key, "");
-        if v.is_empty() { None } else { Some(v) }
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
     };
     state::TaskHistoryFilter {
         session_id: opt("session_id"),

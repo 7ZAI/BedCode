@@ -4,37 +4,72 @@
 //! - 命令过滤：以 `/` 开头的提交行属于 CLI 命令而非任务，一刀切过滤，
 //!   预留白名单扩展点（未来 `/skills xxx` 等任务型斜杠命令放行）
 //! - agent 识别：从会话启动命令检测执行 agent（CLI 级粒度），
-//!   本期只适配 Claude Code，codex/opencode/pi 留 registry 扩展点
+//!   通过 AGENT_PROFILES registry 描述每个 agent 的能力（上下文清理命令、
+//!   会话集成方式、输入是否作为任务跟踪），新增 agent 只需加一条 profile
+
+/// 会话集成方式：agent 任务状态同步/自动授权的部署载体
+///
+/// 新增 agent 时在此扩展枚举，并在 hooks.rs 的 ensure/cleanup 分发中
+/// 实现对应部署与清理逻辑。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionIntegration {
+    /// Claude Code hooks：`.claude/settings.json` + `auto_task_hook.py`
+    ClaudeCodeHooks,
+    /// pi 扩展：`.pi/extensions/pi_task_hook.ts`（pi 自动发现，无需注册）
+    PiExtension,
+    /// 未适配：不部署任何会话集成（无法回传任务状态）
+    None,
+}
 
 /// Agent profile：CLI 级 agent 能力描述
 ///
-/// 上下文清理命令（clear_command）是核心扩展点：
-/// 自动任务执行前需清理上下文防止超限，不同 agent 的清理方式不同
-/// （Claude Code 为 `/clear`，其他 agent 待适配时补充）
+/// 新增 agent 的扩展点（全部在 registry 声明，调度/部署代码零改动）：
+/// - clear_command：上下文清理命令，自动任务执行前清理上下文防止超限；
+///   None 表示未适配（调度时跳过 clear 直接下发）
+/// - session_integration：状态回传的部署载体（hooks / pi 扩展 / 无）
+/// - tracks_input：会话输入是否作为任务跟踪（决定 on_input_submitted 是否建任务行）
 pub struct AgentProfile {
     /// agent CLI 名称（写入 task_history.agent 字段）
     pub name: &'static str,
-    /// 上下文清理命令本体（不含提交符；投递时由调用方按宿主平台拼接 `\r` / `\n`）；None 表示未适配
+    /// 上下文清理命令本体（不含提交符；投递时由调用方按宿主平台拼接 `\r` / `\n`）；
+    /// None 表示未适配
     pub clear_command: Option<&'static str>,
+    /// 会话集成方式（状态回传载体）
+    pub session_integration: SessionIntegration,
+    /// 会话输入是否作为任务跟踪（false 时 on_input_submitted 不创建任务行）
+    pub tracks_input: bool,
 }
 
-/// Agent profile registry（本期仅 claude 有完整 profile）
+/// Agent profile registry
+///
+/// - claude：完整适配（hooks + /clear）
+/// - pi：完整适配（pi 扩展 + /new）—— pi 无 /clear，等效的上下文重建命令是 /new
+///   （开启新会话，pi 会话按分支管理，无"清空上下文继续当前会话"的语义）
+/// - codex / opencode：仅识别，未适配会话集成（任务状态无法回传）
 pub const AGENT_PROFILES: &[AgentProfile] = &[
     AgentProfile {
         name: "claude",
         clear_command: Some("/clear"),
+        session_integration: SessionIntegration::ClaudeCodeHooks,
+        tracks_input: true,
+    },
+    AgentProfile {
+        name: "pi",
+        clear_command: Some("/new"),
+        session_integration: SessionIntegration::PiExtension,
+        tracks_input: true,
     },
     AgentProfile {
         name: "codex",
         clear_command: None,
+        session_integration: SessionIntegration::None,
+        tracks_input: false,
     },
     AgentProfile {
         name: "opencode",
         clear_command: None,
-    },
-    AgentProfile {
-        name: "pi",
-        clear_command: None,
+        session_integration: SessionIntegration::None,
+        tracks_input: false,
     },
 ];
 
@@ -42,6 +77,9 @@ pub const AGENT_PROFILES: &[AgentProfile] = &[
 ///
 /// 匹配命令中的 CLI 关键词，如 `claude` / `claude.exe` / 完整路径均识别为 claude。
 /// 无法识别返回 "unknown"。
+///
+/// 注意：识别仅用于选择 profile，未知 agent 不拦截会话（profile 查不到时
+/// 按未适配处理，调度与部署自动跳过）。
 pub fn detect_agent(command: &str) -> &'static str {
     let lower = command.to_lowercase();
     // 按特异性从高到低匹配，避免 "pi" 等短词误命中
@@ -67,14 +105,34 @@ pub fn detect_agent(command: &str) -> &'static str {
     "unknown"
 }
 
+/// 按名称查找 agent profile；未识别的 agent 返回 None
+pub fn profile_for(agent: &str) -> Option<&'static AgentProfile> {
+    AGENT_PROFILES.iter().find(|p| p.name == agent)
+}
+
 /// 获取指定 agent 的上下文清理命令
 ///
-/// 返回 None 表示该 agent 未适配清理命令（不应进入自动任务调度）
+/// 返回 None 表示该 agent 未适配清理命令（调度时跳过 clear 直接下发）
 pub fn clear_command_for(agent: &str) -> Option<&'static str> {
-    AGENT_PROFILES
-        .iter()
-        .find(|p| p.name == agent)
-        .and_then(|p| p.clear_command)
+    profile_for(agent).and_then(|p| p.clear_command)
+}
+
+/// 获取指定 agent 的会话集成方式（无 profile 视为 None）
+pub fn session_integration_for(agent: &str) -> SessionIntegration {
+    profile_for(agent)
+        .map(|p| p.session_integration)
+        .unwrap_or(SessionIntegration::None)
+}
+
+/// agent 是否支持完整的自动任务执行（输入建任务行 + 状态回传）
+///
+/// 调度链依赖状态回传（终态触发下一个任务），仅识别但无集成的 agent
+/// （tracks_input=false 或 integration=None）不视为支持，避免任务行
+/// 永远卡在 in_progress 导致队列停滞。
+pub fn is_supported(agent: &str) -> bool {
+    profile_for(agent)
+        .map(|p| p.tracks_input && p.session_integration != SessionIntegration::None)
+        .unwrap_or(false)
 }
 
 /// 任务型斜杠命令白名单（v1 为空，预留扩展点）
@@ -107,7 +165,10 @@ mod tests {
     fn detect_agent_claude_variants() {
         assert_eq!(detect_agent("claude"), "claude");
         assert_eq!(detect_agent("claude.exe"), "claude");
-        assert_eq!(detect_agent("C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd"), "claude");
+        assert_eq!(
+            detect_agent("C:\\Users\\dev\\AppData\\Roaming\\npm\\claude.cmd"),
+            "claude"
+        );
         assert_eq!(detect_agent("/usr/local/bin/claude --model opus"), "claude");
         assert_eq!(detect_agent("Claude"), "claude");
     }
@@ -150,12 +211,45 @@ mod tests {
         assert!(!is_command_input(""));
     }
 
-    // ---------- clear_command_for ----------
+    // ---------- clear_command_for / profile registry ----------
 
     #[test]
     fn clear_command_registry() {
         assert_eq!(clear_command_for("claude"), Some("/clear"));
+        // pi 无 /clear，上下文重建用 /new（开启新会话）
+        assert_eq!(clear_command_for("pi"), Some("/new"));
         assert_eq!(clear_command_for("codex"), None);
         assert_eq!(clear_command_for("unknown"), None);
+    }
+
+    #[test]
+    fn profile_capabilities() {
+        // claude / pi：完整支持（建任务行 + 状态回传）
+        assert!(is_supported("claude"));
+        assert!(is_supported("pi"));
+        assert_eq!(
+            session_integration_for("claude"),
+            super::SessionIntegration::ClaudeCodeHooks
+        );
+        assert_eq!(
+            session_integration_for("pi"),
+            super::SessionIntegration::PiExtension
+        );
+
+        // 仅识别未适配：不建任务行、不部署集成、不可调度
+        assert!(!is_supported("codex"));
+        assert!(!is_supported("opencode"));
+        assert_eq!(
+            session_integration_for("opencode"),
+            super::SessionIntegration::None
+        );
+
+        // 未知 agent：全部能力为空
+        assert!(!is_supported("unknown"));
+        assert_eq!(
+            session_integration_for("unknown"),
+            super::SessionIntegration::None
+        );
+        assert!(profile_for("unknown").is_none());
     }
 }
