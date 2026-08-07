@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// 插件生命周期管理器
@@ -106,7 +106,23 @@ impl PluginManager {
     /// 必须在 Tokio 运行时上下文中调用（Engine 创建需要 Handle）。
     /// async：内部需 await 注入 dispatcher，禁止在运行时内使用 block_on（会 panic）
     pub async fn init_wasm_runtime(&self) -> crate::Result<()> {
-        let runtime = Arc::new(WasmRuntime::new()?);
+        // AOT 缓存目录：宿主 cache 目录（非插件目录，防反序列化产物被投毒）
+        let aot_cache_dir = self
+            .app_handle
+            .path()
+            .app_cache_dir()
+            .ok()
+            .map(|d| d.join("wasm-aot"));
+        if let Some(dir) = &aot_cache_dir {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "Failed to create AOT cache dir, AOT cache disabled"
+                );
+            }
+        }
+        let runtime = Arc::new(WasmRuntime::new(aot_cache_dir)?);
 
         // 插件状态上报回调：置 Error + 持久化未启用 + 前端通知
         let plugins = self.plugins.clone();
