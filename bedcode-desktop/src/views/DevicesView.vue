@@ -23,125 +23,31 @@
       </div>
     </div>
 
-    <div class="flex-1 overflow-auto px-6 py-6 space-y-6">
-      <!-- ==================== PAIRING · QR + 配对码 ==================== -->
-      <section>
-        <div class="flex items-baseline justify-between mb-2">
-          <h3 class="wb-section-title">{{ t('desktop.device.sectionPairing') }}</h3>
-          <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('desktop.device.networkHint') }}</span>
-        </div>
-        <div class="grid gap-4 md:grid-cols-2">
-          <!-- ==================== QR 码卡片 ==================== -->
-          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
-            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
-            <div class="flex items-start justify-between gap-3 mb-4">
-              <div class="min-w-0">
-                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.qrDesc') }}</p>
-              </div>
-              <span v-if="qr.hasQr.value" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
-                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
-              </span>
-            </div>
+    <!-- ==================== Tab 切换：设备配对 / 设备列表 ==================== -->
+    <div class="px-6 pt-3 flex-shrink-0">
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)]">
+        <button
+          v-for="tab in deviceTabs"
+          :key="tab.key"
+          class="h-8 flex-1 px-4 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
+          :class="
+            activeTab === tab.key
+              ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
+              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+          "
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+    </div>
 
-            <!-- 主体：固定 168×168 可视区（与配对码卡片对齐）+ 说明与操作 -->
-            <div class="flex items-center gap-4 flex-1">
-              <div
-                class="shrink-0 w-[168px] h-[168px] rounded-lg flex items-center justify-center overflow-hidden"
-                :class="qr.hasQr.value
-                  ? 'bg-white border border-[var(--border)]'
-                  : 'bg-[var(--bg-page)] border border-dashed border-[var(--border-strong)]'"
-              >
-                <!-- 白底衬底保证二维码在暗色模式下可读 -->
-                <canvas v-show="qr.hasQr.value" ref="qrCanvasRef" class="block"></canvas>
-                <div v-if="!qr.hasQr.value" class="flex flex-col items-center justify-center text-center px-3 gap-1.5">
-                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.75 6.75h.008v.008H6.75V6.75zM6.75 16.5h.008v.008H6.75V16.5zM16.5 6.75h.008v.008H16.5V6.75zM13.5 13.5h.008v.008H13.5V13.5zM13.5 19.5h.008v.008H13.5V19.5zM19.5 13.5h.008v.008H19.5V13.5zM19.5 19.5h.008v.008H19.5V19.5zM16.5 16.5h.008v.008H16.5V16.5z" />
-                  </svg>
-                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.qrPlaceholder') }}</p>
-                </div>
-              </div>
-              <div class="min-w-0 flex-1 flex flex-col self-stretch py-1">
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
-                  {{ t('desktop.device.qrHint') }}
-                </p>
-                <p v-if="qr.hasQr.value" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
-                  {{ t('desktop.device.qrSingleUse') }}
-                </p>
-                <div class="flex items-center gap-2 mt-auto pt-3">
-                  <button
-                    v-if="qr.hasQr.value"
-                    class="wb-btn-ghost"
-                    @click="qr.clearQr()"
-                  >
-                    {{ t('common.button.cancel') }}
-                  </button>
-                  <button
-                    class="wb-btn-primary"
-                    :disabled="qr.isLoading.value"
-                    @click="qr.generateQr(selectedIp || undefined)"
-                  >
-                    {{ qr.hasQr.value ? t('common.button.refresh') : t('desktop.device.generateQr') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- ==================== 配对码卡片 ==================== -->
-          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
-            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
-            <div class="flex items-start justify-between gap-3 mb-4">
-              <div class="min-w-0">
-                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.pairingCodeDesc') }}</p>
-              </div>
-              <span v-if="pairingCode" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
-                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                {{ remainingSeconds }}{{ t('common.time.seconds') }}
-              </span>
-            </div>
-
-            <!-- 主体：固定 168×168 可视区（与 QR 卡片对齐）+ 说明与操作 -->
-            <div class="flex items-center gap-4 flex-1">
-              <div
-                class="shrink-0 w-[168px] h-[168px] rounded-lg flex items-center justify-center overflow-hidden bg-[var(--bg-page)]"
-                :class="pairingCode ? 'border border-[var(--border)]' : 'border border-dashed border-[var(--border-strong)]'"
-              >
-                <p v-if="pairingCode" class="font-mono text-[calc(28px*var(--ui-scale))] font-bold tracking-[0.15em] text-[var(--text-primary)] select-all break-all text-center px-2">
-                  {{ pairingCode.code }}
-                </p>
-                <div v-else class="flex flex-col items-center justify-center text-center px-3 gap-1.5">
-                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
-                </div>
-              </div>
-              <div class="min-w-0 flex-1 flex flex-col self-stretch py-1">
-                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
-                  {{ t('desktop.device.pairingCodeHint') }}
-                </p>
-                <p v-if="pairingCode" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
-                  {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
-                </p>
-                <div class="flex items-center gap-2 mt-auto pt-3">
-                  <button v-if="pairingCode" class="wb-btn-ghost" @click="cancelPairing">
-                    {{ t('common.button.cancel') }}
-                  </button>
-                  <button v-else class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
-                    {{ t('desktop.device.generateCode') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ==================== 网络信息条 ==================== -->
-        <div class="mt-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2.5 flex items-center gap-3 flex-wrap">
+    <div class="flex-1 overflow-auto px-6 py-5 space-y-6">
+      <Transition name="tab-fade" mode="out-in">
+      <!-- ==================== Tab1 设备配对 · 网络信息 + QR + 配对码（各占一行） ==================== -->
+      <div v-if="activeTab === 'pairing'" class="space-y-5">
+        <!-- ==================== 网络信息条（置顶） ==================== -->
+        <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2.5 flex items-center gap-3 flex-wrap">
           <span class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
             {{ t('desktop.device.networkTitle') }}
           </span>
@@ -162,8 +68,120 @@
             {{ t('desktop.device.noIpv4') }}
           </span>
         </div>
-      </section>
 
+          <!-- ==================== QR 码卡片（内容居中，旧版样式） ==================== -->
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
+            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.qrTitle') }}</h4>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.qrDesc') }}</p>
+              </div>
+              <span v-if="qr.hasQr.value" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
+                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
+                {{ qr.remainingSeconds.value }}{{ t('common.time.seconds') }}
+              </span>
+            </div>
+
+            <!-- 主体：二维码居中展示，下方说明与操作 -->
+            <div class="flex flex-col items-center text-center">
+              <template v-if="qr.hasQr.value">
+                <!-- 白底衬底保证二维码在暗色模式下可读 -->
+                <div class="inline-block bg-white p-3 rounded-lg border border-[var(--border)] mb-4">
+                  <canvas ref="qrCanvasRef" class="block"></canvas>
+                </div>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.qrHint') }}
+                </p>
+                <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
+                  {{ t('desktop.device.qrSingleUse') }}
+                </p>
+              </template>
+              <template v-else>
+                <div class="w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-page)] flex flex-col items-center justify-center text-center px-3 gap-1.5 mb-4">
+                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.75 6.75h.008v.008H6.75V6.75zM6.75 16.5h.008v.008H6.75V16.5zM16.5 6.75h.008v.008H16.5V6.75zM13.5 13.5h.008v.008H13.5V13.5zM13.5 19.5h.008v.008H13.5V19.5zM19.5 13.5h.008v.008H19.5V13.5zM19.5 19.5h.008v.008H19.5V19.5zM16.5 16.5h.008v.008H16.5V16.5z" />
+                  </svg>
+                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.qrPlaceholder') }}</p>
+                </div>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.qrHint') }}
+                </p>
+              </template>
+              <div class="flex items-center justify-center gap-2 mt-4">
+                <button
+                  v-if="qr.hasQr.value"
+                  class="wb-btn-ghost"
+                  @click="qr.clearQr()"
+                >
+                  {{ t('common.button.cancel') }}
+                </button>
+                <button
+                  class="wb-btn-primary"
+                  :disabled="qr.isLoading.value"
+                  @click="qr.generateQr(selectedIp || undefined)"
+                >
+                  {{ qr.hasQr.value ? t('common.button.refresh') : t('desktop.device.generateQr') }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ==================== 配对码卡片（内容居中，旧版样式） ==================== -->
+          <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col">
+            <!-- 头部：标题 + 描述，右侧倒计时徽标 -->
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.device.pairingCodeTitle') }}</h4>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">{{ t('desktop.device.pairingCodeDesc') }}</p>
+              </div>
+              <span v-if="pairingCode" class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)] flex-shrink-0">
+                <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
+                {{ remainingSeconds }}{{ t('common.time.seconds') }}
+              </span>
+            </div>
+
+            <!-- 主体：配对码居中大字展示，下方说明与操作 -->
+            <div class="flex flex-col items-center text-center">
+              <template v-if="pairingCode">
+                <p class="font-mono text-[calc(36px*var(--ui-scale))] font-bold tracking-[0.15em] text-[var(--text-primary)] select-all break-all text-center px-2 mb-4">
+                  {{ pairingCode.code }}
+                </p>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.pairingCodeHint') }}
+                </p>
+                <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
+                  {{ t('desktop.device.codeExpiresIn', { seconds: remainingSeconds }) }}
+                </p>
+                <div class="flex items-center justify-center gap-2 mt-4">
+                  <button class="wb-btn-ghost" @click="cancelPairing">
+                    {{ t('common.button.cancel') }}
+                  </button>
+                </div>
+              </template>
+              <template v-else>
+                <div class="w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-page)] flex flex-col items-center justify-center text-center px-3 gap-1.5 mb-4">
+                  <svg class="w-7 h-7 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight">{{ t('desktop.device.pairingCodePlaceholder') }}</p>
+                </div>
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed">
+                  {{ t('desktop.device.pairingCodeHint') }}
+                </p>
+                <div class="flex items-center justify-center gap-2 mt-4">
+                  <button class="wb-btn-primary" :disabled="isLoading" @click="generateCode">
+                    {{ t('desktop.device.generateCode') }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+      </div>
+
+      <!-- ==================== Tab2 设备列表 · 在线 / 离线 ==================== -->
+      <div v-else class="space-y-6">
       <!-- ==================== ONLINE 分区 ==================== -->
       <section>
         <h3 class="wb-section-title">
@@ -259,6 +277,8 @@
           </article>
         </div>
       </section>
+      </div>
+      </Transition>
     </div>
 
     <!-- 移除设备确认 -->
@@ -302,6 +322,14 @@ const pairing = usePairing()
 const network = useNetwork()
 const connected = useConnectedDevices()
 const toast = useToast()
+
+// ==================== Tab 切换：设备配对 / 设备列表 ====================
+type TabKey = 'pairing' | 'devices'
+const activeTab = ref<TabKey>('pairing')
+const deviceTabs: { key: TabKey; label: string }[] = [
+  { key: 'pairing', label: t('desktop.device.sectionPairing') },
+  { key: 'devices', label: t('desktop.device.tabDevices') },
+]
 
 // 从配置获取端口与 QR host
 const port = computed(() => settingsStore.settings.network.port)
@@ -357,7 +385,7 @@ watch(
         token: data.token,
       })
       await QRCode.toCanvas(qrCanvasRef.value, qrContent, {
-        width: 148,
+        width: 192,
         margin: 2,
         color: {
           dark: '#000000',
@@ -591,3 +619,19 @@ function formatDate(dateStr: string): string {
   return dateFormatter.value.format(date)
 }
 </script>
+
+<style scoped>
+/* Tab 切换过渡：淡入淡出 + 轻微 Y 位移，避免切换闪现 */
+.tab-fade-enter-active,
+.tab-fade-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.tab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>

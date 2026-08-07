@@ -4,7 +4,7 @@
  *
  * Tab1 当前任务：创建新任务（选择运行中会话）+ 执行中的任务列表
  *              + 执行任务（各会话待执行队列）
- * Tab2 任务记录：筛选条（状态/agent/来源/时间范围）+ 分页任务列表 + 行内详情展开
+ * Tab2 任务日志：筛选条（状态/agent/来源/时间范围）+ 分页任务列表 + 行内详情展开
  * Tab3 定时任务：新建表单（会话配置/触发时间/prompts 列表）+ 任务列表 + 删除
  * Tab4 统计：筛选条件下任务统计（状态分布 / 完成数 / 终态数 / 成功率 / 平均耗时）
  *
@@ -662,6 +662,7 @@ function onLiveChanged() {
     </div>
 
     <!-- Tab1 当前任务 -->
+    <Transition name="tab-fade" mode="out-in">
     <div v-if="activeTab === 'current'" class="flex-1 flex flex-col min-h-0">
       <!-- 滚动内容：创建任务 / 当前任务 / 执行任务 -->
       <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
@@ -822,8 +823,8 @@ function onLiveChanged() {
       </div>
     </div>
 
-    <!-- Tab2 任务记录 -->
-    <div v-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
+    <!-- Tab2 任务日志 -->
+    <div v-else-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0 max-h-[70vh]">
       <!-- 筛选条 -->
       <div class="px-4 pt-3 flex-shrink-0 space-y-2">
         <div class="grid grid-cols-3 gap-1.5">
@@ -889,27 +890,24 @@ function onLiveChanged() {
 
         <!-- 任务列表 -->
         <div v-if="tasks.length > 0">
-          <h3 class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-            {{ t('historySectionTitle') }}
-          </h3>
-          <div class="space-y-1">
+          <div class="space-y-0.5">
             <div
               v-for="task in tasks"
               :key="task.id"
               class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
               @click="toggleTask(task)"
             >
-              <div class="flex items-center gap-2 px-3 py-2">
-                <div class="w-2 h-2 rounded-full flex-shrink-0" :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"></div>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm text-[var(--text-primary)] truncate">{{ task.description || task.session_id }}</p>
-                  <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ formatTime(task.started_at || task.created_at) }}</p>
-                </div>
-                <span class="text-xs flex-shrink-0" :class="statusColor[task.status] || 'text-[var(--text-secondary)]'">
+              <div class="flex items-center gap-2 px-2.5 py-1.5">
+                <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"></div>
+                <p class="flex-1 min-w-0 text-xs text-[var(--text-primary)] truncate">{{ task.description || task.session_id }}</p>
+                <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] flex-shrink-0">
+                  {{ formatTime(task.started_at || task.created_at) }}
+                </span>
+                <span class="text-[calc(11px*var(--ui-scale))] flex-shrink-0" :class="statusColor[task.status] || 'text-[var(--text-secondary)]'">
                   {{ statusLabel[task.status] || task.status }}
                 </span>
                 <svg
-                  class="w-4 h-4 text-[var(--text-tertiary)] flex-shrink-0 transition-transform duration-200"
+                  class="w-3 h-3 text-[var(--text-tertiary)] flex-shrink-0 transition-transform duration-200"
                   :class="{ 'rotate-90': expandedId === task.id }"
                   fill="none"
                   stroke="currentColor"
@@ -920,7 +918,7 @@ function onLiveChanged() {
               </div>
 
               <!-- 行内详情展开 -->
-              <div v-if="expandedId === task.id" class="px-3 pb-3 pt-2 border-t border-[var(--border)]">
+              <div v-if="expandedId === task.id" class="px-3 pb-2.5 pt-1.5 border-t border-[var(--border)]">
                 <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
                   <span class="text-[var(--text-tertiary)]">{{ t('detailAgent') }}</span>
                   <span class="text-[var(--text-primary)] truncate min-w-0">{{ task.agent || '-' }}</span>
@@ -937,7 +935,7 @@ function onLiveChanged() {
                   <span class="text-[var(--text-tertiary)]">{{ t('detailExitReason') }}</span>
                   <span class="text-[var(--text-primary)] truncate min-w-0">{{ task.exit_reason || '-' }}</span>
                 </div>
-                <div class="text-xs mt-1.5">
+                <div class="text-xs mt-1">
                   <span class="text-[var(--text-tertiary)]">{{ t('detailDescription') }}: </span>
                   <span class="text-[var(--text-primary)] whitespace-pre-wrap break-words">{{ task.description || '-' }}</span>
                 </div>
@@ -986,7 +984,7 @@ function onLiveChanged() {
     </div>
 
     <!-- Tab3 定时任务 -->
-    <div v-if="activeTab === 'scheduled'" class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+    <div v-else-if="activeTab === 'scheduled'" class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
       <!-- 新建/收起 -->
       <button
         class="w-full h-8 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
@@ -1117,7 +1115,7 @@ function onLiveChanged() {
     </div>
 
     <!-- Tab4 统计 -->
-    <div v-if="activeTab === 'stats'" class="flex-1 overflow-y-auto px-4 py-3">
+    <div v-else class="flex-1 overflow-y-auto px-4 py-3">
       <!-- 加载中 -->
       <div v-if="!stats" class="flex justify-center py-8">
         <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
@@ -1180,5 +1178,22 @@ function onLiveChanged() {
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
+
+<style scoped>
+/* Tab 切换过渡：淡入淡出 + 轻微 Y 位移，避免切换闪现 */
+.tab-fade-enter-active,
+.tab-fade-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.tab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>

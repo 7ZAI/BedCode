@@ -108,6 +108,7 @@ export default {
       sectionPairing: 'Pairing',
       sectionOnline: 'Online',
       sectionOffline: 'Offline',
+      tabDevices: 'Devices',
       metadataAddress: 'Address',
       pairedAt: 'Paired at {date}',
       lastSeen: 'Last seen {date}',

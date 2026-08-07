@@ -108,6 +108,7 @@ export default {
       sectionPairing: '设备配对',
       sectionOnline: '在线',
       sectionOffline: '离线',
+      tabDevices: '设备列表',
       metadataAddress: '地址',
       pairedAt: '配对于 {date}',
       lastSeen: '上次连接 {date}',

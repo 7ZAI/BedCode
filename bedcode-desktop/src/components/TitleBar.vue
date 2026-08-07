@@ -1,13 +1,13 @@
 <template>
   <header
-    class="h-12 bg-[var(--bg-card)] border-b border-[var(--border)] flex items-center justify-between select-none flex-shrink-0"
+    class="h-10 bg-[var(--bg-card)] border-b border-[var(--border)] flex items-center justify-between select-none flex-shrink-0"
     data-tauri-drag-region
   >
     <!-- 左：logo + 名称 -->
     <div class="flex items-center gap-3 px-4" data-tauri-drag-region>
       <!-- 品牌图标：内联 src-tauri/icons/icon.svg，填充色随 light/dark 主题切换（浅色=深底浅纹，夜间=浅底深纹） -->
       <svg
-        class="w-6 h-6 flex-shrink-0 [--logo-bg-start:#2E2A22] [--logo-bg-end:#0A0907] [--logo-fg:#FFFFFF] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#1C1917]"
+        class="w-5 h-5 flex-shrink-0 [--logo-bg-start:#2E2A22] [--logo-bg-end:#0A0907] [--logo-fg:#FFFFFF] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#1C1917]"
         viewBox="0 0 100 100"
         aria-hidden="true"
       >
@@ -34,14 +34,14 @@
       <div class="flex items-center titlebar-buttons">
         <button
           @click="minimize"
-          class="w-9 h-8 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+          class="w-8 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
           :title="t('desktop.terminal.minimize')"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M20 12H4" /></svg>
         </button>
         <button
           @click="toggleMaximize"
-          class="w-9 h-8 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+          class="w-8 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
           :title="t('desktop.terminal.maximize')"
         >
           <svg v-if="!isMaximized" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="4" y="4" width="16" height="16" rx="1" /></svg>
@@ -49,7 +49,7 @@
         </button>
         <button
           @click="close"
-          class="w-9 h-8 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[#B42318] hover:text-white transition-colors"
+          class="w-8 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[#B42318] hover:text-white transition-colors"
           :title="t('desktop.terminal.close')"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -61,7 +61,7 @@
 
 <script setup lang="ts">
 /**
- * 标题栏 — Warm Workbench 风格：48px 工具栏式，左品牌，右窗口控制
+ * 标题栏 — Warm Workbench 风格：40px 工具栏式，左品牌，右窗口控制
  * 保留插件标题栏扩展点
  */
 import { ref, onMounted, onUnmounted } from 'vue'

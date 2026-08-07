@@ -151,6 +151,11 @@ const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
 const bgOpacity = ref<number>(settingsStore.settings.ui.terminal_bg_opacity ?? 30)
 const bgImageUrl = ref('')
 
+// DEC Mode 2026 同步输出序列：包裹一次写入，让 xterm 缓存所有变化到下一帧
+// 统一渲染，避免 WebGL 渲染器逐块绘制产生的视觉撕裂/重影
+const SYNC_OUTPUT_START = '\x1b[?2026h'
+const SYNC_OUTPUT_END = '\x1b[?2026l'
+
 // xterm.js 实例（组件内）
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -197,6 +202,13 @@ function decodeBase64(base64: string): string {
   }
 }
 
+// DEC Mode 2026 同步输出：包裹数据让渲染器缓存到下一帧统一绘制，
+// 消除 WebGL 逐块绘制造成的视觉撕裂/重影（xterm 6.0+ 支持）
+function writeSync(data: string) {
+  if (!terminal) return
+  terminal.write(SYNC_OUTPUT_START + data + SYNC_OUTPUT_END)
+}
+
 // PTY 输出监听：增量回调模式，每次输出直接写入 xterm + 全局缓存
 // 严格去重：忽略 index <= lastReplayedIndex 的事件（已在历史回放中写入）
 usePtyOutput(sessionId, (data: string, index: number) => {
@@ -206,7 +218,7 @@ usePtyOutput(sessionId, (data: string, index: number) => {
   terminalHistory.append(data)
 
   if (terminal) {
-    terminal.write(data)
+    writeSync(data)
     // 只在实际写入终端时推进水位：历史回放会跳过 <= 水位的重叠事件，
     // 避免窗口打开时同一批输出被实时流与历史回放各写一次（重复行）
     lastReplayedIndex = advanceWatermark(lastReplayedIndex, index)
@@ -497,6 +509,8 @@ function initTerminal() {
     cursorWidth: 1,
     scrollback: 10000,
     allowProposedApi: true,
+    // 启用内置平滑滚动（5.3+ 支持），scrollToBottom 等 API 自动生效
+    smoothScrollDuration: 100,
     // 允许背景透明：必须在 open() 前设置，否则渲染器会把 rgba 背景强制转为不透明，
     // 导致背景图片层被终端背景色遮盖
     allowTransparency: true,
@@ -756,7 +770,7 @@ onMounted(async () => {
         const { events: pending, nextWatermark } = pendingReplayEvents(history.events, lastReplayedIndex)
         for (const event of pending) {
           const data = decodeBase64(event.data)
-          terminal.write(data)
+          writeSync(data)
           terminalHistory.append(data)
           lastReplayedIndex = advanceWatermark(lastReplayedIndex, event.index)
         }
@@ -769,7 +783,7 @@ onMounted(async () => {
       // 回放失败时回退到全局缓存
       const cachedHistory = terminalHistory.getHistory()
       if (cachedHistory) {
-        terminal.write(cachedHistory)
+        writeSync(cachedHistory)
         scrollToBottom()
       }
     }
@@ -777,7 +791,7 @@ onMounted(async () => {
     // 无 Rust 端历史时，从全局缓存恢复
     const history = terminalHistory.getHistory()
     if (history) {
-      terminal.write(history)
+      writeSync(history)
       scrollToBottom()
     }
   }

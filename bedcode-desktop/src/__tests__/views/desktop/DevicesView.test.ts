@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import i18n from '@/locales'
@@ -126,6 +126,14 @@ function mountView() {
   return { wrapper, pinia }
 }
 
+/** 切换到"设备列表"tab（在线/离线设备列表） */
+async function switchToDevicesTab(wrapper: VueWrapper) {
+  const btn = wrapper.findAll('button').find((b) => b.text().includes('设备列表'))
+  expect(btn).toBeDefined()
+  await btn!.trigger('click')
+  await flushPromises()
+}
+
 describe('DevicesView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -168,6 +176,9 @@ describe('DevicesView', () => {
   it('should show empty paired devices state', async () => {
     const { wrapper } = mountView()
     await flushPromises()
+
+    // 设备列表在"设备列表"tab 中，先切换过去
+    await switchToDevicesTab(wrapper)
 
     expect(wrapper.text()).toContain('在线 · 0')
     expect(wrapper.text()).toContain('暂无数据')
@@ -216,6 +227,9 @@ describe('DevicesView', () => {
     const { wrapper, pinia } = mountView()
     await flushPromises()
 
+    // 设备列表在"设备列表"tab 中，先切换过去
+    await switchToDevicesTab(wrapper)
+
     const deviceStore = useDeviceStore(pinia)
     deviceStore.pairedDevices = [
       {
@@ -239,6 +253,9 @@ describe('DevicesView', () => {
   it('should open remove device dialog and confirm removal', async () => {
     const { wrapper, pinia } = mountView()
     await flushPromises()
+
+    // 设备列表在"设备列表"tab 中，先切换过去
+    await switchToDevicesTab(wrapper)
 
     const deviceStore = useDeviceStore(pinia)
     deviceStore.pairedDevices = [

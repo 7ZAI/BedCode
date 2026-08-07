@@ -44,7 +44,6 @@ export interface MessageSchema {
   // ==================== 任务历史视图 ====================
   historyTitle: string
   queueTitle: string
-  historySectionTitle: string
   emptyHistory: string
   emptyHistoryHint: string
   // ==================== Tab 视图 ====================
