@@ -72,8 +72,8 @@ function clearError() {
 // ==================== 任务输入框（textarea 自动增高，类 AI 对话输入框） ====================
 
 const inputRef = ref<HTMLTextAreaElement | null>(null)
-// 与 CSS max-height 保持一致（默认 2 行，最多 6 行，超出滚动）
-const INPUT_MAX_HEIGHT = 132
+// 与 CSS max-height 保持一致（默认 2 行，最多 10 行，超出滚动）
+const INPUT_MAX_HEIGHT = 200
 
 function resizeInput() {
   const el = inputRef.value

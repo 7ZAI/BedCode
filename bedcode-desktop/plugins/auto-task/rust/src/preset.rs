@@ -8,7 +8,7 @@
 //! 同步通道（broadcast_sync），与 SyncEvent 线协议解耦。
 //!
 //! 生命周期：create → 存 preset_tasks → add-preset-to-queue 复制进
-//! task_queue（source='preset'）并删除预设。
+//! task_queue（source='queue'，预存入队后归为自动任务）并删除预设。
 
 use bedcode_plugin_api::constants::EVENT_TASK_PRESET_CHANGED;
 use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase};
@@ -74,10 +74,27 @@ pub fn delete_preset(host: &WasmHost, preset_id: &str) -> bool {
     }
 }
 
+/// 更新预设任务内容；返回是否实际更新（不存在/已被消耗时为 false）
+pub fn update_preset(host: &WasmHost, preset_id: &str, prompt: &str) -> bool {
+    let affected = host
+        .plugin_db_execute_params(
+            "UPDATE preset_tasks SET prompt = ?1 WHERE id = ?2",
+            &sql_params![prompt, preset_id],
+        )
+        .unwrap_or(-1);
+
+    if affected > 0 {
+        host.log_info(&format!("Preset task updated: id={}", preset_id));
+        true
+    } else {
+        false
+    }
+}
+
 /// 把预设任务加入指定会话队列（一次性消耗，原子语义）
 ///
 /// 顺序保证单消费者：先删除预设（affected=1 才继续），再复制 prompt 进
-/// task_queue 末尾（source='preset'）。并发场景下只有一个调用方成功删除，
+/// task_queue 末尾（source='queue'）。并发场景下只有一个调用方成功删除，
 /// 其余收到「已消耗」错误，不会重复入队。
 ///
 /// 返回 (task_id, position)
@@ -95,7 +112,10 @@ pub fn add_preset_to_queue(
         .ok()
         .flatten()
         .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|row| row.get("prompt").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .and_then(|row| {
+            row.get("prompt")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("preset task not found or already consumed: {}", preset_id))?;
 
@@ -104,8 +124,10 @@ pub fn add_preset_to_queue(
         return Err(format!("preset task already consumed: {}", preset_id));
     }
 
-    // 3. 复制进队列（source='preset'，task_history 可区分来源）
-    let (task_id, position) = crate::queue::add_task_with_source(host, session_id, &prompt, "preset");
+    // 3. 复制进队列（source='queue'：预存被消费后即归入自动任务，
+    //    来源只区分 手动输入/自动任务/定时任务 三种）
+    let (task_id, position) =
+        crate::queue::add_task_with_source(host, session_id, &prompt, "queue");
 
     host.log_info(&format!(
         "Preset task enqueued: preset_id={} task_id={} session_id={} position={}",
@@ -138,7 +160,10 @@ fn new_id(host: &WasmHost) -> String {
         .ok()
         .flatten()
         .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|row| row.get("id").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .and_then(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
         .unwrap_or_else(|| {
             let count = host
                 .plugin_db_query("SELECT count(*) AS c FROM preset_tasks")

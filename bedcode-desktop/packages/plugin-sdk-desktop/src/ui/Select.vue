@@ -11,8 +11,9 @@
         :id="id"
         type="button"
         :disabled="disabled"
-        class="w-full h-[var(--input-height)] border rounded-input px-4 text-sm text-left transition-all duration-200 outline-none cursor-pointer bg-[var(--bg-input)] text-[var(--text-primary)] focus:border-brand focus:shadow-input-focus shadow-xs dark:shadow-none flex items-center justify-between gap-2"
+        class="w-full border text-left transition-all duration-200 outline-none cursor-pointer bg-[var(--bg-input)] text-[var(--text-primary)] focus:border-brand focus:shadow-input-focus shadow-xs dark:shadow-none flex items-center justify-between gap-2"
         :class="[
+          triggerSizeCls,
           error ? 'border-red-500' : 'border-[var(--border-input)]',
           { 'opacity-50 cursor-not-allowed': disabled }
         ]"
@@ -41,7 +42,7 @@
           <ul class="py-1 max-h-60 overflow-y-auto">
             <li
               v-if="placeholder"
-              class="px-4 py-2.5 text-sm text-[var(--text-tertiary)] cursor-default select-none"
+              :class="['text-[var(--text-tertiary)] cursor-default select-none', optionRowCls]"
               @click="select('')"
             >
               {{ placeholder }}
@@ -49,8 +50,9 @@
             <li
               v-for="(option, index) in options"
               :key="option.value"
-              class="px-4 py-2.5 text-sm cursor-pointer select-none transition-colors duration-150"
               :class="[
+                optionRowCls,
+                'cursor-pointer select-none transition-colors duration-150',
                 hoveredIndex === index
                   ? 'bg-[var(--color-primary-light)] text-brand font-medium'
                   : 'text-[var(--text-primary)]'
@@ -73,33 +75,40 @@
 
 <script setup lang="ts">
 /**
- * Select - 自定义下拉选择组件
+ * Select - 宿主共享自定义下拉选择组件
  *
- * 替代原生 <select>，hover 样式完全由 CSS token 控制，适配深色/浅色主题
+ * 替代原生 <select>，hover 样式完全由 CSS token 控制，适配深色/浅色主题。
+ * 同时提供给插件 SDK（@bedcode/plugin-sdk-desktop/ui）供插件引用。
+ *
+ * - size="sm"：插件紧凑布局（32px/12px）；默认 md 与宿主表单一致（--input-height）
+ * - open 事件：下拉展开时触发（插件可借此静默刷新选项，无原生组件禁用打断问题）
  */
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
-interface Option {
+export interface SelectOption {
   value: string | number
   label: string
 }
 
-interface Props {
+export interface Props {
   modelValue: string | number
   label?: string
-  options: Option[]
+  options: SelectOption[]
   placeholder?: string
   disabled?: boolean
   required?: boolean
   error?: string
+  /** md：宿主表单默认（--input-height 36px）；sm：插件紧凑布局（32px/12px） */
+  size?: 'md' | 'sm'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   disabled: false,
   required: false,
+  size: 'md',
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'open'])
 
 const id = `select-${Math.random().toString(36).slice(2, 9)}`
 const isOpen = ref(false)
@@ -112,6 +121,16 @@ const selectedLabel = computed(() => {
   const opt = props.options.find(o => o.value === props.modelValue)
   return opt?.label ?? ''
 })
+
+// 尺寸分支：sm 为插件紧凑布局（与插件控件 h-8/text-xs 一致），md 与宿主表单控件一致
+const triggerSizeCls = computed(() =>
+  props.size === 'sm'
+    ? 'h-8 px-2 text-xs rounded-[6px]'
+    : 'h-[var(--input-height)] px-4 text-sm rounded-input',
+)
+const optionRowCls = computed(() =>
+  props.size === 'sm' ? 'px-2 py-1.5 text-xs' : 'px-4 py-2.5 text-sm',
+)
 
 function computePosition() {
   if (!triggerRef.value) return
@@ -132,6 +151,7 @@ function open() {
   if (props.disabled) return
   isOpen.value = true
   hoveredIndex.value = -1
+  emit('open')
   nextTick(computePosition)
 }
 

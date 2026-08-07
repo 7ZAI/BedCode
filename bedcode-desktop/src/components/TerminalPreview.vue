@@ -14,26 +14,20 @@
 
       <div class="flex items-center gap-2">
         <!-- Theme Switch -->
-        <select
+        <Select
           v-model="terminalTheme"
-          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
+          :options="themeSelectOptions"
+          size="sm"
           :title="$t('desktop.terminal.theme')"
-        >
-          <option v-for="(name, key) in themeNames" :key="key" :value="key">
-            {{ name }}
-          </option>
-        </select>
+        />
 
         <!-- Font Size -->
-        <select
+        <Select
           v-model="fontSize"
-          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
+          :options="fontSizeSelectOptions"
+          size="sm"
           :title="$t('desktop.terminal.fontSize')"
-        >
-          <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
-            {{ size }}px
-          </option>
-        </select>
+        />
 
         <!-- Clear Button -->
         <Button variant="ghost" size="sm" @click="clearTerminal" :title="$t('desktop.terminal.clearScreen')">
@@ -94,6 +88,7 @@ import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import Button from '@/components/Button.vue'
+import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { usePtyOutput } from '@/composables/usePtyOutput'
 import {
@@ -397,6 +392,14 @@ const themeNames: Record<string, string> = {
   solarizedLight: 'Solarized Light',
   ubuntu: 'Ubuntu',
 }
+
+// 主题/字号下拉选项：与原生 <option> 一一对应，供共享 Select 使用
+const themeSelectOptions = computed(() =>
+  Object.entries(themeNames).map(([value, label]) => ({ value, label })),
+)
+const fontSizeSelectOptions = computed(() =>
+  [12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
+)
 
 function getTheme() {
   const base = terminalThemes[terminalTheme.value] || terminalThemes.default

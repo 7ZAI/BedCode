@@ -8,6 +8,8 @@
  */
 import { inject } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+// 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
+import Select from '@bedcode/plugin-sdk-desktop/ui'
 import type { Settings } from '../types'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -25,9 +27,15 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-function onConcurrencyChange(e: Event): void {
-  const value = Number((e.target as HTMLSelectElement).value)
-  emit('setConcurrency', value)
+// 并发数选项（1..8）：SDK Select 的 options 为 {value,label} 对象数组
+const concurrencyOptions = Array.from({ length: 8 }, (_, i) => ({
+  value: i + 1,
+  label: String(i + 1),
+}))
+
+// SDK Select 的 modelValue 为 string | number，统一转 number 后上抛
+function onConcurrencyChange(value: string | number): void {
+  emit('setConcurrency', Number(value))
 }
 </script>
 
@@ -85,13 +93,12 @@ function onConcurrencyChange(e: Event): void {
         <!-- 并发数 -->
         <section>
           <h3 class="ft-settings-section-title">{{ t('transfer.settings.concurrency') }}</h3>
-          <select
-            class="ft-select"
-            :value="settings.concurrency"
-            @change="onConcurrencyChange"
-          >
-            <option v-for="n in 8" :key="n" :value="n">{{ n }}</option>
-          </select>
+          <Select
+            :model-value="settings.concurrency"
+            :options="concurrencyOptions"
+            size="sm"
+            @update:model-value="onConcurrencyChange"
+          />
         </section>
 
         <!-- 安全告知（spec §10 常驻） -->

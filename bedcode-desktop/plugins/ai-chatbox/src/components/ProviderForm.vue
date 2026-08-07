@@ -68,14 +68,7 @@
       <!-- API 格式 -->
       <div>
         <label class="block text-sm text-[var(--text-secondary)] mb-1.5">{{ t('desktop.plugin.aiChatbox.apiFormat') }}</label>
-        <select
-          v-model="form.apiFormat"
-          class="w-full bg-[var(--bg-card)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 transition-colors appearance-none cursor-pointer"
-        >
-          <option v-for="opt in apiFormatOptions" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
+        <Select v-model="form.apiFormat" :options="apiFormatOptions" size="sm" />
       </div>
 
       <!-- 模型列表 -->
@@ -110,6 +103,8 @@ import { reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getI18n } from '@bedcode/plugin-sdk-desktop'
 import ModelListEditor from './ModelListEditor.vue'
+// 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
+import Select from '@bedcode/plugin-sdk-desktop/ui'
 import type { ApiProvider, ApiFormat } from '../types'
 import { API_FORMAT_OPTIONS, generateId } from '../types'
 

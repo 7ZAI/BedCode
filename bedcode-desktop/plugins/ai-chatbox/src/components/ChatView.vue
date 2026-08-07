@@ -14,25 +14,25 @@
     <template v-else>
       <header class="px-4 py-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-hover)]">
         <div class="flex items-center gap-2">
-          <select
+          <Select
             v-if="hasProvider"
-            :value="activeProviderId"
-            class="bg-[var(--bg-card)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--text-primary)] outline-none"
-            @change="setActiveProvider(($event.target as HTMLSelectElement).value)"
-          >
-            <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+            :model-value="activeProviderId"
+            :options="providerOptions"
+            size="sm"
+            class="w-44 flex-shrink-0"
+            @update:model-value="onProviderChange"
+          />
           <span v-else class="text-xs text-[var(--text-tertiary)]">{{ t('desktop.plugin.aiChatbox.noProvider') }}</span>
 
           <!-- 模型选择 -->
-          <select
+          <Select
             v-if="hasProvider && currentModels.length > 1"
-            :value="activeModel"
-            class="bg-[var(--bg-card)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--text-primary)] outline-none"
-            @change="setActiveModel(($event.target as HTMLSelectElement).value)"
-          >
-            <option v-for="m in currentModels" :key="m" :value="m">{{ m }}</option>
-          </select>
+            :model-value="activeModel"
+            :options="modelOptions"
+            size="sm"
+            class="w-44 flex-shrink-0"
+            @update:model-value="onModelChange"
+          />
         </div>
         <div class="flex items-center gap-1">
           <button
@@ -115,6 +115,8 @@ import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import ProviderConfigPage from './ProviderConfigPage.vue'
 import PromptOptimizeDialog from './PromptOptimizeDialog.vue'
+// 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
+import Select from '@bedcode/plugin-sdk-desktop/ui'
 import { useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePromptOptimizer } from '../composables/usePromptOptimizer'
@@ -163,6 +165,21 @@ const showConfigPage = ref(false)
 
 /** 当前供应商的模型列表 */
 const currentModels = computed(() => activeProvider.value?.models || [])
+
+/** 供应商下拉选项（SDK Select 的 {value,label} 结构） */
+const providerOptions = computed(() => providers.value.map(p => ({ value: p.id, label: p.name })))
+
+/** 模型下拉选项（模型名既是值也是标签） */
+const modelOptions = computed(() => currentModels.value.map(m => ({ value: m, label: m })))
+
+// Select 的 update:model-value 载荷为 string|number，统一转 string 后走原有联动逻辑
+function onProviderChange(value: string | number): void {
+  setActiveProvider(String(value))
+}
+
+function onModelChange(value: string | number): void {
+  setActiveModel(String(value))
+}
 
 watch(() => messages.value.length, () => {
   nextTick(() => {

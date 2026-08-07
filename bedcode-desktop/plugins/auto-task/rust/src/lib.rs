@@ -317,6 +317,25 @@ impl WasmPlugin for AutoTaskPlugin {
 
                 Ok(serde_json::json!({ "deleted": true }))
             }
+            "auto-task.update-preset-task" => {
+                let preset_id = args.str_or("preset_id", "");
+                let prompt = args.str_or("prompt", "").trim().to_string();
+                if preset_id.is_empty() || prompt.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "update-preset-task: missing preset_id or prompt"
+                    ));
+                }
+
+                if !preset::update_preset(&host, &preset_id, &prompt) {
+                    return Err(anyhow::anyhow!(
+                        "update-preset-task: preset not found: {}",
+                        preset_id
+                    ));
+                }
+                preset::broadcast_preset_changed(&host, &preset_id, "update");
+
+                Ok(serde_json::json!({ "updated": true }))
+            }
             "auto-task.add-preset-to-queue" => {
                 let session_id = args.str_or("session_id", "");
                 let preset_id = args.str_or("preset_id", "");

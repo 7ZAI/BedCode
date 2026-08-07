@@ -20,6 +20,12 @@ use crate::Result;
 
 use super::metrics::{MetricsCollector, ServerMetrics};
 
+/// crash monitor 轮询间隔（毫秒）
+///
+/// 正常停止时 supervisor 只置取消信号、不发送广播事件，
+/// monitor 需周期性唤醒以感知取消信号并退出，避免任务悬挂
+const CRASH_MONITOR_POLL_INTERVAL_MS: u64 = 500;
+
 /// 服务器状态
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -128,23 +134,48 @@ impl ServerSupervisor {
                 let cancel_flag = Arc::new(AtomicBool::new(false));
                 inner.metrics_task_cancel = cancel_flag.clone();
                 let inner_arc = self.inner.clone();
-                tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag));
+                tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag.clone()));
 
                 // 监听 Actix 线程异常退出事件
-                // 当 crash monitor 检测到 Actix 线程崩溃时，会发送 ServerEvent::Stopped
+                // 当 crash monitor 检测到 Actix 线程崩溃时，会发送 ServerEvent::Stopped。
+                // 正常停止由 supervisor 自身处理状态，不广播事件（见 WebSocketManager::stop），
+                // 因此 monitor 只需感知取消信号即退出，避免悬挂
                 let event_rx = ws_manager.subscribe();
                 let inner_for_monitor = self.inner.clone();
+                let monitor_cancel = cancel_flag.clone();
                 tokio::spawn(async move {
                     let mut rx = event_rx;
-                    // 等待 Stopped 事件（正常 stop 由 supervisor 自身处理，这里只关心 crash）
-                    if let Ok(crate::server::ws::ServerEvent::Stopped) = rx.recv().await {
-                        let mut inner = inner_for_monitor.write().await;
-                        // 仅在 Running 状态下处理（避免与正常 stop 冲突）
-                        if inner.status == ServerStatus::Running {
-                            tracing::error!("Server crashed unexpectedly, updating supervisor state");
-                            inner.status = ServerStatus::Stopped;
-                            inner.start_time = None;
-                            inner.metrics_task_cancel.store(true, Ordering::Relaxed);
+                    loop {
+                        if monitor_cancel.load(Ordering::Relaxed) {
+                            tracing::debug!("Server crash monitor cancelled");
+                            break;
+                        }
+                        match tokio::time::timeout(
+                            std::time::Duration::from_millis(CRASH_MONITOR_POLL_INTERVAL_MS),
+                            rx.recv(),
+                        )
+                        .await
+                        {
+                            // 收到 Started 事件（正常启动广播）：忽略，继续监听崩溃
+                            Ok(Ok(crate::server::ws::ServerEvent::Started)) => {}
+                            // 收到 Stopped 事件（仅崩溃路径发送）→ 判定为崩溃
+                            Ok(Ok(crate::server::ws::ServerEvent::Stopped)) => {
+                                let mut inner = inner_for_monitor.write().await;
+                                // 仅在 Running 状态下处理（避免与正常 stop 冲突）
+                                if inner.status == ServerStatus::Running {
+                                    tracing::error!(
+                                        "Server crashed unexpectedly, updating supervisor state"
+                                    );
+                                    inner.status = ServerStatus::Stopped;
+                                    inner.start_time = None;
+                                    inner.metrics_task_cancel.store(true, Ordering::Relaxed);
+                                }
+                                break;
+                            }
+                            // 广播通道已关闭或事件丢失（lag）：终止监听
+                            Ok(Err(_)) => break,
+                            // 轮询超时：回到循环开头检查取消信号
+                            Err(_) => {}
                         }
                     }
                 });
@@ -183,12 +214,24 @@ impl ServerSupervisor {
             inner.metrics_task_cancel.store(true, Ordering::Relaxed);
         }
 
+        // 先置为 Stopped 再执行实际停止：
+        // 即便未来有代码路径在停止期间发送 ServerEvent::Stopped，
+        // crash monitor 读到非 Running 状态也不会误判为崩溃
+        {
+            let mut inner = self.inner.write().await;
+            inner.status = ServerStatus::Stopped;
+        }
+
         // 委托 WebSocketManager 停止 Actix Web
         let ws_manager = crate::server::ws::WebSocketManager::global();
-        ws_manager.stop().await?;
+        if let Err(e) = ws_manager.stop().await {
+            // 停止失败：服务器可能仍在运行，恢复 Running 状态供重试
+            let mut inner = self.inner.write().await;
+            inner.status = ServerStatus::Running;
+            return Err(e);
+        }
 
         let mut inner = self.inner.write().await;
-        inner.status = ServerStatus::Stopped;
         inner.metrics = ServerMetrics::default();
         inner.metrics_history.clear();
         inner.start_time = None;

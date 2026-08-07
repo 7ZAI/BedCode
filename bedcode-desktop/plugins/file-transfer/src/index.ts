@@ -27,6 +27,8 @@ function registerPluginUi(context: PluginContext) {
   sidebarDisposable = context.ui.registerSidebarPanel({
     id: 'file-transfer.sidebar',
     title: context.i18n.t('transfer.sidebar.title'),
+    // 菜单排序：紧跟 agent 任务（auto-task 210）之后，位于服务器（内置 300）之前
+    order: 220,
     icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
     component: FileTransferView,
   })

@@ -58,7 +58,7 @@ export interface MessageSchema {
   queueCount: string
   createTaskTitle: string
   createTaskSession: string
-  createTaskSessionPlaceholder: string
+  saveAsPresetOption: string
   createTaskPromptPlaceholder: string
   createTaskSubmit: string
   createTaskFailed: string
@@ -67,7 +67,7 @@ export interface MessageSchema {
   // ==================== 预设任务 ====================
   presetTitle: string
   saveAsPreset: string
-  createTaskNoSessionHint: string
+  createTaskPresetHint: string
   addToQueue: string
   presetAddHint: string
   createPresetFailed: string
@@ -77,6 +77,9 @@ export interface MessageSchema {
   filterStatus: string
   filterAgent: string
   filterSource: string
+  sourceUser: string
+  sourceQueue: string
+  sourceScheduled: string
   filterSince: string
   filterUntil: string
   filterReset: string

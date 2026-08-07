@@ -129,6 +129,30 @@ cargo test
 
 ---
 
+## UI 组件规范
+
+**禁止使用系统原生 UI 控件外观**（原生 `<select>` 下拉、`<input type="checkbox/radio">`、
+`<input type="date/datetime-local/time/range/color">` 等），移动端与桌面端一致适用。
+
+例外（系统强关联，允许原生）：
+
+- 文件选择弹窗（`@tauri-apps/plugin-dialog` / 系统文件选择器）
+- 系统通知弹窗、系统授权弹窗（如 FsAuthDialog）
+- 完全自绘外观的 input/textarea（外观 100% 由 CSS token 定制、无系统观感，如宿主 Input.vue）
+- 隐藏原生控件仅作交互内核的自绘组件（如 Toggle.vue 内部的 checkbox）
+
+正确做法（按优先级）：
+
+1. 宿主/SDK 共享组件：宿主内部用 `src/components/`；插件用 SDK 子路径（桌面端
+   `@bedcode/plugin-sdk-desktop/ui`、移动端移动 SDK 的 `./ui`），禁止插件自实现一套
+2. 成熟开源 Vue 组件（如 `@vuepic/vue-datepicker`），并用主题 token
+   （`var(--bg-*)` / `var(--mobile-*)`）适配深浅色主题，禁止裸用默认样式
+3. 自实现小型组件（自绘外观 + 原生交互内核），放入共享组件库（宿主或 SDK）供复用
+
+新增共享组件须同时考虑桌面端与移动端（或至少放入对应 SDK 供插件引用）。
+
+---
+
 ## i18n
 
 使用 vue-i18n@9 Composition API，zh-CN（默认）和 en。
@@ -241,6 +265,7 @@ sh scripts/doc-tracking.sh untrack && git commit
 
 - 禁止 `unsafe impl Send/Sync`
 - 禁止屏幕宽度检测平台
+- 禁止系统原生 UI 控件外观（select/checkbox/radio/date/range 等；文件选择、系统通知、授权弹窗等系统强关联场景除外）
 - 禁止 composable 中文硬编码字符串
 - 禁止注释掉的代码
 - 禁止 commit 中 AI 协作者标记

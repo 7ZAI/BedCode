@@ -53,14 +53,15 @@
           </span>
           <span class="text-[var(--border)]">|</span>
           <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.device.ipv4Address') }}</span>
-          <select
-            :value="selectedIp || ''"
-            class="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--bg-page)] wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
-            @change="onIpSelect(($event.target as HTMLSelectElement).value)"
-          >
-            <option v-if="!selectedIp" value="" disabled>{{ t('desktop.device.notSelected') }}</option>
-            <option v-for="ip in ipv4Addresses" :key="ip" :value="ip">{{ ip }}</option>
-          </select>
+          <!-- 固定宽度：行内条带布局，避免 Select 块级根元素撑满整行 -->
+          <Select
+            :model-value="selectedIp || ''"
+            :options="ipOptions"
+            :placeholder="t('desktop.device.notSelected')"
+            size="sm"
+            class="wb-mono w-[200px]"
+            @update:model-value="handleIpSelect"
+          />
           <span class="text-[var(--border)]">·</span>
           <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.device.websocketPort') }}</span>
           <span class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)]">{{ port }}</span>
@@ -310,6 +311,7 @@ import type { PairedDevice } from '@/stores/device'
 import { useQrCode } from '@/composables/useQrCode'
 import { listen } from '@tauri-apps/api/event'
 import Modal from '@/components/Modal.vue'
+import { Select } from '@/components'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { useToast } from '@/composables/useToast'
 import QRCode from 'qrcode'
@@ -403,6 +405,17 @@ async function onIpSelect(ip: string) {
   await settingsStore.saveSettings({
     network: { ...settingsStore.settings.network, qr_host: ip },
   })
+}
+
+// IP 下拉选项：IPv4 地址列表（value/label 同值）
+const ipOptions = computed(() =>
+  ipv4Addresses.value.map(ip => ({ value: ip, label: ip })),
+)
+
+/** 下拉值变化处理：占位清除行会发出空串，与原禁用占位 option 语义一致，空串直接忽略 */
+function handleIpSelect(value: string | number) {
+  if (value === '') return
+  onIpSelect(String(value))
 }
 
 /** 刷新设备列表与在线状态 */

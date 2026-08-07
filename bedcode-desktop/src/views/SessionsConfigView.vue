@@ -25,7 +25,26 @@
       </div>
     </div>
 
-    <!-- 内容区：按功能分 section -->
+    <!-- ==================== Tab 切换：终端配置 / 运行中的会话 ==================== -->
+    <div class="px-6 pt-3 flex-shrink-0">
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)]">
+        <button
+          v-for="tab in sessionTabs"
+          :key="tab.key"
+          class="h-8 flex-1 px-4 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
+          :class="
+            activeTab === tab.key
+              ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
+              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+          "
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+    </div>
+
+    <!-- 内容区：按功能分 tab -->
     <div class="flex-1 overflow-auto px-6 py-6">
       <div class="max-w-5xl mx-auto">
         <!-- Loading -->
@@ -37,21 +56,23 @@
           <p class="wb-mono text-xs text-[var(--text-secondary)]">{{ t('common.status.loading') }}</p>
         </div>
 
-        <!-- Empty -->
-        <div v-else-if="configs.length === 0" class="flex flex-col items-center justify-center py-20">
-          <p class="text-sm text-[var(--text-primary)]">{{ t('desktop.session.noConfig') }}</p>
-          <p class="text-xs text-[var(--text-secondary)] mt-1">{{ t('desktop.session.noConfigHint') }}</p>
-          <button class="wb-btn-primary mt-5 h-8 px-4" @click="showCreateDialog = true">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 4v16m8-8H4" />
-            </svg>
-            {{ t('desktop.session.newConfig') }}
-          </button>
-        </div>
+        <Transition name="tab-fade" mode="out-in">
+          <!-- Tab1：终端配置 -->
+          <div v-if="activeTab === 'configs'" class="space-y-6">
+            <!-- Empty -->
+            <div v-if="configs.length === 0" class="flex flex-col items-center justify-center py-20">
+              <p class="text-sm text-[var(--text-primary)]">{{ t('desktop.session.noConfig') }}</p>
+              <p class="text-xs text-[var(--text-secondary)] mt-1">{{ t('desktop.session.noConfigHint') }}</p>
+              <button class="wb-btn-primary mt-5 h-8 px-4" @click="showCreateDialog = true">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 4v16m8-8H4" />
+                </svg>
+                {{ t('desktop.session.newConfig') }}
+              </button>
+            </div>
 
-        <template v-else>
-          <!-- Section：配置 -->
-          <section>
+            <!-- Section：配置 -->
+            <section v-else>
             <h3 class="wb-section-title">
               {{ t('desktop.session.sessions', { count: configs.length }) }}
             </h3>
@@ -104,6 +125,15 @@
                       {{ isRunningStatus(session.status) ? runTimeText(session) : formatDateTime(session.startedAt || session.createdAt || session.created_at || '') }}
                     </span>
                     <span class="flex-1"></span>
+                    <button
+                      class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0"
+                      :title="t('desktop.terminal.viewTerminal')"
+                      @click.stop="viewSession(session)"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </button>
                     <button
                       class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0"
                       :title="t('desktop.terminal.restartSession')"
@@ -160,33 +190,72 @@
               </div>
             </div>
           </section>
+          </div>
 
-          <!-- Section：运行中会话（跨配置汇总） -->
-          <section v-if="runningSessions.length > 0" class="mt-6">
+          <!-- Tab2：运行中的会话（跨配置汇总，操作与配置卡片内会话一致） -->
+          <div v-else class="space-y-6">
             <h3 class="wb-section-title">
               {{ t('desktop.session.runningSessions', { count: runningSessions.length }) }}
             </h3>
-            <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] divide-y divide-[var(--border)]">
+            <div v-if="runningSessions.length === 0" class="flex flex-col items-center justify-center py-20">
+              <p class="text-sm text-[var(--text-primary)]">{{ t('desktop.session.noSessions') }}</p>
+              <p class="text-xs text-[var(--text-secondary)] mt-1">{{ t('desktop.session.noSessionsHint') }}</p>
+            </div>
+            <div v-else class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] divide-y divide-[var(--border)]">
               <div
                 v-for="session in runningSessions"
                 :key="session.id"
-                class="flex items-center gap-3 px-4 h-11"
+                class="flex items-center gap-3 px-4 h-12"
               >
                 <span :class="['w-2 h-2 rounded-full flex-shrink-0', statusDot(session.status)]"></span>
                 <span class="text-xs font-medium text-[var(--text-primary)] truncate cursor-pointer hover:underline" @click="viewSession(session)">{{ session.name }}</span>
                 <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] flex-shrink-0">{{ statusText(session.status) }}</span>
                 <span class="flex-1"></span>
                 <span class="wb-mono text-[calc(11.5px*var(--ui-scale))] text-[var(--text-secondary)] flex-shrink-0">{{ runTimeText(session) }}</span>
+                <!-- 查看终端 -->
                 <button
-                  class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-red-600 dark:hover:text-red-400 transition-colors flex-shrink-0"
-                  @click="confirmStopSession(session)"
+                  class="w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0"
+                  :title="t('desktop.terminal.viewTerminal')"
+                  @click.stop="viewSession(session)"
                 >
-                  {{ t('common.button.stop') }}
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </button>
+                <!-- 重启 -->
+                <button
+                  class="w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0"
+                  :title="t('desktop.terminal.restartSession')"
+                  @click.stop="restartSession(session)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+                <!-- 停止 -->
+                <button
+                  class="w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0"
+                  :title="t('common.button.stop')"
+                  @click.stop="confirmStopSession(session)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 6h12v12H6z" />
+                  </svg>
+                </button>
+                <!-- 删除 -->
+                <button
+                  class="w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-red-600 dark:hover:text-red-400 transition-colors flex-shrink-0"
+                  :title="t('common.button.delete')"
+                  @click.stop="confirmDeleteSession(session)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
                 </button>
               </div>
             </div>
-          </section>
-        </template>
+          </div>
+        </Transition>
       </div>
     </div>
 
@@ -281,8 +350,17 @@ const { startListening, stopListening } = useSessionStatusListener()
 const configs = computed(() => sessionStore.configs)
 const sessions = computed(() => sessionStore.sessions)
 
-// 跨配置的「运行中」汇总 section 数据源
+// 跨配置的「运行中」汇总 tab 数据源
 const runningSessions = computed(() => sessions.value.filter(s => s.status !== 'stopped'))
+
+// ==================== Tab 切换：终端配置 / 运行中的会话 ====================
+type SessionTabKey = 'configs' | 'running'
+const activeTab = ref<SessionTabKey>('configs')
+const sessionTabs = computed<{ key: SessionTabKey; label: string }[]>(() => [
+  { key: 'configs', label: t('desktop.session.tabConfigs') },
+  // 运行中的会话 tab 实时显示数量
+  { key: 'running', label: `${t('desktop.session.tabRunningSessions')} (${runningSessions.value.length})` },
+])
 
 const showCreateDialog = ref(false)
 const editingConfig = ref<SessionConfig | null>(null)
@@ -626,3 +704,19 @@ async function handleSaveConfig(form: SessionFormData) {
   }
 }
 </script>
+
+<style scoped>
+/* Tab 切换过渡：淡入淡出 + 轻微 Y 位移，避免切换闪现 */
+.tab-fade-enter-active,
+.tab-fade-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.tab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>

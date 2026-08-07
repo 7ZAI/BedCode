@@ -78,6 +78,10 @@
         "title": "Delete Preset Task"
       },
       {
+        "id": "auto-task.update-preset-task",
+        "title": "Update Preset Task"
+      },
+      {
         "id": "auto-task.add-preset-to-queue",
         "title": "Add Preset Task to Queue"
       },

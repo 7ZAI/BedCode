@@ -121,6 +121,38 @@ fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
         })
 }
 
+/// 查询会话配置的工程目录（session_get → configId → session_config_list 匹配 workingDir）
+fn session_working_dir(host: &WasmHost, session_id: &str) -> Option<String> {
+    // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
+    let config_id = host
+        .session_get(session_id)
+        .ok()
+        .flatten()
+        .and_then(|info| {
+            info.get("configId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })?;
+
+    // 2. session_config_list 查找对应配置的工程目录
+    host.session_config_list()
+        .ok()
+        .flatten()
+        .and_then(|configs| {
+            configs
+                .as_array()
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str()))
+                })
+                .and_then(|c| {
+                    c.get("workingDir")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+        })
+}
+
 /// 检测会话的执行 agent（CLI 级，见 agent::detect_agent）
 ///
 /// 会话不存在或配置无命令时返回 "unknown"
@@ -207,12 +239,18 @@ pub fn create_task_from_dispatch(
 fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, source: &str) {
     let claude_sid = find_claude_sid_by_session(host, session_id);
     let (_, auto_answer) = session_flags(host, session_id);
+    // 记录会话配置的工程目录：任务日志直接展示配置目录，后续配置变更不影响历史行
+    let working_dir = session_working_dir(host, session_id);
 
     let sql = "INSERT INTO task_history \
-               (id, description, status, agent, source, session_id, claude_sid, auto_approve, event_time, started_at, created_at, updated_at) \
-               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%d %H:%M:%f', 'now'), datetime('now'), datetime('now'), datetime('now'))";
-    // claude_sid 映射缺失时绑定 NULL（SessionStart 之前就提交输入等边缘场景）
+               (id, description, status, agent, source, session_id, claude_sid, working_dir, auto_approve, event_time, started_at, created_at, updated_at) \
+               VALUES (lower(hex(randomblob(16))), ?1, 'in_progress', ?2, ?3, ?4, ?5, ?6, ?7, strftime('%Y-%m-%d %H:%M:%f', 'now'), datetime('now'), datetime('now'), datetime('now'))";
+    // claude_sid / working_dir 解析失败时绑定 NULL（SessionStart 之前就提交输入等边缘场景）
     let claude_sid_param = claude_sid
+        .as_ref()
+        .map(|s| serde_json::Value::String(s.clone()))
+        .unwrap_or(serde_json::Value::Null);
+    let working_dir_param = working_dir
         .as_ref()
         .map(|s| serde_json::Value::String(s.clone()))
         .unwrap_or(serde_json::Value::Null);
@@ -224,6 +262,7 @@ fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, 
             source,
             session_id,
             claude_sid_param,
+            working_dir_param,
             auto_answer
         ],
     ) {
@@ -564,10 +603,6 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
         .get("session_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let auto_approve = body
-        .get("auto_approve")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
 
     if session_id.is_empty() {
         host.log_warn("session-mode POST rejected: empty session_id");
@@ -575,6 +610,21 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
     }
 
     // 认证由网关中间件统一处理（JWT 或本地放行），此处不重复校验
+
+    // 新协议（移动端）：auto_execute / auto_answer 字段，可部分更新；
+    // 旧协议（hook）：仅 auto_approve，语义等同 auto_answer
+    let auto_execute = body.get("auto_execute").and_then(|v| v.as_bool());
+    let auto_answer = body
+        .get("auto_answer")
+        .and_then(|v| v.as_bool())
+        .or_else(|| body.get("auto_approve").and_then(|v| v.as_bool()));
+
+    if auto_execute.is_none() && auto_answer.is_none() {
+        host.log_warn(
+            "session-mode POST rejected: missing auto_execute/auto_answer/auto_approve field",
+        );
+        return http_response::error(400, "Missing mode flag");
+    }
 
     // 解析 Claude Code session_id → BedCode PTY session_id（与 GET 及 task-status 一致）：
     // hook/移动端可能携带 claude_sid，不经解析会把开关写到错误的 session_settings 行，
@@ -585,49 +635,21 @@ fn handle_set_session_mode(host: &WasmHost, body: &Value, _query: &Value) -> Val
         session_id, resolved_id
     ));
 
-    // 写入会话设置表（auto_answer 开关，兼容旧 hook 只传 auto_approve 的语义）
-    set_session_flags(host, &resolved_id, None, Some(auto_approve));
-
-    // 当前 auto_execute 值（本端点不改动它，事件载荷带上供前端开关保持显示一致）
-    let (auto_execute, _) = session_flags(host, &resolved_id);
-
-    // 广播模式变更到移动端
-    host.broadcast_sync(&SyncEvent::SessionModeChanged {
-        session_id: resolved_id.to_string(),
-        auto_approve,
-    });
-    host.log_debug(&format!(
-        "broadcast_sync: SessionModeChanged for session_id={}",
-        resolved_id
-    ));
-
-    // 通过消息总线通知其他插件会话模式变更
-    let _ = host.bus_publish(
-        EVENT_SESSION_MODE_CHANGED,
-        &serde_json::json!({
-            "session_id": resolved_id,
-            "auto_approve": auto_approve,
-            "auto_execute": auto_execute,
-        }),
-    );
-    // 通知前端 UI（事件名与前端 context.events.on 监听一致，载荷用前端约定的 camelCase，
-    // 与 set_auto_mode 的 emit 保持同构，前端 onModeChanged 才能正确同步两个开关）
-    host.emit_event(
-        EVENT_SESSION_MODE_CHANGED,
-        &serde_json::json!({
-            "session_id": resolved_id,
-            "autoApprove": auto_approve,
-            "auto_answer": auto_approve,
-            "autoExecute": auto_execute,
-            "auto_execute": auto_execute,
-        }),
-    );
-
-    host.log_info(&format!(
-        "Session mode set: session_id={} resolved_sid={} auto_approve={}",
-        session_id, resolved_id, auto_approve
-    ));
-    http_response::ok()
+    // 统一走 set_auto_mode：部分更新 + 前端事件 + 移动端广播 + 总线通知，
+    // 且 auto_execute 由关到开时会立即调度队列中积累的任务
+    match set_auto_mode(host, &resolved_id, auto_execute, auto_answer) {
+        Ok(data) => {
+            host.log_info(&format!(
+                "Session mode set: session_id={} resolved_sid={} {}",
+                session_id, resolved_id, data
+            ));
+            http_response::ok_with_data(data)
+        }
+        Err(e) => {
+            host.log_warn(&format!("session-mode POST failed: {}", e));
+            http_response::error(500, "Failed to set session mode")
+        }
+    }
 }
 
 /// GET /task-status — 查询当前任务状态
@@ -826,7 +848,20 @@ impl TaskHistoryFilter {
         add(&mut clauses, &mut params, "session_id", &self.session_id);
         add(&mut clauses, &mut params, "status", &self.status);
         add(&mut clauses, &mut params, "agent", &self.agent);
-        add(&mut clauses, &mut params, "source", &self.source);
+        // 来源过滤：自动任务（queue）同时匹配历史遗留的 preset 来源行
+        // （旧版本预存任务入队时写入 source='preset'，语义上同为自动任务）
+        if let Some(src) = &self.source {
+            if !src.is_empty() {
+                if src == "queue" {
+                    params.push(Value::String("queue".to_string()));
+                    params.push(Value::String("preset".to_string()));
+                    clauses.push(format!("source IN (?{}, ?{})", params.len() - 1, params.len()));
+                } else {
+                    params.push(Value::String(src.clone()));
+                    clauses.push(format!("source = ?{}", params.len()));
+                }
+            }
+        }
         if let Some(since) = &self.since {
             if !since.is_empty() {
                 params.push(Value::String(since.clone()));
@@ -876,6 +911,9 @@ pub fn list_task_history(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow:
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
 
+    // 旧任务行 working_dir 恒为空：按 session → 配置链路回填工程目录
+    let tasks = backfill_working_dirs(host, rows);
+
     // 同条件统计总数，供前端分页展示
     let count_sql = format!("SELECT COUNT(*) AS cnt FROM task_history{}", where_sql);
     let count_params: Vec<Value> = params[..params.len() - 2].to_vec();
@@ -888,11 +926,78 @@ pub fn list_task_history(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow:
         .unwrap_or(0);
 
     Ok(serde_json::json!({
-        "tasks": rows,
+        "tasks": tasks,
         "total": total,
         "limit": limit,
         "offset": offset,
     }))
+}
+
+/// 回填任务行的工程目录
+///
+/// 早期版本的任务行创建时未写入 working_dir（列恒为空），此处按
+/// session_id → configId → 配置 workingDir 链路现场解析并回填，
+/// 旧任务行也能展示执行会话的配置工程目录；新行插入时已写入，跳过。
+fn backfill_working_dirs(host: &WasmHost, mut rows: Vec<Value>) -> Vec<Value> {
+    // session_id → config_id（已停止的会话仍在列表中，仅被删除的会话无法回填）
+    let session_configs: HashMap<String, String> = host
+        .session_list()
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| {
+            let sid = s.get("id")?.as_str()?.to_string();
+            let config_id = s.get("configId")?.as_str()?.to_string();
+            Some((sid, config_id))
+        })
+        .collect();
+
+    // config_id → 配置工程目录
+    let config_working_dirs: HashMap<String, String> = host
+        .session_config_list()
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| {
+            let id = c.get("id")?.as_str()?.to_string();
+            let wd = c
+                .get("workingDir")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some((id, wd))
+        })
+        .collect();
+
+    for row in &mut rows {
+        // 已有工程目录的行（新行插入时已写入）跳过
+        if row
+            .get("working_dir")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if let Some(map) = row.as_object_mut() {
+            if let Some(wd) = session_configs
+                .get(&session_id)
+                .and_then(|cid| config_working_dirs.get(cid))
+            {
+                map.insert("working_dir".to_string(), Value::String(wd.clone()));
+            }
+        }
+    }
+    rows
 }
 
 /// 任务历史统计聚合（同筛选条件）
@@ -991,9 +1096,10 @@ pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
     let mut result: Vec<Value> = sessions
         .iter()
         .filter_map(|s| {
-            // SessionInfo 序列化为 camelCase（见 session_event.rs）
+            // SessionInfo 序列化为 camelCase（见 session_event.rs），
+            // 状态为小写开头："running" / "starting" / "waitingInput"
             let status = s.get("status").and_then(|v| v.as_str()).unwrap_or("");
-            if !matches!(status, "Running" | "Starting" | "WaitingInput") {
+            if !matches!(status, "running" | "starting" | "waitingInput") {
                 return None;
             }
             let session_id = s

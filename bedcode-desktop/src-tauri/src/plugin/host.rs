@@ -39,7 +39,10 @@ pub struct PluginHost {
     /// WASM 运行时（全局共享）
     wasm_runtime: Arc<WasmRuntime>,
     /// WASM 插件实例（plugin_id → LoadedWasmPlugin）
-    wasm_plugins: Arc<RwLock<HashMap<String, LoadedWasmPlugin>>>,
+    /// WASM 插件实例表：每插件一把互斥锁（实例的 Store 要求独占访问，
+    /// 见 wasm_runtime 模块说明）。map 锁只保护索引结构本身，
+    /// 取到实例 Arc 后立即释放，插件间互不阻塞
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<Mutex<LoadedWasmPlugin>>>>>,
     /// 宿主上下文工厂（供 WASM 插件激活时使用）
     wasm_host_ctx: Arc<WasmHostContext>,
     /// 消息总线
@@ -139,7 +142,7 @@ impl PluginHost {
         }
 
         // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）
-        let mut wasm_plugins_map: HashMap<String, LoadedWasmPlugin> = HashMap::new();
+        let mut wasm_plugins_map: HashMap<String, Arc<Mutex<LoadedWasmPlugin>>> = HashMap::new();
 
         for (id, loaded) in file_plugins {
             // 如果 manifest 声明了 rust_library，尝试加载 WASM 模块
@@ -168,7 +171,7 @@ impl PluginHost {
                                     loaded.manifest.version,
                                     wasm_filename
                                 );
-                                wasm_plugins_map.insert(id.clone(), wasm_plugin);
+                                wasm_plugins_map.insert(id.clone(), Arc::new(Mutex::new(wasm_plugin)));
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -468,8 +471,10 @@ impl PluginHost {
 
         // WASM 插件：调用 __bedcode_activate
         if loaded.source == PluginSource::Wasm {
-            let mut wasm_plugins = self.wasm_plugins.write().await;
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
+                drop(wasm_plugins);
+                let mut wasm_plugin = wasm_plugin.lock().await;
                 match wasm_plugin.activate() {
                     Ok(0) => {
                         tracing::info!("[PluginHost] Plugin '{}' activated", plugin_id);
@@ -558,8 +563,10 @@ impl PluginHost {
             let plugins = self.plugins.read().await;
             if let Some(loaded) = plugins.get(plugin_id) {
                 if loaded.source == PluginSource::Wasm {
-                    let mut wasm_plugins = self.wasm_plugins.write().await;
-                    if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+                    let wasm_plugins = self.wasm_plugins.read().await;
+                    if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
+                        drop(wasm_plugins);
+                        let mut wasm_plugin = wasm_plugin.lock().await;
                         // 停用前先调用 on_shutdown
                         tracing::info!("[PluginHost] Calling on_shutdown for plugin '{}'", plugin_id);
                         if let Err(e) = wasm_plugin.on_shutdown() {
@@ -637,14 +644,14 @@ impl PluginHost {
     ) -> bedcode_plugin_api::UploadHookDecision {
         use bedcode_plugin_api::UploadHookDecision;
 
-        let mut wasm_plugins = self.wasm_plugins.write().await;
-        let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) else {
+        let Some(wasm_plugin) = self.get_wasm_plugin(plugin_id).await else {
             tracing::warn!(
                 plugin_id = %plugin_id,
                 "call_upload_hook: wasm plugin not loaded, denying (fail-closed)"
             );
             return UploadHookDecision::deny("wasm plugin not loaded");
         };
+        let mut wasm_plugin = wasm_plugin.lock().await;
 
         match wasm_plugin.on_upload_request(meta_json) {
             Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
@@ -704,7 +711,10 @@ impl PluginHost {
         let new_wasm_plugin = self.wasm_runtime.instantiate(&module, plugin_id, self.wasm_host_ctx.clone())?;
 
         // 替换 wasm_plugins map 中的实例
-        self.wasm_plugins.write().await.insert(plugin_id.to_string(), new_wasm_plugin);
+        self.wasm_plugins
+            .write()
+            .await
+            .insert(plugin_id.to_string(), Arc::new(Mutex::new(new_wasm_plugin)));
 
         // 3. 重新注册 manifest contributes
         let m = {
@@ -884,6 +894,16 @@ impl PluginHost {
         }
     }
 
+    /// 获取 WASM 插件实例句柄（map 读锁仅在取 Arc 期间持有，随即释放，
+    /// 实例串行化由各插件自己的 Mutex 承担，插件间互不阻塞）
+    async fn get_wasm_plugin(
+        &self,
+        plugin_id: &str,
+    ) -> Option<Arc<Mutex<LoadedWasmPlugin>>> {
+        let wasm_plugins = self.wasm_plugins.read().await;
+        wasm_plugins.get(plugin_id).cloned()
+    }
+
     /// 调用 WASM 插件的 command
     async fn invoke_wasm_command(
         &self,
@@ -908,12 +928,13 @@ impl PluginHost {
             }
         }
 
-        let mut wasm_plugins = self.wasm_plugins.write().await;
-        let wasm_plugin = wasm_plugins.get_mut(plugin_id).ok_or_else(|| {
+        let wasm_plugin = self.get_wasm_plugin(plugin_id).await.ok_or_else(|| {
             crate::AppError::Plugin(format!(
-                "WASM plugin {} not found in loaded instances", plugin_id
+                "WASM plugin {} not found in loaded instances",
+                plugin_id
             ))
         })?;
+        let mut wasm_plugin = wasm_plugin.lock().await;
 
         let args_str = serde_json::to_string(&enriched_args)
             .map_err(|e| crate::AppError::Plugin(format!(
@@ -1161,8 +1182,10 @@ impl PluginHost {
 
         let wasm_plugins = self.wasm_plugins.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
-            let mut wasm_plugins = wasm_plugins.write().await;
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+            let wasm_plugins = wasm_plugins.read().await;
+            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
+                drop(wasm_plugins);
+                let mut wasm_plugin = wasm_plugin.lock().await;
                 if let Err(e) = wasm_plugin.on_session_lifecycle(payload) {
                     tracing::error!(
                         "SessionLifecycle: dispatch to plugin '{}' failed: {}",
@@ -1196,8 +1219,10 @@ impl PluginHost {
 
         let wasm_plugins = self.wasm_plugins.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
-            let mut wasm_plugins = wasm_plugins.write().await;
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+            let wasm_plugins = wasm_plugins.read().await;
+            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
+                drop(wasm_plugins);
+                let mut wasm_plugin = wasm_plugin.lock().await;
                 if let Err(e) = wasm_plugin.on_input_submitted(payload) {
                     tracing::error!(
                         "InputSubmitted: dispatch to plugin '{}' failed: {}",
@@ -1352,8 +1377,10 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
         let wasm_plugins = self.wasm_plugins.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
-            let mut wasm_plugins = wasm_plugins.write().await;
-            if let Some(wasm_plugin) = wasm_plugins.get_mut(plugin_id) {
+            let wasm_plugins = wasm_plugins.read().await;
+            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
+                drop(wasm_plugins);
+                let mut wasm_plugin = wasm_plugin.lock().await;
                 wasm_plugin.on_message(&msg.topic, &msg.sender, &msg.payload)?;
             }
             Ok(())

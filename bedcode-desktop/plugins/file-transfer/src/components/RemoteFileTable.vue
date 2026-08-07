@@ -37,6 +37,13 @@ const allSelected = computed(() => {
   return fileNames.length > 0 && fileNames.every(e => props.selectedNames.includes(e.name))
 })
 
+/** 部分文件被选中（表头半选态：驱动原生 checkbox 的 indeterminate 属性） */
+const someSelected = computed(() => {
+  const fileNames = props.entries.filter(e => !e.isDir)
+  const selectedCount = fileNames.filter(e => props.selectedNames.includes(e.name)).length
+  return selectedCount > 0 && !allSelected.value
+})
+
 /** 当前是否根目录（面包屑仅剩根节点） */
 const isRoot = computed(() => props.breadcrumb.length <= 1)
 
@@ -87,12 +94,22 @@ function onRowDblClick(entry: RemoteEntry): void {
         <thead>
           <tr>
             <th style="width: 32px">
-              <input
-                type="checkbox"
-                class="ft-check"
-                :checked="allSelected"
-                @change="emit('toggleAll')"
-              />
+              <label class="ft-checkbox">
+                <!-- 原生 checkbox 仅作交互内核（绝对定位覆盖 + 透明），change/indeterminate 语义不变 -->
+                <input
+                  type="checkbox"
+                  class="ft-checkbox-input"
+                  :checked="allSelected"
+                  :indeterminate="someSelected"
+                  @change="emit('toggleAll')"
+                />
+                <span class="ft-checkbox-box" aria-hidden="true">
+                  <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span class="ft-checkbox-indet"></span>
+                </span>
+              </label>
             </th>
             <th>{{ t('transfer.table.name') }}</th>
             <th style="width: 90px">{{ t('transfer.table.size') }}</th>
@@ -107,14 +124,24 @@ function onRowDblClick(entry: RemoteEntry): void {
             @dblclick="onRowDblClick(entry)"
           >
             <td>
-              <input
-                type="checkbox"
-                class="ft-check"
-                :class="{ 'ft-check--disabled': entry.isDir }"
-                :disabled="entry.isDir"
-                :checked="!entry.isDir && selectedNames.includes(entry.name)"
-                @change="emit('toggle', entry.name)"
-              />
+              <label
+                class="ft-checkbox"
+                :class="{ 'ft-checkbox--disabled': entry.isDir }"
+              >
+                <!-- 原生 checkbox 仅作交互内核；目录行隐藏（与目录不可勾选语义一致） -->
+                <input
+                  type="checkbox"
+                  class="ft-checkbox-input"
+                  :disabled="entry.isDir"
+                  :checked="!entry.isDir && selectedNames.includes(entry.name)"
+                  @change="emit('toggle', entry.name)"
+                />
+                <span class="ft-checkbox-box" aria-hidden="true">
+                  <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 13l4 4L19 7" />
+                  </svg>
+                </span>
+              </label>
             </td>
             <td>
               <div class="ft-fname">

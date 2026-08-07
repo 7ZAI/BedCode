@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import Select from '@/components/Select.vue'
+// 单源化后宿主 Select 与 SDK 为同一组件，测试直接覆盖 SDK 实现
+import Select from '@bedcode/plugin-sdk-desktop/ui'
 
 /**
  * Select 组件已从原生 <select> 重构为自定义下拉（button 触发器 + Teleport 面板）。

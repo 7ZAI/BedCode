@@ -28,9 +28,7 @@
 use bedcode_plugin_api::constants::EVENT_SESSION_MODE_CHANGED;
 use bedcode_plugin_api::constants::EVENT_TASK_SCHEDULED_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
-use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession,
-};
+use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession};
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -73,8 +71,17 @@ pub fn create_job(
         .ok()
         .flatten()
         .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|row| row.get("id").and_then(|v| v.as_str().map(|s| s.to_string())))
-        .unwrap_or_else(|| format!("sched-{}-{}", config_id, trigger_at.replace([' ', ':', '-'], "")));
+        .and_then(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "sched-{}-{}",
+                config_id,
+                trigger_at.replace([' ', ':', '-'], "")
+            )
+        });
 
     let name_param = if name.is_empty() {
         Value::Null
@@ -197,10 +204,32 @@ pub fn reset_job_with_broadcast(host: &WasmHost, job_id: &str, trigger_at: Optio
 
 /// 定时器到点回调：处理到期任务
 ///
+/// 0. 超过宽限时长的 creating 任务标 failed（宿主异步创建失败时
+///    Created 事件不会到达，看门狗兑底）
 /// 1. 超过宽限期的 pending 任务标 missed（应用关闭期间错过，不补跑）
-/// 2. 宽限期内的到期任务：session_create 新建会话，成功则置 creating
-///    等待 Created 事件入队，失败则置 failed
+/// 2. 宽限期内的到期任务：session_create 排队宿主异步创建（返回预生成
+///    会话 ID），置 creating 等待 Created 事件入队
 pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) {
+    // 0. creating 卡死兑底：会话创建在宿主异步执行（wasm 调用栈内同步创建会
+    //    死锁，见宿主 host_session_create），创建失败时 Created 事件不会到达；
+    //    超过宽限时长仍为 creating 视为创建失败
+    let stuck_sql = format!(
+        "UPDATE scheduled_jobs SET status = 'failed', executed_at = datetime('now'), \
+         error = 'Session creation timed out' \
+         WHERE status = 'creating' AND trigger_at <= datetime(?1, '-{} seconds')",
+        MISSED_GRACE_SECONDS
+    );
+    let stuck_count = host
+        .plugin_db_execute_params(&stuck_sql, &sql_params![now_utc])
+        .unwrap_or(-1);
+    if stuck_count > 0 {
+        host.log_warn(&format!(
+            "scheduler-tick: {} job(s) marked failed (session creation timed out)",
+            stuck_count
+        ));
+        broadcast_scheduled_changed(host, "", "failed", "failed");
+    }
+
     // 1. 错过判定：trigger_at <= now - 宽限期 且仍 pending → missed
     let missed_sql = format!(
         "UPDATE scheduled_jobs SET status = 'missed', executed_at = ?1, \
@@ -233,8 +262,16 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) {
         .unwrap_or_default();
 
     for job in due_jobs {
-        let job_id = job.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let config_id = job.get("config_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let job_id = job
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let config_id = job
+            .get("config_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if job_id.is_empty() || config_id.is_empty() {
             continue;
         }
@@ -245,7 +282,8 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) {
         ));
 
         // 创建会话（核心 SessionManager::create_session，v6 host function）。
-        // 成功时 PTY 已启动，Created 生命周期事件随后到达
+        // 宿主异步创建并立即返回预生成 session_id：成功时 PTY 随后启动，
+        // Created 生命周期事件随后到达（事件分发在 wasm 调用返回后，锁已释放）
         match host.session_create(&config_id) {
             Ok(session_id) => {
                 // 置 creating 并记录 session_id：Created 事件的匹配键。
@@ -255,7 +293,7 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) {
                     &sql_params![session_id, job_id],
                 );
                 host.log_info(&format!(
-                    "scheduler-tick: session created for job_id={}: session_id={}",
+                    "scheduler-tick: session create queued for job_id={}: session_id={}",
                     job_id, session_id
                 ));
                 broadcast_scheduled_changed(host, &job_id, "creating", "trigger");
@@ -296,7 +334,11 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
         return;
     };
 
-    let job_id = job.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let job_id = job
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let prompts: Vec<String> = job
         .get("prompts")
         .and_then(|v| v.as_str())
@@ -333,18 +375,24 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
         session_id: session_id.to_string(),
         auto_approve: auto_answer,
     });
-    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "auto_approve": auto_answer,
-        "auto_execute": true,
-    }));
-    host.emit_event(EVENT_SESSION_MODE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "autoApprove": auto_answer,
-        "auto_answer": auto_answer,
-        "autoExecute": true,
-        "auto_execute": true,
-    }));
+    let _ = host.bus_publish(
+        EVENT_SESSION_MODE_CHANGED,
+        &serde_json::json!({
+            "session_id": session_id,
+            "auto_approve": auto_answer,
+            "auto_execute": true,
+        }),
+    );
+    host.emit_event(
+        EVENT_SESSION_MODE_CHANGED,
+        &serde_json::json!({
+            "session_id": session_id,
+            "autoApprove": auto_answer,
+            "auto_answer": auto_answer,
+            "autoExecute": true,
+            "auto_execute": true,
+        }),
+    );
 
     let _ = host.plugin_db_execute_params(
         "UPDATE scheduled_jobs SET status = 'executed', executed_at = datetime('now'), error = NULL \
@@ -354,7 +402,10 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
 
     host.log_info(&format!(
         "handle_session_created: job_id={} enqueued {} prompt(s) to session_id={} config_id={}",
-        job_id, prompts.len(), session_id, config_id
+        job_id,
+        prompts.len(),
+        session_id,
+        config_id
     ));
 
     let remaining = crate::queue::pending_count(host, session_id);
@@ -392,12 +443,20 @@ pub fn recover_creating_jobs(host: &WasmHost) {
 /// - GET scheduled-jobs/list → 列表
 /// - DELETE scheduled-jobs/remove → 删除（pending / missed / failed）
 /// - POST scheduled-jobs/reset → 重置（missed / failed 重新加入调度，可改触发时间）
-pub fn handle_scheduled_http(host: &WasmHost, method: &str, path: &str, body: &Value, query: &Value) -> Value {
+pub fn handle_scheduled_http(
+    host: &WasmHost,
+    method: &str,
+    path: &str,
+    body: &Value,
+    query: &Value,
+) -> Value {
     host.log_debug(&format!("handle_scheduled_http: {} {}", method, path));
 
     match (method, path) {
         ("POST", "create") => handle_create(host, body),
-        ("GET", "list") => http_response::ok_with_data(serde_json::json!({ "jobs": list_jobs(host) })),
+        ("GET", "list") => {
+            http_response::ok_with_data(serde_json::json!({ "jobs": list_jobs(host) }))
+        }
         ("DELETE", "remove") => handle_remove(host, body, query),
         ("POST", "reset") => handle_reset(host, body),
         _ => {
@@ -414,7 +473,10 @@ pub fn handle_scheduled_http(host: &WasmHost, method: &str, path: &str, body: &V
 fn handle_create(host: &WasmHost, body: &Value) -> Value {
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let config_id = body.get("config_id").and_then(|v| v.as_str()).unwrap_or("");
-    let trigger_at = body.get("trigger_at").and_then(|v| v.as_str()).unwrap_or("");
+    let trigger_at = body
+        .get("trigger_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let prompts: Vec<String> = body
         .get("prompts")
         .and_then(|v| v.as_array())
@@ -458,7 +520,10 @@ fn handle_remove(host: &WasmHost, body: &Value, query: &Value) -> Value {
     if delete_job_with_broadcast(host, job_id) {
         http_response::ok()
     } else {
-        http_response::error(404, "Job not found or not deletable (only pending/missed/failed jobs can be deleted)")
+        http_response::error(
+            404,
+            "Job not found or not deletable (only pending/missed/failed jobs can be deleted)",
+        )
     }
 }
 
@@ -477,7 +542,10 @@ fn handle_reset(host: &WasmHost, body: &Value) -> Value {
     if reset_job_with_broadcast(host, job_id, trigger_param) {
         http_response::ok_with_data(serde_json::json!({ "job_id": job_id, "status": "pending" }))
     } else {
-        http_response::error(404, "Job not found or not resettable (only missed/failed jobs can be reset)")
+        http_response::error(
+            404,
+            "Job not found or not resettable (only missed/failed jobs can be reset)",
+        )
     }
 }
 
@@ -491,14 +559,20 @@ fn broadcast_scheduled_changed(host: &WasmHost, job_id: &str, status: &str, acti
         action: action.to_string(),
     });
 
-    let _ = host.bus_publish(EVENT_TASK_SCHEDULED_CHANGED, &serde_json::json!({
-        "job_id": job_id,
-        "status": status,
-        "action": action,
-    }));
-    host.emit_event(EVENT_TASK_SCHEDULED_CHANGED, &serde_json::json!({
-        "job_id": job_id,
-        "status": status,
-        "action": action,
-    }));
+    let _ = host.bus_publish(
+        EVENT_TASK_SCHEDULED_CHANGED,
+        &serde_json::json!({
+            "job_id": job_id,
+            "status": status,
+            "action": action,
+        }),
+    );
+    host.emit_event(
+        EVENT_TASK_SCHEDULED_CHANGED,
+        &serde_json::json!({
+            "job_id": job_id,
+            "status": status,
+            "action": action,
+        }),
+    );
 }

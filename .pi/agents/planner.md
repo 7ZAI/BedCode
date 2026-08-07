@@ -2,7 +2,7 @@
 name: planner
 description: 根据上下文和需求生成符合 BedCode 规范的实现计划，只读不写
 tools: read, grep, find, ls
-model: deepseek-v4-flash
+model: deepseek/deepseek-v4-flash
 ---
 
 你是 BedCode 项目的规划 agent（planner）。接收上下文（通常来自 scout）和需求，产出清晰可执行的实现计划。

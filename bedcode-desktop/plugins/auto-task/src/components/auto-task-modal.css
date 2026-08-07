@@ -165,14 +165,14 @@
   flex-shrink: 0;
 }
 
-/* 任务输入框：textarea 自动增高，默认 2 行最多 6 行，超出滚动（类 AI 对话输入框） */
+/* 任务输入框：textarea 自动增高，默认 2 行最多 10 行，超出滚动（类 AI 对话输入框） */
 .at-input-textarea {
   resize: none;
   line-height: 1.5;
   padding-top: 0.5rem;
   padding-bottom: 0.5rem;
   min-height: 3.25rem;
-  max-height: 8.25rem;
+  max-height: 12.5rem;
   overflow-y: auto;
 }
 

@@ -80,13 +80,14 @@
                     <span class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{ prop.title }}</span>
                     <span v-if="prop.description" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ prop.description }}</span>
                   </div>
-                  <select
-                    v-if="prop.type === 'string' && prop.enum"
-                    v-model="configValues[key]"
-                    class="w-full max-w-xs h-8 px-2 wb-mono rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
-                  >
-                    <option v-for="opt in prop.enum" :key="opt" :value="opt">{{ opt }}</option>
-                  </select>
+                  <!-- 包装层还原原 select 的 max-w-xs + wb-mono 外观 -->
+                  <div v-if="prop.type === 'string' && prop.enum" class="max-w-xs wb-mono">
+                    <Select
+                      v-model="configValues[key]"
+                      :options="(prop.enum ?? []).map((opt) => ({ value: opt, label: opt }))"
+                      size="sm"
+                    />
+                  </div>
                   <input
                     v-else-if="prop.type === 'string'"
                     v-model="configValues[key]"
@@ -150,6 +151,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { pluginGetInfo, pluginStorageGet, pluginStorageSet } from '@/plugin/commands'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
+import { Select } from '@/components'
 import { useToast } from '@/composables/useToast'
 import type { PluginInfo, PluginConfiguration, ConfigProperty, PluginState } from '@/plugin/types'
 

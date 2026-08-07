@@ -1,7 +1,7 @@
 //! 消息总线域 Host Functions（插件间 Topic 发布/订阅）
 
 use super::memory::read_wasm_string_consume;
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::WasmPluginState;
 
 /// 消息总线：发布消息
 ///
@@ -67,7 +67,17 @@ pub(super) fn host_bus_subscribe(
     };
 
     let bus = host_ctx.message_bus.clone();
-    block_on_async(bus.subscribe_wasm(&plugin_id, &topic));
+    // 异步投递订阅请求，避免在 wasm 调用栈内同步等待 subscribers 写锁：
+    // bus 派发路径持 subscribers 读锁执行插件回调（on_message / on_session_lifecycle 等），
+    // 若插件在这些回调中订阅/退订，同步等待写锁会与派发任务形成同任务重入死锁。
+    // publish 已使用相同模式（spawn 独立任务投递）规避，这里保持一致。
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!(plugin_id = %plugin_id, topic = %topic, "host_bus_subscribe: no runtime context, subscription dropped");
+        return -1;
+    };
+    handle.spawn(async move {
+        bus.subscribe_wasm(&plugin_id, &topic).await;
+    });
     0
 }
 
@@ -92,6 +102,13 @@ pub(super) fn host_bus_unsubscribe(
     };
 
     let bus = host_ctx.message_bus.clone();
-    block_on_async(bus.unsubscribe(&plugin_id, &topic));
+    // 异步投递退订请求：与 host_bus_subscribe 相同的原因（避免派发持锁重入死锁）
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!(plugin_id = %plugin_id, topic = %topic, "host_bus_unsubscribe: no runtime context, unsubscribe dropped");
+        return -1;
+    };
+    handle.spawn(async move {
+        bus.unsubscribe(&plugin_id, &topic).await;
+    });
     0
 }

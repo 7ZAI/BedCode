@@ -97,7 +97,12 @@ pub fn add_task(host: &WasmHost, session_id: &str, prompt: &str) -> (String, i64
 ///
 /// source 随调度写入 task_history.source，区分手动队列任务与定时任务。
 /// 返回 (task_id, position)
-pub fn add_task_with_source(host: &WasmHost, session_id: &str, prompt: &str, source: &str) -> (String, i64) {
+pub fn add_task_with_source(
+    host: &WasmHost,
+    session_id: &str,
+    prompt: &str,
+    source: &str,
+) -> (String, i64) {
     // 查询当前最大 position
     let max_pos = get_max_position(host, session_id);
     let position = max_pos + 1;
@@ -111,7 +116,10 @@ pub fn add_task_with_source(host: &WasmHost, session_id: &str, prompt: &str, sou
         .ok()
         .flatten()
         .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|row| row.get("id").and_then(|v| v.as_str().map(|s| s.to_string())))
+        .and_then(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
         .unwrap_or_else(|| {
             // wasm32-unknown-unknown 无系统时钟，SystemTime::now() 会 panic（unreachable trap）；
             // 回退用会话+位置组合，天然唯一且无时间依赖
@@ -124,7 +132,10 @@ pub fn add_task_with_source(host: &WasmHost, session_id: &str, prompt: &str, sou
         &sql_params![id, session_id, prompt, position, source],
     );
 
-    host.log_info(&format!("Task queued: id={} session_id={} position={}", id, session_id, position));
+    host.log_info(&format!(
+        "Task queued: id={} session_id={} position={}",
+        id, session_id, position
+    ));
 
     (id, position)
 }
@@ -145,7 +156,10 @@ pub fn remove_task(host: &WasmHost, session_id: &str, task_id: &str) -> bool {
     // 重排 position：按创建时间重新编号
     reorder_positions(host, session_id);
 
-    host.log_info(&format!("Task removed: id={} session_id={}", task_id, session_id));
+    host.log_info(&format!(
+        "Task removed: id={} session_id={}",
+        task_id, session_id
+    ));
     true
 }
 
@@ -184,7 +198,10 @@ pub fn update_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &st
         )
         .unwrap_or(-1);
     if affected > 0 {
-        host.log_info(&format!("Task updated: id={} session_id={}", task_id, session_id));
+        host.log_info(&format!(
+            "Task updated: id={} session_id={}",
+            task_id, session_id
+        ));
         true
     } else {
         false
@@ -239,7 +256,10 @@ pub fn reorder_queue(host: &WasmHost, session_id: &str, ordered_ids: &[String]) 
             )
             .unwrap_or(-1);
         if affected <= 0 {
-            host.log_warn(&format!("reorder_queue: failed to set position for id={}", id));
+            host.log_warn(&format!(
+                "reorder_queue: failed to set position for id={}",
+                id
+            ));
             return false;
         }
     }
@@ -310,7 +330,10 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
 
     let queue = list_queue(host, session_id);
     if queue.is_empty() {
-        host.log_debug(&format!("try_dispatch_next: no pending tasks for session_id={}", session_id));
+        host.log_debug(&format!(
+            "try_dispatch_next: no pending tasks for session_id={}",
+            session_id
+        ));
         return;
     }
 
@@ -318,18 +341,36 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         Some(t) => t,
         None => return,
     };
-    let task_id = first.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let prompt = first.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let source = first.get("source").and_then(|v| v.as_str()).unwrap_or("queue").to_string();
+    let task_id = first
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let prompt = first
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let source = first
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("queue")
+        .to_string();
 
     if prompt.is_empty() {
-        host.log_warn(&format!("try_dispatch_next: empty prompt for task_id={}", task_id));
+        host.log_warn(&format!(
+            "try_dispatch_next: empty prompt for task_id={}",
+            task_id
+        ));
         return;
     }
 
     // 确认会话仍在运行
     if host.session_get(session_id).ok().flatten().is_none() {
-        host.log_warn(&format!("try_dispatch_next: session {} not found or not running", session_id));
+        host.log_warn(&format!(
+            "try_dispatch_next: session {} not found or not running",
+            session_id
+        ));
         return;
     }
 
@@ -371,18 +412,33 @@ pub fn on_session_idle(host: &WasmHost, session_id: &str) {
     // 超时检查：若 waiting 已超时，先重试/取消再决定是否下发
     check_waiting_timeouts(host, session_id);
 
-    let has_work = !list_queue(host, session_id).is_empty()
-        || find_waiting_task(host, session_id).is_some();
+    let has_work =
+        !list_queue(host, session_id).is_empty() || find_waiting_task(host, session_id).is_some();
     if !has_work {
         return;
     }
 
     if let Some(waiting) = find_waiting_task(host, session_id) {
-        let task_id = waiting.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let prompt = waiting.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let source = waiting.get("source").and_then(|v| v.as_str()).unwrap_or("queue").to_string();
+        let task_id = waiting
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt = waiting
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let source = waiting
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queue")
+            .to_string();
         if task_id.is_empty() || prompt.is_empty() {
-            host.log_warn(&format!("on_session_idle: malformed waiting task for session_id={}", session_id));
+            host.log_warn(&format!(
+                "on_session_idle: malformed waiting task for session_id={}",
+                session_id
+            ));
             return;
         }
 
@@ -414,7 +470,14 @@ pub fn on_session_idle(host: &WasmHost, session_id: &str) {
 ///
 /// 顺序约束：先写任务行再 terminal_send —— 输入监听（on_input_submitted）
 /// 依赖 has_active_task 跳过插件自身投递的输入行，任务行必须先落库
-fn dispatch_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str, agent_name: &str, source: &str) {
+fn dispatch_task(
+    host: &WasmHost,
+    session_id: &str,
+    task_id: &str,
+    prompt: &str,
+    agent_name: &str,
+    source: &str,
+) {
     let _ = host.plugin_db_execute_params(
         "UPDATE task_queue SET status = 'executing', updated_at = datetime('now') WHERE id = ?1",
         &sql_params![task_id],
@@ -430,7 +493,10 @@ fn dispatch_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str,
     // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
     let input_line = format!("{}{}", prompt.trim_end(), input_submit_char(host));
     if let Err(e) = host.terminal_send(session_id, &input_line) {
-        host.log_error(&format!("dispatch_task: terminal_send failed: task_id={} err={}", task_id, e));
+        host.log_error(&format!(
+            "dispatch_task: terminal_send failed: task_id={} err={}",
+            task_id, e
+        ));
         // 发送失败：任务行已写入，标为中断避免假 in_progress 悬挂
         mark_latest_task_interrupted(host, session_id, "terminal_send failed on dispatch");
         let _ = host.plugin_db_execute_params(
@@ -442,7 +508,9 @@ fn dispatch_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str,
 
     host.log_info(&format!(
         "dispatch_task: dispatched task_id={} prompt_len={} session_id={}",
-        task_id, prompt.len(), session_id
+        task_id,
+        prompt.len(),
+        session_id
     ));
 
     // 队列项执行中：任务终态推送到达后由 try_dispatch_next 置 done 并继续出队。
@@ -494,16 +562,31 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) {
         .unwrap_or_default();
 
     for row in due {
-        let task_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let task_id = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if task_id.is_empty() || session_id.is_empty() {
             continue;
         }
 
-        let clear_command = agent::clear_command_for(crate::state::session_agent(host, &session_id))
-            .unwrap_or("/clear");
-        if let Err(e) = host.terminal_send(&session_id, &format!("{}{}", clear_command, input_submit_char(host))) {
-            host.log_error(&format!("send_due_clears: terminal_send clear failed: task_id={} err={}", task_id, e));
+        let clear_command =
+            agent::clear_command_for(crate::state::session_agent(host, &session_id))
+                .unwrap_or("/clear");
+        if let Err(e) = host.terminal_send(
+            &session_id,
+            &format!("{}{}", clear_command, input_submit_char(host)),
+        ) {
+            host.log_error(&format!(
+                "send_due_clears: terminal_send clear failed: task_id={} err={}",
+                task_id, e
+            ));
             // clear 发送失败：回退 pending，下次终态触发时重试调度
             let _ = host.plugin_db_execute_params(
                 "UPDATE task_queue SET status = 'pending', clear_due_at = NULL, updated_at = datetime('now') WHERE id = ?1",
@@ -547,8 +630,15 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
         .unwrap_or_default();
 
     for row in overdue {
-        let task_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let attempts = row.get("dispatch_attempts").and_then(|v| v.as_i64()).unwrap_or(1);
+        let task_id = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let attempts = row
+            .get("dispatch_attempts")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
         if task_id.is_empty() {
             continue;
         }
@@ -594,7 +684,13 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
 /// - POST task-queue/clear → 清空队列
 /// - POST task-queue/update → 更新任务内容
 /// - POST task-queue/reorder → 重排序队列
-pub fn handle_queue_http(host: &WasmHost, method: &str, path: &str, body: &Value, query: &Value) -> Value {
+pub fn handle_queue_http(
+    host: &WasmHost,
+    method: &str,
+    path: &str,
+    body: &Value,
+    query: &Value,
+) -> Value {
     host.log_debug(&format!("handle_queue_http: {} {}", method, path));
 
     match (method, path) {
@@ -615,7 +711,10 @@ pub fn handle_queue_http(host: &WasmHost, method: &str, path: &str, body: &Value
 
 /// POST task-queue/add
 fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
-    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
 
     if session_id.is_empty() {
@@ -633,7 +732,9 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     broadcast_queue_changed(host, session_id, count_after, "add");
 
     // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）
-    if crate::state::auto_execute_on(host, session_id) && !crate::state::has_active_task(host, session_id) {
+    if crate::state::auto_execute_on(host, session_id)
+        && !crate::state::has_active_task(host, session_id)
+    {
         try_dispatch_next(host, session_id);
     }
 
@@ -645,7 +746,10 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
 
 /// DELETE task-queue/remove
 fn handle_remove(host: &WasmHost, body: &Value, _query: &Value) -> Value {
-    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
 
     if session_id.is_empty() {
@@ -669,7 +773,10 @@ fn handle_remove(host: &WasmHost, body: &Value, _query: &Value) -> Value {
 
 /// GET task-queue/list
 fn handle_list(host: &WasmHost, query: &Value) -> Value {
-    let session_id = query.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = query
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     if session_id.is_empty() {
         return http_response::error(400, "Missing session_id");
@@ -687,7 +794,10 @@ fn handle_list(host: &WasmHost, query: &Value) -> Value {
 
 /// POST task-queue/clear
 fn handle_clear(host: &WasmHost, body: &Value, _query: &Value) -> Value {
-    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     if session_id.is_empty() {
         return http_response::error(400, "Missing session_id");
@@ -701,7 +811,10 @@ fn handle_clear(host: &WasmHost, body: &Value, _query: &Value) -> Value {
 
 /// POST task-queue/update — 更新任务内容
 fn handle_update(host: &WasmHost, body: &Value, _query: &Value) -> Value {
-    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
     let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -728,7 +841,10 @@ fn handle_update(host: &WasmHost, body: &Value, _query: &Value) -> Value {
 
 /// POST task-queue/reorder — 重排序队列
 fn handle_reorder(host: &WasmHost, body: &Value, _query: &Value) -> Value {
-    let session_id = body.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let task_ids: Vec<String> = body
         .get("task_ids")
         .and_then(|v| v.as_array())
@@ -802,15 +918,21 @@ pub fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i
         action: action.to_string(),
     });
 
-    let _ = host.bus_publish(EVENT_TASK_QUEUE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "queue_count": queue_count,
-        "action": action,
-    }));
+    let _ = host.bus_publish(
+        EVENT_TASK_QUEUE_CHANGED,
+        &serde_json::json!({
+            "session_id": session_id,
+            "queue_count": queue_count,
+            "action": action,
+        }),
+    );
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
-    host.emit_event(EVENT_TASK_QUEUE_CHANGED, &serde_json::json!({
-        "session_id": session_id,
-        "queue_count": queue_count,
-        "action": action,
-    }));
+    host.emit_event(
+        EVENT_TASK_QUEUE_CHANGED,
+        &serde_json::json!({
+            "session_id": session_id,
+            "queue_count": queue_count,
+            "action": action,
+        }),
+    );
 }

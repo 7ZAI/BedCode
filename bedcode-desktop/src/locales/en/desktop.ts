@@ -16,6 +16,8 @@ export default {
       expand: 'Expand Sidebar',
     },
     session: {
+      tabConfigs: 'Terminal Configs',
+      tabRunningSessions: 'Running Sessions',
       newConfig: 'New Config',
       editConfig: 'Edit Config',
       noConfig: 'No session configs',

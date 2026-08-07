@@ -61,7 +61,9 @@ const DATEPICKER_THEME_OVERRIDES = `
   --dp-border-color-hover: var(--border-input);
   --dp-primary-color: var(--color-primary);
   --dp-primary-disabled-color: var(--color-primary);
-  --dp-primary-text-color: #fff;
+  /* 底部操作按钮（确认/取消/现在）：文字色跟随主题对比色（深色下为深色文字），
+     避免浅色 primary 背景 + 白字导致按钮不可见 */
+  --dp-primary-text-color: var(--color-primary-contrast);
   --dp-secondary-color: var(--text-tertiary);
   --dp-success-color: var(--color-primary);
   --dp-icon-color: var(--text-secondary);
@@ -83,30 +85,92 @@ const DATEPICKER_THEME_OVERRIDES = `
 let sidebarDisposable: { dispose(): void } | null = null
 let toolbarDisposable: { dispose(): void } | null = null
 let stopLocaleWatch: (() => void) | null = null
+let stopRouteWatch: (() => void) | null = null
+
+// ==================== 工具栏入口可见性（仅插件适配的 agent 会话） ====================
+
+// 完整适配的 agent（Rust AGENT_PROFILES 中 session_integration 非 None）：
+// claude（hooks 集成）/ pi（pi 扩展集成）；codex / opencode 仅识别未适配，不显示入口
+const ADAPTED_AGENTS = ['claude', 'pi']
+
+// 异步同步序号：路由快速切换时丢弃过期结果，避免旧会话的 agent 覆盖新状态
+let toolbarSyncSeq = 0
+
+// 与 Rust agent::detect_agent 保持一致的命令 → agent 识别（用于非运行会话的兜底）
+function detectAgent(command: string): string {
+  const lower = command.toLowerCase()
+  if (lower.includes('claude')) return 'claude'
+  if (lower.includes('codex')) return 'codex'
+  if (lower.includes('opencode')) return 'opencode'
+  // pi 是短词，仅在命令本体为 pi（含路径/扩展名）时匹配，避免误判
+  const firstToken = lower.split(/\s+/)[0] || ''
+  const basename = firstToken.split(/[\\/]/).pop() || ''
+  if (basename.replace(/\.exe$/i, '') === 'pi') return 'pi'
+  return 'unknown'
+}
+
+// 当前终端窗口会话的 agent：优先取运行会话列表（后端已按会话配置命令识别），
+// 未运行（如未启动的会话）时回退 session.get + 会话配置命令关键词匹配
+async function resolveCurrentAgent(context: PluginContext): Promise<string> {
+  const shared = (window as any).__BEDCODE_SHARED__
+  const id = shared?.router?.currentRoute?.value?.params?.id
+  if (typeof id !== 'string' || !id) return 'unknown'
+  try {
+    const result: any = await context.commands.execute('auto-task.list-running-sessions')
+    const match = (result?.sessions ?? []).find((s: any) => s.session_id === id)
+    if (match?.agent) return match.agent
+  } catch (e) {
+    console.warn('[AutoTask] Failed to resolve running session agent:', e)
+  }
+  try {
+    const session: any = await context.session.get(id)
+    const configId = session?.config_id ?? session?.configId
+    if (!configId) return 'unknown'
+    const result: any = await context.commands.execute('auto-task.list-session-configs')
+    const config = (result?.configs ?? []).find((c: any) => c.id === configId)
+    if (config?.command) return detectAgent(config.command)
+  } catch (e) {
+    console.warn('[AutoTask] Failed to resolve session config agent:', e)
+  }
+  return 'unknown'
+}
+
+// 按当前路由会话的 agent 动态注册/注销工具栏入口（路由切换时重新评估）
+async function syncToolbarEntry(context: PluginContext) {
+  const seq = ++toolbarSyncSeq
+  const agent = await resolveCurrentAgent(context)
+  if (seq !== toolbarSyncSeq) return // 过期结果（路由已切换）丢弃
+  const shouldShow = ADAPTED_AGENTS.includes(agent)
+  if (shouldShow && !toolbarDisposable) {
+    toolbarDisposable = context.ui.registerTerminalToolbarItem({
+      id: 'auto-task.open-modal',
+      label: context.i18n.t('title'),
+      onClick: () => {
+        autoTaskModalVisible.value = true
+      },
+    })
+  } else if (!shouldShow && toolbarDisposable) {
+    toolbarDisposable.dispose()
+    toolbarDisposable = null
+  }
+}
 
 /**
- * 注册侧边栏面板 + 终端工具栏按钮
+ * 注册侧边栏面板
  *
  * 注册时标题被静态捕获（宿主 labelKey 非 i18n key，不随 vue-i18n 自动更新），
  * 语言切换时先释放旧注册再重新注册，菜单/路由显示文本即时刷新。
  */
-function registerPluginUi(context: PluginContext) {
+function registerSidebarPanel(context: PluginContext) {
   sidebarDisposable?.dispose()
-  toolbarDisposable?.dispose()
 
   sidebarDisposable = context.ui.registerSidebarPanel({
     id: 'auto-task.history',
     title: context.i18n.t('historyTitle'),
+    // 菜单排序：紧跟终端会话（内置 200）之后，位于服务器（内置 300）之前
+    order: 210,
     icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01',
     component: TaskHistoryView,
-  })
-
-  toolbarDisposable = context.ui.registerTerminalToolbarItem({
-    id: 'auto-task.open-modal',
-    label: context.i18n.t('title'),
-    onClick: () => {
-      autoTaskModalVisible.value = true
-    },
   })
 }
 
@@ -164,15 +228,33 @@ export async function activate(context: PluginContext): Promise<void> {
     document.head.appendChild(styleEl)
   }
 
-  // 注册侧边栏面板 + 终端工具栏按钮（标题随宿主语言切换重注册，见 registerPluginUi）
-  registerPluginUi(context)
+  // 注册侧边栏面板 + 终端工具栏按钮（标题随宿主语言切换重注册，见 registerSidebarPanel / syncToolbarEntry）
+  registerSidebarPanel(context)
+
+  // 工具栏入口仅对插件适配的 agent 会话显示：监听终端窗口路由切换动态注册/注销
+  const sharedRouter = (window as any).__BEDCODE_SHARED__?.router
+  if (sharedRouter) {
+    stopRouteWatch = watch(
+      () => sharedRouter.currentRoute?.value?.params?.id,
+      () => syncToolbarEntry(context),
+    )
+    syncToolbarEntry(context)
+  } else {
+    console.warn('[AutoTask] Shared router unavailable, toolbar entry visibility not managed')
+  }
 
   // 宿主语言切换时重注册菜单项：面板/按钮标题在注册时被静态捕获（labelKey 非 i18n key），
   // 不随 vue-i18n 自动更新，需监听 locale 变化后重新注册刷新菜单/路由显示文本
   const hostI18n = context.i18n.getI18n()
   stopLocaleWatch = watch(
     () => hostI18n?.global?.locale?.value,
-    () => registerPluginUi(context),
+    () => {
+      registerSidebarPanel(context)
+      // 工具栏标题同样静态捕获：语言切换后注销重注册，重新评估当前会话 agent
+      toolbarDisposable?.dispose()
+      toolbarDisposable = null
+      syncToolbarEntry(context)
+    },
   )
 
   // 挂载自动任务弹窗（i18n 已注册，组件 setup 可正常取文案）
@@ -202,7 +284,12 @@ export async function activate(context: PluginContext): Promise<void> {
 }
 
 export async function deactivate(): Promise<void> {
+  stopRouteWatch?.()
   stopLocaleWatch?.()
+  toolbarDisposable?.dispose()
+  toolbarDisposable = null
+  sidebarDisposable?.dispose()
+  sidebarDisposable = null
   unmountModal()
   document.getElementById('auto-task-modal-style')?.remove()
   document.getElementById('auto-task-datepicker-style')?.remove()

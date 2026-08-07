@@ -147,30 +147,24 @@
 
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
           <!-- 终端主题 -->
-          <div>
-            <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">{{ t('desktop.terminal.theme') }}</label>
-            <select
-              v-model="settingsTheme"
-              class="w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
-              @click.stop
-              @mousedown.stop
-            >
-              <option v-for="(name, key) in themeOptions" :key="key" :value="key">{{ name }}</option>
-            </select>
-          </div>
+          <Select
+            v-model="settingsTheme"
+            :options="themeSelectOptions"
+            :label="t('desktop.terminal.theme')"
+            size="sm"
+            @click.stop
+            @mousedown.stop
+          />
 
           <!-- 字体大小 -->
-          <div>
-            <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">{{ t('desktop.terminal.fontSize') }}</label>
-            <select
-              v-model="settingsFontSize"
-              class="w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
-              @click.stop
-              @mousedown.stop
-            >
-              <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">{{ size }}px</option>
-            </select>
-          </div>
+          <Select
+            v-model="settingsFontSize"
+            :options="fontSizeSelectOptions"
+            :label="t('desktop.terminal.fontSize')"
+            size="sm"
+            @click.stop
+            @mousedown.stop
+          />
 
           <!-- 背景图片 -->
           <div>
@@ -240,6 +234,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import TerminalPreview from '@/components/TerminalPreview.vue'
+import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
@@ -295,6 +290,14 @@ const settingsFontSize = computed({
 })
 
 const themeOptions = computed(() => terminalPreviewRef.value?.themeNames ?? {})
+
+// 设置面板主题/字号下拉选项（label 由共享 Select 的 label prop 渲染）
+const themeSelectOptions = computed(() =>
+  Object.entries(themeOptions.value).map(([value, label]) => ({ value, label })),
+)
+const fontSizeSelectOptions = computed(() =>
+  [12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
+)
 
 // ==================== 状态展示 ====================
 

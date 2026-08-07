@@ -16,6 +16,8 @@ export default {
       expand: '展开侧边栏',
     },
     session: {
+      tabConfigs: '终端配置',
+      tabRunningSessions: '运行中的会话',
       newConfig: '新建配置',
       editConfig: '编辑配置',
       noConfig: '暂无会话配置',

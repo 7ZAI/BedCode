@@ -245,14 +245,81 @@
   color: var(--text-tertiary);
 }
 
-.ft-check {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--color-primary);
+.ft-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
   cursor: pointer;
 }
 
-.ft-check--disabled {
+/* 原生 checkbox 仅作交互内核：绝对定位覆盖整个容器并透明，点击/键盘焦点都落在它上面，
+   自绘视觉层由兄弟选择器驱动，change/indeterminate 语义与原生一致 */
+.ft-checkbox-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ft-checkbox--disabled {
+  opacity: 0;
+}
+
+/* 视觉层：16px 圆角 4px；未选 = 输入框底色 + 描边，选中/半选 = 主色底 + 对比色图标 */
+.ft-checkbox-box {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  color: var(--color-primary-contrast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: background-color 200ms, border-color 200ms, color 200ms;
+}
+
+.ft-checkbox:hover .ft-checkbox-box {
+  border-color: var(--color-primary);
+}
+
+.ft-checkbox-input:checked + .ft-checkbox-box,
+.ft-checkbox-input:indeterminate + .ft-checkbox-box {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.ft-checkbox-input:checked + .ft-checkbox-box .ft-checkbox-mark,
+.ft-checkbox-input:indeterminate + .ft-checkbox-box .ft-checkbox-indet {
+  opacity: 1;
+}
+
+/* 键盘可达性：Tab 聚焦时显示主色描边 */
+.ft-checkbox-input:focus-visible + .ft-checkbox-box {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.ft-checkbox-mark {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+  transition: opacity 200ms;
+}
+
+.ft-checkbox-indet {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-primary-contrast);
   opacity: 0;
 }
 
@@ -524,16 +591,6 @@
 
 .ft-dir-value--empty {
   color: var(--text-tertiary);
-}
-
-.ft-select {
-  padding: 5px 10px;
-  background: var(--bg-card);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-input);
-  font-size: 12px;
-  outline: none;
 }
 
 .ft-warning {

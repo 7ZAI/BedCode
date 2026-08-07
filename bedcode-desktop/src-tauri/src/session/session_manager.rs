@@ -275,6 +275,28 @@ impl SessionManager {
     ///
     /// source_device: 触发操作的设备名称，桌面本地操作为 None
     pub async fn create_session_with_source(&self, config_id: &str, source_device: Option<String>) -> Result<String> {
+        self.create_session_with_source_and_id(config_id, source_device, None)
+            .await
+    }
+
+    /// 从配置创建会话（指定会话 ID）
+    ///
+    /// 供宿主在 wasm 调用上下文之外预生成会话 ID 的异步创建场景使用
+    /// （插件定时任务触发，见 host_session_create）：wasm 调用栈内同步创建
+    /// 会因生命周期事件（Creating/Created）回灌同一插件实例而死锁，
+    /// 因此创建改为宿主异步执行，先返回预生成 ID 供插件记录匹配键。
+    pub async fn create_session_with_id(&self, config_id: &str, session_id: &str) -> Result<String> {
+        self.create_session_with_source_and_id(config_id, None, Some(session_id))
+            .await
+    }
+
+    /// 创建会话公共实现：session_id 为 None 时由 PTY 层自行生成
+    async fn create_session_with_source_and_id(
+        &self,
+        config_id: &str,
+        source_device: Option<String>,
+        session_id: Option<&str>,
+    ) -> Result<String> {
         // 从存储加载配置
         let config: crate::db::SessionConfig = self
             .storage
@@ -299,8 +321,13 @@ impl SessionManager {
         // 使用配置映射服务构建启动配置
         let launch_config = self.config_mapper.to_launch_config(&config)?;
 
-        // 创建 PTY 会话
-        let pty_session = self.pty_handler.create_session(launch_config.clone())?;
+        // 创建 PTY 会话（指定 ID 或由 PTY 层生成）
+        let pty_session = match session_id {
+            Some(sid) => self
+                .pty_handler
+                .create_session_with_id(sid.to_string(), launch_config.clone())?,
+            None => self.pty_handler.create_session(launch_config.clone())?,
+        };
         let session_id = pty_session.id().to_string();
 
         // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）

@@ -11,9 +11,11 @@
  * 通过 inject('pluginContext') 获取 PluginContext，
  * 调用 Rust 后端命令查询数据，监听事件实时更新
  */
-import { ref, onMounted, onUnmounted, inject, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, inject, computed, watch, nextTick } from 'vue'
 // 开源 Vue3 日期/时间选择组件（替代原生 datetime-local，样式随宿主主题定制）
 import Datepicker from '@vuepic/vue-datepicker'
+// 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
+import Select from '@bedcode/plugin-sdk-desktop/ui'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -107,8 +109,13 @@ const activeTab = ref<TabKey>('current')
 // Tab1 当前任务
 const runningSessions = ref<RunningSession[]>([])
 const currentLoading = ref(false)
+// 会话选择：'' = 预存模式（保存为预存任务）
 const createSessionId = ref('')
+// 初始默认选择是否已定：仅首次加载时自动选中优先会话，之后一律保留用户选择
+let defaultSessionSelected = false
 const createPrompt = ref('')
+// 创建任务输入框元素引用：提交清空后重置高度为单行
+const createPromptEl = ref<HTMLTextAreaElement | null>(null)
 const creatingTask = ref(false)
 const createError = ref('')
 // Tab1 预设任务（无会话/未选会话时创建，加入队列后自动移除）
@@ -118,7 +125,7 @@ const presetError = ref('')
 // Tab2 任务记录
 const tasks = ref<TaskRecord[]>([])
 const total = ref(0)
-const limit = 15
+const limit = 10
 const offset = ref(0)
 const loading = ref(false)
 const stats = ref<HistoryStats | null>(null)
@@ -139,8 +146,11 @@ const creatingJob = ref(false)
 const formName = ref('')
 const formConfigId = ref('')
 const formTriggerAt = ref<Date | null>(null)
-// 任务内容：textarea 每行一条，提交时按行拆分（支持批量粘贴多条）
-const formPromptsText = ref('')
+// 任务内容：任务卡片列表（一条任务一个卡片，支持逐条添加/删除，与队列弹窗一致）
+const formPrompts = ref<string[]>([])
+const newPrompt = ref('')
+// 添加任务输入框元素引用：添加卡片后重置高度为单行
+const newPromptEl = ref<HTMLTextAreaElement | null>(null)
 const errorMessage = ref('')
 // missed / failed 任务重新设置（重置回 pending，可选改触发时间）
 const resettingId = ref<string | null>(null)
@@ -150,6 +160,35 @@ const resetTriggerAt = ref<Date | null>(null)
 const controlCls =
   'w-full h-8 px-2 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] ' +
   'text-xs text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)] transition-colors duration-200'
+
+// ==================== 自动增高 textarea（任务内容输入统一使用） ====================
+
+// 不含固定高度（controlCls 的 h-8）：高度由内容决定，最多 10 行（200px = 10 × 20px 行高）后内部滚动
+const textareaCls =
+  'w-full px-2 py-1.5 rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] ' +
+  'text-xs text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)] transition-colors duration-200 ' +
+  'resize-none overflow-y-auto leading-5 max-h-[200px]'
+
+// 10 行上限（与 textareaCls 的 max-h-[200px] 保持一致）
+const TEXTAREA_MAX_HEIGHT = 200
+
+// 高度自适应：先置 auto 再取 scrollHeight，钳制到上限后由 overflow-y 滚动
+function autosizeTextarea(el: EventTarget | null) {
+  const t = el as HTMLTextAreaElement | null
+  if (!t) return
+  t.style.height = 'auto'
+  t.style.height = `${Math.min(t.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`
+}
+
+// 任务输入键位统一：Enter 提交（IME 组词中的回车不触发），Shift+Enter 换行
+function submitOnEnter(handler: () => void) {
+  return (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault()
+      handler()
+    }
+  }
+}
 
 // ==================== 日期选择器（@vuepic/vue-datepicker） ====================
 
@@ -256,8 +295,16 @@ function sessionLabel(s: RunningSession): string {
   return s.agent && s.agent !== 'unknown' ? `${base} · ${s.agent}` : base
 }
 
-async function loadRunningSessions() {
-  currentLoading.value = true
+// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话
+const sessionOptions = computed(() => [
+  { value: '', label: t('saveAsPresetOption') },
+  ...runningSessions.value.map((s) => ({ value: s.session_id, label: sessionLabel(s) })),
+])
+
+async function loadRunningSessions(opts: { silent?: boolean } = {}) {
+  // silent：点击下拉触发的刷新不置 loading —— 置 loading 会禁用 select，
+  // 原生下拉在禁用瞬间无法展开（表现为“点击只闪加载、下拉不弹出”）
+  if (!opts.silent) currentLoading.value = true
   try {
     const result: any = await context.commands.execute('auto-task.list-running-sessions')
     const sessions: RunningSession[] = (result?.sessions ?? []).map((s: any) => ({
@@ -283,19 +330,31 @@ async function loadRunningSessions() {
     )
     runningSessions.value = sessions
 
-    // 会话列表变化后修正下拉选中项：优先保留原选择，否则取第一个有活动任务/队列的会话
-    if (!sessions.some((s) => s.session_id === createSessionId.value)) {
+    // 首次加载：有运行中会话时默认选中优先会话（活动任务/队列优先），无会话则预存；
+    // 之后仅修正失效选择（所选会话消失 → 退回预存），不覆盖用户选择
+    if (!defaultSessionSelected) {
+      defaultSessionSelected = true
       const preferred =
         sessions.find(
           (s) => s.queue_count > 0 || ['in_progress', 'asking'].includes(s.task_status),
         ) || sessions[0]
       createSessionId.value = preferred?.session_id ?? ''
+    } else if (
+      createSessionId.value &&
+      !sessions.some((s) => s.session_id === createSessionId.value)
+    ) {
+      createSessionId.value = ''
     }
   } catch (e) {
     console.error('[Auto Task] Failed to load running sessions:', e)
   } finally {
-    currentLoading.value = false
+    if (!opts.silent) currentLoading.value = false
   }
+}
+
+// 点击下拉：静默刷新会话列表（后台更新选项，不打断原生下拉展开）
+function onSessionSelectFocus() {
+  loadRunningSessions({ silent: true })
 }
 
 // 创建新任务：选了运行中的会话 → 加入该会话队列（空闲时立即执行）；
@@ -315,6 +374,9 @@ async function createTask() {
       await context.commands.execute('auto-task.create-preset-task', { prompt })
     }
     createPrompt.value = ''
+    // 清空后把输入框高度重置回单行
+    await nextTick()
+    autosizeTextarea(createPromptEl.value)
     // 立即刷新展示（事件广播会兜底刷新，这里先给用户即时反馈）
     await loadRunningSessions()
     if (!createSessionId.value) await loadPresets()
@@ -366,11 +428,66 @@ async function deletePreset(presetId: string) {
   }
 }
 
+// ==================== 预设任务编辑（行内编辑：输入框 + 保存/取消） ====================
+
+const editingPresetId = ref<string | null>(null)
+const editingPresetText = ref('')
+
+// 进入编辑态：预填当前内容，回车保存 / Esc 取消
+function startEditPreset(p: PresetItem) {
+  editingPresetId.value = p.id
+  editingPresetText.value = p.prompt
+}
+
+async function saveEditPreset() {
+  const prompt = editingPresetText.value.trim()
+  if (!editingPresetId.value || !prompt) {
+    editingPresetId.value = null
+    return
+  }
+  presetError.value = ''
+  try {
+    await context.commands.execute('auto-task.update-preset-task', {
+      preset_id: editingPresetId.value,
+      prompt,
+    })
+    editingPresetId.value = null
+    // 事件广播（preset-changed）兜底，此处直接刷新即时反馈
+    await loadPresets()
+  } catch (e) {
+    console.error('[Auto Task] Failed to update preset:', e)
+    presetError.value = t('updateFailed')
+  }
+}
+
+function cancelEditPreset() {
+  editingPresetId.value = null
+  editingPresetText.value = ''
+}
+
 // ==================== 筛选选项与统计（Tab2/Tab4） ====================
 
 const statusOptions = ['', 'idle', 'in_progress', 'asking', 'completed', 'interrupted']
 const agentOptions = ['', 'claude', 'codex', 'opencode', 'pi', 'unknown']
 const sourceOptions = ['', 'user', 'queue', 'scheduled']
+
+// 来源固定三种（手动输入/自动任务/定时任务）：预存被消费后归为自动任务，
+// 历史遗留的 preset 行同样按自动任务显示，与筛选条件保持一致
+const sourceLabel: Record<string, string> = {
+  user: t('sourceUser'),
+  queue: t('sourceQueue'),
+  preset: t('sourceQueue'),
+  scheduled: t('sourceScheduled'),
+}
+
+// 筛选下拉选项（value 保持内部值，展示中文/可读标签）
+const filterStatusOptions = statusOptions
+  .slice(1)
+  .map((s) => ({ value: s, label: statusLabel[s] || s }))
+const filterAgentOptions = agentOptions.slice(1).map((a) => ({ value: a, label: a }))
+const filterSourceOptions = sourceOptions
+  .slice(1)
+  .map((s) => ({ value: s, label: sourceLabel[s] || s }))
 
 const knownStatuses = ['idle', 'in_progress', 'asking', 'completed', 'interrupted']
 const statusStatsList = computed(() =>
@@ -514,17 +631,35 @@ function configLabel(c: SessionConfig): string {
   return c.name ? `${c.name} (${base})` : base
 }
 
+// 会话配置下拉选项（Tab3 定时任务表单）
+const configOptions = computed(() =>
+  configs.value.map((c) => ({ value: c.id, label: configLabel(c) })),
+)
+
 const utcPreview = computed(() => (formTriggerAt.value ? dateToUtc(formTriggerAt.value) : '-'))
 
 // 重新设置面板的 UTC 预览（与新建表单同款提示）
 const resetUtcPreview = computed(() => (resetTriggerAt.value ? dateToUtc(resetTriggerAt.value) : '-'))
 
+// 添加一条任务卡片（回车或点击按钮；空白忽略）
+async function addPrompt() {
+  const p = newPrompt.value.trim()
+  if (!p) return
+  formPrompts.value.push(p)
+  newPrompt.value = ''
+  // 清空后把输入框高度重置回单行
+  await nextTick()
+  autosizeTextarea(newPromptEl.value)
+}
+
+// 删除指定任务卡片
+function removePrompt(index: number) {
+  formPrompts.value.splice(index, 1)
+}
+
 async function submitJob() {
-  // 每行一条任务，空行忽略；创建后按行顺序依次执行
-  const prompts = formPromptsText.value
-    .split('\n')
-    .map((p) => p.trim())
-    .filter(Boolean)
+  // 任务内容为卡片列表，创建后按卡片顺序依次执行
+  const prompts = formPrompts.value.map((p) => p.trim()).filter(Boolean)
   if (!formConfigId.value || !formTriggerAt.value || prompts.length === 0) {
     errorMessage.value = t('scheduledFormInvalid')
     return
@@ -543,7 +678,8 @@ async function submitJob() {
       formName.value = ''
       formConfigId.value = ''
       formTriggerAt.value = null
-      formPromptsText.value = ''
+      formPrompts.value = []
+      newPrompt.value = ''
       showForm.value = false
       await loadJobs()
     } else {
@@ -679,7 +815,7 @@ function onLiveChanged() {
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+  <div class="h-full overflow-hidden flex flex-col bg-[var(--bg-page)]">
     <!-- Header + Tab 切换 -->
     <div class="px-4 py-3 border-b border-[var(--border)] flex-shrink-0">
       <h2 class="text-sm font-semibold text-[var(--text-primary)] mb-2">{{ t('historyTitle') }}</h2>
@@ -710,20 +846,23 @@ function onLiveChanged() {
           <h3 class="text-xs font-semibold text-[var(--text-primary)]">{{ t('createTaskTitle') }}</h3>
           <div>
             <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('createTaskSession') }}</label>
-            <select v-model="createSessionId" :class="controlCls" :disabled="currentLoading">
-              <option value="" disabled>{{ t('createTaskSessionPlaceholder') }}</option>
-              <option v-for="s in runningSessions" :key="s.session_id" :value="s.session_id">
-                {{ sessionLabel(s) }}
-              </option>
-            </select>
+            <!-- 预存选项永远存在且为默认：即使有运行中的会话，也可不加入队列直接预存 -->
+            <Select
+              v-model="createSessionId"
+              :options="sessionOptions"
+              size="sm"
+              @open="onSessionSelectFocus"
+            />
           </div>
-          <div class="flex items-center gap-1.5">
-            <input
+          <div class="flex items-end gap-1.5">
+            <textarea
               v-model="createPrompt"
-              type="text"
-              :class="controlCls"
+              rows="1"
+              :class="textareaCls"
+              :ref="(el) => (createPromptEl = el as HTMLTextAreaElement | null)"
               :placeholder="t('createTaskPromptPlaceholder')"
-              @keydown.enter="createTask"
+              @input="autosizeTextarea($event.target)"
+              @keydown="submitOnEnter(createTask)($event)"
             />
             <button
               class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -733,9 +872,9 @@ function onLiveChanged() {
               {{ createSessionId ? t('createTaskSubmit') : t('saveAsPreset') }}
             </button>
           </div>
-          <!-- 未选会话时的去向提示：任务将保存为预设 -->
+          <!-- 未选会话（预存模式）时的去向提示 -->
           <p v-if="!createSessionId" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
-            {{ t('createTaskNoSessionHint') }}
+            {{ t('createTaskPresetHint') }}
           </p>
           <p v-if="createError" class="text-xs text-red-500 break-words">{{ createError }}</p>
         </div>
@@ -751,34 +890,93 @@ function onLiveChanged() {
               :key="p.id"
               class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
             >
-              <span class="text-sm text-[var(--text-primary)] truncate flex-1 min-w-0">{{ p.prompt }}</span>
-              <button
-                class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                :class="
-                  createSessionId
-                    ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
-                    : 'bg-[var(--border)] text-[var(--text-tertiary)]'
-                "
-                :disabled="!createSessionId"
-                :title="createSessionId ? t('addToQueue') : t('presetAddHint')"
-                @click="addPresetToSession(p.id)"
-              >
-                {{ t('addToQueue') }}
-              </button>
-              <button
-                class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
-                :title="t('delete')"
-                @click="deletePreset(p.id)"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
-                  />
-                </svg>
-              </button>
+              <!-- 编辑模式：自动增高输入框 + 保存/取消（回车保存，Shift+回车换行，Esc 取消） -->
+              <template v-if="editingPresetId === p.id">
+                <textarea
+                  v-model="editingPresetText"
+                  rows="1"
+                  :class="textareaCls"
+                  :ref="(el) => autosizeTextarea(el)"
+                  :placeholder="p.prompt"
+                  @input="autosizeTextarea($event.target)"
+                  @keydown="submitOnEnter(saveEditPreset)($event)"
+                  @keydown.esc="cancelEditPreset"
+                />
+                <button
+                  class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                  :title="t('save')"
+                  @click="saveEditPreset"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M5 13l4 4L19 7"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                  :title="t('cancel')"
+                  @click="cancelEditPreset"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </template>
+              <!-- 常规模式：内容 + 加入队列 / 编辑 / 删除 -->
+              <template v-else>
+                <span class="text-sm text-[var(--text-primary)] truncate flex-1 min-w-0">{{ p.prompt }}</span>
+                <button
+                  class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  :class="
+                    createSessionId
+                      ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
+                      : 'bg-[var(--border)] text-[var(--text-tertiary)]'
+                  "
+                  :disabled="!createSessionId"
+                  :title="createSessionId ? t('addToQueue') : t('presetAddHint')"
+                  @click="addPresetToSession(p.id)"
+                >
+                  {{ t('addToQueue') }}
+                </button>
+                <button
+                  class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                  :title="t('edit')"
+                  @click="startEditPreset(p)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                    />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                </button>
+                <button
+                  class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                  :title="t('delete')"
+                  @click="deletePreset(p.id)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                    />
+                  </svg>
+                </button>
+              </template>
             </div>
           </div>
           <p v-if="!createSessionId" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
@@ -866,19 +1064,28 @@ function onLiveChanged() {
     <div v-else-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
       <!-- 筛选条 -->
       <div class="px-4 pt-3 flex-shrink-0 space-y-2">
-        <div class="grid grid-cols-3 gap-1.5">
-          <select v-model="filterStatus" :class="controlCls" @change="onFilterChanged">
-            <option value="">{{ t('filterStatus') }}</option>
-            <option v-for="s in statusOptions.slice(1)" :key="s" :value="s">{{ statusLabel[s] || s }}</option>
-          </select>
-          <select v-model="filterAgent" :class="controlCls" @change="onFilterChanged">
-            <option value="">{{ t('filterAgent') }}</option>
-            <option v-for="a in agentOptions.slice(1)" :key="a" :value="a">{{ a }}</option>
-          </select>
-          <select v-model="filterSource" :class="controlCls" @change="onFilterChanged">
-            <option value="">{{ t('filterSource') }}</option>
-            <option v-for="s in sourceOptions.slice(1)" :key="s" :value="s">{{ s }}</option>
-          </select>
+        <div class="grid grid-cols-3 gap-1.5 items-start">
+          <Select
+            v-model="filterStatus"
+            :options="filterStatusOptions"
+            size="sm"
+            :placeholder="t('filterStatus')"
+            @update:model-value="onFilterChanged"
+          />
+          <Select
+            v-model="filterAgent"
+            :options="filterAgentOptions"
+            size="sm"
+            :placeholder="t('filterAgent')"
+            @update:model-value="onFilterChanged"
+          />
+          <Select
+            v-model="filterSource"
+            :options="filterSourceOptions"
+            size="sm"
+            :placeholder="t('filterSource')"
+            @update:model-value="onFilterChanged"
+          />
         </div>
         <div class="grid grid-cols-2 gap-1.5">
           <div>
@@ -926,24 +1133,25 @@ function onLiveChanged() {
         </div>
       </div>
 
-      <!-- 滚动内容：分页任务列表 -->
-      <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
+      <!-- 任务列表：固定高度区域（filterReset 与分页之间），任务超出时内部滚动；
+           分页固定在面板底部不随列表滚动。flex-1 + max-h 保证常规窗口下列表高度固定为 440px，
+           窗口过小时自动收缩以保持分页可见（相对容器计算，随 ui-scale 自适应） -->
+      <div class="flex-1 min-h-0 max-h-[440px] overflow-y-auto px-4 py-3 space-y-0.5">
         <!-- 列表加载中 -->
         <div v-if="loading" class="flex justify-center py-4">
           <span class="text-sm text-[var(--text-tertiary)]">{{ t('loading') }}</span>
         </div>
 
-        <!-- 任务列表（卡片等高，撑满筛选区剩余高度） -->
-        <div v-if="tasks.length > 0" class="h-full">
-          <div class="flex flex-col gap-0.5 h-full">
-            <div
-              v-for="task in tasks"
-              :key="task.id"
-              class="flex-1 flex flex-col min-h-0 rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
-              @click="toggleTask(task)"
-            >
-              <div class="flex items-center gap-2 px-2.5 py-1.5">
-                <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"></div>
+        <!-- 任务列表（自然高度卡片，超出滚动；分页固定在底部不随列表滚动） -->
+        <div v-if="tasks.length > 0" class="space-y-0.5">
+          <div
+            v-for="task in tasks"
+            :key="task.id"
+            class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
+            @click="toggleTask(task)"
+          >
+            <div class="flex items-center gap-2 px-2.5 py-1.5">
+              <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"></div>
                 <p class="flex-1 min-w-0 text-xs text-[var(--text-primary)] truncate">{{ task.description || task.session_id }}</p>
                 <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] flex-shrink-0">
                   {{ formatTime(task.started_at || task.created_at) }}
@@ -968,7 +1176,7 @@ function onLiveChanged() {
                   <span class="text-[var(--text-tertiary)]">{{ t('detailAgent') }}</span>
                   <span class="text-[var(--text-primary)] truncate min-w-0">{{ task.agent || '-' }}</span>
                   <span class="text-[var(--text-tertiary)]">{{ t('detailSource') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{ task.source || '-' }}</span>
+                  <span class="text-[var(--text-primary)] truncate min-w-0">{{ sourceLabel[task.source] || task.source || '-' }}</span>
                   <span class="text-[var(--text-tertiary)]">{{ t('detailCreated') }}</span>
                   <span class="text-[var(--text-primary)] truncate min-w-0">{{ formatTime(task.created_at) }}</span>
                   <span class="text-[var(--text-tertiary)]">{{ t('detailStarted') }}</span>
@@ -986,7 +1194,6 @@ function onLiveChanged() {
                 </div>
               </div>
             </div>
-          </div>
         </div>
 
         <!-- 空状态 -->
@@ -1046,10 +1253,12 @@ function onLiveChanged() {
         </div>
         <div>
           <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledConfig') }}</label>
-          <select v-model="formConfigId" :class="controlCls">
-            <option value="" disabled>{{ t('scheduledConfigPlaceholder') }}</option>
-            <option v-for="c in configs" :key="c.id" :value="c.id">{{ configLabel(c) }}</option>
-          </select>
+          <Select
+            v-model="formConfigId"
+            :options="configOptions"
+            size="sm"
+            :placeholder="t('scheduledConfigPlaceholder')"
+          />
         </div>
         <div>
           <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledTriggerAt') }}</label>
@@ -1072,12 +1281,50 @@ function onLiveChanged() {
         </div>
         <div>
           <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledPrompts') }}</label>
-          <textarea
-            v-model="formPromptsText"
-            rows="3"
-            :class="controlCls + ' resize-y py-1.5 leading-5'"
-            :placeholder="t('scheduledPromptPlaceholder')"
-          />
+          <!-- 任务卡片：一条任务一个卡片，支持逐条删除（与队列弹窗交互一致） -->
+          <div v-if="formPrompts.length > 0" class="space-y-1 mb-2">
+            <div
+              v-for="(p, idx) in formPrompts"
+              :key="idx"
+              class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
+            >
+              <span class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0">#{{ idx + 1 }}</span>
+              <span class="flex-1 min-w-0 text-sm text-[var(--text-primary)] break-words">{{ p }}</span>
+              <button
+                class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                :title="t('delete')"
+                @click="removePrompt(idx)"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <!-- 添加任务：输入后回车或点击按钮生成一张卡片（自动增高，最多 10 行） -->
+          <div class="flex items-end gap-1.5">
+            <textarea
+              v-model="newPrompt"
+              rows="1"
+              :class="textareaCls"
+              :ref="(el) => (newPromptEl = el as HTMLTextAreaElement | null)"
+              :placeholder="t('scheduledPromptPlaceholder')"
+              @input="autosizeTextarea($event.target)"
+              @keydown="submitOnEnter(addPrompt)($event)"
+            />
+            <button
+              class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!newPrompt.trim()"
+              @click="addPrompt"
+            >
+              {{ t('add') }}
+            </button>
+          </div>
           <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">{{ t('scheduledPromptsHint') }}</p>
         </div>
         <button

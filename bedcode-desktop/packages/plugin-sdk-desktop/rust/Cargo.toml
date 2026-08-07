@@ -3,6 +3,8 @@ name = "bedcode-plugin-api"
 version = "0.1.0"
 description = "BedCode Plugin API — trait definitions and shared types for BedCode plugins"
 authors = ["binblink"]
+license = "MIT"
+repository = "https://github.com/7ZAI/BedCode"
 edition = "2021"
 
 [lib]

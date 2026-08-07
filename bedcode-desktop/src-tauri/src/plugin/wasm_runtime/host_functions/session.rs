@@ -3,6 +3,8 @@
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
 use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
 use crate::plugin::permission::{PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE};
+use crate::system::error_boundary::spawn_with_error_boundary;
+use uuid::Uuid;
 
 /// 会话：列出所有会话
 ///
@@ -146,8 +148,15 @@ pub(super) fn host_session_config_list(
 /// 定时自动任务）在指定时刻新建会话。创建成功后宿主照常分发 `Created`
 /// 生命周期事件，插件可据此感知新会话就绪。
 ///
+/// **创建为宿主异步执行**：wasm 调用栈内同步创建会死锁 —— `create_session`
+/// 会同步分发 Creating/Created 生命周期事件，而事件回灌同一插件实例需要
+/// 重新获取 `wasm_plugins` 写锁（该锁正被当前 wasm 调用持有，tokio RwLock
+/// 不可重入），且 wasmtime Store 不可重入。因此此处预生成会话 ID 立即返回，
+/// 实际创建在宿主上下文异步执行：事件分发发生在 wasm 调用返回（锁释放）后，
+/// hooks 仍先于 PTY 启动就位。
+///
 /// 参数：(config_id_ptr, config_id_len, out_ptr)
-/// 返回：0 成功（session_id 写入 out_ptr），-1 失败（含权限拒绝、配置不存在）
+/// 返回：0 成功（预生成的 session_id 写入 out_ptr），-1 失败（含权限拒绝、配置不存在）
 pub(super) fn host_session_create(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     cid_ptr: u32,
@@ -178,29 +187,38 @@ pub(super) fn host_session_create(
 
     let sm = host_ctx.session_manager.clone();
 
-    match block_on_async(sm.create_session(&config_id)) {
-        Ok(session_id) => {
-            tracing::info!(
-                plugin_id = %plugin_id,
-                config_id = %config_id,
-                session_id = %session_id,
-                "host_session_create: session created"
-            );
-            match write_wasm_string(&mut caller, &session_id) {
-                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-                None => {
-                    tracing::error!("host_session_create: failed to write session_id to WASM memory");
-                    -1
-                }
+    // 预生成会话 ID 并异步创建：插件侧照常将 job 置 creating 并记录 session_id，
+    // 等待 Created 事件（携带同一 session_id）完成匹配，语义与同步创建一致
+    let session_id = Uuid::new_v4().to_string();
+    let cid = config_id.clone();
+    let sid = session_id.clone();
+    spawn_with_error_boundary("host_session_create", async move {
+        match sm.create_session_with_id(&cid, &sid).await {
+            Ok(_) => {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    config_id = %cid,
+                    session_id = %sid,
+                    "host_session_create: session created (async)"
+                );
+            }
+            Err(e) => {
+                // 创建失败无同步返回通道：插件侧由 creating 超时看门狗置 failed
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    config_id = %cid,
+                    session_id = %sid,
+                    error = %e,
+                    "host_session_create: create_session failed (async)"
+                );
             }
         }
-        Err(e) => {
-            tracing::error!(
-                plugin_id = %plugin_id,
-                config_id = %config_id,
-                error = %e,
-                "host_session_create: create_session failed"
-            );
+    });
+
+    match write_wasm_string(&mut caller, &session_id) {
+        Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+        None => {
+            tracing::error!("host_session_create: failed to write session_id to WASM memory");
             -1
         }
     }
