@@ -34,6 +34,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
 // 部署时由宿主按当前端口改写（hooks.rs replace_pi_extension_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
+// 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
+// @bedcode-template-version 2
 
 const PLUGIN_ID = "com.bedcode.auto-task"
 const HOST = "127.0.0.1"
@@ -50,6 +52,15 @@ function eventTime(): string {
 }
 
 /**
+ * subagent 子进程检测：subagent 扩展以 `pi --mode json -p --no-session`
+ * 派生独立 pi 进程执行委派任务（继承 BEDCODE_SESSION_ID 并同样加载本扩展）。
+ * 其会话生命周期与主会话任务无关——session_start/agent_settled/进程退出
+ * 会把主任务状态污染（subagent 结束时 completed+interrupted 毫秒级连推，
+ * 提前落终态且误标中断），故子进程中本扩展整体静默。
+ */
+const IS_SUBAGENT_PROCESS = process.argv.includes("--no-session")
+
+/**
  * 推送任务状态到 BedCode 桌面端 HTTP API
  * 失败不阻塞主流程，仅记录日志；终态推送自动重试。
  */
@@ -57,6 +68,9 @@ async function push(status: string, reason: string): Promise<void> {
   // 仅在 BedCode 启动的 PTY 终端中生效（外部终端无此环境变量）
   const bedcodeSessionId = process.env.BEDCODE_SESSION_ID
   if (!bedcodeSessionId) return
+
+  // subagent 子进程整体静默（见 IS_SUBAGENT_PROCESS 注释）
+  if (IS_SUBAGENT_PROCESS) return
 
   // 宿主以 bedcode 会话 ID 键控任务行（on_input_submitted / 队列出队写入），
   // session_id 与 bedcode_session_id 同值即可命中（见 state.rs handle_update_task_status）

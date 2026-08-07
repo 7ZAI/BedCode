@@ -567,21 +567,23 @@ pub fn ensure_pi_extension(
         target, source
     ));
 
-    // 1. 已部署且端口匹配 → 跳过；端口变化 → 重新部署
+    // 1. 已部署且端口与模板版本均匹配 → 跳过；任一不匹配 → 重新部署
+    //    （仅比较端口发现不了脚本内容更新，模板升级须靠版本标记触发重部署）
     match host.fs_read(&target) {
         Ok(Some(existing)) => {
-            if pi_extension_port_matches(&existing, port) {
+            if pi_extension_port_matches(&existing, port) && pi_extension_version_matches(&existing)
+            {
                 host.log_info(
-                    "ensure_pi_extension: extension already deployed with matching port, skipping",
+                    "ensure_pi_extension: extension already deployed with matching port and template version, skipping",
                 );
                 return AgentIntegrationResult {
                     success: true,
-                    message: "pi 扩展已部署且端口匹配".to_string(),
+                    message: "pi 扩展已部署且端口/版本匹配".to_string(),
                     skipped: true,
                 };
             }
             host.log_info(&format!(
-                "ensure_pi_extension: deployed extension port mismatch, redeploying (port={})",
+                "ensure_pi_extension: deployed extension stale (port or template version mismatch), redeploying (port={})",
                 port
             ));
         }
@@ -725,6 +727,23 @@ fn pi_extension_port_matches(content: &str, port: u16) -> bool {
             .collect();
         digits.parse::<u16>().ok()
     }) == Some(port)
+}
+
+/// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
+/// （端口匹配检查无法发现脚本内容更新）
+const PI_EXTENSION_TEMPLATE_VERSION: &str = "2";
+
+/// 检查已部署扩展是否携带当前模板版本标记
+fn pi_extension_version_matches(content: &str) -> bool {
+    const MARKER: &str = "@bedcode-template-version ";
+    content.find(MARKER).map_or(false, |start| {
+        let value_start = start + MARKER.len();
+        let digits: String = content[value_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits == PI_EXTENSION_TEMPLATE_VERSION
+    })
 }
 
 /// 构建 hooks JSON 配置

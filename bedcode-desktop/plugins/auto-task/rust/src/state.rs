@@ -351,6 +351,47 @@ pub fn handle_http_endpoint(
     }
 }
 
+/// 两个固定宽度事件时间（`YYYY-MM-DD HH:MM:SS.mmm`，UTC）的毫秒差（incoming − row）
+///
+/// 格式不匹配或解析失败返回 None（旧版脚本无 event_time / 迁移前数据），
+/// 调用方跳过时间窗判断，保持兼容。
+fn event_time_diff_ms(row: &str, incoming: &str) -> Option<i64> {
+    let parse = |s: &str| -> Option<i64> {
+        let b = s.as_bytes();
+        // 固定布局 23 字符：YYYY-MM-DD HH:MM:SS.mmm（字典序即时间序）
+        if b.len() != 23
+            || b[4] != b'-'
+            || b[7] != b'-'
+            || b[10] != b' '
+            || b[13] != b':'
+            || b[16] != b':'
+            || b[19] != b'.'
+        {
+            return None;
+        }
+        let field = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+        let year = field(0..4)?;
+        let month = field(5..7)?;
+        let day = field(8..10)?;
+        let hour = field(11..13)?;
+        let minute = field(14..16)?;
+        let second = field(17..19)?;
+        let millis = field(20..23)?;
+        // days_from_civil（Howard Hinnant 算法）：公历日期 → 自 1970-01-01 的天数
+        let y = if month <= 2 { year - 1 } else { year };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400; // [0, 399]
+        let mp = month + if month > 2 { -3 } else { 9 }; // [0, 11]
+        let doy = (153 * mp + 2) / 5 + day - 1; // [0, 365]
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+        let days = era * 146097 + doe - 719468;
+        Some(
+            days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis,
+        )
+    };
+    Some(parse(incoming)? - parse(row)?)
+}
+
 /// POST /task-status — 接收 Claude Code hook 推送的任务状态
 fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     host.log_debug(&format!("task-status body: {}", body));
@@ -435,12 +476,32 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             return http_response::ok();
         }
 
+        // 时序基准：事件发生时刻（脚本 UTC 时间戳，固定宽度字符串，字典序可比）。
+        // 无 event_time（旧版脚本）或行无 event_time（迁移前数据）时相关保护跳过，保持兼容。
+        let row_event_time = row.get("event_time").and_then(|v| v.as_str()).unwrap_or("");
+        let incoming_event_time = event_time.unwrap_or("");
+
+        // subagent 回声保护：subagent 子进程（pi --mode json -p --no-session）在
+        // agent_settled 推 completed 后进程退出随即推 interrupted（毫秒级连发），
+        // 会把主会话刚完成的真实任务误标中断。行状态为 completed 且 incoming
+        // interrupted 与行事件相差在窗口内 → 判定为 subagent 退出回声，忽略。
+        // 脚本侧已按 --no-session 静默（pi_task_hook.ts），此处兜底旧部署副本。
+        if status == "interrupted" && current_status == "completed" {
+            if let Some(diff_ms) = event_time_diff_ms(&row_event_time, incoming_event_time) {
+                const SUBAGENT_QUIT_ECHO_WINDOW_MS: i64 = 5_000;
+                if diff_ms <= SUBAGENT_QUIT_ECHO_WINDOW_MS {
+                    host.log_info(&format!(
+                        "task-status: session_id={} skip, interrupted {}ms after completed (subagent quit echo)",
+                        session_id, diff_ms
+                    ));
+                    return http_response::ok();
+                }
+            }
+        }
+
         // 时序保护：拒绝迟到的旧事件（event_time 早于行内已应用事件）。
         // HTTP 推送可能被阻塞乱序到达（Stop 的 GET+POST 竞态、resume 后旧会话迟到推送等），
         // 旧状态覆盖最新状态会导致任务状态回跳、队列调度错乱。
-        // 无 event_time（旧版脚本）或行无 event_time（迁移前数据）时不比较，保持兼容。
-        let row_event_time = row.get("event_time").and_then(|v| v.as_str()).unwrap_or("");
-        let incoming_event_time = event_time.unwrap_or("");
         if !incoming_event_time.is_empty()
             && !row_event_time.is_empty()
             && incoming_event_time < row_event_time
