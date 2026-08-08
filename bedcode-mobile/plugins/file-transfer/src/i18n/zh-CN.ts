@@ -11,13 +11,19 @@ export default {
   // ==================== 工具箱入口 ====================
   'transfer.toolbox.title': '文件传输',
   'transfer.toolbox.subtitle': '内网高速互传文件',
+  'transfer.toolbox.online': '对端已连接',
   'transfer.toolbox.activeCount': '{count} 传输中',
   'transfer.toolbox.disconnected': '未连接',
 
   // ==================== 对端状态 ====================
-  'transfer.peer.online': '在线',
-  'transfer.peer.offline': '离线',
+  // 顶栏连接状态：纯连接层语义
+  'transfer.peer.online': '已连接',
+  'transfer.peer.offline': '未连接',
+  // 业务层对端共享：作为页面空态标题，去掉「已连接」前缀避免与顶栏语义混杂
+  'transfer.peer.notSharing': '对端未共享',
   'transfer.peer.unpaired': '未连接设备',
+  // 已连接但尚未收到对端公告（未共享）：无可辨识信息时的占位名
+  'transfer.peer.unknown': '未知设备',
 
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': '设置',
@@ -46,7 +52,7 @@ export default {
   'transfer.task.resume': '恢复',
   'transfer.task.cancel': '取消',
   'transfer.task.retry': '重新排队',
-  'transfer.task.resumeAll': '全部继续',
+  'transfer.task.resumeAll': '全部恢复',
   'transfer.task.download': '下载',
   'transfer.task.upload': '上传',
   'transfer.task.empty': '暂无传输任务',
@@ -74,6 +80,7 @@ export default {
   'transfer.settings.sharedRoots': '共享目录',
   'transfer.settings.addRoot': '添加目录',
   'transfer.settings.pickRoot': '选择目录',
+  'transfer.settings.picking': '选择中…',
   'transfer.settings.addRootHint': '点「选择目录」用系统选择器（仅 Android 支持），或手动输入本地绝对路径',
   'transfer.settings.pickFailed': '无法解析所选目录，请手动输入路径',
   'transfer.settings.rootDuplicate': '该目录已在共享列表中',
@@ -107,8 +114,10 @@ export default {
 
   // ==================== 空态 ====================
   'transfer.empty.noRoots': '对端尚未设置共享目录',
-  'transfer.empty.noPeer': '未检测到已配对设备',
   'transfer.empty.noDownloadDir': '请先在设置中配置下载目录',
+  'transfer.empty.emptyDirHint': '对端共享目录中还没有文件',
+  'transfer.empty.notSharingHint': '请在对端设备上开启文件共享',
+  'transfer.empty.unavailableHint': '对端可能已断开连接或目录被移除',
 
   // ==================== 单位 ====================
   'transfer.size.bytes': '{value} B',

@@ -10,13 +10,20 @@ export default {
   // ==================== Toolbox entry ====================
   'transfer.toolbox.title': 'File Transfer',
   'transfer.toolbox.subtitle': 'Fast file transfer over LAN',
+  'transfer.toolbox.online': 'Peer online',
   'transfer.toolbox.activeCount': '{count} transferring',
   'transfer.toolbox.disconnected': 'Not connected',
 
   // ==================== Peer status ====================
-  'transfer.peer.online': 'Online',
-  'transfer.peer.offline': 'Offline',
+  // Top bar connection status: connection-layer only
+  'transfer.peer.online': 'Connected',
+  'transfer.peer.offline': 'Not connected',
+  // Business-layer peer sharing: used as the empty-state title; drop the
+  // "Connected" prefix so it doesn't collide with the top bar's meaning.
+  'transfer.peer.notSharing': 'Peer not sharing',
   'transfer.peer.unpaired': 'No device connected',
+  // Connected but peer announcement not received yet: placeholder name
+  'transfer.peer.unknown': 'Unknown device',
 
   // ==================== Top bar / browsing ====================
   'transfer.topbar.settings': 'Settings',
@@ -73,6 +80,7 @@ export default {
   'transfer.settings.sharedRoots': 'Shared folders',
   'transfer.settings.addRoot': 'Add folder',
   'transfer.settings.pickRoot': 'Pick folder',
+  'transfer.settings.picking': 'Picking…',
   'transfer.settings.addRootHint': 'Use the system picker (Android only) or enter an absolute local path',
   'transfer.settings.pickFailed': 'Could not resolve the picked folder. Enter the path manually.',
   'transfer.settings.rootDuplicate': 'This folder is already in the share list',
@@ -106,8 +114,10 @@ export default {
 
   // ==================== Empty states ====================
   'transfer.empty.noRoots': 'The remote device has not shared any folders',
-  'transfer.empty.noPeer': 'No paired device detected',
   'transfer.empty.noDownloadDir': 'Configure a download folder in Settings first',
+  'transfer.empty.emptyDirHint': "No files in the peer's shared folder yet",
+  'transfer.empty.notSharingHint': 'Ask the peer to enable file sharing',
+  'transfer.empty.unavailableHint': 'The peer may be offline or the folder was removed',
 
   // ==================== Units ====================
   'transfer.size.bytes': '{value} B',

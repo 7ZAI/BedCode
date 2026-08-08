@@ -37,9 +37,9 @@ const emit = defineEmits<{
 
 const t = props.t
 
-/** 活跃任务数（供标题角标） */
+/** 活跃传输数（仅真正在传输的任务；排队/暂停/失败不计入，避免数字与状态不符） */
 const activeCount = computed(
-  () => props.tasks.filter(tk => !isTerminalState(tk.state)).length,
+  () => props.tasks.filter(tk => tk.state === 'transferring').length,
 )
 
 /** 任务是否可暂停 */
@@ -119,9 +119,10 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
   return btns
 }
 
-/** 任务方向 → icon-chip 配色 */
-function directionChipClass(direction: string): string {
-  return direction === 'download' ? 'chip-cyan' : 'chip-amber'
+/** 任务方向 → icon-chip 配色：统一中性灰（方向由箭头图标本身表达，
+    状态色只属于 chip / 进度条，避免一卡内方向色与状态色混用） */
+function directionChipClass(): string {
+  return 'chip-zinc'
 }
 
 /** 任务方向 → SVG path */
@@ -172,7 +173,7 @@ function directionIconPath(direction: string): string {
             <div v-for="task in tasks" :key="task.id" class="group-card mb-3">
               <!-- 首行：方向图标 + 名称 + 状态 chip -->
               <div class="group-row" style="gap: 0.625rem">
-                <span class="icon-chip flex-shrink-0" :class="directionChipClass(task.direction)">
+                <span class="icon-chip flex-shrink-0" :class="directionChipClass()">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="directionIconPath(task.direction)" />
                   </svg>
@@ -190,23 +191,23 @@ function directionIconPath(direction: string): string {
               </div>
 
               <!-- 进度条（仅非终态） -->
-              <div v-if="!isTerminalState(task.state)" class="px-4 pb-3">
+              <div v-if="!isTerminalState(task.state)" class="px-4 pb-2.5">
                 <div class="ft-progress-track">
                   <div
                     class="h-full rounded-full transition-all duration-300"
-                    :class="TASK_STATE_PROGRESS_CLASS[task.state]"
+                    :class="[TASK_STATE_PROGRESS_CLASS[task.state], { 'ft-progress-inactive': task.state === 'paused' || task.state === 'resumable' }]"
                     :style="{ width: taskPercent(task) + '%' }"
                   ></div>
                 </div>
               </div>
 
-              <!-- 失败/拒绝原因 -->
-              <div v-if="taskReason(task)" class="px-4 pb-2">
+              <!-- 失败/拒绝原因：左色条 + 浅色底的内联错误块 -->
+              <div v-if="taskReason(task)" class="px-4 pb-2.5">
                 <p class="ft-task-reason">{{ taskReason(task) }}</p>
               </div>
 
               <!-- 操作按钮 -->
-              <div v-if="actionButtons(task).length > 0" class="px-4 pb-3 flex gap-2">
+              <div v-if="actionButtons(task).length > 0" class="px-4 pb-3 pt-1 flex gap-2">
                 <button
                   v-for="btn in actionButtons(task)"
                   :key="btn.key"
@@ -233,7 +234,7 @@ function directionIconPath(direction: string): string {
 
 /* 队列标题 */
 .ft-sheet-title {
-  font-size: clamp(0.9375rem, 1rem + (100vw - 360px) / 800 * 0.0625rem, 1.0625rem);
+  font-size: clamp(0.9375rem, 1rem + (100vw - 360px) / 800, 1.0625rem);
   font-weight: 600;
 }
 
@@ -241,7 +242,7 @@ function directionIconPath(direction: string): string {
 .ft-resume-all-btn {
   padding: 0.25rem 0.75rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   font-weight: 500;
   background: var(--mobile-accent-muted);
   color: var(--mobile-accent);
@@ -254,20 +255,26 @@ function directionIconPath(direction: string): string {
 
 /* 空态文字 */
 .ft-task-empty {
-  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800, 0.9375rem);
   color: var(--mobile-text-muted);
 }
 
 /* 任务名称 */
 .ft-task-name {
-  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800, 0.9375rem);
   font-weight: 500;
 }
 
-/* 任务元信息 */
+/* 任务元信息（数字等宽对齐 60.0/100.0/200.0） */
 .ft-task-meta {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 暂停/可恢复任务的进度条：半透明降低「正在活动」的错觉，状态色仍可辨 */
+.ft-progress-inactive {
+  opacity: 0.45;
 }
 
 /* 进度条轨道 */
@@ -278,17 +285,24 @@ function directionIconPath(direction: string): string {
   overflow: hidden;
 }
 
-/* 失败原因 */
+/* 失败/拒绝原因：内联错误块（左色条 + 浅红底），与状态 chip 视觉呼应 */
 .ft-task-reason {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  border-left: 3px solid var(--mobile-error);
+  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  line-height: 1.45;
   color: var(--mobile-error);
 }
 
-/* 操作按钮 */
+/* 操作按钮：44px 最小触控高度 */
 .ft-task-action-btn {
+  min-height: 2.75rem;
   padding: 0.5rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   font-weight: 500;
   transition: opacity 0.15s ease;
 }

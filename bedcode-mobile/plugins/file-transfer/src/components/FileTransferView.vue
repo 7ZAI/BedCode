@@ -3,10 +3,15 @@
  * FileTransferView — 文件传输浏览主页面 (Mobile)
  *
  * 结构（spec 9.2）：
- *   顶栏（对端名+在线状态，纯信息不带操作按钮）→ 面包屑 → Material 文件列表
+ *   顶栏（对端名+连接状态，纯信息不带操作按钮）→ 面包屑 → Material 文件列表
  *   （图标+名称+元信息+多选勾选）→ 多选时底部主按钮「下载到手机（N 项 · 总大小）」
  *   → 迷你传输条（常驻）→ 右下角 FAB（上传 + 设置，悬浮于底部栏上方）。
- *   对端重测入口下沉到空态（离线/目录不可用时展示重试按钮）。
+ *   对端重测入口下沉到空态（对端未共享/目录不可用时展示重试按钮）。
+ *
+ * 语义分层（避免连接与文件共享混杂）：
+ *   - 顶栏：只反映「连接」维度（已连接 / 未连接），与对端是否共享文件无关。
+ *   - 页面正文：只反映「对端文件共享」维度（空目录 / 对端未共享 / 目录不可用），
+ *     无论连接是否已建立，看不到对端文件统一归到「对端未共享」空态。
  *
  * 业务逻辑全部在 composables（useTasks / useRemoteFs），本组件只做 UI；
  * 设置页经 context.ui.openPage('settings') 整体路由跳转（SettingsPage 包装 useSettings）。
@@ -32,6 +37,91 @@ const queueOpen = ref(false)
 
 /** 对端展示名（实际名字或未连接文案） */
 const peerLabel = computed(() => tasks.displayPeerName.value)
+
+/**
+ * 顶栏连接状态文案：只反映连接层，不掺杂对端共享语义。
+ * 「对端未共享」是业务层信息，仅在页面正文空态出现，与顶栏分离。
+ */
+const peerStatusLabel = computed(() =>
+  tasks.connOnline.value ? t('transfer.peer.online') : t('transfer.peer.offline'),
+)
+
+/** 顶栏连接状态文字语义色：成功 / 静默 */
+const peerStatusClass = computed(() =>
+  tasks.connOnline.value ? 'ft-peer-status--online' : 'ft-peer-status--offline',
+)
+
+/**
+ * 空态类型：只表达「对端文件共享」维度，连接状态由顶栏承载。
+ * 「对端未共享」统一兜底未连接 + 已连接但未共享两种看不到文件的情况。
+ */
+type EmptyKind = 'empty' | 'notSharing' | 'error'
+
+const emptyKind = computed<EmptyKind>(() => {
+  if (fs.error.value) return 'error'
+  if (!tasks.peerOnline.value) return 'notSharing'
+  return 'empty'
+})
+
+/** 空态主标题（按场景区分，避免无差别展示「此目录为空」） */
+const emptyTitle = computed(() => {
+  switch (emptyKind.value) {
+    case 'error': return t('transfer.table.dirUnavailable')
+    case 'notSharing': return t('transfer.peer.notSharing')
+    default: return t('transfer.table.empty')
+  }
+})
+
+/** 空态说明文案（引导用户下一步操作） */
+const emptyHint = computed(() => {
+  switch (emptyKind.value) {
+    case 'error': return t('transfer.empty.unavailableHint')
+    case 'notSharing': return t('transfer.empty.notSharingHint')
+    default: return t('transfer.empty.emptyDirHint')
+  }
+})
+
+/** 空态图标底色（扁平 tint，随状态色） */
+const emptyIcoClass = computed(() => {
+  switch (emptyKind.value) {
+    case 'error': return 'ft-empty-ico--error'
+    case 'notSharing': return 'ft-empty-ico--warning'
+    default: return 'ft-empty-ico--neutral'
+  }
+})
+
+/** 空态图标路径（24 线性描边） */
+const emptyIcoPath = computed(() => {
+  switch (emptyKind.value) {
+    case 'error':
+      return 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
+    case 'notSharing':
+      // 同心圆弧 wifi：顶部最宽 → 往下依次变短 → 底部圆点；
+      // 不用 heroicons 原版 4 弧路径（其中 r5.25 弧会压在最长弧上方，视觉错乱）
+      return 'M4.72 4.39a9.5 9.5 0 0114.56 0M7.82 5.52a6.5 6.5 0 018.36 0M10.8 7.21a3.5 3.5 0 012.4 0M12 20h.01'
+    default:
+      return 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z'
+  }
+})
+
+/** 空态 CTA：异常场景重测对端；正常空目录刷新 */
+const emptyCta = computed(() => {
+  if (emptyKind.value === 'empty') {
+    return {
+      label: t('transfer.topbar.refresh'),
+      primary: false,
+      icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+      action: () => fs.refresh(),
+    }
+  }
+  return {
+    label: t('transfer.topbar.queryPeer'),
+    primary: true,
+    // 循环箭头 = 重新探测/重试语义（放大镜是搜索语义，不匹配）
+    icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+    action: () => tasks.queryPeer(),
+  }
+})
 
 /** 迷你传输条主任务（null 表示无活跃任务） */
 const primaryTask = computed(() => tasks.primaryTask.value)
@@ -109,18 +199,42 @@ onUnmounted(() => {
 
 <template>
   <div class="ft-view h-full flex flex-col bg-[var(--mobile-bg-primary)]">
-    <!-- 顶栏：对端名 + 在线状态（纯信息，操作按钮在右下角 FAB / 空态） -->
-    <div class="flex-shrink-0 flex items-center gap-2 px-4 pt-3 pb-2">
-      <span
-        class="status-dot flex-shrink-0"
-        :class="tasks.peerOnline.value ? 'dot-emerald' : 'dot-zinc'"
-      ></span>
-      <span class="ft-peer-name text-[var(--mobile-text-primary)] truncate">
+    <!-- 顶栏：对端名 + 连接状态 + 右上操作（上传 / 设置） -->
+    <div class="flex-shrink-0 flex items-center gap-2 px-4 pt-2.5 pb-2">
+      <span class="ft-peer-name min-w-0 max-w-[45%] text-[var(--mobile-text-primary)] truncate">
         {{ peerLabel }}
       </span>
-      <span class="ft-peer-status flex-shrink-0">
-        {{ tasks.peerOnline.value ? t('transfer.peer.online') : t('transfer.peer.offline') }}
+      <!-- 状态胶囊紧跟对端名（连接态 success tint 底 / 断开态中性底） -->
+      <span class="ft-peer-status flex-shrink-0" :class="peerStatusClass">
+        {{ peerStatusLabel }}
       </span>
+      <!-- 弹性空隙：把操作按钮推到行尾 -->
+      <div class="flex-1 min-w-2"></div>
+      <!-- 操作按钮（上传 / 设置）：纯图标，置于顶栏右侧，避免悬浮于列表数据之上造成遮挡 -->
+      <button
+        class="ft-topbar-btn ft-topbar-btn-primary flex-shrink-0"
+        :title="t('transfer.topbar.uploadFile')"
+        @click="uploadFile()"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+        </svg>
+      </button>
+      <button
+        class="ft-topbar-btn flex-shrink-0"
+        :title="t('transfer.topbar.settings')"
+        @click="context.ui.openPage('settings')"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+          />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      </button>
     </div>
 
     <!-- 面包屑 -->
@@ -145,29 +259,34 @@ onUnmounted(() => {
       </template>
     </div>
 
-    <!-- 文件列表：相对定位容器，右下角悬浮 FAB 锚定于此（不随滚动移动） -->
-    <div class="flex-1 relative overflow-y-auto min-h-0 overscroll-behavior-none">
-      <div class="px-4">
-        <!-- 加载态 -->
-        <div v-if="fs.loading.value" class="py-10 text-center">
-          <p class="ft-body-text text-[var(--mobile-text-muted)]">{{ t('transfer.table.loading') }}</p>
+    <!-- 文件列表：滚动容器（空态/加载态在可视区内垂直居中，列表态顶部对齐） -->
+    <div class="flex-1 overflow-y-auto min-h-0 overscroll-behavior-none">
+      <!-- min-h-full + flex-col：空态/加载态在可视区内垂直居中，列表态保持顶部对齐 -->
+      <div class="px-4 min-h-full flex flex-col">
+        <!-- 加载态：扁平细线 spinner + 文案 -->
+        <div v-if="fs.loading.value" class="ft-empty-state">
+          <span class="ft-spinner"></span>
+          <p class="ft-body-text text-[var(--mobile-text-muted)] mt-2">{{ t('transfer.table.loading') }}</p>
         </div>
 
-        <!-- 空态 -->
-        <div v-else-if="fs.entries.value.length === 0" class="py-10 text-center px-4">
-          <p class="ft-body-text text-[var(--mobile-text-muted)]">
-            {{ fs.error.value ? t('transfer.table.dirUnavailable') : t('transfer.table.empty') }}
-          </p>
-          <!-- 离线/目录不可用：对端重测下沉到空态，避免顶栏塞操作按钮 -->
+        <!-- 空态（按场景区分：空目录 / 未连接 / 对端未共享 / 目录不可用） -->
+        <div v-else-if="fs.entries.value.length === 0" class="ft-empty-state">
+          <div class="ft-empty-ico" :class="emptyIcoClass">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" :d="emptyIcoPath" />
+            </svg>
+          </div>
+          <p class="ft-empty-title">{{ emptyTitle }}</p>
+          <p class="ft-empty-hint">{{ emptyHint }}</p>
           <button
-            v-if="!tasks.peerOnline.value || fs.error.value"
-            class="mt-4 inline-flex items-center gap-1.5 ft-touch-btn px-4 rounded-xl ft-btn-neutral active:opacity-80 transition-opacity ft-mini-text"
-            @click="tasks.queryPeer()"
+            class="ft-touch-btn ft-empty-cta"
+            :class="emptyCta.primary ? 'ft-empty-cta--primary' : 'ft-empty-cta--neutral'"
+            @click="emptyCta.action()"
           >
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="emptyCta.icon" />
             </svg>
-            {{ t('transfer.topbar.queryPeer') }}
+            {{ emptyCta.label }}
           </button>
         </div>
 
@@ -227,40 +346,6 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-
-      <!-- 悬浮操作按钮（设置 / 上传）：锚定列表底部右下角；多选时隐藏避免遮挡 -->
-      <div
-        v-if="fs.selectedCount.value === 0"
-        class="absolute right-4 bottom-4 flex flex-col items-center gap-3"
-      >
-        <button
-          class="ft-fab ft-fab-secondary"
-          :title="t('transfer.topbar.settings')"
-          @click="context.ui.openPage('settings')"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-            />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
-        <button
-          class="ft-fab ft-fab-primary"
-          :title="t('transfer.topbar.uploadFile')"
-          @click="uploadFile()"
-        >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- 为 FAB 让出底部滚动空间 -->
-      <div class="h-20 flex-shrink-0"></div>
     </div>
 
     <!-- 底部：多选操作条 + 迷你传输条 -->
@@ -269,14 +354,14 @@ onUnmounted(() => {
       <div v-if="fs.selectedCount.value > 0" class="flex items-center gap-3 px-4 py-2.5">
         <button
           class="flex-shrink-0 ft-touch-btn px-3 rounded-lg ft-btn-neutral text-[var(--mobile-text-secondary)] active:opacity-80"
-          :style="{ fontSize: 'clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem)' }"
+          :style="{ fontSize: 'clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem)' }"
           @click="fs.clearSelection()"
         >
           {{ t('transfer.table.clearSelection') }}
         </button>
         <button
-          class="flex-1 ft-touch-btn px-3 rounded-xl text-white bg-[var(--mobile-accent)] active:opacity-80 transition-opacity flex items-center justify-center gap-1.5"
-          :style="{ fontSize: 'clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem)' }"
+          class="flex-1 ft-touch-btn px-3 rounded-xl text-[var(--mobile-text-on-accent)] bg-[var(--mobile-accent)] active:opacity-80 transition-opacity flex items-center justify-center gap-1.5"
+          :style="{ fontSize: 'clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem)' }"
           @click="downloadSelected()"
         >
           <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -338,19 +423,36 @@ onUnmounted(() => {
 <style scoped>
 /* 对端名称：流式字号 */
 .ft-peer-name {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800 * 0.0625rem, 1rem);
+  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
   font-weight: 500;
 }
 
-/* 在线/离线状态文字 */
+/* 顶栏连接状态胶囊：小号 pill，底色 tint 随状态（与插件 ft-chip 同语言） */
 .ft-peer-status {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
-  color: var(--mobile-text-muted);
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 0.5rem;
+  border-radius: 9999px;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-weight: 500;
+}
+
+/* 顶栏连接状态胶囊语义色（连接态 success tint / 断开态中性） */
+.ft-peer-status--online {
+  background: var(--mobile-success-muted);
+  border: 1px solid var(--mobile-success-connected-border);
+  color: var(--mobile-success);
+}
+.ft-peer-status--offline {
+  background: var(--mobile-bg-tertiary);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
 }
 
 /* 面包屑文字 */
 .ft-breadcrumb-item {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
   color: var(--mobile-accent);
 }
 
@@ -361,15 +463,16 @@ onUnmounted(() => {
 
 /* 文件列表正文 */
 .ft-body-text {
-  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800, 0.9375rem);
 }
 
-/* 迷你传输条文字 */
+/* 迷你传输条文字（数字等宽对齐） */
 .ft-mini-text {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+  font-variant-numeric: tabular-nums;
 }
 
-/* 多选勾选框 */
+/* 多选勾选框：只过渡受影响的属性（frontend-styles：禁止 blanket transition-all） */
 .ft-checkbox {
   width: 1.375rem;
   height: 1.375rem;
@@ -378,7 +481,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .ft-checkbox-checked {
@@ -387,41 +490,31 @@ onUnmounted(() => {
   color: var(--mobile-text-on-accent);
 }
 
-/* 离线状态点 */
-.dot-zinc {
-  width: 6px;
-  height: 6px;
-  border-radius: 9999px;
-  background: var(--mobile-text-disabled);
-}
-
-/* 悬浮操作按钮（FAB）：上传主按钮 + 设置次按钮，圆形 + 悬浮阴影 */
-.ft-fab {
+/* 顶栏操作按钮（上传 / 设置）：纯图标（无圆形底），置于行尾。
+   44px 触控目标，按压时仅底色反馈（透明 → 中性底） */
+.ft-topbar-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9999px;
-  box-shadow: var(--mobile-card-shadow-hover);
-  transition: opacity 0.15s ease;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.625rem;
+  color: var(--mobile-text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
-.ft-fab:active {
-  opacity: 0.8;
+.ft-topbar-btn:active {
+  background: var(--mobile-bg-tertiary);
+  color: var(--mobile-text-primary);
 }
 
-.ft-fab-primary {
-  width: clamp(3.25rem, 3.5rem + (100vw - 400px) / 800 * 0.25rem, 3.75rem);
-  height: clamp(3.25rem, 3.5rem + (100vw - 400px) / 800 * 0.25rem, 3.75rem);
-  background: var(--mobile-accent);
-  color: var(--mobile-text-on-accent);
+/* 主操作（上传）：图标用品牌色，保留可发现性 */
+.ft-topbar-btn-primary {
+  color: var(--mobile-accent);
 }
 
-.ft-fab-secondary {
-  width: 2.75rem;
-  height: 2.75rem;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
+.ft-topbar-btn-primary:active {
+  color: var(--mobile-accent);
 }
 </style>

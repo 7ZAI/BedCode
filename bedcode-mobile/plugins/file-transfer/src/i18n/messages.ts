@@ -10,11 +10,16 @@ export interface MessageSchema {
   'transfer.toolbox.subtitle': string
   'transfer.toolbox.activeCount': string
   'transfer.toolbox.disconnected': string
+  'transfer.toolbox.online': string
 
   // ==================== 对端状态 ====================
+  // 顶栏连接状态：仅表达 WS 控制面是否已建立
   'transfer.peer.online': string
   'transfer.peer.offline': string
+  // 业务层对端共享：作为页面空态标题使用，不再含「已连接」前缀
+  'transfer.peer.notSharing': string
   'transfer.peer.unpaired': string
+  'transfer.peer.unknown': string
 
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': string
@@ -70,6 +75,8 @@ export interface MessageSchema {
   'transfer.settings.title': string
   'transfer.settings.sharedRoots': string
   'transfer.settings.addRoot': string
+  'transfer.settings.pickRoot': string
+  'transfer.settings.picking': string
   'transfer.settings.addRootHint': string
   'transfer.settings.removeRoot': string
   'transfer.settings.noRoots': string
@@ -99,8 +106,10 @@ export interface MessageSchema {
 
   // ==================== 空态 ====================
   'transfer.empty.noRoots': string
-  'transfer.empty.noPeer': string
   'transfer.empty.noDownloadDir': string
+  'transfer.empty.emptyDirHint': string
+  'transfer.empty.notSharingHint': string
+  'transfer.empty.unavailableHint': string
 
   // ==================== 单位 ====================
   'transfer.size.bytes': string

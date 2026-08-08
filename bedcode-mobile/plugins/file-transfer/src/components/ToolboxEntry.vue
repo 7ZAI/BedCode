@@ -28,7 +28,7 @@ const activeCount = computed(
     tasks.summary.value.paused,
 )
 
-const online = computed(() => tasks.peerOnline.value)
+const online = computed(() => tasks.connOnline.value)
 
 onMounted(() => {
   tasks.start()
@@ -67,6 +67,8 @@ onUnmounted(() => {
     <span
       v-else-if="online"
       class="flex-shrink-0 status-dot dot-emerald"
+      :aria-label="t('transfer.toolbox.online')"
+      role="img"
     ></span>
     <span
       v-else
@@ -74,14 +76,41 @@ onUnmounted(() => {
     >
       {{ t('transfer.toolbox.disconnected') }}
     </span>
+
+    <!-- 可点击 affordance：与宿主默认入口卡片一致的 chevron -->
+    <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+    </svg>
   </div>
 </template>
 
 <style scoped>
-/* 工具箱入口渐变图标：复用宿主 icon-chip 尺寸，覆盖背景 */
+/* 工具箱入口图标：扁平实色 accent（与插件 FAB 主按钮同语言，
+   不用渐变 — 渐变是 AI 套路特征，且与宿主线性图标风格不统一） */
 .ft-entry-icon {
   color: var(--mobile-text-on-accent);
-  background: linear-gradient(135deg, var(--mobile-accent), #bd93f9);
+  background: var(--mobile-accent);
   border: none;
+}
+
+/* 在线状态点脉冲：柔和呼吸提示「实时在线」（ANIMATIONS 规范：尊重减弱动效偏好） */
+.dot-emerald {
+  animation: ft-entry-dot-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes ft-entry-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-emerald {
+    animation: none;
+  }
 }
 </style>

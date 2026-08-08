@@ -21,16 +21,34 @@ const clock = ref('')
 
 const { t } = useI18n()
 
+// 内置 tab 图标：与宿主 MobileNav 一致的内联 SVG 线性描边（stroke-width 2），
+// 不用 emoji（宿主无 emoji 导航，保证预览与真机一致）
 const baseTabs = computed(() => [
-  { key: 'terminal' as const, label: t('devshell.nav.terminal'), icon: '⌨️' },
-  { key: 'toolbox' as const, label: t('devshell.nav.toolbox'), icon: '🧰' },
-  { key: 'plugins' as const, label: t('devshell.nav.plugins'), icon: '🧩' },
+  { key: 'terminal' as const, label: t('devshell.nav.terminal'), icon: 'M4 17l6-5-6-5m8 10h8' },
+  { key: 'toolbox' as const, label: t('devshell.nav.toolbox'), icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z' },
+  { key: 'plugins' as const, label: t('devshell.nav.plugins'), icon: 'M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 01-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 10-3.214 3.214c.446.166.855.497.925.968a.979.979 0 01-.276.837l-1.61 1.61a2.404 2.404 0 01-1.705.707 2.402 2.402 0 01-1.704-.706l-1.568-1.568a1.026 1.026 0 00-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 11-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 00-.289-.877l-1.568-1.568A2.402 2.402 0 011.841 11.7a2.402 2.402 0 01.706-1.704l1.611-1.61a.98.98 0 01.837-.277c.47.07.802.48.968.925a2.501 2.501 0 103.214-3.214c-.446-.166-.855-.497-.925-.968a.979.979 0 01.276-.837l1.61-1.61c.454-.454 1.068-.706 1.704-.706.636 0 1.25.252 1.705.706z' },
 ])
+
+/** 内置 tab 激活判定：插件工具箱页打开时工具箱 tab 保持高亮（导航归属不变） */
+function isBaseTabActive(key: BaseTab): boolean {
+  if (activeTab.value === key && !activeView.value) return true
+  return key === 'toolbox' && activeView.value?.kind === 'toolbox'
+}
 
 const pageTitle = computed(() => {
   if (activeView.value) return activeView.value.title || ''
   return baseTabs.value.find((tab) => tab.key === activeTab.value)?.label || ''
 })
+
+/**
+ * 全局页头显隐：
+ * - 无插件视图：显示（当前 tab 名）
+ * - toolbox / navTab 视图（header:false，插件无自渲染页头）：由本页头接管 back + 标题
+ * - route 视图：插件自渲染页头（SettingsPage 自带 header），不再叠加全局页头，避免双标题
+ */
+const showGlobalHeader = computed(
+  () => !activeView.value || (activeView.value.header === false && activeView.value.kind !== 'route'),
+)
 
 /** 底部导航切换：先关闭打开的插件视图 */
 function switchTab(tab: BaseTab) {
@@ -102,8 +120,10 @@ function onBeforeUnload() {
       <span class="flex items-center gap-1">📶 🔋</span>
     </div>
 
-    <!-- 页头 -->
+    <!-- 页头：仅当无插件视图或插件视图声明 header:false（由本页头接管）时显示；
+         route 视图插件自渲染页头时隐藏，避免双标题 -->
     <div
+      v-if="showGlobalHeader"
       class="h-11 flex-shrink-0 flex items-center gap-2 px-4 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl"
     >
       <button
@@ -132,21 +152,26 @@ function onBeforeUnload() {
       <button
         v-for="tab in baseTabs"
         :key="tab.key"
-        class="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors duration-200"
-        :class="
-          activeTab === tab.key && !activeView
-            ? 'text-[var(--mobile-accent)]'
-            : 'text-[var(--mobile-text-muted)]'
-        "
+        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors duration-200"
+        :class="isBaseTabActive(tab.key) ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'"
         @click="switchTab(tab.key)"
       >
-        <span class="text-base leading-none">{{ tab.icon }}</span>
+        <span v-if="isSvgIcon(tab.icon)" class="w-5 h-5 flex items-center justify-center">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
+            <path :d="tab.icon" />
+          </svg>
+        </span>
+        <span v-else class="text-base leading-none">{{ tab.icon || '🧩' }}</span>
         <span class="truncate max-w-full">{{ tab.label }}</span>
+        <span
+          v-if="isBaseTabActive(tab.key)"
+          class="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-[var(--mobile-accent)]"
+        ></span>
       </button>
       <button
         v-for="entry in navTabs"
         :key="entry.pluginId + entry.tab.id"
-        class="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors duration-200"
+        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors duration-200"
         :class="isNavTabActive(entry.pluginId, entry.tab.id) ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'"
         @click="openNavTab(entry.pluginId, entry.tab.id)"
       >
@@ -157,6 +182,10 @@ function onBeforeUnload() {
         </span>
         <span v-else class="text-base leading-none">{{ entry.tab.icon || '🧩' }}</span>
         <span class="truncate max-w-full">{{ entry.tab.title }}</span>
+        <span
+          v-if="isNavTabActive(entry.pluginId, entry.tab.id)"
+          class="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-[var(--mobile-accent)]"
+        ></span>
       </button>
     </nav>
 

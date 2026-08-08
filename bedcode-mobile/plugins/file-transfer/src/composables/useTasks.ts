@@ -15,6 +15,7 @@
  */
 import { ref, computed } from 'vue'
 import type { Disposable, PluginContext } from '@bedcode/plugin-sdk-mobile'
+import { getMobileApi } from '@bedcode/plugin-sdk-mobile'
 import type {
   Task,
   TaskStateName,
@@ -22,6 +23,7 @@ import type {
   PeerStatus,
 } from '../types'
 import { isTerminalState } from '../types'
+import { MOCK_ENABLED, MOCK_PEER, mockTasks } from '../mock'
 
 /** 快照差分缓存（任务 id → 上一次 offset + 时间戳），用于推导逐任务速率 */
 interface OffsetSample {
@@ -78,7 +80,9 @@ export function useTasks(context: PluginContext) {
   /** 进度事件聚合瞬时速率（host task id → bps 的存活窗口求和） */
   const progressSpeed = ref(0)
 
-  /** 对端在线状态（filesrv:peer_changed） */
+  /** WS 控制面连接状态（宿主 ws_* 事件驱动；与 peerOnline「对端已公告共享」分离） */
+  const connOnline = ref(false)
+  /** 对端已公告文件服务（filesrv:peer_changed，语义 = 对端已共享） */
   const peerOnline = ref(false)
   const peerId = ref('')
   /** 对端展示名：优先 tasks 中的 peer.name，其次对端 id */
@@ -95,6 +99,20 @@ export function useTasks(context: PluginContext) {
   let dispTasks: Disposable | null = null
   let dispProgress: Disposable | null = null
   let dispPeer: Disposable | null = null
+  /** WS 连接状态事件监听集合 */
+  let dispConn: Disposable[] = []
+  /** 开发期 mock：传输中任务进度推进定时器 */
+  let mockTimer: ReturnType<typeof setInterval> | null = null
+  /** 开发期 mock：入队任务自增序号 */
+  let mockEnqueueSeq = 0
+
+  // 初始连接状态：读取宿主共享连接状态（视图挂载可能晚于 ws_paired 事件，
+  // 事件驱动会漏掉已连接场景；host 未就绪（dev-shell）时保持 false 等事件）
+  try {
+    connOnline.value = getMobileApi().isConnected?.value === true
+  } catch {
+    connOnline.value = false
+  }
 
   /** 整表替换任务快照，并差分推导逐任务速率 */
   function applySnapshot(list: any[]): void {
@@ -146,16 +164,75 @@ export function useTasks(context: PluginContext) {
     progressSpeed.value = sum
   }
 
-  /** 对端上下线事件 */
+  /** 对端上下线事件（对端已公告/撤回文件服务） */
   function onPeerChanged(payload: PeerStatus): void {
     if (payload?.peerId) peerId.value = payload.peerId
     peerOnline.value = !!payload?.online
+    // 公告必然来自已认证连接：对端共享可用 ⇒ 连接必然已建立
+    // （自愈视图挂载前 ws_paired 已发出导致 connOnline 未置位的场景）
+    if (payload?.online) connOnline.value = true
+  }
+
+  /** WS 连接状态事件（宿主 ws_* 事件；连接 ≠ 对端已共享） */
+  function onConnChanged(online: boolean): void {
+    connOnline.value = online
   }
 
   // ==================== 命令封装（与桌面同构） ====================
 
-  /** 拉取全量任务（宿主重启后补同步一次） */
+  /** 开发期 mock：构造入队任务（队列中新任务保持 queued，由用户手动恢复） */
+  function mockEnqueuedTask(args: EnqueueArgs): Task {
+    const now = Date.now()
+    return {
+      id: `mock-e${++mockEnqueueSeq}`,
+      direction: args.direction,
+      peer: { deviceId: args.peerId, name: args.peerName },
+      remotePath: args.remotePath,
+      localPath:
+        args.localPath ??
+        `/storage/emulated/0/Download/${args.remotePath.split('/').pop() ?? 'file'}`,
+      size: 86_400_000,
+      offset: 0,
+      uploadSessionId: null,
+      fingerprint: null,
+      state: 'queued',
+      reason: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+  }
+
+  /** 开发期 mock：本地改写任务状态并重放快照（差分速率随之归零/重算） */
+  function mockMutateState(id: string, state: TaskStateName, reason: string | null = null): void {
+    const next = tasks.value.map((tk) =>
+      tk.id === id ? { ...tk, state, reason, updatedAt: Date.now() } : tk,
+    )
+    applySnapshot(next)
+  }
+
+  /** 开发期 mock：填充对端 + 任务快照，并匀速推进传输中任务进度（约 2MB/s） */
+  function startMock(): void {
+    connOnline.value = true
+    peerOnline.value = true
+    peerId.value = MOCK_PEER.id
+    peerName.value = MOCK_PEER.name
+    applySnapshot(mockTasks())
+    mockTimer = setInterval(() => {
+      const now = Date.now()
+      const next = tasks.value.map((tk) => {
+        if (tk.state !== 'transferring' || tk.size <= 0 || tk.offset >= tk.size) return tk
+        return { ...tk, offset: Math.min(tk.size, tk.offset + 2_400_000), updatedAt: now }
+      })
+      if (next.some((tk, i) => tk.offset !== tasks.value[i].offset)) applySnapshot(next)
+    }, 1200)
+  }
+
+  /** 拉取全量任务（宿主重启后补同步一次；mock 下直接返回本地快照） */
   async function refresh(): Promise<void> {
+    if (MOCK_ENABLED) {
+      applySnapshot(mockTasks())
+      return
+    }
     try {
       const data = await context.commands.execute('file-transfer.list-tasks', {})
       const arr = Array.isArray(data) ? data : (data?.tasks ?? [])
@@ -165,8 +242,13 @@ export function useTasks(context: PluginContext) {
     }
   }
 
-  /** 入队单个任务（返回命令结果；被拒任务由调用方决定弹窗） */
+  /** 入队单个任务（返回命令结果；被拒任务由调用方决定弹窗；mock 下直接入本地队列） */
   async function enqueue(args: EnqueueArgs): Promise<any> {
+    if (MOCK_ENABLED) {
+      const task = mockEnqueuedTask(args)
+      applySnapshot([task, ...tasks.value])
+      return { id: task.id, state: 'queued' }
+    }
     return context.commands.execute('file-transfer.enqueue', {
       direction: args.direction,
       peerId: args.peerId,
@@ -183,6 +265,13 @@ export function useTasks(context: PluginContext) {
    * peerOnline/peerId/peerName 自动刷新；失败静默（连接未建立时宿主直接忽略）。
    */
   async function queryPeer(): Promise<boolean> {
+    if (MOCK_ENABLED) {
+      connOnline.value = true
+      peerOnline.value = true
+      peerId.value = MOCK_PEER.id
+      peerName.value = MOCK_PEER.name
+      return true
+    }
     try {
       await context.commands.execute('file-transfer.query-peer', {})
       return true
@@ -240,18 +329,43 @@ export function useTasks(context: PluginContext) {
   }
 
   async function pause(id: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      mockMutateState(id, 'paused')
+      return
+    }
     await context.commands.execute('file-transfer.pause', { taskId: id })
   }
   async function resume(id: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      mockMutateState(id, 'transferring')
+      return
+    }
     await context.commands.execute('file-transfer.resume', { taskId: id })
   }
   async function cancel(id: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      mockMutateState(id, 'cancelled')
+      return
+    }
     await context.commands.execute('file-transfer.cancel', { taskId: id })
   }
   async function retry(id: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      mockMutateState(id, 'queued')
+      return
+    }
     await context.commands.execute('file-transfer.retry', { taskId: id })
   }
   async function resumeAll(): Promise<void> {
+    if (MOCK_ENABLED) {
+      const next = tasks.value.map((tk) =>
+        tk.state === 'paused' || tk.state === 'resumable'
+          ? { ...tk, state: 'transferring' as TaskStateName, updatedAt: Date.now() }
+          : tk,
+      )
+      applySnapshot(next)
+      return
+    }
     await context.commands.execute('file-transfer.resume-all', {})
   }
 
@@ -310,7 +424,11 @@ export function useTasks(context: PluginContext) {
   /** 对端展示名（i18n key 或实际名字） */
   const displayPeerName = computed(() => {
     if (peerName.value) return peerName.value
-    return peerId.value || context.i18n.t('transfer.peer.unpaired')
+    if (peerId.value) return peerId.value
+    // 已连接但尚未收到对端公告（未共享）：无可辨识信息时用「未知设备」占位，
+    // 避免与「未连接」文案混用
+    if (connOnline.value) return context.i18n.t('transfer.peer.unknown')
+    return context.i18n.t('transfer.peer.unpaired')
   })
 
   /** 队列全部完成/失败 → 系统通知（context.notifications），每批仅通知一次 */
@@ -375,7 +493,20 @@ export function useTasks(context: PluginContext) {
     dispTasks = context.events.on('plugin:file-transfer:tasks-changed', onTasksChanged)
     dispProgress = context.events.on('plugin:transfer:progress', onProgress)
     dispPeer = context.events.on('filesrv:peer_changed', onPeerChanged)
-    void refresh()
+    // WS 控制面连接状态：已连接（含重连成功）/ 断开（含重连中与失败）
+    dispConn = [
+      context.events.on('ws_connected', () => onConnChanged(true)),
+      context.events.on('ws_paired', () => onConnChanged(true)),
+      context.events.on('ws_reconnected', () => onConnChanged(true)),
+      context.events.on('ws_disconnected', () => onConnChanged(false)),
+      context.events.on('ws_unexpected_disconnect', () => onConnChanged(false)),
+      context.events.on('ws_reconnecting', () => onConnChanged(false)),
+      context.events.on('ws_reconnect_failed', () => onConnChanged(false)),
+      context.events.on('ws_error', () => onConnChanged(false)),
+      context.events.on('ws_auth_failed', () => onConnChanged(false)),
+    ]
+    if (MOCK_ENABLED) startMock()
+    else void refresh()
   }
 
   /** 摘除事件监听并清空差分缓存（组件 onUnmounted / 入口卡调用） */
@@ -386,6 +517,12 @@ export function useTasks(context: PluginContext) {
     dispProgress = null
     dispPeer?.dispose()
     dispPeer = null
+    dispConn.forEach(d => d.dispose())
+    dispConn = []
+    if (mockTimer) {
+      clearInterval(mockTimer)
+      mockTimer = null
+    }
     offsetSamples.clear()
     progressSamples.clear()
     progressSpeed.value = 0
@@ -399,6 +536,7 @@ export function useTasks(context: PluginContext) {
     hasRunning,
     totalSpeed,
     primaryTask,
+    connOnline,
     peerOnline,
     peerId,
     peerName,

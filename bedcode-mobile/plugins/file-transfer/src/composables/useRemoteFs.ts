@@ -7,6 +7,7 @@
 import { ref, computed } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 import type { RemoteEntry } from '../types'
+import { MOCK_ENABLED, MOCK_FS_TREE } from '../mock'
 
 export function useRemoteFs(context: PluginContext) {
   /** 当前相对路径（相对挂载根，"" = 根目录） */
@@ -48,6 +49,14 @@ export function useRemoteFs(context: PluginContext) {
     loading.value = true
     error.value = null
     try {
+      // 开发期 mock：直接读本地模拟文件树（模拟 350ms 往返延迟便于观察 loading 态）
+      if (MOCK_ENABLED) {
+        await new Promise((r) => setTimeout(r, 350))
+        entries.value = MOCK_FS_TREE[path] ?? []
+        currentPath.value = path
+        selected.value = new Set()
+        return
+      }
       const data = await context.commands.execute('file-transfer.list-remote', {
         peerId: '',
         path,

@@ -8,6 +8,7 @@
 import { ref } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 import type { Settings } from '../types'
+import { MOCK_ENABLED } from '../mock'
 
 /** 并发数上限（与 WASM Queue 一致） */
 export const CONCURRENCY_MAX = 8
@@ -29,10 +30,18 @@ export function useSettings(context: PluginContext) {
   })
   const loading = ref(false)
 
-  /** 加载设置（含首次拉取） */
+  /** 加载设置（含首次拉取；mock 下返回演示配置） */
   async function load(): Promise<void> {
     loading.value = true
     try {
+      if (MOCK_ENABLED) {
+        settings.value = {
+          roots: ['/storage/emulated/0/共享文件', '/storage/emulated/0/Documents'],
+          downloadDir: '/storage/emulated/0/Download',
+          concurrency: 4,
+        }
+        return
+      }
       const data = await context.commands.execute('file-transfer.get-settings', {})
       settings.value = mapWireSettings(data)
     } catch (e) {
@@ -68,8 +77,12 @@ export function useSettings(context: PluginContext) {
     return persist({ concurrency: clamped })
   }
 
-  /** 写入 WASM 并同步本地状态（挂载失败时 set-settings 返回错误 → false） */
+  /** 写入 WASM 并同步本地状态（挂载失败时 set-settings 返回错误 → false；mock 下直接本地持久） */
   async function persist(patch: Partial<Settings>): Promise<boolean> {
+    if (MOCK_ENABLED) {
+      settings.value = { ...settings.value, ...patch }
+      return true
+    }
     try {
       await context.commands.execute('file-transfer.set-settings', {
         roots: patch.roots ?? settings.value.roots,

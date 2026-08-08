@@ -91,7 +91,7 @@ function incConcurrency(): void {
 </script>
 
 <template>
-  <div class="ft-settings px-4 py-4 space-y-6">
+  <div class="ft-settings px-4 py-4 pb-8 space-y-6">
     <!-- ==================== 共享目录 ==================== -->
     <section class="space-y-3">
       <h2 class="settings-section-title">{{ t('transfer.settings.sharedRoots') }}</h2>
@@ -110,20 +110,13 @@ function incConcurrency(): void {
         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
         </svg>
-        {{ picking ? '…' : t('transfer.settings.pickRoot') }}
+        {{ picking ? t('transfer.settings.picking') : t('transfer.settings.pickRoot') }}
       </button>
 
-      <!-- 手动输入兜底：输入框独立占一行（通栏、44px+ 高度），下方配添加按钮 -->
-      <div class="space-y-2">
-        <input
-          v-model="newRoot"
-          type="text"
-          :placeholder="t('transfer.dialog.localDirPlaceholder')"
-          class="w-full ft-settings-input"
-          @keydown.enter="handleAddRoot()"
-        />
+      <!-- 手动输入兜底：添加按钮在上（与「选择目录」主按钮并列成组），下方输入路径 -->
+      <div class="space-y-2.5">
         <button
-          class="ft-touch-btn w-full gap-2 rounded-xl ft-btn-neutral active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
+          class="ft-touch-btn w-full gap-2 rounded-xl ft-btn-accent active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
           :disabled="adding || !newRoot.trim()"
           @click="handleAddRoot()"
         >
@@ -132,6 +125,13 @@ function incConcurrency(): void {
           </svg>
           {{ t('transfer.settings.addRoot') }}
         </button>
+        <input
+          v-model="newRoot"
+          type="text"
+          :placeholder="t('transfer.dialog.localDirPlaceholder')"
+          class="w-full ft-settings-input"
+          @keydown.enter="handleAddRoot()"
+        />
       </div>
 
       <!-- 目录列表 -->
@@ -148,7 +148,7 @@ function incConcurrency(): void {
             <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
             </svg>
-            <span class="settings-label flex-1 min-w-0 truncate">{{ root }}</span>
+            <span class="settings-label flex-1 min-w-0 truncate" :title="root">{{ root }}</span>
           </div>
           <button
             class="flex-shrink-0 ft-settings-remove-btn"
@@ -169,7 +169,7 @@ function incConcurrency(): void {
             <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            <span class="settings-value flex-1 min-w-0 truncate">
+            <span class="settings-value flex-1 min-w-0 truncate" :class="{ 'ft-settings-unset': !(settingsApi?.settings.value.downloadDir) }">
               {{ settingsApi?.settings.value.downloadDir || t('transfer.settings.noDownloadDir') }}
             </span>
           </div>
@@ -220,21 +220,21 @@ function incConcurrency(): void {
 <style scoped>
 /* 设置区次级说明文字 */
 .ft-settings-hint {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   color: var(--mobile-text-muted);
 }
 
 /* 设置按钮流式字号 */
 .ft-settings-btn {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
   font-weight: 500;
 }
 
 /* 输入框：独立一行通栏，高度对齐触控按钮（44px+），placeholder 走 token */
 .ft-settings-input {
-  min-height: clamp(2.5rem, 2.625rem + (100vw - 400px) / 800 * 0.25rem, 2.875rem);
+  min-height: clamp(2.75rem, 2.75rem + (100vw - 400px) / 800 * 4, 3rem);
   padding: 0.5rem 0.875rem;
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
   color: var(--mobile-text-primary);
   background: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
@@ -255,7 +255,7 @@ function incConcurrency(): void {
 .ft-settings-remove-btn {
   padding: 0.25rem 0.625rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   color: var(--mobile-error);
   border: 1px solid var(--mobile-error-muted);
   background: transparent;
@@ -266,10 +266,10 @@ function incConcurrency(): void {
   opacity: 0.8;
 }
 
-/* 步进按钮（并发数） */
+/* 步进按钮（并发数）：44px 触控目标 */
 .ft-step-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.75rem;
+  height: 2.75rem;
   border-radius: 0.625rem;
   border: 1px solid var(--mobile-border);
   background: var(--mobile-bg-elevated);
@@ -285,13 +285,31 @@ function incConcurrency(): void {
   opacity: 0.8;
 }
 
-/* 步进数值 */
+/* 步进数值：独立 chip 背景，避免「孤儿数字」感 */
 .ft-step-value {
-  width: 2rem;
+  width: 2.5rem;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.625rem;
+  background: var(--mobile-bg-tertiary);
   text-align: center;
-  font-size: clamp(1rem, 1.0625rem + (100vw - 360px) / 800 * 0.0625rem, 1.125rem);
+  font-size: clamp(1rem, 1.0625rem + (100vw - 360px) / 800, 1.125rem);
   font-weight: 600;
   color: var(--mobile-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 下载目录未设置：占位 chip 样式，明确「尚未配置」而非可编辑输入 */
+.ft-settings-unset {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-tertiary);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  color: var(--mobile-text-muted);
 }
 
 /* 黄色提醒框（使用说明 / 安全告知共用） */
@@ -303,7 +321,7 @@ function incConcurrency(): void {
 }
 
 .ft-warning-text {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   line-height: 1.5;
   color: var(--mobile-warning);
   margin: 0;
