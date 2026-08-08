@@ -349,6 +349,18 @@ impl ResponseParser {
         }
     }
 
+    /// 解析认证错误响应
+    ///
+    /// 桌面端拒绝认证时返回 `Message::Error`（如 CREDENTIAL_NOT_BOUND / NOT_PAIRED），
+    /// 返回 (错误码, 错误消息) 供调用方透传给用户；非错误消息返回 None。
+    pub fn parse_auth_error(response: &Message) -> Option<(String, String)> {
+        if let Message::Error { code, message, .. } = response {
+            Some((code.clone(), message.clone()))
+        } else {
+            None
+        }
+    }
+
     /// 解析启动会话响应
     ///
     /// 从 SessionControl 响应中提取 session_id

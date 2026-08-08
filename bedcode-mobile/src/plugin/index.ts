@@ -53,6 +53,7 @@ export async function initPluginSystem(
       activeSessionId: connection.activeSessionId,
       activeSessions: connection.activeSessions,
       sessionConfigs: connection.sessionConfigs,
+      isConnected: connection.isConnected,
       httpTaskQueueList,
       httpTaskQueueAdd,
       httpTaskQueueRemove,

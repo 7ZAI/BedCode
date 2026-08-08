@@ -789,19 +789,17 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
 
 /**
  * 生物认证登录（挑战-应答握手），成功后保存凭据
+ *
+ * 失败时抛出错误（透传桌面端拒绝原因如 CREDENTIAL_NOT_BOUND），
+ * 由调用方决定展示具体文案；不再吞掉错误以免用户只看到笼统提示。
  */
 export async function authenticateWithBiometric(): Promise<boolean> {
-  try {
-    const creds = await wsAuthenticateWithBiometric()
-    if (creds) {
-      saveCredentials(creds)
-      return true
-    }
-    return false
-  } catch (error) {
-    console.error('[MobileConnection] Biometric authentication failed:', error)
-    return false
+  const creds = await wsAuthenticateWithBiometric()
+  if (creds) {
+    saveCredentials(creds)
+    return true
   }
+  return false
 }
 
 /**

@@ -216,6 +216,8 @@ export interface MobileHostApi {
   activeSessions: import('vue').Ref<any[]>
   /** 会话配置列表（响应式 ref） */
   sessionConfigs: import('vue').Ref<any[]>
+  /** 是否已连接对端桌面端（响应式 ref，可 watch / computed） */
+  isConnected: import('vue').Ref<boolean>
   /** 查询任务队列 */
   httpTaskQueueList(sessionId: string): Promise<MobileHttpResult<{
     session_id: string

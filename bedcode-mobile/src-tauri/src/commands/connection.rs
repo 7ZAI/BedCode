@@ -33,7 +33,7 @@ pub async fn ws_connect(
         let auth = get_auth_manager();
         let app_data_dir = app_handle.path().app_data_dir()
             .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?;
-        auth.init_identity(app_data_dir).await;
+        auth.init_identity(&app_handle, app_data_dir).await;
     }
 
     // 发射连接开始事件

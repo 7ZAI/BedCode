@@ -67,8 +67,11 @@ impl AuthManager {
     /// 从文件加载持久化的设备身份
     ///
     /// 首次调用时传入 app 数据目录，后续调用无效果（OnceLock 保证）
-    /// 如果文件不存在则生成新身份并保存
-    pub async fn init_identity(&self, app_data_dir: PathBuf) {
+    /// 文件存在则直接加载；文件不存在（首次安装或卸载重装后）优先用
+    /// 设备唯一 ID（Android ANDROID_ID，卸载重装保持一致）派生身份，
+    /// 保证重装后仍是同一设备号，桌面端配对/生物凭证/连接历史可复用；
+    /// 拿不到设备 ID（非 Android 或插件异常）才回退随机 UUID。
+    pub async fn init_identity(&self, app: &tauri::AppHandle, app_data_dir: PathBuf) {
         let path = app_data_dir.join(IDENTITY_FILE);
         *self.identity_path.write().await = Some(path.clone());
 
@@ -88,8 +91,28 @@ impl AuthManager {
             }
         }
 
-        // 文件不存在或读取失败，保存当前身份
+        // 文件不存在或读取失败：优先用设备唯一 ID 派生稳定身份
+        if let Some(uid) = self.stable_device_uid(app) {
+            let (device_id, fingerprint) = derive_identity_from_uid(&uid);
+            tracing::info!("Derived device identity from stable device UID: device_id={}", device_id);
+            *self.device_id.write().await = device_id;
+            *self.device_fingerprint.write().await = fingerprint;
+            self.save_identity().await;
+            return;
+        }
+
+        // 设备 UID 不可用：回退随机 UUID（非 Android 平台/插件异常）
+        tracing::warn!("Stable device UID unavailable, falling back to random UUID identity");
         self.save_identity().await;
+    }
+
+    /// 获取设备唯一 ID（卸载重装保持一致）
+    ///
+    /// 复用 tauri-plugin-machine-uid：Android 实现为 Settings.Secure.ANDROID_ID，
+    /// 同一设备同一签名下卸载重装不变化（恢复出厂设置才变）；desktop 为机器硬件标识。
+    fn stable_device_uid(&self, app: &tauri::AppHandle) -> Option<String> {
+        use tauri_plugin_machine_uid::MachineUidExt;
+        app.machine_uid().get_machine_uid().ok()?.id
     }
 
     /// 保存设备身份到文件
@@ -126,11 +149,6 @@ impl AuthManager {
     /// 获取设备 ID
     pub async fn get_device_id(&self) -> String {
         self.device_id.read().await.clone()
-    }
-
-    /// 获取设备指纹
-    pub async fn get_device_fingerprint(&self) -> String {
-        self.device_fingerprint.read().await.clone()
     }
 
     /// 获取设备名称
@@ -354,6 +372,14 @@ impl AuthManager {
         let request = AuthRequest::biometric_request(&device_id, &device_name, &fingerprint);
         let response = self.connection.send_and_wait(&request, timeouts::BIO_AUTH).await?;
 
+        // 桌面端拒绝（未绑定凭证/未配对等）：透传真实原因，前端可提示用户改用配对码
+        if let Some((code, msg)) = ResponseParser::parse_auth_error(&response) {
+            let reason = format!("{}: {}", code, msg);
+            *self.status.write().await = AuthStatus::Failed(reason.clone());
+            tracing::warn!("[authenticate_with_biometric] Desktop rejected: {}", reason);
+            return Err(crate::AppError::Auth(reason));
+        }
+
         let nonce = match ResponseParser::parse_auth_response(&response) {
             Some(AuthStage::BiometricChallenge) => {
                 if let Message::Auth { payload, .. } = &response {
@@ -370,16 +396,16 @@ impl AuthManager {
                 };
                 *self.status.write().await = AuthStatus::Failed(reason.clone());
                 tracing::warn!("[authenticate_with_biometric] Desktop rejected: {}", reason);
-                return Ok(false);
+                return Err(crate::AppError::Auth(reason));
             }
             _ => {
                 *self.status.write().await = AuthStatus::Failed("Unexpected biometric response".to_string());
-                return Ok(false);
+                return Err(crate::AppError::Auth("Unexpected biometric response".to_string()));
             }
         };
         if nonce.is_empty() {
             *self.status.write().await = AuthStatus::Failed("Missing challenge nonce".to_string());
-            return Ok(false);
+            return Err(crate::AppError::Auth("Missing challenge nonce".to_string()));
         }
 
         // 2. 生物认证解锁私钥并签名挑战值
@@ -395,6 +421,14 @@ impl AuthManager {
         // 3. 回传签名验证
         let verify = AuthRequest::biometric_verify(&device_id, &device_name, &fingerprint, &nonce, &signature);
         let response = self.connection.send_and_wait(&verify, timeouts::BIO_AUTH).await?;
+
+        // 桌面端拒绝（挑战值过期/验签失败等）：透传真实原因
+        if let Some((code, msg)) = ResponseParser::parse_auth_error(&response) {
+            let reason = format!("{}: {}", code, msg);
+            *self.status.write().await = AuthStatus::Failed(reason.clone());
+            tracing::warn!("[authenticate_with_biometric] Verification rejected: {}", reason);
+            return Err(crate::AppError::Auth(reason));
+        }
 
         match ResponseParser::parse_auth_response(&response) {
             Some(AuthStage::Authenticated) => {
@@ -561,6 +595,18 @@ impl AuthManager {
     pub async fn is_biometric_supported(&self) -> Result<(bool, i32)> {
         crate::plugin::android_plugins::biometric_device_supported().await
     }
+}
+
+/// 从设备唯一 ID 派生稳定身份（device_id + fingerprint）
+///
+/// 同一设备同一签名下卸载重装后 UID 不变，因此派生出的身份不变；
+/// 用哈希而非原始 UID，避免设备标识直接入库/上链。
+fn derive_identity_from_uid(uid: &str) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let device_hash = hex::encode(Sha256::digest(format!("bedcode-device:{}", uid).as_bytes()));
+    let fingerprint_hash = hex::encode(Sha256::digest(format!("bedcode-fingerprint:{}", uid).as_bytes()));
+    // 取前 32 字符保证与旧 UUID 长度风格一致（36 字符左右），便于日志阅读
+    (device_hash[..32].to_string(), fingerprint_hash[..32].to_string())
 }
 
 /// 验证生物认证签名（绑定自检用，与桌面端 verify_biometric_signature 算法一致）
