@@ -2,8 +2,8 @@
  * 插件设置核心逻辑 (Mobile)
  *
  * 经 `file-transfer.get-settings` / `set-settings` 读写，WASM 侧持久化到 storage。
- * 移动端无目录选择器（context.fileService.pickDirectory 会 reject），共享目录改为
- * 手动输入绝对路径；下载目录为只读展示（下载固定落系统 AppDownloadsDir）。
+ * 共享目录经 SAF 系统选择器选择（SettingsSection）或手动输入绝对路径；
+ * 下载目录为只读展示（下载固定落系统 AppDownloadsDir）。
  */
 import { ref } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
@@ -42,13 +42,18 @@ export function useSettings(context: PluginContext) {
     }
   }
 
-  /** 追加共享目录（手动输入绝对路径） */
-  async function addRoot(path: string): Promise<boolean> {
-    const trimmed = path.trim()
-    if (!trimmed) return false
-    if (settings.value.roots.includes(trimmed)) return false
+  /** 追加共享目录（手动输入绝对路径）
+   *
+   * 返回结果原因供 UI 精确提示：ok（已保存并挂载）/ duplicate（路径已存在）/
+   * failed（保存或挂载失败）。路径规范化（去尾部分隔符）避免同目录误判重复。
+   */
+  async function addRoot(path: string): Promise<'ok' | 'duplicate' | 'failed'> {
+    // 规范化：去首尾空白 + 尾部路径分隔符（避免同目录不同写法误判重复）
+    const trimmed = path.trim().replace(/[\\/]+$/, '')
+    if (!trimmed) return 'failed'
+    if (settings.value.roots.includes(trimmed)) return 'duplicate'
     const next = [...settings.value.roots, trimmed]
-    return persist({ roots: next })
+    return (await persist({ roots: next })) ? 'ok' : 'failed'
   }
 
   /** 移除共享目录 */
@@ -63,7 +68,7 @@ export function useSettings(context: PluginContext) {
     return persist({ concurrency: clamped })
   }
 
-  /** 写入 WASM 并同步本地状态 */
+  /** 写入 WASM 并同步本地状态（挂载失败时 set-settings 返回错误 → false） */
   async function persist(patch: Partial<Settings>): Promise<boolean> {
     try {
       await context.commands.execute('file-transfer.set-settings', {

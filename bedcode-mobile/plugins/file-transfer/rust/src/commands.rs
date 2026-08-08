@@ -470,7 +470,9 @@ pub fn set_settings(
                     state.mounted = true;
                     host.log_info(&format!("mounted at {}", result.base_path));
                 }
-                Err(e) => host.log_warn(&format!("mount failed: {}", e)),
+                // 挂载失败必须回报（否则设置显示已保存但共享目录实际未生效，
+                // 且不会发布公告导致对端永远看不到服务）
+                Err(e) => return Err(anyhow::anyhow!("mount failed: {}", e)),
             }
         }
     }

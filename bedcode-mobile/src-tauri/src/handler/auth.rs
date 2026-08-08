@@ -39,6 +39,10 @@ impl ClientRouteHandler for AuthHandler {
                 AuthStage::VerifyCode => {
                     tracing::info!("[AuthHandler] PairingVerified");
                     ctx.emit(MobileEvent::PairingVerified);
+
+                    // 配对成功 = 对端可达：补发文件服务公告（挂载早于连接的
+                    // 场景下首次 announce 因连接未建立被跳过，不重发对端将永远看不到服务）
+                    crate::state::get_file_service().resend_if_active().await;
                 }
                 AuthStage::Failed => {
                     let reason = payload.error.unwrap_or_else(|| "Authentication failed".to_string());

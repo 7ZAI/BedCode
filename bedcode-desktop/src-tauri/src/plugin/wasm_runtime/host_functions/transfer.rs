@@ -455,3 +455,616 @@ fn emit_progress(
     let payload = serde_json::to_value(&progress).unwrap_or_default();
     bus.publish(&format!("transfer:{}", task_id), "host", payload);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bedcode_plugin_api::BusMessage;
+    use crate::plugin::message_bus::{BusMessageHandler, MessageDispatcher};
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// 禁用系统代理对 loopback 的干扰（Windows 全局代理可能拦截测试请求）
+    ///
+    /// reqwest Client::new() 走系统代理；测试全连 127.0.0.1，
+    /// 需在每次 Client 构建前设置 NO_PROXY。并行测试均设置同一值，幂等无竞态。
+    fn disable_proxy_for_loopback() {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    }
+
+    // ==================== Mock HTTP Server ====================
+
+    /// 极简请求（mock 服务器解析产物）
+    struct MockRequest {
+        method: String,
+        headers: HashMap<String, String>,
+        body: Vec<u8>,
+    }
+
+    impl MockRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers.get(name).map(|s| s.as_str())
+        }
+    }
+
+    /// 极简响应
+    struct MockResponse {
+        status: u16,
+        body: Vec<u8>,
+    }
+
+    impl MockResponse {
+        fn ok(body: impl Into<Vec<u8>>) -> Self {
+            Self { status: 200, body: body.into() }
+        }
+
+        fn with_status(status: u16, body: impl Into<Vec<u8>>) -> Self {
+            Self { status, body: body.into() }
+        }
+    }
+
+    /// 启动 mock HTTP 服务器（每连接独立任务，响应后关闭连接）
+    async fn spawn_mock_server(
+        handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>,
+    ) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { break };
+                let handler = handler.clone();
+                tokio::spawn(async move {
+                    let Some(req) = read_request(&mut sock).await else { return };
+                    let resp = handler(req);
+                    let reason = match resp.status {
+                        200 => "OK",
+                        206 => "Partial Content",
+                        500 => "Internal Server Error",
+                        _ => "Unknown",
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        resp.status,
+                        reason,
+                        resp.body.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(&resp.body).await;
+                });
+            }
+        });
+        addr
+    }
+
+    /// 读取并解析一个 HTTP 请求（请求行 + 头 + Content-Length body）
+    async fn read_request(sock: &mut tokio::net::TcpStream) -> Option<MockRequest> {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            let n = sock.read(&mut tmp).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
+        let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let mut lines = head.lines();
+        let mut parts = lines.next()?.split_whitespace();
+        let method = parts.next()?.to_string();
+        let _path = parts.next()?;
+        let mut headers = HashMap::new();
+        let mut content_length = 0usize;
+        for line in lines {
+            if let Some((k, v)) = line.split_once(':') {
+                let key = k.trim().to_ascii_lowercase();
+                let value = v.trim().to_string();
+                if key == "content-length" {
+                    content_length = value.parse().unwrap_or(0);
+                }
+                headers.insert(key, value);
+            }
+        }
+        // reqwest 对未知长度的大 body 会发 Expect: 100-continue，需先应答再读 body
+        if headers
+            .get("expect")
+            .map(|v| v.to_ascii_lowercase().starts_with("100"))
+            .unwrap_or(false)
+        {
+            let _ = sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await;
+        }
+        let mut body = buf.split_off(header_end + 4);
+        // wrap_stream 上传体无固定长度 → reqwest 使用 chunked encoding
+        if headers.get("transfer-encoding").map(|v| v.to_ascii_lowercase() == "chunked").unwrap_or(false) {
+            body = read_chunked_body(sock, body).await?;
+        } else {
+            while body.len() < content_length {
+                let n = sock.read(&mut tmp).await.ok()?;
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&tmp[..n]);
+            }
+            body.truncate(content_length);
+        }
+        Some(MockRequest { method, headers, body })
+    }
+
+    /// 读取 chunked 编码的请求体（`{hex-size}\r\n{data}\r\n` 直到 size=0）
+    async fn read_chunked_body(
+        sock: &mut tokio::net::TcpStream,
+        mut buf: Vec<u8>,
+    ) -> Option<Vec<u8>> {
+        let mut tmp = [0u8; 4096];
+        let mut body = Vec::new();
+        loop {
+            let line_end = match buf.windows(2).position(|w| w == b"\r\n") {
+                Some(p) => p,
+                None => {
+                    let n = sock.read(&mut tmp).await.ok()?;
+                    if n == 0 {
+                        return None;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    continue;
+                }
+            };
+            let line = String::from_utf8_lossy(&buf[..line_end]).to_string();
+            buf.drain(..line_end + 2);
+            // 支持 `size` 与 `size;ext=...` 两种 chunk 头
+            let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
+                .ok()?;
+            if size == 0 {
+                return Some(body); // 结束 chunk，忽略 trailer
+            }
+            while buf.len() < size + 2 {
+                let n = sock.read(&mut tmp).await.ok()?;
+                if n == 0 {
+                    return None;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            body.extend_from_slice(&buf[..size]);
+            buf.drain(..size + 2); // 含 chunk 尾部 CRLF
+        }
+    }
+
+    /// 构造传输请求
+    fn make_request(direction: TransferDirection, url: &str, local_path: &str) -> TransferRequest {
+        TransferRequest {
+            direction,
+            url: url.to_string(),
+            headers: HashMap::new(),
+            local_path: local_path.to_string(),
+            offset: 0,
+            expected_size: 0,
+            final_path: None,
+        }
+    }
+
+    /// 已传字节计数器
+    fn counter() -> Arc<AtomicU64> {
+        Arc::new(AtomicU64::new(0))
+    }
+
+    // ==================== download ====================
+
+    #[tokio::test]
+    async fn download_full_writes_file_and_counts_bytes() {
+        disable_proxy_for_loopback();
+        // 128KB 伪随机体，验证流式分块累计
+        let body: Vec<u8> = (0..128 * 1024).map(|i| (i % 251) as u8).collect();
+        let server_body = body.clone();
+        let addr = spawn_mock_server(Arc::new(move |req: MockRequest| {
+            assert_eq!(req.method, "GET");
+            assert_eq!(req.header("range"), None, "offset=0 不应带 Range");
+            MockResponse::ok(server_body.clone())
+        }))
+        .await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("out.bin");
+        let req = make_request(
+            TransferDirection::Download,
+            &format!("http://{}/file", addr),
+            local.to_str().unwrap(),
+        );
+        let transferred = counter();
+
+        download(&req, transferred.clone(), CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&local).unwrap(), body);
+        assert_eq!(transferred.load(Ordering::Relaxed), body.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn download_resume_sends_range_and_appends_to_existing() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|req: MockRequest| {
+            assert_eq!(req.header("range"), Some("bytes=3-"));
+            MockResponse::with_status(206, b"def".to_vec())
+        }))
+        .await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("resume.bin");
+        std::fs::write(&local, "abc").unwrap();
+        let mut req = make_request(
+            TransferDirection::Download,
+            &format!("http://{}/file", addr),
+            local.to_str().unwrap(),
+        );
+        req.offset = 3;
+
+        download(&req, counter(), CancellationToken::new()).await.unwrap();
+
+        // offset>0 不 truncate：前缀保留，seek 后续写
+        assert_eq!(std::fs::read(&local).unwrap(), b"abcdef");
+    }
+
+    #[tokio::test]
+    async fn download_fresh_truncates_stale_part() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok("hello"))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("fresh.bin");
+        std::fs::write(&local, "stale-content").unwrap();
+
+        download(
+            &make_request(
+                TransferDirection::Download,
+                &format!("http://{}/file", addr),
+                local.to_str().unwrap(),
+            ),
+            counter(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&local).unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn download_renames_part_to_final_path() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok("final-bytes"))).await;
+        let dir = tempdir().unwrap();
+        let part = dir.path().join("out.part");
+        let final_path = dir.path().join("out.txt");
+        let mut req = make_request(
+            TransferDirection::Download,
+            &format!("http://{}/file", addr),
+            part.to_str().unwrap(),
+        );
+        req.final_path = Some(final_path.to_str().unwrap().to_string());
+
+        download(&req, counter(), CancellationToken::new()).await.unwrap();
+
+        assert!(!part.exists(), ".part 应已 rename，不再存在");
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"final-bytes");
+    }
+
+    #[tokio::test]
+    async fn download_duplicate_name_keeps_part() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok("bytes"))).await;
+        let dir = tempdir().unwrap();
+        let part = dir.path().join("dup.part");
+        let final_path = dir.path().join("dup.txt");
+        std::fs::write(&final_path, "occupied").unwrap();
+        let mut req = make_request(
+            TransferDirection::Download,
+            &format!("http://{}/file", addr),
+            part.to_str().unwrap(),
+        );
+        req.final_path = Some(final_path.to_str().unwrap().to_string());
+
+        let err = download(&req, counter(), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, "duplicate-name");
+        assert!(part.exists(), "duplicate-name 时 .part 应保留供用户决定");
+    }
+
+    #[tokio::test]
+    async fn download_http_error_returns_failure() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::with_status(500, "boom"))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("err.bin");
+
+        let err = download(
+            &make_request(
+                TransferDirection::Download,
+                &format!("http://{}/file", addr),
+                local.to_str().unwrap(),
+            ),
+            counter(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("HTTP 500"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn download_cancelled_token_aborts() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok(vec![0u8; 64 * 1024]))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("cancel.bin");
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = download(
+            &make_request(
+                TransferDirection::Download,
+                &format!("http://{}/file", addr),
+                local.to_str().unwrap(),
+            ),
+            counter(),
+            token,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn download_carries_extra_headers() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|req: MockRequest| {
+            assert_eq!(req.header("authorization"), Some("Bearer tok-1"));
+            MockResponse::ok("x")
+        }))
+        .await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("hdr.bin");
+        let mut req = make_request(
+            TransferDirection::Download,
+            &format!("http://{}/file", addr),
+            local.to_str().unwrap(),
+        );
+        req.headers
+            .insert("Authorization".to_string(), "Bearer tok-1".to_string());
+
+        download(&req, counter(), CancellationToken::new()).await.unwrap();
+    }
+
+    // ==================== upload ====================
+
+    #[tokio::test]
+    async fn upload_streams_local_file_body() {
+        disable_proxy_for_loopback();
+        // 256KB 伪随机体，覆盖多块流式读取
+        let data: Vec<u8> = (0..256 * 1024).map(|i| (i % 253) as u8).collect();
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let addr = spawn_mock_server({
+            let received = received.clone();
+            Arc::new(move |req: MockRequest| {
+                assert_eq!(req.method, "PUT");
+                received.lock().unwrap().extend_from_slice(&req.body);
+                MockResponse::ok("")
+            })
+        })
+        .await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("src.bin");
+        std::fs::write(&local, &data).unwrap();
+
+        upload(
+            &make_request(
+                TransferDirection::Upload,
+                &format!("http://{}/upload/sid", addr),
+                local.to_str().unwrap(),
+            ),
+            counter(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(*received.lock().unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn upload_resume_seeks_to_offset() {
+        disable_proxy_for_loopback();
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let addr = spawn_mock_server({
+            let received = received.clone();
+            Arc::new(move |req: MockRequest| {
+                received.lock().unwrap().extend_from_slice(&req.body);
+                MockResponse::ok("")
+            })
+        })
+        .await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("src.bin");
+        std::fs::write(&local, "abcdef").unwrap();
+        let mut req = make_request(
+            TransferDirection::Upload,
+            &format!("http://{}/upload/sid", addr),
+            local.to_str().unwrap(),
+        );
+        req.offset = 2;
+
+        upload(&req, counter()).await.unwrap();
+
+        // seek 到 offset 后只发送尾部（续传语义）
+        assert_eq!(*received.lock().unwrap(), b"cdef");
+    }
+
+    #[tokio::test]
+    async fn upload_http_error_returns_failure() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::with_status(500, "boom"))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("src.bin");
+        std::fs::write(&local, "data").unwrap();
+
+        let err = upload(
+            &make_request(
+                TransferDirection::Upload,
+                &format!("http://{}/upload/sid", addr),
+                local.to_str().unwrap(),
+            ),
+            counter(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("HTTP 500"), "got: {}", err);
+    }
+
+    // ==================== dispatch ====================
+
+    #[tokio::test]
+    async fn execute_transfer_dispatches_by_direction() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|req: MockRequest| {
+            if req.method == "GET" {
+                MockResponse::ok("downloaded")
+            } else {
+                MockResponse::ok("")
+            }
+        }))
+        .await;
+        let dir = tempdir().unwrap();
+        let dl = dir.path().join("dl.bin");
+        let up = dir.path().join("up.bin");
+        std::fs::write(&up, "uploaded").unwrap();
+        let token = CancellationToken::new();
+
+        execute_transfer(
+            &make_request(
+                TransferDirection::Download,
+                &format!("http://{}/file", addr),
+                dl.to_str().unwrap(),
+            ),
+            counter(),
+            token.clone(),
+        )
+        .await
+        .unwrap();
+        execute_transfer(
+            &make_request(
+                TransferDirection::Upload,
+                &format!("http://{}/upload/sid", addr),
+                up.to_str().unwrap(),
+            ),
+            counter(),
+            token.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dl).unwrap(), b"downloaded");
+    }
+
+    // ==================== run_transfer（无头上下文 AppHandle=None） ====================
+
+    /// 测试投递器：publish 要求 dispatcher 已注入，静态订阅者实际不经 dispatcher
+    struct NoopDispatcher;
+
+    impl MessageDispatcher for NoopDispatcher {
+        fn dispatch_to_wasm(&self, _plugin_id: &str, _msg: &BusMessage) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn is_activated(&self, _plugin_id: &str) -> bool {
+            true
+        }
+    }
+
+    /// 静态订阅者：把收到的消息转发到 mpsc 通道
+    struct ChannelHandler(tokio::sync::mpsc::UnboundedSender<BusMessage>);
+
+    impl BusMessageHandler for ChannelHandler {
+        fn on_message(&self, msg: &BusMessage) -> anyhow::Result<()> {
+            let _ = self.0.send(msg.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_transfer_completed_emits_terminal_progress() {
+        disable_proxy_for_loopback();
+        let body = vec![7u8; 32 * 1024];
+        let server_body = body.clone();
+        let addr = spawn_mock_server(Arc::new(move |_| MockResponse::ok(server_body.clone()))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("run.bin");
+        let mut req = make_request(
+            TransferDirection::Download,
+            &format!("http://{}/file", addr),
+            local.to_str().unwrap(),
+        );
+        req.expected_size = body.len() as u64;
+
+        let bus = Arc::new(MessageBus::new());
+        bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        bus.subscribe_static("test-plugin", "transfer:task-run-1", Box::new(ChannelHandler(tx)))
+            .await;
+
+        let task_id = "task-run-1".to_string();
+        run_transfer(task_id.clone(), req, None, bus.clone(), CancellationToken::new()).await;
+
+        // 终态消息：Completed + 最终偏移（插件据此持久化续传点）
+        let msg = rx.recv().await.expect("应收到终态进度消息");
+        assert_eq!(msg.topic, format!("transfer:{}", task_id));
+        let progress: TransferProgress = serde_json::from_value(msg.payload).unwrap();
+        assert_eq!(progress.state, TransferState::Completed);
+        assert_eq!(progress.transferred, body.len() as u64);
+        assert_eq!(progress.total, body.len() as u64);
+
+        // 任务完成/失败后应自行注销（cancel 查不到 = 已完成）
+        assert!(!tasks().lock().await.contains_key(&task_id));
+    }
+
+    #[tokio::test]
+    async fn run_transfer_failed_emits_failure_terminal() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::with_status(500, "boom"))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("run-err.bin");
+
+        let bus = Arc::new(MessageBus::new());
+        bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        bus.subscribe_static("test-plugin", "transfer:task-run-2", Box::new(ChannelHandler(tx)))
+            .await;
+
+        let task_id = "task-run-2".to_string();
+        run_transfer(
+            task_id.clone(),
+            make_request(
+                TransferDirection::Download,
+                &format!("http://{}/file", addr),
+                local.to_str().unwrap(),
+            ),
+            None,
+            bus.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+
+        let msg = rx.recv().await.expect("应收到失败终态消息");
+        let progress: TransferProgress = serde_json::from_value(msg.payload).unwrap();
+        assert!(
+            matches!(progress.state, TransferState::Failed(_)),
+            "应为 Failed 终态，got: {:?}",
+            progress.state
+        );
+        assert!(!tasks().lock().await.contains_key(&task_id));
+    }
+}
