@@ -287,6 +287,17 @@ impl HostSession for WasmHost {
         }
         Ok(read_and_free_result(out[0], out[1]))
     }
+
+    fn session_close(&self, session_id: &str) -> Result<(), HostError> {
+        let (sid_ptr, sid_len) = wasm_alloc_string(session_id);
+        let mut out = [0u32; 2];
+        let status = unsafe { host_session_close(sid_ptr, sid_len, out.as_mut_ptr() as u32) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("session_close"))
+        }
+    }
 }
 
 // ==================== HostTimer ====================
@@ -687,6 +698,8 @@ extern "C" {
     fn host_session_input_register() -> i32;
     /// 会话：按配置创建新会话 — out_ptr 输出 session_id，返回 0 成功 -1 失败
     fn host_session_create(cid_ptr: u32, cid_len: u32, out_ptr: u32) -> i32;
+    /// 会话：关闭（终止）会话 — 返回 0 成功 -1 失败
+    fn host_session_close(sid_ptr: u32, sid_len: u32, out_ptr: u32) -> i32;
     /// 定时器：注册周期回调 — 返回 0 成功，-1 失败
     fn host_timer_register(interval_secs: u32, cmd_ptr: u32, cmd_len: u32) -> i32;
     /// 文件服务：挂载 — MountOptions JSON → out_ptr 输出 MountResult JSON，返回 0 成功 -1 失败
@@ -865,6 +878,8 @@ mod native_link_stubs {
     pub extern "C" fn host_session_input_register() -> i32 { -1 }
     #[no_mangle]
     pub extern "C" fn host_session_create(_cid_ptr: u32, _cid_len: u32, _out_ptr: u32) -> i32 { -1 }
+    #[no_mangle]
+    pub extern "C" fn host_session_close(_sid_ptr: u32, _sid_len: u32, _out_ptr: u32) -> i32 { -1 }
     #[no_mangle]
     pub extern "C" fn host_timer_register(_interval_secs: u32, _cmd_ptr: u32, _cmd_len: u32) -> i32 { -1 }
     #[no_mangle]

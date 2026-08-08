@@ -40,7 +40,9 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///   + 可选导出 `ON_UPLOAD_REQUEST` 上传策略钩子），见内网文件传输插件规格
 /// - v6: 新增会话创建与宿主定时器（host functions `SESSION_CREATE` /
 ///   `TIMER_REGISTER`），支撑插件定时自动任务，见 ADR 0003
-pub const ABI_VERSION: u32 = 6;
+/// - v7: 新增会话关闭（host function `SESSION_CLOSE`），支撑插件在
+///   定时自动任务执行完后关闭其创建的会话
+pub const ABI_VERSION: u32 = 7;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -126,6 +128,8 @@ pub mod import {
     pub const SESSION_INPUT_REGISTER: &str = "host_session_input_register";
     /// 会话：按配置创建新会话（out_ptr 输出 session_id，需要 session:write 权限）
     pub const SESSION_CREATE: &str = "host_session_create";
+    /// 会话：关闭（终止）会话，停止 PTY 并保留会话记录，需要 session:write 权限
+    pub const SESSION_CLOSE: &str = "host_session_close";
 
     // === Timer ===
     /// 定时器：注册周期回调（宿主按 interval 到点调用插件指定 command，
@@ -223,6 +227,7 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::SESSION_LIFECYCLE_REGISTER, 0, 1),
     (import::SESSION_INPUT_REGISTER, 0, 1),
     (import::SESSION_CREATE, 3, 1),
+    (import::SESSION_CLOSE, 3, 1),
     (import::TIMER_REGISTER, 3, 1),
     (import::EMIT_EVENT, 4, 0),
     (import::BROADCAST_SYNC, 2, 0),

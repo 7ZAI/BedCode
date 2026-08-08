@@ -41,4 +41,11 @@ pub trait HostSession {
     /// 生命周期事件（带 session_id + config_id），已注册生命周期监听器的
     /// 插件可据此感知新会话就绪（定时自动任务的会话就绪信号，见 ADR 0003）
     fn session_create(&self, config_id: &str) -> Result<String, HostError>;
+
+    /// 关闭（终止）会话（v7，需要 `session:write` 权限）
+    ///
+    /// 停止会话 PTY 并置为 Stopped，会话记录保留（与用户手动关闭一致）；
+    /// 宿主分发 `Stopping` / `Stopped` 生命周期事件。用于插件在任务
+    /// 执行完毕后清理自己创建的会话（如定时自动任务会话）
+    fn session_close(&self, session_id: &str) -> Result<(), HostError>;
 }
