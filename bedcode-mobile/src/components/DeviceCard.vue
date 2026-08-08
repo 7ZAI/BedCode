@@ -7,7 +7,7 @@
     <div
       :class="[
         'w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors',
-        device.isOnline || isDiscovered ? 'bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)]/20' : 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)]'
+        device.isOnline || isDiscovered ? 'bg-[var(--mobile-accent-muted)] border border-[color:color-mix(in_srgb,var(--mobile-accent)_20%,transparent)]' : 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)]'
       ]"
     >
       <svg class="w-6 h-6" :class="device.isOnline || isDiscovered ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'" fill="none" stroke="currentColor" viewBox="0 0 24 24">

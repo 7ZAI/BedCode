@@ -48,7 +48,7 @@
         <!-- 发现新版本 - 打开浏览器下载 -->
         <button
           v-if="updateStatus === 'available' && updateInfo"
-          class="w-full bg-[var(--mobile-accent)]/15 border border-[var(--mobile-accent)]/30 text-[var(--mobile-accent)] py-3 rounded-xl text-sm font-medium active:bg-[var(--mobile-accent)]/25 transition-colors"
+          class="w-full bg-[color:color-mix(in_srgb,var(--mobile-accent)_15%,transparent)] border border-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] text-[var(--mobile-accent)] py-3 rounded-xl text-sm font-medium active:bg-[color:color-mix(in_srgb,var(--mobile-accent)_25%,transparent)] transition-colors"
           @click="handleDownloadUpdate"
         >
           {{ $t('settings.about.downloadUpdate') }} ({{ updateInfo.version }})

@@ -22,7 +22,7 @@ export interface DialogItem {
 const queue = ref<DialogItem[]>([])
 let nextId = 0
 
-/** 宿主全局轻提示（与 useToast 共用模块级 toasts 单例，App.vue 的 ToastContainer 渲染） */
+/** 宿主全局轻提示（useToast 基于 vue-sonner，App.vue 挂载 Toaster 渲染） */
 const toast = useToast()
 
 function push(kind: DialogItem['kind'], options: DialogOptions): Promise<DialogResult> {

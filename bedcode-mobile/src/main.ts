@@ -9,6 +9,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { initPluginSystem } from '@/plugin'
 import './style.css'
 import './styles/mobile.css'
+import 'vue-sonner/style.css'
 
 const app = createApp(App)
 const pinia = createPinia()
