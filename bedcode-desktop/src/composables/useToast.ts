@@ -1,24 +1,33 @@
-//! Toast notification composable
+//! Toast notification composable — 基于 vue-sonner（Sonner 的 Vue 移植，Tailwind 风格、与移动端一致）
 
-import { h, ref } from 'vue'
-import Toast from '@/components/Toast.vue'
+import { toast } from 'vue-sonner'
 
-interface ToastOptions {
+export interface ToastOptions {
   message: string
   type?: 'success' | 'error' | 'warning' | 'info'
   duration?: number
   position?: 'top' | 'bottom'
 }
 
-const toasts = ref<Array<{ id: number; options: ToastOptions }>>([])
-let toastId = 0
+/** 本地 position 映射到 vue-sonner 位置（桌面端固定中轴显示） */
+function mapPosition(position: ToastOptions['position']): 'top-center' | 'bottom-center' {
+  return position === 'bottom' ? 'bottom-center' : 'top-center'
+}
+
+/** 按类型分发到 sonner 对应方法（richColors 下各自有独立的等级配色与图标） */
+const typeDispatch = {
+  success: toast.success,
+  error: toast.error,
+  warning: toast.warning,
+  info: toast.info,
+} as const
 
 export function useToast() {
   function show(options: ToastOptions) {
-    const id = ++toastId
-    toasts.value.push({ id, options })
-
-    return id
+    return typeDispatch[options.type ?? 'info'](options.message, {
+      duration: options.duration,
+      position: mapPosition(options.position),
+    })
   }
 
   function success(message: string, duration = 3000) {
@@ -37,19 +46,15 @@ export function useToast() {
     return show({ message, type: 'info', duration })
   }
 
-  function dismiss(id: number) {
-    const index = toasts.value.findIndex(t => t.id === id)
-    if (index !== -1) {
-      toasts.value.splice(index, 1)
-    }
+  function dismiss(id?: number | string) {
+    toast.dismiss(id)
   }
 
   function dismissAll() {
-    toasts.value = []
+    toast.dismiss()
   }
 
   return {
-    toasts,
     show,
     success,
     error,
@@ -58,21 +63,4 @@ export function useToast() {
     dismiss,
     dismissAll,
   }
-}
-
-// Toast container component for mounting in App.vue
-export const ToastContainer = {
-  name: 'ToastContainer',
-  setup() {
-    const { toasts, dismiss } = useToast()
-
-    return () =>
-      toasts.value.map(({ id, options }) =>
-        h(Toast, {
-          key: id,
-          ...options,
-          onClose: () => dismiss(id),
-        })
-      )
-  },
 }

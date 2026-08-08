@@ -10,6 +10,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { useWslStore } from '@/stores/wsl'
 import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
+import 'vue-sonner/style.css'
 import './style.css'
 
 interface PluginNotifyPayload {
