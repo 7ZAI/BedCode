@@ -3,21 +3,27 @@
  * bedcode-plugin — BedCode 移动端插件开发工具包命令行
  *
  * 用法：
- *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]
+ *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--ts-only] [--registry]
  *   bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]
- *   bedcode-plugin package [-o <file>]
+ *   bedcode-plugin package [-o <file>] [--hash]
  *   bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]
+ *   bedcode-plugin manifest [--check]
+ *   bedcode-plugin validate [--dir <dir>]
+ *   bedcode-plugin doctor
  *
  * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）；
- *          --registry 时引用已发布的 SDK 版本，否则引用本地 SDK 相对路径
+ *          --ts-only 生成纯前端插件（无 rust/ 目录）；--registry 时引用已发布版本
  * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录
- * package 将产物打包为 {id}.zip 插件包（分发单元）
+ * package 将产物打包为 {id}.zip 插件包（分发单元）；--hash 时计算并写入 wasmHash
  * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR，插件源码在
  *          mock 宿主的移动端骨架中实时预览（WASM 后端不在浏览器运行）；
  *          --host 时监听局域网，手机浏览器访问 http://<PC-IP>:<port> 可查看页面
+ * validate 校验 plugin.json 结构与字段合法性（CI 用，exit 1 表示不合法）
+ * doctor   环境自检：Node / Rust / wasm32 target / dev-shell 依赖 / SDK 构建产物
  */
 
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   copyFileSync,
   cpSync,
@@ -25,6 +31,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
@@ -237,6 +244,12 @@ function cmdCreate(positional, flags) {
     .join('')}Plugin`
   const pkgName = `@bedcode/plugin-${last}`
 
+  // 插件类型：默认 wasm（前端 + WASM 后端）；--ts-only 生成纯前端插件
+  const tsOnly = flags['ts-only'] === true
+  const pluginType = tsOnly ? 'ts-only' : 'wasm'
+  // 注意：值内直接嵌入实际 crate 名（fillPlaceholders 按序替换，不能引用占位符本身）
+  const rustLibraryLine = tsOnly ? '' : `  "rustLibrary": "${crate}",\n`
+
   // SDK 依赖标识：--registry 引用已发布版本（npm + crates.io），默认引用本地 SDK 相对路径
   const sdkPkg = readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json')
   const sdkJs = flags.registry === true
@@ -248,6 +261,9 @@ function cmdCreate(positional, flags) {
 
   // 复制模板并填充占位符
   cpSync(TEMPLATE_DIR, outDir, { recursive: true })
+  if (tsOnly) {
+    rmSync(join(outDir, 'rust'), { recursive: true, force: true })
+  }
   fillPlaceholders(walk(outDir), {
     '{{ID}}': id,
     '{{NAME}}': name,
@@ -257,12 +273,14 @@ function cmdCreate(positional, flags) {
     '{{PKG_NAME}}': pkgName,
     '{{SDK_JS}}': sdkJs,
     '{{SDK_RUST}}': sdkRust,
+    '{{PLUGIN_TYPE}}': pluginType,
+    '{{RUST_LIBRARY_LINE}}': rustLibraryLine,
   })
 
   console.log(`\n[bedcode-plugin] 已生成插件工程: ${outDir}`)
-  console.log(`  id:      ${id}`)
-  console.log(`  name:    ${name}`)
-  console.log(`  crate:   ${crate}`)
+  console.log(`  id:         ${id}`)
+  console.log(`  name:       ${name}`)
+  console.log(`  pluginType: ${pluginType}${tsOnly ? '' : ` (crate: ${crate})`}`)
   console.log(`\n下一步：`)
   console.log(`  cd ${toPosix(relative(process.cwd(), outDir)) || '.'}`)
   console.log(`  npm install`)
@@ -475,6 +493,17 @@ function cmdPackage(flags) {
     process.exit(1)
   }
 
+  // --hash：计算 WASM SHA256 写入 plugin.json（安装时宿主按 wasmHash 校验完整性）
+  if (hasWasm && flags.hash) {
+    const hash = `sha256-${createHash('sha256').update(readFileSync(wasmPath)).digest('hex')}`
+    const current = readJson(manifestPath, 'plugin.json')
+    if (current.wasmHash !== hash) {
+      current.wasmHash = hash
+      writeFileSync(manifestPath, JSON.stringify(current, null, 2) + '\n', 'utf-8')
+      console.log(`[bedcode-plugin] 已写入 wasmHash: ${hash.slice(0, 20)}…`)
+    }
+  }
+
   // 打包条目：plugin.json + dist 全部产物 + wasm，全部位于 zip 根目录
   const entries = [
     { name: 'plugin.json', data: readFileSync(manifestPath) },
@@ -491,22 +520,191 @@ function cmdPackage(flags) {
   console.log(`\n[bedcode-plugin] 已打包 ${entries.length} 个文件 -> ${outFile}`)
 }
 
+// ==================== 命令：validate（清单校验） ====================
+
+/** 合法权限列表（与宿主 src/plugin/permission.ts 权限映射键同步） */
+const VALID_PERMISSIONS = new Set([
+  'terminal:input',
+  'terminal:output',
+  'session:read',
+  'session:write',
+  'ui:toolbox',
+  'ui:navtab',
+  'ui:settings',
+  'ui:input',
+  'ui:route',
+  'network:http',
+  'storage',
+  'fs:read',
+  'fs:write',
+  'bus',
+  'fileservice',
+])
+
+const VALID_PLUGIN_TYPES = new Set(['wasm', 'ts-only', 'rust', 'rust-ts'])
+const WASM_HASH_RE = /^sha256-[0-9a-f]{64}$/i
+
+function cmdValidate(flags) {
+  const dir = resolve(process.cwd(), flags.dir || '.')
+  const manifestPath = join(dir, 'plugin.json')
+  const errors = []
+  const warnings = []
+
+  if (!existsSync(manifestPath)) {
+    console.error(`[bedcode-plugin] 缺少 plugin.json: ${dir}`)
+    process.exit(1)
+  }
+
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+  } catch (e) {
+    console.error(`[bedcode-plugin] plugin.json 不是合法 JSON: ${e.message}`)
+    process.exit(1)
+  }
+
+  // id：反域名风格
+  if (
+    typeof manifest.id !== 'string' ||
+    !/^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$/.test(manifest.id) ||
+    !manifest.id.includes('.')
+  ) {
+    errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
+  }
+
+  // 必填字段
+  for (const field of ['name', 'version', 'main', 'pluginType', 'permissions', 'contributes']) {
+    if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
+      errors.push(`缺少必填字段: ${field}`)
+    }
+  }
+
+  // pluginType / rustLibrary / wasmHash
+  if (manifest.pluginType && !VALID_PLUGIN_TYPES.has(manifest.pluginType)) {
+    errors.push(`pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`)
+  }
+  if (manifest.pluginType === 'wasm' && !manifest.rustLibrary) {
+    errors.push('pluginType=wasm 时必须提供 rustLibrary（与 Cargo.toml 包名一致）')
+  }
+  if (manifest.wasmHash !== undefined && !WASM_HASH_RE.test(manifest.wasmHash)) {
+    errors.push(`wasmHash 格式非法: "${manifest.wasmHash}"（应为 sha256-<64位hex>）`)
+  }
+
+  // 权限
+  if (Array.isArray(manifest.permissions)) {
+    const unknown = manifest.permissions.filter((p) => !VALID_PERMISSIONS.has(p))
+    if (unknown.length) {
+      errors.push(`未知权限: ${unknown.join(', ')}（合法列表见宿主 permission.ts）`)
+    }
+  }
+
+  // main 产物存在性（未构建仅警告）
+  const distMain = join(dir, 'dist', manifest.main || 'index.js')
+  if (!existsSync(distMain)) {
+    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（npm run build）`)
+  }
+
+  // contributes 结构
+  if (manifest.contributes && typeof manifest.contributes !== 'object') {
+    errors.push('contributes 必须是对象')
+  }
+
+  for (const w of warnings) console.log(`  ⚠ ${w}`)
+  for (const e of errors) console.error(`  ✗ ${e}`)
+
+  if (errors.length) {
+    console.error(`\n[bedcode-plugin] validate 失败: ${errors.length} 个错误`)
+    process.exit(1)
+  }
+  console.log(`\n[bedcode-plugin] validate 通过${warnings.length ? `（${warnings.length} 个警告）` : ''}`)
+}
+
+// ==================== 命令：doctor（环境自检） ====================
+
+function cmdDoctor() {
+  const checks = []
+  const add = (name, ok, detail) => checks.push({ name, ok, detail })
+
+  // Node 版本
+  const nodeMajor = Number(process.versions.node.split('.')[0])
+  add('Node.js >= 20', nodeMajor >= 20, process.version)
+
+  // Rust + wasm32 target
+  let rustOk = false
+  let rustDetail = '未安装'
+  try {
+    const r = spawnSync('cargo', ['--version'], { stdio: 'pipe' })
+    if (r.status === 0) {
+      rustOk = true
+      rustDetail = r.stdout.toString().trim()
+    }
+  } catch {
+    // 未安装
+  }
+  add('Rust (cargo)', rustOk, rustDetail)
+  if (rustOk) {
+    const t = spawnSync('rustup', ['target', 'list', '--installed'], { stdio: 'pipe' })
+    const hasWasm = t.status === 0 && t.stdout.toString().includes('wasm32-unknown-unknown')
+    add('wasm32-unknown-unknown target', hasWasm, hasWasm ? '已安装' : '缺失 — 运行 rustup target add wasm32-unknown-unknown')
+  } else {
+    add('wasm32-unknown-unknown target', false, '需先安装 Rust')
+  }
+
+  // 当前目录是否为插件工程
+  const manifestPath = join(process.cwd(), 'plugin.json')
+  if (existsSync(manifestPath)) {
+    try {
+      const m = readJson(manifestPath, 'plugin.json')
+      add('当前目录是插件工程', true, `${m.id} (${m.pluginType})`)
+    } catch {
+      add('当前目录是插件工程', false, 'plugin.json 解析失败')
+    }
+  } else {
+    add('当前目录是插件工程', false, '缺少 plugin.json — 在插件目录内运行本命令时检查才有意义')
+  }
+
+  // dev-shell 依赖（dev 命令就绪性）
+  const devVite = join(SDK_ROOT, 'dev-shell/node_modules/vite/bin/vite.js')
+  add('dev-shell 依赖（dev 命令）', existsSync(devVite), existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装')
+
+  // SDK dist（file: 依赖的插件需要）
+  const sdkDist = join(SDK_ROOT, 'dist/index.js')
+  add('SDK 构建产物（file: 依赖）', existsSync(sdkDist), existsSync(sdkDist) ? '已构建' : '缺失 — 运行 npm run build（SDK 目录内）')
+
+  let failed = 0
+  for (const c of checks) {
+    const icon = c.ok ? '✓' : '✗'
+    if (!c.ok) failed++
+    console.log(`  ${icon} ${c.name} — ${c.detail}`)
+  }
+  console.log(`\n[bedcode-plugin] doctor 完成: ${checks.length - failed}/${checks.length} 通过`)
+  if (failed) process.exit(1)
+}
+
 // ==================== 入口 ====================
 
 function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2))
   const [cmd] = positional
   const rest = positional.slice(1)
+  const pkg = readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json')
+
+  if (flags.version || flags.v) {
+    console.log(pkg.version)
+    process.exit(0)
+  }
 
   if (flags.help || flags.h || !cmd) {
-    console.log(`bedcode-plugin v${readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json').version}`)
+    console.log(`bedcode-plugin v${pkg.version}`)
     console.log('\nBedCode 移动端插件开发工具包\n')
     console.log('用法:')
-    console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]')
+    console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--ts-only] [--registry]')
     console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
-    console.log('  bedcode-plugin package [-o <file>]')
+    console.log('  bedcode-plugin package [-o <file>] [--hash]   # --hash 写入 wasmHash 完整性校验')
     console.log('  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR；--host 供手机访问）')
     console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')
+    console.log('  bedcode-plugin validate [--dir <dir>]   # 校验 plugin.json 结构')
+    console.log('  bedcode-plugin doctor   # 环境自检（Node/Rust/wasm32/dev-shell/SDK）')
     process.exit(0)
   }
 
@@ -525,6 +723,12 @@ function main() {
       break
     case 'manifest':
       cmdManifest(flags)
+      break
+    case 'validate':
+      cmdValidate(flags)
+      break
+    case 'doctor':
+      cmdDoctor()
       break
     default:
       console.error(`未知命令: ${cmd}（运行 bedcode-plugin --help 查看用法）`)

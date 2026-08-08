@@ -1,0 +1,20 @@
+[package]
+name = "{{CRATE}}"
+version = "0.1.0"
+description = "{{NAME}} 插件 WASM 后端"
+authors = ["{{AUTHOR}}"]
+edition = "2021"
+
+[features]
+default = []
+# wasm：启用 WasmPlugin trait / wasm_entry! 宏（WASM 插件必开）
+wasm = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = {{SDK_RUST}}
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"

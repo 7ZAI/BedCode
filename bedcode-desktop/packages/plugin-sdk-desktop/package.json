@@ -15,6 +15,7 @@
     "dist",
     "src",
     "bin",
+    "template",
     "dev-shell",
     "README.md",
     "LICENSE"

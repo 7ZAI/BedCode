@@ -85,6 +85,9 @@ npm run package     # = bedcode-plugin package：产出 dist/{id}.zip
 - `--frontend-only` / `--rust-only`：只构建一半
 - `--resources-dir <父目录>`：额外把产物复制到 `<父目录>/{id}/`（宿主资源目录）
 
+`bedcode-plugin package --hash`：计算 WASM SHA256 写入 `plugin.json` 的 `wasmHash`
+（安装时宿主校验完整性；`--hash` 之外的常规打包不强制要求）。
+
 内置插件由仓库脚本统一构建：
 
 ```bash
@@ -93,6 +96,22 @@ cd bedcode-mobile && npm run plugins:build -- --plugin com.bedcode.auto-task
 ```
 
 ---
+
+### 创建纯前端插件
+
+默认模板为 wasm（前端 + WASM 后端）；`--ts-only` 生成纯前端插件（无 `rust/` 目录，`pluginType: ts-only`）：
+
+```bash
+bedcode-plugin create com.example.ui-only "UI Only" --ts-only
+```
+
+### CLI 其他命令
+
+| 命令 | 说明 |
+|---|---|
+| `bedcode-plugin validate [--dir]` | 校验 plugin.json 结构（id 格式、必填字段、权限白名单、wasmHash 格式、产物存在性）；CI 用，exit 1 表示不合法 |
+| `bedcode-plugin doctor` | 环境自检：Node ≥ 20 / Rust / wasm32 target / dev-shell 依赖 / SDK 构建产物 |
+| `bedcode-plugin --version` | 打印 SDK 版本 |
 
 ## 5. 插件清单 plugin.json
 

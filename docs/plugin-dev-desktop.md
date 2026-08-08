@@ -33,7 +33,28 @@
   `window.__BEDCODE_SHARED__`，插件构建时由 SDK vite 插件外部化，
   经 `getVue()` / `getI18n()` 等复用宿主实例
 
-## 2. 前端 API（context）
+## 2. 创建插件工程
+
+开发工具包为 `@bedcode/plugin-sdk-desktop`，命令行为 `bedcode-plugin-desktop`。
+
+```bash
+bedcode-plugin-desktop create com.example.my-plugin "My Plugin" --author "you"
+cd my-plugin
+npm install
+```
+
+- 默认生成 **ts-only**（纯前端）插件；`--rust` 附带 WASM 后端脚手架（`pluginType: rust-ts`）
+- `create` 从 SDK 内置模板生成：`plugin.json` / `vite.config.ts`（vue 等外部化到宿主）/
+  `src/index.ts` / 可选 `rust/`（WasmPlugin 实现 + `wasm_entry!`）
+
+构建与分发：
+
+```bash
+npm run build    # = bedcode-plugin-desktop build：vite（+ rust-ts 时 cargo wasm32）
+npm run build -- --resources-dir <宿主resources/plugins父目录>   # 复制产物到宿主（内置插件分发方式）
+```
+
+## 3. 前端 API（context）
 
 `activate(context: PluginContext)` 提供：
 
@@ -50,7 +71,7 @@
 
 示例插件：`bedcode-desktop/plugins/ai-chatbox/`（侧边栏 AI 面板 + 终端工具栏项）。
 
-## 3. 浏览器开发环境（Dev Shell）
+## 4. 浏览器开发环境（Dev Shell）
 
 SDK 内置空壳宿主（`dev-shell/`）：桌面端页面骨架（标题栏 / 侧边栏 / 状态栏），
 插件前端源码在浏览器中实时运行，支持 HMR。
@@ -77,7 +98,16 @@ Rust 后端逻辑、真实 HTTP 端点、系统文件选择需在真实宿主验
 
 详见 `packages/plugin-sdk-desktop/dev-shell/README.md`。
 
-## 4. 验证清单
+## 5. CLI 其他命令
+
+| 命令 | 说明 |
+|---|---|
+| `bedcode-plugin-desktop manifest [--check]` | 按源码自动填充 plugin.json 的 contributes/permissions；`--check` 只检查（CI） |
+| `bedcode-plugin-desktop validate [--dir]` | 校验 plugin.json（id 格式、必填字段、sandbox/pluginType、权限白名单、产物存在性） |
+| `bedcode-plugin-desktop doctor` | 环境自检：Node ≥ 20 / Rust / wasm32 target / dev-shell 依赖 / SDK 构建产物 |
+| `bedcode-plugin-desktop --version` | 打印 SDK 版本 |
+
+## 6. 验证清单
 
 1. 插件出现在侧边栏/工具箱，状态「已激活」
 2. 注册的各类扩展点正确渲染（面板 / 工具栏 / 状态栏 / 文件处理器）
@@ -86,11 +116,12 @@ Rust 后端逻辑、真实 HTTP 端点、系统文件选择需在真实宿主验
 5. 停用/激活：dispose 清理、重新 activate 正常
 6. Rust 后端命令：真机/桌面宿主验证（dev-shell 中仅前端 handler 可测）
 
-## 5. 相关代码入口
+## 7. 相关代码入口
 
 | 模块 | 位置 |
 |---|---|
 | SDK 命令行 | `bedcode-desktop/packages/plugin-sdk-desktop/bin/cli.js` |
+| SDK 模板 | `bedcode-desktop/packages/plugin-sdk-desktop/template/` |
 | SDK 浏览器开发环境 | `bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/` |
 | 插件宿主 | `bedcode-desktop/src-tauri/src/plugin/`（host / wasm_runtime / file_service） |
 | 示例插件 | `bedcode-desktop/plugins/ai-chatbox/` |
