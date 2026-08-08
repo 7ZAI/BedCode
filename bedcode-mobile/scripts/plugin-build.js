@@ -28,10 +28,14 @@ for (let i = 0; i < args.length; i++) {
 const pluginsDir = resolve(ROOT, 'plugins')
 const resourcesDir = resolve(ROOT, 'src-tauri/resources/plugins/mobile')
 
-// 扫描插件目录（跳过模板/隐藏目录，需含 plugin.json）
+// 暂停开发的插件：不参与构建，恢复开发时从列表移除
+const EXCLUDED_PLUGINS = ['ai-chatbox']
+
+// 扫描插件目录（跳过模板/隐藏目录/暂停开发的插件，需含 plugin.json）
 const candidates = readdirSync(pluginsDir, { withFileTypes: true })
   .filter((d) => d.isDirectory() && !d.name.startsWith('_') && !d.name.startsWith('.'))
   .map((d) => d.name)
+  .filter((name) => !EXCLUDED_PLUGINS.includes(name))
   .filter((name) => existsSync(resolve(pluginsDir, name, 'plugin.json')))
 
 const selected = targetPlugin

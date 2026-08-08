@@ -68,14 +68,12 @@
       <!-- API 格式 -->
       <div>
         <label class="block text-sm text-[var(--text-secondary)] mb-1.5">{{ t('desktop.plugin.aiChatbox.apiFormat') }}</label>
-        <select
-          v-model="form.apiFormat"
-          class="w-full bg-[var(--bg-card)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 transition-colors appearance-none cursor-pointer"
-        >
-          <option v-for="opt in apiFormatOptions" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
+        <Select
+          :model-value="form.apiFormat"
+          :options="apiFormatOptions"
+          class="w-full"
+          @update:model-value="onSelectApiFormat"
+        />
       </div>
 
       <!-- 模型列表 -->
@@ -109,6 +107,7 @@
 import { reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getI18n } from '@bedcode/plugin-sdk-mobile'
+import Select from '@bedcode/plugin-sdk-mobile/ui'
 import ModelListEditor from './ModelListEditor.vue'
 import type { ApiProvider, ApiFormat } from '../types'
 import { API_FORMAT_OPTIONS, generateId } from '../types'
@@ -160,6 +159,11 @@ interface FormErrors {
 }
 
 const errors = reactive<FormErrors>({})
+
+/** Select 选中 API 格式（事件值统一转 string 后按 ApiFormat 校验） */
+function onSelectApiFormat(v: string | number): void {
+  form.apiFormat = String(v) as ApiFormat
+}
 
 // 编辑模式下监听 initialValues 变化（切换供应商时）
 watch(() => props.initialValues, (val) => {
