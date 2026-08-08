@@ -212,6 +212,10 @@ export interface MobileQueueTaskItem {
 export interface MobileHostApi {
   /** 当前活动会话 id（响应式 ref，可 watch / computed） */
   activeSessionId: import('vue').Ref<string | null>
+  /** 活跃会话列表（响应式 ref） */
+  activeSessions: import('vue').Ref<any[]>
+  /** 会话配置列表（响应式 ref） */
+  sessionConfigs: import('vue').Ref<any[]>
   /** 查询任务队列 */
   httpTaskQueueList(sessionId: string): Promise<MobileHttpResult<{
     session_id: string
@@ -247,6 +251,8 @@ export interface MobileHostApi {
       created_at: string
     } | null
   }>>
+  /** 查询 auto-task 支持的 agent 列表 */
+  httpListSupportedAgents(): Promise<MobileHttpResult<{ agents: string[] }>>
 }
 
 // ==================== 对话框 ====================

@@ -135,7 +135,7 @@
             >
               <div class="flex items-center gap-1.5 mb-1.5">
                 <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ field.label }}</span>
-                <span v-if="field.hint" class="text-[calc(10px*var(--ui-scale))] text-[var(--text-tertiary)]/70">{{ field.hint }}</span>
+                <span v-if="field.hint" class="text-[calc(10px*var(--ui-scale))] text-[color:color-mix(in_srgb,var(--text-tertiary)_70%,transparent)]">{{ field.hint }}</span>
               </div>
               <button
                 v-if="field.type === 'toggle'"

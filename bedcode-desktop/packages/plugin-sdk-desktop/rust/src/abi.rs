@@ -17,7 +17,9 @@
 //!   + 可选导出 `ON_UPLOAD_REQUEST` 上传策略钩子），见内网文件传输插件规格
 //! - v6: 新增会话创建与宿主定时器（host functions `SESSION_CREATE` /
 //!   `TIMER_REGISTER`），支撑插件定时自动任务，见 ADR 0003
-pub const ABI_VERSION: u32 = 6;
+//! - v7: 新增会话关闭（host function `SESSION_CLOSE`），支撑插件在
+//!   定时自动任务执行完后关闭其创建的会话
+pub const ABI_VERSION: u32 = 7;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///

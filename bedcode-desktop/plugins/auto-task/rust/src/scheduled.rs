@@ -14,7 +14,8 @@
 //! ```
 //!
 //! 终态处置：missed / failed 为不可自动恢复的终态，用户可删除（清理）
-//! 或 reset（改触发时间后重新调度）；executed 保留为执行档案，不提供删除。
+//! 或 reset（改触发时间后重新调度）；executed 为执行档案，前端归入
+//! 历史区段，可单条删除或一键清空（执行详情在任务记录页按来源筛选查看）。
 //!
 //! 触发链路与常规自动任务共用队列调度：Created 事件到达后把 prompts
 //! 注入新会话队列（source='scheduled'）并开启会话自动执行开关，
@@ -122,13 +123,13 @@ pub fn list_jobs(host: &WasmHost) -> Vec<Value> {
 
 /// 删除定时任务
 ///
-/// 可删状态：pending（未触发）、missed（错过）、failed（创建失败/重启丢失）——
-/// 后两者是不可自动恢复的终态，用户应能清理归档。
-/// executed 保留为执行档案（展示已完成的调度记录），creating 为瞬态（由状态机自终结）。
+/// 可删状态：pending（未触发）、missed（错过）、failed（创建失败/重启丢失）、
+/// executed（执行档案）——后三者是不可自动恢复的终态，用户应能清理归档；
+/// creating 为瞬态（由状态机自终结）。
 pub fn delete_job(host: &WasmHost, job_id: &str) -> bool {
     let affected = host
         .plugin_db_execute_params(
-            "DELETE FROM scheduled_jobs WHERE id = ?1 AND status IN ('pending', 'missed', 'failed')",
+            "DELETE FROM scheduled_jobs WHERE id = ?1 AND status IN ('pending', 'missed', 'failed', 'executed')",
             &sql_params![job_id],
         )
         .unwrap_or(-1);
@@ -522,7 +523,7 @@ fn handle_remove(host: &WasmHost, body: &Value, query: &Value) -> Value {
     } else {
         http_response::error(
             404,
-            "Job not found or not deletable (only pending/missed/failed jobs can be deleted)",
+            "Job not found or not deletable (only pending/missed/failed/executed jobs can be deleted)",
         )
     }
 }

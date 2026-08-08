@@ -153,6 +153,10 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
     fn create(&mut self, config_id: String) -> Result<String, String> {
         session::session_create(&self.host_ctx, &self.plugin_id, &config_id)
     }
+
+    fn close(&mut self, session_id: String) -> Result<(), String> {
+        session::session_close(&self.host_ctx, &self.plugin_id, &session_id)
+    }
 }
 
 impl bedcode::plugin::host_timer::Host for WasmPluginState {

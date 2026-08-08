@@ -3,11 +3,12 @@
  * bedcode-plugin — BedCode 移动端插件开发工具包命令行
  *
  * 用法：
- *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>]
+ *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]
  *   bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]
  *   bedcode-plugin package [-o <file>]
  *
- * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）
+ * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）；
+ *          --registry 时引用已发布的 SDK 版本，否则引用本地 SDK 相对路径
  * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录
  * package 将产物打包为 {id}.zip 插件包（分发单元）
  */
@@ -232,9 +233,14 @@ function cmdCreate(positional, flags) {
     .join('')}Plugin`
   const pkgName = `@bedcode/plugin-${last}`
 
-  // SDK 相对路径（create 可运行于任意位置：monorepo 或独立工程）
-  const sdkJs = toPosix(relative(outDir, SDK_ROOT))
-  const sdkRust = toPosix(relative(join(outDir, 'rust'), join(SDK_ROOT, 'rust')))
+  // SDK 依赖标识：--registry 引用已发布版本（npm + crates.io），默认引用本地 SDK 相对路径
+  const sdkPkg = readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json')
+  const sdkJs = flags.registry === true
+    ? `^${sdkPkg.version}`
+    : `file:${toPosix(relative(outDir, SDK_ROOT))}`
+  const sdkRust = flags.registry === true
+    ? `"${sdkPkg.version}"`
+    : `{ path = "${toPosix(relative(join(outDir, 'rust'), join(SDK_ROOT, 'rust')))}" }`
 
   // 复制模板并填充占位符
   cpSync(TEMPLATE_DIR, outDir, { recursive: true })
@@ -435,7 +441,7 @@ function main() {
     console.log(`bedcode-plugin v${readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json').version}`)
     console.log('\nBedCode 移动端插件开发工具包\n')
     console.log('用法:')
-    console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>]')
+    console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]')
     console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
     console.log('  bedcode-plugin package [-o <file>]')
     console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')

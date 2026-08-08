@@ -97,7 +97,8 @@ import {
   destroySessionCache,
   resizeHiddenTerminal
 } from '@/composables/useGlobalTerminal'
-import { pendingReplayEvents, advanceWatermark } from '@/utils/ptyReplay'
+import { advanceWatermark } from '@/utils/ptyReplay'
+import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -171,6 +172,12 @@ let pendingScrollRefreshRaf = 0
 // xterm onScroll 取消监听（IDisposable 接口）
 let scrollDisposable: import('@xterm/xterm').IDisposable | null = null
 
+// 选区状态：有选区时 Ctrl+C 应复制而非发送中断（VS Code 终端行为）
+let hasSelection = false
+
+// Ctrl+滚轮缩放监听（passive:false），卸载时移除
+let wheelHandler: ((e: WheelEvent) => void) | null = null
+
 // 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
 let currentLineBuffer = ''
 
@@ -181,6 +188,12 @@ const terminalHistory = useTerminalHistory(sessionId)
 
 // 历史回放去重：记录已回放的最大 index，实时事件 index <= 此值时忽略
 let lastReplayedIndex = 0
+
+// 历史回放是否完成：完成前实时流事件暂存，回放后按序补写，
+// 避免新输出插到历史前面导致乱序
+let historyReplayDone = false
+// 回放完成前到达的实时流事件（保持数组引用，清空用 .length = 0）
+let pendingLiveEvents: { data: string; index: number }[] = []
 
 /** 解码 Base64 编码的 PTY 输出数据为 UTF-8 字符串 */
 function decodeBase64(base64: string): string {
@@ -206,13 +219,14 @@ function writeSync(data: string) {
 
 // PTY 输出监听：增量回调模式，每次输出直接写入 xterm + 全局缓存
 // 严格去重：忽略 index <= lastReplayedIndex 的事件（已在历史回放中写入）
+// 回放完成前（historyReplayDone=false）到达的事件暂存，回放完成后按序补写
 usePtyOutput(sessionId, (data: string, index: number) => {
   if (index <= lastReplayedIndex) return
 
   // 始终写入全局缓存，即使 terminal 未初始化（数据可从历史恢复）
   terminalHistory.append(data)
 
-  if (terminal) {
+  if (terminal && historyReplayDone) {
     writeSync(data)
     // 只在实际写入终端时推进水位：历史回放会跳过 <= 水位的重叠事件，
     // 避免窗口打开时同一批输出被实时流与历史回放各写一次（重复行）
@@ -220,6 +234,9 @@ usePtyOutput(sessionId, (data: string, index: number) => {
     if (!isUserScrolling.value) {
       scrollToBottom()
     }
+  } else if (terminal) {
+    // 历史回放尚未完成：暂存，由 replayHistory 回放后按序补写
+    pendingLiveEvents.push({ data, index })
   }
 })
 
@@ -505,15 +522,24 @@ function initTerminal() {
 
   terminal = new Terminal({
     fontSize: fontSize.value,
-    fontFamily: 'Consolas, Monaco, Courier New, monospace',
+    // VS Code 终端默认字体（Windows 11 自带），其后为跨平台回退
+    fontFamily: 'Cascadia Mono, Consolas, Monaco, Courier New, monospace',
     theme: getTheme(),
-    cursorBlink: true,
-    cursorStyle: 'bar',
+    // 光标统一不显示（见下方 DECTCEM 隐藏）；此处配置为 VS Code 风格的
+    // 块光标 + 不闪烁，作为未来恢复光标时的合理默认
+    cursorBlink: false,
+    cursorStyle: 'block',
     cursorWidth: 1,
-    scrollback: 10000,
+    scrollback: TERMINAL_SCROLLBACK,
     allowProposedApi: true,
     // 启用内置平滑滚动（5.3+ 支持），scrollToBottom 等 API 自动生效
     smoothScrollDuration: 100,
+    // 右键选词：与 VS Code 终端一致，右键单击选中光标下的单词
+    rightClickSelectsWord: true,
+    // Alt+点击定位光标：与 VS Code 终端一致（Windows 下 Alt 键无系统冲突）
+    altClickMovesCursor: true,
+    // 粗体字符使用亮色变体渲染，与主流终端默认一致
+    drawBoldTextInBrightColors: true,
     // 允许背景透明：必须在 open() 前设置，否则渲染器会把 rgba 背景强制转为不透明，
     // 导致背景图片层被终端背景色遮盖
     allowTransparency: true,
@@ -524,6 +550,10 @@ function initTerminal() {
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalContainerRef.value)
   initWebGL(terminal)
+
+  // 移除光标：用 DECTCEM 隐藏序列（\x1b[?25l）在 buffer 层隐藏光标，
+  // WebGL 与 DOM 渲染器均不再绘制（TUI 程序主动发送 \x1b[?25h 时除外）
+  terminal.write('\x1b[?25l')
 
   // WebGL 渲染器激活后，隐藏 DOM 层光标避免双光标问题
   // 只隐藏 DOM 层，保留 WebGL 层光标（WebGL 光标更流畅且不会出现双光标）
@@ -594,9 +624,38 @@ function initTerminal() {
   // 不会因 xterm 内部 DOM 重建而丢失监听
   scrollDisposable = terminal.onScroll(() => handleScroll())
 
+  // 选区状态跟踪：有选区时 Ctrl+C 复制（VS Code 终端行为），不发送 SIGINT
+  terminal.onSelectionChange(() => {
+    hasSelection = !!terminal?.getSelection()
+  })
+
+  // Ctrl+滚轮缩放字号（VS Code 终端行为）；passive:false 才能阻止默认滚动
+  wheelHandler = (e: WheelEvent) => {
+    if (!e.ctrlKey) return
+    e.preventDefault()
+    const sizes = [12, 14, 16, 18, 20]
+    const idx = sizes.indexOf(fontSize.value)
+    const next = Math.min(
+      sizes.length - 1,
+      Math.max(0, idx < 0 ? 0 : idx + (e.deltaY < 0 ? 1 : -1)),
+    )
+    fontSize.value = sizes[next]
+  }
+  terminalContainerRef.value.addEventListener('wheel', wheelHandler, { passive: false })
+
   // 键盘输入
   terminal.onData((data: string) => {
     if (!props.session) return
+
+    // 有选区时 Ctrl+C 仅复制（VS Code 终端行为），不向 PTY 发送中断
+    if (data === '\x03' && hasSelection) {
+      const sel = terminal?.getSelection()
+      if (sel) {
+        navigator.clipboard?.writeText(sel).catch(() => {})
+      }
+      return
+    }
+
     sessionStore.writeToSession(props.session.id, data)
 
     // 追踪当前行输入
@@ -672,6 +731,75 @@ function clearTerminal() {
   terminalHistory.clear()
 }
 
+/**
+ * 从 Rust 端拉取会话历史输出并写入终端（覆盖窗口关闭期间丢失的数据）
+ *
+ * 实时流（pty-output 事件）只转发 maxSeq 之后的新事件，与历史回放的 index
+ * 空间不重叠（共用 Rust 端 next_output_index 全局序号），因此历史全量写入、
+ * 不按水位过滤——否则实时流先到达会推高水位，导致全部历史被跳过。
+ * 回放完成前暂存的实时流事件在此按序补写，保证新输出始终排在历史之后。
+ */
+async function replayHistory() {
+  // 新回放周期开始：清空上轮暂存（用 .length=0 保持数组引用，回调闭包共享）
+  historyReplayDone = false
+  pendingLiveEvents.length = 0
+
+  if (!terminal || !sessionId.value) {
+    historyReplayDone = true
+    return
+  }
+
+  try {
+    const history = await invoke<OutputHistoryResponse>('get_session_output_history', {
+      sessionId: sessionId.value,
+      startSeq: null,
+    })
+
+    // 环形缓冲回卷检测：minSeq > 0 说明会话开头输出已被环形缓冲淘汰，
+    // 当前历史不完整（最早输出不可恢复），提示用户而非静默缺失
+    if (history.minSeq > 0) {
+      console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minSeq=${history.minSeq}，会话开头输出不可用`)
+      toast.warning(t('desktop.terminal.historyTruncated'))
+    }
+
+    if (history.events.length > 0) {
+      // 逐个事件解码并写入 xterm + 全局缓存
+      // 不合并为单次写入，避免隐藏 xterm 实例处理超长字符串时卡顿
+      for (const event of history.events) {
+        const data = decodeBase64(event.data)
+        writeSync(data)
+        terminalHistory.append(data)
+      }
+      // 水位推进到历史末尾：回放期间到达的实时流事件（index > maxSeq）
+      // 仍会正常写入，不会重复
+      lastReplayedIndex = Math.max(lastReplayedIndex, history.maxSeq)
+    } else if (history.maxSeq === 0) {
+      // Rust 端无该会话历史（会话未注册/无输出）时，回退到全局缓存
+      const cachedHistory = terminalHistory.getHistory()
+      if (cachedHistory) {
+        writeSync(cachedHistory)
+      }
+    }
+  } catch (e) {
+    console.error('[TerminalPreview] Failed to get output history:', e)
+    // 回放失败时回退到全局缓存
+    const cachedHistory = terminalHistory.getHistory()
+    if (cachedHistory) {
+      writeSync(cachedHistory)
+    }
+  }
+
+  // 回放完成：补写暂存的实时流事件（按到达顺序，保证历史在前）
+  historyReplayDone = true
+  for (const ev of pendingLiveEvents) {
+    if (ev.index <= lastReplayedIndex) continue
+    writeSync(ev.data)
+    lastReplayedIndex = advanceWatermark(lastReplayedIndex, ev.index)
+  }
+  pendingLiveEvents.length = 0
+  scrollToBottom()
+}
+
 // 字体大小变化
 let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
 watch(fontSize, (newSize) => {
@@ -703,8 +831,10 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
 // 会话变化
 watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
-    // 切换会话时重置去重状态
+    // 切换会话时重置去重与回放状态
     lastReplayedIndex = 0
+    historyReplayDone = false
+    pendingLiveEvents.length = 0
 
     if (oldId) {
       clearTerminal()
@@ -720,6 +850,9 @@ watch(sessionId, async (newId, oldId) => {
       if (props.session?.status === 'starting') {
         await sessionStore.startSession(newId)
       }
+
+      // 切换会话后恢复历史输出
+      await replayHistory()
     }
   }
 }, { immediate: true })
@@ -733,6 +866,10 @@ onMounted(async () => {
   }
 
   initTerminal()
+
+  // 历史回放必须放在背景图片探测之前：图片探测涉及 IPC + 网络请求，可能耗时，
+  // 若回放被推迟，实时流事件会先到达并推高水位，导致历史被过滤
+  await replayHistory()
 
   // 初始化背景图片（在 initTerminal 之后，仅影响后续主题刷新；
   // 首次挂载时若已有背景图，通过一次主题刷新生效）
@@ -749,54 +886,6 @@ onMounted(async () => {
   // 显示终端 fit 后，同步隐藏终端尺寸
   if (terminal && sessionId.value) {
     resizeHiddenTerminal(sessionId.value, terminal.cols, terminal.rows)
-  }
-
-  // 从 Rust 端获取历史输出（覆盖窗口关闭期间丢失的数据）
-  if (terminal && sessionId.value) {
-    try {
-      const history = await invoke<OutputHistoryResponse>('get_session_output_history', {
-        sessionId: sessionId.value,
-        startSeq: null,
-      })
-
-      // 环形缓冲回卷检测：minSeq > 0 说明会话开头输出已被环形缓冲淘汰，
-      // 当前历史不完整（最早输出不可恢复），提示用户而非静默缺失
-      if (history.minSeq > 0) {
-        console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minSeq=${history.minSeq}，会话开头输出不可用`)
-        toast.warning(t('desktop.terminal.historyTruncated'))
-      }
-
-      if (history.events.length > 0) {
-        // 逐个事件解码并写入 xterm + 全局缓存
-        // 不合并为单次写入，避免隐藏 xterm 实例处理超长字符串时卡顿
-        // 跳过已由实时流写入的重叠事件（index <= 水位），避免重复行
-        const { events: pending, nextWatermark } = pendingReplayEvents(history.events, lastReplayedIndex)
-        for (const event of pending) {
-          const data = decodeBase64(event.data)
-          writeSync(data)
-          terminalHistory.append(data)
-          lastReplayedIndex = advanceWatermark(lastReplayedIndex, event.index)
-        }
-        // 水位不倒退（实时流可能已推进到更高 index）
-        lastReplayedIndex = Math.max(lastReplayedIndex, nextWatermark, history.maxSeq)
-        scrollToBottom()
-      }
-    } catch (e) {
-      console.error('[TerminalPreview] Failed to get output history:', e)
-      // 回放失败时回退到全局缓存
-      const cachedHistory = terminalHistory.getHistory()
-      if (cachedHistory) {
-        writeSync(cachedHistory)
-        scrollToBottom()
-      }
-    }
-  } else if (terminal && sessionId.value) {
-    // 无 Rust 端历史时，从全局缓存恢复
-    const history = terminalHistory.getHistory()
-    if (history) {
-      writeSync(history)
-      scrollToBottom()
-    }
   }
 
   terminal?.focus()
@@ -831,6 +920,12 @@ onUnmounted(() => {
   if (scrollDisposable) {
     scrollDisposable.dispose()
     scrollDisposable = null
+  }
+
+  // 清理 Ctrl+滚轮缩放监听
+  if (wheelHandler && terminalContainerRef.value) {
+    terminalContainerRef.value.removeEventListener('wheel', wheelHandler)
+    wheelHandler = null
   }
 
   // 清理待处理的滚动 rAF
@@ -910,45 +1005,24 @@ defineExpose({
   background-color: transparent;
 }
 
+/* xterm 6 中 .xterm-viewport 不承载滚动（内容高度=视口高度，滚动由
+   .xterm-scrollable-element 的 JS 状态驱动），其原生滚动条永远满格且拖不动，
+   会误导用户认为滚动失效。隐藏它，滚动条统一由 xterm 自绘 slider 提供。 */
 :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 6px;
+  display: none;
 }
 
-:deep(.xterm-viewport)::-webkit-scrollbar-track {
-  background: transparent;
-  margin: 8px 2px;
-  border-radius: 3px;
+/* xterm 自绘滚动条（.xterm-scrollable-element > .scrollbar）默认仅鼠标悬停
+   时显示（VS Code 风格），且 slider 高度可能只有最小保护值，深色主题下几乎
+   不可见。强制常显，让用户能发现并拖动真正的滚动条。 */
+:deep(.xterm .xterm-scrollable-element > .scrollbar.vertical) {
+  opacity: 1 !important;
+  transition: none;
 }
 
-:deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.25);
-  border-radius: 3px;
-  transition: background 0.2s ease, width 0.2s ease;
-}
-
-:deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.5);
-}
-
-:deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.35);
-}
-
-.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-}
-
-.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.dark :deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题 */
-/* 只隐藏 DOM 光标元素，不隐藏 cursor-layer（WebGL 渲染器有自己的光标实现） */
+/* WebGL 模式下隐藏 DOM 层光标（双光标防御）。
+   光标已通过 DECTCEM（\x1b[?25l）在 buffer 层移除，此规则作为渲染层
+   冗余保护：若未来恢复光标显示，WebGL 与 DOM 层不会同时绘制 */
 :deep(.xterm-hidden-cursor .xterm-cursor) {
   display: none !important;
 }

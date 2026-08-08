@@ -17,6 +17,12 @@ pub enum SessionIntegration {
     ClaudeCodeHooks,
     /// pi 扩展：`.pi/extensions/pi_task_hook.ts`（pi 自动发现，无需注册）
     PiExtension,
+    /// opencode 插件：`.opencode/plugins/opencode_task_hook.ts`
+    /// （opencode 自动加载项目级插件，无需注册）
+    OpenCodePlugin,
+    /// Codex hooks：`.codex/hooks.json` + `codex_task_hook.py`
+    /// （Codex 从项目 `.codex/` 配置层自动发现 hooks）
+    CodexHooks,
     /// 未适配：不部署任何会话集成（无法回传任务状态）
     None,
 }
@@ -45,7 +51,12 @@ pub struct AgentProfile {
 /// - claude：完整适配（hooks + /clear）
 /// - pi：完整适配（pi 扩展 + /new）—— pi 无 /clear，等效的上下文重建命令是 /new
 ///   （开启新会话，pi 会话按分支管理，无"清空上下文继续当前会话"的语义）
-/// - codex / opencode：仅识别，未适配会话集成（任务状态无法回传）
+/// - opencode：完整适配（opencode 插件，状态回传同 pi 扩展机制）。
+///   上下文清理命令未适配：opencode 无 /clear，/compact 只压缩不重建，
+///   调度时跳过 clear 直接下发（任务行跟踪不受影响）
+/// - codex：完整适配（Codex hooks 集成 + /clear）。
+///   注意：Codex 项目级 hooks 需用户信任项目 `.codex/` 配置层并在 `/hooks`
+///   中确认信任钩子（与 pi 首次 trust 流程同源，宿主无法代答）
 pub const AGENT_PROFILES: &[AgentProfile] = &[
     AgentProfile {
         name: "claude",
@@ -61,15 +72,16 @@ pub const AGENT_PROFILES: &[AgentProfile] = &[
     },
     AgentProfile {
         name: "codex",
-        clear_command: None,
-        session_integration: SessionIntegration::None,
-        tracks_input: false,
+        clear_command: Some("/clear"),
+        session_integration: SessionIntegration::CodexHooks,
+        tracks_input: true,
     },
     AgentProfile {
         name: "opencode",
+        // opencode 无 /clear（/compact 仅压缩上下文），调度跳过 clear 直接下发
         clear_command: None,
-        session_integration: SessionIntegration::None,
-        tracks_input: false,
+        session_integration: SessionIntegration::OpenCodePlugin,
+        tracks_input: true,
     },
 ];
 
@@ -133,6 +145,17 @@ pub fn is_supported(agent: &str) -> bool {
     profile_for(agent)
         .map(|p| p.tracks_input && p.session_integration != SessionIntegration::None)
         .unwrap_or(false)
+}
+
+/// 返回所有完整适配的 agent name 列表
+///
+/// 供前端判断工具栏入口可见性、下拉过滤等场景，避免前端 hardcode 白名单。
+pub fn list_supported() -> Vec<&'static str> {
+    AGENT_PROFILES
+        .iter()
+        .filter(|p| p.tracks_input && p.session_integration != SessionIntegration::None)
+        .map(|p| p.name)
+        .collect()
 }
 
 /// 任务型斜杠命令白名单（v1 为空，预留扩展点）
@@ -218,15 +241,19 @@ mod tests {
         assert_eq!(clear_command_for("claude"), Some("/clear"));
         // pi 无 /clear，上下文重建用 /new（开启新会话）
         assert_eq!(clear_command_for("pi"), Some("/new"));
-        assert_eq!(clear_command_for("codex"), None);
+        // opencode 无 /clear（/compact 仅压缩），未适配清理命令
+        assert_eq!(clear_command_for("opencode"), None);
+        // codex 有 /clear（清屏 + 开启全新对话，等价 claude /clear）
+        assert_eq!(clear_command_for("codex"), Some("/clear"));
         assert_eq!(clear_command_for("unknown"), None);
     }
 
     #[test]
     fn profile_capabilities() {
-        // claude / pi：完整支持（建任务行 + 状态回传）
+        // claude / pi / opencode：完整支持（建任务行 + 状态回传）
         assert!(is_supported("claude"));
         assert!(is_supported("pi"));
+        assert!(is_supported("opencode"));
         assert_eq!(
             session_integration_for("claude"),
             super::SessionIntegration::ClaudeCodeHooks
@@ -235,13 +262,16 @@ mod tests {
             session_integration_for("pi"),
             super::SessionIntegration::PiExtension
         );
-
-        // 仅识别未适配：不建任务行、不部署集成、不可调度
-        assert!(!is_supported("codex"));
-        assert!(!is_supported("opencode"));
         assert_eq!(
             session_integration_for("opencode"),
-            super::SessionIntegration::None
+            super::SessionIntegration::OpenCodePlugin
+        );
+
+        // codex：完整支持（hooks 集成 + /clear + 建任务行）
+        assert!(is_supported("codex"));
+        assert_eq!(
+            session_integration_for("codex"),
+            super::SessionIntegration::CodexHooks
         );
 
         // 未知 agent：全部能力为空

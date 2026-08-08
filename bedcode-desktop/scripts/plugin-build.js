@@ -6,7 +6,7 @@
  * 生产构建脚本，委托给各插件的构建系统
  *
  * 用法：node scripts/plugin-build.js [--plugin <plugin-id>]
- * 默认构建 ai-chatbox 插件
+ * 默认构建 auto-task 插件
  */
 
 import { execSync } from 'child_process'
@@ -21,10 +21,8 @@ const ROOT = resolve(__dirname, '..')
 const IS_WIN = platform() === 'win32'
 
 // 插件配置 — 指向合并后的插件工程目录
+// 注意：ai-chatbox 暂停开发，已从构建流程移除，恢复开发时加回
 const PLUGINS = {
-  'com.bedcode.ai-chatbox': {
-    pluginDir: 'plugins/ai-chatbox',
-  },
   'com.bedcode.auto-task': {
     pluginDir: 'plugins/auto-task',
   },
@@ -35,7 +33,7 @@ const PLUGINS = {
 
 // 解析参数
 const args = process.argv.slice(2)
-let targetPlugin = 'com.bedcode.ai-chatbox'
+let targetPlugin = 'com.bedcode.auto-task'
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--plugin' && args[i + 1]) {
     targetPlugin = args[i + 1]

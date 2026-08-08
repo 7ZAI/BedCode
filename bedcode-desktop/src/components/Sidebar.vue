@@ -67,7 +67,7 @@
 
     <!-- 拖拽 resize handle（保留原有功能） -->
     <div
-      class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-[var(--color-primary)]/20 active:bg-[var(--color-primary)]/30 transition-colors duration-150"
+      class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-[color:color-mix(in_srgb,var(--color-primary)_20%,transparent)] active:bg-[color:color-mix(in_srgb,var(--color-primary)_30%,transparent)] transition-colors duration-150"
       @mousedown="onResizeStart"
     ></div>
   </aside>

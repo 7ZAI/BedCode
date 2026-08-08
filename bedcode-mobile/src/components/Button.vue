@@ -52,15 +52,15 @@ defineEmits(['click'])
 const variantClass = computed(() => {
   switch (props.variant) {
     case 'primary':
-      return 'bg-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/80 text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
+      return 'bg-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_80%,transparent)] text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
     case 'secondary':
       return 'bg-[var(--mobile-bg-elevated)] hover:bg-[var(--mobile-bg-secondary)] text-[var(--mobile-text-secondary)] border border-[var(--mobile-border)] focus:ring-[var(--mobile-border)]'
     case 'danger':
-      return 'bg-[var(--mobile-error)] hover:bg-[var(--mobile-error)]/80 text-white focus:ring-[var(--mobile-error)]'
+      return 'bg-[var(--mobile-error)] hover:bg-[color:color-mix(in_srgb,var(--mobile-error)_80%,transparent)] text-white focus:ring-[var(--mobile-error)]'
     case 'ghost':
       return 'bg-transparent hover:bg-[var(--mobile-accent-muted)] text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] focus:ring-[var(--mobile-border)]'
     default:
-      return 'bg-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/80 text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
+      return 'bg-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_80%,transparent)] text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
   }
 })
 

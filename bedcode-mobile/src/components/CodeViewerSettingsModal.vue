@@ -173,7 +173,7 @@ function handleConfirm() {
 .settings-modal {
   --size-btn: clamp(2rem, 2.5rem, 3rem);
   --footer-btn-py: clamp(0.625rem, 0.75rem, 1rem);
-  --thumb-size: clamp(1rem, 1.375rem, 1.75rem);
+  --thumb-size: clamp(1.25rem, 1.5rem, 1.75rem); /* 默认 24px，满足手指滑动触摸目标 */
   --toggle-w: clamp(2.25rem, 2.75rem, 3.25rem);
   --toggle-h: clamp(1.25rem, 1.5rem, 1.75rem);
 

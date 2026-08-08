@@ -185,6 +185,10 @@ impl HostSession for WasmHost {
     fn session_create(&self, config_id: &str) -> Result<String, HostError> {
         host_session::create(config_id).map_err(|e| host_err("session_create", e))
     }
+
+    fn session_close(&self, session_id: &str) -> Result<(), HostError> {
+        host_session::close(session_id).map_err(|e| host_err("session_close", e))
+    }
 }
 
 // ==================== HostTimer ====================

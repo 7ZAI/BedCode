@@ -28,6 +28,8 @@ export default {
       darkMode: '深色模式',
       followSystem: '跟随系统',
       language: '语言',
+      languageChinese: '中文',
+      languageEnglish: 'English',
       fontSize: '字体大小',
       fontNormal: '正常',
       fontLarge: '大',

@@ -21,6 +21,24 @@ pub const PI_EXTENSIONS_DIR_NAME: &str = "extensions";
 /// BedCode pi 扩展文件名（状态同步 + 自动授权，随构建打包）
 pub const PI_HOOK_SCRIPT_NAME: &str = "pi_task_hook.ts";
 
+/// opencode 配置目录名（插件自动发现根目录）
+pub const OPENCODE_CONFIG_DIR_NAME: &str = ".opencode";
+
+/// opencode 插件目录名（项目级插件自动发现位置 `.opencode/plugins/*.ts`）
+pub const OPENCODE_PLUGINS_DIR_NAME: &str = "plugins";
+
+/// BedCode opencode 插件文件名（状态同步，随构建打包）
+pub const OPENCODE_HOOK_SCRIPT_NAME: &str = "opencode_task_hook.ts";
+
+/// Codex 配置目录名（hooks 自动发现根目录）
+pub const CODEX_CONFIG_DIR_NAME: &str = ".codex";
+
+/// Codex hooks 配置文件名（`<repo>/.codex/hooks.json`）
+pub const CODEX_HOOKS_FILE: &str = "hooks.json";
+
+/// BedCode Codex hook 脚本文件名（状态同步 + 自动授权，随构建打包）
+pub const CODEX_HOOK_SCRIPT_NAME: &str = "codex_task_hook.py";
+
 /// 环境变量：BedCode 服务器端口
 pub const ENV_BEDCODE_PORT: &str = "BEDCODE_PORT";
 

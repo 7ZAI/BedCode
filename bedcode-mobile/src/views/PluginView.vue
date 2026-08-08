@@ -188,7 +188,7 @@
             v-for="plugin in plugins"
             :key="plugin.id"
             class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
-            :class="isErrorState(plugin.state) ? 'border-[var(--mobile-danger-color)]/25' : 'border-[var(--mobile-border)]'"
+            :class="isErrorState(plugin.state) ? 'border-[color:color-mix(in_srgb,var(--mobile-danger-color)_25%,transparent)]' : 'border-[var(--mobile-border)]'"
             :style="!pluginEnabledStates[plugin.id] && !isErrorState(plugin.state) ? 'opacity: .8' : ''"
             @click="openDetail(plugin)"
           >

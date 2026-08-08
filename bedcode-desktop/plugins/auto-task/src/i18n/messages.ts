@@ -64,6 +64,7 @@ export interface MessageSchema {
   createTaskFailed: string
   noRunningSessions: string
   noRunningSessionsHint: string
+  agentNotAdapted: string
   // ==================== 预设任务 ====================
   presetTitle: string
   saveAsPreset: string

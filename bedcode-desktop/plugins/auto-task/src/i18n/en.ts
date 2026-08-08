@@ -17,6 +17,7 @@ const en: MessageSchema = {
   autoExecuteHint: 'Added tasks run automatically one by one when enabled',
   autoAnswer: 'Auto Answer',
   autoAnswerHint: 'Agent questions are answered automatically when enabled',
+  sessionFlagFailed: 'Failed to toggle session flag',
   inputPlaceholder: 'Enter a task — Enter to add, Shift+Enter for newline',
   add: 'Add',
   clearQueue: 'Clear',
@@ -89,6 +90,7 @@ const en: MessageSchema = {
   createTaskFailed: 'Failed to create task',
   noRunningSessions: 'No running sessions',
   noRunningSessionsHint: 'Created tasks are saved as presets — enqueue them after a session starts',
+  agentNotAdapted: 'The current session\'s Agent is not compatible with Auto Task. Please select a compatible session (claude / codex / opencode / pi).',
   // ==================== Preset Tasks ====================
   presetTitle: 'Preset Tasks',
   saveAsPreset: 'Save as Preset',
@@ -121,6 +123,9 @@ const en: MessageSchema = {
   scheduledStatusFailed: 'Failed',
   scheduledStatusMissed: 'Missed',
   scheduledError: 'Error',
+  scheduledSectionActive: 'Active',
+  scheduledSectionFinished: 'History',
+  scheduledClearFinished: 'Clear',
 }
 
 export default en

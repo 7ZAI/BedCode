@@ -2,8 +2,13 @@
   <div :class="themeClasses.container">
     <MobileLayout />
 
-    <!-- Global Toast Container -->
-    <ToastContainer />
+    <!-- Global Toast Container（vue-sonner，richColors 区分等级） -->
+    <Toaster
+      :theme="toasterTheme"
+      position="top-center"
+      rich-colors
+      :mobile-offset="{ top: safeArea.top, bottom: safeArea.bottom }"
+    />
 
     <!-- Plugin Dialog Host -->
     <PluginDialogHost />
@@ -11,15 +16,16 @@
 </template>
 
 <script setup lang="ts">
-import { provide, onMounted, onUnmounted } from 'vue'
+import { provide, computed, onMounted, onUnmounted } from 'vue'
+import { Toaster } from 'vue-sonner'
 import MobileLayout from '@/components/MobileLayout.vue'
 import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
-import { ToastContainer } from '@/composables/useToast'
 import PluginDialogHost from '@/plugin/PluginDialogHost.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
+import { useSettingsStore } from '@/stores/settings'
 // mDNS 广播暂时禁用：移动端目前不需要被发现，避免扫描到自身
 // import { useMdnsAdvertiser } from '@/composables/useMdnsAdvertiser'
 
@@ -30,6 +36,10 @@ const { safeArea, keyboardInfo, isReady } = useEdgeToEdge()
 // 主题与字体管理
 const { themeClasses, setupTheme, cleanupTheme } = useTheme()
 const { setupFontSize } = useFontSize()
+
+// Toaster 主题跟随应用设置（'system' 时由 sonner 自身监听系统偏好）
+const settingsStore = useSettingsStore()
+const toasterTheme = computed(() => settingsStore.settings.ui.theme as 'light' | 'dark' | 'system')
 // const { startAdvertise, stopAdvertise } = useMdnsAdvertiser()
 
 onMounted(async () => {

@@ -334,6 +334,9 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
             "try_dispatch_next: no pending tasks for session_id={}",
             session_id
         ));
+        // 队列清空（最后一个任务终态到达）且无 waiting 项：若该会话由
+        // 定时任务创建，自动关闭会话释放 PTY（无人值守语义，见 scheduled.rs）
+        maybe_close_scheduled_session(host, session_id);
         return;
     }
 
@@ -526,6 +529,48 @@ fn mark_latest_task_interrupted(host: &WasmHost, session_id: &str, reason: &str)
          WHERE id = (SELECT id FROM task_history WHERE session_id = ?2 ORDER BY created_at DESC LIMIT 1)",
         &sql_params![reason, session_id],
     );
+}
+
+/// 关闭定时任务创建的会话（任务全部执行完毕后调用）
+///
+/// 判定依据：scheduled_jobs 中仍存在关联该 session_id 的 executed 档案
+/// （定时任务触发时创建并记录，见 scheduled::handle_scheduler_tick）。
+/// 普通用户会话/手动添加任务的会话无此记录，不受影响。
+/// 调用前需确保队列已完全空闲（无 pending / waiting / executing）。
+fn maybe_close_scheduled_session(host: &WasmHost, session_id: &str) {
+    let job = host
+        .plugin_db_query_params(
+            "SELECT id FROM scheduled_jobs WHERE session_id = ?1 AND status = 'executed'",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()));
+
+    let Some(job) = job else {
+        return;
+    };
+    let job_id = job
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // 确认会话仍在运行（已关闭/不存在时跳过，避免无效调用）
+    if host.session_get(session_id).ok().flatten().is_none() {
+        return;
+    }
+
+    host.log_info(&format!(
+        "maybe_close_scheduled_session: closing session_id={} (scheduled job_id={} finished)",
+        session_id, job_id
+    ));
+    if let Err(e) = host.session_close(session_id) {
+        host.log_error(&format!(
+            "maybe_close_scheduled_session: session_close failed: session_id={} err={}",
+            session_id, e
+        ));
+    }
 }
 
 /// 查询会话的 waiting 态队列项（最多一项）

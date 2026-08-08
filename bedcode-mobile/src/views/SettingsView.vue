@@ -7,7 +7,7 @@
 
     <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
       <!-- Category Entries -->
-      <div class="pt-2 space-y-3">
+      <div class="pt-2 space-y-2">
         <button
           v-for="cat in categories"
           :key="cat.key"
@@ -31,17 +31,21 @@
       <!-- Footer Actions -->
       <div class="mt-6 flex flex-col items-center gap-3">
         <button
-          class="w-full max-w-xs py-3 rounded-xl text-[0.9375rem] font-medium text-center transition-opacity active:opacity-80"
-          style="background: var(--mobile-input-bg); color: var(--mobile-text-secondary)"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-[0.9375rem] font-medium text-[var(--mobile-text-secondary)] bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] transition-all duration-200 hover:bg-[var(--mobile-bg-secondary)] hover:text-[var(--mobile-text-primary)] hover:border-[var(--mobile-border-hover)] active:scale-[0.98] active:opacity-80"
           @click="resetSettings"
         >
+          <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
           {{ $t('settings.actions.resetSettings') }}
         </button>
         <button
-          class="w-full max-w-xs py-3 rounded-xl text-[0.9375rem] font-medium text-center transition-opacity active:opacity-80"
-          style="color: var(--mobile-chip-red)"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-[0.9375rem] font-medium text-[var(--mobile-error)] bg-[var(--mobile-error-muted)] border danger-action-btn transition-all duration-200 active:scale-[0.98] active:opacity-80"
           @click="clearData"
         >
+          <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
           {{ $t('settings.actions.clearAllData') }}
         </button>
       </div>
@@ -263,6 +267,17 @@ async function executeConfirm() {
 </script>
 
 <style scoped>
+/* Tailwind 无法对 var() 任意值应用透明度修饰符（border-[var(--x)]/30 不会生成），
+   半透明描边与 hover 态用 color-mix 显式实现 */
+.danger-action-btn {
+  border-color: color-mix(in srgb, var(--mobile-error) 30%, transparent);
+}
+
+.danger-action-btn:hover {
+  background-color: color-mix(in srgb, var(--mobile-error) 20%, transparent);
+  border-color: color-mix(in srgb, var(--mobile-error) 50%, transparent);
+}
+
 .cat-connection {
   color: var(--mobile-chip-cyan);
   background-color: var(--mobile-chip-cyan-bg);

@@ -92,6 +92,8 @@ interface RunningSession {
   agent: string
   queue_count: number
   queue: QueueItem[]
+  auto_execute: boolean
+  auto_answer: boolean
 }
 
 /** 预设任务（无会话/未选会话时创建，一次性消耗） */
@@ -140,6 +142,14 @@ const filterUntil = ref<Date | null>(null)
 // Tab3 定时任务
 const jobs = ref<ScheduledJob[]>([])
 const jobsLoading = ref(false)
+// 历史区段默认折叠：执行档案不占主视图，展开后仍可查看/清理
+const finishedCollapsed = ref(true)
+// 渲染项：分组头（进行中 / 历史）+ 卡片，单循环内插区段头
+interface RenderedJobItem {
+  header: boolean
+  group: 'active' | 'finished'
+  job?: ScheduledJob
+}
 const configs = ref<SessionConfig[]>([])
 const showForm = ref(false)
 const creatingJob = ref(false)
@@ -272,6 +282,27 @@ function scheduledStatusBadge(status: string): string {
   return `${base} ${colors[status] || colors.pending}`
 }
 
+// 进行中：等待触发 / 正在创建会话；历史：已执行 / 错过 / 失败（终态）
+const activeJobs = computed(() => jobs.value.filter((j) => ['pending', 'creating'].includes(j.status)))
+const finishedJobs = computed(() => jobs.value.filter((j) => ['executed', 'missed', 'failed'].includes(j.status)))
+const executedCount = computed(() => finishedJobs.value.filter((j) => j.status === 'executed').length)
+
+// 分组渲染：进行中在前，历史在后（折叠时不渲染卡片，仅保留区段头）
+const renderedJobItems = computed<RenderedJobItem[]>(() => {
+  const items: RenderedJobItem[] = []
+  if (activeJobs.value.length > 0) {
+    items.push({ header: true, group: 'active' })
+    items.push(...activeJobs.value.map((job) => ({ header: false, group: 'active' as const, job })))
+  }
+  if (finishedJobs.value.length > 0) {
+    items.push({ header: true, group: 'finished' })
+    if (!finishedCollapsed.value) {
+      items.push(...finishedJobs.value.map((job) => ({ header: false, group: 'finished' as const, job })))
+    }
+  }
+  return items
+})
+
 const tabs: { key: TabKey; label: string }[] = [
   { key: 'current', label: t('tabsCurrent') },
   { key: 'records', label: t('tabsRecords') },
@@ -295,10 +326,14 @@ function sessionLabel(s: RunningSession): string {
   return s.agent && s.agent !== 'unknown' ? `${base} · ${s.agent}` : base
 }
 
-// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话
+// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话（仅适配 agent）
+const adaptedRunningSessions = computed(() =>
+  runningSessions.value.filter((s) => s.is_supported),
+)
+
 const sessionOptions = computed(() => [
   { value: '', label: t('saveAsPresetOption') },
-  ...runningSessions.value.map((s) => ({ value: s.session_id, label: sessionLabel(s) })),
+  ...adaptedRunningSessions.value.map((s) => ({ value: s.session_id, label: sessionLabel(s) })),
 ])
 
 async function loadRunningSessions(opts: { silent?: boolean } = {}) {
@@ -334,10 +369,11 @@ async function loadRunningSessions(opts: { silent?: boolean } = {}) {
     // 之后仅修正失效选择（所选会话消失 → 退回预存），不覆盖用户选择
     if (!defaultSessionSelected) {
       defaultSessionSelected = true
+      const adapted = sessions.filter((s) => s.is_supported)
       const preferred =
-        sessions.find(
+        adapted.find(
           (s) => s.queue_count > 0 || ['in_progress', 'asking'].includes(s.task_status),
-        ) || sessions[0]
+        ) || adapted[0]
       createSessionId.value = preferred?.session_id ?? ''
     } else if (
       createSessionId.value &&
@@ -366,6 +402,12 @@ async function createTask() {
   createError.value = ''
   try {
     if (createSessionId.value) {
+      // 兜底：检查所选会话的 agent 是否适配（过滤列表理论上已排除，防止竞态/旧选择残留）
+      const session = runningSessions.value.find((s) => s.session_id === createSessionId.value)
+      if (session && !session.is_supported) {
+        createError.value = t('agentNotAdapted')
+        return
+      }
       await context.commands.execute('auto-task.add-task', {
         session_id: createSessionId.value,
         prompt,
@@ -583,6 +625,35 @@ function toggleTask(task: TaskRecord) {
   expandedId.value = expandedId.value === task.id ? null : task.id
 }
 
+// ==================== 会话开关（队列卡片上的启动 / 自动应答） ====================
+
+// 切换会话自动执行/自动应答开关
+//
+// 乐观更新本地状态即时反馈，失败回滚；后端 set-auto-mode 在自动执行
+// 由关转开且会话空闲时立即调度队列（try_dispatch_next），由此实现在
+// 当前任务页直接触发队列执行。
+async function toggleSessionFlag(
+  s: RunningSession,
+  key: 'auto_execute' | 'auto_answer',
+) {
+  const prev = s[key]
+  s[key] = !prev
+  try {
+    const result: any = await context.commands.execute('auto-task.set-auto-mode', {
+      session_id: s.session_id,
+      auto_execute: s.auto_execute,
+      auto_answer: s.auto_answer,
+    })
+    // 以后端返回的合并结果为准（未传字段保持原值，幂等回写避免闪烁）
+    s.auto_execute = result?.auto_execute ?? s.auto_execute
+    s.auto_answer = result?.auto_answer ?? s.auto_answer
+  } catch (e) {
+    console.error('[Auto Task] Failed to set session mode:', e)
+    s[key] = prev
+    errorMessage.value = t('sessionFlagFailed')
+  }
+}
+
 // ==================== 数据加载（Tab3 定时任务） ====================
 
 async function loadJobs() {
@@ -603,7 +674,9 @@ async function loadJobs() {
 async function loadConfigs() {
   try {
     const result = await context.commands.execute('auto-task.list-session-configs')
-    configs.value = result?.configs ?? []
+    const allConfigs: SessionConfig[] = result?.configs ?? []
+    // 过滤掉未适配 auto-task 的 agent 的会话配置
+    configs.value = allConfigs.filter((c: SessionConfig) => c.is_supported)
   } catch (e) {
     console.error('[Auto Task] Failed to load session configs:', e)
   }
@@ -704,6 +777,22 @@ async function deleteJob(jobId: string) {
   }
 }
 
+// 一键清空执行档案（仅 executed；missed/failed 需用户单独决定重置或删除）
+async function clearFinished() {
+  const executed = finishedJobs.value.filter((j) => j.status === 'executed')
+  if (executed.length === 0) return
+  errorMessage.value = ''
+  try {
+    for (const job of executed) {
+      await context.commands.execute('auto-task.delete-scheduled-job', { job_id: job.id })
+    }
+    await loadJobs()
+  } catch (e) {
+    console.error('[Auto Task] Failed to clear executed jobs:', e)
+    errorMessage.value = t('scheduledDeleteFailed')
+  }
+}
+
 // ==================== 重新设置（missed / failed → pending） ====================
 
 // 打开重置面板：默认预填当前时间（不改则重置后下一调度周期立即触发执行）
@@ -753,9 +842,16 @@ function formatTime(isoStr: string | null): string {
   if (!isoStr) return '-'
   const d = toDate(isoStr)
   if (!d) return isoStr
-  // 跟随宿主当前语言（zh-CN / en），避免硬编码 zh-CN
+  // 跟随宿主当前语言（zh-CN / en），避免硬编码 zh-CN；
+  // 数据层时间精确到秒（datetime('now')），展示同步到秒
   const locale = context.i18n.getI18n()?.global?.locale?.value ?? 'zh-CN'
-  return d.toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(locale, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 // 秒 → 可读时长（如 "5分钟 30秒" / "3h 20min"）
@@ -781,6 +877,7 @@ let statusDisposable: { dispose(): void } | null = null
 let queueDisposable: { dispose(): void } | null = null
 let scheduledDisposable: { dispose(): void } | null = null
 let presetDisposable: { dispose(): void } | null = null
+let modeDisposable: { dispose(): void } | null = null
 
 onMounted(async () => {
   await Promise.all([refreshRecords(), loadJobs(), loadConfigs(), loadRunningSessions(), loadPresets()])
@@ -791,12 +888,24 @@ onMounted(async () => {
   })
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 
-  // status/queue 变更刷新当前任务 + 任务记录；scheduled 变更刷新定时任务；preset 变更刷新预设区
+  // status/queue 变更刷新当前任务 + 任务记录；scheduled 变更刷新定时任务；preset 变更刷新预设区；
+  // mode 变更同步会话开关状态（定时任务/弹窗等路径修改后当前页不失步）
   statusDisposable = context.events.on('task:status-changed', onLiveChanged)
   queueDisposable = context.events.on('task:queue-changed', onLiveChanged)
   scheduledDisposable = context.events.on('task:scheduled-changed', () => loadJobs())
   presetDisposable = context.events.on('task:preset-changed', () => loadPresets())
+  modeDisposable = context.events.on('session:mode-changed', onModeChanged)
 })
+
+// 会话模式变更：同步对应会话的开关状态
+function onModeChanged(data: any) {
+  const sid = data?.session_id
+  if (!sid) return
+  const s = runningSessions.value.find((x) => x.session_id === sid)
+  if (!s) return
+  if (typeof data.auto_execute === 'boolean') s.auto_execute = data.auto_execute
+  if (typeof data.auto_answer === 'boolean') s.auto_answer = data.auto_answer
+}
 
 onUnmounted(() => {
   if (filterDebounce) clearTimeout(filterDebounce)
@@ -805,6 +914,7 @@ onUnmounted(() => {
   queueDisposable?.dispose()
   scheduledDisposable?.dispose()
   presetDisposable?.dispose()
+  modeDisposable?.dispose()
 })
 
 // 任务状态/队列实时变更：任务记录（含统计）与当前任务 Tab 一起刷新
@@ -1022,6 +1132,51 @@ function onLiveChanged() {
               <p class="text-xs text-[var(--text-tertiary)] mb-1">
                 {{ sessionLabel(s) }} · {{ t('queueCount', { count: s.queue.length }) }}
               </p>
+              <!-- 队列卡片头部：启动（自动执行）/ 自动应答开关；开启自动执行后队列立即调度 -->
+              <div class="flex items-center gap-4 px-3 py-1.5 rounded-md bg-[var(--bg-card)] border border-[var(--border)] mb-1.5">
+                <button
+                  class="inline-flex items-center gap-1.5"
+                  :title="t('autoExecuteHint')"
+                  @click="toggleSessionFlag(s, 'auto_execute')"
+                >
+                  <span
+                    class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                    :class="s.auto_execute ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'"
+                  >
+                    <span
+                      class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                      :class="s.auto_execute ? 'left-[18px] bg-[var(--color-primary-contrast)]' : 'left-[2px] bg-[var(--text-tertiary)]'"
+                    ></span>
+                  </span>
+                  <span
+                    class="text-xs transition-colors duration-200"
+                    :class="s.auto_execute ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'"
+                  >
+                    {{ t('autoExecute') }}
+                  </span>
+                </button>
+                <button
+                  class="inline-flex items-center gap-1.5"
+                  :title="t('autoAnswerHint')"
+                  @click="toggleSessionFlag(s, 'auto_answer')"
+                >
+                  <span
+                    class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                    :class="s.auto_answer ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'"
+                  >
+                    <span
+                      class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                      :class="s.auto_answer ? 'left-[18px] bg-[var(--color-primary-contrast)]' : 'left-[2px] bg-[var(--text-tertiary)]'"
+                    ></span>
+                  </span>
+                  <span
+                    class="text-xs transition-colors duration-200"
+                    :class="s.auto_answer ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'"
+                  >
+                    {{ t('autoAnswer') }}
+                  </span>
+                </button>
+              </div>
               <div class="space-y-1">
                 <div
                   v-for="item in s.queue"
@@ -1358,48 +1513,35 @@ function onLiveChanged() {
         <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('scheduledEmptyHint') }}</p>
       </div>
 
-      <!-- 任务列表（按触发时间升序） -->
+      <!-- 任务列表：进行中在前，历史在后（单循环 + 区段头） -->
       <div v-else class="space-y-2">
-        <div v-for="job in jobs" :key="job.id" class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3">
-          <div class="flex items-start gap-2">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm text-[var(--text-primary)] font-medium truncate">{{ job.name || '-' }}</p>
-              <p class="text-xs text-[var(--text-secondary)] mt-0.5">{{ t('scheduledTriggerAt') }}: {{ formatTime(job.trigger_at) }}</p>
-              <p class="text-xs text-[var(--text-secondary)] mt-0.5">{{ t('scheduledConfig') }}: {{ job.config_id }}</p>
-            </div>
-            <span class="flex-shrink-0" :class="scheduledStatusBadge(job.status)">
-              {{ scheduledStatusLabel[job.status] || job.status }}
-            </span>
-          </div>
-          <div v-if="job.prompts.length" class="mt-2 space-y-0.5">
-            <p v-for="(p, idx) in job.prompts" :key="idx" class="text-xs text-[var(--text-secondary)] truncate">
-              {{ idx + 1 }}. {{ p }}
-            </p>
-          </div>
-          <p v-if="job.error" class="text-xs text-red-500 mt-1.5 break-words">{{ t('scheduledError') }}: {{ job.error }}</p>
-
-          <!-- 操作区：pending 可删除；missed/failed 可删除或重新设置（重置回 pending 重新调度） -->
-          <div v-if="['pending', 'missed', 'failed'].includes(job.status)" class="flex justify-end gap-1 mt-2">
+        <template v-for="item in renderedJobItems" :key="item.header ? `header-${item.group}` : item.job.id">
+          <!-- 区段头：进行中（纯文本）；历史（可折叠 + 一键清空执行档案） -->
+          <div v-if="item.header" class="flex items-center justify-between px-1 pt-1">
             <button
-              v-if="job.status !== 'pending'"
-              class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
-              :title="t('scheduledReset')"
-              @click="startReset(job)"
+              v-if="item.group === 'finished'"
+              class="inline-flex items-center gap-1 h-6 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors duration-200"
+              @click="finishedCollapsed = !finishedCollapsed"
             >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 4v5h5M20 20v-5h-5M4.1 9a8 8 0 0115.4-1M19.9 15a8 8 0 01-15.4 1"
-                />
+              <svg
+                class="w-3.5 h-3.5 transition-transform duration-200"
+                :class="{ 'rotate-90': !finishedCollapsed }"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
               </svg>
-              {{ t('scheduledReset') }}
+              {{ t('scheduledSectionFinished') }} ({{ finishedJobs.length }})
             </button>
+            <span v-else class="inline-flex items-center h-6 text-xs font-medium text-[var(--text-secondary)]">
+              {{ t('scheduledSectionActive') }} ({{ activeJobs.length }})
+            </span>
             <button
-              class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-red-500 hover:bg-red-500/10 transition-colors duration-200"
-              :title="t('delete')"
-              @click="deleteJob(job.id)"
+              v-if="item.group === 'finished' && executedCount > 0"
+              class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+              :title="t('scheduledClearFinished')"
+              @click="clearFinished"
             >
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -1409,48 +1551,103 @@ function onLiveChanged() {
                   d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
                 />
               </svg>
-              {{ t('delete') }}
+              {{ t('scheduledClearFinished') }}
             </button>
           </div>
 
-          <!-- 重新设置面板：选择新触发时间（默认当前时间），确认后回到 pending 重新调度 -->
-          <div v-if="resettingId === job.id" class="mt-2 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-2.5 space-y-2">
-            <div>
-              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledTriggerAt') }}</label>
-              <Datepicker
-                v-model="resetTriggerAt"
-                :format="dateFormat"
-                :locale="dateLocale"
-                :dark="isDark"
-                :clearable="false"
-                :enable-time-picker="true"
-                :select-text="dpSelectText"
-                :cancel-text="dpCancelText"
-                :now-button-label="dpNowLabel"
-                :teleport="'body'"
-                :placeholder="t('scheduledTriggerAt')"
-              />
-              <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
-                {{ t('scheduledResetHint') }}
-                {{ t('scheduledUtcHint', { time: resetUtcPreview }) }}
+          <!-- 任务卡片 -->
+          <div v-else class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3">
+            <div class="flex items-start gap-2">
+              <div class="flex-1 min-w-0">
+                <p class="text-sm text-[var(--text-primary)] font-medium truncate">{{ item.job.name || '-' }}</p>
+                <p class="text-xs text-[var(--text-secondary)] mt-0.5">{{ t('scheduledTriggerAt') }}: {{ formatTime(item.job.trigger_at) }}</p>
+                <p class="text-xs text-[var(--text-secondary)] mt-0.5">{{ t('scheduledConfig') }}: {{ item.job.config_id }}</p>
+              </div>
+              <span class="flex-shrink-0" :class="scheduledStatusBadge(item.job.status)">
+                {{ scheduledStatusLabel[item.job.status] || item.job.status }}
+              </span>
+            </div>
+            <div v-if="item.job.prompts.length" class="mt-2 space-y-0.5">
+              <p v-for="(p, idx) in item.job.prompts" :key="idx" class="text-xs text-[var(--text-secondary)] truncate">
+                {{ idx + 1 }}. {{ p }}
               </p>
             </div>
-            <div class="flex gap-1.5">
+            <p v-if="item.job.error" class="text-xs text-red-500 mt-1.5 break-words">{{ t('scheduledError') }}: {{ item.job.error }}</p>
+
+            <!-- 操作区：pending 可删除；missed/failed 可删除或重新设置（重置回 pending 重新调度）；executed 可删除（清档） -->
+            <div v-if="['pending', 'missed', 'failed', 'executed'].includes(item.job.status)" class="flex justify-end gap-1 mt-2">
               <button
-                class="flex-1 h-7 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
-                @click="resetJob(job.id)"
+                v-if="item.job.status !== 'pending' && item.job.status !== 'executed'"
+                class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                :title="t('scheduledReset')"
+                @click="startReset(item.job)"
               >
-                {{ t('confirm') }}
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 4v5h5M20 20v-5h-5M4.1 9a8 8 0 0115.4-1M19.9 15a8 8 0 01-15.4 1"
+                  />
+                </svg>
+                {{ t('scheduledReset') }}
               </button>
               <button
-                class="flex-1 h-7 rounded-[6px] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                @click="cancelReset"
+                class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                :title="t('delete')"
+                @click="deleteJob(item.job.id)"
               >
-                {{ t('cancel') }}
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                  />
+                </svg>
+                {{ t('delete') }}
               </button>
             </div>
+
+            <!-- 重新设置面板：选择新触发时间（默认当前时间），确认后回到 pending 重新调度 -->
+            <div v-if="resettingId === item.job.id" class="mt-2 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-2.5 space-y-2">
+              <div>
+                <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('scheduledTriggerAt') }}</label>
+                <Datepicker
+                  v-model="resetTriggerAt"
+                  :format="dateFormat"
+                  :locale="dateLocale"
+                  :dark="isDark"
+                  :clearable="false"
+                  :enable-time-picker="true"
+                  :select-text="dpSelectText"
+                  :cancel-text="dpCancelText"
+                  :now-button-label="dpNowLabel"
+                  :teleport="'body'"
+                  :placeholder="t('scheduledTriggerAt')"
+                />
+                <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+                  {{ t('scheduledResetHint') }}
+                  {{ t('scheduledUtcHint', { time: resetUtcPreview }) }}
+                </p>
+              </div>
+              <div class="flex gap-1.5">
+                <button
+                  class="flex-1 h-7 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
+                  @click="resetJob(item.job.id)"
+                >
+                  {{ t('confirm') }}
+                </button>
+                <button
+                  class="flex-1 h-7 rounded-[6px] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                  @click="cancelReset"
+                >
+                  {{ t('cancel') }}
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
     </div>
 

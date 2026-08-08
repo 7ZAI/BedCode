@@ -55,7 +55,7 @@
                 </Transition>
               </div>
               <button
-                class="p-1.5 rounded-lg bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150 flex-shrink-0"
+                class="p-1.5 rounded-lg bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-all duration-150 flex-shrink-0"
                 :disabled="!fileExplorerSessionId"
                 @click="showFileExplorer = true"
               >
@@ -87,20 +87,20 @@
                 v-model="form.content"
                 :placeholder="t('mobile.toolbox.taskContentPlaceholder')"
                 rows="8"
-                class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2.5 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors resize-none flex-1 min-h-[160px]"
+                class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2.5 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[color:color-mix(in_srgb,var(--mobile-accent)_50%,transparent)] transition-colors resize-none flex-1 min-h-[160px]"
               ></textarea>
             </div>
           </div>
 
           <div class="flex gap-3 mt-6 flex-shrink-0">
             <button
-              class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 active:opacity-80 transition-colors"
+              class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[color:color-mix(in_srgb,var(--mobile-accent)_40%,transparent)] active:opacity-80 transition-colors"
               @click="emit('close')"
             >
               {{ t('common.button.cancel') }}
             </button>
             <button
-              class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150"
+              class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-all duration-150"
               :class="{ 'opacity-50': !form.content }"
               :disabled="!form.content"
               @click="handleSave"

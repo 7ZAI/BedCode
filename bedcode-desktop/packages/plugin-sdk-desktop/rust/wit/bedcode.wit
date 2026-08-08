@@ -104,6 +104,10 @@ interface host-session {
     lifecycle-register: func() -> result<_, string>;
     input-register: func() -> result<_, string>;
     create: func(config-id: string) -> result<string, string>;
+    /// 关闭（终止）会话（v7）：停止 PTY 并置 Stopped，会话记录保留
+    /// （与用户手动关闭一致）；宿主分发 Stopping/Stopped 生命周期事件。
+    /// 供插件在定时自动任务执行完后清理自己创建的会话。
+    close: func(session-id: string) -> result<_, string>;
 }
 
 /// 主数据库（原 database.rs：db_execute/query/execute_params/query_params）

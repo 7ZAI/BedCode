@@ -41,8 +41,12 @@ async function handlePickRoot(): Promise<void> {
   try {
     const path = await context.fileService.pickDirectory()
     if (path) {
-      const ok = await props.settingsApi.addRoot(path)
-      if (!ok) context.dialogs.showToast(t('transfer.settings.pickDupOrFailed'), 'warning')
+      const result = await props.settingsApi.addRoot(path)
+      if (result === 'duplicate') {
+        context.dialogs.showToast(t('transfer.settings.rootDuplicate'), 'warning')
+      } else if (result === 'failed') {
+        context.dialogs.showToast(t('transfer.settings.addRootFailed'), 'error')
+      }
     }
     // 取消（null）静默
   } catch {
@@ -54,11 +58,17 @@ async function handlePickRoot(): Promise<void> {
 
 async function handleAddRoot(): Promise<void> {
   const path = newRoot.value
-  if (!path.trim()) return
+  if (!path.trim() || !context) return
   adding.value = true
   try {
-    const ok = await props.settingsApi.addRoot(path)
-    if (ok) newRoot.value = ''
+    const result = await props.settingsApi.addRoot(path)
+    if (result === 'ok') {
+      newRoot.value = ''
+    } else if (result === 'duplicate') {
+      context.dialogs.showToast(t('transfer.settings.rootDuplicate'), 'warning')
+    } else {
+      context.dialogs.showToast(t('transfer.settings.addRootFailed'), 'error')
+    }
   } finally {
     adding.value = false
   }
@@ -76,6 +86,13 @@ function decConcurrency(): void {
 function incConcurrency(): void {
   const cur = props.settingsApi.settings.value.concurrency
   if (cur < CONCURRENCY_MAX) void props.settingsApi.setConcurrency(cur + 1)
+}
+
+/** 点击下载目录行：提示固定下载位置（只读，无选择交互） */
+function showDownloadHint(): void {
+  if (context) {
+    context.dialogs.showToast(t('transfer.settings.downloadDirHint'), 'info')
+  }
 }
 </script>
 
@@ -141,7 +158,12 @@ function incConcurrency(): void {
     <section class="space-y-2">
       <h2 class="settings-section-title">{{ t('transfer.settings.downloadDir') }}</h2>
       <div class="settings-group">
-        <div class="settings-row">
+        <div
+          class="settings-row"
+          role="button"
+          tabindex="0"
+          @click="showDownloadHint()"
+        >
           <div class="flex items-center gap-2 flex-1 min-w-0">
             <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />

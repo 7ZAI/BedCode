@@ -706,40 +706,18 @@ onUnmounted(() => {
   overflow-x: hidden;
 }
 
+/* xterm 6 中 .xterm-viewport 不承载滚动（内容高度=视口高度，滚动由
+   .xterm-scrollable-element 的 JS 状态驱动），其原生滚动条永远满格且拖不动，
+   会误导用户认为滚动失效。隐藏它，滚动条统一由 xterm 自绘 slider 提供。 */
 :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 6px;
+  display: none;
 }
 
-:deep(.xterm-viewport)::-webkit-scrollbar-track {
-  background: transparent;
-  margin: 8px 2px;
-  border-radius: 3px;
-}
-
-:deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.25);
-  border-radius: 3px;
-  transition: background 0.2s ease;
-}
-
-:deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.5);
-}
-
-:deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.35);
-}
-
-.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-}
-
-.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.dark :deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+/* xterm 自绘滚动条（.xterm-scrollable-element > .scrollbar）默认仅鼠标悬停
+   时显示（VS Code 风格），且 slider 高度可能只有最小保护值，深色主题下几乎
+   不可见。强制常显，让用户能发现并拖动真正的滚动条。 */
+:deep(.xterm .xterm-scrollable-element > .scrollbar.vertical) {
+  opacity: 1 !important;
+  transition: none;
 }
 </style>
