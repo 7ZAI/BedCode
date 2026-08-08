@@ -198,7 +198,7 @@ impl WasmPlugin for FileTransferPlugin {
 
             "file-transfer.set-concurrency" => commands::set_concurrency(&mut s, &host, &args),
 
-            "file-transfer.get-settings" => Ok(commands::get_settings(&s)),
+            "file-transfer.get-settings" => Ok(commands::get_settings(&s, &host)),
 
             "file-transfer.set-settings" => {
                 let result = commands::set_settings(&mut s, &host, &args)?;

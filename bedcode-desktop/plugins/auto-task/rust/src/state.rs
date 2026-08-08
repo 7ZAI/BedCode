@@ -194,6 +194,62 @@ pub fn has_terminal_task(host: &WasmHost, session_id: &str) -> bool {
         > 0
 }
 
+/// 会话结束时兜底中断仍在运行的任务（意外退出兜底）
+///
+/// 会话意外退出（进程崩溃 / 用户强制关闭 / 直接结束会话）时，agent 的
+/// Stop hook 没有机会推送终态，task_history 中 in_progress / asking 的任务行
+/// 会永久卡在运行中状态。宿主在会话停止后分发 Stopped 生命周期事件，
+/// 插件据此用当前 session_id 查询运行中任务并统一置为 interrupted，
+/// 保证任务状态机收敛到终态（completed / interrupted 之一）。
+///
+/// 仅影响运行中状态行（in_progress / asking）：正常退出场景下 Stop hook
+/// 已推送 completed / interrupted 终态，已终态的行不受影响，此处是纯兜底。
+pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str) {
+    const REASON: &str = "Session ended unexpectedly (task interrupted)";
+
+    let affected = host
+        .plugin_db_execute_params(
+            "UPDATE task_history SET status = 'interrupted', exit_reason = ?1, \
+             completed_at = datetime('now'), updated_at = datetime('now') \
+             WHERE session_id = ?2 AND status IN ('in_progress', 'asking')",
+            &sql_params![REASON, session_id],
+        )
+        .unwrap_or(0);
+
+    // 无运行中任务（正常退出 / 空闲会话）无需广播
+    if affected <= 0 {
+        return;
+    }
+
+    host.log_info(&format!(
+        "Session ended: interrupted {} running task(s) for session_id={}",
+        affected, session_id
+    ));
+
+    // 广播状态变更到移动端 + 消息总线 + 前端 UI，保证全局状态一致
+    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
+        session_id: session_id.to_string(),
+        task_status: "interrupted".to_string(),
+        task_reason: Some(REASON.to_string()),
+        task_questions: None,
+    });
+    let _ = host.bus_publish(
+        EVENT_TASK_STATUS_CHANGED,
+        &serde_json::json!({
+            "session_id": session_id,
+            "task_status": "interrupted",
+        }),
+    );
+    host.emit_event(
+        EVENT_TASK_STATUS_CHANGED,
+        &serde_json::json!({
+            "session_id": session_id,
+            "taskStatus": "interrupted",
+            "taskReason": REASON,
+        }),
+    );
+}
+
 /// 写入任务行（队列出队 / 定时触发调度共用）
 ///
 /// 出队时由插件直接创建任务记录（description = 任务发起输入），

@@ -1720,17 +1720,26 @@ function onLiveChanged() {
 </template>
 
 <style scoped>
-/* Tab 切换过渡：淡入淡出 + 轻微 Y 位移，避免切换闪现 */
-.tab-fade-enter-active,
+/*
+ * Tab 切换过渡：out-in 模式。
+ * 旧面板快速淡出上移，新面板随后从下方滑入插入（slide-up + fade + 轻微缩放），
+ * 缓出曲线带出顺畅感，避免内容直接闪现的生硬切换。
+ */
 .tab-fade-leave-active {
-  transition: opacity 0.16s ease, transform 0.16s ease;
-}
-.tab-fade-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
 }
 .tab-fade-leave-to {
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(-6px);
+}
+.tab-fade-enter-active {
+  transition:
+    opacity 0.26s cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: opacity, transform;
+}
+.tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(14px) scale(0.985);
 }
 </style>

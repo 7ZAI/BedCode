@@ -437,8 +437,19 @@ pub fn set_concurrency(
 }
 
 /// get-settings：返回当前设置
-pub fn get_settings(state: &PluginState) -> serde_json::Value {
-    serde_json::to_value(&state.settings).unwrap_or_default()
+///
+/// download_dir 为空时（未显式配置）解析宿主默认下载目录填充，
+/// 使前端设置页能展示实际落盘地址而非「未设置」。
+pub fn get_settings(state: &PluginState, host: &impl HostConfig) -> serde_json::Value {
+    let mut settings = state.settings.clone();
+    if settings.download_dir.is_empty() {
+        if let Ok(Some(dir)) = host
+            .config_get(bedcode_plugin_api_mobile::host::ConfigKey::AppDownloadsDir)
+        {
+            settings.download_dir = dir;
+        }
+    }
+    serde_json::to_value(&settings).unwrap_or_default()
 }
 
 /// set-settings：更新设置

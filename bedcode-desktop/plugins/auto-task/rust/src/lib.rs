@@ -869,6 +869,22 @@ impl WasmPlugin for AutoTaskPlugin {
                 ));
                 scheduled::handle_session_created(&host, session_id, config_id);
             }
+            // Stopped：会话停止后（PTY 已终止，异步通知）— 意外退出兜底
+            //
+            // 会话意外退出（进程崩溃 / 用户强杀 / 直接结束会话）时，agent 的
+            // Stop hook 不会有机会推送终态，task_history 中仍处 in_progress /
+            // asking 的任务行会永久卡在运行中。此处用当前 session_id 查询这些
+            // 运行中任务并统一置为 interrupted（仅影响运行中行，已终态不受动，
+            // 正常退出时 Stop hook 推送的 completed 不会被覆盖）。
+            // 不使用 Stopping：PTY 尚未终止，agent 可能仍在推送最终状态。
+            SessionLifecycleEvent::Stopped { session_id, .. } => {
+                let host = WasmHost;
+                host.log_debug(&format!(
+                    "on_session_lifecycle: Stopped event session_id={}",
+                    session_id
+                ));
+                state::interrupt_running_tasks_on_session_end(&host, session_id);
+            }
             _ => {}
         }
         Ok(())

@@ -85,7 +85,7 @@ export default {
   'transfer.settings.downloadDirHint': '下载固定保存到系统下载目录',
   'transfer.settings.concurrency': '并发数',
   'transfer.settings.concurrencyHint': '同时传输的文件数（1–8）',
-  'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任的 WiFi 网络中使用',
+  'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任 WiFi 网络中使用',
   'transfer.settings.saved': '设置已保存',
 
   // ==================== 对话框 / 通知 ====================

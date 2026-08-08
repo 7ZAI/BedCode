@@ -6,7 +6,7 @@
  */
 
 import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, SettingsSectionDescriptor, PluginRouteDescriptor } from './types'
-import { ref, type Ref } from 'vue'
+import { ref, markRaw, type Ref } from 'vue'
 
 /** 注册的工具箱视图 */
 interface RegisteredToolboxView {
@@ -82,8 +82,10 @@ class PluginRegistryClass {
       viewId: page.id,
       title: page.title,
       icon: page.icon,
-      component: page.component,
-      entry: page.entry,
+      // markRaw：组件进入响应式数组会被 Vue 深代理，渲染时触发
+      // "Component was made a reactive object" 警告且增加无谓开销
+      component: markRaw(page.component),
+      entry: markRaw(page.entry),
     })
     this.updateReactiveToolboxViews()
     return {
@@ -102,7 +104,7 @@ class PluginRegistryClass {
       id: tab.id,
       title: tab.title,
       icon: tab.icon,
-      component: tab.component,
+      component: markRaw(tab.component),
       order: tab.order,
     })
     this.updateReactiveNavTabs()
@@ -140,7 +142,7 @@ class PluginRegistryClass {
       pluginId,
       id: section.id,
       section: section.section,
-      component: section.component,
+      component: markRaw(section.component),
     })
     this.updateReactiveSettingsSections()
     return {
@@ -159,7 +161,7 @@ class PluginRegistryClass {
       routeId: route.id,
       title: route.title,
       header: route.header ?? true,
-      component: route.component,
+      component: markRaw(route.component),
     }
     this.routesMap.set(key, rec)
     this.updateReactiveRoutes()

@@ -126,6 +126,7 @@ async function syncToolbarEntry(context: PluginContext) {
 
 let toolbarDisposable: { dispose(): void } | null = null
 let stopSessionWatch: (() => void) | null = null
+let stopConnectionWatch: (() => void) | null = null
 
 // ==================== 激活 ====================
 
@@ -140,14 +141,37 @@ export async function activate(context: PluginContext): Promise<void> {
 
   // 从后端获取适配 agent 白名单（权威来源 Rust AGENT_PROFILES），缓存后供 syncToolbarEntry 使用
   const mobileApi = getMobileApi()
-  try {
-    const result = await mobileApi.httpListSupportedAgents()
-    if (result.code === 0 && result.data) {
-      supportedAgents = result.data.agents || []
+
+  /** 拉取适配 agent 白名单并缓存（未连接时对端不可达，失败保持旧值） */
+  async function refreshSupportedAgents() {
+    try {
+      const result = await mobileApi.httpListSupportedAgents()
+      if (result.code === 0 && result.data) {
+        supportedAgents = result.data.agents || []
+      }
+    } catch (e) {
+      console.warn('[AutoTask] Failed to load supported agents:', e)
     }
-  } catch (e) {
-    console.warn('[AutoTask] Failed to load supported agents:', e)
   }
+
+  // 启动时未连接则跳过首次请求（对空 baseUrl 发起 REST 调用只会命中宿主的
+  // "No base URL set" 错误日志）；连接建立后再拉取
+  if (mobileApi.isConnected?.value) {
+    await refreshSupportedAgents()
+  }
+
+  // 连接建立后白名单才有意义：监听连接状态，连上时拉取并重算工具栏入口
+  // （避免 connect 后 supportedAgents 仍为空导致适配 agent 入口永远不显示）
+  stopConnectionWatch = watch(
+    () => mobileApi.isConnected?.value,
+    (connected) => {
+      if (!connected) return
+      void (async () => {
+        await refreshSupportedAgents()
+        syncToolbarEntry(context)
+      })()
+    },
+  )
 
   // 工具栏入口仅对插件适配的 agent 会话显示：监听活动会话变化动态注册/注销
   stopSessionWatch = watch(
@@ -164,6 +188,8 @@ export async function activate(context: PluginContext): Promise<void> {
 }
 
 export async function deactivate(): Promise<void> {
+  stopConnectionWatch?.()
+  stopConnectionWatch = null
   stopSessionWatch?.()
   stopSessionWatch = null
   toolbarDisposable?.dispose()

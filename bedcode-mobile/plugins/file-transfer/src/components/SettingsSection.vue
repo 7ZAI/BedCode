@@ -4,13 +4,14 @@
  *
  * 共享目录管理：Android 优先用 SAF 系统目录选择器（fileService.pickDirectory，
  * 免存储权限）；不支持的 provider / iOS 降级为手动输入绝对路径 + 列表增删。
- * 下载目录只读展示（下载固定落系统 AppDownloadsDir，pick-download-dir 不适用）。
+ * 下载目录只读展示（未显式配置时经 get-settings 解析宿主默认下载目录 AppDownloadsDir）。
  * 并发数 1–8 步进；底部常驻明文传输安全告知（spec §10 transfer.settings.plainWarning）。
  *
  * 同时注册为宿主 SettingsSection（registerSettingsSection），并作为插件内设置页复用。
  *
  * 样式完全复用宿主 settings-group / settings-row / settings-section-title /
- * settings-label / settings-desc 设计语言，字号统一 clamp() 流式缩放。
+ * settings-label / settings-desc 设计语言，字号统一 clamp() 流式缩放；
+ * 提示与安全告知统一使用黄色提醒框（ft-warning-box）。
  */
 import { ref, inject } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
@@ -87,43 +88,48 @@ function incConcurrency(): void {
   const cur = props.settingsApi.settings.value.concurrency
   if (cur < CONCURRENCY_MAX) void props.settingsApi.setConcurrency(cur + 1)
 }
-
-/** 点击下载目录行：提示固定下载位置（只读，无选择交互） */
-function showDownloadHint(): void {
-  if (context) {
-    context.dialogs.showToast(t('transfer.settings.downloadDirHint'), 'info')
-  }
-}
 </script>
 
 <template>
-  <div class="ft-settings px-4 py-4 space-y-5">
+  <div class="ft-settings px-4 py-4 space-y-6">
     <!-- ==================== 共享目录 ==================== -->
-    <section class="space-y-2">
+    <section class="space-y-3">
       <h2 class="settings-section-title">{{ t('transfer.settings.sharedRoots') }}</h2>
-      <p class="settings-desc ft-settings-hint">{{ t('transfer.settings.addRootHint') }}</p>
 
-      <!-- 系统选择器 + 手动输入兜底 -->
-      <div class="flex gap-2 mb-2">
-        <button
-          class="flex-shrink-0 ft-touch-btn px-4 rounded-xl text-white bg-[var(--mobile-accent)] active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
-          :disabled="picking"
-          @click="handlePickRoot()"
-        >
-          {{ picking ? '…' : t('transfer.settings.pickRoot') }}
-        </button>
+      <!-- 使用说明：黄色提醒框（与底部明文安全告知同款视觉） -->
+      <div class="ft-warning-box">
+        <p class="ft-warning-text">{{ t('transfer.settings.addRootHint') }}</p>
+      </div>
+
+      <!-- 系统选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
+      <button
+        class="ft-touch-btn w-full gap-2 rounded-xl text-[var(--mobile-text-on-accent)] bg-[var(--mobile-accent)] active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
+        :disabled="picking"
+        @click="handlePickRoot()"
+      >
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+        {{ picking ? '…' : t('transfer.settings.pickRoot') }}
+      </button>
+
+      <!-- 手动输入兜底：输入框独立占一行（通栏、44px+ 高度），下方配添加按钮 -->
+      <div class="space-y-2">
         <input
           v-model="newRoot"
           type="text"
           :placeholder="t('transfer.dialog.localDirPlaceholder')"
-          class="flex-1 min-w-0 ft-settings-input"
+          class="w-full ft-settings-input"
           @keydown.enter="handleAddRoot()"
         />
         <button
-          class="flex-shrink-0 ft-touch-btn px-4 rounded-xl ft-btn-neutral active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
+          class="ft-touch-btn w-full gap-2 rounded-xl ft-btn-neutral active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
           :disabled="adding || !newRoot.trim()"
           @click="handleAddRoot()"
         >
+          <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
           {{ t('transfer.settings.addRoot') }}
         </button>
       </div>
@@ -154,16 +160,11 @@ function showDownloadHint(): void {
       </div>
     </section>
 
-    <!-- ==================== 下载目录（只读） ==================== -->
+    <!-- ==================== 下载目录（只读，未配置时展示默认落盘地址） ==================== -->
     <section class="space-y-2">
       <h2 class="settings-section-title">{{ t('transfer.settings.downloadDir') }}</h2>
       <div class="settings-group">
-        <div
-          class="settings-row"
-          role="button"
-          tabindex="0"
-          @click="showDownloadHint()"
-        >
+        <div class="settings-row">
           <div class="flex items-center gap-2 flex-1 min-w-0">
             <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -174,6 +175,7 @@ function showDownloadHint(): void {
           </div>
         </div>
       </div>
+      <p class="settings-desc ft-settings-hint">{{ t('transfer.settings.downloadDirHint') }}</p>
     </section>
 
     <!-- ==================== 并发数 ==================== -->
@@ -216,11 +218,10 @@ function showDownloadHint(): void {
 </template>
 
 <style scoped>
-/* 设置提示文字 */
+/* 设置区次级说明文字 */
 .ft-settings-hint {
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
   color: var(--mobile-text-muted);
-  margin-bottom: 0.25rem;
 }
 
 /* 设置按钮流式字号 */
@@ -229,20 +230,25 @@ function showDownloadHint(): void {
   font-weight: 500;
 }
 
-/* 输入框：复用宿主 settings-number-input 风格 */
+/* 输入框：独立一行通栏，高度对齐触控按钮（44px+），placeholder 走 token */
 .ft-settings-input {
-  padding: 0.4375rem 0.75rem;
+  min-height: clamp(2.5rem, 2.625rem + (100vw - 400px) / 800 * 0.25rem, 2.875rem);
+  padding: 0.5rem 0.875rem;
   font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem);
   color: var(--mobile-text-primary);
   background: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
-  border-radius: 0.625rem;
+  border-radius: 0.75rem;
   outline: none;
   transition: border-color 0.15s ease;
 }
 
+.ft-settings-input::placeholder {
+  color: var(--mobile-input-placeholder);
+}
+
 .ft-settings-input:focus {
-  border-color: var(--mobile-accent);
+  border-color: var(--mobile-input-focus);
 }
 
 /* 删除按钮 */
@@ -268,7 +274,7 @@ function showDownloadHint(): void {
   border: 1px solid var(--mobile-border);
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-primary);
-  font-size: 1.125rem;
+  font-size: var(--font-size-xl);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -288,7 +294,7 @@ function showDownloadHint(): void {
   color: var(--mobile-text-primary);
 }
 
-/* 安全告知 */
+/* 黄色提醒框（使用说明 / 安全告知共用） */
 .ft-warning-box {
   padding: 0.75rem 1rem;
   border-radius: 0.75rem;
