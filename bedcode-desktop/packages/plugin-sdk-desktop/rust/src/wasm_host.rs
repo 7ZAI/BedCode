@@ -1,65 +1,66 @@
-//! WASM 插件侧宿主 API 绑定
+//! WASM 插件侧宿主 API 绑定（Component Model 形态，迁移阶段 B）
 //!
-//! [`WasmHost`] 以 WASM import 后端实现 `host/*` 全部功能 trait，
-//! 插件通过这些调用访问宿主能力。编译为 WASM 时，调用对应宿主在
-//! wasmtime Linker 中注册的 host functions。
-//! 线性内存字符串通过 (ptr, len) 对传递，使用 wasm_alloc_string/wasm_read_string 辅助。
+//! [`WasmHost`] 以组件 import 后端实现 `host/*` 全部功能 trait，
+//! 插件通过这些调用访问宿主能力。编译为 WASM 组件时，调用 wit-bindgen
+//! 生成的 import 函数（`crate::wasm::bedcode::plugin::<iface>::<fn>`），
+//! 宿主侧由 `wasm_runtime::component` 的 `add_to_linker` 注册的 Host trait 响应。
 //!
-//! 插件身份（plugin_id）由宿主侧 Caller state 维护并注入各 host function，
+//! 与旧 ABI（extern "C" + (ptr,len) 内存搬运）的差异：
+//! - 内存搬运由绑定层处理，无 alloc/dealloc 配对，杜绝泄漏
+//! - 错误经 WIT `result<T, string>` 透传宿主可读消息（旧 ABI 仅 -1 状态码）
+//! - 日志不再附带插件调用点 file/line（WIT host-log 暂无该通道，见契约注释）
+//!
+//! 插件身份（plugin_id）由宿主侧 Caller state 维护并注入各 import，
 //! 插件侧无需持有 —— `WasmHost` 是无状态 unit struct。
+//! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
     ConfigKey, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService, HostFs,
     HostHttp, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTerminal, HostTransfer,
 };
 use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest};
+use crate::wasm::bedcode::plugin::{
+    host_bus, host_config, host_database, host_events, host_file_service, host_fs, host_http,
+    host_log, host_plugin_database, host_session, host_storage, host_terminal, host_timer,
+    host_transfer,
+};
 
 /// 宿主 API 绑定（WASM 插件侧）
 ///
-/// 无状态 unit struct，通过 WASM import 调用宿主注册的 host functions。
+/// 无状态 unit struct，通过组件 import 调用宿主注册的 host 接口。
 /// 实现了 `host/*` 模块的全部功能 trait（自动获得 `HostApi` 聚合 trait）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WasmHost;
+
+/// 宿主错误 → SDK HostError（WIT `result<T, string>` 的错误串即宿主可读消息）
+fn host_err(api: &str, msg: String) -> HostError {
+    HostError::custom(-1, format!("{}: {}", api, msg))
+}
+
+/// 宿主返回的 JSON 字符串 → serde_json::Value
+fn parse_json(api: &str, s: String) -> Result<serde_json::Value, HostError> {
+    serde_json::from_str(&s)
+        .map_err(|e| HostError::custom(-1, format!("{}: invalid JSON from host: {}", api, e)))
+}
 
 // ==================== HostStorage ====================
 
 impl HostStorage for WasmHost {
     fn storage_get(&self, key: &str) -> Result<Option<serde_json::Value>, HostError> {
-        let (key_ptr, key_len) = wasm_alloc_string(key);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_storage_get(key_ptr, key_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("storage_get"));
+        match host_storage::get(key).map_err(|e| host_err("storage_get", e))? {
+            Some(s) => parse_json("storage_get", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("storage_get: invalid JSON from host: {}", e)))
     }
 
     fn storage_set(&self, key: &str, value: &serde_json::Value) -> Result<(), HostError> {
-        let (key_ptr, key_len) = wasm_alloc_string(key);
-        let val_str = serde_json::to_string(value).unwrap_or_default();
-        let (val_ptr, val_len) = wasm_alloc_string(&val_str);
-        let status = unsafe { host_storage_set(key_ptr, key_len, val_ptr, val_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("storage_set"))
-        }
+        let val_str = serde_json::to_string(value)
+            .map_err(|e| HostError::custom(-1, format!("storage_set: serialize failed: {}", e)))?;
+        host_storage::set(key, &val_str).map_err(|e| host_err("storage_set", e))
     }
 
     fn storage_delete(&self, key: &str) -> Result<(), HostError> {
-        let (key_ptr, key_len) = wasm_alloc_string(key);
-        let status = unsafe { host_storage_delete(key_ptr, key_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("storage_delete"))
-        }
+        host_storage::delete(key).map_err(|e| host_err("storage_delete", e))
     }
 }
 
@@ -67,129 +68,77 @@ impl HostStorage for WasmHost {
 
 impl HostDatabase for WasmHost {
     fn db_execute(&self, sql: &str) -> Result<i32, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
-        let affected = unsafe { host_db_execute(sql_ptr, sql_len) };
-        if affected >= 0 {
-            Ok(affected)
-        } else {
-            Err(HostError::call_failed("db_execute"))
-        }
+        host_database::execute(sql)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("db_execute", e))
     }
 
     fn db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_db_query(sql_ptr, sql_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("db_query"));
+        match host_database::query(sql).map_err(|e| host_err("db_query", e))? {
+            Some(s) => parse_json("db_query", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("db_query: invalid JSON from host: {}", e)))
     }
 
     fn db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
         let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        let (params_ptr, params_len) = wasm_alloc_string(&params_str);
-        let affected = unsafe { host_db_execute_params(sql_ptr, sql_len, params_ptr, params_len) };
-        if affected >= 0 {
-            Ok(affected)
-        } else {
-            Err(HostError::call_failed("db_execute_params"))
-        }
+        host_database::execute_params(sql, &params_str)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("db_execute_params", e))
     }
 
-    fn db_query_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<Option<serde_json::Value>, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
+    fn db_query_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<Option<serde_json::Value>, HostError> {
         let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        let (params_ptr, params_len) = wasm_alloc_string(&params_str);
-        let mut out = [0u32; 2];
-        let status = unsafe {
-            host_db_query_params(sql_ptr, sql_len, params_ptr, params_len, out.as_mut_ptr() as u32)
-        };
-        if status != 0 {
-            return Err(HostError::call_failed("db_query_params"));
+        match host_database::query_params(sql, &params_str)
+            .map_err(|e| host_err("db_query_params", e))?
+        {
+            Some(s) => parse_json("db_query_params", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("db_query_params: invalid JSON from host: {}", e)))
     }
 }
 
 impl HostPluginDatabase for WasmHost {
     fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
-        let affected = unsafe { host_plugin_db_execute(sql_ptr, sql_len) };
-        if affected >= 0 {
-            Ok(affected)
-        } else {
-            Err(HostError::call_failed("plugin_db_execute"))
-        }
+        host_plugin_database::execute(sql)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute", e))
     }
 
     fn plugin_db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_plugin_db_query(sql_ptr, sql_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("plugin_db_query"));
-        }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("plugin_db_query: invalid JSON from host: {}", e)))
-    }
-
-    fn plugin_db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
-        let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        let (params_ptr, params_len) = wasm_alloc_string(&params_str);
-        let affected = unsafe {
-            host_plugin_db_execute_params(sql_ptr, sql_len, params_ptr, params_len)
-        };
-        if affected >= 0 {
-            Ok(affected)
-        } else {
-            Err(HostError::call_failed("plugin_db_execute_params"))
+        match host_plugin_database::query(sql).map_err(|e| host_err("plugin_db_query", e))? {
+            Some(s) => parse_json("plugin_db_query", s).map(Some),
+            None => Ok(None),
         }
     }
 
-    fn plugin_db_query_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<Option<serde_json::Value>, HostError> {
-        let (sql_ptr, sql_len) = wasm_alloc_string(sql);
+    fn plugin_db_execute_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<i32, HostError> {
         let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        let (params_ptr, params_len) = wasm_alloc_string(&params_str);
-        let mut out = [0u32; 2];
-        let status = unsafe {
-            host_plugin_db_query_params(
-                sql_ptr,
-                sql_len,
-                params_ptr,
-                params_len,
-                out.as_mut_ptr() as u32,
-            )
-        };
-        if status != 0 {
-            return Err(HostError::call_failed("plugin_db_query_params"));
+        host_plugin_database::execute_params(sql, &params_str)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute_params", e))
+    }
+
+    fn plugin_db_query_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<Option<serde_json::Value>, HostError> {
+        let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
+        match host_plugin_database::query_params(sql, &params_str)
+            .map_err(|e| host_err("plugin_db_query_params", e))?
+        {
+            Some(s) => parse_json("plugin_db_query_params", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("plugin_db_query_params: invalid JSON from host: {}", e)))
     }
 }
 
@@ -197,14 +146,7 @@ impl HostPluginDatabase for WasmHost {
 
 impl HostTerminal for WasmHost {
     fn terminal_send(&self, session_id: &str, data: &str) -> Result<(), HostError> {
-        let (sid_ptr, sid_len) = wasm_alloc_string(session_id);
-        let (data_ptr, data_len) = wasm_alloc_string(data);
-        let status = unsafe { host_terminal_send(sid_ptr, sid_len, data_ptr, data_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("terminal_send"))
-        }
+        host_terminal::send(session_id, data).map_err(|e| host_err("terminal_send", e))
     }
 }
 
@@ -212,80 +154,36 @@ impl HostTerminal for WasmHost {
 
 impl HostSession for WasmHost {
     fn session_list(&self) -> Result<Option<serde_json::Value>, HostError> {
-        let mut out = [0u32; 2];
-        let status = unsafe { host_session_list(out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("session_list"));
+        match host_session::list_sessions().map_err(|e| host_err("session_list", e))? {
+            Some(s) => parse_json("session_list", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("session_list: invalid JSON from host: {}", e)))
     }
 
     fn session_get(&self, session_id: &str) -> Result<Option<serde_json::Value>, HostError> {
-        let (sid_ptr, sid_len) = wasm_alloc_string(session_id);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_session_get(sid_ptr, sid_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("session_get"));
+        match host_session::get(session_id).map_err(|e| host_err("session_get", e))? {
+            Some(s) => parse_json("session_get", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("session_get: invalid JSON from host: {}", e)))
     }
 
     fn session_config_list(&self) -> Result<Option<serde_json::Value>, HostError> {
-        let mut out = [0u32; 2];
-        let status = unsafe { host_session_config_list(out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("session_config_list"));
+        match host_session::config_list().map_err(|e| host_err("session_config_list", e))? {
+            Some(s) => parse_json("session_config_list", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("session_config_list: invalid JSON from host: {}", e)))
     }
 
     fn session_lifecycle_register(&self) -> Result<(), HostError> {
-        let status = unsafe { host_session_lifecycle_register() };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("session_lifecycle_register"))
-        }
+        host_session::lifecycle_register().map_err(|e| host_err("session_lifecycle_register", e))
     }
 
     fn session_input_register(&self) -> Result<(), HostError> {
-        let status = unsafe { host_session_input_register() };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("session_input_register"))
-        }
+        host_session::input_register().map_err(|e| host_err("session_input_register", e))
     }
 
     fn session_create(&self, config_id: &str) -> Result<String, HostError> {
-        let (cid_ptr, cid_len) = wasm_alloc_string(config_id);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_session_create(cid_ptr, cid_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("session_create"));
-        }
-        if out[0] == 0 && out[1] == 0 {
-            return Err(HostError::custom(-1, "session_create: host returned empty session_id"));
-        }
-        Ok(read_and_free_result(out[0], out[1]))
+        host_session::create(config_id).map_err(|e| host_err("session_create", e))
     }
 }
 
@@ -293,13 +191,7 @@ impl HostSession for WasmHost {
 
 impl crate::host::HostTimer for WasmHost {
     fn timer_register(&self, interval_secs: u64, command: &str) -> Result<(), HostError> {
-        let (cmd_ptr, cmd_len) = wasm_alloc_string(command);
-        let status = unsafe { host_timer_register(interval_secs as u32, cmd_ptr, cmd_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("timer_register"))
-        }
+        host_timer::register(interval_secs, command).map_err(|e| host_err("timer_register", e))
     }
 }
 
@@ -307,49 +199,34 @@ impl crate::host::HostTimer for WasmHost {
 
 impl HostEvents for WasmHost {
     fn emit_event(&self, event_name: &str, payload: &serde_json::Value) {
-        let (name_ptr, name_len) = wasm_alloc_string(event_name);
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
-        let (payload_ptr, payload_len) = wasm_alloc_string(&payload_str);
-        unsafe { host_emit_event(name_ptr, name_len, payload_ptr, payload_len) }
+        host_events::emit(event_name, &payload_str);
     }
 
     fn broadcast_sync(&self, event: &crate::events::SyncEvent) {
         // SyncEvent serde 表示即线协议（tag = "type"），宿主侧反序列化为同一类型
         let payload_str = serde_json::to_string(event).unwrap_or_default();
-        let (ptr, len) = wasm_alloc_string(&payload_str);
-        unsafe { host_broadcast_sync(ptr, len) }
+        host_events::broadcast_sync(&payload_str);
     }
 
     fn notify(&self, title: &str, body: &str) -> Result<(), HostError> {
-        let (title_ptr, title_len) = wasm_alloc_string(title);
-        let (body_ptr, body_len) = wasm_alloc_string(body);
-        let status = unsafe { host_notify(title_ptr, title_len, body_ptr, body_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("notify"))
-        }
+        host_events::notify(title, body).map_err(|e| host_err("notify", e))
     }
 }
 
 // ==================== HostHttp ====================
 
 impl HostHttp for WasmHost {
-    fn http_fetch(&self, request: &serde_json::Value) -> Result<Option<serde_json::Value>, HostError> {
-        let req_str = serde_json::to_string(request).unwrap_or_default();
-        let (req_ptr, req_len) = wasm_alloc_string(&req_str);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_http_fetch(req_ptr, req_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("http_fetch"));
+    fn http_fetch(
+        &self,
+        request: &serde_json::Value,
+    ) -> Result<Option<serde_json::Value>, HostError> {
+        let req_str = serde_json::to_string(request)
+            .map_err(|e| HostError::custom(-1, format!("http_fetch: serialize failed: {}", e)))?;
+        match host_http::fetch(&req_str).map_err(|e| host_err("http_fetch", e))? {
+            Some(s) => parse_json("http_fetch", s).map(Some),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("http_fetch: invalid JSON from host: {}", e)))
     }
 }
 
@@ -357,58 +234,23 @@ impl HostHttp for WasmHost {
 
 impl HostFs for WasmHost {
     fn fs_read(&self, path: &str) -> Result<Option<String>, HostError> {
-        let (path_ptr, path_len) = wasm_alloc_string(path);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_fs_read(path_ptr, path_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("fs_read"));
-        }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        Ok(Some(read_and_free_result(out[0], out[1])))
+        host_fs::read(path).map_err(|e| host_err("fs_read", e))
     }
 
     fn fs_write(&self, path: &str, data: &str) -> Result<(), HostError> {
-        let (path_ptr, path_len) = wasm_alloc_string(path);
-        let (data_ptr, data_len) = wasm_alloc_string(data);
-        let status = unsafe { host_fs_write(path_ptr, path_len, data_ptr, data_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("fs_write"))
-        }
+        host_fs::write(path, data).map_err(|e| host_err("fs_write", e))
     }
 
     fn fs_copy(&self, src: &str, dst: &str) -> Result<(), HostError> {
-        let (src_ptr, src_len) = wasm_alloc_string(src);
-        let (dst_ptr, dst_len) = wasm_alloc_string(dst);
-        let status = unsafe { host_fs_copy(src_ptr, src_len, dst_ptr, dst_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("fs_copy"))
-        }
+        host_fs::copy(src, dst).map_err(|e| host_err("fs_copy", e))
     }
 
     fn fs_delete(&self, path: &str) -> Result<(), HostError> {
-        let (path_ptr, path_len) = wasm_alloc_string(path);
-        let status = unsafe { host_fs_delete(path_ptr, path_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("fs_delete"))
-        }
+        host_fs::delete(path).map_err(|e| host_err("fs_delete", e))
     }
 
     fn fs_exists(&self, path: &str) -> Result<bool, HostError> {
-        let (path_ptr, path_len) = wasm_alloc_string(path);
-        let result = unsafe { host_fs_exists(path_ptr, path_len) };
-        match result {
-            1 => Ok(true),
-            0 => Ok(false),
-            _ => Err(HostError::call_failed("fs_exists")),
-        }
+        host_fs::exists(path).map_err(|e| host_err("fs_exists", e))
     }
 }
 
@@ -416,37 +258,23 @@ impl HostFs for WasmHost {
 
 impl HostLog for WasmHost {
     fn log_info(&self, message: &str) {
-        let (ptr, len) = wasm_alloc_string(message);
-        // track_caller：宿主日志记录插件真实调用点（file:line）而非宿主实现位置
-        let loc = std::panic::Location::caller();
-        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
-        unsafe { host_log_info(ptr, len, file_ptr, file_len, loc.line()) }
+        host_log::info(message);
     }
 
     fn log_debug(&self, message: &str) {
-        let (ptr, len) = wasm_alloc_string(message);
-        let loc = std::panic::Location::caller();
-        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
-        unsafe { host_log_debug(ptr, len, file_ptr, file_len, loc.line()) }
+        host_log::debug(message);
     }
 
     fn log_warn(&self, message: &str) {
-        let (ptr, len) = wasm_alloc_string(message);
-        let loc = std::panic::Location::caller();
-        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
-        unsafe { host_log_warn(ptr, len, file_ptr, file_len, loc.line()) }
+        host_log::warn(message);
     }
 
     fn log_error(&self, message: &str) {
-        let (ptr, len) = wasm_alloc_string(message);
-        let loc = std::panic::Location::caller();
-        let (file_ptr, file_len) = wasm_alloc_string(loc.file());
-        unsafe { host_log_error(ptr, len, file_ptr, file_len, loc.line()) }
+        host_log::error(message);
     }
 
     fn mark_plugin_error(&self, error: &str) {
-        let (ptr, len) = wasm_alloc_string(error);
-        unsafe { host_mark_plugin_error(ptr, len) }
+        host_log::mark_plugin_error(error);
     }
 }
 
@@ -454,35 +282,17 @@ impl HostLog for WasmHost {
 
 impl HostBus for WasmHost {
     fn bus_publish(&self, topic: &str, payload: &serde_json::Value) -> Result<(), HostError> {
-        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
-        let payload_str = serde_json::to_string(payload).unwrap_or_default();
-        let (payload_ptr, payload_len) = wasm_alloc_string(&payload_str);
-        let status = unsafe { host_bus_publish(topic_ptr, topic_len, payload_ptr, payload_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("bus_publish"))
-        }
+        let payload_str = serde_json::to_string(payload)
+            .map_err(|e| HostError::custom(-1, format!("bus_publish: serialize failed: {}", e)))?;
+        host_bus::publish(topic, &payload_str).map_err(|e| host_err("bus_publish", e))
     }
 
     fn bus_subscribe(&self, topic: &str) -> Result<(), HostError> {
-        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
-        let status = unsafe { host_bus_subscribe(topic_ptr, topic_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("bus_subscribe"))
-        }
+        host_bus::subscribe(topic).map_err(|e| host_err("bus_subscribe", e))
     }
 
     fn bus_unsubscribe(&self, topic: &str) -> Result<(), HostError> {
-        let (topic_ptr, topic_len) = wasm_alloc_string(topic);
-        let status = unsafe { host_bus_unsubscribe(topic_ptr, topic_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("bus_unsubscribe"))
-        }
+        host_bus::unsubscribe(topic).map_err(|e| host_err("bus_unsubscribe", e))
     }
 }
 
@@ -490,14 +300,10 @@ impl HostBus for WasmHost {
 
 impl HostConfig for WasmHost {
     fn config_get(&self, key: ConfigKey) -> Result<Option<String>, HostError> {
-        let (key_ptr, key_len) = wasm_alloc_string(key.as_str());
-        let mut out = [0u32; 2];
-        let status = unsafe { host_config_get(key_ptr, key_len, out.as_mut_ptr() as u32) };
-        // 宿主对不可用的配置项返回 -1（如 home_dir 解析失败），语义为"无此配置"而非调用错误
-        if status != 0 || (out[0] == 0 && out[1] == 0) {
-            return Ok(None);
-        }
-        Ok(Some(read_and_free_result(out[0], out[1])))
+        // 宿主对不可用的配置项返回 Err（如 home_dir 解析失败），
+        // 语义为"无此配置"而非调用错误（与 core ABI 的 -1 语义一致）；
+        // 错误内容记录在宿主日志
+        Ok(host_config::get(key.as_str()).ok().flatten())
     }
 }
 
@@ -505,68 +311,39 @@ impl HostConfig for WasmHost {
 
 impl HostFileService for WasmHost {
     fn filesrv_mount(&self, options: &MountOptions) -> Result<MountResult, HostError> {
-        let opts_str = serde_json::to_string(options)
-            .map_err(|e| HostError::custom(-1, format!("filesrv_mount: serialize options failed: {}", e)))?;
-        let (opts_ptr, opts_len) = wasm_alloc_string(&opts_str);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_filesrv_mount(opts_ptr, opts_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("filesrv_mount"));
-        }
-        if out[0] == 0 && out[1] == 0 {
-            return Err(HostError::call_failed("filesrv_mount"));
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map_err(|e| HostError::custom(-1, format!("filesrv_mount: invalid JSON from host: {}", e)))
+        let opts_str = serde_json::to_string(options).map_err(|e| {
+            HostError::custom(-1, format!("filesrv_mount: serialize options failed: {}", e))
+        })?;
+        let json_str = host_file_service::mount(&opts_str)
+            .map_err(|e| host_err("filesrv_mount", e))?;
+        serde_json::from_str(&json_str).map_err(|e| {
+            HostError::custom(-1, format!("filesrv_mount: invalid JSON from host: {}", e))
+        })
     }
 
     fn filesrv_unmount(&self, mount_path: &str) -> Result<(), HostError> {
-        let (mp_ptr, mp_len) = wasm_alloc_string(mount_path);
-        let status = unsafe { host_filesrv_unmount(mp_ptr, mp_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("filesrv_unmount"))
-        }
+        host_file_service::unmount(mount_path).map_err(|e| host_err("filesrv_unmount", e))
     }
 
     fn filesrv_update_roots(&self, mount_path: &str, roots: &[String]) -> Result<(), HostError> {
-        let (mp_ptr, mp_len) = wasm_alloc_string(mount_path);
         let roots_str = serde_json::to_string(roots).unwrap_or_else(|_| "[]".to_string());
-        let (roots_ptr, roots_len) = wasm_alloc_string(&roots_str);
-        let status = unsafe { host_filesrv_update_roots(mp_ptr, mp_len, roots_ptr, roots_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("filesrv_update_roots"))
-        }
+        host_file_service::update_roots(mount_path, &roots_str)
+            .map_err(|e| host_err("filesrv_update_roots", e))
     }
 
     fn filesrv_get_peer(&self, peer_id: &str) -> Result<Option<PeerFileService>, HostError> {
-        let (peer_ptr, peer_len) = wasm_alloc_string(peer_id);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_filesrv_get_peer(peer_ptr, peer_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("filesrv_get_peer"));
+        match host_file_service::get_peer(peer_id)
+            .map_err(|e| host_err("filesrv_get_peer", e))?
+        {
+            Some(s) => serde_json::from_str(&s).map(Some).map_err(|e| {
+                HostError::custom(-1, format!("filesrv_get_peer: invalid JSON from host: {}", e))
+            }),
+            None => Ok(None),
         }
-        if out[0] == 0 && out[1] == 0 {
-            return Ok(None);
-        }
-        let json_str = read_and_free_result(out[0], out[1]);
-        serde_json::from_str(&json_str)
-            .map(Some)
-            .map_err(|e| HostError::custom(-1, format!("filesrv_get_peer: invalid JSON from host: {}", e)))
     }
 
     fn filesrv_query_peer(&self, peer_id: &str) -> Result<(), HostError> {
-        let (peer_ptr, peer_len) = wasm_alloc_string(peer_id);
-        let status = unsafe { host_filesrv_query_peer(peer_ptr, peer_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("filesrv_query_peer"))
-        }
+        host_file_service::query_peer(peer_id).map_err(|e| host_err("filesrv_query_peer", e))
     }
 }
 
@@ -574,324 +351,13 @@ impl HostFileService for WasmHost {
 
 impl HostTransfer for WasmHost {
     fn transfer_start(&self, request: &TransferRequest) -> Result<String, HostError> {
-        let req_str = serde_json::to_string(request)
-            .map_err(|e| HostError::custom(-1, format!("transfer_start: serialize request failed: {}", e)))?;
-        let (req_ptr, req_len) = wasm_alloc_string(&req_str);
-        let mut out = [0u32; 2];
-        let status = unsafe { host_transfer_start(req_ptr, req_len, out.as_mut_ptr() as u32) };
-        if status != 0 {
-            return Err(HostError::call_failed("transfer_start"));
-        }
-        if out[0] == 0 && out[1] == 0 {
-            return Err(HostError::call_failed("transfer_start"));
-        }
-        Ok(read_and_free_result(out[0], out[1]))
+        let req_str = serde_json::to_string(request).map_err(|e| {
+            HostError::custom(-1, format!("transfer_start: serialize request failed: {}", e))
+        })?;
+        host_transfer::start(&req_str).map_err(|e| host_err("transfer_start", e))
     }
 
     fn transfer_cancel(&self, task_id: &str) -> Result<(), HostError> {
-        let (task_ptr, task_len) = wasm_alloc_string(task_id);
-        let status = unsafe { host_transfer_cancel(task_ptr, task_len) };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(HostError::call_failed("transfer_cancel"))
-        }
-    }
-}
-
-// ==================== WASM Import Declarations ====================
-//
-// 这些 extern "C" 声明在编译为 WASM 时对应宿主在 wasmtime Linker 中
-// 注册的 abi::NAMESPACE（"bedcode"）命名空间下的 host functions。
-// 函数名与宿主注册名的一致性由 SDK abi 模块常量保证（宿主侧注册引用同一组常量，
-// 且宿主测试 test_host_fn_registration_matches_abi 校验签名）。
-// #[link(wasm_import_module)] 确保 WASM 模块从 "bedcode" 命名空间导入，
-// 而非默认的 "env" 命名空间。
-//
-// WASM ABI 约定：返回 (ptr, len) 的函数通过输出参数（out_ptr）传递结果，
-// 因为 C ABI 不支持多值返回，Rust 的 (u32, u32) 元组会被编译器
-// 拆解为额外的指针参数，导致签名不匹配。
-// 宿主端将结果写入 out_ptr 指向的 8 字节内存（ptr: u32 + len: u32）。
-
-#[link(wasm_import_module = "bedcode")]
-extern "C" {
-    /// 存储：获取值 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_storage_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
-    /// 存储：设置值 — 返回 0 成功，-1 失败
-    fn host_storage_set(key_ptr: u32, key_len: u32, val_ptr: u32, val_len: u32) -> i32;
-    /// 存储：删除值 — 返回 0 成功，-1 失败
-    fn host_storage_delete(key_ptr: u32, key_len: u32) -> i32;
-    /// 数据库：执行 SQL — 返回受影响行数
-    fn host_db_execute(sql_ptr: u32, sql_len: u32) -> i32;
-    /// 数据库：查询 SQL — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_db_query(sql_ptr: u32, sql_len: u32, out_ptr: u32) -> i32;
-    /// 数据库：执行 SQL 参数绑定版 — params 为 JSON 数组字符串，返回受影响行数
-    fn host_db_execute_params(sql_ptr: u32, sql_len: u32, params_ptr: u32, params_len: u32) -> i32;
-    /// 数据库：查询 SQL 参数绑定版 — 结果写入 out_ptr（8 字节: ptr + len）
-    fn host_db_query_params(sql_ptr: u32, sql_len: u32, params_ptr: u32, params_len: u32, out_ptr: u32) -> i32;
-    /// 插件独立数据库：执行 SQL — 返回受影响行数
-    fn host_plugin_db_execute(sql_ptr: u32, sql_len: u32) -> i32;
-    /// 插件独立数据库：查询 SQL — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_plugin_db_query(sql_ptr: u32, sql_len: u32, out_ptr: u32) -> i32;
-    /// 插件独立数据库：执行 SQL 参数绑定版 — params 为 JSON 数组字符串，返回受影响行数
-    fn host_plugin_db_execute_params(sql_ptr: u32, sql_len: u32, params_ptr: u32, params_len: u32) -> i32;
-    /// 插件独立数据库：查询 SQL 参数绑定版 — 结果写入 out_ptr（8 字节: ptr + len）
-    fn host_plugin_db_query_params(sql_ptr: u32, sql_len: u32, params_ptr: u32, params_len: u32, out_ptr: u32) -> i32;
-    /// 终端：发送输入 — 返回 0 成功，-1 失败
-    fn host_terminal_send(sid_ptr: u32, sid_len: u32, data_ptr: u32, data_len: u32) -> i32;
-    /// 会话：列出所有 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_session_list(out_ptr: u32) -> i32;
-    /// 会话：获取单个 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_session_get(sid_ptr: u32, sid_len: u32, out_ptr: u32) -> i32;
-    /// 会话配置：列出所有 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_session_config_list(out_ptr: u32) -> i32;
-    /// 事件：向前端发送
-    fn host_emit_event(name_ptr: u32, name_len: u32, payload_ptr: u32, payload_len: u32);
-    /// HTTP 代理 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_http_fetch(req_ptr: u32, req_len: u32, out_ptr: u32) -> i32;
-    /// 文件系统：读取文件 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_fs_read(path_ptr: u32, path_len: u32, out_ptr: u32) -> i32;
-    /// 文件系统：写入文件 — 返回 0 成功，-1 失败
-    fn host_fs_write(path_ptr: u32, path_len: u32, data_ptr: u32, data_len: u32) -> i32;
-    /// 文件系统：复制文件 — 返回 0 成功，-1 失败
-    fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
-    /// 文件系统：删除文件 — 返回 0 成功（含文件不存在），-1 失败
-    fn host_fs_delete(path_ptr: u32, path_len: u32) -> i32;
-    /// 文件系统：检查文件是否存在 — 返回 1 存在，0 不存在，-1 错误
-    fn host_fs_exists(path_ptr: u32, path_len: u32) -> i32;
-    /// 配置：读取配置项 — 结果写入 out_ptr（8 字节: ptr + len），返回 0 成功 -1 失败
-    fn host_config_get(key_ptr: u32, key_len: u32, out_ptr: u32) -> i32;
-    /// 日志：info（附带插件调用点 file/line，宿主据此记录真实插件源码位置）
-    fn host_log_info(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
-    /// 日志：debug
-    fn host_log_debug(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
-    /// 日志：warn
-    fn host_log_warn(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
-    /// 日志：error
-    fn host_log_error(msg_ptr: u32, msg_len: u32, file_ptr: u32, file_len: u32, line: u32);
-    /// 插件状态：标记错误（无返回值）
-    fn host_mark_plugin_error(err_ptr: u32, err_len: u32);
-    /// 广播：同步事件到所有客户端
-    fn host_broadcast_sync(payload_ptr: u32, payload_len: u32);
-    /// 通知：发送系统通知 — 返回 0 成功，-1 失败
-    fn host_notify(title_ptr: u32, title_len: u32, body_ptr: u32, body_len: u32) -> i32;
-    /// 消息总线：发布消息 — 返回 0 成功，-1 失败
-    fn host_bus_publish(topic_ptr: u32, topic_len: u32, payload_ptr: u32, payload_len: u32) -> i32;
-    /// 消息总线：订阅 topic — 返回 0 成功，-1 失败
-    fn host_bus_subscribe(topic_ptr: u32, topic_len: u32) -> i32;
-    /// 消息总线：取消订阅 — 返回 0 成功，-1 失败
-    fn host_bus_unsubscribe(topic_ptr: u32, topic_len: u32) -> i32;
-    /// 会话生命周期：注册监听器 — 返回 0 成功，-1 失败
-    fn host_session_lifecycle_register() -> i32;
-    /// 会话输入：注册提交输入行监听器 — 返回 0 成功，-1 失败（含权限拒绝）
-    fn host_session_input_register() -> i32;
-    /// 会话：按配置创建新会话 — out_ptr 输出 session_id，返回 0 成功 -1 失败
-    fn host_session_create(cid_ptr: u32, cid_len: u32, out_ptr: u32) -> i32;
-    /// 定时器：注册周期回调 — 返回 0 成功，-1 失败
-    fn host_timer_register(interval_secs: u32, cmd_ptr: u32, cmd_len: u32) -> i32;
-    /// 文件服务：挂载 — MountOptions JSON → out_ptr 输出 MountResult JSON，返回 0 成功 -1 失败
-    fn host_filesrv_mount(opts_ptr: u32, opts_len: u32, out_ptr: u32) -> i32;
-    /// 文件服务：卸载挂载点 — 返回 0 成功，-1 失败
-    fn host_filesrv_unmount(mp_ptr: u32, mp_len: u32) -> i32;
-    /// 文件服务：更新允许目录根（roots 为 JSON 数组字符串）— 返回 0 成功，-1 失败
-    fn host_filesrv_update_roots(mp_ptr: u32, mp_len: u32, roots_ptr: u32, roots_len: u32) -> i32;
-    /// 文件服务：获取对端信息 — out_ptr 输出 PeerFileService JSON（(0,0) 表示未公告）
-    fn host_filesrv_get_peer(peer_ptr: u32, peer_len: u32, out_ptr: u32) -> i32;
-    /// 文件服务：主动询问对端状态 — 经 WS 控制面发送 Query，返回 0 成功 -1 失败
-    fn host_filesrv_query_peer(peer_ptr: u32, peer_len: u32) -> i32;
-    /// 传输引擎：启动任务 — TransferRequest JSON → out_ptr 输出 task_id，返回 0 成功 -1 失败
-    fn host_transfer_start(req_ptr: u32, req_len: u32, out_ptr: u32) -> i32;
-    /// 传输引擎：取消任务 — 返回 0 成功，-1 失败
-    fn host_transfer_cancel(task_ptr: u32, task_len: u32) -> i32;
-}
-
-// ==================== WASM Memory Helpers ====================
-
-/// 分配字符串到 WASM 线性内存，返回 (ptr, len)
-///
-/// 使用与 `wasm_entry!` 宏生成的 `__bedcode_allocate` 相同的
-/// `std::alloc` Layout(len, 1) 分配，确保与 `__bedcode_deallocate`
-/// 的回收 Layout 精确配对（宿主读参数后回收、插件读结果后回收均依赖此配对）
-pub fn wasm_alloc_string(s: &str) -> (u32, u32) {
-    if s.is_empty() {
-        return (0, 0);
-    }
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let Ok(layout) = std::alloc::Layout::from_size_align(len, 1) else {
-        return (0, 0);
-    };
-    // SAFETY: layout 大小非零（已判空），ptr 由同 Layout 的 dealloc 配对回收
-    let ptr = unsafe { std::alloc::alloc(layout) };
-    if ptr.is_null() {
-        return (0, 0);
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, len);
-    }
-    (ptr as u32, len as u32)
-}
-
-/// 从 WASM 线性内存读取字符串
-pub fn wasm_read_string(ptr: u32, len: u32) -> String {
-    if ptr == 0 && len == 0 {
-        return String::new();
-    }
-    // SAFETY: ptr 和 len 由宿主传入，指向 WASM 线性内存中的有效区域
-    unsafe {
-        let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
-        String::from_utf8_lossy(slice).into_owned()
-    }
-}
-
-/// 释放 WASM 线性内存中的字符串（`__bedcode_allocate` / `wasm_alloc_string` 分配的内存）
-///
-/// 与分配器同 Layout 配对调用，防止长驻插件线性内存单调增长
-pub fn wasm_dealloc_string(ptr: u32, len: u32) {
-    if ptr == 0 || len == 0 {
-        return;
-    }
-    // __bedcode_deallocate 由 wasm_entry! 宏在插件二进制中定义（此处为本地符号声明）
-    extern "C" {
-        fn __bedcode_deallocate(ptr: u32, len: u32);
-    }
-    unsafe { __bedcode_deallocate(ptr, len) };
-}
-
-/// 读取宿主写入的结果字符串并立即释放对应线性内存
-///
-/// 宿主通过 `__bedcode_allocate` 写入 out_ptr 结果，插件拷贝为 Rust String 后
-/// 原缓冲区即失效 —— 读后立即归还是安全的
-fn read_and_free_result(ptr: u32, len: u32) -> String {
-    let s = wasm_read_string(ptr, len);
-    wasm_dealloc_string(ptr, len);
-    s
-}
-
-/// 将 (ptr, len) 结果写入 WASM 线性内存中的 out_ptr 位置（8 字节: ptr:u32 + len:u32）
-///
-/// 用于 wasm_entry! 宏生成的导出函数，将返回值通过 out_ptr 输出参数传递给宿主，
-/// 而非 Rust 元组返回值（C ABI 会将元组拆解为额外指针参数，导致签名不匹配）。
-pub fn wasm_write_result_to_out_ptr(out_ptr: u32, ptr: u32, len: u32) {
-    if out_ptr == 0 {
-        return;
-    }
-    // SAFETY: out_ptr 由宿主传入，指向 WASM 线性内存中的 8 字节有效区域
-    unsafe {
-        let out = out_ptr as *mut u8;
-        std::ptr::copy_nonoverlapping(ptr.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(len.to_le_bytes().as_ptr(), out.add(4), 4);
-    }
-}
-
-// ==================== Native Link Stubs ====================
-
-// 非 wasm32 target（原生 cargo test）下，上方 extern "C" 声明的宿主 import 符号不存在：
-// Linux/macOS 对 cdylib 未定义符号宽容，Windows 链接器则直接报错，导致插件
-// 单元测试无法在 Windows 原生构建。这里提供 stub 实现仅用于满足链接：
-// - 带返回值的函数统一返回失败值（-1），单元测试只测纯逻辑函数，不会实际调用宿主能力
-// - wasm32 编译时本模块不参与，import 仍由宿主 Linker 解析
-#[cfg(not(target_arch = "wasm32"))]
-mod native_link_stubs {
-    #[no_mangle]
-    pub extern "C" fn host_storage_get(_key_ptr: u32, _key_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_storage_set(_key_ptr: u32, _key_len: u32, _val_ptr: u32, _val_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_storage_delete(_key_ptr: u32, _key_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_db_execute(_sql_ptr: u32, _sql_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_db_query(_sql_ptr: u32, _sql_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_db_execute_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_db_query_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_plugin_db_execute(_sql_ptr: u32, _sql_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_plugin_db_query(_sql_ptr: u32, _sql_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_plugin_db_execute_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_plugin_db_query_params(_sql_ptr: u32, _sql_len: u32, _params_ptr: u32, _params_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_terminal_send(_sid_ptr: u32, _sid_len: u32, _data_ptr: u32, _data_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_session_list(_out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_session_get(_sid_ptr: u32, _sid_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_session_config_list(_out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_emit_event(_name_ptr: u32, _name_len: u32, _payload_ptr: u32, _payload_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_http_fetch(_req_ptr: u32, _req_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_fs_read(_path_ptr: u32, _path_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_fs_write(_path_ptr: u32, _path_len: u32, _data_ptr: u32, _data_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_fs_copy(_src_ptr: u32, _src_len: u32, _dst_ptr: u32, _dst_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_fs_delete(_path_ptr: u32, _path_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_fs_exists(_path_ptr: u32, _path_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_config_get(_key_ptr: u32, _key_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_log_info(_msg_ptr: u32, _msg_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_log_debug(_msg_ptr: u32, _msg_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_log_warn(_msg_ptr: u32, _msg_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_log_error(_msg_ptr: u32, _msg_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_mark_plugin_error(_err_ptr: u32, _err_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_broadcast_sync(_payload_ptr: u32, _payload_len: u32) {}
-    #[no_mangle]
-    pub extern "C" fn host_notify(_title_ptr: u32, _title_len: u32, _body_ptr: u32, _body_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_bus_publish(_topic_ptr: u32, _topic_len: u32, _payload_ptr: u32, _payload_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_bus_subscribe(_topic_ptr: u32, _topic_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_bus_unsubscribe(_topic_ptr: u32, _topic_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_session_lifecycle_register() -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_session_input_register() -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_session_create(_cid_ptr: u32, _cid_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_timer_register(_interval_secs: u32, _cmd_ptr: u32, _cmd_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_filesrv_mount(_opts_ptr: u32, _opts_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_filesrv_unmount(_mp_ptr: u32, _mp_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_filesrv_update_roots(_mp_ptr: u32, _mp_len: u32, _roots_ptr: u32, _roots_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_filesrv_get_peer(_peer_ptr: u32, _peer_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_filesrv_query_peer(_peer_ptr: u32, _peer_len: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_transfer_start(_req_ptr: u32, _req_len: u32, _out_ptr: u32) -> i32 { -1 }
-    #[no_mangle]
-    pub extern "C" fn host_transfer_cancel(_task_ptr: u32, _task_len: u32) -> i32 { -1 }
-
-    /// 内存回收 stub：与 wasm_entry! 宏生成版本同 Layout（len, 1）配对释放。
-    /// 原生测试中 wasm_entry! 的同名定义被 cfg 排除（避免重复符号），由此 stub 接管
-    #[no_mangle]
-    pub extern "C" fn __bedcode_deallocate(ptr: u32, len: u32) {
-        if ptr == 0 || len == 0 {
-            return;
-        }
-        if let Ok(layout) = std::alloc::Layout::from_size_align(len as usize, 1) {
-            // SAFETY: ptr 由 wasm_alloc_string / __bedcode_allocate 以相同 Layout 分配
-            unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
-        }
+        host_transfer::cancel(task_id).map_err(|e| host_err("transfer_cancel", e))
     }
 }

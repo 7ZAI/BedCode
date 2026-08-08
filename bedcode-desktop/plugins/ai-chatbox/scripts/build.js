@@ -31,6 +31,12 @@ function buildFrontend() {
 function buildRust() {
   console.log('\n[build] ====== Building Rust backend (WASM) ======')
   run('cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release')
+  // 迁移阶段 B：将 wit-bindgen 产出的 core module 编码为 Component Model 组件
+  // （等价 wasm-tools component new；工具幂等——产物已是组件时直接复制）
+  console.log('\n[build] ====== Componentizing WASM (Component Model) ======')
+  const componentizeManifest = resolve(ROOT, '../../packages/plugin-sdk-desktop/rust/tools/componentize/Cargo.toml')
+  const wasmPath = resolve(ROOT, 'rust/target/wasm32-unknown-unknown/release', `${RUST_LIB_NAME}.wasm`)
+  run(`cargo run --release --manifest-path "${componentizeManifest}" -- "${wasmPath}" -o "${wasmPath}"`)
 }
 
 function copyArtifacts() {

@@ -40,6 +40,11 @@ pub struct BusMessage {
 pub mod wasm;
 #[cfg(feature = "wasm")]
 pub mod wasm_host;
+// 组件导出宏（wasm_entry! 内 export!）的绑定类型路径：generate! 的
+// default_bindings_module 指向 `$crate`，绑定模块树在 wasm.rs 下，
+// 此处 re-export 到 crate 根使 `$crate::bedcode::plugin::<iface>::Guest` 可解析
+#[cfg(feature = "wasm")]
+pub use wasm::bedcode;
 
 pub use args::CommandArgs;
 pub use command::{PluginCommand, PluginCommandEntry};

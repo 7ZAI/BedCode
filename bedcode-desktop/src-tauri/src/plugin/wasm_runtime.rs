@@ -1973,6 +1973,151 @@ mod tests {
         });
     }
 
+    /// 构建 SDK 组件形态测试插件（packages/plugin-sdk-test）并编码为组件
+    ///
+    /// 与 build_test_component 的区别：插件经真实 SDK（wasm_entry! 宏 + WasmHost）
+    /// 构建，验证迁移阶段 B 的 SDK 组件产物链路；源码变更检测覆盖 SDK 关键文件
+    fn build_sdk_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-sdk-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let module_path = output_dir.join("bedcode_plugin_sdk_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return encode_component(
+                    &std::fs::read(&module_path)
+                        .expect("Failed to read SDK test component module"),
+                );
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for SDK test component");
+        assert!(status.success(), "SDK test component WASM build failed");
+
+        encode_component(
+            &std::fs::read(&module_path)
+                .expect("Failed to read SDK test component after build"),
+        )
+    }
+
+    /// SDK 组件插件完整往返：真实 SDK（wasm_entry! 宏 + WasmHost）产物的组件
+    /// 加载、ABI 协商、生命周期、WasmHost 各 trait 经组件 import 的能力往返
+    #[test]
+    fn test_sdk_plugin_component_roundtrip() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_sdk_test_component())
+            .expect("compile SDK test component");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut plugin = wasm_runtime
+                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+                .expect("instantiate SDK test component");
+
+            // 生命周期（宏生成的 lifecycle::Guest）
+            assert_eq!(plugin.activate().expect("activate"), 0);
+            assert_eq!(plugin.deactivate().expect("deactivate"), 0);
+
+            // manifest（宏生成的 manifest::Guest）
+            let manifest: serde_json::Value =
+                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            assert_eq!(manifest["id"], "com.bedcode.sdk-test");
+
+            // storage 往返（WasmHost::storage_set/get 经组件 import）
+            let result = plugin
+                .invoke_command("test_storage", r#"{"key":"sdk-key","value":{"k":"v"}}"#)
+                .expect("test_storage");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["got"]["k"], "v");
+
+            // 主库往返（权限 + 表名前缀校验）
+            let result = plugin.invoke_command("test_db", "{}").expect("test_db");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let rows = r["rows"].as_array().expect("rows array");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0]["val"], "sdk-db");
+
+            // 配置读取（AppConfig 测试初始化 port=8765）
+            let result = plugin.invoke_command("test_config", "{}").expect("test_config");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["port"], "8765");
+
+            // 会话列表（权限 session:read，空列表）
+            let result = plugin
+                .invoke_command("test_session_list", "{}")
+                .expect("test_session_list");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["sessions"], serde_json::json!([]));
+
+            // 事件 emit（无头上下文幂等 Ok）
+            let result = plugin.invoke_command("test_emit", "{}").expect("test_emit");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["emitted"], true);
+
+            // 消息总线发布（同步投递）
+            let result = plugin.invoke_command("test_bus", "{}").expect("test_bus");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["published"], true);
+
+            // notify：无头上下文无 AppHandle，宿主错误经 WIT result 透传
+            let result = plugin.invoke_command("test_notify", "{}").expect("test_notify");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                r["error"]
+                    .as_str()
+                    .map(|e| e.contains("headless") || e.contains("app_handle"))
+                    .unwrap_or(false),
+                "unexpected notify error: {}",
+                r["error"]
+            );
+
+            // 终端钩子（宏生成的 terminal_hooks::Guest，大写转换语义）
+            assert_eq!(
+                plugin.on_terminal_input("session-1", "sdk input").unwrap(),
+                Some("SDK INPUT".to_string())
+            );
+
+            // 上传钩子（宏生成的 upload_hook::Guest，默认 fail-closed）
+            let decision = plugin
+                .on_upload_request(r#"{"name": "f.bin"}"#)
+                .expect("on_upload_request");
+            let d: serde_json::Value = serde_json::from_str(&decision).unwrap();
+            assert_eq!(d["allow"], false);
+        });
+    }
+
     /// 共存入口：load_plugin_from_file 按产物格式自动选择 component 路径
     #[test]
     fn test_load_plugin_from_file_detects_component() {

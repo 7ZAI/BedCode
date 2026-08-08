@@ -9,7 +9,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust", features = ["wasm"] }
+# 迁移阶段 B：本插件为 core 形态测试载体，自包含旧 ABI 胶水（不启用 wasm feature）
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

@@ -15,10 +15,14 @@ crate-type = ["lib", "cdylib"]
 [features]
 default = []
 # 启用 WasmPlugin trait / wasm_entry! 宏 / WasmHost 绑定（WASM 插件必开）
-wasm = []
+# wasm feature 同时启用 wit-bindgen：WIT 契约（wit/bedcode.wit，单一事实来源）
+# 生成 guest 绑定 —— 组件形态（Component Model）的导入/导出
+wasm = ["dep:wit-bindgen"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 inventory = "0.3"
+# WIT 契约绑定（迁移阶段 B：wasm_entry! 生成组件导出，WasmHost 经 bindgen import 调用宿主）
+wit-bindgen = { version = "0.41", features = ["macros"], optional = true }

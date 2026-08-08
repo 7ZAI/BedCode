@@ -1,18 +1,40 @@
-//! WASM 插件入口
+//! WASM 插件入口（Component Model 形态，迁移阶段 B）
 //!
 //! WasmPlugin trait — WASM 插件核心接口
-//! wasm_entry! 宏 — 自动生成 WASM 导出函数和内存分配器
+//! wasm_entry! 宏 — 生成组件世界（WIT `bedcode:plugin` world）的全部导出实现
 //!
-//! 插件开发者只需实现 WasmPlugin trait，然后调用 wasm_entry!(MyPlugin)
+//! 插件开发者只需实现 WasmPlugin trait，然后调用 wasm_entry!(MyPlugin)。
+//! 宏展开为 wit-bindgen 生成的 7 组 `Guest` trait 实现 + `export!` 导出，
+//! 产物为组件（component）而非旧 ABI 的 core module：
+//! - 内存搬运由绑定层处理，不再有 (ptr,len) 与 alloc/dealloc 配对
+//! - 契约定义在 `wit/bedcode.wit`（单一事实来源），接口漂移编译期即暴露
+//! - 宿主以 `load_plugin_from_file` 按产物格式自动选择加载路径（阶段 A 共存）
+//!
+//! 绑定生成（`wit_bindgen::generate!`）：
+//! - import 接口 → `crate::wasm::bedcode::plugin::<iface>::<fn>` 自由函数，
+//!   由 [`crate::wasm_host::WasmHost`] 内部调用
+//! - export 接口 → `crate::wasm::exports::bedcode::plugin::<iface>::Guest` trait，
+//!   由 `wasm_entry!` 宏对插件类型实现
+//! - `pub_export_macro` 使 `export!` 可跨 crate 调用（re-export 在 `wasm` 模块，
+//!   插件 crate 内经 `$crate::wasm::export!` 展开）；`default_bindings_module`
+//!   指向本 SDK 的 `wasm` 模块（`$crate::wasm`），导出函数内的类型引用
+//!   （`exports::bedcode::plugin::<iface>::Guest`）随宏体解析到 SDK
 
 use crate::events::{InputSubmittedEvent, SessionLifecycleEvent};
 use crate::types::{PluginManifest, UploadHookDecision, UploadRequestMeta};
 use crate::BusMessage;
 
+wit_bindgen::generate!({
+    path: "wit/bedcode.wit",
+    world: "plugin",
+    pub_export_macro: true,
+    default_bindings_module: "$crate::wasm",
+});
+
 /// WASM 插件核心 trait
 ///
 /// 所有 WASM 插件必须实现此 trait，并通过 `wasm_entry!` 宏生成导出函数。
-/// 宏负责 WASM ABI 层的 JSON 字符串 ↔ 类型化载荷转换，插件代码只处理类型。
+/// 宏负责组件 ABI 层的 JSON 字符串 ↔ 类型化载荷转换，插件代码只处理类型。
 pub trait WasmPlugin: Send + Sync + 'static {
     /// 插件唯一标识（反向域名格式，如 com.bedcode.ai-chatbox）
     const ID: &'static str;
@@ -88,30 +110,11 @@ pub trait WasmPlugin: Send + Sync + 'static {
     }
 }
 
-/// 自动生成 WASM 导出函数 + 线性内存分配器
+/// 生成组件 world（`bedcode:plugin`）的全部导出实现
 ///
-/// 生成以下导出：
-/// - `__bedcode_abi_version() -> i32` — ABI 版本协商（v2 起）
-/// - `__bedcode_allocate(size) -> ptr` — 内存分配器，供宿主写入字符串
-/// - `__bedcode_deallocate(ptr, len)` — 内存回收器（v2 起，缺失时宿主退化 v1 不回收行为）
-/// - `__bedcode_manifest(out_ptr)` — 返回 manifest JSON，结果写入 out_ptr（8 字节: ptr + len）
-/// - `__bedcode_activate() -> i32` — 激活插件
-/// - `__bedcode_deactivate() -> i32` — 停用插件
-/// - `__bedcode_invoke_command(name_ptr, name_len, args_ptr, args_len, out_ptr)` — 调用命令，结果写入 out_ptr
-/// - `__bedcode_on_terminal_input(sid_ptr, sid_len, text_ptr, text_len, out_ptr)` — 终端输入，结果写入 out_ptr
-/// - `__bedcode_on_terminal_output(sid_ptr, sid_len, data_ptr, data_len, out_ptr)` — 终端输出，结果写入 out_ptr
-/// - `__bedcode_on_startup() -> ()` — 启动回调
-/// - `__bedcode_on_shutdown() -> ()` — 关闭回调
-/// - `__bedcode_on_message(topic, sender, payload) -> i32` — 消息总线消息
-/// - `__bedcode_on_session_lifecycle(payload) -> i32` — 会话生命周期事件
-/// - `__bedcode_on_input_submitted(payload) -> i32` — 提交输入行事件
-/// - `__bedcode_on_upload_request(meta_ptr, meta_len, out_ptr) -> i32` — 上传策略钩子，决定写入 out_ptr
-///
-/// # WASM ABI 约定
-///
-/// 返回 (ptr, len) 对的函数通过 out_ptr 输出参数传递结果（8 字节: ptr:u32 + len:u32），
-/// 而非 Rust 元组返回值。因为 C ABI 不支持多值返回，Rust 的 (u32, u32) 元组
-/// 会被编译器拆解为额外的指针参数，导致宿主端签名不匹配。
+/// 展开为 wit-bindgen 生成的 7 组 `Guest` trait 实现（command / lifecycle /
+/// events / terminal-hooks / upload-hook / manifest / abi）并调用 `export!`
+/// 导出。语义与旧 `__bedcode_*` 导出 1:1 对应（见各 impl 注释）。
 ///
 /// # 用法
 /// ```ignore
@@ -119,336 +122,202 @@ pub trait WasmPlugin: Send + Sync + 'static {
 /// impl WasmPlugin for MyPlugin { ... }
 /// wasm_entry!(MyPlugin);
 /// ```
+/// 参数为 `ident` 而非 `ty`：Rust 宏的片段卫生限制 —— `ty` 片段不能作为
+/// `ident` 传给 `export!` 宏（报 "no rules expected ty metavariable"）。
 #[macro_export]
 macro_rules! wasm_entry {
-    ($plugin_type:ty) => {
-        static PLUGIN: std::sync::OnceLock<$plugin_type> = std::sync::OnceLock::new();
+    ($plugin_type:ident) => {
+        // ==================== command（原 __bedcode_invoke_command） ====================
 
-        /// ABI 版本协商 — 宿主实例化后读取，与 `abi::ABI_VERSION` 比对
-        ///
-        /// 插件要求的版本高于宿主支持时，宿主拒绝加载并给出明确错误
-        #[no_mangle]
-        pub extern "C" fn __bedcode_abi_version() -> i32 {
-            $crate::abi::ABI_VERSION as i32
-        }
+        impl $crate::wasm::exports::bedcode::plugin::command::Guest for $plugin_type {
+            /// 调用自定义命令：JSON 载荷保留（args-json → 类型化 Value → 结果 JSON）
+            fn invoke(name: String, args: String) -> String {
+                // 组件绑定层保证 UTF-8 合法，解析失败时退化为 Null（由插件自行容错）
+                let args: serde_json::Value =
+                    serde_json::from_str(&args).unwrap_or(serde_json::Value::Null);
 
-        /// 内存分配器 — 供宿主写入字符串到 WASM 线性内存
-        ///
-        /// 宿主调用此函数分配 len 字节的内存，然后将字符串字节写入返回的指针位置。
-        /// 使用 std::alloc 精确 Layout 分配，与 `__bedcode_deallocate` 配对回收
-        #[no_mangle]
-        pub extern "C" fn __bedcode_allocate(len: usize) -> *mut u8 {
-            if len == 0 {
-                return std::ptr::null_mut();
-            }
-            match std::alloc::Layout::from_size_align(len, 1) {
-                Ok(layout) => unsafe { std::alloc::alloc(layout) },
-                Err(_) => std::ptr::null_mut(),
-            }
-        }
-
-        /// 内存回收器 — 释放 `__bedcode_allocate` 或 `wasm_alloc_string` 分配的内存
-        ///
-        /// 双向配对回收，消除长驻插件线性内存单调增长：
-        /// - 宿主在读取完插件传入的字符串后调用（host function 参数回收）
-        /// - 插件侧在读取完宿主写入的参数/结果后调用（导出函数参数与 out_ptr 回收）
-        /// - 宿主在读取完插件返回的结果后调用（导出函数结果回收）
-        ///
-        /// 仅 wasm32 target 导出：原生构建（cargo test）由 SDK 的 native_link_stubs
-        /// 提供同名实现，避免重复符号
-        #[cfg(target_arch = "wasm32")]
-        #[no_mangle]
-        pub extern "C" fn __bedcode_deallocate(ptr: u32, len: u32) {
-            if ptr == 0 || len == 0 {
-                return;
-            }
-            if let Ok(layout) = std::alloc::Layout::from_size_align(len as usize, 1) {
-                // SAFETY: ptr 由同模块 __bedcode_allocate / wasm_alloc_string 以相同 Layout 分配
-                unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
-            }
-        }
-
-        /// 返回 manifest JSON — 结果写入 out_ptr（8 字节: ptr + len）
-        #[no_mangle]
-        pub extern "C" fn __bedcode_manifest(out_ptr: u32) {
-            let manifest = <$plugin_type>::manifest();
-            let json = match serde_json::to_string(&manifest) {
-                Ok(s) => s,
-                Err(_) => {
-                    $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, 0, 0);
-                    return;
-                }
-            };
-            let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&json);
-            $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
-        }
-
-        /// 激活插件
-        #[no_mangle]
-        pub extern "C" fn __bedcode_activate() -> i32 {
-            // WasmHost 是无状态 unit struct；插件身份由宿主侧 Caller state 维护。
-            // 日志走 UFCS 调用，宏展开处无需导入 HostLog trait
-            let host = $crate::wasm_host::WasmHost;
-            match <$plugin_type>::activate() {
-                Ok(()) => {
-                    $crate::host::HostLog::log_info(&host, "Plugin activated (wasm)");
-                    0
-                }
-                Err(e) => {
-                    $crate::host::HostLog::log_error(&host, &format!("activate failed: {}", e));
-                    1
+                match <$plugin_type as $crate::wasm::WasmPlugin>::invoke_command(&name, args) {
+                    Ok(value) => {
+                        match serde_json::to_string(&value) {
+                            Ok(s) => s,
+                            // 错误信息经 serde_json 转义，避免引号/反斜杠产生非法 JSON
+                            // 导致宿主侧反序列化失败、屏蔽真实错误原因
+                            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                        }
+                    }
+                    Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
                 }
             }
         }
 
-        /// 停用插件
-        #[no_mangle]
-        pub extern "C" fn __bedcode_deactivate() -> i32 {
-            match <$plugin_type>::deactivate() {
-                Ok(()) => 0,
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(&host, &format!("deactivate failed: {}", e));
-                    1
-                }
-            }
-        }
+        // ==================== lifecycle（原 __bedcode_activate/deactivate/on_startup/on_shutdown） ====================
 
-        /// 调用自定义命令 — 结果写入 out_ptr（8 字节: ptr + len）
-        #[no_mangle]
-        pub extern "C" fn __bedcode_invoke_command(
-            name_ptr: u32,
-            name_len: u32,
-            args_ptr: u32,
-            args_len: u32,
-            out_ptr: u32,
-        ) {
-            let name = $crate::wasm_host::wasm_read_string(name_ptr, name_len);
-            let args_str = $crate::wasm_host::wasm_read_string(args_ptr, args_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(name_ptr, name_len);
-            $crate::wasm_host::wasm_dealloc_string(args_ptr, args_len);
-            // ABI 字符串 → 类型化 JSON（解析失败时为 Null，由插件自行容错）
-            let args: serde_json::Value =
-                serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
-
-            let result_str = match <$plugin_type>::invoke_command(&name, args) {
-                Ok(value) => {
-                    match serde_json::to_string(&value) {
-                        Ok(s) => s,
-                        // 错误信息经 serde_json 转义，避免引号/反斜杠产生非法 JSON
-                        // 导致宿主侧反序列化失败、屏蔽真实错误原因
-                        Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+        impl $crate::wasm::exports::bedcode::plugin::lifecycle::Guest for $plugin_type {
+            fn activate() -> Result<(), String> {
+                // WasmHost 是无状态 unit struct；插件身份由宿主侧 Caller state 维护。
+                // 日志走 UFCS 调用，宏展开处无需导入 HostLog trait
+                let host = $crate::wasm_host::WasmHost;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::activate() {
+                    Ok(()) => {
+                        $crate::host::HostLog::log_info(&host, "Plugin activated (wasm)");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        $crate::host::HostLog::log_error(&host, &format!("activate failed: {}", e));
+                        Err(e.to_string())
                     }
                 }
-                Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
-            };
-            let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&result_str);
-            $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
+            }
+
+            fn deactivate() -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::deactivate() {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("deactivate failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_startup() {
+                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_startup();
+            }
+
+            fn on_shutdown() {
+                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown();
+            }
         }
 
-        /// 终端输入处理 — 结果写入 out_ptr（8 字节: ptr + len）
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_terminal_input(
-            sid_ptr: u32,
-            sid_len: u32,
-            text_ptr: u32,
-            text_len: u32,
-            out_ptr: u32,
-        ) {
-            let session_id = $crate::wasm_host::wasm_read_string(sid_ptr, sid_len);
-            let text = $crate::wasm_host::wasm_read_string(text_ptr, text_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(sid_ptr, sid_len);
-            $crate::wasm_host::wasm_dealloc_string(text_ptr, text_len);
+        // ==================== events（原 __bedcode_on_message/on_session_lifecycle/on_input_submitted） ====================
 
-            match <$plugin_type>::on_terminal_input(&session_id, &text) {
-                Some(modified) => {
-                    let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&modified);
-                    $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
+        impl $crate::wasm::exports::bedcode::plugin::events::Guest for $plugin_type {
+            fn on_message(topic: String, sender: String, payload: String) -> Result<(), String> {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+                // ABI 三段字符串 → 类型化 BusMessage（timestamp 待 ABI v2 传递）
+                let msg = $crate::BusMessage {
+                    topic,
+                    sender,
+                    payload,
+                    timestamp: 0,
+                };
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_message(&msg) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_message failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
                 }
-                None => {
-                    $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, 0, 0);
+            }
+
+            fn on_session_lifecycle(payload: String) -> Result<(), String> {
+                // JSON 字符串 → 类型化 SessionLifecycleEvent（解析失败视为协议错误）
+                let event: $crate::events::SessionLifecycleEvent = serde_json::from_str(&payload)
+                    .map_err(|e| format!("on_session_lifecycle: invalid event payload: {}", e))?;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_lifecycle(&event) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_session_lifecycle failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_input_submitted(payload: String) -> Result<(), String> {
+                // JSON 字符串 → 类型化 InputSubmittedEvent（解析失败视为协议错误）
+                let event: $crate::events::InputSubmittedEvent = serde_json::from_str(&payload)
+                    .map_err(|e| format!("on_input_submitted: invalid event payload: {}", e))?;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_input_submitted(&event) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_input_submitted failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
                 }
             }
         }
 
-        /// 终端输出处理 — 结果写入 out_ptr（8 字节: ptr + len）
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_terminal_output(
-            sid_ptr: u32,
-            sid_len: u32,
-            data_ptr: u32,
-            data_len: u32,
-            out_ptr: u32,
-        ) {
-            let session_id = $crate::wasm_host::wasm_read_string(sid_ptr, sid_len);
-            let data = $crate::wasm_host::wasm_read_string(data_ptr, data_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(sid_ptr, sid_len);
-            $crate::wasm_host::wasm_dealloc_string(data_ptr, data_len);
+        // ==================== terminal-hooks（原 __bedcode_on_terminal_input/output） ====================
 
-            match <$plugin_type>::on_terminal_output(&session_id, &data) {
-                Some(modified) => {
-                    let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&modified);
-                    $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
-                }
-                None => {
-                    $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, 0, 0);
-                }
+        impl $crate::wasm::exports::bedcode::plugin::terminal_hooks::Guest for $plugin_type {
+            fn on_terminal_input(_session_id: String, text: String) -> Option<String> {
+                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_input(&_session_id, &text)
+            }
+
+            fn on_terminal_output(_session_id: String, data: String) -> Option<String> {
+                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_output(&_session_id, &data)
             }
         }
 
-        /// 应用启动完成回调
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_startup() {
-            let _ = <$plugin_type>::on_startup();
-        }
+        // ==================== upload-hook（原 __bedcode_on_upload_request） ====================
 
-        /// 应用即将关闭回调
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_shutdown() {
-            let _ = <$plugin_type>::on_shutdown();
-        }
+        impl $crate::wasm::exports::bedcode::plugin::upload_hook::Guest for $plugin_type {
+            /// 上传策略钩子：fail-closed（入参解析失败时直接拒绝，不调用插件逻辑）。
+            /// 拒绝语义完全由决定 JSON 表达，宿主据此 fail-closed。
+            fn on_upload_request(meta_json: String) -> String {
+                let decision =
+                    match serde_json::from_str::<$crate::types::UploadRequestMeta>(&meta_json) {
+                        Ok(meta) => <$plugin_type as $crate::wasm::WasmPlugin>::on_upload_request(&meta),
+                        Err(e) => {
+                            let host = $crate::wasm_host::WasmHost;
+                            $crate::host::HostLog::log_error(
+                                &host,
+                                &format!("on_upload_request: invalid meta payload: {}", e),
+                            );
+                            $crate::types::UploadHookDecision::deny("invalid upload request meta")
+                        }
+                    };
 
-        /// 接收消息总线消息
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_message(
-            topic_ptr: u32,
-            topic_len: u32,
-            sender_ptr: u32,
-            sender_len: u32,
-            payload_ptr: u32,
-            payload_len: u32,
-        ) -> i32 {
-            let topic = $crate::wasm_host::wasm_read_string(topic_ptr, topic_len);
-            let sender = $crate::wasm_host::wasm_read_string(sender_ptr, sender_len);
-            let payload_str = $crate::wasm_host::wasm_read_string(payload_ptr, payload_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(topic_ptr, topic_len);
-            $crate::wasm_host::wasm_dealloc_string(sender_ptr, sender_len);
-            $crate::wasm_host::wasm_dealloc_string(payload_ptr, payload_len);
-            let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
-                Ok(v) => v,
-                Err(_) => serde_json::Value::Null,
-            };
-            // ABI 三段字符串 → 类型化 BusMessage（timestamp 待 ABI v2 传递）
-            let msg = $crate::BusMessage {
-                topic,
-                sender,
-                payload,
-                timestamp: 0,
-            };
-            match <$plugin_type>::on_message(&msg) {
-                Ok(()) => 0,
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(&host, &format!("on_message failed: {}", e));
-                    -1
-                }
+                // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
+                serde_json::to_string(&decision)
+                    .unwrap_or_else(|_| r#"{"allow":false,"reason":"serialize decision failed"}"#.to_string())
             }
         }
 
-        /// 接收会话生命周期事件
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_session_lifecycle(
-            payload_ptr: u32,
-            payload_len: u32,
-        ) -> i32 {
-            let payload_str = $crate::wasm_host::wasm_read_string(payload_ptr, payload_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(payload_ptr, payload_len);
-            // ABI JSON 字符串 → 类型化 SessionLifecycleEvent（解析失败视为协议错误）
-            let event: $crate::events::SessionLifecycleEvent = match serde_json::from_str(&payload_str) {
-                Ok(e) => e,
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(
-                        &host,
-                        &format!("on_session_lifecycle: invalid event payload: {}", e),
-                    );
-                    return -1;
-                }
-            };
-            match <$plugin_type>::on_session_lifecycle(&event) {
-                Ok(()) => 0,
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(
-                        &host,
-                        &format!("on_session_lifecycle failed: {}", e),
-                    );
-                    -1
-                }
+        // ==================== manifest（原 __bedcode_manifest） ====================
+
+        impl $crate::wasm::exports::bedcode::plugin::manifest::Guest for $plugin_type {
+            fn get() -> String {
+                serde_json::to_string(&<$plugin_type as $crate::wasm::WasmPlugin>::manifest())
+                    .unwrap_or_else(|_| "{}".to_string())
             }
         }
 
-        /// 接收提交输入行事件（异步观察，返回值仅用于宿主侧错误日志）
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_input_submitted(
-            payload_ptr: u32,
-            payload_len: u32,
-        ) -> i32 {
-            let payload_str = $crate::wasm_host::wasm_read_string(payload_ptr, payload_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(payload_ptr, payload_len);
-            // ABI JSON 字符串 → 类型化 InputSubmittedEvent（解析失败视为协议错误）
-            let event: $crate::events::InputSubmittedEvent = match serde_json::from_str(&payload_str) {
-                Ok(e) => e,
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(
-                        &host,
-                        &format!("on_input_submitted: invalid event payload: {}", e),
-                    );
-                    return -1;
-                }
-            };
-            match <$plugin_type>::on_input_submitted(&event) {
-                Ok(()) => 0,
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(
-                        &host,
-                        &format!("on_input_submitted failed: {}", e),
-                    );
-                    -1
-                }
+        // ==================== abi（原 __bedcode_abi_version + form 形态字段） ====================
+
+        impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
+            /// ABI 版本：语义与 `abi::ABI_VERSION`（当前 v6）完全一致
+            fn version() -> u32 {
+                $crate::abi::ABI_VERSION as u32
+            }
+
+            /// 产物形态：组件（Component Model），宿主按 `form()==1` 识别
+            fn form() -> u32 {
+                $crate::abi::FORM_COMPONENT as u32
             }
         }
 
-        /// 上传请求策略钩子 — 决定 JSON 写入 out_ptr（8 字节: ptr + len）
-        ///
-        /// fail-closed：入参解析失败时直接拒绝，不调用插件逻辑。
-        /// 返回值仅用于宿主侧错误日志，拒绝语义完全由决定 JSON 表达
-        #[no_mangle]
-        pub extern "C" fn __bedcode_on_upload_request(
-            meta_ptr: u32,
-            meta_len: u32,
-            out_ptr: u32,
-        ) -> i32 {
-            let meta_str = $crate::wasm_host::wasm_read_string(meta_ptr, meta_len);
-            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
-            $crate::wasm_host::wasm_dealloc_string(meta_ptr, meta_len);
+        // ==================== 组件导出 ====================
 
-            let decision = match serde_json::from_str::<$crate::types::UploadRequestMeta>(&meta_str) {
-                Ok(meta) => <$plugin_type>::on_upload_request(&meta),
-                Err(e) => {
-                    let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(
-                        &host,
-                        &format!("on_upload_request: invalid meta payload: {}", e),
-                    );
-                    $crate::types::UploadHookDecision::deny("invalid upload request meta")
-                }
-            };
-
-            // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
-            let json = serde_json::to_string(&decision)
-                .unwrap_or_else(|_| r#"{"allow":false,"reason":"serialize decision failed"}"#.to_string());
-            let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&json);
-            $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
-            0
-        }
+        // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 7 组接口的 cabi 导出）。
+        // 宏展开处 `$crate` 为插件依赖的 SDK：绑定类型路径经 lib.rs 的
+        // `pub use wasm::bedcode` re-export 定位（generate! 的 default_bindings_module）
+        $crate::wasm::export!($plugin_type);
     };
 }
