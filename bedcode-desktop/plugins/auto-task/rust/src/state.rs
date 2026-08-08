@@ -1206,6 +1206,8 @@ pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let queue_count = crate::queue::pending_count(host, &session_id);
+            // 会话开关随列表返回（前端队列卡片上的启动/自动应答开关状态）
+            let (auto_execute, auto_answer) = session_flags(host, &session_id);
 
             Some(serde_json::json!({
                 "session_id": session_id,
@@ -1218,6 +1220,8 @@ pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
                 "started_at": started_at,
                 "agent": session_agent(host, &session_id),
                 "queue_count": queue_count,
+                "auto_execute": auto_execute,
+                "auto_answer": auto_answer,
             }))
         })
         .collect();

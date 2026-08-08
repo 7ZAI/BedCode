@@ -17,6 +17,7 @@ const en: MessageSchema = {
   autoExecuteHint: 'Added tasks run automatically one by one when enabled',
   autoAnswer: 'Auto Answer',
   autoAnswerHint: 'Agent questions are answered automatically when enabled',
+  sessionFlagFailed: 'Failed to toggle session flag',
   inputPlaceholder: 'Enter a task — Enter to add, Shift+Enter for newline',
   add: 'Add',
   clearQueue: 'Clear',
@@ -121,6 +122,9 @@ const en: MessageSchema = {
   scheduledStatusFailed: 'Failed',
   scheduledStatusMissed: 'Missed',
   scheduledError: 'Error',
+  scheduledSectionActive: 'Active',
+  scheduledSectionFinished: 'History',
+  scheduledClearFinished: 'Clear',
 }
 
 export default en

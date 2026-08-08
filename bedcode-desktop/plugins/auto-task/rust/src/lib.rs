@@ -888,7 +888,7 @@ impl WasmPlugin for AutoTaskPlugin {
         }
 
         // 仅在完整支持自动任务的 agent 会话中把输入当作任务：
-        // 未适配 agent（codex/opencode/unknown）的会话直接忽略
+        // 未适配 agent（unknown）的会话直接忽略
         let session_agent_name = state::session_agent(&host, &event.session_id);
         if !agent::is_supported(session_agent_name) {
             host.log_debug(&format!(

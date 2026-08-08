@@ -91,12 +91,32 @@ function copyArtifacts() {
     console.warn('[build] WARNING: pi_task_hook.ts not found in scripts/')
   }
 
+  // 复制 opencode_task_hook.ts（opencode 插件，部署到项目 .opencode/plugins/）
+  const opencodeHookSource = resolve(ROOT, 'scripts/opencode_task_hook.ts')
+  if (existsSync(opencodeHookSource)) {
+    cpSync(opencodeHookSource, resolve(RESOURCES_DIR, 'opencode_task_hook.ts'))
+    console.log('[build] Copied opencode_task_hook.ts')
+  } else {
+    console.warn('[build] WARNING: opencode_task_hook.ts not found in scripts/')
+  }
+
+  // 复制 codex_task_hook.py（Codex hooks，部署到项目 .codex/）
+  const codexHookSource = resolve(ROOT, 'scripts/codex_task_hook.py')
+  if (existsSync(codexHookSource)) {
+    cpSync(codexHookSource, resolve(RESOURCES_DIR, 'codex_task_hook.py'))
+    console.log('[build] Copied codex_task_hook.py')
+  } else {
+    console.warn('[build] WARNING: codex_task_hook.py not found in scripts/')
+  }
+
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   console.log(`[build]   - index.js`)
   console.log(`[build]   - plugin.json`)
   console.log(`[build]   - ${RUST_LIB_NAME}.wasm`)
   console.log(`[build]   - auto_task_hook.py`)
   console.log(`[build]   - pi_task_hook.ts`)
+  console.log(`[build]   - opencode_task_hook.ts`)
+  console.log(`[build]   - codex_task_hook.py`)
 }
 
 // ==================== Main ====================

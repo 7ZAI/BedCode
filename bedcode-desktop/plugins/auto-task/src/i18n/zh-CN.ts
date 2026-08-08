@@ -17,6 +17,7 @@ const zhCN: MessageSchema = {
   autoExecuteHint: '开启后，添加的任务将自动依次执行',
   autoAnswer: '自动应答',
   autoAnswerHint: '开启后，Agent 的提问将自动回答',
+  sessionFlagFailed: '切换会话开关失败',
   inputPlaceholder: '输入任务内容，回车添加，Shift+回车换行',
   add: '添加',
   clearQueue: '清空',
@@ -121,6 +122,9 @@ const zhCN: MessageSchema = {
   scheduledStatusFailed: '失败',
   scheduledStatusMissed: '错过',
   scheduledError: '错误',
+  scheduledSectionActive: '进行中',
+  scheduledSectionFinished: '历史',
+  scheduledClearFinished: '清空',
 }
 
 export default zhCN

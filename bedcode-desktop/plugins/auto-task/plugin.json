@@ -2,7 +2,7 @@
   "id": "com.bedcode.auto-task",
   "name": "Auto Task",
   "version": "1.0.0",
-  "description": "Agent 任务状态同步与自动授权（Claude Code / pi）",
+  "description": "Agent 任务状态同步与自动授权（Claude Code / pi / opencode / Codex）",
   "author": "BedCode",
   "main": "index.js",
   "sandbox": "inline",

@@ -90,8 +90,8 @@ let stopRouteWatch: (() => void) | null = null
 // ==================== 工具栏入口可见性（仅插件适配的 agent 会话） ====================
 
 // 完整适配的 agent（Rust AGENT_PROFILES 中 session_integration 非 None）：
-// claude（hooks 集成）/ pi（pi 扩展集成）；codex / opencode 仅识别未适配，不显示入口
-const ADAPTED_AGENTS = ['claude', 'pi']
+// claude / codex（hooks 集成）、pi（pi 扩展）、opencode（opencode 插件）
+const ADAPTED_AGENTS = ['claude', 'pi', 'opencode', 'codex']
 
 // 异步同步序号：路由快速切换时丢弃过期结果，避免旧会话的 agent 覆盖新状态
 let toolbarSyncSeq = 0
