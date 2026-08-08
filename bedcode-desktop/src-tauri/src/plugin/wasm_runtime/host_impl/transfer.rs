@@ -1,4 +1,4 @@
-//! 传输引擎域 Host Functions（断点续传的文件上传/下载）
+//! 传输引擎域宿主实现（断点续传的文件上传/下载）
 //!
 //! 宿主托管实际字节搬运，插件只负责任务编排（规格第 6、7 节）：
 //! - 下载：reqwest GET + `Range: bytes={offset}-` → tokio 流式写文件
@@ -9,10 +9,9 @@
 //!
 //! 所有错误结构化回报（Failed(reason) 终态事件），禁止静默失败
 
-use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
 use crate::plugin::fs_auth::FsOp;
 use crate::plugin::message_bus::MessageBus;
-use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
 use crate::system::error_boundary::spawn_with_error_boundary;
 use bedcode_plugin_api::permission::PERMISSION_TRANSFER;
 use bedcode_plugin_api::{TransferDirection, TransferProgress, TransferRequest, TransferState};
@@ -48,9 +47,9 @@ enum Outcome {
     Failed(String),
 }
 
-// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+// ==================== 逻辑层（Component Model 绑定调用） ====================
 
-/// 逻辑层：启动传输任务（权限 + fs 授权 + 登记 + spawn），返回 task_id
+/// 启动传输任务（权限 + fs 授权 + 登记 + spawn），返回 task_id
 ///
 /// 宿主托管实际字节搬运，插件只负责任务编排（规格第 6、7 节）。
 /// 本地路径授权按方向判定：下载 = 写授权，上传 = 读授权。
@@ -114,7 +113,7 @@ pub(crate) fn transfer_start(
     Ok(task_id)
 }
 
-/// 逻辑层：取消传输任务（权限 + 查任务表），任务不存在视为幂等成功
+/// 取消传输任务（权限 + 查任务表），任务不存在视为幂等成功
 pub(crate) fn transfer_cancel(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -138,73 +137,6 @@ pub(crate) fn transfer_cancel(
         }
     }
     Ok(())
-}
-
-// ==================== Host Functions（core module 胶水） ====================
-
-/// 传输引擎：启动传输任务
-///
-/// 参数：(req_ptr, req_len, out_ptr) — req 为 TransferRequest JSON
-/// 返回：0 成功（task_id 写入 out_ptr），-1 失败（权限/fs 授权/参数错误）
-pub(super) fn host_transfer_start(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    req_ptr: u32,
-    req_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let req_str = match read_wasm_string_consume(&mut caller, req_ptr, req_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_transfer_start: failed to read request");
-            return -1;
-        }
-    };
-
-    match transfer_start(&host_ctx, &plugin_id, &req_str) {
-        Ok(task_id) => match write_wasm_string(&mut caller, &task_id) {
-            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-            None => {
-                tracing::error!(plugin_id = %plugin_id, "host_transfer_start: failed to write task_id");
-                -1
-            }
-        },
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_transfer_start: start failed");
-            -1
-        }
-    }
-}
-
-/// 传输引擎：取消传输任务
-///
-/// 参数：(task_ptr, task_len)
-/// 返回：0 成功；任务不存在（已完成/未知）也返回 0（幂等），记录 debug 日志
-pub(super) fn host_transfer_cancel(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    task_ptr: u32,
-    task_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let task_id = match read_wasm_string_consume(&mut caller, task_ptr, task_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_transfer_cancel: failed to read task id");
-            return -1;
-        }
-    };
-
-    match transfer_cancel(&host_ctx, &plugin_id, &task_id) {
-        Ok(()) => 0,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_transfer_cancel: cancel failed");
-            -1
-        }
-    }
 }
 
 // ==================== Transfer Task ====================

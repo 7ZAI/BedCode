@@ -1,14 +1,13 @@
-//! 配置域 Host Functions（白名单配置读取）
+//! 配置域宿主实现（白名单配置读取）
 //!
-//! 逻辑层 `config_get`（权限/白名单校验 + 读取）供 core module 胶水
-//! 与 Component Model 绑定（`wasm_runtime::component`）共用。
+//! `config_get`（权限/白名单校验 + 读取）供 Component Model 绑定
+//! （`wasm_runtime::component`）调用。
 
-use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::block_on_async;
 use crate::system::config::AppConfig;
 use bedcode_plugin_api::host::ConfigKey;
 
-/// 逻辑层：读取宿主配置项（白名单 = SDK `ConfigKey` 枚举本身）
+/// 读取宿主配置项（白名单 = SDK `ConfigKey` 枚举本身）
 ///
 /// `from_str` 过滤非法 key，value match 穷尽所有变体 —— 新增配置项时
 /// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移
@@ -45,40 +44,4 @@ pub(crate) fn config_get(plugin_id: &str, key: &str) -> Result<Option<String>, S
     };
 
     Ok(Some(value))
-}
-
-/// 配置：读取宿主配置项
-///
-/// 参数：(key_ptr, key_len, out_ptr)
-/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
-pub(super) fn host_config_get(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    key_ptr: u32,
-    key_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-
-    let key = match read_wasm_string_consume(&mut caller, key_ptr, key_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_config_get: failed to read key");
-            return -1;
-        }
-    };
-
-    match config_get(&plugin_id, &key) {
-        Ok(Some(value)) => match write_wasm_string(&mut caller, &value) {
-            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-            None => {
-                tracing::error!(plugin_id = %plugin_id, key = %key, "host_config_get: failed to write result to WASM memory");
-                -1
-            }
-        },
-        Ok(None) => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
-        Err(e) => {
-            tracing::error!(plugin_id = %plugin_id, key = %key, "host_config_get: {}", e);
-            -1
-        }
-    }
 }

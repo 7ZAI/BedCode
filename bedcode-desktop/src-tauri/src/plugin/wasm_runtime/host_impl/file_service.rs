@@ -1,0 +1,115 @@
+//! 文件服务域宿主实现（挂载/卸载/更新根目录/对端信息）
+//!
+//! 注册表经 [`WasmHostContext`] 注入（在 PluginHost::new() 中早于插件
+//! auto-activate 创建并注入），宿主实现直接从宿主上下文获取 ——
+//! 不依赖 AppContext 全局单例（其初始化晚于插件激活，激活期挂载会失败）。
+//! 挂载的上传策略钩子目标记为 Wasm（WASM 插件导出 on_upload_request）
+
+use crate::plugin::file_service::HookTarget;
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
+use bedcode_plugin_api::permission::PERMISSION_FILESERVICE;
+use bedcode_plugin_api::{MountOptions, MountResult};
+
+/// 获取文件服务注册表（经宿主上下文注入，激活期始终可用）
+fn file_service_registry(
+    host_ctx: &WasmHostContext,
+) -> std::sync::Arc<crate::plugin::file_service::FileServiceRegistry> {
+    host_ctx.file_service().clone()
+}
+
+/// 挂载（权限 + 注册表 mount），返回 MountResult JSON
+pub(crate) fn filesrv_mount(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    options_json: &str,
+) -> Result<String, String> {
+    let options: MountOptions = serde_json::from_str(options_json)
+        .map_err(|e| format!("file service error: invalid MountOptions JSON: {}", e))?;
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_mount") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    match block_on_async(registry.mount(plugin_id, options, HookTarget::Wasm)) {
+        Ok(entry) => {
+            let result = MountResult {
+                mount_path: entry.mount_path.clone(),
+                base_path: format!("/api/plugins/{}/{}", plugin_id, entry.mount_path),
+            };
+            serde_json::to_string(&result)
+                .map_err(|e| format!("file service error: serialize result failed: {}", e))
+        }
+        Err(e) => Err(format!("file service error: mount failed: {}", e)),
+    }
+}
+
+/// 卸载挂载点（权限 + 注册表 unmount）
+pub(crate) fn filesrv_unmount(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_unmount") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.unmount(plugin_id, mount_path))
+        .map_err(|e| format!("file service error: unmount failed: {}", e))
+}
+
+/// 更新挂载点允许目录根（权限 + 注册表 update_roots）
+pub(crate) fn filesrv_update_roots(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+    roots_json: &str,
+) -> Result<(), String> {
+    let roots: Vec<String> = serde_json::from_str(roots_json)
+        .map_err(|e| format!("file service error: invalid roots JSON: {}", e))?;
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_update_roots") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.update_roots(plugin_id, mount_path, roots))
+        .map_err(|e| format!("file service error: update roots failed: {}", e))
+}
+
+/// 主动询问对端状态（权限 + 经 WS 控制面广播 Query）
+///
+/// peer_id 为空广播给全部已认证客户端（多设备场景幂等；定向发送暂不支持，
+/// WsSessionRegistry 无 device_id 索引）；对端回复 Announce/Withdraw 后
+/// 由注册表推送 `filesrv:peer_changed`。
+pub(crate) fn filesrv_query_peer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    peer_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_query_peer") {
+        return Err("permission denied".to_string());
+    }
+    let payload = crate::enums::FileServicePayload::Query {};
+    let json = crate::server::ws::message::Message::file_service(payload)
+        .to_json()
+        .map_err(|e| format!("file service error: serialize failed: {}", e))?;
+    let registry = crate::server::ws::registry::WsSessionRegistry::global();
+    block_on_async(registry.broadcast(json, None));
+    tracing::debug!(plugin_id = %plugin_id, peer_id = %peer_id, "file service query broadcast");
+    Ok(())
+}
+
+/// 获取对端文件服务信息（权限 + 注册表查询），未公告返回 None
+pub(crate) fn filesrv_get_peer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    peer_id: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_get_peer") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    match block_on_async(registry.get_peer(peer_id)) {
+        Some(info) => serde_json::to_string(&info)
+            .map(Some)
+            .map_err(|e| format!("file service error: serialize failed: {}", e)),
+        None => Ok(None),
+    }
+}

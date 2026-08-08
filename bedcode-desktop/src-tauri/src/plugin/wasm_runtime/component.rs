@@ -1,30 +1,26 @@
-//! Component Model 支持（迁移阶段 A：协议共存）
+//! Component Model 支持（迁移阶段 C：唯一形态）
 //!
 //! 对应 docs/knowledge/wasmtime-component-migration.md：
-//! - 宿主 WasmRuntime 同时支持 core module（自研 ABI，现状）与 component，
-//!   加载入口按产物格式自动选择（见 `WasmRuntime::load_plugin_from_file`）
 //! - 契约定义在 `packages/plugin-sdk-desktop/rust/wit/bedcode.wit`
 //!   （单一事实来源），本模块用 `bindgen!` 生成绑定：
 //!   - import 接口 → `Host` trait，由本模块对 `WasmPluginState` 实现
 //!   - export 接口 → `exports::bedcode::plugin::*::Guest`，宿主侧调用组件
-//! - 已接线接口：host-storage / host-log / host-config / host-terminal /
-//!   host-status（mark-plugin-error 归入 host-log）已随阶段 A 收尾补全全部
-//!   13 组（含 host-database / host-plugin-database / host-session /
+//! - 已接线 13 组 import 接口（host-storage / host-log / host-config /
+//!   host-terminal / host-database / host-plugin-database / host-session /
 //!   host-timer / host-events / host-http / host-fs / host-bus /
 //!   host-file-service / host-transfer），完整 `plugin` world 可直接实例化；
 //!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块
-//! - 业务逻辑与 core module 胶水共用 `host_functions` 的逻辑层函数，
-//!   行为单一事实来源；core 胶水删除时（阶段 C）本模块实现成为规范
+//! - 宿主能力实现层在 `host_impl`（阶段 C 后仅此一层，core 胶水已删）
 //!
-//! ## 与 core module 路径的差异（有意为之，见 WIT 注释）
+//! ## 与 core module 路径的差异（历史，见 WIT 注释）
 //!
 //! - export 全部为必选：core ABI 中 on_message 等可选导出在组件契约中强制
 //!   （组件 world 声明即契约，阶段 B SDK 无条件导出全部）
-//! - log 不带 file/line 调用点（core ABI v7 经 ABI 传插件源码位置；
-//!   组件形态暂无传递通道，阶段 B 可给 host-log 增加可选参数）
+//! - log 不带 file/line 调用点（core ABI 经 ABI 传插件源码位置；
+//!   组件形态暂无传递通道，见 wit/bedcode.wit 的 host-log 注释）
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
-use super::host_functions::{
+use super::host_impl::{
     bus, config, database, events, file_service, fs, http, lifecycle, log, session, status,
     storage, terminal, timer, transfer,
 };
@@ -291,21 +287,21 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
 
 // ==================== 组件插件实例 ====================
 
-/// 已加载的组件形态 WASM 插件
+/// 已加载的组件形态 WASM 插件（阶段 C 后唯一形态）
 ///
-/// 与 `LoadedCorePlugin` 平行：持有 component Instance + Store，
-/// 全部调用走 bindgen 生成的类型化接口（无 (ptr,len) 内存搬运）。
-/// Store 必须与 Instance 一起持有，否则导出函数无法调用。
-pub(crate) struct ComponentWasmPlugin {
+/// 持有 component Instance + Store，全部调用走 bindgen 生成的类型化接口
+/// （无 (ptr,len) 内存搬运）。Store 必须与 Instance 一起持有，
+/// 否则导出函数无法调用。
+pub struct LoadedWasmPlugin {
     instance: Instance,
     store: Store<WasmPluginState>,
 }
 
-impl ComponentWasmPlugin {
+impl LoadedWasmPlugin {
     /// 实例化组件
     ///
     /// 与 core 路径相同的防护：资源限制、epoch 中断、ABI 版本协商
-    /// （新增 form 形态字段：组件必须声明 form=1，版本号语义不变）
+    /// （组件必须声明 form=1，版本号语义不变）
     pub(crate) fn new(
         engine: &wasmtime::Engine,
         component_linker: &Linker<WasmPluginState>,
@@ -541,33 +537,5 @@ impl ComponentWasmPlugin {
 }
 
 // ==================== 产物形态检测 ====================
-
-/// WASM 产物形态：core module（自研 ABI）或 component（Component Model）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArtifactKind {
-    /// 传统 core module（wasm32-unknown-unknown，自研 ABI，`__bedcode_*` 导出）
-    Core,
-    /// Component（Component Model，WIT 契约）
-    Component,
-}
-
-/// 按文件头魔法字节检测产物形态
-///
-/// 两者都以 `\0asm` 开头，第 4-7 字节为版本：
-/// - core module：`01 00 00 00`
-/// - component：`0d 00 01 00`
-pub(crate) fn detect_artifact_kind(bytes: &[u8]) -> crate::Result<ArtifactKind> {
-    if bytes.len() < 8 || &bytes[0..4] != b"\0asm" {
-        return Err(AppError::Plugin(
-            "Invalid WASM artifact: missing \\0asm magic header".to_string(),
-        ));
-    }
-    match &bytes[4..8] {
-        [0x01, 0x00, 0x00, 0x00] => Ok(ArtifactKind::Core),
-        [0x0d, 0x00, 0x01, 0x00] => Ok(ArtifactKind::Component),
-        other => Err(AppError::Plugin(format!(
-            "Unrecognized WASM artifact version bytes: {:02x?}",
-            other
-        ))),
-    }
-}
+//
+// 阶段 C 已删除：产物仅剩组件形态，无需按魔法字节分派加载路径。

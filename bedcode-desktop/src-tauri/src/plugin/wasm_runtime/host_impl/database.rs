@@ -1,13 +1,12 @@
-//! 数据库域 Host Functions（主库前缀隔离 + 插件独立库）
+//! 数据库域宿主实现（主库前缀隔离 + 插件独立库）
 //!
 //! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
 
-use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
-use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use crate::plugin::permission::PERMISSION_STORAGE;
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
 use regex::Regex;
 
-// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+// ==================== 逻辑层（Component Model 绑定调用） ====================
 
 /// 解析参数绑定 JSON 数组字符串（空串视为空数组）
 fn parse_params_json(params_json: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -18,7 +17,7 @@ fn parse_params_json(params_json: &str) -> Result<Vec<serde_json::Value>, String
         .map_err(|e| format!("invalid params JSON array: {}", e))
 }
 
-/// 逻辑层：主库执行 SQL（权限 + 表名前缀校验），返回受影响行数
+/// 主库执行 SQL（权限 + 表名前缀校验），返回受影响行数
 pub(crate) fn db_execute(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -37,7 +36,7 @@ pub(crate) fn db_execute(
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 逻辑层：主库查询（权限 + 表名前缀校验），返回行数组 JSON 字符串
+/// 主库查询（权限 + 表名前缀校验），返回行数组 JSON 字符串
 pub(crate) fn db_query(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -58,7 +57,7 @@ pub(crate) fn db_query(
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-/// 逻辑层：插件独立库执行 SQL（权限校验，无表名前缀校验）
+/// 插件独立库执行 SQL（权限校验，无表名前缀校验）
 pub(crate) fn plugin_db_execute(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -75,7 +74,7 @@ pub(crate) fn plugin_db_execute(
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 逻辑层：插件独立库查询（权限校验，无表名前缀校验）
+/// 插件独立库查询（权限校验，无表名前缀校验）
 pub(crate) fn plugin_db_query(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -95,7 +94,7 @@ pub(crate) fn plugin_db_query(
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-/// 逻辑层：主库执行参数绑定 SQL（权限 + 表名前缀校验）
+/// 主库执行参数绑定 SQL（权限 + 表名前缀校验）
 pub(crate) fn db_execute_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -116,7 +115,7 @@ pub(crate) fn db_execute_params(
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 逻辑层：主库参数绑定查询（权限 + 表名前缀校验）
+/// 主库参数绑定查询（权限 + 表名前缀校验）
 pub(crate) fn db_query_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -139,7 +138,7 @@ pub(crate) fn db_query_params(
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-/// 逻辑层：插件独立库执行参数绑定 SQL（权限校验，无表名前缀校验）
+/// 插件独立库执行参数绑定 SQL（权限校验，无表名前缀校验）
 pub(crate) fn plugin_db_execute_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -158,7 +157,7 @@ pub(crate) fn plugin_db_execute_params(
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 逻辑层：插件独立库参数绑定查询（权限校验，无表名前缀校验）
+/// 插件独立库参数绑定查询（权限校验，无表名前缀校验）
 pub(crate) fn plugin_db_query_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -180,265 +179,7 @@ pub(crate) fn plugin_db_query_params(
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-// ==================== Host Functions（core module 胶水） ====================
-
-/// 数据库：执行 SQL
-///
-/// 参数：(sql_ptr, sql_len)
-/// 返回：受影响行数（>= 0），负数表示错误
-pub(super) fn host_db_execute(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let sql = match read_wasm_string_consume(&mut caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_db_execute: failed to read SQL");
-            return -1;
-        }
-    };
-
-    match db_execute(&host_ctx, &plugin_id, &sql) {
-        Ok(affected) => affected as i32,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_db_execute: SQL execution failed");
-            -1
-        }
-    }
-}
-
-/// 数据库：查询 SQL
-///
-/// 参数：(sql_ptr, sql_len, out_ptr)
-/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
-pub(super) fn host_db_query(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let sql = match read_wasm_string_consume(&mut caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to read SQL");
-            return -1;
-        }
-    };
-
-    let query_result = db_query(&host_ctx, &plugin_id, &sql);
-
-    write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
-}
-
-/// 插件独立数据库：执行 SQL
-///
-/// 参数：(sql_ptr, sql_len)
-/// 返回：受影响行数（>= 0），负数表示错误
-///
-/// 与 host_db_execute 的区别：
-/// - 使用插件独立数据库连接（无全局 Mutex 竞争）
-/// - 无表名前缀校验（整个数据库都是插件的）
-pub(super) fn host_plugin_db_execute(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let sql = match read_wasm_string_consume(&mut caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_plugin_db_execute: failed to read SQL");
-            return -1;
-        }
-    };
-
-    match plugin_db_execute(&host_ctx, &plugin_id, &sql) {
-        Ok(affected) => affected as i32,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_plugin_db_execute: SQL execution failed");
-            -1
-        }
-    }
-}
-
-/// 插件独立数据库：查询 SQL
-///
-/// 参数：(sql_ptr, sql_len, out_ptr)
-/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
-///
-/// 与 host_db_query 的区别：
-/// - 使用插件独立数据库连接（无全局 Mutex 竞争）
-/// - 无表名前缀校验（整个数据库都是插件的）
-pub(super) fn host_plugin_db_query(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let sql = match read_wasm_string_consume(&mut caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_plugin_db_query: failed to read SQL");
-            return -1;
-        }
-    };
-
-    let query_result = plugin_db_query(&host_ctx, &plugin_id, &sql);
-
-    write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
-}
-
-/// 数据库：执行 SQL 参数绑定版
-///
-/// 参数：(sql_ptr, sql_len, params_ptr, params_len)
-/// 返回：受影响行数（>= 0），负数表示错误
-///
-/// params 为 JSON 数组字符串（如 `["abc", 42, true, null]`），
-/// 按序绑定到 SQL 中的 `?1`、`?2` …（或 `?`）占位符，rusqlite 真绑定防注入
-pub(super) fn host_db_execute_params(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    params_ptr: u32,
-    params_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let (sql, params) = match read_sql_and_params(&mut caller, &plugin_id, "host_db_execute_params", sql_ptr, sql_len, params_ptr, params_len) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    match db_execute_params(&host_ctx, &plugin_id, &sql, &params) {
-        Ok(affected) => affected as i32,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_db_execute_params: SQL execution failed");
-            -1
-        }
-    }
-}
-
-/// 数据库：查询 SQL 参数绑定版
-///
-/// 参数：(sql_ptr, sql_len, params_ptr, params_len, out_ptr)
-/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
-pub(super) fn host_db_query_params(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    params_ptr: u32,
-    params_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let (sql, params) = match read_sql_and_params(&mut caller, &plugin_id, "host_db_query_params", sql_ptr, sql_len, params_ptr, params_len) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    let query_result = db_query_params(&host_ctx, &plugin_id, &sql, &params);
-
-    write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
-}
-
-/// 插件独立数据库：执行 SQL 参数绑定版
-///
-/// 参数：(sql_ptr, sql_len, params_ptr, params_len)
-/// 返回：受影响行数（>= 0），负数表示错误（无表名前缀校验）
-pub(super) fn host_plugin_db_execute_params(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    params_ptr: u32,
-    params_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let (sql, params) = match read_sql_and_params(&mut caller, &plugin_id, "host_plugin_db_execute_params", sql_ptr, sql_len, params_ptr, params_len) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    match plugin_db_execute_params(&host_ctx, &plugin_id, &sql, &params) {
-        Ok(affected) => affected as i32,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_plugin_db_execute_params: SQL execution failed");
-            -1
-        }
-    }
-}
-
-/// 插件独立数据库：查询 SQL 参数绑定版
-///
-/// 参数：(sql_ptr, sql_len, params_ptr, params_len, out_ptr)
-/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
-pub(super) fn host_plugin_db_query_params(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    params_ptr: u32,
-    params_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let (sql, params) = match read_sql_and_params(&mut caller, &plugin_id, "host_plugin_db_query_params", sql_ptr, sql_len, params_ptr, params_len) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    let query_result = plugin_db_query_params(&host_ctx, &plugin_id, &sql, &params);
-
-    write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
-}
-
-// ==================== Shared Query Helpers ====================
-
-/// 从 WASM 内存读取 SQL 与参数 JSON 字符串（4 个 params 版 host function 共用）
-///
-/// 仅负责内存读取，JSON 解析与绑定在逻辑层（`db_execute_params` 等）完成
-fn read_sql_and_params(
-    caller: &mut wasmtime::Caller<'_, WasmPluginState>,
-    plugin_id: &str,
-    api: &str,
-    sql_ptr: u32,
-    sql_len: u32,
-    params_ptr: u32,
-    params_len: u32,
-) -> Result<(String, String), i32> {
-    let sql = match read_wasm_string_consume(caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "{}: failed to read SQL", api);
-            return Err(-1);
-        }
-    };
-    let params_str = match read_wasm_string_consume(caller, params_ptr, params_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "{}: failed to read params", api);
-            return Err(-1);
-        }
-    };
-    Ok((sql, params_str))
-}
+// ==================== 参数绑定辅助 ====================
 
 /// 将 JSON 参数绑定到预编译语句（1-based 索引，rusqlite 真绑定，防注入）
 fn bind_json_params(
@@ -546,30 +287,6 @@ fn query_to_json(
             .map(serde_json::Value::Object)
             .collect(),
     ))
-}
-
-/// 将查询结果 JSON 写入 WASM 线性内存（主库与插件库查询共用出口）
-fn write_query_result(
-    caller: &mut wasmtime::Caller<'_, WasmPluginState>,
-    query_result: Result<Option<String>, String>,
-    plugin_id: &str,
-    sql: &str,
-    out_ptr: u32,
-) -> i32 {
-    match query_result {
-        Ok(Some(json_str)) => match write_wasm_string(caller, &json_str) {
-            Some((ptr, len)) => write_result_to_out_ptr(caller, out_ptr, ptr, len),
-            None => {
-                tracing::error!(plugin_id = %plugin_id, "db_query: failed to write result to WASM memory");
-                -1
-            }
-        },
-        Ok(None) => write_result_to_out_ptr(caller, out_ptr, 0, 0),
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "db_query: SQL query failed");
-            -1
-        }
-    }
 }
 
 // ==================== SQL Table Name Validation ====================
