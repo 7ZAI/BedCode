@@ -18,7 +18,7 @@
         @click="navigateTo(item)"
       >
         <component :is="item.icon" class="w-[22px] h-[22px]" />
-        <span class="text-[10px] font-medium">{{ item.label }}</span>
+        <span class="text-xs font-medium">{{ item.label }}</span>
         <span
           v-if="item.pageIndex >= 4"
           class="absolute mt-[-3px] ml-[18px] w-1.5 h-1.5 rounded-full"

@@ -342,8 +342,11 @@ const sidebarStyle = computed(() => {
   if (sidebarWidth.value !== null) {
     return { width: `${sidebarWidth.value}px` }
   }
-  const widthPercent = isLandscape.value ? '30%' : '40%'
-  return { width: widthPercent }
+  // 自适应默认宽度：手机保底 11rem，平板按视口比例放大但封顶，避免文件名过度截断
+  const widthClamp = isLandscape.value
+    ? 'clamp(11rem, 30vw, 18rem)'
+    : 'clamp(11rem, 45vw, 20rem)'
+  return { width: widthClamp }
 })
 
 async function handleRefresh() {
@@ -676,7 +679,7 @@ onUnmounted(() => {
 }
 
 .branch-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-text-secondary);
   white-space: nowrap;
@@ -730,7 +733,7 @@ onUnmounted(() => {
 
 .branch-dropdown-title {
   padding: 0.5rem 0.75rem;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--mobile-text-muted);
   text-transform: uppercase;
@@ -753,7 +756,7 @@ onUnmounted(() => {
   background: none;
   border: none;
   color: var(--mobile-text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   text-align: left;
   transition: background-color 0.15s ease;
@@ -847,7 +850,7 @@ onUnmounted(() => {
 }
 
 .settings-panel-label {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-secondary);
 }
 
@@ -891,7 +894,7 @@ onUnmounted(() => {
   background: var(--mobile-bg-primary);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-primary);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   outline: none;
   transition: border-color 0.2s ease;
 }
@@ -916,7 +919,7 @@ onUnmounted(() => {
 
 /* Font Size Slider */
 .font-size-value {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-accent);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -1001,7 +1004,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   margin-top: 0.25rem;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   color: var(--mobile-text-disabled);
 }
 
@@ -1014,7 +1017,7 @@ onUnmounted(() => {
   flex: 1;
   padding: 0.5rem;
   border-radius: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1064,7 +1067,7 @@ onUnmounted(() => {
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 0.25rem 0;
+  padding: 0.25rem 0 max(0.75rem, env(safe-area-inset-bottom));
 
   /* Firefox */
   scrollbar-width: thin;
@@ -1100,7 +1103,7 @@ onUnmounted(() => {
 }
 
 .state-text {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
 }
 
@@ -1124,7 +1127,7 @@ onUnmounted(() => {
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   transition: all 0.2s ease;
 }

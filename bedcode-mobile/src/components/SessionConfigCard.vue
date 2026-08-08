@@ -3,7 +3,7 @@
     class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl overflow-hidden transition-all duration-300 hover:border-[var(--mobile-border-hover)]"
   >
     <div class="p-4">
-      <div class="flex items-start gap-3">
+      <div class="flex items-center gap-3">
         <span
           class="config-icon"
           :class="config.environment === 'wsl2' ? 'chip-violet' : 'chip-cyan'"
@@ -16,18 +16,8 @@
           class="flex-1 min-w-0 cursor-pointer"
           @click="expanded = !expanded"
         >
-          <div class="flex items-center gap-2">
-            <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ config.name }}</span>
-            <span
-              class="env-tag"
-              :class="config.environment === 'wsl2' ? 'env-wsl' : 'env-win'"
-            >
-              {{ config.environment === 'wsl2' ? 'WSL2' : 'Windows' }}
-            </span>
-          </div>
-          <div v-if="config.command" class="flex items-center gap-1.5 mt-1.5 min-w-0">
-            <span class="text-xs text-[var(--mobile-text-muted)] shrink-0">{{ t('mobile.sessionConfig.command') }}</span>
-            <code class="text-xs font-mono text-[var(--mobile-text-muted)] truncate">{{ config.command }}</code>
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate flex-1 min-w-0">{{ config.name }}</span>
           </div>
           <button
             v-if="runningCount > 0"
@@ -53,7 +43,7 @@
           <template v-else>{{ t('mobile.sessionConfig.start') }}</template>
         </button>
         <svg
-          class="w-4 h-4 flex-shrink-0 transition-transform duration-200 cursor-pointer mt-1"
+          class="w-4 h-4 flex-shrink-0 transition-transform duration-200 cursor-pointer"
           style="color: var(--mobile-row-sub)"
           :class="{ 'rotate-180': expanded }"
           fill="none"
@@ -82,6 +72,23 @@
             <p class="text-xs font-mono text-[var(--mobile-text-muted)] truncate mt-0.5">{{ config.working_dir }}</p>
           </div>
         </button>
+
+        <!-- 启动命令（仅展开时显示） -->
+        <div
+          v-if="config.command"
+          class="px-4 py-3 flex items-center gap-3"
+          style="border-top: 1px solid var(--mobile-border)"
+        >
+          <span class="config-icon-sm chip-violet">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </span>
+          <div class="min-w-0 flex-1">
+            <span class="text-xs text-[var(--mobile-text-muted)]">{{ t('mobile.sessionConfig.command') }}</span>
+            <p class="text-xs font-mono text-[var(--mobile-text-muted)] truncate mt-0.5">{{ config.command }}</p>
+          </div>
+        </div>
 
         <template v-if="runningSessions.length > 0">
           <div

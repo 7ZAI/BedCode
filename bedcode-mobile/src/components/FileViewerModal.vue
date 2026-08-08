@@ -260,7 +260,7 @@ watch(
 }
 
 .viewer-filename {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--mobile-text-primary);
   white-space: nowrap;
@@ -269,7 +269,7 @@ watch(
 }
 
 .viewer-lang-badge {
-  font-size: 0.625rem;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
@@ -509,7 +509,7 @@ watch(
   justify-content: center;
   height: 100%;
   color: var(--mobile-text-muted);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
 }
 
 .viewer-error {
@@ -527,7 +527,7 @@ watch(
 
 .viewer-md-preview {
   padding: 1rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   line-height: 1.7;
   color: var(--mobile-text-primary);
   overflow-y: auto;
@@ -536,7 +536,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h1) {
-  font-size: 1.375rem;
+  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 840 * 0.125rem, 1.5rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin: 0 0 0.75rem;
@@ -545,7 +545,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h2) {
-  font-size: 1.125rem;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   color: var(--mobile-accent);
   margin: 1.25rem 0 0.5rem;
@@ -554,7 +554,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h3) {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin: 1rem 0 0.375rem;
@@ -569,7 +569,7 @@ watch(
   width: 100%;
   border-collapse: collapse;
   margin: 0.5rem 0 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   display: block;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -581,7 +581,7 @@ watch(
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-primary);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 2px solid var(--mobile-border);
@@ -600,7 +600,7 @@ watch(
 
 .viewer-md-preview :deep(code) {
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   padding: 0.125rem 0.375rem;
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
@@ -623,7 +623,7 @@ watch(
   background: none;
   border: none;
   border-radius: 0;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-primary);
 }
 
@@ -682,13 +682,13 @@ watch(
 }
 
 .viewer-lang-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
   text-transform: capitalize;
 }
 
 .viewer-line-count {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
 }
 </style>

@@ -491,7 +491,7 @@ async function doExecute() {
   background: var(--mobile-bg-primary);
   border: 1px solid var(--mobile-border-hover);
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   line-height: 1.5;
   max-height: 280px;
   outline: none;

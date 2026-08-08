@@ -242,7 +242,7 @@ onUnmounted(() => {
 .select-trigger--md {
   min-height: clamp(2.75rem, 2.75rem + (100vw - 400px) / 800 * 0.5rem, 3.25rem);
   padding: 0 0.75rem;
-  font-size: 0.875rem; /* 14px */
+  font-size: var(--font-size-base); /* 14px */
   border-radius: 0.625rem;
 }
 
@@ -250,7 +250,7 @@ onUnmounted(() => {
 .select-trigger--sm {
   min-height: clamp(2.25rem, 2.25rem + (100vw - 400px) / 800 * 0.25rem, 2.5rem);
   padding: 0 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   border-radius: 0.5rem;
 }
 
@@ -276,12 +276,12 @@ onUnmounted(() => {
 
 .select-option--md {
   min-height: 2.75rem; /* 44px */
-  font-size: 0.875rem; /* 14px */
+  font-size: var(--font-size-base); /* 14px */
 }
 
 .select-option--sm {
   min-height: 2.25rem; /* 36px */
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
 }
 
 .select-option--hover {

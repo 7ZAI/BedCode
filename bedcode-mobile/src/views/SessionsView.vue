@@ -3,13 +3,8 @@
     <!-- Header -->
     <div class="page-header flex-shrink-0">
       <div class="page-header-row">
-        <div>
+        <div class="min-w-0 flex-1">
           <h1 class="page-title">{{ t('mobile.session.title') }}</h1>
-          <p class="page-subtitle">
-            {{ isConnected
-              ? t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length })
-              : t('mobile.session.notConnected') }}
-          </p>
         </div>
         <div class="flex items-center gap-1">
           <button
@@ -135,9 +130,6 @@ const mockTerminal = useMockTerminal()
 
 // 连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
-
-// 当前设备名称
-const currentDeviceName = computed(() => connection.currentDevice.value?.name || t('mobile.session.connected'))
 
 const mockSession = computed(() => ({
   id: MOCK_SESSION_ID,

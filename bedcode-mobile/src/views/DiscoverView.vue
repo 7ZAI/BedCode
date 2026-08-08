@@ -56,22 +56,21 @@
         <div
           v-for="service in discoveredServices"
           :key="service.instance_name"
-          class="group-row group-row-btn cursor-pointer"
+          class="group-row group-row-btn device-row cursor-pointer"
           @click="handleConnect(service)"
         >
-          <span class="icon-chip chip-cyan">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <span class="device-chip chip-cyan">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
           </span>
           <div class="flex-1 min-w-0">
-            <div class="group-row-title">{{ service.device_name }}</div>
-            <div class="group-row-sub font-mono">{{ service.address }}:{{ service.port }}</div>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="device-name truncate">{{ service.device_name }}</span>
+              <span class="device-badge badge-cyan">{{ t('mobile.discover.connectToDevice') }}</span>
+            </div>
+            <div class="device-addr font-mono truncate">{{ service.address }}:{{ service.port }}</div>
           </div>
-          <span class="status-badge badge-cyan">{{ service.platform }}</span>
-          <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
         </div>
       </div>
     </div>
@@ -154,3 +153,45 @@ onUnmounted(() => {
   stopScan()
 })
 </script>
+
+<style scoped>
+/* 紧凑设备卡片：以手机宽度 360px 为基准缩放（360px 取最小值），窄屏不拥挤、平板温和放大 */
+.device-row {
+  gap: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
+  padding: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem) 0.75rem;
+  min-height: 3rem;
+}
+
+.device-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.25rem, 2rem);
+  height: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.25rem, 2rem);
+  border-radius: clamp(0.375rem, 0.4375rem + (100vw - 360px) / 840 * 0.0625rem, 0.5rem);
+  flex-shrink: 0;
+}
+
+.device-name {
+  font-size: clamp(0.7813rem, 0.8125rem + (100vw - 360px) / 840 * 0.0625rem, 0.875rem);
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--mobile-row-title);
+}
+
+.device-addr {
+  margin-top: 0.125rem;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.0625rem, 0.75rem);
+  line-height: 1.2;
+  color: var(--mobile-row-sub);
+}
+
+.device-badge {
+  flex-shrink: 0;
+  padding: 0.125rem clamp(0.3125rem, 0.4rem + (100vw - 360px) / 840 * 0.0625rem, 0.5rem);
+  font-size: clamp(0.5rem, 0.5625rem + (100vw - 360px) / 840 * 0.0625rem, 0.625rem);
+  font-weight: 600;
+  line-height: 1.4;
+  border-radius: 999px;
+}
+</style>

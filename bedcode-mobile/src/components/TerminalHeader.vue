@@ -173,7 +173,7 @@ function emitAction(key: string) {
 }
 
 .header-title {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin: 0;
@@ -229,7 +229,9 @@ function emitAction(key: string) {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  min-width: 160px;
+  /* 自适应宽度：手机窄屏 ~10.5rem，平板放大到 ~13rem，文字永不换行 */
+  min-width: clamp(10.5rem, 10.5rem + (100vw - 360px) / 800 * 2.5rem, 13rem);
+  max-width: min(80vw, 16rem);
   background: var(--mobile-bg-secondary);
   border: 1px solid var(--mobile-border);
   border-radius: 0.75rem;
@@ -248,10 +250,11 @@ function emitAction(key: string) {
   background: none;
   border: none;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   cursor: pointer;
   transition: background 0.15s ease;
   text-align: left;
+  white-space: nowrap;
 }
 
 .overflow-menu-item:hover {
@@ -285,7 +288,7 @@ function emitAction(key: string) {
   border-radius: 0.25rem;
   background: color-mix(in srgb, var(--mobile-accent) 20%, transparent);
   color: var(--mobile-accent);
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   letter-spacing: 0.02em;
   white-space: nowrap;

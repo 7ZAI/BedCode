@@ -81,6 +81,18 @@
           >
             {{ loading ? t('mobile.pairing.verifying') : t('mobile.pairing.confirm') }}
           </button>
+
+          <!-- 切换认证方式：生物认证是便捷方式，可随时切过去（未绑定时父组件提示） -->
+          <div class="text-center mt-4">
+            <button
+              class="text-sm transition-colors active:opacity-80"
+              style="color: var(--mobile-accent)"
+              :disabled="loading"
+              @click="emit('switch')"
+            >
+              {{ t('mobile.connection.switchToBiometric') }}
+            </button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -102,6 +114,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   submit: [code: string]
+  /** 用户手动关闭弹窗（点击 X） */
+  close: []
+  /** 请求切换到生物认证 */
+  switch: []
 }>()
 
 const code = ref('')
@@ -130,6 +146,7 @@ function clearCode() {
 function close() {
   code.value = ''
   emit('update:modelValue', false)
+  emit('close')
 }
 
 function submit() {
@@ -215,7 +232,7 @@ function submit() {
 }
 
 .key-btn--small-text {
-  font-size: clamp(0.75rem, 0.875rem, 1rem);
+  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem);
   color: var(--mobile-text-secondary);
 }
 

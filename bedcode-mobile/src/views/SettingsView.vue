@@ -20,7 +20,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="cat.iconPath" />
               </svg>
             </span>
-            <span class="flex-1 min-w-0 text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
+            <span class="flex-1 min-w-0 text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
             <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
@@ -31,7 +31,7 @@
       <!-- Footer Actions -->
       <div class="mt-6 flex flex-col items-center gap-3">
         <button
-          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-[0.9375rem] font-medium text-[var(--mobile-text-secondary)] bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] transition-all duration-200 hover:bg-[var(--mobile-bg-secondary)] hover:text-[var(--mobile-text-primary)] hover:border-[var(--mobile-border-hover)] active:scale-[0.98] active:opacity-80"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-text-secondary)] bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] transition-all duration-200 hover:bg-[var(--mobile-bg-secondary)] hover:text-[var(--mobile-text-primary)] hover:border-[var(--mobile-border-hover)] active:scale-[0.98] active:opacity-80"
           @click="resetSettings"
         >
           <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -40,7 +40,7 @@
           {{ $t('settings.actions.resetSettings') }}
         </button>
         <button
-          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-[0.9375rem] font-medium text-[var(--mobile-error)] bg-[var(--mobile-error-muted)] border danger-action-btn transition-all duration-200 active:scale-[0.98] active:opacity-80"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-error)] bg-[var(--mobile-error-muted)] border danger-action-btn transition-all duration-200 active:scale-[0.98] active:opacity-80"
           @click="clearData"
         >
           <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -333,7 +333,7 @@ async function executeConfirm() {
 }
 
 .confirm-text {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   color: var(--mobile-text-primary);
   margin: 0;
 }
@@ -348,7 +348,7 @@ async function executeConfirm() {
   flex: 1;
   padding: 0.75rem;
   border-radius: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

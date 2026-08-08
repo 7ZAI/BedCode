@@ -61,20 +61,20 @@ const renderedContent = computed(() => {
 <style scoped>
 /* Markdown 渲染样式 */
 .md-body {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   line-height: 1.7;
   color: var(--mobile-text-primary);
 }
 
 .md-body :deep(h1) {
-  font-size: 1.25rem;
+  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 0.125rem, 1.375rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin-bottom: 1rem;
 }
 
 .md-body :deep(h2) {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-accent);
   margin-top: 1.25rem;
@@ -92,7 +92,7 @@ const renderedContent = computed(() => {
   width: 100%;
   border-collapse: collapse;
   margin: 0.5rem 0 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
 }
 
 .md-body :deep(thead th) {
@@ -101,7 +101,7 @@ const renderedContent = computed(() => {
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-primary);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 2px solid var(--mobile-border);
@@ -126,7 +126,7 @@ const renderedContent = computed(() => {
 
 .md-body :deep(code) {
   font-family: 'Courier New', monospace;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   padding: 0.125rem 0.375rem;
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);

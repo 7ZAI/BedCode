@@ -49,6 +49,13 @@ const fontSizeMap = {
   xlarge: 18,
 }
 
+/** UI 字号缩放系数：作用于 --font-size-* 变量（与终端字号档位一致的比例） */
+const uiFontScaleMap = {
+  normal: 1,
+  large: 1.125,
+  xlarge: 1.25,
+} as const
+
 /** 旧版三档字体大小迁移到新档位 */
 const legacyFontSizeMap: Record<string, MobileSettings['fontSize']> = {
   small: 'normal',
@@ -72,6 +79,9 @@ function syncToSettingsStore() {
       terminal_font_size: terminalFontSize,
     }
   })
+
+  // UI 字号缩放：html 内联变量优先级高于 .mobile-ui 块内定义，覆盖继承默认值 1
+  document.documentElement.style.setProperty('--mobile-font-scale', String(uiFontScaleMap[settings.value.fontSize]))
 }
 
 /** 保存设置到 localStorage 与后端数据库 */

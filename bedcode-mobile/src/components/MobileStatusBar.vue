@@ -62,7 +62,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: flex-end;
   padding: 0 16px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--mobile-accent);
 }

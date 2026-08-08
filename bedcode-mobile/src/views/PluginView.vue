@@ -35,7 +35,7 @@
                 {{ detailPlugin.author || '-' }} · v{{ detailPlugin.version }}
               </p>
               <span
-                class="inline-flex items-center gap-1.5 mt-2 px-1.5 py-0.5 rounded-tag text-[11px] font-medium"
+                class="inline-flex items-center gap-1.5 mt-2 px-1.5 py-0.5 rounded-tag text-xs font-medium"
                 :class="stateBadgeClass(detailPlugin.state)"
               >
                 {{ $t(getStateKey(detailPlugin.state)) }}
@@ -76,15 +76,15 @@
           <div class="mx-5 mt-5 grid grid-cols-3 rounded-xl border border-[var(--mobile-border)] overflow-hidden bg-[var(--mobile-bg-secondary)]">
             <div class="py-3 text-center border-r border-[var(--mobile-border)]">
               <div class="text-sm font-semibold text-[var(--mobile-text-primary)]">{{ getContributionChips(detailPlugin).length }}</div>
-              <div class="text-[11px] mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.statExtensions') }}</div>
+              <div class="text-xs mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.statExtensions') }}</div>
             </div>
             <div class="py-3 text-center border-r border-[var(--mobile-border)]">
               <div class="text-sm font-semibold text-[var(--mobile-text-primary)]">{{ detailPlugin.permissions.length }}</div>
-              <div class="text-[11px] mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.permissions') }}</div>
+              <div class="text-xs mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.permissions') }}</div>
             </div>
             <div class="py-3 text-center">
               <div class="text-sm font-semibold text-[var(--mobile-text-primary)]">{{ formatBytes(detailPlugin.sizeBytes) }}</div>
-              <div class="text-[11px] mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.size') }}</div>
+              <div class="text-xs mt-0.5 text-[var(--mobile-text-muted)]">{{ $t('mobile.plugin.size') }}</div>
             </div>
           </div>
 
@@ -103,7 +103,7 @@
                 <span
                   v-for="chip in getContributionChips(detailPlugin)"
                   :key="chip.key"
-                  class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]"
+                  class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]"
                 >
                   {{ chip.emoji }} {{ $t(chip.labelKey, chip.params ?? {}) }}
                 </span>
@@ -120,7 +120,7 @@
                     <div class="text-xs font-medium text-[var(--mobile-text-primary)]">{{ getPermissionMeta(perm).title }}</div>
                     <div class="text-xs text-[var(--mobile-text-muted)]">{{ getPermissionMeta(perm).desc }}</div>
                   </div>
-                  <span class="font-mono text-[11px] text-[var(--mobile-text-disabled)] flex-shrink-0">{{ perm }}</span>
+                  <span class="font-mono text-xs text-[var(--mobile-text-disabled)] flex-shrink-0">{{ perm }}</span>
                 </div>
                 <div v-if="detailPlugin.permissions.length === 0" class="py-3 text-xs text-[var(--mobile-text-muted)]">-</div>
               </div>
@@ -201,10 +201,10 @@
               />
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
+                  <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
                   <!-- 状态徽章 -->
                   <span
-                    class="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-tag text-[11px] font-medium"
+                    class="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-tag text-xs font-medium"
                     :class="stateBadgeClass(plugin.state)"
                   >
                     <span

@@ -75,14 +75,6 @@
   --mobile-shortcut-border: rgba(189, 147, 249, 0.35);
   --mobile-shortcut-active-bg: linear-gradient(135deg, rgba(189, 147, 249, 0.28), rgba(189, 147, 249, 0.16));
 
-  /* 环境标签 - WSL2 (紫色调) */
-  --mobile-tag-wsl-color: #bd93f9;
-  --mobile-tag-wsl-bg: rgba(189, 147, 249, 0.12);
-  --mobile-tag-wsl-border: rgba(189, 147, 249, 0.35);
-  /* 环境标签 - Windows (青色调) */
-  --mobile-tag-win-color: #8be9fd;
-  --mobile-tag-win-bg: rgba(139, 233, 253, 0.12);
-  --mobile-tag-win-border: rgba(139, 233, 253, 0.35);
   --mobile-custom-cmd-color: #50fa7b;
   --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.12), rgba(80, 250, 123, 0.06));
   --mobile-custom-cmd-border: rgba(80, 250, 123, 0.35);
@@ -233,14 +225,6 @@ html:not(.dark) .mobile-app {
   --mobile-shortcut-border: rgba(124, 58, 237, 0.3);
   --mobile-shortcut-active-bg: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(124, 58, 237, 0.12));
 
-  /* 环境标签 - WSL2 (紫色调，浅色模式) */
-  --mobile-tag-wsl-color: #7c3aed;
-  --mobile-tag-wsl-bg: rgba(124, 58, 237, 0.1);
-  --mobile-tag-wsl-border: rgba(124, 58, 237, 0.3);
-  /* 环境标签 - Windows (青色调，浅色模式) */
-  --mobile-tag-win-color: #0891b2;
-  --mobile-tag-win-bg: rgba(8, 145, 178, 0.1);
-  --mobile-tag-win-border: rgba(8, 145, 178, 0.3);
   --mobile-custom-cmd-color: #059669;
   --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(5, 150, 105, 0.05));
   --mobile-custom-cmd-border: rgba(5, 150, 105, 0.3);
@@ -321,6 +305,30 @@ html:not(.dark) .mobile-app {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
+/* ==================== 流式字号（自适应文字大小） ==================== */
+/* 所有移动端文字随视口宽度在 320px(小屏) → 1200px(平板) 之间等比缩放：
+   360px 处等于原有固定字号（xs=10 / sm=12 / base=14 / lg=16 / xl=18 / 2xl=24），
+   更窄窗口继续缩小，平板自动放大。style.css 中 .mobile-ui 下的
+   h1/p/button/text-* 等规则均引用这些变量，因此全端文字一次生效。 */
+
+.mobile-ui,
+.mobile-app {
+  /* --mobile-font-scale：外观设置字体大小档位驱动（normal=1 / large=1.125 / xlarge=1.25），
+     useMobileSettings 在 html 上写入 inline 值，未设置时回退 1 */
+  --font-size-xs: calc(clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem) * var(--mobile-font-scale, 1));      /* 9 / 10 / 12px */
+  --font-size-sm: calc(clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem) * var(--mobile-font-scale, 1));      /* 11 / 12 / 14px */
+  --font-size-base: calc(clamp(0.8125rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem) * var(--mobile-font-scale, 1));       /* 13 / 14 / 16px */
+  --font-size-lg: calc(clamp(0.9375rem, 1rem + (100vw - 360px) / 840 * 0.125rem, 1.125rem) * var(--mobile-font-scale, 1));         /* 15 / 16 / 18px */
+  --font-size-xl: calc(clamp(1.0625rem, 1.125rem + (100vw - 360px) / 840 * 0.125rem, 1.25rem) * var(--mobile-font-scale, 1));      /* 17 / 18 / 20px */
+  --font-size-2xl: calc(clamp(1.375rem, 1.5rem + (100vw - 360px) / 840 * 0.125rem, 1.625rem) * var(--mobile-font-scale, 1));       /* 22 / 24 / 26px */
+}
+
+/* text-2xl：style.css 未映射，补充一条流式规则（用于 emoji 图标等大字号） */
+.mobile-ui .text-2xl {
+  font-size: var(--font-size-2xl);
+  line-height: 1.3;
+}
+
 /* ============================================
    xterm 终端滚动 - 全局禁用 viewport 原生滚动
    移动端使用外层伪滚动容器 + scrollToLine 方案
@@ -371,7 +379,7 @@ html:not(.dark) .mobile-app {
 }
 
 .mobile-loading-text {
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
   color: var(--mobile-text-muted);
   margin: 0;
 }
@@ -477,7 +485,7 @@ button.group-row:active,
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.0625rem, 0.75rem);
   font-weight: 600;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
@@ -497,28 +505,6 @@ button.group-row:active,
 .dot-emerald {
   background: var(--mobile-chip-emerald);
   box-shadow: 0 0 6px color-mix(in srgb, var(--mobile-chip-emerald) 80%, transparent);
-}
-
-/* ==================== 环境标签 ==================== */
-
-.env-tag {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 0.1rem 0.4rem;
-  border-radius: 0.375rem;
-  border: 1px solid;
-}
-
-.env-wsl {
-  color: var(--mobile-chip-violet);
-  border-color: color-mix(in srgb, var(--mobile-chip-violet) 35%, transparent);
-  background: color-mix(in srgb, var(--mobile-chip-violet) 8%, transparent);
-}
-
-.env-win {
-  color: var(--mobile-chip-cyan);
-  border-color: color-mix(in srgb, var(--mobile-chip-cyan) 35%, transparent);
-  background: color-mix(in srgb, var(--mobile-chip-cyan) 8%, transparent);
 }
 
 /* ==================== 页面标题 ==================== */
@@ -552,7 +538,7 @@ button.group-row:active,
 
 /* 分组标题 */
 .settings-section-title {
-  font-size: 0.6875rem;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.0625rem, 0.75rem);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -594,18 +580,19 @@ button.settings-row:active {
 }
 
 .settings-label {
-  font-size: 0.9375rem;
+  font-size: clamp(0.8125rem, 0.9375rem + (100vw - 360px) / 840 * 0.0625rem, 1rem);
   color: var(--mobile-text-primary);
 }
 
 .settings-desc {
-  font-size: 0.75rem;
+  /* 说明文字：比 settings-label 小一号，手机上 10px 起、平板 11px 封顶 */
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.0625rem, 0.6875rem);
   color: var(--mobile-text-muted);
   margin-top: 0.125rem;
 }
 
 .settings-value {
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
   color: var(--mobile-text-secondary);
 }
 
@@ -615,7 +602,7 @@ button.settings-row:active {
   -webkit-appearance: none;
   min-width: 7.5rem;
   padding: 0.4375rem 2rem 0.4375rem 0.75rem;
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
   color: var(--mobile-text-primary);
   background-color: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
@@ -636,7 +623,7 @@ button.settings-row:active {
 .settings-number-input {
   width: 4.5rem;
   padding: 0.4375rem 0.5rem;
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
   text-align: center;
   color: var(--mobile-text-primary);
   background: var(--mobile-input-bg);

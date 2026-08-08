@@ -6,7 +6,7 @@
       <span class="flex-1 text-sm font-medium text-[var(--mobile-text-primary)]">{{ title }}</span>
       <span
         v-if="badge !== undefined"
-        class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-secondary)]"
+        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-secondary)]"
       >
         {{ badge }}
       </span>

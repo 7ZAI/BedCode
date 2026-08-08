@@ -3,11 +3,15 @@
     <!-- Header -->
     <div class="page-header flex-shrink-0">
       <div class="page-header-row">
-        <div>
-          <h1 class="page-title">{{ t('mobile.connection.title') }}</h1>
-          <p class="page-subtitle">
+        <div class="min-w-0 flex-1">
+          <h1 class="page-title truncate">{{ t('mobile.connection.title') }}</h1>
+          <!-- 连接成功后标题下方仅显示「已连接」小字，未连接/连接中显示状态文字 -->
+          <p class="page-subtitle connection-status-subtitle">
             <template v-if="isConnected && currentDevice">
-              {{ currentDevice.name }} · {{ currentDevice.address }}
+              <span class="inline-flex items-center gap-1.5">
+                <span class="status-dot dot-emerald"></span>
+                {{ t('mobile.connection.connected') }}
+              </span>
             </template>
             <template v-else>
               {{ connectionStatusText }}
@@ -15,7 +19,7 @@
           </p>
         </div>
         <button
-          class="text-[13px] font-medium pb-1 transition-colors active:opacity-80"
+          class="flex-shrink-0 whitespace-nowrap text-sm font-medium pb-1 transition-colors active:opacity-80"
           style="color: var(--mobile-accent)"
           :class="{ 'opacity-50': connection.isConnecting.value }"
           :disabled="connection.isConnecting.value"
@@ -58,18 +62,12 @@
                 </svg>
               </span>
               <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ currentDevice.name }}</span>
-                  <span class="status-badge badge-emerald">
-                    <span class="status-dot dot-emerald"></span>
-                    {{ connectionStatus === 'paired' ? (t('mobile.connection.authenticated') || '已配对') : (t('mobile.connection.paired') || '已配对') }}
-                  </span>
-                </div>
+                <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate block">{{ currentDevice.name }}</span>
                 <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ currentDevice.address }}</p>
               </div>
               <!-- 断开按钮：与连接信息同行，不独占一行 -->
               <button
-                class="flex-shrink-0 h-11 px-3.5 rounded-xl flex items-center gap-1.5 chip-red font-medium text-[0.8125rem] transition-all duration-300 active:opacity-80 hover:opacity-90"
+                class="flex-shrink-0 h-11 px-3.5 rounded-xl flex items-center gap-1.5 chip-red font-medium text-sm transition-all duration-300 active:opacity-80 hover:opacity-90"
                 @click="handleDisconnect"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -82,9 +80,9 @@
 
           <!-- Session Configs header -->
           <div class="flex items-center justify-between pt-2">
-            <span class="text-[0.8125rem] font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.sessionConfig') }}</span>
+            <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.sessionConfig') }}</span>
             <button
-              class="p-1.5 rounded-lg transition-colors active:opacity-80"
+              class="p-2 rounded-lg transition-colors active:opacity-80"
               style="color: var(--mobile-text-muted)"
               :class="{ 'opacity-50': isRefreshing }"
               :disabled="isRefreshing"
@@ -92,7 +90,7 @@
               :title="t('mobile.connection.refreshConfig')"
             >
               <svg
-                class="w-4 h-4"
+                class="w-5 h-5"
                 :class="{ 'animate-spin': isRefreshing }"
                 fill="none"
                 stroke="currentColor"
@@ -147,7 +145,7 @@
         <div class="pt-2 space-y-3">
           <!-- Connection History header -->
           <div class="flex items-center justify-between">
-            <span class="text-[0.8125rem] font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.connectionHistory') }}</span>
+            <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.connectionHistory') }}</span>
             <button
               v-if="connectionHistory.length > 0"
               class="text-xs transition-colors active:opacity-80"
@@ -176,7 +174,7 @@
                   </svg>
                 </span>
                 <div class="flex-1 min-w-0">
-                  <div class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ item.name || item.address }}</div>
+                  <div class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ item.name || item.address }}</div>
                   <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ item.address }}</p>
                 </div>
                 <button
@@ -198,7 +196,7 @@
     <!-- Action Buttons (when not connected) -->
     <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
       <button
-        class="w-full h-11 rounded-xl text-[0.9375rem] font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
         style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
@@ -210,7 +208,7 @@
         {{ t('mobile.connection.scanConnect') }}
       </button>
       <button
-        class="w-full h-11 rounded-xl text-[0.9375rem] font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+        class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
         style="background: var(--mobile-group-bg); color: var(--mobile-text-secondary); border: 1px solid var(--mobile-group-border)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
@@ -233,15 +231,14 @@
       @cancel="handleCancelConnection"
     />
 
-    <!-- Auth Method Dialog -->
-    <AuthMethodDialog
-      v-model="showAuthDialog"
-      :can-biometric="authBiometricAvailable"
+    <!-- Biometric Auth Dialog -->
+    <BiometricAuthDialog
+      v-model="showBiometricDialog"
       :error="authDialogError"
       :loading="authDialogLoading"
-      :default-method="mobileSettings.preferredAuthMethod === 'biometric' ? 'biometric' : 'pairing'"
-      @confirm="handleAuthMethod"
-      @close="handleAuthDialogClose"
+      @authenticate="runBiometricAuth"
+      @switch-to-pairing="handleSwitchToPairing"
+      @close="handleBiometricDialogClose"
     />
 
     <!-- Pairing Dialog -->
@@ -250,6 +247,8 @@
       :loading="isPairing"
       :error="pairingError"
       @submit="handlePairingSubmit"
+      @switch="handleSwitchToBiometric"
+      @close="handlePairingClose"
     />
 
     <!-- Stop Confirmation Modal -->
@@ -314,7 +313,7 @@ import { wsGetBiometricKeyStatus } from '@/composables/useMobileCommands'
 import { useToast } from '@/composables/useToast'
 import BottomSheet from '@/components/BottomSheet.vue'
 import PairingInput from '@/components/PairingInput.vue'
-import AuthMethodDialog from '@/components/AuthMethodDialog.vue'
+import BiometricAuthDialog from '@/components/BiometricAuthDialog.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
 import SessionConfigCard, { type SessionConfigSummary } from '@/components/SessionConfigCard.vue'
@@ -376,8 +375,8 @@ const isPairing = ref(false)
 const pairingError = ref('')
 const connectionError = ref('')
 
-// 认证方式选择弹窗（JWT 失效后：生物认证 / 配对码二选一，可切换）
-const showAuthDialog = ref(false)
+// 认证弹窗（JWT 失效后：根据认证设置直接弹对应弹窗，不再选择；配对码兜底，生物认证便捷）
+const showBiometricDialog = ref(false)
 const authBiometricAvailable = ref(false)
 const authDialogError = ref('')
 const authDialogLoading = ref(false)
@@ -604,13 +603,20 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
       console.log('[DevicesView] startConnection: Step 2 skipped (skipPairing=false, must pair)')
     }
 
-    // Step 2.5: JWT 认证失败（或手动连接）→ 认证方式选择弹窗。
-    // 生物认证与配对码触发时机一致，弹窗内可切换；设置决定默认显示的方式。
+    // Step 2.5: JWT 认证失败（或手动连接）→ 根据认证设置直接弹出对应认证弹窗。
+    // 设置优先生物认证且已绑定 → 弹生物认证弹窗并自动触发指纹；否则配对码兜底。
     const keyStatus = await wsGetBiometricKeyStatus().catch(() => null)
     authBiometricAvailable.value = !!(keyStatus?.deviceSupported && keyStatus?.hasKey)
     authDialogError.value = ''
-    console.log('[DevicesView] startConnection: Step 2.5 auth method selection, canBiometric=', authBiometricAvailable.value)
-    showAuthDialog.value = true
+    pairingError.value = ''
+    console.log('[DevicesView] startConnection: Step 2.5 auth, preferred=', mobileSettings.value.preferredAuthMethod, 'canBiometric=', authBiometricAvailable.value)
+
+    const preferBiometric = mobileSettings.value.preferredAuthMethod === 'biometric' && authBiometricAvailable.value
+    if (preferBiometric) {
+      await openBiometricAuth()
+    } else {
+      await startPairingFlow()
+    }
   } catch (error) {
     connectionError.value = String(error)
     console.error('[DevicesView] startConnection failed:', error)
@@ -644,60 +650,107 @@ async function handleCancelConnection() {
   connectionError.value = t('mobile.connection.userCancelled')
 }
 
-// 认证方式选择弹窗：确认后执行对应认证流程
-async function handleAuthMethod(method: 'biometric' | 'pairing') {
+// 打开生物认证弹窗并立即触发指纹验证（打开即弹系统生物识别）
+async function openBiometricAuth() {
+  showBiometricDialog.value = true
+  authDialogError.value = ''
+  await runBiometricAuth()
+}
+
+// 生物认证：指纹识别成功后才走挑战-应答拿到密钥配对，失败留在弹窗内可重试或切换
+async function runBiometricAuth() {
   const device = pendingDevice.value
   if (!device) return
-  showAuthDialog.value = false
 
-  if (method === 'biometric') {
-    // 生物认证：弹指纹/人脸签名挑战值，成功后建立连接
-    console.log('[DevicesView] Auth method: biometric')
-    authDialogLoading.value = true
-    try {
-      const bioOk = await connection.authenticateWithBiometric()
-      if (bioOk) {
-        pendingDevice.value = null
-        connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
-        await connection.loadSessionConfigs()
-        return
-      }
-      // 生物认证失败/取消 → 回到选择弹窗，可切换配对码
-      authDialogError.value = t('mobile.connection.biometricFailed')
-      showAuthDialog.value = true
-    } catch (e) {
-      console.error('[DevicesView] Biometric auth error:', e)
-      authDialogError.value = String(e)
-      showAuthDialog.value = true
-    } finally {
-      authDialogLoading.value = false
-    }
-  } else {
-    // 配对码：请求配对码后进入输入弹窗
-    console.log('[DevicesView] Auth method: pairing code')
-    showPairingLoading.value = true
-    try {
-      const pairingTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(t('mobile.connection.pairingTimeout'))), 15000)
-      )
-      await Promise.race([connection.requestPairing(), pairingTimeout])
-      showPairing.value = true
+  authDialogLoading.value = true
+  authDialogError.value = ''
+  try {
+    const bioOk = await connection.authenticateWithBiometric()
+    if (bioOk) {
+      showBiometricDialog.value = false
+      pendingDevice.value = null
       connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
-    } catch (pairingError) {
-      // 配对失败或超时时断开连接
-      console.error('[DevicesView] Pairing failed:', pairingError)
-      connectionError.value = String(pairingError)
-      toast.error(String(pairingError))
-      await connection.disconnect()
-    } finally {
-      showPairingLoading.value = false
+      await connection.loadSessionConfigs()
+      return
     }
+    // 生物认证失败/取消 → 弹窗内展示错误，可重试指纹或切换配对码
+    authDialogError.value = t('mobile.connection.biometricFailed')
+  } catch (e) {
+    console.error('[DevicesView] Biometric auth error:', e)
+    authDialogError.value = biometricAuthErrorText(e)
+  } finally {
+    authDialogLoading.value = false
   }
 }
 
-// 用户关闭认证选择弹窗 → 断开连接，保持前后端状态一致
-function handleAuthDialogClose() {
+// 将桌面端拒绝原因（AppError::Auth 透传）映射为友好 i18n 文案
+function biometricAuthErrorText(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  // 桌面端未绑定该设备的生物凭证（绑定在另一实例/数据被重置）：提示重新绑定或改用配对码
+  if (/CREDENTIAL_NOT_BOUND|NOT_PAIRED|credential not bound|device not paired/i.test(msg)) {
+    return t('mobile.connection.biometricNotBoundOnDesktop')
+  }
+  // 挑战值过期/重复使用/验签失败
+  if (/CHALLENGE_INVALID|SIGNATURE_INVALID|challenge|signature/i.test(msg)) {
+    return t('mobile.connection.biometricFailed')
+  }
+  return msg
+}
+
+// 配对码认证（兑底方式）：请求配对码后进入输入弹窗
+async function startPairingFlow() {
+  const device = pendingDevice.value
+  if (!device) return
+
+  showPairingLoading.value = true
+  try {
+    const pairingTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(t('mobile.connection.pairingTimeout'))), 15000)
+    )
+    await Promise.race([connection.requestPairing(), pairingTimeout])
+    showPairing.value = true
+    connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+  } catch (pairingError) {
+    // 配对失败或超时时断开连接
+    console.error('[DevicesView] Pairing failed:', pairingError)
+    connectionError.value = String(pairingError)
+    toast.error(String(pairingError))
+    await connection.disconnect()
+  } finally {
+    showPairingLoading.value = false
+  }
+}
+
+// 配对码弹窗 → 切换到生物认证；未绑定生物认证时提示，无法切换
+async function handleSwitchToBiometric() {
+  if (!authBiometricAvailable.value) {
+    toast.warning(t('mobile.connection.biometricNotBound'))
+    return
+  }
+  showPairing.value = false
+  pairingError.value = ''
+  await openBiometricAuth()
+}
+
+// 生物认证弹窗 → 切换到配对码（兑底方式）
+async function handleSwitchToPairing() {
+  showBiometricDialog.value = false
   authDialogError.value = ''
+  await startPairingFlow()
+}
+
+// 用户关闭生物认证弹窗 → 断开连接，保持前后端状态一致
+function handleBiometricDialogClose() {
+  showBiometricDialog.value = false
+  authDialogError.value = ''
+  connectionError.value = t('mobile.connection.userCancelled')
+  connection.disconnect()
+}
+
+// 用户关闭配对码弹窗 → 断开连接，保持前后端状态一致
+function handlePairingClose() {
+  showPairing.value = false
+  pairingError.value = ''
   connectionError.value = t('mobile.connection.userCancelled')
   connection.disconnect()
 }
@@ -754,6 +807,11 @@ function handleNavigateToFiles(config: SessionConfigSummary) {
 </script>
 
 <style scoped>
+/* 标题下连接状态小字：比 page-subtitle 默认更小，手机上 10px、平板 11px */
+.connection-status-subtitle {
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.0625rem, 0.6875rem);
+}
+
 /* 设备图标容器：与 PluginIcon md 尺寸一致（48px, rounded-xl） */
 .device-icon {
   display: flex;

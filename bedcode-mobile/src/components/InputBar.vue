@@ -228,7 +228,7 @@ defineExpose({ focus })
   border: none;
   outline: none;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-family: inherit;
   resize: none;
   max-height: 120px;

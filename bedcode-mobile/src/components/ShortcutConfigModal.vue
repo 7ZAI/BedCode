@@ -584,7 +584,7 @@ watch(() => props.visible, (show) => {
   justify-content: center;
   gap: 0.375rem;
   height: 2.25rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   border-radius: 0.5rem;
   color: var(--mobile-text-muted);
@@ -604,7 +604,7 @@ watch(() => props.visible, (show) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   border-radius: 9999px;
   background: var(--mobile-accent-muted);
@@ -614,7 +614,7 @@ watch(() => props.visible, (show) => {
 /* ==================== 快捷键列表 ==================== */
 
 .section-title {
-  font-size: 0.6875rem;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -654,7 +654,7 @@ watch(() => props.visible, (show) => {
   min-width: 1.625rem;
   padding: 0.1875rem 0.4375rem;
   font-family: ui-monospace, 'Cascadia Mono', 'Courier New', monospace;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-text-primary);
   background: var(--mobile-bg-secondary);
@@ -666,16 +666,16 @@ watch(() => props.visible, (show) => {
 .kbd-chip.lg {
   min-width: 2rem;
   padding: 0.3125rem 0.625rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
 }
 
 .kbd-plus {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
 }
 
 .kbd-plus.lg {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
 }
 
 /* 显示/隐藏开关 */
@@ -736,7 +736,7 @@ watch(() => props.visible, (show) => {
 .empty-hint {
   padding: 1.25rem;
   text-align: center;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
   background: var(--mobile-bg-elevated);
   border: 1px dashed var(--mobile-border);
@@ -750,7 +750,7 @@ watch(() => props.visible, (show) => {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   color: var(--mobile-text-muted);
   background: transparent;
@@ -787,7 +787,7 @@ watch(() => props.visible, (show) => {
 }
 
 .preview-placeholder {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-input-placeholder);
   text-align: center;
 }
@@ -836,12 +836,12 @@ watch(() => props.visible, (show) => {
 }
 
 .capture-placeholder {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-input-placeholder);
 }
 
 .capture-active-text {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--mobile-accent);
 }
@@ -855,7 +855,7 @@ watch(() => props.visible, (show) => {
 
 .modifier-btn {
   height: 2.5rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   border-radius: 0.625rem;
   border: 1px solid var(--mobile-border);
@@ -888,7 +888,7 @@ watch(() => props.visible, (show) => {
 
 .key-btn {
   height: 2.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   border-radius: 0.5rem;
   border: 1px solid var(--mobile-border);
@@ -920,7 +920,7 @@ watch(() => props.visible, (show) => {
   align-items: center;
   justify-content: center;
   gap: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-danger-color, #ff5555);
   margin-bottom: 0.5rem;
 }
@@ -932,7 +932,7 @@ watch(() => props.visible, (show) => {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  font-size: 0.9375rem;
+  font-size: var(--font-size-base);
   font-weight: 600;
   border-radius: 0.75rem;
   border: none;
@@ -988,7 +988,7 @@ watch(() => props.visible, (show) => {
 }
 
 .delete-confirm-text {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   color: var(--mobile-text-primary);
   margin: 0 0 1.25rem;
   line-height: 1.5;
@@ -1003,7 +1003,7 @@ watch(() => props.visible, (show) => {
   flex: 1;
   height: 2.625rem;
   border-radius: 0.625rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;

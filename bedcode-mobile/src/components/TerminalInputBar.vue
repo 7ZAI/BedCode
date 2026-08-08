@@ -955,7 +955,7 @@ onMounted(() => {
   border: none;
   outline: none;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-family: inherit;
   resize: none;
   line-height: 1.5;
@@ -1425,7 +1425,7 @@ onMounted(() => {
 }
 
 .dialog-title {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin-bottom: 1rem;
@@ -1439,7 +1439,7 @@ onMounted(() => {
   border-radius: 0.75rem;
   padding: 0.625rem 0.875rem;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   outline: none;
   transition: border-color 0.2s ease;
   font-family: 'Courier New', monospace;
@@ -1465,7 +1465,7 @@ onMounted(() => {
   height: clamp(2rem, 2.25rem, 2.75rem);
   border-radius: 0.75rem;
   border: 1px solid;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;

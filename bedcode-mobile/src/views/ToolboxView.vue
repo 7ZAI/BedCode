@@ -25,7 +25,6 @@
     <template v-else>
       <div class="page-header flex-shrink-0">
         <h1 class="page-title">{{ t('mobile.toolbox.title') }}</h1>
-        <p class="page-subtitle">{{ t('mobile.toolbox.subtitle') }}</p>
       </div>
 
       <div class="flex-1 overflow-y-auto px-4 pb-8">
@@ -43,7 +42,7 @@
               </span>
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ t('mobile.toolbox.presetTasks') }}</span>
+                  <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ t('mobile.toolbox.presetTasks') }}</span>
                   <span v-if="taskCount > 0" class="status-badge badge-cyan">{{ taskCount }}</span>
                 </div>
                 <p class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">{{ presetEntryDesc }}</p>
@@ -73,7 +72,7 @@
                   <span v-else class="text-2xl">{{ view.icon ?? '🧩' }}</span>
                 </span>
                 <div class="flex-1 min-w-0">
-                  <div class="text-[0.9375rem] font-medium text-[var(--mobile-text-primary)] truncate">{{ view.title }}</div>
+                  <div class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ view.title }}</div>
                   <p class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">{{ t('mobile.toolbox.pluginEntry') }}</p>
                 </div>
                 <svg class="w-4 h-4 flex-shrink-0 mt-1" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">

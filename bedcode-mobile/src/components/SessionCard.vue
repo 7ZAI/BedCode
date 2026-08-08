@@ -25,7 +25,7 @@
     <button
       v-if="session.status !== 'stopped'"
       class="ml-1 w-8 h-8 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
-      style="background: var(--mobile-chip-red-bg); color: var(--mobile-chip-red)"
+      style="background: color-mix(in srgb, var(--mobile-chip-red) 16%, transparent); color: var(--mobile-chip-red); border: 1px solid color-mix(in srgb, var(--mobile-chip-red) 35%, transparent)"
       @click.stop="$emit('stop')"
       :title="t('mobile.sessionCard.stopSession')"
     >

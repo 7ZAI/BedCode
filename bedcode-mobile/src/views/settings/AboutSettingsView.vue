@@ -153,7 +153,7 @@ function handleDownloadUpdate() {
 }
 
 .confirm-text {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   color: var(--mobile-text-primary);
   margin: 0;
 }
@@ -172,7 +172,7 @@ function handleDownloadUpdate() {
   flex: 1;
   padding: 0.75rem;
   border-radius: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
