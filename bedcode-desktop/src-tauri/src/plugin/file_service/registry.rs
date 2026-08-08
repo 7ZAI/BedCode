@@ -185,16 +185,10 @@ impl FileServiceRegistry {
             mounts.insert(key, entry.clone());
         }
 
-        // 清理宿主异常退出遗留的孤儿临时文件（best effort，失败不影响挂载）
-        let cleaned = upload::clean_orphan_parts(&entry.roots);
-        if cleaned > 0 {
-            tracing::info!(
-                plugin_id = %plugin_id,
-                mount = %options.mount_path,
-                "mount: cleaned {} orphan upload temp file(s)",
-                cleaned
-            );
-        }
+        // 清理宿主异常退出遗留的孤儿临时文件：后台扫描（best effort，失败不影响挂载）。
+        // 大目录（NAS/深目录）扫描可能耗时数十秒，不能阻塞 wasm 挂载调用——
+        // 慢宿主工作移出调用路径后，宿主延迟与插件执行预算彻底解耦
+        spawn_orphan_cleanup(plugin_id, &options.mount_path, entry.roots.clone());
 
         tracing::info!(
             plugin_id = %plugin_id,
@@ -642,6 +636,37 @@ fn peer_info_changed(old: &PeerFileService, new: &PeerFileService) -> bool {
         }
     }
     false
+}
+
+/// 后台清理孤儿上传临时文件（best effort：失败仅记录日志，不阻塞调用方）
+///
+/// 无运行时上下文时（理论上不会发生：mount 必在异步上下文调用）回退同步执行
+fn spawn_orphan_cleanup(plugin_id: &str, mount_path: &str, roots: Vec<std::path::PathBuf>) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        let cleaned = upload::clean_orphan_parts(&roots);
+        if cleaned > 0 {
+            tracing::info!(
+                plugin_id = %plugin_id,
+                mount = %mount_path,
+                "mount: cleaned {} orphan upload temp file(s)",
+                cleaned
+            );
+        }
+        return;
+    };
+    let plugin_id = plugin_id.to_string();
+    let mount_path = mount_path.to_string();
+    handle.spawn_blocking(move || {
+        let cleaned = upload::clean_orphan_parts(&roots);
+        if cleaned > 0 {
+            tracing::info!(
+                plugin_id = %plugin_id,
+                mount = %mount_path,
+                "mount: cleaned {} orphan upload temp file(s) (background)",
+                cleaned
+            );
+        }
+    });
 }
 
 /// 校验挂载点名称：必须匹配 `^[a-z0-9-_]+$`（URL 段安全，防止路径注入）

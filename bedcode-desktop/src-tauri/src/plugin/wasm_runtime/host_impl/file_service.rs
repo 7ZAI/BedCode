@@ -23,6 +23,13 @@ pub(crate) fn filesrv_mount(
     plugin_id: &str,
     options_json: &str,
 ) -> Result<String, String> {
+    // 测试钩子：模拟慢宿主调用（燃料看门狗回归测试用——宿主阻塞不得计入
+    // guest 燃料消耗，生产环境不设置该变量）
+    if let Ok(ms) = std::env::var("BEDCODE_TEST_MOUNT_DELAY_MS") {
+        if let Ok(ms) = ms.parse::<u64>() {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+    }
     let options: MountOptions = serde_json::from_str(options_json)
         .map_err(|e| format!("file service error: invalid MountOptions JSON: {}", e))?;
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_mount") {

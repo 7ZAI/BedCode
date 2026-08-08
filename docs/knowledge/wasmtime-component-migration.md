@@ -93,7 +93,10 @@ bedcode_host::database::add_to_linker(&mut linker, |s| &mut s.database)?;
 - 删除 `host_functions/` 13 组手写注册 + `(ptr,len)` 内存搬运代码
 - `LoadedWasmPlugin` 改为持有 `wasmtime::component::Instance` + `Store<新状态>`
 - 签名表测试（`HOST_FN_SIGNATURES`）替换为 WIT 契约 + bindgen 生成的类型（编译期即保证）
-- 现有 epoch 中断 / ResourceLimiter / AOT 缓存机制**全部保留**（组件模型完全兼容）
+- 现有 ResourceLimiter / AOT 缓存机制**全部保留**（组件模型完全兼容）；
+  看门狗由 epoch 中断替换为**燃料（fuel）**机制：燃料只计 guest 指令数，
+  宿主调用阻塞期间零消耗（慢宿主调用永不误杀），死循环烧完预算必被 trap；
+  每次导出调用前重置预算（见 `FUEL_PER_CALL`）
 
 ---
 

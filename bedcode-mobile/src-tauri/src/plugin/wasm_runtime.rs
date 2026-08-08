@@ -29,10 +29,18 @@ use wasmtime::{
 
 // ==================== Resource Limits & Interruption ====================
 
-/// epoch 递增周期（毫秒）：后台线程每周期推进一次全局纪元
-const EPOCH_TICK_MILLIS: u64 = 500;
-/// 每次 wasm 调用允许的 epoch tick 数（超时窗口 ≈ EPOCH_TICK_MILLIS × EPOCH_GRACE_TICKS）
-const EPOCH_GRACE_TICKS: u64 = 2;
+/// 单次 wasm 导出调用允许消耗的燃料（指令数）——防失控/恶意插件无限执行
+///
+/// 用燃料（fuel）而非 epoch 墙钟窗口做看门狗：
+/// - 燃料只计 guest 指令数，宿主调用阻塞期间（授权弹窗、目录扫描、网络）
+///   guest 零消耗——慢宿主调用无论多久都不会被误杀；epoch 按墙钟计，
+///   宿主阻塞期间照走，正是历史上误杀慢调用的根因
+/// - 纯 guest 死循环持续烧燃料，必然耗尽被 trap（确定性，不受宿主负载影响）
+/// - 每次导出调用前重置燃料（见 get_export_func/allocate_memory），预算只
+///   约束单次调用内 guest 计算量，与宿主延迟彻底解耦
+/// 64G 指令 ≈ 数十秒纯 guest 计算（wasm32 release 约 1-3G 指令/秒），
+/// 覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
+const FUEL_PER_CALL: u64 = 64_000_000_000;
 /// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
 const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 /// 单插件表元素上限
@@ -168,8 +176,8 @@ impl WasmRuntime {
         let runtime_handle = tokio::runtime::Handle::current();
 
         let mut config = Config::new();
-        // 启用 epoch 中断：后台线程周期推进纪元，防止插件死循环无限阻塞宿主
-        config.epoch_interruption(true);
+        // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 FUEL_PER_CALL）
+        config.consume_fuel(true);
         // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
         match Cache::new(CacheConfig::new()) {
             Ok(cache) => {
@@ -185,19 +193,6 @@ impl WasmRuntime {
         let mut linker = Linker::new(&engine);
 
         register_host_functions(&mut linker)?;
-
-        // 后台线程周期递增 epoch：任何进行中的 wasm 调用超过超时窗口即被中断（trap）。
-        // spawn 失败降级为无中断（与未启用 epoch 时行为一致），不 panic
-        let epoch_engine = engine.clone();
-        if let Err(e) = std::thread::Builder::new()
-            .name("wasmtime-epoch".to_string())
-            .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(EPOCH_TICK_MILLIS));
-                epoch_engine.increment_epoch();
-            })
-        {
-            tracing::warn!(error = %e, "Failed to spawn epoch thread, interruption disabled");
-        }
 
         Ok(Self { engine, linker, runtime_handle, aot_cache_dir })
     }
@@ -309,10 +304,15 @@ impl WasmRuntime {
         };
         let mut store = Store::new(&self.engine, state);
 
-        // 注册资源限制（内存/表超限拒绝增长）并配置 epoch 中断（wasm 死循环超时 trap）
+        // 注册资源限制（内存/表超限拒绝增长）并配置燃料看门狗（wasm 死循环烧完燃料 trap）
         store.limiter(|state| state as &mut dyn ResourceLimiter);
-        store.epoch_deadline_trap();
-        store.set_epoch_deadline(EPOCH_GRACE_TICKS);
+        // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
+        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "Failed to set fuel for plugin '{}': {}",
+                plugin_id, e
+            ))
+        })?;
 
         let instance = self
             .linker
@@ -682,8 +682,10 @@ impl LoadedWasmPlugin {
     // ==================== Memory Helpers ====================
 
     fn get_export_func(&mut self, name: &str) -> crate::Result<wasmtime::Func> {
-        // 刷新 epoch 超时窗口：本次调用最多执行 EPOCH_GRACE_TICKS 个 tick
-        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
+        // 重置燃料预算：单次调用预算，宿主调用阻塞不消耗燃料（见 FUEL_PER_CALL）
+        self.store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to refill fuel: {}", e))
+        })?;
         self.instance
             .get_func(&mut self.store, name)
             .ok_or_else(|| {
@@ -783,8 +785,10 @@ impl LoadedWasmPlugin {
                 )
             })?;
         let mut alloc_results = [wasmtime::Val::I32(0)];
-        // 刷新 epoch 超时窗口：guest 分配器也可能死循环
-        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
+        // 重置燃料预算：guest 分配器也是 guest 代码，死循环同样会被 fuel trap
+        self.store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to refill fuel for allocate: {}", e))
+        })?;
         alloc_func
             .call(&mut self.store, &[wasmtime::Val::I32(size as i32)], &mut alloc_results)
             .map_err(|e| crate::AppError::Plugin(format!("WASM allocate() call failed: {}", e)))?;
@@ -830,8 +834,10 @@ impl LoadedWasmPlugin {
         else {
             return;
         };
-        // 刷新 epoch 超时窗口：guest 回收函数也可能死循环
-        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
+        // 重置燃料预算：guest 回收函数也是 guest 代码，死循环同样会被 fuel trap
+        if let Err(e) = self.store.set_fuel(FUEL_PER_CALL) {
+            tracing::warn!(error = %e, "Failed to refill fuel for deallocate");
+        }
         let _ = func.call(
             &mut self.store,
             &[

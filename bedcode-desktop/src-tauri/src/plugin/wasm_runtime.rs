@@ -27,11 +27,19 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter};
 
 // ==================== Resource Limits & Interruption ====================
 
-/// epoch 递增周期（毫秒）：后台线程每周期推进一次全局纪元
-const EPOCH_TICK_MILLIS: u64 = 500;
-/// 每次 wasm 调用允许的 epoch tick 数（超时窗口 ≈ EPOCH_TICK_MILLIS × EPOCH_GRACE_TICKS，
-/// 放宽至 2s 避免误杀合法重计算；纯 guest 死循环最迟 2s 被 trap）
-const EPOCH_GRACE_TICKS: u64 = 4;
+/// 单次 wasm 导出调用允许消耗的燃料（指令数）——防失控/恶意插件无限执行
+///
+/// 用燃料（fuel）而非 epoch 墙钟窗口做看门狗：
+/// - 燃料只计 guest 指令数，宿主调用阻塞期间（授权弹窗、目录扫描、网络）
+///   guest 零消耗——慢宿主调用无论多久都不会被误杀；epoch 按墙钟计，
+///   宿主阻塞期间照走，正是历史上误杀慢调用的根因（见组件迁移期间
+///   filesrv_mount 阻塞 >2s 被 trap 的回归）
+/// - 纯 guest 死循环持续烧燃料，必然耗尽被 trap（确定性，不受宿主负载影响）
+/// - 每次导出调用前重置燃料（见 component::exports），预算只约束单次调用内
+///   guest 计算量，与宿主延迟彻底解耦
+/// 64G 指令 ≈ 数十秒纯 guest 计算（wasm32 release 约 1-3G 指令/秒），
+/// 覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
+const FUEL_PER_CALL: u64 = 64_000_000_000;
 /// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
 const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 /// 单插件表元素上限
@@ -234,8 +242,8 @@ impl WasmRuntime {
         app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> crate::Result<Self> {
         let mut config = Config::new();
-        // 启用 epoch 中断：后台线程周期推进纪元，防止插件死循环无限阻塞宿主
-        config.epoch_interruption(true);
+        // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 FUEL_PER_CALL）
+        config.consume_fuel(true);
         // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
         match Cache::new(CacheConfig::new()) {
             Ok(cache) => {
@@ -270,19 +278,6 @@ impl WasmRuntime {
         }
 
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle));
-
-        // 后台线程周期递增 epoch：任何进行中的 wasm 调用超过超时窗口即被中断（trap）。
-        // spawn 失败降级为无中断（与未启用 epoch 时行为一致），不 panic
-        let epoch_engine = engine.clone();
-        if let Err(e) = std::thread::Builder::new()
-            .name("wasmtime-epoch".to_string())
-            .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(EPOCH_TICK_MILLIS));
-                epoch_engine.increment_epoch();
-            })
-        {
-            tracing::warn!(error = %e, "Failed to spawn epoch thread, interruption disabled");
-        }
 
         Ok(Self { engine, linker, fs_auth, aot_cache_dir })
     }
@@ -1022,5 +1017,186 @@ mod tests {
             .expect("component from full compile should instantiate");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ==================== 真实 file-transfer 组件端到端 ====================
+
+    /// 加载真实 file-transfer 组件产物并预置设置（roots 指向临时目录）
+    ///
+    /// 返回 (插件实例, 共享根目录)；测试结束由调用方清理临时目录。
+    /// 产物缺失时 panic（构建顺序依赖：先跑插件构建脚本再跑测试）
+    fn load_real_file_transfer(
+        wasm_runtime: &WasmRuntime,
+        host_ctx: &Arc<WasmHostContext>,
+    ) -> (LoadedWasmPlugin, std::path::PathBuf) {
+        const FT_PLUGIN_ID: &str = "com.bedcode.file-transfer";
+
+        // 授予与插件 manifest 一致的权限（activate 路径：storage/fileservice/bus）
+        let permissions: &[&str] = &[
+            "broadcast",
+            "bus",
+            "fileservice",
+            "fs:read",
+            "fs:write",
+            "network:http",
+            "storage",
+            "transfer",
+            "ui:sidebar",
+        ];
+        host_ctx.permission.grant_permissions(
+            FT_PLUGIN_ID,
+            &permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+
+        // 预置插件设置：roots 非空才会走到挂载路径（空 roots 直接跳过）
+        let root_dir = std::env::temp_dir().join(format!(
+            "bedcode_ft_epoch_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let settings = serde_json::json!({
+            "roots": [root_dir.to_string_lossy()],
+            "downloadDir": "",
+            "concurrency": 2,
+        });
+        let storage = host_ctx.storage.clone();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            storage
+                .set(FT_PLUGIN_ID, "file-transfer-settings", settings)
+                .await
+                .unwrap();
+        });
+
+        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/plugins/desktop/com.bedcode.file-transfer")
+            .join("bedcode_plugin_file_transfer.wasm");
+        assert!(
+            wasm_path.exists(),
+            "file-transfer wasm artifact missing: {}",
+            wasm_path.display()
+        );
+
+        let plugin = wasm_runtime
+            .load_plugin_from_file(&wasm_path, FT_PLUGIN_ID, host_ctx.clone())
+            .expect("load real file-transfer component");
+        (plugin, root_dir)
+    }
+
+    /// 真实组件快速路径：activate 端到端成功（设置加载 → 挂载 → 任务加载）
+    #[test]
+    fn test_real_file_transfer_activate_success() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let (mut plugin, root_dir) = load_real_file_transfer(&wasm_runtime, &host_ctx);
+
+        // 宿主调用需 tokio 运行时上下文（block_on_async 依赖）
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            plugin
+                .activate()
+                .expect("real file-transfer activate should succeed");
+        });
+
+        let _ = std::fs::remove_dir_all(&root_dir);
+    }
+
+    /// 慢宿主调用与看门狗机制的回归测试
+    ///
+    /// 曾出现：宿主 filesrv_mount 阻塞超过 epoch 窗口（2s）后返回，guest 重新进入
+    /// wasm 提升返回值时被中断 trap（backtrace 首帧 cabi_realloc），activate 整体
+    /// 失败。修复为燃料看门狗：燃料只计 guest 指令数，宿主阻塞期间零消耗，
+    /// 慢调用无论多久都不会被误杀（死循环则持续烧燃料必被 trap）。
+    #[test]
+    fn test_real_file_transfer_activate_slow_host_call() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let (mut plugin, root_dir) = load_real_file_transfer(&wasm_runtime, &host_ctx);
+
+        // 模拟宿主调用阻塞 4s：宿主延迟不得计入 guest 燃料消耗
+        let previous = std::env::var("BEDCODE_TEST_MOUNT_DELAY_MS").ok();
+        std::env::set_var("BEDCODE_TEST_MOUNT_DELAY_MS", "4000");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async { plugin.activate() });
+        match previous {
+            Some(v) => std::env::set_var("BEDCODE_TEST_MOUNT_DELAY_MS", v),
+            None => std::env::remove_var("BEDCODE_TEST_MOUNT_DELAY_MS"),
+        }
+        result.expect(
+            "activate must survive slow host calls (fuel counts guest instructions only)",
+        );
+
+        let _ = std::fs::remove_dir_all(&root_dir);
+    }
+
+    /// 燃料看门狗：guest 执行必须消耗燃料（组件形态下 fuel 生效），
+    /// 且每次导出调用前重置预算（预算不跨调用累积）
+    #[test]
+    fn test_component_fuel_watchdog() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .expect("instantiate test component");
+
+        // 调用前剩余燃料 ≈ 单次预算（实例化/ABI 校验的消耗可忽略）
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let before = {
+                let (store, _) = plugin.raw_store();
+                store.get_fuel().expect("get fuel")
+            };
+            plugin
+                .invoke_command("test.echo", r#"{"hello":"x"}"#)
+                .expect("invoke_command");
+            let after = {
+                let (store, _) = plugin.raw_store();
+                store.get_fuel().expect("get fuel")
+            };
+            assert!(
+                after < before,
+                "guest execution must consume fuel (before={}, after={})",
+                before,
+                after
+            );
+
+            // 预算重置：人为耗尽燃料后再调用——exports() 必须自动续费使其成功
+            {
+                let (store, _) = plugin.raw_store();
+                store.set_fuel(1000).expect("drain fuel");
+            }
+            plugin
+                .invoke_command("test.echo", r#"{"hello":"z"}"#)
+                .expect("refueled invoke must succeed");
+            let after2 = {
+                let (store, _) = plugin.raw_store();
+                store.get_fuel().expect("get fuel")
+            };
+            assert!(
+                after2 > FUEL_PER_CALL / 2,
+                "fuel must be refilled per export call, got {}",
+                after2
+            );
+        });
+    }
+
+    /// 燃料耗尽必须 trap：绕过 exports() 的自动续费，直接以小预算调用导出
+    #[test]
+    fn test_component_fuel_exhaustion_traps() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .expect("instantiate test component");
+
+        let (store, instance) = plugin.raw_store();
+        store.set_fuel(1).expect("set tiny fuel");
+        let binding = super::component::Plugin::new(&mut *store, instance).expect("bind exports");
+        let result = binding
+            .bedcode_plugin_command()
+            .call_invoke(store, "test.echo", r#"{"a":1}"#);
+        assert!(result.is_err(), "fuel exhausted must trap: {:?}", result);
     }
 }

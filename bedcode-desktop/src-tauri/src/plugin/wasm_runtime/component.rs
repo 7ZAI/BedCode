@@ -24,7 +24,7 @@ use super::host_impl::{
     bus, config, database, events, file_service, fs, http, lifecycle, log, session, status,
     storage, terminal, timer, transfer,
 };
-use super::{WasmHostContext, WasmPluginState, EPOCH_GRACE_TICKS};
+use super::{WasmHostContext, WasmPluginState, FUEL_PER_CALL};
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
@@ -304,7 +304,7 @@ pub struct LoadedWasmPlugin {
 impl LoadedWasmPlugin {
     /// 实例化组件
     ///
-    /// 与 core 路径相同的防护：资源限制、epoch 中断、ABI 版本协商
+    /// 与 core 路径相同的防护：资源限制、燃料看门狗、ABI 版本协商
     /// （组件必须声明 form=1，版本号语义不变）
     pub(crate) fn new(
         engine: &wasmtime::Engine,
@@ -319,8 +319,10 @@ impl LoadedWasmPlugin {
         };
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
-        store.epoch_deadline_trap();
-        store.set_epoch_deadline(EPOCH_GRACE_TICKS);
+        // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
+        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e))
+        })?;
 
         let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
             AppError::Plugin(format!(
@@ -342,6 +344,10 @@ impl LoadedWasmPlugin {
         store: &mut Store<WasmPluginState>,
         instance: &Instance,
     ) -> crate::Result<()> {
+        // 本路径不经 exports()（实例化后立即校验），独立重置燃料
+        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e))
+        })?;
         let exports = Plugin::new(&mut *store, instance).map_err(|e| {
             AppError::Plugin(format!("WASM component missing required exports: {}", e))
         })?;
@@ -372,11 +378,12 @@ impl LoadedWasmPlugin {
 
     /// 获取 world 导出绑定（每次调用重新索引导出，开销可忽略）
     ///
-    /// 所有导出调用都经过此处：顺带刷新 epoch 超时窗口
-    /// （core 路径在 `get_export_func` 中做同样的事），
-    /// 防止长驻插件在实例化后累计超时被误 trap
+    /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
+    /// 宿主调用阻塞不消耗燃料，见 FUEL_PER_CALL 说明）
     fn exports(&mut self) -> crate::Result<Plugin> {
-        self.store.set_epoch_deadline(EPOCH_GRACE_TICKS);
+        self.store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            AppError::Plugin(format!("WASM fuel refill failed: {}", e))
+        })?;
         Plugin::new(&mut self.store, &self.instance).map_err(|e| {
             AppError::Plugin(format!("WASM component exports access failed: {}", e))
         })
@@ -537,6 +544,12 @@ impl LoadedWasmPlugin {
         manifest.call_get(&mut self.store).map_err(|e| {
             AppError::Plugin(format!("WASM manifest() call failed: {}", e))
         })
+    }
+
+    /// 测试访问器：直接获取 Store/Instance（燃料断言与耗尽 trap 测试用）
+    #[cfg(test)]
+    pub(crate) fn raw_store(&mut self) -> (&mut Store<WasmPluginState>, &Instance) {
+        (&mut self.store, &self.instance)
     }
 }
 
