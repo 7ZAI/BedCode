@@ -4,7 +4,7 @@
     <div class="wb-toolbar">
       <div class="flex items-center gap-2.5">
         <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h1>
-        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ enabledPlugins.length }}/{{ plugins.length }} {{ $t('desktop.plugin.enabled') }}</span>
+        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ enabledPlugins.length }}/{{ plugins.length }} {{ $t('desktop.plugin.enabledSection') }}</span>
       </div>
       <button class="wb-btn-ghost" :disabled="loading" @click="loadPlugins()">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -35,7 +35,7 @@
         <template v-else>
           <!-- ENABLED 分区 -->
           <section v-if="enabledPlugins.length > 0" class="mb-6">
-            <h2 class="wb-section-title">ENABLED · {{ enabledPlugins.length }}</h2>
+            <h2 class="wb-section-title">{{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}</h2>
             <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden">
               <div
                 v-for="plugin in enabledPlugins"
@@ -77,7 +77,7 @@
                   <!-- 简介展开 chevron -->
                   <button
                     class="w-5 h-5 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0"
-                    :title="$t('desktop.plugin.noDescription') ? '' : $t('desktop.plugin.openDetail')"
+                    :title="$t('desktop.plugin.openDetail')"
                     @click.stop="descExpanded[plugin.id] = !descExpanded[plugin.id]"
                   >
                     <svg
@@ -105,6 +105,8 @@
                     v-if="plugin.pluginType !== 'rust'"
                     class="relative w-10 h-5 rounded-[4px] border transition-colors shrink-0 bg-[var(--color-primary)] border-[var(--color-primary)]"
                     :class="{ 'opacity-50 cursor-not-allowed': togglingId === plugin.id }"
+                    :title="$t('desktop.plugin.disable')"
+                    :aria-label="$t('desktop.plugin.disable')"
                     :disabled="togglingId === plugin.id"
                     @click.stop="handleToggle(plugin.id, false)"
                   >
@@ -118,7 +120,7 @@
 
           <!-- DISABLED 分区 -->
           <section v-if="disabledPlugins.length > 0">
-            <h2 class="wb-section-title">DISABLED · {{ disabledPlugins.length }}</h2>
+            <h2 class="wb-section-title">{{ $t('desktop.plugin.disabledSection') }} · {{ disabledPlugins.length }}</h2>
             <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden">
               <div
                 v-for="plugin in disabledPlugins"
@@ -155,6 +157,7 @@
                   <!-- 简介展开 chevron -->
                   <button
                     class="w-5 h-5 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors shrink-0"
+                    :title="$t('desktop.plugin.openDetail')"
                     @click.stop="descExpanded[plugin.id] = !descExpanded[plugin.id]"
                   >
                     <svg
@@ -174,6 +177,8 @@
                     v-if="plugin.pluginType !== 'rust'"
                     class="relative w-10 h-5 rounded-[4px] border transition-colors shrink-0 bg-[var(--bg-page)] border-[var(--border-strong)]"
                     :class="{ 'opacity-50 cursor-not-allowed': togglingId === plugin.id }"
+                    :title="$t('desktop.plugin.enabled')"
+                    :aria-label="$t('desktop.plugin.enabled')"
                     :disabled="togglingId === plugin.id"
                     @click.stop="handleToggle(plugin.id, true)"
                   >

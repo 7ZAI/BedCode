@@ -236,6 +236,8 @@ export default {
       state: '状态',
       config: '配置',
       enabled: '启用',
+      enabledSection: '已启用',
+      disabledSection: '未启用',
       activated: '已激活',
       loaded: '已加载',
       deactivated: '已停用',

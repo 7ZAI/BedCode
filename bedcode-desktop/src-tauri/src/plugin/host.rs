@@ -158,6 +158,18 @@ impl PluginHost {
                         loaded.manifest.version,
                         wasm_path.display()
                     );
+                    // 不 continue：manifest 仍注册（Error 状态），避免 WASM 缺失时
+                    // 插件从列表消失（与移动端行为一致，仅跳过 WASM 实例）
+                    all_plugins.insert(
+                        id,
+                        LoadedPlugin {
+                            state: PluginState::Error(format!(
+                                "WASM module not found: {}",
+                                wasm_path.display()
+                            )),
+                            ..loaded
+                        },
+                    );
                     continue;
                 }
 
@@ -178,6 +190,15 @@ impl PluginHost {
                             loaded.manifest.id,
                             loaded.manifest.version,
                             e
+                        );
+                        // 同上：WASM 加载失败仅丢弃运行时实例，manifest 仍注册，
+                        // 保证插件列表可见且状态可诊断
+                        all_plugins.insert(
+                            id,
+                            LoadedPlugin {
+                                state: PluginState::Error(format!("WASM load failed: {}", e)),
+                                ..loaded
+                            },
                         );
                         continue;
                     }

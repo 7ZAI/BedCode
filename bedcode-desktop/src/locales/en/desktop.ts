@@ -236,6 +236,8 @@ export default {
       state: 'State',
       config: 'Config',
       enabled: 'Enabled',
+      enabledSection: 'Enabled',
+      disabledSection: 'Disabled',
       activated: 'Activated',
       loaded: 'Loaded',
       deactivated: 'Deactivated',
