@@ -179,9 +179,8 @@ interface abi {
 
 /// 插件世界：宿主能力全部为 import，插件行为全部为 export
 ///
-/// 阶段 A：宿主侧已接线的接口为 storage / log / config / terminal / abi，
-/// 其余接口在 WIT 中定义但宿主尚未实现 Host trait（实例化未接线接口的
-/// 组件会得到明确的 unknown import 错误）。随阶段 B/C 增量补齐。
+/// 阶段 A 收尾后宿主已全部接线（13 组 import），完整 world 可直接实例化；
+/// 阶段 B SDK 构建脚本以本 world 生成 guest 绑定。
 world plugin {
     import host-storage;
     import host-database;
@@ -197,27 +196,6 @@ world plugin {
     import host-file-service;
     import host-transfer;
     import host-timer;
-
-    export command;
-    export lifecycle;
-    export events;
-    export terminal-hooks;
-    export upload-hook;
-    export manifest;
-    export abi;
-}
-
-/// 阶段 A 可实例化子集：仅 import 宿主已接线的 4 个能力，export 与完整 world 一致。
-///
-/// 测试组件（packages/plugin-component-test）与阶段 B 初期 SDK 用它构建组件；
-/// 宿主全部接口接线后删除本 world，统一使用完整 `plugin` world。
-/// 两个 world 的 export 接口定义相同，宿主以 `plugin` world 生成的绑定
-/// 可正常加载 `plugin-phase-a` 构建的组件。
-world plugin-phase-a {
-    import host-storage;
-    import host-log;
-    import host-config;
-    import host-terminal;
 
     export command;
     export lifecycle;

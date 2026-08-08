@@ -18,6 +18,107 @@ fn file_service_registry(
     host_ctx.file_service().clone()
 }
 
+// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+
+/// 逻辑层：挂载（权限 + 注册表 mount），返回 MountResult JSON
+pub(crate) fn filesrv_mount(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    options_json: &str,
+) -> Result<String, String> {
+    let options: MountOptions = serde_json::from_str(options_json)
+        .map_err(|e| format!("file service error: invalid MountOptions JSON: {}", e))?;
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_mount") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    match block_on_async(registry.mount(plugin_id, options, HookTarget::Wasm)) {
+        Ok(entry) => {
+            let result = MountResult {
+                mount_path: entry.mount_path.clone(),
+                base_path: format!("/api/plugins/{}/{}", plugin_id, entry.mount_path),
+            };
+            serde_json::to_string(&result)
+                .map_err(|e| format!("file service error: serialize result failed: {}", e))
+        }
+        Err(e) => Err(format!("file service error: mount failed: {}", e)),
+    }
+}
+
+/// 逻辑层：卸载挂载点（权限 + 注册表 unmount）
+pub(crate) fn filesrv_unmount(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_unmount") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.unmount(plugin_id, mount_path))
+        .map_err(|e| format!("file service error: unmount failed: {}", e))
+}
+
+/// 逻辑层：更新挂载点允许目录根（权限 + 注册表 update_roots）
+pub(crate) fn filesrv_update_roots(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+    roots_json: &str,
+) -> Result<(), String> {
+    let roots: Vec<String> = serde_json::from_str(roots_json)
+        .map_err(|e| format!("file service error: invalid roots JSON: {}", e))?;
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_update_roots") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.update_roots(plugin_id, mount_path, roots))
+        .map_err(|e| format!("file service error: update roots failed: {}", e))
+}
+
+/// 逻辑层：主动询问对端状态（权限 + 经 WS 控制面广播 Query）
+///
+/// peer_id 为空广播给全部已认证客户端（多设备场景幂等；定向发送暂不支持，
+/// WsSessionRegistry 无 device_id 索引）；对端回复 Announce/Withdraw 后
+/// 由注册表推送 `filesrv:peer_changed`。
+pub(crate) fn filesrv_query_peer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    peer_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_query_peer") {
+        return Err("permission denied".to_string());
+    }
+    let payload = crate::enums::FileServicePayload::Query {};
+    let json = crate::server::ws::message::Message::file_service(payload)
+        .to_json()
+        .map_err(|e| format!("file service error: serialize failed: {}", e))?;
+    let registry = crate::server::ws::registry::WsSessionRegistry::global();
+    block_on_async(registry.broadcast(json, None));
+    tracing::debug!(plugin_id = %plugin_id, peer_id = %peer_id, "file service query broadcast");
+    Ok(())
+}
+
+/// 逻辑层：获取对端文件服务信息（权限 + 注册表查询），未公告返回 None
+pub(crate) fn filesrv_get_peer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    peer_id: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_get_peer") {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    match block_on_async(registry.get_peer(peer_id)) {
+        Some(info) => serde_json::to_string(&info)
+            .map(Some)
+            .map_err(|e| format!("file service error: serialize failed: {}", e)),
+        None => Ok(None),
+    }
+}
+
+// ==================== Host Functions（core module 胶水） ====================
+
 /// 文件服务：挂载
 ///
 /// 参数：(options_ptr, options_len, out_ptr) — options 为 MountOptions JSON
@@ -39,45 +140,16 @@ pub(super) fn host_filesrv_mount(
         }
     };
 
-    let options: MountOptions = match serde_json::from_str(&options_str) {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_mount: invalid MountOptions JSON");
-            return -1;
-        }
-    };
-
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FILESERVICE, "host_filesrv_mount")
-    {
-        return -1;
-    }
-
-    let registry = file_service_registry(&host_ctx);
-
-    let mount_path = options.mount_path.clone();
-    match block_on_async(registry.mount(&plugin_id, options, HookTarget::Wasm)) {
-        Ok(entry) => {
-            let result = MountResult {
-                mount_path: entry.mount_path.clone(),
-                base_path: format!("/api/plugins/{}/{}", plugin_id, entry.mount_path),
-            };
-            let json = match serde_json::to_string(&result) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_mount: serialize result failed");
-                    return -1;
-                }
-            };
-            match write_wasm_string(&mut caller, &json) {
-                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-                None => {
-                    tracing::error!(plugin_id = %plugin_id, "host_filesrv_mount: failed to write result");
-                    -1
-                }
+    match filesrv_mount(&host_ctx, &plugin_id, &options_str) {
+        Ok(json) => match write_wasm_string(&mut caller, &json) {
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, "host_filesrv_mount: failed to write result");
+                -1
             }
-        }
+        },
         Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, mount = %mount_path, "host_filesrv_mount: mount failed");
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_mount: mount failed");
             -1
         }
     }
@@ -103,14 +175,7 @@ pub(super) fn host_filesrv_unmount(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FILESERVICE, "host_filesrv_unmount")
-    {
-        return -1;
-    }
-
-    let registry = file_service_registry(&host_ctx);
-
-    match block_on_async(registry.unmount(&plugin_id, &mount_path)) {
+    match filesrv_unmount(&host_ctx, &plugin_id, &mount_path) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, mount = %mount_path, "host_filesrv_unmount: unmount failed");
@@ -149,26 +214,7 @@ pub(super) fn host_filesrv_update_roots(
         }
     };
 
-    let roots: Vec<String> = match serde_json::from_str(&roots_str) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, mount = %mount_path, "host_filesrv_update_roots: invalid roots JSON");
-            return -1;
-        }
-    };
-
-    if !super::check_permission(
-        &host_ctx,
-        &plugin_id,
-        PERMISSION_FILESERVICE,
-        "host_filesrv_update_roots",
-    ) {
-        return -1;
-    }
-
-    let registry = file_service_registry(&host_ctx);
-
-    match block_on_async(registry.update_roots(&plugin_id, &mount_path, roots)) {
+    match filesrv_update_roots(&host_ctx, &plugin_id, &mount_path, &roots_str) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, mount = %mount_path, "host_filesrv_update_roots: update failed");
@@ -199,28 +245,13 @@ pub(super) fn host_filesrv_query_peer(
         }
     };
 
-    if !super::check_permission(
-        &host_ctx,
-        &plugin_id,
-        PERMISSION_FILESERVICE,
-        "host_filesrv_query_peer",
-    ) {
-        return -1;
-    }
-
-    let payload = crate::enums::FileServicePayload::Query {};
-    let json = match crate::server::ws::message::Message::file_service(payload).to_json() {
-        Ok(j) => j,
+    match filesrv_query_peer(&host_ctx, &plugin_id, &peer_id) {
+        Ok(()) => 0,
         Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_query_peer: serialize failed");
-            return -1;
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_filesrv_query_peer: query failed");
+            -1
         }
-    };
-
-    let registry = crate::server::ws::registry::WsSessionRegistry::global();
-    block_on_async(registry.broadcast(json, None));
-    tracing::debug!(plugin_id = %plugin_id, peer_id = %peer_id, "file service query broadcast");
-    0
+    }
 }
 
 /// 文件服务：获取对端文件服务信息
@@ -244,27 +275,18 @@ pub(super) fn host_filesrv_get_peer(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FILESERVICE, "host_filesrv_get_peer")
-    {
-        return -1;
-    }
-
-    let registry = file_service_registry(&host_ctx);
-
-    match block_on_async(registry.get_peer(&peer_id)) {
-        Some(info) => {
-            let json = match serde_json::to_string(&info) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(error = %e, plugin_id = %plugin_id, peer_id = %peer_id, "host_filesrv_get_peer: serialize failed");
-                    return -1;
-                }
-            };
-            match write_wasm_string(&mut caller, &json) {
-                Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-                None => -1,
+    match filesrv_get_peer(&host_ctx, &plugin_id, &peer_id) {
+        Ok(Some(json)) => match write_wasm_string(&mut caller, &json) {
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, peer_id = %peer_id, "host_filesrv_get_peer: failed to write result");
+                -1
             }
+        },
+        Ok(None) => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, peer_id = %peer_id, "host_filesrv_get_peer: get failed");
+            -1
         }
-        None => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
     }
 }

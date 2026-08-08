@@ -4,7 +4,9 @@
 //! 组件，验证宿主 Component Model 路径（阶段 A 共存）的完整往返：
 //! - export：全部 7 个接口（command / lifecycle / events / terminal-hooks /
 //!   upload-hook / manifest / abi）
-//! - import：host-storage（命令调用内做读往返）、host-log（生命周期激活打日志）
+//! - import：host-storage（命令调用内做读往返）、host-log（生命周期激活打日志）、
+//!   host-database / host-plugin-database（SQL 往返）、host-session（列表）、
+//!   host-bus（发布）、host-events（emit）—— 覆盖阶段 A 收尾接线的各组
 //!
 //! 构建产物是 core module（wit-bindgen 绑定），宿主测试用
 //! `wit_component::ComponentEncoder` 编码为组件后加载（等价于
@@ -12,23 +14,92 @@
 
 wit_bindgen::generate!({
     path: "../plugin-sdk-desktop/rust/wit/bedcode.wit",
-    world: "plugin-phase-a",
+    world: "plugin",
 });
 
-use crate::bedcode::plugin::host_log;
-use crate::bedcode::plugin::host_storage;
+use crate::bedcode::plugin::{
+    host_bus, host_database, host_events, host_log, host_plugin_database, host_session,
+    host_storage,
+};
 use crate::exports::bedcode::plugin::{abi, command, events, lifecycle, manifest, terminal_hooks, upload_hook};
 
 struct Guest;
 
 impl command::Guest for Guest {
     fn invoke(name: String, args: String) -> String {
+        let mut out = serde_json::json!({
+            "name": name,
+            "args": args,
+        });
+
         // 调用宿主 import：storage 读往返（key 由宿主测试预先写入）
         match host_storage::get("component-test-key") {
-            Ok(Some(v)) => format!("{{\"name\":\"{}\",\"args\":{},\"stored\":{}}}", name, args, v),
-            Ok(None) => format!("{{\"name\":\"{}\",\"args\":{},\"stored\":null}}", name, args),
-            Err(e) => format!("{{\"error\":\"{}\"}}", e),
+            Ok(Some(v)) => {
+                out["stored"] = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v));
+            }
+            Ok(None) => out["stored"] = serde_json::Value::Null,
+            Err(e) => {
+                out["storageError"] = serde_json::json!(e);
+            }
         }
+
+        // 主库往返：表名必须带插件前缀（宿主侧前缀校验，防跨插件数据访问）
+        let table = "plugin_com_bedcode_test_component_roundtrip";
+        if let Err(e) = host_database::execute(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY, val TEXT)",
+            table
+        )) {
+            out["dbCreateError"] = serde_json::json!(e);
+        }
+        let _ = host_database::execute(&format!("INSERT INTO {} (val) VALUES ('hello')", table));
+        match host_database::query(&format!("SELECT val FROM {} ORDER BY id", table)) {
+            Ok(Some(rows)) => {
+                out["dbRows"] = serde_json::from_str(&rows).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(None) => out["dbRows"] = serde_json::Value::Null,
+            Err(e) => {
+                out["dbQueryError"] = serde_json::json!(e);
+            }
+        }
+
+        // 插件独立库往返：无表名前缀校验（整个库都是插件的）
+        if let Err(e) = host_plugin_database::execute("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, val TEXT)") {
+            out["pdbCreateError"] = serde_json::json!(e);
+        }
+        let _ = host_plugin_database::execute("INSERT INTO t (val) VALUES ('pdb')");
+        match host_plugin_database::query("SELECT val FROM t ORDER BY id") {
+            Ok(Some(rows)) => {
+                out["pdbRows"] = serde_json::from_str(&rows).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(None) => out["pdbRows"] = serde_json::Value::Null,
+            Err(e) => {
+                out["pdbQueryError"] = serde_json::json!(e);
+            }
+        }
+
+        // 会话列表（权限 session:read）
+        match host_session::list_sessions() {
+            Ok(Some(list)) => {
+                out["sessions"] = serde_json::from_str(&list).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(None) => out["sessions"] = serde_json::Value::Null,
+            Err(e) => {
+                out["sessionError"] = serde_json::json!(e);
+            }
+        }
+
+        // 消息总线发布（同步投递，总线内部异步派发）
+        match host_bus::publish("component-test-topic", r#"{"from":"component-test"}"#) {
+            Ok(()) => out["busPublished"] = serde_json::json!(true),
+            Err(e) => {
+                out["busError"] = serde_json::json!(e);
+            }
+        }
+
+        // 前端事件（无头测试上下文无 AppHandle，宿主按幂等处理返回 Ok）
+        host_events::emit("component-test-event", r#"{"a":1}"#);
+
+        serde_json::to_string(&out).unwrap_or_default()
     }
 }
 

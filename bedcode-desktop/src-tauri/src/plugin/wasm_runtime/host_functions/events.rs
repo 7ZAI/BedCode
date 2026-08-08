@@ -1,9 +1,86 @@
 //! 事件域 Host Functions（前端事件 / 移动端同步广播 / 通知）
 
 use super::memory::read_wasm_string_consume;
-use crate::plugin::wasm_runtime::WasmPluginState;
+use crate::plugin::wasm_runtime::{WasmHostContext, WasmPluginState};
 use crate::plugin::permission::PERMISSION_BROADCAST;
 use tauri::Emitter;
+
+// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+
+/// 逻辑层：发送 Tauri 事件到前端
+///
+/// 无头上下文（测试）没有 AppHandle，事件无处投递，返回 Ok 保持幂等
+pub(crate) fn emit_event(
+    host_ctx: &WasmHostContext,
+    event_name: &str,
+    payload_json: &str,
+) -> Result<(), String> {
+    let json_payload: serde_json::Value = match serde_json::from_str(payload_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, event = %event_name, "emit_event: invalid JSON payload, using raw string");
+            serde_json::Value::String(payload_json.to_string())
+        }
+    };
+    let Some(app_handle) = host_ctx.app_handle.as_ref() else {
+        tracing::warn!(event = %event_name, "emit_event: app_handle not available in headless context");
+        return Ok(());
+    };
+    app_handle
+        .emit(event_name, json_payload)
+        .map_err(|e| format!("event emit failed: {}", e))
+}
+
+/// 逻辑层：广播同步事件到所有客户端（移动端同步通道）
+///
+/// 载荷为 SDK 类型化 `SyncEvent`（serde 表示即线协议），
+/// 宿主反序列化后经 `From` 穷尽转换为内部事件 —— 未知类型在编译期即不可能出现
+pub(crate) fn broadcast_sync(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    event_json: &str,
+) -> Result<(), String> {
+    // 权限校验：broadcast 权限门控移动端同步通道
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_BROADCAST, "host_broadcast_sync") {
+        return Err("permission denied".to_string());
+    }
+    // 载荷直接反序列化为 SDK 类型化 SyncEvent（与插件侧同一类型，serde 表示即线协议）
+    // 未知/畸形事件在此被拒绝，不再静默丢弃：类型化后插件侧也无法构造未知变体
+    let sdk_event: bedcode_plugin_api::events::SyncEvent = serde_json::from_str(event_json)
+        .map_err(|e| format!("broadcast error: unknown or malformed sync event: {}", e))?;
+    // 穷尽转换：SyncEvent 新增变体时 From 实现编译失败，强制同步
+    let sync_event = crate::events::DesktopSyncEvent::from(sdk_event);
+    let ctx = crate::system::app_context::AppContext::global();
+    let sync_tx = ctx.sync_tx();
+    sync_tx
+        .send(sync_event)
+        .map(|_| ())
+        .map_err(|e| format!("broadcast error: {}", e))
+}
+
+/// 逻辑层：通过 Tauri 事件发送到前端 toast
+pub(crate) fn notify(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    title: &str,
+    body: &str,
+) -> Result<(), String> {
+    let Some(app_handle) = host_ctx.app_handle.as_ref() else {
+        return Err("notify error: app_handle not available in headless context".to_string());
+    };
+    app_handle
+        .emit(
+            "plugin:notify",
+            serde_json::json!({
+                "plugin_id": plugin_id,
+                "title": title,
+                "body": body,
+            }),
+        )
+        .map_err(|e| format!("notify error: emit failed: {}", e))
+}
+
+// ==================== Host Functions（core module 胶水） ====================
 
 /// 事件：发送 Tauri 事件到前端
 ///
@@ -31,21 +108,7 @@ pub(super) fn host_emit_event(
         }
     };
 
-    let json_payload: serde_json::Value = match serde_json::from_str(&payload_str) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, event = %event_name, "host_emit_event: invalid JSON payload, using raw string");
-            serde_json::Value::String(payload_str)
-        }
-    };
-
-    let host_ctx = caller.data().host_ctx.clone();
-    // 无头上下文（测试）没有 AppHandle，事件无处投递
-    let Some(app_handle) = host_ctx.app_handle.as_ref() else {
-        tracing::warn!(event = %event_name, "host_emit_event: app_handle not available in headless context");
-        return;
-    };
-    if let Err(e) = app_handle.emit(&event_name, json_payload) {
+    if let Err(e) = emit_event(&caller.data().host_ctx, &event_name, &payload_str) {
         tracing::error!(error = %e, event = %event_name, "host_emit_event: emit failed");
     }
 }
@@ -65,11 +128,6 @@ pub(super) fn host_broadcast_sync(
     let plugin_id = caller.data().plugin_id.clone();
     let host_ctx = caller.data().host_ctx.clone();
 
-    // 权限校验：broadcast 权限门控移动端同步通道
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_BROADCAST, "host_broadcast_sync") {
-        return;
-    }
-
     let payload_str = match read_wasm_string_consume(&mut caller, payload_ptr, payload_len) {
         Some(s) => s,
         None => {
@@ -78,22 +136,7 @@ pub(super) fn host_broadcast_sync(
         }
     };
 
-    // 载荷直接反序列化为 SDK 类型化 SyncEvent（与插件侧同一类型，serde 表示即线协议）
-    // 未知/畸形事件在此被拒绝，不再静默丢弃：类型化后插件侧也无法构造未知变体
-    let sdk_event: bedcode_plugin_api::events::SyncEvent = match serde_json::from_str(&payload_str) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(error = %e, "[plugin:{}] host_broadcast_sync: unknown or malformed sync event", plugin_id);
-            return;
-        }
-    };
-
-    // 穷尽转换：SyncEvent 新增变体时 From 实现编译失败，强制同步
-    let sync_event = crate::events::DesktopSyncEvent::from(sdk_event);
-
-    let ctx = crate::system::app_context::AppContext::global();
-    let sync_tx = ctx.sync_tx();
-    if let Err(e) = sync_tx.send(sync_event) {
+    if let Err(e) = broadcast_sync(&host_ctx, &plugin_id, &payload_str) {
         tracing::error!(error = %e, "[plugin:{}] host_broadcast_sync: broadcast failed", plugin_id);
     }
 }
@@ -128,18 +171,10 @@ pub(super) fn host_notify(
         }
     };
 
-    let Some(app_handle) = host_ctx.app_handle.as_ref() else {
-        tracing::warn!(plugin_id = %plugin_id, "host_notify: app_handle not available in headless context");
-        return -1;
-    };
-    match app_handle.emit("plugin:notify", serde_json::json!({
-        "plugin_id": plugin_id,
-        "title": title,
-        "body": body,
-    })) {
+    match notify(&host_ctx, &plugin_id, &title, &body) {
         Ok(()) => 0,
         Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_notify: emit failed");
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_notify: notify failed");
             -1
         }
     }

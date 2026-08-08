@@ -14,21 +14,21 @@
 //! - 其他函数用 i32 状态码返回
 //! - 宿主通过 Caller 访问 WasmPluginState 获取 plugin_id 和宿主能力
 
-mod bus;
+pub(super) mod bus;
 pub(super) mod config;
-mod database;
-mod events;
+pub(super) mod database;
+pub(super) mod events;
 pub(super) mod file_service;
-mod fs;
-mod http;
-mod lifecycle;
+pub(super) mod fs;
+pub(super) mod http;
+pub(super) mod lifecycle;
 pub(super) mod log;
 pub(super) mod memory;
-mod session;
+pub(super) mod session;
 pub(super) mod status;
 pub(super) mod storage;
 pub(super) mod terminal;
-mod timer;
+pub(super) mod timer;
 pub(super) mod transfer;
 mod wsl_fs;
 

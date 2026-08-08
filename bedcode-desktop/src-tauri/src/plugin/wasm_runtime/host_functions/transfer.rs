@@ -12,7 +12,7 @@
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
 use crate::plugin::fs_auth::FsOp;
 use crate::plugin::message_bus::MessageBus;
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use crate::system::error_boundary::spawn_with_error_boundary;
 use bedcode_plugin_api::permission::PERMISSION_TRANSFER;
 use bedcode_plugin_api::{TransferDirection, TransferProgress, TransferRequest, TransferState};
@@ -48,6 +48,100 @@ enum Outcome {
     Failed(String),
 }
 
+// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+
+/// 逻辑层：启动传输任务（权限 + fs 授权 + 登记 + spawn），返回 task_id
+///
+/// 宿主托管实际字节搬运，插件只负责任务编排（规格第 6、7 节）。
+/// 本地路径授权按方向判定：下载 = 写授权，上传 = 读授权。
+pub(crate) fn transfer_start(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    request_json: &str,
+) -> Result<String, String> {
+    let request: TransferRequest = serde_json::from_str(request_json)
+        .map_err(|e| format!("transfer error: invalid TransferRequest JSON: {}", e))?;
+
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TRANSFER, "host_transfer_start") {
+        return Err("permission denied".to_string());
+    }
+
+    // 本地路径 fs 授权：下载 = 写授权，上传 = 读授权
+    let fs_op = match request.direction {
+        TransferDirection::Download => FsOp::Write,
+        TransferDirection::Upload => FsOp::Read,
+    };
+    let fs_auth = host_ctx.fs_auth.clone();
+    let local_path = request.local_path.clone();
+    if !block_on_async(fs_auth.check(plugin_id, &local_path, fs_op)) {
+        tracing::error!(
+            plugin_id = %plugin_id,
+            local_path = %local_path,
+            "transfer_start: local path not authorized by user"
+        );
+        return Err("transfer error: local path not authorized by user".to_string());
+    }
+
+    // final_path 是下载完成后的 rename 目标，同样需要写授权校验
+    if let Some(ref final_path) = request.final_path {
+        if !block_on_async(fs_auth.check(plugin_id, final_path, fs_op)) {
+            tracing::error!(
+                plugin_id = %plugin_id,
+                final_path = %final_path,
+                "transfer_start: final_path not authorized by user"
+            );
+            return Err("transfer error: final_path not authorized by user".to_string());
+        }
+    }
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let token = CancellationToken::new();
+
+    // 先登记再 spawn：避免 cancel 早于任务注册到达而丢失取消语义
+    let task_id_for_map = task_id.clone();
+    let token_for_map = token.clone();
+    block_on_async(async move {
+        tasks().lock().await.insert(task_id_for_map, token_for_map);
+    });
+
+    let app_handle = host_ctx.app_handle.clone();
+    let bus = host_ctx.message_bus.clone();
+    let task_id_for_spawn = task_id.clone();
+    spawn_with_error_boundary("plugin_transfer_task", async move {
+        run_transfer(task_id_for_spawn, request, app_handle, bus, token).await;
+    });
+
+    Ok(task_id)
+}
+
+/// 逻辑层：取消传输任务（权限 + 查任务表），任务不存在视为幂等成功
+pub(crate) fn transfer_cancel(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TRANSFER, "host_transfer_cancel") {
+        return Err("permission denied".to_string());
+    }
+    let token = block_on_async(async { tasks().lock().await.get(task_id).cloned() });
+    match token {
+        Some(token) => {
+            tracing::info!(plugin_id = %plugin_id, task_id = %task_id, "transfer cancel requested");
+            token.cancel();
+        }
+        None => {
+            tracing::debug!(
+                plugin_id = %plugin_id,
+                task_id = %task_id,
+                "transfer_cancel: task not active (already finished or unknown)"
+            );
+        }
+    }
+    Ok(())
+}
+
+// ==================== Host Functions（core module 胶水） ====================
+
 /// 传输引擎：启动传输任务
 ///
 /// 参数：(req_ptr, req_len, out_ptr) — req 为 TransferRequest JSON
@@ -69,69 +163,16 @@ pub(super) fn host_transfer_start(
         }
     };
 
-    let request: TransferRequest = match serde_json::from_str(&req_str) {
-        Ok(r) => r,
+    match transfer_start(&host_ctx, &plugin_id, &req_str) {
+        Ok(task_id) => match write_wasm_string(&mut caller, &task_id) {
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, "host_transfer_start: failed to write task_id");
+                -1
+            }
+        },
         Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_transfer_start: invalid TransferRequest JSON");
-            return -1;
-        }
-    };
-
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_TRANSFER, "host_transfer_start")
-    {
-        return -1;
-    }
-
-    // 本地路径 fs 授权：下载 = 写授权，上传 = 读授权
-    let fs_op = match request.direction {
-        TransferDirection::Download => FsOp::Write,
-        TransferDirection::Upload => FsOp::Read,
-    };
-    let fs_auth = host_ctx.fs_auth.clone();
-    let local_path = request.local_path.clone();
-    let plugin_id_for_auth = plugin_id.clone();
-    if !block_on_async(fs_auth.check(&plugin_id_for_auth, &local_path, fs_op)) {
-        tracing::error!(
-            plugin_id = %plugin_id,
-            local_path = %local_path,
-            "host_transfer_start: local path not authorized by user"
-        );
-        return -1;
-    }
-
-    // final_path 是下载完成后的 rename 目标，同样需要写授权校验
-    if let Some(ref final_path) = request.final_path {
-        if !block_on_async(fs_auth.check(&plugin_id_for_auth, final_path, fs_op)) {
-            tracing::error!(
-                plugin_id = %plugin_id,
-                final_path = %final_path,
-                "host_transfer_start: final_path not authorized by user"
-            );
-            return -1;
-        }
-    }
-
-    let task_id = uuid::Uuid::new_v4().to_string();
-    let token = CancellationToken::new();
-
-    // 先登记再 spawn：避免 cancel 早于任务注册到达而丢失取消语义
-    let task_id_for_map = task_id.clone();
-    let token_for_map = token.clone();
-    block_on_async(async move {
-        tasks().lock().await.insert(task_id_for_map, token_for_map);
-    });
-
-    let app_handle = host_ctx.app_handle.clone();
-    let bus = host_ctx.message_bus.clone();
-    let task_id_for_spawn = task_id.clone();
-    spawn_with_error_boundary("plugin_transfer_task", async move {
-        run_transfer(task_id_for_spawn, request, app_handle, bus, token).await;
-    });
-
-    match write_wasm_string(&mut caller, &task_id) {
-        Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_transfer_start: failed to write task_id");
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_transfer_start: start failed");
             -1
         }
     }
@@ -157,26 +198,13 @@ pub(super) fn host_transfer_cancel(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_TRANSFER, "host_transfer_cancel")
-    {
-        return -1;
-    }
-
-    let token = block_on_async(async { tasks().lock().await.get(&task_id).cloned() });
-    match token {
-        Some(token) => {
-            tracing::info!(plugin_id = %plugin_id, task_id = %task_id, "transfer cancel requested");
-            token.cancel();
-        }
-        None => {
-            tracing::debug!(
-                plugin_id = %plugin_id,
-                task_id = %task_id,
-                "host_transfer_cancel: task not active (already finished or unknown)"
-            );
+    match transfer_cancel(&host_ctx, &plugin_id, &task_id) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_transfer_cancel: cancel failed");
+            -1
         }
     }
-    0
 }
 
 // ==================== Transfer Task ====================

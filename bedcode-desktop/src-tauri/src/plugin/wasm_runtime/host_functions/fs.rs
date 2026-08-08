@@ -6,7 +6,7 @@
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
 use super::wsl_fs;
 use crate::plugin::fs_auth::FsOp;
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use crate::plugin::permission::{PERMISSION_FS_READ, PERMISSION_FS_WRITE};
 
 /// 读取文本文件（WSL UNC 路径走 wsl.exe 桥接）
@@ -77,6 +77,119 @@ fn delete_file(path: &str) -> std::io::Result<()> {
     }
 }
 
+// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+
+/// 逻辑层：读取文本文件（权限 + 三层访问校验）
+pub(crate) fn fs_read(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_read") {
+        return Err("permission denied".to_string());
+    }
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Read));
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_read: access denied by fs_auth");
+        return Err("permission denied".to_string());
+    }
+    read_text_file(path)
+        .map(Some)
+        .map_err(|e| format!("fs error: file read failed: {}", e))
+}
+
+/// 逻辑层：写入文本文件（权限 + 三层访问校验）
+pub(crate) fn fs_write(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    path: &str,
+    data: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_write") {
+        return Err("permission denied".to_string());
+    }
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Write));
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_write: access denied by fs_auth");
+        return Err("permission denied".to_string());
+    }
+    write_text_file(path, data).map_err(|e| format!("fs error: file write failed: {}", e))
+}
+
+/// 逻辑层：复制文件（读源 + 写目标双授权）
+pub(crate) fn fs_copy(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    src: &str,
+    dst: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_copy") {
+        return Err("permission denied".to_string());
+    }
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_copy") {
+        return Err("permission denied".to_string());
+    }
+    // 访问校验（源文件读、目标文件写）
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(async {
+        let read_ok = fs_auth.check(plugin_id, src, FsOp::Read).await;
+        if !read_ok {
+            return false;
+        }
+        fs_auth.check(plugin_id, dst, FsOp::Write).await
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, src = %src, dst = %dst, "fs_copy: access denied by fs_auth");
+        return Err("permission denied".to_string());
+    }
+    copy_file(src, dst).map_err(|e| format!("fs error: file copy failed: {}", e))
+}
+
+/// 逻辑层：删除文件（权限 + 三层访问校验；文件不存在视为成功，幂等）
+pub(crate) fn fs_delete(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    path: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_delete") {
+        return Err("permission denied".to_string());
+    }
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Write));
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_delete: access denied by fs_auth");
+        return Err("permission denied".to_string());
+    }
+    delete_file(path).map_err(|e| format!("fs error: file delete failed: {}", e))
+}
+
+/// 逻辑层：检查文件是否存在（权限 + 三层访问校验，支持 WSL UNC 路径）
+pub(crate) fn fs_exists(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    path: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_exists") {
+        return Err("permission denied".to_string());
+    }
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Read));
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_exists: access denied by fs_auth");
+        return Err("permission denied".to_string());
+    }
+    // 支持 WSL UNC 路径
+    if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(path) {
+        return wsl_fs::exists_via_wsl(&distro, &wsl_path)
+            .map_err(|e| format!("fs error: WSL check failed: {}", e));
+    }
+    Ok(std::path::Path::new(path).exists())
+}
+
+// ==================== Host Functions（core module 胶水） ====================
+
 /// 文件系统：读取文件
 ///
 /// 参数：(path_ptr, path_len, out_ptr)
@@ -98,28 +211,15 @@ pub(super) fn host_fs_read(
         }
     };
 
-    // 权限校验
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_READ, "host_fs_read") {
-        return -1;
-    }
-
-    // 访问校验（三层策略）
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(&plugin_id, &path, FsOp::Read));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_read: access denied by fs_auth");
-        return -1;
-    }
-
-    // 执行文件读取
-    match read_text_file(&path) {
-        Ok(content) => match write_wasm_string(&mut caller, &content) {
+    match fs_read(&host_ctx, &plugin_id, &path) {
+        Ok(Some(content)) => match write_wasm_string(&mut caller, &content) {
             Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
             None => {
                 tracing::error!(plugin_id = %plugin_id, path = %path, "host_fs_read: failed to write result to WASM memory");
                 -1
             }
         },
+        Ok(None) => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_read: file read failed");
             -1
@@ -157,20 +257,7 @@ pub(super) fn host_fs_write(
         }
     };
 
-    // 权限校验
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_WRITE, "host_fs_write") {
-        return -1;
-    }
-
-    // 访问校验
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(&plugin_id, &path, FsOp::Write));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_write: access denied by fs_auth");
-        return -1;
-    }
-
-    match write_text_file(&path, &data) {
+    match fs_write(&host_ctx, &plugin_id, &path, &data) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_write: file write failed");
@@ -209,33 +296,8 @@ pub(super) fn host_fs_copy(
         }
     };
 
-    // 复制需要读+写权限
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_READ, "host_fs_copy") {
-        return -1;
-    }
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_WRITE, "host_fs_copy") {
-        return -1;
-    }
-
-    // 访问校验（源文件读、目标文件写）
-    let fs_auth = host_ctx.fs_auth.clone();
-    let plugin_id_clone = plugin_id.clone();
-    let src_clone = src.clone();
-    let dst_clone = dst.clone();
-    let allowed = block_on_async(async {
-        let read_ok = fs_auth.check(&plugin_id_clone, &src_clone, FsOp::Read).await;
-        if !read_ok {
-            return false;
-        }
-        fs_auth.check(&plugin_id_clone, &dst_clone, FsOp::Write).await
-    });
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, src = %src, dst = %dst, "host_fs_copy: access denied by fs_auth");
-        return -1;
-    }
-
-    match copy_file(&src, &dst) {
-        Ok(_) => 0,
+    match fs_copy(&host_ctx, &plugin_id, &src, &dst) {
+        Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, src = %src, dst = %dst, "host_fs_copy: file copy failed");
             -1
@@ -263,20 +325,7 @@ pub(super) fn host_fs_delete(
         }
     };
 
-    // 权限校验（删除属于写操作）
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_WRITE, "host_fs_delete") {
-        return -1;
-    }
-
-    // 访问校验
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(&plugin_id, &path, FsOp::Write));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_delete: access denied by fs_auth");
-        return -1;
-    }
-
-    match delete_file(&path) {
+    match fs_delete(&host_ctx, &plugin_id, &path) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_delete: file delete failed");
@@ -305,29 +354,17 @@ pub(super) fn host_fs_exists(
         }
     };
 
-    // 权限校验（存在性检查属于读操作）
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_FS_READ, "host_fs_exists") {
-        return -1;
-    }
-
-    // 访问校验
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(&plugin_id, &path, FsOp::Read));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_exists: access denied by fs_auth");
-        return -1;
-    }
-
-    // 支持 WSL UNC 路径
-    if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(&path) {
-        match wsl_fs::exists_via_wsl(&distro, &wsl_path) {
-            Ok(exists) => return if exists { 1 } else { 0 },
-            Err(e) => {
-                tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_exists: WSL check failed");
-                return -1;
+    match fs_exists(&host_ctx, &plugin_id, &path) {
+        Ok(exists) => {
+            if exists {
+                1
+            } else {
+                0
             }
         }
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_exists: exists check failed");
+            -1
+        }
     }
-
-    if std::path::Path::new(&path).exists() { 1 } else { 0 }
 }

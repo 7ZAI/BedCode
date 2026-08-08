@@ -1,7 +1,7 @@
 //! HTTP 代理域 Host Functions（宿主代发请求，支持 SSE 流式推流）
 
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use crate::system::constants::plugin::{PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_TIMEOUT_SECS};
 use serde::Deserialize;
 use std::sync::LazyLock;
@@ -25,10 +25,9 @@ static HTTP_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
-/// HTTP 代理：发起 HTTP 请求
-///
-/// 参数：(request_json_ptr, request_json_len, out_ptr)
-/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+
+/// 逻辑层：发起 HTTP 请求（宿主代发，支持 SSE 流式推流）
 ///
 /// request_json 格式：
 /// ```json
@@ -45,31 +44,13 @@ static HTTP_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 /// 流式模式：宿主 spawn tokio 任务执行 HTTP 请求，逐 chunk 通过 emit_event 推送，
 /// http_fetch 立即返回 stream_id
 /// 非流式模式：block_on 执行，返回完整响应
-pub(super) fn host_http_fetch(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    req_ptr: u32,
-    req_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let request_json = match read_wasm_string_consume(&mut caller, req_ptr, req_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to read request JSON");
-            return -1;
-        }
-    };
-
-    // 解析请求
-    let request: serde_json::Value = match serde_json::from_str(&request_json) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: invalid request JSON");
-            return -1;
-        }
-    };
+pub(crate) fn http_fetch(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    request_json: &str,
+) -> Result<Option<String>, String> {
+    let request: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|e| format!("http error: invalid request JSON: {}", e))?;
 
     let is_stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -84,13 +65,11 @@ pub(super) fn host_http_fetch(
 
         // 流式推送依赖前端事件通道，无头上下文不可用
         let Some(app_handle) = host_ctx.app_handle.clone() else {
-            tracing::error!(plugin_id = %plugin_id, "host_http_fetch: streaming requires app_handle");
-            return -1;
+            return Err("http error: streaming requires app_handle".to_string());
         };
 
-        let plugin_id_clone = plugin_id.clone();
+        let plugin_id_clone = plugin_id.to_string();
         let stream_event_clone = stream_event.clone();
-
         tokio::spawn(async move {
             if let Err(e) = execute_streaming_http(
                 &request,
@@ -118,34 +97,54 @@ pub(super) fn host_http_fetch(
             "streamId": stream_id,
             "streamEvent": stream_event,
         });
-        let result_str = serde_json::to_string(&result_json).unwrap_or_default();
-        match write_wasm_string(&mut caller, &result_str) {
-            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-            None => -1,
-        }
+        serde_json::to_string(&result_json)
+            .map(Some)
+            .map_err(|e| format!("http error: response serialization failed: {}", e))
     } else {
         // 非流式模式：同步执行 HTTP 请求
-        match block_on_async(execute_http_request(&request)) {
-            Ok(response) => {
-                let result_str = match serde_json::to_string(&response) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: response serialization failed");
-                        return -1;
-                    }
-                };
-                match write_wasm_string(&mut caller, &result_str) {
-                    Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
-                    None => {
-                        tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to write result to WASM memory");
-                        -1
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: HTTP request failed");
+        let response = block_on_async(execute_http_request(&request))
+            .map_err(|e| format!("http error: {}", e))?;
+        serde_json::to_string(&response)
+            .map(Some)
+            .map_err(|e| format!("http error: response serialization failed: {}", e))
+    }
+}
+
+// ==================== Host Functions（core module 胶水） ====================
+
+/// HTTP 代理：发起 HTTP 请求
+///
+/// 参数：(request_json_ptr, request_json_len, out_ptr)
+/// 返回：0 成功，-1 失败。结果写入 out_ptr（8 字节: ptr + len）
+pub(super) fn host_http_fetch(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    req_ptr: u32,
+    req_len: u32,
+    out_ptr: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let request_json = match read_wasm_string_consume(&mut caller, req_ptr, req_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to read request JSON");
+            return -1;
+        }
+    };
+
+    match http_fetch(&host_ctx, &plugin_id, &request_json) {
+        Ok(Some(json)) => match write_wasm_string(&mut caller, &json) {
+            Some((ptr, len)) => write_result_to_out_ptr(&mut caller, out_ptr, ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, "host_http_fetch: failed to write result to WASM memory");
                 -1
             }
+        },
+        Ok(None) => write_result_to_out_ptr(&mut caller, out_ptr, 0, 0),
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_http_fetch: HTTP request failed");
+            -1
         }
     }
 }

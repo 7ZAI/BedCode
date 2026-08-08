@@ -1918,6 +1918,29 @@ mod tests {
             assert_eq!(result_json["name"], "test.echo");
             assert_eq!(result_json["stored"]["k"], "v");
 
+            // 主库往返：前缀校验通过 + 建表 + 插入 + 查询
+            let db_rows = result_json["dbRows"].as_array().expect("dbRows array");
+            assert_eq!(db_rows.len(), 1);
+            assert_eq!(db_rows[0]["val"], "hello");
+
+            // 插件独立库：无头测试上下文无 app_handle，宿主按设计返回不可用错误
+            // （真实运行环境有 app_handle，独立库正常打开）。此处验证 import 接线
+            // 与错误透传链路正确，而非 SQL 执行本身（主库往返已覆盖 SQL 语义）。
+            let pdb_err = result_json["pdbQueryError"]
+                .as_str()
+                .expect("pdbQueryError should be present");
+            assert!(
+                pdb_err.contains("headless"),
+                "unexpected pdbQueryError: {}",
+                pdb_err
+            );
+
+            // 会话列表（权限 session:read，空列表）
+            assert_eq!(result_json["sessions"], serde_json::json!([]));
+
+            // 消息总线发布（同步投递）
+            assert_eq!(result_json["busPublished"], serde_json::json!(true));
+
             // 终端钩子（与 core 形态 plugin-test 同语义：大写转换）
             assert_eq!(
                 plugin.on_terminal_input("session-1", "hello input").unwrap(),

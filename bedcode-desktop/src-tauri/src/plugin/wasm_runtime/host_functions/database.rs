@@ -3,11 +3,184 @@
 //! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
 
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use crate::plugin::permission::PERMISSION_STORAGE;
 use regex::Regex;
 
-// ==================== Host Functions ====================
+// ==================== 逻辑层（core 胶水与 Component Model 绑定共用） ====================
+
+/// 解析参数绑定 JSON 数组字符串（空串视为空数组）
+fn parse_params_json(params_json: &str) -> Result<Vec<serde_json::Value>, String> {
+    if params_json.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(params_json)
+        .map_err(|e| format!("invalid params JSON array: {}", e))
+}
+
+/// 逻辑层：主库执行 SQL（权限 + 表名前缀校验），返回受影响行数
+pub(crate) fn db_execute(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute") {
+        return Err("permission denied".to_string());
+    }
+    validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
+    let db = host_ctx.db.clone();
+    block_on_async(async {
+        let db = db.lock().await;
+        db.conn().execute(sql, []).map_err(|e| e.to_string())
+    })
+    .map(|affected| affected as u32)
+    .map_err(|e| format!("database error: {}", e))
+}
+
+/// 逻辑层：主库查询（权限 + 表名前缀校验），返回行数组 JSON 字符串
+pub(crate) fn db_query(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_query") {
+        return Err("permission denied".to_string());
+    }
+    validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
+    let db = host_ctx.db.clone();
+    let value = block_on_async(async {
+        let db = db.lock().await;
+        query_to_json(db.conn(), sql)
+    })
+    .map_err(|e| format!("database error: {}", e))?;
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| format!("database error: JSON serialization failed: {}", e))
+}
+
+/// 逻辑层：插件独立库执行 SQL（权限校验，无表名前缀校验）
+pub(crate) fn plugin_db_execute(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute") {
+        return Err("permission denied".to_string());
+    }
+    block_on_async(async {
+        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db = db_arc.lock().await;
+        db.conn().execute(sql, []).map(|n| n as u32).map_err(|e| e.to_string())
+    })
+    .map_err(|e| format!("database error: {}", e))
+}
+
+/// 逻辑层：插件独立库查询（权限校验，无表名前缀校验）
+pub(crate) fn plugin_db_query(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_query") {
+        return Err("permission denied".to_string());
+    }
+    let value = block_on_async(async {
+        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db = db_arc.lock().await;
+        query_to_json(db.conn(), sql)
+    })
+    .map_err(|e| format!("database error: {}", e))?;
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| format!("database error: JSON serialization failed: {}", e))
+}
+
+/// 逻辑层：主库执行参数绑定 SQL（权限 + 表名前缀校验）
+pub(crate) fn db_execute_params(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+    params_json: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute_params") {
+        return Err("permission denied".to_string());
+    }
+    validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
+    let params = parse_params_json(params_json)?;
+    let db = host_ctx.db.clone();
+    block_on_async(async {
+        let db = db.lock().await;
+        execute_with_params(db.conn(), sql, &params)
+    })
+    .map(|affected| affected as u32)
+    .map_err(|e| format!("database error: {}", e))
+}
+
+/// 逻辑层：主库参数绑定查询（权限 + 表名前缀校验）
+pub(crate) fn db_query_params(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+    params_json: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_query_params") {
+        return Err("permission denied".to_string());
+    }
+    validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
+    let params = parse_params_json(params_json)?;
+    let db = host_ctx.db.clone();
+    let value = block_on_async(async {
+        let db = db.lock().await;
+        query_with_params_to_json(db.conn(), sql, &params)
+    })
+    .map_err(|e| format!("database error: {}", e))?;
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| format!("database error: JSON serialization failed: {}", e))
+}
+
+/// 逻辑层：插件独立库执行参数绑定 SQL（权限校验，无表名前缀校验）
+pub(crate) fn plugin_db_execute_params(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+    params_json: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_params") {
+        return Err("permission denied".to_string());
+    }
+    let params = parse_params_json(params_json)?;
+    block_on_async(async {
+        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db = db_arc.lock().await;
+        execute_with_params(db.conn(), sql, &params).map(|n| n as u32)
+    })
+    .map_err(|e| format!("database error: {}", e))
+}
+
+/// 逻辑层：插件独立库参数绑定查询（权限校验，无表名前缀校验）
+pub(crate) fn plugin_db_query_params(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sql: &str,
+    params_json: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_query_params") {
+        return Err("permission denied".to_string());
+    }
+    let params = parse_params_json(params_json)?;
+    let value = block_on_async(async {
+        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db = db_arc.lock().await;
+        query_with_params_to_json(db.conn(), sql, &params)
+    })
+    .map_err(|e| format!("database error: {}", e))?;
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| format!("database error: JSON serialization failed: {}", e))
+}
+
+// ==================== Host Functions（core module 胶水） ====================
 
 /// 数据库：执行 SQL
 ///
@@ -29,21 +202,7 @@ pub(super) fn host_db_execute(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_db_execute") {
-        return -1;
-    }
-
-    // 表名前缀校验
-    if let Err(e) = validate_sql_table_prefix(&plugin_id, &sql) {
-        tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_execute: table name validation failed");
-        return -1;
-    }
-
-    let db = host_ctx.db.clone();
-    match block_on_async(async {
-        let db = db.lock().await;
-        db.conn().execute(&sql, []).map_err(|e| e.to_string())
-    }) {
+    match db_execute(&host_ctx, &plugin_id, &sql) {
         Ok(affected) => affected as i32,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_db_execute: SQL execution failed");
@@ -73,20 +232,7 @@ pub(super) fn host_db_query(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_db_query") {
-        return -1;
-    }
-
-    if let Err(e) = validate_sql_table_prefix(&plugin_id, &sql) {
-        tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: table name validation failed");
-        return -1;
-    }
-
-    let db = host_ctx.db.clone();
-    let query_result: Result<serde_json::Value, String> = block_on_async(async {
-        let db = db.lock().await;
-        query_to_json(db.conn(), &sql)
-    });
+    let query_result = db_query(&host_ctx, &plugin_id, &sql);
 
     write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
 }
@@ -115,18 +261,7 @@ pub(super) fn host_plugin_db_execute(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute") {
-        return -1;
-    }
-
-    let result: Result<i32, String> = block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(&plugin_id).await
-            .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
-        db.conn().execute(&sql, []).map(|n| n as i32).map_err(|e| e.to_string())
-    });
-
-    match result {
+    match plugin_db_execute(&host_ctx, &plugin_id, &sql) {
         Ok(affected) => affected as i32,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_plugin_db_execute: SQL execution failed");
@@ -160,16 +295,7 @@ pub(super) fn host_plugin_db_query(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_plugin_db_query") {
-        return -1;
-    }
-
-    let query_result: Result<serde_json::Value, String> = block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(&plugin_id).await
-            .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
-        query_to_json(db.conn(), &sql)
-    });
+    let query_result = plugin_db_query(&host_ctx, &plugin_id, &sql);
 
     write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
 }
@@ -196,21 +322,7 @@ pub(super) fn host_db_execute_params(
         Err(code) => return code,
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_db_execute_params") {
-        return -1;
-    }
-
-    // 表名前缀校验（与 host_db_execute 一致）
-    if let Err(e) = validate_sql_table_prefix(&plugin_id, &sql) {
-        tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_execute_params: table name validation failed");
-        return -1;
-    }
-
-    let db = host_ctx.db.clone();
-    match block_on_async(async {
-        let db = db.lock().await;
-        execute_with_params(db.conn(), &sql, &params)
-    }) {
+    match db_execute_params(&host_ctx, &plugin_id, &sql, &params) {
         Ok(affected) => affected as i32,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_db_execute_params: SQL execution failed");
@@ -239,20 +351,7 @@ pub(super) fn host_db_query_params(
         Err(code) => return code,
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_db_query_params") {
-        return -1;
-    }
-
-    if let Err(e) = validate_sql_table_prefix(&plugin_id, &sql) {
-        tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query_params: table name validation failed");
-        return -1;
-    }
-
-    let db = host_ctx.db.clone();
-    let query_result = block_on_async(async {
-        let db = db.lock().await;
-        query_with_params_to_json(db.conn(), &sql, &params)
-    });
+    let query_result = db_query_params(&host_ctx, &plugin_id, &sql, &params);
 
     write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
 }
@@ -276,19 +375,8 @@ pub(super) fn host_plugin_db_execute_params(
         Err(code) => return code,
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_params") {
-        return -1;
-    }
-
-    let result: Result<i32, String> = block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(&plugin_id).await
-            .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
-        execute_with_params(db.conn(), &sql, &params).map(|n| n as i32)
-    });
-
-    match result {
-        Ok(affected) => affected,
+    match plugin_db_execute_params(&host_ctx, &plugin_id, &sql, &params) {
+        Ok(affected) => affected as i32,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "host_plugin_db_execute_params: SQL execution failed");
             -1
@@ -316,23 +404,16 @@ pub(super) fn host_plugin_db_query_params(
         Err(code) => return code,
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_plugin_db_query_params") {
-        return -1;
-    }
-
-    let query_result: Result<serde_json::Value, String> = block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(&plugin_id).await
-            .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
-        query_with_params_to_json(db.conn(), &sql, &params)
-    });
+    let query_result = plugin_db_query_params(&host_ctx, &plugin_id, &sql, &params);
 
     write_query_result(&mut caller, query_result, &plugin_id, &sql, out_ptr)
 }
 
 // ==================== Shared Query Helpers ====================
 
-/// 从 WASM 内存读取 SQL 与参数数组（4 个 params 版 host function 共用）
+/// 从 WASM 内存读取 SQL 与参数 JSON 字符串（4 个 params 版 host function 共用）
+///
+/// 仅负责内存读取，JSON 解析与绑定在逻辑层（`db_execute_params` 等）完成
 fn read_sql_and_params(
     caller: &mut wasmtime::Caller<'_, WasmPluginState>,
     plugin_id: &str,
@@ -341,7 +422,7 @@ fn read_sql_and_params(
     sql_len: u32,
     params_ptr: u32,
     params_len: u32,
-) -> Result<(String, Vec<serde_json::Value>), i32> {
+) -> Result<(String, String), i32> {
     let sql = match read_wasm_string_consume(caller, sql_ptr, sql_len) {
         Some(s) => s,
         None => {
@@ -356,18 +437,7 @@ fn read_sql_and_params(
             return Err(-1);
         }
     };
-    let params: Vec<serde_json::Value> = if params_str.is_empty() {
-        Vec::new()
-    } else {
-        match serde_json::from_str(&params_str) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(error = %e, plugin_id = %plugin_id, "{}: invalid params JSON array", api);
-                return Err(-1);
-            }
-        }
-    };
-    Ok((sql, params))
+    Ok((sql, params_str))
 }
 
 /// 将 JSON 参数绑定到预编译语句（1-based 索引，rusqlite 真绑定，防注入）
@@ -481,28 +551,20 @@ fn query_to_json(
 /// 将查询结果 JSON 写入 WASM 线性内存（主库与插件库查询共用出口）
 fn write_query_result(
     caller: &mut wasmtime::Caller<'_, WasmPluginState>,
-    query_result: Result<serde_json::Value, String>,
+    query_result: Result<Option<String>, String>,
     plugin_id: &str,
     sql: &str,
     out_ptr: u32,
 ) -> i32 {
     match query_result {
-        Ok(value) => {
-            let json_str = match serde_json::to_string(&value) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(error = %e, plugin_id = %plugin_id, "db_query: JSON serialization failed");
-                    return -1;
-                }
-            };
-            match write_wasm_string(caller, &json_str) {
-                Some((ptr, len)) => write_result_to_out_ptr(caller, out_ptr, ptr, len),
-                None => {
-                    tracing::error!(plugin_id = %plugin_id, "db_query: failed to write result to WASM memory");
-                    -1
-                }
+        Ok(Some(json_str)) => match write_wasm_string(caller, &json_str) {
+            Some((ptr, len)) => write_result_to_out_ptr(caller, out_ptr, ptr, len),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, "db_query: failed to write result to WASM memory");
+                -1
             }
-        }
+        },
+        Ok(None) => write_result_to_out_ptr(caller, out_ptr, 0, 0),
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, sql = %sql, "db_query: SQL query failed");
             -1

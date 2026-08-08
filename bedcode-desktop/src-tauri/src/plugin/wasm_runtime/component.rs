@@ -8,10 +8,11 @@
 //!   - import 接口 → `Host` trait，由本模块对 `WasmPluginState` 实现
 //!   - export 接口 → `exports::bedcode::plugin::*::Guest`，宿主侧调用组件
 //! - 已接线接口：host-storage / host-log / host-config / host-terminal /
-//!   host-status（mark-plugin-error 归入 host-log）。其余 8 组接口在 WIT
-//!   中已定义但未接线，实例化导入它们的组件会得到明确的 unknown import 错误；
-//!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块（机械性工作，
-//!   随阶段 B/C 补齐）
+//!   host-status（mark-plugin-error 归入 host-log）已随阶段 A 收尾补全全部
+//!   13 组（含 host-database / host-plugin-database / host-session /
+//!   host-timer / host-events / host-http / host-fs / host-bus /
+//!   host-file-service / host-transfer），完整 `plugin` world 可直接实例化；
+//!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块
 //! - 业务逻辑与 core module 胶水共用 `host_functions` 的逻辑层函数，
 //!   行为单一事实来源；core 胶水删除时（阶段 C）本模块实现成为规范
 //!
@@ -23,7 +24,10 @@
 //!   组件形态暂无传递通道，阶段 B 可给 host-log 增加可选参数）
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
-use super::host_functions::{config, log, status, storage, terminal};
+use super::host_functions::{
+    bus, config, database, events, file_service, fs, http, lifecycle, log, session, status,
+    storage, terminal, timer, transfer,
+};
 use super::{WasmHostContext, WasmPluginState, EPOCH_GRACE_TICKS};
 use crate::AppError;
 use bedcode_plugin_api::abi;
@@ -93,6 +97,167 @@ impl bedcode::plugin::host_terminal::Host for WasmPluginState {
     }
 }
 
+impl bedcode::plugin::host_database::Host for WasmPluginState {
+    fn execute(&mut self, sql: String) -> Result<u32, String> {
+        database::db_execute(&self.host_ctx, &self.plugin_id, &sql)
+    }
+
+    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
+        database::db_query(&self.host_ctx, &self.plugin_id, &sql)
+    }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        database::db_execute_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        database::db_query_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+    }
+}
+
+impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
+    fn execute(&mut self, sql: String) -> Result<u32, String> {
+        database::plugin_db_execute(&self.host_ctx, &self.plugin_id, &sql)
+    }
+
+    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
+        database::plugin_db_query(&self.host_ctx, &self.plugin_id, &sql)
+    }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        database::plugin_db_execute_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        database::plugin_db_query_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+    }
+}
+
+impl bedcode::plugin::host_session::Host for WasmPluginState {
+    fn list_sessions(&mut self) -> Result<Option<String>, String> {
+        session::session_list(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn get(&mut self, session_id: String) -> Result<Option<String>, String> {
+        session::session_get(&self.host_ctx, &self.plugin_id, &session_id)
+    }
+
+    fn config_list(&mut self) -> Result<Option<String>, String> {
+        session::session_config_list(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn lifecycle_register(&mut self) -> Result<(), String> {
+        lifecycle::session_lifecycle_register(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn input_register(&mut self) -> Result<(), String> {
+        lifecycle::session_input_register(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn create(&mut self, config_id: String) -> Result<String, String> {
+        session::session_create(&self.host_ctx, &self.plugin_id, &config_id)
+    }
+}
+
+impl bedcode::plugin::host_timer::Host for WasmPluginState {
+    fn register(&mut self, interval_secs: u64, command: String) -> Result<(), String> {
+        timer::timer_register(&self.host_ctx, &self.plugin_id, interval_secs, &command)
+    }
+}
+
+impl bedcode::plugin::host_events::Host for WasmPluginState {
+    // WIT 中 emit/broadcast-sync 无错误返回，宿主侧记录日志（与 core 胶水一致）
+    fn emit(&mut self, event_name: String, payload_json: String) {
+        if let Err(e) = events::emit_event(&self.host_ctx, &event_name, &payload_json) {
+            tracing::error!(error = %e, event = %event_name, "host_events.emit failed");
+        }
+    }
+
+    fn broadcast_sync(&mut self, event_json: String) {
+        if let Err(e) = events::broadcast_sync(&self.host_ctx, &self.plugin_id, &event_json) {
+            tracing::error!(error = %e, "host_events.broadcast_sync failed");
+        }
+    }
+
+    fn notify(&mut self, title: String, body: String) -> Result<(), String> {
+        events::notify(&self.host_ctx, &self.plugin_id, &title, &body)
+    }
+}
+
+impl bedcode::plugin::host_http::Host for WasmPluginState {
+    fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
+        http::http_fetch(&self.host_ctx, &self.plugin_id, &request_json)
+    }
+}
+
+impl bedcode::plugin::host_fs::Host for WasmPluginState {
+    fn read(&mut self, path: String) -> Result<Option<String>, String> {
+        fs::fs_read(&self.host_ctx, &self.plugin_id, &path)
+    }
+
+    fn write(&mut self, path: String, data: String) -> Result<(), String> {
+        fs::fs_write(&self.host_ctx, &self.plugin_id, &path, &data)
+    }
+
+    fn copy(&mut self, src: String, dst: String) -> Result<(), String> {
+        fs::fs_copy(&self.host_ctx, &self.plugin_id, &src, &dst)
+    }
+
+    fn delete(&mut self, path: String) -> Result<(), String> {
+        fs::fs_delete(&self.host_ctx, &self.plugin_id, &path)
+    }
+
+    fn exists(&mut self, path: String) -> Result<bool, String> {
+        fs::fs_exists(&self.host_ctx, &self.plugin_id, &path)
+    }
+}
+
+impl bedcode::plugin::host_bus::Host for WasmPluginState {
+    fn publish(&mut self, topic: String, payload_json: String) -> Result<(), String> {
+        bus::bus_publish(&self.host_ctx, &self.plugin_id, &topic, &payload_json)
+    }
+
+    fn subscribe(&mut self, topic: String) -> Result<(), String> {
+        bus::bus_subscribe(&self.host_ctx, &self.plugin_id, &topic)
+    }
+
+    fn unsubscribe(&mut self, topic: String) -> Result<(), String> {
+        bus::bus_unsubscribe(&self.host_ctx, &self.plugin_id, &topic)
+    }
+}
+
+impl bedcode::plugin::host_file_service::Host for WasmPluginState {
+    fn mount(&mut self, options_json: String) -> Result<String, String> {
+        file_service::filesrv_mount(&self.host_ctx, &self.plugin_id, &options_json)
+    }
+
+    fn unmount(&mut self, mount_path: String) -> Result<(), String> {
+        file_service::filesrv_unmount(&self.host_ctx, &self.plugin_id, &mount_path)
+    }
+
+    fn update_roots(&mut self, mount_path: String, roots_json: String) -> Result<(), String> {
+        file_service::filesrv_update_roots(&self.host_ctx, &self.plugin_id, &mount_path, &roots_json)
+    }
+
+    fn get_peer(&mut self, peer_id: String) -> Result<Option<String>, String> {
+        file_service::filesrv_get_peer(&self.host_ctx, &self.plugin_id, &peer_id)
+    }
+
+    fn query_peer(&mut self, peer_id: String) -> Result<(), String> {
+        file_service::filesrv_query_peer(&self.host_ctx, &self.plugin_id, &peer_id)
+    }
+}
+
+impl bedcode::plugin::host_transfer::Host for WasmPluginState {
+    fn start(&mut self, request_json: String) -> Result<String, String> {
+        transfer::transfer_start(&self.host_ctx, &self.plugin_id, &request_json)
+    }
+
+    fn cancel(&mut self, task_id: String) -> Result<(), String> {
+        transfer::transfer_cancel(&self.host_ctx, &self.plugin_id, &task_id)
+    }
+}
+
 // ==================== Component Linker 组装 ====================
 
 /// 将已接线的 import 接口注册到 component linker
@@ -106,6 +271,16 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_terminal::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_session::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_file_service::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_transfer::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(linker, |s| s).map_err(|e| {
             AppError::Plugin(format!("Failed to register component host interface: {}", e))
