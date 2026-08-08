@@ -243,6 +243,10 @@ bedcode-plugin dev ../my-plugin --port 5180 --open
 bedcode-plugin dev --host     # 监听局域网，手机浏览器访问 http://<电脑IP>:5173 查看
 ```
 
+> **Windows 注意**：直接在 cmd / PowerShell 输入 `bedcode-plugin` 会提示「不是内部或外部命令」——
+> Windows 不自动把 `node_modules/.bin` 加入 PATH（只有 npm 脚本 / npx 会解析）。
+> 请用 `npm run dev`（模板与内置插件已内置该脚本）或 `npx bedcode-plugin dev`。
+
 浏览器打开 `http://localhost:5173`，页面包含：
 
 - **手机框**：390×844 移动端骨架（状态栏/页头/底部导航），可切换全宽渲染

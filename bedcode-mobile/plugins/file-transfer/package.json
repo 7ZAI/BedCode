@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "bedcode-plugin build",
-    "package": "bedcode-plugin package"
+    "package": "bedcode-plugin package",
+    "dev": "bedcode-plugin dev"
   },
   "dependencies": {
     "@bedcode/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"

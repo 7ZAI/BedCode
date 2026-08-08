@@ -8,9 +8,19 @@
 在插件工程目录运行：
 
 ```bash
-bedcode-plugin dev            # 使用当前目录作为插件
-bedcode-plugin dev --entry src/custom-entry.ts
-bedcode-plugin dev ../my-plugin --port 5180 --open
+npm run dev                   # 推荐：npm 脚本自动解析 node_modules/.bin（Windows 必需）
+npx bedcode-plugin dev        # 或 npx 方式（等效）
+bedcode-plugin dev            # 仅 macOS/Linux（PATH 含 .bin 时）
+```
+
+> **Windows**：cmd / PowerShell 直接输入 `bedcode-plugin` 会报"不是内部或外部命令"，
+> 因为 Windows 不把 `node_modules/.bin` 加入 PATH——请用 `npm run dev` 或 `npx`。
+
+带参数示例：
+
+```bash
+npx bedcode-plugin dev --entry src/custom-entry.ts
+npx bedcode-plugin dev --port 5180 --open
 ```
 
 浏览器打开 `http://localhost:5173`（--open 自动打开）。
