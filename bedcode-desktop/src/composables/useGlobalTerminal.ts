@@ -7,6 +7,7 @@
 
 import { computed, type Ref } from 'vue'
 import { Terminal } from '@xterm/xterm'
+import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import '@xterm/xterm/css/xterm.css'
 
 // 会话历史缓存：sessionId -> 原始输出数据
@@ -72,7 +73,7 @@ export function initSessionCache(sessionId: string, cols?: number): void {
     fontFamily: 'Consolas, Monaco, Courier New, monospace',
     theme: darkTheme,
     cursorBlink: false,
-    scrollback: 10000,
+    scrollback: TERMINAL_SCROLLBACK,
     cols: effectiveCols,
     rows: 40,
     allowProposedApi: true,
