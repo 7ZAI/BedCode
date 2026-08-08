@@ -8,6 +8,20 @@ use super::memory::read_wasm_string_consume;
 use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
 use wasmtime::Caller;
 
+/// 逻辑层：标记插件为错误状态（component 形态复用）
+///
+/// 宿主仅 emit `plugin:error` 事件通知前端弹窗提示，不改变插件激活状态。
+pub(crate) fn mark_plugin_error(host_ctx: &crate::plugin::wasm_runtime::WasmHostContext, plugin_id: String, error: String) {
+    block_on_async(async move {
+        match host_ctx.services().await {
+            Some(services) => services.mark_plugin_error(plugin_id, error),
+            None => tracing::error!(
+                "[PluginHost] host_mark_plugin_error: plugin services not initialized"
+            ),
+        }
+    });
+}
+
 /// 标记插件为错误状态
 ///
 /// 参数：(err_ptr, err_len) — 错误描述
@@ -22,12 +36,5 @@ pub(super) fn host_mark_plugin_error(
     let error = read_wasm_string_consume(&mut caller, err_ptr, err_len).unwrap_or_default();
     let host_ctx = caller.data().host_ctx.clone();
 
-    block_on_async(async move {
-        match host_ctx.services().await {
-            Some(services) => services.mark_plugin_error(plugin_id, error),
-            None => tracing::error!(
-                "[PluginHost] host_mark_plugin_error: plugin services not initialized"
-            ),
-        }
-    });
+    mark_plugin_error(&host_ctx, plugin_id, error);
 }

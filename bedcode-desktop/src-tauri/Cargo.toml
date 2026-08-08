@@ -126,6 +126,9 @@ portable-pty = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+# 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
+# （等价于 `wasm-tools component new`；版本与 wasmtime 46 的 wasm-tools 工具链对齐）
+wit-component = "0.255"
 
 [profile.release]
 panic = "abort"

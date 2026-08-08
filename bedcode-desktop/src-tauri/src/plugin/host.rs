@@ -161,32 +161,20 @@ impl PluginHost {
                     continue;
                 }
 
-                match wasm_runtime.compile_module_from_file(&wasm_path) {
-                    Ok(module) => {
-                        match wasm_runtime.instantiate(&module, &id, wasm_host_ctx.clone()) {
-                            Ok(wasm_plugin) => {
-                                tracing::info!(
-                                    "WASM plugin loaded: {} v{} (module: {})",
-                                    loaded.manifest.id,
-                                    loaded.manifest.version,
-                                    wasm_filename
-                                );
-                                wasm_plugins_map.insert(id.clone(), Arc::new(Mutex::new(wasm_plugin)));
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to instantiate WASM for plugin {} v{}: {}",
-                                    loaded.manifest.id,
-                                    loaded.manifest.version,
-                                    e
-                                );
-                                continue;
-                            }
-                        }
+                // 阶段 A 共存入口：按产物格式自动选择 core module / component
+                match wasm_runtime.load_plugin_from_file(&wasm_path, &id, wasm_host_ctx.clone()) {
+                    Ok(wasm_plugin) => {
+                        tracing::info!(
+                            "WASM plugin loaded: {} v{} (module: {})",
+                            loaded.manifest.id,
+                            loaded.manifest.version,
+                            wasm_filename
+                        );
+                        wasm_plugins_map.insert(id.clone(), Arc::new(Mutex::new(wasm_plugin)));
                     }
                     Err(e) => {
                         tracing::error!(
-                            "Failed to compile WASM for plugin {} v{}: {}",
+                            "Failed to load WASM for plugin {} v{}: {}",
                             loaded.manifest.id,
                             loaded.manifest.version,
                             e
@@ -707,8 +695,11 @@ impl PluginHost {
         let wasm_filename = format!("{}.wasm", rust_library);
         let wasm_path = plugin_dir.join(&wasm_filename);
 
-        let module = self.wasm_runtime.compile_module_from_file(&wasm_path)?;
-        let new_wasm_plugin = self.wasm_runtime.instantiate(&module, plugin_id, self.wasm_host_ctx.clone())?;
+        let new_wasm_plugin = self.wasm_runtime.load_plugin_from_file(
+            &wasm_path,
+            plugin_id,
+            self.wasm_host_ctx.clone(),
+        )?;
 
         // 替换 wasm_plugins map 中的实例
         self.wasm_plugins

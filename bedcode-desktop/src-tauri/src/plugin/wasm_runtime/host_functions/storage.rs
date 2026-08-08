@@ -1,8 +1,56 @@
 //! 存储域 Host Functions（插件键值存储，按 plugin_id 隔离）
+//!
+//! 每个能力拆成两层：
+//! - `storage_get/set/delete`（逻辑层）：权限校验 + 服务调用，core module 胶水
+//!   与 Component Model 绑定（`wasm_runtime::component`）共用，单一行为事实来源
+//! - `host_storage_*`（core module 胶水层）：`(ptr,len)` 内存搬运 + 结果写出
 
 use super::memory::{read_wasm_string_consume, write_result_to_out_ptr, write_wasm_string};
-use crate::plugin::wasm_runtime::{block_on_async, WasmPluginState};
+use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext, WasmPluginState};
 use crate::plugin::permission::PERMISSION_STORAGE;
+
+/// 逻辑层：获取值（权限校验 + 服务调用）
+pub(crate) fn storage_get(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    key: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_get") {
+        return Err("permission denied".to_string());
+    }
+    let storage = host_ctx.storage.clone();
+    block_on_async(storage.get(plugin_id, key))
+        .map_err(|e| format!("storage error: {}", e))
+}
+
+/// 逻辑层：设置值（权限校验 + 服务调用）
+pub(crate) fn storage_set(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_set") {
+        return Err("permission denied".to_string());
+    }
+    let storage = host_ctx.storage.clone();
+    block_on_async(storage.set(plugin_id, key, value))
+        .map_err(|e| format!("storage error: {}", e))
+}
+
+/// 逻辑层：删除值（权限校验 + 服务调用）
+pub(crate) fn storage_delete(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    key: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
+        return Err("permission denied".to_string());
+    }
+    let storage = host_ctx.storage.clone();
+    block_on_async(storage.delete(plugin_id, key))
+        .map_err(|e| format!("storage error: {}", e))
+}
 
 /// 存储：获取值
 ///
@@ -25,14 +73,7 @@ pub(super) fn host_storage_get(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_storage_get") {
-        return -1;
-    }
-
-    let storage = host_ctx.storage.clone();
-    let result = block_on_async(storage.get(&plugin_id, &key));
-
-    match result {
+    match storage_get(&host_ctx, &plugin_id, &key) {
         Ok(Some(value)) => {
             let json_str = match serde_json::to_string(&value) {
                 Ok(s) => s,
@@ -95,12 +136,7 @@ pub(super) fn host_storage_set(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_storage_set") {
-        return -1;
-    }
-
-    let storage = host_ctx.storage.clone();
-    match block_on_async(storage.set(&plugin_id, &key, json_value)) {
+    match storage_set(&host_ctx, &plugin_id, &key, json_value) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, key = %key, "host_storage_set: storage error");
@@ -129,12 +165,7 @@ pub(super) fn host_storage_delete(
         }
     };
 
-    if !super::check_permission(&host_ctx, &plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
-        return -1;
-    }
-
-    let storage = host_ctx.storage.clone();
-    match block_on_async(storage.delete(&plugin_id, &key)) {
+    match storage_delete(&host_ctx, &plugin_id, &key) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, key = %key, "host_storage_delete: storage error");

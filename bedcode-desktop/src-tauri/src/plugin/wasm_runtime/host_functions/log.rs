@@ -86,6 +86,27 @@ fn emit_plugin_log(plugin_id: &str, level: Level, file: &str, line: u32, message
     Event::dispatch(&meta, &values);
 }
 
+/// 逻辑层：发出 info 日志（core 胶水携带插件调用点 file/line；
+/// component 形态暂不携带调用点，传 ""/0，见 wit/bedcode.wit 的 host-log 注释）
+pub(crate) fn log_info(plugin_id: &str, message: &str, file: &str, line: u32) {
+    emit_plugin_log(plugin_id, Level::INFO, file, line, message);
+}
+
+/// 逻辑层：发出 debug 日志
+pub(crate) fn log_debug(plugin_id: &str, message: &str, file: &str, line: u32) {
+    emit_plugin_log(plugin_id, Level::DEBUG, file, line, message);
+}
+
+/// 逻辑层：发出 warn 日志
+pub(crate) fn log_warn(plugin_id: &str, message: &str, file: &str, line: u32) {
+    emit_plugin_log(plugin_id, Level::WARN, file, line, message);
+}
+
+/// 逻辑层：发出 error 日志
+pub(crate) fn log_error(plugin_id: &str, message: &str, file: &str, line: u32) {
+    emit_plugin_log(plugin_id, Level::ERROR, file, line, message);
+}
+
 /// 日志：info 级别
 pub(super) fn host_log_info(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
@@ -98,7 +119,7 @@ pub(super) fn host_log_info(
     let plugin_id = caller.data().plugin_id.clone();
     let message = read_wasm_string_consume(&mut caller, msg_ptr, msg_len).unwrap_or_default();
     let file = read_wasm_string_consume(&mut caller, file_ptr, file_len).unwrap_or_default();
-    emit_plugin_log(&plugin_id, Level::INFO, &file, line, &message);
+    log_info(&plugin_id, &message, &file, line);
 }
 
 /// 日志：debug 级别
@@ -113,7 +134,7 @@ pub(super) fn host_log_debug(
     let plugin_id = caller.data().plugin_id.clone();
     let message = read_wasm_string_consume(&mut caller, msg_ptr, msg_len).unwrap_or_default();
     let file = read_wasm_string_consume(&mut caller, file_ptr, file_len).unwrap_or_default();
-    emit_plugin_log(&plugin_id, Level::DEBUG, &file, line, &message);
+    log_debug(&plugin_id, &message, &file, line);
 }
 
 /// 日志：warn 级别
@@ -128,7 +149,7 @@ pub(super) fn host_log_warn(
     let plugin_id = caller.data().plugin_id.clone();
     let message = read_wasm_string_consume(&mut caller, msg_ptr, msg_len).unwrap_or_default();
     let file = read_wasm_string_consume(&mut caller, file_ptr, file_len).unwrap_or_default();
-    emit_plugin_log(&plugin_id, Level::WARN, &file, line, &message);
+    log_warn(&plugin_id, &message, &file, line);
 }
 
 /// 日志：error 级别
@@ -143,7 +164,7 @@ pub(super) fn host_log_error(
     let plugin_id = caller.data().plugin_id.clone();
     let message = read_wasm_string_consume(&mut caller, msg_ptr, msg_len).unwrap_or_default();
     let file = read_wasm_string_consume(&mut caller, file_ptr, file_len).unwrap_or_default();
-    emit_plugin_log(&plugin_id, Level::ERROR, &file, line, &message);
+    log_error(&plugin_id, &message, &file, line);
 }
 
 #[cfg(test)]

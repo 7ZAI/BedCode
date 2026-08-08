@@ -6,7 +6,11 @@
 //!
 //! Host Functions 的具体实现位于 [`host_functions`] 子模块，
 //! 本模块只负责运行时生命周期管理与宿主上下文定义
+//!
+//! Component Model 共存（迁移阶段 A）见 [`component`] 子模块：
+//! `load_plugin_from_file` 按产物格式自动选择 core module / component 路径
 
+mod component;
 mod host_functions;
 
 use crate::db::Database;
@@ -78,6 +82,12 @@ where
 pub struct WasmRuntime {
     engine: Engine,
     linker: Linker<WasmPluginState>,
+    /// Component 形态插件的 linker（迁移阶段 A：协议共存）
+    ///
+    /// 与 core 路径的 [`linker`] 平行，已接线的 import 接口见
+    /// [`component::add_to_linker`]，实例化导入未接线接口的组件会报
+    /// unknown import 错误
+    component_linker: wasmtime::component::Linker<WasmPluginState>,
     /// 文件系统访问校验器
     fs_auth: Arc<FsAuthChecker>,
     /// AOT 编译产物（`.cwasm`）缓存目录（宿主 cache 目录，非插件目录）
@@ -204,14 +214,147 @@ pub struct WasmHostContext {
     plugin_services: Arc<RwLock<Option<Arc<dyn PluginServices>>>>,
 }
 
-/// 已加载的 WASM 插件
+/// 已加载的 WASM 插件（core module 形态，自研 ABI）
 ///
 /// 持有 Instance、Store 和 Memory 引用
 /// Store 必须与 Instance 一起持有，否则 Instance 的导出函数无法调用
-pub struct LoadedWasmPlugin {
+pub struct LoadedCorePlugin {
     pub(crate) instance: Instance,
     pub(crate) store: Store<WasmPluginState>,
     pub(crate) memory: Memory,
+}
+
+/// 已加载的 WASM 插件（按产物形态分派）
+///
+/// 迁移阶段 A 的共存形态：`Core` 为现状自研 ABI 插件，`Component` 为
+/// Component Model 插件（见 [`component::ComponentWasmPlugin`]）。
+/// 加载入口 `WasmRuntime::load_plugin_from_file` 自动选择；
+/// 阶段 C 清理完成后仅保留 `Component` 变体。
+pub enum LoadedWasmPlugin {
+    /// core module（wasm32-unknown-unknown，`__bedcode_*` 导出）
+    Core(LoadedCorePlugin),
+    /// component（WIT 契约，bindgen 类型化调用）
+    Component(component::ComponentWasmPlugin),
+}
+
+impl LoadedWasmPlugin {
+    /// 调用插件的 activate 导出函数
+    pub fn activate(&mut self) -> crate::Result<i32> {
+        match self {
+            Self::Core(p) => p.activate(),
+            Self::Component(p) => p.activate(),
+        }
+    }
+
+    /// 调用插件的 deactivate 导出函数
+    pub fn deactivate(&mut self) -> crate::Result<i32> {
+        match self {
+            Self::Core(p) => p.deactivate(),
+            Self::Component(p) => p.deactivate(),
+        }
+    }
+
+    /// 调用插件的 invoke_command 导出函数
+    pub fn invoke_command(&mut self, command_name: &str, args_json: &str) -> crate::Result<String> {
+        match self {
+            Self::Core(p) => p.invoke_command(command_name, args_json),
+            Self::Component(p) => p.invoke_command(command_name, args_json),
+        }
+    }
+
+    /// 调用插件的 on_terminal_input 导出函数
+    pub fn on_terminal_input(
+        &mut self,
+        session_id: &str,
+        text: &str,
+    ) -> crate::Result<Option<String>> {
+        match self {
+            Self::Core(p) => p.on_terminal_input(session_id, text),
+            Self::Component(p) => p.on_terminal_input(session_id, text),
+        }
+    }
+
+    /// 调用插件的 on_terminal_output 导出函数
+    pub fn on_terminal_output(
+        &mut self,
+        session_id: &str,
+        data: &str,
+    ) -> crate::Result<Option<String>> {
+        match self {
+            Self::Core(p) => p.on_terminal_output(session_id, data),
+            Self::Component(p) => p.on_terminal_output(session_id, data),
+        }
+    }
+
+    /// 调用插件的 on_startup 导出函数（可选）
+    pub fn on_startup(&mut self) -> crate::Result<()> {
+        match self {
+            Self::Core(p) => p.on_startup(),
+            Self::Component(p) => p.on_startup(),
+        }
+    }
+
+    /// 调用插件的 on_shutdown 导出函数（可选）
+    pub fn on_shutdown(&mut self) -> crate::Result<()> {
+        match self {
+            Self::Core(p) => p.on_shutdown(),
+            Self::Component(p) => p.on_shutdown(),
+        }
+    }
+
+    /// 调用插件的消息总线消息接收导出函数（可选）
+    pub fn on_message(
+        &mut self,
+        topic: &str,
+        sender: &str,
+        payload: &serde_json::Value,
+    ) -> crate::Result<()> {
+        match self {
+            Self::Core(p) => p.on_message(topic, sender, payload),
+            Self::Component(p) => p.on_message(topic, sender, payload),
+        }
+    }
+
+    /// 调用插件的会话生命周期事件导出函数（可选）
+    pub fn on_session_lifecycle(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
+        match self {
+            Self::Core(p) => p.on_session_lifecycle(payload),
+            Self::Component(p) => p.on_session_lifecycle(payload),
+        }
+    }
+
+    /// 调用插件的提交输入行事件导出函数（可选，见 ADR 0001）
+    pub fn on_input_submitted(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
+        match self {
+            Self::Core(p) => p.on_input_submitted(payload),
+            Self::Component(p) => p.on_input_submitted(payload),
+        }
+    }
+
+    /// 调用插件的上传策略钩子导出函数（可选，ABI v5）
+    pub fn on_upload_request(&mut self, meta_json: &str) -> crate::Result<String> {
+        match self {
+            Self::Core(p) => p.on_upload_request(meta_json),
+            Self::Component(p) => p.on_upload_request(meta_json),
+        }
+    }
+
+    /// 获取插件的 manifest JSON
+    pub fn get_manifest(&mut self) -> crate::Result<String> {
+        match self {
+            Self::Core(p) => p.get_manifest(),
+            Self::Component(p) => p.get_manifest(),
+        }
+    }
+
+    /// 获取 core 形态内部引用（仅供内存操作测试使用；component 形态 panic）
+    #[cfg(test)]
+    pub(crate) fn as_core_mut(&mut self) -> &mut LoadedCorePlugin {
+        match self {
+            Self::Core(p) => p,
+            Self::Component(_) => panic!("as_core_mut called on component plugin"),
+        }
+    }
 }
 
 /// 根据 wasm 路径生成 AOT 缓存文件名（稳定 hash，避免路径字符/长度问题）
@@ -253,6 +396,10 @@ impl WasmRuntime {
         // 注册所有 Host Functions 到 "bedcode" 命名空间（实现见 host_functions 子模块）
         host_functions::register_host_functions(&mut linker)?;
 
+        // Component 形态插件（阶段 A）：已接线接口见 component::add_to_linker
+        let mut component_linker = wasmtime::component::Linker::new(&engine);
+        component::add_to_linker(&mut component_linker)?;
+
         // AOT 缓存目录：宿主 cache 目录（非插件目录，见结构体字段注释）。
         // 须在 app_handle move 进 FsAuthChecker 之前取出
         let aot_cache_dir = app_handle
@@ -284,7 +431,143 @@ impl WasmRuntime {
             tracing::warn!(error = %e, "Failed to spawn epoch thread, interruption disabled");
         }
 
-        Ok(Self { engine, linker, fs_auth, aot_cache_dir })
+        Ok(Self { engine, linker, component_linker, fs_auth, aot_cache_dir })
+    }
+
+    /// 从字节流编译 WASM 组件（Component Model，迁移阶段 A）
+    pub fn compile_component(&self, bytes: &[u8]) -> crate::Result<wasmtime::component::Component> {
+        wasmtime::component::Component::from_binary(&self.engine, bytes).map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to compile WASM component: {}", e))
+        })
+    }
+
+    /// 从文件编译 WASM 组件（带 AOT 缓存，与 core 路径同构）
+    ///
+    /// 缓存文件名带 `c` 前缀区分 core module 产物（同一路径的插件切换形态
+    /// 时不会误读对方产物）；`Component::serialize` 产物与 `Module::serialize`
+    /// 不同，混用会反序列化失败。
+    pub fn compile_component_from_file(&self, path: &Path) -> crate::Result<wasmtime::component::Component> {
+        // 无 AOT 缓存目录（无头/测试上下文）时退化为纯编译
+        let Some(cache_dir) = &self.aot_cache_dir else {
+            return wasmtime::component::Component::from_file(&self.engine, path).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "Failed to compile WASM component from '{}': {}",
+                    path.display(),
+                    e
+                ))
+            });
+        };
+
+        let cache_path = cache_dir.join(format!("c{:016x}.cwasm", aot_cache_key(path)));
+
+        // 产物存在且不旧于 wasm 源时尝试直接反序列化
+        let cache_fresh = std::fs::metadata(path)
+            .and_then(|w| w.modified())
+            .ok()
+            .zip(std::fs::metadata(&cache_path).and_then(|c| c.modified()).ok())
+            .map(|(wasm_mtime, cache_mtime)| cache_mtime >= wasm_mtime)
+            .unwrap_or(false);
+
+        if cache_fresh {
+            // unsafe：产物为本机自写缓存；Engine 版本/特性不匹配时 deserialize 失败，
+            // 回退到完整编译路径
+            if let Ok(bytes) = std::fs::read(&cache_path) {
+                if let Ok(component) = unsafe { wasmtime::component::Component::deserialize(&self.engine, &bytes) } {
+                    tracing::debug!(
+                        path = %cache_path.display(),
+                        "Loaded WASM component from AOT cache"
+                    );
+                    return Ok(component);
+                }
+            }
+        }
+
+        let component = wasmtime::component::Component::from_file(&self.engine, path).map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "Failed to compile WASM component from '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        // 写回 AOT 缓存：先写临时文件再 rename（原子替换，避免崩溃留半截产物）；
+        // 失败不阻断加载（下次启动重新编译）
+        match component.serialize() {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::create_dir_all(cache_dir) {
+                    tracing::warn!(
+                        path = %cache_dir.display(),
+                        error = %e,
+                        "Failed to create AOT cache dir, will recompile next time"
+                    );
+                    return Ok(component);
+                }
+                let tmp_path = cache_path.with_extension("cwasm.tmp");
+                let write_result = std::fs::write(&tmp_path, &bytes)
+                    .and_then(|_| std::fs::rename(&tmp_path, &cache_path));
+                if let Err(e) = write_result {
+                    tracing::warn!(
+                        path = %cache_path.display(),
+                        error = %e,
+                        "Failed to write AOT cache, will recompile next time"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize component for AOT cache");
+            }
+        }
+
+        Ok(component)
+    }
+
+    /// 从文件加载 WASM 插件（阶段 A 共存入口：按产物格式自动选择）
+    ///
+    /// core module 走现有 `compile_module_from_file` + `instantiate` 路径；
+    /// component 走 `compile_component_from_file` + `instantiate_component`。
+    /// 现有插件（wasm32-unknown-unknown 产物）行为完全不变。
+    pub fn load_plugin_from_file(
+        &self,
+        path: &Path,
+        plugin_id: &str,
+        host_ctx: Arc<WasmHostContext>,
+    ) -> crate::Result<LoadedWasmPlugin> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "Failed to read WASM artifact '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+        match component::detect_artifact_kind(&bytes)? {
+            component::ArtifactKind::Core => {
+                let module = self.compile_module(&bytes)?;
+                self.instantiate(&module, plugin_id, host_ctx)
+            }
+            component::ArtifactKind::Component => {
+                let component = self.compile_component(&bytes)?;
+                self.instantiate_component(&component, plugin_id, host_ctx)
+            }
+        }
+    }
+
+    /// 实例化 WASM 组件（Component Model，迁移阶段 A）
+    ///
+    /// 创建 Store + WasmPluginState，通过 component linker 实例化，
+    /// 校验 ABI 版本与形态字段（见 [`component::ComponentWasmPlugin::new`]）
+    pub fn instantiate_component(
+        &self,
+        component: &wasmtime::component::Component,
+        plugin_id: &str,
+        host_ctx: Arc<WasmHostContext>,
+    ) -> crate::Result<LoadedWasmPlugin> {
+        Ok(LoadedWasmPlugin::Component(component::ComponentWasmPlugin::new(
+            &self.engine,
+            &self.component_linker,
+            component,
+            plugin_id,
+            host_ctx,
+        )?))
     }
 
     /// 从字节流编译 WASM 模块
@@ -445,15 +728,15 @@ impl WasmRuntime {
             }
         }
 
-        Ok(LoadedWasmPlugin {
+        Ok(LoadedWasmPlugin::Core(LoadedCorePlugin {
             instance,
             store,
             memory,
-        })
+        }))
     }
 }
 
-impl LoadedWasmPlugin {
+impl LoadedCorePlugin {
     /// 调用插件的 activate 导出函数
     pub fn activate(&mut self) -> crate::Result<i32> {
         let func = self.get_export_func(abi::export::ACTIVATE)?;
@@ -1266,10 +1549,10 @@ mod tests {
         for &(name, expected_params, expected_results) in bedcode_plugin_api::abi::HOST_FN_SIGNATURES {
             let export = wasm_runtime
                 .linker()
-                .get(&mut plugin.store, bedcode_plugin_api::abi::NAMESPACE, name)
+                .get(&mut plugin.as_core_mut().store, bedcode_plugin_api::abi::NAMESPACE, name)
                 .unwrap_or_else(|e| panic!("Host function '{}' not registered: {}", name, e));
 
-            let func_type = match export.ty(&plugin.store) {
+            let func_type = match export.ty(&plugin.as_core_mut().store) {
                 wasmtime::ExternType::Func(ty) => ty,
                 other => panic!("Host function '{}' is not a function, got: {:?}", name, other),
             };
@@ -1368,11 +1651,11 @@ mod tests {
         let (_rt, mut plugin) = setup_wasm_plugin();
 
         let test_str = "Hello, WASM!";
-        let (ptr, len) = plugin.write_string_to_memory(test_str).unwrap();
+        let (ptr, len) = plugin.as_core_mut().write_string_to_memory(test_str).unwrap();
         assert_ne!(ptr, 0);
         assert_eq!(len as usize, test_str.len());
 
-        let read_back = plugin.read_string_from_memory(ptr, len).unwrap();
+        let read_back = plugin.as_core_mut().read_string_from_memory(ptr, len).unwrap();
         assert_eq!(read_back, test_str);
     }
 
@@ -1380,11 +1663,11 @@ mod tests {
     fn test_write_read_empty_string() {
         let (_rt, mut plugin) = setup_wasm_plugin();
 
-        let (ptr, len) = plugin.write_string_to_memory("").unwrap();
+        let (ptr, len) = plugin.as_core_mut().write_string_to_memory("").unwrap();
         assert_eq!(ptr, 0);
         assert_eq!(len, 0);
 
-        let read_back = plugin.read_string_from_memory(0, 0).unwrap();
+        let read_back = plugin.as_core_mut().read_string_from_memory(0, 0).unwrap();
         assert_eq!(read_back, "");
     }
 
@@ -1393,10 +1676,10 @@ mod tests {
         let (_rt, mut plugin) = setup_wasm_plugin();
 
         let test_str = "你好世界 🦀 wasm";
-        let (ptr, len) = plugin.write_string_to_memory(test_str).unwrap();
+        let (ptr, len) = plugin.as_core_mut().write_string_to_memory(test_str).unwrap();
         assert_ne!(ptr, 0);
 
-        let read_back = plugin.read_string_from_memory(ptr, len).unwrap();
+        let read_back = plugin.as_core_mut().read_string_from_memory(ptr, len).unwrap();
         assert_eq!(read_back, test_str);
     }
 
@@ -1404,10 +1687,10 @@ mod tests {
     fn test_allocate_memory_returns_valid_ptr() {
         let (_rt, mut plugin) = setup_wasm_plugin();
 
-        let ptr = plugin.allocate_memory(64).unwrap();
+        let ptr = plugin.as_core_mut().allocate_memory(64).unwrap();
         assert_ne!(ptr, 0);
 
-        let ptr2 = plugin.allocate_memory(128).unwrap();
+        let ptr2 = plugin.as_core_mut().allocate_memory(128).unwrap();
         assert_ne!(ptr2, 0);
         assert_ne!(ptr, ptr2);
     }
@@ -1416,15 +1699,16 @@ mod tests {
     fn test_read_result_from_out_ptr() {
         let (_rt, mut plugin) = setup_wasm_plugin();
 
-        let out_ptr = plugin.allocate_memory(8).unwrap();
+        let out_ptr = plugin.as_core_mut().allocate_memory(8).unwrap();
 
-        let memory = plugin.memory;
-        let memory_data = memory.data_mut(&mut plugin.store);
+        let core = plugin.as_core_mut();
+        let memory = core.memory;
+        let memory_data = memory.data_mut(&mut core.store);
         let start = out_ptr as usize;
         memory_data[start..start + 4].copy_from_slice(&0x1000u32.to_le_bytes());
         memory_data[start + 4..start + 8].copy_from_slice(&42u32.to_le_bytes());
 
-        let (ptr, len) = plugin.read_result_from_out_ptr(out_ptr).unwrap();
+        let (ptr, len) = plugin.as_core_mut().read_result_from_out_ptr(out_ptr).unwrap();
         assert_eq!(ptr, 0x1000);
         assert_eq!(len, 42);
     }
@@ -1433,14 +1717,15 @@ mod tests {
     fn test_out_ptr_null_result() {
         let (_rt, mut plugin) = setup_wasm_plugin();
 
-        let out_ptr = plugin.allocate_memory(8).unwrap();
-        let memory = plugin.memory;
-        let memory_data = memory.data_mut(&mut plugin.store);
+        let out_ptr = plugin.as_core_mut().allocate_memory(8).unwrap();
+        let core = plugin.as_core_mut();
+        let memory = core.memory;
+        let memory_data = memory.data_mut(&mut core.store);
         let start = out_ptr as usize;
         memory_data[start..start + 4].copy_from_slice(&0u32.to_le_bytes());
         memory_data[start + 4..start + 8].copy_from_slice(&0u32.to_le_bytes());
 
-        let (ptr, len) = plugin.read_result_from_out_ptr(out_ptr).unwrap();
+        let (ptr, len) = plugin.as_core_mut().read_result_from_out_ptr(out_ptr).unwrap();
         assert_eq!(ptr, 0);
         assert_eq!(len, 0);
     }
@@ -1487,5 +1772,236 @@ mod tests {
         assert!(result.is_ok(), "get_manifest failed: {:?}", result.err());
         let manifest: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
         assert_eq!(manifest["id"], TEST_PLUGIN_ID);
+    }
+
+    // ==================== Component Model 测试（迁移阶段 A） ====================
+
+    /// 将 wit-bindgen 产出的 core module 编码为组件
+    ///
+    /// 等价于 `wasm-tools component new`（WIT 元数据已由 wit-bindgen
+    /// 嵌入 core module 的 component-type 自定义段）
+    fn encode_component(module: &[u8]) -> Vec<u8> {
+        let mut encoder = wit_component::ComponentEncoder::default();
+        encoder
+            .module(module)
+            .expect("component encoder module")
+            .encode()
+            .expect("component encoder encode")
+    }
+
+    /// 构建测试用组件插件并编码为组件
+    ///
+    /// 测试插件为独立 crate（packages/plugin-component-test），基于
+    /// WIT 契约（packages/plugin-sdk-desktop/rust/wit）生成绑定；
+    /// 源码变更检测与 build_test_wasm 同策略
+    fn build_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-component-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return encode_component(
+                    &std::fs::read(&module_path).expect("Failed to read test component module"),
+                );
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for test component");
+        assert!(status.success(), "Test component WASM build failed");
+
+        encode_component(
+            &std::fs::read(&module_path).expect("Failed to read test component after build"),
+        )
+    }
+
+    /// 创建已实例化的组件插件（复用 setup_wasm_runtime 的宿主上下文）
+    fn setup_component_plugin() -> (WasmRuntime, LoadedWasmPlugin) {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .expect("instantiate test component");
+        (wasm_runtime, plugin)
+    }
+
+    /// 产物形态检测：魔法字节区分 core module / component
+    #[test]
+    fn test_detect_artifact_kind() {
+        use super::component::{detect_artifact_kind, ArtifactKind};
+
+        // core module 版本字：01 00 00 00
+        assert_eq!(
+            detect_artifact_kind(&[0, b'a', b's', b'm', 1, 0, 0, 0]).unwrap(),
+            ArtifactKind::Core
+        );
+        // component 版本字：0d 00 01 00
+        assert_eq!(
+            detect_artifact_kind(&[0, b'a', b's', b'm', 0x0d, 0, 1, 0]).unwrap(),
+            ArtifactKind::Component
+        );
+        // 非法输入
+        assert!(detect_artifact_kind(b"not wasm").is_err());
+        assert!(detect_artifact_kind(&[0, b'a', b's', b'm', 9, 9, 9, 9]).is_err());
+        assert!(detect_artifact_kind(&[0, b'a']).is_err());
+    }
+
+    /// 组件完整往返：实例化、ABI 协商、生命周期、命令（guest 内 import 往返）、
+    /// 终端钩子、事件回调、上传钩子、manifest
+    #[test]
+    fn test_component_roundtrip() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // 组件内 import 调用经 block_on_async 走 tokio（与 core 路径同机制），
+        // 测试体整体在运行时上下文中执行
+        rt.block_on(async {
+            // 预写 storage key：验证 guest 内 host_storage import 读回（JSON 值往返）
+            host_ctx
+                .storage
+                .set(TEST_PLUGIN_ID, "component-test-key", serde_json::json!({"k": "v"}))
+                .await
+                .expect("preset storage key");
+
+            let mut plugin = wasm_runtime
+                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+                .expect("instantiate test component");
+
+            // 生命周期
+            assert_eq!(plugin.activate().expect("activate"), 0);
+            assert_eq!(plugin.deactivate().expect("deactivate"), 0);
+
+            // manifest
+            let manifest: serde_json::Value =
+                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            assert_eq!(manifest["id"], "com.bedcode.component-test");
+
+            // 命令调用：guest 内 host_storage.get 往返
+            let result = plugin
+                .invoke_command("test.echo", r#"{"hello":"component"}"#)
+                .expect("invoke_command");
+            let result_json: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(result_json["name"], "test.echo");
+            assert_eq!(result_json["stored"]["k"], "v");
+
+            // 终端钩子（与 core 形态 plugin-test 同语义：大写转换）
+            assert_eq!(
+                plugin.on_terminal_input("session-1", "hello input").unwrap(),
+                Some("HELLO INPUT".to_string())
+            );
+            assert_eq!(
+                plugin.on_terminal_output("session-1", "hello output").unwrap(),
+                Some("HELLO OUTPUT".to_string())
+            );
+
+            // 事件回调 + 启动/关闭
+            plugin
+                .on_message("topic", "sender", &serde_json::json!({"a": 1}))
+                .expect("on_message");
+            plugin
+                .on_session_lifecycle(&serde_json::json!({"type": "created"}))
+                .expect("on_session_lifecycle");
+            plugin
+                .on_input_submitted(&serde_json::json!({"sessionId": "s1"}))
+                .expect("on_input_submitted");
+            plugin.on_startup().expect("on_startup");
+            plugin.on_shutdown().expect("on_shutdown");
+
+            // 上传钩子：fail-closed 决策 JSON
+            let decision = plugin
+                .on_upload_request(r#"{"name": "f.bin"}"#)
+                .expect("on_upload_request");
+            let decision_json: serde_json::Value = serde_json::from_str(&decision).unwrap();
+            assert_eq!(decision_json["allow"], false);
+        });
+    }
+
+    /// 共存入口：load_plugin_from_file 按产物格式自动选择 component 路径
+    #[test]
+    fn test_load_plugin_from_file_detects_component() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let temp_dir = std::env::temp_dir()
+            .join(format!("bedcode_component_test_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wasm_path = temp_dir.join("plugin.wasm");
+        std::fs::write(&wasm_path, build_test_component()).unwrap();
+
+        let plugin = wasm_runtime
+            .load_plugin_from_file(&wasm_path, TEST_PLUGIN_ID, host_ctx)
+            .expect("auto-detect should load component");
+        assert!(matches!(plugin, LoadedWasmPlugin::Component(_)));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 组件 AOT 缓存：产物写入、缓存命中、两次实例化等价
+    #[test]
+    fn test_compile_component_from_file_aot_cache() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "bedcode_component_aot_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wasm_path = temp_dir.join("test_component.wasm");
+        // 组件缓存文件名带 c 前缀（与 core module 产物区分）
+        let cache_path = std::env::temp_dir()
+            .join(format!("bedcode_aot_{}", std::process::id()))
+            .join(format!("c{:016x}.cwasm", aot_cache_key(&wasm_path)));
+        std::fs::write(&wasm_path, build_test_component()).unwrap();
+
+        // 首次编译：生成缓存产物
+        let component = wasm_runtime
+            .compile_component_from_file(&wasm_path)
+            .expect("first compile should succeed");
+        assert!(cache_path.exists(), "component AOT cache file should be written");
+
+        // 再次加载：命中缓存（mtime 未变）
+        let cached = wasm_runtime
+            .compile_component_from_file(&wasm_path)
+            .expect("cached load should succeed");
+
+        for c in [component, cached] {
+            wasm_runtime
+                .instantiate_component(&c, TEST_PLUGIN_ID, host_ctx.clone())
+                .expect("component from cache should instantiate");
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -15,19 +15,19 @@
 //! - 宿主通过 Caller 访问 WasmPluginState 获取 plugin_id 和宿主能力
 
 mod bus;
-mod config;
+pub(super) mod config;
 mod database;
 mod events;
 pub(super) mod file_service;
 mod fs;
 mod http;
 mod lifecycle;
-mod log;
+pub(super) mod log;
 pub(super) mod memory;
 mod session;
-mod status;
-mod storage;
-mod terminal;
+pub(super) mod status;
+pub(super) mod storage;
+pub(super) mod terminal;
 mod timer;
 pub(super) mod transfer;
 mod wsl_fs;

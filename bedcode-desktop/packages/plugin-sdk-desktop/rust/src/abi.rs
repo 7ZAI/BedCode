@@ -42,6 +42,14 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///   `TIMER_REGISTER`），支撑插件定时自动任务，见 ADR 0003
 pub const ABI_VERSION: u32 = 6;
 
+/// 产物形态字段（Component Model 迁移阶段 A，见 wasmtime-component-migration.md）
+///
+/// 组件通过 WIT `abi` 接口的 `form()` 声明形态，语义与 ABI_VERSION 解耦：
+/// 不 bump ABI 大版本，仅区分加载路径（core module vs component）
+pub const FORM_CORE: u32 = 0;
+/// 组件形态标识：`abi.form() == FORM_COMPONENT` 时按 Component Model 加载
+pub const FORM_COMPONENT: u32 = 1;
+
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
     /// 内存分配器 — 宿主写入字符串前分配 len 字节
