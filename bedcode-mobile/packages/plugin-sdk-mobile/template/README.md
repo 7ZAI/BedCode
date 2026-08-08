@@ -6,9 +6,13 @@
 
 ```bash
 npm install        # 安装依赖（含 SDK、vite、vue）
+npm run dev        # 浏览器开发环境（Dev Shell：mock 宿主 + 移动端骨架，HMR）
 npm run build      # 构建：vite（前端）+ cargo（WASM）
 npm run package    # 打包 dist/{{ID}}.zip 插件包
 ```
+
+`npm run dev` 首次运行自动安装 dev-shell 依赖，浏览器打开 http://localhost:5173；
+WASM 后端命令与真机专属能力仍需真机验证（见下方指南）。
 
 ## 安装到 BedCode Mobile
 

@@ -6,14 +6,17 @@
  *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]
  *   bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]
  *   bedcode-plugin package [-o <file>]
+ *   bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--open]
  *
  * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）；
  *          --registry 时引用已发布的 SDK 版本，否则引用本地 SDK 相对路径
  * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录
  * package 将产物打包为 {id}.zip 插件包（分发单元）
+ * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR，插件源码在
+ *          mock 宿主的移动端骨架中实时预览（WASM 后端不在浏览器运行）
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   copyFileSync,
   cpSync,
@@ -262,8 +265,60 @@ function cmdCreate(positional, flags) {
   console.log(`\n下一步：`)
   console.log(`  cd ${toPosix(relative(process.cwd(), outDir)) || '.'}`)
   console.log(`  npm install`)
+  console.log(`  npm run dev            # 浏览器开发环境（HMR，无需真机）`)
   console.log(`  npm run build        # 构建（vite + WASM）`)
   console.log(`  npm run package      # 打包 dist/${id}.zip 插件包`)
+}
+
+// ==================== 命令：dev（浏览器开发环境） ====================
+
+/** 启动 dev-shell：缺依赖时自动安装，然后以长驻 vite 进程运行 */
+function cmdDev(positional, flags) {
+  const cwd = process.cwd()
+  const pluginDir = resolve(cwd, positional[0] || '.')
+  const entry = flags.entry ? resolve(cwd, flags.entry) : resolve(pluginDir, 'src/index.ts')
+
+  if (!existsSync(join(pluginDir, 'plugin.json')) && !existsSync(entry)) {
+    console.error(`[bedcode-plugin] 目标不是插件工程（缺少 plugin.json 与 ${entry}）: ${pluginDir}`)
+    console.error('用法: bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--open]')
+    process.exit(1)
+  }
+
+  const devShellDir = join(SDK_ROOT, 'dev-shell')
+  if (!existsSync(devShellDir)) {
+    console.error(`[bedcode-plugin] dev-shell 不存在: ${devShellDir}（SDK 包不完整）`)
+    process.exit(1)
+  }
+
+  // dev-shell 首次运行需要安装自身依赖（vue / vite / tailwind 等）
+  const viteBin = join(devShellDir, 'node_modules/vite/bin/vite.js')
+  if (!existsSync(viteBin)) {
+    console.log('[bedcode-plugin] dev-shell 依赖缺失，正在安装（仅首次）…')
+    run('npm', ['install', '--no-audit', '--no-fund'], devShellDir)
+  }
+
+  const args = [
+    viteBin,
+    '--config',
+    join(devShellDir, 'vite.config.ts'),
+    '--port',
+    String(flags.port || 5173),
+  ]
+  if (flags.open) args.push('--open')
+
+  console.log(`[bedcode-plugin] 启动 dev-shell（插件: ${pluginDir}）`)
+  console.log(`[bedcode-plugin] 浏览器打开 http://localhost:${flags.port || 5173}/ 预览（Ctrl+C 退出）`)
+  const child = spawn(process.execPath, args, {
+    cwd: devShellDir,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      BEDCODE_DEV_PLUGINS: `${pluginDir}::${entry}`,
+    },
+  })
+  child.on('exit', (code) => {
+    process.exit(code ?? 0)
+  })
 }
 
 // ==================== 命令：manifest（自动填充） ====================
@@ -444,6 +499,7 @@ function main() {
     console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]')
     console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
     console.log('  bedcode-plugin package [-o <file>]')
+    console.log('  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--open]   # 浏览器开发环境（HMR）')
     console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')
     process.exit(0)
   }
@@ -457,6 +513,9 @@ function main() {
       break
     case 'package':
       cmdPackage(flags)
+      break
+    case 'dev':
+      cmdDev(rest, flags)
       break
     case 'manifest':
       cmdManifest(flags)

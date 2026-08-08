@@ -1,0 +1,38 @@
+/* Dev Shell 附加样式（宿主 style.css 之外的骨架专用） */
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+/* 桌面端工作台根容器 */
+.desktop-ui {
+  height: 100vh;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 30%, transparent);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-secondary) 45%, transparent);
+}
+
+.terminal-output {
+  font-family: Consolas, Monaco, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

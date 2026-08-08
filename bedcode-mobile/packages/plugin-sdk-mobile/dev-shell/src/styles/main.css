@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* 手机框最大高度：844px 真机尺寸，视口矮时收窄保证整体可见（底部导航不被裁切） */
+  --dev-shell-frame-h: min(844px, calc(100vh - 7rem));
+}
+
+@supports (height: 1dvh) {
+  :root {
+    /* 动态视口：浏览器工具条收起/展开时高度不闪变 */
+    --dev-shell-frame-h: min(844px, calc(100dvh - 7rem));
+  }
+}
+
+/* ===== 基础（与宿主 style.css 对齐的最小集合） ===== */
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* 安全区域（浏览器中恒为 0，保留变量兼容插件安全区逻辑） */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-top: var(--safe-area-inset-top);
+  --safe-area-bottom: var(--safe-area-inset-bottom);
+  --keyboard-height: 0px;
+  --keyboard-visible: 0;
+}
+
+:root {
+  color-scheme: light;
+}
+:root.dark {
+  color-scheme: dark;
+}
+
+:root {
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-base: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #14141a;
+}
+
+/* ===== 移动端字体规则（与宿主一致） ===== */
+.mobile-ui {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+.mobile-ui h1,
+.mobile-ui .text-xl,
+.mobile-ui .title-xl {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.mobile-ui h2,
+.mobile-ui .text-lg,
+.mobile-ui .title-lg {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.mobile-ui .text-sm,
+.mobile-ui small {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+.mobile-ui .text-xs {
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+.mobile-ui button,
+.mobile-ui .btn {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+}
+.mobile-ui input,
+.mobile-ui textarea,
+.mobile-ui select {
+  font-size: var(--font-size-base);
+}
+
+.text-xs {
+  font-size: var(--font-size-xs);
+}
+.text-sm {
+  font-size: var(--font-size-sm);
+}
+.text-base {
+  font-size: var(--font-size-base);
+}
+.text-lg {
+  font-size: var(--font-size-lg);
+}
+.text-xl {
+  font-size: var(--font-size-xl);
+}
+
+/* ===== 移动端容器 ===== */
+.mobile-app {
+  min-height: 100vh;
+  min-height: 100dvh;
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mobile-nav-safe {
+  padding-bottom: var(--safe-area-bottom, 0px);
+}
+.mobile-header-safe {
+  padding-top: var(--safe-area-top, 0px);
+}
+.mobile-input-bar {
+  margin-bottom: env(keyboard-inset-bottom, 0px);
+  transition: margin-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===== 滚动条（token 驱动，深浅色自适应） ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--mobile-text-muted) 35%, transparent);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--mobile-text-muted) 55%, transparent);
+}
+
+/* ===== 终端输出 ===== */
+.terminal-output {
+  font-family: Consolas, Monaco, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
