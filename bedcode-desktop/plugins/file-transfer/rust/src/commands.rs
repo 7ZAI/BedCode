@@ -449,9 +449,29 @@ pub fn set_settings(
 ) -> anyhow::Result<serde_json::Value> {
     if let Some(roots) = args.get("roots").and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok()) {
         state.settings.roots = roots.clone();
-        if state.mounted {
-            let roots_owned: Vec<String> = roots;
-            let _ = host.filesrv_update_roots(MOUNT_PATH, &roots_owned);
+        if roots.is_empty() {
+            // 清空全部共享目录 = 停止共享：卸载挂载（宿主拒绝空 roots 挂载）
+            if state.mounted {
+                let _ = host.filesrv_unmount(MOUNT_PATH);
+                state.mounted = false;
+                host.log_info("all shared roots removed, file service unmounted");
+            }
+        } else if state.mounted {
+            let _ = host.filesrv_update_roots(MOUNT_PATH, &roots);
+        } else {
+            // 之前未挂载（如清空后重配目录）：与激活逻辑一致重新挂载
+            let options = MountOptions {
+                mount_path: MOUNT_PATH.to_string(),
+                roots: roots.clone(),
+                operations: vec![FileOperation::List, FileOperation::Download, FileOperation::Upload],
+            };
+            match host.filesrv_mount(&options) {
+                Ok(result) => {
+                    state.mounted = true;
+                    host.log_info(&format!("mounted at {}", result.base_path));
+                }
+                Err(e) => host.log_warn(&format!("mount failed: {}", e)),
+            }
         }
     }
     if let Some(dir) = args.get("downloadDir").and_then(|v| v.as_str()) {
@@ -518,8 +538,15 @@ pub fn update_roots(
         .ok_or_else(|| anyhow::anyhow!("missing roots"))?;
 
     if state.mounted {
-        host.filesrv_update_roots(MOUNT_PATH, &roots)
-            .map_err(|e| anyhow::anyhow!("update_roots failed: {}", e))?;
+        if roots.is_empty() {
+            // 清空全部共享目录 = 停止共享：卸载挂载（宿主拒绝空 roots 挂载）
+            host.filesrv_unmount(MOUNT_PATH)
+                .map_err(|e| anyhow::anyhow!("unmount failed: {}", e))?;
+            state.mounted = false;
+        } else {
+            host.filesrv_update_roots(MOUNT_PATH, &roots)
+                .map_err(|e| anyhow::anyhow!("update_roots failed: {}", e))?;
+        }
     }
     state.settings.roots = roots;
     save_settings(host, &state.settings);
