@@ -1,26 +1,33 @@
 #!/bin/sh
 # 分支级文档跟踪助手（doc-tracking）
 #
-# 背景：文档/配置文件（docs/、AGENTS.md、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch issue 文档）只在跟踪分支
-# （默认 dev）入库；其他分支（master / uat / milestone 等）不跟踪。
-# .gitignore 已忽略这些路径，因此非跟踪分支剔除后它们在工作区中保持"被忽略"
-# 状态，来回切换分支不会冲突。
+# 背景：文档/配置文件（docs/、AGENTS.md、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch issue 文档）
+# 只在除 uat / master 外的分支入库（dev、feature/* 等全部正常跟踪）。
+# uat / master 不跟踪这些路径——仅从 index 剔除，工作区始终保留（.gitignore 已忽略
+# 这些路径，且 post-checkout 会从 dev 恢复工作区副本），来回切换分支不会冲突，
+# 也不会产生"删除文档"的提交。
+#
+# 注意：README.md / README_en.md 不在受保护路径中，所有分支（含 uat/master）均正常跟踪。
 #
 # 用法：
-#   scripts/doc-tracking.sh untrack [hook]  非跟踪分支从 index 剔除受保护文件
+#   scripts/doc-tracking.sh untrack [hook]  uat/master 从 index 剔除受保护文件
 #                                           （工作区保留；同时以"删除"侧解决
-#                                           dev→master 合并产生的 modify/delete 冲突）
-#   scripts/doc-tracking.sh restore         非跟踪分支上从跟踪分支恢复缺失的
-#                                           工作区文件（供本地查阅，不入库）
+#                                           dev→uat/master 合并产生的 modify/delete 冲突）
+#   scripts/doc-tracking.sh restore         uat/master 上从 dev 恢复缺失的工作区文件
+#                                           （供本地查阅，不入库）
 #
 # 由 scripts/hooks/ 下的 pre-commit / post-checkout / post-merge 自动调用，
 # 也可手动运行（如合并冲突后运行 untrack 再提交）。
 #
-# 环境变量：DOC_TRACKING_BRANCHES 可覆盖跟踪分支白名单（默认 "dev"）。
+# 环境变量：
+#   DOC_UNTRACKED_BRANCHES   不跟踪分支黑名单（默认 "uat master"），其余分支全部正常跟踪
+#   DOC_TRACKING_SOURCE      恢复工作区副本的源分支（默认 "dev"）
 
-TRACKING_BRANCHES="${DOC_TRACKING_BRANCHES:-dev}"
+UNTRACKED_BRANCHES="${DOC_UNTRACKED_BRANCHES:-uat master}"
+TRACKING_SOURCE="${DOC_TRACKING_SOURCE:-dev}"
 
 # 受保护路径，与 .gitignore 的 Documentation / IDE 段落对应。
+# README.md / README_en.md 不在此列（全分支跟踪）。
 # 注意：.pi 只跟踪配置（agents/extensions/prompts/settings.json），
 # .pi/sessions/ 会话日志始终忽略、不入库（勿执行 git add -f .pi 整目录）。
 PROTECTED_PATHS="docs AGENTS.md CLAUDE.md CONTEXT.md .pi .scratch"
@@ -31,8 +38,9 @@ current_branch() {
   git symbolic-ref --short HEAD 2>/dev/null
 }
 
-is_tracking_branch() {
-  for _b in $TRACKING_BRANCHES; do
+# 当前分支是否在黑名单（不跟踪文档）中
+is_untracked_branch() {
+  for _b in $UNTRACKED_BRANCHES; do
     [ "$1" = "$_b" ] && return 0
   done
   return 1
@@ -40,15 +48,15 @@ is_tracking_branch() {
 
 # ==================== 子命令 ====================
 
-# 从 index 剔除受保护文件（保留工作区内容）。
-# git ls-files 会列出冲突条目，因此 git rm --cached 同时能把
-# modify/delete 冲突解决为"保持删除"。
+# 从 index 剔除受保护文件（保留工作区内容）。仅在 uat / master 上执行。
+# dev、feature 等其余分支直接返回，正常跟踪、不干预。
 cmd_untrack() {
   _hook="${1:-manual}"
   _branch=$(current_branch)
   # detached HEAD 等无分支场景不处理
   [ -z "$_branch" ] && return 0
-  is_tracking_branch "$_branch" && return 0
+  # 非黑名单分支（dev、feature/* 等）：正常跟踪，不干预
+  is_untracked_branch "$_branch" || return 0
 
   _removed=1
   for _p in $PROTECTED_PATHS; do
@@ -69,22 +77,20 @@ cmd_untrack() {
   return 0
 }
 
-# 从跟踪分支恢复工作区中缺失的受保护文件（仅工作区，不入库）。
-# 场景：从 dev 切到 master 时，dev 跟踪而 master 不跟踪的文件会被 checkout
-# 从工作区删除，此命令把它们恢复出来供本地查阅。
+# 从跟踪源分支（默认 dev）恢复工作区中缺失的受保护文件（仅工作区，不入库）。
+# 场景：uat/master 上 dev 合入的新文档在工作区缺失时补回，供本地查阅。
 cmd_restore() {
   _branch=$(current_branch)
   [ -z "$_branch" ] && return 0
-  is_tracking_branch "$_branch" && return 0
+  # 非黑名单分支不需要恢复（本就跟踪）
+  is_untracked_branch "$_branch" || return 0
 
+  git rev-parse --verify --quiet "$TRACKING_SOURCE" >/dev/null 2>&1 || return 0
   for _p in $PROTECTED_PATHS; do
-    for _tb in $TRACKING_BRANCHES; do
-      git rev-parse --verify --quiet "$_tb" >/dev/null 2>&1 || continue
-      git ls-tree -r --name-only "$_tb" -- "$_p" 2>/dev/null |
-        while IFS= read -r _f; do
-          [ -e "$_f" ] || git restore --source="$_tb" --worktree -- "$_f" 2>/dev/null
-        done
-    done
+    git ls-tree -r --name-only "$TRACKING_SOURCE" -- "$_p" 2>/dev/null |
+      while IFS= read -r _f; do
+        [ -e "$_f" ] || git restore --source="$TRACKING_SOURCE" --worktree -- "$_f" 2>/dev/null
+      done
   done
   return 0
 }

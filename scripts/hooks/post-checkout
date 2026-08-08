@@ -1,5 +1,5 @@
 #!/bin/sh
-# post-checkout：切到非跟踪分支后剔除文档文件，并从跟踪分支恢复工作区副本
+# post-checkout：切到 uat/master 后剔除文档文件，并从 dev 恢复工作区副本
 # $3 == 1 表示分支级 checkout（文件级 checkout 跳过，避免噪音）
 [ "${3:-0}" = "1" ] || exit 0
 _dir=$(dirname "$0")
