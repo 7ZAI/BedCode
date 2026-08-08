@@ -24,6 +24,7 @@ import {
   httpSessionSettings,
   httpSetSessionMode,
   httpCurrentTask,
+  httpListSupportedAgents,
 } from '@/composables/useHttpApi'
 
 /**
@@ -40,6 +41,7 @@ export async function initPluginSystem(
   // 1. 初始化共享运行时（含对话框服务）
   // mobileApi：移动端宿主连接/HTTP 能力（当前活动会话 + AutoTask 队列接口），
   // 供插件前端经 SDK getMobileApi() 访问对端桌面端 REST API
+  const connection = useMobileConnection()
   await initSharedRuntime(
     app,
     pinia,
@@ -48,7 +50,9 @@ export async function initPluginSystem(
     { usePresetTasks },
     pluginDialogHost,
     {
-      activeSessionId: useMobileConnection().activeSessionId,
+      activeSessionId: connection.activeSessionId,
+      activeSessions: connection.activeSessions,
+      sessionConfigs: connection.sessionConfigs,
       httpTaskQueueList,
       httpTaskQueueAdd,
       httpTaskQueueRemove,
@@ -58,6 +62,7 @@ export async function initPluginSystem(
       httpSessionSettings,
       httpSetSessionMode,
       httpCurrentTask,
+      httpListSupportedAgents,
     },
   )
 

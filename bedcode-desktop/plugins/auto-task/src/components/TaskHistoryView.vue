@@ -326,10 +326,14 @@ function sessionLabel(s: RunningSession): string {
   return s.agent && s.agent !== 'unknown' ? `${base} · ${s.agent}` : base
 }
 
-// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话
+// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话（仅适配 agent）
+const adaptedRunningSessions = computed(() =>
+  runningSessions.value.filter((s) => s.is_supported),
+)
+
 const sessionOptions = computed(() => [
   { value: '', label: t('saveAsPresetOption') },
-  ...runningSessions.value.map((s) => ({ value: s.session_id, label: sessionLabel(s) })),
+  ...adaptedRunningSessions.value.map((s) => ({ value: s.session_id, label: sessionLabel(s) })),
 ])
 
 async function loadRunningSessions(opts: { silent?: boolean } = {}) {
@@ -365,10 +369,11 @@ async function loadRunningSessions(opts: { silent?: boolean } = {}) {
     // 之后仅修正失效选择（所选会话消失 → 退回预存），不覆盖用户选择
     if (!defaultSessionSelected) {
       defaultSessionSelected = true
+      const adapted = sessions.filter((s) => s.is_supported)
       const preferred =
-        sessions.find(
+        adapted.find(
           (s) => s.queue_count > 0 || ['in_progress', 'asking'].includes(s.task_status),
-        ) || sessions[0]
+        ) || adapted[0]
       createSessionId.value = preferred?.session_id ?? ''
     } else if (
       createSessionId.value &&
@@ -397,6 +402,12 @@ async function createTask() {
   createError.value = ''
   try {
     if (createSessionId.value) {
+      // 兜底：检查所选会话的 agent 是否适配（过滤列表理论上已排除，防止竞态/旧选择残留）
+      const session = runningSessions.value.find((s) => s.session_id === createSessionId.value)
+      if (session && !session.is_supported) {
+        createError.value = t('agentNotAdapted')
+        return
+      }
       await context.commands.execute('auto-task.add-task', {
         session_id: createSessionId.value,
         prompt,
@@ -663,7 +674,9 @@ async function loadJobs() {
 async function loadConfigs() {
   try {
     const result = await context.commands.execute('auto-task.list-session-configs')
-    configs.value = result?.configs ?? []
+    const allConfigs: SessionConfig[] = result?.configs ?? []
+    // 过滤掉未适配 auto-task 的 agent 的会话配置
+    configs.value = allConfigs.filter((c: SessionConfig) => c.is_supported)
   } catch (e) {
     console.error('[Auto Task] Failed to load session configs:', e)
   }

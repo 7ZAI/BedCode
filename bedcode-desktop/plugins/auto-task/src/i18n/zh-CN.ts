@@ -90,6 +90,7 @@ const zhCN: MessageSchema = {
   createTaskFailed: '创建任务失败',
   noRunningSessions: '暂无运行中的会话',
   noRunningSessionsHint: '创建的任务将保存为预设任务，启动会话后可加入队列',
+  agentNotAdapted: '当前会话的 Agent 未适配自动任务功能，请选择适配的会话（claude / codex / opencode / pi）',
   // ==================== 预设任务 ====================
   presetTitle: '预设任务',
   saveAsPreset: '保存为预设',

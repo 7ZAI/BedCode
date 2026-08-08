@@ -344,6 +344,10 @@ pub fn handle_http_endpoint(
         ("GET", "session-mode") => handle_get_session_mode(host, query),
         ("GET", "session-settings") => handle_get_session_settings_http(host, query),
         ("GET", "task-history/current") => handle_get_current_task(host, query),
+        ("GET", "supported-agents") => {
+            let agents = crate::agent::list_supported();
+            http_response::ok(serde_json::json!({ "agents": agents }))
+        }
         _ => {
             host.log_warn(&format!("Unknown HTTP endpoint: {} {}", method, path));
             http_response::error(404, &format!("Not found: {} {}", method, path))
@@ -1208,6 +1212,7 @@ pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
             let queue_count = crate::queue::pending_count(host, &session_id);
             // 会话开关随列表返回（前端队列卡片上的启动/自动应答开关状态）
             let (auto_execute, auto_answer) = session_flags(host, &session_id);
+            let agent = session_agent(host, &session_id);
 
             Some(serde_json::json!({
                 "session_id": session_id,
@@ -1218,7 +1223,8 @@ pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
                 "task_status": task_status,
                 "description": description,
                 "started_at": started_at,
-                "agent": session_agent(host, &session_id),
+                "agent": agent,
+                "is_supported": crate::agent::is_supported(agent),
                 "queue_count": queue_count,
                 "auto_execute": auto_execute,
                 "auto_answer": auto_answer,

@@ -90,6 +90,7 @@ const en: MessageSchema = {
   createTaskFailed: 'Failed to create task',
   noRunningSessions: 'No running sessions',
   noRunningSessionsHint: 'Created tasks are saved as presets — enqueue them after a session starts',
+  agentNotAdapted: 'The current session\'s Agent is not compatible with Auto Task. Please select a compatible session (claude / codex / opencode / pi).',
   // ==================== Preset Tasks ====================
   presetTitle: 'Preset Tasks',
   saveAsPreset: 'Save as Preset',

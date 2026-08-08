@@ -35,10 +35,103 @@
           </button>
         </div>
 
+        <!-- 工程目录选择（有可用目录时显示） -->
+        <div v-if="effectiveProjectDir" class="flex items-center gap-2">
+          <div class="relative flex-1 min-w-0">
+            <button
+              class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs w-full transition-colors active:opacity-80"
+              style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-border-hover); color: var(--mobile-text-secondary)"
+              @click="showDirDropdown = !showDirDropdown"
+            >
+              <svg
+                class="w-3.5 h-3.5 flex-shrink-0"
+                style="color: var(--mobile-accent)"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                />
+              </svg>
+              <span class="truncate">{{ selectedDirLabel }}</span>
+              <svg
+                class="w-3 h-3 flex-shrink-0 ml-auto transition-transform duration-200"
+                :class="{ 'rotate-180': showDirDropdown }"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <Transition name="dropdown">
+              <div
+                v-if="showDirDropdown"
+                class="absolute top-full left-0 right-0 mt-1 max-h-[180px] overflow-y-auto rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.4)] z-30"
+                style="background: var(--mobile-bg-tertiary); border: 1px solid var(--mobile-border)"
+                @click.stop
+              >
+                <button
+                  v-for="dir in projectDirs"
+                  :key="dir"
+                  class="dropdown-item w-full text-left px-3 py-2 text-xs transition-colors flex items-center gap-2"
+                  :class="dir === selectedDir ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-secondary)]'"
+                  @click="selectedDir = dir; showDirDropdown = false"
+                >
+                  <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                    />
+                  </svg>
+                  <span class="truncate">{{ dir }}</span>
+                  <svg
+                    v-if="dir === selectedDir"
+                    class="w-3 h-3 flex-shrink-0 ml-auto"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+              </div>
+            </Transition>
+          </div>
+          <button
+            class="flex-shrink-0 flex items-center justify-center p-1.5 rounded-lg transition-all active:scale-[0.98]"
+            style="
+              background: var(--mobile-accent-secondary);
+              border: 1px solid var(--mobile-border-active);
+              color: var(--mobile-accent);
+              min-width: 2.25rem;
+              min-height: 2.25rem;
+            "
+            :disabled="!fileExplorerSessionId"
+            @click="showFileExplorer = true"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+              />
+            </svg>
+          </button>
+        </div>
+
         <textarea
           ref="contentTextarea"
           v-model="draftContent"
-          rows="2"
+          rows="4"
           class="content-input w-full rounded-lg px-3 py-2.5 resize-none overflow-y-auto transition-colors duration-200"
           :placeholder="t('mobile.toolbox.taskContentPlaceholder')"
           @input="autosizeTextarea"
@@ -149,6 +242,29 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- File Explorer Dialog -->
+    <Teleport to="body">
+      <Transition name="center-modal">
+        <div
+          v-if="showFileExplorer && fileExplorerSessionId"
+          class="fixed inset-0 z-[120] flex items-center justify-center p-4 mobile-ui"
+        >
+          <div class="absolute inset-0" style="background: var(--mobile-overlay-heavy)" @click="showFileExplorer = false"></div>
+          <div
+            class="relative w-full h-full rounded-2xl shadow-xl overflow-hidden flex flex-col modal-panel"
+            style="background: var(--mobile-bg-card); border: 1px solid var(--mobile-border)"
+          >
+            <FileExplorer
+              :session-id="fileExplorerSessionId"
+              mode="emit"
+              :title="selectedDirLabel"
+              @close="showFileExplorer = false"
+            />
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -156,12 +272,12 @@
 /**
  * PresetTasksView - 预设任务二级页面
  *
- * 页面顶部为常驻编辑区域（原 TaskEditDialog 内容：任务内容 + AI 模板 + 添加按钮），
+ * 页面顶部为常驻编辑区域（原 TaskEditDialog 内容：任务内容 + AI 模板 + 工程目录浏览 + 添加按钮），
  * 点击添加生成预设任务卡片条，下方为可滚动的任务卡片列表（执行/编辑/删除）。
  * 结构与 auto-task 插件 Tab1「创建任务 + 预设任务列表」一致。
  */
 
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, defineAsyncComponent } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
@@ -169,6 +285,9 @@ import { usePresetTasks } from '@/composables/usePresetTasks'
 import { useToast } from '@/composables/useToast'
 import PresetTaskCard from '@/components/PresetTaskCard.vue'
 import type { PresetTask } from '@/composables/model'
+
+// 懒加载：FileExplorer 依赖 shiki 高亮引擎，避免首次进入本页时加载整个 shiki
+const FileExplorer = defineAsyncComponent(() => import('@/components/FileExplorer.vue'))
 
 const router = useRouter()
 const connection = useMobileConnection()
@@ -178,6 +297,47 @@ const { tasks, load, addTask, updateTask, deleteTask, executeTask } = usePresetT
 
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 const activeSessions = computed(() => connection.activeSessions.value || [])
+const sessionConfigs = computed(() => connection.sessionConfigs.value || [])
+
+// ==================== 工程目录选择 ====================
+
+/** 从会话配置中提取去重的工程目录列表 */
+const projectDirs = computed(() => {
+  const dirs = sessionConfigs.value
+    .map((c: any) => c.working_dir)
+    .filter((d: string | undefined): d is string => !!d)
+  return [...new Set(dirs)]
+})
+
+/** 是否有任何可用目录 */
+const effectiveProjectDir = computed(() => projectDirs.value.length > 0)
+
+const showDirDropdown = ref(false)
+const selectedDir = ref<string | null>(null)
+const showFileExplorer = ref(false)
+
+/** 目录短标签：仅显示最后一段路径 */
+function dirLabel(dir: string | null): string {
+  if (!dir) return t('mobile.toolbox.selectProject')
+  const parts = dir.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || dir
+}
+
+const selectedDirLabel = computed(() => dirLabel(selectedDir.value))
+
+/** 根据目录找到对应的活跃会话 ID（用于 FileExplorer） */
+const fileExplorerSessionId = computed(() => {
+  const dir = selectedDir.value
+  if (!dir) {
+    return connection.activeSessionId.value || ''
+  }
+  const matchedConfig = sessionConfigs.value.find((c: any) => c.working_dir === dir)
+  if (!matchedConfig) return connection.activeSessionId.value || ''
+  const session = activeSessions.value.find(
+    (s: any) => s.config_id === matchedConfig.id || s.configId === matchedConfig.id
+  )
+  return session?.id || matchedConfig.id || connection.activeSessionId.value || ''
+})
 
 // ==================== 顶部编辑区域 ====================
 
@@ -208,7 +368,7 @@ function autosizeTextarea() {
   const el = contentTextarea.value
   if (!el) return
   el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+  el.style.height = `${Math.min(el.scrollHeight, 280)}px`
 }
 
 /** 回车提交（IME 组词中的回车不触发），Shift+Enter 换行 */
@@ -333,7 +493,7 @@ async function doExecute() {
   color: var(--mobile-text-primary);
   font-size: 0.875rem;
   line-height: 1.5;
-  max-height: 200px;
+  max-height: 280px;
   outline: none;
 }
 
@@ -343,5 +503,21 @@ async function doExecute() {
 
 .content-input:focus {
   border-color: color-mix(in srgb, var(--mobile-accent) 50%, transparent);
+}
+
+/* 下拉菜单过渡 */
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition: all 0.2s ease;
+}
+
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+.dropdown-item:hover {
+  background: var(--mobile-bg-elevated);
 }
 </style>

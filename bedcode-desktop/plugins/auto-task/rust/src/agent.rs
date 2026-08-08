@@ -147,6 +147,17 @@ pub fn is_supported(agent: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 返回所有完整适配的 agent name 列表
+///
+/// 供前端判断工具栏入口可见性、下拉过滤等场景，避免前端 hardcode 白名单。
+pub fn list_supported() -> Vec<&'static str> {
+    AGENT_PROFILES
+        .iter()
+        .filter(|p| p.tracks_input && p.session_integration != SessionIntegration::None)
+        .map(|p| p.name)
+        .collect()
+}
+
 /// 任务型斜杠命令白名单（v1 为空，预留扩展点）
 ///
 /// 白名单内的斜杠命令视为任务而非命令，照常创建任务记录。

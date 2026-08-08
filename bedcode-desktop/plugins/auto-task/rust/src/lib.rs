@@ -458,14 +458,27 @@ impl WasmPlugin for AutoTaskPlugin {
                 Ok(serde_json::json!({ "reordered": true }))
             }
             "auto-task.list-session-configs" => {
-                // 供前端定时任务表单选择会话配置（含 name/workingDir/command）
+                // 供前端定时任务表单选择会话配置（含 name/workingDir/command/isSupported）
                 let configs = host
                     .session_config_list()
                     .ok()
                     .flatten()
                     .and_then(|v| v.as_array().cloned())
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|mut c| {
+                        if let Some(cmd) = c.get("command").and_then(|v| v.as_str()) {
+                            let agent = crate::agent::detect_agent(cmd);
+                            c["is_supported"] = serde_json::Value::Bool(crate::agent::is_supported(agent));
+                        }
+                        c
+                    })
+                    .collect::<Vec<_>>();
                 Ok(serde_json::json!({ "configs": configs }))
+            }
+            "auto-task.list-supported-agents" => {
+                let agents = crate::agent::list_supported();
+                Ok(serde_json::json!({ "agents": agents }))
             }
             "auto-task.list-scheduled-jobs" => {
                 let jobs = scheduled::list_jobs(&host);

@@ -89,69 +89,42 @@ let stopRouteWatch: (() => void) | null = null
 
 // ==================== 工具栏入口可见性（仅插件适配的 agent 会话） ====================
 
-// 完整适配的 agent（Rust AGENT_PROFILES 中 session_integration 非 None）：
-// claude / codex（hooks 集成）、pi（pi 扩展）、opencode（opencode 插件）
-const ADAPTED_AGENTS = ['claude', 'pi', 'opencode', 'codex']
-
 // 异步同步序号：路由快速切换时丢弃过期结果，避免旧会话的 agent 覆盖新状态
 let toolbarSyncSeq = 0
 
-// 与 Rust agent::detect_agent 保持一致的命令 → agent 识别（用于非运行会话的兜底）
-function detectAgent(command: string): string {
-  const lower = command.toLowerCase()
-  if (lower.includes('claude')) return 'claude'
-  if (lower.includes('codex')) return 'codex'
-  if (lower.includes('opencode')) return 'opencode'
-  // pi 是短词，仅在命令本体为 pi（含路径/扩展名）时匹配，避免误判
-  const firstToken = lower.split(/\s+/)[0] || ''
-  const basename = firstToken.split(/[\\/]/).pop() || ''
-  if (basename.replace(/\.exe$/i, '') === 'pi') return 'pi'
-  return 'unknown'
-}
-
-// 当前终端窗口会话的 agent：优先取运行会话列表（后端已按会话配置命令识别），
-// 未运行（如未启动的会话）时回退 session.get + 会话配置命令关键词匹配
-async function resolveCurrentAgent(context: PluginContext): Promise<string> {
-  const shared = (window as any).__BEDCODE_SHARED__
-  const id = shared?.router?.currentRoute?.value?.params?.id
-  if (typeof id !== 'string' || !id) return 'unknown'
-  try {
-    const result: any = await context.commands.execute('auto-task.list-running-sessions')
-    const match = (result?.sessions ?? []).find((s: any) => s.session_id === id)
-    if (match?.agent) return match.agent
-  } catch (e) {
-    console.warn('[AutoTask] Failed to resolve running session agent:', e)
-  }
-  try {
-    const session: any = await context.session.get(id)
-    const configId = session?.config_id ?? session?.configId
-    if (!configId) return 'unknown'
-    const result: any = await context.commands.execute('auto-task.list-session-configs')
-    const config = (result?.configs ?? []).find((c: any) => c.id === configId)
-    if (config?.command) return detectAgent(config.command)
-  } catch (e) {
-    console.warn('[AutoTask] Failed to resolve session config agent:', e)
-  }
-  return 'unknown'
-}
-
 // 按当前路由会话的 agent 动态注册/注销工具栏入口（路由切换时重新评估）
+// 直接调用后端 list-running-sessions，利用其返回的 is_supported 字段判断，
+// 避免前端 hardcode 白名单（权威来源在 Rust AGENT_PROFILES）。
 async function syncToolbarEntry(context: PluginContext) {
   const seq = ++toolbarSyncSeq
-  const agent = await resolveCurrentAgent(context)
-  if (seq !== toolbarSyncSeq) return // 过期结果（路由已切换）丢弃
-  const shouldShow = ADAPTED_AGENTS.includes(agent)
-  if (shouldShow && !toolbarDisposable) {
-    toolbarDisposable = context.ui.registerTerminalToolbarItem({
-      id: 'auto-task.open-modal',
-      label: context.i18n.t('title'),
-      onClick: () => {
-        autoTaskModalVisible.value = true
-      },
-    })
-  } else if (!shouldShow && toolbarDisposable) {
-    toolbarDisposable.dispose()
-    toolbarDisposable = null
+  const shared = (window as any).__BEDCODE_SHARED__
+  const id = shared?.router?.currentRoute?.value?.params?.id
+  if (typeof id !== 'string' || !id) {
+    if (toolbarDisposable) {
+      toolbarDisposable.dispose()
+      toolbarDisposable = null
+    }
+    return
+  }
+  try {
+    const result: any = await context.commands.execute('auto-task.list-running-sessions')
+    if (seq !== toolbarSyncSeq) return // 过期结果丢弃
+    const match = (result?.sessions ?? []).find((s: any) => s.session_id === id)
+    const shouldShow = match?.is_supported ?? false
+    if (shouldShow && !toolbarDisposable) {
+      toolbarDisposable = context.ui.registerTerminalToolbarItem({
+        id: 'auto-task.open-modal',
+        label: context.i18n.t('title'),
+        onClick: () => {
+          autoTaskModalVisible.value = true
+        },
+      })
+    } else if (!shouldShow && toolbarDisposable) {
+      toolbarDisposable.dispose()
+      toolbarDisposable = null
+    }
+  } catch (e) {
+    console.warn('[AutoTask] Failed to sync toolbar entry:', e)
   }
 }
 
