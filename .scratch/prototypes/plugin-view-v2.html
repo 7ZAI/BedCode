@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PluginView v2 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --mobile-bg-primary: #0a0a0f;
+    --mobile-bg-secondary: #12121a;
+    --mobile-bg-tertiary: #1a1a2e;
+    --mobile-bg-card: #12121a;
+    --mobile-bg-elevated: #1f2937;
+    --mobile-card-shadow: 0 2px 8px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+    --mobile-card-shadow-hover: 0 4px 16px rgba(0,0,0,.4), 0 2px 4px rgba(0,0,0,.3);
+    --mobile-text-primary: #ffffff;
+    --mobile-text-secondary: #9ca3af;
+    --mobile-text-muted: #6b7280;
+    --mobile-text-disabled: #4b5563;
+    --mobile-text-on-accent: #0a0a0f;
+    --mobile-border: rgba(34,211,238,.1);
+    --mobile-border-hover: rgba(34,211,238,.2);
+    --mobile-accent: #00d4ff;
+    --mobile-accent-muted: rgba(0,212,255,.1);
+    --mobile-accent-secondary: rgba(0,212,255,.2);
+    --mobile-success: #10b981;
+    --mobile-success-muted: rgba(16,185,129,.1);
+    --mobile-warning: #f59e0b;
+    --mobile-warning-muted: rgba(245,158,11,.1);
+    --mobile-error: #ef4444;
+    --mobile-error-muted: rgba(239,68,68,.1);
+    --mobile-overlay: rgba(0,0,0,.6);
+    --mobile-input-bg: #16161e;
+    --mobile-input-border: rgba(139,233,253,.25);
+    --mobile-nav-bg: rgba(10,10,15,.95);
+  }
+  html, body { background: #050508; }
+  .screen { display: none; }
+  .screen.active { display: flex; }
+  /* 开关 */
+  .switch { position: relative; width: 44px; height: 26px; border-radius: 999px; background: #2a2a38; transition: background .2s; flex-shrink: 0; cursor: pointer; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 999px; background: #6b7280; transition: all .2s; }
+  .switch.on { background: var(--mobile-accent); }
+  .switch.on::after { left: 21px; background: var(--mobile-text-on-accent); }
+  .switch.disabled { opacity: .45; pointer-events: none; }
+  /* 图标渐变底 */
+  .icon-tile { border-radius: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 11px; }
+  .fade-in { animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  /* 折叠面板 */
+  .acc .acc-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .25s ease; }
+  .acc.collapsed .acc-body { grid-template-rows: 0fr; }
+  .acc-body > div { overflow: hidden; }
+  .acc .chevron { transition: transform .25s ease; }
+  .acc.collapsed .chevron { transform: rotate(-90deg); }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center py-8 font-sans">
+
+<div class="text-center mb-6 px-4">
+  <h1 class="text-white text-xl font-semibold">PluginView v2 · 设计原型</h1>
+  <p class="text-gray-500 text-sm mt-1">BedCode 移动端插件管理重设计 — 点击卡片进入详情页</p>
+</div>
+
+<!-- ==================== 手机框架 ==================== -->
+<div class="relative w-[390px] h-[780px] rounded-[44px] border-[10px] border-[#1c1c24] overflow-hidden shadow-2xl" style="background: var(--mobile-bg-primary)">
+
+  <!-- ========== 屏幕 1：插件列表 ========== -->
+  <div id="screen-list" class="screen active flex-col absolute inset-0">
+    <!-- Header -->
+    <header class="flex-shrink-0 backdrop-blur-xl border-b px-4 py-3 flex items-center gap-3" style="background: rgba(18,18,26,.9); border-color: var(--mobile-border)">
+      <button class="p-1 -ml-1" style="color: var(--mobile-text-secondary)">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <h1 class="flex-1 text-lg font-semibold tracking-wide" style="color: var(--mobile-text-primary)">插件</h1>
+      <button onclick="toggleInstall(true)" class="w-8 h-8 flex items-center justify-center rounded-lg text-white" style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 4v16m8-8H4"/></svg>
+      </button>
+    </header>
+
+    <!-- 摘要行 -->
+    <div class="px-4 pt-3 pb-1 flex items-center justify-between text-xs">
+      <span style="color: var(--mobile-text-muted)">已安装 5 个 · 4 个启用</span>
+      <button class="font-medium" style="color: var(--mobile-accent)">管理</button>
+    </div>
+
+    <!-- 插件列表 -->
+    <div class="flex-1 overflow-y-auto px-4 pb-6 space-y-3 pt-1">
+
+      <!-- 卡片：有图标（emoji）+ 已启用 -->
+      <div onclick="openDetail()" class="fade-in rounded-xl p-4 cursor-pointer transition-all duration-300 hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)]" style="background: var(--mobile-bg-card); border: 1px solid var(--mobile-border); box-shadow: var(--mobile-card-shadow)">
+        <div class="flex items-start gap-3">
+          <div class="icon-tile w-12 h-12 text-2xl" style="background: linear-gradient(135deg, rgba(0,212,255,.18), rgba(0,212,255,.05)); border: 1px solid rgba(0,212,255,.2)">📁</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium truncate" style="color: var(--mobile-text-primary)">文件浏览器</span>
+              <span class="chip" style="background: var(--mobile-success-muted); color: var(--mobile-success)">
+                <span class="w-1.5 h-1.5 rounded-full" style="background: var(--mobile-success)"></span>运行中
+              </span>
+            </div>
+            <p class="text-xs mt-1 clamp2 leading-relaxed" style="color: var(--mobile-text-secondary)">浏览、编辑与同步远程主机文件，支持语法高亮、二进制对比与断点续传。</p>
+          </div>
+          <div class="switch on mt-0.5" onclick="event.stopPropagation(); this.classList.toggle('on')"></div>
+        </div>
+      </div>
+
+      <!-- 卡片：渐变字母头像（无 icon 回退）+ 已禁用 -->
+      <div class="fade-in rounded-xl p-4 cursor-pointer transition-all duration-300" style="background: var(--mobile-bg-card); border: 1px solid var(--mobile-border); box-shadow: var(--mobile-card-shadow); opacity: .8">
+        <div class="flex items-start gap-3">
+          <div class="icon-tile w-12 h-12 text-lg font-bold text-white" style="background: linear-gradient(135deg, #7c3aed, #4f46e5)">G</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium truncate" style="color: var(--mobile-text-primary)">Git Blame</span>
+              <span class="chip" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-muted)">已停用</span>
+            </div>
+            <p class="text-xs mt-1 clamp2 leading-relaxed" style="color: var(--mobile-text-secondary)">在文件查看器中逐行显示 Git 提交信息、作者与时间。</p>
+          </div>
+          <div class="switch mt-0.5" onclick="event.stopPropagation(); this.classList.toggle('on')"></div>
+        </div>
+      </div>
+
+      <!-- 卡片：错误状态 -->
+      <div class="fade-in rounded-xl p-4 cursor-pointer transition-all duration-300" style="background: var(--mobile-bg-card); border: 1px solid rgba(239,68,68,.25); box-shadow: var(--mobile-card-shadow)">
+        <div class="flex items-start gap-3">
+          <div class="icon-tile w-12 h-12 text-2xl" style="background: linear-gradient(135deg, rgba(245,158,11,.18), rgba(245,158,11,.05)); border: 1px solid rgba(245,158,11,.2)">🎨</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium truncate" style="color: var(--mobile-text-primary)">主题工坊</span>
+              <span class="chip" style="background: var(--mobile-error-muted); color: var(--mobile-error)">加载失败</span>
+            </div>
+            <p class="text-xs mt-1 leading-relaxed" style="color: var(--mobile-error)">⚠ manifest 版本不兼容：需要 SDK ≥ 2.0</p>
+          </div>
+          <svg class="w-5 h-5 mt-0.5" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </div>
+      </div>
+
+      <!-- 卡片：普通已启用 -->
+      <div class="fade-in rounded-xl p-4 cursor-pointer transition-all duration-300" style="background: var(--mobile-bg-card); border: 1px solid var(--mobile-border); box-shadow: var(--mobile-card-shadow)">
+        <div class="flex items-start gap-3">
+          <div class="icon-tile w-12 h-12 text-2xl" style="background: linear-gradient(135deg, rgba(16,185,129,.18), rgba(16,185,129,.05)); border: 1px solid rgba(16,185,129,.2)">⌨️</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium truncate" style="color: var(--mobile-text-primary)">快捷键扩展</span>
+              <span class="chip" style="background: var(--mobile-success-muted); color: var(--mobile-success)">
+                <span class="w-1.5 h-1.5 rounded-full" style="background: var(--mobile-success)"></span>运行中
+              </span>
+            </div>
+            <p class="text-xs mt-1 clamp2 leading-relaxed" style="color: var(--mobile-text-secondary)">为终端添加 Vim 风格快捷键、组合键映射与输入宏。</p>
+          </div>
+          <div class="switch on mt-0.5" onclick="event.stopPropagation(); this.classList.toggle('on')"></div>
+        </div>
+      </div>
+
+      <!-- 卡片：带图片图标（示例用 SVG data URI 占位） -->
+      <div class="fade-in rounded-xl p-4 cursor-pointer transition-all duration-300" style="background: var(--mobile-bg-card); border: 1px solid var(--mobile-border); box-shadow: var(--mobile-card-shadow)">
+        <div class="flex items-start gap-3">
+          <div class="icon-tile w-12 h-12 overflow-hidden" style="background: linear-gradient(135deg, #0ea5e9, #6366f1)">
+            <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium truncate" style="color: var(--mobile-text-primary)">Docker 面板</span>
+              <span class="chip" style="background: var(--mobile-success-muted); color: var(--mobile-success)">
+                <span class="w-1.5 h-1.5 rounded-full" style="background: var(--mobile-success)"></span>运行中
+              </span>
+            </div>
+            <p class="text-xs mt-1 clamp2 leading-relaxed" style="color: var(--mobile-text-secondary)">在工具箱中查看容器状态、日志，一键重启或清理镜像。</p>
+          </div>
+          <div class="switch on mt-0.5" onclick="event.stopPropagation(); this.classList.toggle('on')"></div>
+        </div>
+      </div>
+
+      <!-- 空状态（隐藏，演示用） -->
+      <!--
+      <div class="flex flex-col items-center justify-center py-24 text-center">
+        <div class="icon-tile w-16 h-16 text-3xl mb-4" style="background: var(--mobile-bg-tertiary); border: 1px solid var(--mobile-border)">🧩</div>
+        <p class="text-sm" style="color: var(--mobile-text-muted)">还没有安装插件</p>
+        <p class="text-xs mt-2" style="color: var(--mobile-text-disabled)">点击右上角 + 从文件或 URL 安装</p>
+      </div>
+      -->
+    </div>
+
+    <!-- 底部导航占位 -->
+    <nav class="flex-shrink-0 flex items-center justify-around py-2.5 border-t" style="background: var(--mobile-nav-bg); border-color: var(--mobile-border)">
+      <svg class="w-6 h-6" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>
+      <svg class="w-6 h-6" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      <svg class="w-6 h-6" style="color: var(--mobile-accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+      <svg class="w-6 h-6" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317a1.724 1.724 0 012.573 0 1.724 1.724 0 002.572 1.066 1.724 1.724 0 012.138 2.138 1.724 1.724 0 001.066 2.572 1.724 1.724 0 010 2.573 1.724 1.724 0 00-1.066 2.572 1.724 1.724 0 01-2.138 2.138 1.724 1.724 0 00-2.572 1.066 1.724 1.724 0 01-2.573 0 1.724 1.724 0 00-2.572-1.066 1.724 1.724 0 01-2.138-2.138 1.724 1.724 0 00-1.066-2.572 1.724 1.724 0 010-2.573 1.724 1.724 0 001.066-2.572 1.724 1.724 0 012.138-2.138 1.724 1.724 0 002.572-1.066zM15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    </nav>
+
+    <!-- 安装弹层 -->
+    <div id="install-sheet" class="hidden absolute inset-0 z-50 flex items-center justify-center p-4">
+      <div class="absolute inset-0" style="background: var(--mobile-overlay)" onclick="toggleInstall(false)"></div>
+      <div class="relative w-full rounded-2xl p-5 shadow-xl fade-in" style="background: var(--mobile-bg-card); border: 1px solid var(--mobile-border)">
+        <h3 class="text-lg font-semibold mb-4" style="color: var(--mobile-text-primary)">安装插件</h3>
+        <button class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left" style="background: var(--mobile-input-bg)">
+          <svg class="w-5 h-5" style="color: var(--mobile-accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+          <span class="text-sm" style="color: var(--mobile-text-primary)">从文件安装（.zip）</span>
+        </button>
+        <div class="mt-3">
+          <div class="flex items-center gap-3 px-4 py-3 rounded-xl" style="background: var(--mobile-input-bg)">
+            <svg class="w-5 h-5 flex-shrink-0" style="color: var(--mobile-accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 115.656 5.656l-1.5 1.5"/></svg>
+            <input type="url" class="flex-1 bg-transparent text-sm outline-none" style="color: var(--mobile-text-primary)" placeholder="https://example.com/plugin.zip" />
+          </div>
+          <button class="mt-3 w-full py-2.5 rounded-xl text-sm font-medium" style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)">安装</button>
+        </div>
+        <button onclick="toggleInstall(false)" class="mt-4 w-full py-2 text-sm" style="color: var(--mobile-text-muted)">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 屏幕 2：插件详情 ========== -->
+  <div id="screen-detail" class="screen flex-col absolute inset-0">
+    <header class="flex-shrink-0 backdrop-blur-xl border-b px-4 py-3 flex items-center gap-3" style="background: rgba(18,18,26,.9); border-color: var(--mobile-border)">
+      <button onclick="closeDetail()" class="p-1 -ml-1" style="color: var(--mobile-text-secondary)">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <h1 class="flex-1 text-lg font-semibold tracking-wide" style="color: var(--mobile-text-primary)">插件详情</h1>
+    </header>
+
+    <div class="flex-1 overflow-y-auto">
+      <!-- Hero -->
+      <div class="px-5 pt-6 pb-5 flex items-center gap-4 fade-in">
+        <div class="icon-tile w-16 h-16 text-4xl" style="background: linear-gradient(135deg, rgba(0,212,255,.18), rgba(0,212,255,.05)); border: 1px solid rgba(0,212,255,.2)">📁</div>
+        <div class="flex-1 min-w-0">
+          <h2 class="text-lg font-semibold" style="color: var(--mobile-text-primary)">文件浏览器</h2>
+          <p class="text-xs mt-0.5" style="color: var(--mobile-text-muted)">BedCode 官方 · v1.2.0</p>
+          <span class="chip mt-2" style="background: var(--mobile-success-muted); color: var(--mobile-success)">
+            <span class="w-1.5 h-1.5 rounded-full" style="background: var(--mobile-success)"></span>运行中
+          </span>
+        </div>
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="px-5 grid grid-cols-2 gap-3">
+        <button class="py-2.5 rounded-xl text-sm font-medium" style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)">停用</button>
+        <button class="py-2.5 rounded-xl text-sm font-medium" style="background: var(--mobile-error-muted); color: var(--mobile-error)">卸载</button>
+      </div>
+
+      <!-- 统计 -->
+      <div class="mx-5 mt-5 grid grid-cols-3 rounded-xl border overflow-hidden" style="border-color: var(--mobile-border); background: var(--mobile-bg-secondary)">
+        <div class="py-3 text-center border-r" style="border-color: var(--mobile-border)">
+          <div class="text-sm font-semibold" style="color: var(--mobile-text-primary)">4</div>
+          <div class="text-[10px] mt-0.5" style="color: var(--mobile-text-muted)">扩展点</div>
+        </div>
+        <div class="py-3 text-center border-r" style="border-color: var(--mobile-border)">
+          <div class="text-sm font-semibold" style="color: var(--mobile-text-primary)">3</div>
+          <div class="text-[10px] mt-0.5" style="color: var(--mobile-text-muted)">权限</div>
+        </div>
+        <div class="py-3 text-center">
+          <div class="text-sm font-semibold" style="color: var(--mobile-text-primary)">2.1 MB</div>
+          <div class="text-[10px] mt-0.5" style="color: var(--mobile-text-muted)">大小</div>
+        </div>
+      </div>
+
+      <!-- 折叠区域容器：统一 px-5 + space-y-3，各 section 宽度/内边距一致 -->
+      <div class="px-5 mt-6 pb-8 space-y-3">
+
+        <!-- 简介（默认展开） -->
+        <section class="acc rounded-xl border overflow-hidden" style="border-color: var(--mobile-border); background: var(--mobile-bg-secondary)">
+          <button onclick="toggleAcc(this)" class="w-full flex items-center gap-3 px-4 py-3 text-left">
+            <span class="w-5 h-5 flex items-center justify-center text-xs" style="color: var(--mobile-accent)">📄</span>
+            <span class="flex-1 text-sm font-medium" style="color: var(--mobile-text-primary)">简介</span>
+            <svg class="chevron w-4 h-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div class="acc-body"><div>
+            <p class="px-4 pb-4 text-sm leading-relaxed" style="color: var(--mobile-text-secondary)">
+              浏览、编辑与同步远程主机文件。支持语法高亮的文件查看器、二进制差异对比、大文件断点续传，以及目录级双向同步任务。提供工具箱页面与终端工具栏快捷入口。
+            </p>
+          </div></div>
+        </section>
+
+        <!-- 扩展点（默认展开） -->
+        <section class="acc rounded-xl border overflow-hidden" style="border-color: var(--mobile-border); background: var(--mobile-bg-secondary)">
+          <button onclick="toggleAcc(this)" class="w-full flex items-center gap-3 px-4 py-3 text-left">
+            <span class="w-5 h-5 flex items-center justify-center text-xs" style="color: var(--mobile-accent)">🧩</span>
+            <span class="flex-1 text-sm font-medium" style="color: var(--mobile-text-primary)">扩展点</span>
+            <span class="chip" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">4</span>
+            <svg class="chevron w-4 h-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div class="acc-body"><div>
+            <div class="px-4 pb-4 flex flex-wrap gap-2">
+              <span class="chip" style="background: var(--mobile-accent-muted); color: var(--mobile-accent)">🧰 工具箱页面</span>
+              <span class="chip" style="background: var(--mobile-accent-muted); color: var(--mobile-accent)">📑 导航标签</span>
+              <span class="chip" style="background: var(--mobile-accent-muted); color: var(--mobile-accent)">⌨ 终端工具栏</span>
+              <span class="chip" style="background: var(--mobile-accent-muted); color: var(--mobile-accent)">⚙ 设置项</span>
+            </div>
+          </div></div>
+        </section>
+
+        <!-- 权限（默认展开） -->
+        <section class="acc rounded-xl border overflow-hidden" style="border-color: var(--mobile-border); background: var(--mobile-bg-secondary)">
+          <button onclick="toggleAcc(this)" class="w-full flex items-center gap-3 px-4 py-3 text-left">
+            <span class="w-5 h-5 flex items-center justify-center text-xs" style="color: var(--mobile-warning)">🛡️</span>
+            <span class="flex-1 text-sm font-medium" style="color: var(--mobile-text-primary)">权限</span>
+            <span class="chip" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">3</span>
+            <svg class="chevron w-4 h-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div class="acc-body"><div>
+            <div class="px-4 pb-2 border-t divide-y" style="border-color: var(--mobile-border)">
+              <div class="flex items-center gap-3 py-3" style="border-color: var(--mobile-border)">
+                <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-warning)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                <div class="flex-1 min-w-0"><div class="text-xs font-medium" style="color: var(--mobile-text-primary)">fs.read / fs.write</div><div class="text-[11px]" style="color: var(--mobile-text-muted)">读写主机文件系统</div></div>
+              </div>
+              <div class="flex items-center gap-3 py-3" style="border-color: var(--mobile-border)">
+                <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-success)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                <div class="flex-1 min-w-0"><div class="text-xs font-medium" style="color: var(--mobile-text-primary)">terminal.access</div><div class="text-[11px]" style="color: var(--mobile-text-muted)">在会话中执行命令</div></div>
+              </div>
+              <div class="flex items-center gap-3 py-3">
+                <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7C5 4 4 5 4 7zm4 5h8"/></svg>
+                <div class="flex-1 min-w-0"><div class="text-xs font-medium" style="color: var(--mobile-text-primary)">storage.local</div><div class="text-[11px]" style="color: var(--mobile-text-muted)">本地持久化存储</div></div>
+              </div>
+            </div>
+          </div></div>
+        </section>
+
+        <!-- 信息（默认折叠，标签列固定宽度对齐） -->
+        <section class="acc collapsed rounded-xl border overflow-hidden" style="border-color: var(--mobile-border); background: var(--mobile-bg-secondary)">
+          <button onclick="toggleAcc(this)" class="w-full flex items-center gap-3 px-4 py-3 text-left">
+            <span class="w-5 h-5 flex items-center justify-center text-xs" style="color: var(--mobile-text-muted)">ℹ️</span>
+            <span class="flex-1 text-sm font-medium" style="color: var(--mobile-text-primary)">详细信息</span>
+            <svg class="chevron w-4 h-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div class="acc-body"><div>
+            <div class="px-4 pb-3 border-t text-xs space-y-0" style="border-color: var(--mobile-border)">
+              <div class="grid py-2.5" style="grid-template-columns: 72px 1fr">
+                <span style="color: var(--mobile-text-muted)">插件 ID</span>
+                <span class="font-mono break-all" style="color: var(--mobile-text-secondary)">com.bedcode.file-explorer</span>
+              </div>
+              <div class="grid py-2.5 border-t" style="grid-template-columns: 72px 1fr; border-color: var(--mobile-border)">
+                <span style="color: var(--mobile-text-muted)">来源</span>
+                <span style="color: var(--mobile-text-secondary)">内置（apk-asset）</span>
+              </div>
+              <div class="grid py-2.5 border-t" style="grid-template-columns: 72px 1fr; border-color: var(--mobile-border)">
+                <span style="color: var(--mobile-text-muted)">类型</span>
+                <span style="color: var(--mobile-text-secondary)">view</span>
+              </div>
+              <div class="grid py-2.5 border-t" style="grid-template-columns: 72px 1fr; border-color: var(--mobile-border)">
+                <span style="color: var(--mobile-text-muted)">入口</span>
+                <span class="font-mono break-all" style="color: var(--mobile-text-secondary)">dist/index.js</span>
+              </div>
+              <div class="grid py-2.5 border-t" style="grid-template-columns: 72px 1fr; border-color: var(--mobile-border)">
+                <span style="color: var(--mobile-text-muted)">安装时间</span>
+                <span style="color: var(--mobile-text-secondary)">2026-01-12 08:30</span>
+              </div>
+            </div>
+          </div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="text-gray-600 text-xs mt-6 px-4 text-center max-w-md">
+  原型要点：图标（emoji / 图片 / 渐变字母回退）、双行描述、状态徽章、来源标签、详情页折叠区域（简介 / 扩展点 / 权限 / 详细信息）。
+  manifest 需新增 <code class="text-cyan-500">icon</code> 字段支持。
+</p>
+
+<script>
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+  function openDetail() { show('screen-detail'); }
+  function closeDetail() { show('screen-list'); }
+  function toggleInstall(open) {
+    document.getElementById('install-sheet').classList.toggle('hidden', !open);
+  }
+  function toggleAcc(btn) {
+    btn.closest('.acc').classList.toggle('collapsed');
+  }
+</script>
+</body>
+</html>
