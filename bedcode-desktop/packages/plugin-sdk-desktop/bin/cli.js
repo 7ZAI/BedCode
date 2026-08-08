@@ -4,7 +4,7 @@
  *
  * 用法：
  *   bedcode-plugin-desktop manifest [--check]
- *   bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--open]
+ *   bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]
  *
  * manifest  按插件源码自动填充 plugin.json 的 contributes/permissions；
  *           --check 只检查不一致不写入（CI 用，exit 1 表示需要更新）
@@ -111,6 +111,7 @@ function cmdDev(positional, flags) {
     '--port',
     String(flags.port || 5173),
   ]
+  if (flags.host) args.push('--host', typeof flags.host === 'string' ? flags.host : '0.0.0.0')
   if (flags.open) args.push('--open')
 
   console.log(`[bedcode-plugin-desktop] 启动 dev-shell（插件: ${pluginDir}）`)
@@ -140,7 +141,7 @@ function main() {
     console.log('\nBedCode 桌面端插件开发工具包\n')
     console.log('用法:')
     console.log('  bedcode-plugin-desktop manifest [--check]   # 按源码自动填充 contributes/permissions')
-    console.log('  bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--open]   # 浏览器开发环境（HMR）')
+    console.log('  bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR）')
     process.exit(0)
   }
 

@@ -11,6 +11,7 @@
 bedcode-plugin-desktop dev            # 使用当前目录作为插件
 bedcode-plugin-desktop dev --entry src/custom-entry.ts
 bedcode-plugin-desktop dev ../my-plugin --port 5180 --open
+bedcode-plugin-desktop dev --host     # 监听局域网（平板/其他设备浏览器访问）
 ```
 
 浏览器打开 `http://localhost:5173`（--open 自动打开）。

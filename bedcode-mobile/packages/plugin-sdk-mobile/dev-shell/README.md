@@ -15,6 +15,23 @@ bedcode-plugin dev ../my-plugin --port 5180 --open
 
 浏览器打开 `http://localhost:5173`（--open 自动打开）。
 
+### 在手机上查看页面
+
+```bash
+bedcode-plugin dev --host     # 监听局域网（默认 0.0.0.0）
+```
+
+手机与电脑连同一 WiFi，手机浏览器打开 `http://<电脑IP>:5173/` 即可在真机浏览器中
+查看页面（真实触控、真实视口）。建议：
+
+- 点工具条「手机框：关」切换全宽渲染，去掉模拟手机框后的布局即真实移动端布局
+- 查看电脑 IP：`ipconfig`（Windows）或 `ifconfig`（macOS/Linux）；也可用手机扫码
+  工具条无二维码，需手动输入
+- 手机与电脑不在同一网段、或公司防火墙限制时可能连不上，改用真机安装验证
+
+> 注意：手机上运行的仍是 mock 宿主（WASM 后端命令、真实 WS 等依然不可用），
+> 适合快速看布局/交互；完整能力验证仍需安装到 BedCode Mobile。
+
 ### 手动启动（不走 CLI）
 
 ```bash

@@ -6,14 +6,15 @@
  *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]
  *   bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]
  *   bedcode-plugin package [-o <file>]
- *   bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--open]
+ *   bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]
  *
  * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）；
  *          --registry 时引用已发布的 SDK 版本，否则引用本地 SDK 相对路径
  * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录
  * package 将产物打包为 {id}.zip 插件包（分发单元）
  * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR，插件源码在
- *          mock 宿主的移动端骨架中实时预览（WASM 后端不在浏览器运行）
+ *          mock 宿主的移动端骨架中实时预览（WASM 后端不在浏览器运行）；
+ *          --host 时监听局域网，手机浏览器访问 http://<PC-IP>:<port> 可查看页面
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -304,9 +305,14 @@ function cmdDev(positional, flags) {
     '--port',
     String(flags.port || 5173),
   ]
+  // --host：监听局域网（vite 默认仅 localhost），手机浏览器可访问查看页面
+  if (flags.host) args.push('--host', typeof flags.host === 'string' ? flags.host : '0.0.0.0')
   if (flags.open) args.push('--open')
 
   console.log(`[bedcode-plugin] 启动 dev-shell（插件: ${pluginDir}）`)
+  if (flags.host) {
+    console.log(`[bedcode-plugin] 已监听局域网 — 手机与电脑同一 WiFi 时，手机浏览器打开 http://<电脑IP>:${flags.port || 5173}/ 查看（建议关掉手机框开关）`)
+  }
   console.log(`[bedcode-plugin] 浏览器打开 http://localhost:${flags.port || 5173}/ 预览（Ctrl+C 退出）`)
   const child = spawn(process.execPath, args, {
     cwd: devShellDir,
@@ -499,7 +505,7 @@ function main() {
     console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--registry]')
     console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
     console.log('  bedcode-plugin package [-o <file>]')
-    console.log('  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--open]   # 浏览器开发环境（HMR）')
+    console.log('  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR；--host 供手机访问）')
     console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')
     process.exit(0)
   }

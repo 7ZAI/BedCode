@@ -221,6 +221,7 @@ app.mount(container)
 ```bash
 bedcode-plugin dev            # 在当前插件目录启动
 bedcode-plugin dev ../my-plugin --port 5180 --open
+bedcode-plugin dev --host     # 监听局域网，手机浏览器访问 http://<电脑IP>:5173 查看
 ```
 
 浏览器打开 `http://localhost:5173`，页面包含：
