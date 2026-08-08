@@ -7,7 +7,6 @@ export { default as Input } from './Input.vue'
 export { default as Select } from '@bedcode/plugin-sdk-desktop/ui'
 export { default as Toggle } from './Toggle.vue'
 export { default as Modal } from './Modal.vue'
-export { default as Toast } from './Toast.vue'
 
 // 新增组件
 export { default as Spinner } from './Spinner.vue'
