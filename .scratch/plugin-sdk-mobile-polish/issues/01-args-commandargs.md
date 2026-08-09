@@ -1,7 +1,7 @@
 # 01 — 移植 CommandArgs（args.rs）
 
 Type: task
-Status: claimed
+Status: resolved
 Blocked by: —
 
 ## 问题
