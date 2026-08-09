@@ -105,13 +105,6 @@ export async function resizeSession(sessionId: string, cols: number, rows: numbe
 }
 
 /**
- * 获取会话的历史输出（用于回放）
- */
-export async function getSessionOutputHistory(sessionId: string): Promise<PtyOutputEvent[]> {
-  return await invoke('get_session_output_history', { sessionId })
-}
-
-/**
  * 发送输入到会话
  */
 export async function writeToSession(sessionId: string, data: string): Promise<void> {
@@ -434,16 +427,6 @@ export async function onDeviceDisconnected(callback: (event: any) => void): Prom
 }
 
 /**
- * 监听指定会话的 PTY 输出事件
- * 事件名按 session 分 channel：pty-output-{sessionId}
- */
-export async function onPtyOutput(sessionId: string, callback: (event: any) => void): Promise<() => void> {
-  return await listen(`pty-output-${sessionId}`, (event) => {
-    callback(event.payload);
-  });
-}
-
-/**
  * 清理所有事件监听
  */
 export function cleanupEventListeners() {
@@ -473,7 +456,6 @@ export function useDesktopCommands() {
     deleteSession,
     restartSession,
     resizeSession,
-    getSessionOutputHistory,
     writeToSession,
     sendSpecialKey,
 
@@ -527,7 +509,6 @@ export function useDesktopCommands() {
     // Events
     onDeviceConnected,
     onDeviceDisconnected,
-    onPtyOutput,
     cleanupEventListeners,
   }
 }

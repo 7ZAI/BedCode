@@ -92,13 +92,7 @@ import { useToast } from '@/composables/useToast'
 import Button from '@/components/Button.vue'
 import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
-import { usePtyOutput } from '@/composables/usePtyOutput'
-import {
-  useTerminalHistory,
-  initSessionCache,
-  destroySessionCache
-} from '@/composables/useGlobalTerminal'
-import { advanceWatermark } from '@/utils/ptyReplay'
+import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -108,17 +102,10 @@ import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from 
 import { invoke } from '@tauri-apps/api/core'
 import '@xterm/xterm/css/xterm.css'
 
-/** Rust 端历史回放响应 */
-interface OutputHistoryResponse {
-  minSeq: number
-  maxSeq: number
-  events: Array<{
-    sessionId: string
-    data: string      // Base64 编码
-    index: number
-    timestamp: string
-    isWaiting: boolean
-  }>
+/** Rust 端本地 WS 订阅裁决（服务端基于真源裁决，消费者零猜测） */
+interface SubscribeControl {
+  mode: string
+  minOffset: number
 }
 
 interface Props {
@@ -182,17 +169,11 @@ let currentLineBuffer = ''
 
 const sessionId = computed(() => props.session?.id || '')
 
-// 终端历史缓存（传入 computed ref，会话切换时自动更新目标）
-const terminalHistory = useTerminalHistory(sessionId)
-
-// 历史回放去重：记录已回放的最大 index，实时事件 index <= 此值时忽略
-let lastReplayedIndex = 0
-
-// 历史回放是否完成：完成前实时流事件暂存，回放后按序补写，
-// 避免新输出插到历史前面导致乱序
-let historyReplayDone = false
-// 回放完成前到达的实时流事件（保持数组引用，清空用 .length = 0）
-let pendingLiveEvents: { data: Uint8Array; index: number }[] = []
+// ==================== 本地 WS 二进制输出流 ====================
+// 单一通道（历史回放 + 实时推送），字节游标连续性由 composable 守护：
+// - onData：游标校验通过后的原始字节帧，直接入 rAF 写入管线（无去重/无补序）
+// - onReset：服务端裁决 reset（环形头部淘汰/流重建），清屏后回放帧从 minOffset 起重播
+// - onTruncated：min_offset > 0 说明会话开头输出已不可恢复，提示用户
 
 // ==================== 写入管线 ====================
 // 实时输出合并：同一渲染帧内的多个输出事件合并为一次 write（2026 包裹），
@@ -279,48 +260,26 @@ function enqueueOutput(data: Uint8Array) {
   }
 }
 
-/** 历史回放专用：逐条同步写入（DEC 2026 包裹），避免单次超长字节解析卡顿 */
-function writeReplay(data: Uint8Array) {
-  if (!terminal) return
-  terminal.write(wrapSyncOutput(data))
-}
-
-/** 解码 Base64 编码的 PTY 输出为原始字节（不转 UTF-8，终端字节流可能含任意字节） */
-function decodeBase64Bytes(base64: string): Uint8Array {
-  try {
-    const binaryString = atob(base64)
-    const bytes = new Uint8Array(binaryString.length)
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i)
-    }
-    return bytes
-  } catch (e) {
-    console.error('[TerminalPreview] Failed to decode base64:', e)
-    return new Uint8Array(0)
-  }
-}
-
-// PTY 输出监听：增量回调模式，每次输出入队写入 + 全局缓存
-// 严格去重：忽略 index <= lastReplayedIndex 的事件（已在历史回放中写入）
-// 回放完成前（historyReplayDone=false）到达的事件暂存，回放完成后按序补写
-usePtyOutput(sessionId, (data: Uint8Array, index: number) => {
-  if (index <= lastReplayedIndex) return
-
-  // 始终写入全局缓存，即使 terminal 未初始化（数据可从历史恢复）
-  terminalHistory.append(data)
-
-  if (terminal && historyReplayDone) {
+// 本地 WS 输出流：
+// - onData 帧已通过字节级连续性校验，与游标无缝衔接，直接写入（无去重）
+// - onReset 时清屏：回放帧随后从 minOffset 流式写入，重建自洽帧
+// - onTruncated 保留原有"历史被截断"提示 UX（触发条件从 minSeq > 0 改为 minOffset > 0）
+const terminalStream = useTerminalOutputStream({
+  onData: ({ data }) => {
     enqueueOutput(data)
-    // 只在实际写入终端时推进水位：历史回放会跳过 <= 水位的重叠事件，
-    // 避免窗口打开时同一批输出被实时流与历史回放各写一次（重复行）
-    lastReplayedIndex = advanceWatermark(lastReplayedIndex, index)
     if (!isUserScrolling.value) {
       scrollToBottom()
     }
-  } else if (terminal) {
-    // 历史回放尚未完成：暂存，由 replayHistory 回放后按序补写
-    pendingLiveEvents.push({ data, index })
-  }
+  },
+  onReset: (_control: SubscribeControl) => {
+    if (terminal) {
+      terminal.clear()
+    }
+  },
+  onTruncated: (minOffset: number) => {
+    console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minOffset=${minOffset}，会话开头输出不可用`)
+    toast.warning(t('desktop.terminal.historyTruncated'))
+  },
 })
 
 const statusColor = computed(() => {
@@ -771,76 +730,6 @@ function scrollToBottomManual() {
 function clearTerminal() {
   if (!terminal) return
   terminal.clear()
-  terminalHistory.clear()
-}
-
-/**
- * 从 Rust 端拉取会话历史输出并写入终端（覆盖窗口关闭期间丢失的数据）
- *
- * 实时流（pty-output 事件）只转发 maxSeq 之后的新事件，与历史回放的 index
- * 空间不重叠（共用 Rust 端 next_output_index 全局序号），因此历史全量写入、
- * 不按水位过滤——否则实时流先到达会推高水位，导致全部历史被跳过。
- * 回放完成前暂存的实时流事件在此按序补写，保证新输出始终排在历史之后。
- */
-async function replayHistory() {
-  // 新回放周期开始：清空上轮暂存（用 .length=0 保持数组引用，回调闭包共享）
-  historyReplayDone = false
-  pendingLiveEvents.length = 0
-
-  if (!terminal || !sessionId.value) {
-    historyReplayDone = true
-    return
-  }
-
-  try {
-    const history = await invoke<OutputHistoryResponse>('get_session_output_history', {
-      sessionId: sessionId.value,
-      startSeq: null,
-    })
-
-    // 环形缓冲回卷检测：minSeq > 0 说明会话开头输出已被环形缓冲淘汰，
-    // 当前历史不完整（最早输出不可恢复），提示用户而非静默缺失
-    if (history.minSeq > 0) {
-      console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minSeq=${history.minSeq}，会话开头输出不可用`)
-      toast.warning(t('desktop.terminal.historyTruncated'))
-    }
-
-    if (history.events.length > 0) {
-      // 逐个事件解码并写入 xterm + 全局缓存
-      // 不合并为单次写入，避免处理超长字符串时卡顿
-      for (const event of history.events) {
-        const data = decodeBase64Bytes(event.data)
-        writeReplay(data)
-        terminalHistory.append(data)
-      }
-      // 水位推进到历史末尾：回放期间到达的实时流事件（index > maxSeq）
-      // 仍会正常写入，不会重复
-      lastReplayedIndex = Math.max(lastReplayedIndex, history.maxSeq)
-    } else if (history.maxSeq === 0) {
-      // Rust 端无该会话历史（会话未注册/无输出）时，回退到全局缓存
-      const cachedHistory = terminalHistory.getHistory()
-      if (cachedHistory) {
-        writeReplay(cachedHistory)
-      }
-    }
-  } catch (e) {
-    console.error('[TerminalPreview] Failed to get output history:', e)
-    // 回放失败时回退到全局缓存
-    const cachedHistory = terminalHistory.getHistory()
-    if (cachedHistory) {
-      writeReplay(cachedHistory)
-    }
-  }
-
-  // 回放完成：补写暂存的实时流事件（按到达顺序，保证历史在前）
-  historyReplayDone = true
-  for (const ev of pendingLiveEvents) {
-    if (ev.index <= lastReplayedIndex) continue
-    writeReplay(ev.data)
-    lastReplayedIndex = advanceWatermark(lastReplayedIndex, ev.index)
-  }
-  pendingLiveEvents.length = 0
-  scrollToBottom()
 }
 
 // ==================== 设置同步 ====================
@@ -895,13 +784,12 @@ watch(() => settingsStore.settings.ui.terminal_theme, (newTheme) => {
 })
 
 // 会话变化
+// 游标重置（新会话坐标空间独立），断开旧流并连接新流；
+// 历史回放由服务端裁决后以二进制帧流式送达（无需 invoke 拉取）。
+// 首次挂载（terminal 未就绪）只握手不订阅，订阅由 onMounted 触发
+let streamMounted = false
 watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
-    // 切换会话时重置去重与回放状态
-    lastReplayedIndex = 0
-    historyReplayDone = false
-    pendingLiveEvents.length = 0
-
     if (oldId) {
       clearTerminal()
     }
@@ -917,25 +805,31 @@ watch(sessionId, async (newId, oldId) => {
         await sessionStore.startSession(newId)
       }
 
-      // 切换会话后恢复历史输出
-      await replayHistory()
+      terminalStream.start(newId)
+      if (streamMounted) {
+        terminalStream.subscribe()
+      }
+    } else {
+      terminalStream.stop()
     }
   }
 }, { immediate: true })
 
+// 会话状态变化：停止/出错时断开输出流；重新运行时恢复订阅
+watch(() => props.session?.status, (status) => {
+  if (!sessionId.value) return
+  if (status === 'stopped' || status === 'error') {
+    terminalStream.stop()
+  } else if (status === 'running') {
+    terminalStream.start(sessionId.value)
+    terminalStream.subscribe()
+  }
+})
+
 onMounted(async () => {
   await nextTick()
 
-  // 确保会话缓存已初始化（如果已存在则跳过）
-  if (sessionId.value) {
-    initSessionCache(sessionId.value)
-  }
-
   initTerminal()
-
-  // 历史回放必须放在背景图片探测之前：图片探测涉及 IPC + 网络请求，可能耗时，
-  // 若回放被推迟，实时流事件会先到达并推高水位，导致历史被过滤
-  await replayHistory()
 
   // 初始化背景图片（在 initTerminal 之后，仅影响后续主题刷新；
   // 首次挂载时若已有背景图，通过一次主题刷新生效）
@@ -949,10 +843,18 @@ onMounted(async () => {
     pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
   })
 
+  // terminal 就绪后启动本地 WS 输出流：历史回放 + 实时推送同通道流式到达
+  terminalStream.start(sessionId.value)
+  terminalStream.subscribe()
+  streamMounted = true
+
   terminal?.focus()
 })
 
 onUnmounted(() => {
+  // 断开本地 WS 输出流（停止重连）
+  terminalStream.stop()
+
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
 
@@ -974,7 +876,7 @@ onUnmounted(() => {
     pendingScrollRaf = 0
   }
 
-  // 清理写入队列（未 flush 的数据已进全局缓存，可从历史恢复）
+  // 清理写入队列（未 flush 的数据仍存于服务端环形，重开窗口可恢复）
   if (flushRaf) {
     cancelAnimationFrame(flushRaf)
     flushRaf = 0
@@ -983,7 +885,8 @@ onUnmounted(() => {
     clearTimeout(flushTimer)
     flushTimer = null
   }
-  writeQueue = ''
+  writeQueue.length = 0
+  writeQueueBytes = 0
 
   // 清理 resize rAF
   if (resizeRaf) {

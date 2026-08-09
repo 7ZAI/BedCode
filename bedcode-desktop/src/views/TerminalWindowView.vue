@@ -239,7 +239,6 @@ import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue
 import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { useSessionStore } from '@/stores/session'
-import { destroySessionCache } from '@/composables/useGlobalTerminal'
 import { getSessionConfig } from '@/composables/useDesktopCommands'
 import type { SessionInfo, SessionConfig } from '@/composables/useTauri'
 
@@ -584,7 +583,6 @@ async function checkAndSnap(mainPos: { x: number; y: number; width: number; heig
 async function stopSession() {
   try {
     await sessionStore.killSession(sessionId.value)
-    destroySessionCache(sessionId.value)
     toast.info(t('desktop.session.sessionStopped'))
     await appWindow.close()
   } catch (e) {

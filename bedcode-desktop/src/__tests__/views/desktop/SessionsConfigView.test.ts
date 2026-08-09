@@ -45,12 +45,6 @@ vi.mock('@/composables/useSessionStatusListener', () => ({
   }),
 }))
 
-vi.mock('@/composables/useGlobalTerminal', () => ({
-  initSessionCache: vi.fn(),
-  destroySessionCache: vi.fn(),
-  cleanupAllCaches: vi.fn(),
-}))
-
 // Mock 子组件
 vi.mock('@/components/Button.vue', () => ({
   default: {

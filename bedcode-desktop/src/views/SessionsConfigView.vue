@@ -339,7 +339,6 @@ import { InvokeTimeoutError } from '@/utils/invoke'
 import { useSessionStore, type SessionInfo, type SessionConfig } from '@/stores/session'
 import { useSessionWindows } from '@/composables/useSessionWindows'
 import { useSessionStatusListener } from '@/composables/useSessionStatusListener'
-import { initSessionCache, destroySessionCache } from '@/composables/useGlobalTerminal'
 
 const sessionStore = useSessionStore()
 const { t } = useI18n()
@@ -532,7 +531,6 @@ async function startSession(configId: string) {
   try {
     // 两阶段启动：先创建会话（不启动 PTY），初始化历史缓存，再启动 PTY
     const sessionId = await sessionStore.createSession(configId)
-    initSessionCache(sessionId)
     await sessionStore.startSession(sessionId)
     toast.success(t('desktop.session.sessionStarted'))
   } catch (e: any) {
@@ -589,7 +587,6 @@ async function confirmStop() {
 
   try {
     await sessionStore.killSession(sessionId)
-    destroySessionCache(sessionId)
     toast.info(t('desktop.session.sessionStopped'))
 
     // 立即关闭终端窗口
@@ -641,7 +638,6 @@ async function confirmDeleteSessionNow() {
     // 运行中的会话先停止
     if (isRunning) {
       await sessionStore.killSession(sessionId)
-      destroySessionCache(sessionId)
     }
     // 然后删除
     await sessionStore.deleteSession(sessionId)
