@@ -18,7 +18,7 @@ Sizes: `w-4 h-4` (small), `w-5 h-5` (medium), `w-6 h-6` (large). Color inherits 
 
 ```html
 <!-- Online / running -->
-<div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+<div class="w-2 h-2 rounded-full bg-[var(--color-success)]"></div>
 
 <!-- Offline / stopped -->
 <div class="w-2 h-2 rounded-full bg-[var(--text-tertiary)]"></div>
@@ -26,6 +26,8 @@ Sizes: `w-4 h-4` (small), `w-5 h-5` (medium), `w-6 h-6` (large). Color inherits 
 <!-- Mobile connected glow -->
 <div class="w-2.5 h-2.5 rounded-full bg-[var(--mobile-success)] shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse"></div>
 ```
+
+Status colors always come from tokens (`--color-success/warning/danger`, `--mobile-*`) — never Tailwind palette classes (`bg-green-500`). The 12% alpha `*-light` / `*-muted` tokens provide tinted backgrounds for the same status.
 
 ## Badge / Tag
 
@@ -126,9 +128,11 @@ Use `<style scoped>` for:
 
 ## Button Pattern
 
+Brand backgrounds invert between themes, so text uses the **contrast token** — never `text-white`:
+
 ```html
 <!-- Primary -->
-<button class="bg-brand hover:bg-[var(--color-primary-hover)] text-white rounded-btn shadow-xs
+<button class="bg-brand hover:bg-[var(--color-primary-hover)] text-[var(--color-primary-contrast)] rounded-btn
   transition-all duration-200 h-8 px-4 text-sm">
   Save
 </button>
@@ -151,3 +155,5 @@ Use `<style scoped>` for:
   Edit
 </button>
 ```
+
+Hover-only feedback is meaningless on touch — every interactive element pairs `hover:` with an `active:` state (`active:opacity-80` on mobile).

@@ -104,4 +104,24 @@ Add to `style.css` as `@keyframes` + utility class:
 1. Animate `transform` and `opacity` only — GPU-composited, no layout recalc
 2. `will-change: transform` on actively animating elements; remove on completion
 3. Use scoped `<style>` for `<Transition>` classes to avoid global CSS pollution
-4. `prefers-reduced-motion`: complex animations benefit from a media query guard; simple 200ms hover transitions are universally safe
+4. `prefers-reduced-motion` is **mandatory**, not optional. Every project ships this global guard (in `style.css` / `mobile.css`), so decorative transitions collapse to near-instant:
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+```
+
+This block does stop spinners (`animate-spin`) and pulses — accepted, they freeze harmlessly at one frame. If a status indicator must keep pulsing (e.g. a connection warning), exempt it explicitly:
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-critical { animation-duration: 2s !important; }
+}
+```
+
+Complex enter/leave choreography beyond 300ms should additionally gate on `(prefers-reduced-motion: no-preference)`.
