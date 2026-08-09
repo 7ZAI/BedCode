@@ -81,9 +81,12 @@ class PluginAssetExtractor(private val activity: Activity) : Plugin(activity) {
             // 已解压、版本一致且 manifest 是真实文件 → 跳过（升级后按版本刷新）。
             // manifest 必须是文件：历史 bug 曾把 plugin.json 解压成目录，
             // 仅凭标记跳过会让损坏产物永远无法自愈。
+            // debug 构建（tauri:android:dev）：插件重构建而应用版本未变时标记仍匹配，
+            // 会一直加载旧产物 —— debug 下始终重新解压保证 dev 看到最新构建。
             val marker = File(destDir, MARKER_FILE)
             val manifestOk = File(destDir, PLUGIN_MANIFEST_FILE).isFile
-            if (manifestOk &&
+            if (!BuildConfig.DEBUG &&
+                manifestOk &&
                 marker.exists() &&
                 marker.readText().trim() == "$SOURCE_APK_ASSET:$appVersion"
             ) continue
