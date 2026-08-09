@@ -10,8 +10,9 @@ const zhCN: MessageSchema = {
   'transfer.sidebar.title': '文件传输',
 
   // ==================== 对端 pill ====================
-  'transfer.peer.online': '在线',
-  'transfer.peer.offline': '离线',
+  'transfer.peer.online': '已连接',
+  'transfer.peer.offline': '未连接',
+  'transfer.peer.notSharing': '已连接 · 对端未共享',
   'transfer.peer.unpaired': '未连接设备',
   'transfer.peer.noSharedRoots': '对方尚未设置共享目录',
 

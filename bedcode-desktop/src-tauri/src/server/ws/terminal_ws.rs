@@ -124,6 +124,21 @@ impl Actor for TerminalWs {
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("Terminal WS disconnected: {}", self.session.addr);
 
+        // 通知前端设备下线（与 DEVICE_CONNECTED 对称；仅已认证连接有 device_id）
+        if let Some(device_id) = self.session.device_id.clone() {
+            let app_ctx = crate::system::app_context::AppContext::global();
+            let _ = app_ctx.app_handle().emit(
+                crate::system::constants::event::DEVICE_DISCONNECTED,
+                &crate::server::connection_types::DeviceConnectionEvent {
+                    addr: self.session.addr.to_string(),
+                    device_id,
+                    device_name: self.session.device_name.clone(),
+                    fingerprint: self.session.fingerprint.clone(),
+                    event: "disconnected".to_string(),
+                },
+            );
+        }
+
         // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录
         let client_id = self.session.addr.to_string();
         let sessions: Vec<String> = self.session.subscribed_sessions.iter().cloned().collect();

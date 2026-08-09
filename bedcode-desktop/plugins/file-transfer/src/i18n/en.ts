@@ -10,8 +10,9 @@ const en: MessageSchema = {
   'transfer.sidebar.title': 'File Transfer',
 
   // ==================== Peer pill ====================
-  'transfer.peer.online': 'Online',
-  'transfer.peer.offline': 'Offline',
+  'transfer.peer.online': 'Connected',
+  'transfer.peer.offline': 'Not connected',
+  'transfer.peer.notSharing': 'Connected · peer not sharing',
   'transfer.peer.unpaired': 'No device connected',
   'transfer.peer.noSharedRoots': "Peer hasn't shared any folders yet",
 

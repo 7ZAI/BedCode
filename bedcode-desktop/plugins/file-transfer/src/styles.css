@@ -68,6 +68,11 @@
   background: var(--color-success);
 }
 
+/* 已连接但对端未共享（partial） */
+.ft-dot--partial {
+  background: var(--color-warning);
+}
+
 .ft-dot--offline {
   background: var(--text-tertiary);
 }

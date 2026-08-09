@@ -11,6 +11,9 @@ pub const SESSION_RESTARTED: &str = "session-restarted";
 /// 设备连接/认证事件
 pub const DEVICE_CONNECTED: &str = "device-connected";
 
+/// 设备断开事件（WS 连接关闭时发出，与 `DEVICE_CONNECTED` 对称）
+pub const DEVICE_DISCONNECTED: &str = "device-disconnected";
+
 /// 生命周期：应用启动完成
 pub const LIFECYCLE_STARTUP: &str = "lifecycle:startup";
 

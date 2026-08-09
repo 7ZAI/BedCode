@@ -14,6 +14,7 @@ export interface MessageSchema {
   // ==================== 对端 pill ====================
   'transfer.peer.online': string
   'transfer.peer.offline': string
+  'transfer.peer.notSharing': string
   'transfer.peer.unpaired': string
   'transfer.peer.noSharedRoots': string
 
