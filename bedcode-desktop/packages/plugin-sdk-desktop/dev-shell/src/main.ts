@@ -11,6 +11,7 @@ import App from './App.vue'
 import { initSharedRuntime } from './shared-runtime'
 import { loadPlugins } from './loader'
 import { zhCN, en } from './locales'
+import { readSavedLocale } from './locale'
 import './styles/style.css'
 import './styles/dev.css'
 
@@ -19,7 +20,7 @@ const pinia = createPinia()
 
 const i18n = createI18n({
   legacy: false,
-  locale: 'zh-CN',
+  locale: readSavedLocale(),
   fallbackLocale: 'en',
   messages: { 'zh-CN': zhCN, en },
   missingWarn: false,

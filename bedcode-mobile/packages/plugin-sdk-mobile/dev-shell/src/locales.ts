@@ -42,6 +42,7 @@ export const zhCN = {
   'devshell.theme.dark': '深色模式',
   'devshell.theme.light': '浅色模式',
   'devshell.theme.system': '跟随系统',
+  'devshell.toolbar.noPlugins': '未加载插件',
 }
 
 export const en = {
@@ -85,4 +86,5 @@ export const en = {
   'devshell.theme.dark': 'Dark Mode',
   'devshell.theme.light': 'Light Mode',
   'devshell.theme.system': 'Follow System',
+  'devshell.toolbar.noPlugins': 'No plugin loaded',
 }

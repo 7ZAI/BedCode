@@ -18,6 +18,7 @@ import {
 import { deactivateAll } from './loader'
 import { connected } from './mock/session'
 import { isSvgIcon } from './utils/icon'
+import { saveLocale, type DevLocale } from './locale'
 import PanelView from './views/PanelView.vue'
 import ToolboxView from './views/ToolboxView.vue'
 import PluginsView from './views/PluginsView.vue'
@@ -30,7 +31,23 @@ type BaseTab = 'terminal' | 'toolbox' | 'plugins' | 'settings'
 const activeTab = ref<BaseTab>('toolbox')
 const logOpen = ref(false)
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+
+// 语言切换选项（语言名用自身文字展示，无需翻译）
+const localeOptions: { value: DevLocale; label: string }[] = [
+  { value: 'zh-CN', label: '中' },
+  { value: 'en', label: 'EN' },
+]
+
+function setLocale(next: DevLocale) {
+  locale.value = next
+  saveLocale(next)
+}
+
+// 插件名列表：分隔符跟随当前语言
+const pluginSummary = computed(() =>
+  plugins.value.map((p) => p.name).join(locale.value === 'en' ? ', ' : '，'),
+)
 
 const baseTabs = computed(() => [
   { key: 'terminal' as const, label: t('devshell.nav.terminal'), icon: '⌨️' },
@@ -103,7 +120,7 @@ window.addEventListener('beforeunload', () => {
       <span class="w-3 h-3 rounded-full bg-brand flex-shrink-0" />
       <span class="text-sm font-semibold text-[var(--text-primary)] whitespace-nowrap">{{ t('devshell.brand') }}</span>
       <span v-if="plugins.length" class="text-xs text-[var(--text-tertiary)] truncate min-w-0">
-        {{ plugins.map((p) => p.name).join('，') }}
+        {{ pluginSummary }}
       </span>
       <span class="flex-1" />
       <button
@@ -114,6 +131,22 @@ window.addEventListener('beforeunload', () => {
       >
         {{ entry.item.icon ? entry.item.icon + ' ' : '' }}{{ entry.item.label }}
       </button>
+      <!-- 语言切换（中 / EN 分段按钮） -->
+      <div class="flex items-center rounded-btn bg-[var(--bg-hover)] p-0.5">
+        <button
+          v-for="opt in localeOptions"
+          :key="opt.value"
+          class="px-2 py-0.5 rounded text-xs transition-colors duration-200"
+          :class="
+            locale === opt.value
+              ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'
+              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+          "
+          @click="setLocale(opt.value)"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
       <button
         class="px-2.5 py-1 rounded-btn text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors duration-200"
         @click="logOpen = !logOpen"

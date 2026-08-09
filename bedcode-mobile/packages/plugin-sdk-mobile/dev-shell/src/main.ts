@@ -16,6 +16,7 @@ import { presetTasksApi } from './mock/preset-tasks'
 import { mobileApi } from './mock/mobile-api'
 import { dialogService } from './mock/dialog-service'
 import { zhCN, en } from './locales'
+import { readSavedLocale } from './locale'
 import './styles/main.css'
 import './styles/mobile.css'
 
@@ -24,7 +25,7 @@ const pinia = createPinia()
 
 const i18n = createI18n({
   legacy: false,
-  locale: 'zh-CN',
+  locale: readSavedLocale(),
   fallbackLocale: 'en',
   messages: { 'zh-CN': zhCN, en },
   missingWarn: false,
