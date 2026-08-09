@@ -53,7 +53,7 @@
 
       <!-- 按日期分组的 section -->
       <div v-else class="space-y-6 max-w-3xl">
-        <section v-for="group in groups" :key="group.date">
+        <section v-for="group in groups" :key="group.date" class="history-group">
           <!-- 小号全大写 letterspacing 分组标题 -->
           <h3 class="wb-section-title font-mono tracking-[0.12em]">
             {{ group.date }} · {{ group.entries.length }}
@@ -62,7 +62,7 @@
             <div
               v-for="entry in group.entries"
               :key="entry.id"
-              class="px-4 py-3 flex items-center gap-3 hover:bg-[var(--bg-hover)] transition-colors"
+              class="history-entry px-4 py-3 flex items-center gap-3 hover:bg-[var(--bg-hover)] transition-colors"
             >
               <span
                 :class="[
@@ -209,3 +209,29 @@ onMounted(async () => {
   await loadHistory()
 })
 </script>
+
+<style scoped>
+/*
+ * 长列表优化：content-visibility: auto 跳过屏幕外元素的渲染
+ *
+ * 收益预估（100+ 条连接历史场景）：
+ * - 初次渲染：跳屏外 section 的 layout/paint，FPS 提升 3-5x
+ * - 大列表滚动：滚动时仅渲染视口内 section，主线程压力下降
+ * - 代价：首次快速滚动到屏幕外时会有轻微 "弹出" 动画
+ *
+ * contain-intrinsic-size 预估行高，避免滚动条跳动
+ * - 标题 ~32px
+ * - 每条 entry ~52px (含内边距)
+ * - 容器预估总高 = 32 + 52 * 假设平均 5 条 = 292px
+ */
+.history-group {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 292px;
+}
+
+.history-entry {
+  /* 单条 entry 单独启用 skip，配合整组 skip，双重保险 */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 52px;
+}
+</style>

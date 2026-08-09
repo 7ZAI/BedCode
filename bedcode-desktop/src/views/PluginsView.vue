@@ -100,17 +100,20 @@
                     {{ $t('desktop.plugin.goConfig') }}
                   </router-link>
                   <span v-else class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.config') }}</span>
-                  <!-- 启停开关 -->
+                  <!-- 启停开关（v-bind 改造：CSS 变量驱动样式，状态切换集中在 <style>） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
-                    class="relative w-10 h-5 rounded-[4px] border transition-colors shrink-0 bg-[var(--color-primary)] border-[var(--color-primary)]"
-                    :class="{ 'opacity-50 cursor-not-allowed': togglingId === plugin.id }"
+                    class="plugin-toggle"
+                    :style="{
+                      '--toggle-on': isActivated(plugin.state) ? 1 : 0,
+                      '--toggle-locked': togglingId === plugin.id ? 1 : 0,
+                    }"
                     :title="$t('desktop.plugin.disable')"
                     :aria-label="$t('desktop.plugin.disable')"
                     :disabled="togglingId === plugin.id"
                     @click.stop="handleToggle(plugin.id, false)"
                   >
-                    <span class="absolute top-[3px] left-[22px] w-3 h-3 rounded-[2px] bg-[var(--color-primary-contrast)] transition-all"></span>
+                    <span class="plugin-toggle__knob" />
                   </button>
                   <span v-else class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0">{{ $t('desktop.plugin.alwaysOn') }}</span>
                 </div>
@@ -172,17 +175,20 @@
                   </button>
                   <!-- 配置入口不可用 -->
                   <span class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.config') }}</span>
-                  <!-- 启停开关 -->
+                  <!-- 启停开关（v-bind 改造：同一组件，状态由 CSS 变量驱动） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
-                    class="relative w-10 h-5 rounded-[4px] border transition-colors shrink-0 bg-[var(--bg-page)] border-[var(--border-strong)]"
-                    :class="{ 'opacity-50 cursor-not-allowed': togglingId === plugin.id }"
+                    class="plugin-toggle"
+                    :style="{
+                      '--toggle-on': isActivated(plugin.state) ? 1 : 0,
+                      '--toggle-locked': togglingId === plugin.id ? 1 : 0,
+                    }"
                     :title="$t('desktop.plugin.enabled')"
                     :aria-label="$t('desktop.plugin.enabled')"
                     :disabled="togglingId === plugin.id"
                     @click.stop="handleToggle(plugin.id, true)"
                   >
-                    <span class="absolute top-[3px] left-[3px] w-3 h-3 rounded-[2px] bg-[var(--border-strong)] transition-all"></span>
+                    <span class="plugin-toggle__knob" />
                   </button>
                   <span v-else class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.alwaysOn') }}</span>
                 </div>
@@ -273,5 +279,58 @@ onMounted(() => {
 .overlay-enter-from,
 .overlay-leave-to {
   opacity: 0;
+}
+
+/* ==================== 启停开关 ==================== */
+/*
+ * v-bind 改造要点：
+ * - 状态（on / locked）由父组件通过 :style 注入 CSS 变量（数值：0 或 1）
+ * - 视觉表现（背景、边框、圆点位置、opacity）完全由 <style> 集中定义
+ * - 切换 on 时只需改变 --toggle-on 数值，圆点 transform 自动位移（calc 参与）
+ * - 锁定态（--toggle-locked: 1）通过 calc 乘 0.5 影响 opacity，零额外 DOM
+ * - 子组件或子元素可通过 var(--toggle-on) 读取状态，无需 props 透传
+ */
+.plugin-toggle {
+  /* 数值由父组件 :style 注入；这里给默认值保 SSR/初次渲染正确 */
+  --toggle-on: 0;
+  --toggle-locked: 0;
+  --toggle-shift: 19;       /* 圆点位移：按钮 40 - 圆点 12 - 左右内边距 3*2 - 边框 1*2 = 19px */
+
+  position: relative;
+  width: 2.5rem;
+  height: 1.25rem;
+  border-radius: 4px;
+  border: 1px solid;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
+
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  /* 锁定 1 时 opacity 0.5，0 时 1；calc(1 - var(--toggle-locked) * 0.5) */
+  opacity: calc(1 - var(--toggle-locked) * 0.5);
+}
+
+/* 关闭态：覆盖 background / border */
+.plugin-toggle[style*="--toggle-on: 0"] {
+  background: var(--bg-page);
+  border-color: var(--border-strong);
+}
+
+.plugin-toggle__knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  background: var(--color-primary-contrast);
+  transition: transform 0.2s, background-color 0.2s;
+  /* calc 直接用 --toggle-on（数字），不用字符串 */
+  transform: translateX(calc(var(--toggle-on) * var(--toggle-shift) * 1px));
+}
+
+.plugin-toggle[style*="--toggle-on: 0"] .plugin-toggle__knob {
+  background: var(--border-strong);
 }
 </style>
