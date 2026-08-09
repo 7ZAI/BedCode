@@ -34,6 +34,7 @@ CONTEXT.md
 .idea/
 .claude/
 .pi/
+.opencode/
 .vscode/
 .VSCodeCounter/
 *.swp
