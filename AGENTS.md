@@ -342,6 +342,7 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 | `reviewer` | 代码审查（只读） | deepseek-v4-flash |
 | `worker` | 通用实现（完整能力） | deepseek-v4-flash |
 | `tester` | 运行测试并报告 | deepseek-v4-flash |
+| `vision` | 视觉分析（图片识别 / UI 评审 / 设计稿解读），详见下节 | opencode-go/minimax-m3 |
 
 三种模式：
 - 单任务：`{ agent, task, agentScope: "both" }`
@@ -349,5 +350,68 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 - 链式：`{ chain: [{ agent, task }, ...], agentScope: "both" }`，步骤间用 `{previous}` 占位符传递输出
 
 工作流 prompt 模板（`.pi/prompts/`）：`/implement`（scout → planner → worker）、`/scout-and-plan`（只出计划）、`/implement-and-review`（worker → reviewer → worker）、`/implement-and-test`（worker → tester）。
+
+### Vision subagent
+
+`vision` 是**唯一带视觉能力的 agent**（模型支持图像理解），主 agent 需提供**图片文件路径**（非 URL / 非 base64）。它不修改文件、不执行命令，仅做读图与结构化分析。
+
+#### 评审范围协议(Scope Protocol)
+
+主 agent 必须在 `task` 字符串中用 `范围:` 或 `scope:` 一行显式指定评审范围:
+
+| 指令 | 行为 |
+|------|------|
+| `范围: 完整` / `scope: full` | 评审整张图(含外壳) |
+| `范围: 手机内部` / `scope: phone` | 只评手机模拟器内 |
+| `范围: 桌面应用内` / `scope: desktop` | 只评桌面应用窗口内 |
+| `范围: 忽略外壳` / `scope: ignore-chrome` | 自动识别 dev-shell 外壳并只评内部 |
+| `范围: <自由描述>` | 按描述执行 |
+
+**未指定范围时**:vision 自动识别 dev-shell(适用于 BedCode `bedcode-mobile` / `bedcode-desktop` 的 dev-shell 调试壳),忽略外壳只评内部。**指令冲突时主 agent 优先**(主 agent 可能有 vision 看不到的上下文,如只想看 dev-shell 自身的 UI bug、只想看错误堆栈)。
+
+完整协议见 `.pi/agents/vision.md` 的 "## 评审范围协议" 段。
+
+#### 标准调用
+
+```javascript
+// 显式指定范围 — 评审手机内部
+subagent(agent: "vision", agentScope: "both", task: `
+  范围: 手机内部
+  截图: <绝对路径>
+  ...评审要求...
+`)
+
+// 显式完整 — 评审 dev-shell 自身(顶栏/手机框/控制面板)
+subagent(agent: "vision", agentScope: "both", task: `
+  范围: 完整
+  截图: <绝对路径>
+  请评审 dev-shell 调试壳的顶栏按钮对齐、手机框定位、四周留白。
+`)
+
+// 零配置 — 默认自动识别 dev-shell
+subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路径>")
+```
+
+#### 截图准备
+
+主 agent 需先截图再传路径给 vision,常用方式:
+- Chrome headless 直连截图:`chrome.exe --headless=new --screenshot=/path/to/out.png --window-size=1440,900 <url>`
+- `browser-tools` skill:`browser-screenshot.js` / `browser-content.js`(注意该 skill 的 `browser-start.js` 仅 macOS 可用,Windows 用 Chrome headless 替代)
+- 已有图片文件:直接传绝对路径
+
+#### 协助 Skills
+
+`design-taste-frontend-v1`(位于 `.agents/skills/taste-skill-v1/`) — UI 截图 / 设计稿评审时由 vision 自动加载,提供品味基线(`VARIANCE=8` / `MOTION=6` / `DENSITY=4`)与 AI 套路识别清单(第 7 节)、五大硬性指标(第 3 节)、Pre-Flight 自查(第 10 节)。原 skill 面向 React/Next.js,vision 评审时自动映射到 Vue 3 + Tauri 栈。
+
+#### 适用场景
+
+- 错误截图诊断(Tauri / Vue 报错 → 定位问题)
+- UI 截图评审(对照 `frontend-styles` + `design-taste-frontend-v1` 给出量化反馈)
+- 设计稿解读(提取颜色 / 间距 / 字体 / 组件结构)
+- 架构图 / 流程图解析(转文字描述 + 代码骨架)
+- 代码截图转文字(截图里的代码提取为可编辑文本)
+- 图标 / Logo 识别
+
+输出格式固定:基础描述 → 详细分析 → Pre-Flight 自查 → 建议。详见 `.pi/agents/vision.md`。
 
 适用场景：大范围代码调查、可并行的独立子任务、需要隔离上下文的重型任务。简单的定位/小改动直接用 codegraph 工具即可，不必启动 subagent。
