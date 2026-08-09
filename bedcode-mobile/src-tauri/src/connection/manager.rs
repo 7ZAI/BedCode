@@ -30,11 +30,15 @@ use crate::system::constants::reconnect::DEFAULT_RETRY_DELAYS_MS;
 // Re-export ConnectionStatus for public API
 pub use crate::connection::ConnectionStatus;
 
-/// 判断错误是否表示连接已断开或请求失败（需要通知前端）
+/// 判断错误是否表示连接已断开（需要通知前端）
+///
+/// 仅对真正的连接级故障（通道关闭/未连接/连接丢失/发送失败）返回 true；
+/// 超时类错误（Response timeout）**不是**连接断开——订阅/请求可能因服务端
+/// 背压或处理慢而超时，此时连接仍存活，误报会触发前端断连提示与重连循环
 fn is_disconnect_error(error: &crate::AppError) -> bool {
     match error {
         crate::AppError::WebSocket(msg) => {
-            // 检查错误消息是否包含断开或超时相关的关键词
+            // 检查错误消息是否包含断开相关的关键词（不含 timeout）
             let msg_lower = msg.to_lowercase();
             msg_lower.contains("not connected")
                 || msg_lower.contains("disconnected")
@@ -42,8 +46,6 @@ fn is_disconnect_error(error: &crate::AppError) -> bool {
                 || msg_lower.contains("connection closed")
                 || msg_lower.contains("failed to send")
                 || msg_lower.contains("channel closed")
-                || msg_lower.contains("timeout")  // 超时也可能是连接问题
-                || msg_lower.contains("response timeout")
         }
         _ => false,
     }
@@ -448,7 +450,7 @@ impl ConnectionManager {
         };
 
         let msg_preview = message.to_json().unwrap_or_default();
-        tracing::info!("[ConnectionManager] send() message_type={:?}, preview={}",
+        tracing::debug!("[ConnectionManager] send() message_type={:?}, preview={}",
             "Message",
             &msg_preview[..msg_preview.len().min(LOG_PREVIEW_MAX_LEN)]);
 
@@ -456,7 +458,7 @@ impl ConnectionManager {
             let result = client.send(&message).await;
             match &result {
                 Ok(_) => {
-                    tracing::info!("[ConnectionManager] send() result: OK");
+                    tracing::debug!("[ConnectionManager] send() result: OK");
                 }
                 Err(e) => {
                     tracing::error!("[ConnectionManager] send() failed: {}", e);
@@ -479,11 +481,11 @@ impl ConnectionManager {
         };
 
         if let Some(client) = self.client.read().await.as_ref() {
-            tracing::info!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
+            tracing::debug!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
             let result = client.send_and_wait(&message, timeout).await
                 .with_context(|| format!("send_and_wait timeout={}s", timeout.as_secs()))
                 .map_err(|e| crate::AppError::WebSocket(e.to_string()));
-            tracing::info!("[ConnectionManager] send_and_wait: result={:?}", result.as_ref().map(|m| m.message_type().unwrap_or("unknown")));
+            tracing::debug!("[ConnectionManager] send_and_wait: result={:?}", result.as_ref().map(|m| m.message_type().unwrap_or("unknown")));
             result
         } else {
             tracing::error!("[ConnectionManager] send_and_wait: client is None!");

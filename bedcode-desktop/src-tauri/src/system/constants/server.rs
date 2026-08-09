@@ -23,6 +23,13 @@ pub const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 /// 超过此时间未收到 Pong 则判定连接断开
 pub const CLIENT_TIMEOUT_SECS: u64 = 10;
 
+/// 远程客户端超时（秒）
+///
+/// 移动端在高负载（输出风暴 + 前端渲染 + 日志 I/O）下 Pong 回复可能延迟，
+/// 本地环回通道（桌面 WebView）保持 CLIENT_TIMEOUT_SECS 即可，
+/// 远程通道放宽到 45s 避免高负载误断导致的断连-重连-再订阅循环
+pub const REMOTE_CLIENT_TIMEOUT_SECS: u64 = 45;
+
 /// WebSocket 事件广播容量
 ///
 /// 用于 WebSocketManager 内部 ServerEvent 广播

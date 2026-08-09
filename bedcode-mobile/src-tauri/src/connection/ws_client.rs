@@ -158,7 +158,7 @@ impl WsClient {
 
         // 获取 handler 和 request_manager
         let handler = self.handler.read().await.clone();
-        tracing::info!("[WsClient] Handler status: is_some={}", handler.is_some());
+        tracing::debug!("[WsClient] Handler status: is_some={}", handler.is_some());
         let request_manager = self.request_manager.clone();
         let event_tx = self.event_tx.clone();
         let heartbeat = self.heartbeat.clone();
@@ -189,13 +189,13 @@ impl WsClient {
                         msg = rx.next() => {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
-                                    info!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
+                                    debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
 
                                     // 1. 尝试匹配 pending 请求
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {
                                         Some(_) => {
                                             // 未匹配，是推送消息，交给 handler 处理
-                                            info!("[WsClient] Push message, handler is_some: {}", handler.is_some());
+                                            debug!("[WsClient] Push message, handler is_some: {}", handler.is_some());
                                             let _ = event_tx.send(WsClientEvent::PushMessage {
                                                 content: text.clone(),
                                             });
@@ -287,7 +287,7 @@ impl WsClient {
                         msg = rx.recv() => {
                             match msg {
                                 Some(WsMsg::Text(text)) => {
-                                    info!("[WsClient] >>> SEND: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
+                                    debug!("[WsClient] >>> SEND: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Text(text)).await {
                                         error!("[WsClient] Send error: {}", e);
@@ -461,15 +461,15 @@ impl WsClient {
 
     /// 发送消息（不等待响应）
     pub async fn send(&self, message: &Message) -> Result<()> {
-        tracing::info!("[WsClient] send() called, checking ws_sender...");
+        tracing::debug!("[WsClient] send() called, checking ws_sender...");
         if let Some(sender) = self.ws_sender.read().await.as_ref() {
             let json = message.to_json()?;
-            tracing::info!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(LOG_PREVIEW_MAX_LEN)]);
+            tracing::debug!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(LOG_PREVIEW_MAX_LEN)]);
             sender
                 .send(WsMsg::Text(json))
                 .await
                 .map_err(|e| crate::AppError::WebSocket(format!("Failed to send: {}", e)))?;
-            tracing::info!("[WsClient] send() completed - message queued");
+            tracing::debug!("[WsClient] send() completed - message queued");
             Ok(())
         } else {
             tracing::error!("[WsClient] send() failed - ws_sender is None!");

@@ -18,7 +18,7 @@ use crate::session::GlobalOutputManager;
 use crate::utils::auth::jwt::JwtService;
 use crate::enums::{SessionControlPayload, TerminalPayload};
 use crate::system::config::AppConfig;
-use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS};
+use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS, REMOTE_CLIENT_TIMEOUT_SECS};
 use crate::system::constants::event;
 
 /// 心跳间隔
@@ -111,9 +111,18 @@ impl TerminalWs {
     }
 
     /// 心跳检测
+    ///
+    /// 本地环回通道（桌面 WebView）保持 10s 超时；远程通道（移动端）放宽到
+    /// 45s——移动端在输出风暴/高负载/弱网下 Pong 回复可能延迟，收紧的超时
+    /// 会造成断连-重连-再订阅的循环（每次循环都触发前端断连提示）
     fn start_heartbeat(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
+        let timeout = if self.local {
+            CLIENT_TIMEOUT
+        } else {
+            Duration::from_secs(REMOTE_CLIENT_TIMEOUT_SECS)
+        };
+        ctx.run_interval(HEARTBEAT_INTERVAL, move |act, ctx| {
+            if Instant::now().duration_since(act.hb) > timeout {
                 tracing::warn!("WebSocket heartbeat timeout for {}", act.session.addr);
                 ctx.stop();
                 return;
@@ -633,7 +642,10 @@ impl TerminalWs {
         let addr = ctx.address();
 
         // 创建输出转发通道
-        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(256);
+        // 容量 4096：历史回放 + 实时输出并发到达时，subscribe() 的历史发送
+        // 会被 send_queue 背压阻塞（历史发不完 → subscribe_response 不回 →
+        // 客户端 send_and_wait 超时误判断开）。大容量显著降低背压概率
+        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(4096);
 
         let session_id_for_sub = session_id.clone();
         let session_id_for_fwd = session_id.clone();
@@ -656,66 +668,45 @@ impl TerminalWs {
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
         let local = self.local;
+        let merge_output = config.terminal.merge_output;
 
         actix::spawn(async move {
-            let mut buffer = OutputBuffer::new(local);
+            // 本地通道（桌面端环回，延迟敏感）恒零缓冲直通；远程通道按开关决定：
+            // 合并开启 → 有界延迟合并；关闭 → 零缓冲直通。合并/直通语义与
+            // 时序保证集中在 forward_loop（有单测覆盖）
+            let interval = if local || !merge_output {
+                Duration::ZERO
+            } else {
+                flush_interval
+            };
+            let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(64);
+            let fwd = tokio::spawn(forward_loop(
+                output_rx,
+                out_tx,
+                interval,
+                max_buffer_size,
+                local,
+                session_id_for_fwd,
+            ));
 
-            loop {
-                match tokio::time::timeout(flush_interval, output_rx.recv()).await {
-                    Ok(Some(event)) => {
-                        buffer.append(&event);
-                        if buffer.data.len() >= max_buffer_size {
-                            match buffer.flush(&session_id_for_fwd) {
-                                ForwardOutput::Text(text) => {
-                                    if addr.send(TerminalOutput { text }).await.is_err() {
-                                        tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
-                                        break;
-                                    }
-                                }
-                                ForwardOutput::Binary(data) => {
-                                    if addr.send(TerminalOutputBinary { data }).await.is_err() {
-                                        tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
-                                        break;
-                                    }
-                                }
-                            }
+            // 消费循环：转发结果经 actor 发送（失败 = actor 停止，终止转发）
+            while let Some(out) = out_rx.recv().await {
+                match out {
+                    ForwardOutput::Text(text) => {
+                        if addr.send(TerminalOutput { text }).await.is_err() {
+                            tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                            break;
                         }
                     }
-                    Ok(None) => {
-                        // channel 关闭，最终 flush
-                        if !buffer.is_empty() {
-                            match buffer.flush(&session_id_for_fwd) {
-                                ForwardOutput::Text(text) => {
-                                    let _ = addr.send(TerminalOutput { text }).await;
-                                }
-                                ForwardOutput::Binary(data) => {
-                                    let _ = addr.send(TerminalOutputBinary { data }).await;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    Err(_) => {
-                        // 超时，flush 缓冲区
-                        if !buffer.is_empty() {
-                            match buffer.flush(&session_id_for_fwd) {
-                                ForwardOutput::Text(text) => {
-                                    if addr.send(TerminalOutput { text }).await.is_err() {
-                                        tracing::debug!("[OutputForwarder] Actor stopped on flush, exiting loop");
-                                        break;
-                                    }
-                                }
-                                ForwardOutput::Binary(data) => {
-                                    if addr.send(TerminalOutputBinary { data }).await.is_err() {
-                                        tracing::debug!("[OutputForwarder] Actor stopped on flush, exiting loop");
-                                        break;
-                                    }
-                                }
-                            }
+                    ForwardOutput::Binary(data) => {
+                        if addr.send(TerminalOutputBinary { data }).await.is_err() {
+                            tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                            break;
                         }
                     }
                 }
             }
+            let _ = fwd.await;
         });
     }
 
@@ -915,6 +906,7 @@ impl Handler<SendTextMessage> for TerminalWs {
 // ==================== Output Buffer ====================
 
 /// 转发输出形态：文本 JSON（移动端 WS）或二进制帧（桌面端本地 WS）
+#[derive(Debug)]
 enum ForwardOutput {
     Text(String),
     Binary(Vec<u8>),
@@ -1016,6 +1008,72 @@ impl OutputBuffer {
             );
             self.data.clear();
             ForwardOutput::Text(message.to_json().unwrap_or_default())
+        }
+    }
+}
+
+/// 输出转发循环 — 将 OutputEvent 流编码为 ForwardOutput 经 out_tx 送出
+///
+/// 两种模式：
+/// - `flush_interval = ZERO`：零缓冲直通，每条事件立即转发（本地环回通道 / 合并开关关闭）
+/// - 有界延迟合并：字节达 `max_buffer_size` 或距上次 flush 超过 `flush_interval` 时
+///   flush（先到先发），持续输出下延迟恒 ≤ flush_interval。不能用 timeout 重计时代替
+///   时间窗——持续输出时 timeout 永不触发，flush 会退化成仅容量触发，慢速输出
+///   延迟 = 容量/速率（可达数百 ms）
+async fn forward_loop(
+    mut output_rx: tokio::sync::mpsc::Receiver<crate::session::OutputEvent>,
+    out_tx: tokio::sync::mpsc::Sender<ForwardOutput>,
+    flush_interval: Duration,
+    max_buffer_size: usize,
+    binary: bool,
+    session_id: String,
+) {
+    let mut buffer = OutputBuffer::new(binary);
+
+    if flush_interval.is_zero() {
+        // 零缓冲直通：每条事件立即转发，不等待
+        while let Some(event) = output_rx.recv().await {
+            buffer.append(&event);
+            if out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                break;
+            }
+        }
+        return;
+    }
+
+    // 有界延迟合并：时间窗 / 字节窗双条件，先到先发
+    let mut last_flush = tokio::time::Instant::now();
+    loop {
+        match tokio::time::timeout(flush_interval, output_rx.recv()).await {
+            Ok(Some(event)) => {
+                buffer.append(&event);
+                if buffer.data.len() >= max_buffer_size
+                    || last_flush.elapsed() >= flush_interval
+                {
+                    if out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                        break;
+                    }
+                    last_flush = tokio::time::Instant::now();
+                }
+            }
+            Ok(None) => {
+                // channel 关闭，最终 flush
+                if !buffer.is_empty() {
+                    let _ = out_tx.send(buffer.flush(&session_id)).await;
+                }
+                break;
+            }
+            Err(_) => {
+                // 空闲超时，flush 缓冲区；仅在确有内容发出时重置时间窗——
+                // 空 buffer 也重置会把持续输出场景的时间窗进度抹掉（timeout 与
+                // 事件同时就绪时 Err 分支先执行，内容 flush 将永远等不到）
+                if !buffer.is_empty() {
+                    if out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                        break;
+                    }
+                    last_flush = tokio::time::Instant::now();
+                }
+            }
         }
     }
 }
@@ -1158,5 +1216,192 @@ mod tests {
         assert_eq!(end_index, None);
         assert_eq!(start_offset, Some(100));
         assert_eq!(end_offset, Some(106));
+    }
+
+    // ==================== forward_loop 转发循环（合并时序语义） ====================
+
+    /// 启动 forward_loop 并返回 (事件发送端, 输出接收端)
+    fn spawn_forward(
+        flush_interval: Duration,
+        max_buffer_size: usize,
+        binary: bool,
+    ) -> (
+        tokio::sync::mpsc::Sender<crate::session::OutputEvent>,
+        tokio::sync::mpsc::Receiver<ForwardOutput>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(128);
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(128);
+        let fwd = tokio::spawn(forward_loop(rx, out_tx, flush_interval, max_buffer_size, binary, "s".into()));
+        (tx, out_rx, fwd)
+    }
+
+    /// 持续输出（事件间隔 < flush_interval）：合并生效且首条消息延迟有界（≤ 时间窗）
+    ///
+    /// 使用 tokio 虚拟时钟（start_paused）精确控制事件节奏，避免真实定时器
+    /// 精度（Windows 上 ~15ms 抖动）干扰批次断言；消费任务与发送并行，
+    /// 记录的是消息实际发出的时刻而非测试开始接收的时刻
+    #[tokio::test(start_paused = true)]
+    async fn test_forward_loop_sustained_output_bounded_delay_and_merging() {
+        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(20), 64 * 1024, false);
+
+        let start = tokio::time::Instant::now();
+        let (res_tx, mut res_rx) = tokio::sync::mpsc::channel::<(usize, Option<Duration>)>(4);
+        // 并行消费：记录每条消息的实际发出时刻（虚拟时钟）
+        let collector = tokio::spawn(async move {
+            let mut messages = 0;
+            let mut first_at: Option<Duration> = None;
+            while let Some(out) = out_rx.recv().await {
+                if first_at.is_none() {
+                    first_at = Some(start.elapsed());
+                }
+                let ForwardOutput::Text(_) = out else {
+                    panic!("expected text output");
+                };
+                messages += 1;
+            }
+            let _ = res_tx.send((messages, first_at)).await;
+        });
+
+        // 每 5ms 一条小事件，共 30 条（持续 150ms，间隔远小于 20ms 时间窗）
+        for i in 0..30u64 {
+            tx.send(event("s", b"x", i, i, i + 1)).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        drop(tx);
+
+        let (messages, first_at) = res_rx.recv().await.expect("collector finished");
+        let _ = collector.await;
+        let _ = fwd.await;
+
+        // 合并生效：30 条事件按 20ms 窗聚合成 ~7-8 批（5ms 间隔 → 每批 4-5 条）
+        assert!(messages < 12, "expected merging, got {messages} messages");
+        // 有界延迟：首批事件累积满 20ms 时间窗时发出（虚拟时钟精确）
+        let first = first_at.expect("at least one message");
+        assert!(
+            first >= Duration::from_millis(15) && first <= Duration::from_millis(25),
+            "first message delayed {first:?}, expected ~20ms"
+        );
+    }
+
+    /// 字节窗：单条大事件 ≥ max_buffer_size 时立即 flush，不等待时间窗
+    #[tokio::test(start_paused = true)]
+    async fn test_forward_loop_byte_window_flushes_immediately() {
+        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(500), 8, false);
+
+        let start = tokio::time::Instant::now();
+        tx.send(event("s", b"0123456789", 0, 0, 10)).await.unwrap(); // 10 字节 > 8
+        drop(tx);
+
+        let out = tokio::time::timeout(Duration::from_millis(50), out_rx.recv())
+            .await
+            .expect("byte window must flush immediately")
+            .expect("forward_loop exited");
+        // 立即 flush：虚拟时间几乎未流逝，不等到 500ms 时间窗
+        assert!(start.elapsed() < Duration::from_millis(100));
+
+        let ForwardOutput::Text(json) = out else {
+            panic!("expected text output");
+        };
+        let msg: Message = Message::from_json(&json).unwrap();
+        let Message::Terminal { payload, .. } = msg else {
+            panic!("expected terminal message");
+        };
+        let crate::enums::TerminalAction::Output { data, index, .. } = payload.action else {
+            panic!("expected output action");
+        };
+        assert_eq!(index, 0);
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data).unwrap();
+        assert_eq!(decoded, b"0123456789");
+        let _ = fwd.await;
+    }
+
+    /// 空闲 flush：单条小事件后无后续，≤ flush_interval 后发出（不无限滞留）
+    ///
+    /// 注意保持 sender 存活：drop 会触发 final flush 路径（立即发出），
+    /// 而非空闲超时路径
+    #[tokio::test(start_paused = true)]
+    async fn test_forward_loop_idle_flush_within_interval() {
+        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(30), 64 * 1024, false);
+
+        let start = tokio::time::Instant::now();
+        tx.send(event("s", b"hi", 0, 0, 2)).await.unwrap();
+
+        let out = tokio::time::timeout(Duration::from_millis(80), out_rx.recv())
+            .await
+            .expect("idle flush within interval")
+            .expect("forward_loop exited");
+        // 空闲 flush 由时间窗触发：虚拟时间 ≈30ms（而非无限滞留）
+        let elapsed = start.elapsed();
+        assert!(
+            (Duration::from_millis(25)..=Duration::from_millis(60)).contains(&elapsed),
+            "idle flush elapsed: {elapsed:?}"
+        );
+        assert!(matches!(out, ForwardOutput::Text(_)));
+
+        drop(tx); // 关闭通道，让循环退出
+        let _ = fwd.await;
+    }
+
+    /// 零间隔（直通模式）：每条事件立即转发，消息数 = 事件数，无合并
+    #[tokio::test]
+    async fn test_forward_loop_zero_interval_passthrough() {
+        let (tx, mut out_rx, fwd) = spawn_forward(Duration::ZERO, 64 * 1024, false);
+
+        for i in 0..5u64 {
+            tx.send(event("s", b"x", i, i, i + 1)).await.unwrap();
+        }
+        drop(tx);
+
+        let mut messages = 0;
+        while let Some(out) = out_rx.recv().await {
+            let ForwardOutput::Text(_) = out else {
+                panic!("expected text output");
+            };
+            messages += 1;
+        }
+        let _ = fwd.await;
+        assert_eq!(messages, 5, "passthrough must forward each event unchanged");
+    }
+
+    /// 通道关闭：未达时间窗/字节窗的残留缓冲最终 flush（合并语义收尾）
+    #[tokio::test]
+    async fn test_forward_loop_final_flush_on_channel_close() {
+        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
+
+        tx.send(event("s", b"ab", 0, 0, 2)).await.unwrap();
+        tx.send(event("s", b"cd", 1, 2, 4)).await.unwrap();
+        drop(tx); // 未达时间窗/字节窗 → 关闭时合并两条最终发出
+
+        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
+            .await
+            .expect("final flush on channel close")
+            .expect("forward_loop exited");
+        let ForwardOutput::Text(json) = out else {
+            panic!("expected text output");
+        };
+        let msg: Message = Message::from_json(&json).unwrap();
+        let Message::Terminal { payload, .. } = msg else {
+            panic!("expected terminal message");
+        };
+        let crate::enums::TerminalAction::Output { data, index, end_index, start_offset, end_offset, .. } = payload.action else {
+            panic!("expected output action");
+        };
+        assert_eq!(index, 0);
+        assert_eq!(end_index, Some(1), "merged two events");
+        assert_eq!(start_offset, Some(0));
+        assert_eq!(end_offset, Some(4));
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data).unwrap();
+        assert_eq!(decoded, b"abcd");
+
+        // 循环在关闭后退出：recv 返回 Ok(None)（通道关闭）而非超时
+        assert!(
+            matches!(
+                tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
+                Ok(None)
+            ),
+            "forward_loop must exit after channel close"
+        );
+        let _ = fwd.await;
     }
 }

@@ -48,8 +48,9 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("channels.lifecycle_capacity", "生命周期事件广播容量 - PTY 进程状态变更"),
     ("terminal.default_cols", "默认终端列数"),
     ("terminal.default_rows", "默认终端行数"),
-    ("terminal.flush_interval_ms", "输出缓冲刷新间隔（毫秒）- 合并多条输出减少 WebSocket 消息数"),
-    ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 达到此大小立即刷新"),
+    ("terminal.flush_interval_ms", "远程通道输出缓冲刷新间隔（毫秒）- 合并开关开启时生效；桌面本地通道零缓冲直通"),
+    ("terminal.merge_output", "服务端输出合并开关（true/false）- 开启后远程通道按 flush_interval_ms 合并输出减少 WS 消息数；默认开启（移动端弱网/高频输出防消息风暴），桌面本地通道恒为零缓冲直通"),
+    ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
     ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
     ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
@@ -108,6 +109,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "terminal.default_cols",
         "terminal.default_rows",
         "terminal.flush_interval_ms",
+        "terminal.merge_output",
         "terminal.max_buffer_size",
         "terminal.read_buffer_size",
     ]),
@@ -369,9 +371,13 @@ pub struct TerminalConfig {
     pub default_cols: u16,
     /// 默认终端行数
     pub default_rows: u16,
-    /// 输出缓冲刷新间隔（毫秒）- 合并多条输出减少 WebSocket 消息数
+    /// 远程通道输出缓冲刷新间隔（毫秒）- 仅 merge_output 开启时生效；
+    /// 桌面本地（环回）通道零缓冲直通，不受此值影响
     pub flush_interval_ms: u64,
-    /// 最大输出缓冲大小（字节）- 达到此大小立即刷新
+    /// 服务端输出合并开关：开启后远程通道按 flush_interval_ms 合并输出
+    /// 减少 WS 消息数；默认关闭（所有通道零缓冲直通，延迟最优）
+    pub merge_output: bool,
+    /// 最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新
     pub max_buffer_size: usize,
     /// PTY 读取缓冲区大小（字节）- 单次读取的最大字节数
     pub read_buffer_size: usize,
@@ -382,7 +388,8 @@ impl Default for TerminalConfig {
         Self {
             default_cols: 120,
             default_rows: 40,
-            flush_interval_ms: 50,
+            flush_interval_ms: 20,
+            merge_output: true,
             max_buffer_size: 64 * 1024,
             read_buffer_size: 4096,
         }
@@ -545,7 +552,8 @@ impl AppConfig {
             terminal: TerminalConfig {
                 default_cols: parse_value(props, "terminal.default_cols", 120),
                 default_rows: parse_value(props, "terminal.default_rows", 40),
-                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 50),
+                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 20),
+                merge_output: parse_value(props, "terminal.merge_output", true),
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
             },

@@ -22,7 +22,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }

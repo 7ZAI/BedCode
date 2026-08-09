@@ -77,7 +77,7 @@ impl RequestResponseManager {
             _ => message.message_id().map(|s| s.to_string()),
         };
 
-        tracing::info!(
+        tracing::debug!(
             "[RequestResponseManager] Trying to match message, type={}, id={:?}, pending_count={}",
             message.message_type().unwrap_or("unknown"),
             id,
@@ -87,7 +87,7 @@ impl RequestResponseManager {
         if let Some(id) = id {
             let pending_count_before = self.pending.lock().await.len();
             if let Some(pending) = self.pending.lock().await.remove(&id) {
-                tracing::info!("[RequestResponseManager] ✓ Matched pending request for id={}", id);
+                tracing::debug!("[RequestResponseManager] ✓ Matched pending request for id={}", id);
                 let _ = pending.tx.send(Ok(message));
                 return None;  // 已匹配，不返回消息
             } else {
