@@ -26,5 +26,14 @@ pub const PLUGIN_HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// 流式请求不设总超时（长连接不应被截断），仅受连接超时约束
 pub const PLUGIN_HTTP_TIMEOUT_SECS: u64 = 120;
 
+/// 插件 HTTP 代理非流式响应体上限（字节）
+///
+/// 非流式 `http_fetch` 响应体会经 canonical ABI 拷入插件线性内存并由插件
+/// serde 解析（guest 指令，消耗单次导出调用 fuel 预算）。无上限响应体可能耗尽
+/// fuel 触发 trap 污染 Store（`CannotEnterComponent`）；大载荷必须走
+/// `stream:true` 流式模式（宿主后台任务经事件逐 chunk 推送，不经 guest 内存）。
+/// 32MB 对目录列举/元数据绰绰有余（guest 解析约几 G 指令，远低于 FUEL_PER_CALL 64G）。
+pub const PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+
 /// 环境变量：BedCode PTY 会话 ID
 pub const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";

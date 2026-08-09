@@ -3,9 +3,18 @@
 //! 宿主侧工具函数 — SQL 表名校验、数据库列转换、HTTP 代理执行
 //! 从原 host_context.rs 迁移核心逻辑，适配 WASM Host Function 调用模式
 
+use futures_util::StreamExt;
 use regex::Regex;
 use serde::Deserialize;
 use tauri::Emitter;
+
+/// 非流式 `http_fetch` 响应体上限（字节）
+///
+/// 响应体会拷入 guest 线性内存并由插件 serde 解析（guest 指令，消耗单次调用
+/// fuel 预算）；无上限响应体可能耗尽 fuel 触发 trap。大载荷必须走
+/// `stream:true` 流式模式（宿主后台任务经事件逐 chunk 推送，不经 guest 内存）。
+/// 32MB 对目录列举/元数据绰绰有余（guest 解析约几 G 指令，远低于 FUEL_PER_CALL）。
+const PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 // ==================== SQL Table Name Validation ====================
 
@@ -179,7 +188,25 @@ pub async fn execute_http_request(
         .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_str().unwrap_or("").to_string())))
         .collect();
 
-    let resp_body = response.text().await?;
+    // 响应体带上限流式读取：防止无上限响应体拷入 guest 内存 + guest serde 解析
+    // 耗尽单次调用 fuel 预算（触发 trap）。超限立即中止连接并报错，
+    // 引导插件改用 stream:true（宿主后台任务经事件逐 chunk 推送，不经 guest 内存）。
+    let mut body_bytes = Vec::new();
+    let mut body_stream = response.bytes_stream();
+    while let Some(chunk) = body_stream.next().await {
+        let chunk = chunk
+            .map_err(|e| anyhow::anyhow!("http error: read response body failed: {}", e))?;
+        if body_bytes.len() + chunk.len() > PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES {
+            return Err(anyhow::anyhow!(
+                "http error: response body exceeds {} bytes limit (use stream:true for large payloads)",
+                PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES
+            ));
+        }
+        body_bytes.extend_from_slice(&chunk);
+    }
+    let resp_body = String::from_utf8(body_bytes).map_err(|e| {
+        anyhow::anyhow!("http error: response body is not UTF-8: {}", e)
+    })?;
 
     Ok(serde_json::json!({
         "status": status,
@@ -201,8 +228,6 @@ pub async fn execute_streaming_http(
     stream_event: &str,
     plugin_id: &str,
 ) -> anyhow::Result<()> {
-    use futures_util::StreamExt;
-
     let method = request
         .get("method")
         .and_then(|v| v.as_str())
@@ -375,6 +400,72 @@ fn as_string_map(value: &serde_json::Value) -> Option<std::collections::HashMap<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// 禁用系统代理对 loopback 的干扰（Windows 全局代理可能拦截测试请求）
+    fn disable_proxy_for_loopback() {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    }
+
+    /// 极简 mock HTTP 服务器：返回固定 body，响应后关闭连接
+    async fn spawn_mock_server(body: Vec<u8>) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
+            }
+        });
+        addr
+    }
+
+    /// 正常小响应体：完整返回，不受上限影响
+    #[tokio::test]
+    async fn http_fetch_small_response_ok() {
+        disable_proxy_for_loopback();
+        let addr = spawn_mock_server(b"{\"ok\":true}".to_vec()).await;
+        let resp = execute_http_request(&json!({
+            "method": "GET",
+            "url": format!("http://{}/small", addr),
+        }))
+        .await
+        .expect("small response must succeed");
+        assert_eq!(resp["status"], 200);
+        assert_eq!(resp["body"], "{\"ok\":true}");
+    }
+
+    /// 超限响应体：立即拒绝并报错引导 stream:true，绝不把大载荷交给 guest
+    /// （保证 guest 侧 serde 解析工作量有界 → 不可能耗尽 fuel 预算被 trap）
+    #[tokio::test]
+    async fn http_fetch_oversized_response_rejected() {
+        disable_proxy_for_loopback();
+        let addr =
+            spawn_mock_server(vec![0u8; PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES + 1]).await;
+        let err = execute_http_request(&json!({
+            "method": "GET",
+            "url": format!("http://{}/big", addr),
+        }))
+        .await
+        .expect_err("oversized response must be rejected");
+        assert!(
+            err.to_string().contains("exceeds"),
+            "error should mention size limit, got: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("stream:true"),
+            "error should guide to streaming mode, got: {}",
+            err
+        );
+    }
 
     #[test]
     fn test_sanitize_plugin_id() {
