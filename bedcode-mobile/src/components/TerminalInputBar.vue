@@ -1,6 +1,6 @@
 <template>
   <div
-    class="terminal-input-bar z-40"
+    class="terminal-input-bar z-10"
     :style="inputBarStyle"
   >
     <!-- 快捷键面板遮罩 - 点击终端区域关闭面板 -->

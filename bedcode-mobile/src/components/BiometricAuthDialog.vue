@@ -39,7 +39,7 @@
 
           <!-- Verify button -->
           <button
-            class="w-full py-3 rounded-xl text-sm font-medium transition-all duration-200 active:opacity-80"
+            class="w-full py-3 rounded-xl text-sm font-medium transition-opacity duration-200 active:opacity-80"
             :class="loading
               ? 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-muted)]'
               : 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'"

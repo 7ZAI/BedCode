@@ -24,7 +24,7 @@
           <label class="group-row-sub">{{ t(editingTask ? 'mobile.toolbox.editTask' : 'mobile.toolbox.taskContent') }}</label>
           <button
             v-if="!hasAiTemplate"
-            class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition-all active:scale-95"
+            class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition-transform active:scale-95"
             style="background: var(--mobile-accent-secondary); border: 1px solid var(--mobile-border-active); color: var(--mobile-accent)"
             @click="insertAiTemplate"
           >
@@ -105,7 +105,7 @@
             </Transition>
           </div>
           <button
-            class="flex-shrink-0 flex items-center justify-center p-1.5 rounded-lg transition-all active:scale-[0.98]"
+            class="flex-shrink-0 flex items-center justify-center p-1.5 rounded-lg transition-transform active:scale-[0.98]"
             style="
               background: var(--mobile-accent-secondary);
               border: 1px solid var(--mobile-border-active);
@@ -139,7 +139,7 @@
         ></textarea>
 
         <button
-          class="w-full h-11 rounded-xl text-sm font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+          class="w-full h-11 rounded-xl text-sm font-medium transition-transform active:scale-[0.98] flex items-center justify-center gap-2"
           :class="{ 'opacity-50': !draftContent.trim() }"
           style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
           :disabled="!draftContent.trim()"
@@ -201,7 +201,7 @@
             </div>
 
             <button
-              class="w-full mt-4 h-10 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+              class="w-full mt-4 h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
               style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
               @click="showSessionPicker = false"
             >
@@ -224,14 +224,14 @@
 
             <div class="flex gap-3">
               <button
-                class="flex-1 h-10 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+                class="flex-1 h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
                 style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
                 @click="showConfirmDialog = false"
               >
                 {{ t('common.button.cancel') }}
               </button>
               <button
-                class="flex-1 h-10 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+                class="flex-1 h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
                 style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
                 @click="doExecute"
               >
@@ -248,7 +248,7 @@
       <Transition name="center-modal">
         <div
           v-if="showFileExplorer && fileExplorerSessionId"
-          class="fixed inset-0 z-[120] flex items-center justify-center p-4 mobile-ui"
+          class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui"
         >
           <div class="absolute inset-0" style="background: var(--mobile-overlay-heavy)" @click="showFileExplorer = false"></div>
           <div

@@ -61,7 +61,7 @@ defineEmits<{
 }
 
 .confirm-text {
-  font-size: clamp(0.8125rem, 1rem + (100vw - 360px) / 840 * 0.125rem, 1.125rem);
+  font-size: clamp(0.8125rem, 1rem + (100vw - 360px) / 840 * 2, 1.125rem);
   color: var(--mobile-text-primary);
   margin: 0 0 1.25rem;
 }
@@ -75,7 +75,7 @@ defineEmits<{
   flex: 1;
   padding: clamp(0.625rem, 0.75rem, 1rem);
   border-radius: 0.5rem;
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

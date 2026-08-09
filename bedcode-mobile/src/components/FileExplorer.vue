@@ -313,6 +313,11 @@ watch(
 </script>
 
 <style scoped>
+/* 文件浏览器可嵌入会话/任务面板，以自身宽度为容器进行流式缩放 */
+:root {
+  container-type: inline-size;
+}
+
 /* ==================== Header ==================== */
 
 .explorer-header {
@@ -364,7 +369,7 @@ watch(
 }
 
 .header-lang-badge {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
@@ -620,7 +625,7 @@ watch(
 }
 
 .code-md-preview :deep(h1) {
-  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 840 * 0.125rem, 1.5rem);
+  font-size: clamp(1.25rem, 1.375rem + (100cqw - 360px) / 840 * 2, 1.5rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin: 0 0 0.75rem;

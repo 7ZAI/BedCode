@@ -88,7 +88,7 @@ export default {
       noDevices: '未发现附近设备',
       noDevicesHint: '请确保桌面端正在运行且处于同一局域网',
       deviceFound: '发现 {count} 台设备',
-      connectToDevice: '连接此设备',
+      connectToDevice: '连接',
       stopScan: '停止扫描',
       restartScan: '重新扫描',
       scanTimeout: '扫描超时，未发现设备',

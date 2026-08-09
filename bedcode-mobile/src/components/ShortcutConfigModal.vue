@@ -604,7 +604,7 @@ watch(() => props.visible, (show) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   border-radius: 9999px;
   background: var(--mobile-accent-muted);
@@ -614,7 +614,7 @@ watch(() => props.visible, (show) => {
 /* ==================== 快捷键列表 ==================== */
 
 .section-title {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;

@@ -1,6 +1,6 @@
 <template>
   <div
-    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl overflow-hidden transition-all duration-300 hover:border-[var(--mobile-border-hover)]"
+    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl overflow-hidden transition-colors duration-300 hover:border-[var(--mobile-border-hover)]"
   >
     <div class="p-4">
       <div class="flex items-center gap-3">

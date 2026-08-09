@@ -88,7 +88,7 @@ export default {
       noDevices: 'No devices found',
       noDevicesHint: 'Make sure desktop is running on the same network',
       deviceFound: '{count} device(s) found',
-      connectToDevice: 'Connect to this device',
+      connectToDevice: 'Connect',
       stopScan: 'Stop Scan',
       restartScan: 'Scan Again',
       scanTimeout: 'Scan timed out, no devices found',

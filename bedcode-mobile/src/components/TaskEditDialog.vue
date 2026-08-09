@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="center-modal">
-      <div v-if="visible" class="fixed inset-0 z-[110] flex items-center justify-center p-4 mobile-ui">
+      <div v-if="visible" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui">
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="emit('close')"></div>
         <div class="relative w-full max-w-lg bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl max-h-[85vh] flex flex-col modal-panel">
           <div class="flex items-center justify-between mb-4 flex-shrink-0">
@@ -55,7 +55,7 @@
                 </Transition>
               </div>
               <button
-                class="p-1.5 rounded-lg bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-all duration-150 flex-shrink-0"
+                class="p-1.5 rounded-lg bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-[background-color,transform] duration-150 flex-shrink-0"
                 :disabled="!fileExplorerSessionId"
                 @click="showFileExplorer = true"
               >
@@ -73,7 +73,7 @@
                 <label class="text-[var(--mobile-text-muted)] text-sm">{{ t('mobile.toolbox.taskContent') }}</label>
                 <button
                   v-if="!hasAiTemplate"
-                  class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] active:scale-[0.95] transition-all duration-150"
+                  class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] active:scale-[0.95] transition-transform duration-150"
                   @click="insertAiTemplate"
                 >
                   <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,7 +100,7 @@
               {{ t('common.button.cancel') }}
             </button>
             <button
-              class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-all duration-150"
+              class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-transform duration-150"
               :class="{ 'opacity-50': !form.content }"
               :disabled="!form.content"
               @click="handleSave"
@@ -116,7 +116,7 @@
   <!-- File Explorer Dialog (层级高于 Edit Dialog) -->
   <Teleport to="body">
     <Transition name="center-modal">
-      <div v-if="showFileExplorer && fileExplorerSessionId" class="fixed inset-0 z-[120] flex items-center justify-center p-[10%] mobile-ui">
+      <div v-if="showFileExplorer && fileExplorerSessionId" class="fixed inset-0 z-[100] flex items-center justify-center p-[10%] mobile-ui">
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showFileExplorer = false"></div>
         <div class="relative w-full h-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl shadow-xl overflow-hidden flex flex-col modal-panel">
           <FileExplorer

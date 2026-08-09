@@ -1,7 +1,7 @@
-# 宿主 mobile.css 无效 calc 模式修复（待执行）
+# 宿主 mobile.css 无效 calc 模式修复
 
 - **Type:** task
-- **Status:** ready-for-agent
+- **Status:** resolved
 - **发现:** 2025-08-09（file-transfer 插件 UI 优化期间）
 
 ## 问题描述
@@ -44,3 +44,21 @@ CSS 规范（css-values-4）规定 `*` 运算符两侧至少一侧必须为 `<nu
 ## Comments
 
 - 2025-08-09：用户在插件优化期间确认此问题存在，先记录待执行；当前优先完成 file-transfer 插件 UI 优化与 mock 数据填充。
+
+## Answer
+
+2025-08-10 执行完毕，全部按映射表替换（rem→px，@16px root）：
+
+| 位置 | 替换数 | 说明 |
+|------|--------|------|
+| `bedcode-mobile/src/styles/mobile.css` | 23 | 文档计数 22，实测 23 处全部替换 |
+| 宿主 `bedcode-mobile/src/components/*` + `views/*`（12 个 .vue） | 31 | 同类 bug 未列文档，一并修复 |
+| `bedcode-mobile/packages/plugin-sdk-mobile/src/ui/Select.vue` | 2 | 0.5rem→*8、0.25rem→*4，漏网修复 |
+| `bedcode-mobile/plugins/auto-task/src/panel.css` | 1 | 漏网修复 |
+| `.agents/skills/frontend-styles/`（SKILL.md / MOBILE.md / TOKENS.md） | 10 | 文档示例同步修正 |
+
+`bedcode-desktop/` 核查无同类模式。
+
+验证：
+- `vue-tsc --noEmit` 通过（bedcode-mobile）
+- Chrome headless 实测四种换算（*2 / 省略 1px / *4 / *40）计算值与公式逐位一致，clamp 上下限命中

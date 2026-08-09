@@ -86,19 +86,24 @@ function handleDelete() {
 </script>
 
 <style scoped>
-/* 操作按钮：自适应大小（手机紧凑、平板略大），触控区不小于 32px */
+/* 卡片可嵌入列表/面板，以自身宽度为容器进行流式缩放 */
+:root {
+  container-type: inline-size;
+}
+
+/* 操作按钮：自适应大小（手机紧凑、平板略大），触控区不小于 44px */
 .action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(0.3125rem, 0.375rem + (100vw - 360px) / 800 * 0.0625rem, 0.4375rem);
+  padding: clamp(0.3125rem, 0.375rem + (100cqw - 360px) / 800, 0.4375rem);
   border-radius: 0.625rem;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease;
   cursor: pointer;
   border: none;
   background: transparent;
-  min-width: 2rem;
-  min-height: 2rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
 }
 
 .action-btn:active {
@@ -107,8 +112,8 @@ function handleDelete() {
 }
 
 .action-icon {
-  width: clamp(1rem, 1.125rem + (100vw - 360px) / 800 * 0.0625rem, 1.25rem);
-  height: clamp(1rem, 1.125rem + (100vw - 360px) / 800 * 0.0625rem, 1.25rem);
+  width: clamp(1rem, 1.125rem + (100cqw - 360px) / 800, 1.25rem);
+  height: clamp(1rem, 1.125rem + (100cqw - 360px) / 800, 1.25rem);
   flex-shrink: 0;
 }
 

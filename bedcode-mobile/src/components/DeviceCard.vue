@@ -1,6 +1,6 @@
 <template>
   <div
-    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 flex items-center gap-3 shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-all duration-300 cursor-pointer group"
+    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 flex items-center gap-3 shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-[border-color,box-shadow] duration-300 cursor-pointer group active:opacity-90"
     @click="$emit('click')"
   >
     <!-- Icon -->

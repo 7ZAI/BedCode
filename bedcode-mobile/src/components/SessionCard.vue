@@ -24,7 +24,7 @@
 
     <button
       v-if="session.status !== 'stopped'"
-      class="ml-1 w-8 h-8 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
+      class="ml-1 w-11 h-11 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
       style="background: color-mix(in srgb, var(--mobile-chip-red) 16%, transparent); color: var(--mobile-chip-red); border: 1px solid color-mix(in srgb, var(--mobile-chip-red) 35%, transparent)"
       @click.stop="$emit('stop')"
       :title="t('mobile.sessionCard.stopSession')"
@@ -35,7 +35,7 @@
     </button>
     <button
       v-else
-      class="ml-1 w-8 h-8 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
+      class="ml-1 w-11 h-11 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
       style="background: var(--mobile-chip-zinc-bg); color: var(--mobile-chip-zinc)"
       @click.stop="$emit('delete')"
       :title="t('mobile.sessionCard.deleteSession')"

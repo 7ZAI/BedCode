@@ -11,7 +11,7 @@
         <button
           v-for="cat in categories"
           :key="cat.key"
-          class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+          class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
           @click="router.push({ name: cat.route })"
         >
           <div class="flex items-center gap-3">
@@ -31,7 +31,7 @@
       <!-- Footer Actions -->
       <div class="mt-6 flex flex-col items-center gap-3">
         <button
-          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-text-secondary)] bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] transition-all duration-200 hover:bg-[var(--mobile-bg-secondary)] hover:text-[var(--mobile-text-primary)] hover:border-[var(--mobile-border-hover)] active:scale-[0.98] active:opacity-80"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-text-secondary)] bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] transition-colors duration-200 hover:bg-[var(--mobile-bg-secondary)] hover:text-[var(--mobile-text-primary)] hover:border-[var(--mobile-border-hover)] active:scale-[0.98] active:opacity-80"
           @click="resetSettings"
         >
           <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -40,7 +40,7 @@
           {{ $t('settings.actions.resetSettings') }}
         </button>
         <button
-          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-error)] bg-[var(--mobile-error-muted)] border danger-action-btn transition-all duration-200 active:scale-[0.98] active:opacity-80"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-error)] bg-[var(--mobile-error-muted)] border danger-action-btn transition-colors duration-200 active:scale-[0.98] active:opacity-80"
           @click="clearData"
         >
           <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

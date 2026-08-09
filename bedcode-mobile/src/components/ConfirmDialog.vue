@@ -58,7 +58,7 @@
                 'flex-1 rounded-xl font-medium active:opacity-80 transition-colors duration-200 confirm-btn-height',
                 loading ? 'opacity-50 pointer-events-none' : '',
                 variant === 'danger'
-                  ? 'bg-[var(--mobile-danger-solid-bg)] text-white'
+                  ? 'bg-[var(--mobile-danger-solid-bg)] text-[var(--mobile-text-on-accent)]'
                   : 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'
               ]"
               :disabled="loading"

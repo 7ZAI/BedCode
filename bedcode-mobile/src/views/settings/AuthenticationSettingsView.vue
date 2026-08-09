@@ -8,7 +8,7 @@
           <button
             v-for="method in authMethods"
             :key="method.value"
-            class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-sm font-medium transition-all duration-200 active:opacity-80"
+            class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-sm font-medium transition-opacity duration-200 active:opacity-80"
             :class="settings.preferredAuthMethod === method.value
               ? 'bg-[color:color-mix(in_srgb,var(--mobile-accent)_15%,transparent)] border-[var(--mobile-accent)] text-[var(--mobile-accent)]'
               : 'bg-[var(--mobile-bg-elevated)] border-[var(--mobile-border)] text-[var(--mobile-text-secondary)]'"
@@ -47,7 +47,7 @@
 
         <button
           v-if="deviceSupported"
-          class="w-full py-3 rounded-xl text-sm font-medium transition-all duration-200 active:opacity-80"
+          class="w-full py-3 rounded-xl text-sm font-medium transition-opacity duration-200 active:opacity-80"
           :class="hasKey
             ? 'bg-[var(--mobile-bg-elevated)] border border-[color:color-mix(in_srgb,var(--mobile-error)_40%,transparent)] text-[var(--mobile-error)]'
             : 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'"

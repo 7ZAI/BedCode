@@ -53,7 +53,7 @@
   --mobile-terminal-header: rgba(18, 18, 26, 0.9);
 
   /* 导航栏 */
-  --mobile-nav-bg: rgba(10, 10, 15, 0.95);
+  --mobile-nav-bg: rgba(10, 10, 15, 0.9);
   --mobile-nav-border: rgba(34, 211, 238, 0.2);
   --mobile-nav-active: #00d4ff;
   --mobile-nav-inactive: #6b7280;
@@ -63,6 +63,11 @@
   --mobile-input-border: rgba(139, 233, 253, 0.25);
   --mobile-input-focus: rgba(139, 233, 253, 0.45);
   --mobile-input-placeholder: #5c5c6d;
+
+  /* 触控目标最小尺寸（恒常值，不随屏幕缩放） */
+  --mobile-input-height: 44px;
+  --mobile-nav-item-height: 44px;
+  --mobile-touch-target-min: 44px;
 
   /* 代码查看器 */
   --mobile-code-gutter-bg: rgba(255, 255, 255, 0.04);
@@ -203,7 +208,7 @@ html:not(.dark) .mobile-app {
   --mobile-terminal-header: rgba(238, 241, 245, 0.95);
 
   /* 导航栏 */
-  --mobile-nav-bg: rgba(255, 255, 255, 0.95);
+  --mobile-nav-bg: rgba(255, 255, 255, 0.9);
   --mobile-nav-border: rgba(15, 23, 42, 0.1);
   --mobile-nav-active: #0891b2;
   --mobile-nav-inactive: #94a3b8;
@@ -315,12 +320,12 @@ html:not(.dark) .mobile-app {
 .mobile-app {
   /* --mobile-font-scale：外观设置字体大小档位驱动（normal=1 / large=1.125 / xlarge=1.25），
      useMobileSettings 在 html 上写入 inline 值，未设置时回退 1 */
-  --font-size-xs: calc(clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem) * var(--mobile-font-scale, 1));      /* 9 / 10 / 12px */
-  --font-size-sm: calc(clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem) * var(--mobile-font-scale, 1));      /* 11 / 12 / 14px */
-  --font-size-base: calc(clamp(0.8125rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem) * var(--mobile-font-scale, 1));       /* 13 / 14 / 16px */
-  --font-size-lg: calc(clamp(0.9375rem, 1rem + (100vw - 360px) / 840 * 0.125rem, 1.125rem) * var(--mobile-font-scale, 1));         /* 15 / 16 / 18px */
-  --font-size-xl: calc(clamp(1.0625rem, 1.125rem + (100vw - 360px) / 840 * 0.125rem, 1.25rem) * var(--mobile-font-scale, 1));      /* 17 / 18 / 20px */
-  --font-size-2xl: calc(clamp(1.375rem, 1.5rem + (100vw - 360px) / 840 * 0.125rem, 1.625rem) * var(--mobile-font-scale, 1));       /* 22 / 24 / 26px */
+  --font-size-xs: calc(clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem) * var(--mobile-font-scale, 1));      /* 9 / 10 / 12px */
+  --font-size-sm: calc(clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem) * var(--mobile-font-scale, 1));      /* 11 / 12 / 14px */
+  --font-size-base: calc(clamp(0.8125rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem) * var(--mobile-font-scale, 1));       /* 13 / 14 / 16px */
+  --font-size-lg: calc(clamp(0.9375rem, 1rem + (100vw - 360px) / 840 * 2, 1.125rem) * var(--mobile-font-scale, 1));         /* 15 / 16 / 18px */
+  --font-size-xl: calc(clamp(1.0625rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem) * var(--mobile-font-scale, 1));      /* 17 / 18 / 20px */
+  --font-size-2xl: calc(clamp(1.375rem, 1.5rem + (100vw - 360px) / 840 * 2, 1.625rem) * var(--mobile-font-scale, 1));       /* 22 / 24 / 26px */
 }
 
 /* text-2xl：style.css 未映射，补充一条流式规则（用于 emoji 图标等大字号） */
@@ -379,7 +384,7 @@ html:not(.dark) .mobile-app {
 }
 
 .mobile-loading-text {
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
   color: var(--mobile-text-muted);
   margin: 0;
 }
@@ -398,7 +403,7 @@ html:not(.dark) .mobile-app {
 /* ==================== 分组卡片通用语言 ==================== */
 
 .group-section-title {
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800 * 0.0625rem, 0.75rem);
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -439,23 +444,23 @@ button.group-row:active,
 }
 
 .group-row-title {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800 * 0.0625rem, 1rem);
+  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
   font-weight: 500;
   color: var(--mobile-row-title);
 }
 
 .group-row-label {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800 * 0.0625rem, 1rem);
+  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
   color: var(--mobile-row-title);
 }
 
 .group-row-sub {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   color: var(--mobile-row-sub);
 }
 
 .group-row-value {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800 * 0.0625rem, 0.875rem);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
   color: var(--mobile-row-value);
 }
 
@@ -465,8 +470,8 @@ button.group-row:active,
   display: flex;
   align-items: center;
   justify-content: center;
-  width: clamp(2rem, 2.25rem + (100vw - 360px) / 800 * 0.25rem, 2.5rem);
-  height: clamp(2rem, 2.25rem + (100vw - 360px) / 800 * 0.25rem, 2.5rem);
+  width: clamp(2rem, 2.25rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  height: clamp(2rem, 2.25rem + (100vw - 360px) / 800 * 4, 2.5rem);
   border-radius: 0.625rem;
   flex-shrink: 0;
 }
@@ -485,7 +490,7 @@ button.group-row:active,
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.0625rem, 0.75rem);
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
   font-weight: 600;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
@@ -510,14 +515,14 @@ button.group-row:active,
 /* ==================== 页面标题 ==================== */
 
 .page-title {
-  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 800 * 0.125rem, 1.5rem);
+  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 800 * 2, 1.5rem);
   font-weight: 600;
   letter-spacing: -0.025em;
   color: var(--mobile-text-primary);
 }
 
 .page-subtitle {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800 * 0.0625rem, 0.8125rem);
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   color: var(--mobile-text-muted);
   margin-top: 0.125rem;
 }
@@ -538,7 +543,7 @@ button.group-row:active,
 
 /* 分组标题 */
 .settings-section-title {
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.0625rem, 0.75rem);
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -580,19 +585,19 @@ button.settings-row:active {
 }
 
 .settings-label {
-  font-size: clamp(0.8125rem, 0.9375rem + (100vw - 360px) / 840 * 0.0625rem, 1rem);
+  font-size: clamp(0.8125rem, 0.9375rem + (100vw - 360px) / 840, 1rem);
   color: var(--mobile-text-primary);
 }
 
 .settings-desc {
   /* 说明文字：比 settings-label 小一号，手机上 10px 起、平板 11px 封顶 */
-  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.0625rem, 0.6875rem);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840, 0.6875rem);
   color: var(--mobile-text-muted);
   margin-top: 0.125rem;
 }
 
 .settings-value {
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
   color: var(--mobile-text-secondary);
 }
 
@@ -602,7 +607,7 @@ button.settings-row:active {
   -webkit-appearance: none;
   min-width: 7.5rem;
   padding: 0.4375rem 2rem 0.4375rem 0.75rem;
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
   color: var(--mobile-text-primary);
   background-color: var(--mobile-input-bg);
   border: 1px solid var(--mobile-input-border);
@@ -623,7 +628,7 @@ button.settings-row:active {
 .settings-number-input {
   width: 4.5rem;
   padding: 0.4375rem 0.5rem;
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.0625rem, 0.9375rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
   text-align: center;
   color: var(--mobile-text-primary);
   background: var(--mobile-input-bg);

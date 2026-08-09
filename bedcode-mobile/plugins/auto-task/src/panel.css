@@ -42,7 +42,7 @@
 }
 
 .atp-panel-title {
-  font-size: clamp(0.9375rem, 1.0625rem + (100vw - 360px) / 840 * 0.125rem, 1.1875rem);
+  font-size: clamp(0.9375rem, 1.0625rem + (100vw - 360px) / 840 * 2, 1.1875rem);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin: 0;

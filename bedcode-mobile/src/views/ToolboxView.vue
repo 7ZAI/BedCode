@@ -31,7 +31,7 @@
         <div class="pt-2 space-y-3">
           <!-- 预设任务入口 -->
           <button
-            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
             @click="router.push({ name: 'mobile-preset-tasks' })"
           >
             <div class="flex items-start gap-3">
@@ -54,7 +54,7 @@
           <button
             v-for="view in pluginRegistry.toolboxViews.value"
             :key="`${view.pluginId}:${view.viewId}`"
-            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
             @click="activePluginView = view"
           >
             <PluginViewHost

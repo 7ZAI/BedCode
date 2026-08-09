@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed z-[999]" :style="floatingStyle">
+  <div class="fixed z-30" :style="floatingStyle">
     <!-- 悬浮球 -->
     <button
       ref="btnRef"
@@ -56,7 +56,7 @@
           <button class="px-4 py-2 text-sm text-[var(--mobile-text-secondary)]" @click="showInput = false">{{ t('common.button.cancel') }}</button>
           <div class="flex gap-2">
             <button class="px-4 py-2 text-sm bg-[var(--mobile-input-bg)] rounded-lg" :disabled="!inputText.trim()" @click="onSubmit">{{ t('common.button.send') }}</button>
-            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-white rounded-lg" :disabled="!inputText.trim()" @click="onExecute">{{ t('common.button.execute') }}</button>
+            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] rounded-lg" :disabled="!inputText.trim()" @click="onExecute">{{ t('common.button.execute') }}</button>
           </div>
         </div>
       </div>

@@ -54,7 +54,7 @@
       <div v-if="isConnected" class="pb-8">
         <div class="pt-2 space-y-3">
           <!-- Connected device info + disconnect（同行，断开按钮位于卡片右侧） -->
-          <div v-if="currentDevice" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 transition-all duration-300">
+          <div v-if="currentDevice" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 transition-colors duration-300">
             <div class="flex items-center gap-3">
               <span class="device-icon chip-emerald">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -67,7 +67,7 @@
               </div>
               <!-- 断开按钮：与连接信息同行，不独占一行 -->
               <button
-                class="flex-shrink-0 h-11 px-3.5 rounded-xl flex items-center gap-1.5 chip-red font-medium text-sm transition-all duration-300 active:opacity-80 hover:opacity-90"
+                class="flex-shrink-0 h-11 px-3.5 rounded-xl flex items-center gap-1.5 chip-red font-medium text-sm transition-opacity duration-300 active:opacity-80 hover:opacity-90"
                 @click="handleDisconnect"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -164,7 +164,7 @@
             <button
               v-for="item in connectionHistory"
               :key="item.address"
-              class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+              class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
               @click="handleConnectFromHistory(item)"
             >
               <div class="flex items-center gap-3">
@@ -282,7 +282,7 @@
       <Transition name="fade">
         <div
           v-if="showPairingLoading"
-          class="fixed inset-0 z-[9999] flex items-center justify-center backdrop-blur-sm mobile-ui"
+          class="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm mobile-ui"
           style="background: var(--mobile-overlay)"
         >
           <div class="rounded-2xl p-6 shadow-xl flex flex-col items-center gap-4 min-w-[200px]" style="background: var(--mobile-group-bg)">
@@ -809,7 +809,7 @@ function handleNavigateToFiles(config: SessionConfigSummary) {
 <style scoped>
 /* 标题下连接状态小字：比 page-subtitle 默认更小，手机上 10px、平板 11px */
 .connection-status-subtitle {
-  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.0625rem, 0.6875rem);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840, 0.6875rem);
 }
 
 /* 设备图标容器：与 PluginIcon md 尺寸一致（48px, rounded-xl） */

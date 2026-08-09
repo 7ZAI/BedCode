@@ -4,7 +4,7 @@
     <div class="page-header flex-shrink-0">
       <div class="flex items-center gap-3">
         <button
-          class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
+          class="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
           style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
           @click="goBack"
         >
@@ -157,8 +157,8 @@ onUnmounted(() => {
 <style scoped>
 /* 紧凑设备卡片：以手机宽度 360px 为基准缩放（360px 取最小值），窄屏不拥挤、平板温和放大 */
 .device-row {
-  gap: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem);
-  padding: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 0.125rem, 0.75rem) 0.75rem;
+  gap: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem);
+  padding: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem) 0.75rem;
   min-height: 3rem;
 }
 
@@ -166,14 +166,14 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.25rem, 2rem);
-  height: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 0.25rem, 2rem);
-  border-radius: clamp(0.375rem, 0.4375rem + (100vw - 360px) / 840 * 0.0625rem, 0.5rem);
+  width: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 4, 2rem);
+  height: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 4, 2rem);
+  border-radius: clamp(0.375rem, 0.4375rem + (100vw - 360px) / 840, 0.5rem);
   flex-shrink: 0;
 }
 
 .device-name {
-  font-size: clamp(0.7813rem, 0.8125rem + (100vw - 360px) / 840 * 0.0625rem, 0.875rem);
+  font-size: clamp(0.7813rem, 0.8125rem + (100vw - 360px) / 840, 0.875rem);
   font-weight: 500;
   line-height: 1.2;
   color: var(--mobile-row-title);
@@ -181,15 +181,15 @@ onUnmounted(() => {
 
 .device-addr {
   margin-top: 0.125rem;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840 * 0.0625rem, 0.75rem);
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
   line-height: 1.2;
   color: var(--mobile-row-sub);
 }
 
 .device-badge {
   flex-shrink: 0;
-  padding: 0.125rem clamp(0.3125rem, 0.4rem + (100vw - 360px) / 840 * 0.0625rem, 0.5rem);
-  font-size: clamp(0.5rem, 0.5625rem + (100vw - 360px) / 840 * 0.0625rem, 0.625rem);
+  padding: 0.125rem clamp(0.3125rem, 0.4rem + (100vw - 360px) / 840, 0.5rem);
+  font-size: clamp(0.5rem, 0.5625rem + (100vw - 360px) / 840, 0.625rem);
   font-weight: 600;
   line-height: 1.4;
   border-radius: 999px;

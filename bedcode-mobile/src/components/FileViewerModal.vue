@@ -269,7 +269,7 @@ watch(
 }
 
 .viewer-lang-badge {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
@@ -536,7 +536,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h1) {
-  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 840 * 0.125rem, 1.5rem);
+  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 840 * 2, 1.5rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin: 0 0 0.75rem;

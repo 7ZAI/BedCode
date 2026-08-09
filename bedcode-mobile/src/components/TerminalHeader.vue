@@ -230,7 +230,7 @@ function emitAction(key: string) {
   top: calc(100% + 4px);
   right: 0;
   /* 自适应宽度：手机窄屏 ~10.5rem，平板放大到 ~13rem，文字永不换行 */
-  min-width: clamp(10.5rem, 10.5rem + (100vw - 360px) / 800 * 2.5rem, 13rem);
+  min-width: clamp(10.5rem, 10.5rem + (100vw - 360px) / 800 * 40, 13rem);
   max-width: min(80vw, 16rem);
   background: var(--mobile-bg-secondary);
   border: 1px solid var(--mobile-border);
@@ -288,7 +288,7 @@ function emitAction(key: string) {
   border-radius: 0.25rem;
   background: color-mix(in srgb, var(--mobile-accent) 20%, transparent);
   color: var(--mobile-accent);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 500;
   letter-spacing: 0.02em;
   white-space: nowrap;

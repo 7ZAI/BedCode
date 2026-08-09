@@ -19,7 +19,7 @@
           <div class="flex items-center justify-between px-4 py-2">
             <span class="font-medium text-[var(--mobile-text-primary)]">{{ t('mobile.shortcut.title') }}</span>
             <button
-              class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
+              class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] active:opacity-70 transition-colors"
               @click="emit('close')"
             >
               <svg class="w-5 h-5 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">

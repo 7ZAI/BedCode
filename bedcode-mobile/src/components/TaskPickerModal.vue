@@ -196,7 +196,6 @@ async function handleEditSave(data: PresetTask | { content: string }) {
 }
 
 .modal-content {
-  --action-btn: clamp(1.75rem, 2rem, 2.5rem);
   --edit-btn: clamp(1.5rem, 1.75rem, 2rem);
   --row-px: clamp(0.5rem, 0.75rem, 1rem);
   --row-py: clamp(0.375rem, 0.625rem, 0.75rem);
@@ -232,8 +231,8 @@ async function handleEditSave(data: PresetTask | { content: string }) {
 }
 
 .add-btn {
-  width: var(--action-btn);
-  height: var(--action-btn);
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
   border-radius: 8px;
   border: none;
   background: var(--mobile-accent-muted);
@@ -339,8 +338,8 @@ async function handleEditSave(data: PresetTask | { content: string }) {
 }
 
 .send-btn {
-  width: var(--action-btn);
-  height: var(--action-btn);
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
   border-radius: 6px;
   border: none;
   background: var(--mobile-bg-secondary);
@@ -359,8 +358,8 @@ async function handleEditSave(data: PresetTask | { content: string }) {
 }
 
 .exec-btn {
-  width: var(--action-btn);
-  height: var(--action-btn);
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
   border-radius: 6px;
   border: none;
   background: var(--mobile-accent-muted);

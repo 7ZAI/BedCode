@@ -232,7 +232,7 @@ function submit() {
 }
 
 .key-btn--small-text {
-  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem);
+  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   color: var(--mobile-text-secondary);
 }
 

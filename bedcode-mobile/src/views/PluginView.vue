@@ -2,7 +2,7 @@
   <div class="relative h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- ==================== 详情页 ==================== -->
     <Transition name="detail">
-      <div v-if="detailPlugin" class="absolute inset-0 z-40 flex flex-col" style="background: var(--mobile-bg-primary)">
+      <div v-if="detailPlugin" class="absolute inset-0 z-10 flex flex-col" style="background: var(--mobile-bg-primary)">
         <!-- Header -->
         <div class="page-header flex-shrink-0">
           <div class="flex items-center gap-3">
@@ -158,8 +158,8 @@
           <p class="page-subtitle">{{ $t('mobile.plugin.summary', { total: plugins.length, enabled: enabledCount }) }}</p>
         </div>
         <button
-          class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl text-white active:opacity-80 transition-opacity"
-          style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
+          class="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl text-[var(--mobile-text-on-accent)] active:opacity-80 transition-colors"
+          style="background: var(--mobile-accent)"
           :disabled="installing"
           @click="showInstallSheet = true"
         >
@@ -187,7 +187,7 @@
           <div
             v-for="plugin in plugins"
             :key="plugin.id"
-            class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-all duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
             :class="isErrorState(plugin.state) ? 'border-[color:color-mix(in_srgb,var(--mobile-danger-color)_25%,transparent)]' : 'border-[var(--mobile-border)]'"
             :style="!pluginEnabledStates[plugin.id] && !isErrorState(plugin.state) ? 'opacity: .8' : ''"
             @click="openDetail(plugin)"

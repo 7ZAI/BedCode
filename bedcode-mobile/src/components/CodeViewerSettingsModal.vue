@@ -250,7 +250,7 @@ function handleConfirm() {
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-primary);
-  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 0.125rem, 1.375rem);
+  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 2, 1.375rem);
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -267,7 +267,7 @@ function handleConfirm() {
 .size-value {
   flex: 1;
   text-align: center;
-  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 0.125rem, 1.25rem);
+  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -307,13 +307,13 @@ function handleConfirm() {
   padding: 0.5rem;
   border-radius: 0.375rem;
   text-align: center;
-  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem);
+  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 600;
   font-family: 'Fira Code', 'JetBrains Mono', monospace;
 }
 
 .theme-name {
-  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem);
+  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem);
   color: var(--mobile-text-muted);
 }
 
@@ -335,7 +335,7 @@ function handleConfirm() {
   background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
   color: var(--mobile-text-secondary);
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -367,7 +367,7 @@ function handleConfirm() {
 }
 
 .slider-value {
-  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 0.125rem, 1.25rem);
+  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -417,7 +417,7 @@ function handleConfirm() {
 }
 
 .slider-range-label {
-  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 0.125rem, 0.875rem);
+  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem);
   color: var(--mobile-text-muted);
   text-align: right;
 }
@@ -466,7 +466,7 @@ function handleConfirm() {
   flex: 1;
   padding: var(--footer-btn-py);
   border-radius: 0.5rem;
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 0.125rem, 1rem);
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

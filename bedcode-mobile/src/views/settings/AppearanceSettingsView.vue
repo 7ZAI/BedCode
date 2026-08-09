@@ -228,7 +228,7 @@ onMounted(loadSettings)
   border: none;
   background: transparent;
   color: var(--mobile-text-secondary);
-  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.0625rem, 0.6875rem);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840, 0.6875rem);
   white-space: nowrap;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -325,7 +325,7 @@ onMounted(loadSettings)
   display: flex;
   justify-content: space-between;
   margin-top: 0.25rem;
-  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 0.0625rem, 0.6875rem);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840, 0.6875rem);
   color: var(--mobile-text-disabled);
 }
 </style>

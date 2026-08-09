@@ -733,7 +733,7 @@ onUnmounted(() => {
 
 .branch-dropdown-title {
   padding: 0.5rem 0.75rem;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-text-muted);
   text-transform: uppercase;
@@ -1004,7 +1004,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   margin-top: 0.25rem;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-disabled);
 }
 
@@ -1118,7 +1118,7 @@ onUnmounted(() => {
 }
 
 .error-state .state-text {
-  color: var(--error, #ef4444);
+  color: var(--mobile-error);
 }
 
 .retry-btn {

@@ -4,7 +4,7 @@
     <div class="page-header flex-shrink-0">
       <div class="flex items-center gap-3">
         <button
-          class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
+          class="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
           style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
           @click="goBack"
         >

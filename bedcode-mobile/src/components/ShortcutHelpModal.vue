@@ -3,7 +3,7 @@
     <Transition name="bottom-sheet">
     <div
       v-if="visible"
-      class="fixed inset-0 z-[120] flex items-end justify-center mobile-ui"
+      class="fixed inset-0 z-[100] flex items-end justify-center mobile-ui"
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
@@ -12,7 +12,7 @@
         <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
           <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ $t('mobile.shortcutHelp.title') }}</span>
           <button
-            class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] transition-colors"
+            class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] active:opacity-70 transition-colors"
             @click="emit('close')"
           >
             <svg class="w-5 h-5 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -67,7 +67,7 @@ const renderedContent = computed(() => {
 }
 
 .md-body :deep(h1) {
-  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 0.125rem, 1.375rem);
+  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 2, 1.375rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin-bottom: 1rem;
