@@ -18,6 +18,10 @@ impl ClientRouteHandler for AuthHandler {
             match payload.stage {
                 AuthStage::Authenticated => {
                     if let Some(session_token) = payload.session_token {
+                        // 持久化为全局 token：桌面端文件服务公告约定不携带 token，
+                        // 插件经 host_filesrv_get_peer 读取的 peer token 依赖此兜底；
+                        // 不设置则插件 HTTP 调用无 Authorization 头，桌面端返回 401
+                        crate::state::set_global_token(&session_token);
                         tracing::info!("[AuthHandler] Authenticated");
                         ctx.emit(MobileEvent::AuthSuccess {
                             session_token,

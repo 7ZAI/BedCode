@@ -79,8 +79,15 @@ async fn apply_desktop_announce(port: u16, token: String, mounts: Vec<MountAnnou
     });
     peer.ip = target.address.clone();
     peer.port = port;
+    // 公告 token 优先；为空时以宿主全局 token 填充（含已有记录：
+    // 重新配对/重发 JWT 后 token 变更，不刷新将携带过期 token 导致 401）
     if !token.is_empty() {
         peer.token = token;
+    } else {
+        let current_token = crate::state::get_global_token();
+        if !current_token.is_empty() {
+            peer.token = current_token;
+        }
     }
     peer.mounts = mounts
         .into_iter()
