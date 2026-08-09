@@ -11,6 +11,7 @@ use crate::enums::control::{SessionConfigAction, SessionConfigPayload, SessionCo
 use crate::enums::file_service::FileServicePayload;
 use crate::enums::special_key::KeyCombo;
 use crate::enums::summary::SessionSummary;
+use crate::enums::SubscribeMode;
 use crate::enums::SyncPayload;
 
 // ==================== Ack 响应代码常量 ====================
@@ -252,6 +253,8 @@ impl Message {
                     is_waiting,
                     index,
                     end_index: None,
+                    start_offset: None,
+                    end_offset: None,
                 },
             },
         }
@@ -260,7 +263,8 @@ impl Message {
     /// 创建终端输出消息（使用已编码的 Base64 数据）
     /// 用于数据已经经过 Base64 编码的场景（如从 PTY 输出缓冲区转发）
     /// end_index 在合并多条事件时提供结束索引，前端可用其精确更新去重游标
-    pub fn output_from_base64(session_id: &str, data_base64: &str, is_waiting: bool, index: usize, end_index: Option<usize>) -> Self {
+    /// start_offset/end_offset 提供字节级游标（会话流坐标），供增量续传
+    pub fn output_from_base64(session_id: &str, data_base64: &str, is_waiting: bool, index: usize, end_index: Option<usize>, start_offset: Option<u64>, end_offset: Option<u64>) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
@@ -273,6 +277,8 @@ impl Message {
                     is_waiting,
                     index,
                     end_index,
+                    start_offset,
+                    end_offset,
                 },
             },
         }
@@ -342,14 +348,16 @@ impl Message {
     }
 
     /// 创建终端订阅响应消息
-    pub fn subscribe_response(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize) -> Self {
-        Self::subscribe_response_with_request_id(session_id, min_seq, max_seq, history_count, &generate_message_id())
+    pub fn subscribe_response(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize, mode: SubscribeMode, min_offset: u64, max_offset: u64) -> Self {
+        Self::subscribe_response_with_request_id(session_id, min_seq, max_seq, history_count, mode, min_offset, max_offset, &generate_message_id())
     }
 
     /// 创建终端订阅响应消息（携带原始 request_id）
     ///
     /// 用于回复 `expect_response=true` 的订阅请求，使客户端能匹配 pending 请求
-    pub fn subscribe_response_with_request_id(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize, request_id: &str) -> Self {
+    /// mode/min_offset/max_offset 为订阅裁决信息（见 SubscribeMode），
+    /// 消费者据此决定清屏重播（reset）或从游标续传（incremental）
+    pub fn subscribe_response_with_request_id(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize, mode: SubscribeMode, min_offset: u64, max_offset: u64, request_id: &str) -> Self {
         Message::Terminal {
             message_id: request_id.to_string(),
             expect_response: false,
@@ -361,6 +369,9 @@ impl Message {
                     min_seq,
                     max_seq,
                     history_count,
+                    mode,
+                    min_offset,
+                    max_offset,
                 },
             },
         }

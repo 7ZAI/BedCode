@@ -46,11 +46,19 @@ struct UnsubscribeResult {
     success: bool,
 }
 
-/// 终端输出消息（从输出转发任务传回）
+/// 终端输出消息（从输出转发任务传回，文本 JSON 形态，供移动端 WS 使用）
 #[derive(Message)]
 #[rtype(result = "()")]
 struct TerminalOutput {
     text: String,
+}
+
+/// 终端输出消息（从输出转发任务传回，二进制帧形态，供桌面端本地 WS 使用）
+/// `data` 为已编码的完整帧（含 20 字节头），直接 ctx.binary 发送
+#[derive(Message)]
+#[rtype(result = "()")]
+struct TerminalOutputBinary {
+    data: Vec<u8>,
 }
 
 /// 认证响应消息（从异步 auth_service 传回）
@@ -80,6 +88,8 @@ pub struct SendTextMessage {
 pub struct TerminalWs {
     session: WsSession,
     hb: Instant,
+    /// 是否为本地环回通道（桌面端 WebView 直连，免 JWT、输出走二进制帧）
+    local: bool,
 }
 
 impl TerminalWs {
@@ -87,7 +97,17 @@ impl TerminalWs {
         Self {
             session: WsSession::new(addr),
             hb: Instant::now(),
+            local: false,
         }
+    }
+
+    /// 本地环回通道：直接标记已认证，跳过配对/JWT 流程
+    /// （路由层已校验 peer 为环回地址，见 server/app.rs local_terminal_ws）
+    pub fn new_local(addr: SocketAddr) -> Self {
+        let mut ws = Self::new(addr);
+        ws.session.authenticated = true;
+        ws.local = true;
+        ws
     }
 
     /// 心跳检测
@@ -630,41 +650,67 @@ impl TerminalWs {
         });
 
         // 启动输出转发任务：将 OutputEvent 转为 WS 消息发到 actor
+        // 本地通道 → 二进制帧（桌面端原始字节直通）；远程通道 → base64 JSON（移动端兼容）
         let addr = ctx.address();
         let config = AppConfig::global();
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
+        let local = self.local;
 
         actix::spawn(async move {
-            let mut buffer = OutputBuffer::new();
+            let mut buffer = OutputBuffer::new(local);
 
             loop {
                 match tokio::time::timeout(flush_interval, output_rx.recv()).await {
                     Ok(Some(event)) => {
                         buffer.append(&event);
                         if buffer.data.len() >= max_buffer_size {
-                            let text = buffer.flush(&session_id_for_fwd);
-                            if addr.send(TerminalOutput { text }).await.is_err() {
-                                tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
-                                break;
+                            match buffer.flush(&session_id_for_fwd) {
+                                ForwardOutput::Text(text) => {
+                                    if addr.send(TerminalOutput { text }).await.is_err() {
+                                        tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                                        break;
+                                    }
+                                }
+                                ForwardOutput::Binary(data) => {
+                                    if addr.send(TerminalOutputBinary { data }).await.is_err() {
+                                        tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
                     Ok(None) => {
                         // channel 关闭，最终 flush
                         if !buffer.is_empty() {
-                            let text = buffer.flush(&session_id_for_fwd);
-                            let _ = addr.send(TerminalOutput { text }).await;
+                            match buffer.flush(&session_id_for_fwd) {
+                                ForwardOutput::Text(text) => {
+                                    let _ = addr.send(TerminalOutput { text }).await;
+                                }
+                                ForwardOutput::Binary(data) => {
+                                    let _ = addr.send(TerminalOutputBinary { data }).await;
+                                }
+                            }
                         }
                         break;
                     }
                     Err(_) => {
                         // 超时，flush 缓冲区
                         if !buffer.is_empty() {
-                            let text = buffer.flush(&session_id_for_fwd);
-                            if addr.send(TerminalOutput { text }).await.is_err() {
-                                tracing::debug!("[OutputForwarder] Actor stopped on flush, exiting loop");
-                                break;
+                            match buffer.flush(&session_id_for_fwd) {
+                                ForwardOutput::Text(text) => {
+                                    if addr.send(TerminalOutput { text }).await.is_err() {
+                                        tracing::debug!("[OutputForwarder] Actor stopped on flush, exiting loop");
+                                        break;
+                                    }
+                                }
+                                ForwardOutput::Binary(data) => {
+                                    if addr.send(TerminalOutputBinary { data }).await.is_err() {
+                                        tracing::debug!("[OutputForwarder] Actor stopped on flush, exiting loop");
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -765,6 +811,9 @@ impl Handler<SubscribeResult> for TerminalWs {
                     response.min_seq,
                     response.max_seq,
                     response.history_count,
+                    response.mode,
+                    response.min_offset,
+                    response.max_offset,
                     &msg.request_id,
                 );
                 if let Ok(json) = ws_msg.to_json() {
@@ -806,6 +855,16 @@ impl Handler<TerminalOutput> for TerminalWs {
     fn handle(&mut self, msg: TerminalOutput, ctx: &mut Self::Context) {
         crate::server::metrics::MetricsCollector::global().inc_ws_sent();
         ctx.text(msg.text);
+    }
+}
+
+/// 处理终端输出转发（二进制帧，本地通道）
+impl Handler<TerminalOutputBinary> for TerminalWs {
+    type Result = ();
+
+    fn handle(&mut self, msg: TerminalOutputBinary, ctx: &mut Self::Context) {
+        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+        ctx.binary(msg.data);
     }
 }
 
@@ -855,30 +914,63 @@ impl Handler<SendTextMessage> for TerminalWs {
 
 // ==================== Output Buffer ====================
 
+/// 转发输出形态：文本 JSON（移动端 WS）或二进制帧（桌面端本地 WS）
+enum ForwardOutput {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+/// 二进制帧头：magic(2) + version(1) + flags(1) + start_offset(8 LE) + end_offset(8 LE) = 20 字节
+const BINARY_FRAME_HEADER_LEN: usize = 20;
+const BINARY_FRAME_MAGIC: [u8; 2] = [0x54, 0x42]; // "TB"
+const BINARY_FRAME_VERSION: u8 = 1;
+const BINARY_FRAME_FLAG_WAITING: u8 = 0x01;
+
+/// 编码输出二进制帧（客户端据此做字节级连续性校验）
+fn encode_output_frame(start_offset: u64, end_offset: u64, is_waiting: bool, data: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(BINARY_FRAME_HEADER_LEN + data.len());
+    frame.extend_from_slice(&BINARY_FRAME_MAGIC);
+    frame.push(BINARY_FRAME_VERSION);
+    frame.push(if is_waiting { BINARY_FRAME_FLAG_WAITING } else { 0 });
+    frame.extend_from_slice(&start_offset.to_le_bytes());
+    frame.extend_from_slice(&end_offset.to_le_bytes());
+    frame.extend_from_slice(data);
+    frame
+}
+
 /// 输出缓冲区 — 累积多条 PTY 输出，减少 WS 消息数量
 struct OutputBuffer {
     data: Vec<u8>,
     start_index: u64,
     end_index: u64,
+    start_offset: u64,
+    end_offset: u64,
     last_is_waiting: bool,
+    /// true = 二进制帧输出（本地通道）；false = base64 JSON（移动端通道）
+    binary: bool,
 }
 
 impl OutputBuffer {
-    fn new() -> Self {
+    fn new(binary: bool) -> Self {
         Self {
             data: Vec::new(),
             start_index: 0,
             end_index: 0,
+            start_offset: 0,
+            end_offset: 0,
             last_is_waiting: false,
+            binary,
         }
     }
 
     fn append(&mut self, event: &crate::session::OutputEvent) {
         if self.data.is_empty() {
             self.start_index = event.index;
+            self.start_offset = event.start_offset;
         }
         // 始终更新 end_index 为最新事件的 index
         self.end_index = event.index;
+        self.end_offset = event.end_offset;
         self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
     }
@@ -887,30 +979,44 @@ impl OutputBuffer {
         self.data.is_empty()
     }
 
-    /// Flush 缓冲区为 WS 消息 JSON
+    /// Flush 缓冲区为转发输出
     ///
-    /// 合并多条事件时，index 为起始索引，end_index 为结束索引，
+    /// 文本形态：合并多条事件时，index 为起始索引，end_index 为结束索引，
     /// 前端可用 end_index 精确更新去重游标，支持增量同步
-    fn flush(&mut self, session_id: &str) -> String {
-        let data_base64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &self.data,
-        );
-        // 仅在合并了多条事件（end_index > start_index）时附带 end_index
-        let end_index = if self.end_index > self.start_index {
-            Some(self.end_index as usize)
+    /// 二进制形态：帧携带 [start_offset, end_offset)，客户端校验连续性
+    fn flush(&mut self, session_id: &str) -> ForwardOutput {
+        if self.binary {
+            let frame = encode_output_frame(
+                self.start_offset,
+                self.end_offset,
+                self.last_is_waiting,
+                &self.data,
+            );
+            self.data.clear();
+            ForwardOutput::Binary(frame)
         } else {
-            None
-        };
-        let message = Message::output_from_base64(
-            session_id,
-            &data_base64,
-            self.last_is_waiting,
-            self.start_index as usize,
-            end_index,
-        );
-        self.data.clear();
-        message.to_json().unwrap_or_default()
+            let data_base64 = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &self.data,
+            );
+            // 仅在合并了多条事件（end_index > start_index）时附带 end_index
+            let end_index = if self.end_index > self.start_index {
+                Some(self.end_index as usize)
+            } else {
+                None
+            };
+            let message = Message::output_from_base64(
+                session_id,
+                &data_base64,
+                self.last_is_waiting,
+                self.start_index as usize,
+                end_index,
+                Some(self.start_offset),
+                Some(self.end_offset),
+            );
+            self.data.clear();
+            ForwardOutput::Text(message.to_json().unwrap_or_default())
+        }
     }
 }
 
@@ -945,5 +1051,112 @@ async fn send_file_service_snapshot_to(addr: SocketAddr) {
     };
     if let Err(e) = WsSessionRegistry::global().send_to_addr(&addr, json).await {
         tracing::warn!(addr = %addr, error = %e, "send_file_service_snapshot: send failed");
+    }
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(session_id: &str, data: &[u8], index: u64, start_offset: u64, end_offset: u64) -> crate::session::OutputEvent {
+        crate::session::OutputEvent {
+            session_id: session_id.to_string(),
+            data: data.to_vec(),
+            index,
+            start_offset,
+            end_offset,
+            timestamp: 0,
+            is_waiting: false,
+        }
+    }
+
+    /// 帧头布局：magic(2) + version(1) + flags(1) + start(8 LE) + end(8 LE) + payload
+    #[test]
+    fn test_encode_output_frame_header() {
+        let frame = encode_output_frame(100, 106, true, b"hello");
+
+        assert_eq!(&frame[0..2], b"TB");
+        assert_eq!(frame[2], 1); // version
+        assert_eq!(frame[3], BINARY_FRAME_FLAG_WAITING); // is_waiting
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 100);
+        assert_eq!(u64::from_le_bytes(frame[12..20].try_into().unwrap()), 106);
+        assert_eq!(&frame[20..], b"hello");
+        assert_eq!(frame.len(), BINARY_FRAME_HEADER_LEN + 5);
+    }
+
+    #[test]
+    fn test_encode_output_frame_non_waiting_flag() {
+        let frame = encode_output_frame(0, 1, false, b"x");
+        assert_eq!(frame[3], 0);
+    }
+
+    /// 二进制形态：合并多条事件为一个帧，偏移取首事件 start / 尾事件 end
+    #[test]
+    fn test_output_buffer_binary_flush_merges_with_offsets() {
+        let mut buf = OutputBuffer::new(true);
+        buf.append(&event("s", b"ab", 0, 10, 12));
+        buf.append(&event("s", b"cd", 1, 12, 14));
+        buf.append(&event("s", b"ef", 2, 14, 16));
+
+        let out = buf.flush("s");
+        let ForwardOutput::Binary(frame) = out else {
+            panic!("expected binary frame");
+        };
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 10);
+        assert_eq!(u64::from_le_bytes(frame[12..20].try_into().unwrap()), 16);
+        assert_eq!(&frame[20..], b"abcdef");
+        assert!(buf.is_empty()); // flush 后清空
+    }
+
+    /// 文本形态（移动端兼容）：base64 JSON 携带 start_offset/end_offset 与 end_index
+    #[test]
+    fn test_output_buffer_text_flush_carries_offsets() {
+        let mut buf = OutputBuffer::new(false);
+        buf.append(&event("s", b"ab", 3, 40, 42));
+        buf.append(&event("s", b"cd", 4, 42, 44));
+
+        let out = buf.flush("s");
+        let ForwardOutput::Text(json) = out else {
+            panic!("expected text output");
+        };
+        let msg: Message = Message::from_json(&json).unwrap();
+        let Message::Terminal { payload, .. } = msg else {
+            panic!("expected terminal message");
+        };
+        let crate::enums::TerminalAction::Output { data, index, end_index, start_offset, end_offset, .. } = payload.action else {
+            panic!("expected output action");
+        };
+        assert_eq!(index, 3);
+        assert_eq!(end_index, Some(4));
+        assert_eq!(start_offset, Some(40));
+        assert_eq!(end_offset, Some(44));
+        // 解码 base64 校验数据
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data).unwrap();
+        assert_eq!(decoded, b"abcd");
+    }
+
+    /// 单事件 flush：end_index 为 None，偏移取事件自身
+    #[test]
+    fn test_output_buffer_single_event_flush() {
+        let mut buf = OutputBuffer::new(false);
+        buf.append(&event("s", b"single", 7, 100, 106));
+
+        let out = buf.flush("s");
+        let ForwardOutput::Text(json) = out else {
+            panic!("expected text output");
+        };
+        let msg: Message = Message::from_json(&json).unwrap();
+        let Message::Terminal { payload, .. } = msg else {
+            panic!("expected terminal message");
+        };
+        let crate::enums::TerminalAction::Output { index, end_index, start_offset, end_offset, .. } = payload.action else {
+            panic!("expected output action");
+        };
+        assert_eq!(index, 7);
+        assert_eq!(end_index, None);
+        assert_eq!(start_offset, Some(100));
+        assert_eq!(end_offset, Some(106));
     }
 }

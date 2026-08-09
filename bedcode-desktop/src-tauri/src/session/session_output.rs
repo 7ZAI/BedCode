@@ -4,6 +4,7 @@
 //! OutputCache trait 已内联到此文件（只有一个实现）
 
 use crate::pty::PtyOutputEvent;
+use crate::enums::SubscribeMode;
 use crate::system::config::AppConfig;
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -79,6 +80,10 @@ pub struct OutputHistoryResponse {
     pub min_seq: u64,
     /// 队列中最新事件的序号
     pub max_seq: u64,
+    /// 队列中最早字节偏移（更早的头部已被环形淘汰）
+    pub min_offset: u64,
+    /// 队列中最新字节偏移
+    pub max_offset: u64,
     /// 历史事件列表（data 为 Base64 编码）
     pub events: Vec<PtyOutputEvent>,
 }
@@ -101,11 +106,17 @@ impl From<OutputEvent> for PtyOutputEvent {
 ///
 /// `data` 存储原始字节数据，在发送到 WebSocket 时才进行 Base64 编码
 /// 避免在缓冲合并时多次编解码
+///
+/// `start_offset` / `end_offset`：事件在会话流中的字节区间（半开 [start, end)）。
+/// 由 UnifiedOutputQueue::push 在未携带时自动分配（单写者路径），
+/// 消费者用它做字节级断点续传与连续性校验
 #[derive(Debug, Clone)]
 pub struct OutputEvent {
     pub session_id: String,
     pub data: Vec<u8>,
     pub index: u64,
+    pub start_offset: u64,
+    pub end_offset: u64,
     pub timestamp: i64,
     pub is_waiting: bool,
 }
@@ -126,6 +137,8 @@ impl OutputEvent {
             session_id,
             data,
             index,
+            start_offset: 0,
+            end_offset: 0,
             timestamp,
             is_waiting,
         }
@@ -160,6 +173,14 @@ impl OutputEvent {
 /// - `capacity`: 最大事件条数（条目级限制）
 /// - `max_total_bytes`: 最大总字节数（内存级限制）
 /// 任一限制超出时丢弃最旧事件，与前端 buffer 逻辑一致
+///
+/// 字节偏移空间：每个事件占会话流中的 [start_offset, end_offset)，
+/// 环形只从头淘汰 → 保留区间 [min_offset, max_offset) 恒字节连续，
+/// 中间不存在空洞（"严格连续"的数据层保证）
+///
+/// 清屏快照点：扫描 `\x1b[2J`（清屏序列）记录其后的字节位置。
+/// 全屏 TUI（vim/opencode 等）清屏后从零重绘，快照之后的字节是自洽的一帧——
+/// reset 回放优先从快照点起播，替代"从残缺窗口头部起播"
 pub struct UnifiedOutputQueue {
     buffer: std::collections::VecDeque<OutputEvent>,
     capacity: usize,
@@ -167,6 +188,10 @@ pub struct UnifiedOutputQueue {
     total_bytes: u64,
     max_seq: AtomicU64,
     min_seq: AtomicU64,
+    min_offset: AtomicU64,
+    max_offset: AtomicU64,
+    /// 最后一次 `\x1b[2J` 之后的字节位置（0 = 无快照，回退 min_offset）
+    snapshot_offset: AtomicU64,
     total_produced: AtomicU64,
 }
 
@@ -185,6 +210,9 @@ impl UnifiedOutputQueue {
             total_bytes: 0,
             max_seq: AtomicU64::new(0),
             min_seq: AtomicU64::new(0),
+            min_offset: AtomicU64::new(0),
+            max_offset: AtomicU64::new(0),
+            snapshot_offset: AtomicU64::new(0),
             total_produced: AtomicU64::new(0),
         }
     }
@@ -197,6 +225,22 @@ impl UnifiedOutputQueue {
         self.min_seq.load(Ordering::SeqCst)
     }
 
+    pub fn min_offset(&self) -> u64 {
+        self.min_offset.load(Ordering::SeqCst)
+    }
+
+    pub fn max_offset(&self) -> u64 {
+        self.max_offset.load(Ordering::SeqCst)
+    }
+
+    /// 清屏快照点：最后一次 `\x1b[2J` 之后的字节位置（0 = 无快照）
+    ///
+    /// 调用方需与 min_offset 比较：快照被环形淘汰后（snapshot < min_offset）
+    /// 回退到 min_offset
+    pub fn snapshot_offset(&self) -> u64 {
+        self.snapshot_offset.load(Ordering::SeqCst)
+    }
+
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
@@ -205,11 +249,31 @@ impl UnifiedOutputQueue {
         self.buffer.is_empty()
     }
 
-    /// 推入新事件
+    /// 推入新事件，返回分配字节偏移后的完整事件（供调用方转发给订阅者）
     ///
     /// 双重容量检查：条目数和总字节数任一超出时丢弃最旧事件
-    pub fn push(&mut self, event: OutputEvent) {
+    /// 事件未携带字节偏移（start==end==0）时按队列末尾自动分配，
+    /// 保证会话流偏移连续（测试与真实路径共用同一分配逻辑）
+    pub fn push(&mut self, event: OutputEvent) -> OutputEvent {
+        let (start_offset, end_offset) = if event.end_offset > event.start_offset {
+            (event.start_offset, event.end_offset)
+        } else {
+            let start = self.max_offset.load(Ordering::SeqCst);
+            (start, start + event.data.len() as u64)
+        };
+
+        let event = OutputEvent {
+            start_offset,
+            end_offset,
+            ..event
+        };
+
         self.max_seq.store(event.index, Ordering::SeqCst);
+        self.max_offset.store(end_offset, Ordering::SeqCst);
+        // 扫描清屏序列：全屏 TUI 清屏后重绘的字节是自洽帧，reset 回放起点
+        if let Some(rel) = scan_clear_screen(&event.data) {
+            self.snapshot_offset.store(start_offset + rel as u64, Ordering::SeqCst);
+        }
         self.total_produced.fetch_add(1, Ordering::SeqCst);
 
         let event_bytes = event.data.len() as u64;
@@ -224,21 +288,57 @@ impl UnifiedOutputQueue {
                 self.min_seq.store(old.index + 1, Ordering::SeqCst);
             }
         }
+        // 淘汰后 min_offset 与队首对齐（仅从头淘汰 → 保留后缀连续）
+        self.min_offset.store(
+            self.buffer.front().map_or_else(|| end_offset, |e| e.start_offset),
+            Ordering::SeqCst,
+        );
 
         self.buffer.push_back(event);
+        self.buffer.back().unwrap().clone()
     }
 
-    /// 获取范围数据 [start_seq, max_seq]
-    pub fn get_range(&self, start_seq: u64) -> Vec<OutputEvent> {
-        let min_seq = self.min_seq.load(Ordering::SeqCst);
-        let actual_start = start_seq.max(min_seq);
+    /// 获取游标之后的事件段 [cursor, max_offset]，首个事件裁剪到 cursor
+    ///
+    /// 裁剪粒度是字节：断点落在事件中间时丢弃该事件 cursor 之前的部分，
+    /// 消费者续传不重不漏（"严格连续"的回放层保证）
+    pub fn get_range(&self, cursor: u64) -> Vec<OutputEvent> {
+        let min_offset = self.min_offset.load(Ordering::SeqCst);
+        let start = cursor.max(min_offset);
 
-        self.buffer
-            .iter()
-            .filter(|e| e.index >= actual_start)
-            .cloned()
-            .collect()
+        let mut events = Vec::new();
+        for event in self.buffer.iter() {
+            if event.end_offset <= cursor {
+                continue;
+            }
+            let mut ev = event.clone();
+            if ev.start_offset < start {
+                let skip = (start - ev.start_offset) as usize;
+                ev.data = ev.data[skip..].to_vec();
+                ev.start_offset = start;
+            }
+            events.push(ev);
+        }
+        events
     }
+}
+
+/// 扫描数据中最后一个 `\x1b[2J`（CSI ED 清屏序列）的结束位置（相对 data 起点）
+///
+/// 只识别标准大写 J 的 ED 清屏命令；清屏后程序立即重绘，
+/// 因此该位置之后的字节构成一帧自洽的屏幕内容
+fn scan_clear_screen(data: &[u8]) -> Option<usize> {
+    // ESC [ 2 J = 0x1b 0x5b 0x32 0x4a
+    if data.len() < 4 {
+        return None;
+    }
+    let mut found = None;
+    for i in 0..=data.len() - 4 {
+        if data[i] == 0x1b && data[i + 1] == 0x5b && data[i + 2] == 0x32 && data[i + 3] == 0x4a {
+            found = Some(i + 4);
+        }
+    }
+    found
 }
 
 impl Default for UnifiedOutputQueue {
@@ -310,6 +410,12 @@ pub struct SubscribeResponse {
     pub min_seq: u64,
     pub max_seq: u64,
     pub history_count: usize,
+    /// 订阅裁决：incremental = 从游标续传；reset = 游标已失效，清屏后全量重播
+    pub mode: SubscribeMode,
+    /// 环形保留区间的最小字节偏移（min_offset 之前的头部已被淘汰）
+    pub min_offset: u64,
+    /// 环形保留区间的最大字节偏移
+    pub max_offset: u64,
 }
 
 /// 单个 PTY 会话的输出管理，包括输出队列和订阅者管理
@@ -333,8 +439,11 @@ impl SessionOutputManager {
     }
 
     /// 处理新输出
+    ///
+    /// 先入队（队列分配字节偏移）再用带偏移的事件广播给订阅者，
+    /// 保证订阅者拿到的每个事件都可做字节级连续性校验
     pub async fn on_output(&self, event: OutputEvent) {
-        self.output_queue.write().await.push(event.clone());
+        let event = self.output_queue.write().await.push(event);
 
         let subscribers = self.subscribers.read().await;
         for subscriber in subscribers.values() {
@@ -363,6 +472,11 @@ impl SessionOutputManager {
     ///
     /// 占位期间 on_output() 会看到该 subscriber 但因 active=false 将事件缓存到 pending，
     /// 排空 pending 和 activate 在同一写锁内完成，保证零丢失且顺序正确
+    ///
+    /// 游标语义（字节偏移）：
+    /// - `start_seq = None`：首次订阅，mode=Reset，全量重播保留区间
+    /// - `start_seq = C`（在 [min_offset, max_offset]）：mode=Incremental，从 C 裁剪续传
+    /// - 其他：mode=Reset（头部被淘汰或流已重建）
     pub async fn subscribe(
         &self,
         client_id: &str,
@@ -381,10 +495,20 @@ impl SessionOutputManager {
         let queue = self.output_queue.read().await;
         let min_seq = queue.min_seq();
         let max_seq = queue.max_seq();
+        let min_offset = queue.min_offset();
+        let max_offset = queue.max_offset();
 
-        // start_seq 为 None 或 0 时从头获取，否则从指定序号开始
-        let actual_start = start_seq.unwrap_or(0);
-        let history = queue.get_range(actual_start);
+        // 服务端裁决：游标在保留区间内 → incremental，否则 → reset
+        let cursor = start_seq.unwrap_or(0);
+        let mode = match start_seq {
+            Some(c) if c >= min_offset && c <= max_offset => SubscribeMode::Incremental,
+            // None（首次订阅）或游标早于头部 / 晚于尾部 → 全量重播
+            _ => SubscribeMode::Reset,
+        };
+        // reset 回放起点：优先清屏快照点（全屏 TUI 自洽帧），
+        // 快照被环形淘汰或不存在时回退到保留区间头部
+        let reset_start = queue.snapshot_offset().max(min_offset);
+        let history = queue.get_range(if mode == SubscribeMode::Incremental { cursor } else { reset_start });
         drop(queue);
 
         // 通过该订阅者的独立通道发送历史（保证顺序）
@@ -435,10 +559,11 @@ impl SessionOutputManager {
         }
 
         tracing::info!(
-            "[SessionOutputManager] Client {} subscribed to session {}, start_seq={:?}, history_count={}",
+            "[SessionOutputManager] Client {} subscribed to session {}, start_seq={:?}, mode={:?}, history_count={}",
             client_id,
             self.session_id,
             start_seq,
+            mode,
             history.len()
         );
 
@@ -446,7 +571,44 @@ impl SessionOutputManager {
             min_seq,
             max_seq,
             history_count: history.len(),
+            mode,
+            min_offset,
+            max_offset,
         }
+    }
+
+    /// 通过插件 TerminalHandler 管道处理输出
+    ///
+    /// 将输出数据解码，依次调用所有 Rust terminal handler 的 `on_output`，
+    /// 如果任一 handler 修改了数据，使用修改后的数据重建事件。
+    /// 无 terminal handler 或非 UTF-8 输出（二进制数据）时直接透传。
+    ///
+    /// 位于真源（入队前）：所有消费出口（本地 WS / 移动端 WS / 历史）语义一致
+    async fn process_through_plugins(&self, mut event: OutputEvent) -> OutputEvent {
+        let ctx = crate::system::app_context::AppContext::global();
+        let plugin_host = ctx.plugin_host();
+
+        // 无 terminal handler 时直接透传：避免每次输出都做
+        // UTF-8 校验 + 字符串拷贝（绝大多数运行场景无插件）
+        if !plugin_host.has_terminal_handlers().await {
+            return event;
+        }
+
+        let text = match String::from_utf8(event.data.clone()) {
+            Ok(t) => t,
+            Err(_) => return event, // 非 UTF-8 输出（二进制数据），跳过插件处理
+        };
+
+        // 通过插件管道处理
+        let processed = plugin_host.process_terminal_output(&event.session_id, &text).await;
+
+        // 如果数据未被修改，直接返回原始事件
+        if processed == text {
+            return event;
+        }
+
+        event.data = processed.into_bytes();
+        event
     }
 
     /// 取消订阅
@@ -474,18 +636,22 @@ impl SessionOutputManager {
 
     /// 获取历史输出（供桌面端回放使用）
     ///
-    /// 从 UnifiedOutputQueue 读取指定序号之后的全部事件，
+    /// 从 UnifiedOutputQueue 读取指定游标之后的全部事件，
     /// 转换为 PtyOutputEvent 格式返回
     pub async fn get_history(&self, start_seq: Option<u64>) -> OutputHistoryResponse {
         let queue = self.output_queue.read().await;
         let min_seq = queue.min_seq();
         let max_seq = queue.max_seq();
+        let min_offset = queue.min_offset();
+        let max_offset = queue.max_offset();
         let actual_start = start_seq.unwrap_or(0);
         let events = queue.get_range(actual_start);
 
         OutputHistoryResponse {
             min_seq,
             max_seq,
+            min_offset,
+            max_offset,
             events: events.into_iter().map(|e| e.into()).collect(),
         }
     }
@@ -675,9 +841,12 @@ mod tests {
             queue.push(make_event(i));
         }
 
+        // 字节游标 5：事件 1 裁剪为 [5,8)，事件 2-9 完整（共 9 个事件，字节连续）
         let events = queue.get_range(5);
-        assert_eq!(events.len(), 5);
-        assert_eq!(events[0].index, 5);
+        assert_eq!(events.len(), 9);
+        assert_eq!(events[0].index, 1);
+        assert_eq!(events[0].start_offset, 5);
+        assert_eq!(events[8].index, 9);
     }
 
     #[test]
@@ -695,6 +864,194 @@ mod tests {
         assert_eq!(queue.len(), 2);
         assert_eq!(queue.min_seq(), 1);
         assert_eq!(queue.max_seq(), 2);
+    }
+
+    /// 验证 push 自动分配连续的字节偏移（会话流 = 事件字节拼接）
+    #[test]
+    fn test_push_assigns_contiguous_offsets() {
+        let mut queue = UnifiedOutputQueue::new(10);
+
+        // b"test" = 4 字节
+        queue.push(make_event(0));
+        queue.push(make_event(1));
+        queue.push(make_event(2));
+
+        assert_eq!(queue.min_offset(), 0);
+        assert_eq!(queue.max_offset(), 12);
+        assert_eq!(queue.get_range(0)[0].start_offset, 0);
+        assert_eq!(queue.get_range(0)[0].end_offset, 4);
+        assert_eq!(queue.get_range(0)[1].start_offset, 4);
+        assert_eq!(queue.get_range(0)[2].end_offset, 12);
+    }
+
+    /// 验证环形淘汰后 min_offset 对齐队首，保留后缀仍字节连续
+    #[test]
+    fn test_eviction_advances_min_offset() {
+        let mut queue = UnifiedOutputQueue::new(2);
+
+        queue.push(make_event(0));
+        queue.push(make_event(1));
+        queue.push(make_event(2));
+
+        // 淘汰 index 0 → 保留 [4, 12)
+        assert_eq!(queue.min_offset(), 4);
+        assert_eq!(queue.max_offset(), 12);
+        assert_eq!(queue.get_range(0).len(), 2);
+        assert_eq!(queue.get_range(0)[0].start_offset, 4);
+    }
+
+    /// 验证字节级断点续传：游标落在事件中间时首事件被裁剪到游标
+    #[test]
+    fn test_get_range_trims_partial_event() {
+        let mut queue = UnifiedOutputQueue::new(10);
+
+        queue.push(make_event(0)); // [0, 4)
+        queue.push(make_event(1)); // [4, 8)
+        queue.push(make_event(2)); // [8, 12)
+
+        // cursor=5：事件 1 的 [5,8) + 事件 2 完整
+        let events = queue.get_range(5);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].index, 1);
+        assert_eq!(events[0].start_offset, 5);
+        assert_eq!(events[0].end_offset, 8);
+        assert_eq!(events[0].data.len(), 3);
+        assert_eq!(events[1].start_offset, 8);
+
+        // cursor 恰好等于某事件末尾：不返回该事件
+        let events = queue.get_range(8);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].index, 2);
+    }
+
+    /// 验证订阅裁决：游标在保留区间内 → incremental；否则 → reset
+    #[tokio::test]
+    async fn test_subscribe_mode_decision() {
+        let manager = SessionOutputManager::new("test-session");
+
+        for i in 0..5 {
+            manager.output_queue.write().await.push(make_event(i));
+        }
+
+        let (tx, _rx) = mpsc::channel(100);
+
+        // 首次订阅（None）→ reset，全量重播
+        let resp = manager.subscribe("client-reset", tx.clone(), None).await;
+        assert_eq!(resp.mode, SubscribeMode::Reset);
+        assert_eq!(resp.history_count, 5);
+        assert_eq!(resp.min_offset, 0);
+        assert_eq!(resp.max_offset, 20);
+
+        // 游标在区间内 → incremental
+        let resp = manager.subscribe("client-inc", tx.clone(), Some(8)).await;
+        assert_eq!(resp.mode, SubscribeMode::Incremental);
+        assert_eq!(resp.history_count, 3); // [8, 20) = 事件 2,3,4
+
+        // 游标 1 也在区间内（min_offset=0）→ incremental，首事件裁剪
+        let resp = manager.subscribe("client-old", tx.clone(), Some(1)).await;
+        assert_eq!(resp.mode, SubscribeMode::Incremental);
+        assert_eq!(resp.history_count, 5);
+    }
+
+    /// 验证 incremental 订阅收到的首事件被裁剪到游标（字节级续传）
+    #[tokio::test]
+    async fn test_subscribe_incremental_trim() {
+        let manager = SessionOutputManager::new("test-session");
+
+        for i in 0..5 {
+            manager.output_queue.write().await.push(make_event(i));
+        }
+
+        let (tx, mut rx) = mpsc::channel(100);
+        // 游标 6 → 首事件 [4,8) 裁剪为 [6,8)
+        let resp = manager.subscribe("client-1", tx, Some(6)).await;
+        assert_eq!(resp.mode, SubscribeMode::Incremental);
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first.index, 1);
+        assert_eq!(first.start_offset, 6);
+        assert_eq!(first.data.len(), 2);
+
+        let second = rx.recv().await.unwrap();
+        assert_eq!(second.start_offset, 8);
+        assert_eq!(second.data.len(), 4);
+    }
+
+    /// 验证扫描 `\x1b[2J` 记录清屏快照点
+    #[test]
+    fn test_push_tracks_clear_snapshot() {
+        let mut queue = UnifiedOutputQueue::new(10);
+
+        queue.push(make_event(0)); // [0, 4)
+        // 事件 1 含清屏序列：\x1b[2J + "hello"，起点 4，序列结束于 8
+        let data = b"\x1b[2Jhello";
+        queue.push(OutputEvent::new(
+            "test".to_string(),
+            data.to_vec(),
+            1,
+            Utc::now().timestamp_millis(),
+            false,
+        ));
+
+        assert_eq!(queue.snapshot_offset(), 8);
+
+        // 后续无清屏的事件不改变快照
+        queue.push(make_event(2));
+        assert_eq!(queue.snapshot_offset(), 8);
+    }
+
+    /// 验证 reset 回放优先从清屏快照点起播（全屏 TUI 自洽帧）
+    #[tokio::test]
+    async fn test_reset_backfills_from_snapshot() {
+        let manager = SessionOutputManager::new("test-session");
+
+        // 事件 0-2 为普通输出，事件 3 清屏后重绘
+        manager.output_queue.write().await.push(make_event(0)); // [0, 4)
+        manager.output_queue.write().await.push(make_event(1)); // [4, 8)
+        manager.output_queue.write().await.push(make_event(2)); // [8, 12)
+        let clear_data = b"\x1b[2Jframe"; // 起点 12，快照 = 12 + 4 = 16
+        manager.output_queue.write().await.push(OutputEvent::new(
+            "test".to_string(),
+            clear_data.to_vec(),
+            3,
+            Utc::now().timestamp_millis(),
+            false,
+        ));
+        manager.output_queue.write().await.push(make_event(4)); // [21, 25)
+
+        let (tx, mut rx) = mpsc::channel(100);
+        // 首次订阅 → reset，回放应从快照点 16 开始而非 min_offset 0
+        let resp = manager.subscribe("client-1", tx, None).await;
+        assert_eq!(resp.mode, SubscribeMode::Reset);
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first.start_offset, 16);
+        assert_eq!(first.data, b"frame");
+        let second = rx.recv().await.unwrap();
+        assert_eq!(second.start_offset, 21);
+    }
+
+    /// 验证快照点被环形淘汰后回退到 min_offset
+    #[test]
+    fn test_snapshot_evicted_falls_back_to_min_offset() {
+        let mut queue = UnifiedOutputQueue::new(2);
+
+        // 事件 0 清屏（b"\x1b[2Jabc" = 7 字节，快照 = 4），
+        // 事件 1-2 普通（容量 2 → 事件 0 被淘汰）
+        queue.push(OutputEvent::new(
+            "test".to_string(),
+            b"\x1b[2Jabc".to_vec(),
+            0,
+            Utc::now().timestamp_millis(),
+            false,
+        ));
+        queue.push(make_event(1));
+        queue.push(make_event(2));
+
+        // 快照 4 < min_offset 7 → 回退 min_offset
+        assert_eq!(queue.min_offset(), 7);
+        assert_eq!(queue.snapshot_offset(), 4);
+        assert_eq!(queue.snapshot_offset().max(queue.min_offset()), 7);
     }
 
     #[test]
@@ -767,6 +1124,8 @@ mod tests {
             session_id: session_id.to_string(),
             data: b"test".to_vec(),
             index,
+            start_offset: 0,
+            end_offset: 0,
             timestamp: Utc::now().timestamp_millis(),
             is_waiting: false,
         }
@@ -834,16 +1193,19 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(100);
 
-        // start_seq=3：只应收到 index >= 3 的事件
+        // 字节游标 3：首事件 [0,4) 裁剪为 [3,4)，之后事件完整
         let response = manager.subscribe("client-1", tx, Some(3)).await;
-        assert_eq!(response.min_seq, 0);
-        assert_eq!(response.max_seq, 4);
-        assert_eq!(response.history_count, 2); // index 3, 4
+        assert_eq!(response.mode, SubscribeMode::Incremental);
+        assert_eq!(response.min_offset, 0);
+        assert_eq!(response.max_offset, 20);
+        assert_eq!(response.history_count, 5); // 裁剪后仍 5 个事件
 
         let e1 = rx.recv().await.unwrap();
-        assert_eq!(e1.index, 3);
+        assert_eq!(e1.index, 0);
+        assert_eq!(e1.start_offset, 3);
+        assert_eq!(e1.data.len(), 1);
         let e2 = rx.recv().await.unwrap();
-        assert_eq!(e2.index, 4);
+        assert_eq!(e2.start_offset, 4);
     }
 
     #[tokio::test]

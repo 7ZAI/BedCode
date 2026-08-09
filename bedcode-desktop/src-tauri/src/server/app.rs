@@ -15,7 +15,7 @@ use crate::server::controllers::{
 };
 use crate::server::ws::terminal_ws::TerminalWs;
 use crate::system::constants::server::{
-    WS_TERMINAL_PATH, API_HEALTH_PATH, PLACEHOLDER_PEER_ADDR,
+    WS_TERMINAL_PATH, API_HEALTH_PATH, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR,
     CORS_MAX_AGE_SECS, BIND_ADDRESS,
 };
 
@@ -25,6 +25,45 @@ async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpRespo
     let ws_actor = TerminalWs::new(addr);
     let config = crate::system::config::AppConfig::global();
     // max_size 同时限制 frame 和 message 大小，取两者中较大的值
+    let max_size = std::cmp::max(
+        config.network.ws_max_frame_size_kb * 1024,
+        config.network.ws_max_message_size_mb * 1024 * 1024,
+    );
+    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
+        .frame_size(max_size)
+        .start()
+}
+
+/// 本地 WS 握手端点 — 仅供桌面端 WebView 直连
+///
+/// 双重防线：
+/// 1. 环回地址校验：服务器绑定 0.0.0.0 供移动端访问，本地通道必须显式限定环回
+/// 2. 短期一次性令牌校验（?token=）：防止本机其他进程（恶意网页/脚本）连本地端口
+async fn local_terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
+    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    if !addr.ip().is_loopback() {
+        tracing::warn!(addr = %addr, "Local WS rejected: peer is not loopback");
+        return Ok(HttpResponse::Forbidden().finish());
+    }
+
+    // 校验短期一次性令牌（由 get_local_ws_token command 签发）
+    let token = req.query_string().split('&').find_map(|kv| {
+        let mut parts = kv.split('=');
+        match (parts.next(), parts.next()) {
+            (Some("token"), Some(v)) if !v.is_empty() => Some(v.to_string()),
+            _ => None,
+        }
+    });
+    match token {
+        Some(t) if crate::server::local_token::LocalTokenManager::global().verify_and_consume(&t) => {}
+        _ => {
+            tracing::warn!(addr = %addr, "Local WS rejected: missing or invalid token");
+            return Ok(HttpResponse::Forbidden().finish());
+        }
+    }
+
+    let ws_actor = TerminalWs::new_local(addr);
+    let config = crate::system::config::AppConfig::global();
     let max_size = std::cmp::max(
         config.network.ws_max_frame_size_kb * 1024,
         config.network.ws_max_message_size_mb * 1024 * 1024,
@@ -126,6 +165,9 @@ async fn terminal_bg_image() -> HttpResponse {
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 终端端点
     cfg.route(WS_TERMINAL_PATH, web::get().to(terminal_ws));
+
+    // 本地 WebSocket 终端端点（桌面端 WebView 直连，环回校验 + 免 JWT + 二进制帧）
+    cfg.route(LOCAL_WS_TERMINAL_PATH, web::get().to(local_terminal_ws));
 
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));

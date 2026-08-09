@@ -128,6 +128,8 @@ pub async fn get_session_output_history(
         None => Ok(OutputHistoryResponse {
             min_seq: 0,
             max_seq: 0,
+            min_offset: 0,
+            max_offset: 0,
             events: vec![],
         }),
     }

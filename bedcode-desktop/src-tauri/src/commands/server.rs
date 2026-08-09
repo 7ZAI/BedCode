@@ -54,6 +54,15 @@ pub async fn get_server_status() -> Result<ServerStatusInfo> {
     Ok(supervisor.get_status_info().await)
 }
 
+/// 获取本地 WS 通道短期一次性令牌
+///
+/// 桌面端 WebView 连接 /ws/terminal/local 时携带（?token=），
+/// 环回 IP 校验之外的第二道防线（防本机其他进程免认证订阅 PTY 输出）
+#[tauri::command]
+pub fn get_local_ws_token() -> String {
+    crate::server::local_token::LocalTokenManager::global().issue()
+}
+
 /// 获取网络配置
 #[tauri::command]
 pub async fn get_server_network_config() -> Result<NetworkConfig> {
