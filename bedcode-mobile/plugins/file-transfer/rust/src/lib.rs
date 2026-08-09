@@ -49,7 +49,7 @@ impl WasmPlugin for FileTransferPlugin {
         let host = host();
         host.log_info("File Transfer plugin activating (wasm, mobile)");
 
-        let mut s = state().lock().unwrap();
+        let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
 
         // 1. 加载设置
         s.settings = commands::load_settings(&host);
@@ -100,7 +100,7 @@ impl WasmPlugin for FileTransferPlugin {
 
     fn deactivate() -> anyhow::Result<()> {
         let host = host();
-        let mut s = state().lock().unwrap();
+        let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
 
         // flush 任务存储
         s.tasks.save(&host);
@@ -131,7 +131,7 @@ impl WasmPlugin for FileTransferPlugin {
 
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let host = host();
-        let mut s = state().lock().unwrap();
+        let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
 
         match name {
             "file-transfer.list-tasks" => Ok(commands::list_tasks(&s)),
@@ -224,7 +224,7 @@ impl WasmPlugin for FileTransferPlugin {
                 serde_json::from_value(msg.payload.clone()).map_err(|e| {
                     anyhow::anyhow!("invalid transfer progress payload: {}", e)
                 })?;
-            let mut s = state().lock().unwrap();
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
             commands::handle_transfer_progress(&mut s, &host, &progress);
             commands::schedule_and_start(&mut s, &host);
             return Ok(());
@@ -241,7 +241,7 @@ impl WasmPlugin for FileTransferPlugin {
                 .get("online")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let mut s = state().lock().unwrap();
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
             commands::handle_peer_changed(&mut s, &host, peer_id, online);
             return Ok(());
         }
@@ -251,13 +251,13 @@ impl WasmPlugin for FileTransferPlugin {
 
     fn on_upload_request(meta: &UploadRequestMeta) -> UploadHookDecision {
         let host = host();
-        let s = state().lock().unwrap();
+        let s = state().lock().unwrap_or_else(|e| e.into_inner());
         commands::handle_upload_request(&s, &host, meta)
     }
 
     fn on_shutdown() -> anyhow::Result<()> {
         let host = host();
-        let s = state().lock().unwrap();
+        let s = state().lock().unwrap_or_else(|e| e.into_inner());
         s.tasks.save(&host);
         host.log_info("File Transfer: tasks flushed on shutdown");
         Ok(())

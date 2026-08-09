@@ -22,6 +22,14 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
 
+/// WASM 插件 trap 自动重载最小间隔（秒）
+///
+/// wasmtime 同步引擎下任何一次 trap 都会污染整个 Store（`set_trapped`），
+/// 之后该实例所有调用持续报 `CannotEnterComponent`，唯一恢复途径是整体重载。
+/// 自动重载用最小间隔限频，防「重载后立刻再 trap」时无限重载风暴
+/// （持久性 bug 时最多每间隔重试一次，期间插件保持 Error 态）。
+const PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS: u64 = 30;
+
 /// 插件宿主
 pub struct PluginHost {
     /// 已加载的插件
@@ -54,6 +62,10 @@ pub struct PluginHost {
     /// 重复注册替换旧句柄；插件停用/应用关闭时中止。
     /// 用 std Mutex：仅短时间的 map 操作，不跨 await 持锁
     plugin_timers: Arc<std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// WASM 插件 trap 自动重载限频表（plugin_id → 最近一次自动重载时刻）
+    ///
+    /// std Mutex：仅短时 map 操作，不跨 await 持锁
+    wasm_reload_throttle: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
 }
 
 impl PluginHost {
@@ -221,6 +233,7 @@ impl PluginHost {
             message_bus,
             file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -653,16 +666,20 @@ impl PluginHost {
     ) -> bedcode_plugin_api::UploadHookDecision {
         use bedcode_plugin_api::UploadHookDecision;
 
-        let Some(wasm_plugin) = self.get_wasm_plugin(plugin_id).await else {
+        // 插件未加载 → 直接拒绝（fail-closed），不触发重载
+        if self.get_wasm_plugin(plugin_id).await.is_none() {
             tracing::warn!(
                 plugin_id = %plugin_id,
                 "call_upload_hook: wasm plugin not loaded, denying (fail-closed)"
             );
             return UploadHookDecision::deny("wasm plugin not loaded");
-        };
-        let mut wasm_plugin = wasm_plugin.lock().await;
+        }
 
-        match wasm_plugin.on_upload_request(meta_json) {
+        // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        match self
+            .with_wasm_plugin_call(plugin_id, |plugin| plugin.on_upload_request(meta_json))
+            .await
+        {
             Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
                 Ok(decision) => decision,
                 Err(e) => {
@@ -916,6 +933,99 @@ impl PluginHost {
         wasm_plugins.get(plugin_id).cloned()
     }
 
+    /// WASM 插件调用失败（trap / store 中毒）后的自动恢复
+    ///
+    /// wasmtime 同步引擎下任何一次 trap 都会 `set_trapped()` 污染 Store，
+    /// 之后该实例所有调用持续报 `CannotEnterComponent`，唯一恢复途径是整体重载
+    /// （deactivate → 重新实例化 → activate，即 [`reload_wasm_plugin`]）。
+    /// 本方法只做：限频（防重载风暴）+ 后台调度 + 失败时置 Error 态。
+    ///
+    /// 同步上下文可调用（内部 spawn 不阻塞）；调用方须先释放插件实例锁。
+    pub fn schedule_plugin_reload_after_trap(&self, plugin_id: &str) {
+        let plugin_id = plugin_id.to_string();
+
+        // 限频：距上次自动重载不足最小间隔则跳过（已在上次恢复或仍属持久性故障）
+        {
+            let mut throttle = self
+                .wasm_reload_throttle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(last) = throttle.get(&plugin_id) {
+                if last.elapsed()
+                    < std::time::Duration::from_secs(PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS)
+                {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        "plugin trap recovery throttled (recent reload), keeping error state"
+                    );
+                    return;
+                }
+            }
+            throttle.insert(plugin_id.clone(), std::time::Instant::now());
+        }
+
+        let host = self.clone();
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            "plugin WASM trap detected, scheduling auto reload"
+        );
+        tokio::spawn(async move {
+            // 恢复窗口内用户已停用（或正在停用）时不擅自重载
+            if !host.is_activated(&plugin_id).await {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    "plugin no longer activated, skip auto reload"
+                );
+                return;
+            }
+            match host.reload_wasm_plugin(&plugin_id).await {
+                Ok(()) => {
+                    tracing::info!(plugin_id = %plugin_id, "plugin auto reloaded after trap");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "plugin auto reload after trap failed"
+                    );
+                    // 置 Error 态：UI 可见原因，且 is_activated 门禁停止后续分发
+                    host.mark_error(
+                        &plugin_id,
+                        format!("auto reload after trap failed: {}", e),
+                    )
+                    .await;
+                }
+            }
+        });
+    }
+
+    /// 持锁调用 WASM 插件导出并统一处理失败恢复
+    ///
+    /// 调用失败（trap / 导出绑定失败 / store 中毒）时：先释放实例锁（防死锁），
+    /// 再调度自动重载（见 [`schedule_plugin_reload_after_trap`]），最后返回 Err 给调用方。
+    /// 调用方只需把 Err 转成自己的错误形态（anyhow / 日志 / fail-closed 决定）。
+    async fn with_wasm_plugin_call<T>(
+        &self,
+        plugin_id: &str,
+        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T>,
+    ) -> crate::Result<T> {
+        let Some(wasm_plugin) = self.get_wasm_plugin(plugin_id).await else {
+            return Err(crate::AppError::Plugin(format!(
+                "WASM plugin {} not found in loaded instances",
+                plugin_id
+            )));
+        };
+        let result = {
+            let mut guard = wasm_plugin.lock().await;
+            call(&mut guard)
+        };
+        if result.is_err() {
+            // 实例已不可用 → 自动重载恢复（锁已释放，无死锁）
+            self.schedule_plugin_reload_after_trap(plugin_id);
+        }
+        result
+    }
+
     /// 调用 WASM 插件的 command
     async fn invoke_wasm_command(
         &self,
@@ -940,20 +1050,17 @@ impl PluginHost {
             }
         }
 
-        let wasm_plugin = self.get_wasm_plugin(plugin_id).await.ok_or_else(|| {
-            crate::AppError::Plugin(format!(
-                "WASM plugin {} not found in loaded instances",
-                plugin_id
-            ))
-        })?;
-        let mut wasm_plugin = wasm_plugin.lock().await;
-
         let args_str = serde_json::to_string(&enriched_args)
             .map_err(|e| crate::AppError::Plugin(format!(
                 "Failed to serialize command args: {}", e
             )))?;
 
-        let result_str = wasm_plugin.invoke_command(command_name, &args_str)?;
+        // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        let result_str = self
+            .with_wasm_plugin_call(plugin_id, |plugin| {
+                plugin.invoke_command(command_name, &args_str)
+            })
+            .await?;
 
         let value: serde_json::Value = serde_json::from_str(&result_str)
             .map_err(|e| crate::AppError::Plugin(format!(
@@ -1192,18 +1299,18 @@ impl PluginHost {
             return;
         }
 
-        let wasm_plugins = self.wasm_plugins.clone();
+        let host = self.clone();
+        let plugin_id = plugin_id.to_string();
+        let payload = payload.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
-            let wasm_plugins = wasm_plugins.read().await;
-            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
-                drop(wasm_plugins);
-                let mut wasm_plugin = wasm_plugin.lock().await;
-                if let Err(e) = wasm_plugin.on_session_lifecycle(payload) {
-                    tracing::error!(
-                        "SessionLifecycle: dispatch to plugin '{}' failed: {}",
-                        plugin_id, e
-                    );
-                }
+            if let Err(e) = host
+                .with_wasm_plugin_call(&plugin_id, |plugin| plugin.on_session_lifecycle(&payload))
+                .await
+            {
+                tracing::error!(
+                    "SessionLifecycle: dispatch to plugin '{}' failed: {}",
+                    plugin_id, e
+                );
             }
         });
     }
@@ -1229,23 +1336,17 @@ impl PluginHost {
             payload
         );
 
-        let wasm_plugins = self.wasm_plugins.clone();
+        let host = self.clone();
+        let plugin_id = plugin_id.to_string();
+        let payload = payload.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
-            let wasm_plugins = wasm_plugins.read().await;
-            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
-                drop(wasm_plugins);
-                let mut wasm_plugin = wasm_plugin.lock().await;
-                if let Err(e) = wasm_plugin.on_input_submitted(payload) {
-                    tracing::error!(
-                        "InputSubmitted: dispatch to plugin '{}' failed: {}",
-                        plugin_id, e
-                    );
-                }
-            } else {
-                // WASM 实例缺失（如模块加载失败/热重载后未实例化）
-                tracing::debug!(
-                    "InputSubmitted: wasm plugin '{}' not found in wasm_plugins map",
-                    plugin_id
+            if let Err(e) = host
+                .with_wasm_plugin_call(&plugin_id, |plugin| plugin.on_input_submitted(&payload))
+                .await
+            {
+                tracing::error!(
+                    "InputSubmitted: dispatch to plugin '{}' failed: {}",
+                    plugin_id, e
                 );
             }
         });
@@ -1379,6 +1480,7 @@ impl Clone for PluginHost {
             message_bus: self.message_bus.clone(),
             file_service: self.file_service.clone(),
             plugin_timers: self.plugin_timers.clone(),
+            wasm_reload_throttle: self.wasm_reload_throttle.clone(),
         }
     }
 }
@@ -1387,15 +1489,16 @@ impl Clone for PluginHost {
 
 impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
-        let wasm_plugins = self.wasm_plugins.clone();
+        let host = self.clone();
+        let plugin_id = plugin_id.to_string();
+        let msg = msg.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
-            let wasm_plugins = wasm_plugins.read().await;
-            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
-                drop(wasm_plugins);
-                let mut wasm_plugin = wasm_plugin.lock().await;
-                wasm_plugin.on_message(&msg.topic, &msg.sender, &msg.payload)?;
-            }
-            Ok(())
+            // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+            host.with_wasm_plugin_call(&plugin_id, |plugin| {
+                plugin.on_message(&msg.topic, &msg.sender, &msg.payload)
+            })
+            .await
+            .map_err(|e| anyhow::Error::from(e))
         })
     }
 

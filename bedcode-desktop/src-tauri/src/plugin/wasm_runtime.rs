@@ -1199,4 +1199,56 @@ mod tests {
             .call_invoke(store, "test.echo", r#"{"a":1}"#);
         assert!(result.is_err(), "fuel exhausted must trap: {:?}", result);
     }
+
+    /// trap 后 Store 被污染：同一实例后续调用持续报 `cannot enter component instance`
+    /// （wasmtime 同步引擎 `set_trapped` 语义，宿主 trap 自动重载机制的立论依据）
+    #[test]
+    fn test_component_trap_poisons_store_and_reinstantiate_recovers() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+
+        // 1. 实例 A：制造一次 trap（燃料耗尽）
+        let mut plugin_a = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone())
+            .expect("instantiate component A");
+        {
+            let (store, instance) = plugin_a.raw_store();
+            store.set_fuel(1).expect("set tiny fuel");
+            let binding = super::component::Plugin::new(&mut *store, instance).expect("bind exports");
+            let result = binding
+                .bedcode_plugin_command()
+                .call_invoke(store, "test.echo", r#"{"a":1}"#);
+            assert!(result.is_err(), "fuel exhausted must trap: {:?}", result);
+        }
+
+        // 2. 同一实例再次调用：必须持续失败且报 cannot enter component instance
+        //    （不能自愈 —— 这正是宿主必须整体重载的原因）
+        let err = {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                plugin_a
+                    .invoke_command("test.echo", r#"{"a":2}"#)
+                    .expect_err("poisoned store must keep failing")
+            })
+        };
+        assert!(
+            err.to_string().contains("cannot enter component instance"),
+            "poisoned store error should be CannotEnterComponent, got: {}",
+            err
+        );
+
+        // 3. 重新实例化（等价宿主 reload_wasm_plugin 的重建）→ 新实例正常可用
+        let mut plugin_b = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .expect("re-instantiate after trap");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let echo = rt.block_on(async {
+            plugin_b
+                .invoke_command("test.echo", r#"{"hello":"recovered"}"#)
+                .expect("fresh instance must work")
+        });
+        assert!(echo.contains("recovered"), "got: {}", echo);
+    }
 }

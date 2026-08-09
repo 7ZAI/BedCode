@@ -10,6 +10,8 @@
 
 ### P2 — 宿主/SDK 缺口
 - [x] **移动端 SDK 补 `fs_delete` 导出**（2026-08-07 完成）：新增 Kotlin `FileDeletePlugin`（gen/android + android-backup 双备份，已入 AGENTS.md 恢复清单）→ `android_plugins.rs` 注册/`delete_file()` 桥 → wasm_runtime 注册 `host_fs_delete`（fs:write 权限 + fs_auth Write 校验，非 Android 平台 std::fs 兜底）→ SDK `HostFs::fs_delete`（abi.rs 常量 + 签名表 + wasm_host 实现）→ 插件 `delete_part_file` 恢复真实删除。移动端取消下载现在会清理本地 `.part`。
+- [x] **WASM 插件 trap 自动恢复（桌面端）**（2026-08-09 完成）：wasmtime 同步引擎下任何 trap 都会 `set_trapped()` 永久污染 Store，后续所有调用持续报 `cannot enter component instance`（消息总线只记录错误、插件永久失效）。host.rs 新增 `with_wasm_plugin_call` + `schedule_plugin_reload_after_trap`：所有 WASM 入口（on_message / invoke_command / on_upload_request / on_session_lifecycle / on_input_submitted）调用失败时释放实例锁 → 后台 deactivate→重新实例化→activate（复用 reload_wasm_plugin），30s 限频防重载风暴，失败置 Error 态；插件被停用时不擅自重载。同时 file-transfer 插件（两端）`state().lock().unwrap()` 改 poison 容忍，切断「一个 panic → 锁中毒 → 后续全 panic」连锁。配套测试 `test_component_trap_poisons_store_and_reinstantiate_recovers` 验证污染语义与重建恢复。
+- [x] **http_fetch 响应体上限（两端，防 fuel trap）**（2026-08-09 完成）：http_fetch 等待阶段 guest 零燃料（fuel 只计 guest 指令），但响应体回传后 canonical ABI 拷入 guest 内存 + guest serde 解析会消耗单次调用 fuel 预算，无上限响应体可耗尽 fuel 触发 trap。非流式 http_fetch 响应体上限 32MB（`PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES`，桌面 constants / 移动 wasm_host 本地常量），流式读取超限即中止并报错引导 `stream:true`；大载荷（如 ai-chatbox）已走流式模式不受影响。配套测试两端各 2 个（小响应正常 / 超限拒绝）。
 - [ ] **锁跨阻塞网络 IO 重构**：`schedule_and_start` 持全局 `Mutex` 时执行 `http_fetch` 握手（http_fetch timeout 120s/connect 10s），对端半连接时进度事件可停滞最长 120s、拖住移动端单 delivery worker。非硬死锁，真机若体验差再重构（prepare→execute→commit 三段式）。
 - [ ] **fs_auth 白名单收敛**：`com.bedcode.file-transfer` 进白名单 = 任意路径放行。当前信任模型（内置首方 + 配对白名单）下接受；若未来开放 zip 安装同名插件需收敛为按 roots/download_dir 授权。
 
