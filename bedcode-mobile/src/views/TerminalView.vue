@@ -138,8 +138,22 @@
 
 <script setup lang="ts">
 /**
- * 终端视图 - 显示 PTY 输出和输入栏
- * 支持多会话切换和 ANSI 渲染
+ * 终端视图（移动端）— xterm.js 渲染内核 + 移动端输入/键盘避让
+ *
+ * 渲染与滚动架构对齐桌面端 TerminalPreview.vue（VS Code 终端体验）：
+ * - 写入管线：同帧输出经 rAF 合并 + DEC 2026 同步输出包裹 + 64KB 拆块
+ *   （writeCoalescer），高频输出无撕裂/重影、超大块不卡主线程
+ * - 渲染：WebGL addon（context loss 自动回退恢复），xterm 渲染循环自绘
+ * - 滚动：onScroll 推导"是否在底部"（位置即状态），回到底部自动跟随输出
+ * - 尺寸：ResizeObserver + rAF 节流 fit，cols/rows 实际变化才同步 PTY
+ *
+ * 移动端特殊处理：
+ * - disableStdin：禁用 xterm 原生输入（桌面键盘输入流无法在移动端复现），
+ *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
+ * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
+ * - 键盘避让：visualViewport + 插件 safeAreaChanged 双通道检测，movable-area
+ *   transform 上移（配合 AndroidManifest adjustNothing）
+ * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
  */
 defineOptions({ name: 'TerminalView' })
 
@@ -162,6 +176,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
+import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import TerminalHeader from '@/components/TerminalHeader.vue'
 import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
 import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
@@ -186,7 +201,7 @@ const mockTerminal = useMockTerminal()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
-const { writeBufferHistoryToTerminal, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleSessionStopped } = useTerminalBuffer()
+const { registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleSessionStopped } = useTerminalBuffer()
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
@@ -224,6 +239,8 @@ const isTerminalReady = ref(false)
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
 const resizeObserverRef = ref<ResizeObserver | null>(null)
+// ResizeObserver rAF 节流句柄：同一帧内多次 fit 只执行一次
+let resizeRaf = 0
 
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
@@ -323,7 +340,6 @@ const pluginKeyboardHeight = ref(0)
 
 // 侧边栏设置面板输入框聚焦时，禁用键盘避让
 const settingsInputFocused = ref(false)
-
 
 // 最终键盘偏移量：取两个通道中的较大值
 const keyboardOffset = computed(() => {
@@ -465,40 +481,81 @@ watch(isSystemDark, () => {
 
 // ==================== Terminal Setup ====================
 
+/**
+ * WebGL 渲染器：动态加载（移动端包体积/启动优化），
+ * 处理上下文丢失（丢失时回退 DOM 渲染，1s 后尝试重建）
+ */
+async function initWebGL(term: Terminal): Promise<boolean> {
+  try {
+    const { WebglAddon } = await import('@xterm/addon-webgl')
+    const addon = new WebglAddon()
+    addon.onContextLoss(() => {
+      console.warn('[TerminalView] WebGL context lost, disposing renderer')
+      addon.dispose()
+      // 上下文丢失时恢复 DOM 层光标
+      term.element?.classList.remove('xterm-hidden-cursor')
+      // 延迟 1s 后尝试重新创建 WebGL 渲染器
+      setTimeout(() => {
+        if (terminalRef.value !== term) return
+        try {
+          const newAddon = new WebglAddon()
+          newAddon.onContextLoss(() => {
+            console.warn('[TerminalView] WebGL context lost again')
+            newAddon.dispose()
+            term.element?.classList.remove('xterm-hidden-cursor')
+          })
+          term.loadAddon(newAddon)
+          term.element?.classList.add('xterm-hidden-cursor')
+          console.info('[TerminalView] WebGL context recovered')
+        } catch (e) {
+          console.warn('[TerminalView] WebGL recovery failed, using canvas fallback:', e)
+        }
+      }, 1000)
+    })
+    term.loadAddon(addon)
+    return true
+  } catch {
+    // WebGL 不可用时回退到 canvas 渲染器
+    return false
+  }
+}
+
 async function initTerminal() {
   if (!xtermContainer.value) return
 
-  const theme = TERMINAL_THEMES[terminalSettings.value.theme]
   const term = new Terminal({
-    theme: theme,
-    fontFamily: '"Courier New", Courier, "Lucida Console", monospace',
+    // 字体与尺寸（对齐桌面端，VS Code 终端默认字体栈 + 跨平台回退）
     fontSize: terminalSettings.value.fontSize,
-    lineHeight: 1.2,
+    fontFamily: 'Cascadia Mono, Consolas, Monaco, Courier New, monospace',
+    lineHeight: 1,
+    // 滚动历史行数（与桌面主机服务端事件队列容量对齐）
+    scrollback: TERMINAL_SCROLLBACK,
+    // 即时滚动：关闭平滑滚动，避免 WebGL 滚动动画期间合成器缓存旧帧导致重影
+    smoothScrollDuration: 0,
+    // VS Code 风格块光标：移动端保留光标（标记输入落点与 TUI 光标位置），
+    // 仅隐藏 DOM 层光标避免与 WebGL 层双光标（见 xterm-hidden-cursor）
     cursorBlink: true,
     cursorStyle: 'block',
-    allowProposedApi: true,
-    scrollback: 5000,
-    convertEol: true,
-    // 移动端禁用内置输入，避免弹出输入法
+    cursorWidth: 1,
+    drawBoldTextInBrightColors: true,
+    // 移动端特殊处理：禁用 xterm 原生输入。
+    // 桌面端键盘输入流（onData → PTY）无法在移动端复现，输入统一由底部
+    // TerminalInputBar 承担，避免软键盘误弹与焦点抢占
     disableStdin: true,
-    // 移动端滚动灵敏度
-    scrollSensitivity: 0.8,
-    // 禁用 xterm 内部平滑滚动动画：
-    // smoothScrollDuration 默认非 0，scrollToLine 会触发多帧动画，
-    // 在 WebGL 双缓冲下出现新旧帧重叠（重影）。移动端由自定义触摸滚动接管，
-    // 直接跳转到目标行即可，无需补间动画。
-    smoothScrollDuration: 0,
+    // 主题
+    theme: TERMINAL_THEMES[terminalSettings.value.theme],
+    allowProposedApi: true,
   })
 
   terminalRef.value = term
-  term.open(xtermContainer.value)
 
+  // 挂载 addon（对齐桌面端顺序：addon 先于 open）
   const addon = new FitAddon()
   fitAddonRef.value = addon
   term.loadAddon(addon)
   term.loadAddon(new WebLinksAddon())
 
-  // Unicode11 addon：启用 Unicode 11 字符宽度计算
+  // Unicode11 addon（移动端特殊处理）：启用 Unicode 11 字符宽度计算。
   // TUI 应用（opencode 等）大量使用 box-drawing 字符（╔═╗║╚╝）和 emoji，
   // 不加载此 addon 时 xterm 默认字符宽度表为 Unicode 5，
   // 部分新字符的列宽计算错误会导致光标位置漂移、上一个写入的字符部分残留（重影）
@@ -506,65 +563,43 @@ async function initTerminal() {
   term.loadAddon(unicode11)
   term.unicode.activeVersion = '11'
 
-  // WebGL renderer — 后台加载，带上下文丢失恢复
-  let webglAddon: InstanceType<typeof import('@xterm/addon-webgl').WebglAddon> | null = null
-  try {
-    const { WebglAddon } = await import('@xterm/addon-webgl')
-    const addon = new WebglAddon()
-    addon.onContextLoss(() => {
-      console.warn('[TerminalView] WebGL context lost, disposing renderer')
-      addon.dispose()
-      webglAddon = null
-      // 恢复 DOM 光标
-      term.element?.classList.remove('xterm-hidden-cursor')
-      // 延迟后尝试重建 WebGL 渲染器
-      setTimeout(() => {
-        if (terminalRef.value !== term || webglAddon) return
-        try {
-          const newAddon = new WebglAddon()
-          newAddon.onContextLoss(() => {
-            console.warn('[TerminalView] WebGL context lost again')
-            newAddon.dispose()
-            if (webglAddon === newAddon) webglAddon = null
-            term.element?.classList.remove('xterm-hidden-cursor')
-          })
-          term.loadAddon(newAddon)
-          webglAddon = newAddon
-          term.element?.classList.add('xterm-hidden-cursor')
-          console.info('[TerminalView] WebGL context recovered')
-        } catch (e) {
-          console.warn('[TerminalView] WebGL recovery failed, using canvas fallback:', e)
-          webglAddon = null
-        }
-      }, 1000)
-    })
-    term.loadAddon(addon)
-    webglAddon = addon
-    // WebGL 渲染器激活后隐藏 DOM 层光标，避免双光标
+  term.open(xtermContainer.value)
+
+  // WebGL 渲染器激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
+  const webglOk = await initWebGL(term)
+  if (webglOk) {
     term.element?.classList.add('xterm-hidden-cursor')
-  } catch {
-    // WebGL 不可用时回退到 canvas 渲染器
   }
 
-  // 从 buffer 写入历史数据
-  writeBufferHistoryToTerminal(sessionId.value, term)
-
-  // 注册实时 handler
+  // 注册实时 handler — 历史回放（订阅后服务端流式送达）与实时推送同通道，
+  // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹 + 64KB 拆块）
   registerRealtimeHandler(sessionId.value, term)
 
+  // 延迟 fit + 触摸滚动接管：等待 xterm 完成首帧布局，
+  // 触摸监听挂到 viewport 上，需其在 DOM 中就绪
   setTimeout(() => {
     fitTerminal(fitAddonRef.value)
     setupViewportScroll()
   }, 100)
 
-  const observer = new ResizeObserver(() => {
-    requestAnimationFrame(() => fitTerminal(fitAddonRef.value))
+  // ResizeObserver — rAF 节流，避免快速连续 fit 导致的重复渲染；
+  // 仅当 cols/rows 实际变化时同步 PTY（xterm 自身负责重绘）
+  resizeObserverRef.value = new ResizeObserver(() => {
+    if (resizeRaf) return
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0
+      if (!fitAddonRef.value || !terminalRef.value) return
+      const cols = terminalRef.value.cols
+      const rows = terminalRef.value.rows
+      fitAddonRef.value.fit()
+      if (terminalRef.value.cols !== cols || terminalRef.value.rows !== rows) {
+        syncTerminalSizeToHost()
+      }
+    })
   })
-  resizeObserverRef.value = observer
-  observer.observe(xtermContainer.value)
+  resizeObserverRef.value.observe(xtermContainer.value)
 
-  window.addEventListener('resize', handleWindowResize)
-
+  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到主机会话
   term.onResize(({ cols, rows }) => {
     if (!isMockSession(sessionId.value) && isConnected.value && isSessionActive.value && sessionId.value) {
       wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
@@ -574,16 +609,15 @@ async function initTerminal() {
   })
 }
 
-function handleWindowResize() {
-  setTimeout(() => fitTerminal(fitAddonRef.value), 100)
-}
-
 function disposeTerminal() {
   if (resizeObserverRef.value) {
     resizeObserverRef.value.disconnect()
     resizeObserverRef.value = null
   }
-  window.removeEventListener('resize', handleWindowResize)
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf)
+    resizeRaf = 0
+  }
 
   if (sessionId.value) {
     unregisterRealtimeHandler(sessionId.value)
@@ -607,6 +641,8 @@ function applyTerminalTheme() {
 }
 
 // ==================== Input Handlers ====================
+// 输入统一由 TerminalInputBar 承担（xterm 原生输入已禁用），
+// 命令经 HTTP 发送到主机会话，特殊键以转义序列形式发送
 
 function handleInputSubmit(text: string) {
   if (!terminalRef.value) return
@@ -689,7 +725,7 @@ function clearTerminal() {
 
 // ==================== Refresh Terminal ====================
 
-/** 主动同步当前终端尺寸到桌面端 PTY（HTTP，带响应确认）
+/** 主动同步当前终端尺寸到主机 PTY（HTTP，带响应确认）
  * 重连/会话激活后 PTY 重建为默认 80x24，容器尺寸未变化时 fit/onResize 都不会触发，
  * 必须显式同步一次，否则输出按错误宽度换行导致格式混乱 */
 async function syncTerminalSizeToHost() {
@@ -780,7 +816,7 @@ onMounted(async () => {
   window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
 
   await nextTick()
-  initTerminal()
+  await initTerminal()
 
   if (isMockSession(sessionId.value)) {
     if (terminalRef.value) {
@@ -807,7 +843,9 @@ onUnmounted(async () => {
   }
   disposeTerminal()
 
-  if (!isSessionActive.value) {
+  // 页面卸载即取消订阅：后台期间的输出由服务端环形保留，
+  // 重新进入时以字节游标续传（服务端裁决 incremental/reset）
+  if (!isMockSession(sessionId.value)) {
     await unsubscribeSession(sessionId.value)
   }
 })

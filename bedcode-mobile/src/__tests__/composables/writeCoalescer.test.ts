@@ -1,8 +1,11 @@
 /**
  * writeCoalescer 单元测试
  *
- * 验证 rAF 合并写入行为：同帧多次 write 合并为一次 term.write，
- * 避免 TUI 高频输出时 WebGL 双缓冲重影。
+ * 验证对齐桌面端的写入管线行为：
+ * - 同帧多次 write 合并为一次 term.write（DEC 2026 包裹），避免 WebGL 双缓冲重影
+ * - 单次 write 超过 64KB 拆块（BSU/分块/ESU），让 xterm parser 让出主线程
+ * - 累积超过 256KB 阈值立即 flush（移动端特殊处理）
+ * - rAF 暂停（最小化/后台）时 100ms 兜底定时器清空队列
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -12,6 +15,9 @@ import type { Terminal } from '@xterm/xterm'
 // DEC Mode 2026 同步输出序列（与实现保持一致）
 const SYNC_PREFIX = Array.from(new TextEncoder().encode('\x1b[?2026h'))
 const SYNC_SUFFIX = Array.from(new TextEncoder().encode('\x1b[?2026l'))
+
+// 单次 write 上限（与实现保持一致）
+const MAX_WRITE_CHUNK = 64 * 1024
 
 /** 断言写入的数据 = DEC 2026 包裹后的 payload */
 function expectWrapped(writeMock: ReturnType<typeof vi.fn>, payload: number[]) {
@@ -101,19 +107,72 @@ describe('createWriteCoalescer', () => {
     expect(term.write).toHaveBeenCalledTimes(1)
   })
 
-  it('累积超过阈值时立即 flush（不走 rAF）', () => {
+  it('超过 64KB 拆块写入：BSU + 分块 + ESU', () => {
     const term = makeMockTerminal()
     const coalescer = createWriteCoalescer(term)
 
-    // 256KB 阈值，200KB + 100KB 累积到 300KB 时立即 flush
+    // 96KB 载荷 → 2 块（零拷贝 subarray 切片）
+    const payload = new Uint8Array(MAX_WRITE_CHUNK + 32 * 1024).fill(7)
+    coalescer(payload)
+    rafCallbacks[0](0)
+
+    expect(term.write).toHaveBeenCalledTimes(4)
+    const calls = term.write.mock.calls.map(c => Array.from(c[0] as Uint8Array))
+    expect(calls[0]).toEqual(SYNC_PREFIX)
+    expect(calls[1]).toEqual(Array.from(payload.subarray(0, MAX_WRITE_CHUNK)))
+    expect(calls[2]).toEqual(Array.from(payload.subarray(MAX_WRITE_CHUNK)))
+    expect(calls[3]).toEqual(SYNC_SUFFIX)
+  })
+
+  it('累积超过 256KB 阈值时立即 flush（取消挂起 rAF，仍拆块）', () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term)
+
     coalescer(new Uint8Array(200 * 1024))
     expect(term.write).not.toHaveBeenCalled()
     expect(rafCallbacks).toHaveLength(1)
 
     coalescer(new Uint8Array(100 * 1024))
-    expect(term.write).toHaveBeenCalledTimes(1)
+    // 300KB → 5 块 + BSU/ESU = 7 次 write，立即执行
+    expect(term.write).toHaveBeenCalledTimes(7)
     // 立即 flush 取消了挂起的 rAF
     expect(rafCallbacks).toHaveLength(1)
+
+    // 内容完整性：分块拼接 = 原始 300KB，首尾为 2026 包裹
+    const written = term.write.mock.calls.map(c => c[0] as Uint8Array)
+    expect(Array.from(written[0])).toEqual(SYNC_PREFIX)
+    expect(Array.from(written[written.length - 1])).toEqual(SYNC_SUFFIX)
+    const joined = new Uint8Array(300 * 1024)
+    let offset = 0
+    for (const chunk of written.slice(1, -1)) {
+      joined.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    expect(offset).toBe(300 * 1024)
+    // 每块不超过上限
+    for (const chunk of written.slice(1, -1)) {
+      expect(chunk.byteLength).toBeLessThanOrEqual(MAX_WRITE_CHUNK)
+    }
+  })
+
+  it('rAF 暂停时 100ms 兜底定时器清空队列', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const term = makeMockTerminal()
+      const coalescer = createWriteCoalescer(term)
+
+      coalescer(new Uint8Array([1, 2, 3]))
+      expect(term.write).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(99)
+      expect(term.write).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(1)
+      expect(term.write).toHaveBeenCalledTimes(1)
+      expectWrapped(term.write, [1, 2, 3])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('terminal 已 dispose 时 flush 静默丢弃', () => {
@@ -127,16 +186,20 @@ describe('createWriteCoalescer', () => {
     expect(term.write).not.toHaveBeenCalled()
   })
 
-  it('dispose 取消挂起的 rAF 并清空缓冲', () => {
-    const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+  it('dispose 取消挂起的 rAF 与兜底定时器，清空缓冲', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const term = makeMockTerminal()
+      const coalescer = createWriteCoalescer(term)
 
-    coalescer(new Uint8Array([1, 2, 3]))
-    coalescer.dispose()
-    expect(rafCallbacks).toHaveLength(1)
+      coalescer(new Uint8Array([1, 2, 3]))
+      coalescer.dispose()
 
-    rafCallbacks[0](0)
-    expect(term.write).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(200)
+      expect(term.write).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('dispose 之后再次 write 会重新调度 rAF', () => {

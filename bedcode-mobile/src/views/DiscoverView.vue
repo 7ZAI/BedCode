@@ -56,7 +56,8 @@
         <div
           v-for="service in discoveredServices"
           :key="service.instance_name"
-          class="group-row group-row-btn device-row cursor-pointer"
+          class="group-row device-row"
+          :class="isCurrentDevice(service) ? 'is-connected' : 'group-row-btn cursor-pointer'"
           @click="handleConnect(service)"
         >
           <span class="device-chip chip-cyan">
@@ -67,7 +68,14 @@
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 min-w-0">
               <span class="device-name truncate">{{ service.device_name }}</span>
-              <span class="device-badge badge-cyan">{{ t('mobile.discover.connectToDevice') }}</span>
+              <!-- 连接状态徽章：ml-auto 永远靠右，当前已连接设备显示绿色状态 -->
+              <span
+                class="status-badge ml-auto"
+                :class="isCurrentDevice(service) ? 'badge-emerald' : 'badge-cyan'"
+              >
+                <span v-if="isCurrentDevice(service)" class="status-dot dot-emerald"></span>
+                {{ isCurrentDevice(service) ? t('mobile.discover.connected') : t('mobile.discover.connectToDevice') }}
+              </span>
             </div>
             <div class="device-addr font-mono truncate">{{ service.address }}:{{ service.port }}</div>
           </div>
@@ -111,6 +119,11 @@ const { t } = useI18n()
 
 function goBack() {
   router.back()
+}
+
+// 是否为当前已连接的设备（与 handleConnect 的守卫逻辑保持一致）
+function isCurrentDevice(service: DiscoveredService): boolean {
+  return connection.isConnected.value && connection.currentDevice.value?.address === service.address
 }
 
 async function startScan() {
@@ -173,7 +186,7 @@ onUnmounted(() => {
 }
 
 .device-name {
-  font-size: clamp(0.7813rem, 0.8125rem + (100vw - 360px) / 840, 0.875rem);
+  font-size: var(--font-size-base);
   font-weight: 500;
   line-height: 1.2;
   color: var(--mobile-row-title);
@@ -181,17 +194,22 @@ onUnmounted(() => {
 
 .device-addr {
   margin-top: 0.125rem;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
+  font-size: var(--font-size-sm);
   line-height: 1.2;
   color: var(--mobile-row-sub);
 }
 
-.device-badge {
-  flex-shrink: 0;
-  padding: 0.125rem clamp(0.3125rem, 0.4rem + (100vw - 360px) / 840, 0.5rem);
-  font-size: clamp(0.5rem, 0.5625rem + (100vw - 360px) / 840, 0.625rem);
-  font-weight: 600;
-  line-height: 1.4;
-  border-radius: 999px;
+/* 已连接设备：非交互行，无按压反馈 */
+.device-row.is-connected {
+  cursor: default;
+}
+
+.device-row.is-connected:active {
+  background: none;
+}
+
+.device-row.is-connected .device-chip {
+  color: var(--mobile-chip-emerald);
+  background: var(--mobile-chip-emerald-bg);
 }
 </style>

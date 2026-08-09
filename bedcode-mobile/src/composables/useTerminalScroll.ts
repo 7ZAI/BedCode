@@ -3,6 +3,10 @@
  *
  * 封装 xterm 终端的触摸滚动（含惯性）、自定义滚动条、长按选择模式等逻辑。
  * 不拥有 Terminal/FitAddon 实例，通过参数接收 ref。
+ *
+ * 滚动状态对齐桌面端 TerminalPreview："是否在底部"由 onScroll 按位置推导
+ * （位置即状态，无容差猜测）；触摸按下期间以 touchActive 锁定输出自动跟随
+ * （VS Code 终端滚动锁行为：手指按住时不被新输出拉回底部）。
  */
 
 import { ref, reactive, computed, nextTick, watch, type Ref } from 'vue'
@@ -28,6 +32,8 @@ export function useTerminalScroll(
   const currentLine = ref(0)
   const cellHeight = ref(0)
   const isUserScrolling = ref(false)
+  /** 触摸滚动锁：手指按下期间暂停输出自动跟随，抬起后由位置推导恢复 */
+  const touchActive = ref(false)
   const scrollbarVisible = ref(false)
   const isSelectionMode = ref(false)
   const hasSelection = ref(false)
@@ -125,10 +131,11 @@ export function useTerminalScroll(
     return 0
   }
 
-  function isScrolledToBottom(): boolean {
-    if (!scrollContainerRef.value || !terminalRef.value) return true
-    const maxLine = terminalRef.value.buffer.active.length - terminalRef.value.rows
-    return currentLine.value >= maxLine - 2
+  /** 是否已滚动到缓冲区底部（对齐桌面端推导公式） */
+  function isAtBottom(): boolean {
+    if (!terminalRef.value) return true
+    const buffer = terminalRef.value.buffer.active
+    return buffer.viewportY + terminalRef.value.rows >= buffer.length - 1
   }
 
   /**
@@ -138,7 +145,7 @@ export function useTerminalScroll(
    * - rAF 节流：同帧多次调用只滚一次，输出持续增长时更新目标行
    */
   function scrollToBottom() {
-    if (!terminalRef.value || isUserScrolling.value) return
+    if (!terminalRef.value || isUserScrolling.value || touchActive.value) return
 
     const bufferLength = terminalRef.value.buffer.active.length
     const rows = terminalRef.value.rows
@@ -168,7 +175,10 @@ export function useTerminalScroll(
   function scrollToBottomManual() {
     if (!terminalRef.value) return
 
+    // 显式复位底部状态与滚动锁：已在底部时 scrollToLine 不触发 onScroll，
+    // 推导路径不会执行，需手动复位
     isUserScrolling.value = false
+    touchActive.value = false
     const bufferLength = terminalRef.value.buffer.active.length
     const rows = terminalRef.value.rows
     const targetLine = Math.max(0, bufferLength - rows)
@@ -275,8 +285,9 @@ export function useTerminalScroll(
     touchState.velocity = 0
     touchState.fractionalLine = 0
 
-    // 触摸即接管滚动：暂停输出自动跟随，避免手势被新输出拉回底部
-    isUserScrolling.value = true
+    // 触摸即锁定滚动：暂停输出自动跟随，避免手势被新输出拉回底部；
+    // 底部判定仍由 onScroll 按位置推导，手指抬起后自动恢复
+    touchActive.value = true
 
     enableGpuHint()
 
@@ -350,10 +361,13 @@ export function useTerminalScroll(
     }
 
     if (!terminalRef.value || cellHeight.value <= 0) {
+      touchActive.value = false
       disableGpuHint()
       return
     }
 
+    // 手指抬起解除滚动锁：是否停在底部由 onScroll 按位置推导
+    touchActive.value = false
     startInertia()
   }
 
@@ -374,9 +388,7 @@ export function useTerminalScroll(
 
   function startInertia() {
     if (Math.abs(touchState.velocity) < 0.02) {
-      if (isScrolledToBottom()) {
-        isUserScrolling.value = false
-      }
+      // 是否停在底部由 onScroll 按位置推导，无需手动判定
       disableGpuHint()
       return
     }
@@ -394,9 +406,7 @@ export function useTerminalScroll(
       if (Math.abs(touchState.velocity) < 0.005) {
         touchState.inertiaRafId = 0
         touchState.fractionalLine = 0
-        if (isScrolledToBottom()) {
-          isUserScrolling.value = false
-        }
+        // 惯性结束：是否停在底部由 onScroll 按位置推导
         disableGpuHint()
         return
       }
@@ -600,6 +610,11 @@ export function useTerminalScroll(
 
     terminalRef.value.onScroll((viewportY: number) => {
       currentLine.value = viewportY
+      // 对齐桌面端：由滚动位置推导是否处于底部（位置即状态），
+      // 在底部时输出自动跟随，向上滚动后停止跟随
+      const buffer = terminalRef.value!.buffer.active
+      const viewportBottom = buffer.viewportY + terminalRef.value!.rows
+      isUserScrolling.value = viewportBottom < buffer.length - 1
       scheduleScrollRefresh()
     })
 
@@ -625,7 +640,8 @@ export function useTerminalScroll(
 
   function handleShortcutsPanelToggle(height: number) {
     if (height > 0) {
-      if (isScrolledToBottom()) {
+      // 仅当终端停在底部时上移内容，露出被面板遮挡的当前行
+      if (isAtBottom()) {
         shortcutsPanelHeight.value = height
       }
     } else {
@@ -647,6 +663,7 @@ export function useTerminalScroll(
 
   function dispose() {
     isUserScrolling.value = false
+    touchActive.value = false
     scrollbarVisible.value = false
 
     if (xtermTransitionTimer) {
