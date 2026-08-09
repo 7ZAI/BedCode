@@ -37,7 +37,7 @@ describe('useSidebarMenu', () => {
 
   it('默认只有内置菜单项，按内置 order 升序排列，设备配对位于首位、设置位于最末位', () => {
     const { menuItems } = useSidebarMenu()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'server', 'plugins', 'settings'])
+    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'plugins', 'settings'])
     // 设备配对菜单项使用"设备配对" i18n key
     expect(menuItems.value[0].labelKey).toBe('desktop.sidebar.devicePairing')
     expect(menuItems.value[0].isI18nKey).toBe(true)
@@ -49,13 +49,13 @@ describe('useSidebarMenu', () => {
 
     const { menuItems } = useSidebarMenu()
     const ids = menuItems.value.map((m) => m.id)
-    expect(ids).toEqual(['devices', 'sessions', 'server', 'plugins', 'plugin-p1-v1', 'plugin-p2-v2', 'settings'])
+    expect(ids).toEqual(['devices', 'sessions', 'plugins', 'plugin-p1-v1', 'plugin-p2-v2', 'settings'])
   })
 
   it('插件可通过 order 插入到任意内置菜单项之间', () => {
     // order 150：位于"设备配对"(100) 与"终端会话"(200) 之间
     registerPluginView('p1', 'v1', 'sidebar', 150)
-    // order 350：位于"服务器"(300) 与"插件"(400) 之间
+    // order 350：位于"终端会话"(200) 与"插件"(400) 之间（server 槽位 300 已废弃）
     registerPluginView('p2', 'v2', 'toolbox', 350)
 
     const { menuItems } = useSidebarMenu()
@@ -63,7 +63,6 @@ describe('useSidebarMenu', () => {
       'devices',
       'plugin-p1-v1',
       'sessions',
-      'server',
       'plugin-p2-v2',
       'plugins',
       'settings',
@@ -89,11 +88,11 @@ describe('useSidebarMenu', () => {
     disposables.push(custom)
 
     const { menuItems } = useSidebarMenu()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'custom', 'server', 'plugins', 'settings'])
+    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'custom', 'plugins', 'settings'])
 
     // dispose 后菜单项移除
     custom.dispose()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'server', 'plugins', 'settings'])
+    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'plugins', 'settings'])
   })
 
   it('自定义项支持 i18n key 与纯文本标题标记', () => {

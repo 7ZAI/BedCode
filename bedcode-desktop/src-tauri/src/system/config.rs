@@ -182,6 +182,9 @@ pub struct NetworkConfig {
     /// WebSocket 单消息最大大小（MB）
     #[serde(default = "default_ws_max_message_size_mb")]
     pub ws_max_message_size_mb: usize,
+    /// 服务器性能监控采集总开关（默认关闭；开启时采集 CPU/内存/WS 速率指标）
+    #[serde(default = "default_metrics_enabled")]
+    pub metrics_enabled: bool,
 }
 
 fn default_prevent_sleep() -> bool {
@@ -197,6 +200,7 @@ fn default_tcp_nodelay() -> bool { true }
 fn default_shutdown_timeout_secs() -> u64 { 30 }
 fn default_ws_max_frame_size_kb() -> usize { 64 }
 fn default_ws_max_message_size_mb() -> usize { 16 }
+fn default_metrics_enabled() -> bool { false }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
@@ -214,6 +218,7 @@ impl Default for NetworkConfig {
             shutdown_timeout_secs: default_shutdown_timeout_secs(),
             ws_max_frame_size_kb: default_ws_max_frame_size_kb(),
             ws_max_message_size_mb: default_ws_max_message_size_mb(),
+            metrics_enabled: default_metrics_enabled(),
         }
     }
 }
@@ -501,6 +506,7 @@ impl AppConfig {
                 shutdown_timeout_secs: parse_value(props, "network.shutdown_timeout_secs", default_shutdown_timeout_secs()),
                 ws_max_frame_size_kb: parse_value(props, "network.ws_max_frame_size_kb", default_ws_max_frame_size_kb()),
                 ws_max_message_size_mb: parse_value(props, "network.ws_max_message_size_mb", default_ws_max_message_size_mb()),
+                metrics_enabled: parse_value(props, "network.metrics_enabled", default_metrics_enabled()),
             },
             session: SessionConfig {
                 default_environment: parse_value(props, "session.default_environment", "windows".to_string()),
@@ -591,6 +597,7 @@ impl AppConfig {
         map.insert("network.shutdown_timeout_secs".to_string(), self.network.shutdown_timeout_secs.to_string());
         map.insert("network.ws_max_frame_size_kb".to_string(), self.network.ws_max_frame_size_kb.to_string());
         map.insert("network.ws_max_message_size_mb".to_string(), self.network.ws_max_message_size_mb.to_string());
+        map.insert("network.metrics_enabled".to_string(), self.network.metrics_enabled.to_string());
         map.insert("session.default_environment".to_string(), self.session.default_environment.clone());
         map.insert("session.default_wsl_distro".to_string(), self.session.default_wsl_distro.clone().unwrap_or_default());
         map.insert("session.default_working_dir".to_string(), self.session.default_working_dir.clone().unwrap_or_default());

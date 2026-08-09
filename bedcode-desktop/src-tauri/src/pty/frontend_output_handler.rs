@@ -50,6 +50,12 @@ impl FrontendOutputHandler {
         let ctx = crate::system::app_context::AppContext::global();
         let plugin_host = ctx.plugin_host();
 
+        // 无 terminal handler 时直接透传：避免每次输出都做
+        // base64 解码 + UTF-8 校验 + 字符串拷贝（绝大多数运行场景无插件）
+        if !plugin_host.has_terminal_handlers().await {
+            return event;
+        }
+
         // 解码 Base64 输出数据
         let bytes = match event.decode_data() {
             Some(b) => b,

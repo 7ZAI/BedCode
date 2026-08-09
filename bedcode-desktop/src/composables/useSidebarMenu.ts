@@ -42,7 +42,8 @@ export interface SidebarMenuItemDescriptor {
 }
 
 /** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设备配对(100) 置于首位；设置(700) 置于插件默认排序值(600) 之后，保证默认位于最末位 */
+ * 设备配对(100) 置于首位；设置(700) 置于插件默认排序值(600) 之后，保证默认位于最末位。
+ * 说明：server 槽位(300) 保留不复用，防止插件排序撞位 */
 export const BUILTIN_MENU_ORDERS = {
   devices: 100,
   sessions: 200,
@@ -54,7 +55,13 @@ export const BUILTIN_MENU_ORDERS = {
 /** 插件/自定义项未指定 icon 时的兜底图标 */
 const DEFAULT_MENU_ICON = 'M4 6h16M4 12h16M4 18h7'
 
-/** 内置菜单项（与插件共用 Heroicons outline 图标体系） */
+/**
+ * 内置菜单项（与插件共用 Heroicons outline 图标体系）
+ *
+ * 服务器管理页面（/server）已从导航中移除入口（产品决策：服务器常驻，
+ * 用户不可开关，见 ServerSupervisor）。路由与页面代码保留，调试者可直接
+ * 访问 /server URL 预览，未来 CLI 开发工具可复用此页面。
+ */
 export const builtinMenuItems: SidebarMenuItem[] = [
   {
     id: 'sessions',
@@ -64,14 +71,16 @@ export const builtinMenuItems: SidebarMenuItem[] = [
     icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01',
     order: BUILTIN_MENU_ORDERS.sessions,
   },
-  {
-    id: 'server',
-    path: '/server',
-    labelKey: 'desktop.sidebar.server',
-    isI18nKey: true,
-    icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01',
-    order: BUILTIN_MENU_ORDERS.server,
-  },
+  // 服务器管理入口已移除：页面保留于 /server 供调试者直接访问 URL 预览。
+  // 原菜单项：
+  // {
+  //   id: 'server',
+  //   path: '/server',
+  //   labelKey: 'desktop.sidebar.server',
+  //   isI18nKey: true,
+  //   icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01',
+  //   order: BUILTIN_MENU_ORDERS.server,
+  // },
   {
     id: 'devices',
     path: '/devices',

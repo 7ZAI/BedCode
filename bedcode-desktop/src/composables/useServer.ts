@@ -33,6 +33,8 @@ export interface NetworkConfig {
   shutdown_timeout_secs: number
   ws_max_frame_size_kb: number
   ws_max_message_size_mb: number
+  /** 服务器性能监控采集总开关（默认关闭） */
+  metrics_enabled: boolean
 }
 
 /** 服务器性能指标 */

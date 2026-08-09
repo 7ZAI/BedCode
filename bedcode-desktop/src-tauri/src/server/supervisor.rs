@@ -71,6 +71,16 @@ struct SupervisorInner {
 /// 服务器管理器（全局单例）
 ///
 /// 委托 WebSocketManager 启动/停止 Actix Web，直接采集指标
+///
+/// # 产品决策：服务器永久自启动
+///
+/// 桌面端本地功能（终端背景图 `/static/terminal-bg`、插件 HTTP 端点等）依赖本服务，
+/// 用户关闭服务会导致这些功能静默失效，因此自启动**永久开启且不再可配置**
+/// （见 [`ServerSupervisor::init_config`]；配置文件中遗留的 `network.auto_start`
+/// 字段不再生效）。管理页面入口已从 UI 移除，调试者可直访 `/server` 预览。
+///
+/// 未来规划：可能通过 CLI 开发工具提供服务重启能力（复用现有
+/// [`ServerSupervisor::start`] / [`stop`](Self::stop) / [`restart`](Self::restart)）。
 pub struct ServerSupervisor {
     inner: Arc<RwLock<SupervisorInner>>,
 }
@@ -95,10 +105,16 @@ impl ServerSupervisor {
     }
 
     /// 初始化配置
+    ///
+    /// `auto_start` 参数保留仅为 API 兼容：产品决策为服务器永久自启动，
+    /// 无论配置如何，启动阶段一律自动开启（`network.auto_start` 配置项废弃）。
+    /// 未来 CLI 开发工具可调用 [`start`](Self::start) 重启服务。
     pub async fn init_config(&self, port: u16, auto_start: bool) {
         let mut inner = self.inner.write().await;
         inner.port = port;
-        inner.auto_start = auto_start;
+        // 忽略传入值，恒为开启：用户不可关闭服务器（关闭会导致本地功能静默失效）
+        inner.auto_start = true;
+        let _ = auto_start;
     }
 
     /// 启动服务器（主进程内 Actix Web）
@@ -130,11 +146,16 @@ impl ServerSupervisor {
                 // 取消旧的指标采样任务（防御性：确保 stop() 遗漏时也能停止）
                 inner.metrics_task_cancel.store(true, Ordering::Relaxed);
 
-                // 启动新的指标采样任务
+                // 取消标志供采样任务与 crash monitor 共用
                 let cancel_flag = Arc::new(AtomicBool::new(false));
                 inner.metrics_task_cancel = cancel_flag.clone();
-                let inner_arc = self.inner.clone();
-                tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag.clone()));
+
+                // 指标采样按配置总开关启动（network.metrics_enabled，默认关闭；
+                // 调试者需在 config.properties 开启后重启服务生效）
+                if crate::system::config::AppConfig::global().network.metrics_enabled {
+                    let inner_arc = self.inner.clone();
+                    tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag.clone()));
+                }
 
                 // 监听 Actix 线程异常退出事件
                 // 当 crash monitor 检测到 Actix 线程崩溃时，会发送 ServerEvent::Stopped。
@@ -296,9 +317,12 @@ impl ServerSupervisor {
     }
 
     /// 更新自启动配置
-    pub async fn update_auto_start(&self, auto_start: bool) {
+    ///
+    /// 产品决策：自启动永久开启，本方法为 no-op（保留接口供旧命令调用，
+    /// 实际值恒为 true，见 [`init_config`](Self::init_config)）
+    pub async fn update_auto_start(&self, _auto_start: bool) {
         let mut inner = self.inner.write().await;
-        inner.auto_start = auto_start;
+        inner.auto_start = true;
     }
 }
 

@@ -10,7 +10,7 @@ import { onPtyOutput } from '@/composables/useDesktopCommands'
 
 export function usePtyOutput(
   sessionId: string | Ref<string>,
-  onData: (data: string, index: number) => void,
+  onData: (data: Uint8Array, index: number) => void,
 ) {
   let unlisten: (() => void) | null = null
 
@@ -36,18 +36,20 @@ export function usePtyOutput(
     // 按 session 分 channel 监听，无需前端过滤
     unlisten = await onPtyOutput(targetSessionId, (event: any) => {
       try {
-        // atob() 解码后是 Latin-1 编码，需要转换为 UTF-8
+        // atob() 解码后是 Latin-1 编码，逐字符拷贝为字节数组。
+        // 不转 UTF-8 字符串：终端字节流含任意字节（转义序列/二进制数据），
+        // TextDecoder 会把非法字节替换为 U+FFFD 破坏数据；
+        // 且 xterm.write 原生接受 Uint8Array，无需字符串中间态
         const binaryString = atob(event.data)
         const bytes = new Uint8Array(binaryString.length)
         for (let i = 0; i < binaryString.length; i++) {
           bytes[i] = binaryString.charCodeAt(i)
         }
-        const decodedData = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-        onData(decodedData, event.index ?? 0)
+        onData(bytes, event.index ?? 0)
       } catch (e) {
         console.error('[usePtyOutput] Failed to decode base64:', e)
-        // 解码失败时使用原始数据
-        onData(event.data, event.index ?? 0)
+        // 解码失败无法恢复原始字节，丢弃并打日志（Rust 端为标准 base64，正常不会发生）
+        onData(new Uint8Array(0), event.index ?? 0)
       }
     })
   }

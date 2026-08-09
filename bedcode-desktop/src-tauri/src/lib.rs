@@ -343,7 +343,9 @@ pub fn run() {
 
             let supervisor = server::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
-            let auto_start = app_config.network.auto_start;
+            // 产品决策：服务器永久自启动，不再可配置（本地功能依赖此服务，
+            // 见 ServerSupervisor 类注释；config 中 network.auto_start 已废弃）
+            let auto_start = true;
             tauri::async_runtime::spawn(async move {
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
