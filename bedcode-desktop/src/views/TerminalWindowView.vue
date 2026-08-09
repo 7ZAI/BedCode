@@ -102,8 +102,8 @@
       <p class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.terminal.loadingSession') }}</p>
     </div>
 
-    <!-- 终端区 -->
-    <TerminalPreview v-else ref="terminalPreviewRef" :session="session" :show-input="true" :show-header="false" />
+    <!-- 终端区：flex-1 占据剩余空间，min-h-0 防止内容撑开容器 -->
+    <TerminalPreview v-else ref="terminalPreviewRef" class="flex-1 min-h-0" :session="session" :show-input="true" :show-header="false" />
 
     <!-- 24px 状态条 -->
     <footer class="h-6 shrink-0 flex items-center justify-between px-3 border-t border-[var(--border)] bg-[var(--bg-card)]">
@@ -678,10 +678,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-:deep(.xterm) {
-  height: 100%;
-}
-
 /* 设置面板滑出过渡：will-change 提升为独立合成层，避免动画期间页面抖动 */
 .settings-panel-enter-active,
 .settings-panel-leave-active {
@@ -699,25 +695,5 @@ onUnmounted(() => {
 .settings-backdrop-leave-active {
   transition: opacity 0.2s ease;
   will-change: opacity;
-}
-
-:deep(.xterm-viewport) {
-  border-radius: 0;
-  overflow-x: hidden;
-}
-
-/* xterm 6 中 .xterm-viewport 不承载滚动（内容高度=视口高度，滚动由
-   .xterm-scrollable-element 的 JS 状态驱动），其原生滚动条永远满格且拖不动，
-   会误导用户认为滚动失效。隐藏它，滚动条统一由 xterm 自绘 slider 提供。 */
-:deep(.xterm-viewport)::-webkit-scrollbar {
-  display: none;
-}
-
-/* xterm 自绘滚动条（.xterm-scrollable-element > .scrollbar）默认仅鼠标悬停
-   时显示（VS Code 风格），且 slider 高度可能只有最小保护值，深色主题下几乎
-   不可见。强制常显，让用户能发现并拖动真正的滚动条。 */
-:deep(.xterm .xterm-scrollable-element > .scrollbar.vertical) {
-  opacity: 1 !important;
-  transition: none;
 }
 </style>
