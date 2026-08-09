@@ -256,6 +256,8 @@ impl Message {
                     is_waiting,
                     index,
                     end_index: None,
+                    start_offset: None,
+                    end_offset: None,
                 },
             },
         }
@@ -277,6 +279,8 @@ impl Message {
                     is_waiting,
                     index,
                     end_index,
+                    start_offset: None,
+                    end_offset: None,
                 },
             },
         }
@@ -365,6 +369,9 @@ impl Message {
                     min_seq,
                     max_seq,
                     history_count,
+                    mode: None,
+                    min_offset: None,
+                    max_offset: None,
                 },
             },
         }

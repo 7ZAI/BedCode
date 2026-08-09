@@ -165,7 +165,7 @@ async function init() {
       console.log('[MobileConnection] Disconnected')
       autoStopForegroundService()
 
-      // 标记所有 buffer 未订阅 + hasGap
+      // 标记所有 buffer 未订阅（重连后按字节游标重新订阅）
       const bufferStore = useTerminalBufferStore()
       bufferStore.markAllUnsubscribed()
     },
@@ -201,18 +201,15 @@ async function init() {
         if (!buffer.sessionStopped && !buffer.subscribed) {
           // 先标记 subscribed 防止 watch(isConnected) 和此处竞态导致双重订阅
           bufferStore.markSubscribed(sid)
-          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
+          // 字节游标续传（服务端裁决：游标失效时自动全量重播）
+          const startSeq = buffer.cursor >= 0 ? buffer.cursor : undefined
           wsJoinSession(sid, startSeq)
             .then((result) => {
-              if (startSeq !== undefined && result && result.minSeq > startSeq) {
-                // 增量同步回退 — 清空 buffer，标记 hasGap，通知 xterm 清空
+              // 服务端裁决 reset：游标已失效，清屏后等待全量回放帧
+              if (result.mode === 'reset') {
                 const buf = bufferStore.getBuffer(sid)
                 if (buf) {
-                  buf.chunks = []
-                  buf.totalBytes = 0
-                  buf.lastIndex = -1
-                  buf.lastEndIndex = -1
-                  buf.hasGap = true
+                  buf.cursor = -1
                 }
                 // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
                 const handler = bufferStore.realtimeHandlers.get(sid)

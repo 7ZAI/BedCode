@@ -1,20 +1,19 @@
 /**
  * Terminal Buffer Composable
  *
- * TerminalView 用的 composable — 从 store 读取 buffer、注册实时 handler、写入历史到 xterm
+ * TerminalView 用的 composable — 管理会话订阅与实时输出写入。
+ * 数据真源在服务端：历史回放（incremental 续传 / reset 全量重播）与实时推送
+ * 同通道流式到达，前端只维护字节游标，不再缓存输出字节。
  */
 
-import { useTerminalBufferStore, type OutputPayload } from '@/stores/terminalBuffer'
-import {
-  wsJoinSession,
-  wsLeaveSession,
-} from '@/composables/useMobileCommands'
-import { createWriteCoalescer, wrapSyncOutput } from '@/composables/writeCoalescer'
+import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
+import { wsJoinSession, wsLeaveSession } from '@/composables/useMobileCommands'
+import { createWriteCoalescer } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
 
 // ==================== Types ====================
 
-export type { OutputPayload } from '@/stores/terminalBuffer'
+export type { OutputPayload, SubscribeResultInfo } from '@/stores/terminalBuffer'
 
 // ==================== Write Coalescer ====================
 //
@@ -36,38 +35,8 @@ export function useTerminalBuffer() {
   const store = useTerminalBufferStore()
 
   /**
-   * 写入 buffer 中的历史数据到 xterm
-   *
-   * @param sessionId - 会话 ID
-   * @param terminal - xterm Terminal 实例
-   */
-  function writeBufferHistoryToTerminal(sessionId: string, terminal: Terminal) {
-    const buffer = store.getBuffer(sessionId)
-    if (!buffer || buffer.chunks.length === 0) return
-
-    // 合并所有 chunks 为单次写入，避免长历史触发多次 render 引起重影
-    let totalBytes = 0
-    for (const chunk of buffer.chunks) totalBytes += chunk.byteLength
-    if (totalBytes === 0) return
-
-    // DEC Mode 2026 包裹：让 xterm 缓存整段历史到下一帧统一渲染，
-    // 避免 WebGL 渲染器逐块绘制长历史时产生视觉撕裂/重影
-    if (buffer.chunks.length === 1) {
-      terminal.write(wrapSyncOutput(buffer.chunks[0]))
-      return
-    }
-
-    const combined = new Uint8Array(totalBytes)
-    let offset = 0
-    for (const chunk of buffer.chunks) {
-      combined.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    terminal.write(wrapSyncOutput(combined))
-  }
-
-  /**
-   * 注册实时输出 handler — 新数据同时写 buffer（store 已处理）和 xterm
+   * 注册实时输出 handler — 服务端回放（历史）与实时推送同通道到达，
+   * 统一经 rAF 合并写入 xterm
    *
    * @param sessionId - 会话 ID
    * @param terminal - xterm Terminal 实例
@@ -75,7 +44,7 @@ export function useTerminalBuffer() {
   function registerRealtimeHandler(sessionId: string, terminal: Terminal) {
     const writeCoalescer = createWriteCoalescer(terminal)
     store.registerRealtimeHandler(sessionId, {
-      onOutput: (data: Uint8Array, _payload: OutputPayload) => {
+      onOutput: (data: Uint8Array) => {
         writeCoalescer(data)
       },
       onClear: () => {
@@ -97,46 +66,33 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 订阅会话 — 如果 buffer 已标记 subscribed 则跳过
+   * 订阅会话 — 已订阅则跳过；未订阅时以字节游标发起增量续传
+   *
+   * 服务端裁决 mode（替代旧版 minSeq > startSeq 客户端猜测）：
+   * - incremental：游标在保留区间内，从游标字节级裁剪续传
+   * - reset：游标失效（头部淘汰/流重建/首次），清屏后全量重播
    *
    * @param sessionId - 会话 ID
-   * @returns SubscribeResult 或 null（已订阅时跳过）
+   * @returns 订阅裁决信息或 null（已订阅时跳过）
    */
-  async function subscribeSession(sessionId: string): Promise<{ minSeq: number; maxSeq: number; historyCount: number } | null> {
+  async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
     const buffer = store.getBuffer(sessionId)
     if (buffer?.subscribed) return null // 已订阅，跳过
 
-    // 增量同步：有 lastIndex 时从断点继续
-    const startSeq = buffer && buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
-
-    // 全量回放时重置 buffer 去重游标
-    if (startSeq === undefined) {
-      if (buffer) {
-        buffer.lastIndex = -1
-        buffer.lastEndIndex = -1
-      }
-    }
+    // 字节游标：上次渲染到的位置；-1（未渲染过）→ 首次全量重播
+    const cursor = buffer && buffer.cursor >= 0 ? buffer.cursor : undefined
 
     // 先确保 buffer 存在 + 监听器启动，再订阅后端
     store.ensureBuffer(sessionId)
 
-    const result = await wsJoinSession(sessionId, startSeq)
+    const result = await wsJoinSession(sessionId, cursor)
 
-    // 增量同步回退检测：后端 minSeq > startSeq，说明旧数据已被覆盖
-    if (startSeq !== undefined && result && result.minSeq > startSeq) {
-      console.warn(
-        `[useTerminalBuffer] Incremental sync gap: minSeq=${result.minSeq} > startSeq=${startSeq}, clearing buffer for fresh replay`
-      )
-      // 清空 buffer 避免显示不完整的拼接内容
+    // 服务端裁决 reset：游标已失效，清屏后等待全量回放帧
+    if (result.mode === 'reset') {
       const buf = store.getBuffer(sessionId)
       if (buf) {
-        buf.chunks = []
-        buf.totalBytes = 0
-        buf.lastIndex = -1
-        buf.lastEndIndex = -1
-        buf.hasGap = true
+        buf.cursor = -1
       }
-      // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
       const handler = store.realtimeHandlers.get(sessionId)
       if (handler?.onClear) {
         handler.onClear()
@@ -148,7 +104,7 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 取消订阅会话（会话停止/删除时调用）
+   * 取消订阅会话（页面卸载/会话停止/删除时调用）
    *
    * @param sessionId - 会话 ID
    */
@@ -163,7 +119,7 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 连接断开时 — 标记所有 buffer 未订阅 + hasGap
+   * 连接断开时 — 标记所有 buffer 未订阅
    */
   function handleDisconnect() {
     store.markAllUnsubscribed()
@@ -217,7 +173,6 @@ export function useTerminalBuffer() {
 
   return {
     store,
-    writeBufferHistoryToTerminal,
     registerRealtimeHandler,
     unregisterRealtimeHandler,
     subscribeSession,

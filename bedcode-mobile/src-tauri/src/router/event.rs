@@ -36,6 +36,10 @@ pub enum MobileEvent {
         index: u64,
         /// 合并消息的结束索引，None 表示单条事件
         end_index: Option<u64>,
+        /// 起始字节偏移（会话流坐标），供字节级游标续传（旧版服务端不发送）
+        start_offset: Option<u64>,
+        /// 结束字节偏移（会话流坐标）
+        end_offset: Option<u64>,
     },
 
     // === 认证事件 ===
@@ -207,13 +211,15 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
         // 终端输出事件：直接传递 Base64 到前端，由前端解码
         // 避免在 Rust 层做 Base64 解码 + UTF-8 lossy 转换的双重开销
         // 前端用 atob() 解码为 Uint8Array 传给 xterm.write()，比 string 更高效且无损
-        MobileEvent::Output { session_id, data, is_waiting, index: global_index, end_index } => {
+        MobileEvent::Output { session_id, data, is_waiting, index: global_index, end_index, start_offset, end_offset } => {
             if let Err(e) = app.emit("ws_output", serde_json::json!({
                 "session_id": session_id,
                 "data_base64": data,
                 "is_waiting": is_waiting,
                 "index": global_index,
                 "end_index": end_index,
+                "start_offset": start_offset,
+                "end_offset": end_offset,
             })) {
                 tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
             }

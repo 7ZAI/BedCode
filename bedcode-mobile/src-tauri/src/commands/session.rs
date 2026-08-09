@@ -76,6 +76,12 @@ pub struct SubscribeResult {
     pub max_seq: u64,
     /// 历史消息数量
     pub history_count: usize,
+    /// 订阅裁决：incremental = 从游标续传；reset = 清屏全量重播（旧版服务端返回 reset）
+    pub mode: crate::enums::SubscribeMode,
+    /// 环形保留区间最小字节偏移
+    pub min_offset: u64,
+    /// 环形保留区间最大字节偏移
+    pub max_offset: u64,
 }
 
 /// 带起始序号的订阅会话（用于断线重连后从断点继续）
@@ -95,15 +101,19 @@ pub async fn ws_subscribe_session(app_handle: AppHandle, session_id: String, sta
 
     // 解析响应：成功时为 SubscribeResponse，失败时为 Error（如 AUTH_REQUIRED）
     let result = if let Message::Terminal { payload, .. } = &response {
-        if let TerminalAction::SubscribeResponse { min_seq, max_seq, history_count } = &payload.action {
+        if let TerminalAction::SubscribeResponse { min_seq, max_seq, history_count, mode, min_offset, max_offset } = &payload.action {
             SubscribeResult {
                 min_seq: *min_seq,
                 max_seq: *max_seq,
                 history_count: *history_count,
+                // 旧版服务端不发送 mode/offsets：按 reset 处理（全量重播，语义保守正确）
+                mode: mode.unwrap_or(crate::enums::SubscribeMode::Reset),
+                min_offset: min_offset.unwrap_or(0),
+                max_offset: max_offset.unwrap_or(*max_seq),
             }
         } else {
             // 非标准响应，返回默认值
-            SubscribeResult { min_seq: 0, max_seq: 0, history_count: 0 }
+            SubscribeResult { min_seq: 0, max_seq: 0, history_count: 0, mode: crate::enums::SubscribeMode::Reset, min_offset: 0, max_offset: 0 }
         }
     } else if let Message::Error { code, message, .. } = &response {
         // 桌面端返回错误（如 AUTH_REQUIRED），转为 AppError 让前端可感知
@@ -115,7 +125,7 @@ pub async fn ws_subscribe_session(app_handle: AppHandle, session_id: String, sta
             format!("Subscribe failed: {} - {}", code, message)
         ));
     } else {
-        SubscribeResult { min_seq: 0, max_seq: 0, history_count: 0 }
+        SubscribeResult { min_seq: 0, max_seq: 0, history_count: 0, mode: crate::enums::SubscribeMode::Reset, min_offset: 0, max_offset: 0 }
     };
 
     tracing::info!(

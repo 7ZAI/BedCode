@@ -1,9 +1,9 @@
 /**
  * Terminal Buffer Store
  *
- * 全局终端输出缓冲区 — 分离数据接收与渲染
- * 后台会话只维护轻量 JS buffer，不持有 xterm 实例
- * 切换到某会话时，从 buffer 一次性写入历史数据到 xterm
+ * 全局终端输出订阅状态 — 数据真源在服务端（环形输出队列），
+ * 前端只维护字节游标（已渲染位置），不再缓存输出字节。
+ * 历史回放由服务端裁决（incremental 续传 / reset 全量重播）后流式推送。
  */
 
 import { defineStore } from 'pinia'
@@ -19,44 +19,44 @@ export interface OutputPayload {
   index: number
   end_index?: number
   is_waiting: boolean
+  /** 字节偏移（会话流坐标）——新服务端发送；旧版缺失时退化为无游标透传 */
+  start_offset?: number
+  end_offset?: number
 }
 
-/** 实时输出回调 — TerminalView 注册，新数据同时写 buffer + xterm */
+/** 订阅裁决（服务端告知，消费者零猜测） */
+export interface SubscribeResultInfo {
+  minSeq: number
+  maxSeq: number
+  historyCount: number
+  mode: 'incremental' | 'reset'
+  minOffset: number
+  maxOffset: number
+}
+
+/** 实时输出回调 — TerminalView 注册 */
 export interface RealtimeHandler {
   onOutput: (data: Uint8Array, payload: OutputPayload) => void
-  /** buffer 被清空（增量回退/全量重播）时调用，TerminalView 应清空 xterm */
+  /** 订阅裁决 reset（游标失效/全量重播）时调用，TerminalView 应清空 xterm */
   onClear?: () => void
 }
 
-/** 单会话缓冲区 */
+/** 单会话订阅状态（无本地数据缓存） */
 export interface SessionBuffer {
-  /** 原始输出 chunks，每个是 Uint8Array（解码后的 base64 数据） */
-  chunks: Uint8Array[]
-  /** 总字节数，用于容量控制 */
-  totalBytes: number
-  /** 最后接收的输出索引（去重游标） */
-  lastIndex: number
-  /** 最后接收的 end_index（合并消息的结束索引） */
-  lastEndIndex: number
-  /** buffer 是否有缺口（溢出丢弃或断连期间缺失） */
-  hasGap: boolean
+  /** 已渲染到的字节偏移（游标），-1 = 尚未渲染过（首次订阅全量重播） */
+  cursor: number
   /** 该会话是否已向后端订阅 */
   subscribed: boolean
   /** 会话是否已停止 */
   sessionStopped: boolean
 }
 
-// ==================== Constants ====================
-
-/** 每会话 buffer 上限（与 xterm scrollback 5000 行对齐） */
-const MAX_BUFFER_BYTES = 2 * 1024 * 1024
-
 // ==================== Store ====================
 
 export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   // ==================== State ====================
 
-  /** sessionId → SessionBuffer */
+  /** sessionId → 订阅状态 */
   const buffers = reactive(new Map<string, SessionBuffer>())
 
   /** sessionId → 实时回调（TerminalView 注册的） */
@@ -85,23 +85,49 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       // 会话已停止后不再接收
       if (buffer.sessionStopped) return
 
-      // 索引去重
-      if (payload.index !== undefined && payload.index <= buffer.lastIndex) {
+      const handler = realtimeHandlers.get(sessionId)
+
+      // 旧版服务端（无字节偏移）：无法维护游标，仅透传（兼容路径）
+      if (payload.start_offset === undefined || payload.end_offset === undefined) {
+        const data = decodeBase64(payload.data_base64)
+        handler?.onOutput(data, payload)
         return
       }
 
-      // 解码 base64 → Uint8Array
-      const data = decodeBase64(payload.data_base64)
-
-      // 追加到 buffer
-      appendToBuffer(sessionId, data, payload.index, payload.end_index ?? payload.index)
-
-      // 同时回调实时 handler（TerminalView 可见时）
-      const handler = realtimeHandlers.get(sessionId)
-      if (handler) {
-        handler.onOutput(data, payload)
+      // 连续性校验（防御）：服务端契约保证帧间字节连续，
+      // 违反即不变量破坏 → 清屏 + 丢弃游标 + 重新订阅（服务端裁决 reset 全量重播）
+      if (buffer.cursor >= 0 && payload.start_offset !== buffer.cursor) {
+        console.error(
+          `[terminalBuffer] continuity violation: start=${payload.start_offset}, cursor=${buffer.cursor}. Resubscribing with reset`
+        )
+        resubscribeWithReset(sessionId, buffer, handler)
+        return
       }
+
+      // 游标推进到帧尾（= 已渲染位置）
+      buffer.cursor = payload.end_offset
+
+      const data = decodeBase64(payload.data_base64)
+      handler?.onOutput(data, payload)
     })
+  }
+
+  /** 连续性不变量破坏后的自愈：丢弃游标，重新订阅（服务端给正确答案） */
+  async function resubscribeWithReset(
+    sessionId: string,
+    buffer: SessionBuffer,
+    handler?: RealtimeHandler,
+  ) {
+    buffer.cursor = -1
+    buffer.subscribed = false
+    handler?.onClear?.()
+    try {
+      // 游标丢弃 → 服务端裁决 reset，清屏后全量重播
+      await subscribeRemote(sessionId, undefined)
+      buffer.subscribed = true
+    } catch (e) {
+      console.warn('[terminalBuffer] Resubscribe after violation failed:', e)
+    }
   }
 
   /** 停止全局监听器 */
@@ -115,16 +141,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   // ==================== Buffer Operations ====================
 
-  /** 确保会话有 buffer，不存在则创建 */
+  /** 确保会话有订阅状态，不存在则创建 */
   function ensureBuffer(sessionId: string): SessionBuffer {
     let buffer = buffers.get(sessionId)
     if (!buffer) {
       buffer = {
-        chunks: [],
-        totalBytes: 0,
-        lastIndex: -1,
-        lastEndIndex: -1,
-        hasGap: false,
+        cursor: -1,
         subscribed: false,
         sessionStopped: false,
       }
@@ -135,49 +157,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     return buffer
   }
 
-  /** 小 chunk 合并阈值（字节），低于此大小的相邻 chunk 会合并减少 GC 压力 */
-  const MERGE_THRESHOLD = 4096
-
-  /** 追加输出数据到 buffer */
-  function appendToBuffer(sessionId: string, data: Uint8Array, index: number, endIndex: number) {
-    const buffer = ensureBuffer(sessionId)
-
-    // 小 chunk 合并：当最后一个 chunk 和新数据都较小时，合并为一个 Uint8Array
-    if (buffer.chunks.length > 0) {
-      const last = buffer.chunks[buffer.chunks.length - 1]
-      if (last.byteLength < MERGE_THRESHOLD && data.byteLength < MERGE_THRESHOLD) {
-        const merged = new Uint8Array(last.byteLength + data.byteLength)
-        merged.set(last)
-        merged.set(data, last.byteLength)
-        buffer.chunks[buffer.chunks.length - 1] = merged
-        buffer.totalBytes += data.length
-        buffer.lastIndex = index
-        buffer.lastEndIndex = endIndex
-
-        // 容量溢出时丢弃最旧 chunks
-        while (buffer.totalBytes > MAX_BUFFER_BYTES && buffer.chunks.length > 1) {
-          const removed = buffer.chunks.shift()!
-          buffer.totalBytes -= removed.length
-          buffer.hasGap = true
-        }
-        return
-      }
-    }
-
-    buffer.chunks.push(data)
-    buffer.totalBytes += data.length
-    buffer.lastIndex = index
-    buffer.lastEndIndex = endIndex
-
-    // 容量溢出时丢弃最旧 chunks
-    while (buffer.totalBytes > MAX_BUFFER_BYTES && buffer.chunks.length > 1) {
-      const removed = buffer.chunks.shift()!
-      buffer.totalBytes -= removed.length
-      buffer.hasGap = true
-    }
-  }
-
-  /** 获取会话 buffer */
+  /** 获取会话订阅状态 */
   function getBuffer(sessionId: string): SessionBuffer | undefined {
     return buffers.get(sessionId)
   }
@@ -188,7 +168,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer.subscribed = true
   }
 
-  /** 标记未订阅（断连时） */
+  /** 标记未订阅（断连/取消订阅时） */
   function markUnsubscribed(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (buffer) {
@@ -200,7 +180,6 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function markAllUnsubscribed() {
     for (const buffer of buffers.values()) {
       buffer.subscribed = false
-      buffer.hasGap = true
     }
   }
 
@@ -212,7 +191,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     }
   }
 
-  /** 清理单个会话 buffer */
+  /** 清理单个会话订阅状态 */
   function clearBuffer(sessionId: string) {
     buffers.delete(sessionId)
     realtimeHandlers.delete(sessionId)
@@ -222,7 +201,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     }
   }
 
-  /** 清理所有 buffer */
+  /** 清理所有订阅状态 */
   function clearAllBuffers() {
     buffers.clear()
     realtimeHandlers.clear()
@@ -258,7 +237,6 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     realtimeHandlers,
     ensureBuffer,
     getBuffer,
-    appendToBuffer,
     markSubscribed,
     markUnsubscribed,
     markAllUnsubscribed,
@@ -270,3 +248,20 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     startGlobalListener,
   }
 })
+
+// ==================== Remote Subscription ====================
+// 订阅动作收敛到 store：连续性不变量破坏时可在监听器内自愈（重新订阅）
+
+import { invoke } from '@tauri-apps/api/core'
+
+/** 远端订阅（ws_subscribe_session），返回服务端裁决 */
+async function subscribeRemote(sessionId: string, cursor: number | undefined) {
+  const result = await invoke<SubscribeResultInfo>('ws_subscribe_session', {
+    sessionId,
+    startSeq: cursor === undefined ? null : cursor,
+  })
+  return result
+}
+
+// 供 composable 复用
+export { subscribeRemote }
