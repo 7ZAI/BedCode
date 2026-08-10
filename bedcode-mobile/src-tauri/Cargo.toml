@@ -66,10 +66,16 @@ tokio-tungstenite = "0.24"
 mdns-sd = "0.20"
 flume = "0.12"
 
+# Network utilities
+local-ip-address = "0.6"
+# Hostname（非 Android 平台设备名回退）
+hostname = "0.4"
+
 futures-util = "0.3"
 
 # WASM runtime for plugin system
-wasmtime = "46"
+# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
+wasmtime = "47"
 
 # HTTP client (WASM plugin HTTP proxy + remote download)
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
@@ -101,7 +107,9 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 tempfile = "3"
 
 [profile.release]
-panic = "abort"
+# unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
+# 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"

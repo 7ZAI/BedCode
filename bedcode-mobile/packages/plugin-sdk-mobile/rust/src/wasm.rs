@@ -79,9 +79,14 @@ pub trait WasmPlugin: Send + Sync + 'static {
 #[macro_export]
 macro_rules! wasm_entry {
     ($plugin_type:ty) => {
-        static PLUGIN: std::sync::OnceLock<$plugin_type> = std::sync::OnceLock::new();
-        static HOST: std::sync::OnceLock<$crate::wasm_host::WasmHost> = std::sync::OnceLock::new();
-        use $crate::host::HostLog as _;
+        // 导出函数仅 wasm32 目标需要（宿主 wasmtime 加载）；host 目标（cargo test）
+        // 不生成任何导出，避免 `#[no_mangle]` 强制保留对 host_* import 符号的未定义引用
+        #[cfg(target_arch = "wasm32")]
+        mod __bedcode_wasm_exports {
+            use super::*;
+            static PLUGIN: std::sync::OnceLock<$plugin_type> = std::sync::OnceLock::new();
+            static HOST: std::sync::OnceLock<$crate::wasm_host::WasmHost> = std::sync::OnceLock::new();
+            use $crate::host::HostLog as _;
 
         /// ABI 版本协商 — 宿主实例化后读取，与 `abi::ABI_VERSION` 比对
         #[no_mangle]
@@ -308,6 +313,7 @@ macro_rules! wasm_entry {
             let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&json);
             $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
             0
+            }
         }
     };
 }

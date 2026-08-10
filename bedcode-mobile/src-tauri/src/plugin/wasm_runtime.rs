@@ -157,10 +157,16 @@ pub struct LoadedWasmPlugin {
 }
 
 /// 根据 wasm 路径生成 AOT 缓存文件名（稳定 hash，避免路径字符/长度问题）
-fn aot_cache_key(path: &Path) -> u64 {
+/// 产物 key：路径 + 源码大小双因子哈希
+///
+/// 源码大小进入 key：解压器保留旧 mtime 时，仅 mtime 比较发现不了内容
+/// 变更；大小变化必然换 key → 缓存 miss → 重新编译。产物自身长度与源码
+/// 长度无固定关系，不能作为新鲜度因子（比较会恒不等、永久禁用缓存）
+fn aot_cache_key(path: &Path, source_len: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut hasher);
+    source_len.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -224,14 +230,23 @@ impl WasmRuntime {
             });
         };
 
-        let cache_path = cache_dir.join(format!("{:016x}.cwasm", aot_cache_key(path)));
+        // 源码大小计入缓存 key（内容变化但 mtime 未更新的场景：大小变化必然换 key）；
+        // 新鲜度主判据为 mtime——同大小同 mtime 的编辑无法探测（无成本方案），
+        // 但旧产物是合法编译代码不会崩溃，仅行为漂移，属可接受残留
+        let wasm_md = std::fs::metadata(path).ok();
+        let cache_path = cache_dir.join(format!(
+            "{:016x}.cwasm",
+            aot_cache_key(path, wasm_md.as_ref().map(|md| md.len()).unwrap_or(0))
+        ));
 
-        // 产物存在且不旧于 wasm 源时尝试直接反序列化
-        let cache_fresh = std::fs::metadata(path)
-            .and_then(|w| w.modified())
-            .ok()
-            .zip(std::fs::metadata(&cache_path).and_then(|c| c.modified()).ok())
-            .map(|(wasm_mtime, cache_mtime)| cache_mtime >= wasm_mtime)
+        let cache_fresh = wasm_md
+            .and_then(|w| w.modified().ok())
+            .zip(
+                std::fs::metadata(&cache_path)
+                    .ok()
+                    .and_then(|c| c.modified().ok()),
+            )
+            .map(|(wm, cm)| cm >= wm)
             .unwrap_or(false);
 
         if cache_fresh {

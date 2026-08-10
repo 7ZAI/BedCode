@@ -223,10 +223,16 @@ pub struct WasmHostContext {
 /// 方法接口与迁移前枚举完全一致。
 
 /// 根据 wasm 路径生成 AOT 缓存文件名（稳定 hash，避免路径字符/长度问题）
-fn aot_cache_key(path: &Path) -> u64 {
+/// 产物 key：路径 + 源码大小双因子哈希
+///
+/// 源码大小进入 key：解压器保留旧 mtime 时，仅 mtime 比较发现不了内容
+/// 变更；大小变化必然换 key → 缓存 miss → 重新编译。产物自身长度与源码
+/// 长度无固定关系，不能作为新鲜度因子（比较会恒不等、永久禁用缓存）
+fn aot_cache_key(path: &Path, source_len: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut hasher);
+    source_len.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -306,14 +312,23 @@ impl WasmRuntime {
             });
         };
 
-        let cache_path = cache_dir.join(format!("c{:016x}.cwasm", aot_cache_key(path)));
+        // 源码大小计入缓存 key（内容变化但 mtime 未更新的场景：大小变化必然换 key）；
+        // 新鲜度主判据为 mtime——同大小同 mtime 的编辑无法探测（无成本方案），
+        // 但旧产物是合法编译代码不会崩溃，仅行为漂移，属可接受残留
+        let wasm_md = std::fs::metadata(path).ok();
+        let cache_path = cache_dir.join(format!(
+            "c{:016x}.cwasm",
+            aot_cache_key(path, wasm_md.as_ref().map(|md| md.len()).unwrap_or(0))
+        ));
 
-        // 产物存在且不旧于 wasm 源时尝试直接反序列化
-        let cache_fresh = std::fs::metadata(path)
-            .and_then(|w| w.modified())
-            .ok()
-            .zip(std::fs::metadata(&cache_path).and_then(|c| c.modified()).ok())
-            .map(|(wasm_mtime, cache_mtime)| cache_mtime >= wasm_mtime)
+        let cache_fresh = wasm_md
+            .and_then(|w| w.modified().ok())
+            .zip(
+                std::fs::metadata(&cache_path)
+                    .ok()
+                    .and_then(|c| c.modified().ok()),
+            )
+            .map(|(wm, cm)| cm >= wm)
             .unwrap_or(false);
 
         if cache_fresh {
@@ -947,6 +962,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
+    /// 缓存 key：源码大小变化必须换 key（防解压器保留旧 mtime 时误加载旧产物）
+    #[test]
+    fn test_aot_cache_key_factors_source_size() {
+        let path = std::path::Path::new("plugin.wasm");
+        assert_eq!(aot_cache_key(path, 100), aot_cache_key(path, 100));
+        assert_ne!(aot_cache_key(path, 100), aot_cache_key(path, 200));
+    }
+
     /// 组件 AOT 缓存：产物写入、缓存命中、两次实例化等价
     #[test]
     fn test_compile_component_from_file_aot_cache() {
@@ -959,10 +982,14 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
         let wasm_path = temp_dir.join("test_component.wasm");
         // 组件缓存文件名带 c 前缀（与 core module 产物区分）
+        let wasm_bytes = build_test_component();
         let cache_path = std::env::temp_dir()
             .join(format!("bedcode_aot_{}", std::process::id()))
-            .join(format!("c{:016x}.cwasm", aot_cache_key(&wasm_path)));
-        std::fs::write(&wasm_path, build_test_component()).unwrap();
+            .join(format!(
+                "c{:016x}.cwasm",
+                aot_cache_key(&wasm_path, wasm_bytes.len() as u64)
+            ));
+        std::fs::write(&wasm_path, &wasm_bytes).unwrap();
 
         // 首次编译：生成缓存产物
         let component = wasm_runtime
@@ -970,10 +997,16 @@ mod tests {
             .expect("first compile should succeed");
         assert!(cache_path.exists(), "component AOT cache file should be written");
 
-        // 再次加载：命中缓存（mtime 未变）
+        // 再次加载：命中缓存（产物不被重写，mtime 不变）——重编译路径会重写产物
+        let cache_mtime_before = std::fs::metadata(&cache_path).unwrap().modified().unwrap();
         let cached = wasm_runtime
             .compile_component_from_file(&wasm_path)
             .expect("cached load should succeed");
+        let cache_mtime_after = std::fs::metadata(&cache_path).unwrap().modified().unwrap();
+        assert_eq!(
+            cache_mtime_before, cache_mtime_after,
+            "cache hit should not rewrite artifact"
+        );
 
         for c in [component, cached] {
             wasm_runtime
@@ -999,7 +1032,10 @@ mod tests {
         let wasm_path = temp_dir.join("test_component.wasm");
         let cache_path = std::env::temp_dir()
             .join(format!("bedcode_aot_{}", std::process::id()))
-            .join(format!("c{:016x}.cwasm", aot_cache_key(&wasm_path)));
+            .join(format!(
+                "c{:016x}.cwasm",
+                aot_cache_key(&wasm_path, build_test_component().len() as u64)
+            ));
         std::fs::write(&wasm_path, build_test_component()).unwrap();
 
         // 首次编译生成缓存

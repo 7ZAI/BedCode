@@ -81,7 +81,8 @@ notify = "6"
 regex = "1"
 
 # WASM runtime for plugin system
-wasmtime = "46"
+# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
+wasmtime = "47"
 
 # HTTP client (WASM plugin HTTP proxy)
 reqwest = { version = "0.12", features = ["stream"] }
@@ -131,7 +132,9 @@ tempfile = "3"
 wit-component = "0.255"
 
 [profile.release]
-panic = "abort"
+# unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
+# 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）
+panic = "unwind"
 # fat LTO + 单 codegen unit 会在最终链接阶段合并全部 bitcode，峰值内存 8GB+（含 wasmtime/cranelift 时更甚），
 # 在 16GB 内存机器上触发 OOM；改用 thin LTO + 并行 codegen，性能损失 ~2-5%，峰值内存大幅下降
 codegen-units = 16
