@@ -30,6 +30,30 @@ use tokio::sync::Mutex;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// 删除当天已存在的日志文件（仅 dev 构建调用）
+///
+/// dev 启动频次高，按天追加会让同一天的日志混入多次启动的片段，难以定位；
+/// 因此 dev 启动时替换当天日志（删旧建新）。release 保持按天追加轮转。
+/// 必须在 RollingFileAppender 构建前调用，确保 appender 首次写入创建全新文件。
+#[cfg(debug_assertions)]
+fn reset_today_logs(log_dir: &std::path::Path) {
+    // tracing_appender 的 rolling 文件名日期用 UTC（与本地日期可能错位一天）
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    for prefix in ["runtime", "error"] {
+        let path = log_dir.join(format!("{prefix}.{today}.log"));
+        if path.exists() {
+            match std::fs::remove_file(&path) {
+                Ok(()) => eprintln!("[logging] dev reset: replaced today's log {}", path.display()),
+                Err(e) => eprintln!(
+                    "[logging] dev reset: failed to replace {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+}
+
 /// 初始化日志系统
 ///
 /// 接受 LogConfig 参数，所有日志行为均可通过配置文件控制
@@ -40,6 +64,10 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
         .expect("Failed to get log directory");
 
     std::fs::create_dir_all(&log_dir)?;
+
+    // dev 构建替换当天日志（release 保持追加轮转）
+    #[cfg(debug_assertions)]
+    reset_today_logs(&log_dir);
 
     // 解析轮转策略
     let rotation = match log_config.rotation.as_str() {
