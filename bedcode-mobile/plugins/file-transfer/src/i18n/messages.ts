@@ -78,6 +78,7 @@ export interface MessageSchema {
   'transfer.settings.pickRoot': string
   'transfer.settings.picking': string
   'transfer.settings.addRootHint': string
+  'transfer.settings.scopedStorageHint': string
   'transfer.settings.removeRoot': string
   'transfer.settings.noRoots': string
   'transfer.settings.downloadDir': string

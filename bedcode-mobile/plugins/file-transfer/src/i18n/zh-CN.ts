@@ -82,6 +82,7 @@ export default {
   'transfer.settings.pickRoot': '选择目录',
   'transfer.settings.picking': '选择中…',
   'transfer.settings.addRootHint': '点「选择目录」用系统选择器（仅 Android 支持），或手动输入本地绝对路径',
+  'transfer.settings.scopedStorageHint': 'Android 11+ 分区存储：共享目录若在应用私有目录或媒体库之外（如存储根目录下的自定义文件夹），对端将看不到内容；请在系统设置 → 应用 → BedCode → 允许访问所有文件 中授权',
   'transfer.settings.pickFailed': '无法解析所选目录，请手动输入路径',
   'transfer.settings.rootDuplicate': '该目录已在共享列表中',
   'transfer.settings.addRootFailed': '添加失败：无法挂载共享目录，请检查路径',

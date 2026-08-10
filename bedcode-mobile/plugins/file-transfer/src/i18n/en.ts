@@ -82,6 +82,7 @@ export default {
   'transfer.settings.pickRoot': 'Pick folder',
   'transfer.settings.picking': 'Picking…',
   'transfer.settings.addRootHint': 'Use the system picker (Android only) or enter an absolute local path',
+  'transfer.settings.scopedStorageHint': 'Android 11+ scoped storage: if the shared folder is outside the app-private dir or media collections (e.g. a custom top-level folder), the peer won\'t see its contents. Grant "All files access" in System settings → Apps → BedCode.',
   'transfer.settings.pickFailed': 'Could not resolve the picked folder. Enter the path manually.',
   'transfer.settings.rootDuplicate': 'This folder is already in the share list',
   'transfer.settings.addRootFailed': 'Failed to add: could not mount the shared folder. Check the path.',

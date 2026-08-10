@@ -99,6 +99,7 @@ function incConcurrency(): void {
       <!-- 使用说明：黄色提醒框（与底部明文安全告知同款视觉） -->
       <div class="ft-warning-box">
         <p class="ft-warning-text">{{ t('transfer.settings.addRootHint') }}</p>
+        <p class="ft-warning-text mt-2">{{ t('transfer.settings.scopedStorageHint') }}</p>
       </div>
 
       <!-- 系统选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
