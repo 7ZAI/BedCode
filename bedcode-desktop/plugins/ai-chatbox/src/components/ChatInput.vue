@@ -36,14 +36,14 @@
         v-else
         class="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center transition-colors disabled:pointer-events-none"
         :class="canSend
-          ? 'bg-brand text-[var(--color-primary-contrast)] hover:bg-brand-hover'
+          ? 'bg-brand text-[var(--color-primary-contrast)] hover:opacity-90'
           : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'"
         :title="t('desktop.plugin.aiChatbox.send')"
         :disabled="disabled || !canSend"
         @click="send"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7 17L17 7M17 7H8M17 7v9" />
         </svg>
       </button>
     </div>
@@ -122,11 +122,32 @@ defineExpose({ focusInput })
 </script>
 
 <style scoped>
-/* SDK Select 在输入框内弱化为无边框浅灰 pill（DeepSeek/ChatGPT 模型选择器样式），
-   避免容器内出现嵌套输入框边框；--bg-hover 比容器底色更深一档，pill 质感成立 */
+/* SDK Select 在输入框内弱化为无边框圆角 chip（DeepSeek/ChatGPT 模型选择器样式），
+   避免容器内出现嵌套输入框边框。hover 用 color-mix 朝文字色混入一档：
+   浅色主题变深、深色主题变亮（--bg-input 与容器底色 --bg-card 相同，不能用于 hover） */
 :deep(.model-picker .relative button) {
+  height: 28px;
+  padding: 0 8px 0 10px;
   background: var(--bg-hover);
   border-color: transparent;
+  border-radius: 8px;
   box-shadow: none;
+  transition: background-color 0.2s;
+}
+:deep(.model-picker .relative button:hover) {
+  background: color-mix(in srgb, var(--bg-hover) 88%, var(--text-primary));
+}
+/* 小 chevron：覆盖 SDK 默认 w-5 h-5 */
+:deep(.model-picker .relative button svg) {
+  width: 14px;
+  height: 14px;
+}
+/* 模型名过长时截断，保持 chip 稳定宽度 */
+:deep(.model-picker .relative button span) {
+  font-size: 12px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

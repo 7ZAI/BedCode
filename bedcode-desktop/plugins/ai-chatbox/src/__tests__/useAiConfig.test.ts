@@ -24,6 +24,44 @@ describe('useAiConfig', () => {
     expect(config.activeModel.value).toBe('deepseek-chat')
   })
 
+  it('从预设模板添加：写入 presetId（首个自动激活）', async () => {
+    const { config } = setup()
+    const p = await config.addProvider({
+      id: 'qwen',
+      name: '通义千问 (Qwen)',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-turbo'],
+    })
+
+    expect(p.presetId).toBe('qwen')
+    expect(config.providers.value[0].presetId).toBe('qwen')
+    // 首个供应商仍自动激活（既有逻辑保留）
+    expect(config.activeProviderId.value).toBe(p.id)
+  })
+
+  it('新增供应商不自动激活（首个除外）：不打断当前对话的激活供应商', async () => {
+    const { config } = setup()
+    const first = await config.addProvider(makeProvider())
+    const second = await config.addProvider(makeProvider({
+      id: 'p2',
+      name: 'Qwen',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-turbo'],
+    }))
+
+    expect(config.providers.value.length).toBe(2)
+    expect(config.activeProviderId.value).toBe(first.id)
+    expect(config.activeProviderId.value).not.toBe(second.id)
+    expect(config.activeModel.value).toBe('deepseek-chat')
+  })
+
+  it('已带 presetId 的表单对象：原样保留（编辑/保存路径）', async () => {
+    const { config } = setup()
+    const p = await config.addProvider(makeProvider({ presetId: 'deepseek' }))
+    expect(p.presetId).toBe('deepseek')
+    expect(config.providers.value[0].presetId).toBe('deepseek')
+  })
+
   it('持久化：providers/active 写入 storage', async () => {
     const { mock, config } = setup()
     await config.addProvider(makeProvider())
@@ -47,7 +85,13 @@ describe('useAiConfig', () => {
   it('删除当前供应商：active 回退到剩余首个', async () => {
     const { config } = setup()
     await config.addProvider(makeProvider())
-    await config.addProvider({ name: 'Qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-turbo'] })
+    await config.addProvider(makeProvider({
+      id: 'p2',
+      name: 'Qwen',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-turbo'],
+      activeModel: 'qwen-turbo',
+    }))
 
     await config.removeProvider('p1')
     expect(config.providers.value.length).toBe(1)
@@ -93,6 +137,22 @@ describe('useAiConfig', () => {
     expect(config.providers.value.length).toBe(1)
     expect(config.activeProviderId.value).toBe('p1')
     expect(config.activeModel.value).toBe('deepseek-reasoner')
+  })
+
+  it('loadConfig：旧数据无 presetId 归一化不崩溃、不强制补默认值', async () => {
+    const mock = createMockContext()
+    const legacy = makeProvider()
+    delete legacy.presetId
+    mock.storageMap.set('apiProviders', [legacy])
+    mock.storageMap.set('activeProvider', 'p1')
+
+    const config = useAiConfig(mock.context)
+    await config.loadConfig()
+
+    expect(config.providers.value.length).toBe(1)
+    // 无 presetId → 保持 undefined（UI 走首字母头像兜底）
+    expect(config.providers.value[0].presetId).toBeUndefined()
+    expect(config.activeProviderId.value).toBe('p1')
   })
 
   it('buildRequestProvider：对话级 model 覆盖优先', async () => {

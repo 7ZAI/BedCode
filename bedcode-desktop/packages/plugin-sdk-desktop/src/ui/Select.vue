@@ -39,7 +39,7 @@
           :class="isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'"
           :style="panelStyle"
         >
-          <ul class="py-1 max-h-60 overflow-y-auto">
+          <ul class="py-1 overflow-y-auto" :style="panelListStyle">
             <li
               v-if="placeholder"
               :class="['text-[var(--text-tertiary)] cursor-default select-none', optionRowCls]"
@@ -84,6 +84,7 @@
  * - open 事件：下拉展开时触发（插件可借此静默刷新选项，无原生组件禁用打断问题）
  */
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { computeSelectPosition, SELECT_MAX_PANEL_HEIGHT } from './select-position'
 
 export interface SelectOption {
   value: string | number
@@ -116,6 +117,7 @@ const hoveredIndex = ref(-1)
 const triggerRef = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 const panelStyle = ref<Record<string, string>>({})
+const panelListStyle = ref<Record<string, string>>({})
 
 const selectedLabel = computed(() => {
   const opt = props.options.find(o => o.value === props.modelValue)
@@ -135,10 +137,20 @@ const optionRowCls = computed(() =>
 function computePosition() {
   if (!triggerRef.value) return
   const rect = triggerRef.value.getBoundingClientRect()
+  // 面板未渲染/高度不可测时退回设计高度，规则仍然成立
+  const panelHeight = panelRef.value?.getBoundingClientRect().height || SELECT_MAX_PANEL_HEIGHT
+  const pos = computeSelectPosition(
+    { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
+    { width: window.innerWidth, height: window.innerHeight },
+    panelHeight,
+  )
   panelStyle.value = {
-    top: `${rect.bottom + 4}px`,
-    left: `${rect.left}px`,
+    top: `${pos.top}px`,
+    left: `${pos.left}px`,
     width: `${rect.width}px`,
+  }
+  panelListStyle.value = {
+    maxHeight: `${pos.maxHeight}px`,
   }
 }
 

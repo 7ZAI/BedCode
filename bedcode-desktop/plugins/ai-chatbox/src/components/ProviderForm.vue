@@ -99,14 +99,14 @@
       <button
         v-if="mode === 'edit'"
         class="h-[36px] px-4 text-sm rounded-btn bg-[var(--color-danger-light)] text-[var(--color-danger)] hover:opacity-80 transition-opacity"
-        @click="askDelete"
+        @click="askDelete = true"
       >
-        {{ deleting ? t('desktop.plugin.aiChatbox.confirmDeleteShort') : t('desktop.plugin.aiChatbox.deleteProvider') }}
+        {{ t('desktop.plugin.aiChatbox.deleteProvider') }}
       </button>
       <span v-else></span>
       <div class="flex gap-2">
         <button
-          class="h-[36px] px-5 text-sm rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:bg-brand-hover transition-colors disabled:opacity-50"
+          class="h-[36px] px-5 text-sm rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:opacity-90 transition-opacity disabled:opacity-50"
           :disabled="!canSave"
           @click="save"
         >
@@ -114,6 +114,15 @@
         </button>
       </div>
     </div>
+
+    <!-- 删除确认（编辑模式；与列表行删除共用同一弹窗） -->
+    <ConfirmDialog
+      v-if="askDelete && initialValues"
+      :title="t('desktop.plugin.aiChatbox.confirmDeleteTitle')"
+      :body="t('desktop.plugin.aiChatbox.confirmDeleteBody', { name: initialValues.name })"
+      @confirm="emit('delete', initialValues.id)"
+      @cancel="askDelete = false"
+    />
   </div>
 </template>
 
@@ -123,17 +132,22 @@
  *
  * 预设/自定义共用：名称 + BaseURL + API Key（明文存储，与现状一致）+ 拉取模型
  * （真实 GET /models，失败回退不阻塞）+ 测试连接（非流式短请求）+ 模型列表编辑。
- * 删除用内联二次确认（禁原生 confirm 弹窗）。
+ * 添加模式由 preset 模板回填（自定义模板传 null 全空）；编辑模式 initialValues 回填，
+ * presetId 保持原值；删除走 ConfirmDialog（禁原生 confirm 弹窗）。
  */
 import { ref, reactive, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ModelListEditor from './ModelListEditor.vue'
-import { PROVIDER_PRESETS, generateId } from '../types'
-import type { ApiProvider } from '../types'
+import ConfirmDialog from './ConfirmDialog.vue'
+import { generateId } from '../types'
+import type { ApiProvider, ProviderPreset } from '../types'
 
 const props = defineProps<{
   mode: 'add' | 'edit'
+  /** 编辑模式的已有数据（add 模式为 undefined） */
   initialValues?: ApiProvider
+  /** 添加模式的预设模板（自定义模板传 null 表示全空表单） */
+  preset?: ProviderPreset | null
   existingNames: string[]
   /** 拉取模型列表（经宿主命令，由 ChatView 注入 config.fetchModels） */
   fetchModels: (provider: ApiProvider) => Promise<string[]>
@@ -148,21 +162,22 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-/** 预设回填（无 initialValues 且匹配预设名时） */
-const preset = computed(() =>
-  PROVIDER_PRESETS.find(p => p.name === props.initialValues?.name) || null
+/** 回填来源：编辑取已有数据，添加取预设模板（自定义模板为 null → 全空） */
+const source = computed(() =>
+  props.mode === 'edit' ? props.initialValues : props.preset ?? null,
 )
 
 const form = reactive<ApiProvider>({
   id: props.initialValues?.id || generateId(),
-  name: props.initialValues?.name || props.mode === 'add' && preset.value?.name ? preset.value!.name : '',
+  name: source.value?.name || '',
   apiKey: props.initialValues?.apiKey || '',
-  baseUrl: props.initialValues?.baseUrl || preset.value?.baseUrl || '',
+  baseUrl: source.value?.baseUrl || '',
   apiFormat: 'openai',
-  models: props.initialValues?.models?.length
-    ? [...props.initialValues.models]
-    : preset.value?.models ? [...preset.value.models] : [],
-  activeModel: props.initialValues?.activeModel || '',
+  models: source.value?.models?.length ? [...source.value.models] : [],
+  // 编辑模式回填已有选择；添加模式随 models 回填首个（否则空 activeModel 靠运行时兑底，保存后再进编辑才可见）
+  activeModel: props.initialValues?.activeModel || source.value?.models?.[0] || '',
+  // 编辑保持原值；添加取模板 id（自定义模板为 undefined）
+  presetId: props.mode === 'edit' ? props.initialValues?.presetId : props.preset?.id,
 })
 
 const showKey = ref(false)
@@ -171,7 +186,7 @@ const testing = ref(false)
 const fetchError = ref('')
 const testResult = ref<string | null>(null)
 const testOk = ref(false)
-const deleting = ref(false)
+const askDelete = ref(false)
 
 const canSave = computed(() =>
   form.name.trim() !== '' && form.baseUrl.trim() !== '' && form.apiKey.trim() !== ''
@@ -208,17 +223,6 @@ async function onTestConnection(): Promise<void> {
     testResult.value = String(e?.message || e)
   } finally {
     testing.value = false
-  }
-}
-
-function askDelete(): void {
-  if (deleting.value) {
-    emit('delete', props.initialValues!.id)
-    deleting.value = false
-  } else {
-    deleting.value = true
-    // 3 秒后复位，避免误触
-    setTimeout(() => { deleting.value = false }, 3000)
   }
 }
 

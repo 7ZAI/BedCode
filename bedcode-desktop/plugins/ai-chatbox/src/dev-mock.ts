@@ -40,15 +40,17 @@ const HOST_KEYS_ZH = {
         deleteMessage: '删除消息',
         providerConfig: '模型供应商配置',
         backToChat: '返回聊天',
+        back: '返回',
         addProvider: '添加供应商',
         editProvider: '编辑供应商',
         save: '保存',
         saveProvider: '保存',
         deleteProvider: '删除供应商',
-        confirmDeleteShort: '确认删除？',
-        presetProviders: '预设供应商',
-        customProviders: '自定义供应商',
-        addCustomProvider: '＋ 自定义供应商',
+        selectTemplate: '选择模板',
+        customTemplate: '自定义',
+        confirmDeleteTitle: '删除供应商',
+        confirmDeleteBody: '确定删除「{name}」？删除后需重新配置',
+        noProvidersHint: '暂无供应商，点击上方「添加供应商」开始',
         activeProvider: '当前使用',
         name: '名称',
         baseUrl: 'Base URL',
@@ -109,15 +111,17 @@ const HOST_KEYS_EN = {
         deleteMessage: 'Delete message',
         providerConfig: 'Provider Settings',
         backToChat: 'Back to chat',
+        back: 'Back',
         addProvider: 'Add Provider',
         editProvider: 'Edit Provider',
         save: 'Save',
         saveProvider: 'Save',
         deleteProvider: 'Delete Provider',
-        confirmDeleteShort: 'Confirm delete?',
-        presetProviders: 'Presets',
-        customProviders: 'Custom Providers',
-        addCustomProvider: '+ Custom Provider',
+        selectTemplate: 'Choose Template',
+        customTemplate: 'Custom',
+        confirmDeleteTitle: 'Delete Provider',
+        confirmDeleteBody: 'Delete "{name}"? You will need to reconfigure it',
+        noProvidersHint: 'No providers yet. Click "Add Provider" to get started',
         activeProvider: 'Active',
         name: 'Name',
         baseUrl: 'Base URL',
@@ -171,7 +175,8 @@ interface MockConversation {
   systemPrompt: string
 }
 
-/** 预置供应商（写入 storage，useAiConfig.loadConfig 读取） */
+/** 预置供应商（写入 storage，useAiConfig.loadConfig 读取）
+ * 前两个带 presetId 展示品牌图标；第三个无 presetId，评审首字母彩色头像兜底 */
 const seedProviders = [
   {
     id: 'prov-deepseek',
@@ -181,6 +186,7 @@ const seedProviders = [
     apiFormat: 'openai' as const,
     models: ['deepseek-chat', 'deepseek-reasoner'],
     activeModel: 'deepseek-chat',
+    presetId: 'deepseek',
   },
   {
     id: 'prov-qwen',
@@ -190,6 +196,16 @@ const seedProviders = [
     apiFormat: 'openai' as const,
     models: ['qwen-turbo', 'qwen-plus', 'qwen-max'],
     activeModel: 'qwen-plus',
+    presetId: 'qwen',
+  },
+  {
+    id: 'prov-custom',
+    name: 'OpenRouter',
+    apiKey: 'sk-test-custom',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiFormat: 'openai' as const,
+    models: ['openai/gpt-4o-mini', 'anthropic/claude-sonnet-4'],
+    activeModel: 'openai/gpt-4o-mini',
   },
 ]
 
