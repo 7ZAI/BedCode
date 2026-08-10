@@ -120,9 +120,14 @@ pub(crate) fn fs_read(
         tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_read: access denied by fs_auth");
         return Err("permission denied".to_string());
     }
-    read_text_file(path)
-        .map(Some)
-        .map_err(|e| format!("fs error: file read failed: {}", e))
+    read_text_file(path).map(Some).or_else(|e| {
+        // SDK HostFs 契约：文件不存在返回 Ok(None)（store.rs 等插件依赖此语义处理新建文件）
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(format!("fs error: file read failed: {}", e))
+        }
+    })
 }
 
 /// 写入文本文件（权限 + 三层访问校验）

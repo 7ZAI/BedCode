@@ -188,28 +188,25 @@
             </div>
           </div>
 
-          <!-- 输入区：模型切换 + 输入框（模型贴近发送，切换后新消息立即生效） -->
+          <!-- 输入区：模型切换与发送按钮同处输入框内（切换后新消息立即生效） -->
           <div class="border-t border-[var(--border)] p-3 bg-[var(--bg-card)]">
-            <div v-if="hasProvider" class="flex items-center gap-2 mb-2 px-1">
-              <span class="text-xs text-[var(--text-tertiary)] flex-shrink-0">
-                {{ t('desktop.plugin.aiChatbox.model') }}
-              </span>
-              <Select
-                :model-value="activeModel"
-                :options="modelOptions"
-                size="sm"
-                class="w-52 flex-shrink-0"
-                @update:model-value="onModelChange"
-              />
-              <span class="flex-1" />
-            </div>
             <ChatInput
               :disabled="sending || !hasProvider"
               :streaming="isStreaming"
               :placeholder="t('desktop.plugin.aiChatbox.inputPlaceholder')"
               @send="sendMessage"
               @stop="stopGeneration"
-            />
+            >
+              <template #toolbar>
+                <Select
+                  :model-value="activeModel"
+                  :options="modelOptions"
+                  size="sm"
+                  class="model-picker w-52 flex-shrink-0"
+                  @update:model-value="onModelChange"
+                />
+              </template>
+            </ChatInput>
           </div>
         </template>
       </div>

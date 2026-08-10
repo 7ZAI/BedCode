@@ -12,6 +12,16 @@ import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 // 仅 dev-shell 生效：浏览器无 WASM 后端，注册命令 mock 展示完整 UI（生产构建自动排除）
 import { registerDevMock, disposeDevMock } from './dev-mock'
 
+/**
+ * 是否为真实 Tauri 宿主（android:dev / 打包产物）。
+ * dev-shell（浏览器 vite）无 __TAURI_INTERNALS__；真实宿主有。
+ * 仅 dev-shell 注册命令 mock——真实宿主必须走 WASM 后端，
+ * 否则 mock 会劫持命令（对话日志不落盘）。
+ */
+function isTauriHost(): boolean {
+  return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+}
+
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 
 let toolboxDisposable: { dispose(): void } | null = null
@@ -44,8 +54,9 @@ export async function activate(context: PluginContext): Promise<void> {
     context.i18n.registerMessages(locale, msgs)
   }
 
-  // dev-shell（vite dev）：注册命令 mock，让无后端环境可预览完整 UI
-  if (import.meta.env.DEV) {
+  // dev-shell（浏览器 vite）：注册命令 mock，让无后端环境可预览完整 UI；
+  // 真实 Tauri 宿主（含 android:dev）走 WASM 后端，不注册（mock 会劫持命令）
+  if (import.meta.env.DEV && !isTauriHost()) {
     await registerDevMock(context)
   }
 

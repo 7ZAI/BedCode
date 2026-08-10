@@ -1,56 +1,58 @@
 <template>
-  <!-- 输入框容器（DeepSeek/Claude 式）：左下角模型 pill + 右下角圆形发送/停止 -->
+  <!-- 输入框容器（DeepSeek/Claude 式）：textarea 在上，底部一行 = 左下模型 pill + 右下圆形发送/停止 -->
   <div
-    class="flex items-end gap-2 rounded-2xl border border-[var(--mobile-input-border)] bg-[var(--mobile-input-bg)] px-2.5 py-2 focus-within:border-[var(--mobile-input-focus)] transition-colors"
+    class="rounded-2xl border border-[var(--mobile-input-border)] bg-[var(--mobile-input-bg)] px-2.5 py-2 focus-within:border-[var(--mobile-input-focus)] transition-colors"
   >
-    <div class="flex-1 min-w-0">
-      <!-- 模型切换 pill（左下角，贴近发送便于切换后立即生效） -->
-      <div v-if="showModel && modelOptions.length > 0" class="mb-1.5 -ml-1">
-        <Select
-          :model-value="modelValue"
-          :options="modelOptions"
-          size="sm"
-          :placeholder="t('mobile.plugin.aiChatbox.model')"
-          class="max-w-[10.5rem]"
-          @update:model-value="emit('update:modelValue', String($event))"
-        />
-      </div>
+    <textarea
+      ref="textareaRef"
+      v-model="draft"
+      rows="1"
+      class="w-full resize-none min-h-[44px] max-h-40 px-1 text-[var(--font-size-base)] leading-snug bg-transparent text-[var(--mobile-text-primary)] placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none"
+      :placeholder="placeholder"
+      :disabled="disabled"
+      @keydown.enter.exact.prevent="onEnter"
+      @keydown.enter.shift.prevent="insertNewline"
+    ></textarea>
 
-      <textarea
-        ref="textareaRef"
-        v-model="draft"
-        rows="1"
-        class="w-full resize-none min-h-[44px] max-h-40 px-1 text-[var(--font-size-base)] leading-snug bg-transparent text-[var(--mobile-text-primary)] placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none"
-        :placeholder="placeholder"
-        :disabled="disabled"
-        @keydown.enter.exact.prevent="onEnter"
-        @keydown.enter.shift.prevent="insertNewline"
-      ></textarea>
+    <!-- 底部一行：左下模型 pill（Select sm）+ 右下圆形发送/停止 -->
+    <div class="flex items-center justify-between mt-1 -mx-1 min-h-9">
+      <Select
+        v-if="showModel && modelOptions.length > 0"
+        :model-value="modelValue"
+        :options="modelOptions"
+        size="sm"
+        :placeholder="t('mobile.plugin.aiChatbox.model')"
+        class="max-w-[10.5rem]"
+        @update:model-value="emit('update:modelValue', String($event))"
+      />
+      <span v-else></span>
+
+      <button
+        v-if="streaming"
+        class="w-10 h-10 flex-shrink-0 rounded-full flex items-center justify-center bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity"
+        :title="t('mobile.plugin.aiChatbox.stop')"
+        @click="emit('stop')"
+      >
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <rect x="6" y="6" width="12" height="12" rx="2" />
+        </svg>
+      </button>
+      <button
+        v-else
+        class="w-10 h-10 flex-shrink-0 rounded-full flex items-center justify-center transition-colors active:opacity-80 disabled:pointer-events-none"
+        :class="canSend
+          ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'
+          : 'bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-disabled)]'"
+        :title="t('mobile.plugin.aiChatbox.send')"
+        :disabled="!canSend"
+        @click="send"
+      >
+        <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12l7-7 7 7" />
+        </svg>
+      </button>
     </div>
-
-    <!-- 右下角：流式中为停止，否则为发送（圆形） -->
-    <button
-      v-if="streaming"
-      class="w-10 h-10 flex-shrink-0 rounded-full flex items-center justify-center bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity"
-      :title="t('mobile.plugin.aiChatbox.stop')"
-      @click="emit('stop')"
-    >
-      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-        <rect x="6" y="6" width="12" height="12" rx="2" />
-      </svg>
-    </button>
-    <button
-      v-else
-      class="w-10 h-10 flex-shrink-0 rounded-full flex items-center justify-center bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity disabled:opacity-30 disabled:pointer-events-none"
-      :title="t('mobile.plugin.aiChatbox.send')"
-      :disabled="disabled || !draft.trim()"
-      @click="send"
-    >
-      <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5" />
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12l7-7 7 7" />
-      </svg>
-    </button>
   </div>
 </template>
 
@@ -58,11 +60,11 @@
 /**
  * ChatInput — 多行输入框（移动端，DeepSeek/Claude 式内联布局）
  *
- * 输入框容器内：左下角模型切换 pill（Select sm）+ 多行 textarea；
- * 右下角圆形发送按钮（空输入禁用）/ 流式时切换为停止按钮。
+ * 输入框容器内：textarea 在上；底部一行左下角模型切换 pill（Select sm）、
+ * 右下角圆形发送按钮（空输入灰底禁用）/ 流式时切换为停止按钮。
  * Enter 发送 / Shift+Enter 换行；textarea 自适应高度（1~8 行）。
  */
-import { ref, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@bedcode/plugin-sdk-mobile/ui'
 
@@ -92,6 +94,8 @@ const { t } = useI18n()
 
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+const canSend = computed(() => !props.disabled && draft.value.trim() !== '')
 
 /** 自适应高度：内容变化后按 scrollHeight 调整（上限 10rem = max-h-40） */
 watch(draft, async () => {

@@ -147,3 +147,29 @@ _Avoid_: 排队、待办
 **上下文清理 (Context Clear)**:
 自动任务（队列出队/定时触发）执行前先执行的 agent 上下文清理命令，用于防止上下文超限。清理命令由执行 agent 的 profile 提供（Claude Code 为 `/clear`，其他 agent 走扩展点）。清理可能导致 agent 会话重建（新 agent 会话 ID 与新的 session_mapping），其触发的会话结束事件属于机制副作用，不得改写前一任务的终态；全新会话的首个任务无需清理。
 _Avoid_: 清屏、重置对话、/clear（指机制时）
+
+### AI 对话 (AI Chatbox)
+
+**对话 (Conversation)**:
+AI Chatbox 插件的会话单元：由元数据（标题、模型、供应商、system prompt）与消息序列组成，持久化为数据目录下 `conversations/{convId}.jsonl` 的一个文件。对话级 system prompt 与模型切换只影响该对话后续消息。
+_Avoid_: 会话（与宿主终端会话 Session 混淆时）、聊天记录（指存储时）
+
+**对话日志 (Conversation Log)**:
+对话历史的唯一存储形态：JSONL 文件（首行 meta、后续逐行 message），明文可查、可备份、可手工编辑；取代 v1 的宿主 SQLite 存储。追加写入为主（重生成时覆盖文件末尾的 assistant 行），删除对话 = 删除文件 + 从索引移除。
+_Avoid_: 数据库、存储表
+
+**数据目录 (Data Directory)**:
+插件数据落盘的根目录（桌面 `{HomeDir}/.bedcode/ai-chatbox/`、移动 `{AppDownloadsDir}/ai-chatbox/`），位于插件包目录之外——卸载插件不清用户数据。内含 `index.jsonl`（对话索引）、`providers.json`（供应商配置占位）与 `conversations/`。
+_Avoid_: 插件目录、工作目录
+
+**目录授权 (Directory Authorization)**:
+宿主 fs_auth 弹窗机制对插件数据目录的授权：插件 activate 时一次弹窗批量申请数据目录前缀，同意后前缀制持久化放行后续读写；拒绝或 30 秒超时则激活失败（Error 状态），重新启用可再次弹窗。撤销授权后插件写文件失败并提示「目录授权已失效」。
+_Avoid_: 文件权限（指操作系统权限时）、授权弹窗（单指 UI 时）
+
+**流式回复 (Streaming Reply)**:
+模型回复逐字（chunk）渲染的生成过程，可中途停止；停止/失败时已接收内容照常落盘。发送后可「重新生成」重跑最后一条用户消息，落盘覆盖旧回复行防重启后旧回复复现。
+_Avoid_: 打字机效果、流式输出（指网络传输时）
+
+**token 用量 (Usage)**:
+每条助手消息的 prompt/completion/total token 计数，来自宿主 SSE done 事件透传的 usage 字段，随消息落盘并显示在消息 meta 行。
+_Avoid_: 消耗、计费（指金额时）

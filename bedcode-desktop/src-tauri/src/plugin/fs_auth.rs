@@ -298,8 +298,11 @@ impl FsAuthChecker {
 
         for prefix_val in &granted {
             if let Some(prefix_str) = prefix_val.as_str() {
-                if let Ok(prefix_path) = PathBuf::from(prefix_str).canonicalize() {
-                    if canonical.starts_with(&prefix_path) {
+                // 与检查路径同一规范化（含 \?\ 剥离），保证两端格式一致
+                if let Some(prefix_path) = Self::canonicalize_path(prefix_str) {
+                    // Path::strip_prefix 按组件剥离：成功即表示 canonical 位于授权前缀之下，
+                    // 组件边界天然防止 `.bedcode` 误匹配 `.bedcode-other` 这类相邻目录
+                    if canonical.strip_prefix(&prefix_path).is_ok() {
                         return true;
                     }
                 }
@@ -418,10 +421,14 @@ impl FsAuthChecker {
     }
 
     /// 规范化路径（解析 ..、符号链接等）
+    ///
+    /// Windows 上 `canonicalize` 返回 `\\?\C:\...` verbatim 格式，而 fallback
+    /// 分支（父目录尚不存在）只能返回普通路径——两者格式不一致会导致与已授权
+    /// 前缀的匹配失败（首次写入新子目录文件时误弹窗）。此处统一剥掉 `\\?\` 前缀。
     fn canonicalize_path(path: &str) -> Option<PathBuf> {
         let p = Path::new(path);
         // 文件可能不存在（如即将写入的文件），使用父目录 canonicalize
-        if p.exists() {
+        let result = if p.exists() {
             p.canonicalize().ok()
         } else if let Some(parent) = p.parent() {
             // 父目录可能存在
@@ -430,13 +437,37 @@ impl FsAuthChecker {
                 let file_name = p.file_name()?;
                 Some(canon_parent.join(file_name))
             } else {
-                // 父目录也不存在，直接使用路径（后续 fs_write 会创建）
-                Some(p.to_path_buf())
+                // 父目录也不存在：直接使用路径（后续 fs_write 会创建）。
+                // 规范化分隔符——canonicalize 在 Windows 上统一为 `\`，
+                // 否则与已授权前缀的匹配会因 `/` 与 `\` 混用而失败
+                let raw = p.to_string_lossy();
+                #[cfg(windows)]
+                let normalized = PathBuf::from(raw.replace('/', "\\"));
+                #[cfg(not(windows))]
+                let normalized = PathBuf::from(raw.into_owned());
+                Some(normalized)
             }
         } else {
             Some(p.to_path_buf())
-        }
+        };
+        result.map(|pb| strip_verbatim_prefix(&pb))
     }
+}
+
+/// 剥掉 Windows canonicalize 的 `\\?\` verbatim 前缀，统一路径格式
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 #[cfg(test)]
@@ -481,5 +512,47 @@ mod tests {
         let checker = headless_checker().await;
         assert!(checker.check_batch("com.bedcode.test", &[], FsOp::Read).await);
         assert!(checker.pending_requests.lock().await.is_empty());
+    }
+
+    /// canonicalize_path：父目录也不存在（首次写入新子目录文件）时应规范化分隔符
+    #[test]
+    fn canonicalize_path_normalizes_separators() {
+        let fake = format!(
+            "{}/sub-not-exist/deep-not-exist/file.jsonl",
+            std::env::temp_dir().to_string_lossy()
+        );
+        let canon = FsAuthChecker::canonicalize_path(&fake).expect("fallback must succeed");
+        #[cfg(windows)]
+        assert!(
+            !canon.to_string_lossy().contains('/'),
+            "fallback path must use backslash on Windows"
+        );
+        assert_eq!(canon.to_string_lossy().as_ref(), fake.replace('/', "\\"));
+    }
+
+    /// 已授权前缀：边界匹配 + 尚不存在的子路径（混合分隔符）也应放行
+    #[tokio::test]
+    async fn granted_path_prefix_respects_separator_boundary() {
+        let checker = headless_checker().await;
+        let base = std::env::temp_dir();
+        let granted_dir = base.join("fs-auth-granted");
+        std::fs::create_dir_all(&granted_dir).unwrap();
+        let granted = granted_dir.to_string_lossy().to_string();
+
+        // 保存授权前缀（父目录形式）
+        checker
+            .save_granted_path("com.bedcode.test", &format!("{}/data.jsonl", granted))
+            .await
+            .unwrap();
+
+        // 前缀内、尚不存在的子目录 + 混合分隔符 → 放行（回归首次写新目录场景）
+        let inside = format!("{}/conversations/new.jsonl", granted);
+        assert!(checker.check_batch("com.bedcode.test", &[inside], FsOp::Write).await);
+
+        // 相邻目录（前缀后紧跟非分隔符）不放行
+        let adjacent = format!("{}2/file.jsonl", granted);
+        assert!(!checker.check_batch("com.bedcode.test", &[adjacent], FsOp::Write).await);
+
+        std::fs::remove_dir_all(&granted_dir).unwrap();
     }
 }

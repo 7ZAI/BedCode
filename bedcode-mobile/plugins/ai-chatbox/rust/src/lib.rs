@@ -12,10 +12,10 @@ mod store;
 use bedcode_plugin_api_mobile::host::{HostConfig, HostFs, HostLog};
 use bedcode_plugin_api_mobile::types::PluginManifest;
 use bedcode_plugin_api_mobile::{WasmHost, WasmPlugin};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
-/// 数据目录（activate 时解析并锁定；commands 经此取路径）
-static DATA_DIR: OnceLock<String> = OnceLock::new();
+/// 数据目录（activate 时解析；deactivate 时清空，支持同一进程内停用后重新激活）
+static DATA_DIR: RwLock<Option<String>> = RwLock::new(None);
 
 struct AiChatboxPlugin;
 
@@ -47,9 +47,9 @@ impl WasmPlugin for AiChatboxPlugin {
             ));
         }
 
-        DATA_DIR.set(data_dir.clone()).map_err(|_| {
-            anyhow::anyhow!("activate: data_dir already initialized: {}", data_dir)
-        })?;
+        *DATA_DIR
+            .write()
+            .map_err(|e| anyhow::anyhow!("activate: data_dir lock poisoned: {}", e))? = Some(data_dir.clone());
         store::init(&host, &data_dir)?;
 
         host.log_info("Plugin activated (wasm, mobile)");
@@ -58,6 +58,10 @@ impl WasmPlugin for AiChatboxPlugin {
 
     fn deactivate() -> anyhow::Result<()> {
         let host = WasmHost;
+        // 清空数据目录：同一进程内停用后重新激活可再次初始化（宿主复用 WASM 实例）
+        if let Ok(mut guard) = DATA_DIR.write() {
+            *guard = None;
+        }
         host.log_info("Plugin deactivated (wasm, mobile)");
         Ok(())
     }

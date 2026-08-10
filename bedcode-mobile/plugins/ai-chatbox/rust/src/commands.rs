@@ -71,7 +71,7 @@ pub fn fetch_models(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
 /// 列出所有对话（index.jsonl，按 updatedAt DESC）
 pub fn list_conversations(_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let conversations = store::list_conversations(&host(), data_dir())?;
+    let conversations = store::list_conversations(&host(), &data_dir())?;
     Ok(serde_json::json!({ "conversations": conversations }))
 }
 
@@ -82,7 +82,7 @@ pub fn get_messages(args: serde_json::Value) -> anyhow::Result<serde_json::Value
         .str("conversationId")
         .ok_or_else(|| anyhow::anyhow!("get_messages: missing conversationId"))?;
 
-    let messages = store::get_messages(&host(), data_dir(), &conversation_id)?;
+    let messages = store::get_messages(&host(), &data_dir(), &conversation_id)?;
     Ok(serde_json::json!({ "messages": messages }))
 }
 
@@ -95,7 +95,7 @@ pub fn save_conversation(args: serde_json::Value) -> anyhow::Result<serde_json::
     )
     .map_err(|e| anyhow::anyhow!("save_conversation: invalid conversation: {}", e))?;
 
-    store::save_conversation(&host(), data_dir(), &conv)?;
+    store::save_conversation(&host(), &data_dir(), &conv)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
@@ -122,7 +122,7 @@ pub fn save_message(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
     store::save_message(
         &host(),
-        data_dir(),
+        &data_dir(),
         &conversation_id,
         &msg,
         args.bool_or("replaceLastAssistant", false),
@@ -137,13 +137,15 @@ pub fn delete_conversation(args: serde_json::Value) -> anyhow::Result<serde_json
         .str("conversationId")
         .ok_or_else(|| anyhow::anyhow!("delete_conversation: missing conversationId"))?;
 
-    store::delete_conversation(&host(), data_dir(), &conversation_id)?;
+    store::delete_conversation(&host(), &data_dir(), &conversation_id)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
 /// 数据目录（activate 时初始化）
-fn data_dir() -> &'static str {
+fn data_dir() -> String {
     DATA_DIR
-        .get()
+        .read()
+        .expect("data_dir lock poisoned")
+        .clone()
         .expect("data_dir must be initialized during plugin activate")
 }

@@ -202,11 +202,9 @@ pub fn save_conversation<H: HostFs + HostLog>(
     data_dir: &str,
     conv: &ConversationMeta,
 ) -> anyhow::Result<()> {
-    // 重写对话文件首行（meta 与消息行保持同文件）
+    // 重写对话文件首行（meta 与消息行保持同文件）；新对话文件尚不存在时直接创建
     let path = conversation_path(data_dir, &conv.id);
-    let content = host
-        .fs_read(&path)?
-        .ok_or_else(|| anyhow::anyhow!("conversation file not found: {}", path))?;
+    let content = host.fs_read(&path)?.unwrap_or_default();
     let mut lines: Vec<&str> = content.lines().collect();
     let meta_line = meta_json_line(conv)?;
     // 解析首行判断是否 meta（serde_json key 顺序不保证，不能用字符串前缀匹配）
@@ -500,5 +498,25 @@ mod tests {
         assert!(content.contains("\"role\":\"user\""));
         // 索引已更新
         assert_eq!(list_conversations(&host, "/data").unwrap()[0].title, "renamed");
+    }
+
+    #[test]
+    fn save_conversation_creates_file_when_missing() {
+        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let conv = meta("c-new", "2026-01-05T00:00:00Z");
+
+        // 新建对话：对话文件不存在，save_conversation 应创建（meta 首行）而非报错
+        save_conversation(&host, "/data", &conv).unwrap();
+
+        let content = host.files.lock().unwrap().get("/data/conversations/c-new.jsonl").unwrap().clone();
+        assert!(content.lines().next().unwrap().contains("\"type\":\"meta\""));
+        // 索引同步
+        assert_eq!(list_conversations(&host, "/data").unwrap()[0].id, "c-new");
+
+        // 之后 save_message 可正常追加（文件已存在）
+        save_message(&host, "/data", "c-new", &msg("user", "first"), false).unwrap();
+        let messages = get_messages(&host, "/data", "c-new").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "first");
     }
 }

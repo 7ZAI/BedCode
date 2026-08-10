@@ -1790,6 +1790,14 @@ fn host_fs_read(
                 -1
             }
         },
+        // SDK HostFs 契约：文件不存在返回 Ok(None)（out=(0,0)，与空文件编码一致）
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if write_result_to_out_ptr(&mut caller, out_ptr, 0, 0) {
+                0
+            } else {
+                -1
+            }
+        }
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, path = %path, "host_fs_read: file read failed");
             -1
