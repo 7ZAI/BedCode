@@ -1,14 +1,21 @@
 //! AI Chatbox Plugin (WASM, Mobile)
 //!
-//! AI 大模型对话与终端提示词优化
-//! 使用 bedcode-plugin-api-mobile WasmPlugin trait 实现，通过 wasm_entry! 宏生成导出
+//! 纯 AI 对话插件：JSONL 对话日志落盘 + 单一 OpenAI 兼容供应商协议。
+//! 激活时集中目录授权（宿主 fs_auth 弹窗）：同意 → 初始化数据目录 → 激活成功；
+//! 拒绝/超时 → 激活失败（Error 状态），重新启用可重试。
+//! 数据目录：`{AppDownloadsDir}/ai-chatbox/`（插件目录之外，卸载不清用户数据）。
 
-mod ai_client;
+mod client;
 mod commands;
-mod db;
+mod store;
 
-use bedcode_plugin_api_mobile::{HostLog, WasmPlugin, WasmHost};
+use bedcode_plugin_api_mobile::host::{HostConfig, HostFs, HostLog};
 use bedcode_plugin_api_mobile::types::PluginManifest;
+use bedcode_plugin_api_mobile::{WasmHost, WasmPlugin};
+use std::sync::OnceLock;
+
+/// 数据目录（activate 时解析并锁定；commands 经此取路径）
+static DATA_DIR: OnceLock<String> = OnceLock::new();
 
 struct AiChatboxPlugin;
 
@@ -16,13 +23,35 @@ impl WasmPlugin for AiChatboxPlugin {
     const ID: &'static str = "com.bedcode.ai-chatbox";
 
     fn manifest() -> PluginManifest {
-        // plugin.json 为 manifest 单一事实来源（bedcode-plugin build/package 时自动填充）
-        serde_json::from_str(include_str!("../../plugin.json")).expect("plugin.json must be valid PluginManifest")
+        serde_json::from_str(include_str!("../../plugin.json"))
+            .expect("plugin.json must be valid PluginManifest")
     }
 
     fn activate() -> anyhow::Result<()> {
         let host = WasmHost;
-        db::init(&host)?;
+
+        // 数据目录：{AppDownloadsDir}/ai-chatbox/（Android 外部私有下载目录，免权限）
+        let downloads = host
+            .config_get(bedcode_plugin_api_mobile::host::ConfigKey::AppDownloadsDir)?
+            .ok_or_else(|| anyhow::anyhow!("activate: app downloads dir config unavailable"))?;
+        let data_dir = format!("{}/ai-chatbox", downloads.trim_end_matches(['/', '\\']));
+
+        // 集中目录授权：未同意（拒绝/30s 超时）→ 激活失败，重新启用可再次弹窗
+        let allowed = host
+            .fs_request_auth(&[data_dir.clone()])
+            .map_err(|e| anyhow::anyhow!("activate: fs_request_auth failed: {}", e))?;
+        if !allowed {
+            return Err(anyhow::anyhow!(
+                "目录授权被拒绝：{}，请在插件设置中重新启用以再次授权",
+                data_dir
+            ));
+        }
+
+        DATA_DIR.set(data_dir.clone()).map_err(|_| {
+            anyhow::anyhow!("activate: data_dir already initialized: {}", data_dir)
+        })?;
+        store::init(&host, &data_dir)?;
+
         host.log_info("Plugin activated (wasm, mobile)");
         Ok(())
     }
@@ -35,24 +64,16 @@ impl WasmPlugin for AiChatboxPlugin {
 
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         match name {
-            "ai-chatbox.chat-stream" => commands::chat_stream(&args),
-            "ai-chatbox.chat-complete" => commands::chat_complete(&args),
-            "ai-chatbox.optimize-prompt" => commands::optimize_prompt(&args),
-            "ai-chatbox.list-conversations" => commands::list_conversations(&args),
-            "ai-chatbox.get-messages" => commands::get_messages(&args),
-            "ai-chatbox.save-conversation" => commands::save_conversation(&args),
-            "ai-chatbox.save-message" => commands::save_message(&args),
-            "ai-chatbox.delete-conversation" => commands::delete_conversation(&args),
+            "ai-chatbox.chat-stream" => commands::chat_stream(args),
+            "ai-chatbox.chat-complete" => commands::chat_complete(args),
+            "ai-chatbox.fetch-models" => commands::fetch_models(args),
+            "ai-chatbox.list-conversations" => commands::list_conversations(args),
+            "ai-chatbox.get-messages" => commands::get_messages(args),
+            "ai-chatbox.save-conversation" => commands::save_conversation(args),
+            "ai-chatbox.save-message" => commands::save_message(args),
+            "ai-chatbox.delete-conversation" => commands::delete_conversation(args),
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
         }
-    }
-
-    fn on_terminal_input(_session_id: &str, _text: &str) -> Option<String> {
-        None
-    }
-
-    fn on_terminal_output(_session_id: &str, _data: &str) -> Option<String> {
-        None
     }
 }
 

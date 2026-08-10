@@ -7,5 +7,6 @@
 
 export interface MessageSchema {
   // ==================== 菜单/路由显示文本 ====================
-  sidebarTitle: string
+  navTitle: string
+  toolboxTitle: string
 }

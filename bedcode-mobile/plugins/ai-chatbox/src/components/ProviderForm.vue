@@ -1,100 +1,116 @@
 <template>
-  <div class="h-full flex flex-col">
-    <!-- 标题区 -->
-    <div class="mb-6">
-      <h2 class="text-lg font-semibold text-[var(--text-primary)]">
-        {{ mode === 'add' ? t('desktop.plugin.aiChatbox.addProvider') : t('desktop.plugin.aiChatbox.editProvider') }}
-      </h2>
-      <p v-if="mode === 'add'" class="mt-1 text-sm text-[var(--text-tertiary)]">
-        {{ t('desktop.plugin.aiChatbox.subtitle') }}
+  <div class="space-y-5">
+    <div class="flex items-center justify-between">
+      <h4 class="text-[var(--font-size-lg)] font-medium text-[var(--mobile-text-primary)]">
+        {{ mode === 'edit' ? t('mobile.plugin.aiChatbox.editProvider') : t('mobile.plugin.aiChatbox.addProvider') }}
+      </h4>
+      <span
+        v-if="mode === 'edit'"
+        class="text-xs px-2.5 py-1 rounded-full bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-muted)]"
+      >{{ initialValues?.name }}</span>
+    </div>
+
+    <!-- 名称 -->
+    <div>
+      <label class="block text-xs font-medium mb-1.5 text-[var(--mobile-text-secondary)]">
+        {{ t('mobile.plugin.aiChatbox.name') }}
+      </label>
+      <input
+        v-model="form.name"
+        type="text"
+        class="w-full min-h-[44px] px-3 text-[var(--font-size-base)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-border)] rounded-xl placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none focus:border-[var(--mobile-input-focus)] transition-colors"
+      />
+    </div>
+
+    <!-- Base URL -->
+    <div>
+      <label class="block text-xs font-medium mb-1.5 text-[var(--mobile-text-secondary)]">
+        {{ t('mobile.plugin.aiChatbox.baseUrl') }}
+      </label>
+      <input
+        v-model="form.baseUrl"
+        type="text"
+        placeholder="https://api.example.com/v1"
+        class="w-full min-h-[44px] px-3 text-[var(--font-size-base)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-border)] rounded-xl placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none focus:border-[var(--mobile-input-focus)] transition-colors"
+      />
+    </div>
+
+    <!-- API Key -->
+    <div>
+      <label class="block text-xs font-medium mb-1.5 text-[var(--mobile-text-secondary)]">
+        {{ t('mobile.plugin.aiChatbox.apiKey') }}
+      </label>
+      <div class="flex gap-2">
+        <input
+          v-model="form.apiKey"
+          :type="showKey ? 'text' : 'password'"
+          placeholder="sk-..."
+          class="flex-1 min-w-0 min-h-[44px] px-3 text-[var(--font-size-base)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-border)] rounded-xl placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none focus:border-[var(--mobile-input-focus)] transition-colors"
+        />
+        <button
+          class="min-h-[44px] px-3 text-[var(--font-size-sm)] rounded-xl bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity flex-shrink-0"
+          @click="showKey = !showKey"
+        >
+          {{ showKey ? t('mobile.plugin.aiChatbox.hide') : t('mobile.plugin.aiChatbox.show') }}
+        </button>
+      </div>
+      <p class="mt-1.5 text-xs text-[var(--mobile-text-muted)]">
+        {{ t('mobile.plugin.aiChatbox.apiKeyHint') }}
       </p>
     </div>
 
-    <!-- 表单 -->
-    <div class="flex-1 space-y-5">
-      <!-- 名称 -->
-      <div>
-        <label class="block text-sm text-[var(--text-secondary)] mb-1.5">{{ t('desktop.plugin.aiChatbox.name') }}</label>
-        <input
-          v-model="form.name"
-          type="text"
-          :placeholder="t('desktop.plugin.aiChatbox.name')"
-          class="w-full bg-[var(--bg-card)] border rounded-md px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 transition-colors"
-          :class="errors.name ? 'border-[var(--color-danger)]' : 'border-[var(--border)]'"
-        />
-        <p v-if="errors.name" class="mt-1 text-xs text-[var(--color-danger)]">{{ errors.name }}</p>
+    <!-- 拉取模型 + 测试连接 -->
+    <div class="space-y-2">
+      <div class="flex items-center gap-2">
+        <button
+          class="min-h-[44px] px-4 text-[var(--font-size-sm)] rounded-xl bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity disabled:opacity-40 flex-shrink-0"
+          :disabled="fetching || !form.baseUrl || !form.apiKey"
+          @click="onFetchModels"
+        >
+          {{ fetching ? t('mobile.plugin.aiChatbox.fetchingModels') : t('mobile.plugin.aiChatbox.fetchModels') }}
+        </button>
+        <button
+          class="min-h-[44px] px-4 text-[var(--font-size-sm)] rounded-xl bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity disabled:opacity-40 flex-shrink-0"
+          :disabled="testing || !form.baseUrl || !form.apiKey"
+          @click="onTestConnection"
+        >
+          {{ testing ? t('mobile.plugin.aiChatbox.testing') : t('mobile.plugin.aiChatbox.testConnection') }}
+        </button>
       </div>
-
-      <!-- Base URL -->
-      <div>
-        <label class="block text-sm text-[var(--text-secondary)] mb-1.5">{{ t('desktop.plugin.aiChatbox.baseUrl') }}</label>
-        <input
-          v-model="form.baseUrl"
-          type="text"
-          placeholder="https://api.example.com/v1"
-          class="w-full bg-[var(--bg-card)] border rounded-md px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 transition-colors"
-          :class="errors.baseUrl ? 'border-[var(--color-danger)]' : 'border-[var(--border)]'"
-        />
-        <p v-if="errors.baseUrl" class="mt-1 text-xs text-[var(--color-danger)]">{{ errors.baseUrl }}</p>
-      </div>
-
-      <!-- API Key -->
-      <div>
-        <label class="block text-sm text-[var(--text-secondary)] mb-1.5">{{ t('desktop.plugin.aiChatbox.apiKey') }}</label>
-        <div class="relative">
-          <input
-            v-model="form.apiKey"
-            :type="showApiKey ? 'text' : 'password'"
-            :placeholder="t('desktop.plugin.aiChatbox.apiKey')"
-            class="w-full bg-[var(--bg-card)] border rounded-md px-3 py-2 pr-10 text-sm text-[var(--text-primary)] outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 transition-colors"
-            :class="errors.apiKey ? 'border-[var(--color-danger)]' : 'border-[var(--border)]'"
-          />
-          <button
-            class="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
-            @click="showApiKey = !showApiKey"
-          >
-            <svg v-if="showApiKey" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-            </svg>
-            <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-          </button>
-        </div>
-        <p v-if="errors.apiKey" class="mt-1 text-xs text-[var(--color-danger)]">{{ errors.apiKey }}</p>
-      </div>
-
-      <!-- API 格式 -->
-      <div>
-        <label class="block text-sm text-[var(--text-secondary)] mb-1.5">{{ t('desktop.plugin.aiChatbox.apiFormat') }}</label>
-        <Select
-          :model-value="form.apiFormat"
-          :options="apiFormatOptions"
-          class="w-full"
-          @update:model-value="onSelectApiFormat"
-        />
-      </div>
-
-      <!-- 模型列表 -->
-      <ModelListEditor :models="form.models" @update="form.models = $event" />
-      <p v-if="errors.models" class="text-xs text-[var(--color-danger)]">{{ errors.models }}</p>
+      <p v-if="fetchError" class="text-xs text-[var(--mobile-error)] break-words">
+        {{ fetchError }}
+      </p>
+      <p
+        v-else-if="testResult !== null"
+        class="text-xs break-words"
+        :class="testOk ? 'text-[var(--mobile-success)]' : 'text-[var(--mobile-error)]'"
+      >{{ testOk ? t('mobile.plugin.aiChatbox.testOk') : testResult }}</p>
     </div>
 
-    <!-- 底部操作 -->
-    <div class="flex items-center gap-3 pt-6 mt-6 border-t border-[var(--border)]">
-      <button
-        class="px-4 py-2 text-sm bg-brand hover:bg-brand-hover text-white rounded-md transition-colors"
-        @click="handleSave"
-      >
-        {{ mode === 'add' ? t('desktop.plugin.aiChatbox.addProvider') : t('desktop.plugin.aiChatbox.saveProvider') }}
-      </button>
+    <!-- 模型列表 -->
+    <div>
+      <label class="block text-xs font-medium mb-1.5 text-[var(--mobile-text-secondary)]">
+        {{ t('mobile.plugin.aiChatbox.modelList') }}
+      </label>
+      <ModelListEditor v-model:models="form.models" />
+    </div>
+
+    <!-- 操作 -->
+    <div class="flex items-center justify-between pt-2">
       <button
         v-if="mode === 'edit'"
-        class="px-4 py-2 text-sm bg-[var(--bg-hover)] text-[var(--color-danger)] hover:bg-[var(--bg-hover)]/80 rounded-md transition-colors"
-        @click="emit('delete', editingId)"
+        class="min-h-[44px] px-4 text-[var(--font-size-sm)] rounded-xl bg-[var(--mobile-error-muted)] text-[var(--mobile-error)] active:opacity-80 transition-opacity"
+        @click="askDelete"
       >
-        {{ t('desktop.plugin.aiChatbox.deleteProvider') }}
+        {{ deleting ? t('mobile.plugin.aiChatbox.confirmDeleteShort') : t('mobile.plugin.aiChatbox.deleteProvider') }}
+      </button>
+      <span v-else></span>
+      <button
+        class="min-h-[44px] px-6 text-[var(--font-size-base)] rounded-xl bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity disabled:opacity-40"
+        :disabled="!canSave"
+        @click="save"
+      >
+        {{ t('mobile.plugin.aiChatbox.saveProvider') }}
       </button>
     </div>
   </div>
@@ -102,24 +118,26 @@
 
 <script setup lang="ts">
 /**
- * 供应商表单 — 新增/编辑共用
+ * ProviderForm — 供应商编辑表单（移动端）
+ *
+ * 预设/自定义共用：名称 + BaseURL + API Key（明文存储，与现状一致）+ 拉取模型
+ * （真实 GET /models，失败回退不阻塞）+ 测试连接（非流式短请求）+ 模型列表编辑。
+ * 删除用内联二次确认（禁原生 confirm 弹窗）。
  */
-import { reactive, ref, watch } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getI18n } from '@bedcode/plugin-sdk-mobile'
-import Select from '@bedcode/plugin-sdk-mobile/ui'
 import ModelListEditor from './ModelListEditor.vue'
-import type { ApiProvider, ApiFormat } from '../types'
-import { API_FORMAT_OPTIONS, generateId } from '../types'
-
-const { t } = useI18n()
-// 模块级代码不能使用 useI18n()，通过 SDK 获取宿主 i18n 实例
-const i18n = getI18n()
+import { PROVIDER_PRESETS, generateId } from '../types'
+import type { ApiProvider } from '../types'
 
 const props = defineProps<{
   mode: 'add' | 'edit'
   initialValues?: ApiProvider
-  existingNames?: string[]
+  existingNames: string[]
+  /** 拉取模型列表（经宿主命令，由 ChatView 注入 config.fetchModels） */
+  fetchModels: (provider: ApiProvider) => Promise<string[]>
+  /** 测试连接（经宿主命令，由 ChatView 注入 config.testConnection） */
+  testConnection: (provider: ApiProvider) => Promise<string>
 }>()
 
 const emit = defineEmits<{
@@ -127,106 +145,87 @@ const emit = defineEmits<{
   delete: [id: string]
 }>()
 
-const apiFormatOptions = API_FORMAT_OPTIONS.map(opt => ({
-  ...opt,
-  label: t(`desktop.plugin.aiChatbox.format${opt.value.charAt(0).toUpperCase() + opt.value.slice(1)}`),
-}))
+const { t } = useI18n()
 
-const showApiKey = ref(false)
-const editingId = ref(props.initialValues?.id || '')
+/** 预设回填（无 initialValues 且匹配预设名时） */
+const preset = computed(() =>
+  PROVIDER_PRESETS.find(p => p.name === props.initialValues?.name) || null
+)
 
-interface FormState {
-  name: string
-  baseUrl: string
-  apiKey: string
-  apiFormat: ApiFormat
-  models: string[]
-}
-
-const form = reactive<FormState>({
-  name: props.initialValues?.name || '',
-  baseUrl: props.initialValues?.baseUrl || '',
+const form = reactive<ApiProvider>({
+  id: props.initialValues?.id || generateId(),
+  name: props.initialValues?.name || props.mode === 'add' && preset.value?.name ? preset.value!.name : '',
   apiKey: props.initialValues?.apiKey || '',
-  apiFormat: props.initialValues?.apiFormat || 'openai',
-  models: props.initialValues?.models ? [...props.initialValues.models] : [],
+  baseUrl: props.initialValues?.baseUrl || preset.value?.baseUrl || '',
+  apiFormat: 'openai',
+  models: props.initialValues?.models?.length
+    ? [...props.initialValues.models]
+    : preset.value?.models ? [...preset.value.models] : [],
+  activeModel: props.initialValues?.activeModel || '',
 })
 
-interface FormErrors {
-  name?: string
-  baseUrl?: string
-  apiKey?: string
-  models?: string
+const showKey = ref(false)
+const fetching = ref(false)
+const testing = ref(false)
+const fetchError = ref('')
+const testResult = ref<string | null>(null)
+const testOk = ref(false)
+const deleting = ref(false)
+
+const canSave = computed(() =>
+  form.name.trim() !== '' && form.baseUrl.trim() !== '' && form.apiKey.trim() !== ''
+)
+
+/** 拉取模型列表：成功替换 models；失败提示并保留现有列表 */
+async function onFetchModels(): Promise<void> {
+  fetching.value = true
+  fetchError.value = ''
+  try {
+    const result = await props.fetchModels({ ...form })
+    if (result.length > 0) {
+      form.models = result
+    } else {
+      fetchError.value = t('mobile.plugin.aiChatbox.fetchModelsEmpty')
+    }
+  } catch (e: any) {
+    fetchError.value = `${t('mobile.plugin.aiChatbox.fetchModelsFailed')}: ${String(e?.message || e)}`
+  } finally {
+    fetching.value = false
+  }
 }
 
-const errors = reactive<FormErrors>({})
-
-/** Select 选中 API 格式（事件值统一转 string 后按 ApiFormat 校验） */
-function onSelectApiFormat(v: string | number): void {
-  form.apiFormat = String(v) as ApiFormat
+/** 测试连接：成功显示回复预览；失败显示错误 */
+async function onTestConnection(): Promise<void> {
+  testing.value = true
+  testResult.value = null
+  try {
+    const reply = await props.testConnection({ ...form })
+    testOk.value = true
+    testResult.value = reply.slice(0, 120)
+  } catch (e: any) {
+    testOk.value = false
+    testResult.value = String(e?.message || e)
+  } finally {
+    testing.value = false
+  }
 }
 
-// 编辑模式下监听 initialValues 变化（切换供应商时）
-watch(() => props.initialValues, (val) => {
-  if (val) {
-    form.name = val.name
-    form.baseUrl = val.baseUrl
-    form.apiKey = val.apiKey
-    form.apiFormat = val.apiFormat
-    form.models = [...val.models]
-    editingId.value = val.id
+function askDelete(): void {
+  if (deleting.value) {
+    emit('delete', props.initialValues!.id)
+    deleting.value = false
+  } else {
+    deleting.value = true
+    // 3 秒后复位，避免误触
+    setTimeout(() => { deleting.value = false }, 3000)
   }
-}, { deep: true })
-
-function validate(): boolean {
-  errors.name = ''
-  errors.baseUrl = ''
-  errors.apiKey = ''
-  errors.models = ''
-
-  let valid = true
-
-  if (!form.name.trim()) {
-    errors.name = i18n.global.t('desktop.plugin.aiChatbox.nameRequired')
-    valid = false
-  } else if (props.mode === 'add' && props.existingNames?.includes(form.name.trim())) {
-    errors.name = i18n.global.t('desktop.plugin.aiChatbox.providerExists', { name: form.name })
-    valid = false
-  }
-
-  if (!form.baseUrl.trim()) {
-    errors.baseUrl = i18n.global.t('desktop.plugin.aiChatbox.baseUrlRequired')
-    valid = false
-  }
-
-  // Ollama 不需要 API Key
-  if (form.apiFormat !== 'ollama' && !form.apiKey.trim()) {
-    errors.apiKey = i18n.global.t('desktop.plugin.aiChatbox.apiKeyRequired')
-    valid = false
-  }
-
-  const nonEmptyModels = form.models.filter(m => m.trim())
-  if (nonEmptyModels.length === 0) {
-    errors.models = i18n.global.t('desktop.plugin.aiChatbox.modelRequired')
-    valid = false
-  }
-
-  return valid
 }
 
-function handleSave(): void {
-  if (!validate()) return
-
-  const nonEmptyModels = form.models.filter(m => m.trim())
-  const provider: ApiProvider = {
-    id: props.mode === 'edit' ? editingId.value : generateId(),
-    name: form.name.trim(),
-    apiKey: form.apiKey.trim(),
-    baseUrl: form.baseUrl.trim(),
-    apiFormat: form.apiFormat,
-    models: nonEmptyModels,
-    activeModel: props.initialValues?.activeModel || nonEmptyModels[0] || '',
-  }
-
-  emit('save', provider)
+function save(): void {
+  if (!canSave.value) return
+  emit('save', {
+    ...form,
+    activeModel: form.models[0] || '',
+  })
 }
 </script>

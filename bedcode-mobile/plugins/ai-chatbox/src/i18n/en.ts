@@ -6,7 +6,8 @@ import type { MessageSchema } from './messages'
  * Maintained in a standalone file; inlined into the bundle at build time by Vite.
  */
 const en: MessageSchema = {
-  sidebarTitle: 'AI Chat',
+  navTitle: 'AI',
+  toolboxTitle: 'AI Chat',
 }
 
 export default en

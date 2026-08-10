@@ -2,10 +2,10 @@
  * AI Chatbox 插件内部类型定义
  */
 
-/** API 格式 */
-export type ApiFormat = 'openai' | 'anthropic' | 'gemini' | 'ollama'
+/** API 格式（当前仅 OpenAI 兼容协议，字段保留供未来扩展） */
+export type ApiFormat = 'openai'
 
-/** API 提供商配置 */
+/** API 提供商配置（storage 持久化；providers.json 为数据目录内镜像占位） */
 export interface ApiProvider {
   id: string
   name: string
@@ -14,60 +14,54 @@ export interface ApiProvider {
   apiFormat: ApiFormat
   models: string[]
   activeModel: string
+  /** 对话级临时模型覆盖（发给 Rust 时优先于 activeModel；不持久化） */
+  model?: string
 }
 
-/** 聊天消息 */
+/** token 用量（流结束事件由宿主从 SSE usage 透传） */
+export interface Usage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
+/** 聊天消息（assistant 消息含 model / usage） */
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
+  model?: string
+  usage?: Usage
 }
 
-/** 对话元数据 */
+/** 对话元数据（对话文件首行 + index.jsonl） */
 export interface ConversationMeta {
   id: string
   title: string
   createdAt: string
   updatedAt: string
+  providerId: string
   providerName: string
+  model: string
+  systemPrompt: string
 }
 
-/** 预设模板 */
+/** 供应商预设目录 */
 export interface ProviderPreset {
   name: string
   baseUrl: string
-  apiFormat: ApiFormat
   models: string[]
 }
 
-/** AI 聊天响应事件 */
-export interface CurrentInputEvent {
-  sessionId: string
-  text: string
-}
-
-/** 预设 Provider 模板 */
+/** 内置供应商预设（全部走 OpenAI 兼容协议；Anthropic 官方 OpenAI 兼容端点） */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiFormat: 'openai', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiFormat: 'openai', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'] },
-  { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiFormat: 'anthropic', models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'] },
-  { name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', apiFormat: 'gemini', models: ['gemini-2.0-flash', 'gemini-1.5-pro'] },
-  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiFormat: 'openai', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
-  { name: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1', apiFormat: 'openai', models: ['moonshot-v1-8k', 'moonshot-v1-32k'] },
-  { name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiFormat: 'openai', models: ['glm-4-flash', 'glm-4-plus', 'glm-4'] },
-  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', apiFormat: 'openai', models: ['Qwen/Qwen2.5-7B-Instruct', 'deepseek-ai/DeepSeek-V3'] },
-  { name: 'Ollama', baseUrl: 'http://localhost:11434', apiFormat: 'ollama', models: [] },
+  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  { name: '通义千问 (Qwen)', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'] },
+  { name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'] },
 ]
 
-/** API 格式选项（用于下拉框） */
-export const API_FORMAT_OPTIONS: { value: ApiFormat; label: string }[] = [
-  { value: 'openai', label: 'OpenAI API' },
-  { value: 'anthropic', label: 'Anthropic Messages' },
-  { value: 'gemini', label: 'Google Gemini' },
-  { value: 'ollama', label: 'Ollama' },
-]
-
-/** 生成简短 UUID */
+/** 生成简短 ID（时间戳 + 随机段，对话/供应商/流共用） */
 export function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
 }

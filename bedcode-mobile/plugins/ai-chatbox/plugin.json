@@ -1,19 +1,18 @@
 {
   "id": "com.bedcode.ai-chatbox",
   "name": "AI Chatbox",
-  "version": "1.0.0",
-  "description": "AI 大模型对话与终端提示词优化",
+  "version": "2.0.0",
+  "description": "AI 大模型对话（OpenAI 兼容供应商，JSONL 对话日志落盘）",
   "author": "BedCode",
   "icon": "💬",
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
   "permissions": [
+    "fs:read",
+    "fs:write",
     "network:http",
-    "session:read",
     "storage",
-    "terminal:input",
-    "terminal:output",
     "ui:navtab",
     "ui:toolbox"
   ],
@@ -28,8 +27,8 @@
         "title": "Chat Complete"
       },
       {
-        "id": "ai-chatbox.optimize-prompt",
-        "title": "Optimize Prompt"
+        "id": "ai-chatbox.fetch-models",
+        "title": "Fetch Models"
       },
       {
         "id": "ai-chatbox.list-conversations",
@@ -66,42 +65,6 @@
       "icon": "💬",
       "component": "ChatView",
       "order": 10
-    },
-    "terminal": {
-      "inputHandlers": [
-        "on_terminal_input"
-      ],
-      "outputParsers": [
-        "on_terminal_output"
-      ],
-      "toolbarItems": [
-        {
-          "id": "ai-optimize-prompt",
-          "title": "AI 优化",
-          "icon": "✨"
-        }
-      ]
-    },
-    "configuration": {
-      "title": "AI Chatbox Settings",
-      "properties": {
-        "apiProviders": {
-          "type": "string",
-          "title": "API Providers (JSON)",
-          "description": "JSON array of API provider configs",
-          "default": "[]"
-        },
-        "activeProvider": {
-          "type": "string",
-          "title": "Active Provider ID",
-          "default": ""
-        },
-        "activeModel": {
-          "type": "string",
-          "title": "Active Model",
-          "default": ""
-        }
-      }
     }
   }
 }

@@ -1,37 +1,43 @@
 <template>
   <div class="space-y-2">
-    <div class="flex items-center justify-between">
-      <label class="text-sm text-[var(--text-secondary)]">{{ t('desktop.plugin.aiChatbox.modelList') }}</label>
-      <button
-        class="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]/80 transition-colors"
-        @click="addModel"
+    <!-- 模型列表 -->
+    <div v-if="models.length > 0" class="space-y-1.5">
+      <div
+        v-for="(m, i) in models"
+        :key="i"
+        class="flex items-center gap-2 px-3 min-h-[44px] bg-[var(--mobile-input-bg)] border border-[var(--mobile-input-border)] rounded-xl"
       >
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-        </svg>
-        {{ t('desktop.plugin.aiChatbox.addModel') }}
-      </button>
+        <span class="flex-1 min-w-0 truncate text-[var(--font-size-base)] text-[var(--mobile-text-primary)] font-mono">{{ m }}</span>
+        <button
+          class="w-10 h-10 flex items-center justify-center text-[var(--mobile-text-muted)] active:opacity-80 rounded-lg transition-opacity flex-shrink-0"
+          :title="t('mobile.plugin.aiChatbox.removeModel')"
+          @click="removeModel(i)"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div v-else class="px-3 py-2 text-xs text-[var(--mobile-text-muted)]">
+      {{ t('mobile.plugin.aiChatbox.noModels') }}
     </div>
 
-    <div v-if="models.length === 0" class="text-xs text-[var(--text-tertiary)] py-2">
-      {{ t('desktop.plugin.aiChatbox.noModels') }}
-    </div>
-
-    <div v-for="(model, index) in models" :key="index" class="flex items-center gap-2">
+    <!-- 添加模型 -->
+    <div class="flex gap-2">
       <input
-        :value="model"
+        v-model="draft"
         type="text"
-        :placeholder="t('desktop.plugin.aiChatbox.modelId')"
-        class="flex-1 bg-[var(--bg-card)] border border-[var(--border)] rounded-md px-3 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 transition-colors"
-        @input="updateModel(index, ($event.target as HTMLInputElement).value)"
+        class="flex-1 min-h-[44px] px-3 text-[var(--font-size-base)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-border)] rounded-xl placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none focus:border-[var(--mobile-input-focus)] transition-colors"
+        :placeholder="t('mobile.plugin.aiChatbox.modelId')"
+        @keydown.enter="addModel"
       />
       <button
-        class="p-1 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] transition-colors"
-        @click="removeModel(index)"
+        class="min-h-[44px] px-4 text-[var(--font-size-base)] rounded-xl bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity flex-shrink-0 disabled:opacity-40"
+        :disabled="!draft.trim()"
+        @click="addModel"
       >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        {{ t('mobile.plugin.aiChatbox.addModel') }}
       </button>
     </div>
   </div>
@@ -39,33 +45,26 @@
 
 <script setup lang="ts">
 /**
- * 模型列表编辑器 — 管理模型 ID 的增删
+ * ModelListEditor — 模型列表编辑（v-model:models 双向绑定，移动端）
  */
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+
+const props = defineProps<{ models: string[] }>()
+const emit = defineEmits<{ 'update:models': [models: string[]] }>()
 
 const { t } = useI18n()
 
-const props = defineProps<{
-  models: string[]
-}>()
-
-const emit = defineEmits<{
-  update: [models: string[]]
-}>()
+const draft = ref('')
 
 function addModel(): void {
-  emit('update', [...props.models, ''])
+  const id = draft.value.trim()
+  if (!id || props.models.includes(id)) return
+  emit('update:models', [...props.models, id])
+  draft.value = ''
 }
 
-function removeModel(index: number): void {
-  const updated = [...props.models]
-  updated.splice(index, 1)
-  emit('update', updated)
-}
-
-function updateModel(index: number, value: string): void {
-  const updated = [...props.models]
-  updated[index] = value
-  emit('update', updated)
+function removeModel(idx: number): void {
+  emit('update:models', props.models.filter((_, i) => i !== idx))
 }
 </script>

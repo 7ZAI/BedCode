@@ -1,73 +1,118 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- 顶栏 -->
-    <header class="h-12 flex items-center justify-between px-4 border-b border-[var(--border)] bg-[var(--bg-hover)]">
+    <header class="mobile-header-safe flex items-center justify-between px-3 pb-2 pt-1 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-card)]">
       <button
-        class="flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+        class="h-11 px-2 -ml-2 flex items-center gap-1 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
         @click="emit('back')"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
         </svg>
-        {{ t('desktop.plugin.aiChatbox.backToChat') }}
+        {{ t('mobile.plugin.aiChatbox.backToChat') }}
       </button>
-      <h3 class="text-sm font-medium text-[var(--text-primary)]">{{ t('desktop.plugin.aiChatbox.providerConfig') }}</h3>
-      <div class="w-20"></div>
+      <h3 class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">{{ t('mobile.plugin.aiChatbox.providerConfig') }}</h3>
+      <div class="w-16"></div>
     </header>
 
-    <!-- 主体：左右分栏 -->
-    <div class="flex-1 flex overflow-hidden">
-      <!-- 左侧边栏 -->
-      <ProviderSidebar
-        :providers="providers"
-        :selected-provider-id="selectedProviderId"
-        :selected-preset-name="selectedPresetName"
-        :is-add-mode="editingMode === 'add' && !selectedPresetName"
-        @select-provider="handleSelectProvider"
-        @select-preset="handleSelectPreset"
-        @add-new="handleAddNew"
-      />
+    <!-- 主体：单栏滚动（预设 → 自定义 → 表单） -->
+    <div class="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+      <!-- 预设供应商 -->
+      <section>
+        <div class="text-xs font-medium text-[var(--mobile-text-muted)] mb-2">
+          {{ t('mobile.plugin.aiChatbox.presetProviders') }}
+        </div>
+        <div class="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
+          <button
+            v-for="preset in PROVIDER_PRESETS"
+            :key="preset.name"
+            class="flex-shrink-0 h-11 px-4 rounded-xl text-[var(--font-size-sm)] border transition-colors"
+            :class="selectedPresetName === preset.name
+              ? 'bg-[var(--mobile-accent-muted)] border-[var(--mobile-border-active)] text-[var(--mobile-accent)]'
+              : 'bg-[var(--mobile-bg-card)] border-[var(--mobile-border)] text-[var(--mobile-text-primary)] active:bg-[var(--mobile-bg-tertiary)]'"
+            @click="selectPreset(preset)"
+          >
+            {{ preset.name }}
+          </button>
+        </div>
+      </section>
 
-      <!-- 右侧表单区 -->
-      <div class="flex-1 overflow-y-auto p-6">
+      <!-- 自定义供应商 -->
+      <section>
+        <div class="text-xs font-medium text-[var(--mobile-text-muted)] mb-2">
+          {{ t('mobile.plugin.aiChatbox.customProviders') }}
+        </div>
+        <div class="space-y-1.5">
+          <button
+            v-for="p in providers"
+            :key="p.id"
+            class="w-full flex items-center gap-2 px-3 h-12 rounded-xl text-[var(--font-size-base)] transition-colors"
+            :class="selectedProviderId === p.id
+              ? 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-text-primary)]'
+              : 'bg-[var(--mobile-bg-card)] text-[var(--mobile-text-secondary)] active:bg-[var(--mobile-bg-tertiary)]'"
+            @click="selectProvider(p.id)"
+          >
+            <span class="flex-1 min-w-0 truncate text-left">{{ p.name }}</span>
+            <span
+              v-if="activeProviderId === p.id"
+              class="w-2 h-2 rounded-full bg-[var(--mobile-accent)] flex-shrink-0"
+              :title="t('mobile.plugin.aiChatbox.activeProvider')"
+            ></span>
+          </button>
+
+          <button
+            class="w-full text-left px-3 h-12 rounded-xl text-[var(--font-size-base)] text-[var(--mobile-accent)] active:bg-[var(--mobile-bg-tertiary)] transition-colors"
+            @click="addCustom"
+          >
+            {{ t('mobile.plugin.aiChatbox.addCustomProvider') }}
+          </button>
+        </div>
+      </section>
+
+      <!-- 表单区 -->
+      <section class="pt-1">
         <ProviderForm
           :key="formKey"
           :mode="editingMode"
           :initial-values="formInitialValues"
           :existing-names="existingNames"
+          :fetch-models="props.fetchModels"
+          :test-connection="props.testConnection"
           @save="handleSave"
           @delete="handleDelete"
         />
-      </div>
+      </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 供应商配置页 — 独立页面，左右分栏
+ * 供应商配置页（移动端全屏）— 预设目录/自定义供应商列表 + 表单编辑
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getI18n } from '@bedcode/plugin-sdk-mobile'
-import ProviderSidebar from './ProviderSidebar.vue'
 import ProviderForm from './ProviderForm.vue'
+import { PROVIDER_PRESETS } from '../types'
 import type { ApiProvider, ProviderPreset } from '../types'
-
-const { t } = useI18n()
-// 模块级代码不能使用 useI18n()，通过 SDK 获取宿主 i18n 实例
-const i18n = getI18n()
 
 const props = defineProps<{
   providers: ApiProvider[]
+  activeProviderId?: string
+  /** 拉取模型列表（ChatView 注入 config.fetchModels） */
+  fetchModels: (provider: ApiProvider) => Promise<string[]>
+  /** 测试连接（ChatView 注入 config.testConnection） */
+  testConnection: (provider: ApiProvider) => Promise<string>
 }>()
 
 const emit = defineEmits<{
   back: []
   add: [provider: ApiProvider]
-  update: [id: string, provider: ApiProvider]
+  update: [provider: ApiProvider]
   remove: [id: string]
 }>()
+
+const { t } = useI18n()
 
 const selectedProviderId = ref('')
 const selectedPresetName = ref('')
@@ -82,29 +127,26 @@ const formInitialValues = computed<ApiProvider | undefined>(() => {
   return undefined
 })
 
-/** 已存在的供应商名称（用于重名检测） */
-const existingNames = computed(() =>
-  props.providers.map(p => p.name)
-)
-
-/** 切换到编辑模式 */
-function handleSelectProvider(id: string): void {
-  selectedProviderId.value = id
-  selectedPresetName.value = ''
-  editingMode.value = 'edit'
-  formKey.value++
-}
+const existingNames = computed(() => props.providers.map(p => p.name))
 
 /** 从预设添加 */
-function handleSelectPreset(preset: ProviderPreset): void {
+function selectPreset(preset: ProviderPreset): void {
   selectedProviderId.value = ''
   selectedPresetName.value = preset.name
   editingMode.value = 'add'
   formKey.value++
 }
 
-/** 新增空白供应商 */
-function handleAddNew(): void {
+/** 编辑已有供应商 */
+function selectProvider(id: string): void {
+  selectedProviderId.value = id
+  selectedPresetName.value = ''
+  editingMode.value = 'edit'
+  formKey.value++
+}
+
+/** 自定义添加（空表单） */
+function addCustom(): void {
   selectedProviderId.value = ''
   selectedPresetName.value = ''
   editingMode.value = 'add'
@@ -114,7 +156,7 @@ function handleAddNew(): void {
 /** 保存（新增或更新） */
 function handleSave(provider: ApiProvider): void {
   if (editingMode.value === 'edit' && selectedProviderId.value) {
-    emit('update', selectedProviderId.value, provider)
+    emit('update', provider)
   } else {
     emit('add', provider)
     // 添加后自动切换到编辑模式
@@ -127,7 +169,6 @@ function handleSave(provider: ApiProvider): void {
 
 /** 删除供应商 */
 function handleDelete(id: string): void {
-  if (!confirm(i18n.global.t('desktop.plugin.aiChatbox.confirmDelete'))) return
   emit('remove', id)
   selectedProviderId.value = ''
   selectedPresetName.value = ''

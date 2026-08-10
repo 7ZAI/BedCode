@@ -1,60 +1,135 @@
 <template>
-  <div class="flex gap-2 items-end">
-    <textarea
-      ref="inputRef"
-      v-model="text"
-      :placeholder="placeholder"
-      :disabled="disabled"
-      rows="1"
-      class="flex-1 resize-none bg-[var(--bg-card)] border border-[var(--border)] rounded-input px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:border-brand outline-none"
-      @keydown.enter.exact.prevent="handleSend"
-      @input="autoResize"
-    ></textarea>
+  <!-- 输入框容器（DeepSeek/Claude 式）：左下角模型 pill + 右下角圆形发送/停止 -->
+  <div
+    class="flex items-end gap-2 rounded-2xl border border-[var(--mobile-input-border)] bg-[var(--mobile-input-bg)] px-2.5 py-2 focus-within:border-[var(--mobile-input-focus)] transition-colors"
+  >
+    <div class="flex-1 min-w-0">
+      <!-- 模型切换 pill（左下角，贴近发送便于切换后立即生效） -->
+      <div v-if="showModel && modelOptions.length > 0" class="mb-1.5 -ml-1">
+        <Select
+          :model-value="modelValue"
+          :options="modelOptions"
+          size="sm"
+          :placeholder="t('mobile.plugin.aiChatbox.model')"
+          class="max-w-[10.5rem]"
+          @update:model-value="emit('update:modelValue', String($event))"
+        />
+      </div>
+
+      <textarea
+        ref="textareaRef"
+        v-model="draft"
+        rows="1"
+        class="w-full resize-none min-h-[44px] max-h-40 px-1 text-[var(--font-size-base)] leading-snug bg-transparent text-[var(--mobile-text-primary)] placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none"
+        :placeholder="placeholder"
+        :disabled="disabled"
+        @keydown.enter.exact.prevent="onEnter"
+        @keydown.enter.shift.prevent="insertNewline"
+      ></textarea>
+    </div>
+
+    <!-- 右下角：流式中为停止，否则为发送（圆形） -->
     <button
-      :disabled="disabled || !text.trim()"
-      class="px-3 py-2 bg-brand hover:bg-brand-hover disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-btn text-sm font-medium transition-colors flex-shrink-0"
-      @click="handleSend"
+      v-if="streaming"
+      class="w-10 h-10 flex-shrink-0 rounded-full flex items-center justify-center bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity"
+      :title="t('mobile.plugin.aiChatbox.stop')"
+      @click="emit('stop')"
     >
-      {{ label }}
+      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+        <rect x="6" y="6" width="12" height="12" rx="2" />
+      </svg>
+    </button>
+    <button
+      v-else
+      class="w-10 h-10 flex-shrink-0 rounded-full flex items-center justify-center bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity disabled:opacity-30 disabled:pointer-events-none"
+      :title="t('mobile.plugin.aiChatbox.send')"
+      :disabled="disabled || !draft.trim()"
+      @click="send"
+    >
+      <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5" />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12l7-7 7 7" />
+      </svg>
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+/**
+ * ChatInput — 多行输入框（移动端，DeepSeek/Claude 式内联布局）
+ *
+ * 输入框容器内：左下角模型切换 pill（Select sm）+ 多行 textarea；
+ * 右下角圆形发送按钮（空输入禁用）/ 流式时切换为停止按钮。
+ * Enter 发送 / Shift+Enter 换行；textarea 自适应高度（1~8 行）。
+ */
+import { ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-
-const { t } = useI18n()
+import Select from '@bedcode/plugin-sdk-mobile/ui'
 
 const props = withDefaults(defineProps<{
   disabled?: boolean
+  streaming?: boolean
   placeholder?: string
+  /** 当前模型（pill 显示） */
+  modelValue?: string
+  /** 模型选项 */
+  modelOptions?: { value: string | number; label: string }[]
+  /** 是否显示模型 pill（无供应商时不显示） */
+  showModel?: boolean
 }>(), {
-  disabled: false,
-  placeholder: '',
+  modelValue: '',
+  modelOptions: () => [],
+  showModel: true,
 })
-
-const label = t('desktop.plugin.aiChatbox.send')
 
 const emit = defineEmits<{
   send: [content: string]
+  stop: []
+  'update:modelValue': [value: string]
 }>()
 
-const text = ref('')
-const inputRef = ref<HTMLTextAreaElement | null>(null)
+const { t } = useI18n()
 
-function handleSend(): void {
-  const content = text.value.trim()
-  if (!content || props.disabled) return
-  emit('send', content)
-  text.value = ''
-  nextTick(() => autoResize())
-}
+const draft = ref('')
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
-function autoResize(): void {
-  const el = inputRef.value
+/** 自适应高度：内容变化后按 scrollHeight 调整（上限 10rem = max-h-40） */
+watch(draft, async () => {
+  await nextTick()
+  const el = textareaRef.value
   if (!el) return
   el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+})
+
+function send(): void {
+  const content = draft.value.trim()
+  if (!content || props.disabled) return
+  draft.value = ''
+  nextTick(() => {
+    const el = textareaRef.value
+    if (el) el.style.height = 'auto'
+  })
+  emit('send', content)
 }
+
+function onEnter(): void {
+  send()
+}
+
+function insertNewline(): void {
+  const el = textareaRef.value
+  if (!el) return
+  const start = el.selectionStart
+  draft.value = draft.value.slice(0, start) + '\n' + draft.value.slice(el.selectionEnd)
+  nextTick(() => {
+    el.selectionStart = el.selectionEnd = start + 1
+  })
+}
+
+function focusInput(): void {
+  textareaRef.value?.focus()
+}
+
+defineExpose({ focusInput })
 </script>

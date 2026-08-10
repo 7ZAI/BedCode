@@ -1,9 +1,13 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--bg-page)]">
-    <!-- 配置页模式 -->
+  <div class="h-full flex bg-[var(--bg-page)]">
+    <!-- 配置页模式（全宽覆盖） -->
     <ProviderConfigPage
       v-if="showConfigPage"
+      class="w-full"
       :providers="providers"
+      :active-provider-id="activeProviderId"
+      :fetch-models="config.fetchModels"
+      :test-connection="config.testConnection"
       @back="showConfigPage = false"
       @add="addProvider"
       @update="updateProvider"
@@ -12,120 +16,230 @@
 
     <!-- 聊天模式 -->
     <template v-else>
-      <header class="px-4 py-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-hover)]">
-        <div class="flex items-center gap-2">
-          <Select
-            v-if="hasProvider"
-            :model-value="activeProviderId"
-            :options="providerOptions"
-            size="sm"
-            class="w-44 flex-shrink-0"
-            @update:model-value="onProviderChange"
-          />
-          <span v-else class="text-xs text-[var(--text-tertiary)]">{{ t('desktop.plugin.aiChatbox.noProvider') }}</span>
-
-          <!-- 模型选择 -->
-          <Select
-            v-if="hasProvider && currentModels.length > 1"
-            :model-value="activeModel"
-            :options="modelOptions"
-            size="sm"
-            class="w-44 flex-shrink-0"
-            @update:model-value="onModelChange"
-          />
-        </div>
-        <div class="flex items-center gap-1">
-          <button
-            class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors"
-            :title="t('desktop.plugin.aiChatbox.modelConfig')"
-            @click="showConfigPage = true"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-          <button
-            :disabled="!hasProvider"
-            class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors disabled:opacity-50"
-            :title="t('desktop.plugin.aiChatbox.newConversation')"
-            @click="newConversation(activeProvider?.name || '')"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      <div v-if="!hasProvider" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
-        <div class="text-4xl mb-3">🤖</div>
-        <p class="text-sm text-[var(--text-secondary)] mb-3">{{ t('desktop.plugin.aiChatbox.pleaseConfigure') }}</p>
-        <button
-          class="px-4 py-2 text-sm bg-brand hover:bg-brand-hover text-white rounded-btn transition-colors"
-          @click="showConfigPage = true"
-        >
-          {{ t('desktop.plugin.aiChatbox.configureModel') }}
-        </button>
+      <!-- 对话列表 -->
+      <div class="w-52 flex-shrink-0">
+        <ConversationList
+          :conversations="conversations"
+          :current-id="currentConvId"
+          :loading="loadingHistory"
+          @select="switchConversation"
+          @new="onNewConversation"
+          @rename="onRenameConversation"
+          @delete="onDeleteConversation"
+        />
       </div>
 
-      <template v-else>
-        <div ref="messagesContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
-          <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center">
-            <div class="text-3xl mb-2">💬</div>
-            <p class="text-sm text-[var(--text-tertiary)]">{{ t('desktop.plugin.aiChatbox.startNewChat') }}</p>
+      <!-- 聊天区 -->
+      <div class="flex-1 flex flex-col min-w-0">
+        <!-- 头部：对话标题 + 供应商/模型 + 设置 -->
+        <header class="px-4 py-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-card)]">
+          <div class="flex items-center gap-2 min-w-0">
+            <span
+              class="text-sm font-medium text-[var(--text-primary)] truncate max-w-[10rem]"
+              :title="currentTitle"
+            >
+              {{ currentTitle }}
+            </span>
+            <span
+              v-if="currentConversation?.systemPrompt"
+              class="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-hover)] text-[var(--text-tertiary)]"
+              :title="t('desktop.plugin.aiChatbox.systemPrompt')"
+            >
+              {{ t('desktop.plugin.aiChatbox.systemPromptOn') }}
+            </span>
           </div>
-          <ChatMessage
-            v-for="(msg, i) in messages"
-            :key="i"
-            :message="msg"
-            :streaming="isStreaming && i === messages.length - 1"
-          />
-        </div>
-        <div class="border-t border-[var(--border)] p-3">
-          <ChatInput
-            :disabled="sending || !activeProvider"
-            :placeholder="t('desktop.plugin.aiChatbox.inputPlaceholder')"
-            @send="sendMessage"
-          />
-        </div>
-      </template>
+          <div class="flex items-center gap-2">
+            <Select
+              v-if="hasProvider"
+              :model-value="activeProviderId"
+              :options="providerOptions"
+              size="sm"
+              class="w-40 flex-shrink-0"
+              @update:model-value="onProviderChange"
+            />
+            <button
+              v-if="hasProvider"
+              class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0"
+              :title="t('desktop.plugin.aiChatbox.systemPrompt')"
+              @click="showSystemPromptEditor = !showSystemPromptEditor"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2v6h6" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 13H8" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 17H8" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9H8" />
+              </svg>
+            </button>
+            <button
+              class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0"
+              :title="t('desktop.plugin.aiChatbox.providerConfig')"
+              @click="showConfigPage = true"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
+        </header>
 
-      <!-- 提示词优化弹窗 -->
-      <PromptOptimizeDialog
-        :show="optimizeShowDialog"
-        :optimizing="optimizing"
-        :original="optimizeOriginal"
-        :optimized="optimizeOptimized"
-        :error="optimizeError"
-        @accept="acceptOptimized()"
-        @cancel="cancelOptimize()"
-      />
+        <!-- system prompt 编辑器（内联面板） -->
+        <div
+          v-if="showSystemPromptEditor"
+          class="px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-card)]"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-[var(--text-secondary)]">
+              {{ t('desktop.plugin.aiChatbox.systemPrompt') }}
+            </span>
+            <button
+              class="text-xs text-[var(--color-primary)] hover:underline"
+              @click="clearSystemPrompt"
+            >
+              {{ t('desktop.plugin.aiChatbox.clear') }}
+            </button>
+          </div>
+          <textarea
+            v-model="systemPromptDraft"
+            rows="3"
+            class="w-full px-3 py-2 text-sm bg-[var(--bg-input)] text-[var(--text-primary)] border border-[var(--border-input)] rounded-input placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-brand transition-colors"
+            :placeholder="t('desktop.plugin.aiChatbox.systemPromptPlaceholder')"
+          ></textarea>
+          <div class="flex justify-end gap-2 mt-2">
+            <button
+              class="px-3 h-7 text-xs rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors"
+              @click="showSystemPromptEditor = false"
+            >
+              {{ t('desktop.plugin.aiChatbox.cancel') }}
+            </button>
+            <button
+              class="px-3 h-7 text-xs rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:bg-brand-hover transition-colors"
+              @click="applySystemPrompt"
+            >
+              {{ t('desktop.plugin.aiChatbox.save') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 未配置供应商 -->
+        <div v-if="!hasProvider" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+          <div class="w-14 h-14 rounded-card bg-[var(--bg-card)] border border-[var(--border)] flex items-center justify-center mb-4 text-[var(--text-secondary)]">
+            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path d="M12 8V4H8" />
+              <rect width="16" height="12" x="4" y="8" rx="2" />
+              <path d="M2 14h2" />
+              <path d="M20 14h2" />
+              <path d="M15 13v2" />
+              <path d="M9 13v2" />
+            </svg>
+          </div>
+          <p class="text-sm text-[var(--text-secondary)] mb-1">{{ t('desktop.plugin.aiChatbox.pleaseConfigure') }}</p>
+          <p class="text-xs text-[var(--text-tertiary)] mb-4">{{ t('desktop.plugin.aiChatbox.emptyHint') }}</p>
+          <button
+            class="px-4 py-2 text-sm bg-brand text-[var(--color-primary-contrast)] hover:bg-brand-hover rounded-btn transition-colors"
+            @click="showConfigPage = true"
+          >
+            {{ t('desktop.plugin.aiChatbox.configureModel') }}
+          </button>
+        </div>
+
+        <template v-else>
+          <!-- 消息区 -->
+          <div ref="messagesContainer" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center">
+              <div class="w-12 h-12 rounded-full bg-[var(--bg-hover)] flex items-center justify-center mb-3 text-[var(--text-tertiary)]">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+                </svg>
+              </div>
+              <p class="text-sm text-[var(--text-tertiary)]">{{ t('desktop.plugin.aiChatbox.startNewChat') }}</p>
+            </div>
+
+            <!-- 全局错误条（授权失效/请求失败等） -->
+            <div
+              v-if="visibleError"
+              class="flex items-center gap-2 px-3 py-2 text-xs rounded-btn border border-[var(--color-danger)]/30 bg-[var(--color-danger-light)] text-[var(--color-danger)]"
+            >
+              <span class="flex-1">{{ visibleError }}</span>
+              <button class="text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]" @click="dismissError">
+                ✕
+              </button>
+            </div>
+
+            <ChatMessage
+              v-for="(msg, i) in messages"
+              :key="i"
+              :message="msg"
+              :streaming="isStreaming && i === messages.length - 1"
+              :error-text="i === messages.length - 1 ? messageErrorText : ''"
+              @delete="onDeleteMessage"
+            />
+
+            <!-- 重新生成（最后一条是 assistant 且非流式时） -->
+            <div v-if="canRegenerate" class="flex justify-center">
+              <button
+                class="px-3 h-7 text-xs rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors"
+                :title="t('desktop.plugin.aiChatbox.regenerate')"
+                @click="regenerate"
+              >
+                {{ t('desktop.plugin.aiChatbox.regenerate') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 输入区：模型切换 + 输入框（模型贴近发送，切换后新消息立即生效） -->
+          <div class="border-t border-[var(--border)] p-3 bg-[var(--bg-card)]">
+            <div v-if="hasProvider" class="flex items-center gap-2 mb-2 px-1">
+              <span class="text-xs text-[var(--text-tertiary)] flex-shrink-0">
+                {{ t('desktop.plugin.aiChatbox.model') }}
+              </span>
+              <Select
+                :model-value="activeModel"
+                :options="modelOptions"
+                size="sm"
+                class="w-52 flex-shrink-0"
+                @update:model-value="onModelChange"
+              />
+              <span class="flex-1" />
+            </div>
+            <ChatInput
+              :disabled="sending || !hasProvider"
+              :streaming="isStreaming"
+              :placeholder="t('desktop.plugin.aiChatbox.inputPlaceholder')"
+              @send="sendMessage"
+              @stop="stopGeneration"
+            />
+          </div>
+        </template>
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * AI Chatbox 侧边栏面板
+ * AI Chatbox 侧边栏面板 — 对话列表 + 消息流 + 输入区 + 供应商配置
  */
 import { ref, computed, watch, nextTick, onMounted, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
+import ConversationList from './ConversationList.vue'
 import ProviderConfigPage from './ProviderConfigPage.vue'
-import PromptOptimizeDialog from './PromptOptimizeDialog.vue'
-// 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
 import Select from '@bedcode/plugin-sdk-desktop/ui'
 import { useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
-import { usePromptOptimizer } from '../composables/usePromptOptimizer'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { ChatMessage as ChatMessageType, ConversationMeta } from '../types'
 
 const { t } = useI18n()
 
-// 通过 provide/inject 获取 PluginContext
+// 宿主注入 PluginContext（PluginViewHost provide）
 const context = inject<PluginContext>('pluginContext')!
+
+const config = useAiConfig(context)
+const chat = useAiChat(context, config)
 
 const {
   providers,
@@ -134,45 +248,78 @@ const {
   activeModel,
   hasProvider,
   loadConfig,
-  setActiveProvider,
-  setActiveModel,
   addProvider,
   updateProvider,
   removeProvider,
-} = useAiConfig(context.storage.get, context.storage.set)
+  setActiveProvider,
+  setActiveModel,
+} = config
 
 const {
+  conversations,
+  currentConvId,
+  currentConversation,
   messages,
   sending,
   isStreaming,
+  loadingHistory,
+  lastError,
   loadConversations,
   newConversation,
+  renameConversation,
+  deleteConversation,
   sendMessage,
-} = useAiChat(context)
-
-const {
-  showDialog: optimizeShowDialog,
-  optimizing,
-  originalText: optimizeOriginal,
-  optimizedText: optimizeOptimized,
-  errorMessage: optimizeError,
-  acceptOptimized,
-  cancelOptimize,
-} = usePromptOptimizer(context)
+  stopGeneration,
+  regenerate,
+  switchConversation,
+  setSystemPrompt,
+} = chat
 
 const messagesContainer = ref<HTMLElement | null>(null)
 const showConfigPage = ref(false)
+const showSystemPromptEditor = ref(false)
+const systemPromptDraft = ref('')
+const dismissedError = ref('')
 
-/** 当前供应商的模型列表 */
-const currentModels = computed(() => activeProvider.value?.models || [])
+/** 当前对话标题（无对话选中时显示面板名；新对话占位显示默认文案） */
+const currentTitle = computed(() => {
+  if (!currentConversation.value) {
+    return t('desktop.plugin.aiChatbox.title')
+  }
+  const title = currentConversation.value.title
+  if (!title || title === 'desktop.plugin.aiChatbox.newConversation') {
+    return t('desktop.plugin.aiChatbox.newConversation')
+  }
+  return title
+})
 
-/** 供应商下拉选项（SDK Select 的 {value,label} 结构） */
 const providerOptions = computed(() => providers.value.map(p => ({ value: p.id, label: p.name })))
+const modelOptions = computed(() => activeProvider.value?.models.map(m => ({ value: m, label: m })) || [])
 
-/** 模型下拉选项（模型名既是值也是标签） */
-const modelOptions = computed(() => currentModels.value.map(m => ({ value: m, label: m })))
+/** 最近一条消息的错误文本（assistant 空内容时显示） */
+const messageErrorText = computed(() => {
+  const last = messages.value[messages.value.length - 1]
+  if (!last || last.role !== 'assistant' || last.content) return ''
+  return lastError.value.startsWith('desktop.plugin.')
+    ? t(lastError.value)
+    : lastError.value
+})
 
-// Select 的 update:model-value 载荷为 string|number，统一转 string 后走原有联动逻辑
+/** 全局错误条（请求失败/授权失效，非单消息错误） */
+const visibleError = computed(() => {
+  if (!lastError.value) return ''
+  if (lastError.value === dismissedError.value) return ''
+  return lastError.value.startsWith('desktop.plugin.')
+    ? t(lastError.value)
+    : lastError.value
+})
+
+const canRegenerate = computed(() =>
+  !sending.value &&
+  messages.value.length > 0 &&
+  messages.value[messages.value.length - 1].role === 'assistant'
+)
+
 function onProviderChange(value: string | number): void {
   setActiveProvider(String(value))
 }
@@ -181,7 +328,43 @@ function onModelChange(value: string | number): void {
   setActiveModel(String(value))
 }
 
-watch(() => messages.value.length, () => {
+async function onNewConversation(): Promise<void> {
+  if (!hasProvider.value) return
+  await newConversation()
+}
+
+async function onRenameConversation(conv: ConversationMeta, title: string): Promise<void> {
+  await renameConversation(conv.id, title)
+}
+
+async function onDeleteConversation(conv: ConversationMeta): Promise<void> {
+  await deleteConversation(conv.id)
+}
+
+/** 删除单条消息（仅前端会话内删除；文件为 append-only 日志，保留历史） */
+async function onDeleteMessage(msg: ChatMessageType): Promise<void> {
+  const idx = messages.value.indexOf(msg)
+  if (idx !== -1) {
+    messages.value.splice(idx, 1)
+  }
+}
+
+function dismissError(): void {
+  dismissedError.value = lastError.value
+}
+
+async function applySystemPrompt(): Promise<void> {
+  await setSystemPrompt(systemPromptDraft.value)
+  showSystemPromptEditor.value = false
+}
+
+async function clearSystemPrompt(): Promise<void> {
+  systemPromptDraft.value = ''
+  await setSystemPrompt('')
+}
+
+// 自动滚动到底部
+watch(() => messages.value.length + (chat.streamingContent.value?.length || 0), () => {
   nextTick(() => {
     if (messagesContainer.value) {
       messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
