@@ -19,7 +19,15 @@ import { usePeer } from '../composables/usePeer'
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
-const { peer, connOnline, start: startPeer, stop: stopPeer } = usePeer(context)
+const {
+  peer,
+  peers,
+  activePeerId,
+  connOnline,
+  switchPeer,
+  start: startPeer,
+  stop: stopPeer,
+} = usePeer(context)
 const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
 const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency } = useSettings(context)
 const {
@@ -106,12 +114,22 @@ async function handleUpload(): Promise<void> {
   }
 }
 
-/** 对端上/下线驱动目录加载/清空 */
+/** 设备切换菜单开合（多对端切换入口） */
+const peerMenuOpen = ref(false)
+
+/** 切换激活设备：关菜单 + 调插件命令；成功由 activePeerId 变化驱动目录重载 */
+async function handleSwitchPeer(id: string): Promise<void> {
+  peerMenuOpen.value = false
+  await switchPeer(id)
+}
+
+/** 激活设备变化（上线自动激活 / 手动切换）驱动目录加载/清空 */
 watch(
-  () => peer.value.online,
-  (online) => {
-    if (online) {
-      void loadDir()
+  () => peer.value.id,
+  (id) => {
+    if (id) {
+      // 重置到根目录：切换设备后旧面包屑路径可能在新对端不存在
+      navigateTo(0)
     } else {
       stopRemote()
       clearSelection()
@@ -143,7 +161,7 @@ onUnmounted(() => {
         <span
           class="ft-dot"
           :class="
-            connOnline.value
+            connOnline
               ? peer.online
                 ? 'ft-dot--online'
                 : 'ft-dot--partial'
@@ -155,41 +173,107 @@ onUnmounted(() => {
           {{ peerStatusLabel }}
         </span>
       </div>
+      <!-- 设备切换：多对端场景点击弹出在线设备列表 -->
+      <div class="ft-peer-switch-wrap">
+        <button
+          class="ft-btn ft-peer-switch-btn"
+          :class="{ 'ft-peer-switch-btn--open': peerMenuOpen }"
+          :disabled="peers.length === 0"
+          :title="t('transfer.peer.switchTitle')"
+          @click="peerMenuOpen = !peerMenuOpen"
+        >
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+          </svg>
+          <span class="ft-btn-text">{{ peers.length }}</span>
+        </button>
+        <!-- 设备列表下拉（自绘，禁原生 select） -->
+        <Transition name="ft-drop">
+          <div v-if="peerMenuOpen" class="ft-peer-menu">
+            <div class="ft-peer-menu-title">{{ t('transfer.peer.switchTitle') }}</div>
+            <button
+              v-for="p in peers"
+              :key="p.id"
+              class="ft-peer-menu-item"
+              :class="{ 'ft-peer-menu-item--active': p.id === activePeerId }"
+              @click="handleSwitchPeer(p.id)"
+            >
+              <!-- 列表内对端均为在线（peer_changed online 才入列），统一绿点，激活项以高亮+勾标识 -->
+              <span class="ft-dot ft-dot--online"></span>
+              <span class="ft-peer-menu-name">{{ p.name || p.ip || p.id }}</span>
+              <span v-if="p.id === activePeerId" class="ft-peer-menu-check">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                </svg>
+              </span>
+            </button>
+          </div>
+        </Transition>
+      </div>
       <div class="ft-spacer"></div>
-      <button class="ft-btn" :disabled="!peer.online" @click="handleUpload">
-        📤<span class="ft-btn-text">{{ t('transfer.topbar.sendToPhone') }}</span>
+      <button class="ft-btn" :disabled="!peer.online" @click="handleUpload" :title="t('transfer.topbar.sendToPhone')">
+        <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+        </svg>
+        <span class="ft-btn-text">{{ t('transfer.topbar.sendToPhone') }}</span>
       </button>
       <button class="ft-btn ft-btn--primary" :disabled="!canDownload" @click="handleDownload">
-        {{ t('transfer.topbar.downloadSelected', { count: selectedCount }) }}
+        <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+        </svg>
+        <span class="ft-btn-text">{{ t('transfer.topbar.downloadSelected', { count: selectedCount }) }}</span>
       </button>
-      <button class="ft-btn" :disabled="!peer.online" @click="handleRefresh">
-        ⟳<span class="ft-btn-text">{{ t('transfer.topbar.refresh') }}</span>
+      <button class="ft-btn" :disabled="!peer.online" @click="handleRefresh" :title="t('transfer.topbar.refresh')">
+        <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M23 4v6h-6M1 20v-6h6" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+        </svg>
+        <span class="ft-btn-text">{{ t('transfer.topbar.refresh') }}</span>
       </button>
-      <button class="ft-btn" @click="showSettings = true">
-        ⚙<span class="ft-btn-text">{{ t('transfer.topbar.settings') }}</span>
+      <button class="ft-btn" @click="showSettings = true" :title="t('transfer.topbar.settings')">
+        <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+        </svg>
+        <span class="ft-btn-text">{{ t('transfer.topbar.settings') }}</span>
       </button>
     </div>
 
     <!-- 空态：未配置共享目录 -->
     <div v-if="showNoRoots" class="ft-empty">
-      <div class="ft-empty-ico">📂</div>
-      <div>{{ t('transfer.empty.noRoots') }}</div>
-      <button class="ft-btn ft-empty-action" @click="showSettings = true">
+      <div class="ft-empty-ico">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+        </svg>
+      </div>
+      <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
+      <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
+      <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
         {{ t('transfer.topbar.settings') }}
       </button>
     </div>
 
     <!-- 空态：对端未连接 / 已连接但未共享 -->
     <div v-else-if="showNoPeer" class="ft-empty">
-      <div class="ft-empty-ico">📱</div>
-      <div>{{ noPeerLabel }}</div>
+      <div class="ft-empty-ico">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 18h2" />
+        </svg>
+      </div>
+      <div class="ft-empty-title">{{ noPeerLabel }}</div>
+      <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
     </div>
 
     <!-- 空态：未设置下载目录 -->
     <div v-else-if="settings.downloadDir === ''" class="ft-empty">
-      <div class="ft-empty-ico">⬇️</div>
-      <div>{{ t('transfer.empty.noDownloadDir') }}</div>
-      <button class="ft-btn ft-empty-action" @click="showSettings = true">
+      <div class="ft-empty-ico">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v12M5 12l7 7 7-7" />
+        </svg>
+      </div>
+      <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
+      <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
+      <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
         {{ t('transfer.topbar.settings') }}
       </button>
     </div>

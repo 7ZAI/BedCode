@@ -50,24 +50,24 @@ function onConcurrencyChange(value: string | number): void {
 
       <div class="ft-settings-body">
         <!-- 共享目录 -->
-        <section>
+        <section class="ft-settings-section">
           <h3 class="ft-settings-section-title">{{ t('transfer.settings.sharedRoots') }}</h3>
-          <div v-if="settings.roots.length === 0" class="ft-dir-value ft-dir-value--empty">
+          <div v-if="settings.roots.length === 0" class="ft-dir-value ft-dir-value--empty ft-dir-value--placeholder">
             {{ t('transfer.settings.noRoots') }}
           </div>
           <div v-else class="ft-root-list">
             <div v-for="root in settings.roots" :key="root" class="ft-root-item">
               <span class="ft-root-path" :title="root">{{ root }}</span>
               <button
-                class="ft-mini-btn"
+                class="ft-mini-btn ft-mini-btn--ghost"
                 :title="t('transfer.settings.removeRoot')"
                 @click="emit('removeRoot', root)"
               >
-                ✕
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
               </button>
             </div>
           </div>
-          <div class="ft-settings-row ft-settings-row--push">
+          <div class="ft-settings-row ft-settings-row--push ft-settings-row--right">
             <button class="ft-btn" @click="emit('addRoot')">
               {{ t('transfer.settings.addRoot') }}
             </button>
@@ -75,12 +75,12 @@ function onConcurrencyChange(value: string | number): void {
         </section>
 
         <!-- 下载目录 -->
-        <section>
+        <section class="ft-settings-section">
           <h3 class="ft-settings-section-title">{{ t('transfer.settings.downloadDir') }}</h3>
           <div class="ft-settings-row">
             <span
               class="ft-dir-value"
-              :class="{ 'ft-dir-value--empty': !settings.downloadDir }"
+              :class="{ 'ft-dir-value--empty ft-dir-value--placeholder': !settings.downloadDir }"
             >
               {{ settings.downloadDir || t('transfer.settings.noDownloadDir') }}
             </span>
@@ -91,7 +91,7 @@ function onConcurrencyChange(value: string | number): void {
         </section>
 
         <!-- 并发数 -->
-        <section>
+        <section class="ft-settings-section">
           <h3 class="ft-settings-section-title">{{ t('transfer.settings.concurrency') }}</h3>
           <Select
             :model-value="settings.concurrency"
@@ -99,10 +99,16 @@ function onConcurrencyChange(value: string | number): void {
             size="sm"
             @update:model-value="onConcurrencyChange"
           />
+          <p class="ft-settings-helper">{{ t('transfer.settings.concurrencyHint') }}</p>
         </section>
 
         <!-- 安全告知（spec §10 常驻） -->
-        <div class="ft-warning">⚠️ {{ t('transfer.settings.plainWarning') }}</div>
+        <div class="ft-warning">
+          <svg class="ft-warning-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01" />
+          </svg>
+          <span>{{ t('transfer.settings.plainWarning') }}</span>
+        </div>
       </div>
     </div>
   </div>

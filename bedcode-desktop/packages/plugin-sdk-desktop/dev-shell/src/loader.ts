@@ -14,6 +14,9 @@ import {
   type DevPluginRecord,
 } from './registry'
 
+// dev-shell 专用 mock：浏览器中 WASM 后端不可用，为特定插件注入模拟命令与事件
+import { registerFileTransferMock, disposeFileTransferMock } from './mock/file-transfer'
+
 export const ready = ref(false)
 
 /** 激活所有被调试插件（幂等） */
@@ -49,6 +52,11 @@ export async function loadPlugins(): Promise<void> {
           await module.activate(context)
           record.state = 'activated'
           pushLog('info', pluginId, 'activate() 成功')
+          // 注入插件 mock（浏览器无 WASM 后端，模拟命令与事件以展示完整 UI）
+          if (pluginId === 'com.bedcode.file-transfer') {
+            registerFileTransferMock(context)
+            pushLog('info', pluginId, '已注入 dev-shell mock 数据')
+          }
         } else {
           record.state = 'loaded'
           pushLog('warn', pluginId, '入口模块未导出 activate()，仅完成加载')
@@ -87,6 +95,10 @@ export async function deactivatePlugin(pluginId: string): Promise<void> {
     } catch (e) {
       pushLog('warn', pluginId, `deactivate() 失败: ${e}`)
     }
+  }
+  // 清理插件 mock（停止进度模拟定时器）
+  if (pluginId === 'com.bedcode.file-transfer') {
+    disposeFileTransferMock()
   }
   record.state = 'deactivated'
   pushLog('info', pluginId, '已停用')

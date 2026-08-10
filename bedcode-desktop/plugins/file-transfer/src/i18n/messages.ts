@@ -17,6 +17,7 @@ export interface MessageSchema {
   'transfer.peer.notSharing': string
   'transfer.peer.unpaired': string
   'transfer.peer.noSharedRoots': string
+  'transfer.peer.switchTitle': string
 
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': string
@@ -66,6 +67,7 @@ export interface MessageSchema {
   'transfer.settings.noDownloadDir': string
   'transfer.settings.chooseDir': string
   'transfer.settings.concurrency': string
+  'transfer.settings.concurrencyHint': string
   'transfer.settings.plainWarning': string
 
   // ==================== 错误（spec §10） ====================
@@ -75,8 +77,11 @@ export interface MessageSchema {
 
   // ==================== 空态 ====================
   'transfer.empty.noRoots': string
+  'transfer.empty.noRootsHint': string
   'transfer.empty.noPeer': string
+  'transfer.empty.noPeerHint': string
   'transfer.empty.noDownloadDir': string
+  'transfer.empty.noDownloadDirHint': string
 
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': string

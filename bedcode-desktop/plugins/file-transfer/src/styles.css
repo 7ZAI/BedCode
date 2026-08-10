@@ -25,7 +25,7 @@
 .ft-topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 0 14px;
   height: 46px;
   flex-shrink: 0;
@@ -44,6 +44,8 @@
   font-size: 12px;
   color: var(--text-primary);
   max-width: 200px;
+  /* 与紧随的设备切换按钮紧凑衔接，避免视觉“分家” */
+  margin-right: 2px;
 }
 
 .ft-peer-name {
@@ -54,7 +56,7 @@
 
 .ft-peer-meta {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .ft-dot {
@@ -81,6 +83,89 @@
   flex: 1;
 }
 
+/* 设备切换入口（多对端场景）与下拉菜单（自绘，禁原生 select） */
+.ft-peer-switch-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ft-peer-switch-btn--open {
+  border-color: var(--color-primary);
+}
+
+.ft-peer-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.ft-peer-menu-title {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ft-peer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  border-radius: var(--radius-tag);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.ft-peer-menu-item:hover,
+.ft-peer-menu-item--active {
+  background: var(--bg-hover);
+}
+
+/* 激活项：底色向主色偏（选中语义明确，非 hover 同色） */
+.ft-peer-menu-item--active {
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ft-peer-menu-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-peer-menu-check {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+/* 下拉淡入 + 轻微位移（200ms 内，避免拖沓） */
+.ft-drop-enter-active,
+.ft-drop-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ft-drop-enter-from,
+.ft-drop-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
 .ft-btn {
   display: inline-flex;
   align-items: center;
@@ -92,22 +177,26 @@
   border-radius: var(--radius-button);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color 0.2s ease, background-color 0.2s ease;
+  transition: border-color 0.2s ease, background-color 0.2s ease, opacity 0.2s ease;
 }
 
 .ft-btn:hover {
   border-color: var(--color-primary);
+  background: var(--bg-card);
 }
 
+/* 禁用态：次级灰而非半透明，避免“看起来可点但点不动” */
 .ft-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: not-allowed;
+  background: var(--bg-hover);
+  border-color: var(--border);
 }
 
 .ft-btn--primary {
   background: var(--color-primary);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-primary-contrast);
 }
 
 .ft-btn--primary:hover {
@@ -117,6 +206,13 @@
 
 .ft-btn-text {
   margin-left: 2px;
+}
+
+/* 按钮内 SVG 图标统一样式（1.5 描边，随按钮字号） */
+.ft-ico-btn {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 /* ==================== 双栏主体 ==================== */
@@ -188,6 +284,8 @@
 .ft-table-wrap {
   flex: 1;
   overflow: auto;
+  /* 滚动条占位稳定，避免粘性表头横向滚动时错位 */
+  scrollbar-gutter: stable;
 }
 
 .ft-table {
@@ -240,10 +338,16 @@
 
 .ft-ico {
   width: 18px;
+  height: 18px;
   flex-shrink: 0;
-  text-align: center;
-  font-size: 14px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ft-ico svg {
+  width: 16px;
+  height: 16px;
 }
 
 .ft-dim {
@@ -328,6 +432,7 @@
   opacity: 0;
 }
 
+/* 空态：图标容器（柔和底色 + 描边）+ 主/副文案分层 + 主色引导按钮 */
 .ft-empty {
   flex: 1;
   display: flex;
@@ -342,12 +447,42 @@
 }
 
 .ft-empty-ico {
-  font-size: 26px;
-  line-height: 1;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: var(--color-primary-light);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  /* 内阴影微强化存在感（远观不“飘”） */
+  box-shadow: inset 0 1px 2px rgba(38, 35, 27, 0.05);
+}
+
+.ft-empty-ico svg {
+  width: 30px;
+  height: 30px;
+}
+
+.ft-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-empty-desc {
+  max-width: 340px;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
 }
 
 .ft-empty-action {
-  margin-top: 8px;
+  margin-top: 14px;
+  padding: 6px 16px;
 }
 
 /* ==================== 队列面板 ==================== */
@@ -400,9 +535,10 @@
 }
 
 .ft-chip--reject {
-  /* 宿主无紫色 token，同名被拒沿用原型紫色 #a78bfa */
-  background: color-mix(in srgb, #a78bfa 15%, transparent);
-  color: #a78bfa;
+  /* 宿主无独立 token：用 danger+primary 派生深酒红（非 AI 紫），与失败(纯红)语义区分 */
+  --ft-reject: color-mix(in srgb, var(--color-danger) 72%, var(--color-primary) 28%);
+  background: color-mix(in srgb, var(--ft-reject) 15%, transparent);
+  color: var(--ft-reject);
 }
 
 .ft-resume-all {
@@ -440,8 +576,25 @@
 }
 
 .ft-task-dir {
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.ft-task-dir svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ft-task-dir--up {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
 }
 
 .ft-task-name {
@@ -457,7 +610,12 @@
   background: none;
   border: none;
   color: var(--text-secondary);
-  padding: 2px 6px;
+  padding: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 6px;
   cursor: pointer;
   font-size: 11px;
@@ -465,9 +623,25 @@
   transition: color 0.2s ease, background-color 0.2s ease;
 }
 
+.ft-mini-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
 .ft-mini-btn:hover {
   background: var(--bg-input);
   color: var(--text-primary);
+}
+
+/* ghost 变体：破坏性操作默认弱化，hover 才显现（设置面板路径移除） */
+.ft-mini-btn--ghost {
+  opacity: 0.35;
+}
+
+.ft-mini-btn--ghost:hover {
+  opacity: 1;
+  background: var(--color-danger-light);
+  color: var(--color-danger);
 }
 
 .ft-pbar {
@@ -528,10 +702,10 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
 }
 
 .ft-settings-title {
@@ -544,11 +718,27 @@
   margin-top: 8px;
 }
 
+.ft-settings-row--right {
+  justify-content: flex-end;
+}
+
 .ft-settings-section-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 8px;
+}
+
+.ft-settings-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.ft-settings-helper {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
 }
 
 .ft-settings-row {
@@ -598,9 +788,23 @@
   color: var(--text-tertiary);
 }
 
+/* 空值占位：虚线放置区，既是视觉锚点也是下一步的引导（可点击区域） */
+.ft-dir-value--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-input);
+  background: var(--bg-card);
+  font-size: 12px;
+}
+
 .ft-warning {
   display: flex;
   gap: 8px;
+  align-items: flex-start;
   padding: 10px 12px;
   background: var(--color-warning-light);
   border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
@@ -608,6 +812,14 @@
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.ft-warning-ico {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--color-warning);
 }
 
 .ft-loading {

@@ -15,6 +15,7 @@ const en: MessageSchema = {
   'transfer.peer.notSharing': 'Connected · peer not sharing',
   'transfer.peer.unpaired': 'No device connected',
   'transfer.peer.noSharedRoots': "Peer hasn't shared any folders yet",
+  'transfer.peer.switchTitle': 'Switch device',
 
   // ==================== Top bar ====================
   'transfer.topbar.sendToPhone': 'Send to phone…',
@@ -64,6 +65,7 @@ const en: MessageSchema = {
   'transfer.settings.noDownloadDir': 'Not set',
   'transfer.settings.chooseDir': 'Choose folder',
   'transfer.settings.concurrency': 'Concurrency',
+  'transfer.settings.concurrencyHint': 'Number of simultaneous transfers; increasing it may use more bandwidth',
   'transfer.settings.plainWarning': 'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
 
   // ==================== Errors (spec §10) ====================
@@ -73,8 +75,11 @@ const en: MessageSchema = {
 
   // ==================== Empty states ====================
   'transfer.empty.noRoots': 'Configure shared folders in Settings first',
+  'transfer.empty.noRootsHint': 'Add a local folder as a shared root so your peer can browse and download files from it',
   'transfer.empty.noPeer': 'No paired device detected',
+  'transfer.empty.noPeerHint': 'Make sure your phone and computer are on the same network and the phone is paired with sharing enabled',
   'transfer.empty.noDownloadDir': 'Configure a download folder in Settings first',
+  'transfer.empty.noDownloadDirHint': 'Choose where received files are saved, then you can download files from your peer to this device',
 
   // ==================== ETA ====================
   'transfer.eta.seconds': '{count}s left',

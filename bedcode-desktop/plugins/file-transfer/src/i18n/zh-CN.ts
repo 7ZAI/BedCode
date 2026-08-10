@@ -15,6 +15,7 @@ const zhCN: MessageSchema = {
   'transfer.peer.notSharing': '已连接 · 对端未共享',
   'transfer.peer.unpaired': '未连接设备',
   'transfer.peer.noSharedRoots': '对方尚未设置共享目录',
+  'transfer.peer.switchTitle': '切换设备',
 
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': '发送到手机…',
@@ -64,6 +65,7 @@ const zhCN: MessageSchema = {
   'transfer.settings.noDownloadDir': '未设置',
   'transfer.settings.chooseDir': '选择目录',
   'transfer.settings.concurrency': '并发数',
+  'transfer.settings.concurrencyHint': '同时传输的任务数量，增大可能占用更多带宽',
   'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任的 WiFi 网络中使用',
 
   // ==================== 错误（spec §10） ====================
@@ -73,8 +75,11 @@ const zhCN: MessageSchema = {
 
   // ==================== 空态 ====================
   'transfer.empty.noRoots': '请先在设置中配置共享目录',
+  'transfer.empty.noRootsHint': '添加一个本机目录作为共享根，对端即可浏览并下载其中的文件',
   'transfer.empty.noPeer': '未检测到已配对设备',
+  'transfer.empty.noPeerHint': '确保手机与电脑在同一局域网，且手机端已配对并开启共享',
   'transfer.empty.noDownloadDir': '请先在设置中配置下载目录',
+  'transfer.empty.noDownloadDirHint': '选择接收文件的保存位置，之后就能从对端下载文件到本机',
 
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': '剩 {count} 秒',

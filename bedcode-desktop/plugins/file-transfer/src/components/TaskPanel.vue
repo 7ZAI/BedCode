@@ -152,13 +152,38 @@ function reasonText(task: Task): string {
       <div v-else class="ft-task-list">
         <div v-for="task in tasks" :key="task.id" class="ft-task">
           <div class="ft-task-head">
-            <span class="ft-task-dir">{{ task.direction === 'download' ? '⬇' : '⬆' }}</span>
+            <span class="ft-task-dir" :class="task.direction === 'upload' ? 'ft-task-dir--up' : ''">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  v-if="task.direction === 'download'"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 5v14M19 12l-7 7-7-7"
+                />
+                <path
+                  v-else
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 19V5M5 12l7-7 7 7"
+                />
+              </svg>
+            </span>
             <span class="ft-task-name" :title="task.remotePath">{{ displayName(task.remotePath) }}</span>
             <span class="ft-chip" :class="chipClass(task.state)">{{ stateLabel(task.state) }}</span>
-            <button v-if="canPause(task)" class="ft-mini-btn" :title="t('transfer.task.pause')" @click="emit('pause', task.id)">⏸</button>
-            <button v-if="canResume(task)" class="ft-mini-btn" :title="t('transfer.task.resume')" @click="emit('resume', task.id)">▶</button>
-            <button v-if="canRetry(task)" class="ft-mini-btn" :title="t('transfer.task.retry')" @click="emit('retry', task.id)">↻</button>
-            <button v-if="canCancel(task)" class="ft-mini-btn" :title="t('transfer.task.cancel')" @click="emit('cancel', task.id)">✕</button>
+            <button v-if="canPause(task)" class="ft-mini-btn" :title="t('transfer.task.pause')" @click="emit('pause', task.id)">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M9 4h2v16H9zM15 4h2v16h-2z" /></svg>
+            </button>
+            <button v-if="canResume(task)" class="ft-mini-btn" :title="t('transfer.task.resume')" @click="emit('resume', task.id)">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4l13 8-13 8V4z" /></svg>
+            </button>
+            <button v-if="canRetry(task)" class="ft-mini-btn" :title="t('transfer.task.retry')" @click="emit('retry', task.id)">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M1 4v6h6M3.51 15a9 9 0 102.13-9.36L1 10" /></svg>
+            </button>
+            <button v-if="canCancel(task)" class="ft-mini-btn" :title="t('transfer.task.cancel')" @click="emit('cancel', task.id)">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
           </div>
 
           <!-- 进度条（终态无进度条时也渲染完成态） -->
