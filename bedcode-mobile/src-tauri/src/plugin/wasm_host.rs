@@ -133,6 +133,8 @@ pub fn column_to_json(row: &rusqlite::Row<'_>, col_index: usize) -> serde_json::
 #[derive(Debug, Deserialize)]
 struct OpenAiSseResponse {
     choices: Vec<OpenAiSseChoice>,
+    /// 流末尾的用量信息（部分供应商在最后一个 chunk 携带，缺失时为 None）
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,6 +343,7 @@ fn parse_and_emit_sse(
     app_handle: &tauri::AppHandle,
     stream_event: &str,
 ) {
+    let mut last_usage: Option<serde_json::Value> = None;
     while let Some(pos) = buffer.find("\n\n") {
         let event_text = buffer[..pos].to_string();
         buffer.drain(..pos + 2);
@@ -349,13 +352,22 @@ fn parse_and_emit_sse(
             if let Some(data) = line.strip_prefix("data: ") {
                 let data = data.trim();
                 if data == "[DONE]" {
-                    let _ = app_handle.emit(stream_event, serde_json::json!({ "done": true }));
+                    // done 事件携带最后一次出现的 usage（无则省略，向后兼容）
+                    let mut payload = serde_json::Map::new();
+                    payload.insert("done".to_string(), serde_json::Value::Bool(true));
+                    if let Some(usage) = last_usage.take() {
+                        payload.insert("usage".to_string(), usage);
+                    }
+                    let _ = app_handle.emit(stream_event, serde_json::Value::Object(payload));
                     return;
                 }
 
                 match format {
                     "openai" => {
                         if let Ok(parsed) = serde_json::from_str::<OpenAiSseResponse>(data) {
+                            if parsed.usage.is_some() {
+                                last_usage = parsed.usage.clone();
+                            }
                             if let Some(content) = parsed
                                 .choices
                                 .first()

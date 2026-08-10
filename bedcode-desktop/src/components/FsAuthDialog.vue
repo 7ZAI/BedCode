@@ -30,9 +30,26 @@
 
             <!-- Path display -->
             <div class="space-y-1">
-              <span class="text-xs text-[var(--text-tertiary)]">{{ t('desktop.plugin.fsAuthPath') }}</span>
-              <div class="p-2 rounded-input bg-[var(--bg-input)] text-xs text-[var(--text-primary)] break-all font-mono">
-                {{ request.path }}
+              <span class="text-xs text-[var(--text-tertiary)]">
+                {{ pathCount > 1 ? t('desktop.plugin.fsAuthPaths', { count: pathCount }) : t('desktop.plugin.fsAuthPath') }}
+              </span>
+              <div
+                v-if="pathCount > 1"
+                class="max-h-40 overflow-y-auto p-2 rounded-input bg-[var(--bg-input)] text-xs text-[var(--text-primary)] space-y-1"
+              >
+                <div
+                  v-for="p in paths"
+                  :key="p"
+                  class="break-all font-mono leading-relaxed"
+                >
+                  {{ p }}
+                </div>
+              </div>
+              <div
+                v-else
+                class="p-2 rounded-input bg-[var(--bg-input)] text-xs text-[var(--text-primary)] break-all font-mono"
+              >
+                {{ paths[0] || request.path }}
               </div>
             </div>
 
@@ -87,12 +104,22 @@ const { t } = useI18n()
 interface FsAuthRequest {
   requestId: string
   pluginId: string
-  path: string
+  path?: string
+  /** 批量授权：未授权路径数组（桌面 1.0 后新增，优先于 path） */
+  paths?: string[]
   operation: string
 }
 
 const request = ref<FsAuthRequest | null>(null)
 const remember = ref(true)
+
+/** 待展示路径列表（批量事件用 paths，兼容旧事件回退 path） */
+const paths = computed(() => {
+  if (!request.value) return []
+  return request.value.paths?.length ? request.value.paths : [request.value.path || '']
+})
+
+const pathCount = computed(() => paths.value.length)
 
 const operationLabel = computed(() => {
   if (!request.value) return ''

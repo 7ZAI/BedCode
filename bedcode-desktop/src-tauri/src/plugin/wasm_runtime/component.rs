@@ -210,6 +210,10 @@ impl bedcode::plugin::host_fs::Host for WasmPluginState {
     fn exists(&mut self, path: String) -> Result<bool, String> {
         fs::fs_exists(&self.host_ctx, &self.plugin_id, &path)
     }
+
+    fn request_auth(&mut self, paths_json: String) -> Result<bool, String> {
+        fs::fs_request_auth(&self.host_ctx, &self.plugin_id, &paths_json)
+    }
 }
 
 impl bedcode::plugin::host_bus::Host for WasmPluginState {

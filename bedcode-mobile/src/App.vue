@@ -12,6 +12,9 @@
 
     <!-- Plugin Dialog Host -->
     <PluginDialogHost />
+
+    <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
+    <FsAuthDialog />
   </div>
 </template>
 
@@ -23,6 +26,7 @@ import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/PluginDialogHost.vue'
+import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
 import { useSettingsStore } from '@/stores/settings'

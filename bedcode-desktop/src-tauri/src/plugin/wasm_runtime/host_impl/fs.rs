@@ -29,6 +29,35 @@ fn write_text_file(path: &str, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)
 }
 
+/// 批量请求目录授权（权限 + fs_auth 批量弹窗校验）
+///
+/// paths-json 为 JSON 字符串数组；返回是否全部同意（拒绝/超时均为 false）
+pub(crate) fn fs_request_auth(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    paths_json: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_request_auth") {
+        return Err("permission denied".to_string());
+    }
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| format!("fs error: invalid paths json: {}", e))?;
+    if paths.is_empty() {
+        return Ok(true);
+    }
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = block_on_async(fs_auth.check_batch(plugin_id, &paths, FsOp::Read));
+    if !allowed {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            paths = ?paths,
+            "fs_request_auth: denied by user"
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 /// 读取文件原始字节（WSL UNC 路径走 wsl.exe 桥接）
 fn read_file_bytes(path: &str) -> std::io::Result<Vec<u8>> {
     if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(path) {

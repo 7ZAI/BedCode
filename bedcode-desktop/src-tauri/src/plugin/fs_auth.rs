@@ -36,8 +36,8 @@ struct PendingRequest {
     request_id: String,
     /// 请求授权的插件 ID
     plugin_id: String,
-    /// 请求授权的文件路径
-    path: String,
+    /// 请求授权的文件路径（单路径请求为单元素；批量请求含全部未授权路径）
+    paths: Vec<String>,
     /// 回复通道
     reply_tx: oneshot::Sender<bool>,
 }
@@ -141,11 +141,122 @@ impl FsAuthChecker {
         if let Some(idx) = pending.iter().position(|r| r.request_id == request_id) {
             let request = pending.remove(idx);
             if allowed && remember {
-                if let Err(e) = self.save_granted_path(&request.plugin_id, &request.path).await {
-                    tracing::warn!("fs_auth: failed to save granted path: {}", e);
+                for path in &request.paths {
+                    if let Err(e) = self.save_granted_path(&request.plugin_id, path).await {
+                        tracing::warn!("fs_auth: failed to save granted path: {}", e);
+                    }
                 }
             }
             let _ = request.reply_tx.send(allowed);
+        }
+    }
+
+    /// 批量请求目录授权
+    ///
+    /// 已授权/白名单路径直接放行；未授权路径合并为**一次**弹窗询问，
+    /// 全部同意才返回 `true`（任一拒绝或超时即 `false`）。
+    /// 供插件 activate 时集中申请数据目录访问权。
+    pub async fn check_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
+        let mut ungranted: Vec<String> = Vec::new();
+
+        for path in paths {
+            let canonical = match Self::canonicalize_path(path) {
+                Some(c) => c,
+                None => {
+                    tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_auth: path canonicalization failed");
+                    return false;
+                }
+            };
+
+            // 路径白名单 / 插件白名单 / 已授权前缀 → 直接放行
+            if self.match_path_whitelist(&canonical) {
+                continue;
+            }
+            if self.plugin_whitelist.contains(plugin_id) {
+                continue;
+            }
+            if self.check_granted_path(plugin_id, &canonical).await {
+                continue;
+            }
+            ungranted.push(path.clone());
+        }
+
+        if ungranted.is_empty() {
+            return true;
+        }
+
+        self.request_user_auth_batch(plugin_id, &ungranted, operation).await
+    }
+
+    /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
+    async fn request_user_auth_batch(
+        &self,
+        plugin_id: &str,
+        paths: &[String],
+        operation: FsOp,
+    ) -> bool {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (reply_tx, reply_rx) = oneshot::channel();
+
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.push(PendingRequest {
+                request_id: request_id.clone(),
+                plugin_id: plugin_id.to_string(),
+                paths: paths.to_vec(),
+                reply_tx,
+            });
+        }
+
+        // 发送弹窗事件到前端（paths 数组 + path 兼容字段 = 首个路径）
+        let payload = serde_json::json!({
+            "requestId": request_id,
+            "pluginId": plugin_id,
+            "paths": paths,
+            "path": paths.first().cloned().unwrap_or_default(),
+            "operation": operation.to_string(),
+        });
+
+        // 无头上下文（测试）没有 AppHandle，无法弹窗：移除已入队请求，保守拒绝
+        let Some(app_handle) = self.app_handle.as_ref() else {
+            let mut pending = self.pending_requests.lock().await;
+            pending.retain(|r| r.request_id != request_id);
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "fs_auth: no app_handle in headless context, denying auth request"
+            );
+            return false;
+        };
+
+        if let Err(e) = app_handle.emit("plugin:fs-auth-request", payload) {
+            // 事件未送达前端：请求永远不会被响应，移除已入队条目避免 pending 泄漏
+            let mut pending = self.pending_requests.lock().await;
+            pending.retain(|r| r.request_id != request_id);
+            tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
+            return false;
+        }
+
+        // 等待用户回复（超时 30 秒自动拒绝）
+        match tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx).await {
+            Ok(Ok(allowed)) => {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    paths = ?paths,
+                    allowed = allowed,
+                    "fs_auth: user responded (batch)"
+                );
+                allowed
+            }
+            _ => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    paths = ?paths,
+                    "fs_auth: batch auth request timed out or cancelled"
+                );
+                let mut pending = self.pending_requests.lock().await;
+                pending.retain(|r| r.request_id != request_id);
+                false
+            }
         }
     }
 
@@ -209,7 +320,7 @@ impl FsAuthChecker {
             pending.push(PendingRequest {
                 request_id: request_id.clone(),
                 plugin_id: plugin_id.to_string(),
-                path: path.to_string(),
+                paths: vec![path.to_string()],
                 reply_tx,
             });
         }
@@ -222,8 +333,10 @@ impl FsAuthChecker {
             "operation": operation.to_string(),
         });
 
-        // 无头上下文（测试）没有 AppHandle，无法弹窗，保守拒绝
+        // 无头上下文（测试）没有 AppHandle，无法弹窗：移除已入队请求，保守拒绝
         let Some(app_handle) = self.app_handle.as_ref() else {
+            let mut pending = self.pending_requests.lock().await;
+            pending.retain(|r| r.request_id != request_id);
             tracing::warn!(
                 plugin_id = %plugin_id,
                 path = %path,
@@ -233,6 +346,9 @@ impl FsAuthChecker {
         };
 
         if let Err(e) = app_handle.emit("plugin:fs-auth-request", payload) {
+            // 事件未送达前端：请求永远不会被响应，移除已入队条目避免 pending 泄漏
+            let mut pending = self.pending_requests.lock().await;
+            pending.retain(|r| r.request_id != request_id);
             tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
             return false;
         }
@@ -320,5 +436,50 @@ impl FsAuthChecker {
         } else {
             Some(p.to_path_buf())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::plugin::storage::PluginStorage;
+    use std::sync::Arc;
+
+    /// 内存数据库 + 无头 AppHandle（None）的校验器：无法弹窗，未授权路径应保守拒绝
+    async fn headless_checker() -> FsAuthChecker {
+        let db = Database::new(&std::path::Path::new(":memory:")).unwrap();
+        db.init_schema().unwrap();
+        // Mutex 为 tokio::sync::Mutex（super::* 引入），与 PluginStorage 签名一致
+        FsAuthChecker::new(Arc::new(PluginStorage::new(Arc::new(Mutex::new(db)))), None)
+    }
+
+    #[tokio::test]
+    async fn check_batch_whitelist_path_bypasses_dialog() {
+        let checker = headless_checker().await;
+        // 路径白名单（.claude/ 目录段）命中 → 直接放行，无需弹窗
+        let path = std::env::temp_dir()
+            .join(".claude")
+            .join("settings.json")
+            .to_string_lossy()
+            .to_string();
+        assert!(checker.check_batch("com.bedcode.test", &[path], FsOp::Read).await);
+        assert!(checker.pending_requests.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn check_batch_ungranted_headless_denied_and_pending_cleaned() {
+        let checker = headless_checker().await;
+        // 未授权路径 + 无头上下文：保守拒绝，且不残留 pending 条目（泄漏回归）
+        let path = std::env::temp_dir().to_string_lossy().to_string();
+        assert!(!checker.check_batch("com.bedcode.test", &[path], FsOp::Read).await);
+        assert!(checker.pending_requests.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn check_batch_empty_paths_returns_true() {
+        let checker = headless_checker().await;
+        assert!(checker.check_batch("com.bedcode.test", &[], FsOp::Read).await);
+        assert!(checker.pending_requests.lock().await.is_empty());
     }
 }

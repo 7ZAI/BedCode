@@ -256,6 +256,13 @@ impl HostFs for WasmHost {
     fn fs_exists(&self, path: &str) -> Result<bool, HostError> {
         host_fs::exists(path).map_err(|e| host_err("fs_exists", e))
     }
+
+    fn fs_request_auth(&self, paths: &[String]) -> Result<bool, HostError> {
+        let paths_json = serde_json::to_string(paths).map_err(|e| {
+            HostError::custom(-1, format!("fs_request_auth: serialize failed: {}", e))
+        })?;
+        host_fs::request_auth(&paths_json).map_err(|e| host_err("fs_request_auth", e))
+    }
 }
 
 // ==================== HostLog ====================

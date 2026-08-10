@@ -269,6 +269,19 @@ impl HostFs for WasmHost {
             Err(HostError::call_failed("fs_delete"))
         }
     }
+
+    fn fs_request_auth(&self, paths: &[String]) -> Result<bool, HostError> {
+        let json = serde_json::to_string(paths)
+            .map_err(|e| HostError::custom(-1, format!("fs_request_auth: serialize failed: {}", e)))?;
+        let (paths_ptr, paths_len) = wasm_alloc_string(&json);
+        let result = unsafe { host_fs_request_auth(paths_ptr, paths_len) };
+        wasm_dealloc_string(paths_ptr, paths_len);
+        match result {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(HostError::call_failed("fs_request_auth")),
+        }
+    }
 }
 
 // ==================== HostLog ====================
@@ -512,6 +525,8 @@ extern "C" {
     fn host_fs_copy(src_ptr: u32, src_len: u32, dst_ptr: u32, dst_len: u32) -> i32;
     /// 文件系统：检查文件是否存在 — 返回 1 存在，0 不存在，-1 错误
     fn host_fs_exists(path_ptr: u32, path_len: u32) -> i32;
+    /// 文件系统：批量请求目录授权（paths 为 JSON 字符串数组）— 返回 1 全部同意，0 拒绝/超时，-1 失败
+    fn host_fs_request_auth(paths_ptr: u32, paths_len: u32) -> i32;
     /// 文件系统：删除文件 — 返回 0 成功（不存在也视为成功），-1 失败
     fn host_fs_delete(path_ptr: u32, path_len: u32) -> i32;
     /// 消息总线：发布消息 — 返回 0 成功，-1 失败

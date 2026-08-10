@@ -72,6 +72,9 @@ interface host-fs {
     copy: func(src: string, dst: string) -> result<_, string>;
     delete: func(path: string) -> result<_, string>;
     exists: func(path: string) -> result<bool, string>;
+    /// 批量请求目录授权：未授权路径合并为一次用户弹窗，阻塞等待答复
+    /// （paths-json 为 JSON 字符串数组；返回是否全部同意）
+    request-auth: func(paths-json: string) -> result<bool, string>;
 }
 
 /// 文件传输引擎（原 transfer.rs：transfer_start/cancel，ABI v5）

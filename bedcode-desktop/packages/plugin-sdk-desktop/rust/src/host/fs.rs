@@ -22,4 +22,11 @@ pub trait HostFs {
 
     /// 检查文件是否存在；路径不可访问返回 `Ok(false)`
     fn fs_exists(&self, path: &str) -> Result<bool, HostError>;
+
+    /// 批量请求目录授权（未授权路径合并为一次用户弹窗，阻塞等待答复）
+    ///
+    /// 返回 `true` 表示全部路径已获授权（含此前已授权路径）；
+    /// `false` 表示用户拒绝或超时。常用于插件 activate 时集中申请
+    /// 数据目录访问权，拒绝则激活失败。
+    fn fs_request_auth(&self, paths: &[String]) -> Result<bool, HostError>;
 }

@@ -35,7 +35,8 @@ impl std::fmt::Display for FsOp {
 struct PendingRequest {
     request_id: String,
     plugin_id: String,
-    path: String,
+    /// 请求授权的文件路径（单路径请求为单元素；批量请求含全部未授权路径）
+    paths: Vec<String>,
     reply_tx: oneshot::Sender<bool>,
 }
 
@@ -116,11 +117,106 @@ impl FsAuthChecker {
         };
 
         if allowed && remember {
-            if let Err(e) = self.save_granted_path(&request.plugin_id, &request.path).await {
-                tracing::warn!(error = %e, "fs_auth: failed to save granted path");
+            for path in &request.paths {
+                if let Err(e) = self.save_granted_path(&request.plugin_id, path).await {
+                    tracing::warn!(error = %e, "fs_auth: failed to save granted path");
+                }
             }
         }
         let _ = request.reply_tx.send(allowed);
+    }
+
+    /// 批量请求目录授权
+    ///
+    /// 已授权/白名单路径直接放行；未授权路径合并为**一次**弹窗询问，
+    /// 全部同意才返回 `true`（任一拒绝或超时即 `false`）。
+    /// 供插件 activate 时集中申请数据目录访问权。
+    pub async fn check_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
+        let mut ungranted: Vec<String> = Vec::new();
+
+        for path in paths {
+            let canonical = match Self::canonicalize_path(path) {
+                Some(p) => p,
+                None => {
+                    tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_auth: path canonicalization failed");
+                    return false;
+                }
+            };
+
+            // 路径白名单 / 插件白名单 / 已授权前缀 → 直接放行
+            if self.check_path_whitelist(&canonical).await {
+                continue;
+            }
+            if self.check_plugin_whitelist(plugin_id).await {
+                continue;
+            }
+            if self.check_granted_path(plugin_id, &canonical).await {
+                continue;
+            }
+            ungranted.push(path.clone());
+        }
+
+        if ungranted.is_empty() {
+            return true;
+        }
+
+        self.request_user_auth_batch(plugin_id, &ungranted, operation).await
+    }
+
+    /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
+    async fn request_user_auth_batch(
+        &self,
+        plugin_id: &str,
+        paths: &[String],
+        operation: FsOp,
+    ) -> bool {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (reply_tx, reply_rx) = oneshot::channel();
+
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.push(PendingRequest {
+                request_id: request_id.clone(),
+                plugin_id: plugin_id.to_string(),
+                paths: paths.to_vec(),
+                reply_tx,
+            });
+        }
+
+        // 发送弹窗事件到前端（paths 数组 + path 兼容字段 = 首个路径）
+        let payload = serde_json::json!({
+            "requestId": request_id,
+            "pluginId": plugin_id,
+            "paths": paths,
+            "path": paths.first().cloned().unwrap_or_default(),
+            "operation": operation.to_string(),
+        });
+
+        if let Err(e) = self.app_handle.emit("plugin:fs-auth-request", payload) {
+            // 事件未送达前端：请求永远不会被响应，移除已入队条目避免 pending 泄漏
+            let mut pending = self.pending_requests.lock().await;
+            pending.retain(|r| r.request_id != request_id);
+            tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
+            return false;
+        }
+
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(AUTH_TIMEOUT_SECS),
+            reply_rx,
+        )
+        .await
+        {
+            Ok(Ok(allowed)) => {
+                tracing::info!(plugin_id = %plugin_id, paths = ?paths, allowed = allowed, "fs_auth: user responded (batch)");
+                allowed
+            }
+            _ => {
+                tracing::warn!(plugin_id = %plugin_id, paths = ?paths, "fs_auth: batch auth request timed out or cancelled");
+                let mut pending = self.pending_requests.lock().await;
+                pending.retain(|r| r.request_id != request_id);
+                false
+            }
+        }
     }
 
     // ==================== 路径白名单管理 ====================
@@ -255,7 +351,7 @@ impl FsAuthChecker {
             pending.push(PendingRequest {
                 request_id: request_id.clone(),
                 plugin_id: plugin_id.to_string(),
-                path: path.to_string(),
+                paths: vec![path.to_string()],
                 reply_tx,
             });
         }
@@ -268,6 +364,9 @@ impl FsAuthChecker {
         });
 
         if let Err(e) = self.app_handle.emit("plugin:fs-auth-request", payload) {
+            // 事件未送达前端：请求永远不会被响应，移除已入队条目避免 pending 泄漏
+            let mut pending = self.pending_requests.lock().await;
+            pending.retain(|r| r.request_id != request_id);
             tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
             return false;
         }

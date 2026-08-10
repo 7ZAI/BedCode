@@ -964,6 +964,9 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
         .func_wrap("bedcode", "host_fs_exists", host_fs_exists)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_exists: {}", e)))?;
     linker
+        .func_wrap("bedcode", "host_fs_request_auth", host_fs_request_auth)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_request_auth: {}", e)))?;
+    linker
         .func_wrap("bedcode", "host_fs_delete", host_fs_delete)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_delete: {}", e)))?;
 
@@ -1965,7 +1968,60 @@ fn host_fs_exists(
         return -1;
     }
 
-    if std::path::Path::new(&path).exists() { 1 } else { 0 }
+    let exists = std::path::Path::new(&path).exists();
+    tracing::debug!(plugin_id = %plugin_id, path = %path, exists = %exists, "host_fs_exists");
+    if exists { 1 } else { 0 }
+}
+
+/// 文件系统：批量请求目录授权
+///
+/// paths 参数为 JSON 字符串数组（未授权路径合并为一次弹窗询问）。
+/// 返回：1 全部同意，0 拒绝/超时，-1 失败。
+fn host_fs_request_auth(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    paths_ptr: u32,
+    paths_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_READ) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_request_auth: permission denied (fs:read)");
+        return -1;
+    }
+    let host_ctx = caller.data().host_ctx.clone();
+
+    let paths_json = match read_wasm_string(&mut caller, paths_ptr, paths_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_request_auth: failed to read paths");
+            return -1;
+        }
+    };
+
+    let paths: Vec<String> = match serde_json::from_str(&paths_json) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, plugin_id = %plugin_id, "host_fs_request_auth: invalid paths json");
+            return -1;
+        }
+    };
+
+    if paths.is_empty() {
+        return 1;
+    }
+
+    // 访问校验（批量弹窗）
+    let fs_auth = host_ctx.fs_auth.clone();
+    let allowed = guarded_host_call(&plugin_id, "host_fs_request_auth", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(fs_auth.check_batch(&plugin_id, &paths, crate::plugin::fs_auth::FsOp::Read))
+        })
+    });
+    if !allowed {
+        tracing::warn!(plugin_id = %plugin_id, paths = ?paths, "host_fs_request_auth: denied by user");
+        return 0;
+    }
+    1
 }
 
 /// 文件系统：删除文件
@@ -2673,6 +2729,8 @@ fn host_config_get(
 
     match write_wasm_string(&mut caller, &value) {
         Some((ptr, len)) => {
+            // 值可能含敏感配置（API key 等），仅记录长度不落盘原文
+            tracing::debug!(plugin_id = %plugin_id, key = %key, value_len = value.len(), "host_config_get: ok");
             if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
                 0
             } else {
