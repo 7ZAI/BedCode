@@ -36,9 +36,8 @@
  * 键盘弹出时通过 transform 整体上移，GPU 合成不触发布局重排
  * Header 不在此区域内，保持固定位置
  * 父容器 .movable-clip 裁剪超出部分，防止突破安全区
- * 不使用 will-change: transform，持续开启会导致 xterm 滚动重影
- * 不使用持续 transition，持续开启会导致 xterm-container 被 GPU 提升为合成层
- * will-change 和 transition 由 JS 在键盘动画期间临时添加 */
+ * 不使用 transition/will-change：transform 逐帧跟随 visualViewport，
+ * 与系统键盘动画同步，避免动画滞后露出底部空隙（白屏闪烁） */
 .movable-area {
   display: flex;
   flex-direction: column;
@@ -347,13 +346,13 @@
   width: 0;
 }
 
-/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题 */
+/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题（USE_WEBGL_RENDERER 开启时生效） */
 /* 只隐藏 DOM 光标元素，不隐藏 cursor-layer（WebGL 渲染器有自己的光标实现） */
 :deep(.xterm-hidden-cursor .xterm-cursor) {
   display: none !important;
 }
 
-/* 防止 WebGL 渲染器滚动时出现重影：
+/* 防止渲染器滚动时出现重影：
  * 1. 禁止 xterm-screen 使用 GPU 合成层（will-change），持续开启会导致
  *    scrollToLine 时新旧帧同时可见
  * 2. 确保 xterm 渲染层不创建独立的合成层 */

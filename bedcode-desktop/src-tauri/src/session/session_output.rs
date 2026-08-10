@@ -360,7 +360,13 @@ pub struct SubscriberState {
     pub send_queue: mpsc::Sender<OutputEvent>,
     /// inactive 期间的待发送缓冲，消除历史发送→激活之间的丢失窗口
     pub pending: RwLock<Vec<OutputEvent>>,
+    /// 背压丢弃计数（try_send 满时递增，限频日志用）
+    pub dropped: AtomicU64,
 }
+
+/// inactive 占位期间 pending 缓存上限：超出丢弃新事件（客户端激活后
+/// 字节游标连续性校验检测到缺口 → reset 重播自愈，事件仍留在输出队列）
+const PENDING_EVENT_CAP: usize = 8192;
 
 impl SubscriberState {
     pub fn new(client_id: String, send_queue: mpsc::Sender<OutputEvent>) -> Self {
@@ -370,6 +376,7 @@ impl SubscriberState {
             sent_seq: AtomicU64::new(0),
             send_queue,
             pending: RwLock::new(Vec::new()),
+            dropped: AtomicU64::new(0),
         }
     }
 
@@ -442,22 +449,51 @@ impl SessionOutputManager {
     ///
     /// 先入队（队列分配字节偏移）再用带偏移的事件广播给订阅者，
     /// 保证订阅者拿到的每个事件都可做字节级连续性校验
+    ///
+    /// 背压保护：同步 try_send 而非 await send——慢订阅者（移动端弱网，
+    /// 4096 事件通道 + 有界合并 + 转发通道逐级排满）不能阻塞 on_output，
+    /// 否则同会话所有订阅者（含桌面端本地 WS）输出同步冻结、PTY 读取
+    /// 停摆。满时丢弃该事件：客户端字节游标连续性校验会检测到缺口并
+    /// 自愈（reset 全量重播补回，事件仍保留在输出队列中）
     pub async fn on_output(&self, event: OutputEvent) {
         let event = self.output_queue.write().await.push(event);
 
         let subscribers = self.subscribers.read().await;
         for subscriber in subscribers.values() {
             if subscriber.is_active() {
-                if let Err(e) = subscriber.send_queue.send(event.clone()).await {
-                    tracing::warn!(
-                        "[SessionOutputManager] Failed to send to subscriber {}: {}",
-                        subscriber.client_id, e
-                    );
+                if let Err(e) = subscriber.send_queue.try_send(event.clone()) {
+                    match e {
+                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                            // 背压丢弃：限频日志（前 3 次 + 每 100 次），避免刷屏
+                            let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
+                            if n <= 3 || n % 100 == 0 {
+                                tracing::warn!(
+                                    "[SessionOutputManager] Subscriber {} backlog full, dropped event #{}",
+                                    subscriber.client_id, n
+                                );
+                            }
+                        }
+                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                            // 订阅者已移除：静默忽略
+                        }
+                    }
                 }
             } else {
-                // inactive 期间缓存事件，激活时排空，消除历史发送→激活的丢失窗口
+                // inactive 期间缓存事件，激活时排空，消除历史发送→激活的丢失窗口。
+                // 有界保护：占位窗口（历史排空）可能因慢链路持续很久，pending 无上限
+                // 会持续吃内存；超出容量丢弃并计数，缺口由连续性自愈补回
                 if let Ok(mut pending) = subscriber.pending.try_write() {
-                    pending.push(event.clone());
+                    if pending.len() >= PENDING_EVENT_CAP {
+                        let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
+                        if n <= 3 || n % 100 == 0 {
+                            tracing::warn!(
+                                "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{}",
+                                subscriber.client_id, n
+                            );
+                        }
+                    } else {
+                        pending.push(event.clone());
+                    }
                 }
             }
         }
@@ -482,6 +518,7 @@ impl SessionOutputManager {
         client_id: &str,
         ws_sender: mpsc::Sender<OutputEvent>,
         start_seq: Option<u64>,
+        response_tx: Option<tokio::sync::oneshot::Sender<SubscribeResponse>>,
     ) -> SubscribeResponse {
         let subscriber = SubscriberState::new(client_id.to_string(), ws_sender);
 
@@ -510,6 +547,24 @@ impl SessionOutputManager {
         let reset_start = queue.snapshot_offset().max(min_offset);
         let history = queue.get_range(if mode == SubscribeMode::Incremental { cursor } else { reset_start });
         drop(queue);
+
+        let response = SubscribeResponse {
+            min_seq,
+            max_seq,
+            history_count: history.len(),
+            mode,
+            min_offset,
+            max_offset,
+        };
+
+        // 订阅响应前置：历史入队可能被通道背压阻塞（容量 4096 + 大历史 +
+        // 慢链路时排空极慢），若等历史发完再回响应，客户端订阅超时（10s）
+        // 会误判失败——订阅实际已建立，后续重新订阅会替换订阅者，旧任务
+        // 残留缓冲帧形成重复流（连续性违反风暴）。先回裁决消息，历史帧
+        // 随后按序到达，客户端语义不变（帧仍晚于响应）
+        if let Some(tx) = response_tx {
+            let _ = tx.send(response.clone());
+        }
 
         // 通过该订阅者的独立通道发送历史（保证顺序）
         {
@@ -567,14 +622,7 @@ impl SessionOutputManager {
             history.len()
         );
 
-        SubscribeResponse {
-            min_seq,
-            max_seq,
-            history_count: history.len(),
-            mode,
-            min_offset,
-            max_offset,
-        }
+        response
     }
 
     /// 通过插件 TerminalHandler 管道处理输出
@@ -724,10 +772,11 @@ impl GlobalOutputManager {
         client_id: &str,
         ws_sender: mpsc::Sender<OutputEvent>,
         start_seq: Option<u64>,
+        response_tx: Option<tokio::sync::oneshot::Sender<SubscribeResponse>>,
     ) -> Option<SubscribeResponse> {
         let sessions = self.sessions.read().await;
         if let Some(manager) = sessions.get(session_id) {
-            Some(manager.subscribe(client_id, ws_sender, start_seq).await)
+            Some(manager.subscribe(client_id, ws_sender, start_seq, response_tx).await)
         } else {
             tracing::warn!(
                 "[GlobalOutputManager] Session {} not found for subscribe",
@@ -936,19 +985,19 @@ mod tests {
         let (tx, _rx) = mpsc::channel(100);
 
         // 首次订阅（None）→ reset，全量重播
-        let resp = manager.subscribe("client-reset", tx.clone(), None).await;
+        let resp = manager.subscribe("client-reset", tx.clone(), None, None).await;
         assert_eq!(resp.mode, SubscribeMode::Reset);
         assert_eq!(resp.history_count, 5);
         assert_eq!(resp.min_offset, 0);
         assert_eq!(resp.max_offset, 20);
 
         // 游标在区间内 → incremental
-        let resp = manager.subscribe("client-inc", tx.clone(), Some(8)).await;
+        let resp = manager.subscribe("client-inc", tx.clone(), Some(8), None).await;
         assert_eq!(resp.mode, SubscribeMode::Incremental);
         assert_eq!(resp.history_count, 3); // [8, 20) = 事件 2,3,4
 
         // 游标 1 也在区间内（min_offset=0）→ incremental，首事件裁剪
-        let resp = manager.subscribe("client-old", tx.clone(), Some(1)).await;
+        let resp = manager.subscribe("client-old", tx.clone(), Some(1), None).await;
         assert_eq!(resp.mode, SubscribeMode::Incremental);
         assert_eq!(resp.history_count, 5);
     }
@@ -964,7 +1013,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(100);
         // 游标 6 → 首事件 [4,8) 裁剪为 [6,8)
-        let resp = manager.subscribe("client-1", tx, Some(6)).await;
+        let resp = manager.subscribe("client-1", tx, Some(6), None).await;
         assert_eq!(resp.mode, SubscribeMode::Incremental);
 
         let first = rx.recv().await.unwrap();
@@ -1021,7 +1070,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(100);
         // 首次订阅 → reset，回放应从快照点 16 开始而非 min_offset 0
-        let resp = manager.subscribe("client-1", tx, None).await;
+        let resp = manager.subscribe("client-1", tx, None, None).await;
         assert_eq!(resp.mode, SubscribeMode::Reset);
 
         let first = rx.recv().await.unwrap();
@@ -1074,7 +1123,7 @@ mod tests {
         manager.output_queue.write().await.push(make_event(0));
         manager.output_queue.write().await.push(make_event(1));
 
-        let response = manager.subscribe("client-1", tx, None).await;
+        let response = manager.subscribe("client-1", tx, None, None).await;
         assert_eq!(response.min_seq, 0);
         assert_eq!(response.max_seq, 1);
         assert_eq!(response.history_count, 2);
@@ -1096,8 +1145,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(100);
         let (tx2, mut rx2) = mpsc::channel(100);
 
-        manager.subscribe("client-1", tx1, None).await;
-        manager.subscribe("client-2", tx2, None).await;
+        manager.subscribe("client-1", tx1, None, None).await;
+        manager.subscribe("client-2", tx2, None, None).await;
 
         manager.on_output(make_event(0)).await;
 
@@ -1112,7 +1161,7 @@ mod tests {
         let manager = SessionOutputManager::new("test-session");
 
         let (tx, _rx) = mpsc::channel(100);
-        manager.subscribe("client-1", tx, None).await;
+        manager.subscribe("client-1", tx, None, None).await;
 
         manager.unsubscribe("client-1").await;
 
@@ -1138,7 +1187,7 @@ mod tests {
         manager.register_session("session-1").await;
 
         let (tx, mut rx) = mpsc::channel(100);
-        manager.subscribe("session-1", "client-1", tx, None).await;
+        manager.subscribe("session-1", "client-1", tx, None, None).await;
 
         manager.on_output(make_session_event("session-1", 0)).await;
 
@@ -1157,8 +1206,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(100);
         let (tx2, mut rx2) = mpsc::channel(100);
 
-        manager.subscribe("session-1", "client-1", tx1, None).await;
-        manager.subscribe("session-2", "client-2", tx2, None).await;
+        manager.subscribe("session-1", "client-1", tx1, None, None).await;
+        manager.subscribe("session-2", "client-2", tx2, None, None).await;
 
         manager.on_output(make_session_event("session-1", 0)).await;
         manager.on_output(make_session_event("session-2", 0)).await;
@@ -1194,7 +1243,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(100);
 
         // 字节游标 3：首事件 [0,4) 裁剪为 [3,4)，之后事件完整
-        let response = manager.subscribe("client-1", tx, Some(3)).await;
+        let response = manager.subscribe("client-1", tx, Some(3), None).await;
         assert_eq!(response.mode, SubscribeMode::Incremental);
         assert_eq!(response.min_offset, 0);
         assert_eq!(response.max_offset, 20);
@@ -1219,7 +1268,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(100);
 
         // start_seq=0 等同于 None，从头获取所有历史
-        let response = manager.subscribe("client-1", tx, Some(0)).await;
+        let response = manager.subscribe("client-1", tx, Some(0), None).await;
         assert_eq!(response.history_count, 3);
 
         for i in 0..3 {
@@ -1242,7 +1291,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(100);
 
         // subscribe 会：占位 → 发历史(0-4) → 排空 pending → activate
-        let response = manager.subscribe("client-1", tx, None).await;
+        let response = manager.subscribe("client-1", tx, None, None).await;
         assert_eq!(response.history_count, 5);
 
         // 收到历史 0-4
@@ -1359,7 +1408,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(100);
 
         // subscribe 完成后，sent_seq 应为当前 max_seq
-        let response = manager.subscribe("client-1", tx, None).await;
+        let response = manager.subscribe("client-1", tx, None, None).await;
         assert_eq!(response.max_seq, 2);
 
         // 验证 subscriber 的 sent_seq 是最新的

@@ -390,6 +390,7 @@ import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import type { QuickBarItem } from '@/stores/inputAssistant'
+import { useToast } from '@/composables/useToast'
 
 // ==================== Types ====================
 
@@ -403,13 +404,11 @@ interface CustomCommand {
 const props = withDefaults(defineProps<{
   disabled?: boolean
   isConnected?: boolean
-  showShortcuts?: boolean
   placeholder?: string
   isLandscape?: boolean
 }>(), {
   disabled: false,
   isConnected: false,
-  showShortcuts: false,
   placeholder: '',
   isLandscape: false,
 })
@@ -438,6 +437,7 @@ const inputBarStyle = computed(() => {
 // ==================== State ====================
 
 const assistStore = useInputAssistantStore()
+const toast = useToast()
 const { t } = useI18n()
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const shortcutsPanelRef = ref<HTMLElement | null>(null)
@@ -630,6 +630,11 @@ const canSubmit = computed(() => {
 // ==================== Methods ====================
 
 function toggleShortcuts() {
+  // 横屏高度有限，面板不渲染：提示用户而非静默无响应
+  if (props.isLandscape) {
+    toast.warning(t('mobile.input.shortcutsLandscapeUnavailable'))
+    return
+  }
   showShortcutsPanel.value = !showShortcutsPanel.value
   if (showShortcutsPanel.value) {
     // 面板渲染后测量高度并通知终端，同时计算左侧网格列数

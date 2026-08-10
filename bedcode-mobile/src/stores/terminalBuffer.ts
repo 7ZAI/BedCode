@@ -47,8 +47,16 @@ export interface SessionBuffer {
   cursor: number
   /** 该会话是否已向后端订阅 */
   subscribed: boolean
+  /** 订阅请求已发出、响应未返回（防止并发重复订阅） */
+  subscribing: boolean
   /** 会话是否已停止 */
   sessionStopped: boolean
+  /** 订阅确认前缓冲的回放帧（裁决消息与历史帧经不同消息路径，顺序无保证） */
+  pending: OutputPayload[]
+  /** 缓冲帧总字节数（防御性上限，超限重置订阅） */
+  pendingBytes: number
+  /** 页面重进已请求全量重播：在途订阅（旧游标）完成后须以重置游标重订阅 */
+  replayRequested: boolean
 }
 
 // ==================== Store ====================
@@ -66,68 +74,245 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   const unlistenRef = ref<UnlistenFn | null>(null)
   /** 是否已启动全局监听 */
   let listenerStarted = false
+  /** 监听注册中的 promise（并发调用共享同一注册；失败复位允许重试） */
+  let listenerPromise: Promise<void> | null = null
+
+  /** 订阅确认前缓冲回放帧的上限（防御性；服务端环形容量远小于此） */
+  const MAX_PENDING_FRAME_BYTES = 8 * 1024 * 1024
+
+  /** 自愈重订阅冷却间隔（毫秒）：限制同一会话连续性自愈的频率 */
+  const RESUBSCRIBE_COOLDOWN_MS = 2000
+  /** sessionId → 上次 resubscribeWithReset 的时间戳 */
+  const lastResubscribeAt = reactive(new Map<string, number>())
 
   // ==================== Global Listener ====================
 
-  /** 启动全局 ws_output 监听器（只启动一次） */
-  async function startGlobalListener() {
-    if (listenerStarted) return
+  /** 启动全局 ws_output 监听器（只启动一次；返回注册完成 promise） */
+  function startGlobalListener(): Promise<void> {
+    if (listenerStarted) return Promise.resolve()
+    if (listenerPromise) return listenerPromise
+
     listenerStarted = true
+    listenerPromise = (async () => {
+      try {
+        unlistenRef.value = await listen<OutputPayload>('ws_output', (event) => {
+          const payload = event.payload
+          const sessionId = payload.session_id
+          const buffer = buffers.get(sessionId)
 
-    unlistenRef.value = await listen<OutputPayload>('ws_output', (event) => {
-      const payload = event.payload
-      const sessionId = payload.session_id
-      const buffer = buffers.get(sessionId)
+          // 没有 buffer 的会话忽略（未被任何终端访问过）
+          if (!buffer) return
 
-      // 没有 buffer 的会话忽略（未被任何终端访问过）
-      if (!buffer) return
+          // 会话已停止后不再接收
+          if (buffer.sessionStopped) return
 
-      // 会话已停止后不再接收
-      if (buffer.sessionStopped) return
+          const handler = realtimeHandlers.get(sessionId)
 
-      const handler = realtimeHandlers.get(sessionId)
+          // 旧版服务端（无字节偏移）：无法维护游标，仅透传（兼容路径）
+          if (payload.start_offset === undefined || payload.end_offset === undefined) {
+            const data = decodeBase64(payload.data_base64)
+            handler?.onOutput(data, payload)
+            return
+          }
 
-      // 旧版服务端（无字节偏移）：无法维护游标，仅透传（兼容路径）
-      if (payload.start_offset === undefined || payload.end_offset === undefined) {
-        const data = decodeBase64(payload.data_base64)
-        handler?.onOutput(data, payload)
-        return
+          // 订阅确认前到达的回放帧：缓冲，确认后按序写入。
+          // 服务端 SubscribeResult 与历史帧经不同 actor 消息路径发送，顺序无保证，
+          // 帧可能先于裁决消息到达；直接写入会在 reset 清屏时被错误清除
+          if (!buffer.subscribed) {
+            buffer.pending.push(payload)
+            buffer.pendingBytes += payload.data_base64.length
+            if (buffer.pendingBytes > MAX_PENDING_FRAME_BYTES) {
+              console.error('[terminalBuffer] pending frame overflow, resubscribing with reset')
+              resubscribeWithReset(sessionId, buffer, handler)
+            }
+            return
+          }
+
+          deliverFrame(sessionId, buffer, handler, payload)
+        })
+      } catch (e) {
+        // 注册失败：复位标志，允许下次调用重试（订阅路径 await 后失败走重试）
+        listenerStarted = false
+        listenerPromise = null
+        throw e
       }
+    })()
 
-      // 连续性校验（防御）：服务端契约保证帧间字节连续，
-      // 违反即不变量破坏 → 清屏 + 丢弃游标 + 重新订阅（服务端裁决 reset 全量重播）
-      if (buffer.cursor >= 0 && payload.start_offset !== buffer.cursor) {
-        console.error(
-          `[terminalBuffer] continuity violation: start=${payload.start_offset}, cursor=${buffer.cursor}. Resubscribing with reset`
-        )
-        resubscribeWithReset(sessionId, buffer, handler)
-        return
-      }
-
-      // 游标推进到帧尾（= 已渲染位置）
-      buffer.cursor = payload.end_offset
-
-      const data = decodeBase64(payload.data_base64)
-      handler?.onOutput(data, payload)
-    })
+    return listenerPromise
   }
 
-  /** 连续性不变量破坏后的自愈：丢弃游标，重新订阅（服务端给正确答案） */
+  /** 交付帧：先做连续性校验，再推进游标并回调；返回是否成功交付 */
+  function deliverFrame(
+    sessionId: string,
+    buffer: SessionBuffer,
+    handler: RealtimeHandler | undefined,
+    payload: OutputPayload,
+  ): boolean {
+    // 防御：无偏移帧（旧版服务端）不应到达此处——监听器已提前透传，
+    // 缓冲帧也只收录带偏移的帧
+    if (payload.start_offset === undefined || payload.end_offset === undefined) {
+      console.warn('[terminalBuffer] deliverFrame received frame without offsets, skipping')
+      return true
+    }
+
+    // 连续性校验（防御）：服务端契约保证帧间字节连续，
+    // 违反即不变量破坏 → 清屏 + 丢弃游标 + 重新订阅（服务端裁决 reset 全量重播）
+    if (buffer.cursor >= 0 && payload.start_offset !== buffer.cursor) {
+      console.error(
+        `[terminalBuffer] continuity violation: start=${payload.start_offset}, cursor=${buffer.cursor}. Resubscribing with reset`
+      )
+      resubscribeWithReset(sessionId, buffer, handler)
+      return false
+    }
+
+    // 游标推进到帧尾（= 已渲染位置）
+    buffer.cursor = payload.end_offset
+    const data = decodeBase64(payload.data_base64)
+    handler?.onOutput(data, payload)
+    return true
+  }
+
+  /**
+   * 订阅确认后排空缓冲的回放帧（按到达顺序写入，保持字节连续）
+   *
+   * @param skipUpToOffset - 服务端裁决响应携带的快照 max_offset：end_offset <= 该值
+   *   的帧（旧流残留/回放前缀）已含在服务端历史快照内，跳过避免重复写入；
+   *   大于该值的帧是快照后的实时帧，不在回放内，保留写入
+   */
+  function flushPending(sessionId: string, buffer: SessionBuffer, skipUpToOffset?: number) {
+    const frames = buffer.pending
+    buffer.pending = []
+    buffer.pendingBytes = 0
+    if (frames.length === 0) return
+
+    const handler = realtimeHandlers.get(sessionId)
+    for (const payload of frames) {
+      // 快照已覆盖的帧：跳过（服务端回放会重发这些字节，写入即重复）
+      if (
+        skipUpToOffset !== undefined &&
+        payload.end_offset !== undefined &&
+        payload.end_offset <= skipUpToOffset
+      ) {
+        continue
+      }
+      // 连续性不变量破坏：剩余帧丢弃，交给重订阅的全量回放
+      if (!deliverFrame(sessionId, buffer, handler, payload)) break
+    }
+  }
+
+  /**
+   * 发起订阅请求（核心逻辑；调用方负责 ensureBuffer 与前置状态检查）
+   *
+   * 订阅确认后统一顺序：reset → 清屏 + 游标重置 → 标记已订阅 → 排空缓冲帧。
+   * 失败时不抛出：丢弃缓冲帧、保持未订阅，由外部生命周期（重连 / 页面重进）重试。
+   *
+   * 重播用循环而非递归：forceReplay 竞态下需以重置游标再订阅一次，
+   * 递归会在重播订阅在途时提前清 subscribing 标志，并发调用方可绕过
+   * 防重（重复订阅 + 双清屏）；循环保持 subscribing 贯穿全部重播轮次
+   */
+  async function doSubscribe(
+    sessionId: string,
+    buffer: SessionBuffer,
+  ): Promise<SubscribeResultInfo | null> {
+    // 已订阅或订阅请求在途：跳过（防止并发重复订阅）
+    if (buffer.subscribed || buffer.subscribing) return null
+
+    buffer.subscribing = true
+    try {
+      for (;;) {
+        // 注册等待：确保 ws_output 监听已就绪再发订阅请求，否则回放帧
+        // （Tauri 事件不缓冲）会在监听注册前到达而丢失
+        await startGlobalListener()
+
+        // 字节游标：上次渲染到的位置；-1（未渲染过）→ 首次全量重播
+        const requestedCursor = buffer.cursor >= 0 ? buffer.cursor : undefined
+        const result = await subscribeRemote(sessionId, requestedCursor)
+
+        // 服务端裁决 reset：游标已失效，清屏后等待全量回放帧
+        if (result.mode === 'reset') {
+          buffer.cursor = -1
+          // 丢弃确认前缓冲的旧流残留帧：reset 裁决意味着游标失效，而订阅请求
+          // 往返期间到达的帧只能来自被替换/中止的旧订阅流（服务端响应先于新
+          // 回放帧发送，新回放帧必然晚于响应）。排空旧流残留帧会推进游标，
+          // 新回放首帧（快照点起播）必然违反连续性 → 重订阅自持循环
+          buffer.pending = []
+          buffer.pendingBytes = 0
+          const handler = realtimeHandlers.get(sessionId)
+          handler?.onClear?.()
+        }
+
+        buffer.subscribed = true
+        // incremental：缓冲帧跳过快照已覆盖部分后排空写入（服务端历史快照
+        // 与订阅往返期间先到的帧字节重叠——不跳过则重复写入触发连续性自愈
+        // 闪屏）；reset：缓冲帧已丢弃，回放帧随后按序到达（游标 -1 首帧锚定）
+        if (result.mode !== 'reset') {
+          flushPending(sessionId, buffer, result.maxOffset)
+        }
+
+        // forceReplay 与在途订阅竞态：订阅期间游标被重置为 -1（页面重进 /
+        // 连续性自愈早退），但本次裁决按旧游标 incremental 完成——旧游标续传
+        // 会丢失历史，须以重置游标重订阅一次（cursor=-1 → 服务端 reset 全量重播）
+        if (buffer.replayRequested && requestedCursor !== undefined) {
+          buffer.replayRequested = false
+          buffer.cursor = -1
+          buffer.subscribed = false
+          buffer.pending = []
+          buffer.pendingBytes = 0
+          continue
+        }
+        // 已按 -1 全量重播（或本次请求本就无游标）：消费重播标记
+        buffer.replayRequested = false
+        return result
+      }
+    } catch (e) {
+      // 订阅失败：丢弃缓冲帧（订阅未建立，旧帧无意义），保持未订阅允许外部重试
+      buffer.pending = []
+      buffer.pendingBytes = 0
+      console.warn(`[terminalBuffer] Subscribe session ${sessionId} failed:`, e)
+      return null
+    } finally {
+      buffer.subscribing = false
+    }
+  }
+
+  /**
+   * 订阅会话（统一入口，幂等）— 页面进入 / 重连恢复 / 自愈全部收敛于此
+   *
+   * @returns 订阅裁决信息；已订阅 / 订阅请求在途 / 订阅失败时返回 null
+   */
+  async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
+    const buffer = ensureBuffer(sessionId)
+    return doSubscribe(sessionId, buffer)
+  }
+
+  /** 连续性不变量破坏后的自愈：丢弃游标与缓冲帧，重新订阅（服务端给正确答案）
+   *
+   * 带冷却：同一会话反复违反时（重复流等异常场景），限制自愈频率，防止
+   * "违反 → 重订阅 → 重复流 → 再违反"自持风暴——每次自愈都清屏，高频下
+   * 表现为终端闪烁 / 白屏（TUI 应用全屏重绘时最明显）。冷却期内违反帧
+   * 仍被拒绝写入，冷却结束后一次重订阅即可恢复 */
   async function resubscribeWithReset(
     sessionId: string,
     buffer: SessionBuffer,
     handler?: RealtimeHandler,
   ) {
+    const now = Date.now()
+    const last = lastResubscribeAt.get(sessionId) ?? 0
+    if (now - last < RESUBSCRIBE_COOLDOWN_MS) return
+    lastResubscribeAt.set(sessionId, now)
+
     buffer.cursor = -1
     buffer.subscribed = false
+    buffer.pending = []
+    buffer.pendingBytes = 0
     handler?.onClear?.()
-    try {
-      // 游标丢弃 → 服务端裁决 reset，清屏后全量重播
-      await subscribeRemote(sessionId, undefined)
-      buffer.subscribed = true
-    } catch (e) {
-      console.warn('[terminalBuffer] Resubscribe after violation failed:', e)
+    // 原订阅请求仍在途：标记重播请求（其按旧游标 incremental 裁决完成时，
+    // doSubscribe 会以重置游标重订阅全量重播），不再发起新订阅
+    if (buffer.subscribing) {
+      buffer.replayRequested = true
+      return
     }
+    await doSubscribe(sessionId, buffer)
   }
 
   /** 停止全局监听器 */
@@ -148,13 +333,33 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer = {
         cursor: -1,
         subscribed: false,
+        subscribing: false,
         sessionStopped: false,
+        pending: [],
+        pendingBytes: 0,
+        replayRequested: false,
       }
       buffers.set(sessionId, buffer)
-      // 有 buffer 时需要全局监听器
-      startGlobalListener()
+      // 有 buffer 时需要全局监听器（注册失败由订阅路径的 await 兜底重试）
+      startGlobalListener().catch((e) => {
+        console.warn('[terminalBuffer] Global listener start failed:', e)
+      })
     }
     return buffer
+  }
+
+  /**
+   * 强制全量重播：页面重进时 xterm 为全新实例，旧游标续传会丢失历史
+   * （游标已被推进过的字节从未渲染过），重置游标与订阅状态后，
+   * 下次订阅服务端裁决 reset 全量重播（优先清屏快照点起播）
+   */
+  function forceReplay(sessionId: string) {
+    const buffer = ensureBuffer(sessionId)
+    buffer.cursor = -1
+    buffer.subscribed = false
+    buffer.pending = []
+    buffer.pendingBytes = 0
+    buffer.replayRequested = true
   }
 
   /** 获取会话订阅状态 */
@@ -168,11 +373,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer.subscribed = true
   }
 
-  /** 标记未订阅（断连/取消订阅时） */
+  /** 标记未订阅（断连/取消订阅时）；订阅解除后缓冲帧无意义，一并丢弃 */
   function markUnsubscribed(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (buffer) {
       buffer.subscribed = false
+      buffer.pending = []
+      buffer.pendingBytes = 0
     }
   }
 
@@ -180,14 +387,24 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function markAllUnsubscribed() {
     for (const buffer of buffers.values()) {
       buffer.subscribed = false
+      buffer.pending = []
+      buffer.pendingBytes = 0
     }
   }
 
-  /** 标记会话停止 */
+  /**
+   * 标记会话停止：游标与订阅状态一并失效。
+   * 会话重启后偏移空间从 0 重建（新 SessionOutputManager），旧游标续传会
+   * 渲染新流的中段——游标必须重置为 -1，重启后订阅走服务端 reset 全量重播
+   */
   function markSessionStopped(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (buffer) {
       buffer.sessionStopped = true
+      buffer.subscribed = false
+      buffer.cursor = -1
+      buffer.pending = []
+      buffer.pendingBytes = 0
     }
   }
 
@@ -195,6 +412,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function clearBuffer(sessionId: string) {
     buffers.delete(sessionId)
     realtimeHandlers.delete(sessionId)
+    lastResubscribeAt.delete(sessionId)
     // 所有 buffer 都清理后，关闭全局监听器
     if (buffers.size === 0) {
       stopGlobalListener()
@@ -241,11 +459,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     markUnsubscribed,
     markAllUnsubscribed,
     markSessionStopped,
+    forceReplay,
     clearBuffer,
     clearAllBuffers,
     registerRealtimeHandler,
     unregisterRealtimeHandler,
     startGlobalListener,
+    subscribeSession,
   }
 })
 

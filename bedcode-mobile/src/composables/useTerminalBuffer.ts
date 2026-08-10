@@ -7,7 +7,7 @@
  */
 
 import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
-import { wsJoinSession, wsLeaveSession } from '@/composables/useMobileCommands'
+import { wsLeaveSession } from '@/composables/useMobileCommands'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
 
@@ -40,9 +40,11 @@ export function useTerminalBuffer() {
    *
    * @param sessionId - 会话 ID
    * @param terminal - xterm Terminal 实例
+   * @param wrapSyncOutput - 是否用 DEC 2026 包裹每次写入（仅 WebGL 渲染器需要；
+   *   DOM 渲染器默认关闭，避免与 TUI 应用自身 2026 序列嵌套导致闪烁）
    */
-  function registerRealtimeHandler(sessionId: string, terminal: Terminal) {
-    const writeCoalescer = createWriteCoalescer(terminal)
+  function registerRealtimeHandler(sessionId: string, terminal: Terminal, wrapSyncOutput = false) {
+    const writeCoalescer = createWriteCoalescer(terminal, { wrapSyncOutput })
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
         writeCoalescer(data)
@@ -66,41 +68,18 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 订阅会话 — 已订阅则跳过；未订阅时以字节游标发起增量续传
+   * 订阅会话 — 已订阅/在途则跳过；逻辑收敛到 store（防重 + 缓冲帧排空），
+   * 所有订阅路径（页面进入 / 重连恢复 / 自愈）统一入口
    *
    * 服务端裁决 mode（替代旧版 minSeq > startSeq 客户端猜测）：
    * - incremental：游标在保留区间内，从游标字节级裁剪续传
    * - reset：游标失效（头部淘汰/流重建/首次），清屏后全量重播
    *
    * @param sessionId - 会话 ID
-   * @returns 订阅裁决信息或 null（已订阅时跳过）
+   * @returns 订阅裁决信息；已订阅/在途/失败时返回 null
    */
   async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
-    const buffer = store.getBuffer(sessionId)
-    if (buffer?.subscribed) return null // 已订阅，跳过
-
-    // 字节游标：上次渲染到的位置；-1（未渲染过）→ 首次全量重播
-    const cursor = buffer && buffer.cursor >= 0 ? buffer.cursor : undefined
-
-    // 先确保 buffer 存在 + 监听器启动，再订阅后端
-    store.ensureBuffer(sessionId)
-
-    const result = await wsJoinSession(sessionId, cursor)
-
-    // 服务端裁决 reset：游标已失效，清屏后等待全量回放帧
-    if (result.mode === 'reset') {
-      const buf = store.getBuffer(sessionId)
-      if (buf) {
-        buf.cursor = -1
-      }
-      const handler = store.realtimeHandlers.get(sessionId)
-      if (handler?.onClear) {
-        handler.onClear()
-      }
-    }
-
-    store.markSubscribed(sessionId)
-    return result
+    return store.subscribeSession(sessionId)
   }
 
   /**
@@ -119,38 +98,34 @@ export function useTerminalBuffer() {
   }
 
   /**
+   * 强制全量重播 — 页面重进时 xterm 为全新实例，旧游标续传会丢失历史。
+   * 重置游标与订阅状态，下次订阅服务端裁决 reset 全量重播
+   *
+   * @param sessionId - 会话 ID
+   */
+  function forceReplay(sessionId: string) {
+    store.forceReplay(sessionId)
+  }
+
+  /**
    * 连接断开时 — 标记所有 buffer 未订阅
    */
   function handleDisconnect() {
     store.markAllUnsubscribed()
   }
 
-  /**
-   * 连接恢复时 — 重新订阅所有有 buffer 且未停止的会话
-   */
-  async function handleReconnect() {
-    const sessionIds: string[] = []
-    for (const [sessionId, buffer] of store.buffers.entries()) {
-      if (!buffer.sessionStopped) {
-        sessionIds.push(sessionId)
-      }
-    }
-
-    for (const sessionId of sessionIds) {
-      try {
-        await subscribeSession(sessionId)
-      } catch (e) {
-        console.warn(`[useTerminalBuffer] Resubscribe failed for ${sessionId}:`, e)
-      }
-    }
-  }
 
   /**
-   * 会话停止时 — 标记 buffer + 取消后端订阅
+   * 会话停止时 — 标记 buffer + 取消订阅状态 + 取消后端订阅。
+   *
+   * 注意：不注销实时 handler——终端页面可能仍存活，会话重启后输出链路
+   * 依赖该 handler 渲染（注销后无任何路径重新注册，页面将永久冻结）。
+   * handler 生命周期归视图（挂载注册 / 卸载注销），与会话状态无关
    */
   async function handleSessionStopped(sessionId: string) {
     store.markSessionStopped(sessionId)
-    store.unregisterRealtimeHandler(sessionId)
+    // 停止即取消订阅：清 subscribed 与缓冲帧，与后端状态保持一致
+    store.markUnsubscribed(sessionId)
     try {
       await wsLeaveSession(sessionId)
     } catch (e) {
@@ -177,8 +152,8 @@ export function useTerminalBuffer() {
     unregisterRealtimeHandler,
     subscribeSession,
     unsubscribeSession,
+    forceReplay,
     handleDisconnect,
-    handleReconnect,
     handleSessionStopped,
     handleSessionRemoved,
   }

@@ -1,9 +1,11 @@
 /**
  * writeCoalescer 单元测试
  *
- * 验证对齐桌面端的写入管线行为：
- * - 同帧多次 write 合并为一次 term.write（DEC 2026 包裹），避免 WebGL 双缓冲重影
- * - 单次 write 超过 64KB 拆块（BSU/分块/ESU），让 xterm parser 让出主线程
+ * 验证移动端写入管线行为：
+ * - 同帧多次 write 合并为一次 term.write（默认无 DEC 2026 包裹——DOM 渲染器
+ *   不需要，且包裹会与 TUI 应用自身 2026 序列嵌套导致闪烁）
+ * - wrapSyncOutput: true 时启用 DEC 2026 包裹（WebGL 渲染器模式，防双缓冲重影）
+ * - 单次 write 超过 64KB 拆块，让 xterm parser 让出主线程
  * - 累积超过 256KB 阈值立即 flush（移动端特殊处理）
  * - rAF 暂停（最小化/后台）时 100ms 兜底定时器清空队列
  */
@@ -23,6 +25,12 @@ const MAX_WRITE_CHUNK = 64 * 1024
 function expectWrapped(writeMock: ReturnType<typeof vi.fn>, payload: number[]) {
   const written = writeMock.mock.calls[writeMock.mock.calls.length - 1][0] as Uint8Array
   expect(Array.from(written)).toEqual([...SYNC_PREFIX, ...payload, ...SYNC_SUFFIX])
+}
+
+/** 断言写入的数据 = 原始 payload（默认无包裹） */
+function expectRaw(writeMock: ReturnType<typeof vi.fn>, payload: number[]) {
+  const written = writeMock.mock.calls[writeMock.mock.calls.length - 1][0] as Uint8Array
+  expect(Array.from(written)).toEqual(payload)
 }
 
 function makeMockTerminal(): Terminal {
@@ -61,7 +69,7 @@ describe('createWriteCoalescer', () => {
     vi.unstubAllGlobals()
   })
 
-  it('同帧多次 write 合并为一次 terminal.write', () => {
+  it('同帧多次 write 合并为一次 terminal.write（默认无 2026 包裹）', () => {
     const term = makeMockTerminal()
     const coalescer = createWriteCoalescer(term)
 
@@ -77,7 +85,18 @@ describe('createWriteCoalescer', () => {
 
     rafCallbacks[0](0)
     expect(term.write).toHaveBeenCalledTimes(1)
-    expectWrapped(term.write, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expectRaw(term.write, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+  })
+
+  it('wrapSyncOutput: true 时同帧合并写入带 2026 包裹（WebGL 模式）', () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term, { wrapSyncOutput: true })
+
+    coalescer(new Uint8Array([1, 2, 3]))
+    rafCallbacks[0](0)
+
+    expect(term.write).toHaveBeenCalledTimes(1)
+    expectWrapped(term.write, [1, 2, 3])
   })
 
   it('flush 后下一帧再次入队可正常 flush', () => {
@@ -92,7 +111,7 @@ describe('createWriteCoalescer', () => {
     expect(rafCallbacks).toHaveLength(2)
     rafCallbacks[1](0)
     expect(term.write).toHaveBeenCalledTimes(2)
-    expectWrapped(term.write, [2, 3])
+    expectRaw(term.write, [2, 3])
   })
 
   it('单次 write 也走 rAF，不直接调用', () => {
@@ -107,9 +126,24 @@ describe('createWriteCoalescer', () => {
     expect(term.write).toHaveBeenCalledTimes(1)
   })
 
-  it('超过 64KB 拆块写入：BSU + 分块 + ESU', () => {
+  it('超过 64KB 拆块写入（默认裸分块，无包裹）', () => {
     const term = makeMockTerminal()
     const coalescer = createWriteCoalescer(term)
+
+    // 96KB 载荷 → 2 块（零拷贝 subarray 切片）
+    const payload = new Uint8Array(MAX_WRITE_CHUNK + 32 * 1024).fill(7)
+    coalescer(payload)
+    rafCallbacks[0](0)
+
+    expect(term.write).toHaveBeenCalledTimes(2)
+    const calls = term.write.mock.calls.map(c => Array.from(c[0] as Uint8Array))
+    expect(calls[0]).toEqual(Array.from(payload.subarray(0, MAX_WRITE_CHUNK)))
+    expect(calls[1]).toEqual(Array.from(payload.subarray(MAX_WRITE_CHUNK)))
+  })
+
+  it('超过 64KB 拆块写入（wrapSyncOutput: true）：BSU + 分块 + ESU', () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term, { wrapSyncOutput: true })
 
     // 96KB 载荷 → 2 块（零拷贝 subarray 切片）
     const payload = new Uint8Array(MAX_WRITE_CHUNK + 32 * 1024).fill(7)
@@ -133,24 +167,22 @@ describe('createWriteCoalescer', () => {
     expect(rafCallbacks).toHaveLength(1)
 
     coalescer(new Uint8Array(100 * 1024))
-    // 300KB → 5 块 + BSU/ESU = 7 次 write，立即执行
-    expect(term.write).toHaveBeenCalledTimes(7)
+    // 300KB → 5 块，立即执行
+    expect(term.write).toHaveBeenCalledTimes(5)
     // 立即 flush 取消了挂起的 rAF
     expect(rafCallbacks).toHaveLength(1)
 
-    // 内容完整性：分块拼接 = 原始 300KB，首尾为 2026 包裹
+    // 内容完整性：分块拼接 = 原始 300KB，无包裹
     const written = term.write.mock.calls.map(c => c[0] as Uint8Array)
-    expect(Array.from(written[0])).toEqual(SYNC_PREFIX)
-    expect(Array.from(written[written.length - 1])).toEqual(SYNC_SUFFIX)
     const joined = new Uint8Array(300 * 1024)
     let offset = 0
-    for (const chunk of written.slice(1, -1)) {
+    for (const chunk of written) {
       joined.set(chunk, offset)
       offset += chunk.byteLength
     }
     expect(offset).toBe(300 * 1024)
     // 每块不超过上限
-    for (const chunk of written.slice(1, -1)) {
+    for (const chunk of written) {
       expect(chunk.byteLength).toBeLessThanOrEqual(MAX_WRITE_CHUNK)
     }
   })
@@ -169,7 +201,7 @@ describe('createWriteCoalescer', () => {
 
       vi.advanceTimersByTime(1)
       expect(term.write).toHaveBeenCalledTimes(1)
-      expectWrapped(term.write, [1, 2, 3])
+      expectRaw(term.write, [1, 2, 3])
     } finally {
       vi.useRealTimers()
     }

@@ -147,7 +147,7 @@ pub async fn handle_control(
             }
 
             let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(256);
-            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None).await;
+            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None, None).await;
 
             match subscribe_result {
                 Some(response) => {

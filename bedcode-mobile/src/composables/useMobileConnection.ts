@@ -168,7 +168,9 @@ async function init() {
       // 连接建立时确保全局监听器启动（订阅在 onPaired 认证成功后执行，
       // 因为桌面端要求先认证才能订阅会话输出）
       const bufferStore = useTerminalBufferStore()
-      bufferStore.startGlobalListener()
+      bufferStore.startGlobalListener().catch((e) => {
+        console.warn('[MobileConnection] Global listener start failed:', e)
+      })
     },
     onDisconnected: () => {
       clearConnectionTimeout()
@@ -208,33 +210,16 @@ async function init() {
       // 认证成功后重新订阅所有后台会话的终端输出
       // 必须在 onPaired 而非 onConnected 中执行，因为桌面端要求先认证才能订阅
       const bufferStore = useTerminalBufferStore()
-      bufferStore.startGlobalListener()
+      bufferStore.startGlobalListener().catch((e) => {
+        console.warn('[MobileConnection] Global listener start failed:', e)
+      })
       for (const [sid, buffer] of bufferStore.buffers.entries()) {
         if (!buffer.sessionStopped && !buffer.subscribed) {
-          // 先标记 subscribed 防止 watch(isConnected) 和此处竞态导致双重订阅
-          bufferStore.markSubscribed(sid)
-          // 字节游标续传（服务端裁决：游标失效时自动全量重播）
-          const startSeq = buffer.cursor >= 0 ? buffer.cursor : undefined
-          wsJoinSession(sid, startSeq)
-            .then((result) => {
-              // 服务端裁决 reset：游标已失效，清屏后等待全量回放帧
-              if (result.mode === 'reset') {
-                const buf = bufferStore.getBuffer(sid)
-                if (buf) {
-                  buf.cursor = -1
-                }
-                // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
-                const handler = bufferStore.realtimeHandlers.get(sid)
-                if (handler?.onClear) {
-                  handler.onClear()
-                }
-              }
-            })
-            .catch((e) => {
-              console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
-              // 订阅失败时回退 subscribed 状态，允许后续重试
-              bufferStore.markUnsubscribed(sid)
-            })
+          // 统一订阅入口：字节游标续传 + 缓冲帧排空 + subscribing 防重
+          // （失败不抛错，内部保持未订阅，等待下次重连/页面重进重试）
+          bufferStore.subscribeSession(sid).catch((e) => {
+            console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
+          })
         }
       }
     },

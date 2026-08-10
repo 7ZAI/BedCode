@@ -19,13 +19,20 @@
           </p>
         </div>
         <button
-          class="flex-shrink-0 whitespace-nowrap text-sm font-medium pb-1 transition-colors active:opacity-80"
+          class="flex-shrink-0 p-2 -mr-2 rounded-lg transition-colors active:opacity-80"
           style="color: var(--mobile-accent)"
           :class="{ 'opacity-50': connection.isConnecting.value }"
           :disabled="connection.isConnecting.value"
+          :title="t('mobile.connection.discoverDevices')"
           @click="$router.push({ name: 'mobile-discover' })"
         >
-          {{ t('mobile.connection.discoverDevices') }}
+          <!-- 雷达扫描图标：完整同心圆 + 45° 扫描射线 + 中心点（声呐式） -->
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <circle cx="12" cy="12" r="6" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 12l7.07-7.07" />
+            <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+          </svg>
         </button>
       </div>
     </div>
@@ -148,7 +155,7 @@
             <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.connectionHistory') }}</span>
             <button
               v-if="connectionHistory.length > 0"
-              class="text-xs transition-colors active:opacity-80"
+              class="text-sm transition-colors active:opacity-80"
               style="color: var(--mobile-text-muted)"
               @click="clearHistory"
             >

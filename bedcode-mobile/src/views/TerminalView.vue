@@ -25,7 +25,7 @@
     <!-- 裁剪容器：限制上移区域不突破 Header 底部 -->
     <div class="movable-clip">
       <!-- 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移 -->
-      <div ref="movableAreaRef" class="movable-area" :style="movableAreaStyle">
+      <div class="movable-area" :style="movableAreaStyle">
         <!-- Main Content: Terminal + Sidebar overlay -->
         <div class="main-content">
           <div class="terminal-output-area">
@@ -78,7 +78,6 @@
             class="sidebar-overlay"
             :class="{ 'sidebar-hidden': !showSidebar }"
             :session-id="sessionId"
-            @long-press="handleLongPress"
             @settings-input-focus="handleSettingsInputFocus"
           />
           <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
@@ -143,7 +142,8 @@
  * 渲染与滚动架构对齐桌面端 TerminalPreview.vue（VS Code 终端体验）：
  * - 写入管线：同帧输出经 rAF 合并 + DEC 2026 同步输出包裹 + 64KB 拆块
  *   （writeCoalescer），高频输出无撕裂/重影、超大块不卡主线程
- * - 渲染：WebGL addon（context loss 自动回退恢复），xterm 渲染循环自绘
+ * - 渲染：默认 DOM 渲染器（xterm 内置 canvas，移动端 TUI 场景稳定无闪烁）；
+ *   可选 WebGL addon（USE_WEBGL_RENDERER 开关，context loss 自动回退恢复）
  * - 滚动：onScroll 推导"是否在底部"（位置即状态），回到底部自动跟随输出
  * - 尺寸：ResizeObserver + rAF 节流 fit，cols/rows 实际变化才同步 PTY
  *
@@ -152,7 +152,8 @@
  *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
  * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
  * - 键盘避让：visualViewport + 插件 safeAreaChanged 双通道检测，movable-area
- *   transform 上移（配合 AndroidManifest adjustNothing）
+ *   transform 上移（配合 AndroidManifest adjustNothing），无 CSS transition，
+ *   transform 直接跟随 visualViewport 与键盘动画同步，避免动画滞后露出底部空隙
  * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
  */
 defineOptions({ name: 'TerminalView' })
@@ -186,7 +187,6 @@ import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import { useToast } from '@/composables/useToast'
-import { writeClipboardText } from '@/utils/clipboard'
 import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
 import { TERMINAL_THEMES } from '@/config/terminalThemes'
 import type { PresetTask } from '@/composables/model'
@@ -201,7 +201,7 @@ const mockTerminal = useMockTerminal()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
-const { registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleSessionStopped } = useTerminalBuffer()
+const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, forceReplay, handleDisconnect, handleSessionStopped } = useTerminalBuffer()
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
@@ -234,7 +234,6 @@ const visibleToolbarItems = computed(() => {
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
-const movableAreaRef = ref<HTMLDivElement | null>(null)
 const isTerminalReady = ref(false)
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
@@ -379,6 +378,7 @@ const terminalViewStyle = computed(() => ({
 // 配合 AndroidManifest adjustNothing：
 // 系统不调整 WebView 大小，完全由 JS 控制偏移
 // 双通道检测取较大值，兼容不同 WebView 的 visualViewport 行为
+// 不带 transition：transform 逐帧跟随 keyboardOffset，与键盘动画同步
 const movableAreaStyle = computed(() => {
   if (keyboardOffset.value <= 0) {
     return { transform: 'translateY(0)' }
@@ -443,22 +443,16 @@ const selectionBarStyle = computed(() => {
 
 // ==================== Watchers ====================
 
-// 键盘偏移变化时的处理
-// 动画期间临时启用 will-change + transition 保证流畅，动画结束后移除避免 xterm 重影
-// 持续开启 transition 会导致 movable-area 被 GPU 提升为合成层
-// 触摸滚动时 WebGL canvas 在合成层上更新不同步，产生重影
-watch(keyboardOffset, (newVal, oldVal) => {
-  if (movableAreaRef.value) {
-    movableAreaRef.value.style.willChange = 'transform'
-    movableAreaRef.value.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)'
+// 键盘偏移变化时强制重绘终端，清除 canvas 移动后的残留帧
+// （WebGL 渲染器开启时合成层移动尤为明显，DOM 渲染器下也保持一致性）
+// 键盘避让故意不做 CSS transition：transform 直接跟随 visualViewport
+// 逐帧变化，与系统键盘弹出/收起动画同步，底部不会露出空隙；
+// 0.25s 过渡动画滞后于键盘动画，动画期间底部露出 terminal-view 背景
+// （浅色主题为 #fafafa），形成白屏闪烁
+watch(keyboardOffset, () => {
+  if (terminalRef.value && terminalRef.value.rows > 0) {
+    terminalRef.value.refresh(0, terminalRef.value.rows - 1)
   }
-
-  setTimeout(() => {
-    if (movableAreaRef.value) {
-      movableAreaRef.value.style.willChange = 'auto'
-      movableAreaRef.value.style.transition = 'none'
-    }
-  }, 300)
 })
 
 watch(() => settingsStore.settings.ui.theme, (uiTheme) => {
@@ -480,6 +474,16 @@ watch(isSystemDark, () => {
 })
 
 // ==================== Terminal Setup ====================
+
+/**
+ * 渲染器开关：移动端默认 WebGL（与桌面端 TerminalPreview 对齐）——
+ * Android WebView 的 WebGL 常为软件渲染（SwiftShader），双缓冲纹理交换
+ * 在 TUI 全屏重绘（opencode/vim 每帧清屏+重绘）时可能闪烁/撕裂，故开启
+ * 时用 DEC 2026 同步输出包裹（writeCoalescer wrapSyncOutput）防双缓冲重影；
+ * WebGL 不可用（context loss / 初始化失败）时自动回退 DOM 渲染器。
+ * 切换为 false 即禁用 WebGL addon，仅影响移动端；桌面端不受此开关影响
+ */
+const USE_WEBGL_RENDERER = true
 
 /**
  * WebGL 渲染器：动态加载（移动端包体积/启动优化），
@@ -519,21 +523,22 @@ async function initWebGL(term: Terminal): Promise<boolean> {
     return false
   }
 }
-
 async function initTerminal() {
   if (!xtermContainer.value) return
 
   const term = new Terminal({
+    // 渲染器：默认 DOM（xterm 内置 canvas）；USE_WEBGL_RENDERER 开启时
+    // WebGL addon 加载成功后自动接管渲染，失败则保持 DOM
     // 字体与尺寸（对齐桌面端，VS Code 终端默认字体栈 + 跨平台回退）
     fontSize: terminalSettings.value.fontSize,
     fontFamily: 'Cascadia Mono, Consolas, Monaco, Courier New, monospace',
     lineHeight: 1,
     // 滚动历史行数（与桌面主机服务端事件队列容量对齐）
     scrollback: TERMINAL_SCROLLBACK,
-    // 即时滚动：关闭平滑滚动，避免 WebGL 滚动动画期间合成器缓存旧帧导致重影
+    // 即时滚动：关闭平滑滚动，避免滚动动画期间合成器缓存旧帧导致重影
     smoothScrollDuration: 0,
     // VS Code 风格块光标：移动端保留光标（标记输入落点与 TUI 光标位置），
-    // 仅隐藏 DOM 层光标避免与 WebGL 层双光标（见 xterm-hidden-cursor）
+    // DOM 渲染器自带光标层，无需额外处理
     cursorBlink: true,
     cursorStyle: 'block',
     cursorWidth: 1,
@@ -565,15 +570,20 @@ async function initTerminal() {
 
   term.open(xtermContainer.value)
 
-  // WebGL 渲染器激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
-  const webglOk = await initWebGL(term)
-  if (webglOk) {
-    term.element?.classList.add('xterm-hidden-cursor')
+  // WebGL 激活与否决定 DEC 2026 包裹：仅 WebGL 渲染器需要包裹防双缓冲
+  // 重影；回退 DOM 时包裹会与 TUI 应用自身 2026 序列嵌套产生空白帧闪烁
+  let webglActive = false
+  if (USE_WEBGL_RENDERER) {
+    // WebGL 渲染器激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
+    webglActive = await initWebGL(term)
+    if (webglActive) {
+      term.element?.classList.add('xterm-hidden-cursor')
+    }
   }
 
   // 注册实时 handler — 历史回放（订阅后服务端流式送达）与实时推送同通道，
-  // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹 + 64KB 拆块）
-  registerRealtimeHandler(sessionId.value, term)
+  // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹仅 WebGL 模式启用）
+  registerRealtimeHandler(sessionId.value, term, webglActive)
 
   // 延迟 fit + 触摸滚动接管：等待 xterm 完成首帧布局，
   // 触摸监听挂到 viewport 上，需其在 DOM 中就绪
@@ -675,6 +685,7 @@ function handleSpecialKey(key: string) {
     httpSendSessionInput(sessionId.value, '', key).then(result => {
       if (result.code !== 0) {
         console.error('[TerminalView] Send special key failed:', result.message)
+        toast.error(t('mobile.connection.connectFailed'))
       }
     })
   }
@@ -766,15 +777,6 @@ function handleSettingsInputFocus(focused: boolean) {
   settingsInputFocused.value = focused
 }
 
-async function handleLongPress(name: string, path: string) {
-  try {
-    await writeClipboardText(path)
-    toast.success(t('mobile.file.copied', { path }))
-  } catch {
-    toast.error(t('mobile.file.copyFailed'))
-  }
-}
-
 function handleBack() {
   router.back()
 }
@@ -803,7 +805,56 @@ async function onTaskExecute(task: PresetTask) {
   }
 }
 
+// ==================== Subscribe with Retry ====================
+//
+// 订阅失败（弱网/桌面端重启/超时）时终端会静默空白且无重试路径，
+// 这里做 toast 提示 + 3s 定时重试，成功或页面卸载/断连后停止。
+
+let subscribeRetryTimer: ReturnType<typeof setTimeout> | null = null
+let subscribeRetryToasted = false
+
+function clearSubscribeRetry() {
+  if (subscribeRetryTimer) {
+    clearTimeout(subscribeRetryTimer)
+    subscribeRetryTimer = null
+  }
+}
+
+/** 订阅 + 失败自动重试（页面存活且会话活跃期间有效） */
+async function subscribeWithRetry() {
+  if (isMockSession(sessionId.value)) return
+  const result = await subscribeSession(sessionId.value)
+  const buffer = bufferStore.getBuffer(sessionId.value)
+
+  // 已订阅（成功或此前已订阅）：复位重试状态
+  if (result || buffer?.subscribed) {
+    subscribeRetryToasted = false
+    return
+  }
+  // 订阅请求仍在途（防重早退）：不提示，稍后重试
+  if (buffer?.subscribing) {
+    clearSubscribeRetry()
+    subscribeRetryTimer = setTimeout(subscribeWithRetry, 3000)
+    return
+  }
+
+  // 订阅失败：首次失败提示一次，随后静默重试
+  if (!subscribeRetryToasted) {
+    subscribeRetryToasted = true
+    toast.error(t('mobile.terminal.subscribeFailed'))
+  }
+  clearSubscribeRetry()
+  subscribeRetryTimer = setTimeout(async () => {
+    subscribeRetryTimer = null
+    if (disposed) return
+    if (!isConnected.value || !isSessionActive.value) return
+    await subscribeWithRetry()
+  }, 3000)
+}
+
 // ==================== Lifecycle ====================
+
+let disposed = false
 
 onMounted(async () => {
   // 监听 visualViewport 变化，获取键盘弹出/收起的实际偏移
@@ -823,7 +874,10 @@ onMounted(async () => {
       mockTerminal.startOutput(terminalRef.value)
     }
   } else if (isSessionActive.value && isConnected.value) {
-    await subscribeSession(sessionId.value)
+    // xterm 每次进入都是全新实例：旧游标续传会丢失历史（含后台期间
+    // 已推进但从未渲染过的字节）→ 强制重置游标，服务端全量重播
+    forceReplay(sessionId.value)
+    await subscribeWithRetry()
     syncTerminalSizeToHost()
   }
 
@@ -831,6 +885,9 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
+  disposed = true
+  clearSubscribeRetry()
+
   // 移除 visualViewport 事件监听
   if (window.visualViewport) {
     window.visualViewport.removeEventListener('resize', handleVisualViewportChange)
@@ -844,7 +901,7 @@ onUnmounted(async () => {
   disposeTerminal()
 
   // 页面卸载即取消订阅：后台期间的输出由服务端环形保留，
-  // 重新进入时以字节游标续传（服务端裁决 incremental/reset）
+  // 重新进入时强制全量重播（forceReplay + 服务端 reset 裁决）
   if (!isMockSession(sessionId.value)) {
     await unsubscribeSession(sessionId.value)
   }
@@ -853,7 +910,9 @@ onUnmounted(async () => {
 watch(isSessionActive, async (active, prevActive) => {
   if (!sessionId.value || isMockSession(sessionId.value)) return
   if (active && !prevActive) {
-    await subscribeSession(sessionId.value)
+    // 会话停止/重启后偏移空间从 0 重建，游标已被 markSessionStopped 重置，
+    // 此处订阅即全量重播；页面存活场景走增量续传
+    await subscribeWithRetry()
     // 会话激活（含重连后）时 PTY 可能仍是默认尺寸，主动同步一次
     syncTerminalSizeToHost()
   } else if (!active && prevActive) {
@@ -865,9 +924,10 @@ watch(isConnected, async (connected) => {
   if (!sessionId.value || isMockSession(sessionId.value)) return
   if (!connected) {
     handleDisconnect()
+    clearSubscribeRetry()
   } else if (connected && isSessionActive.value) {
-    await subscribeSession(sessionId.value)
     // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
+    await subscribeWithRetry()
     syncTerminalSizeToHost()
   }
 })
