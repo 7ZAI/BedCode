@@ -212,10 +212,16 @@ pub async fn handle_auth(
             let address = format!("{}", addr);
             record_history(db, &fingerprint, connection_method::JWT, connection_result::SUCCESS, Some(&address)).await;
 
-            // 更新配对设备的 last_seen 和 connect_count
+            // 更新配对设备的 last_seen 和 connect_count，并同步设备展示名
+            // （设备上报了真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
             if !fingerprint.is_empty() {
+                let display_name = payload
+                    .device_name
+                    .as_deref()
+                    .filter(|n| !n.trim().is_empty())
+                    .map(|n| format_device_display_name(n, &address));
                 let db_guard = db.lock().await;
-                if let Err(e) = db_guard.update_pairing_last_seen(&fingerprint) {
+                if let Err(e) = db_guard.update_pairing_last_seen(&fingerprint, display_name.as_deref()) {
                     tracing::warn!(fingerprint = %fingerprint, error = %e, "Failed to update pairing last_seen");
                 }
             }

@@ -33,7 +33,16 @@ pub async fn announce(registry: &Arc<FileServiceRegistry>, server: &Arc<FileServ
         return;
     }
 
-    let payload = FileServicePayload::Announce { port, token, mounts };
+    let payload = FileServicePayload::Announce {
+        port,
+        token,
+        // 携带对端真实设备名供桌面端文件传输展示；SystemInfo 可能尚未初始化
+        //（try_get_system_info 为 None），此时为空串，桌面端保留原记录名
+        device_name: crate::state::try_get_system_info()
+            .map(|i| i.device_name.clone())
+            .unwrap_or_default(),
+        mounts,
+    };
     send(payload).await;
 }
 

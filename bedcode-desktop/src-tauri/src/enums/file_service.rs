@@ -27,6 +27,12 @@ pub enum FileServicePayload {
         port: u16,
         /// Bearer Token（移动端内存态，配对解除即失效）
         token: String,
+        /// 对端真实设备名（用户设置名，获取不到时为兜底名），供文件传输展示
+        ///
+        /// #[serde(default)]：旧端二进制不发此字段，缺省时反序列化仍成功，
+        /// 否则整个 Announce 解析失败、对端共享目录判定为不可用
+        #[serde(default)]
+        device_name: String,
         /// 当前全部挂载清单
         mounts: Vec<MountAnnouncement>,
     },
@@ -65,6 +71,7 @@ mod tests {
         let payload = FileServicePayload::Announce {
             port: 41234,
             token: "tok".to_string(),
+            device_name: "my-phone".to_string(),
             mounts: vec![MountAnnouncement {
                 plugin_id: "com.bedcode.file-transfer".to_string(),
                 mount_path: "files".to_string(),
@@ -73,6 +80,7 @@ mod tests {
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"action\":\"announce\""));
+        assert!(json.contains("\"device_name\":\"my-phone\""));
         let back: FileServicePayload = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, FileServicePayload::Announce { port: 41234, .. }));
     }

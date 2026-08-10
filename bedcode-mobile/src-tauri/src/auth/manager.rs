@@ -194,6 +194,18 @@ impl AuthManager {
         match self.connection.send_and_wait(&message, timeouts::AUTH).await {
             Ok(response) => {
                 if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
+                    // 提取会话 token 写入全局 token：JWT 重连路径的响应经
+                    // RequestResponseManager 按 message_id 消费，不会走到
+                    // AuthHandler（唯一调用 set_global_token 的路径）；不补写则
+                    // 插件对桌面端 HTTP 文件服务的调用无 Authorization 头 → 401
+                    let session_token = if let Message::Auth { payload, .. } = &response {
+                        payload.session_token.clone().unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    if !session_token.is_empty() {
+                        crate::state::set_global_token(&session_token);
+                    }
                     *self.status.write().await = AuthStatus::Authenticated;
                     self.connection.set_paired().await;
                     tracing::info!("[authenticate] JWT re-authentication successful");
@@ -286,6 +298,11 @@ impl AuthManager {
                 };
 
                 self.set_credentials(creds).await;
+                // 响应被 RequestResponseManager 消费，AuthHandler 不会执行；
+                // 全局 token 供文件服务 HTTP 调用（对桌面端 /api/plugins/* 鉴权）
+                if !session_token.is_empty() {
+                    crate::state::set_global_token(&session_token);
+                }
                 *self.status.write().await = AuthStatus::Authenticated;
                 self.connection.set_paired().await;
                 Ok(true)
@@ -343,6 +360,10 @@ impl AuthManager {
             };
 
             self.set_credentials(creds).await;
+            // 同上：响应被 RequestResponseManager 消费，此处补写全局 token
+            if !session_token.is_empty() {
+                crate::state::set_global_token(&session_token);
+            }
             *self.status.write().await = AuthStatus::Authenticated;
             self.connection.set_paired().await;
             return Ok(true);
@@ -450,6 +471,10 @@ impl AuthManager {
                 };
 
                 self.set_credentials(creds).await;
+                // 同上：响应被 RequestResponseManager 消费，此处补写全局 token
+                if !session_token.is_empty() {
+                    crate::state::set_global_token(&session_token);
+                }
                 *self.status.write().await = AuthStatus::Authenticated;
                 self.connection.set_paired().await;
                 tracing::info!("[authenticate_with_biometric] Biometric authentication successful");

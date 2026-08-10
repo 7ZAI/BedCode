@@ -82,8 +82,17 @@ pub fn list_remote(
     if resp.status != 200 {
         return Err(format!("list_remote: HTTP {}", resp.status));
     }
-    serde_json::from_str(&resp.body)
-        .map_err(|e| format!("list_remote: parse body failed: {}", e))
+    let body: serde_json::Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("list_remote: parse body failed: {}", e))?;
+    // 兼容两端 server 的响应形态差异：桌面端 ApiResponse 包装
+    // （data.entries）、移动端 ListResponse（entries）、裸数组
+    let entries = if let Some(entries) = unwrap_data(&body).get("entries") {
+        entries
+    } else {
+        &body
+    };
+    serde_json::from_value(entries.clone())
+        .map_err(|e| format!("list_remote: parse entries failed: {}", e))
 }
 
 // ==================== 文件指纹 ====================
@@ -167,8 +176,12 @@ pub fn create_session(
     let resp = do_fetch(host, "POST", &url, auth, Some(&body))
         .map_err(|e| CreateSessionError::Other(e))?;
     match resp.status {
-        200 | 201 => serde_json::from_str(&resp.body)
-            .map_err(|e| CreateSessionError::Other(format!("parse session response: {}", e))),
+        200 | 201 => {
+            let body: serde_json::Value = serde_json::from_str(&resp.body)
+                .map_err(|e| CreateSessionError::Other(format!("parse session response: {}", e)))?;
+            serde_json::from_value(unwrap_data(&body).clone())
+                .map_err(|e| CreateSessionError::Other(format!("parse session response: {}", e)))
+        }
         409 => Err(CreateSessionError::DuplicateName),
         _ => Err(CreateSessionError::Other(format!(
             "create_session: HTTP {}",
@@ -194,7 +207,7 @@ pub fn query_session(
         200 => {
             let body: serde_json::Value = serde_json::from_str(&resp.body)
                 .map_err(|e| QuerySessionError::Other(format!("parse: {}", e)))?;
-            Ok(body
+            Ok(unwrap_data(&body)
                 .get("received")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0))
@@ -264,6 +277,18 @@ pub enum QuerySessionError {
 }
 
 // ==================== 内部辅助 ====================
+
+/// 提取响应体中的业务数据（兼容两端 server 的响应包装差异）：
+/// - 桌面端统一 ApiResponse 包装：`{ code, message, data: {...} }`
+/// - 移动端直接返回 DTO：`{ path, entries }` / `{ sessionId, received }`
+///
+/// 对象含非 null `data` 字段时返回 `data` 引用，否则返回原对象
+fn unwrap_data<'a>(body: &'a serde_json::Value) -> &'a serde_json::Value {
+    match body.get("data") {
+        Some(v) if !v.is_null() => v,
+        _ => body,
+    }
+}
 
 /// 执行 HTTP 请求
 fn do_fetch(

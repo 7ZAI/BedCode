@@ -561,9 +561,13 @@ impl FileServiceRegistry {
     async fn emit_peer_changed(&self, peer_id: &str, online: bool) {
         use tauri::Emitter;
 
+        // 携带对端真实设备名与 IP，供前端文件传输展示（无记录时为空串）
+        let info = self.get_peer(peer_id).await;
         let payload = serde_json::json!({
             "peerId": peer_id,
             "online": online,
+            "deviceName": info.as_ref().map(|i| i.device_name.clone()).unwrap_or_default(),
+            "ip": info.map(|i| i.ip).unwrap_or_default(),
         });
 
         // 通道 1：Tauri 事件（前端 UI 订阅，如对端状态角标）

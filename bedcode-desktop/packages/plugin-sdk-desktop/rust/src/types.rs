@@ -392,6 +392,9 @@ pub struct PeerFileService {
     /// 鉴权 Token（移动端服务为 Bearer Token；桌面端走 JWT 时可为空）
     #[serde(default)]
     pub token: String,
+    /// 对端真实设备名（用户设置名，获取不到时为兜底名）
+    #[serde(default)]
+    pub device_name: String,
     /// 对端挂载点列表
     #[serde(default)]
     pub mounts: Vec<PeerMountAnnouncement>,

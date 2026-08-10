@@ -260,11 +260,12 @@ pub async fn reauthenticate(
             }
 
             // 更新配对设备的 last_seen 和 connect_count
+            // （HTTP 重认证路径无客户端地址，无法拼展示名；设备名刷新由 WS 重认证路径承担）
             if let Some(ref fp) = claims.fingerprint {
                 let ctx = AppContext::global();
                 let db = ctx.db();
                 let db_guard = db.lock().await;
-                if let Err(e) = db_guard.update_pairing_last_seen(fp) {
+                if let Err(e) = db_guard.update_pairing_last_seen(fp, None) {
                     tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
                 }
             }

@@ -90,6 +90,10 @@ export interface TransferProgress {
 export interface PeerStatus {
   peerId: string
   online: boolean
+  /** 对端真实设备名（宿主公告携带，可为空串） */
+  deviceName?: string
+  /** 对端 IP（宿主公告携带，可为空串） */
+  ip?: string
 }
 
 /** 任务状态 → 展示文案 key（错误类附加 reason，见 TaskQueueSheet） */

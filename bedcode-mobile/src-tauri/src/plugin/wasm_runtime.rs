@@ -2539,10 +2539,22 @@ fn host_transfer_start(
         return -1;
     }
 
+    tracing::info!(
+        plugin_id = %plugin_id,
+        direction = ?request.direction,
+        url = %request.url,
+        local_path = %request.local_path,
+        "host_transfer_start: spawning transfer"
+    );
     let task_id = crate::plugin::transfer::spawn_transfer(
         request,
         host_ctx.app_handle.clone(),
         host_ctx.message_bus.clone(),
+    );
+    tracing::info!(
+        plugin_id = %plugin_id,
+        task_id = %task_id,
+        "host_transfer_start: transfer spawned"
     );
 
     match write_wasm_string(&mut caller, &task_id) {

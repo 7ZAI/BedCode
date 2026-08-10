@@ -408,7 +408,7 @@ export interface PeerMountAnnouncement {
   operations: ('list' | 'download' | 'upload')[]
 }
 
-/** 对端文件服务信息（与 SDK Rust PeerFileService camelCase 对应，控制面公告填充） */
+/** 对端文件服务信息（与 SDK Rust PeerFileService 对应，控制面公告填充） */
 export interface PeerFileServiceInfo {
   /** 对端 IP */
   ip: string
@@ -416,6 +416,8 @@ export interface PeerFileServiceInfo {
   port: number
   /** 鉴权 Token（移动端服务为 Bearer Token；桌面端走 JWT 时为空） */
   token: string
+  /** 对端真实设备名（用户设置名，获取不到时为兜底名；wire 为 snake_case） */
+  device_name: string
   /** 对端挂载点列表 */
   mounts: PeerMountAnnouncement[]
 }

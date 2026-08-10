@@ -171,6 +171,17 @@ impl FileServiceServer {
                 // 先在同步段构造调用 future 再 move 进 async 块；
                 // 两个分支用 Either 统一返回类型
                 .wrap_fn(|req, srv| {
+                    // 请求日志（排查链路用，移动端 file service 无 actix Logger）：
+                    // 来源 IP + method + path + 结果（token 本体不落日志）
+                    let req_desc = {
+                        let ip = req
+                            .peer_addr()
+                            .map(|a| a.ip().to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        format!("{} {} {} {}", ip, req.method(), req.path(), req.query_string())
+                    };
+                    let req_start = std::time::Instant::now();
+
                     let authorized = req
                         .headers()
                         .get(actix_web::http::header::AUTHORIZATION)
@@ -188,6 +199,10 @@ impl FileServiceServer {
                         .unwrap_or(false);
 
                     if !authorized {
+                        tracing::warn!(
+                            "file service request REJECTED (missing/invalid bearer token): {}",
+                            req_desc
+                        );
                         // ServiceRequest → HttpRequest 后才能构造新响应
                         let (req, _payload) = req.into_parts();
                         let resp = HttpResponse::Unauthorized().json(serde_json::json!({
@@ -203,6 +218,13 @@ impl FileServiceServer {
                     let fut = srv.call(req);
                     futures_util::future::Either::Right(async move {
                         let res = fut.await?;
+                        let status = res.response().status().as_u16();
+                        tracing::info!(
+                            "file service request {} status={} elapsed_ms={}",
+                            req_desc,
+                            status,
+                            req_start.elapsed().as_millis() as u64
+                        );
                         Ok(res.map_into_left_body())
                     })
                 })

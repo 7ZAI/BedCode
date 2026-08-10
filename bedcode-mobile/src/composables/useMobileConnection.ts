@@ -16,7 +16,7 @@ import {
   wsAuthenticateWithBiometric,
   wsRequestPairing,
   wsVerifyPairingCode,
-  wsJoinSession,
+  wsSetToken,
   initMobileEventListeners,
   cleanupMobileEventListeners,
   saveAuthCredentials,
@@ -131,6 +131,18 @@ async function init() {
   console.log('[MobileConnection] init() loaded credentials:', savedCreds ? { ...savedCreds, sessionToken: savedCreds.sessionToken ? `length=${savedCreds.sessionToken.length}` : 'missing' } : null)
   if (savedCreds) {
     authCredentials.value = savedCreds
+  }
+
+  // 恢复 Rust 侧全局 token（GLOBAL_TOKEN 为内存态，进程重启后为空）：
+  // 插件对桌面端文件服务（/api/plugins/*）的 HTTP 调用依赖它作为 JWT；
+  // JWT 重连响应经 RequestResponseManager 消费不会触发 AuthHandler 补写，
+  // 只能在此显式恢复，否则文件服务请求永远无 Authorization 头（桌面端 401）
+  if (savedCreds?.sessionToken) {
+    try {
+      await wsSetToken(savedCreds.sessionToken)
+    } catch (e) {
+      console.error('[MobileConnection] wsSetToken failed:', e)
+    }
   }
 
   // 加载已配对设备列表

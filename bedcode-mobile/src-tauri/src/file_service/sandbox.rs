@@ -121,6 +121,24 @@ pub fn resolve_within_roots(roots: &[PathBuf], rel: &str) -> Result<PathBuf, San
         return Err(SandboxError::NoRoots);
     }
 
+    // 根别名：单段 rel 等于某 root 的最后一段时，视为浏览该 root 本身。
+    // 根目录列表（list path=""）以 root 最后一段作为顶层条目名，前端点击
+    // 进入会回传该名；若不解到此映射，会解析成 `root/<同名>`（不存在 → 404）
+    //
+    // 歧义取舍：root 内存在与 root 基名同名的真实子目录时，解析到 root 本身
+    //（多 root 同名基名时取第一个）——与列表顶层条目语义一致，优先保证导航可达
+    if parts.len() == 1 {
+        for root in roots {
+            let is_alias = root
+                .file_name()
+                .map(|n| n.to_string_lossy().as_ref() == parts[0])
+                .unwrap_or(false);
+            if is_alias {
+                return Ok(root.clone());
+            }
+        }
+    }
+
     let mut escape_detected = false;
     for root in roots {
         let mut candidate = root.clone();

@@ -94,9 +94,18 @@ export function usePeer(context: PluginContext) {
   }
 
   /** 对端上/下线事件（宿主通道，先于插件总线投递；重拉列表兜底） */
-  function handlePeerChanged(payload: { peerId?: string; online?: boolean }): void {
+  function handlePeerChanged(payload: { peerId?: string; online?: boolean; deviceName?: string; ip?: string }): void {
     if (payload?.online && payload.peerId) {
       connOnline.value = true
+      // 宿主公告携带真实设备名/IP（filesrv:peer_changed 载荷），直接富化缓存
+      if (payload.deviceName) {
+        nameById.set(payload.peerId, payload.deviceName)
+        const item = peers.value.find((p) => p.id === payload.peerId)
+        if (item) item.name = payload.deviceName
+      }
+      if (payload.ip) {
+        ipById.set(payload.peerId, payload.ip)
+      }
     }
     void refresh()
   }
@@ -126,6 +135,11 @@ export function usePeer(context: PluginContext) {
         if (info?.ip) {
           ipById.set(p.id, info.ip)
           p.ip = info.ip
+        }
+        // 名称缺失时用公告携带的真实设备名兜底（device-connected 事件遗漏场景）
+        if (info?.device_name && !nameById.has(p.id)) {
+          nameById.set(p.id, info.device_name)
+          p.name = info.device_name
         }
       } catch {
         // 对端信息查询失败不影响列表展示

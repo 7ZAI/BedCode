@@ -54,12 +54,16 @@ impl Database {
     }
 
     /// 更新已配对设备的 last_seen 和 connect_count（JWT 重连时调用）
-    pub fn update_pairing_last_seen(&self, fingerprint: &str) -> Result<()> {
+    ///
+    /// `device_name` 为 Some 时同步更新展示名（重连时设备上报了新的真实设备名），
+    /// None 时保留原值
+    pub fn update_pairing_last_seen(&self, fingerprint: &str, device_name: Option<&str>) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn().execute(
-            "UPDATE pairings SET last_seen = ?1, connect_count = connect_count + 1
-             WHERE device_fingerprint = ?2 AND is_active = 1",
-            rusqlite::params![now, fingerprint],
+            "UPDATE pairings SET last_seen = ?1, connect_count = connect_count + 1,
+             device_name = COALESCE(?2, device_name)
+             WHERE device_fingerprint = ?3 AND is_active = 1",
+            rusqlite::params![now, device_name, fingerprint],
         )?;
         Ok(())
     }

@@ -64,8 +64,9 @@ export function useRemoteFs(context: PluginContext) {
       entries.value = Array.isArray(data) ? data : (data?.entries ?? [])
       currentPath.value = path
       selected.value = new Set()
+      console.log(`[File Transfer] list-remote OK: path='${path}' entries=${entries.value.length}`)
     } catch (e) {
-      console.error('[File Transfer] list-remote failed:', e)
+      console.error(`[File Transfer] list-remote FAILED: path='${path}'`, e)
       error.value = context.i18n.t('transfer.table.dirUnavailable')
       entries.value = []
     } finally {

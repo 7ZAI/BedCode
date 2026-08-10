@@ -90,16 +90,21 @@ pub fn list_tasks(state: &PluginState) -> serde_json::Value {
 /// 经宿主 WS 控制面广播 Query；对端回复 Announce/Withdraw 后宿主注册表
 /// 更新并推送 `filesrv:peer_changed`，前端状态随之刷新。
 /// 用于对端状态事件遗漏（先挂载后连接/广播丢失）时主动恢复。
-pub fn query_peer(host: &impl HostFileService) -> anyhow::Result<serde_json::Value> {
+pub fn query_peer(host: &(impl HostFileService + HostLog)) -> anyhow::Result<serde_json::Value> {
+    host.log_info("query-peer: probing remote file service state");
     host.filesrv_query_peer("")
-        .map_err(|e| anyhow::anyhow!("query-peer: {}", e))?;
+        .map_err(|e| {
+            host.log_warn(&format!("query-peer FAILED: {}", e));
+            anyhow::anyhow!("query-peer: {}", e)
+        })?;
+    host.log_info("query-peer: query broadcast sent");
     Ok(serde_json::json!({ "ok": true }))
 }
 
 /// list-remote：列举对端目录
 pub fn list_remote(
     state: &PluginState,
-    host: &impl HostHttp,
+    host: &(impl HostHttp + HostLog),
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let path = args
@@ -108,8 +113,19 @@ pub fn list_remote(
         .unwrap_or("");
     let (base, auth) = state.peer.base_and_auth()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+    host.log_info(&format!(
+        "list-remote: path='{}' base={} auth_len={}",
+        path, base, auth.len()
+    ));
     let entries = handshake::list_remote(host, &base, &auth, path)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| {
+            host.log_warn(&format!(
+                "list-remote FAILED: {} (base={} auth_len={})",
+                e, base, auth.len()
+            ));
+            anyhow::anyhow!("{}", e)
+        })?;
+    host.log_info(&format!("list-remote OK: path='{}' entries={}", path, entries.len()));
     Ok(serde_json::to_value(entries)?)
 }
 
@@ -832,6 +848,34 @@ pub fn handle_peer_changed(
         state.peer.on_peer_offline(peer_id)
     };
 
+    host.log_info(&format!(
+        "peer_changed: peer_id={} online={} changed={}",
+        peer_id, online, peers_changed
+    ));
+    if online {
+        // 打印当前激活对端连接信息（token 只打长度，不打本体）
+        match state.peer.active() {
+            Some(ep) => {
+                host.log_info(&format!(
+                    "peer_changed: active peer ip={} port={} token_len={} mounts={}",
+                    ep.ip,
+                    ep.port,
+                    ep.token.len(),
+                    ep.mounts.len()
+                ));
+                if ep.token.is_empty() {
+                    host.log_warn("peer_changed: active peer token is EMPTY — remote HTTP calls will lack Authorization (401)");
+                }
+            }
+            None => {
+                host.log_warn(&format!(
+                    "peer_changed: online=true but no active peer (peer_id={})",
+                    peer_id
+                ));
+            }
+        }
+    }
+
     if !online {
         // 该对端下线：其 transferring/queued 任务 → resumable（auto_resumable=true）；
         // 其他对端的任务不受影响。queued 不摘除会留待后续调度周期被
@@ -913,6 +957,12 @@ pub fn set_active_peer(
         .peer
         .set_active(host, peer_id)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if let Some(ep) = state.peer.active() {
+        host.log_info(&format!(
+            "set-active-peer: peer_id={} ip={} port={} token_len={} mounts={}",
+            peer_id, ep.ip, ep.port, ep.token.len(), ep.mounts.len()
+        ));
+    }
     emit_peers_changed(host, &state.peer);
     Ok(serde_json::json!({ "ok": true, "activePeerId": peer_id }))
 }

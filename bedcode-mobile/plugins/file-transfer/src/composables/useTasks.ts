@@ -168,6 +168,8 @@ export function useTasks(context: PluginContext) {
   function onPeerChanged(payload: PeerStatus): void {
     if (payload?.peerId) peerId.value = payload.peerId
     peerOnline.value = !!payload?.online
+    // 对端真实设备名（桌面端 Announce 公告携带，替代任务名/占位文案）
+    if (payload?.deviceName) peerName.value = payload.deviceName
     // 公告必然来自已认证连接：对端共享可用 ⇒ 连接必然已建立
     // （自愈视图挂载前 ws_paired 已发出导致 connOnline 未置位的场景）
     if (payload?.online) connOnline.value = true

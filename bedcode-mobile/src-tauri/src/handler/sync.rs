@@ -176,6 +176,8 @@ async fn update_desktop_peer(
             // 桌面端文件服务复用 HTTP server 端口（与 WS 同端口）
             port: target.port,
             token: crate::state::get_global_token(),
+            // 真实设备名由桌面端 Announce 公告携带（此路径无名称信息）
+            device_name: String::new(),
             mounts: Vec::new(),
         }
     });

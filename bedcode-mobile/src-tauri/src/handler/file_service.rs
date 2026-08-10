@@ -22,9 +22,9 @@ impl ClientRouteHandler for FileServiceHandler {
     async fn handle(&self, message: Message, _ctx: &ClientRouteContext) -> Result<Option<Message>> {
         if let Message::FileService { payload, .. } = message {
             match payload {
-                FileServicePayload::Announce { port, token, mounts } => {
+                FileServicePayload::Announce { port, token, device_name, mounts } => {
                     tracing::info!(port, mounts = mounts.len(), "desktop file service announced");
-                    apply_desktop_announce(port, token, mounts).await;
+                    apply_desktop_announce(port, token, device_name, mounts).await;
                 }
                 FileServicePayload::Withdraw {} => {
                     if let Some(peer_id) = desktop_peer_id().await {
@@ -70,7 +70,7 @@ impl ClientRouteHandler for FileServiceHandler {
 /// 认证成功快照与 Query 回复，属于低频幂等通知——若沿用去重，前端/插件
 /// 事件错过（页面后开、插件晚激活）后，相同内容的重复公告会被吞掉推送，
 /// 前端只能停在"对端未共享"空态无法恢复（用户反复点重测也无济于事）。
-async fn apply_desktop_announce(port: u16, token: String, mounts: Vec<MountAnnouncement>) {
+async fn apply_desktop_announce(port: u16, token: String, device_name: String, mounts: Vec<MountAnnouncement>) {
     let cm = crate::state::get_connection_manager();
     let Some(target) = cm.get_target().await else {
         tracing::debug!("apply_desktop_announce: no connection target, skip");
@@ -86,11 +86,16 @@ async fn apply_desktop_announce(port: u16, token: String, mounts: Vec<MountAnnou
             ip: target.address.clone(),
             port: target.port,
             token: crate::state::get_global_token(),
+            device_name: String::new(),
             mounts: Vec::new(),
         }
     });
     peer.ip = target.address.clone();
     peer.port = port;
+    // 公告携带对端真实设备名（桌面端 SystemInfo 兜底保证非空）
+    if !device_name.is_empty() {
+        peer.device_name = device_name;
+    }
     // 公告 token 优先；为空时以宿主全局 token 填充（含已有记录：
     // 重新配对/重发 JWT 后 token 变更，不刷新将携带过期 token 导致 401）
     if !token.is_empty() {
@@ -110,5 +115,24 @@ async fn apply_desktop_announce(port: u16, token: String, mounts: Vec<MountAnnou
         })
         .collect();
 
+    // 排查链路：应用结果（token 只打长度不打本体；空 token = 后续 HTTP 必 401）
+    let token_len = peer.token.len();
+    if peer.token.is_empty() {
+        tracing::warn!(
+            peer_id = %peer_id,
+            ip = %peer.ip,
+            port = peer.port,
+            "desktop peer token is EMPTY — remote HTTP calls will lack Authorization (401)"
+        );
+    } else {
+        tracing::info!(
+            peer_id = %peer_id,
+            ip = %peer.ip,
+            port = peer.port,
+            token_len = token_len,
+            mounts = peer.mounts.len(),
+            "desktop peer updated"
+        );
+    }
     registry.push_peer(&peer_id, peer).await;
 }

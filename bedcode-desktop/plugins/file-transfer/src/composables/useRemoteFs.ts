@@ -65,11 +65,12 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
       // 目录内容变化后仅保留仍存在的选中项
       const alive = new Set(entries.value.map(e => e.name))
       selectedNames.value = selectedNames.value.filter(n => alive.has(n))
+      console.log(`[File Transfer] list-remote OK: path='${target}' entries=${entries.value.length}`)
     } catch (e) {
       if (seq !== busySeq) return
       entries.value = []
       errorKey.value = 'transfer.error.dirUnavailable'
-      console.error('[File Transfer] list-remote failed:', e)
+      console.error(`[File Transfer] list-remote FAILED: path='${target}'`, e)
     } finally {
       if (seq === busySeq) loading.value = false
     }

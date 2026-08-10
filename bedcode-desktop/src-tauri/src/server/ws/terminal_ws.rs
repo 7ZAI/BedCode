@@ -342,13 +342,14 @@ impl TerminalWs {
         let file_service = crate::system::app_context::AppContext::global().file_service().clone();
 
         match payload {
-            FileServicePayload::Announce { port, token, mounts } => {
+            FileServicePayload::Announce { port, token, device_name, mounts } => {
                 // IP 取连接 peer_addr（移动端 bind 0.0.0.0，公告不含 IP）
                 let ip = self.session.addr.ip().to_string();
                 let info = bedcode_plugin_api::PeerFileService {
                     ip: ip.clone(),
                     port,
                     token,
+                    device_name,
                     mounts: mounts
                         .into_iter()
                         .map(|m| bedcode_plugin_api::PeerMountAnnouncement {
@@ -555,14 +556,21 @@ impl TerminalWs {
                     registry.set_authenticated(&client_id, device_name, fp).await;
                 });
 
-                // 更新配对设备的 last_seen 和 connect_count
+                // 更新配对设备的 last_seen 和 connect_count，并同步设备展示名
+                // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
                 let fingerprint = claims.fingerprint.clone();
+                let display_name = claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
+                    crate::server::services::auth_service::format_device_display_name(
+                        n,
+                        &self.session.addr.to_string(),
+                    )
+                });
                 actix::spawn(async move {
                     if let Some(fp) = fingerprint {
                         let app_ctx = AppContext::global();
                         let db = app_ctx.db().clone();
                         let db_guard = db.lock().await;
-                        if let Err(e) = db_guard.update_pairing_last_seen(&fp) {
+                        if let Err(e) = db_guard.update_pairing_last_seen(&fp, display_name.as_deref()) {
                             tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
                         }
                     }
@@ -1191,6 +1199,8 @@ async fn send_file_service_snapshot_to(addr: SocketAddr) {
         FileServicePayload::Announce {
             port: AppConfig::global().network.port,
             token: String::new(),
+            // 携带本机真实设备名（SystemInfo 兜底保证非空），供移动端文件传输展示
+            device_name: ctx.system_info().device_name.clone(),
             mounts,
         }
     };
