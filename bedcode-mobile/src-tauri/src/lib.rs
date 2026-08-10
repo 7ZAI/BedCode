@@ -56,6 +56,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())
         .plugin(crate::plugin::android_plugins::downloads_dir_plugin())
         .plugin(crate::plugin::android_plugins::file_delete_plugin())
+        .plugin(crate::plugin::android_plugins::device_info_plugin())
         .plugin(crate::plugin::android_plugins::saf_picker_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
@@ -98,6 +99,21 @@ pub fn run() {
                 let app_version = app.package_info().version.to_string();
                 let app_data_dir_for_extract = app_data_dir.clone();
                 tauri::async_runtime::spawn(async move {
+                    // 采集并挂载全局系统信息（OS / 设备名称 / IP），
+                    // 并同步设备名到 AuthManager，配对时上报真实用户设备名
+                    let system_info =
+                        crate::system::info::SystemInfo::collect().await;
+                    let device_name = system_info.device_name.clone();
+                    crate::state::init_system_info(system_info);
+                    crate::state::get_auth_manager()
+                        .set_device_name(device_name.clone())
+                        .await;
+                    tracing::info!(
+                        "[BedCode] System info initialized: device_name={}, os={}",
+                        device_name,
+                        std::env::consts::OS
+                    );
+
                     // 解压内置插件（Android：Kotlin 桥；桌面 dev：源码资源目录复制）
                     if let Err(e) = crate::plugin::loader::PluginLoader::extract_apk_plugins(
                         &app_data_dir_for_extract,
@@ -198,6 +214,7 @@ pub fn run() {
             // Utility
             system::commands::ping,
             system::commands::get_app_version,
+            system::commands::get_system_info,
             system::commands::get_local_ip_addresses,
             // Android Specific
             commands::android::set_screen_orientation,

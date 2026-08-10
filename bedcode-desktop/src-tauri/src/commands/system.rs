@@ -257,6 +257,13 @@ pub fn get_local_ip_addresses() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 获取系统基本信息（OS / 设备名称 / IP 地址，启动时采集一次）
+#[tauri::command]
+pub fn get_system_info(app_handle: tauri::AppHandle) -> crate::system::SystemInfo {
+    use tauri::Manager;
+    (**app_handle.state::<Arc<crate::system::SystemInfo>>().inner()).clone()
+}
+
 // ==================== Window Close Commands ====================
 
 /// 用户确认关闭窗口（前端确认弹窗后调用）

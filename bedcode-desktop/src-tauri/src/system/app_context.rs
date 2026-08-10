@@ -7,6 +7,7 @@ use crate::plugin::PluginHost;
 use crate::plugin::file_service::FileServiceRegistry;
 use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
+use crate::system::info::SystemInfo;
 use crate::utils::auth::QrTokenManager;
 use crate::utils::auth::biometric::BiometricChallengeManager;
 use crate::mdns::advertiser::MdnsAdvertiser;
@@ -45,6 +46,8 @@ pub struct AppContext {
     sync_tx: broadcast::Sender<crate::events::DesktopSyncEvent>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
     resource_dir: Arc<PathBuf>,
+    /// 系统基本信息（OS / 设备名称 / IP，启动时采集）
+    system_info: Arc<SystemInfo>,
 }
 
 /// 全局单实例存储 — init() 和 global() 必须引用同一个 static
@@ -120,6 +123,10 @@ impl AppContext {
     pub fn resource_dir(&self) -> &Arc<PathBuf> {
         &self.resource_dir
     }
+
+    pub fn system_info(&self) -> &Arc<SystemInfo> {
+        &self.system_info
+    }
 }
 
 /// 构建器，用于分步组装 AppContext
@@ -136,6 +143,7 @@ pub struct AppContextBuilder {
     app_handle: Option<Arc<AppHandle>>,
     sync_tx: Option<broadcast::Sender<crate::events::DesktopSyncEvent>>,
     resource_dir: Option<Arc<PathBuf>>,
+    system_info: Option<Arc<SystemInfo>>,
 }
 
 impl AppContextBuilder {
@@ -153,6 +161,7 @@ impl AppContextBuilder {
             app_handle: None,
             sync_tx: None,
             resource_dir: None,
+            system_info: None,
         }
     }
 
@@ -211,6 +220,11 @@ impl AppContextBuilder {
         self
     }
 
+    pub fn system_info(mut self, si: Arc<SystemInfo>) -> Self {
+        self.system_info = Some(si);
+        self
+    }
+
     /// 构建并初始化全局 AppContext
     pub fn build_and_init(self) -> &'static AppContext {
         let ctx = AppContext {
@@ -226,6 +240,7 @@ impl AppContextBuilder {
             app_handle: self.app_handle.expect("AppContext: app_handle is required"),
             sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
             resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),
+            system_info: self.system_info.expect("AppContext: system_info is required"),
         };
         AppContext::init(ctx)
     }

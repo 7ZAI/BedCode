@@ -401,24 +401,14 @@ async fn metrics_sampling_task(
     }
 }
 
-/// 获取设备主机名，用于 mDNS 服务实例名
-fn get_hostname() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("COMPUTERNAME").unwrap_or_else(|_| mdns::DEFAULT_HOSTNAME.to_string())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| mdns::DEFAULT_HOSTNAME.to_string())
-    }
-}
-
 /// 启动 mDNS 广播
 fn start_mdns_advertisement(port: u16) {
-    let hostname = get_hostname();
-    let service_name = format!("{}{}", mdns::SERVICE_NAME_PREFIX, hostname);
+    // 设备名取自全局 SystemInfo（用户设置的电脑名），与 mDNS 实例名保持一致
+    let device_name = crate::system::app_context::AppContext::global()
+        .system_info()
+        .device_name
+        .clone();
+    let service_name = format!("{}{}", mdns::SERVICE_NAME_PREFIX, device_name);
 
     tokio::spawn(async move {
         let ctx = crate::system::app_context::AppContext::global();

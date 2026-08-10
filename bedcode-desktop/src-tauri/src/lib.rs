@@ -254,6 +254,9 @@ pub fn run() {
 
             // ==================== 创建所有全局单实例 ====================
 
+            // 采集系统基本信息（OS / 设备名称 / IP），挂载到 AppContext 供全局引用
+            let system_info = Arc::new(system::info::SystemInfo::collect());
+
             let storage = Arc::new(session::SessionStorage::new(db.clone()));
             let resource_dir_arc = Arc::new(resource_dir);
             let session_manager = Arc::new(session::SessionManager::new(storage, resource_dir_arc.clone()));
@@ -311,6 +314,7 @@ pub fn run() {
                 .app_handle(app_handle_arc.clone())
                 .sync_tx(sync_tx.clone())
                 .resource_dir(resource_dir_arc.clone())
+                .system_info(system_info.clone())
                 .build_and_init();
 
             // 同时注册到 Tauri State（前端 invoke 可用）
@@ -322,6 +326,7 @@ pub fn run() {
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
+            app.manage(system_info.clone());
 
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载
@@ -533,6 +538,7 @@ pub fn run() {
             commands::system::get_app_version,
             commands::system::get_startup_time,
             commands::system::get_local_ip_addresses,
+            commands::system::get_system_info,
             commands::system::confirm_window_close,
             commands::devices::get_connected_devices,
             // Plugin
