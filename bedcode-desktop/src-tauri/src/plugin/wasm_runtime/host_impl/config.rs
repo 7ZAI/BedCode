@@ -41,6 +41,14 @@ pub(crate) fn config_get(plugin_id: &str, key: &str) -> Result<Option<String>, S
                 }
             }
         }
+        ConfigKey::CurrentTimeMs => {
+            // wasm32-unknown-unknown 无系统时钟（SystemTime/Instant 均 panic），
+            // 插件经此获取真实时间（Unix 毫秒）
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis().to_string())
+                .map_err(|e| format!("system time unavailable: {}", e))?
+        }
     };
 
     Ok(Some(value))

@@ -15,16 +15,23 @@ pub enum ConfigKey {
     /// （`/storage/emulated/0/Android/data/com.bedcode.mobile/files/Download`）
     /// 宿主侧惰性创建目录（不存在时 `create_dir_all`）
     AppDownloadsDir,
+    /// 宿主当前 Unix 毫秒时间戳
+    ///
+    /// wasm32-unknown-unknown 无系统时钟（`SystemTime::now()`/`Instant::now()`
+    /// 均 panic），需要真实时间的插件一律经此获取，禁止直接调 std 时间 API。
+    /// 不可用时返回 `Ok(None)`，调用方降级（如用 0/计数器）。
+    CurrentTimeMs,
 }
 
 impl ConfigKey {
     /// 全部合法配置项（宿主白名单校验用）
-    pub const ALL: &'static [ConfigKey] = &[ConfigKey::AppDownloadsDir];
+    pub const ALL: &'static [ConfigKey] = &[ConfigKey::AppDownloadsDir, ConfigKey::CurrentTimeMs];
 
     /// 线上协议字符串（host function 传参格式）
     pub fn as_str(&self) -> &'static str {
         match self {
             ConfigKey::AppDownloadsDir => "app.downloads_dir",
+            ConfigKey::CurrentTimeMs => "system.time_ms",
         }
     }
 
@@ -32,6 +39,7 @@ impl ConfigKey {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "app.downloads_dir" => Some(ConfigKey::AppDownloadsDir),
+            "system.time_ms" => Some(ConfigKey::CurrentTimeMs),
             _ => None,
         }
     }

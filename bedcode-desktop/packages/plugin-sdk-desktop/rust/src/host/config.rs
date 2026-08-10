@@ -13,17 +13,24 @@ pub enum ConfigKey {
     NetworkPort,
     /// 用户主目录绝对路径
     HomeDir,
+    /// 宿主当前 Unix 毫秒时间戳
+    ///
+    /// wasm32-unknown-unknown 无系统时钟（`SystemTime::now()`/`Instant::now()`
+    /// 均 panic），需要真实时间的插件一律经此获取，禁止直接调 std 时间 API。
+    /// 不可用时返回 `Ok(None)`，调用方降级（如用 0/计数器）。
+    CurrentTimeMs,
 }
 
 impl ConfigKey {
     /// 全部合法配置项（宿主白名单校验用）
-    pub const ALL: &'static [ConfigKey] = &[ConfigKey::NetworkPort, ConfigKey::HomeDir];
+    pub const ALL: &'static [ConfigKey] = &[ConfigKey::NetworkPort, ConfigKey::HomeDir, ConfigKey::CurrentTimeMs];
 
     /// 线上协议字符串（host function 传参格式）
     pub fn as_str(&self) -> &'static str {
         match self {
             ConfigKey::NetworkPort => "network.port",
             ConfigKey::HomeDir => "home_dir",
+            ConfigKey::CurrentTimeMs => "system.time_ms",
         }
     }
 
@@ -32,6 +39,7 @@ impl ConfigKey {
         match s {
             "network.port" => Some(ConfigKey::NetworkPort),
             "home_dir" => Some(ConfigKey::HomeDir),
+            "system.time_ms" => Some(ConfigKey::CurrentTimeMs),
             _ => None,
         }
     }

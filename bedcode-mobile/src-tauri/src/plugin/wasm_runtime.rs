@@ -2733,6 +2733,17 @@ fn host_config_get(
                 }
             }
         }
+        bedcode_plugin_api_mobile::ConfigKey::CurrentTimeMs => {
+            // wasm32-unknown-unknown 无系统时钟（SystemTime/Instant 均 panic），
+            // 插件经此获取真实时间（Unix 毫秒）
+            match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => d.as_millis().to_string(),
+                Err(e) => {
+                    tracing::error!(plugin_id = %plugin_id, error = %e, "host_config_get: system time unavailable");
+                    return -1;
+                }
+            }
+        }
     };
 
     match write_wasm_string(&mut caller, &value) {

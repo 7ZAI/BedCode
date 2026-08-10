@@ -11,7 +11,8 @@ use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
 use crate::state::{Direction, Fingerprint, PeerInfo, Task, TaskState, TaskStore};
 use bedcode_plugin_api::host::{
-    HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog, HostStorage, HostTransfer,
+    ConfigKey, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog, HostStorage,
+    HostTransfer,
 };
 use bedcode_plugin_api::types::{
     FileOperation, MountOptions, TransferDirection, TransferProgress, TransferRequest,
@@ -189,6 +190,7 @@ fn enqueue_download(
             remote_path,
             &local_path,
             0,
+            now_ms(host),
         );
         task.state = TaskState::Rejected;
         task.reason = Some("duplicate-name".to_string());
@@ -206,6 +208,7 @@ fn enqueue_download(
         remote_path,
         &local_path,
         0,
+        now_ms(host),
     );
     let task_json = serde_json::to_value(&task)?;
     let task_id = task.id.clone();
@@ -243,6 +246,7 @@ fn enqueue_upload(
         remote_path,
         local_path,
         0,
+        now_ms(host),
     );
     let task_json = serde_json::to_value(&task)?;
     let task_id = task.id.clone();
@@ -809,11 +813,9 @@ pub fn handle_transfer_progress(
     }
 
     // 持久化策略（spec §7.3）：终态立即写，Running 进度按 1s 节流；
-    // emit_tasks_changed 每消息照发，保证 UI 实时进度
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    // emit_tasks_changed 每消息照发，保证 UI 实时进度。
+    // 时间经宿主获取（wasm32-unknown-unknown 无系统时钟，SystemTime 会 panic）
+    let now = now_ms(host);
 
     let is_terminal = matches!(
         &progress.state,
@@ -1060,14 +1062,10 @@ fn make_task(
     remote_path: &str,
     local_path: &str,
     size: u64,
+    now: u64,
 ) -> Task {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
     Task {
-        id: generate_id(),
+        id: generate_id(now),
         direction,
         peer: PeerInfo {
             device_id: peer_id.to_string(),
@@ -1090,13 +1088,27 @@ fn make_task(
 }
 
 /// 生成唯一任务 ID
-fn generate_id() -> String {
-    // 简单实现：时间戳 + 随机后缀
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("ft-{:x}", now)
+///
+/// wasm32-unknown-unknown 无系统时钟/随机源（SystemTime::now() 会 panic），
+/// 时间戳由宿主提供（now_ms），单调计数器保证同毫秒内不冲突；
+/// 宿主时间不可用（now=0）时仅计数器兜底，仍保持进程内唯一。
+fn generate_id(now: u64) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("ft-{:x}-{:x}", now, n)
+}
+
+/// 获取宿主当前时间（Unix 毫秒）；宿主不可用/解析失败降级为 0
+///
+/// wasm32-unknown-unknown 无系统时钟（SystemTime::now()/Instant::now() 均 panic
+/// 触发 unreachable trap——移动端 aarch64 上 SIGILL 未被 wasmtime trap handler
+/// 捕获会直接闪退），插件一律经 host.config_get(ConfigKey::CurrentTimeMs) 取时间。
+fn now_ms(host: &impl HostConfig) -> u64 {
+    host.config_get(ConfigKey::CurrentTimeMs)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0)
 }
 
 /// 解析下载目录
