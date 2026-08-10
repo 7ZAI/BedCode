@@ -122,6 +122,12 @@ npm run dev
 # Android 热加载开发模式（真机/模拟器）
 npm run tauri:android:dev
 
+# Android 开发模式 + 电脑端日志落盘
+# 普通 tauri:android:dev 只打控制台；本命令额外把 Tauri CLI 转发的 logcat
+# 实时写入 .dev-logs/android-dev.YYYY-MM-DD.log（UTC 日期，无 ANSI 码，可 grep）。
+# 每次启动清空当天日志文件（跨天按 UTC 轮转新文件）；Ctrl+C 退出前 flush 落盘
+npm run tauri:android:dev:log
+
 # 仅 Rust 编译检查
 cd src-tauri && cargo check
 ```
@@ -378,6 +384,7 @@ cd <project>/src-tauri && cargo build
 | 插件构建（桌面） | `bedcode-desktop` | `npm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/desktop/` |
 | 插件构建（移动） | `bedcode-mobile` | `npm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/mobile/` |
 | Android 开发 | `bedcode-mobile` | `npm run tauri:android:dev` | 真机/模拟器 + 热更新 |
+| Android 开发（日志落盘） | `bedcode-mobile` | `npm run tauri:android:dev:log` | logcat 写入 `.dev-logs/android-dev.*.log` |
 | Android APK | `bedcode-mobile` | `npm run tauri:android:build` | `.apk` |
 | Android 快速构建 | `bedcode-mobile` | `npm run tauri:android:build:fast` | Debug `.apk` |
 | 前端测试 | `<project>` | `npm run test:run` | 终端输出 |

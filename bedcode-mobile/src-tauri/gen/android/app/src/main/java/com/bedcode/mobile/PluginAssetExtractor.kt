@@ -70,11 +70,17 @@ class PluginAssetExtractor(private val activity: Activity) : Plugin(activity) {
         // assets 中内置插件带平台层级 mobile/（与 Rust dev_copy_plugins 的
         // resources/plugins/mobile 及构建产物布局一致），此处展开到 {plugin_id}
         val pluginsRoot = "resources/plugins/$PLATFORM_DIR"
-        val pluginIds = activity.assets.list(pluginsRoot) ?: return 0
+        val pluginIds = (activity.assets.list(pluginsRoot) ?: return 0)
+            .filter { !it.startsWith(".") }
+            .toSet()
+
+        // 清理 APK 中已移除的插件（暂停开发/从 bundle 移除）：保留带 apk-asset
+        // 标记但不在当前 assets 列表中的残留目录会继续被宿主 load_all 扫描加载，
+        // 必须删除，否则已下架插件在升级后依然出现在应用里
+        cleanupRemovedPlugins(pluginIds)
 
         var extracted = 0
         for (id in pluginIds) {
-            if (id.startsWith(".")) continue
             val assetDir = "$pluginsRoot/$id"
             val destDir = File(pluginsBaseDir, id)
 
@@ -139,6 +145,40 @@ class PluginAssetExtractor(private val activity: Activity) : Plugin(activity) {
         // 若 filesDir/plugins 已空则一并移除
         if (legacyBase.isDirectory && (legacyBase.listFiles()?.isEmpty() != false)) {
             legacyBase.delete()
+        }
+    }
+
+    /**
+     * 清理 APK 中已移除的内置插件（暂停开发/从 bundle 剔除）
+     *
+     * 仅删除带 apk-asset 来源标记且不在当前 assets 列表中的目录，
+     * 保留 file-install / remote-download 来源的用户安装插件。
+     * 无标记（旧版本安装 / 手动放入）或标记读取失败时无法确认内置来源，
+     * 一律保守保留并告警——误删用户插件不可恢复。
+     */
+    private fun cleanupRemovedPlugins(activeIds: Set<String>) {
+        val base = pluginsBaseDir
+        if (!base.isDirectory) return
+        base.listFiles()?.forEach { dir ->
+            if (!dir.isDirectory || dir.name in activeIds) return@forEach
+            val marker = File(dir, MARKER_FILE)
+            val isApkAsset = try {
+                if (!marker.exists()) {
+                    // 无来源标记：可能是标记机制引入前安装的插件，无法确认内置
+                    // 来源，保守保留（仅清理标记正向确认为 apk-asset 的目录）
+                    Log.w(TAG, "Plugin without source marker kept: ${dir.name}")
+                    false
+                } else {
+                    marker.readText().trim().startsWith("$SOURCE_APK_ASSET:")
+                }
+            } catch (e: Exception) {
+                // 标记损坏/不可读：无法确认来源，保守保留
+                Log.w(TAG, "Plugin marker unreadable, kept: ${dir.name}", e)
+                false
+            }
+            if (isApkAsset && dir.deleteRecursively()) {
+                Log.i(TAG, "Removed bundled plugin no longer in APK: ${dir.name}")
+            }
         }
     }
 
