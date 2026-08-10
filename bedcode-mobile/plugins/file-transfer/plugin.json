@@ -32,6 +32,14 @@
         "title": "Query Peer Status"
       },
       {
+        "id": "file-transfer.list-peers",
+        "title": "List Peers"
+      },
+      {
+        "id": "file-transfer.set-active-peer",
+        "title": "Set Active Peer"
+      },
+      {
         "id": "file-transfer.list-remote",
         "title": "List Remote Files"
       },

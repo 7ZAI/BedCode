@@ -54,9 +54,10 @@ impl TaskState {
 /// 纯函数，无副作用，可独立单测。
 pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), &'static str> {
     match (from, to) {
-        // queued → transferring（槽位空出）/ cancelled
+        // queued → transferring（槽位空出）/ cancelled / resumable（对端下线）
         (TaskState::Queued, TaskState::Transferring) => Ok(()),
         (TaskState::Queued, TaskState::Cancelled) => Ok(()),
+        (TaskState::Queued, TaskState::Resumable) => Ok(()),
 
         // transferring → paused（用户）/ resumable（断线）/ completed / failed / rejected / cancelled
         (TaskState::Transferring, TaskState::Paused) => Ok(()),

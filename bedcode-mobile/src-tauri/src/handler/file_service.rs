@@ -37,6 +37,13 @@ impl ClientRouteHandler for FileServiceHandler {
                     let fs = crate::state::get_file_service();
                     if fs.registry.mount_count().await > 0 && fs.server.is_running().await {
                         tracing::info!("file service query received, replying announce");
+                        // 强制推送当前记录（Query = 显式刷新请求，绕过 set_peer
+                        // 去重：插件 activate 后主动探测时信息未变会被吞掉推送）
+                        if let Some(peer_id) = desktop_peer_id().await {
+                            if let Some(info) = fs.registry.get_peer(&peer_id).await {
+                                fs.registry.push_peer(&peer_id, info).await;
+                            }
+                        }
                         crate::file_service::announce::announce(&fs.registry, &fs.server).await;
                     } else {
                         tracing::info!("file service query received, replying withdraw");
@@ -58,6 +65,11 @@ impl ClientRouteHandler for FileServiceHandler {
 /// peer_id 取当前连接目标（单连接场景，与 `update_desktop_peer` 同规则）；
 /// ip/port/token 兜底与 `update_desktop_peer` 一致（token 为空时以宿主
 /// 全局 token 填充，桌面端 HTTP 复用 WS 端口时端口一致）
+///
+/// 走 `push_peer`（强制推送）而非 `set_peer`（去重）：本路径承载桌面端
+/// 认证成功快照与 Query 回复，属于低频幂等通知——若沿用去重，前端/插件
+/// 事件错过（页面后开、插件晚激活）后，相同内容的重复公告会被吞掉推送，
+/// 前端只能停在"对端未共享"空态无法恢复（用户反复点重测也无济于事）。
 async fn apply_desktop_announce(port: u16, token: String, mounts: Vec<MountAnnouncement>) {
     let cm = crate::state::get_connection_manager();
     let Some(target) = cm.get_target().await else {
@@ -98,5 +110,5 @@ async fn apply_desktop_announce(port: u16, token: String, mounts: Vec<MountAnnou
         })
         .collect();
 
-    registry.set_peer(&peer_id, peer).await;
+    registry.push_peer(&peer_id, peer).await;
 }

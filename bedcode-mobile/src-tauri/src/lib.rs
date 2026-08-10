@@ -112,6 +112,16 @@ pub fn run() {
                         return;
                     }
 
+                    // 注入 AppHandle 到文件服务注册表：双通道推送（Tauri 事件 + 插件
+                    // 总线）的 Tauri 事件通道依赖它。WASM 插件经 host_filesrv_mount
+                    // 挂载时不注入（仅 TS 通道 plugin_filesrv_mount 注入），若此处
+                    // 缺失，filesrv:peer_changed 事件到不了插件前端，对端永远显示
+                    // "未共享"。必须在插件激活（scan_and_load）前注入一次（幂等）
+                    crate::state::get_file_service()
+                        .registry
+                        .set_app_handle(ah.clone())
+                        .await;
+
                     // 种子内置受信任插件白名单（幂等：已存在则跳过）
                     // - auto-task: 自动化任务插件
                     // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页

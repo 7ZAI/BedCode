@@ -90,6 +90,20 @@ pub struct TerminalWs {
     hb: Instant,
     /// 是否为本地环回通道（桌面端 WebView 直连，免 JWT、输出走二进制帧）
     local: bool,
+    /// 输出转发任务表（key = `client_id:session_id` → forward_loop JoinHandle）
+    ///
+    /// 订阅者被替换 / 取消订阅 / 连接断开时 abort：旧订阅者的 send_queue 被替换
+    /// drop 后，其 forward_loop 仍会把通道中已缓冲的历史帧排空投递到同一 WS，
+    /// 客户端字节游标必然不匹配 → 连续性违反 → 重订阅风暴（自持循环）。
+    /// abort 直接丢弃残留帧，保证同连接同一会话始终只有一条输出流
+    output_forwarders: std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
+    /// 订阅任务表（key = `client_id:session_id` → subscribe task JoinHandle）
+    ///
+    /// 订阅者被替换 / 取消订阅时 abort：旧任务的 subscribe() 已完成占位并在
+    /// 发送历史，其历史发送循环重新读取 subscribers 会拿到替换后的新订阅者，
+    /// 把旧历史注入新通道 → 客户端收到重复字节（游标连续不触发自愈，重复
+    /// 内容直接显示）。abort 直接终止旧任务的发送循环
+    subscribe_tasks: std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
 }
 
 impl TerminalWs {
@@ -98,6 +112,8 @@ impl TerminalWs {
             session: WsSession::new(addr),
             hb: Instant::now(),
             local: false,
+            output_forwarders: std::collections::HashMap::new(),
+            subscribe_tasks: std::collections::HashMap::new(),
         }
     }
 
@@ -152,6 +168,16 @@ impl Actor for TerminalWs {
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("Terminal WS disconnected: {}", self.session.addr);
+
+        // 中止所有输出转发任务：连接已断开，残留缓冲帧不再需要投递
+        for (_, handle) in self.output_forwarders.drain() {
+            handle.abort();
+        }
+        // 中止所有订阅任务：连接已断开，旧任务的历史发送不再需要（其
+        // 占位订阅者残留也会随断连清理移除）
+        for (_, handle) in self.subscribe_tasks.drain() {
+            handle.abort();
+        }
 
         // 通知前端设备下线（与 DEVICE_CONNECTED 对称；仅已认证连接有 device_id）
         if let Some(device_id) = self.session.device_id.clone() {
@@ -351,8 +377,14 @@ impl TerminalWs {
             FileServicePayload::Query {} => {
                 // 主动探测：向该客户端回复当前挂载快照（有挂载 → Announce；无 → Withdraw）
                 let addr = self.session.addr;
+                let device_id = device_id.clone();
                 tracing::info!(device_id = %device_id, "file service query received, replying snapshot");
                 actix::spawn(async move {
+                    // 强制推送该设备当前记录（Query = 显式刷新请求，绕过 set_peer
+                    // 去重：插件 activate 后主动探测时信息未变会被吞掉推送）
+                    if let Some(info) = file_service.get_peer(&device_id).await {
+                        file_service.push_peer(&device_id, info).await;
+                    }
                     send_file_service_snapshot_to(addr).await;
                 });
             }
@@ -641,24 +673,71 @@ impl TerminalWs {
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
 
+        // 替换订阅者前先中止旧转发任务：旧任务的 send_queue 被替换 drop 后，
+        // 其 forward_loop 仍会把通道中已缓冲的历史帧排空投递到同一 WS——
+        // 客户端游标必然不匹配 → 连续性违反 → 重订阅风暴（自持循环）。
+        // abort 直接丢弃残留帧，保证同连接同一会话始终只有一条输出流
+        let fwd_key = format!("{}:{}", client_id, session_id);
+        if let Some(prev) = self.output_forwarders.remove(&fwd_key) {
+            tracing::debug!("[TerminalWs] Aborting previous output forwarder: {}", fwd_key);
+            prev.abort();
+        }
+
+        // 替换订阅者前先中止旧订阅任务：旧任务的 subscribe() 已完成占位并
+        // 在发送历史，其历史发送循环重新读取 subscribers 会拿到替换后的
+        // 新订阅者，把旧历史注入新通道 → 客户端收到重复字节（游标连续，
+        // 不触发自愈，重复内容直接显示）。abort 直接终止旧任务的发送循环
+        let sub_key = format!("{}:{}", client_id, session_id);
+        if let Some(prev) = self.subscribe_tasks.remove(&sub_key) {
+            tracing::debug!("[TerminalWs] Aborting previous subscribe task: {}", sub_key);
+            prev.abort();
+        }
+
         // 创建输出转发通道
         // 容量 4096：历史回放 + 实时输出并发到达时，subscribe() 的历史发送
         // 会被 send_queue 背压阻塞（历史发不完 → subscribe_response 不回 →
         // 客户端 send_and_wait 超时误判断开）。大容量显著降低背压概率
-        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(4096);
+        let (output_tx, output_rx) =
+            tokio::sync::mpsc::channel::<crate::session::OutputEvent>(4096);
 
         let session_id_for_sub = session_id.clone();
-        let session_id_for_fwd = session_id.clone();
         let request_id = message_id.clone();
 
-        // 在 Actix 运行时中执行异步订阅
+        // 订阅响应经 oneshot 提前返回：subscribe() 在历史入队前发响应，
+        // 不被历史背压阻塞——大历史 + 慢链路时响应延迟会让客户端 10s 订阅
+        // 超时误判失败（订阅实际已建立，后续重订阅产生孤儿任务 → 重复流）
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        let addr_for_resp = addr.clone();
+        let session_id_for_resp = session_id.clone();
+        let request_id_for_resp = request_id.clone();
+
+        // 在 Tokio 运行时中执行异步订阅（tokio::spawn 而非 actix::spawn：
+        // 需要可 abort 的 JoinHandle，订阅者被替换时终止旧任务的历史发送，
+        // 防止旧历史注入新订阅者通道造成客户端重复字节）
+        let subscribe_handle = tokio::spawn(async move {
+            let result = global_manager
+                .subscribe(&session_id_for_sub, &client_id, output_tx, start_seq, Some(resp_tx))
+                .await;
+            // 响应已通过 resp_tx 前置返回；此处仅处理会话不存在（resp_tx 已丢弃）
+            if result.is_none() {
+                let _ = addr.send(SubscribeResult {
+                    session_id: session_id_for_sub,
+                    request_id,
+                    result: None,
+                }).await;
+            }
+        });
+        self.subscribe_tasks.insert(sub_key, subscribe_handle);
+
+        // 响应转发任务：订阅建立后立即把裁决消息送回客户端
         actix::spawn(async move {
-            let result = global_manager.subscribe(&session_id_for_sub, &client_id, output_tx, start_seq).await;
-            let _ = addr.send(SubscribeResult {
-                session_id: session_id_for_sub.clone(),
-                request_id,
-                result,
-            }).await;
+            if let Ok(response) = resp_rx.await {
+                let _ = addr_for_resp.send(SubscribeResult {
+                    session_id: session_id_for_resp,
+                    request_id: request_id_for_resp,
+                    result: Some(response),
+                }).await;
+            }
         });
 
         // 启动输出转发任务：将 OutputEvent 转为 WS 消息发到 actor
@@ -670,26 +749,29 @@ impl TerminalWs {
         let local = self.local;
         let merge_output = config.terminal.merge_output;
 
-        actix::spawn(async move {
-            // 本地通道（桌面端环回，延迟敏感）恒零缓冲直通；远程通道按开关决定：
-            // 合并开启 → 有界延迟合并；关闭 → 零缓冲直通。合并/直通语义与
-            // 时序保证集中在 forward_loop（有单测覆盖）
-            let interval = if local || !merge_output {
-                Duration::ZERO
-            } else {
-                flush_interval
-            };
-            let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(64);
-            let fwd = tokio::spawn(forward_loop(
-                output_rx,
-                out_tx,
-                interval,
-                max_buffer_size,
-                local,
-                session_id_for_fwd,
-            ));
+        // 本地通道（桌面端环回，延迟敏感）恒零缓冲直通；远程通道按开关决定：
+        // 合并开启 → 有界延迟合并；关闭 → 零缓冲直通。合并/直通语义与
+        // 时序保证集中在 forward_loop（有单测覆盖）
+        let interval = if local || !merge_output {
+            Duration::ZERO
+        } else {
+            flush_interval
+        };
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(64);
+        let session_id_for_fwd = session_id.clone();
+        let fwd_handle = tokio::spawn(forward_loop(
+            output_rx,
+            out_tx,
+            interval,
+            max_buffer_size,
+            local,
+            session_id_for_fwd,
+        ));
+        // 注册转发任务：替换订阅 / 取消订阅 / 断连时 abort
+        self.output_forwarders.insert(fwd_key, fwd_handle);
 
-            // 消费循环：转发结果经 actor 发送（失败 = actor 停止，终止转发）
+        // 消费循环：转发结果经 actor 发送（失败 = actor 停止，终止转发）
+        actix::spawn(async move {
             while let Some(out) = out_rx.recv().await {
                 match out {
                     ForwardOutput::Text(text) => {
@@ -706,7 +788,6 @@ impl TerminalWs {
                     }
                 }
             }
-            let _ = fwd.await;
         });
     }
 
@@ -721,6 +802,19 @@ impl TerminalWs {
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
         let request_id = message_id;
+
+        // 中止该会话的输出转发任务：取消订阅后旧任务残留缓冲帧无意义
+        let fwd_key = format!("{}:{}", client_id, session_id);
+        if let Some(prev) = self.output_forwarders.remove(&fwd_key) {
+            tracing::debug!("[TerminalWs] Aborting output forwarder on unsubscribe: {}", fwd_key);
+            prev.abort();
+        }
+        // 中止在途订阅任务：取消订阅后旧订阅完成会重新插入占位订阅者
+        let sub_key = format!("{}:{}", client_id, session_id);
+        if let Some(prev) = self.subscribe_tasks.remove(&sub_key) {
+            tracing::debug!("[TerminalWs] Aborting subscribe task on unsubscribe: {}", sub_key);
+            prev.abort();
+        }
 
         actix::spawn(async move {
             let success = global_manager.unsubscribe(&session_id, &client_id).await;

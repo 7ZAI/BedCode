@@ -1094,6 +1094,41 @@ fn write_result_to_out_ptr(
 // - host_notify 调用 tauri-plugin-notification
 // - host_session_list/get 为空操作
 
+// ==================== Host Call Panic Guard ====================
+
+/// 在 wasmtime host function 内执行阻塞宿主调用并捕获 panic
+///
+/// wasmtime host function 经 extern "C" ABI 进入，panic 越过该边界是 UB
+/// （release 下 panic=unwind 时 catch_unwind 生效，但 C ABI 边界自身不展开）。
+/// host fn 内的 block_in_place / Handle::current() / 锁 unwrap 等异常会 panic，
+/// 统一在此截获：记录 error 日志（含插件 ID 与调用名），返回 fallback 让调用方
+/// 按失败语义继续 —— WASM 插件侧已有结构化错误处理（任务置 Failed 推送到前端），
+/// 插件业务 panic 不再拖垮整个应用。
+fn guarded_host_call<T>(
+    plugin_id: &str,
+    host_fn: &'static str,
+    fallback: T,
+    f: impl FnOnce() -> T,
+) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(panic_err) => {
+            let msg = panic_err
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic_err.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic payload".to_string());
+            tracing::error!(
+                plugin_id = %plugin_id,
+                host_fn = host_fn,
+                error = %msg,
+                "host function panicked; swallowed and returning fallback (plugin survives)"
+            );
+            fallback
+        }
+    }
+}
+
 fn host_storage_get(
     mut caller: wasmtime::Caller<'_, WasmPluginState>,
     key_ptr: u32,
@@ -1117,9 +1152,12 @@ fn host_storage_get(
 
     let storage = host_ctx.storage.clone();
     let handle = caller.data().runtime_handle.clone();
-    let result = tokio::task::block_in_place(|| {
-        handle.block_on(storage.get(&plugin_id, &key))
-    });
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_storage_get",
+        Err(crate::AppError::Internal("host_storage_get panicked".to_string())),
+        || tokio::task::block_in_place(|| handle.block_on(storage.get(&plugin_id, &key))),
+    );
 
     match result {
         Ok(Some(value)) => {
@@ -1195,9 +1233,12 @@ fn host_storage_set(
 
     let storage = host_ctx.storage.clone();
     let handle = caller.data().runtime_handle.clone();
-    match tokio::task::block_in_place(|| {
-        handle.block_on(storage.set(&plugin_id, &key, json_value))
-    }) {
+    match guarded_host_call(
+        &plugin_id,
+        "host_storage_set",
+        Err(crate::AppError::Internal("host_storage_set panicked".to_string())),
+        || tokio::task::block_in_place(|| handle.block_on(storage.set(&plugin_id, &key, json_value))),
+    ) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_set: storage error");
@@ -1228,9 +1269,12 @@ fn host_storage_delete(
 
     let storage = host_ctx.storage.clone();
     let handle = caller.data().runtime_handle.clone();
-    match tokio::task::block_in_place(|| {
-        handle.block_on(storage.delete(&plugin_id, &key))
-    }) {
+    match guarded_host_call(
+        &plugin_id,
+        "host_storage_delete",
+        Err(crate::AppError::Internal("host_storage_delete panicked".to_string())),
+        || tokio::task::block_in_place(|| handle.block_on(storage.delete(&plugin_id, &key))),
+    ) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_delete: storage error");
@@ -1267,8 +1311,9 @@ fn host_db_execute(
 
     let db = host_ctx.db.clone();
     // 作用域收窄 guard 生命周期：避免尾部表达式临时值悬垂（db 先于 guard drop）
+    // poison 容忍：host fn 内 panic 被 guarded_host_call 截获后锁会中毒，不能连锁 panic
     let affected = {
-        let conn = db.lock().unwrap();
+        let conn = db.lock().unwrap_or_else(|e| e.into_inner());
         match conn.execute(&sql, []) {
             Ok(affected) => affected as i32,
             Err(e) => {
@@ -1308,7 +1353,8 @@ fn host_db_query(
 
     let db = host_ctx.db.clone();
     let query_result: Result<serde_json::Value, String> = (|| {
-        let conn = db.lock().unwrap();
+        // poison 容忍：host fn 内 panic 被截获后锁会中毒，不能连锁 panic
+        let conn = db.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
             .prepare(&sql)
@@ -1408,9 +1454,12 @@ fn host_terminal_send(
     let message = TerminalRequest::input(&session_id, &data, None);
     let handle = caller.data().runtime_handle.clone();
 
-    match tokio::task::block_in_place(|| {
-        handle.block_on(conn.send(&message))
-    }) {
+    match guarded_host_call(
+        &plugin_id,
+        "host_terminal_send",
+        Err(crate::AppError::Internal("host_terminal_send panicked".to_string())),
+        || tokio::task::block_in_place(|| handle.block_on(conn.send(&message))),
+    ) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, session_id = %session_id, "host_terminal_send: WebSocket send failed");
@@ -1539,9 +1588,14 @@ fn host_http_fetch(
         }
     } else {
         let handle = caller.data().runtime_handle.clone();
-        match tokio::task::block_in_place(|| {
-            handle.block_on(wasm_host::execute_http_request(&request))
-        }) {
+        match guarded_host_call(
+            &plugin_id,
+            "host_http_fetch",
+            Err(anyhow::anyhow!("host_http_fetch panicked")),
+            || tokio::task::block_in_place(|| {
+                handle.block_on(wasm_host::execute_http_request(&request))
+            }),
+        ) {
             Ok(response) => {
                 let result_str = match serde_json::to_string(&response) {
                     Ok(s) => s,
@@ -1693,8 +1747,11 @@ fn host_fs_read(
 
     // 访问校验
     let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Read))
+    let allowed = guarded_host_call(&plugin_id, "host_fs_read", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Read))
+        })
     });
     if !allowed {
         tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_read: access denied by fs_auth");
@@ -1754,8 +1811,11 @@ fn host_fs_write(
     };
 
     let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Write))
+    let allowed = guarded_host_call(&plugin_id, "host_fs_write", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Write))
+        })
     });
     if !allowed {
         tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_write: access denied by fs_auth");
@@ -1819,12 +1879,14 @@ fn host_fs_copy(
     let plugin_id_clone = plugin_id.clone();
     let src_clone = src.clone();
     let dst_clone = dst.clone();
-    let allowed = tokio::task::block_in_place(|| {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            let read_ok = fs_auth.check(&plugin_id_clone, &src_clone, crate::plugin::fs_auth::FsOp::Read).await;
-            if !read_ok { return false; }
-            fs_auth.check(&plugin_id_clone, &dst_clone, crate::plugin::fs_auth::FsOp::Write).await
+    let allowed = guarded_host_call(&plugin_id, "host_fs_copy", false, || {
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let read_ok = fs_auth.check(&plugin_id_clone, &src_clone, crate::plugin::fs_auth::FsOp::Read).await;
+                if !read_ok { return false; }
+                fs_auth.check(&plugin_id_clone, &dst_clone, crate::plugin::fs_auth::FsOp::Write).await
+            })
         })
     });
     if !allowed {
@@ -1876,10 +1938,12 @@ fn host_fs_exists(
 
     // 访问校验
     let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(
-            fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Read),
-        )
+    let allowed = guarded_host_call(&plugin_id, "host_fs_exists", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Read),
+            )
+        })
     });
     if !allowed {
         tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_exists: access denied by fs_auth");
@@ -1916,9 +1980,11 @@ fn host_fs_delete(
 
     // 访问校验
     let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Write))
+    let allowed = guarded_host_call(&plugin_id, "host_fs_delete", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(fs_auth.check(&plugin_id, &path, crate::plugin::fs_auth::FsOp::Write))
+        })
     });
     if !allowed {
         tracing::warn!(plugin_id = %plugin_id, path = %path, "host_fs_delete: access denied by fs_auth");
@@ -1933,10 +1999,17 @@ fn host_fs_delete(
     #[cfg(target_os = "android")]
     {
         let path_clone = path.clone();
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(crate::plugin::android_plugins::delete_file(&path_clone))
-        });
+        let result = guarded_host_call(
+            &plugin_id,
+            "host_fs_delete(android)",
+            Err(crate::AppError::Internal("host_fs_delete(android) panicked".to_string())),
+            || {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(crate::plugin::android_plugins::delete_file(&path_clone))
+                })
+            },
+        );
         return match result {
             Ok(()) => 0,
             Err(e) => {
@@ -2026,8 +2099,8 @@ fn host_bus_subscribe(
 
     let bus = host_ctx.message_bus.clone();
     let handle = caller.data().runtime_handle.clone();
-    tokio::task::block_in_place(|| {
-        handle.block_on(bus.subscribe_wasm(&plugin_id, &topic))
+    guarded_host_call(&plugin_id, "host_bus_subscribe", (), || {
+        tokio::task::block_in_place(|| handle.block_on(bus.subscribe_wasm(&plugin_id, &topic)))
     });
     0
 }
@@ -2055,8 +2128,8 @@ fn host_bus_unsubscribe(
 
     let bus = host_ctx.message_bus.clone();
     let handle = caller.data().runtime_handle.clone();
-    tokio::task::block_in_place(|| {
-        handle.block_on(bus.unsubscribe(&plugin_id, &topic))
+    guarded_host_call(&plugin_id, "host_bus_unsubscribe", (), || {
+        tokio::task::block_in_place(|| handle.block_on(bus.unsubscribe(&plugin_id, &topic)))
     });
     0
 }
@@ -2124,13 +2197,20 @@ fn host_filesrv_mount(
     let fs = crate::state::get_file_service();
     let mount_path = options.mount_path.clone();
     let handle = caller.data().runtime_handle.clone();
-    let mount_result = tokio::task::block_in_place(|| {
-        handle.block_on(fs.registry.mount(
-            &plugin_id,
-            options,
-            crate::file_service::registry::HookTarget::Wasm,
-        ))
-    });
+    let mount_result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_mount",
+        Err(crate::AppError::Internal("host_filesrv_mount panicked".to_string())),
+        || {
+            tokio::task::block_in_place(|| {
+                handle.block_on(fs.registry.mount(
+                    &plugin_id,
+                    options,
+                    crate::file_service::registry::HookTarget::Wasm,
+                ))
+            })
+        },
+    );
 
     match mount_result {
         Ok(entry) => {
@@ -2202,9 +2282,12 @@ fn host_filesrv_unmount(
 
     let fs = crate::state::get_file_service();
     let handle = caller.data().runtime_handle.clone();
-    let result = tokio::task::block_in_place(|| {
-        handle.block_on(fs.registry.unmount(&plugin_id, &mount_path))
-    });
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_unmount",
+        Err(crate::AppError::Internal("host_filesrv_unmount panicked".to_string())),
+        || tokio::task::block_in_place(|| handle.block_on(fs.registry.unmount(&plugin_id, &mount_path))),
+    );
 
     match result {
         Ok(()) => {
@@ -2265,9 +2348,12 @@ fn host_filesrv_update_roots(
 
     let fs = crate::state::get_file_service();
     let handle = caller.data().runtime_handle.clone();
-    let result = tokio::task::block_in_place(|| {
-        handle.block_on(fs.registry.update_roots(&plugin_id, &mount_path, roots))
-    });
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_update_roots",
+        Err(crate::AppError::Internal("host_filesrv_update_roots panicked".to_string())),
+        || tokio::task::block_in_place(|| handle.block_on(fs.registry.update_roots(&plugin_id, &mount_path, roots))),
+    );
 
     match result {
         Ok(()) => {
@@ -2313,7 +2399,9 @@ fn host_filesrv_get_peer(
 
     let fs = crate::state::get_file_service();
     let handle = caller.data().runtime_handle.clone();
-    let peer = tokio::task::block_in_place(|| handle.block_on(fs.registry.get_peer(&peer_id)));
+    let peer = guarded_host_call(&plugin_id, "host_filesrv_get_peer", None, || {
+        tokio::task::block_in_place(|| handle.block_on(fs.registry.get_peer(&peer_id)))
+    });
 
     let Some(peer) = peer else {
         // 未公告：out_ptr 写 (0,0)，插件侧 SDK 映射为 Ok(None)
@@ -2368,17 +2456,24 @@ fn host_filesrv_query_peer(
 
     let conn = crate::state::get_connection_manager();
     let handle = caller.data().runtime_handle.clone();
-    let result = tokio::task::block_in_place(|| {
-        handle.block_on(async {
-            if !conn.is_connected().await {
-                return Err(crate::AppError::WebSocket("not connected".to_string()));
-            }
-            conn.send(&crate::model::message::Message::file_service(
-                crate::enums::file_service::FileServicePayload::Query {},
-            ))
-            .await
-        })
-    });
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_query_peer",
+        Err(crate::AppError::WebSocket("host_filesrv_query_peer panicked".to_string())),
+        || {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    if !conn.is_connected().await {
+                        return Err(crate::AppError::WebSocket("not connected".to_string()));
+                    }
+                    conn.send(&crate::model::message::Message::file_service(
+                        crate::enums::file_service::FileServicePayload::Query {},
+                    ))
+                    .await
+                })
+            })
+        },
+    );
 
     match result {
         Ok(_) => {
@@ -2426,11 +2521,14 @@ fn host_transfer_start(
     };
 
     // 本地路径 fs 授权：下载 = 写授权，上传 = 读授权
+    // （panic guard：授权流程异常不崩溃，fail-closed 拒绝并回报插件）
     let handle = caller.data().runtime_handle.clone();
-    let authorized = tokio::task::block_in_place(|| {
-        handle.block_on(crate::plugin::transfer::check_local_path_authorized(
-            &plugin_id, &request,
-        ))
+    let authorized = guarded_host_call(&plugin_id, "host_transfer_start", false, || {
+        tokio::task::block_in_place(|| {
+            handle.block_on(crate::plugin::transfer::check_local_path_authorized(
+                &plugin_id, &request,
+            ))
+        })
     });
     if !authorized {
         tracing::error!(
@@ -2486,8 +2584,8 @@ fn host_transfer_cancel(
     };
 
     let handle = caller.data().runtime_handle.clone();
-    let cancelled = tokio::task::block_in_place(|| {
-        handle.block_on(crate::plugin::transfer::cancel_transfer(&task_id))
+    let cancelled = guarded_host_call(&plugin_id, "host_transfer_cancel", false, || {
+        tokio::task::block_in_place(|| handle.block_on(crate::plugin::transfer::cancel_transfer(&task_id)))
     });
     if cancelled {
         tracing::info!(plugin_id = %plugin_id, task_id = %task_id, "transfer cancel requested");
@@ -2568,12 +2666,15 @@ fn host_config_get(
 /// 2. 兜底：`app_data_dir()/Downloads`（内部存储，注释说明局限）
 /// 目录不存在时惰性创建
 fn resolve_downloads_dir(caller: &wasmtime::Caller<'_, WasmPluginState>) -> Option<String> {
+    let plugin_id = caller.data().plugin_id.clone();
     let host_ctx = caller.data().host_ctx.clone();
     let handle = caller.data().runtime_handle.clone();
 
     // 首选：Kotlin 桥获取外部私有下载目录
-    let external_path = tokio::task::block_in_place(|| {
-        handle.block_on(crate::plugin::android_plugins::get_external_downloads_dir())
+    let external_path = guarded_host_call(&plugin_id, "resolve_downloads_dir(external)", None, || {
+        tokio::task::block_in_place(|| {
+            handle.block_on(crate::plugin::android_plugins::get_external_downloads_dir())
+        })
     });
 
     let path = if let Some(ext_path) = external_path {
@@ -2582,9 +2683,11 @@ fn resolve_downloads_dir(caller: &wasmtime::Caller<'_, WasmPluginState>) -> Opti
     } else {
         // 兜底：app_data_dir()/Downloads（内部存储目录，文件管理器不可见；
         // 外部存储不可用时的降级方案）
-        let fallback = tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                host_ctx.app_handle.path().app_data_dir().ok()
+        let fallback = guarded_host_call(&plugin_id, "resolve_downloads_dir(fallback)", None, || {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    host_ctx.app_handle.path().app_data_dir().ok()
+                })
             })
         });
         match fallback {

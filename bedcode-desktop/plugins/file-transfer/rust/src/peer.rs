@@ -1,11 +1,15 @@
 //! 对端缓存与 URL 构造
 //!
-//! activate 时经 `filesrv_get_peer` 初始化；
-//! 订阅 `filesrv:peer_changed` 后刷新。
-//! 对端不在线时命令返回明确错误。
+//! 多对端场景（桌面端）：维护在线对端映射 + 激活对端，切换激活对端不影响
+//! 传输中任务（任务启动时已捕获 endpoint）。单对端场景（移动端）同构，
+//! 同一时刻只有 0/1 个对端记录。
+//!
+//! activate 时构造（is_peer_desktop 固定为平台值）；订阅
+//! `filesrv:peer_changed` 后增删/刷新。对端不在线时命令返回明确错误。
 
 use bedcode_plugin_api::host::HostFileService;
 use bedcode_plugin_api::types::{FileOperation, PeerMountAnnouncement};
+use std::collections::BTreeMap;
 
 /// 插件 ID（文件传输插件）
 pub const PLUGIN_ID: &str = "com.bedcode.file-transfer";
@@ -64,121 +68,131 @@ impl PeerEndpoint {
     }
 }
 
-/// 对端缓存
+/// 对端存储（多对端 + 激活）
 ///
-/// 存储当前已知的对端连接信息。
-/// peer_id 为空表示尚未配对或对端不在线。
-pub struct PeerCache {
-    /// 对端设备 ID（已知时）
-    peer_id: Option<String>,
-    /// 对端连接信息（在线时）
-    endpoint: Option<PeerEndpoint>,
-    /// 对端是否为桌面端（影响 base URL 格式）
+/// - 在线对端：已公告文件服务的设备（BTreeMap 保证列表顺序稳定，UI 展示一致）
+/// - 激活对端：插件当前服务的目标（目录浏览/新任务调度指向它）
+/// - 首次上线自动激活；激活对端下线自动切换到任一剩余对端（防呆）
+pub struct PeerStore {
+    /// 在线对端（peer_id → 连接信息）
+    peers: BTreeMap<String, PeerEndpoint>,
+    /// 激活对端 ID（None = 无可用对端）
+    active: Option<String>,
+    /// 对端是否为桌面端（影响 base URL 格式，activate 时固定）
     is_peer_desktop: bool,
 }
 
-impl PeerCache {
-    pub fn new() -> Self {
+impl PeerStore {
+    pub fn new(is_peer_desktop: bool) -> Self {
         Self {
-            peer_id: None,
-            endpoint: None,
-            is_peer_desktop: false,
+            peers: BTreeMap::new(),
+            active: None,
+            is_peer_desktop,
         }
     }
 
-    /// 初始化：尝试获取对端信息
+    /// 对端上线：登记/刷新连接信息；无激活对端时自动激活（首次上线/切换对端自愈）
     ///
-    /// `peer_id` 由宿主文件服务控制面提供（配对连接中的对端 ID）。
-    /// 对端未公告时 endpoint 为 None，命令需优雅处理。
-    pub fn init(&mut self, host: &impl HostFileService, peer_id: &str, is_peer_desktop: bool) {
-        self.peer_id = if peer_id.is_empty() {
-            None
-        } else {
-            Some(peer_id.to_string())
+    /// 返回是否发生变化（新对端登记或激活切换；调用方据此决定是否推送 peers-changed）。
+    /// 自愈：激活对端的离线事件可能因总线投递失败丢失，宿主已解析不到时
+    /// 重置 active，让新上线对端接管（否则 active 永久指向已离线对端）。
+    pub fn on_peer_online(&mut self, host: &impl HostFileService, peer_id: &str) -> bool {
+        if let Some(active_id) = self.active.clone() {
+            if active_id != peer_id && fetch_peer(host, &active_id).is_none() {
+                self.active = None;
+            }
+        }
+        let Some(info) = fetch_peer(host, peer_id) else {
+            return false;
         };
-        self.is_peer_desktop = is_peer_desktop;
-        self.refresh(host);
+        let is_new = self.peers.insert(peer_id.to_string(), info).is_none();
+        let need_activate = self.active.is_none();
+        if need_activate {
+            self.active = Some(peer_id.to_string());
+        }
+        is_new || need_activate
     }
 
-    /// 刷新对端信息
-    pub fn refresh(&mut self, host: &impl HostFileService) {
-        if let Some(ref pid) = self.peer_id {
-            match host.filesrv_get_peer(pid) {
-                Ok(Some(pfs)) => {
-                    self.endpoint = Some(PeerEndpoint {
-                        ip: pfs.ip,
-                        port: pfs.port,
-                        token: pfs.token,
-                        mounts: pfs.mounts,
-                    });
-                }
-                Ok(None) => {
-                    self.endpoint = None;
-                }
-                Err(e) => {
-                    self.endpoint = None;
-                    // 记录但不崩溃（对端可能尚未公告）
-                    let _ = e;
-                }
-            }
-        } else {
-            self.endpoint = None;
+    /// 对端下线：移除记录；激活对端被移除时自动切换到任一剩余对端
+    ///
+    /// 返回是否发生变化（调用方据此决定是否推送 peers-changed）
+    pub fn on_peer_offline(&mut self, peer_id: &str) -> bool {
+        let removed = self.peers.remove(peer_id).is_some();
+        if removed && self.active.as_deref() == Some(peer_id) {
+            self.active = self.peers.keys().next().cloned();
+        }
+        removed
+    }
+
+    /// 切换激活对端（前端设备列表命令）
+    ///
+    /// 对端必须在线；成功后刷新其连接信息（公告内容可能已更新）
+    pub fn set_active(&mut self, host: &impl HostFileService, peer_id: &str) -> Result<(), String> {
+        if !self.peers.contains_key(peer_id) {
+            return Err(format!("peer not online: {}", peer_id));
+        }
+        self.active = Some(peer_id.to_string());
+        self.refresh(host, peer_id);
+        Ok(())
+    }
+
+    /// 刷新指定对端的连接信息（set_peer 更新公告时调用）
+    fn refresh(&mut self, host: &impl HostFileService, peer_id: &str) {
+        if let Some(info) = fetch_peer(host, peer_id) {
+            self.peers.insert(peer_id.to_string(), info);
         }
     }
 
-    /// 处理对端上下线事件
-    pub fn on_peer_changed(
-        &mut self,
-        host: &impl HostFileService,
-        peer_id: &str,
-        online: bool,
-    ) {
-        if Some(peer_id) == self.peer_id.as_deref() {
-            if online {
-                self.refresh(host);
-            } else {
-                self.endpoint = None;
-            }
-        }
+    /// 当前激活对端连接信息
+    pub fn active(&self) -> Option<&PeerEndpoint> {
+        self.active.as_ref().and_then(|id| self.peers.get(id))
     }
 
-    /// 获取当前对端连接信息
-    ///
-    /// 返回 None 表示对端不在线或未配对
-    pub fn endpoint(&self) -> Option<&PeerEndpoint> {
-        self.endpoint.as_ref()
+    /// 当前激活对端 ID
+    pub fn active_id(&self) -> Option<&str> {
+        self.active.as_deref()
     }
 
-    /// 获取 base URL + auth token（便捷方法）
+    /// 在线对端 ID 列表（BTreeMap 排序，顺序稳定）
+    pub fn peers(&self) -> Vec<&str> {
+        self.peers.keys().map(String::as_str).collect()
+    }
+
+    /// 指定对端的连接信息（任务绑定查询，不依赖激活状态）
+    pub fn endpoint(&self, peer_id: &str) -> Option<&PeerEndpoint> {
+        self.peers.get(peer_id)
+    }
+
+    /// 激活对端的 base URL + auth token（便捷方法）
     ///
-    /// 对端不在线时返回 Err
+    /// 无激活对端时返回 Err
     pub fn base_and_auth(&self) -> Result<(String, String), String> {
         let ep = self
-            .endpoint
-            .as_ref()
+            .active()
             .ok_or_else(|| "peer not online".to_string())?;
-        let base = ep.base_url(self.is_peer_desktop);
-        Ok((base, ep.token.clone()))
+        Ok((ep.base_url(self.is_peer_desktop), ep.token.clone()))
     }
 
-    /// 对端是否在线
-    pub fn is_online(&self) -> bool {
-        self.endpoint.is_some()
+    /// 指定对端的 base URL + auth token（任务启动/取消/完成通知使用，
+    /// 与激活状态解耦：任务从入队起绑定对端）
+    pub fn base_and_auth_for(&self, peer_id: &str) -> Result<(String, String), String> {
+        let ep = self
+            .endpoint(peer_id)
+            .ok_or_else(|| format!("peer not online: {}", peer_id))?;
+        Ok((ep.base_url(self.is_peer_desktop), ep.token.clone()))
     }
+}
 
-    pub fn peer_id(&self) -> Option<&str> {
-        self.peer_id.as_deref()
-    }
-
-    /// 设置对端 ID（首次感知对端上线时自动采纳）
-    ///
-    /// `is_peer_desktop` 保持 activate 时 init 设定的平台值不变
-    ///（桌面插件的对端是移动端 → false；移动插件的对端是桌面端 → true）。
-    pub fn set_peer_id(&mut self, peer_id: &str) {
-        self.peer_id = if peer_id.is_empty() {
-            None
-        } else {
-            Some(peer_id.to_string())
-        };
+/// 经宿主文件服务查询对端连接信息（未公告/查询失败返回 None）
+fn fetch_peer(host: &impl HostFileService, peer_id: &str) -> Option<PeerEndpoint> {
+    match host.filesrv_get_peer(peer_id) {
+        Ok(Some(pfs)) => Some(PeerEndpoint {
+            ip: pfs.ip,
+            port: pfs.port,
+            token: pfs.token,
+            mounts: pfs.mounts,
+        }),
+        Ok(None) => None,
+        Err(_) => None, // 记录但不崩溃（对端可能尚未公告）
     }
 }

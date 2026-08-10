@@ -511,6 +511,20 @@ impl FileServiceRegistry {
         self.peers.read().await.get(peer_id).cloned()
     }
 
+    /// 强制推送对端在线状态（Query 探测回复路径使用）
+    ///
+    /// 与 [`set_peer`](Self::set_peer) 的区别：不做信息变更去重，
+    /// 即使记录未变也推送 `filesrv:peer_changed`（online=true）。
+    /// 插件 activate 后主动 Query 探测时，若信息未变会被 set_peer 去重
+    /// 吞掉推送，插件端对端列表将无法恢复。
+    pub async fn push_peer(&self, peer_id: &str, info: PeerFileService) {
+        {
+            let mut peers = self.peers.write().await;
+            peers.insert(peer_id.to_string(), info);
+        }
+        self.emit_peer_changed(peer_id, true).await;
+    }
+
     /// 移除对端信息（对端下线/解除配对时调用）
     ///
     /// 记录存在时经双通道推送 `filesrv:peer_changed`（online=false），

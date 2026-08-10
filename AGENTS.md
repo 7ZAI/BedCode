@@ -103,6 +103,17 @@ cargo test
 
 全部使用 `tracing`，日志级别：`debug!`（常规）、`info!`（关键）、`warn!`（警告/重试）、`error!`（异常）。Android 平台统一写 `tracing::` 宏，自动转发到 logcat。
 
+**日志落盘（调试/排查用，主要为编程 agent 提供可查询路径）：**
+
+| 端 | 行为 | 日志位置（电脑端） | 说明 |
+|----|------|--------------------|------|
+| 桌面端 | 始终落盘（dev/release 均写文件） | `%LOCALAPPDATA%\com.bedcode.app\logs\`（如 `C:\Users\<user>\AppData\Local\com.bedcode.app\logs\`） | `runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR，按天轮转 |
+| 移动端 | **电脑端落盘需用 `npm run tauri:android:dev:log`**（普通 `tauri:android:dev` 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（UTC 日期） | 脚本把 Tauri CLI 转发的 logcat 同时写文件（无 ANSI 码，可 grep）；移动端进程在手机上，**无法直接写电脑磁盘**，故不设手机内部落盘（agent 读不到） |
+
+确认实际路径：桌面端 dev 控制台首行 `Logging initialized. Log directory: ...`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
+
+排查链路问题时优先看两端 `runtime.*.log`（含 DEBUG 级）：搜索 `file_service`、`peer_changed`、`MessageBus`、`reqwest::connect`（桌面端代理劫持痕迹 `proxy(...) intercepts`）等关键词。
+
 ---
 
 ## Frontend (Vue 3 + TypeScript)

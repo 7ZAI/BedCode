@@ -1,13 +1,13 @@
 //! 命令处理
 //!
-//! 14 个命令的实现（plugin.json 声明），由 lib.rs invoke_command 路由。
+//! 16 个命令的实现（plugin.json 声明），由 lib.rs invoke_command 路由。
 //! 每个命令接收 PluginState 引用和参数 JSON，返回结果 JSON。
 //!
 //! 宿主调用（transfer_start 等）在释放状态锁后执行，
 //! 避免 on_bus_message 回调死锁。
 
 use crate::handshake::{self, CreateSessionError, QuerySessionError};
-use crate::peer::{PeerCache, MOUNT_PATH};
+use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
 use crate::state::{Direction, Fingerprint, PeerInfo, Task, TaskState, TaskStore};
 use bedcode_plugin_api_mobile::host::{
@@ -60,8 +60,8 @@ pub struct PluginState {
     pub queue: Queue,
     /// 插件设置
     pub settings: Settings,
-    /// 对端缓存
-    pub peer: PeerCache,
+    /// 对端存储（多对端 + 激活）
+    pub peer: PeerStore,
     /// 是否已挂载
     pub mounted: bool,
 }
@@ -72,7 +72,8 @@ impl PluginState {
             tasks: TaskStore::new(),
             queue: Queue::new(DEFAULT_CONCURRENCY),
             settings: Settings::default(),
-            peer: PeerCache::new(),
+            // 移动插件对端恒为桌面端（activate 时按平台值重建，此处仅防呆）
+            peer: PeerStore::new(true),
             mounted: false,
         }
     }
@@ -293,7 +294,7 @@ pub fn cancel(
     host: &(impl HostTransfer + HostFs + HostHttp + HostStorage + HostEvents + HostLog),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let (host_task_id, direction, upload_session_id, local_path) = {
+    let (host_task_id, direction, upload_session_id, local_path, peer_id) = {
         let task = state.tasks.get_mut(task_id)
             .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
         if task.state.is_terminal() {
@@ -306,6 +307,7 @@ pub fn cancel(
             task.direction,
             task.upload_session_id.clone(),
             task.local_path.clone(),
+            task.peer.device_id.clone(),
         )
     };
 
@@ -317,7 +319,7 @@ pub fn cancel(
     // 上传：取消远端 session（失败记日志，不阻塞本地终态）
     if direction == Direction::Upload {
         if let Some(ref sid) = upload_session_id {
-            if let Ok((base, auth)) = state.peer.base_and_auth() {
+            if let Ok((base, auth)) = state.peer.base_and_auth_for(&peer_id) {
                 if let Err(e) = handshake::cancel_session(host, &base, &auth, sid) {
                     host.log_error(&format!(
                         "upload cancel_session failed for task {}: {}",
@@ -597,8 +599,9 @@ fn start_single_task(
     host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostFileService),
     task_id: &str,
 ) -> Result<(), String> {
-    let (base, auth) = state.peer.base_and_auth()?;
     let task = state.tasks.get(task_id).ok_or("task not found")?;
+    // 任务从入队起绑定对端：调度用任务自己的 endpoint，切换激活对端不影响排队任务
+    let (base, auth) = state.peer.base_and_auth_for(&task.peer.device_id)?;
     let direction = task.direction;
     let remote_path = task.remote_path.clone();
     let local_path = task.local_path.clone();
@@ -746,7 +749,7 @@ pub fn handle_transfer_progress(
             // 上传完成：通知远端 complete（失败记日志，不阻塞终态）
             if task.direction == Direction::Upload {
                 if let Some(ref sid) = task.upload_session_id.clone() {
-                    if let Ok((base, auth)) = state.peer.base_and_auth() {
+                    if let Ok((base, auth)) = state.peer.base_and_auth_for(&task.peer.device_id) {
                         if let Err(e) = handshake::complete_session(host, &base, &auth, sid) {
                             host.log_error(&format!(
                                 "upload complete_session failed for task {}: {}",
@@ -826,50 +829,62 @@ pub fn handle_transfer_progress(
 }
 
 /// 处理对端上下线消息（on_bus_message `filesrv:peer_changed`）
+///
+/// 多对端语义：任务与对端强绑定（task.peer.device_id），仅受影响对端的任务
+/// 暂停/自动恢复；激活对端自动管理（首台自动激活、下线自动切换）在 PeerStore 内。
 pub fn handle_peer_changed(
     state: &mut PluginState,
     host: &(impl HostFileService + HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents),
     peer_id: &str,
     online: bool,
 ) {
-    // 首次感知对端上线时自动采纳 peer_id（单对端场景，尚无对端 ID 时）
-    if online && state.peer.peer_id().is_none() {
-        state.peer.set_peer_id(peer_id);
-    }
-
-    state.peer.on_peer_changed(host, peer_id, online);
+    let peers_changed = if online {
+        state.peer.on_peer_online(host, peer_id)
+    } else {
+        state.peer.on_peer_offline(peer_id)
+    };
 
     if !online {
-        // 对端下线：transferring → resumable（auto_resumable=true）
-        let transferring_ids: Vec<String> = state
+        // 该对端下线：其 transferring/queued 任务 → resumable（auto_resumable=true）；
+        // 其他对端的任务不受影响。queued 不摘除会留待后续调度周期被
+        // start_single_task 误判 Failed（peer not online），且上线后无法自动恢复
+        let affected_ids: Vec<String> = state
             .tasks
             .values()
-            .filter(|t| t.state == TaskState::Transferring)
+            .filter(|t| {
+                (t.state == TaskState::Transferring || t.state == TaskState::Queued)
+                    && t.peer.device_id == peer_id
+            })
             .map(|t| t.id.clone())
             .collect();
 
-        for id in &transferring_ids {
+        for id in &affected_ids {
             if let Some(task) = state.tasks.get_mut(id) {
                 let htid = task.host_task_id.clone();
                 let _ = task.transition(TaskState::Resumable);
                 task.auto_resumable = true;
-                // 取消宿主传输
+                // 取消宿主传输 + 摘除队列（状态已置 resumable，排队语义失效）
                 if let Some(ref h) = htid {
                     let _ = host.transfer_cancel(h);
                 }
                 state.queue.release(id);
+                state.queue.remove(id);
             }
         }
-        if !transferring_ids.is_empty() {
+        if !affected_ids.is_empty() {
             state.tasks.save(host);
             emit_tasks_changed(host, &state.tasks);
         }
     } else {
-        // 对端上线：auto_resumable 的 resumable 自动重新调度（spec §7.2）
+        // 该对端上线：其 auto_resumable 的 resumable 任务自动重新调度（spec §7.2）
         let auto_ids: Vec<String> = state
             .tasks
             .values()
-            .filter(|t| t.state == TaskState::Resumable && t.auto_resumable)
+            .filter(|t| {
+                t.state == TaskState::Resumable
+                    && t.auto_resumable
+                    && t.peer.device_id == peer_id
+            })
             .map(|t| t.id.clone())
             .collect();
 
@@ -886,6 +901,51 @@ pub fn handle_peer_changed(
             schedule_and_start(state, host);
         }
     }
+
+    if peers_changed {
+        emit_peers_changed(host, &state.peer);
+    }
+}
+
+/// list-peers：返回在线对端列表与激活对端（前端设备列表/切换数据源）
+pub fn list_peers(state: &PluginState) -> serde_json::Value {
+    peers_snapshot(&state.peer)
+}
+
+/// set-active-peer：切换激活对端（前端设备列表点击调用）
+///
+/// 对端必须在线（列表来自 list-peers）；切换后推送 peers-changed，
+/// 前端据此重载目录。传输中任务不受影响（启动时已捕获 endpoint）。
+pub fn set_active_peer(
+    state: &mut PluginState,
+    host: &(impl HostFileService + HostEvents + HostLog),
+    peer_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    state
+        .peer
+        .set_active(host, peer_id)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    emit_peers_changed(host, &state.peer);
+    Ok(serde_json::json!({ "ok": true, "activePeerId": peer_id }))
+}
+
+/// 对端列表快照（list-peers 命令 / peers-changed 事件共用载荷）
+pub fn peers_snapshot(peer: &PeerStore) -> serde_json::Value {
+    let peers: Vec<serde_json::Value> = peer
+        .peers()
+        .into_iter()
+        .map(|id| serde_json::json!({ "peerId": id }))
+        .collect();
+    serde_json::json!({
+        "peers": peers,
+        "activePeerId": peer.active_id(),
+    })
+}
+
+/// 推送对端列表变更事件（列表/激活变化时调用）
+fn emit_peers_changed(host: &(impl HostEvents + HostLog), peer: &PeerStore) {
+    let snapshot = peers_snapshot(peer);
+    host.emit_event("plugin:file-transfer:peers-changed", &snapshot);
 }
 
 // ==================== 上传钩子 ====================

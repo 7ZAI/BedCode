@@ -123,6 +123,15 @@ export function useRemoteFs(context: PluginContext) {
     selected.value = new Set()
   }
 
+  /** 重置浏览状态（对端下线/切换时调用：清空残留目录条目，避免对离线对端误操作） */
+  function reset(): void {
+    currentPath.value = ''
+    entries.value = []
+    loading.value = false
+    error.value = null
+    selected.value = new Set()
+  }
+
   /** 当前勾选的文件名列表（不含目录，用于入队下载） */
   const selectedFiles = computed(() =>
     entries.value.filter(e => !e.isDir && selected.value.has(e.name)).map(e => e.name),
@@ -148,5 +157,6 @@ export function useRemoteFs(context: PluginContext) {
     toggle,
     toggleAll,
     clearSelection,
+    reset,
   }
 }

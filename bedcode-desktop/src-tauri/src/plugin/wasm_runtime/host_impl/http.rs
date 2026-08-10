@@ -28,6 +28,61 @@ static HTTP_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
+/// 判断目标地址是否为私网/回环/链路本地地址（动态判定，无硬编码网段）
+///
+/// 系统代理（如 Clash）只应代理外网：局域网文件服务（对端共享目录）请求若
+/// 走代理，会被劫持到本地代理端口（127.0.0.1:10808），对端服务器收不到请求。
+/// 标准库 `Ipv4Addr::is_private()` 即 RFC1918（10/8、172.16/12、192.168/16），
+/// 配合 loopback/link-local，覆盖内网传输场景的全部直连目标。
+fn is_private_target(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().and_then(|h| h.parse::<std::net::IpAddr>().ok()))
+        .map(|ip| match ip {
+            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unicast_link_local(),
+        })
+        .unwrap_or(false)
+}
+
+/// 直连客户端（禁系统代理）：私网目标（局域网文件服务）专用，
+/// 配置与对应默认 client 一致（超时/响应上限语义不变）
+static HTTP_DIRECT_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_default()
+});
+
+/// 流式直连客户端（禁系统代理，仅连接超时）
+static HTTP_DIRECT_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_default()
+});
+
+/// 按目标地址选择客户端：私网直连，其余走系统代理（外网插件 API 不受影响）
+fn client_for(url: &str) -> &'static reqwest::Client {
+    if is_private_target(url) {
+        &HTTP_DIRECT_CLIENT
+    } else {
+        &HTTP_CLIENT
+    }
+}
+
+/// 流式客户端选择（同上）
+fn stream_client_for(url: &str) -> &'static reqwest::Client {
+    if is_private_target(url) {
+        &HTTP_DIRECT_STREAM_CLIENT
+    } else {
+        &HTTP_STREAM_CLIENT
+    }
+}
+
 /// 发起 HTTP 请求（宿主代发，支持 SSE 流式推流）
 ///
 /// request_json 格式：
@@ -150,7 +205,7 @@ async fn execute_http_request(
     let headers = request.get("headers").and_then(|v| as_string_map(v));
     let body = request.get("body").and_then(|v| v.as_str());
 
-    let mut req_builder = HTTP_CLIENT.request(method.parse()?, url);
+    let mut req_builder = client_for(url).request(method.parse()?, url);
 
     if let Some(hdrs) = &headers {
         for (key, value) in hdrs {
@@ -225,7 +280,7 @@ async fn execute_streaming_http(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let mut req_builder = HTTP_STREAM_CLIENT.request(method.parse()?, url);
+    let mut req_builder = stream_client_for(url).request(method.parse()?, url);
 
     if let Some(hdrs) = &headers {
         for (key, value) in hdrs {
@@ -457,8 +512,31 @@ mod tests {
         );
         assert!(
             err.to_string().contains("stream:true"),
+
             "error should guide to streaming mode, got: {}",
             err
         );
+    }
+
+    /// 私网目标判定：局域网/回环/链路本地 → 直连（不走系统代理）
+    ///
+    /// 文件服务对端通常是局域网 IP（RFC1918），标准库 is_private 动态判定，
+    /// 不硬编码网段；域名（外网 API）→ false 走系统代理
+    #[test]
+    fn is_private_target_classifies_correctly() {
+        // RFC1918：10/8、172.16/12、192.168/16
+        assert!(is_private_target(
+            "http://10.60.74.97:43145/com.bedcode.file-transfer/files/list"
+        ));
+        assert!(is_private_target("http://192.168.1.5:8080/"));
+        assert!(is_private_target("http://172.16.0.1/"));
+        // loopback 与链路本地
+        assert!(is_private_target("http://127.0.0.1:5173/"));
+        assert!(is_private_target("http://169.254.1.1/"));
+        // 外网域名/IP → 走代理
+        assert!(!is_private_target("https://api.example.com/v1/chat"));
+        assert!(!is_private_target("http://8.8.8.8/"));
+        // 无 host 的畸形 URL → false（默认走代理，行为保守）
+        assert!(!is_private_target("not a url"));
     }
 }

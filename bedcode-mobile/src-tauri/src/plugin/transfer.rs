@@ -16,7 +16,7 @@ use crate::system::error_boundary::spawn_with_error_boundary;
 use bedcode_plugin_api_mobile::{
     TransferDirection, TransferProgress, TransferRequest, TransferState,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt as _, StreamExt};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -85,13 +85,56 @@ pub fn spawn_transfer(
     let token = CancellationToken::new();
 
     // 先登记再 spawn：避免 cancel 早于任务注册到达而丢失取消语义
+    // （poison 容忍：传输任务 panic 被下方 catch_unwind 截获后锁会中毒，不能连锁 panic）
     let task_id_for_map = task_id.clone();
     let token_for_map = token.clone();
-    tasks().lock().unwrap().insert(task_id_for_map, token_for_map);
+    tasks().lock().unwrap_or_else(|e| e.into_inner()).insert(task_id_for_map, token_for_map);
 
     let task_id_for_spawn = task_id.clone();
-    spawn_with_error_boundary("plugin_transfer_task", async move {
-        run_transfer(task_id_for_spawn, request, app_handle, bus, token).await;
+    let panic_task_id = task_id.clone();
+    let panic_app = app_handle.clone();
+    let panic_bus = bus.clone();
+    let panic_token = token.clone();
+    tokio::spawn(async move {
+        // 截获 run_transfer 内 panic：若仅用 spawn_with_error_boundary，panic 后
+        // 任务会永久停在 transferring（宿主无终态回报、插件收不到失败）。
+        // 此处额外清理任务表/停 reporter，并推送 Failed 终态——插件任务转失败，
+        // 前端任务列表显示失败原因，而不是整个应用崩溃。
+        let result = std::panic::AssertUnwindSafe(run_transfer(
+            task_id_for_spawn,
+            request,
+            app_handle,
+            bus,
+            token,
+        ))
+        .catch_unwind()
+        .await;
+
+        if let Err(panic_err) = result {
+            panic_token.cancel();
+            tasks().lock().unwrap_or_else(|e| e.into_inner()).remove(&panic_task_id);
+            let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            tracing::error!(
+                task_id = %panic_task_id,
+                error = %msg,
+                "transfer task panicked; reporting Failed to plugin instead of crashing"
+            );
+            emit_progress(
+                &panic_app,
+                &panic_bus,
+                &panic_task_id,
+                0,
+                0,
+                0,
+                TransferState::Failed(format!("host transfer internal error: {}", msg)),
+            );
+        }
     });
 
     task_id
@@ -99,7 +142,7 @@ pub fn spawn_transfer(
 
 /// 取消传输任务（任务不存在视为已完成，幂等返回 false）
 pub async fn cancel_transfer(task_id: &str) -> bool {
-    match tasks().lock().unwrap().get(task_id).cloned() {
+    match tasks().lock().unwrap_or_else(|e| e.into_inner()).get(task_id).cloned() {
         Some(token) => {
             token.cancel();
             true
@@ -181,7 +224,7 @@ async fn run_transfer(
     };
 
     reporter_token.cancel();
-    tasks().lock().unwrap().remove(&task_id);
+    tasks().lock().unwrap_or_else(|e| e.into_inner()).remove(&task_id);
 
     // 终局事件（携带最终偏移，插件据此持久化续传点）
     let final_bytes = transferred.load(Ordering::Relaxed);

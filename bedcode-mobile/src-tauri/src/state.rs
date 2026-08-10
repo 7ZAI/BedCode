@@ -89,6 +89,11 @@ pub fn get_plugin_manager() -> Arc<PluginManager> {
     PLUGIN_MANAGER.get().expect("PluginManager not initialized").clone()
 }
 
+/// 尝试获取插件管理器（未初始化返回 None，供 best-effort 路径使用）
+pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
+    PLUGIN_MANAGER.get().cloned()
+}
+
 // ==================== File Service ====================
 
 /// 获取文件服务单例（内网文件传输插件规格阶段 2）

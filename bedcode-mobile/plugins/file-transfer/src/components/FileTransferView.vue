@@ -19,7 +19,7 @@
  *
  * 经宿主 PluginViewHost 渲染（provide pluginContext），故此处直接断言非空。
  */
-import { inject, ref, onMounted, onUnmounted, computed } from 'vue'
+import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
 import { useRemoteFs } from '../composables/useRemoteFs'
@@ -145,6 +145,7 @@ function onRowTap(entry: { name: string; isDir: boolean }): void {
 
 /** 批量下载勾选文件 */
 async function downloadSelected(): Promise<void> {
+  if (!tasks.peerOnline.value) return
   const paths = fs.selectedFiles.value
   if (paths.length === 0) return
   const ok = await tasks.enqueueDownload(paths, {
@@ -160,6 +161,7 @@ async function downloadSelected(): Promise<void> {
  * 目标远端目录为当前面包屑目录，文件名取本地路径 basename。
  */
 async function uploadFile(): Promise<void> {
+  if (!tasks.peerOnline.value) return
   let localPath: string | null = null
   try {
     localPath = await context.fileService.pickFile()
@@ -185,11 +187,33 @@ async function uploadFile(): Promise<void> {
   })
 }
 
+/**
+ * 对端共享状态变化驱动目录加载（与桌面端 watch(peer.online) 对齐）：
+ * queryPeer/peer_changed 置位 peerOnline 后自动刷新目录，
+ * 避免首次进入停留在「对端未共享」空态需手动点重测。
+ */
+watch(
+  () => tasks.peerOnline.value,
+  (online) => {
+    if (online) {
+      void fs.refresh()
+    } else {
+      // 对端下线：清空残留目录条目与勾选，避免对离线对端入队
+      fs.reset()
+    }
+  },
+)
+
 onMounted(() => {
   tasks.start()
-  void fs.load('')
-  // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）
-  void tasks.queryPeer()
+  if (tasks.peerOnline.value) {
+    // 对端已就绪（视图挂载晚于事件）：直接加载
+    void fs.load('')
+  } else {
+    // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）；
+    // 探测回复后 peerOnline 置位，由上方 watch 自动加载目录
+    void tasks.queryPeer()
+  }
 })
 
 onUnmounted(() => {

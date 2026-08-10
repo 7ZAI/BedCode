@@ -16,7 +16,7 @@ use bedcode_plugin_api::types::{
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{BusMessage, WasmPlugin};
 use commands::PluginState;
-use peer::{MOUNT_PATH, PLUGIN_ID};
+use peer::{PeerStore, MOUNT_PATH, PLUGIN_ID};
 use state::TaskState;
 use std::sync::{Mutex, OnceLock};
 
@@ -78,12 +78,21 @@ impl WasmPlugin for FileTransferPlugin {
         // 3. 加载持久化任务（保留 paused/resumable，传输中残留降级为 resumable）
         s.tasks.load(&host);
 
-        // 4. 初始化对端缓存（is_peer_desktop=false：桌面插件的对端是移动端，
-        //    base 无 /api/plugins 前缀；peer_id 留空，由 peer_changed 首次上线自动采纳）
-        s.peer.init(&host, "", false);
+        // 4. 初始化对端存储（is_peer_desktop=false：桌面插件的对端是移动端，
+        //    base 无 /api/plugins 前缀；对端列表由 peer_changed 事件驱动增删）
+        s.peer = PeerStore::new(false);
 
         // 5. 订阅总线 topics
         let _ = host.bus_subscribe("filesrv:peer_changed");
+
+        // 6. 主动探测对端（修复插件激活晚于认证导致的总线事件丢失：
+        //    activate 完成即广播 Query，对端回复后宿主推送 peer_changed）
+        if let Err(e) = host.filesrv_query_peer("") {
+            host.log_warn(&format!(
+                "peer probe on activate failed (will recover on next event/query): {}",
+                e
+            ));
+        }
 
         host.log_info(&format!(
             "File Transfer activated: {} tasks loaded, {} roots, concurrency={}",
@@ -134,6 +143,18 @@ impl WasmPlugin for FileTransferPlugin {
             "file-transfer.list-tasks" => Ok(commands::list_tasks(&s)),
 
             "file-transfer.query-peer" => commands::query_peer(&host),
+
+            "file-transfer.list-peers" => Ok(commands::list_peers(&s)),
+
+            "file-transfer.set-active-peer" => {
+                let peer_id = args
+                    .get("peerId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing peerId"))?
+                    .to_string();
+                let result = commands::set_active_peer(&mut s, &host, &peer_id)?;
+                Ok(result)
+            }
 
             "file-transfer.list-remote" => commands::list_remote(&s, &host, &args),
 

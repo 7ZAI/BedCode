@@ -81,6 +81,14 @@
       {
         "id": "file-transfer.update-roots",
         "title": "Update Mount Roots"
+      },
+      {
+        "id": "file-transfer.list-peers",
+        "title": "List Peers"
+      },
+      {
+        "id": "file-transfer.set-active-peer",
+        "title": "Set Active Peer"
       }
     ],
     "views": [
