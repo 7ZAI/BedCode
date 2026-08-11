@@ -93,7 +93,9 @@ pub(crate) fn transfer_start(
         }
     }
 
-    let task_id = uuid::Uuid::new_v4().to_string();
+    // 用插件预生成的 task_id（bus topic `transfer:{task_id}` 与 Tauri 事件
+    // taskId 均以它为准），不再自生成 UUID —— 插件先订阅后启动，进度零丢失
+    let task_id = request.task_id.clone();
     let token = CancellationToken::new();
 
     // 先登记再 spawn：避免 cancel 早于任务注册到达而丢失取消语义
@@ -597,6 +599,7 @@ mod tests {
     /// 构造传输请求
     fn make_request(direction: TransferDirection, url: &str, local_path: &str) -> TransferRequest {
         TransferRequest {
+            task_id: format!("test-{}", url),
             direction,
             url: url.to_string(),
             headers: HashMap::new(),

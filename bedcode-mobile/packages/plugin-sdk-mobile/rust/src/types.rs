@@ -323,6 +323,13 @@ pub enum TransferDirection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferRequest {
+    /// 任务 ID（插件预生成）。
+    ///
+    /// 宿主以它为进度总线 topic（`transfer:{task_id}`）与 Tauri 事件
+    /// `plugin:transfer:progress` 的 taskId，不再自生成 UUID ——
+    /// 插件可在 `transfer_start` 前订阅 `transfer:{task_id}` 收到全部
+    /// 进度/终态消息，避免「宿主传输先完成、插件后订阅」的竞态丢消息
+    pub task_id: String,
     /// 传输方向
     pub direction: TransferDirection,
     /// 对端 URL（下载 = 文件 URL；上传 = upload session 的 append URL）
@@ -367,7 +374,7 @@ pub enum TransferState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferProgress {
-    /// 宿主生成的任务 ID
+    /// 任务 ID（= 插件预生成的 task_id，与任务快照同一命名空间）
     pub task_id: String,
     /// 已传输字节数（含续传偏移）
     pub transferred: u64,

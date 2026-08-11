@@ -11,8 +11,8 @@ use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
 use crate::state::{Direction, Fingerprint, PeerInfo, Task, TaskState, TaskStore};
 use bedcode_plugin_api_mobile::host::{
-    ConfigKey, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog, HostStorage,
-    HostTransfer,
+    ConfigKey, HostBus, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog,
+    HostStorage, HostTransfer,
 };
 use bedcode_plugin_api_mobile::types::{
     FileOperation, MountOptions, TransferDirection, TransferProgress, TransferRequest,
@@ -119,7 +119,7 @@ pub fn list_remote(
         "list-remote: path='{}' base={} auth_len={}",
         path, base, auth.len()
     ));
-    let entries = handshake::list_remote(host, &base, &auth, path)
+    let result = handshake::list_remote(host, &base, &auth, path)
         .map_err(|e| {
             host.log_warn(&format!(
                 "list-remote FAILED: {} (base={} auth_len={})",
@@ -127,8 +127,16 @@ pub fn list_remote(
             ));
             anyhow::anyhow!("{}", e)
         })?;
-    host.log_info(&format!("list-remote OK: path='{}' entries={}", path, entries.len()));
-    Ok(serde_json::to_value(entries)?)
+    host.log_info(&format!(
+        "list-remote OK: path='{}' entries={} notice={:?}",
+        path,
+        result.entries.len(),
+        result.notice
+    ));
+    Ok(serde_json::json!({
+        "entries": result.entries,
+        "notice": result.notice,
+    }))
 }
 
 /// enqueue：入队传输任务
@@ -595,7 +603,7 @@ pub fn update_roots(
 /// 返回需要 emit 的任务变更事件（调用方在释放锁后执行）
 pub fn schedule_and_start(
     state: &mut PluginState,
-    host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostFileService),
+    host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostFileService + HostBus),
 ) {
     let actions = state.queue.schedule();
     for task_id in actions {
@@ -616,7 +624,7 @@ pub fn schedule_and_start(
 /// 启动单个任务传输
 fn start_single_task(
     state: &mut PluginState,
-    host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostFileService),
+    host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostFileService + HostBus),
     task_id: &str,
 ) -> Result<(), String> {
     let task = state.tasks.get(task_id).ok_or("task not found")?;
@@ -661,6 +669,7 @@ fn start_single_task(
             let final_path = task.local_path.trim_end_matches(".part").to_string();
 
             let request = TransferRequest {
+                task_id: task_id.to_string(),
                 direction: TransferDirection::Download,
                 url: format!("{}/file?path={}", base, urlencoded(&remote_path)),
                 headers: auth_headers(&auth),
@@ -670,8 +679,22 @@ fn start_single_task(
                 final_path: Some(final_path),
             };
 
-            let host_task_id = host.transfer_start(&request)
-                .map_err(|e| format!("transfer_start failed: {}", e))?;
+            // 先订阅再启动：宿主以插件 task_id 为进度总线 topic（transfer:{task_id}），
+            // 订阅先于 transfer_start 执行，进度/终态消息不会因「宿主先完成」而丢失。
+            // 订阅失败仅告警（进度事件缺失由任务状态兜底）；启动失败时退订防泄漏
+            let progress_topic = format!("transfer:{}", task_id);
+            if let Err(e) = host.bus_subscribe(&progress_topic) {
+                host.log_warn(&format!("bus_subscribe {} failed: {}", progress_topic, e));
+            }
+            let host_task_id = match host.transfer_start(&request) {
+                Ok(id) => id,
+                Err(e) => {
+                    if let Err(uerr) = host.bus_unsubscribe(&progress_topic) {
+                        host.log_warn(&format!("bus_unsubscribe {} failed: {}", progress_topic, uerr));
+                    }
+                    return Err(format!("transfer_start failed: {}", e));
+                }
+            };
 
             if let Some(task) = state.tasks.get_mut(task_id) {
                 task.host_task_id = Some(host_task_id);
@@ -713,6 +736,7 @@ fn start_single_task(
             }
 
             let request = TransferRequest {
+                task_id: task_id.to_string(),
                 direction: TransferDirection::Upload,
                 url: format!("{}/upload/{}", base, session_id),
                 headers: auth_headers(&auth),
@@ -722,8 +746,20 @@ fn start_single_task(
                 final_path: None,
             };
 
-            let host_task_id = host.transfer_start(&request)
-                .map_err(|e| format!("transfer_start failed: {}", e))?;
+            // 先订阅再启动（同 Download 分支，见上）
+            let progress_topic = format!("transfer:{}", task_id);
+            if let Err(e) = host.bus_subscribe(&progress_topic) {
+                host.log_warn(&format!("bus_subscribe {} failed: {}", progress_topic, e));
+            }
+            let host_task_id = match host.transfer_start(&request) {
+                Ok(id) => id,
+                Err(e) => {
+                    if let Err(uerr) = host.bus_unsubscribe(&progress_topic) {
+                        host.log_warn(&format!("bus_unsubscribe {} failed: {}", progress_topic, uerr));
+                    }
+                    return Err(format!("transfer_start failed: {}", e));
+                }
+            };
 
             if let Some(task) = state.tasks.get_mut(task_id) {
                 task.host_task_id = Some(host_task_id);
@@ -737,10 +773,10 @@ fn start_single_task(
 
 // ==================== 消息处理 ====================
 
-/// 处理传输进度消息（on_bus_message `transfer:{host_task_id}`）
+/// 处理传输进度消息（on_bus_message `transfer:{task_id}`）
 pub fn handle_transfer_progress(
     state: &mut PluginState,
-    host: &(impl HostStorage + HostEvents + HostLog + HostTransfer + HostFs + HostHttp + HostFileService + HostConfig),
+    host: &(impl HostStorage + HostEvents + HostLog + HostTransfer + HostFs + HostHttp + HostFileService + HostConfig + HostBus),
     progress: &TransferProgress,
 ) {
     let task_id = match state.tasks.find_by_host_task_id(&progress.task_id) {
@@ -836,6 +872,13 @@ pub fn handle_transfer_progress(
 
     if is_terminal {
         state.tasks.save(host);
+        // 终态已到，取消进度 topic 订阅（避免 topic 泄漏）；失败仅告警，不影响任务收尾
+        if let Err(e) = host.bus_unsubscribe(&format!("transfer:{}", progress.task_id)) {
+            host.log_warn(&format!(
+                "bus_unsubscribe transfer:{} failed: {}",
+                progress.task_id, e
+            ));
+        }
     } else if let Some(task) = state.tasks.get_mut(&task_id) {
         if task.should_flush(now) {
             task.mark_flushed(now);
@@ -852,7 +895,7 @@ pub fn handle_transfer_progress(
 /// 暂停/自动恢复；激活对端自动管理（首台自动激活、下线自动切换）在 PeerStore 内。
 pub fn handle_peer_changed(
     state: &mut PluginState,
-    host: &(impl HostFileService + HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents),
+    host: &(impl HostFileService + HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostBus),
     peer_id: &str,
     online: bool,
 ) {

@@ -5,9 +5,9 @@
  * （每次状态迁移/进度更新后由 WASM 全量推送），前端不做增量合并，
  * 直接整表替换避免状态漂移。
  *
- * `plugin:transfer:progress` 事件携带的是宿主传输引擎 UUID（host_task_id），
- * 与插件任务 id 不同命名空间，无法逐任务映射；该事件仅用于聚合瞬时总速率，
- * 作为快照差分速率的上限补充。
+ * `plugin:transfer:progress` 事件携带插件任务 id（宿主以插件 task_id 为
+ * 事件 taskId），与任务快照同一命名空间；仍仅用于聚合瞬时总速率，
+ * 作为快照差分速率的上限补充（任务级进度以 tasks-changed 快照为准）。
  *
  * 命令调用约定与桌面端同构（context.commands.execute('file-transfer.*')）。
  * 同名被拒（enqueue 返回 rejected / reason=duplicate-name）→ context.dialogs 弹
