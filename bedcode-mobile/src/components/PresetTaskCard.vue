@@ -13,7 +13,13 @@
     <!-- 中间内容（点击触发详情/预览） -->
     <div class="flex-1 min-w-0 cursor-pointer" @click="$emit('tap')">
       <div class="group-row-title truncate">{{ task.content }}</div>
-      <div class="group-row-sub mt-0.5">{{ formattedDate }}</div>
+      <div class="group-row-sub mt-0.5 flex items-center gap-2">
+        <span>{{ formattedDate }}</span>
+        <!-- 执行状态徽章（未使用/执行中/已完成/已中断） -->
+        <span class="preset-status-badge" :style="{ color: statusColor[task.status], borderColor: statusColor[task.status] }">
+          {{ statusText }}
+        </span>
+      </div>
     </div>
 
     <!-- 右侧操作按钮组（直接显示，大小自适应） -->
@@ -66,6 +72,19 @@ const emit = defineEmits<{
   edit: [task: PresetTask]
   delete: [id: string]
 }>()
+
+/** 执行状态徽章颜色（与 auto-task 面板状态色一致，全部走 token） */
+const statusColor: Record<string, string> = {
+  unused: 'var(--mobile-text-disabled)',
+  executing: 'var(--mobile-accent)',
+  completed: 'var(--mobile-success)',
+  interrupted: 'var(--mobile-error)',
+}
+
+const statusText = computed(() => {
+  // 状态 key 已在 zh-CN/en 同步收录（mobile.presetTask.status.*）
+  return t(`mobile.presetTask.status.${props.task.status}`)
+})
 
 const formattedDate = computed(() => {
   const d = new Date(props.task.createdAt)
@@ -130,5 +149,16 @@ function handleDelete() {
 .action-red {
   color: var(--mobile-chip-red);
   background: var(--mobile-chip-red-bg);
+}
+
+/* 执行状态徽章 */
+.preset-status-badge {
+  font-size: 0.625rem;
+  line-height: 1.4;
+  padding: 0 0.375rem;
+  border-radius: 9999px;
+  border: 1px solid;
+  opacity: 0.85;
+  flex-shrink: 0;
 }
 </style>

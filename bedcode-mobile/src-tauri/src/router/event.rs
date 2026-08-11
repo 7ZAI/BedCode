@@ -135,8 +135,12 @@ pub enum MobileEvent {
         session_id: String,
         /// 变更后的待执行任务数量
         queue_count: i64,
-        /// 触发动作：add / remove / clear / dequeue
+        /// 触发动作：add / remove / clear / dequeue / done / update / reorder / cancel
         action: String,
+        /// 关联的队列项 ID（done 广播携带，供预设任务完成匹配）
+        task_id: Option<String>,
+        /// 队列项状态（done 广播为 "done"）
+        status: Option<String>,
     },
 
     // === 定时自动任务同步事件（v6，ADR 0003） ===
@@ -332,15 +336,17 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
             }));
         }
 
-        MobileEvent::SyncTaskQueueChanged { session_id, queue_count, action } => {
+        MobileEvent::SyncTaskQueueChanged { session_id, queue_count, action, task_id, status } => {
             tracing::info!(
-                "[EventForwarder] SyncTaskQueueChanged: session_id={}, count={}, action={}",
-                session_id, queue_count, action
+                "[EventForwarder] SyncTaskQueueChanged: session_id={}, count={}, action={}, task_id={:?}, status={:?}",
+                session_id, queue_count, action, task_id, status
             );
             let _ = app.emit("ws_sync_task_queue_changed", serde_json::json!({
                 "session_id": session_id,
                 "queue_count": queue_count,
                 "action": action,
+                "task_id": task_id,
+                "status": status,
             }));
         }
 

@@ -99,9 +99,15 @@
               v-for="task in presetTasks"
               :key="task.id"
               class="atp-preset-chip"
-              :disabled="!activeSessionId"
+              :disabled="!activeSessionId || !canEnqueue(task)"
               @click="handleAddFromPreset(task)"
-            >{{ task.content }}</button>
+            >
+              <span class="atp-preset-chip-text">{{ task.content }}</span>
+              <span
+                class="atp-preset-chip-status"
+                :style="{ color: statusColor[task.status] || statusColor.idle }"
+              >{{ presetStatusLabel(task.status) }}</span>
+            </button>
           </div>
         </div>
 
@@ -251,7 +257,7 @@ interface CurrentTask {
 
 // ==================== State ====================
 
-const { tasks: presetTasks } = getPresetTasks().usePresetTasks()
+const { tasks: presetTasks, markEnqueued, markCompletedByTaskId, revertToUnusedByTaskId, reconcileWithQueue, canEnqueue } = getPresetTasks().usePresetTasks()
 const queue = ref<QueueTaskItem[]>([])
 const loading = ref(false)
 const manualInput = ref('')
@@ -282,6 +288,14 @@ const statusLabel: Record<string, string> = {
   completed: t('completed'),
   interrupted: t('interrupted'),
   pending: t('pending'),
+  // 预设任务执行状态（本地，入队即视为已执行）
+  unused: t('unused'),
+  executing: t('inProgress'),
+}
+
+/** 预设任务状态标签（未使用/执行中/已完成/已中断） */
+function presetStatusLabel(status: string): string {
+  return statusLabel[status] || status
 }
 
 const statusColor: Record<string, string> = {
@@ -291,6 +305,9 @@ const statusColor: Record<string, string> = {
   completed: '#22c55e',
   interrupted: 'var(--mobile-error)',
   pending: 'var(--mobile-text-disabled)',
+  // 预设任务执行状态（本地，入队即视为已执行）
+  unused: 'var(--mobile-text-disabled)',
+  executing: 'var(--mobile-accent)',
 }
 
 const displayTask = computed(() => {
@@ -353,6 +370,10 @@ async function refresh() {
   loading.value = true
   try {
     await Promise.all([loadQueue(), loadCurrentTask(), loadSessionSettings()])
+    // 对账：本地执行中的预设，其队列项已不在桌面 pending 队列（完成/被删/丢失）
+    // 且未收到完成广播 → 落 interrupted（幂等；pending 列表是权威的排队信号，
+    // 仅判定本会话入队的预设，防多会话误中断）
+    await reconcileWithQueue(activeSessionId.value)
   } finally {
     loading.value = false
   }
@@ -368,9 +389,11 @@ watch(autoTaskPanelVisible, (val) => {
 // ==================== Actions ====================
 
 async function handleAddFromPreset(task: any) {
-  if (!activeSessionId.value) return
+  if (!activeSessionId.value || !canEnqueue(task)) return
   const result = await mobileApi.httpTaskQueueAdd(activeSessionId.value, task.content)
-  if (result.code === 0) {
+  if (result.code === 0 && result.data?.task_id) {
+    // 入队即视为已执行（可靠信号，不等完成广播）：记录队列项 id 与所在会话
+    await markEnqueued(task.id, result.data.task_id, activeSessionId.value)
     await loadQueue()
   } else {
     showError(t('addFailed'))
@@ -392,6 +415,8 @@ async function handleRemove(taskId: string) {
   if (!activeSessionId.value) return
   const result = await mobileApi.httpTaskQueueRemove(activeSessionId.value, taskId)
   if (result.code === 0) {
+    // 队列项移除 → 关联预设回退未使用（可再次添加）
+    await revertToUnusedByTaskId(taskId)
     await loadQueue()
   } else {
     showError(t('removeFailed'))
@@ -406,9 +431,14 @@ function handleClear() {
 async function confirmClear() {
   confirmingClear.value = false
   if (!activeSessionId.value) return
+  // 清空前快照待清队列项 id：清空成功后逐个回退关联预设
+  const clearedIds = queue.value.map(q => q.id)
   const result = await mobileApi.httpTaskQueueClear(activeSessionId.value)
   if (result.code === 0) {
     queue.value = []
+    for (const id of clearedIds) {
+      await revertToUnusedByTaskId(id)
+    }
   } else {
     showError(t('clearFailed'))
   }
@@ -547,6 +577,9 @@ onMounted(() => {
   }
   // 通道 2: 监听插件 safeAreaChanged 事件
   window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
+  // 完成广播：桌面端任务 done 时经宿主转发（bedcode:task_queue_changed），
+  // 按队列项 id 匹配本地预设 → completed（不匹配忽略；dev-shell 可手动 dispatch 模拟）
+  window.addEventListener('bedcode:task_queue_changed', handleTaskQueueChanged)
 })
 
 onUnmounted(() => {
@@ -555,6 +588,23 @@ onUnmounted(() => {
     window.visualViewport.removeEventListener('scroll', handleVisualViewportChange)
   }
   window.removeEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
+  window.removeEventListener('bedcode:task_queue_changed', handleTaskQueueChanged)
 })
+
+/** 桌面端任务队列变更（宿主转发的 CustomEvent）——完成广播按 task_id 匹配预设。
+ * 不校验 session_id：预设可入队到任意会话（活动会话切换后广播仍应生效），
+ * 匹配唯一性由队列项 UUID 保证（手动输入项无本地记录，自然忽略） */
+function handleTaskQueueChanged(e: Event) {
+  const detail = (e as CustomEvent).detail as {
+    session_id: string
+    queue_count: number
+    action: string
+    task_id?: string | null
+    status?: string | null
+  }
+  if (detail?.action === 'done' && detail.task_id) {
+    markCompletedByTaskId(detail.task_id)
+  }
+}
 </script>
 

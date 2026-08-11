@@ -345,6 +345,7 @@ let unlistenSyncConfigCreated: UnlistenFn | null = null
 let unlistenSyncConfigUpdated: UnlistenFn | null = null
 let unlistenSyncConfigRemoved: UnlistenFn | null = null
 let unlistenSyncTaskStatusChanged: UnlistenFn | null = null
+let unlistenSyncTaskQueueChanged: UnlistenFn | null = null
 
 /**
  * 同步事件回调接口
@@ -480,6 +481,14 @@ export async function initMobileEventListeners(callbacks: {
       callbacks.onSyncTaskStatusChanged?.(event.payload)
     })
   }
+
+  // 任务队列变更转发：无条件监听并转发为 window CustomEvent，供插件（auto-task 面板）
+  // 订阅完成广播（action='done' + task_id）更新预设任务执行状态。插件不直接依赖
+  // @tauri-apps/api，经宿主转发保持插件/宿主边界（dev-shell 可手动 dispatch 模拟）
+  unlistenSyncTaskQueueChanged = await listen<{ session_id: string; queue_count: number; action: string; task_id?: string | null; status?: string | null }>('ws_sync_task_queue_changed', (event) => {
+    console.debug('[MobileCommands] ws_sync_task_queue_changed:', event.payload.session_id, 'action:', event.payload.action, 'task_id:', event.payload.task_id ?? 'none')
+    window.dispatchEvent(new CustomEvent('bedcode:task_queue_changed', { detail: event.payload }))
+  })
 }
 
 /**
@@ -507,6 +516,7 @@ export function cleanupMobileEventListeners() {
   unlistenSyncConfigUpdated?.()
   unlistenSyncConfigRemoved?.()
   unlistenSyncTaskStatusChanged?.()
+  unlistenSyncTaskQueueChanged?.()
 }
 
 // ==================== Mobile Commands Composable ====================

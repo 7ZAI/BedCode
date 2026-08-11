@@ -138,6 +138,9 @@
           @keydown="submitOnEnter(handleAdd)"
         ></textarea>
 
+        <!-- 可重复/不可重复属性（创建时设置；编辑时可改，改属性不重置执行状态） -->
+        <RepeatableToggle v-model="draftRepeatable" />
+
         <button
           class="w-full h-11 rounded-xl text-sm font-medium transition-transform active:scale-[0.98] flex items-center justify-center gap-2"
           :class="{ 'opacity-50': !draftContent.trim() }"
@@ -284,6 +287,7 @@ import { useMobileConnection } from '@/composables/useMobileConnection'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 import { useToast } from '@/composables/useToast'
 import PresetTaskCard from '@/components/PresetTaskCard.vue'
+import RepeatableToggle from '@/components/RepeatableToggle.vue'
 import type { PresetTask } from '@/composables/model'
 
 // 懒加载：FileExplorer 依赖 shiki 高亮引擎，避免首次进入本页时加载整个 shiki
@@ -293,7 +297,7 @@ const router = useRouter()
 const connection = useMobileConnection()
 const toast = useToast()
 const { t } = useI18n()
-const { tasks, load, addTask, updateTask, deleteTask, executeTask } = usePresetTasks()
+const { tasks, load, addTask, updateTask, deleteTask, executeTask, reconcileWithQueue } = usePresetTasks()
 
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
 const activeSessions = computed(() => connection.activeSessions.value || [])
@@ -347,6 +351,8 @@ const AI_TEMPLATE = '目标：\n上下文：\n约束：\n完成条件：'
 const contentTextarea = ref<HTMLTextAreaElement | null>(null)
 const contentScrollRef = ref<HTMLDivElement | null>(null)
 const draftContent = ref('')
+/** 可重复/不可重复属性（默认可重复：与旧数据行为一致） */
+const draftRepeatable = ref(true)
 /** 非空时为编辑模式：内容来自对应任务，点击按钮保存修改 */
 const editingTask = ref<PresetTask | null>(null)
 
@@ -387,13 +393,14 @@ async function handleAdd() {
   if (!content) return
 
   if (editingTask.value) {
-    await updateTask({ ...editingTask.value, content })
+    await updateTask({ ...editingTask.value, content, repeatable: draftRepeatable.value })
   } else {
-    await addTask({ content })
+    await addTask({ content, repeatable: draftRepeatable.value })
   }
 
   draftContent.value = ''
   editingTask.value = null
+  draftRepeatable.value = true
   nextTick(() => {
     autosizeTextarea()
     contentTextarea.value?.focus()
@@ -404,6 +411,7 @@ async function handleAdd() {
 function openEditTask(task: PresetTask) {
   editingTask.value = task
   draftContent.value = task.content
+  draftRepeatable.value = task.repeatable
   contentScrollRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
   nextTick(() => {
     autosizeTextarea()
@@ -429,6 +437,12 @@ const pendingSessionId = ref('')
 
 onMounted(async () => {
   await load()
+  // 对账（spec：面板打开 + 应用启动后首次进入）：执行中且队列项已不在
+  // 当前会话 pending 队列的预设落中断（广播不可靠时的兑底）
+  const sid = connection.activeSessionId.value
+  if (sid) {
+    await reconcileWithQueue(sid)
+  }
 })
 
 /** 点击卡片/执行按钮 → session picker flow */

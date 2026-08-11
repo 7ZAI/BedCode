@@ -410,7 +410,7 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
     ));
 
     let remaining = crate::queue::pending_count(host, session_id);
-    crate::queue::broadcast_queue_changed(host, session_id, remaining, "add");
+    crate::queue::broadcast_queue_changed(host, session_id, remaining, "add", None, None);
     broadcast_scheduled_changed(host, &job_id, "executed", "trigger");
 }
 

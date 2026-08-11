@@ -126,8 +126,14 @@ pub enum SyncEvent {
         session_id: String,
         /// 变更后的待执行任务数量
         queue_count: i64,
-        /// 触发动作：add / remove / clear / dequeue
+        /// 触发动作：add / remove / clear / dequeue / done / update / reorder / cancel
         action: String,
+        /// 关联的队列项 ID（done 广播携带，供移动端预设任务完成匹配；其余动作可选）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// 队列项状态（done 广播为 "done"）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     /// 定时自动任务变更（v6，ADR 0003）
     TaskScheduledChanged {

@@ -79,8 +79,14 @@ pub enum SyncPayload {
         session_id: String,
         /// 变更后的待执行任务数量
         queue_count: i64,
-        /// 触发动作：add / remove / clear / dequeue
+        /// 触发动作：add / remove / clear / dequeue / done / update / reorder / cancel
         action: String,
+        /// 关联的队列项 ID（done 广播携带，供预设任务完成匹配）
+        #[serde(default)]
+        task_id: Option<String>,
+        /// 队列项状态（done 广播为 "done"）
+        #[serde(default)]
+        status: Option<String>,
     },
 
     // === 定时自动任务同步（v6，ADR 0003） ===

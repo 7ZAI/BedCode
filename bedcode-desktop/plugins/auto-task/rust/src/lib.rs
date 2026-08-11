@@ -281,7 +281,7 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let count_after = queue::pending_count(&host, &session_id);
-                queue::broadcast_queue_changed(&host, &session_id, count_after, "add");
+                queue::broadcast_queue_changed(&host, &session_id, count_after, "add", None, None);
 
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
             }
@@ -359,7 +359,7 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let count_after = queue::pending_count(&host, &session_id);
-                queue::broadcast_queue_changed(&host, &session_id, count_after, "add");
+                queue::broadcast_queue_changed(&host, &session_id, count_after, "add", None, None);
                 preset::broadcast_preset_changed(&host, &preset_id, "enqueue");
 
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
@@ -381,7 +381,7 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let remaining = queue::pending_count(&host, &session_id);
-                queue::broadcast_queue_changed(&host, &session_id, remaining, "remove");
+                queue::broadcast_queue_changed(&host, &session_id, remaining, "remove", None, None);
 
                 Ok(serde_json::json!({ "removed": true }))
             }
@@ -393,7 +393,7 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let cleared = queue::clear_queue(&host, &session_id);
-                queue::broadcast_queue_changed(&host, &session_id, 0, "clear");
+                queue::broadcast_queue_changed(&host, &session_id, 0, "clear", None, None);
 
                 Ok(serde_json::json!({ "cleared": cleared }))
             }
@@ -421,7 +421,7 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let remaining = queue::pending_count(&host, &session_id);
-                queue::broadcast_queue_changed(&host, &session_id, remaining, "update");
+                queue::broadcast_queue_changed(&host, &session_id, remaining, "update", None, None);
 
                 Ok(serde_json::json!({ "updated": true }))
             }
@@ -453,7 +453,7 @@ impl WasmPlugin for AutoTaskPlugin {
                 }
 
                 let remaining = queue::pending_count(&host, &session_id);
-                queue::broadcast_queue_changed(&host, &session_id, remaining, "reorder");
+                queue::broadcast_queue_changed(&host, &session_id, remaining, "reorder", None, None);
 
                 Ok(serde_json::json!({ "reordered": true }))
             }

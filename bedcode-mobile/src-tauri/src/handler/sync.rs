@@ -89,12 +89,14 @@ impl ClientRouteHandler for SyncHandler {
                         auto_approve,
                     });
                 }
-                SyncPayload::TaskQueueChanged { session_id, queue_count, action } => {
-                    tracing::info!("[SyncHandler] TaskQueueChanged: session_id={}, count={}, action={}", session_id, queue_count, action);
+                SyncPayload::TaskQueueChanged { session_id, queue_count, action, task_id, status } => {
+                    tracing::info!("[SyncHandler] TaskQueueChanged: session_id={}, count={}, action={}, task_id={:?}, status={:?}", session_id, queue_count, action, task_id, status);
                     ctx.emit(MobileEvent::SyncTaskQueueChanged {
                         session_id,
                         queue_count,
                         action,
+                        task_id,
+                        status,
                     });
                 }
                 SyncPayload::TaskScheduledChanged { job_id, status, action } => {

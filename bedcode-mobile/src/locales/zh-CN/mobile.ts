@@ -289,6 +289,12 @@ export default {
       execute: '执行',
       edit: '编辑',
       delete: '删除',
+      status: {
+        unused: '未使用',
+        executing: '执行中',
+        completed: '已完成',
+        interrupted: '已中断',
+      },
     },
     bottomSheet: {
       connecting: '正在连接...',
@@ -336,6 +342,11 @@ export default {
       browseFiles: '浏览项目文件',
       selectProject: '选择工程目录',
       browseProject: '浏览工程目录',
+      repeatable: '可重复执行',
+      repeatableOn: '可重复',
+      repeatableOff: '不可重复',
+      repeatableOnHint: '可反复加入自动任务队列，不受执行历史限制',
+      repeatableOffHint: '执行过一次（含手动执行）即锁定，不能再加入队列',
     },
     notification: {
       connectionDisconnected: '与 {name} 断开连接',

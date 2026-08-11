@@ -289,6 +289,12 @@ export default {
       execute: 'Execute',
       edit: 'Edit',
       delete: 'Delete',
+      status: {
+        unused: 'Unused',
+        executing: 'In Progress',
+        completed: 'Completed',
+        interrupted: 'Interrupted',
+      },
     },
     bottomSheet: {
       connecting: 'Connecting...',
@@ -336,6 +342,11 @@ export default {
       browseFiles: 'Browse project files',
       selectProject: 'Select project dir',
       browseProject: 'Browse project dir',
+      repeatable: 'Repeatable',
+      repeatableOn: 'Repeatable',
+      repeatableOff: 'One-shot',
+      repeatableOnHint: 'Can be re-added to the auto-task queue, not limited by execution history',
+      repeatableOffHint: 'Locked after being executed once (including manual), cannot be re-added',
     },
     notification: {
       connectionDisconnected: 'Disconnected from {name}',

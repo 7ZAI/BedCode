@@ -68,6 +68,8 @@
           </div>
 
           <div class="space-y-4 flex-1 overflow-y-auto min-h-0">
+            <!-- 可重复/不可重复属性（创建时设置；编辑时可改，改属性不重置执行状态） -->
+            <RepeatableToggle v-model="form.repeatable" />
             <div class="flex-1 min-h-0 flex flex-col">
               <div class="flex items-center justify-between mb-1">
                 <label class="text-[var(--mobile-text-muted)] text-sm">{{ t('mobile.toolbox.taskContent') }}</label>
@@ -145,6 +147,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileExplorer from '@/components/FileExplorer.vue'
+import RepeatableToggle from '@/components/RepeatableToggle.vue'
 import type { PresetTask } from '@/composables/model'
 
 const props = defineProps<{
@@ -171,8 +174,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 保存：新增时传 { content }，编辑时传完整 PresetTask */
-  save: [data: PresetTask | { content: string }]
+  /** 保存：新增时传 { content, repeatable }，编辑时传完整 PresetTask */
+  save: [data: PresetTask | { content: string; repeatable: boolean }]
   close: []
 }>()
 
@@ -199,7 +202,7 @@ function insertAiTemplate() {
 // ==================== 表单状态 ====================
 
 const contentTextarea = ref<HTMLTextAreaElement | null>(null)
-const form = ref({ content: '' })
+const form = ref({ content: '', repeatable: true })
 const showDirDropdown = ref(false)
 const selectedDir = ref<string | null>(null)
 const showFileExplorer = ref(false)
@@ -216,9 +219,9 @@ const effectiveProjectDir = computed(() => !!props.lockedDir || props.projectDir
 watch(() => props.visible, (val) => {
   if (val) {
     if (props.task) {
-      form.value = { content: props.task.content }
+      form.value = { content: props.task.content, repeatable: props.task.repeatable }
     } else {
-      form.value = { content: '' }
+      form.value = { content: '', repeatable: true }
     }
     // 非锁定模式才重置用户选择
     if (!props.lockedDir) {
@@ -274,10 +277,11 @@ function handleSave() {
     emit('save', {
       ...props.task,
       content: form.value.content,
+      repeatable: form.value.repeatable,
     } as PresetTask)
   } else {
-    // 新增模式：返回表单数据
-    emit('save', { content: form.value.content })
+    // 新增模式：返回表单数据（含可重复属性）
+    emit('save', { content: form.value.content, repeatable: form.value.repeatable })
   }
 }
 </script>

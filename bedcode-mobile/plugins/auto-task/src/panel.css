@@ -308,6 +308,25 @@
   cursor: not-allowed;
 }
 
+.atp-preset-chip:disabled:hover {
+  border-color: var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+/* 预设 chip 内部布局：内容 + 状态标签 */
+.atp-preset-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+
+.atp-preset-chip-status {
+  font-size: 0.625rem;
+  flex-shrink: 0;
+  margin-left: 0.375rem;
+  opacity: 0.9;
+}
+
 /* 输入 */
 .atp-input-section {
   padding: 0 1.25rem 0.75rem;

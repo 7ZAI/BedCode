@@ -310,11 +310,37 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
 
     // 终态到达：上一轮下发的 executing 项归档为 done
     // （状态机把 done 延后到任务真正完成时，使队列视图能反映执行中的任务）
+    // 归档前先取 executing 项 id 列表，逐项广播 done（带 task_id，供移动端
+    // 预设任务完成匹配；批量 UPDATE 无法获知具体行，故先 SELECT）
+    let done_ids: Vec<String> = host
+        .plugin_db_query_params(
+            "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'executing'",
+            &sql_params![session_id],
+        )
+        .map_err(|e| {
+            // 查询失败时无法广播 done，移动端预设将卡在执行中直至对账——
+            // 不静默：记录日志，归档仍继续（广播是尽力而为）
+            host.log_warn(&format!(
+                "try_dispatch_next: failed to read executing ids for done broadcast: {}",
+                e
+            ));
+        })
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
     let _ = host.plugin_db_execute_params(
         "UPDATE task_queue SET status = 'done', updated_at = datetime('now') \
          WHERE session_id = ?1 AND status = 'executing'",
         &sql_params![session_id],
     );
+    let remaining = pending_count(host, session_id);
+    for task_id in &done_ids {
+        broadcast_queue_changed(host, session_id, remaining, "done", Some(task_id), Some("done"));
+    }
 
     // 先处理超时的 waiting 项（重试或取消），避免卡住后续调度
     check_waiting_timeouts(host, session_id);
@@ -506,6 +532,9 @@ fn dispatch_task(
             "UPDATE task_queue SET status = 'done', updated_at = datetime('now') WHERE id = ?1",
             &sql_params![task_id],
         );
+        // 发送失败同样广播 done（携带 task_id），移动端预设任务据此完成匹配
+        let remaining = pending_count(host, session_id);
+        broadcast_queue_changed(host, session_id, remaining, "done", Some(task_id), Some("done"));
         return;
     }
 
@@ -519,7 +548,7 @@ fn dispatch_task(
     // 队列项执行中：任务终态推送到达后由 try_dispatch_next 置 done 并继续出队。
     // executing 状态用于区分"已下发未完成"与"已完成"，避免重复下发。
     let remaining = pending_count(host, session_id);
-    broadcast_queue_changed(host, session_id, remaining, "dequeue");
+    broadcast_queue_changed(host, session_id, remaining, "dequeue", None, None);
 }
 
 /// 将指定会话最新任务行标为 interrupted（调度失败兑底）
@@ -713,7 +742,7 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
                 attempts, task_id, session_id
             ));
             let remaining = pending_count(host, session_id);
-            broadcast_queue_changed(host, session_id, remaining, "cancel");
+            broadcast_queue_changed(host, session_id, remaining, "cancel", None, None);
         }
     }
 }
@@ -774,7 +803,7 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
 
     // 广播队列变更
     let count_after = pending_count(host, session_id);
-    broadcast_queue_changed(host, session_id, count_after, "add");
+    broadcast_queue_changed(host, session_id, count_after, "add", None, None);
 
     // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）
     if crate::state::auto_execute_on(host, session_id)
@@ -811,7 +840,7 @@ fn handle_remove(host: &WasmHost, body: &Value, _query: &Value) -> Value {
 
     // 删除后广播队列变更
     let remaining = pending_count(host, session_id);
-    broadcast_queue_changed(host, session_id, remaining, "remove");
+    broadcast_queue_changed(host, session_id, remaining, "remove", None, None);
 
     http_response::ok()
 }
@@ -849,7 +878,7 @@ fn handle_clear(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     }
 
     clear_queue(host, session_id);
-    broadcast_queue_changed(host, session_id, 0, "clear");
+    broadcast_queue_changed(host, session_id, 0, "clear", None, None);
 
     http_response::ok()
 }
@@ -879,7 +908,7 @@ fn handle_update(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     }
 
     let remaining = pending_count(host, session_id);
-    broadcast_queue_changed(host, session_id, remaining, "update");
+    broadcast_queue_changed(host, session_id, remaining, "update", None, None);
 
     http_response::ok()
 }
@@ -913,7 +942,7 @@ fn handle_reorder(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     }
 
     let remaining = pending_count(host, session_id);
-    broadcast_queue_changed(host, session_id, remaining, "reorder");
+    broadcast_queue_changed(host, session_id, remaining, "reorder", None, None);
 
     http_response::ok()
 }
@@ -956,11 +985,25 @@ fn reorder_positions(host: &WasmHost, session_id: &str) {
 }
 
 /// 广播队列变更事件
-pub fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i64, action: &str) {
+///
+/// task_id/status 为可选关联信息：done 广播携带（移动端预设任务完成匹配），
+/// 其余动作传 None 保持既有线协议。
+pub fn broadcast_queue_changed(
+    host: &WasmHost,
+    session_id: &str,
+    queue_count: i64,
+    action: &str,
+    task_id: Option<&str>,
+    status: Option<&str>,
+) {
+    let task_id = task_id.map(|s| s.to_string());
+    let status = status.map(|s| s.to_string());
     host.broadcast_sync(&SyncEvent::TaskQueueChanged {
         session_id: session_id.to_string(),
         queue_count,
         action: action.to_string(),
+        task_id: task_id.clone(),
+        status: status.clone(),
     });
 
     let _ = host.bus_publish(
@@ -969,6 +1012,8 @@ pub fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i
             "session_id": session_id,
             "queue_count": queue_count,
             "action": action,
+            "task_id": task_id,
+            "status": status,
         }),
     );
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
@@ -978,6 +1023,8 @@ pub fn broadcast_queue_changed(host: &WasmHost, session_id: &str, queue_count: i
             "session_id": session_id,
             "queue_count": queue_count,
             "action": action,
+            "task_id": task_id,
+            "status": status,
         }),
     );
 }
