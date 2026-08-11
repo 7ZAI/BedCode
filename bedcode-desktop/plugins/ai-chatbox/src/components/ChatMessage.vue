@@ -23,10 +23,27 @@
         <span v-if="message.usage" class="font-mono rounded-tag bg-[var(--bg-hover)] px-1.5 py-0.5">
           ↑{{ message.usage.promptTokens }} ↓{{ message.usage.completionTokens }} Σ{{ message.usage.totalTokens }}
         </span>
-        <!-- 操作按钮（悬停显示） -->
-        <span class="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+      </div>
+
+      <!-- 内容：user / assistant 均 Markdown 渲染（主流布局）；user 为右对齐气泡，assistant 全宽文本 -->
+      <div
+        v-if="isUser"
+        class="md-body inline-block max-w-[85%] text-left rounded-lg px-3 py-2 bg-[var(--color-primary)]/10"
+        v-html="rendered"
+      />
+      <div v-else ref="contentRef" class="text-sm leading-relaxed text-[var(--text-primary)] md-body" v-html="rendered" />
+
+      <!-- 错误提示（assistant 无内容且带错误时） -->
+      <div
+        v-if="!isUser && !message.content && errorText"
+        class="text-xs text-[var(--color-danger)]"
+      >{{ errorText }}</div>
+
+      <!-- 底部操作行（悬停显示；复制/删除置于消息末尾，主流布局） -->
+      <div class="flex justify-end">
+        <div class="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 px-1 py-0.5 rounded-btn bg-[var(--bg-card)] border border-[var(--border)] shadow-sm">
           <button
-            class="p-0.5 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] rounded transition-colors"
+            class="p-1 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] rounded transition-colors"
             :title="t('desktop.plugin.aiChatbox.copyMessage')"
             @click="copyContent"
           >
@@ -35,7 +52,7 @@
             </svg>
           </button>
           <button
-            class="p-0.5 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] rounded transition-colors"
+            class="p-1 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] rounded transition-colors"
             :title="t('desktop.plugin.aiChatbox.deleteMessage')"
             @click="$emit('delete', message)"
           >
@@ -43,21 +60,8 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
           </button>
-        </span>
+        </div>
       </div>
-
-      <!-- 内容（user 文本右对齐，assistant 保持左对齐） -->
-      <div
-        v-if="isUser"
-        class="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text-primary)]"
-      >{{ message.content }}</div>
-      <div v-else ref="contentRef" class="text-sm leading-relaxed text-[var(--text-primary)] md-body" v-html="rendered" />
-
-      <!-- 错误提示（assistant 无内容且带错误时） -->
-      <div
-        v-if="!isUser && !message.content && errorText"
-        class="text-xs text-[var(--color-danger)]"
-      >{{ errorText }}</div>
 
       <!-- 流式光标 -->
       <span
@@ -70,10 +74,11 @@
 
 <script setup lang="ts">
 /**
- * ChatMessage — 单条聊天消息
+ * ChatMessage — 单条聊天消息（桌面端）
  *
- * user 消息纯文本；assistant 消息 Markdown 渲染（marked + highlight.js 代码高亮），
- * 支持整条复制、代码块一键复制、删除、token 用量显示、流式光标。
+ * user / assistant 均 Markdown 渲染（marked + highlight.js 代码高亮，DOMPurify 消毒），
+ * 与主流聊天应用一致：复制/删除操作置于消息末尾（悬停显示），
+ * 代码块带语言标签 + 一键复制头部。
  */
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -106,24 +111,40 @@ const rendered = computed(() => {
 
 const contentRef = ref<HTMLElement | null>(null)
 
-/** 代码块高亮 + 注入一键复制按钮（渲染后执行；按钮幂等避免重复注入） */
+/** 代码块高亮 + 注入语言标签/复制按钮头部（渲染后执行；幂等避免重复注入） */
 function enhanceCodeBlocks(): void {
   const container = contentRef.value
   if (!container) return
   container.querySelectorAll<HTMLElement>('pre').forEach(pre => {
     const code = pre.querySelector('code')
-    if (code) {
-      hljs.highlightElement(code)
+    // 流式期间重复触发：已高亮的跳过，避免反复重包 DOM
+    if (code && !code.classList.contains('hljs')) {
+      try {
+        hljs.highlightElement(code)
+      } catch {
+        // 异常输入降级为无高亮纯文本，不影响消息渲染
+      }
     }
-    if (pre.querySelector('.md-copy-btn')) return
+    if (pre.querySelector('.md-code-header')) return
+    const lang = code?.className.match(/language-([\w+-]+)/)?.[1] ?? ''
+    const header = document.createElement('div')
+    header.className = 'md-code-header'
+    const langEl = document.createElement('span')
+    langEl.className = 'md-code-lang'
+    langEl.textContent = lang
     const btn = document.createElement('button')
     btn.className = 'md-copy-btn'
     btn.textContent = t('desktop.plugin.aiChatbox.copy')
     btn.addEventListener('click', () => {
-      const text = pre.querySelector('code')?.innerText ?? ''
+      const text = code?.innerText ?? ''
       navigator.clipboard.writeText(text).catch(() => {})
+      btn.textContent = t('desktop.plugin.aiChatbox.copied')
+      setTimeout(() => {
+        btn.textContent = t('desktop.plugin.aiChatbox.copy')
+      }, 1500)
     })
-    pre.appendChild(btn)
+    header.append(langEl, btn)
+    pre.prepend(header)
   })
 }
 
@@ -213,8 +234,8 @@ watch(() => props.message.content, enhanceCodeBlocks)
   background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  padding: 0.75rem;
-  padding-top: 1.75rem;
+  /* 顶部为代码块头部（语言标签 + 复制按钮）预留空间 */
+  padding: 2.25rem 0.75rem 0.75rem;
   overflow-x: auto;
   margin: 0.5em 0;
 }
@@ -224,10 +245,27 @@ watch(() => props.message.content, enhanceCodeBlocks)
   font-size: 0.8125rem;
   line-height: 1.6;
 }
-.md-body :deep(pre .md-copy-btn) {
+.md-body :deep(.md-code-header) {
   position: absolute;
-  top: 0.375rem;
-  right: 0.5rem;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: var(--bg-input);
+}
+.md-body :deep(.md-code-lang) {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  text-transform: lowercase;
+}
+.md-body :deep(pre .md-copy-btn) {
   font-size: 0.6875rem;
   color: var(--text-tertiary);
   background: transparent;

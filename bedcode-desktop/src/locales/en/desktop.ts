@@ -362,6 +362,7 @@ export default {
         you: 'You',
         assistant: 'AI',
         copy: 'Copy',
+        copied: 'Copied',
         copyMessage: 'Copy message',
         delete: 'Delete',
         deleteMessage: 'Delete message',

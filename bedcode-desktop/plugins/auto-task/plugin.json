@@ -2,7 +2,7 @@
   "id": "com.bedcode.auto-task",
   "name": "Auto Task",
   "version": "1.0.0",
-  "description": "Agent 任务状态同步与自动授权（Claude Code / pi / opencode / Codex）",
+  "description": "Agent 任务队列与自动授权：同步 Claude Code / pi / opencode / Codex 任务状态，支持任务队列调度、预设任务、定时任务与历史统计；agent 请求授权时自动放行。\n使用：Claude Code 会话创建时自动安装项目 hooks 同步任务状态；终端工具栏按钮打开任务队列弹窗，侧边栏「任务历史」查看执行记录与统计。",
   "author": "BedCode",
   "main": "index.js",
   "sandbox": "inline",

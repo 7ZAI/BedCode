@@ -21,8 +21,10 @@ const ROOT = resolve(__dirname, '..')
 const IS_WIN = platform() === 'win32'
 
 // 插件配置 — 指向合并后的插件工程目录
-// 注意：ai-chatbox 暂停开发，已从构建流程移除，恢复开发时加回
 const PLUGINS = {
+  'com.bedcode.ai-chatbox': {
+    pluginDir: 'plugins/ai-chatbox',
+  },
   'com.bedcode.auto-task': {
     pluginDir: 'plugins/auto-task',
   },

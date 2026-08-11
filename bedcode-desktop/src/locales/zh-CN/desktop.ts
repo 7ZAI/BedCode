@@ -362,6 +362,7 @@ export default {
         you: '我',
         assistant: 'AI',
         copy: '复制',
+        copied: '已复制',
         copyMessage: '复制消息',
         delete: '删除',
         deleteMessage: '删除消息',
