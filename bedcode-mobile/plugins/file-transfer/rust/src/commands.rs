@@ -9,6 +9,7 @@
 use crate::handshake::{self, CreateSessionError, QuerySessionError};
 use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
+use crate::shared::{self, SharedRoot};
 use crate::state::{Direction, Fingerprint, PeerInfo, Task, TaskState, TaskStore};
 use bedcode_plugin_api_mobile::host::{
     ConfigKey, HostBus, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog,
@@ -28,9 +29,10 @@ const SETTINGS_KEY: &str = "file-transfer-settings";
 /// 插件设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// 共享目录根列表（绝对路径）
-    #[serde(default)]
-    pub roots: Vec<String>,
+    /// 共享目录条目（SAF URI 存储；私有下载目录免授权特殊条目不入库，读取时派生）
+    /// 字段级容错：旧格式字符串数组解析失败时返回空，不拖垮整个 Settings
+    #[serde(default, deserialize_with = "crate::shared::deserialize_roots")]
+    pub roots: Vec<SharedRoot>,
     /// 下载目录（绝对路径，移动端必须配置）
     #[serde(default)]
     pub download_dir: String,
@@ -176,7 +178,7 @@ fn enqueue_download(
     remote_path: &str,
     peer_id: &str,
     peer_name: &str,
-    _args: &serde_json::Value,
+    args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     // 确定下载目录
     let download_dir = resolve_download_dir(state, host)?;
@@ -187,30 +189,49 @@ fn enqueue_download(
         .next()
         .unwrap_or(remote_path);
 
-    let local_path = format!("{}/{}.part", download_dir, file_name);
-    let final_path = format!("{}/{}", download_dir, file_name);
-
-    // 目标存在性预检（spec §7.4：目标已存在 → rejected duplicate-name）
-    if let Ok(true) = host.fs_exists(&final_path) {
-        let mut task = make_task(
-            Direction::Download,
-            peer_id,
-            peer_name,
-            remote_path,
-            &local_path,
-            0,
+    // 「保存到…」（M3）：下载完成后弹系统保存对话框（用户选位置）。中转文件
+    // 名唯一化（前缀 .save-），避免与默认下载的同名文件冲突——保存到…的
+    // 同名语义由系统对话框在用户选位置时裁决，不走 duplicate-name 预检
+    let save_to = args
+        .get("saveTo")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let local_path = if save_to {
+        format!(
+            "{}/.save-{}-{}.part",
+            download_dir,
             now_ms(host),
-        );
-        task.state = TaskState::Rejected;
-        task.reason = Some("duplicate-name".to_string());
-        let task_json = serde_json::to_value(&task)?;
-        state.tasks.insert(task);
-        state.tasks.save(host);
-        emit_tasks_changed(host, &state.tasks);
-        return Ok(task_json);
+            file_name
+        )
+    } else {
+        format!("{}/{}.part", download_dir, file_name)
+    };
+    let final_path = local_path.trim_end_matches(".part").to_string();
+
+    // 目标存在性预检（spec §7.4：目标已存在 → rejected duplicate-name）；
+    // 保存到…的中转名唯一化天然不冲突，跳过预检
+    if !save_to {
+        if let Ok(true) = host.fs_exists(&final_path) {
+            let mut task = make_task(
+                Direction::Download,
+                peer_id,
+                peer_name,
+                remote_path,
+                &local_path,
+                0,
+                now_ms(host),
+            );
+            task.state = TaskState::Rejected;
+            task.reason = Some("duplicate-name".to_string());
+            let task_json = serde_json::to_value(&task)?;
+            state.tasks.insert(task);
+            state.tasks.save(host);
+            emit_tasks_changed(host, &state.tasks);
+            return Ok(task_json);
+        }
     }
 
-    let task = make_task(
+    let mut task = make_task(
         Direction::Download,
         peer_id,
         peer_name,
@@ -219,6 +240,7 @@ fn enqueue_download(
         0,
         now_ms(host),
     );
+    task.save_to = save_to;
     let task_json = serde_json::to_value(&task)?;
     let task_id = task.id.clone();
     state.tasks.insert(task);
@@ -242,13 +264,23 @@ fn enqueue_upload(
         .get("localPath")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing localPath for upload"))?;
+    // 中转复制（Relay Copy）cache 副本标记：上传完成后删除本地源文件
+    // （SAF 共享目录 → cache 链路的副本生命周期，见 spec「复制桥语义」）
+    let cleanup_local = args
+        .get("cleanupLocal")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // 本地文件必须存在
-    if let Ok(false) = host.fs_exists(local_path) {
-        return Err(anyhow::anyhow!("local file not found: {}", local_path));
+    // 本地文件必须存在。SAF 流直传源（content://）无法经真实路径 fs_exists
+    // 校验（分区存储 FUSE 过滤/云盘 provider 无路径），存在性由宿主 Kotlin
+    // safOpen 打开时验证；仅真实路径源做预检
+    if !local_path.starts_with("content://") {
+        if let Ok(false) = host.fs_exists(local_path) {
+            return Err(anyhow::anyhow!("local file not found: {}", local_path));
+        }
     }
 
-    let task = make_task(
+    let mut task = make_task(
         Direction::Upload,
         peer_id,
         peer_name,
@@ -257,6 +289,8 @@ fn enqueue_upload(
         0,
         now_ms(host),
     );
+    // insert 前直接落标记，避免 insert → get_mut → 改 → 再 save 的迂回
+    task.cleanup_local = cleanup_local;
     let task_json = serde_json::to_value(&task)?;
     let task_id = task.id.clone();
     state.tasks.insert(task);
@@ -468,14 +502,32 @@ pub fn set_concurrency(
 
 /// get-settings：返回当前设置
 ///
-/// download_dir 为空时（未显式配置）解析宿主默认下载目录填充，
-/// 使前端设置页能展示实际落盘地址而非「未设置」。
+/// roots 注入免授权特殊条目（app 私有下载目录）：不入库、读取时派生，
+/// 始终置顶展示（特殊条目不可移除，前端按 kind 区分）。
+/// download_dir 仅在未显式配置时用宿主默认值填充展示（保留既有语义：
+/// 不覆盖存储值——前端 persist 会全量回传设置，若此处无条件覆写，首次
+/// 保存即把存储中的自定义 download_dir 永久改写为 AppDownloadsDir）。
 pub fn get_settings(state: &PluginState, host: &impl HostConfig) -> serde_json::Value {
     let mut settings = state.settings.clone();
-    if settings.download_dir.is_empty() {
-        if let Ok(Some(dir)) = host
-            .config_get(bedcode_plugin_api_mobile::host::ConfigKey::AppDownloadsDir)
-        {
+    if let Ok(Some(dir)) = host
+        .config_get(bedcode_plugin_api_mobile::host::ConfigKey::AppDownloadsDir)
+    {
+        // 派生免授权特殊条目（已有同 id 条目时不重复插入；与 download_dir
+        // 填充独立——特殊条目恒以宿主配置为基址，不受存储值影响）
+        let special = SharedRoot {
+            id: dir.clone(),
+            kind: shared::KIND_PRIVATE_DOWNLOADS.to_string(),
+            name: std::path::Path::new(&dir)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Download".to_string()),
+            document_id: String::new(),
+            authorized: true,
+        };
+        if !shared::contains(&settings.roots, &special.id) {
+            settings.roots.insert(0, special);
+        }
+        if settings.download_dir.is_empty() {
             settings.download_dir = dir;
         }
     }
@@ -483,39 +535,32 @@ pub fn get_settings(state: &PluginState, host: &impl HostConfig) -> serde_json::
 }
 
 /// set-settings：更新设置
+///
+/// roots 为结构化条目数组（SharedRoot）；入库时剔除免授权特殊条目
+/// （派生数据不入库，避免与宿主配置漂移）。挂载含全部条目——SAF 树条目
+/// 与真实路径条目均可挂载（M2：file_service 三端点已 SAF 化，宿主按
+/// content:// 前缀分流）。
 pub fn set_settings(
     state: &mut PluginState,
-    host: &(impl HostStorage + HostLog + HostFileService),
+    host: &(impl HostStorage + HostLog + HostFileService + HostConfig),
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    if let Some(roots) = args.get("roots").and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok()) {
-        state.settings.roots = roots.clone();
-        if roots.is_empty() {
-            // 清空全部共享目录 = 停止共享：卸载挂载（宿主拒绝空 roots 挂载）
-            if state.mounted {
-                let _ = host.filesrv_unmount(MOUNT_PATH);
-                state.mounted = false;
-                host.log_info("all shared roots removed, file service unmounted");
+    if let Some(roots) = args
+        .get("roots")
+        .and_then(|v| serde_json::from_value::<Vec<SharedRoot>>(v.clone()).ok())
+    {
+        // 入库前剔除特殊条目（派生数据）+ 同 id 去重（防前端回传重复）
+        let mut stored: Vec<SharedRoot> = Vec::new();
+        for root in roots {
+            if root.kind == shared::KIND_PRIVATE_DOWNLOADS {
+                continue;
             }
-        } else if state.mounted {
-            let _ = host.filesrv_update_roots(MOUNT_PATH, &roots);
-        } else {
-            // 之前未挂载（如清空后重配目录）：与激活逻辑一致重新挂载
-            let options = MountOptions {
-                mount_path: MOUNT_PATH.to_string(),
-                roots: roots.clone(),
-                operations: vec![FileOperation::List, FileOperation::Download, FileOperation::Upload],
-            };
-            match host.filesrv_mount(&options) {
-                Ok(result) => {
-                    state.mounted = true;
-                    host.log_info(&format!("mounted at {}", result.base_path));
-                }
-                // 挂载失败必须回报（否则设置显示已保存但共享目录实际未生效，
-                // 且不会发布公告导致对端永远看不到服务）
-                Err(e) => return Err(anyhow::anyhow!("mount failed: {}", e)),
+            if !shared::contains(&stored, &root.id) {
+                stored.push(root);
             }
         }
+        state.settings.roots = stored;
+        sync_mount(state, host)?;
     }
     if let Some(dir) = args.get("downloadDir").and_then(|v| v.as_str()) {
         state.settings.download_dir = dir.to_string();
@@ -528,6 +573,61 @@ pub fn set_settings(
     Ok(serde_json::json!({"ok": true}))
 }
 
+/// 计算生效挂载根：存储可挂载（真实路径）条目 + 免授权特殊条目去重
+///
+/// 特殊条目（app 私有下载目录）始终可挂载（story #11：免授权即可共享该
+/// 目录）。activate 与 sync_mount 必须共用同一推导：否则 set-settings 后
+/// 存储条目全为 SAF（不可挂载）时 sync_mount 会算出空根直接卸载整个
+/// 文件服务，桌面端连免授权特殊条目也看不到了（挂载状态漂移）。
+pub fn effective_mount_roots(state: &PluginState, host: &impl HostConfig) -> Vec<String> {
+    let mut roots = shared::mountable_paths(&state.settings.roots);
+    if let Ok(Some(dir)) = host.config_get(bedcode_plugin_api_mobile::host::ConfigKey::AppDownloadsDir)
+    {
+        if !roots.contains(&dir) {
+            roots.push(dir);
+        }
+    }
+    roots
+}
+
+/// 同步挂载状态：可挂载（真实路径）条目非空 → 挂载/更新；为空 → 卸载
+///
+/// 清空全部可挂载共享目录 = 停止共享：卸载挂载（宿主拒绝空 roots 挂载）。
+fn sync_mount(
+    state: &mut PluginState,
+    host: &(impl HostStorage + HostLog + HostFileService + HostConfig),
+) -> anyhow::Result<()> {
+    let mount_roots = effective_mount_roots(state, host);
+    if mount_roots.is_empty() {
+        if state.mounted {
+            let _ = host.filesrv_unmount(MOUNT_PATH);
+            state.mounted = false;
+            host.log_info("no mountable shared roots, file service unmounted");
+        }
+        return Ok(());
+    }
+    if state.mounted {
+        let _ = host.filesrv_update_roots(MOUNT_PATH, &mount_roots);
+    } else {
+        // 之前未挂载（如清空后重配目录）：与激活逻辑一致重新挂载
+        let options = MountOptions {
+            mount_path: MOUNT_PATH.to_string(),
+            roots: mount_roots,
+            operations: vec![FileOperation::List, FileOperation::Download, FileOperation::Upload],
+        };
+        match host.filesrv_mount(&options) {
+            Ok(result) => {
+                state.mounted = true;
+                host.log_info(&format!("mounted at {}", result.base_path));
+            }
+            // 挂载失败必须回报（否则设置显示已保存但共享目录实际未生效，
+            // 且不会发布公告导致对端永远看不到服务）
+            Err(e) => return Err(anyhow::anyhow!("mount failed: {}", e)),
+        }
+    }
+    Ok(())
+}
+
 /// pick-download-dir：返回错误码（WASM 无法弹窗，需前端走 context.fileService.pickDirectory）
 pub fn pick_download_dir() -> anyhow::Result<serde_json::Value> {
     // 前端应使用 context.fileService.pickDirectory 选择目录后调用 set-settings
@@ -538,23 +638,27 @@ pub fn pick_download_dir() -> anyhow::Result<serde_json::Value> {
 }
 
 /// mount-local：挂载本地目录
+///
+/// roots 参数为结构化条目数组（SharedRoot，与 set-settings 同格式）；
+/// 挂载含全部条目（SAF 树条目与真实路径条目均可挂载，宿主按前缀分流）。
 pub fn mount_local(
     state: &mut PluginState,
     host: &(impl HostFileService + HostLog),
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    let roots = args
+    let roots: Vec<SharedRoot> = args
         .get("roots")
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+        .and_then(|v| serde_json::from_value::<Vec<SharedRoot>>(v.clone()).ok())
         .unwrap_or_else(|| state.settings.roots.clone());
+    let mount_roots = shared::mountable_paths(&roots);
 
-    if roots.is_empty() {
-        return Err(anyhow::anyhow!("no roots to mount"));
+    if mount_roots.is_empty() {
+        return Err(anyhow::anyhow!("no mountable roots"));
     }
 
     let options = MountOptions {
         mount_path: MOUNT_PATH.to_string(),
-        roots: roots.clone(),
+        roots: mount_roots,
         operations: vec![FileOperation::List, FileOperation::Download, FileOperation::Upload],
     };
 
@@ -569,25 +673,26 @@ pub fn mount_local(
     }
 }
 
-/// update-roots：更新挂载根
+/// update-roots：更新挂载根（结构化条目数组；SAF 树条目与真实路径条目均可挂载）
 pub fn update_roots(
     state: &mut PluginState,
     host: &(impl HostFileService + HostStorage + HostLog),
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    let roots = args
+    let roots: Vec<SharedRoot> = args
         .get("roots")
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+        .and_then(|v| serde_json::from_value::<Vec<SharedRoot>>(v.clone()).ok())
         .ok_or_else(|| anyhow::anyhow!("missing roots"))?;
+    let mount_roots = shared::mountable_paths(&roots);
 
     if state.mounted {
-        if roots.is_empty() {
-            // 清空全部共享目录 = 停止共享：卸载挂载（宿主拒绝空 roots 挂载）
+        if mount_roots.is_empty() {
+            // 清空全部可挂载共享目录 = 停止共享：卸载挂载（宿主拒绝空 roots 挂载）
             host.filesrv_unmount(MOUNT_PATH)
                 .map_err(|e| anyhow::anyhow!("unmount failed: {}", e))?;
             state.mounted = false;
         } else {
-            host.filesrv_update_roots(MOUNT_PATH, &roots)
+            host.filesrv_update_roots(MOUNT_PATH, &mount_roots)
                 .map_err(|e| anyhow::anyhow!("update_roots failed: {}", e))?;
         }
     }
@@ -802,6 +907,17 @@ pub fn handle_transfer_progress(
             task.offset = task.size;
             state.queue.release(&task_id);
 
+            // M2/M3 接收方向落位：下载完成 → 「保存到…」（用户指定位置）或
+            // MediaStore 公共下载目录（默认）；失败回退私有目录（最终文件保留
+            // 在原位）。task.place 标记落点，前端据此提示
+            if task.direction == Direction::Download {
+                if task.save_to {
+                    place_saved_to_document(host, task, &task_id);
+                } else {
+                    place_downloaded_file(host, task, &task_id);
+                }
+            }
+
             // 上传完成：通知远端 complete（失败记日志，不阻塞终态）
             if task.direction == Direction::Upload {
                 if let Some(ref sid) = task.upload_session_id.clone() {
@@ -814,6 +930,22 @@ pub fn handle_transfer_progress(
                         }
                     }
                 }
+                // 中转复制 cache 副本：完成即删（生命周期「复制 → 上传 → 完成 → 删除」）；
+                // 真实路径源（免授权特殊条目）不标记 cleanup_local，不会误删用户文件
+                if task.cleanup_local {
+                    let lp = task.local_path.clone();
+                    if let Err(e) = host.fs_delete(&lp) {
+                        host.log_warn(&format!(
+                            "cleanup_local delete failed for task {} ({}): {}",
+                            task_id, lp, e
+                        ));
+                    } else {
+                        host.log_debug(&format!(
+                            "cleanup_local deleted cache copy for task {}",
+                            task_id
+                        ));
+                    }
+                }
             }
         }
         TransferState::Failed(reason) => {
@@ -824,6 +956,18 @@ pub fn handle_transfer_progress(
             } else if reason == "duplicate-name" {
                 task.state = TaskState::Rejected;
                 task.reason = Some("duplicate-name".to_string());
+            } else if reason == "not-seekable-resume" {
+                // M3 SAF pipe 流（不可 seek）跨任务续传：宿主只能从头打开
+                // （effective_offset=0 ≠ 请求 offset）→ 重建 session 全量重传
+                // （Kotlin 侧 offset=0 重开会强制重开 fd 从头，见 spec M3
+                // 续传策略）。直接重新入队，不置终态——对端 session 以旧
+                // 偏移累计，必须废弃重建
+                task.state = TaskState::Queued;
+                task.offset = 0;
+                task.upload_session_id = None;
+                task.reason = None;
+                let id = task.id.clone();
+                state.queue.enqueue(&id);
             } else {
                 task.state = TaskState::Failed;
                 task.reason = Some(reason.clone());
@@ -887,6 +1031,91 @@ pub fn handle_transfer_progress(
     }
 
     emit_tasks_changed(host, &state.tasks);
+}
+
+/// 下载完成后的 MediaStore 落位（M2 接收方向统一落下载目录）///
+/// 引擎已完成 `.part` → 下载目录最终名 rename（私有副本在握，续传/跨重启
+/// 可靠，现有机制零改动）；此处将其拷贝到系统公共下载目录：
+/// - 成功：删除私有副本（落点唯一，重复下载同名文件不再被 duplicate-name
+///   预检拦截，也不会产生两份内容）
+/// - 失败：保留私有副本（回退），task.place 标记供前端提示
+fn place_downloaded_file(host: &(impl HostFs + HostLog), task: &mut Task, task_id: &str) {
+    let final_path = task.local_path.trim_end_matches(".part").to_string();
+    // 展示名取远端路径 basename（远端文件名即用户期望的目标名）
+    let display_name = task
+        .remote_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&task.remote_path)
+        .to_string();
+    match host.fs_write_media_downloads(&final_path, &display_name, "") {
+        Ok(()) => {
+            // 公共目录已持有副本：删除私有副本（落点唯一）。删失败仅告警——
+            // 残留副本由用户自行清理，不影响任务终态
+            if let Err(e) = host.fs_delete(&final_path) {
+                host.log_warn(&format!(
+                    "download placement: delete private copy failed for task {} ({}): {}",
+                    task_id, final_path, e
+                ));
+            }
+            task.place = Some("system".to_string());
+            host.log_info(&format!(
+                "download placement: saved to system Downloads for task {}",
+                task_id
+            ));
+        }
+        Err(e) => {
+            // 回退私有目录：最终文件保留在原位（无需额外动作），仅标记供前端提示
+            task.place = Some("private".to_string());
+            host.log_warn(&format!(
+                "download placement: MediaStore write failed for task {} ({}), kept in private dir: {}",
+                task_id, final_path, e
+            ));
+        }
+    }
+}
+
+/// 下载完成后的「保存到…」落位（M3 单文件目标）
+///
+/// 引擎已完成 `.part` → 下载目录最终名 rename（私有副本在握）；此处弹系统
+/// 保存对话框（ACTION_CREATE_DOCUMENT，用户选位置）并流拷贝到所选位置
+/// （写完即达）：
+/// - 成功：删除私有副本（落点唯一，不留残余）
+/// - 失败/用户取消：保留私有副本（回退），task.place 标记供前端提示
+fn place_saved_to_document(host: &(impl HostFs + HostLog), task: &mut Task, task_id: &str) {
+    let final_path = task.local_path.trim_end_matches(".part").to_string();
+    // 展示名取远端路径 basename（用户期望的文件名，对话框默认名）
+    let suggested_name = task
+        .remote_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&task.remote_path)
+        .to_string();
+    match host.fs_save_to_document(&final_path, &suggested_name, "") {
+        Ok(()) => {
+            // 用户位置已持有副本：删除私有副本（落点唯一）。删失败仅告警——
+            // 残留副本由用户自行清理，不影响任务终态
+            if let Err(e) = host.fs_delete(&final_path) {
+                host.log_warn(&format!(
+                    "save-to placement: delete private copy failed for task {} ({}): {}",
+                    task_id, final_path, e
+                ));
+            }
+            task.place = Some("saved-to".to_string());
+            host.log_info(&format!(
+                "save-to placement: saved to user-selected location for task {}",
+                task_id
+            ));
+        }
+        Err(e) => {
+            // 失败/取消：保留私有副本（回退语义），标记供前端提示
+            task.place = Some("save-failed".to_string());
+            host.log_warn(&format!(
+                "save-to placement: saveToDocument failed/cancelled for task {} ({}), kept in private dir: {}",
+                task_id, final_path, e
+            ));
+        }
+    }
 }
 
 /// 处理对端上下线消息（on_bus_message `filesrv:peer_changed`）
@@ -1047,20 +1276,17 @@ fn emit_peers_changed(host: &(impl HostEvents + HostLog), peer: &PeerStore) {
 
 /// 上传请求策略钩子（on_upload_request）
 ///
-/// 解析 meta.relativePath 到 roots 下的绝对路径，对每个 root 拼出目标绝对路径，
-/// 用 host.fs_exists 检查目标是否已存在（wasm 环境 std::fs 全部 stub false，不可用）。
+/// 桌面端推送（upload session）的落点是**下载目录**（M2 方向模型：接收统一落
+/// 下载目录，不落共享目录）。同名预检因此针对下载目录而非共享目录 roots：
+/// 私有下载目录同名经 host.fs_exists 提前拒绝；公共 Download 目录同名由宿主
+/// MediaStore 预检（writeMediaDownloads 返回 duplicate-name）兜底拒绝。
 /// 宿主沙箱已在上传创建前完成路径合法性校验，插件只需同名即拒。
 pub fn handle_upload_request(
     state: &PluginState,
-    host: &impl HostFs,
+    host: &(impl HostFs + HostConfig),
     meta: &UploadRequestMeta,
 ) -> UploadHookDecision {
     let rel = meta.relative_path.trim_matches('/');
-    let roots: Vec<PathBuf> = state.settings.roots.iter().map(PathBuf::from).collect();
-
-    if roots.is_empty() {
-        return UploadHookDecision::deny("no-roots");
-    }
 
     // 清洗相对路径（复刻 sandbox::clean_relative_parts，拒绝 ..、绝对路径、:）
     let parts = match clean_relative_parts(rel) {
@@ -1071,16 +1297,17 @@ pub fn handle_upload_request(
         return UploadHookDecision::deny("invalid-path");
     }
 
-    // 任一根下目标已存在 → 同名拒绝；全部不存在 → allow
-    // （host.fs_exists 缺 fs:read 权限时 fail-closed 返回 Err，同名预检静默失效）
-    for root in &roots {
-        let mut target = root.clone();
-        for part in &parts {
-            target.push(part);
-        }
-        if let Ok(true) = host.fs_exists(target.to_string_lossy().as_ref()) {
-            return UploadHookDecision::deny("duplicate-name");
-        }
+    // 同名预检目标 = 下载目录 + 远端文件名（与落位 display_name 一致）
+    let Ok(download_dir) = resolve_download_dir(state, host) else {
+        // 下载目录未配置：宿主侧 create_upload 会拒绝，无需在此重复拒绝
+        return UploadHookDecision::allow();
+    };
+    let file_name = parts.last().expect("parts non-empty checked above");
+    let target = PathBuf::from(&download_dir).join(file_name);
+    // host.fs_exists 缺 fs:read 权限时 fail-closed 返回 Err，同名预检静默失效
+    // ——公共目录同名由宿主 MediaStore 预检兜底，不依赖本检查
+    if let Ok(true) = host.fs_exists(target.to_string_lossy().as_ref()) {
+        return UploadHookDecision::deny("duplicate-name");
     }
 
     UploadHookDecision::allow()
@@ -1134,14 +1361,16 @@ fn make_task(
         fingerprint: None,
         state: TaskState::Queued,
         reason: None,
+        place: None,
+        save_to: false,
         created_at: now,
         updated_at: now,
         host_task_id: None,
+        cleanup_local: false,
         auto_resumable: false,
         last_flush: 0,
     }
 }
-
 /// 生成唯一任务 ID
 ///
 /// wasm32-unknown-unknown 无系统时钟/随机源（SystemTime::now() 会 panic），
@@ -1235,4 +1464,154 @@ pub fn load_settings(host: &impl HostStorage) -> Settings {
 fn emit_tasks_changed(host: &(impl HostEvents + HostLog), tasks: &TaskStore) {
     let snapshot = serde_json::to_value(tasks.snapshot()).unwrap_or(serde_json::Value::Array(vec![]));
     host.emit_event("plugin:file-transfer:tasks-changed", &snapshot);
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bedcode_plugin_api_mobile::host::HostError;
+
+    /// 落位测试用 fake 宿主：记录 fs_delete 调用，write_media_downloads 按
+    /// 配置返回成功/失败（M2 完成钩子层编排测试，spec「主 seam fake 注入」）；
+    /// fs_save_to_document 按 save_ok 返回（M3「保存到…」编排测试）
+    struct FakePlaceHost {
+        media_ok: bool,
+        save_ok: bool,
+        deleted: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl HostFs for FakePlaceHost {
+        fn fs_read(&self, _path: &str) -> Result<Option<String>, HostError> {
+            Ok(None)
+        }
+        fn fs_write(&self, _path: &str, _data: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+        fn fs_copy(&self, _src: &str, _dst: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+        fn fs_exists(&self, _path: &str) -> Result<bool, HostError> {
+            Ok(false)
+        }
+        fn fs_delete(&self, path: &str) -> Result<(), HostError> {
+            self.deleted.lock().unwrap().push(path.to_string());
+            Ok(())
+        }
+        fn fs_request_auth(&self, _paths: &[String]) -> Result<bool, HostError> {
+            Ok(true)
+        }
+        fn fs_write_media_downloads(
+            &self,
+            _src_path: &str,
+            _display_name: &str,
+            _mime_type: &str,
+        ) -> Result<(), HostError> {
+            if self.media_ok {
+                Ok(())
+            } else {
+                Err(HostError::custom(-1, "requires API 29+"))
+            }
+        }
+
+        fn fs_save_to_document(
+            &self,
+            _src_path: &str,
+            _suggested_name: &str,
+            _mime_type: &str,
+        ) -> Result<(), HostError> {
+            if self.save_ok {
+                Ok(())
+            } else {
+                Err(HostError::custom(-1, "cancelled by user"))
+            }
+        }
+    }
+
+    impl HostLog for FakePlaceHost {
+        fn log_info(&self, _message: &str) {}
+        fn log_debug(&self, _message: &str) {}
+        fn log_warn(&self, _message: &str) {}
+        fn log_error(&self, _message: &str) {}
+        fn mark_plugin_error(&self, _error: &str) {}
+    }
+
+    fn download_task(local_path: &str, remote_path: &str) -> Task {
+        let mut task = make_task(
+            Direction::Download,
+            "peer-1",
+            "桌面",
+            remote_path,
+            local_path,
+            100,
+            0,
+        );
+        task.state = TaskState::Completed;
+        task
+    }
+
+    #[test]
+    fn place_downloaded_file_success_deletes_private_copy_and_marks_system() {
+        let host = FakePlaceHost {
+            media_ok: true,
+            save_ok: false,
+            deleted: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut task = download_task("/data/dl/movie.mp4.part", "movie.mp4");
+        place_downloaded_file(&host, &mut task, "t1");
+        assert_eq!(task.place.as_deref(), Some("system"));
+        // 私有副本已删（落点唯一）；展示名 = 远端 basename
+        assert_eq!(
+            host.deleted.lock().unwrap().as_slice(),
+            &["/data/dl/movie.mp4".to_string()]
+        );
+    }
+
+    #[test]
+    fn place_downloaded_file_failure_keeps_private_copy_and_marks_private() {
+        let host = FakePlaceHost {
+            media_ok: false,
+            save_ok: false,
+            deleted: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut task = download_task("/data/dl/movie.mp4.part", "dir/movie.mp4");
+        place_downloaded_file(&host, &mut task, "t2");
+        assert_eq!(task.place.as_deref(), Some("private"));
+        // 回退私有目录：不删除最终文件
+        assert!(host.deleted.lock().unwrap().is_empty());
+    }
+
+    // ==================== M3「保存到…」落位 ====================
+
+    #[test]
+    fn place_saved_to_document_success_deletes_private_copy_and_marks_saved() {
+        let host = FakePlaceHost {
+            media_ok: true,
+            save_ok: true,
+            deleted: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut task = download_task("/data/dl/.save-1-movie.mp4.part", "dir/movie.mp4");
+        place_saved_to_document(&host, &mut task, "t3");
+        assert_eq!(task.place.as_deref(), Some("saved-to"));
+        // 用户位置已持有副本：私有副本已删（落点唯一）
+        assert_eq!(
+            host.deleted.lock().unwrap().as_slice(),
+            &["/data/dl/.save-1-movie.mp4".to_string()]
+        );
+    }
+
+    #[test]
+    fn place_saved_to_document_failure_keeps_private_copy_and_marks_save_failed() {
+        let host = FakePlaceHost {
+            media_ok: true,
+            save_ok: false,
+            deleted: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut task = download_task("/data/dl/.save-2-movie.mp4.part", "movie.mp4");
+        place_saved_to_document(&host, &mut task, "t4");
+        assert_eq!(task.place.as_deref(), Some("save-failed"));
+        // 失败/取消：保留私有副本（回退语义）
+        assert!(host.deleted.lock().unwrap().is_empty());
+    }
 }

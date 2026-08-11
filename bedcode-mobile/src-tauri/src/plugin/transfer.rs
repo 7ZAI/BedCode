@@ -171,6 +171,14 @@ async fn run_transfer(
     bus: Arc<MessageBus>,
     token: CancellationToken,
 ) {
+    // M3 SAF 流直传：content:// 源经 SafIo 桥读（Android 才有）；state 未
+    // manage（测试/非 Android）时为 None，upload 按普通路径处理或明确报错
+    let saf = {
+        use tauri::Manager;
+        app_handle
+            .try_state::<crate::plugin::saf_io::SafIoState>()
+            .map(|s| s.inner().0.clone())
+    };
     let transferred = Arc::new(AtomicU64::new(request.offset));
     let total = request.expected_size;
 
@@ -219,7 +227,7 @@ async fn run_transfer(
     // 取消立即中断传输 future（下载中断流读取 / 上传丢弃请求体）
     let outcome = tokio::select! {
         _ = token.cancelled() => Outcome::Cancelled,
-        result = execute_transfer(&request, transferred.clone(), token.clone()) => match result {
+        result = execute_transfer(&request, transferred.clone(), token.clone(), saf) => match result {
             Ok(()) => Outcome::Completed,
             Err(reason) => Outcome::Failed(reason),
         },
@@ -255,10 +263,11 @@ async fn execute_transfer(
     request: &TransferRequest,
     transferred: Arc<AtomicU64>,
     token: CancellationToken,
+    saf: Option<Arc<dyn crate::plugin::saf_io::SafIo>>,
 ) -> Result<(), String> {
     match request.direction {
         TransferDirection::Download => download(request, transferred, token).await,
-        TransferDirection::Upload => upload(request, transferred).await,
+        TransferDirection::Upload => upload(request, transferred, saf).await,
     }
 }
 
@@ -359,30 +368,120 @@ async fn download(
     Ok(())
 }
 
+/// 上传本地读取源（M3：上传 SAF 流直传的 IO 半边抽象）
+///
+/// - 普通路径：tokio::fs（原有语义，可 seek 真续传）
+/// - content:// URI：SAF 流句柄（Kotlin 桥 base64 跨桥读），seek 语义由
+///   SafIo::open_stream 的 offset 参数承载（可 seek 真续传 / pipe 流保 fd
+///   顺序续读 / 跨任务全量重传，见 spec M3 续传策略）
+enum UploadSource {
+    /// 本地文件（tokio 异步 IO）
+    File(tokio::fs::File),
+    /// SAF 流直传句柄（同步桥，poll_read 内阻塞跨桥）
+    Saf(Box<SafStreamReader>),
+}
+
+/// SAF 流直传的 AsyncRead 适配：每次 poll_read 同步经 SafIo::read_stream 读
+///
+/// poll 上下文阻塞与 Kotlin 桥一致（block_in_place + block_on 已在
+/// KotlinSafIo::read_stream 内部完成）；EOF 后返回 0 不再跨桥。
+/// drop 不关闭句柄——任务内断线重连依赖 fd 保留（spec M3），关闭由
+/// upload 成功路径显式 close_stream 或 Kotlin 超时清扫兜底。
+struct SafStreamReader {
+    handle_id: String,
+    saf: Arc<dyn crate::plugin::saf_io::SafIo>,
+    eof: bool,
+}
+
+impl tokio::io::AsyncRead for SafStreamReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = &mut *self;
+        if this.eof {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        // ReadBuf::initialize_unfilled 需要 &mut [u8]；先取容量再读入
+        let capacity = buf.remaining();
+        if capacity == 0 {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        match this.saf.read_stream(&this.handle_id, capacity) {
+            Ok(data) => {
+                if data.is_empty() {
+                    // EOF（Kotlin 侧 read 返回 -1 → 空 base64）
+                    this.eof = true;
+                    std::task::Poll::Ready(Ok(()))
+                } else {
+                    let n = data.len().min(capacity);
+                    buf.put_slice(&data[..n]);
+                    std::task::Poll::Ready(Ok(()))
+                }
+            }
+            Err(e) => std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("saf_read_stream: {}", e),
+            ))),
+        }
+    }
+}
+
 /// 上传：本地文件从 offset seek → PUT 流式 body 到对端 upload session
 ///
 /// Upload 方向忽略 final_path（仅 Download 方向用于 .part → 最终名原子落位）
-async fn upload(request: &TransferRequest, transferred: Arc<AtomicU64>) -> Result<(), String> {
+///
+/// M3：local_path 为 content:// URI 时走 SAF 流直传（saf 参数为桥实现，
+/// Android 注入；非 Android 无 SAF 概念）。续传策略：
+/// - open_stream 返回 effective_offset == request.offset → 正常上传
+/// - 不等（pipe 流不可 seek 且无活跃句柄）→ 回报 not-seekable-resume，
+///   插件重建 session 全量重传（fd 保留，重传时 offset=0 强制重开从头）
+/// - 上传成功显式 close_stream 释放 fd；失败/取消不 close（任务内保 fd
+///   顺序续读，spec M3）
+async fn upload(
+    request: &TransferRequest,
+    transferred: Arc<AtomicU64>,
+    saf: Option<Arc<dyn crate::plugin::saf_io::SafIo>>,
+) -> Result<(), String> {
     use tokio::io::AsyncSeekExt;
 
-    let mut file = tokio::fs::File::open(&request.local_path)
-        .await
-        .map_err(|e| format!("open local file '{}' failed: {}", request.local_path, e))?;
-
-    if request.offset > 0 {
-        file.seek(std::io::SeekFrom::Start(request.offset))
+    let local_path = &request.local_path;
+    let saf_handle_id: Option<String>;
+    let source: UploadSource = if local_path.starts_with("content://") {
+        // SAF 流直传（M3）：open 即带 offset（可 seek 真续传 / pipe 流从头）
+        let saf = saf.clone().ok_or_else(|| {
+            format!(
+                "open SAF stream '{}' failed: SafIo unavailable (SAF is Android-only)",
+                local_path
+            )
+        })?;
+        let handle = saf
+            .open_stream(local_path, request.offset)
+            .map_err(|e| format!("saf_open '{}' failed: {}", local_path, e))?;
+        if handle.effective_offset != request.offset {
+            // pipe 流（不可 seek）且无活跃句柄：无法从断点续读，全量重传
+            // 由插件重建 session 触发（Kotlin 侧 offset=0 重开会强制重开 fd）
+            return Err("not-seekable-resume".to_string());
+        }
+        saf_handle_id = Some(handle.handle_id.clone());
+        UploadSource::Saf(Box::new(SafStreamReader {
+            handle_id: handle.handle_id,
+            saf,
+            eof: false,
+        }))
+    } else {
+        saf_handle_id = None;
+        let mut file = tokio::fs::File::open(local_path)
             .await
-            .map_err(|e| format!("seek local file to offset {} failed: {}", request.offset, e))?;
-    }
-
-    // ReaderStream 按 IO_BUFFER_SIZE 读块；inspect 中累已传字节（进度 reporter 读取）
-    let stream = tokio_util::io::ReaderStream::with_capacity(file, IO_BUFFER_SIZE).map(
-        move |item| {
-            item.inspect(|bytes| {
-                transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            })
-        },
-    );
+            .map_err(|e| format!("open local file '{}' failed: {}", local_path, e))?;
+        if request.offset > 0 {
+            file.seek(std::io::SeekFrom::Start(request.offset))
+                .await
+                .map_err(|e| format!("seek local file to offset {} failed: {}", request.offset, e))?;
+        }
+        UploadSource::File(file)
+    };
 
     let client = reqwest::Client::new();
     let mut builder = client.put(&request.url);
@@ -390,18 +489,53 @@ async fn upload(request: &TransferRequest, transferred: Arc<AtomicU64>) -> Resul
         builder = builder.header(key.as_str(), value.as_str());
     }
 
+    // 统一为 Box<dyn Stream>：File（tokio 异步）与 SafStreamReader（同步桥）
+    // 均为 AsyncRead，ReaderStream 包装后 Item 类型一致
+    let body_stream: Box<
+        dyn futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>>
+            + Send
+            + Unpin,
+    > = match source {
+        UploadSource::File(file) => Box::new(
+            tokio_util::io::ReaderStream::with_capacity(file, IO_BUFFER_SIZE).map(move |item| {
+                item.inspect(|bytes| {
+                    transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                })
+            }),
+        ),
+        UploadSource::Saf(reader) => Box::new(
+            tokio_util::io::ReaderStream::with_capacity(reader, IO_BUFFER_SIZE).map(move |item| {
+                item.inspect(|bytes| {
+                    transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                })
+            }),
+        ),
+    };
+
     let response = builder
-        .body(reqwest::Body::wrap_stream(stream))
+        .body(reqwest::Body::wrap_stream(body_stream))
         .send()
         .await
         .map_err(|e| format!("PUT {} failed: {}", request.url, e))?;
 
     if !response.status().is_success() {
+        // 失败不 close：fd 保留供任务内续读（spec M3）
         return Err(format!(
             "PUT {} returned HTTP {}",
             request.url,
             response.status().as_u16()
         ));
+    }
+
+    // 成功：显式释放 SAF 句柄（后续重传会是全新会话，从头或 seek）
+    if let (Some(handle_id), Some(saf)) = (saf_handle_id, saf) {
+        if let Err(e) = saf.close_stream(&handle_id) {
+            tracing::warn!(
+                handle_id = %handle_id,
+                "upload: close_stream failed (leak bounded by Kotlin sweep): {}",
+                e
+            );
+        }
     }
     Ok(())
 }
@@ -845,6 +979,7 @@ mod tests {
                 local.to_str().unwrap(),
             ),
             counter(),
+            None,
         )
         .await
         .unwrap();
@@ -874,7 +1009,7 @@ mod tests {
         );
         req.offset = 2;
 
-        upload(&req, counter()).await.unwrap();
+        upload(&req, counter(), None).await.unwrap();
 
         // seek 到 offset 后只发送尾部（续传语义）
         assert_eq!(*received.lock().unwrap(), b"cdef");
@@ -895,11 +1030,203 @@ mod tests {
                 local.to_str().unwrap(),
             ),
             counter(),
+            None,
         )
         .await
         .unwrap_err();
 
         assert!(err.contains("HTTP 500"), "got: {}", err);
+    }
+
+    // ==================== M3：SAF 流直传（fake 注入） ====================
+
+    /// SAF 流直传测试 fake：按 uri/offset 语义模拟 Kotlin safOpen/safRead
+    ///
+    /// - open_stream 记录请求 offset，返回 effective_offset（可按配置偏离，
+    ///   模拟 pipe 流不可 seek）
+    /// - read_stream 按顺序吐出 DATA 的字节切片（512B/次），EOF 后空
+    /// - close_stream 记录调用（成功路径必须关闭句柄）
+    struct FakeSafIo {
+        /// 全量源数据（read_stream 的取数源）
+        data: Vec<u8>,
+        /// 实际生效偏移（默认与请求一致；偏离模拟 pipe 流跨任务重传场景）
+        effective_offset: std::sync::Mutex<Option<u64>>,
+        /// 请求过 open_stream 的 (uri, offset)
+        opened: std::sync::Mutex<Vec<(String, u64)>>,
+        /// 被 close 的句柄
+        closed: std::sync::Mutex<Vec<String>>,
+        /// read_stream 已读字节数（fake 内部游标）
+        cursor: std::sync::Mutex<u64>,
+    }
+
+    impl FakeSafIo {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                effective_offset: std::sync::Mutex::new(None),
+                opened: std::sync::Mutex::new(Vec::new()),
+                closed: std::sync::Mutex::new(Vec::new()),
+                cursor: std::sync::Mutex::new(0),
+            }
+        }
+    }
+
+    impl crate::plugin::saf_io::SafIo for FakeSafIo {
+        fn list_tree(&self, _t: &str, _d: &str) -> crate::Result<Vec<crate::plugin::saf_io::SafEntry>> {
+            Ok(vec![])
+        }
+        fn read_to_cache(&self, _u: &str, _d: &str) -> crate::Result<crate::plugin::saf_io::SafCopyHandle> {
+            unreachable!()
+        }
+        fn copy_status(&self, _c: &str) -> crate::Result<crate::plugin::saf_io::SafCopyStatus> {
+            unreachable!()
+        }
+        fn cancel_copy(&self, _c: &str) -> crate::Result<()> {
+            unreachable!()
+        }
+        fn cleanup_stale_copies(&self) -> crate::Result<()> {
+            Ok(())
+        }
+        fn check_authorized(&self, _t: &str) -> crate::Result<bool> {
+            Ok(true)
+        }
+        fn write_media_downloads(&self, _s: &str, _d: &str, _m: &str) -> crate::Result<()> {
+            Ok(())
+        }
+        fn open_stream(
+            &self,
+            uri: &str,
+            offset: u64,
+        ) -> crate::Result<crate::plugin::saf_io::SafStreamHandle> {
+            self.opened.lock().unwrap().push((uri.to_string(), offset));
+            let effective = self.effective_offset.lock().unwrap().unwrap_or(offset);
+            // 模拟 Kotlin Os.lseek：可 seek 时句柄游标定位到 effective_offset
+            // （pipe 流从头，effective_offset=0）
+            *self.cursor.lock().unwrap() = effective;
+            Ok(crate::plugin::saf_io::SafStreamHandle {
+                handle_id: "stream-1".to_string(),
+                effective_offset: effective,
+                seekable: self.effective_offset.lock().unwrap().is_none(),
+            })
+        }
+        fn read_stream(&self, _h: &str, len: usize) -> crate::Result<Vec<u8>> {
+            let mut cursor = self.cursor.lock().unwrap();
+            let start = *cursor as usize;
+            if start >= self.data.len() {
+                return Ok(Vec::new()); // EOF
+            }
+            let end = (start + len).min(self.data.len());
+            *cursor = end as u64;
+            Ok(self.data[start..end].to_vec())
+        }
+        fn seek_stream(&self, _h: &str, _o: u64) -> crate::Result<()> {
+            Ok(())
+        }
+        fn close_stream(&self, h: &str) -> crate::Result<()> {
+            self.closed.lock().unwrap().push(h.to_string());
+            Ok(())
+        }
+        fn stream_seekable(&self, _u: &str) -> crate::Result<bool> {
+            Ok(true)
+        }
+        fn save_to_document(&self, _s: &str, _n: &str, _m: &str) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_saf_content_uri_streams_via_bridge_and_closes_on_success() {
+        disable_proxy_for_loopback();
+        // 256KB 伪随机体，覆盖多块跨桥读取（单块 512KB > 数据量，一轮读完）
+        let data: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let addr = spawn_mock_server({
+            let received = received.clone();
+            Arc::new(move |req: MockRequest| {
+                assert_eq!(req.method, "PUT");
+                received.lock().unwrap().extend_from_slice(&req.body);
+                MockResponse::ok("")
+            })
+        })
+        .await;
+        let saf = Arc::new(FakeSafIo::new(data.clone()));
+        let uri = "content://tree/root/document/f1";
+
+        upload(
+            &make_request(TransferDirection::Upload, &format!("http://{}/upload/sid", addr), uri),
+            counter(),
+            Some(saf.clone()),
+        )
+        .await
+        .unwrap();
+
+        // body 与源数据逐字节一致（无中转复制，流直传）
+        assert_eq!(*received.lock().unwrap(), data);
+        // 打开时 offset=0
+        assert_eq!(saf.opened.lock().unwrap().as_slice(), &[(uri.to_string(), 0)]);
+        // 成功后必须显式 close（否则 fd 泄漏）
+        assert_eq!(saf.closed.lock().unwrap().as_slice(), &["stream-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn upload_saf_seekable_resume_seeks_at_open() {
+        disable_proxy_for_loopback();
+        // 续传语义：open_stream 收到请求 offset，fake 的游标起点与之一致
+        // （真机由 Kotlin Os.lseek 完成）；只发送断点之后的字节
+        let data: Vec<u8> = (0..4096).map(|i| (i % 253) as u8).collect();
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let addr = spawn_mock_server({
+            let received = received.clone();
+            Arc::new(move |req: MockRequest| {
+                received.lock().unwrap().extend_from_slice(&req.body);
+                MockResponse::ok("")
+            })
+        })
+        .await;
+        let saf = Arc::new(FakeSafIo::new(data.clone()));
+        let uri = "content://tree/root/document/f1";
+        let mut req = make_request(TransferDirection::Upload, &format!("http://{}/upload/sid", addr), uri);
+        req.offset = 1024;
+
+        upload(&req, counter(), Some(saf.clone())).await.unwrap();
+
+        assert_eq!(*received.lock().unwrap(), data[1024..]);
+        assert_eq!(saf.opened.lock().unwrap().as_slice(), &[(uri.to_string(), 1024)]);
+        assert_eq!(saf.closed.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn upload_saf_pipe_stream_not_seekable_reports_resume_error() {
+        disable_proxy_for_loopback();
+        // pipe 流（不可 seek）跨任务续传：Kotlin 只能从头打开，
+        // effective_offset=0 ≠ 请求 offset=10 → 宿主回报 not-seekable-resume，
+        // 插件重建 session 全量重传；句柄不 close（fd 保留供重传）
+        let saf = Arc::new(FakeSafIo::new(b"0123456789abcdef".to_vec()));
+        *saf.effective_offset.lock().unwrap() = Some(0);
+        let uri = "content://pipe/stream/s1";
+        let mut req = make_request(TransferDirection::Upload, "http://127.0.0.1:1/upload/sid", uri);
+        req.offset = 10;
+
+        let err = upload(&req, counter(), Some(saf.clone())).await.unwrap_err();
+
+        assert_eq!(err, "not-seekable-resume");
+        assert!(saf.closed.lock().unwrap().is_empty(), "失败不得 close（fd 保留续读）");
+    }
+
+    #[tokio::test]
+    async fn upload_saf_without_io_reports_platform_error() {
+        disable_proxy_for_loopback();
+        // 非 Android 平台（saf=None）遇到 content:// 源：明确错误而非静默
+        // 退化（dev 窗口无 SAF 概念）
+        let uri = "content://tree/root/document/f1";
+        let err = upload(
+            &make_request(TransferDirection::Upload, "http://127.0.0.1:1/upload/sid", uri),
+            counter(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("SafIo unavailable"), "got: {}", err);
     }
 
     // ==================== dispatch ====================
@@ -929,6 +1256,7 @@ mod tests {
             ),
             counter(),
             token.clone(),
+            None,
         )
         .await
         .unwrap();
@@ -940,6 +1268,7 @@ mod tests {
             ),
             counter(),
             token.clone(),
+            None,
         )
         .await
         .unwrap();

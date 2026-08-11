@@ -39,6 +39,7 @@ Label: wayfinder:map
 - [桌面端插件 UI 规格](issues/04-桌面端插件UI规格.md) — 选定 Variant A 双栏工作台：左目录表格（多选）+ 右常驻传输队列（状态汇总 chips + 任务卡）；四色状态标签体系。原型：prototypes/desktop-ui/index.html#A。
 - [移动端插件 UI 规格](issues/05-移动端插件UI规格.md) — 工具箱长条入口块（实时状态角标）+ 页面方案 A：浏览为主 + 迷你传输条/底部抽屉队列；同名被拒用 Material 对话框即时提醒。原型：prototypes/mobile-ui/index.html#A。
 - [用户授权流与安全细节](issues/06-用户授权流与安全细节.md) — 白名单默认空即默认安全；配对+白名单即完整信任模型；不做审计；明文告知一行文案 + **传输层加密拦截预留缝（MVP 空实现）**；同名被拒仅发起方感知，四条 i18n 文案定稿。
+- [移动端 cargo test 崩溃与 SAF 根 documentId 解码修复](issues/09-移动端cargo-test崩溃与SAF根documentId解码修复.md) — 0xc0000139 根因：测试 exe 无应用级 manifest，加载 System32 comctl32 5.82 桩缺 `TaskDialogIndirect`（rfd win_cid 后端）；修复：app.manifest + build.rs 统一注入 common-controls v6（bin 改 `new_without_app_manifest` 防 RT_MANIFEST 重复），`CARGO_CFG_TARGET_OS` 判定防泄漏到 Android 目标。顺带修复被掩盖的生产 bug：`tree_document_id` 改为返回解码形态（`primary:Download`），对齐 Kotlin `getTreeDocumentId`/`buildChildDocumentsUriUsingTree` 契约——SAF 根级列目录/下载此前必空。
 
 ## Not yet specified
 

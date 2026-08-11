@@ -14,6 +14,7 @@
 
 use crate::file_service::cipher::{PassthroughCipher, TransportCipher};
 use crate::file_service::sandbox;
+use crate::file_service::saf_tree;
 use crate::file_service::upload::UploadSessionManager;
 use bedcode_plugin_api_mobile::{
     FileOperation, MountOptions, PeerFileService, UploadHookDecision, UploadRequestMeta,
@@ -45,8 +46,14 @@ pub struct MountEntry {
     pub plugin_id: String,
     /// 挂载点名称（URL 段）
     pub mount_path: String,
-    /// 允许目录根（canonicalize 后，已去重取最外层）
+    /// 允许目录根（canonicalize 后，已去重取最外层；真实路径根）
     pub roots: Vec<PathBuf>,
+    /// SAF 树根（content://tree/... URI；持久化授权，M2）
+    ///
+    /// 共享目录 SAF 化的挂载形态：list/download 经 SafIo（list_tree 遍历 /
+    /// 中转复制）服务，不再走 std::fs 真实路径。免 fs_auth（授权由系统
+    /// 持久化 URI 权限承载）与 canonicalize（content:// 无路径语义）。
+    pub saf_roots: Vec<String>,
     /// 允许的操作集合
     pub operations: Vec<FileOperation>,
     /// 上传策略钩子目标
@@ -69,17 +76,31 @@ pub struct FileServiceRegistry {
     pending_hook_replies: Mutex<HashMap<String, oneshot::Sender<UploadHookDecision>>>,
     /// Tauri AppHandle（Webview 钩子事件发送；经 [`set_app_handle`](Self::set_app_handle) 注入）
     app_handle: RwLock<Option<tauri::AppHandle>>,
+    /// SAF 存储访问实现（M2 三端点；生产 = default_saf_io，测试注入 fake）
+    saf_io: RwLock<Option<Arc<dyn crate::plugin::saf_io::SafIo>>>,
+    /// 接收落点下载目录（M2 上传目标语义；懒解析自 app_handle 并缓存，测试可预置）
+    downloads_dir: RwLock<Option<PathBuf>>,
+    /// SAF 中转缓存目录（M2 download 端点 cache 中转；懒解析自 app_handle 并缓存，测试可预置）
+    relay_dir: RwLock<Option<PathBuf>>,
 }
 
 impl FileServiceRegistry {
     /// 创建注册表（后台 sweeper 需在 runtime 上下文内经 [`start_background_tasks`] 启动）
     pub fn new() -> Arc<Self> {
+        Self::with_saf_io(crate::plugin::saf_io::default_saf_io())
+    }
+
+    /// 创建注册表并注入 SafIo 实现（端点测试注入 fake；生产用 [`new`](Self::new)）
+    pub fn with_saf_io(saf_io: Arc<dyn crate::plugin::saf_io::SafIo>) -> Arc<Self> {
         Arc::new(Self {
             mounts: RwLock::new(HashMap::new()),
             peers: RwLock::new(HashMap::new()),
             upload_sessions: Arc::new(UploadSessionManager::new()),
             pending_hook_replies: Mutex::new(HashMap::new()),
             app_handle: RwLock::new(None),
+            saf_io: RwLock::new(Some(saf_io)),
+            downloads_dir: RwLock::new(None),
+            relay_dir: RwLock::new(None),
         })
     }
 
@@ -90,6 +111,72 @@ impl FileServiceRegistry {
             return;
         }
         *self.app_handle.write().await = Some(handle);
+    }
+
+    // ==================== SAF 化辅助（M2） ====================
+
+    /// SAF 存储访问实现（三端点 list/download/upload 落位用；None = 未注入）
+    pub async fn saf_io(&self) -> Option<Arc<dyn crate::plugin::saf_io::SafIo>> {
+        self.saf_io.read().await.clone()
+    }
+
+    /// 注入 SafIo 实现（端点测试替换 fake）
+    pub async fn set_saf_io(&self, saf: Arc<dyn crate::plugin::saf_io::SafIo>) {
+        *self.saf_io.write().await = Some(saf);
+    }
+
+    /// 接收落点下载目录（M2 上传目标语义；懒解析自 app_handle 并缓存）
+    ///
+    /// 解析链与命令层/WASM host 共用（android_plugins.rs resolve_app_downloads_dir）：
+    /// Kotlin 桥外部私有目录 → app_data/Downloads 回退。外部存储不可用的设备上
+    /// 上传会话临时文件与回退落位（rename）都落到该目录，与下载方向私有回退一致。
+    pub async fn downloads_dir(&self) -> Option<PathBuf> {
+        if let Some(dir) = self.downloads_dir.read().await.as_ref() {
+            return Some(dir.clone());
+        }
+        let handle = self.app_handle.read().await.clone()?;
+        let dir = PathBuf::from(crate::plugin::android_plugins::resolve_app_downloads_dir(&handle).await?);
+        *self.downloads_dir.write().await = Some(dir.clone());
+        Some(dir)
+    }
+
+    /// 预置下载目录（端点测试注入临时目录）
+    pub async fn set_downloads_dir(&self, dir: PathBuf) {
+        *self.downloads_dir.write().await = Some(dir);
+    }
+
+    /// SAF 中转缓存目录（M2 download 端点 cache 中转；懒解析自 app_handle 并缓存）
+    ///
+    /// app cache/bedcode_downloads（系统可清理；副本生命周期短，见 saf_tree 模块）。
+    pub async fn relay_dir(&self) -> Option<PathBuf> {
+        if let Some(dir) = self.relay_dir.read().await.as_ref() {
+            return Some(dir.clone());
+        }
+        use tauri::Manager;
+        let handle = self.app_handle.read().await.clone()?;
+        let dir = handle.path().app_cache_dir().ok()?.join("bedcode_downloads");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::error!(
+                error = %e,
+                path = %dir.display(),
+                "registry: failed to create saf relay dir"
+            );
+            return None;
+        }
+        *self.relay_dir.write().await = Some(dir.clone());
+        Some(dir)
+    }
+
+    /// 预置中转缓存目录（端点测试注入临时目录）
+    pub async fn set_relay_dir(&self, dir: PathBuf) {
+        *self.relay_dir.write().await = Some(dir);
+    }
+
+    /// 测试辅助：直接注入挂载条目（绕过 fs_auth / plugin manager 依赖）
+    #[cfg(test)]
+    pub async fn insert_entry_for_test(&self, entry: MountEntry) {
+        let key = (entry.plugin_id.clone(), entry.mount_path.clone());
+        self.mounts.write().await.insert(key, entry);
     }
 
     /// 启动后台任务（必须在 tokio runtime 上下文内调用一次）
@@ -128,6 +215,22 @@ impl FileServiceRegistry {
             )));
         }
 
+        // 根分流（M2 SAF 化）：SAF 树根（content://tree/...）免 fs_auth 与
+        // canonicalize（持久化授权经 ContentResolver 生效，无路径语义）；
+        // 真实路径根保持现有校验（fs_auth + normalize_roots）
+        let saf_roots: Vec<String> = options
+            .roots
+            .iter()
+            .filter(|r| saf_tree::is_saf_tree_uri(r))
+            .cloned()
+            .collect();
+        let real_roots: Vec<PathBuf> = options
+            .roots
+            .iter()
+            .filter(|r| !saf_tree::is_saf_tree_uri(r))
+            .map(PathBuf::from)
+            .collect();
+
         // 声明 upload 操作时挂载点具备写入能力，按写授权校验（覆盖读）
         let fs_op = if options.operations.contains(&FileOperation::Upload) {
             crate::plugin::fs_auth::FsOp::Write
@@ -135,27 +238,33 @@ impl FileServiceRegistry {
             crate::plugin::fs_auth::FsOp::Read
         };
         let fs_auth = crate::state::get_plugin_manager().fs_auth().clone();
-        for root in &options.roots {
-            if !fs_auth.check(plugin_id, root, fs_op).await {
+        for root in &real_roots {
+            let root_str = root.to_string_lossy();
+            if !fs_auth.check(plugin_id, &root_str, fs_op).await {
                 return Err(crate::AppError::Auth(format!(
                     "mount '{}': root '{}' not authorized by user",
-                    options.mount_path, root
+                    options.mount_path, root_str
                 )));
             }
         }
 
-        let raw_roots: Vec<PathBuf> = options.roots.iter().map(PathBuf::from).collect();
-        let roots = sandbox::normalize_roots(&raw_roots).map_err(|e| {
-            crate::AppError::InvalidInput(format!(
-                "mount '{}': invalid roots: {}",
-                options.mount_path, e
-            ))
-        })?;
+        let roots = if real_roots.is_empty() {
+            // 全 SAF 根挂载：真实路径根为空合法（SAF 分支自行解析）
+            Vec::new()
+        } else {
+            sandbox::normalize_roots(&real_roots).map_err(|e| {
+                crate::AppError::InvalidInput(format!(
+                    "mount '{}': invalid roots: {}",
+                    options.mount_path, e
+                ))
+            })?
+        };
 
         let entry = MountEntry {
             plugin_id: plugin_id.to_string(),
             mount_path: options.mount_path.clone(),
             roots,
+            saf_roots,
             operations: options.operations.clone(),
             hook,
             // MVP 直通加密缝；未来接入 E2E 加密时在此注入真实实现
@@ -176,8 +285,11 @@ impl FileServiceRegistry {
 
         // 清理宿主异常退出遗留的孤儿临时文件：后台扫描（best effort，失败不影响挂载）。
         // 大目录（NAS/深目录）扫描可能耗时数十秒，不能阻塞 wasm 挂载调用——
-        // 慢宿主工作移出调用路径后，宿主延迟与插件执行预算彻底解耦（见 FUEL_PER_CALL）
-        spawn_orphan_cleanup(plugin_id, &options.mount_path, entry.roots.clone());
+        // 慢宿主工作移出调用路径后，宿主延迟与插件执行预算彻底解耦（见 FUEL_PER_CALL）。
+        // 仅扫描真实路径根（SAF 树根无文件系统语义）；下载目录一并扫描（接收方向
+        // 会话临时文件落私有下载目录，崩溃遗留 .part 需兜底清理）
+        let downloads_dir = self.downloads_dir().await;
+        spawn_orphan_cleanup(plugin_id, &options.mount_path, entry.roots.clone(), downloads_dir);
 
         tracing::info!(
             plugin_id = %plugin_id,
@@ -219,23 +331,39 @@ impl FileServiceRegistry {
             }
         };
 
+        // 根分流同 mount：SAF 树根免 fs_auth / normalize，真实路径根保持现有校验
+        let saf_roots: Vec<String> = roots
+            .iter()
+            .filter(|r| saf_tree::is_saf_tree_uri(r))
+            .cloned()
+            .collect();
+        let real_roots: Vec<PathBuf> = roots
+            .iter()
+            .filter(|r| !saf_tree::is_saf_tree_uri(r))
+            .map(PathBuf::from)
+            .collect();
+
         let fs_auth = crate::state::get_plugin_manager().fs_auth().clone();
-        for root in &roots {
-            if !fs_auth.check(plugin_id, root, fs_op).await {
+        for root in &real_roots {
+            let root_str = root.to_string_lossy();
+            if !fs_auth.check(plugin_id, &root_str, fs_op).await {
                 return Err(crate::AppError::Auth(format!(
                     "update_roots for mount '{}': root '{}' not authorized by user",
-                    mount_path, root
+                    mount_path, root_str
                 )));
             }
         }
 
-        let raw_roots: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
-        let normalized = sandbox::normalize_roots(&raw_roots).map_err(|e| {
-            crate::AppError::InvalidInput(format!(
-                "update_roots for mount '{}': invalid roots: {}",
-                mount_path, e
-            ))
-        })?;
+        let normalized = if real_roots.is_empty() {
+            Vec::new()
+        } else {
+            sandbox::normalize_roots(&real_roots).map_err(|e| {
+                crate::AppError::InvalidInput(format!(
+                    "update_roots for mount '{}': invalid roots: {}",
+                    mount_path, e
+                ))
+            })?
+        };
 
         let mut mounts = self.mounts.write().await;
         let entry = mounts
@@ -247,6 +375,7 @@ impl FileServiceRegistry {
                 ))
             })?;
         entry.roots = normalized;
+        entry.saf_roots = saf_roots;
 
         tracing::info!(
             plugin_id = %plugin_id,
@@ -650,9 +779,13 @@ fn peer_info_changed(old: &PeerFileService, new: &PeerFileService) -> bool {
 /// 后台清理孤儿上传临时文件（best effort：失败仅记录日志，不阻塞调用方）
 ///
 /// 无运行时上下文时（理论上不会发生：mount 必在异步上下文调用）回退同步执行
-fn spawn_orphan_cleanup(plugin_id: &str, mount_path: &str, roots: Vec<PathBuf>) {
+fn spawn_orphan_cleanup(plugin_id: &str, mount_path: &str, roots: Vec<PathBuf>, downloads_dir: Option<PathBuf>) {
+    let dirs: Vec<PathBuf> = roots
+        .into_iter()
+        .chain(downloads_dir)
+        .collect();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        let cleaned = crate::file_service::upload::clean_orphan_parts(&roots);
+        let cleaned = crate::file_service::upload::clean_orphan_parts(&dirs);
         if cleaned > 0 {
             tracing::info!(
                 plugin_id = %plugin_id,
@@ -666,7 +799,7 @@ fn spawn_orphan_cleanup(plugin_id: &str, mount_path: &str, roots: Vec<PathBuf>) 
     let plugin_id = plugin_id.to_string();
     let mount_path = mount_path.to_string();
     handle.spawn_blocking(move || {
-        let cleaned = crate::file_service::upload::clean_orphan_parts(&roots);
+        let cleaned = crate::file_service::upload::clean_orphan_parts(&dirs);
         if cleaned > 0 {
             tracing::info!(
                 plugin_id = %plugin_id,

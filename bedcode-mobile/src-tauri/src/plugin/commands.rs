@@ -658,6 +658,265 @@ pub async fn open_all_files_settings(
 }
 
 
+// ==================== SAF 存储访问（SafIo 主 seam，共享目录/上传页用） ====================
+
+/// SAF：列出目录树子条目（共享目录 App 内遍历，免系统选择器）
+///
+/// 权限经 require_fileservice 门控；实现经 Tauri state 的 SafIoState
+/// 注入（Android = KotlinSafIo 转发 SafTransferPlugin；测试注入 fake）。
+#[tauri::command]
+pub async fn plugin_saf_list_tree(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    tree_uri: String,
+    document_id: String,
+) -> Result<Vec<crate::plugin::saf_io::SafEntry>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_list_tree").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_list_tree_impl(saf.inner().0.as_ref(), &tree_uri, &document_id)
+}
+
+/// SAF：启动中转复制（SAF 源 → app 私有 cache），返回 {copyId, destPath}
+#[tauri::command]
+pub async fn plugin_saf_copy_start(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    uri: String,
+    dest_name: String,
+) -> Result<crate::plugin::saf_io::SafCopyHandle> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_copy_start").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_copy_start_impl(saf.inner().0.as_ref(), &uri, &dest_name)
+}
+
+/// SAF：轮询中转复制进度（「准备中」进度条数据源）
+#[tauri::command]
+pub async fn plugin_saf_copy_status(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    copy_id: String,
+) -> Result<crate::plugin::saf_io::SafCopyStatus> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_copy_status").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_copy_status_impl(saf.inner().0.as_ref(), &copy_id)
+}
+
+/// SAF：取消中转复制（复制方删除半成品后结束，无残留）
+#[tauri::command]
+pub async fn plugin_saf_copy_cancel(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    copy_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_copy_cancel").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_copy_cancel_impl(saf.inner().0.as_ref(), &copy_id)
+}
+
+/// SAF：清扫中转复制残留（file-transfer 插件激活时调用）
+#[tauri::command]
+pub async fn plugin_saf_cleanup_stale_copies(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_cleanup_stale_copies").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_cleanup_stale_copies_impl(saf.inner().0.as_ref())
+}
+
+/// SAF：检测树授权是否仍有效（失效标记 → 前端提示重新授权）
+#[tauri::command]
+pub async fn plugin_saf_check_authorized(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    tree_uri: String,
+) -> Result<bool> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_check_authorized").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_check_authorized_impl(saf.inner().0.as_ref(), &tree_uri)
+}
+
+/// SAF：写入 MediaStore 公共下载目录（接收方向统一落点，M2）
+///
+/// src_path 为 app 私有下载目录中的最终文件；mime_type 为空串时由
+/// Kotlin 按扩展名推断。失败（含 API<29 设备不支持）由调用方回退私有目录。
+#[tauri::command]
+pub async fn plugin_saf_write_media_downloads(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    src_path: String,
+    display_name: String,
+    mime_type: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_write_media_downloads").await?;
+    let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
+    saf_write_media_downloads_impl(
+        saf.inner().0.as_ref(),
+        &src_path,
+        &display_name,
+        &mime_type,
+    )
+}
+
+/// SAF：弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用）
+///
+/// 返回 (uri, documentId, displayName)；用户取消返回 None。
+/// 持久化授权（takePersistableUriPermission）由 Kotlin SafPickerPlugin 完成。
+#[tauri::command]
+pub async fn plugin_pick_shared_directory(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<Option<(String, String, String)>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_pick_shared_directory").await?;
+    crate::plugin::android_plugins::pick_shared_directory_android()
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("{}: {}", plugin_id, e)))
+}
+
+/// 列出真实路径目录条目（免授权特殊条目「app 私有下载目录」浏览用）
+///
+/// 仅允许 AppDownloadsDir（Android 外部私有下载目录）及其子目录：
+/// 特殊条目是唯一保留的真实路径共享条目（CONTEXT.md「文件传输」术语），
+/// 白名单校验防任意路径探测。基址解析与 WASM host_config_get 共用同一
+/// 函数（resolve_app_downloads_dir），保证外部存储不可用时特殊条目的
+/// 派生路径与浏览白名单一致。
+#[tauri::command]
+pub async fn plugin_saf_list_dir(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    path: String,
+) -> Result<Vec<crate::plugin::saf_io::SafEntry>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_saf_list_dir").await?;
+    list_private_downloads_dir(&app_handle, &path).await
+}
+
+/// 命令内部实现（与 Tauri 解耦，供单测注入 fake SafIo）
+fn saf_list_tree_impl(
+    saf: &dyn crate::plugin::saf_io::SafIo,
+    tree_uri: &str,
+    document_id: &str,
+) -> Result<Vec<crate::plugin::saf_io::SafEntry>> {
+    saf.list_tree(tree_uri, document_id).map_err(|e| {
+        crate::AppError::Plugin(format!("plugin_saf_list_tree({}): {}", tree_uri, e))
+    })
+}
+
+fn saf_copy_start_impl(
+    saf: &dyn crate::plugin::saf_io::SafIo,
+    uri: &str,
+    dest_name: &str,
+) -> Result<crate::plugin::saf_io::SafCopyHandle> {
+    saf.read_to_cache(uri, dest_name).map_err(|e| {
+        crate::AppError::Plugin(format!("plugin_saf_copy_start({}): {}", uri, e))
+    })
+}
+
+fn saf_copy_status_impl(
+    saf: &dyn crate::plugin::saf_io::SafIo,
+    copy_id: &str,
+) -> Result<crate::plugin::saf_io::SafCopyStatus> {
+    saf.copy_status(copy_id).map_err(|e| {
+        crate::AppError::Plugin(format!("plugin_saf_copy_status({}): {}", copy_id, e))
+    })
+}
+
+fn saf_copy_cancel_impl(saf: &dyn crate::plugin::saf_io::SafIo, copy_id: &str) -> Result<()> {
+    saf.cancel_copy(copy_id).map_err(|e| {
+        crate::AppError::Plugin(format!("plugin_saf_copy_cancel({}): {}", copy_id, e))
+    })
+}
+
+fn saf_cleanup_stale_copies_impl(saf: &dyn crate::plugin::saf_io::SafIo) -> Result<()> {
+    saf.cleanup_stale_copies().map_err(|e| {
+        crate::AppError::Plugin(format!("plugin_saf_cleanup_stale_copies: {}", e))
+    })
+}
+
+fn saf_check_authorized_impl(saf: &dyn crate::plugin::saf_io::SafIo, tree_uri: &str) -> Result<bool> {
+    saf.check_authorized(tree_uri).map_err(|e| {
+        crate::AppError::Plugin(format!("plugin_saf_check_authorized({}): {}", tree_uri, e))
+    })
+}
+
+fn saf_write_media_downloads_impl(
+    saf: &dyn crate::plugin::saf_io::SafIo,
+    src_path: &str,
+    display_name: &str,
+    mime_type: &str,
+) -> Result<()> {
+    saf.write_media_downloads(src_path, display_name, mime_type).map_err(|e| {
+        crate::AppError::Plugin(format!(
+            "plugin_saf_write_media_downloads({}): {}",
+            src_path, e
+        ))
+    })
+}
+
+/// 列出 AppDownloadsDir 及其子目录（白名单校验 + std::fs::read_dir）
+///
+/// 目录不可访问（非 Android / 目录被清）返回明确错误；条目只含
+/// name/isDir/size（真实路径条目，无 uri/documentId 语义）。
+async fn list_private_downloads_dir(
+    app_handle: &tauri::AppHandle,
+    path: &str,
+) -> Result<Vec<crate::plugin::saf_io::SafEntry>> {
+    // 白名单：必须位于 AppDownloadsDir（免授权特殊条目）之下；基址解析与
+    // WASM host config 共用（resolve_app_downloads_dir，含 app_data 回退）
+    if !crate::plugin::android_plugins::is_within_app_downloads_dir(app_handle, path).await {
+        return Err(crate::AppError::Auth(format!(
+            "plugin_saf_list_dir: path '{}' is outside the private downloads dir",
+            path
+        )));
+    }
+
+    let entries = std::fs::read_dir(path).map_err(|e| {
+        crate::AppError::Plugin(format!(
+            "plugin_saf_list_dir: failed to read '{}': {}",
+            path, e
+        ))
+    })?;
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            // 单条目读取失败（并发删除等）跳过，不阻断整个列表
+            Err(e) => {
+                tracing::debug!(error = %e, path = %path, "plugin_saf_list_dir: skip unreadable entry");
+                continue;
+            }
+        };
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        out.push(crate::plugin::saf_io::SafEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            is_dir: meta.is_dir(),
+            size: meta.len() as i64,
+            mime: String::new(),
+            // 真实路径条目以绝对路径承载 uri 字段（免授权特殊条目直读直传）
+            uri: entry.path().to_string_lossy().into_owned(),
+            document_id: String::new(),
+        });
+    }
+    out.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(out)
+}
+
+
 // ==================== Plugin Command Invoke ====================
 
 /// 调用 WASM 插件命令（前端 context.commands.execute 的回退桥）
@@ -679,4 +938,212 @@ pub async fn plugin_invoke(
             plugin_id, e
         ))
     })
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::saf_io::{SafCopyHandle, SafCopyStatus, SafEntry, SafIo, SafStreamHandle};
+
+    /// 命令层 impl 包装测试用 fake：按配置返回成功或固定错误
+    ///
+    /// 覆盖 saf_*_impl 的错误上下文包装（AppError::Plugin 带命令名/参数）
+    /// 与成功透传（spec「主 seam fake 注入覆盖编排」：命令入口薄包装
+    /// 同样纳入，防错误上下文丢失）。
+    struct FakeSaf {
+        fail_with: Option<&'static str>,
+    }
+
+    impl SafIo for FakeSaf {
+        fn list_tree(&self, _tree_uri: &str, _document_id: &str) -> Result<Vec<SafEntry>> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(vec![SafEntry {
+                    name: "a.txt".to_string(),
+                    is_dir: false,
+                    size: 1,
+                    mime: "text/plain".to_string(),
+                    uri: "content://tree/root/document/f1".to_string(),
+                    document_id: "f1".to_string(),
+                }]),
+            }
+        }
+
+        fn read_to_cache(&self, _uri: &str, _dest_name: &str) -> Result<SafCopyHandle> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(SafCopyHandle {
+                    copy_id: "copy-1".to_string(),
+                    dest_path: "/cache/a.txt".to_string(),
+                }),
+            }
+        }
+
+        fn copy_status(&self, _copy_id: &str) -> Result<SafCopyStatus> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(SafCopyStatus {
+                    copy_id: "copy-1".to_string(),
+                    done: 1,
+                    total: 1,
+                    finished: true,
+                    cancelled: false,
+                    error: None,
+                    dest_path: "/cache/a.txt".to_string(),
+                }),
+            }
+        }
+
+        fn cancel_copy(&self, _copy_id: &str) -> Result<()> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(()),
+            }
+        }
+
+        fn cleanup_stale_copies(&self) -> Result<()> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(()),
+            }
+        }
+
+        fn check_authorized(&self, _tree_uri: &str) -> Result<bool> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(true),
+            }
+        }
+
+        fn write_media_downloads(
+            &self,
+            src_path: &str,
+            display_name: &str,
+            _mime_type: &str,
+        ) -> Result<()> {
+            assert_eq!(src_path, "/data/downloads/a.txt");
+            assert_eq!(display_name, "a.txt");
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(()),
+            }
+        }
+
+        fn open_stream(&self, _uri: &str, offset: u64) -> Result<SafStreamHandle> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(SafStreamHandle {
+                    handle_id: "stream-1".to_string(),
+                    effective_offset: offset,
+                    seekable: true,
+                }),
+            }
+        }
+
+        fn read_stream(&self, _handle_id: &str, _len: usize) -> Result<Vec<u8>> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(b"abc".to_vec()),
+            }
+        }
+
+        fn seek_stream(&self, _handle_id: &str, _offset: u64) -> Result<()> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(()),
+            }
+        }
+
+        fn close_stream(&self, _handle_id: &str) -> Result<()> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(()),
+            }
+        }
+
+        fn stream_seekable(&self, _uri: &str) -> Result<bool> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(true),
+            }
+        }
+
+        fn save_to_document(&self, _src: &str, _name: &str, _mime: &str) -> Result<()> {
+            match self.fail_with {
+                Some(msg) => Err(crate::AppError::Plugin(msg.to_string())),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[test]
+    fn saf_list_tree_impl_wraps_error_with_command_context() {
+        let fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_list_tree_impl(&fake, "content://tree/root", "d1").unwrap_err();
+        // 错误必须带命令名与参数（调用方定位），而非裸底层错误
+        assert!(err.to_string().contains("plugin_saf_list_tree"));
+        assert!(err.to_string().contains("content://tree/root"));
+    }
+
+    #[test]
+    fn saf_list_tree_impl_forwards_entries() {
+        let fake = FakeSaf { fail_with: None };
+        let entries = saf_list_tree_impl(&fake, "content://tree/root", "d1").expect("list should succeed");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.txt");
+    }
+
+    #[test]
+    fn saf_copy_start_impl_wraps_error_with_uri() {
+        let fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_copy_start_impl(&fake, "content://tree/root/document/f1", "a.txt").unwrap_err();
+        assert!(err.to_string().contains("plugin_saf_copy_start"));
+        assert!(err.to_string().contains("content://tree/root/document/f1"));
+    }
+
+    #[test]
+    fn saf_copy_status_impl_wraps_error_with_copy_id() {
+        let fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_copy_status_impl(&fake, "copy-1").unwrap_err();
+        assert!(err.to_string().contains("plugin_saf_copy_status"));
+        assert!(err.to_string().contains("copy-1"));
+    }
+
+    #[test]
+    fn saf_copy_cancel_impl_wraps_error_with_copy_id() {
+        let fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_copy_cancel_impl(&fake, "copy-1").unwrap_err();
+        assert!(err.to_string().contains("plugin_saf_copy_cancel"));
+        assert!(err.to_string().contains("copy-1"));
+    }
+
+    #[test]
+    fn saf_cleanup_stale_copies_impl_wraps_error() {
+        let fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_cleanup_stale_copies_impl(&fake).unwrap_err();
+        assert!(err.to_string().contains("plugin_saf_cleanup_stale_copies"));
+    }
+
+    #[test]
+    fn saf_check_authorized_impl_forwards_and_wraps() {
+        let ok_fake = FakeSaf { fail_with: None };
+        assert!(saf_check_authorized_impl(&ok_fake, "content://tree/root").expect("check should succeed"));
+        let err_fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_check_authorized_impl(&err_fake, "content://tree/root").unwrap_err();
+        assert!(err.to_string().contains("plugin_saf_check_authorized"));
+    }
+
+    #[test]
+    fn saf_write_media_downloads_impl_forwards_and_wraps() {
+        let ok_fake = FakeSaf { fail_with: None };
+        saf_write_media_downloads_impl(&ok_fake, "/data/downloads/a.txt", "a.txt", "")
+            .expect("media write should succeed");
+        let err_fake = FakeSaf { fail_with: Some("boom") };
+        let err = saf_write_media_downloads_impl(&err_fake, "/data/downloads/a.txt", "a.txt", "")
+            .unwrap_err();
+        assert!(err.to_string().contains("plugin_saf_write_media_downloads"));
+        assert!(err.to_string().contains("/data/downloads/a.txt"));
+    }
 }

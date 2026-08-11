@@ -282,6 +282,50 @@ impl HostFs for WasmHost {
             _ => Err(HostError::call_failed("fs_request_auth")),
         }
     }
+
+    fn fs_write_media_downloads(
+        &self,
+        src_path: &str,
+        display_name: &str,
+        mime_type: &str,
+    ) -> Result<(), HostError> {
+        let (src_ptr, src_len) = wasm_alloc_string(src_path);
+        let (name_ptr, name_len) = wasm_alloc_string(display_name);
+        let (mime_ptr, mime_len) = wasm_alloc_string(mime_type);
+        let status = unsafe {
+            host_fs_write_media_downloads(src_ptr, src_len, name_ptr, name_len, mime_ptr, mime_len)
+        };
+        wasm_dealloc_string(src_ptr, src_len);
+        wasm_dealloc_string(name_ptr, name_len);
+        wasm_dealloc_string(mime_ptr, mime_len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("fs_write_media_downloads"))
+        }
+    }
+
+    fn fs_save_to_document(
+        &self,
+        src_path: &str,
+        suggested_name: &str,
+        mime_type: &str,
+    ) -> Result<(), HostError> {
+        let (src_ptr, src_len) = wasm_alloc_string(src_path);
+        let (name_ptr, name_len) = wasm_alloc_string(suggested_name);
+        let (mime_ptr, mime_len) = wasm_alloc_string(mime_type);
+        let status = unsafe {
+            host_fs_save_to_document(src_ptr, src_len, name_ptr, name_len, mime_ptr, mime_len)
+        };
+        wasm_dealloc_string(src_ptr, src_len);
+        wasm_dealloc_string(name_ptr, name_len);
+        wasm_dealloc_string(mime_ptr, mime_len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("fs_save_to_document"))
+        }
+    }
 }
 
 // ==================== HostLog ====================
@@ -529,6 +573,24 @@ extern "C" {
     fn host_fs_request_auth(paths_ptr: u32, paths_len: u32) -> i32;
     /// 文件系统：删除文件 — 返回 0 成功（不存在也视为成功），-1 失败
     fn host_fs_delete(path_ptr: u32, path_len: u32) -> i32;
+    /// 文件系统：写入 MediaStore 公共下载目录 — 返回 0 成功，-1 失败
+    fn host_fs_write_media_downloads(
+        src_ptr: u32,
+        src_len: u32,
+        name_ptr: u32,
+        name_len: u32,
+        mime_ptr: u32,
+        mime_len: u32,
+    ) -> i32;
+    /// 文件系统：「保存到…」弹系统保存对话框并拷贝 — 返回 0 成功，-1 失败/取消
+    fn host_fs_save_to_document(
+        src_ptr: u32,
+        src_len: u32,
+        name_ptr: u32,
+        name_len: u32,
+        mime_ptr: u32,
+        mime_len: u32,
+    ) -> i32;
     /// 消息总线：发布消息 — 返回 0 成功，-1 失败
     fn host_bus_publish(topic_ptr: u32, topic_len: u32, payload_ptr: u32, payload_len: u32) -> i32;
     /// 消息总线：订阅 topic — 返回 0 成功，-1 失败

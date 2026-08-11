@@ -145,6 +145,20 @@ pub struct Task {
     pub state: TaskState,
     /// 失败/拒绝原因
     pub reason: Option<String>,
+    /// 下载落点标记（M2 接收方向 MediaStore 落位后的去向）
+    ///
+    /// - "system"：已写入系统公共下载目录（MediaStore.Downloads，私有副本已删）
+    /// - "private"：MediaStore 写入失败（含 API<29 设备），回退应用私有下载目录
+    /// - "saved-to"：已保存到用户选择的「保存到…」位置（私有副本已删）
+    /// - "save-failed"：保存到…失败/用户取消，副本保留在应用私有下载目录
+    /// - None：未执行落位（上传方向/旧任务）
+    #[serde(default)]
+    pub place: Option<String>,
+    /// 「保存到…」标记（M3）：下载完成后弹系统保存对话框（用户选位置），
+    /// 代替默认的 MediaStore 落位；完成即拷到所选位置并删除私有副本。
+    /// 入队时由前端置位，持久化（跨重启仍按用户意图落位）。
+    #[serde(default)]
+    pub save_to: bool,
     /// 创建时间（Unix 毫秒）
     pub created_at: u64,
     /// 更新时间（Unix 毫秒）
@@ -154,6 +168,13 @@ pub struct Task {
     /// 宿主传输引擎 task_id（关联进度回调）
     #[serde(skip)]
     pub host_task_id: Option<String>,
+    /// 上传完成后是否删除本地源文件（中转复制 cache 副本标记）
+    ///
+    /// SAF 上传链路（共享目录 → 中转复制 → cache → 引擎）的 cache 副本
+    /// 生命周期为「复制 → 上传 → 完成 → 删除」；真实路径源（免授权特殊
+    /// 条目）不设此标记。
+    #[serde(skip)]
+    pub cleanup_local: bool,
     /// 是否因断线自动转为 resumable（重连自动续传标记）
     #[serde(skip)]
     pub auto_resumable: bool,
@@ -374,9 +395,12 @@ mod tests {
             fingerprint: None,
             state: TaskState::Queued,
             reason: None,
+            place: None,
+            save_to: false,
             created_at: 0,
             updated_at: 0,
             host_task_id: None,
+            cleanup_local: false,
             auto_resumable: false,
             last_flush: 0,
         };

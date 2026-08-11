@@ -50,6 +50,15 @@ pub enum UploadSessionError {
     Io(#[from] std::io::Error),
 }
 
+/// MediaStore 落位结果：区分「同名拒绝」（任务终态失败，.part 保留）与
+/// 其他失败（回退私有目录 rename，原 complete 语义）
+pub enum PlacementError {
+    /// 目标（公共 Download 目录）已存在同名文件
+    Duplicate(String),
+    /// 其他失败（MediaStore 不可用、IO 错误等）
+    Other(String),
+}
+
 /// 单个上传会话
 pub struct UploadSession {
     /// 会话 ID（UUID v4）
@@ -215,6 +224,95 @@ impl UploadSessionManager {
             return Err(UploadSessionError::Io(e));
         }
         Ok(target)
+    }
+
+    /// 完成上传（M2 落位扩展）：先尝试外部落位回调（MediaStore 公共下载），
+    /// 失败自动回退 rename 到目标名（私有下载目录，原 complete 语义）
+    ///
+    /// 目标已存在 → DuplicateName（保留 .part）；临时文件缺失 → NotFound。
+    /// 落位回调返回 Err 视为 MediaStore 写入失败（原因仅记录日志），
+    /// 回退 rename 成功仍返回 Ok(target)——调用方无需感知回退发生。
+    /// 本方法不引入 tauri/SafIo 依赖（回调由调用方注入，保持本模块可独立单测）。
+    pub async fn complete_to_media<F>(
+        &self,
+        sid: &str,
+        plugin_id: &str,
+        mount_path: &str,
+        place: F,
+    ) -> Result<PathBuf, UploadSessionError>
+    where
+        F: FnOnce(&Path, &str) -> Result<(), PlacementError>,
+    {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(sid)
+            .filter(|s| s.plugin_id == plugin_id && s.mount_path == mount_path)
+            .ok_or_else(|| UploadSessionError::NotFound(sid.to_string()))?;
+
+        if session.target.exists() {
+            return Err(UploadSessionError::DuplicateName(session.target.clone()));
+        }
+        if !session.tmp.exists() {
+            return Err(UploadSessionError::NotFound(format!(
+                "{} (temp file missing)",
+                sid
+            )));
+        }
+
+        let target = session.target.clone();
+        let tmp = session.tmp.clone();
+        // 展示名 = 最终目标文件名（临时文件名 `.bedcode-upload-{sid}.part`
+        // 对用户无意义，不能作为公共下载目录的文件名）
+        let display_name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // 先移除 session：任一落位路径失败（rename 失败）时 .part 保留，
+        // session 不复活（与 complete 相同的语义安全）
+        let session = sessions.remove(sid).expect("session present after get_mut");
+        drop(sessions);
+
+        match place(&tmp, &display_name) {
+            // MediaStore 写入成功：删除临时文件（公共目录为唯一副本）
+            Ok(()) => {
+                if let Err(e) = std::fs::remove_file(&tmp) {
+                    // 删失败仅告警：残留 `.part` 由下次挂载的孤儿清理兜底，
+                    // 公共目录副本已可用，不阻断成功响应
+                    tracing::warn!(
+                        session_id = %sid,
+                        tmp = %tmp.display(),
+                        "complete_to_media: remove temp after media placement failed: {}",
+                        e
+                    );
+                }
+                Ok(target)
+            }
+            // 同名拒绝：任务终态失败（409 duplicate-name），.part 保留，
+            // 不回退私有目录（避免覆盖私有目录既有同名文件）
+            Err(PlacementError::Duplicate(reason)) => {
+                self.sessions.lock().await.insert(sid.to_string(), session);
+                tracing::warn!(
+                    session_id = %sid,
+                    reason = %reason,
+                    "complete_to_media: duplicate-name, keeping .part"
+                );
+                Err(UploadSessionError::DuplicateName(target))
+            }
+            // MediaStore 其他失败：回退 rename 到私有下载目录（原语义）
+            Err(PlacementError::Other(reason)) => {
+                tracing::warn!(
+                    session_id = %sid,
+                    reason = %reason,
+                    "complete_to_media: media placement failed, falling back to private rename"
+                );
+                if let Err(e) = std::fs::rename(&tmp, &target) {
+                    // 还原 session 便于客户端查询最终状态；.part 保留
+                    self.sessions.lock().await.insert(sid.to_string(), session);
+                    return Err(UploadSessionError::Io(e));
+                }
+                Ok(target)
+            }
+        }
     }
 
     /// 取消会话：移除 session 并删除临时文件（删失败仅告警）
@@ -519,6 +617,161 @@ mod tests {
             let err = manager.complete(&session.id, "p", "m").await.unwrap_err();
             assert!(matches!(err, UploadSessionError::DuplicateName(_)));
             // .part 保留供用户决定；session 仍在可查询
+            assert!(session.tmp.exists());
+            assert!(manager.get(&session.id, "p", "m").await.is_some());
+        });
+    }
+
+    #[test]
+    fn test_complete_to_media_success_deletes_temp() {
+        let rt = runtime();
+        rt.block_on(async {
+            let base = tempfile::tempdir().unwrap();
+            let manager = UploadSessionManager::new();
+
+            let target = target_in(base.path(), "movie.mp4");
+            let session = manager
+                .create("p", "m", target.clone(), 4)
+                .await
+                .unwrap();
+            manager.append(&session.id, "p", "m", 0, b"data").await.unwrap();
+
+            // MediaStore 落位成功：临时文件删除、目标不产生（副本在公共目录）
+            let placed = manager
+                .complete_to_media(&session.id, "p", "m", |tmp, name| {
+                    assert_eq!(name, "movie.mp4");
+                    assert!(tmp.exists());
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            assert_eq!(placed, target);
+            assert!(!session.tmp.exists());
+            assert!(!target.exists());
+            // session 已移除
+            assert!(manager.get(&session.id, "p", "m").await.is_none());
+        });
+    }
+
+    #[test]
+    fn test_complete_to_media_fallback_renames_to_private() {
+        let rt = runtime();
+        rt.block_on(async {
+            let base = tempfile::tempdir().unwrap();
+            let manager = UploadSessionManager::new();
+
+            let target = target_in(base.path(), "movie.mp4");
+            let session = manager
+                .create("p", "m", target.clone(), 4)
+                .await
+                .unwrap();
+            manager.append(&session.id, "p", "m", 0, b"data").await.unwrap();
+
+            // MediaStore 写入失败（如 API<29）→ 回退 rename（私有目录落点）
+            let placed = manager
+                .complete_to_media(&session.id, "p", "m", |_tmp, _name| {
+                    Err(PlacementError::Other("requires API 29+".to_string()))
+                })
+                .await
+                .unwrap();
+            assert_eq!(placed, target);
+            assert!(target.exists());
+            assert_eq!(std::fs::read(&target).unwrap(), b"data");
+        });
+    }
+
+    #[test]
+    fn test_complete_to_media_fallback_rename_failure_restores_session() {
+        let rt = runtime();
+        rt.block_on(async {
+            let base = tempfile::tempdir().unwrap();
+            let manager = UploadSessionManager::new();
+
+            // 手工构造 session：tmp 存活于独立目录，target 父目录不存在
+            // → MediaStore 回退 rename 必然失败 → session 还原（.part 保留）
+            let ghost = base.path().join("ghost");
+            let target = ghost.join("x.bin");
+            let tmp_dir = base.path().join("tmp-alive");
+            std::fs::create_dir_all(&tmp_dir).unwrap();
+            let tmp = tmp_dir.join("t.part");
+            std::fs::write(&tmp, b"abc").unwrap();
+            let session = UploadSession {
+                id: "s1".to_string(),
+                plugin_id: "p".to_string(),
+                mount_path: "m".to_string(),
+                target: target.clone(),
+                tmp: tmp.clone(),
+                size: 3,
+                received: 3,
+                last_active: Instant::now(),
+            };
+            manager.sessions.lock().await.insert(session.id.clone(), session);
+
+            let err = manager
+                .complete_to_media("s1", "p", "m", |_tmp, _name| {
+                    Err(PlacementError::Other("media write failed".to_string()))
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, UploadSessionError::Io(_)));
+            // 失败后 session 还原、.part 保留（客户端可查询/重试）
+            assert!(manager.get("s1", "p", "m").await.is_some());
+            assert!(tmp.exists());
+        });
+    }
+
+    #[test]
+    fn test_complete_to_media_duplicate_name_keeps_part() {
+        let rt = runtime();
+        rt.block_on(async {
+            let base = tempfile::tempdir().unwrap();
+            let manager = UploadSessionManager::new();
+
+            let target = target_in(base.path(), "dup.txt");
+            std::fs::write(&target, b"occupied").unwrap();
+
+            let session = manager
+                .create("p", "m", target.clone(), 4)
+                .await
+                .unwrap();
+            manager.append(&session.id, "p", "m", 0, b"data").await.unwrap();
+
+            let err = manager
+                .complete_to_media(&session.id, "p", "m", |_tmp, _name| Ok(()))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, UploadSessionError::DuplicateName(_)));
+            assert!(session.tmp.exists());
+            assert!(manager.get(&session.id, "p", "m").await.is_some());
+        });
+    }
+
+    #[test]
+    fn test_complete_to_media_duplicate_place_error_keeps_part_no_fallback() {
+        let rt = runtime();
+        rt.block_on(async {
+            let base = tempfile::tempdir().unwrap();
+            let manager = UploadSessionManager::new();
+
+            // 私有下载目录已存在同名目标（place 返回 Duplicate）→ 不得回退
+            // rename 覆盖私有副本；.part 保留、session 还原（客户端可查询）
+            let target = target_in(base.path(), "dup.mp4");
+            std::fs::write(&target, b"existing-private").unwrap();
+            let session = manager
+                .create("p", "m", target.clone(), 4)
+                .await
+                .unwrap();
+            manager.append(&session.id, "p", "m", 0, b"data").await.unwrap();
+
+            let err = manager
+                .complete_to_media(&session.id, "p", "m", |_tmp, _name| {
+                    Err(PlacementError::Duplicate("duplicate-name".to_string()))
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, UploadSessionError::DuplicateName(_)));
+            // 私有副本未被覆盖、.part 保留、session 还原
+            assert_eq!(std::fs::read(&target).unwrap(), b"existing-private");
             assert!(session.tmp.exists());
             assert!(manager.get(&session.id, "p", "m").await.is_some());
         });

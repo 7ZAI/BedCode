@@ -2,8 +2,12 @@
 /**
  * SettingsSection — 文件传输设置区 (Mobile)
  *
- * 共享目录管理：Android 优先用 SAF 系统目录选择器（fileService.pickDirectory，
- * 免存储权限）；不支持的 provider / iOS 降级为手动输入绝对路径 + 列表增删。
+ * 共享目录（Shared Directory）：条目以 SAF URI（content://tree/...）存储，
+ * 经系统目录树选择器添加（fileService.pickSharedDirectory，持久化授权重启
+ * 仍有效）；免授权特殊条目「app 私有下载目录」由 WASM 派生注入（kind=
+ * private_downloads，不可移除）。授权被回收/目录被删 → 条目标记失效，
+ * 展示「重新授权」入口（story #10）。旧真实路径条目与手动输入已废除
+ * （M1 起上传源严格限于共享目录）。
  * 下载目录只读展示（未显式配置时经 get-settings 解析宿主默认下载目录 AppDownloadsDir）。
  * 并发数 1–8 步进；底部常驻明文传输安全告知（spec §10 transfer.settings.plainWarning）。
  *
@@ -16,6 +20,8 @@
 import { ref, inject } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 import type { useSettings } from '../composables/useSettings'
+import type { SharedRoot } from '../types'
+import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import { CONCURRENCY_MAX } from '../composables/useSettings'
 
 type SettingsApi = ReturnType<typeof useSettings>
@@ -30,50 +36,23 @@ const context = inject<PluginContext>('pluginContext')
 
 const t = props.t
 
-/** 手动输入的新共享目录路径 */
-const newRoot = ref('')
-const adding = ref(false)
+/** 系统目录树选择器添加共享目录中 */
 const picking = ref(false)
 
-/** 「所有文件访问权限」一键授权跳转中 */
-const granting = ref(false)
-
-/**
- * 一键跳转系统「所有文件访问权限」授权页（Android 11+ 分区存储下读取
- * 顶层自定义目录必需；无运行时弹窗，只能经系统设置手动开启）。
- * 已授权时宿主直接返回 true（不跳转），失败（非 Android / 未激活）toast 提示。
- */
-async function handleGrantAllFilesAccess(): Promise<void> {
-  if (!context || granting.value) return
-  granting.value = true
-  try {
-    const granted = await context.fileService.requestAllFilesAccess()
-    if (granted) {
-      context.dialogs.showToast(t('transfer.settings.allFilesAccessGranted'), 'success')
-    }
-    // 未授权：宿主已跳转系统设置页，回到 App 后用户手动开启
-  } catch {
-    context.dialogs.showToast(t('transfer.settings.allFilesAccessUnavailable'), 'error')
-  } finally {
-    granting.value = false
-  }
-}
-
-/** 系统目录选择器选目录（取消/失败静默，失败 toast 提示降级手动输入） */
+/** 系统目录树选择器选共享目录（取消/失败 toast 提示） */
 async function handlePickRoot(): Promise<void> {
   if (!context || picking.value) return
   picking.value = true
   try {
-    const path = await context.fileService.pickDirectory()
-    if (path) {
-      const result = await props.settingsApi.addRoot(path)
-      if (result === 'duplicate') {
-        context.dialogs.showToast(t('transfer.settings.rootDuplicate'), 'warning')
-      } else if (result === 'failed') {
-        context.dialogs.showToast(t('transfer.settings.addRootFailed'), 'error')
-      }
+    const result = await props.settingsApi.addRoot()
+    if (result === 'duplicate') {
+      context.dialogs.showToast(t('transfer.settings.rootDuplicate'), 'warning')
+    } else if (result === 'failed') {
+      context.dialogs.showToast(t('transfer.settings.pickFailed'), 'error')
+    } else if (result === 'unsupported') {
+      context.dialogs.showToast(t('transfer.settings.pickUnsupported'), 'error')
     }
-    // 取消（null）静默
+    // ok / cancelled（用户取消）静默（目录已入列 / 无需打扰）
   } catch {
     context.dialogs.showToast(t('transfer.settings.pickFailed'), 'error')
   } finally {
@@ -81,26 +60,25 @@ async function handlePickRoot(): Promise<void> {
   }
 }
 
-async function handleAddRoot(): Promise<void> {
-  const path = newRoot.value
-  if (!path.trim() || !context) return
-  adding.value = true
+/** 重新授权失效条目（重新选择目录树替换） */
+async function handleReauthorize(root: SharedRoot): Promise<void> {
+  if (!context || picking.value) return
+  picking.value = true
   try {
-    const result = await props.settingsApi.addRoot(path)
-    if (result === 'ok') {
-      newRoot.value = ''
-    } else if (result === 'duplicate') {
-      context.dialogs.showToast(t('transfer.settings.rootDuplicate'), 'warning')
-    } else {
-      context.dialogs.showToast(t('transfer.settings.addRootFailed'), 'error')
+    const ok = await props.settingsApi.reauthorizeRoot(root)
+    if (ok) {
+      context.dialogs.showToast(t('transfer.settings.reauthorized'), 'success')
     }
+  } catch {
+    context.dialogs.showToast(t('transfer.settings.pickFailed'), 'error')
   } finally {
-    adding.value = false
+    picking.value = false
   }
 }
 
-async function handleRemoveRoot(path: string): Promise<void> {
-  await props.settingsApi.removeRoot(path)
+/** 移除共享目录（免授权特殊条目不可移除） */
+async function handleRemoveRoot(id: string): Promise<void> {
+  await props.settingsApi.removeRoot(id)
 }
 
 function decConcurrency(): void {
@@ -123,17 +101,9 @@ function incConcurrency(): void {
       <!-- 使用说明：黄色提醒框（与底部明文安全告知同款视觉） -->
       <div class="ft-warning-box">
         <p class="ft-warning-text">{{ t('transfer.settings.addRootHint') }}</p>
-        <p class="ft-warning-text mt-2">{{ t('transfer.settings.scopedStorageHint') }}</p>
-        <button
-          class="ft-grant-btn mt-2.5"
-          :disabled="granting"
-          @click="handleGrantAllFilesAccess()"
-        >
-          {{ granting ? t('transfer.settings.granting') : t('transfer.settings.grantAllFilesAccess') }}
-        </button>
       </div>
 
-      <!-- 系统选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
+      <!-- 系统目录树选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
       <button
         class="ft-touch-btn w-full gap-2 rounded-xl text-[var(--mobile-text-on-accent)] bg-[var(--mobile-accent)] active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
         :disabled="picking"
@@ -145,27 +115,6 @@ function incConcurrency(): void {
         {{ picking ? t('transfer.settings.picking') : t('transfer.settings.pickRoot') }}
       </button>
 
-      <!-- 手动输入兜底：添加按钮在上（与「选择目录」主按钮并列成组），下方输入路径 -->
-      <div class="space-y-2.5">
-        <button
-          class="ft-touch-btn w-full gap-2 rounded-xl ft-btn-accent active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
-          :disabled="adding || !newRoot.trim()"
-          @click="handleAddRoot()"
-        >
-          <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-          </svg>
-          {{ t('transfer.settings.addRoot') }}
-        </button>
-        <input
-          v-model="newRoot"
-          type="text"
-          :placeholder="t('transfer.dialog.localDirPlaceholder')"
-          class="w-full ft-settings-input"
-          @keydown.enter="handleAddRoot()"
-        />
-      </div>
-
       <!-- 目录列表 -->
       <div v-if="(settingsApi?.settings.value.roots.length ?? 0) === 0" class="settings-desc py-1">
         {{ t('transfer.settings.noRoots') }}
@@ -173,23 +122,48 @@ function incConcurrency(): void {
       <div v-else class="settings-group">
         <div
           v-for="(root, idx) in settingsApi?.settings.value.roots ?? []"
-          :key="root"
+          :key="root.id"
           class="settings-row"
+          :class="{ 'ft-row-invalid': !root.authorized }"
         >
           <div class="flex items-center gap-2 flex-1 min-w-0">
             <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
             </svg>
-            <span class="settings-label flex-1 min-w-0 truncate" :title="root">{{ root }}</span>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="settings-label truncate" :title="root.name">{{ root.name }}</span>
+                <span v-if="root.kind === KIND_PRIVATE_DOWNLOADS" class="ft-free-badge flex-shrink-0">
+                  {{ t('transfer.settings.freeBadge') }}
+                </span>
+                <span v-else-if="!root.authorized" class="ft-invalid-badge flex-shrink-0">
+                  {{ t('transfer.settings.rootInvalid') }}
+                </span>
+              </div>
+              <!-- SAF 条目展示 URI（特殊条目展示真实路径） -->
+              <p class="ft-root-uri truncate" :title="root.id">{{ root.id }}</p>
+            </div>
           </div>
-          <button
-            class="flex-shrink-0 ft-settings-remove-btn"
-            @click="handleRemoveRoot(root)"
-          >
-            {{ t('transfer.settings.removeRoot') }}
-          </button>
+          <div class="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              v-if="root.kind !== KIND_PRIVATE_DOWNLOADS && !root.authorized"
+              class="ft-reauth-btn"
+              :disabled="picking"
+              @click="handleReauthorize(root)"
+            >
+              {{ t('transfer.settings.reauthorize') }}
+            </button>
+            <button
+              v-if="root.kind !== KIND_PRIVATE_DOWNLOADS"
+              class="flex-shrink-0 ft-settings-remove-btn"
+              @click="handleRemoveRoot(root.id)"
+            >
+              {{ t('transfer.settings.removeRoot') }}
+            </button>
+          </div>
         </div>
       </div>
+      <p class="settings-desc ft-settings-hint">{{ t('transfer.settings.specialEntryHint') }}</p>
     </section>
 
     <!-- ==================== 下载目录（只读，未配置时展示默认落盘地址） ==================== -->
@@ -262,25 +236,54 @@ function incConcurrency(): void {
   font-weight: 500;
 }
 
-/* 输入框：独立一行通栏，高度对齐触控按钮（44px+），placeholder 走 token */
-.ft-settings-input {
-  min-height: clamp(2.75rem, 2.75rem + (100vw - 400px) / 800 * 4, 3rem);
-  padding: 0.5rem 0.875rem;
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
-  color: var(--mobile-text-primary);
-  background: var(--mobile-input-bg);
-  border: 1px solid var(--mobile-input-border);
-  border-radius: 0.75rem;
-  outline: none;
-  transition: border-color 0.15s ease;
+/* 共享目录条目 URI（次级信息行） */
+.ft-root-uri {
+  margin-top: 0.125rem;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  color: var(--mobile-text-muted);
 }
 
-.ft-settings-input::placeholder {
-  color: var(--mobile-input-placeholder);
+/* 免授权特殊条目徽标 */
+.ft-free-badge {
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-weight: 500;
+  background: var(--mobile-bg-tertiary);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
 }
 
-.ft-settings-input:focus {
-  border-color: var(--mobile-input-focus);
+/* 失效条目徽标（授权被回收/目录被删） */
+.ft-invalid-badge {
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-weight: 500;
+  color: var(--mobile-warning);
+  border: 1px solid var(--mobile-warning-muted);
+  background: color-mix(in srgb, var(--mobile-warning) 8%, transparent);
+}
+
+/* 重新授权按钮：警示色描边，44px 触控目标 */
+.ft-reauth-btn {
+  min-height: 2.25rem;
+  padding: 0 0.625rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-weight: 500;
+  color: var(--mobile-warning);
+  border: 1px solid var(--mobile-warning-muted);
+  background: transparent;
+  transition: opacity 0.15s ease;
+}
+
+.ft-reauth-btn:active {
+  opacity: 0.8;
+}
+
+.ft-reauth-btn:disabled {
+  opacity: 0.5;
 }
 
 /* 删除按钮 */
@@ -357,29 +360,5 @@ function incConcurrency(): void {
   line-height: 1.5;
   color: var(--mobile-warning);
   margin: 0;
-}
-
-/* 「去授权」按钮：警告框内次要操作，主色文字 + 警示边框，44px 触控目标 */
-.ft-grant-btn {
-  min-height: clamp(2.5rem, 2.5rem + (100vw - 400px) / 800 * 2, 2.75rem);
-  padding: 0 1rem;
-  border-radius: 0.625rem;
-  border: 1px solid var(--mobile-warning-muted);
-  background: color-mix(in srgb, var(--mobile-warning) 10%, transparent);
-  color: var(--mobile-warning);
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.15s ease;
-}
-
-.ft-grant-btn:active {
-  opacity: 0.8;
-}
-
-.ft-grant-btn:disabled {
-  opacity: 0.5;
 }
 </style>

@@ -19,20 +19,27 @@
 //!
 //! 服务面无删除/改名/移动/覆盖端点（规格 8 节）。
 //!
+//! SAF 化（M2，见 [`saf_tree`]）：挂载根含 `content://tree/...` URI 时，
+//! list/download 经 SafIo 服务（list_tree 遍历 / 中转复制到私有中转目录，
+//! Range 响应从中转副本服务）；upload 目标语义改为下载目录，complete 优先
+//! 落 MediaStore 公共下载、失败回退私有目录。
+//!
 //! Android 注意：actix 默认按核数起 worker 线程，服务启动经
 //! `tauri::async_runtime::spawn` 交给运行时，不阻塞调用方。
 
 use crate::file_service::auth::BearerTokenGuard;
 use crate::file_service::registry::{FileServiceRegistry, MountEntry};
+use crate::file_service::saf_tree;
 use crate::file_service::upload::UploadSessionError;
-use crate::file_service::sandbox;
+use crate::file_service::{cipher::TransportCipher, sandbox};
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use actix_web::dev::{ServerHandle, Service as _};
 use bedcode_plugin_api_mobile::FileOperation;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 
 /// PUT append 累积缓冲下限（规格：256KB–1MB）
@@ -47,7 +54,7 @@ const CREATE_UPLOAD_BODY_LIMIT: usize = 64 * 1024;
 // ==================== DTO ====================
 
 /// 目录条目（浏览列表，过滤 *.part 临时文件）
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntryDto {
     /// 文件/目录名
@@ -61,7 +68,7 @@ pub struct FileEntryDto {
 }
 
 /// 目录列举响应
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResponse {
     /// 当前相对路径
@@ -95,7 +102,7 @@ pub struct UploadSessionResponse {
 }
 
 /// 路径查询参数
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct PathOnlyQuery {
     /// 相对挂载点的路径（空 = 挂载根）
     #[serde(default)]
@@ -156,6 +163,13 @@ impl FileServiceServer {
         let mut running = self.running.lock().await;
         if let Some(r) = running.as_ref() {
             return Ok(r.port);
+        }
+
+        // 启动扫描清理 SAF 中转副本（进程崩溃残留；副本可随时从 SAF 重新
+        // 生成，见 saf_tree 模块「启动扫描清理」）。懒解析失败（无 app handle）
+        // 仅告警，不阻断服务启动
+        if let Some(relay_dir) = self.registry.relay_dir().await {
+            saf_tree::sweep_relay_dir(&relay_dir);
         }
 
         // token 与服务生命周期绑定：启动即生成（内存态，不落盘）
@@ -434,7 +448,10 @@ fn parse_range_header(value: &str, file_len: u64) -> Option<(u64, Option<u64>)> 
 /// GET /{plugin_id}/{mount}/list?path= — 目录列举
 ///
 /// path 为空时列举挂载根（多 root 时每个 root 作为顶层条目，
-/// 名称取 root 最后一段；失效的 root 跳过并告警）
+/// 名称取 root 最后一段；失效的 root 跳过并告警；SAF 树根以别名
+/// （树 document id 末段）作为顶层条目）。非空 path 先试 SAF 根命中
+/// （list_tree 遍历，无 needs_all_files_access notice 语义），
+/// 未命中走真实路径 read_dir。
 async fn list_dir(
     registry: web::Data<Arc<FileServiceRegistry>>,
     params: web::Path<(String, String)>,
@@ -452,7 +469,7 @@ async fn list_dir(
 
     let rel = query.path.trim_matches('/').to_string();
 
-    // 挂载根列举：每个允许目录根作为顶层条目
+    // 挂载根列举：真实路径根 + SAF 树根作为顶层条目
     if rel.is_empty() {
         let mut entries = Vec::new();
         for root in &entry.roots {
@@ -479,12 +496,37 @@ async fn list_dir(
                 }
             }
         }
+        // SAF 树根：别名作为顶层条目（is_dir=true；别名与请求路径首段映射，
+        // 可导航；授权有效性在遍历时校验，此处不拦截）
+        for saf_root in &entry.saf_roots {
+            match saf_tree::tree_alias(saf_root) {
+                Some(alias) => entries.push(FileEntryDto {
+                    name: alias,
+                    size: 0,
+                    mtime: 0,
+                    is_dir: true,
+                }),
+                None => tracing::warn!(
+                    plugin_id = %plugin_id,
+                    mount = %mount,
+                    root = %saf_root,
+                    "list: invalid SAF root skipped"
+                ),
+            }
+        }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         return HttpResponse::Ok().json(ListResponse {
             path: String::new(),
             entries,
             notice: None,
         });
+    }
+
+    // SAF 根命中：list_tree 遍历（替代 std::fs::read_dir）。SAF 授权场景
+    // 不触发 needs_all_files_access notice（notice 仅真实路径根的分区存储
+    // 过滤语义，见 resolve_sandboxed 分支下方）
+    if let Some((tree_uri, parts)) = saf_tree::match_saf_root(&entry.saf_roots, &rel) {
+        return list_saf_dir(&registry, &tree_uri, &parts, &rel).await;
     }
 
     let target = match registry.resolve_sandboxed(&plugin_id, &mount, &rel).await {
@@ -527,9 +569,111 @@ async fn list_dir(
     }
 }
 
+// ==================== SAF 端点辅助（M2） ====================
+
+/// SAF 解析错误 → HTTP 响应（NotFound → 404，其余 500 带上下文）
+fn saf_error_response(err: &crate::AppError) -> HttpResponse {
+    let status = if matches!(err, crate::AppError::NotFound(_)) {
+        actix_web::http::StatusCode::NOT_FOUND
+    } else {
+        actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+    };
+    error_response(status, status.as_u16(), &err.to_string())
+}
+
+/// SAF 目录列举：walk 到目标目录 → list_tree 子条目（替代 std::fs::read_dir）
+///
+/// 无 needs_all_files_access notice 语义（SAF 条目经持久化授权，分区存储
+/// 过滤不适用）；列表字段与真实路径一致（SAF 条目无 mtime，置 0）。
+async fn list_saf_dir(
+    registry: &web::Data<Arc<FileServiceRegistry>>,
+    tree_uri: &str,
+    parts: &[String],
+    rel: &str,
+) -> HttpResponse {
+    let saf = match registry.saf_io().await {
+        Some(s) => s,
+        None => return error_response(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 500, "SAF storage unavailable on this platform"),
+    };
+    let root_doc = match saf_tree::tree_document_id(tree_uri) {
+        Some(d) => d,
+        None => {
+            return error_response(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 500, &format!("invalid SAF root: {}", tree_uri))
+        }
+    };
+    let target = match saf_tree::walk_to_entry(saf.as_ref(), tree_uri, &root_doc, parts).await {
+        Ok(t) => t,
+        Err(e) => return saf_error_response(&e),
+    };
+    if !target.is_dir {
+        return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &format!("'{}' is not a directory", rel));
+    }
+    let children = match saf.list_tree(tree_uri, &target.document_id) {
+        Ok(c) => c,
+        Err(e) => {
+            return error_response(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                500,
+                &format!("list SAF tree failed (permission may be revoked): {}", e),
+            )
+        }
+    };
+    let mut entries: Vec<FileEntryDto> = children
+        .into_iter()
+        // 过滤上传/中转临时文件（*.part），与真实路径列表规则一致
+        .filter(|c| !crate::file_service::upload::is_filtered_listing_name(&c.name))
+        .map(|c| FileEntryDto {
+            name: c.name,
+            size: if c.is_dir { 0 } else { c.size.max(0) as u64 },
+            mtime: 0,
+            is_dir: c.is_dir,
+        })
+        .collect();
+    // 目录优先，按名称排序，保证两端 UI 展示一致
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+    HttpResponse::Ok().json(ListResponse {
+        path: rel.to_string(),
+        entries,
+        notice: None,
+    })
+}
+
+/// SAF 下载源解析：walk 到文件条目 → 确保中转副本（不可续）→ 副本路径/大小
+///
+/// 指纹（HEAD）与 Range（GET）均以副本为准：副本在 TTL 内稳定，续传握手
+/// （size/mtime 比对）可命中；副本被清理/重生成后指纹变化，对端判
+/// remote-changed 从头重传（语义安全，见 saf_tree 模块）。
+async fn resolve_saf_download_source(
+    registry: &Arc<FileServiceRegistry>,
+    tree_uri: &str,
+    parts: &[String],
+    rel: &str,
+) -> crate::Result<(PathBuf, u64, PathBuf)> {
+    let saf = registry.saf_io().await.ok_or_else(|| {
+        crate::AppError::Internal("SAF storage unavailable on this platform".to_string())
+    })?;
+    let root_doc = saf_tree::tree_document_id(tree_uri).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!("invalid SAF root: {}", tree_uri))
+    })?;
+    let source = saf_tree::walk_to_entry(saf.as_ref(), tree_uri, &root_doc, parts).await?;
+    if source.is_dir {
+        return Err(crate::AppError::NotFound(format!("'{}' is not a file", rel)));
+    }
+    let relay_dir = registry.relay_dir().await.ok_or_else(|| {
+        crate::AppError::Internal("SAF relay dir unavailable".to_string())
+    })?;
+    let cache_path =
+        saf_tree::ensure_relay_copy(saf.as_ref(), &relay_dir, &source.uri).await?;
+    let meta = tokio::fs::metadata(&cache_path).await.map_err(|e| {
+        crate::AppError::Internal(format!("relay copy metadata failed: {}", e))
+    })?;
+    Ok((cache_path, meta.len(), relay_dir))
+}
+
 /// GET /{plugin_id}/{mount}/file?path= — 下载（支持 Range 续传 206）
 ///
-/// 流式读取（512KB 缓冲），字节经挂载点 cipher.encrypt_chunk（MVP 直通）
+/// 流式读取（512KB 缓冲），字节经挂载点 cipher.encrypt_chunk（MVP 直通）。
+/// SAF 根命中：源经中转复制（不可续）后从中转副本服务（可续）。
 async fn download_file(
     req: HttpRequest,
     registry: web::Data<Arc<FileServiceRegistry>>,
@@ -547,6 +691,59 @@ async fn download_file(
     }
 
     let rel = query.path.trim_matches('/').to_string();
+
+    // SAF 根命中：中转复制 → Range 从中转副本服务（副本 TTL 内续传命中）
+    if let Some((tree_uri, parts)) = saf_tree::match_saf_root(&entry.saf_roots, &rel) {
+        let (cache_path, file_len, relay_dir) =
+            match resolve_saf_download_source(registry.as_ref(), &tree_uri, &parts, &rel).await
+            {
+                Ok(v) => v,
+                Err(e) => return saf_error_response(&e),
+            };
+
+        // Range 解析：仅支持 bytes=N- / bytes=N-M 单段（与真实路径一致）
+        let range = req
+            .headers()
+            .get(actix_web::http::header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| parse_range_header(v, file_len));
+        let (start, end) = range.unwrap_or((0, None));
+        let end = end.unwrap_or(file_len.saturating_sub(1)).min(file_len.saturating_sub(1));
+        let content_len = end - start + 1;
+
+        let file = match tokio::fs::File::open(&cache_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                return error_response(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    500,
+                    &format!("failed to open relay copy '{}': {}", cache_path.display(), e),
+                )
+            }
+        };
+
+        use tokio::io::AsyncSeekExt;
+        let mut file = file;
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+            return error_response(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                500,
+                &format!("seek failed: {}", e),
+            );
+        }
+
+        let stream = build_download_stream(
+            file,
+            content_len,
+            entry.cipher.clone(),
+            Some((relay_dir.clone(), cache_path.clone())),
+        );
+        // 响应构建即 arm：客户端中断（流未走终止分支）时副本仍按 TTL 清理；
+        // 流终止分支会再次 arm（刷新 last_access 滑动续期，见 saf_tree）
+        saf_tree::arm_relay_cleanup(&relay_dir, &cache_path);
+        return build_download_response(range, start, end, file_len, content_len, stream);
+    }
+
     let target = match registry.resolve_sandboxed(&plugin_id, &mount, &rel).await {
         Ok(p) => p,
         Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
@@ -586,7 +783,7 @@ async fn download_file(
         }
     };
 
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    use tokio::io::AsyncSeekExt;
     let mut file = file;
     if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
         return error_response(
@@ -596,37 +793,95 @@ async fn download_file(
         );
     }
 
-    let cipher = entry.cipher.clone();
-    // remaining：本响应还需发送的字节数（Range 截断后的长度）。
-    // 外层闭包持有 cipher（Arc），每次迭代克隆一份移入 async 块，
-    // 避免 FnMut 多次调用时移动捕获变量
-    let stream = futures_util::stream::unfold(
-        (file, content_len),
-        move |(mut file, remaining)| {
+    let stream = build_download_stream(file, content_len, entry.cipher.clone(), None);
+    build_download_response(range, start, end, file_len, content_len, stream)
+}
+
+/// 流式响应状态：文件 + 剩余字节 + 中转副本清理钩子（SAF 下载用）
+struct DownloadStreamState {
+    file: tokio::fs::File,
+    remaining: u64,
+    /// 中转副本清理（服务完成/超时后；relay_dir, cache_path）
+    relay_cleanup: Option<(PathBuf, PathBuf)>,
+    /// 清理钩子是否已触发（流可能提前终止，仅触发一次）
+    cleanup_armed: bool,
+}
+
+/// 构建下载流式响应体（真实路径与 SAF 中转副本共用）
+///
+/// cleanup：流终止（完成/EOF/错误）时触发的中转副本 TTL 清理——副本在
+/// 响应结束后延迟清理，续传窗口（TTL 内）命中需文件仍在（见 saf_tree）。
+fn build_download_stream(
+    file: tokio::fs::File,
+    content_len: u64,
+    cipher: Arc<dyn TransportCipher>,
+    relay_cleanup: Option<(PathBuf, PathBuf)>,
+) -> impl futures_util::Stream<Item = Result<web::Bytes, std::io::Error>> {
+    futures_util::stream::unfold(
+        DownloadStreamState {
+            file,
+            remaining: content_len,
+            relay_cleanup,
+            cleanup_armed: false,
+        },
+        move |mut st| {
             let cipher = cipher.clone();
             async move {
-            if remaining == 0 {
-                return None;
-            }
-            let to_read = (DOWNLOAD_CHUNK_SIZE as u64).min(remaining) as usize;
-            let mut buf = vec![0u8; to_read];
-            match file.read(&mut buf).await {
-                Ok(0) => None, // EOF 早于声明长度（文件被截断），终止流
-                Ok(n) => {
-                    buf.truncate(n);
-                    // 加密缝：下载方向文件字节经 cipher 变换后发送（MVP 直通）
-                    let chunk = cipher.encrypt_chunk(buf);
-                    Some((
-                        Ok::<_, std::io::Error>(web::Bytes::from(chunk)),
-                        (file, remaining - n as u64),
-                    ))
+                if st.remaining == 0 {
+                    arm_relay_cleanup_once(&mut st);
+                    return None;
                 }
-                Err(e) => Some((Err(e), (file, 0))),
-            }
+                let to_read = (DOWNLOAD_CHUNK_SIZE as u64).min(st.remaining) as usize;
+                let mut buf = vec![0u8; to_read];
+                match st.file.read(&mut buf).await {
+                    Ok(0) => {
+                        // EOF 早于声明长度（文件被截断），终止流
+                        arm_relay_cleanup_once(&mut st);
+                        None
+                    }
+                    Ok(n) => {
+                        buf.truncate(n);
+                        // 加密缝：下载方向文件字节经 cipher 变换后发送（MVP 直通）
+                        let chunk = cipher.encrypt_chunk(buf);
+                        st.remaining -= n as u64;
+                        Some((
+                            Ok::<_, std::io::Error>(web::Bytes::from(chunk)),
+                            st,
+                        ))
+                    }
+                    Err(e) => {
+                        arm_relay_cleanup_once(&mut st);
+                        Some((Err(e), st))
+                    }
+                }
             }
         },
-    );
+    )
+}
 
+/// 流终止时触发中转副本 TTL 清理（幂等：仅触发一次）
+fn arm_relay_cleanup_once(st: &mut DownloadStreamState) {
+    if st.cleanup_armed {
+        return;
+    }
+    st.cleanup_armed = true;
+    if let Some((relay_dir, cache_path)) = st.relay_cleanup.clone() {
+        saf_tree::arm_relay_cleanup(&relay_dir, &cache_path);
+    }
+}
+
+/// 构造下载响应（Range 206 / 200 全量 + 流式 body）
+fn build_download_response<S>(
+    range: Option<(u64, Option<u64>)>,
+    start: u64,
+    end: u64,
+    file_len: u64,
+    content_len: u64,
+    stream: S,
+) -> HttpResponse
+where
+    S: futures_util::Stream<Item = Result<web::Bytes, std::io::Error>> + 'static,
+{
     let mut builder = if range.is_some() {
         let mut b = HttpResponse::PartialContent();
         b.insert_header((
@@ -646,6 +901,8 @@ async fn download_file(
 }
 
 /// HEAD /{plugin_id}/{mount}/file?path= — 返回 size+mtime 指纹（续传有效性比对，规格 7.4）
+///
+/// SAF 根命中：先确保中转副本（指纹以副本为准，见 resolve_saf_download_source）。
 async fn head_file(
     registry: web::Data<Arc<FileServiceRegistry>>,
     params: web::Path<(String, String)>,
@@ -662,6 +919,33 @@ async fn head_file(
     }
 
     let rel = query.path.trim_matches('/').to_string();
+
+    // SAF 根命中：中转副本的 size/mtime 作为指纹（副本 TTL 内稳定）
+    if let Some((tree_uri, parts)) = saf_tree::match_saf_root(&entry.saf_roots, &rel) {
+        let (cache_path, _file_len, relay_dir) =
+            match resolve_saf_download_source(registry.as_ref(), &tree_uri, &parts, &rel).await
+            {
+                Ok(v) => v,
+                Err(e) => return saf_error_response(&e),
+            };
+        let meta = match tokio::fs::metadata(&cache_path).await {
+            Ok(m) if m.is_file() => m,
+            _ => {
+                return error_response(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    500,
+                    "relay copy missing",
+                )
+            }
+        };
+        saf_tree::arm_relay_cleanup(&relay_dir, &cache_path);
+        return HttpResponse::Ok()
+            .insert_header(("X-File-Size", meta.len().to_string()))
+            .insert_header(("X-File-Mtime", mtime_unix_secs(&meta).to_string()))
+            .insert_header((actix_web::http::header::CONTENT_LENGTH, meta.len().to_string()))
+            .finish();
+    }
+
     let target = match registry.resolve_sandboxed(&plugin_id, &mount, &rel).await {
         Ok(p) => p,
         Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
@@ -688,7 +972,9 @@ async fn head_file(
 /// POST /{plugin_id}/{mount}/upload — 创建 upload session
 ///
 /// 流程（规格 4.2/4.4）：沙箱解析目标 → 策略钩子（2s fail-closed，
-/// 拒绝发生在写任何字节前）→ 创建 session 返回 {sessionId, received:0}
+/// 拒绝发生在写任何字节前）→ 创建 session 返回 {sessionId, received:0}。
+/// M2：目标语义改为下载目录（接收落点；共享目录只读暴露，桌面端推送
+/// 统一落下载目录，不落挂载根），session 临时文件机制不变。
 async fn create_upload(
     registry: web::Data<Arc<FileServiceRegistry>>,
     params: web::Path<(String, String)>,
@@ -704,9 +990,20 @@ async fn create_upload(
         return resp;
     }
 
-    // 沙箱解析：父目录必须存在于某 root 内（最终文件尚不存在）
+    // 沙箱解析：父目录必须存在于下载目录内（最终文件尚不存在）。
+    // 复用 resolve_upload_target_within_roots 的别名/穿越校验，根 = 下载目录
     let rel = body.relative_path.trim_matches('/').to_string();
-    let target = match sandbox::resolve_upload_target_within_roots(&entry.roots, &rel) {
+    let downloads_dir = match registry.downloads_dir().await {
+        Some(d) => d,
+        None => {
+            return error_response(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                500,
+                "downloads dir unavailable",
+            )
+        }
+    };
+    let target = match sandbox::resolve_upload_target_within_roots(&[downloads_dir], &rel) {
         Ok(p) => p,
         Err(e) => {
             return error_response(actix_web::http::StatusCode::BAD_REQUEST, 400, &e.to_string())
@@ -852,19 +1149,43 @@ async fn query_upload(
     }
 }
 
-/// POST /{plugin_id}/{mount}/upload/{sid}/complete — 原子 rename 落位
+/// POST /{plugin_id}/{mount}/upload/{sid}/complete — 落位（M2：MediaStore 优先）
 ///
-/// 目标已存在 → 409 duplicate-name（保留 .part，规格 7.4）
+/// 落位顺序：MediaStore 公共下载写入成功 → 删除临时文件（公共目录唯一副本）；
+/// 写入失败（含 API<29 设备）→ 回退 rename 到私有下载目录（原 complete 语义）。
+/// 目标（私有回退路径）已存在 → 409 duplicate-name（保留 .part，规格 7.4）。
 async fn complete_upload(
     registry: web::Data<Arc<FileServiceRegistry>>,
     params: web::Path<(String, String, String)>,
 ) -> HttpResponse {
     let (plugin_id, mount, sid) = params.into_inner();
-    match registry
-        .upload_sessions()
-        .complete(&sid, &plugin_id, &mount)
-        .await
-    {
+    let sessions = registry.upload_sessions();
+
+    let result = match registry.saf_io().await {
+        // MediaStore 落位：成功删临时文件，失败回退 rename（回退由
+        // complete_to_media 内部完成，见 upload.rs）
+        Some(saf) => {
+            sessions
+                .complete_to_media(&sid, &plugin_id, &mount, |tmp, display_name| {
+                    saf.write_media_downloads(&tmp.to_string_lossy(), display_name, "")
+                        .map_err(|e| {
+                            // 同名拒绝（Kotlin 侧 MediaStore 预检返回）→ 终态失败
+                            // 不回退私有；其余失败回退私有 rename（原语义）
+                            let msg = e.to_string();
+                            if msg.contains("duplicate-name") {
+                                crate::file_service::upload::PlacementError::Duplicate(msg)
+                            } else {
+                                crate::file_service::upload::PlacementError::Other(msg)
+                            }
+                        })
+                })
+                .await
+        }
+        // SafIo 未注入（非 Android）：直接 rename 落位（原语义）
+        None => sessions.complete(&sid, &plugin_id, &mount).await,
+    };
+
+    match result {
         Ok(target) => {
             tracing::info!(
                 plugin_id = %plugin_id,
@@ -923,6 +1244,294 @@ async fn cancel_upload(
 mod tests {
     use super::*;
 
+    /// 从 HttpResponse 提取响应体字节（测试辅助）
+    async fn body_bytes(resp: HttpResponse) -> actix_web::web::Bytes {
+        actix_web::body::to_bytes(resp.into_body()).await.unwrap()
+    }
+    use crate::file_service::cipher::PassthroughCipher;
+    use crate::file_service::registry::HookTarget;
+    use crate::plugin::saf_io::{SafCopyHandle, SafCopyStatus, SafEntry, SafIo, SafStreamHandle};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TREE: &str = "content://tree/primary%3ADownload";
+    const ROOT_DOC: &str = "primary:Download";
+
+    /// 端点测试用 fake SafIo：内存树 + 文件内容 + 可配置 MediaStore 落位结果
+    ///
+    /// 覆盖端点 cache 中转编排（list_tree 遍历 / 中转复制 / 落点回退），
+    /// spec「测试注入 fake」；read_to_cache 直接落盘文件内容（模拟 Kotlin
+    /// 复制完成），copy_status 恒为已终态成功。
+    struct FakeSaf {
+        /// (tree_uri, document_id) → 子条目
+        tree: HashMap<(String, String), Vec<SafEntry>>,
+        /// 文件条目 URI → 内容
+        files: HashMap<String, Vec<u8>>,
+        /// MediaStore 落位是否成功
+        media_ok: bool,
+        /// 落位调用记录（src, display_name）
+        media_writes: std::sync::Mutex<Vec<(String, String)>>,
+        /// 已启动的中转复制计数
+        copies_started: AtomicUsize,
+        /// 中转复制 staging 目录（模拟 Kotlin bedcode_uploads）
+        staging: PathBuf,
+    }
+
+    impl SafIo for FakeSaf {
+        fn list_tree(&self, tree_uri: &str, document_id: &str) -> crate::Result<Vec<SafEntry>> {
+            Ok(self
+                .tree
+                .get(&(tree_uri.to_string(), document_id.to_string()))
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        fn read_to_cache(&self, uri: &str, dest_name: &str) -> crate::Result<SafCopyHandle> {
+            let dest_path = self.staging.join(dest_name);
+            if let Some(content) = self.files.get(uri) {
+                std::fs::create_dir_all(&self.staging).unwrap();
+                std::fs::write(&dest_path, content).unwrap();
+            }
+            self.copies_started.fetch_add(1, Ordering::SeqCst);
+            Ok(SafCopyHandle {
+                copy_id: format!("copy-{}", dest_name),
+                dest_path: dest_path.to_string_lossy().into_owned(),
+            })
+        }
+
+        fn copy_status(&self, _copy_id: &str) -> crate::Result<SafCopyStatus> {
+            Ok(SafCopyStatus {
+                copy_id: String::new(),
+                done: 0,
+                total: 0,
+                finished: true,
+                cancelled: false,
+                error: None,
+                dest_path: String::new(),
+            })
+        }
+
+        fn cancel_copy(&self, _copy_id: &str) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn cleanup_stale_copies(&self) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn check_authorized(&self, _tree_uri: &str) -> crate::Result<bool> {
+            Ok(true)
+        }
+
+        fn write_media_downloads(
+            &self,
+            src_path: &str,
+            display_name: &str,
+            _mime_type: &str,
+        ) -> crate::Result<()> {
+            self.media_writes
+                .lock()
+                .unwrap()
+                .push((src_path.to_string(), display_name.to_string()));
+            if self.media_ok {
+                Ok(())
+            } else {
+                Err(crate::AppError::Plugin("requires API 29+".to_string()))
+            }
+        }
+
+        // M3 流直传 / 保存到…：server.rs 端点测试未覆盖（编排在插件侧），
+        // 全部返回默认成功/不可用错误以通过 trait 编译
+        fn open_stream(&self, _u: &str, offset: u64) -> crate::Result<SafStreamHandle> {
+            Ok(SafStreamHandle {
+                handle_id: "stream-1".to_string(),
+                effective_offset: offset,
+                seekable: true,
+            })
+        }
+
+        fn read_stream(&self, _h: &str, _len: usize) -> crate::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn seek_stream(&self, _h: &str, _o: u64) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn close_stream(&self, _h: &str) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn stream_seekable(&self, _u: &str) -> crate::Result<bool> {
+            Ok(true)
+        }
+
+        fn save_to_document(&self, _s: &str, _n: &str, _m: &str) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl FakeSaf {
+        fn new(media_ok: bool, staging: PathBuf) -> Self {
+            Self {
+                tree: HashMap::new(),
+                files: HashMap::new(),
+                media_ok,
+                media_writes: std::sync::Mutex::new(Vec::new()),
+                copies_started: AtomicUsize::new(0),
+                staging,
+            }
+        }
+
+        /// 构建标准树：根含 sub/ 目录与 a.txt，sub/ 含 b.bin
+        fn with_standard_tree(mut self) -> Self {
+            self.tree.insert(
+                (TREE.to_string(), ROOT_DOC.to_string()),
+                vec![
+                    SafEntry {
+                        name: "sub".to_string(),
+                        is_dir: true,
+                        size: 0,
+                        mime: String::new(),
+                        uri: format!("{}/document/sub", TREE),
+                        document_id: "sub-doc".to_string(),
+                    },
+                    SafEntry {
+                        name: "a.txt".to_string(),
+                        is_dir: false,
+                        size: 11,
+                        mime: "text/plain".to_string(),
+                        uri: format!("{}/document/f1", TREE),
+                        document_id: "f1".to_string(),
+                    },
+                ],
+            );
+            self.tree.insert(
+                (TREE.to_string(), "sub-doc".to_string()),
+                vec![SafEntry {
+                    name: "b.bin".to_string(),
+                    is_dir: false,
+                    size: 2,
+                    mime: "application/octet-stream".to_string(),
+                    uri: format!("{}/document/f2", TREE),
+                    document_id: "f2".to_string(),
+                }],
+            );
+            self.files.insert(format!("{}/document/f1", TREE), b"hello world".to_vec());
+            self.files.insert(format!("{}/document/f2", TREE), b"hi".to_vec());
+            self
+        }
+    }
+
+    /// 构造带 SAF 根的挂载条目（List/Download/Upload 全操作）
+    fn saf_mount_entry() -> MountEntry {
+        MountEntry {
+            plugin_id: "com.test".to_string(),
+            mount_path: "files".to_string(),
+            roots: Vec::new(),
+            saf_roots: vec![TREE.to_string()],
+            operations: vec![
+                FileOperation::List,
+                FileOperation::Download,
+                FileOperation::Upload,
+            ],
+            hook: HookTarget::None,
+            cipher: Arc::new(PassthroughCipher),
+        }
+    }
+
+    /// 挂载注册表并注入 fake（返回 fake 引用供断言）
+    async fn mounted_registry(
+        saf: FakeSaf,
+        relay_dir: &Path,
+    ) -> (Arc<FileServiceRegistry>, Arc<FakeSaf>) {
+        let saf = Arc::new(saf);
+        let registry = FileServiceRegistry::with_saf_io(saf.clone());
+        registry.set_relay_dir(relay_dir.to_path_buf()).await;
+        registry.insert_entry_for_test(saf_mount_entry()).await;
+        (registry, saf)
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().unwrap()
+    }
+
+    #[test]
+    fn list_dir_lists_saf_root_and_traverses_tree() {
+        let rt = runtime();
+        rt.block_on(async {
+            let base = tempfile::tempdir().unwrap();
+            let relay = base.path().join("relay");
+            let (registry, _saf) = mounted_registry(
+                FakeSaf::new(true, base.path().join("staging")).with_standard_tree(),
+                &relay,
+            )
+            .await;
+            let data = web::Data::new(registry.clone());
+            let path = || web::Path::from(("com.test".to_string(), "files".to_string()));
+
+            // 挂载根：SAF 树根以别名「Download」作为顶层条目
+            let resp = list_dir(
+                data.clone(),
+                path(),
+                web::Query::from_query("").unwrap(),
+            )
+            .await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+            let body: ListResponse = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+            assert_eq!(body.entries.len(), 1);
+            assert_eq!(body.entries[0].name, "Download");
+            assert!(body.entries[0].is_dir);
+            assert!(body.notice.is_none(), "SAF 列表不触发 needs_all_files_access notice");
+
+            // 树根：sub（目录）+ a.txt（11 字节）
+            let resp = list_dir(
+                data.clone(),
+                path(),
+                web::Query::from_query("path=Download").unwrap(),
+            )
+            .await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+            let body: ListResponse = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+            assert_eq!(body.entries.len(), 2);
+            assert!(body.entries[0].is_dir);
+            assert_eq!(body.entries[0].name, "sub");
+            assert!(!body.entries[1].is_dir);
+            assert_eq!(body.entries[1].name, "a.txt");
+            assert_eq!(body.entries[1].size, 11);
+
+            // 子目录：b.bin
+            let resp = list_dir(
+                data.clone(),
+                path(),
+                web::Query::from_query("path=Download/sub").unwrap(),
+            )
+            .await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+            let body: ListResponse = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+            assert_eq!(body.entries.len(), 1);
+            assert_eq!(body.entries[0].name, "b.bin");
+
+            // 缺失路径 → 404
+            let resp = list_dir(
+                data.clone(),
+                path(),
+                web::Query::from_query("path=Download/missing").unwrap(),
+            )
+            .await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+
+            // 对文件路径执行列表 → 404（不是目录）
+            let resp = list_dir(
+                data,
+                path(),
+                web::Query::from_query("path=Download/a.txt").unwrap(),
+            )
+            .await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+        });
+    }
+
     #[test]
     fn test_parse_range_header() {
         assert_eq!(parse_range_header("bytes=0-", 100), Some((0, None)));
@@ -938,3 +1547,4 @@ mod tests {
         assert_eq!(parse_range_header("chars=0-", 100), None);
     }
 }
+

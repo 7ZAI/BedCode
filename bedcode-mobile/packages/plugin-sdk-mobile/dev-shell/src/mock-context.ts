@@ -33,6 +33,7 @@ import {
   stopSession,
 } from './mock/session'
 import { dialogService } from './mock/dialog-service'
+import { getDevMock } from './registry'
 import {
   getPluginRecord,
   goBackView,
@@ -50,6 +51,82 @@ import {
 /** 存储命名空间（与宿主插件 storage 的 per-plugin 隔离一致） */
 function storageKey(pluginId: string, key: string): string {
   return `bedcode-dev-shell:${pluginId}:${key}`
+}
+
+/**
+ * dev-shell 的 SAF mock：模拟目录树遍历 + 定时推进的中转复制
+ *
+ * 与真机语义对齐：listTree 按 documentId 分目录；copyStart 立即返回句柄，
+ * 进度由定时器推进（约 4MB/s），取消置位后停止；浏览器无 cache 概念，
+ * destPath 用模拟路径。目录树由插件 devMock.safTree 提供（领域数据归插件）。
+ */
+function createMockSaf(
+  tree: Record<string, import('../../src/types').SafTreeEntry[]>,
+): import('../../src/types').SafAPI {
+  interface MockCopy {
+    done: number
+    total: number
+    finished: boolean
+    cancelled: boolean
+    timer: ReturnType<typeof setInterval> | null
+  }
+  const copies = new Map<string, MockCopy>()
+
+  return {
+    async listTree(treeUri: string, documentId: string) {
+      // 精确目录优先；树根（pick 返回的 documentId 不入树）回退到 mock 根
+      const entries =
+        tree[documentId] ?? (treeUri.includes('mock') ? (tree['mock:root'] ?? []) : [])
+      return entries.map(e => ({
+        name: e.name,
+        isDir: e.isDir,
+        size: e.size,
+        mime: e.mime,
+        uri: `${treeUri}/document/${e.docId}`,
+        documentId: e.docId,
+      }))
+    },
+    async copyStart(uri: string, destName: string) {
+      const copyId = `mock-copy-${copies.size + 1}`
+      const total = 86_400_000
+      const copy: MockCopy = { done: 0, total, finished: false, cancelled: false, timer: null }
+      copies.set(copyId, copy)
+      copy.timer = setInterval(() => {
+        copy.done = Math.min(total, copy.done + 2_400_000)
+        if (copy.done >= total || copy.cancelled) {
+          copy.finished = true
+          if (copy.timer) clearInterval(copy.timer)
+          copy.timer = null
+        }
+      }, 400)
+      return { copyId, destPath: `/mock/cache/bedcode_uploads/${destName}` }
+    },
+    async copyStatus(copyId: string) {
+      const copy = copies.get(copyId)
+      if (!copy) throw new Error(`unknown copyId ${copyId}`)
+      return {
+        copyId,
+        done: copy.done,
+        total: copy.total,
+        finished: copy.finished,
+        cancelled: copy.cancelled,
+        error: null,
+        destPath: `/mock/cache/bedcode_uploads/${copyId}.bin`,
+      }
+    },
+    async copyCancel(copyId: string) {
+      const copy = copies.get(copyId)
+      if (!copy) throw new Error(`unknown copyId ${copyId}`)
+      copy.cancelled = true
+    },
+    async cleanupStaleCopies() {
+      // dev-shell：无真实 cache 文件，仅清空内存复制表
+      copies.clear()
+    },
+    async checkAuthorized(_treeUri: string) {
+      return true
+    },
+  }
 }
 
 /** 创建插件的 PluginContext */
@@ -240,6 +317,36 @@ export function createMockContext(pluginId: string): PluginContext {
     async requestAllFilesAccess() {
       return false
     },
+    async pickSharedDirectory() {
+      const value = await dialogService.showPrompt({
+        title: '选择共享目录（dev-shell mock）',
+        message: '浏览器无法调起 SAF 目录树选择器，输入模拟目录名',
+        inputPlaceholder: '如 模拟共享目录',
+        inputValue: '模拟共享目录',
+      })
+      if (!value) return null
+      return {
+        uri: `content://tree/mock-${encodeURIComponent(value)}`,
+        documentId: `mock:${encodeURIComponent(value)}`,
+        displayName: value,
+      }
+    },
+    async listDir(path: string) {
+      // 免授权特殊条目（app 私有下载目录）浏览：条目由插件 devMock.listDirEntries
+      // 提供（领域数据归插件）；未注册该插件时返回空列表
+      const entries = getDevMock(pluginId)?.listDirEntries
+      if (!entries?.length) return []
+      return entries.map((e) => ({
+        name: e.name,
+        isDir: e.isDir,
+        size: e.size,
+        mime: e.mime,
+        uri: `${path}/${e.name}`,
+        documentId: '',
+      }))
+    },
+    // SAF 存储访问（dev-shell mock）：目录树由插件 devMock.safTree 提供
+    saf: createMockSaf(getDevMock(pluginId)?.safTree ?? {}),
   }
 
   // ==================== I18nAPI ====================

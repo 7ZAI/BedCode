@@ -45,6 +45,9 @@ export interface Task {
   fingerprint: Fingerprint | null
   state: TaskStateName
   reason: string | null
+  /** 下载落点标记（M2/M3）：system=公共下载目录 / private=私有目录回退 /
+   * saved-to=已保存到所选位置 / save-failed=保存失败保留私有副本 */
+  place: string | null
   createdAt: number
   updatedAt: number
 }
@@ -57,9 +60,42 @@ export interface RemoteEntry {
   isDir: boolean
 }
 
+/** 共享目录条目类型（与 WASM SharedRoot.kind 对应） */
+export type SharedRootKind = 'saf' | 'private_downloads'
+
+/** 共享目录条目（camelCase 内部模型；WASM 侧字段为 snake_case document_id） */
+export interface SharedRoot {
+  /** 条目 id：SAF 树 URI（content://tree/...）；特殊条目为真实路径 */
+  id: string
+  /** 条目类型：saf = SAF 树授权条目；private_downloads = 免授权特殊条目 */
+  kind: SharedRootKind
+  /** 展示名 */
+  name: string
+  /** SAF 根 document id（App 内遍历起点；特殊条目为空串） */
+  documentId: string
+  /** 授权有效性（check_authorized 结果回写；false = 已失效，需重新授权） */
+  authorized: boolean
+}
+
+/** 共享目录条目（用于上传页文件列表；SAF 条目与真实路径条目同构） */
+export interface SharedEntry {
+  name: string
+  isDir: boolean
+  /** 文件大小（字节；目录/未知为 0） */
+  size: number
+  /** 条目 document URI（SAF 条目）；真实路径条目为绝对路径 */
+  uri: string
+  /** 条目 document id（子目录遍历用；真实路径条目为空串） */
+  documentId: string
+}
+
+/** 免授权特殊条目 kind 常量（前端识别用） */
+export const KIND_PRIVATE_DOWNLOADS: SharedRootKind = 'private_downloads'
+
 /** 插件设置（camelCase 内部模型；get-settings 的 download_dir 在 composable 归一化） */
 export interface Settings {
-  roots: string[]
+  /** 共享目录条目（含派生免授权特殊条目，kind=private_downloads） */
+  roots: SharedRoot[]
   downloadDir: string
   concurrency: number
 }

@@ -74,15 +74,17 @@ export interface MessageSchema {
   // ==================== 设置 ====================
   'transfer.settings.title': string
   'transfer.settings.sharedRoots': string
-  'transfer.settings.addRoot': string
+  'transfer.settings.addRootHint': string
   'transfer.settings.pickRoot': string
   'transfer.settings.picking': string
-  'transfer.settings.addRootHint': string
-  'transfer.settings.scopedStorageHint': string
-  'transfer.settings.grantAllFilesAccess': string
-  'transfer.settings.granting': string
-  'transfer.settings.allFilesAccessGranted': string
-  'transfer.settings.allFilesAccessUnavailable': string
+  'transfer.settings.pickFailed': string
+  'transfer.settings.pickUnsupported': string
+  'transfer.settings.rootDuplicate': string
+  'transfer.settings.rootInvalid': string
+  'transfer.settings.reauthorize': string
+  'transfer.settings.reauthorized': string
+  'transfer.settings.freeBadge': string
+  'transfer.settings.specialEntryHint': string
   'transfer.settings.removeRoot': string
   'transfer.settings.noRoots': string
   'transfer.settings.downloadDir': string
@@ -93,12 +95,34 @@ export interface MessageSchema {
   'transfer.settings.plainWarning': string
   'transfer.settings.saved': string
 
+  // ==================== 上传页（共享目录） ====================
+  'transfer.upload.title': string
+  'transfer.upload.chooseRoot': string
+  'transfer.upload.noRoots': string
+  'transfer.upload.openSettings': string
+  'transfer.upload.emptyDir': string
+  'transfer.upload.loading': string
+  'transfer.upload.dirUnavailable': string
+  'transfer.upload.rootInvalid': string
+  'transfer.upload.reauthorize': string
+  'transfer.upload.reauthorized': string
+  'transfer.upload.backToRoots': string
+  'transfer.upload.specialBadge': string
+  'transfer.upload.specialEntryHint': string
+  'transfer.upload.enqueueFailed': string
+  'transfer.upload.enqueued': string
+  'transfer.upload.offline': string
+
+  // ==================== 「保存到…」（M3 单文件目标） ====================
+  'transfer.saveTo.title': string
+  'transfer.saveTo.enqueued': string
+  'transfer.saveTo.saved': string
+  'transfer.saveTo.failed': string
+
   // ==================== 对话框 / 通知 ====================
   'transfer.dialog.duplicateTitle': string
   'transfer.dialog.gotIt': string
   'transfer.dialog.cancel': string
-  'transfer.dialog.localPathPlaceholder': string
-  'transfer.dialog.uploadTitle': string
   'transfer.notify.doneTitle': string
   'transfer.notify.doneBody': string
   'transfer.notify.failedTitle': string

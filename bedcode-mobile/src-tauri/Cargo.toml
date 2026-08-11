@@ -25,6 +25,8 @@ tauri-plugin-machine-uid = "0.1.3"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
+# reqwest body 流类型（与 tokio-util ReaderStream 配对；SAF 流直传的 Box<dyn Stream> 标注用）
+bytes = "1"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }

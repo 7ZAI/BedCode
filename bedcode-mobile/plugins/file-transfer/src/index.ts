@@ -16,11 +16,39 @@ import SettingsSection from './components/SettingsSection.vue'
 import SettingsPage from './components/SettingsPage.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, PluginDevMock } from '@bedcode/plugin-sdk-mobile'
 
 const STYLE_ID = 'file-transfer-plugin-style'
 
+/**
+ * dev-shell 领域数据：SAF 目录树 + 免授权目录浏览条目（浏览器 mock 宿主用）
+ * 仅 dev-shell 消费（见 PluginDevMock 协议），真实宿主忽略此导出
+ */
+export const devMock: PluginDevMock = {
+  safTree: {
+    'mock:root': [
+      { name: '文档资料', isDir: true, size: 0, mime: 'application/vnd.google-apps.folder', docId: 'mock:docs' },
+      { name: '安装包.zip', isDir: false, size: 190_000_000, mime: 'application/zip', docId: 'mock:zip' },
+      { name: '旅行记录.mp4', isDir: false, size: 1_450_000_000, mime: 'video/mp4', docId: 'mock:mp4' },
+      { name: '季度报告.pptx', isDir: false, size: 4_400_000, mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', docId: 'mock:pptx' },
+    ],
+    'mock:docs': [
+      { name: '合同扫描件.pdf', isDir: false, size: 8_600_000, mime: 'application/pdf', docId: 'mock:pdf' },
+      { name: '会议纪要.docx', isDir: false, size: 350_000, mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docId: 'mock:docx' },
+    ],
+  },
+  listDirEntries: [
+    { name: 'report.pdf', isDir: false, size: 2_400_000, mime: 'application/pdf' },
+    { name: 'photo.jpg', isDir: false, size: 4_800_000, mime: 'image/jpeg' },
+    { name: 'archive.zip', isDir: false, size: 190_000_000, mime: 'application/zip' },
+  ],
+}
+
 export async function activate(context: PluginContext): Promise<void> {
+  // 0. 清扫中转复制残留（spec「复制桥语义」：插件激活时扫描清理 cache 残留）
+  //    非 Android / 宿主未就绪时静默降级（dev-shell 无真实 cache）
+  void context.fileService.saf.cleanupStaleCopies().catch(() => {})
+
   // 1. 注册 i18n 消息（必须在组件 setup 前完成，保证模板取文案可用）
   for (const [locale, msgs] of Object.entries(messages)) {
     context.i18n.registerMessages(locale, msgs)

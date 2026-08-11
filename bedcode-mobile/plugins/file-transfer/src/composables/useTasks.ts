@@ -48,6 +48,7 @@ function mapWireTask(raw: any): Task {
     fingerprint: raw.fingerprint ?? null,
     state: raw.state as TaskStateName,
     reason: raw.reason ?? null,
+    place: raw.place ?? null,
     createdAt: raw.created_at ?? raw.createdAt ?? 0,
     updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
   }
@@ -60,6 +61,10 @@ export interface EnqueueArgs {
   peerName: string
   remotePath: string
   localPath?: string
+  /** 上传完成后删除本地源文件（中转复制 cache 副本标记；真实路径源勿传） */
+  cleanupLocal?: boolean
+  /** 下载「保存到…」（M3）：完成时弹系统保存对话框（用户选位置），代替默认 MediaStore 落位 */
+  saveTo?: boolean
 }
 
 /** 是否被拒任务（enqueue 返回的 rejected / reason=duplicate-name） */
@@ -90,6 +95,9 @@ export function useTasks(context: PluginContext) {
 
   /** 队列是否已结算（避免重复通知） */
   let notifiedSettled = false
+
+  /** 「保存到…」结果提示去重（taskId+place 已提示过的组合不再重复弹） */
+  const notifiedSaveTo = new Set<string>()
 
   /** 快照差分样本表（任务生命周期内持续累积） */
   const offsetSamples = new Map<string, OffsetSample>()
@@ -133,6 +141,22 @@ export function useTasks(context: PluginContext) {
 
     tasks.value = next
     speedMap.value = nextSpeeds
+
+    // 「保存到…」结果提示（M3）：下载任务完成且带落点标记时弹 toast
+    //（saved-to = 已保存到所选位置；save-failed = 失败/取消，副本保留私有目录）
+    for (const t of next) {
+      if (t.direction === 'download' && t.state === 'completed' && t.place) {
+        const key = `${t.id}:${t.place}`
+        if (!notifiedSaveTo.has(key)) {
+          notifiedSaveTo.add(key)
+          if (t.place === 'saved-to') {
+            context.dialogs.showToast(context.i18n.t('transfer.saveTo.saved'), 'success')
+          } else if (t.place === 'save-failed') {
+            context.dialogs.showToast(context.i18n.t('transfer.saveTo.failed'), 'error')
+          }
+        }
+      }
+    }
 
     // 对端名兜底：快照里携带 peer.name 时优先采用
     const firstNamed = next.find(t => t.peer?.name)
@@ -199,6 +223,7 @@ export function useTasks(context: PluginContext) {
       fingerprint: null,
       state: 'queued',
       reason: null,
+      place: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -257,6 +282,8 @@ export function useTasks(context: PluginContext) {
       peerName: args.peerName,
       remotePath: args.remotePath,
       localPath: args.localPath ?? null,
+      cleanupLocal: args.cleanupLocal ?? false,
+      saveTo: args.saveTo ?? false,
     })
   }
 
@@ -286,10 +313,12 @@ export function useTasks(context: PluginContext) {
   /**
    * 批量入队下载（逐个入队，单个失败不中断整批）。
    * 任一同名被拒即弹「无法上传」Material 对话框（context.dialogs）。
+   * saveTo（M3）：每项下载完成后弹系统保存对话框（用户选位置）。
    */
   async function enqueueDownload(
     paths: string[],
     peer: { id: string; name: string },
+    options?: { saveTo?: boolean },
   ): Promise<number> {
     let ok = 0
     for (const remotePath of paths) {
@@ -299,6 +328,7 @@ export function useTasks(context: PluginContext) {
           peerId: peer.id,
           peerName: peer.name,
           remotePath,
+          saveTo: options?.saveTo ?? false,
         })
         if (isRejectedTask(result)) {
           void showDuplicateDialog()

@@ -426,6 +426,71 @@ export interface PeerFileServiceInfo {
   mounts: PeerMountAnnouncement[]
 }
 
+/** SAF 目录树条目（listTree 返回；真实路径条目列表复用，uri 承载绝对路径） */
+export interface SafEntry {
+  name: string
+  isDir: boolean
+  /** 文件大小（字节；目录/未知为 0） */
+  size: number
+  /** MIME 类型（可空串） */
+  mime: string
+  /** 条目 document URI（content://.../document/...；真实路径条目为绝对路径） */
+  uri: string
+  /** 条目 document id（子目录遍历用；真实路径条目为空串） */
+  documentId: string
+}
+
+/** 中转复制启动结果 */
+export interface SafCopyHandle {
+  /** 复制句柄 id（copyStatus / copyCancel 用） */
+  copyId: string
+  /** cache 落盘绝对路径（复制完成后即 enqueue 的 localPath） */
+  destPath: string
+}
+
+/** 中转复制进度快照（「准备中」进度条数据源） */
+export interface SafCopyStatus {
+  copyId: string
+  /** 已复制字节数 */
+  done: number
+  /** 总字节数（未知大小（流式 provider）为 0） */
+  total: number
+  /** 复制是否已结束（成功/失败/取消三者其一） */
+  finished: boolean
+  /** 是否被用户取消 */
+  cancelled: boolean
+  /** 失败原因（仅失败时非空） */
+  error: string | null
+  /** cache 落盘绝对路径 */
+  destPath: string
+}
+
+/** 系统目录树选择结果（添加共享目录条目用；Kotlin SafPickerPlugin 返回） */
+export interface PickedSharedDirectory {
+  /** content://tree URI（条目 id） */
+  uri: string
+  /** 树根 document id（子目录遍历起点） */
+  documentId: string
+  /** 目录展示名 */
+  displayName: string
+}
+
+/** SAF 存储访问 API（需 fileservice 权限；非 Android 平台 reject） */
+export interface SafAPI {
+  /** 列出目录树子条目（共享目录 App 内遍历，免系统选择器） */
+  listTree(treeUri: string, documentId: string): Promise<SafEntry[]>
+  /** 启动中转复制（Relay Copy）：SAF 源 → app 私有 cache，立即返回句柄 */
+  copyStart(uri: string, destName: string): Promise<SafCopyHandle>
+  /** 轮询中转复制进度 */
+  copyStatus(copyId: string): Promise<SafCopyStatus>
+  /** 取消中转复制（复制方删除半成品后结束，无残留） */
+  copyCancel(copyId: string): Promise<void>
+  /** 清扫中转复制残留（插件激活时调用，删除缓存 staging 目录全部文件） */
+  cleanupStaleCopies(): Promise<void>
+  /** 检测树授权是否仍有效（失效标记 → 提示重新授权） */
+  checkAuthorized(treeUri: string): Promise<boolean>
+}
+
 /** 文件服务 API（需 fileservice 权限） */
 export interface FileServiceAPI {
   /** 挂载文件服务端点（插件作为文件服务方），返回挂载句柄 */
@@ -440,10 +505,52 @@ export interface FileServiceAPI {
    * Android 使用 SAF 文件选择器并解析为真实路径；不支持的 provider 或 iOS 会 reject，
    * 插件应捕获后改用手动路径输入 */
   pickFile(): Promise<string | null>
+  /** 弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用；
+   * 持久化授权由宿主完成，重启仍有效；用户取消返回 null；非 Android 平台 reject） */
+  pickSharedDirectory(): Promise<PickedSharedDirectory | null>
+  /** 列出真实路径目录条目（免授权特殊条目「app 私有下载目录」浏览用；
+   * 仅允许该目录及其子目录；非 Android 平台 reject） */
+  listDir(path: string): Promise<SafEntry[]>
+  /** SAF 存储访问（共享目录遍历 + 中转复制；非 Android 平台 reject） */
+  readonly saf: SafAPI
   /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下，非媒体集合的顶层
    * 自定义目录 read_dir 会被 FUSE 过滤为空，需该权限才能经真实路径读取；
    * 无运行时弹窗，宿主跳转系统授权页）。返回当前是否已授权；非 Android 平台 reject */
   requestAllFilesAccess(): Promise<boolean>
+}
+
+// ==================== 插件开发期领域数据（dev-shell mock 协议） ====================
+
+/** SAF 目录树条目（dev-shell safTree 用；docId 为子目录遍历 key） */
+export interface SafTreeEntry {
+  name: string
+  isDir: boolean
+  /** 文件大小（字节；目录/未知为 0） */
+  size: number
+  /** MIME 类型（可空串） */
+  mime: string
+  /** 子目录遍历 key（对应 safTree 下一级键；目录条目必填，文件条目忽略） */
+  docId: string
+}
+
+/** 免授权真实路径目录浏览条目种子（dev-shell listDir 用；uri/documentId 由 mock 宿主拼装） */
+export type SafEntrySeed = Omit<SafEntry, 'uri' | 'documentId'>
+
+/**
+ * 插件开发期领域数据：dev-shell mock 宿主按 pluginId 合并（仅浏览器 dev 环境消费）
+ *
+ * 与"宿主能力 mock"（会话/对话框/事件/HTTP 接口等，固定在 dev-shell 内实现）
+ * 区分：本协议只承载各插件自己的业务演示数据，由插件入口导出 devMock，
+ * dev-shell 加载插件时经 registry 注册、createMockContext 按需取用。
+ * 真实宿主忽略该字段（多余导出对 activate 无影响），插件无需条件编译。
+ */
+export interface PluginDevMock {
+  /** 任务队列种子（auto-task：mobileApi 初始队列项，localStorage 无缓存时使用） */
+  queueSeed?: MobileQueueTaskItem[]
+  /** 免授权真实路径目录浏览条目（file-transfer：fileService.listDir 的返回） */
+  listDirEntries?: SafEntrySeed[]
+  /** SAF 目录树（file-transfer：documentId → 条目，saf.listTree 遍历用） */
+  safTree?: Record<string, SafTreeEntry[]>
 }
 
 /** 国际化 API */
@@ -491,4 +598,6 @@ export interface PluginContext {
 export interface PluginModule {
   activate(context: PluginContext): Promise<void>
   deactivate?: () => Promise<void>
+  /** dev-shell 领域数据（见 PluginDevMock）；真实宿主忽略 */
+  devMock?: PluginDevMock
 }

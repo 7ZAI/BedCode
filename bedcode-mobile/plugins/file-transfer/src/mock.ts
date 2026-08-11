@@ -92,6 +92,7 @@ export function mockTasks(): Task[] {
     fingerprint: { size, mtime: now - 86_400_000 },
     state,
     reason,
+    place: null,
     createdAt: now - 3_600_000,
     updatedAt: now,
   })

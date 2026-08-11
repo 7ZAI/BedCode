@@ -10,6 +10,7 @@ mod commands;
 mod handshake;
 mod peer;
 mod queue;
+mod shared;
 mod state;
 
 use bedcode_plugin_api_mobile::host::{HostBus, HostFileService, HostLog, HostTransfer};
@@ -56,11 +57,16 @@ impl WasmPlugin for FileTransferPlugin {
         let concurrency = s.settings.concurrency;
         s.queue.set_concurrency(concurrency);
 
-        // 2. 挂载文件服务（roots 非空时）
-        if !s.settings.roots.is_empty() {
+        // 2. 挂载文件服务（可挂载根非空时）
+        //    可挂载根 = 全部共享目录条目（M2：SAF 树条目与免授权特殊条目
+        //    均可挂载，宿主按 content:// 前缀分流——桌面端可浏览/拉取 SAF
+        //    共享目录）。与 sync_mount 共用同一推导（effective_mount_roots），
+        //    防 set-settings 后挂载漂移
+        let mount_roots = commands::effective_mount_roots(&s, &host);
+        if !mount_roots.is_empty() {
             let options = MountOptions {
                 mount_path: MOUNT_PATH.to_string(),
-                roots: s.settings.roots.clone(),
+                roots: mount_roots,
                 operations: vec![
                     FileOperation::List,
                     FileOperation::Download,

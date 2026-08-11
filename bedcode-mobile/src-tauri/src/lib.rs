@@ -58,12 +58,19 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::file_delete_plugin())
         .plugin(crate::plugin::android_plugins::device_info_plugin())
         .plugin(crate::plugin::android_plugins::saf_picker_plugin())
+        .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
 
             let app_handle = app.handle();
+
+            // 托管 SafIo 主 seam 实现（Android = KotlinSafIo 转发 SafTransferPlugin；
+            // 其他平台 = 明确不可用）。经 state 注入命令层，测试可替换为 fake
+            app.manage(crate::plugin::saf_io::SafIoState(
+                crate::plugin::saf_io::default_saf_io(),
+            ));
 
             // 初始化移动端设置管理器 (JSON 文件存储)
             let app_data_dir = app_handle
@@ -265,6 +272,15 @@ pub fn run() {
             crate::plugin::commands::plugin_pick_directory,
             crate::plugin::commands::plugin_pick_file,
             crate::plugin::commands::open_all_files_settings,
+            // SAF 存储访问（SafIo 主 seam，共享目录/上传页）
+            crate::plugin::commands::plugin_saf_list_tree,
+            crate::plugin::commands::plugin_saf_copy_start,
+            crate::plugin::commands::plugin_saf_copy_status,
+            crate::plugin::commands::plugin_saf_copy_cancel,
+            crate::plugin::commands::plugin_saf_cleanup_stale_copies,
+            crate::plugin::commands::plugin_saf_check_authorized,
+            crate::plugin::commands::plugin_pick_shared_directory,
+            crate::plugin::commands::plugin_saf_list_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

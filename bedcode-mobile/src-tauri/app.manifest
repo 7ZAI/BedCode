@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  测试二进制（cargo test 生成的 exe）无应用级 manifest，Windows 加载器会选中
+  System32 的 comctl32 5.82 兼容桩（不导出 TaskDialogIndirect），导致
+  rfd 的 message dialog 代码路径在进程启动时直接崩溃（0xc0000139）。
+  此 manifest 声明依赖 common-controls v6（WinSxS），与 Tauri 主应用行为一致。
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

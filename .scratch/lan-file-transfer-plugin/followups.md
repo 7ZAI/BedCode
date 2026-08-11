@@ -7,6 +7,7 @@
 ### P1 — 上传方向收口
 - [x] **桌面上传 UI（发送到手机）**（2026-08-07 完成）：宿主新增 `plugin_pick_files` 多文件选择命令（`plugin_pick_directory` 同构，fileservice 权限）→ SDK `FileServiceAPI.pickFiles()` + 前端 `pluginPickFiles` 封装 + 权限列表双端同步（permission.ts / SDK permission.rs）→ 顶栏「发送到手机…」按钮 → `enqueueUpload`（`direction=upload` + `localPath`，remotePath 取文件名，对端挂载根落位）。桌面端上传入队链路已闭环。
 - [ ] **上传方向 E2E 验证**：上传钩子已修复（`host.fs_exists` 同名即拒）、session 流已实现，需真机双端实测（移动→桌面 10GB 级 + 桌面→移动）。
+- [ ] **移动端存储访问 SAF 化**（方案见 `issues/08-移动端SAF存储访问改造方案.md`，2026-08-11 grilling 定稿）：不依赖 All Files（注定不可得）。v1 = 共享目录改存 SAF URI + Kotlin `SafTransferPlugin`（`listTreeChildren` 遍历 + `safToCache` 中转复制）+ 上传页共享目录文件列表 + MediaStore.Downloads 默认接收落点（私有回退）+ file_service 三端点 SAF 化（cache 中转）；Rust 引擎零改动。M1 上传 → M2 接收+共享 → M3 可选（上传 SAF 流直传 / 「保存到…」）。术语见 CONTEXT.md「文件传输」，架构决策见 docs/adr/0009。
 
 ### P2 — 宿主/SDK 缺口
 - [x] **移动端 SDK 补 `fs_delete` 导出**（2026-08-07 完成）：新增 Kotlin `FileDeletePlugin`（gen/android + android-backup 双备份，已入 AGENTS.md 恢复清单）→ `android_plugins.rs` 注册/`delete_file()` 桥 → wasm_runtime 注册 `host_fs_delete`（fs:write 权限 + fs_auth Write 校验，非 Android 平台 std::fs 兜底）→ SDK `HostFs::fs_delete`（abi.rs 常量 + 签名表 + wasm_host 实现）→ 插件 `delete_part_file` 恢复真实删除。移动端取消下载现在会清理本地 `.part`。

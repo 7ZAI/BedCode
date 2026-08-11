@@ -13,9 +13,10 @@
  *   - 页面正文：只反映「对端文件共享」维度（空目录 / 对端未共享 / 目录不可用），
  *     无论连接是否已建立，看不到对端文件统一归到「对端未共享」空态。
  *
- * 业务逻辑全部在 composables（useTasks / useRemoteFs），本组件只做 UI；
+ * 业务逻辑全部在 composables（useTasks / useRemoteFs / useSharedUpload），本组件只做 UI；
  * 设置页经 context.ui.openPage('settings') 整体路由跳转（SettingsPage 包装 useSettings）。
- * 上传入口为占位：移动 SDK 无文件选择 API，经 dialogs.showPrompt 手动输入本地绝对路径。
+ * 上传入口为共享目录上传页（底部抽屉）：App 内遍历共享目录（SAF URI 存储）→
+ * 「准备中」中转复制进度 + 取消 → 完成后自动入队（M1 上传页）。
  *
  * 经宿主 PluginViewHost 渲染（provide pluginContext），故此处直接断言非空。
  */
@@ -23,15 +24,20 @@ import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import type { PluginContext, Disposable } from '@bedcode/plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
 import { useRemoteFs } from '../composables/useRemoteFs'
+import { useSettings } from '../composables/useSettings'
+import { useSharedUpload } from '../composables/useSharedUpload'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
 import FileTypeIcon from './FileTypeIcon.vue'
 import TaskQueueSheet from './TaskQueueSheet.vue'
+import SharedDirSheet from './SharedDirSheet.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const tasks = useTasks(context)
 const fs = useRemoteFs(context)
+const settings = useSettings(context)
+const upload = useSharedUpload(context, tasks, settings)
 
 /** 队列 bottom sheet 是否展开 */
 const queueOpen = ref(false)
@@ -202,8 +208,67 @@ const downloadLabel = computed(() =>
   }),
 )
 
-/** 点击行：目录进入，文件勾选 */
+// ==================== 「保存到…」（M3 单文件目标） ====================
+
+/** 长按触发阈值（ms）：与原生长按菜单语义对齐 */
+const LONG_PRESS_MS = 500
+/** 长按定时器（触发后清除） */
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+/** 长按已触发标记：抑制随后 touchend 派生的 click（避免误勾选） */
+let longPressFired = false
+
+/** 长按文件行：启动定时器；目录长按不处理 */
+function onRowTouchStart(_e: TouchEvent, entry: { isDir: boolean; name: string }): void {
+  if (entry.isDir) return
+  longPressFired = false
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null
+    longPressFired = true
+    void saveToFile(entry.name)
+  }, LONG_PRESS_MS)
+}
+
+/** 手指移动/抬起/取消：取消未达阈值的长按 */
+function onRowTouchCancel(): void {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+/** 桌面 dev 兜底：右键菜单触发「保存到…」（真机走长按） */
+function onRowContextMenu(entry: { isDir: boolean; name: string }): void {
+  if (entry.isDir) return
+  void saveToFile(entry.name)
+}
+
+/**
+ * 「保存到…」：入队下载（中转目录唯一名）→ 完成时 WASM 弹系统保存对话框
+ * （ACTION_CREATE_DOCUMENT，用户选位置）→ 流拷贝即达 → 删除中转副本
+ */
+async function saveToFile(name: string): Promise<void> {
+  if (!tasks.peerOnline.value) {
+    context.dialogs.showToast(t('transfer.upload.offline'), 'error')
+    return
+  }
+  const base = fs.currentPath.value
+  const path = base ? `${base}/${name}` : name
+  const ok = await tasks.enqueueDownload(
+    [path],
+    { id: tasks.peerId.value, name: tasks.displayPeerName.value },
+    { saveTo: true },
+  )
+  if (ok > 0) {
+    context.dialogs.showToast(t('transfer.saveTo.enqueued'), 'success')
+  }
+}
+
+/** 点击行：目录进入，文件勾选（长按已触发时抑制，避免误勾选） */
 function onRowTap(entry: { name: string; isDir: boolean }): void {
+  if (longPressFired) {
+    longPressFired = false
+    return
+  }
   if (entry.isDir) {
     void fs.cd(entry.name)
   } else {
@@ -225,35 +290,17 @@ async function downloadSelected(): Promise<void> {
 }
 
 /**
- * 上传入口：优先系统文件选择器（fileService.pickFile，Android SAF 免权限）；
- * 选择器不可用/路径解析失败降级 dialogs.showPrompt 手动输入绝对路径。
- * 目标远端目录为当前面包屑目录，文件名取本地路径 basename。
+ * 上传入口：打开共享目录上传页（底部抽屉）
+ *
+ * M1 上传源严格限于共享目录（SAF 目录树授权，见 spec）：App 内遍历
+ * 共享目录文件列表 → 「准备中」中转复制 → 完成后自动入队。
  */
 async function uploadFile(): Promise<void> {
-  if (!tasks.peerOnline.value) return
-  let localPath: string | null = null
-  try {
-    localPath = await context.fileService.pickFile()
-  } catch {
-    // SAF 选择器不可用（不支持的 provider / iOS）→ 手动输入兜底
-    localPath = await context.dialogs.showPrompt({
-      title: t('transfer.dialog.uploadTitle'),
-      message: t('transfer.settings.addRootHint'),
-      inputPlaceholder: t('transfer.dialog.localPathPlaceholder'),
-      confirmText: t('transfer.task.upload'),
-      cancelText: t('transfer.dialog.cancel'),
-    })
+  if (!tasks.peerOnline.value) {
+    context.dialogs.showToast(t('transfer.upload.offline'), 'error')
+    return
   }
-  if (!localPath) return
-  const fileName = localPath.split(/[\\/]/).pop() || localPath
-  const base = fs.currentPath.value
-  const remotePath = base ? `${base}/${fileName}` : fileName
-  await tasks.enqueueUpload({
-    peerId: tasks.peerId.value,
-    peerName: tasks.displayPeerName.value,
-    remotePath,
-    localPath,
-  })
+  await upload.openSheet()
 }
 
 /**
@@ -435,6 +482,11 @@ onUnmounted(() => {
               'ft-row-selected': !entry.isDir && fs.selected.value.has(entry.name),
             }"
             @click="onRowTap(entry)"
+            @touchstart.passive="(e) => onRowTouchStart(e, entry)"
+            @touchmove.passive="onRowTouchCancel"
+            @touchend="onRowTouchCancel"
+            @touchcancel="onRowTouchCancel"
+            @contextmenu.prevent="onRowContextMenu(entry)"
           >
             <!-- 类型图标（按扩展名匹配：音乐/视频/图片/PDF/文档等，未知回退通用文件） -->
             <FileTypeIcon :name="entry.name" :is-dir="entry.isDir" />
@@ -550,6 +602,15 @@ onUnmounted(() => {
       @cancel="(id) => tasks.cancel(id)"
       @retry="(id) => tasks.retry(id)"
       @resume-all="() => tasks.resumeAll()"
+    />
+
+    <!-- 共享目录上传页（M1：共享目录文件列表 + 准备中进度 + 取消） -->
+    <SharedDirSheet
+      :open="upload.open.value"
+      :upload="upload"
+      :t="t"
+      @close="upload.close()"
+      @open-settings="() => { upload.close(); context.ui.openPage('settings') }"
     />
   </div>
 </template>

@@ -11,6 +11,7 @@
 //! 导致 `run_mobile_plugin_async` 路由到错误的插件。
 
 use std::sync::OnceLock;
+use tauri::Manager;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 PluginAssetExtractor 句柄（仅 Android 平台使用）
@@ -173,6 +174,49 @@ pub async fn get_external_downloads_dir() -> Option<String> {
     None
 }
 
+/// 解析 app 下载目录（免授权特殊条目基址，与 WASM host config 共用）
+///
+/// 策略（与 wasm_runtime.rs 的 resolve_downloads_dir 保持同一解析链）：
+/// 1. Kotlin 桥 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`（外部私有目录，免权限）
+/// 2. 兜底 `app_data_dir()/Downloads`（内部存储；外部存储不可用时设备上
+///    特殊条目仍以回退路径派生，浏览端（plugin_saf_list_dir）与配置端
+///    （WASM host_config_get）必须一致，否则外部存储不可用的设备上
+///    特殊条目派生成功但浏览被白名单拒绝）
+/// 目录不存在时惰性创建。
+pub async fn resolve_app_downloads_dir(app_handle: &tauri::AppHandle) -> Option<String> {
+    // 首选：Kotlin 桥获取外部私有下载目录
+    if let Some(ext) = get_external_downloads_dir().await {
+        tracing::debug!(path = %ext, "resolve_app_downloads_dir: using external private downloads dir");
+        return Some(ext);
+    }
+    // 兜底：app_data_dir()/Downloads（内部存储目录，文件管理器不可见）
+    let data_dir = app_handle.path().app_data_dir().ok()?;
+    let path = data_dir.join("Downloads");
+    if !path.exists() {
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            tracing::error!(error = %e, path = %path.display(), "resolve_app_downloads_dir: failed to create fallback dir");
+            return None;
+        }
+        tracing::info!(path = %path.display(), "resolve_app_downloads_dir: created app_data/Downloads fallback");
+    }
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// 判断路径是否位于 AppDownloadsDir（免授权特殊条目）之下
+///
+/// canonicalize 白名单，三处共用（命令层 saf 列表、WASM host media 落位、
+/// save-to-document 落位）；基址解析失败返回 false（fail-closed）
+pub async fn is_within_app_downloads_dir(app_handle: &tauri::AppHandle, path: &str) -> bool {
+    let Some(base) = resolve_app_downloads_dir(app_handle).await else {
+        return false;
+    };
+    let base_canon =
+        std::fs::canonicalize(&base).unwrap_or_else(|_| std::path::PathBuf::from(&base));
+    let target_canon =
+        std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    target_canon.starts_with(&base_canon)
+}
+
 /// 注册 FileDeletePlugin（删除文件，WASM HostFs::fs_delete 的 Android 实现）
 pub fn file_delete_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     Builder::new("file-delete")
@@ -226,6 +270,9 @@ pub async fn delete_file(_path: &str) -> crate::Result<()> {
 
 /// 已注册的 SafPickerPlugin 句柄（仅 Android 平台使用）
 static SAF_PICKER_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
+
+/// 已注册的 SafTransferPlugin 句柄（仅 Android 平台使用）
+static SAF_TRANSFER_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 已注册的 AllFilesAccessPlugin 句柄（仅 Android 平台使用）
 static ALL_FILES_ACCESS_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
@@ -282,6 +329,26 @@ pub fn saf_picker_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             {
                 let handle = api.register_android_plugin("com.bedcode.mobile", "SafPickerPlugin")?;
                 let _ = SAF_PICKER_HANDLE.set(handle);
+            }
+            #[cfg(not(target_os = "android"))] // 非 Android 平台消除 unused 警告
+            let _ = api;
+            Ok(())
+        })
+        .build()
+}
+
+/// 注册 SafTransferPlugin（SAF 存储传输后端：目录树遍历 / 中转复制 / 授权检测）
+///
+/// 对应宿主 Rust SafIo trait（saf_io.rs）的 Kotlin 实现，转发经本文件
+/// saf_* 函数（run_mobile_plugin_async 模式）。
+/// gen/android 重建恢复清单：SafTransferPlugin.kt 须恢复
+pub fn saf_transfer_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    Builder::new("saf-transfer")
+        .setup(|_app, api| {
+            #[cfg(target_os = "android")]
+            {
+                let handle = api.register_android_plugin("com.bedcode.mobile", "SafTransferPlugin")?;
+                let _ = SAF_TRANSFER_HANDLE.set(handle);
             }
             #[cfg(not(target_os = "android"))] // 非 Android 平台消除 unused 警告
             let _ = api;
@@ -366,6 +433,411 @@ fn saf_response_to_path(
         ))
     })?;
     Ok(Some(path))
+}
+
+/// 弹系统目录树选择器，返回 SAF 树元数据（共享目录条目用，不做真实路径解析）
+///
+/// 共享目录条目存储 content://tree URI + documentId + 展示名（spec：
+/// 共享目录 = SAF URI 存储）；真实路径解析仅旧选路需要，SAF 化后废除。
+/// 用户取消返回 Ok(None)；持久化授权由 Kotlin 侧 takePersistableUriPermission
+/// 完成（重启仍有效）。
+#[cfg(target_os = "android")]
+pub async fn pick_shared_directory_android(
+) -> crate::Result<Option<(String, String, String)>> {
+    let handle = SAF_PICKER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafPickerPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("pickDirectory", serde_json::json!({}))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke pickDirectory: {}", e)))?;
+    if response.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Ok(None);
+    }
+    let uri = response.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+    let document_id = response.get("documentId").and_then(|v| v.as_str()).unwrap_or("");
+    let display_name = response.get("displayName").and_then(|v| v.as_str()).unwrap_or("");
+    if uri.is_empty() || document_id.is_empty() {
+        return Err(crate::AppError::Plugin(format!(
+            "pickDirectory returned incomplete SAF metadata (uri={}, documentId={})",
+            uri, document_id
+        )));
+    }
+    Ok(Some((uri.to_string(), document_id.to_string(), display_name.to_string())))
+}
+
+/// 非 Android 平台无 SAF 目录树选择器（共享目录功能仅 Android 可用）
+#[cfg(not(target_os = "android"))]
+pub async fn pick_shared_directory_android() -> crate::Result<Option<(String, String, String)>> {
+    Err(crate::AppError::Plugin(
+        "SAF directory picker unavailable on this platform".to_string(),
+    ))
+}
+
+// ==================== SafIo 桥（SafTransferPlugin 转发） ====================
+//
+// 对应 saf_io.rs 的 KotlinSafIo：把 trait 方法经 run_mobile_plugin_async
+// 转发到 Kotlin SafTransferPlugin，并把响应解析为 Rust 类型（解析函数在
+// saf_io.rs，可单测）。
+
+/// 列出目录树子条目
+#[cfg(target_os = "android")]
+pub async fn saf_list_tree(tree_uri: &str, document_id: &str) -> crate::Result<Vec<crate::plugin::saf_io::SafEntry>> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "listTreeChildren",
+            serde_json::json!({ "treeUri": tree_uri, "documentId": document_id }),
+        )
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke listTreeChildren: {}", e))
+        })?;
+    crate::plugin::saf_io::parse_saf_entries(&response)
+}
+
+/// 启动中转复制（SAF 源 → app 私有 cache）
+#[cfg(target_os = "android")]
+pub async fn saf_copy_start(
+    uri: &str,
+    dest_name: &str,
+) -> crate::Result<crate::plugin::saf_io::SafCopyHandle> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "safToCache",
+            serde_json::json!({ "uri": uri, "destName": dest_name }),
+        )
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke safToCache: {}", e)))?;
+    crate::plugin::saf_io::parse_saf_copy_handle(&response)
+}
+
+/// 轮询中转复制进度
+#[cfg(target_os = "android")]
+pub async fn saf_copy_status(
+    copy_id: &str,
+) -> crate::Result<crate::plugin::saf_io::SafCopyStatus> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("copyProgress", serde_json::json!({ "copyId": copy_id }))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke copyProgress: {}", e)))?;
+    crate::plugin::saf_io::parse_saf_copy_status(&response)
+}
+
+/// 取消中转复制
+#[cfg(target_os = "android")]
+pub async fn saf_copy_cancel(copy_id: &str) -> crate::Result<()> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("cancelCopy", serde_json::json!({ "copyId": copy_id }))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke cancelCopy: {}", e)))?;
+    if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(crate::AppError::Plugin(format!(
+            "cancelCopy rejected for copyId {}",
+            copy_id
+        )))
+    }
+}
+
+/// 清扫中转复制残留（file-transfer 插件激活时调用，删除 staging 目录全部文件）
+#[cfg(target_os = "android")]
+pub async fn saf_cleanup_stale_copies() -> crate::Result<()> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    handle
+        .run_mobile_plugin_async::<()>("cleanupStaleCopies", serde_json::json!({}))
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke cleanupStaleCopies: {}", e))
+        })
+}
+
+/// 检测树授权是否仍有效
+#[cfg(target_os = "android")]
+pub async fn saf_check_authorized(tree_uri: &str) -> crate::Result<bool> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "checkAuthorized",
+            serde_json::json!({ "treeUri": tree_uri }),
+        )
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke checkAuthorized: {}", e)))?;
+    Ok(response.get("authorized").and_then(|v| v.as_bool()).unwrap_or(false))
+}
+
+/// 写入 MediaStore.Downloads 公共下载目录（接收方向统一落点，M2）
+///
+/// src_path 为 app 私有下载目录中的最终文件；mime_type 为空串时由 Kotlin
+/// 按扩展名推断。失败（含 API<29 设备不支持）返回错误，调用方回退私有目录。
+#[cfg(target_os = "android")]
+pub async fn saf_write_media_downloads(
+    src_path: &str,
+    display_name: &str,
+    mime_type: &str,
+) -> crate::Result<()> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "writeMediaDownloads",
+            serde_json::json!({
+                "srcPath": src_path,
+                "displayName": display_name,
+                "mimeType": mime_type,
+            }),
+        )
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke writeMediaDownloads: {}", e))
+        })?;
+    crate::plugin::saf_io::parse_media_write_response(&response)
+}
+
+/// 打开 SAF 源为可流读句柄（M3 上传流直传；offset 语义见 SafIo::open_stream）
+#[cfg(target_os = "android")]
+pub async fn saf_stream_open(
+    uri: &str,
+    offset: u64,
+) -> crate::Result<crate::plugin::saf_io::SafStreamHandle> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "safOpen",
+            serde_json::json!({ "uri": uri, "mode": "r", "offset": offset }),
+        )
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke safOpen: {}", e)))?;
+    crate::plugin::saf_io::parse_saf_stream_handle(&response)
+}
+
+/// 从流句柄读取至多 len 字节（EOF 返回空；base64 跨桥传输）
+#[cfg(target_os = "android")]
+pub async fn saf_stream_read(handle_id: &str, len: usize) -> crate::Result<Vec<u8>> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "safRead",
+            serde_json::json!({ "handleId": handle_id, "len": len }),
+        )
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke safRead: {}", e)))?;
+    crate::plugin::saf_io::parse_saf_read_response(&response)
+}
+
+/// 移动流句柄到指定偏移（仅可 seek 句柄）
+#[cfg(target_os = "android")]
+pub async fn saf_stream_seek(handle_id: &str, offset: u64) -> crate::Result<()> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "safSeek",
+            serde_json::json!({ "handleId": handle_id, "offset": offset }),
+        )
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke safSeek: {}", e)))?;
+    if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(crate::AppError::Plugin(format!(
+            "safSeek rejected for handle {}",
+            handle_id
+        )))
+    }
+}
+
+/// 关闭流句柄（任务终态后调用；任务内恢复不调用，fd 保留续读）
+#[cfg(target_os = "android")]
+pub async fn saf_stream_close(handle_id: &str) -> crate::Result<()> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("safClose", serde_json::json!({ "handleId": handle_id }))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke safClose: {}", e)))?;
+    if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(crate::AppError::Plugin(format!(
+            "safClose rejected for handle {}",
+            handle_id
+        )))
+    }
+}
+
+/// 探测 SAF 源是否可 seek（getStatSize()==-1 为 pipe 流）
+#[cfg(target_os = "android")]
+pub async fn saf_stream_seekable(uri: &str) -> crate::Result<bool> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("safSeekable", serde_json::json!({ "uri": uri }))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke safSeekable: {}", e)))?;
+    crate::plugin::saf_io::parse_saf_seekable_response(&response)
+}
+
+/// 「保存到…」（M3）：弹 ACTION_CREATE_DOCUMENT 对话框并流拷贝到用户选择的位置
+///
+/// 用户取消视为失败（保留私有副本回退）。suggested_name 为对话框默认文件名，
+/// mime_type 为空串时按扩展名推断。
+#[cfg(target_os = "android")]
+pub async fn saf_save_to_document(
+    src_path: &str,
+    suggested_name: &str,
+    mime_type: &str,
+) -> crate::Result<()> {
+    let handle = SAF_TRANSFER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafTransferPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async(
+            "saveToDocument",
+            serde_json::json!({
+                "srcPath": src_path,
+                "suggestedName": suggested_name,
+                "mimeType": mime_type,
+            }),
+        )
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke saveToDocument: {}", e)))?;
+    crate::plugin::saf_io::parse_save_to_document_response(&response)
+}
+
+/// 非 Android 平台 SafIo 不可用（dev 窗口无 SAF 概念；调用方展示明确提示）
+#[cfg(not(target_os = "android"))]
+pub async fn saf_cleanup_stale_copies() -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_list_tree(
+    _tree_uri: &str,
+    _document_id: &str,
+) -> crate::Result<Vec<crate::plugin::saf_io::SafEntry>> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_copy_start(
+    _uri: &str,
+    _dest_name: &str,
+) -> crate::Result<crate::plugin::saf_io::SafCopyHandle> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_copy_status(
+    _copy_id: &str,
+) -> crate::Result<crate::plugin::saf_io::SafCopyStatus> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_copy_cancel(_copy_id: &str) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_check_authorized(_tree_uri: &str) -> crate::Result<bool> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_write_media_downloads(
+    _src_path: &str,
+    _display_name: &str,
+    _mime_type: &str,
+) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_stream_open(
+    _uri: &str,
+    _offset: u64,
+) -> crate::Result<crate::plugin::saf_io::SafStreamHandle> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_stream_read(_handle_id: &str, _len: usize) -> crate::Result<Vec<u8>> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_stream_seek(_handle_id: &str, _offset: u64) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_stream_close(_handle_id: &str) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_stream_seekable(_uri: &str) -> crate::Result<bool> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn saf_save_to_document(
+    _src_path: &str,
+    _suggested_name: &str,
+    _mime_type: &str,
+) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "SAF storage is not available on this platform".to_string(),
+    ))
 }
 
 /// 注册 BiometricKeyPlugin（生物认证密钥：Android Keystore 生成/签名/删除）

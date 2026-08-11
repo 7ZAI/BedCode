@@ -22,7 +22,7 @@ use crate::state::get_connection_manager;
 use crate::connection::request::TerminalRequest;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use wasmtime::{
     Cache, CacheConfig, Config, Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store,
 };
@@ -969,6 +969,22 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_fs_delete", host_fs_delete)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_fs_delete: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_fs_write_media_downloads", host_fs_write_media_downloads)
+        .map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "Failed to register host_fs_write_media_downloads: {}",
+                e
+            ))
+        })?;
+    linker
+        .func_wrap("bedcode", "host_fs_save_to_document", host_fs_save_to_document)
+        .map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "Failed to register host_fs_save_to_document: {}",
+                e
+            ))
+        })?;
 
     // 消息总线
     linker
@@ -2110,6 +2126,211 @@ fn host_fs_delete(
     }
 }
 
+/// 文件系统：写入 MediaStore 公共下载目录（接收方向统一落点，M2）
+///
+/// 参数：(src_ptr, src_len, name_ptr, name_len, mime_ptr, mime_len)
+/// 返回：0 成功（文件已入系统公共下载目录），-1 失败（调用方回退私有目录）。
+/// 实现经 SafIo 主 seam（Kotlin SafTransferPlugin.writeMediaDownloads），
+/// 与命令层 plugin_saf_write_media_downloads 共用同一后端。
+fn host_fs_write_media_downloads(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    src_ptr: u32,
+    src_len: u32,
+    name_ptr: u32,
+    name_len: u32,
+    mime_ptr: u32,
+    mime_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_WRITE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_write_media_downloads: permission denied (fs:write)");
+        return -1;
+    }
+
+    let src_path = match read_wasm_string(&mut caller, src_ptr, src_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_write_media_downloads: failed to read src path");
+            return -1;
+        }
+    };
+    let display_name = match read_wasm_string(&mut caller, name_ptr, name_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_write_media_downloads: failed to read display name");
+            return -1;
+        }
+    };
+    let mime_type = match read_wasm_string(&mut caller, mime_ptr, mime_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_write_media_downloads: failed to read mime type");
+            return -1;
+        }
+    };
+
+    // 落点写公共存储不经 fs_auth 路径白名单（MediaStore 零权限写入，非路径 IO）；
+    // 入参 src 校验：必须是宿主解析的 app 下载目录内文件（防止插件任意路径
+    // 数据被拷贝进公共下载），基址解析与浏览白名单共用同一函数
+    let host_ctx = caller.data().host_ctx.clone();
+    let src_path_clone = src_path.clone();
+    let allowed = guarded_host_call(&plugin_id, "host_fs_write_media_downloads", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                crate::plugin::android_plugins::is_within_app_downloads_dir(
+                    &host_ctx.app_handle,
+                    &src_path_clone,
+                ),
+            )
+        })
+    });
+    if !allowed {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            src = %src_path,
+            "host_fs_write_media_downloads: src outside app downloads dir, rejected"
+        );
+        return -1;
+    }
+
+    let saf = {
+        use tauri::Manager;
+        host_ctx.app_handle.state::<crate::plugin::saf_io::SafIoState>()
+    };
+    let saf_io = saf.inner().0.clone();
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_fs_write_media_downloads(saf)",
+        Err(crate::AppError::Internal(
+            "host_fs_write_media_downloads panicked".to_string(),
+        )),
+        || saf_io.write_media_downloads(&src_path, &display_name, &mime_type),
+    );
+    match result {
+        Ok(()) => {
+            tracing::info!(
+                plugin_id = %plugin_id,
+                src = %src_path,
+                display_name = %display_name,
+                "host_fs_write_media_downloads: ok"
+            );
+            0
+        }
+        Err(e) => {
+            // 失败不视为异常（回退私有目录是正常分支），warn 级记录原因供排查
+            tracing::warn!(
+                error = %e,
+                plugin_id = %plugin_id,
+                src = %src_path,
+                "host_fs_write_media_downloads failed, caller falls back to private dir"
+            );
+            -1
+        }
+    }
+}
+
+/// 文件系统：「保存到…」（M3）弹系统保存对话框并流拷贝到用户选择的位置
+///
+/// 参数：(src_ptr, src_len, name_ptr, name_len, mime_ptr, mime_len)
+/// 返回：0 成功（已写入用户选择的位置），-1 失败/用户取消（调用方保留副本）。
+/// 实现经 SafIo 主 seam（Kotlin SafTransferPlugin.saveToDocument），src 白名单
+/// 校验与 host_fs_write_media_downloads 一致（必须位于 app 下载目录内）。
+fn host_fs_save_to_document(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    src_ptr: u32,
+    src_len: u32,
+    name_ptr: u32,
+    name_len: u32,
+    mime_ptr: u32,
+    mime_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FS_WRITE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_fs_save_to_document: permission denied (fs:write)");
+        return -1;
+    }
+
+    let src_path = match read_wasm_string(&mut caller, src_ptr, src_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_save_to_document: failed to read src path");
+            return -1;
+        }
+    };
+    let suggested_name = match read_wasm_string(&mut caller, name_ptr, name_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_save_to_document: failed to read suggested name");
+            return -1;
+        }
+    };
+    let mime_type = match read_wasm_string(&mut caller, mime_ptr, mime_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_fs_save_to_document: failed to read mime type");
+            return -1;
+        }
+    };
+
+    // 入参 src 校验：必须是宿主解析的 app 下载目录内文件（防止插件任意路径
+    // 数据被拷贝到用户选择的任意位置），基址解析与浏览白名单共用同一函数
+    let host_ctx = caller.data().host_ctx.clone();
+    let src_path_clone = src_path.clone();
+    let allowed = guarded_host_call(&plugin_id, "host_fs_save_to_document", false, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                crate::plugin::android_plugins::is_within_app_downloads_dir(
+                    &host_ctx.app_handle,
+                    &src_path_clone,
+                ),
+            )
+        })
+    });
+    if !allowed {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            src = %src_path,
+            "host_fs_save_to_document: src outside app downloads dir, rejected"
+        );
+        return -1;
+    }
+
+    let saf = {
+        use tauri::Manager;
+        host_ctx.app_handle.state::<crate::plugin::saf_io::SafIoState>()
+    };
+    let saf_io = saf.inner().0.clone();
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_fs_save_to_document(saf)",
+        Err(crate::AppError::Internal(
+            "host_fs_save_to_document panicked".to_string(),
+        )),
+        || saf_io.save_to_document(&src_path, &suggested_name, &mime_type),
+    );
+    match result {
+        Ok(()) => {
+            tracing::info!(
+                plugin_id = %plugin_id,
+                src = %src_path,
+                suggested_name = %suggested_name,
+                "host_fs_save_to_document: ok"
+            );
+            0
+        }
+        Err(e) => {
+            // 失败/用户取消：保留私有副本（回退语义），warn 级记录原因
+            tracing::warn!(
+                error = %e,
+                plugin_id = %plugin_id,
+                src = %src_path,
+                "host_fs_save_to_document failed/cancelled, private copy kept"
+            );
+            -1
+        }
+    }
+}
+
 // ==================== Message Bus Host Functions ====================
 
 /// 消息总线：发布消息
@@ -2765,56 +2986,21 @@ fn host_config_get(
 
 /// 解析下载目录路径
 ///
-/// 策略（按优先级）：
-/// 1. Kotlin 桥：`getExternalFilesDir(DIRECTORY_DOWNLOADS)`（外部私有目录，免权限）
-/// 2. 兜底：`app_data_dir()/Downloads`（内部存储，注释说明局限）
-/// 目录不存在时惰性创建
+/// 解析链与命令层 plugin_saf_list_dir 共用（android_plugins.rs
+/// resolve_app_downloads_dir）：Kotlin 桥外部私有目录 → app_data 回退，
+/// 目录不存在时惰性创建。两处共用保证外部存储不可用时特殊条目的
+/// 派生路径与浏览白名单一致。
 fn resolve_downloads_dir(caller: &wasmtime::Caller<'_, WasmPluginState>) -> Option<String> {
     let plugin_id = caller.data().plugin_id.clone();
     let host_ctx = caller.data().host_ctx.clone();
     let handle = caller.data().runtime_handle.clone();
+    let app_handle = host_ctx.app_handle.clone();
 
-    // 首选：Kotlin 桥获取外部私有下载目录
-    let external_path = guarded_host_call(&plugin_id, "resolve_downloads_dir(external)", None, || {
+    guarded_host_call(&plugin_id, "resolve_downloads_dir", None, || {
         tokio::task::block_in_place(|| {
-            handle.block_on(crate::plugin::android_plugins::get_external_downloads_dir())
+            handle.block_on(crate::plugin::android_plugins::resolve_app_downloads_dir(
+                &app_handle,
+            ))
         })
-    });
-
-    let path = if let Some(ext_path) = external_path {
-        tracing::debug!(path = %ext_path, "resolve_downloads_dir: using external private downloads dir");
-        std::path::PathBuf::from(ext_path)
-    } else {
-        // 兜底：app_data_dir()/Downloads（内部存储目录，文件管理器不可见；
-        // 外部存储不可用时的降级方案）
-        let fallback = guarded_host_call(&plugin_id, "resolve_downloads_dir(fallback)", None, || {
-            tokio::task::block_in_place(|| {
-                handle.block_on(async {
-                    host_ctx.app_handle.path().app_data_dir().ok()
-                })
-            })
-        });
-        match fallback {
-            Some(data_dir) => {
-                let path = data_dir.join("Downloads");
-                tracing::debug!(path = %path.display(), "resolve_downloads_dir: using app_data_dir/Downloads fallback");
-                path
-            }
-            None => {
-                tracing::error!("resolve_downloads_dir: neither external storage nor app_data_dir available");
-                return None;
-            }
-        }
-    };
-
-    // 惰性创建目录
-    if !path.exists() {
-        if let Err(e) = std::fs::create_dir_all(&path) {
-            tracing::error!(error = %e, path = %path.display(), "resolve_downloads_dir: failed to create directory");
-            return None;
-        }
-        tracing::info!(path = %path.display(), "resolve_downloads_dir: created downloads directory");
-    }
-
-    Some(path.to_string_lossy().to_string())
+    })
 }

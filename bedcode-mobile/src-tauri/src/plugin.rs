@@ -10,6 +10,7 @@ pub mod loader;
 pub mod manager;
 pub mod message_bus;
 pub mod registry;
+pub mod saf_io;
 pub mod saf_path;
 pub mod storage;
 pub mod transfer;

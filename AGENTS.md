@@ -56,7 +56,12 @@ cd bedcode-desktop && npm run test:run
 
 # Rust Test
 cargo test
+
+# Kotlin/Gradle 编译（gen/android 有 Kotlin 改动时必跑，非 Android 平台跳过）
+cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugKotlin
 ```
+
+> **Kotlin 编译验证规范**：改 `gen/android/app/src/main/java/com/bedcode/mobile/` 下的自定义 Kotlin 插件（SafPickerPlugin/SafTransferPlugin 等）后，仅靠 `cargo test` / 前端测试**无法覆盖** Kotlin 代码（独立 Gradle + Kotlin 工具链），必须额外跑 `./gradlew :app:compileUniversalDebugKotlin`（离线模式加 `--offline`）验证编译。曾因漏验导致 `OpenableColumns.MIME_TYPE` 不存在等真实编译错误（见 `.scratch/lan-file-transfer-plugin/issues/08` Comments）。
 
 > **前端测试规范**：`npm run test` 等于 `vitest`（watch 模式），执行完不退出、会一直挂着监听文件变化。
 > 统一使用 `npm run test:run`（即 `vitest run`，一次性跑完并退出），也可直接 `npx vitest run`。
@@ -226,7 +231,7 @@ cargo test
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
+- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
 
 ---
 
@@ -293,6 +298,7 @@ sh scripts/doc-tracking.sh untrack && git commit
 
 - 所有修改的 Rust 代码 `cargo test` 通过
 - 所有修改的前端代码 `npm run test:run`（vitest run）通过
+- 修改了 `gen/android` 下 Kotlin 代码的，`./gradlew :app:compileUniversalDebugKotlin` 通过
 - i18n key 同步出现在 zh-CN 和 en 文件中
 - 公开项有文档注释
 - 错误处理使用 `AppError` 而非裸字符串
