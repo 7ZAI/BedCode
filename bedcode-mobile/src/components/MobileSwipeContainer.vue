@@ -54,15 +54,17 @@ interface PageConfig {
   name: string
   component: any
   pluginId?: string
+  /** 排序值，与 MobileNav 的内置插槽约定一致（0/100/200/300 + 插件插入值） */
+  order: number
 }
 
-// 页面配置（内置 + 插件导航 Tab，响应式）
+// 页面配置（内置 + 插件导航 Tab，响应式；按 order 排序与导航栏顺序一致）
 const pages = computed<PageConfig[]>(() => {
   const builtin: PageConfig[] = [
-    { name: 'mobile-devices', component: DevicesView },
-    { name: 'mobile-sessions', component: SessionsView },
-    { name: 'mobile-toolbox', component: ToolboxView },
-    { name: 'mobile-settings', component: SettingsView },
+    { name: 'mobile-devices', component: DevicesView, order: 0 },
+    { name: 'mobile-sessions', component: SessionsView, order: 100 },
+    { name: 'mobile-toolbox', component: ToolboxView, order: 200 },
+    { name: 'mobile-settings', component: SettingsView, order: 300 },
   ]
 
   const pluginPages: PageConfig[] = pluginRegistry.navTabs.value.map(tab => ({
@@ -71,9 +73,10 @@ const pages = computed<PageConfig[]>(() => {
     name: `plugin-nav-${tab.pluginId}-${tab.id}`,
     component: tab.component,
     pluginId: tab.pluginId,
+    order: tab.order,
   }))
 
-  return [...builtin, ...pluginPages]
+  return [...builtin, ...pluginPages].sort((a, b) => a.order - b.order)
 })
 
 // 状态

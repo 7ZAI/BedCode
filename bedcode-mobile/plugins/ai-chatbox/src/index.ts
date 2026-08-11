@@ -44,7 +44,8 @@ function registerPluginUi(context: PluginContext): void {
     title: context.i18n.t('navTitle'),
     icon: '💬',
     component: ChatView,
-    order: 10,
+    // 内置插槽：连接=0、会话=100、工具箱=200、设置=300；150 = 会话右侧
+    order: 150,
   })
 }
 

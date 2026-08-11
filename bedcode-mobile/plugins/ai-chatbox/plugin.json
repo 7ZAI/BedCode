@@ -64,7 +64,7 @@
       "title": "AI",
       "icon": "💬",
       "component": "ChatView",
-      "order": 10
+      "order": 150
     }
   }
 }

@@ -20,7 +20,7 @@
         <component :is="item.icon" class="w-[22px] h-[22px]" />
         <span class="text-xs font-medium">{{ item.label }}</span>
         <span
-          v-if="item.pageIndex >= 4"
+          v-if="item.isPlugin"
           class="absolute mt-[-3px] ml-[18px] w-1.5 h-1.5 rounded-full"
           style="background: var(--mobile-chip-emerald)"
         ></span>
@@ -56,40 +56,15 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 
-// 路由名称到页面索引的映射
-const pageRouteNames: Record<string, number> = {
-  'mobile-devices': 0,
-  'mobile-sessions': 1,
-  'mobile-toolbox': 2,
-  'mobile-settings': 3,
-  'mobile-home': 0 // 默认首页
-}
-
-// 当前页面索引
-const currentPage = computed(() => {
-  // 优先从查询参数获取页面索引
-  const queryPage = route.query.page
-  if (queryPage) {
-    const page = parseInt(queryPage as string, 10)
-    const maxPage = navItems.value.length - 1
-    if (!isNaN(page) && page >= 0 && page <= maxPage) {
-      return page
-    }
-  }
-
-  // 其次从路由名称获取
-  const name = route.name as string
-  if (pageRouteNames[name] !== undefined) {
-    return pageRouteNames[name]
-  }
-  return 0
-})
-
-const navItems = computed(() => {
+// 导航项（内置 + 插件导航 Tab，统一按 order 排序决定页面索引）
+// 内置插槽约定：连接=0、会话=100、工具箱=200、设置=300，插件用中间值插入
+// 如 order=150 即位于「会话」右侧；页面索引 = 排序后位置（内置与插件共享序列）
+const navItems = computed<NavItem[]>(() => {
   const builtin = [
     {
       path: '/mobile',
-      pageIndex: 0,
+      name: 'mobile-devices',
+      order: 0,
       label: computed(() => t('mobile.nav.connection')),
       isSwipe: true,
       icon: {
@@ -105,7 +80,8 @@ const navItems = computed(() => {
     },
     {
       path: '/mobile',
-      pageIndex: 1,
+      name: 'mobile-sessions',
+      order: 100,
       label: computed(() => t('mobile.nav.sessions')),
       isSwipe: true,
       icon: {
@@ -121,7 +97,8 @@ const navItems = computed(() => {
     },
     {
       path: '/mobile',
-      pageIndex: 2,
+      name: 'mobile-toolbox',
+      order: 200,
       label: computed(() => t('mobile.nav.toolbox')),
       isSwipe: true,
       icon: {
@@ -137,7 +114,8 @@ const navItems = computed(() => {
     },
     {
       path: '/mobile',
-      pageIndex: 3,
+      name: 'mobile-settings',
+      order: 300,
       label: computed(() => t('mobile.nav.settings')),
       isSwipe: true,
       icon: {
@@ -159,12 +137,14 @@ const navItems = computed(() => {
     }
   ]
 
-  // 追加插件导航 Tab
-  const pluginTabs = pluginRegistry.navTabs.value.map((tab, idx) => ({
+  // 追加插件导航 Tab（order 参与全局排序，可与内置插槽交错）
+  const pluginTabs = pluginRegistry.navTabs.value.map((tab) => ({
     path: '/mobile',
-    pageIndex: 4 + idx,
+    name: `plugin-nav-${tab.pluginId}-${tab.id}`,
+    order: tab.order,
     label: computed(() => tab.title),
     isSwipe: true,
+    isPlugin: true,
     icon: {
       render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', {
@@ -178,14 +158,51 @@ const navItems = computed(() => {
   }))
 
   return [...builtin, ...pluginTabs]
+    .sort((a, b) => a.order - b.order)
+    .map((item, idx) => ({ ...item, pageIndex: idx }))
+})
+
+/** 路由名称到页面索引的映射（随导航排序动态生成） */
+const pageRouteNames = computed<Record<string, number>>(() => {
+  const map: Record<string, number> = { 'mobile-home': 0 }
+  for (const [idx, item] of navItems.value.entries()) {
+    if (item.name) map[item.name] = idx
+  }
+  return map
+})
+
+// 当前页面索引
+const currentPage = computed(() => {
+  // 优先从查询参数获取页面索引
+  const queryPage = route.query.page
+  if (queryPage) {
+    const page = parseInt(queryPage as string, 10)
+    const maxPage = navItems.value.length - 1
+    if (!isNaN(page) && page >= 0 && page <= maxPage) {
+      return page
+    }
+  }
+
+  // 其次从路由名称获取
+  const name = route.name as string
+  if (pageRouteNames.value[name] !== undefined) {
+    return pageRouteNames.value[name]
+  }
+  return 0
 })
 
 /** 导航项类型 */
 interface NavItem {
   path: string
   pageIndex: number
+  /** 内置页路由名（插件 tab 为 plugin-nav-{pluginId}-{id}） */
+  name?: string
+  /** 全局排序值：内置插槽 0/100/200/300，插件用中间值插入 */
+  order: number
   label: ComputedRef<string>
   isSwipe: boolean
+  /** 插件 tab 标记（绿点指示） */
+  isPlugin?: boolean
   icon: { render: () => ReturnType<typeof h> }
 }
 

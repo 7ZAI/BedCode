@@ -181,53 +181,109 @@
       </div>
 
       <template v-else>
-
-        <!-- Plugin cards -->
-        <div class="p-4 pt-2 space-y-3">
-          <div
-            v-for="plugin in plugins"
-            :key="plugin.id"
-            class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
-            :class="isErrorState(plugin.state) ? 'border-[color:color-mix(in_srgb,var(--mobile-danger-color)_25%,transparent)]' : 'border-[var(--mobile-border)]'"
-            :style="!pluginEnabledStates[plugin.id] && !isErrorState(plugin.state) ? 'opacity: .8' : ''"
-            @click="openDetail(plugin)"
-          >
-            <div class="flex items-start gap-3">
-              <PluginIcon
-                :icon="plugin.icon"
-                :name="plugin.name"
-                :plugin-id="plugin.id"
-                :extension-path="plugin.extensionPath"
-              />
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
-                  <!-- 状态徽章 -->
-                  <span
-                    class="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-tag text-xs font-medium"
-                    :class="stateBadgeClass(plugin.state)"
-                  >
+        <!-- ==================== 已启用分区 ==================== -->
+        <section v-if="enabledPlugins.length > 0">
+          <h2 class="px-4 pt-4 pb-1 text-xs font-medium text-[var(--mobile-text-muted)]">
+            {{ $t('mobile.plugin.enabledSection') }} · {{ enabledPlugins.length }}
+          </h2>
+          <div class="p-4 pt-2 space-y-3">
+            <div
+              v-for="plugin in enabledPlugins"
+              :key="plugin.id"
+              class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+              :class="isErrorState(plugin.state) ? 'border-[color:color-mix(in_srgb,var(--mobile-danger-color)_25%,transparent)]' : 'border-[var(--mobile-border)]'"
+              :style="!pluginEnabledStates[plugin.id] && !isErrorState(plugin.state) ? 'opacity: .8' : ''"
+              @click="openDetail(plugin)"
+            >
+              <div class="flex items-start gap-3">
+                <PluginIcon
+                  :icon="plugin.icon"
+                  :name="plugin.name"
+                  :plugin-id="plugin.id"
+                  :extension-path="plugin.extensionPath"
+                />
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
+                    <!-- 状态徽章 -->
                     <span
-                      v-if="plugin.state.state === 'Activated'"
-                      class="w-1.5 h-1.5 rounded-full bg-[var(--mobile-success)]"
-                    ></span>
-                    {{ $t(getStateKey(plugin.state)) }}
-                  </span>
+                      class="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-tag text-xs font-medium"
+                      :class="stateBadgeClass(plugin.state)"
+                    >
+                      <span
+                        v-if="plugin.state.state === 'Activated'"
+                        class="w-1.5 h-1.5 rounded-full bg-[var(--mobile-success)]"
+                      ></span>
+                      {{ $t(getStateKey(plugin.state)) }}
+                    </span>
+                  </div>
+                  <!-- 描述或错误信息 -->
+                  <p v-if="isErrorState(plugin.state)" class="text-xs mt-1 leading-relaxed text-[var(--mobile-danger-color)]">
+                    ⚠ {{ getErrorMessage(plugin.state) }}
+                  </p>
+                  <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">
+                    {{ plugin.description || $t('mobile.plugin.noDescription') }}
+                  </p>
                 </div>
-                <!-- 描述或错误信息 -->
-                <p v-if="isErrorState(plugin.state)" class="text-xs mt-1 leading-relaxed text-[var(--mobile-danger-color)]">
-                  ⚠ {{ getErrorMessage(plugin.state) }}
-                </p>
-                <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">
-                  {{ plugin.description || $t('mobile.plugin.noDescription') }}
-                </p>
-              </div>
-              <div @click.stop>
-                <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
+                <div @click.stop>
+                  <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
+
+        <!-- ==================== 未启用分区 ==================== -->
+        <section v-if="disabledPlugins.length > 0">
+          <h2 class="px-4 pt-4 pb-1 text-xs font-medium text-[var(--mobile-text-muted)]">
+            {{ $t('mobile.plugin.disabledSection') }} · {{ disabledPlugins.length }}
+          </h2>
+          <div class="p-4 pt-2 space-y-3">
+            <div
+              v-for="plugin in disabledPlugins"
+              :key="plugin.id"
+              class="bg-[var(--mobile-bg-card)] border rounded-xl p-4 cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+              :class="isErrorState(plugin.state) ? 'border-[color:color-mix(in_srgb,var(--mobile-danger-color)_25%,transparent)]' : 'border-[var(--mobile-border)]'"
+              :style="!pluginEnabledStates[plugin.id] && !isErrorState(plugin.state) ? 'opacity: .8' : ''"
+              @click="openDetail(plugin)"
+            >
+              <div class="flex items-start gap-3">
+                <PluginIcon
+                  :icon="plugin.icon"
+                  :name="plugin.name"
+                  :plugin-id="plugin.id"
+                  :extension-path="plugin.extensionPath"
+                />
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ plugin.name }}</span>
+                    <!-- 状态徽章 -->
+                    <span
+                      class="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-tag text-xs font-medium"
+                      :class="stateBadgeClass(plugin.state)"
+                    >
+                      <span
+                        v-if="plugin.state.state === 'Activated'"
+                        class="w-1.5 h-1.5 rounded-full bg-[var(--mobile-success)]"
+                      ></span>
+                      {{ $t(getStateKey(plugin.state)) }}
+                    </span>
+                  </div>
+                  <!-- 描述或错误信息 -->
+                  <p v-if="isErrorState(plugin.state)" class="text-xs mt-1 leading-relaxed text-[var(--mobile-danger-color)]">
+                    ⚠ {{ getErrorMessage(plugin.state) }}
+                  </p>
+                  <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">
+                    {{ plugin.description || $t('mobile.plugin.noDescription') }}
+                  </p>
+                </div>
+                <div @click.stop>
+                  <Toggle v-model="pluginEnabledStates[plugin.id]" @update:model-value="(v: boolean) => handlePluginToggle(plugin.id, v)" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </template>
     </div>
 
@@ -305,7 +361,7 @@
  * PluginView - 插件管理页面
  *
  * 独立页面，从设置页跳转进入。两级视图：
- * - 列表页：插件卡片（图标/名称/状态徽章/描述/开关）+ 安装入口
+ * - 列表页：已启用/未启用分区插件卡片（图标/名称/状态徽章/描述/开关）+ 安装入口，启用后自动进入启用区
  * - 详情页：Hero + 操作按钮 + 统计条 + 折叠区域（简介/扩展点/权限/详细信息）
  */
 import { ref, computed, onMounted } from 'vue'
@@ -341,10 +397,13 @@ const installing = ref(false)
 const uninstallTarget = ref<PluginInfo | null>(null)
 const showUninstallConfirm = ref(false)
 
+/** 已启用分区：按开关偏好分组（启用后自动进入启用区） */
+const enabledPlugins = computed(() => plugins.value.filter((p) => pluginEnabledStates.value[p.id]))
+/** 未启用分区 */
+const disabledPlugins = computed(() => plugins.value.filter((p) => !pluginEnabledStates.value[p.id]))
+
 /** 已启用插件数（列表页摘要行） */
-const enabledCount = computed(() =>
-  plugins.value.filter((p) => pluginEnabledStates.value[p.id]).length
-)
+const enabledCount = computed(() => enabledPlugins.value.length)
 
 onMounted(loadPlugins)
 
