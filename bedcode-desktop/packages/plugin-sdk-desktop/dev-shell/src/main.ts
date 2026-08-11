@@ -12,6 +12,7 @@ import { initSharedRuntime } from './shared-runtime'
 import { loadPlugins } from './loader'
 import { zhCN, en } from './locales'
 import { readSavedLocale } from './locale'
+import { initHostUi } from './theme'
 import './styles/style.css'
 import './styles/dev.css'
 
@@ -27,8 +28,8 @@ const i18n = createI18n({
   fallbackWarn: false,
 })
 
-// 宿主在设置中动态调整 --ui-scale；dev-shell 固定 1（骨架无设置联动）
-document.documentElement.style.setProperty('--ui-scale', '1')
+// 恢复持久化的宿主界面设置（主题模式/色板/字体大小），与宿主 useTheme/useFontSize 同语义
+initHostUi()
 
 const router = createRouter({
   history: createWebHashHistory(),
