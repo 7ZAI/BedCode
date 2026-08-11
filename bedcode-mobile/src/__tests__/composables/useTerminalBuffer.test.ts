@@ -201,4 +201,48 @@ describe('useTerminalBuffer.subscribeSession', () => {
 
     expect(terminal.clear).toHaveBeenCalledTimes(1)
   })
+
+  it('prepareSession：预加载订阅成功 → 标记就绪（终端页 consumePrepared 消费）', async () => {
+    // forceReplay 丢弃游标 → startSeq null → 服务端 reset 全量重播
+    invokeMock.mockResolvedValueOnce({
+      minSeq: 0,
+      maxSeq: 10,
+      historyCount: 5,
+      mode: 'reset',
+      minOffset: 0,
+      maxOffset: 20,
+    })
+
+    const ready = await terminalBuffer.prepareSession('s1')
+    expect(ready).toBe(true)
+    expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: null })
+    expect(store.consumePrepared()).toBe('s1')
+  })
+
+  it('prepareSession：订阅失败 → 返回 false、不标记就绪（终端页自行重试）', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('network down'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const ready = await terminalBuffer.prepareSession('s1')
+    expect(ready).toBe(false)
+    expect(store.consumePrepared()).toBeNull()
+
+    warnSpy.mockRestore()
+  })
+
+  it('prepareSession：订阅挂起超时 → 返回 false，不阻塞跳转', async () => {
+    vi.useFakeTimers()
+    try {
+      // 服务端不响应（订阅请求永不返回）
+      invokeMock.mockImplementation(() => new Promise(() => {}))
+
+      const pending = terminalBuffer.prepareSession('s1')
+      await vi.advanceTimersByTimeAsync(8000)
+      const ready = await pending
+      expect(ready).toBe(false)
+      expect(store.consumePrepared()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -85,6 +85,26 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** sessionId → 上次 resubscribeWithReset 的时间戳 */
   const lastResubscribeAt = reactive(new Map<string, number>())
 
+  /** 预加载已就绪的会话（会话页 prepareSession 成功后标记，终端页挂载时消费一次） */
+  const preparedSessionId = ref<string | null>(null)
+
+  /** 标记预加载就绪：终端页挂载后可跳过 forceReplay，直接渲染已缓冲回放 */
+  function markPrepared(sessionId: string) {
+    preparedSessionId.value = sessionId
+  }
+
+  /** 消费预加载标记（一次性）：返回就绪会话 ID 并复位 */
+  function consumePrepared(): string | null {
+    const id = preparedSessionId.value
+    preparedSessionId.value = null
+    return id
+  }
+
+  /** 使预加载标记失效：会话状态被重置（自愈重订阅/断连/停止/清空）后，
+   *  已缓冲回放帧不可信（被丢弃/游标失效），终端页挂载时必须走 forceReplay 兜底 */
+  function invalidatePrepared(sessionId: string) {
+    if (preparedSessionId.value === sessionId) preparedSessionId.value = null
+  }
   // ==================== Global Listener ====================
 
   /** 启动全局 ws_output 监听器（只启动一次；返回注册完成 promise） */
@@ -125,6 +145,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
               console.error('[terminalBuffer] pending frame overflow, resubscribing with reset')
               resubscribeWithReset(sessionId, buffer, handler)
             }
+            return
+          }
+
+          // 已订阅但无实时 handler（会话页预加载）：缓冲帧等待终端页挂载后写入，
+          // 与订阅确认前缓冲同队列（pending），注册 handler 时统一排空
+          if (!handler) {
+            bufferFrameForPendingHandler(sessionId, buffer, payload)
             return
           }
 
@@ -296,6 +323,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer: SessionBuffer,
     handler?: RealtimeHandler,
   ) {
+    invalidatePrepared(sessionId)
     const now = Date.now()
     const last = lastResubscribeAt.get(sessionId) ?? 0
     if (now - last < RESUBSCRIBE_COOLDOWN_MS) return
@@ -375,6 +403,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 标记未订阅（断连/取消订阅时）；订阅解除后缓冲帧无意义，一并丢弃 */
   function markUnsubscribed(sessionId: string) {
+    invalidatePrepared(sessionId)
     const buffer = buffers.get(sessionId)
     if (buffer) {
       buffer.subscribed = false
@@ -385,6 +414,9 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 标记所有 buffer 未订阅（连接断开时） */
   function markAllUnsubscribed() {
+    for (const sessionId of buffers.keys()) {
+      invalidatePrepared(sessionId)
+    }
     for (const buffer of buffers.values()) {
       buffer.subscribed = false
       buffer.pending = []
@@ -398,6 +430,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
    * 渲染新流的中段——游标必须重置为 -1，重启后订阅走服务端 reset 全量重播
    */
   function markSessionStopped(sessionId: string) {
+    invalidatePrepared(sessionId)
     const buffer = buffers.get(sessionId)
     if (buffer) {
       buffer.sessionStopped = true
@@ -410,6 +443,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 清理单个会话订阅状态 */
   function clearBuffer(sessionId: string) {
+    invalidatePrepared(sessionId)
     buffers.delete(sessionId)
     realtimeHandlers.delete(sessionId)
     lastResubscribeAt.delete(sessionId)
@@ -421,6 +455,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 清理所有订阅状态 */
   function clearAllBuffers() {
+    preparedSessionId.value = null
     buffers.clear()
     realtimeHandlers.clear()
     stopGlobalListener()
@@ -431,6 +466,46 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 注册实时输出回调（TerminalView onMounted 时调用） */
   function registerRealtimeHandler(sessionId: string, handler: RealtimeHandler) {
     realtimeHandlers.set(sessionId, handler)
+
+    // 预加载（会话页订阅后无 handler）期间缓冲的回放帧：回退游标到首帧起点后
+    // 按到达顺序写入（帧在缓冲时已通过连续性校验，顺序即字节连续）。
+    // 仅排空「已订阅但无 handler」路径的帧；未订阅缓冲的帧属订阅确认前残留，
+    // 仍由 doSubscribe 的 flushPending 统一处理（reset 裁决时会被丢弃）
+    const buffer = buffers.get(sessionId)
+    if (buffer && buffer.subscribed && buffer.pending.length > 0) {
+      const first = buffer.pending[0]
+      if (first.start_offset !== undefined) buffer.cursor = first.start_offset
+      flushPending(sessionId, buffer)
+    }
+  }
+
+  /** 已订阅但无 handler 时的缓冲写入（连续性校验 + 上限保护） */
+  function bufferFrameForPendingHandler(
+    sessionId: string,
+    buffer: SessionBuffer,
+    payload: OutputPayload,
+  ) {
+    // 连续性校验（与 deliverFrame 一致）：破坏时走自愈重订阅（丢弃游标与
+    // 缓冲帧，重置后全量回放），不变量保持与有 handler 时完全一致
+    if (buffer.cursor >= 0 && payload.start_offset !== buffer.cursor) {
+      console.warn(
+        `[terminalBuffer] continuity violation (no handler): start=${payload.start_offset}, cursor=${buffer.cursor}. Resubscribing with reset`
+      )
+      resubscribeWithReset(sessionId, buffer, undefined)
+      return
+    }
+    buffer.cursor = payload.end_offset ?? buffer.cursor
+    buffer.pending.push(payload)
+    buffer.pendingBytes += payload.data_base64.length
+    // 无 handler 无处渲染：超限丢弃缓冲会留下中间缺口 → 与连续性违反同路径
+    // 自愈（重置游标全量重播）；自愈被冷却挡住时，预加载标记已失效，终端页
+    // 挂载走 forceReplay 兜底
+    if (buffer.pendingBytes > MAX_PENDING_FRAME_BYTES) {
+      console.warn(
+        `[terminalBuffer] preload frame overflow (session ${sessionId}), resubscribing with reset`
+      )
+      resubscribeWithReset(sessionId, buffer, undefined)
+    }
   }
 
   /** 注销实时输出回调（TerminalView onUnmounted 时调用） */
@@ -456,6 +531,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     ensureBuffer,
     getBuffer,
     markSubscribed,
+    markPrepared,
+    consumePrepared,
     markUnsubscribed,
     markAllUnsubscribed,
     markSessionStopped,

@@ -353,4 +353,44 @@ describe('terminalBuffer store', () => {
     expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: null })
     expect(result?.mode).toBe('reset')
   })
+
+  it('预加载（已订阅无 handler）：回放帧缓冲，注册 handler 时回退游标统一写入', async () => {
+    store.ensureBuffer('s1')
+    await flushAsync()
+
+    // 会话页预加载订阅（forceReplay 后游标丢弃 → reset 全量重播），无 handler
+    invokeMock.mockResolvedValueOnce({ ...subscribeOk, mode: 'reset' })
+    const result = await store.subscribeSession('s1')
+    expect(result?.mode).toBe('reset')
+    const buf = store.getBuffer('s1')!
+    expect(buf.subscribed).toBe(true)
+
+    // 回放帧到达：无 handler → 缓冲不丢弃，游标正常推进
+    const onOutput = vi.fn()
+    listener!({ payload: payload('s1', 'ab', 0, 2) })
+    listener!({ payload: payload('s1', 'cd', 2, 4) })
+    expect(onOutput).not.toHaveBeenCalled()
+    expect(buf.cursor).toBe(4)
+    expect(buf.pending.length).toBe(2)
+
+    // 终端页挂载注册 handler：回退游标到首帧起点后按序写入
+    store.registerRealtimeHandler('s1', { onOutput })
+    expect(onOutput).toHaveBeenCalledTimes(2)
+    const first = onOutput.mock.calls[0][0] as Uint8Array
+    expect(String.fromCharCode(...first)).toBe('ab')
+    expect(buf.cursor).toBe(4)
+    expect(buf.pending.length).toBe(0)
+
+    // 后续实时帧直达 handler
+    listener!({ payload: payload('s1', 'ef', 4, 6) })
+    expect(onOutput).toHaveBeenCalledTimes(3)
+    expect(buf.cursor).toBe(6)
+  })
+
+  it('预加载就绪标记：markPrepared 后 consumePrepared 一次性消费', async () => {
+    expect(store.consumePrepared()).toBeNull()
+    store.markPrepared('s1')
+    expect(store.consumePrepared()).toBe('s1')
+    expect(store.consumePrepared()).toBeNull()
+  })
 })

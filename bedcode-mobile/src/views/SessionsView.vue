@@ -72,13 +72,8 @@
       </template>
     </div>
 
-    <!-- Loading Overlay -->
-    <transition name="mobile-loading-fade">
-      <div v-if="isNavigating" class="mobile-loading-overlay">
-        <div class="mobile-loading-spinner"></div>
-        <p class="mobile-loading-text">{{ t('mobile.terminal.preparing') }}</p>
-      </div>
-    </transition>
+    <!-- Loading Dialog: 终端准备中（弹窗遮罩，会话页面保持可见；就绪后才跳转） -->
+    <LoadingDialog :visible="isNavigating" :message="t('mobile.terminal.preparing')" />
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" :title="t('mobile.session.confirmStop')" size="sm">
@@ -113,15 +108,18 @@ import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
+import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { httpStopSession, httpRemoveSession } from '@/composables/useHttpApi'
 import { useToast } from '@/composables/useToast'
 import { useMockTerminal, MOCK_SESSION_ID } from '@/composables/useMockTerminal'
 import SessionCard from '@/components/SessionCard.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
+import LoadingDialog from '@/components/LoadingDialog.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
+const { prepareSession } = useTerminalBuffer()
 const toast = useToast()
 const { t } = useI18n()
 
@@ -163,10 +161,18 @@ function handleMockSessionClick() {
 // 真实会话处理函数
 const isNavigating = ref(false)
 
-function handleSessionClick(session: any) {
+async function handleSessionClick(session: any) {
   if (isNavigating.value) return
   isNavigating.value = true
   connection.activeSessionId.value = session.id
+
+  // 终端准备：订阅输出（回放帧缓冲在 store），就绪后才跳转 —— loading 以
+  // 弹窗形式展示在本页，终端页挂载即渲染历史；失败/超时不阻塞跳转，由
+  // 终端页走原有 forceReplay + 订阅重试路径
+  if (session.status === 'running' || session.status === 'waiting_input') {
+    await prepareSession(session.id)
+  }
+
   router.push({
     name: 'mobile-terminal',
     params: { id: session.id },

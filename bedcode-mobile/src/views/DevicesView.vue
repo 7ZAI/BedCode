@@ -172,6 +172,8 @@
               v-for="item in connectionHistory"
               :key="item.address"
               class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+              :disabled="connection.isConnecting.value"
+              :class="{ 'opacity-50 pointer-events-none': connection.isConnecting.value }"
               @click="handleConnectFromHistory(item)"
             >
               <div class="flex items-center gap-3">
@@ -187,6 +189,7 @@
                 <button
                   class="p-1.5 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
                   style="color: var(--mobile-text-disabled)"
+                  :disabled="connection.isConnecting.value"
                   @click.stop="removeFromHistory(item.address)"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -300,13 +303,14 @@
       </Transition>
     </Teleport>
 
-    <!-- Loading Overlay: 跳转终端期间显示 -->
-    <transition name="mobile-loading-fade">
-      <div v-if="isNavigating" class="mobile-loading-overlay">
-        <div class="mobile-loading-spinner"></div>
-        <p class="mobile-loading-text">{{ t('mobile.terminal.preparing') }}</p>
-      </div>
-    </transition>
+    <!-- Loading Dialog: 连接中（弹窗遮罩，点击连接历史/扫码/手动连接后展示，阻断重复点击） -->
+    <LoadingDialog
+      :visible="showConnectLoading"
+      :message="t('mobile.connection.connecting', { name: pendingDevice?.name || t('mobile.nav.connection') })"
+    />
+
+    <!-- Loading Dialog: 终端准备中（就绪后才跳转，弹窗展示在连接页） -->
+    <LoadingDialog :visible="isNavigating" :message="t('mobile.terminal.preparing')" />
   </div>
 </template>
 
@@ -316,6 +320,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/composables/useMobileConnection'
 import { useMobileSettings } from '@/composables/useMobileSettings'
+import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { wsGetBiometricKeyStatus } from '@/composables/useMobileCommands'
 import { useToast } from '@/composables/useToast'
 import BottomSheet from '@/components/BottomSheet.vue'
@@ -323,10 +328,12 @@ import PairingInput from '@/components/PairingInput.vue'
 import BiometricAuthDialog from '@/components/BiometricAuthDialog.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
+import LoadingDialog from '@/components/LoadingDialog.vue'
 import SessionConfigCard, { type SessionConfigSummary } from '@/components/SessionConfigCard.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
+const { prepareSession } = useTerminalBuffer()
 const { settings: mobileSettings } = useMobileSettings()
 const toast = useToast()
 const { t } = useI18n()
@@ -338,13 +345,18 @@ const connectionHistory = connection.connectionHistory
 const isLoadingConfigs = connection.isLoadingConfigs
 const hasLoadedConfigs = connection.hasLoadedConfigs
 
-// 点击会话跳转到终端
+// 点击会话跳转到终端：先准备（订阅输出）再跳转，loading 以弹窗展示在本页
 const isNavigating = ref(false)
 
-function handleSessionClick(session: any) {
+async function handleSessionClick(session: any) {
   if (isNavigating.value) return
   isNavigating.value = true
   connection.activeSessionId.value = session.id
+
+  // 订阅输出（回放帧缓冲在 store），就绪后才跳转，终端页挂载即渲染历史；
+  // 失败/超时不阻塞跳转，由终端页走原有 forceReplay + 订阅重试路径
+  await prepareSession(session.id)
+
   router.push({
     name: 'mobile-terminal',
     params: { id: session.id },
@@ -378,6 +390,7 @@ async function confirmStop() {
 const showManualConnect = ref(false)
 const showPairing = ref(false)
 const showPairingLoading = ref(false)  // 全局遮罩 loading（配对请求时）
+const showConnectLoading = ref(false)  // 连接中弹窗遮罩（点击连接后展示，阻断重复点击）
 const isPairing = ref(false)
 const pairingError = ref('')
 const connectionError = ref('')
@@ -524,6 +537,9 @@ watch([isConnected, connection.connectionStatus], async ([connected, status], [o
 
 // Connect from history
 async function handleConnectFromHistory(item: any) {
+  // 连接中禁止重复点击（弹窗遮罩已阻断，此处兜底）
+  if (connection.isConnecting.value) return
+
   const [host, portStr] = item.address.split(':')
   const savedSettings = JSON.parse(localStorage.getItem('mobile-settings') || '{}')
   const defaultPort = savedSettings.defaultPort || 8765
@@ -547,6 +563,9 @@ async function handleConnectFromHistory(item: any) {
 
 // Manual address input
 async function handleConnectManual(address: string) {
+  // 连接中禁止重复点击
+  if (connection.isConnecting.value) return
+
   const [host, portStr] = address.split(':')
   const savedSettings = JSON.parse(localStorage.getItem('mobile-settings') || '{}')
   const defaultPort = savedSettings.defaultPort || 8765
@@ -578,6 +597,8 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
   pendingDevice.value = device
   connectionError.value = ''
   connection.isConnecting.value = true
+  // 连接中弹窗遮罩（连接/认证阶段展示；进入配对/生物认证弹窗后由各自 UI 接管）
+  showConnectLoading.value = true
 
   console.log('[DevicesView] startConnection: Step 1 connect...')
   console.time('startConnection')
@@ -646,12 +667,14 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
   } finally {
     console.timeEnd('startConnection')
     connection.isConnecting.value = false
+    showConnectLoading.value = false  // 确保在任何情况下都隐藏 loading
     showPairingLoading.value = false  // 确保在任何情况下都隐藏 loading
   }
 }
 
 // Cancel connection
 async function handleCancelConnection() {
+  showConnectLoading.value = false
   await connection.cancelConnection()
   connection.isConnecting.value = false
   connectionError.value = t('mobile.connection.userCancelled')
@@ -659,6 +682,8 @@ async function handleCancelConnection() {
 
 // 打开生物认证弹窗并立即触发指纹验证（打开即弹系统生物识别）
 async function openBiometricAuth() {
+  // 连接中弹窗让位于生物认证弹窗
+  showConnectLoading.value = false
   showBiometricDialog.value = true
   authDialogError.value = ''
   await runBiometricAuth()
@@ -709,6 +734,8 @@ async function startPairingFlow() {
   const device = pendingDevice.value
   if (!device) return
 
+  // 连接中弹窗让位于配对请求弹窗
+  showConnectLoading.value = false
   showPairingLoading.value = true
   try {
     const pairingTimeout = new Promise<never>((_, reject) =>

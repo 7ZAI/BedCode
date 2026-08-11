@@ -874,9 +874,14 @@ onMounted(async () => {
       mockTerminal.startOutput(terminalRef.value)
     }
   } else if (isSessionActive.value && isConnected.value) {
-    // xterm 每次进入都是全新实例：旧游标续传会丢失历史（含后台期间
-    // 已推进但从未渲染过的字节）→ 强制重置游标，服务端全量重播
-    forceReplay(sessionId.value)
+    // 会话页预加载已就绪（全量回放已在订阅期间缓冲，registerRealtimeHandler
+    // 挂载时已写入 xterm）：跳过 forceReplay，避免清空已缓冲历史再次全量回放
+    const prepared = bufferStore.consumePrepared() === sessionId.value
+    if (!prepared) {
+      // xterm 每次进入都是全新实例：旧游标续传会丢失历史（含后台期间
+      // 已推进但从未渲染过的字节）→ 强制重置游标，服务端全量重播
+      forceReplay(sessionId.value)
+    }
     await subscribeWithRetry()
     syncTerminalSizeToHost()
   }

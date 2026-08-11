@@ -11,12 +11,14 @@ import { wsLeaveSession } from '@/composables/useMobileCommands'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
 
+/** 会话页预加载的超时上限（毫秒）：超时不再等待，直接跳转由终端页自行重试 */
+const PREPARE_TIMEOUT_MS = 8000
+
 // ==================== Types ====================
 
 export type { OutputPayload, SubscribeResultInfo } from '@/stores/terminalBuffer'
 
 // ==================== Write Coalescer ====================
-//
 // 为什么需要 rAF 合并写入：
 // - TUI 应用（opencode、Claude Code、vim、htop 等）在一次屏幕刷新内会发出大量
 //   cursor 定位 + 字符写入的连续转义序列，每个 WS 消息触发一次 terminal.write()
@@ -108,6 +110,37 @@ export function useTerminalBuffer() {
   }
 
   /**
+   * 预加载会话输出 — 会话页点击进入终端前的准备：强制全量重播 + 订阅。
+   * 回放帧在 handler 注册前由 store 缓冲，终端页挂载时统一写入，
+   * 实现「终端准备好后才跳转」：进入终端页即渲染历史，无需二次等待。
+   *
+   * 返回是否已就绪；失败/超时返回 false，终端页走原有 forceReplay + 重试路径。
+   *
+   * @param sessionId - 会话 ID
+   */
+  async function prepareSession(sessionId: string): Promise<boolean> {
+    forceReplay(sessionId)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        subscribeSession(sessionId),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('prepare timeout')), PREPARE_TIMEOUT_MS)
+        }),
+      ])
+    } catch (e) {
+      // 超时/订阅失败：不阻塞跳转，终端页自行重试
+      console.warn(`[useTerminalBuffer] Prepare session ${sessionId} failed:`, e)
+      return false
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    const ready = !!store.getBuffer(sessionId)?.subscribed
+    if (ready) store.markPrepared(sessionId)
+    return ready
+  }
+
+  /**
    * 连接断开时 — 标记所有 buffer 未订阅
    */
   function handleDisconnect() {
@@ -153,6 +186,7 @@ export function useTerminalBuffer() {
     subscribeSession,
     unsubscribeSession,
     forceReplay,
+    prepareSession,
     handleDisconnect,
     handleSessionStopped,
     handleSessionRemoved,
