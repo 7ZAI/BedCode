@@ -18,6 +18,10 @@ function applyTheme(theme: string) {
   } else {
     root.classList.remove('dark')
   }
+
+  // 主色色板：与桌面端同名 palette 同源（背景/文字等其余 token 保持移动端自身风格）
+  const palette = useSettingsStore().settings.ui.palette || 'default'
+  root.setAttribute('data-palette', palette)
 }
 
 function setupTheme() {
@@ -48,6 +52,11 @@ export function useTheme() {
     cleanupTheme()
     applyTheme(newTheme)
     setupTheme()
+  })
+
+  // 监听主色色板变化（palette 与 theme 独立，无需重建 system 监听）
+  watch(() => settingsStore.settings.ui.palette, () => {
+    applyTheme(settingsStore.settings.ui.theme)
   })
 
   // 主题对应的容器类名

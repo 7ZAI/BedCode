@@ -21,6 +21,21 @@
             </div>
           </div>
           <div class="settings-row">
+            <span class="settings-label settings-row-label">{{ $t('settings.appearance.palette') }}</span>
+            <div class="settings-segment" role="group" :aria-label="$t('settings.appearance.palette')">
+              <button
+                v-for="opt in paletteOptions"
+                :key="opt.value"
+                type="button"
+                class="settings-segment-btn"
+                :class="{ active: paletteMode === opt.value }"
+                @click="paletteMode = opt.value"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+          <div class="settings-row">
             <span class="settings-label settings-row-label">{{ $t('settings.appearance.language') }}</span>
             <div class="settings-segment" role="group" :aria-label="$t('settings.appearance.language')">
               <button
@@ -110,13 +125,22 @@ import { useMobileSettings, defaultMobileSettings } from '@/composables/useMobil
 
 const { t } = useI18n()
 
-const { settings, themeMode, currentLanguage, loadSettings } = useMobileSettings()
+const { settings, themeMode, paletteMode, currentLanguage, loadSettings } = useMobileSettings()
 
 /** 主题选项（i18n 标签，值保持与 store 一致） */
 const themeOptions = computed(() => [
   { value: 'dark', label: t('settings.appearance.darkMode') },
   { value: 'light', label: t('settings.appearance.lightMode') },
   { value: 'system', label: t('settings.appearance.followSystem') },
+])
+
+/** 主色色板选项（与桌面端同名 palette 同源；default = Dracula 象牙白） */
+const paletteOptions = computed(() => [
+  { value: 'default', label: t('settings.appearance.paletteDefault') },
+  { value: 'forest', label: t('settings.appearance.paletteForest') },
+  { value: 'ocean', label: t('settings.appearance.paletteOcean') },
+  { value: 'sunset', label: t('settings.appearance.paletteSunset') },
+  { value: 'violet', label: t('settings.appearance.paletteViolet') },
 ])
 
 /** 语言选项（语言名用各自原生写法，两种语言环境保持一致） */
