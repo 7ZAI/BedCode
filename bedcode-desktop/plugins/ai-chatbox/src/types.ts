@@ -2,8 +2,8 @@
  * AI Chatbox 插件内部类型定义
  */
 
-/** API 格式（当前仅 OpenAI 兼容协议，字段保留供未来扩展） */
-export type ApiFormat = 'openai'
+/** API 协议方言（供应商适配层分派键；custom 为私有网关逃生舱槽位，本期不实现 UI） */
+export type ApiStyle = 'openai' | 'anthropic' | 'gemini' | 'custom'
 
 /** API 提供商配置（storage 持久化；providers.json 为数据目录内镜像占位） */
 export interface ApiProvider {
@@ -11,7 +11,7 @@ export interface ApiProvider {
   name: string
   apiKey: string
   baseUrl: string
-  apiFormat: ApiFormat
+  apiStyle: ApiStyle
   models: string[]
   activeModel: string
   /** 创建来源的预设模板 id（旧数据缺失时走首字母头像，向后兼容） */
@@ -27,13 +27,14 @@ export interface Usage {
   totalTokens: number
 }
 
-/** 聊天消息（assistant 消息含 model / usage） */
+/** 聊天消息（assistant 消息含 model / usage；reasoning 为思考过程全文，P3 随日志落盘） */
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
   model?: string
   usage?: Usage
+  reasoning?: string
 }
 
 /** 对话元数据（对话文件首行 + index.jsonl） */

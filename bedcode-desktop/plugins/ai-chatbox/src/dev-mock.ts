@@ -78,6 +78,8 @@ const HOST_KEYS_ZH = {
         contextLimitExceeded: '超出上下文长度，请新建对话',
         authRevoked: '目录授权已失效，请在设置中重新授权',
         requestFailed: '请求失败',
+        apiKeyRequired: '请先填写 API Key',
+        baseUrlInvalid: 'Base URL 地址无效',
       },
     },
   },
@@ -149,6 +151,8 @@ const HOST_KEYS_EN = {
         contextLimitExceeded: 'Context length exceeded — start a new conversation',
         authRevoked: 'Directory authorization revoked — re-authorize in settings',
         requestFailed: 'Request failed',
+        apiKeyRequired: 'API key is required',
+        baseUrlInvalid: 'Invalid Base URL',
       },
     },
   },
@@ -183,7 +187,7 @@ const seedProviders = [
     name: 'DeepSeek',
     apiKey: 'sk-test-deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
-    apiFormat: 'openai' as const,
+    apiStyle: 'openai' as const,
     models: ['deepseek-chat', 'deepseek-reasoner'],
     activeModel: 'deepseek-chat',
     presetId: 'deepseek',
@@ -193,7 +197,7 @@ const seedProviders = [
     name: '通义千问 (Qwen)',
     apiKey: 'sk-test-qwen',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    apiFormat: 'openai' as const,
+    apiStyle: 'openai' as const,
     models: ['qwen-turbo', 'qwen-plus', 'qwen-max'],
     activeModel: 'qwen-plus',
     presetId: 'qwen',
@@ -203,7 +207,7 @@ const seedProviders = [
     name: 'OpenRouter',
     apiKey: 'sk-test-custom',
     baseUrl: 'https://openrouter.ai/api/v1',
-    apiFormat: 'openai' as const,
+    apiStyle: 'openai' as const,
     models: ['openai/gpt-4o-mini', 'anthropic/claude-sonnet-4'],
     activeModel: 'openai/gpt-4o-mini',
   },
@@ -306,7 +310,7 @@ const STREAM_REPLY =
   '```\n\n' +
   '要点：\n' +
   '1. 每个 chunk 追加到 streamingContent\n' +
-  '2. done 事件携带 usage（↑prompt ↓completion Σtotal）\n' +
+  '2. usage 尾块（include_usage）随流解析提取（↑prompt ↓completion Σtotal）\n' +
   '3. 停止 / 重生成走本地截断与文件覆盖'
 
 // ==================== 运行态状态（默认空；?mock=1 时 seedMockData 填充） ====================
@@ -368,18 +372,26 @@ function registerCommands(context: PluginContext): void {
     let i = 0
     const tick = () => {
       const step = 6 + Math.floor(Math.random() * 7)
-      const chunk = STREAM_REPLY.slice(i, i + step)
+      const text = STREAM_REPLY.slice(i, i + step)
       i += step
       if (i >= STREAM_REPLY.length) {
         clearInterval(handle)
         const hIdx = timers.indexOf(handle)
         if (hIdx !== -1) timers.splice(hIdx, 1)
+        // 模拟真实链路收尾：usage 尾块（include_usage）→ [DONE] → 宿主 done 兜底
         context.events.emit(`ai-chatbox:stream:${streamId}`, {
-          done: true,
-          usage: { prompt_tokens: 421, completion_tokens: 356, total_tokens: 777 },
+          chunk: `data: ${JSON.stringify({
+            choices: [],
+            usage: { prompt_tokens: 421, completion_tokens: 356, total_tokens: 777 },
+          })}\n\n`,
         })
+        context.events.emit(`ai-chatbox:stream:${streamId}`, { chunk: 'data: [DONE]\n\n' })
+        context.events.emit(`ai-chatbox:stream:${streamId}`, { done: true })
       } else {
-        context.events.emit(`ai-chatbox:stream:${streamId}`, { chunk })
+        // 模拟宿主 raw 模式：逐网络 chunk 推原始 SSE 字节（事件可能被切碎）
+        context.events.emit(`ai-chatbox:stream:${streamId}`, {
+          chunk: `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`,
+        })
       }
     }
     const handle = setInterval(tick, 30) as unknown as number
@@ -388,11 +400,15 @@ function registerCommands(context: PluginContext): void {
   })
 
   context.commands.register('ai-chatbox.chat-complete', () => ({
-    content: 'mock 测试连接回复：网络链路正常 ✅',
+    status: 200,
+    body: JSON.stringify({ choices: [{ message: { content: 'mock 测试连接回复：网络链路正常 ✅' } }] }),
   }))
 
   context.commands.register('ai-chatbox.fetch-models', () => ({
-    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'],
+    status: 200,
+    body: JSON.stringify({
+      data: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'].map((id) => ({ id })),
+    }),
   }))
 }
 

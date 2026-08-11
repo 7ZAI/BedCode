@@ -172,7 +172,8 @@ const form = reactive<ApiProvider>({
   name: source.value?.name || '',
   apiKey: props.initialValues?.apiKey || '',
   baseUrl: source.value?.baseUrl || '',
-  apiFormat: 'openai',
+  // 编辑模式回填已有方言（否则保存会把 anthropic/gemini 重置成 openai）；添加模式默认 openai（预设全为 OpenAI 兼容协议）
+  apiStyle: props.initialValues?.apiStyle || 'openai',
   models: source.value?.models?.length ? [...source.value.models] : [],
   // 编辑模式回填已有选择；添加模式随 models 回填首个（否则空 activeModel 靠运行时兑底，保存后再进编辑才可见）
   activeModel: props.initialValues?.activeModel || source.value?.models?.[0] || '',

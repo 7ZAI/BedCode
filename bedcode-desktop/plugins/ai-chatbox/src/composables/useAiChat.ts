@@ -8,6 +8,11 @@
 import { ref, computed } from 'vue'
 import type { ChatMessage, ConversationMeta, Usage } from '../types'
 import { generateId } from '../types'
+import { SseBuffer } from '../adapters/sse'
+import { mergeUsage } from '../adapters/usage'
+import { buildStreamRequest, getAdapter, parseStreamEvent } from '../adapters/registry'
+import { isValidBaseUrl } from '../adapters/utils'
+import type { AdapterMessage, StreamEvent } from '../adapters/types'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 import type { useAiConfig } from './useAiConfig'
 
@@ -31,6 +36,10 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
   const messages = ref<ChatMessage[]>([])
   const sending = ref(false)
   const streamingContent = ref('')
+  /** 流式期间的思考过程（P3 UI 折叠展示；随正文一起截断/覆盖） */
+  const streamingReasoning = ref('')
+  /** 流终结守卫：adapter [DONE]/message_stop 与宿主 done 事件都可能触发收尾，须幂等 */
+  const streamEnded = ref(false)
   const loadingHistory = ref(false)
   /** 最近一次错误（i18n key 或原始文本），组件展示后消费 */
   const lastError = ref('')
@@ -164,8 +173,8 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
   }
 
   /** 组装请求消息：systemPrompt（如有） + 全部历史（全量发送，超限由模型报错） */
-  function buildRequestMessages(): { role: string; content: string }[] {
-    const result: { role: string; content: string }[] = []
+  function buildRequestMessages(): AdapterMessage[] {
+    const result: AdapterMessage[] = []
     const sys = currentConversation.value?.systemPrompt?.trim()
     if (sys) {
       result.push({ role: 'system', content: sys })
@@ -186,6 +195,16 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
       return
     }
     if (sending.value) return
+
+    // 发送前校验（原 Rust 校验前移）：apiKey 非空 + baseUrl 合法
+    if (!provider.apiKey.trim()) {
+      lastError.value = 'desktop.plugin.aiChatbox.apiKeyRequired'
+      return
+    }
+    if (!isValidBaseUrl(provider.baseUrl)) {
+      lastError.value = 'desktop.plugin.aiChatbox.baseUrlInvalid'
+      return
+    }
 
     if (!currentConvId.value) {
       await newConversation()
@@ -213,56 +232,92 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
     messages.value.push(assistantMsg)
     sending.value = true
     streamingContent.value = ''
+    streamingReasoning.value = ''
+    streamEnded.value = false
 
     const streamId = generateId()
     const requestMessages = buildRequestMessages()
+    // 协议适配层构建请求（raw 模式：sseFormat 为空，SSE 语义由前端解析）
+    const request = buildStreamRequest(provider, requestMessages, streamId)
 
-    streamDisposable = context.events.on(`ai-chatbox:stream:${streamId}`, (payload: any) => {
-      if (payload.chunk) {
-        streamingContent.value += payload.chunk
+    // 每次发送独立的流状态：SSE 缓冲 + usage 累积（adapter 解析结果落地处）
+    const sse = new SseBuffer()
+    let usageAcc: Usage | undefined
+
+    function applyStreamEvent(ev: StreamEvent): void {
+      if (ev.chunk) {
+        streamingContent.value += ev.chunk
         const last = messages.value[messages.value.length - 1]
         if (last && last.role === 'assistant') {
           last.content = streamingContent.value
         }
+      }
+      if (ev.reasoning) {
+        streamingReasoning.value += ev.reasoning
+        const last = messages.value[messages.value.length - 1]
+        if (last && last.role === 'assistant') {
+          last.reasoning = streamingReasoning.value
+        }
+      }
+      if (ev.usage) {
+        usageAcc = mergeUsage(usageAcc, ev.usage)
+      }
+      if (ev.done) {
+        // adapter 侧终结（openai [DONE] / anthropic message_stop）；宿主 done 仅兜底
+        void finishStream(true, undefined, usageAcc, replaceLast)
+      }
+    }
+
+    streamDisposable = context.events.on(`ai-chatbox:stream:${streamId}`, (payload: any) => {
+      if (streamEnded.value) return
+      if (typeof payload.chunk === 'string') {
+        // 宿主 raw 模式：逐网络 chunk 推原始 SSE 字节，跨 chunk 断行由 SseBuffer 处理
+        for (const data of sse.push(payload.chunk)) {
+          // 异常服务端可能在 [DONE] 后同一 chunk 还带残余事件：收尾后立即停止消费
+          if (streamEnded.value) break
+          const ev = parseStreamEvent(provider.apiStyle, data)
+          if (ev) applyStreamEvent(ev)
+        }
       } else if (payload.error) {
-        finishStream(false, payload.error, undefined, replaceLast)
+        finishStream(false, payload.error, usageAcc, replaceLast)
       } else if (payload.done) {
-        finishStream(true, undefined, parseUsage(payload.usage), replaceLast)
+        // 宿主 done 兜底：flush 残留缓冲后终结（已终结时幂等跳过）
+        for (const data of sse.flush()) {
+          if (streamEnded.value) break
+          const ev = parseStreamEvent(provider.apiStyle, data)
+          if (ev) applyStreamEvent(ev)
+        }
+        finishStream(true, undefined, usageAcc, replaceLast)
       }
     })
 
     try {
       await context.commands.execute('ai-chatbox.chat-stream', {
         streamId,
-        provider,
-        messages: requestMessages,
+        request,
       })
     } catch (e: any) {
-      finishStream(false, String(e?.message || e), undefined, replaceLast)
+      finishStream(false, String(e?.message || e), usageAcc, replaceLast)
     }
   }
 
-  /** 解析宿主透传的 usage（openai 蛇形字段 → 前端驼峰） */
-  function parseUsage(raw: any): Usage | undefined {
-    if (!raw || typeof raw !== 'object') return undefined
-    return {
-      promptTokens: raw.prompt_tokens ?? raw.promptTokens ?? 0,
-      completionTokens: raw.completion_tokens ?? raw.completionTokens ?? 0,
-      totalTokens: raw.total_tokens ?? raw.totalTokens ?? 0,
-    }
-  }
-
-  /** 流结束统一收尾：复位状态（同步，UI 即时响应）+ 落盘 assistant 消息（含 usage） */
+  /** 流结束统一收尾：复位状态（同步，UI 即时响应）+ 落盘 assistant 消息（含 usage）
+   *
+   * 幂等：adapter [DONE]/message_stop 与宿主 done 事件都会触发，
+   * streamEnded 守卫保证只收尾一次（防双重落盘/重复 flush） */
   async function finishStream(
     completed: boolean,
     errorText?: string,
     usage?: Usage,
     replaceAssistantRow = false,
   ): Promise<void> {
+    if (streamEnded.value) return
+    streamEnded.value = true
     streamDisposable?.dispose()
     streamDisposable = null
     sending.value = false
     streamingContent.value = ''
+    streamingReasoning.value = ''
 
     const last = messages.value[messages.value.length - 1]
     if (last && last.role === 'assistant') {
@@ -329,6 +384,7 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
     sending,
     isStreaming,
     streamingContent,
+    streamingReasoning,
     loadingHistory,
     lastError,
     loadConversations,

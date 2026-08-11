@@ -4,7 +4,7 @@
 //! chat-stream / chat-complete / fetch-models / list-conversations /
 //! get-messages / save-conversation / save-message / delete-conversation
 
-use crate::client::{self, ApiProvider, ChatMessage};
+use crate::client;
 use crate::store::{self, ChatMessageRecord, ConversationMeta};
 use crate::DATA_DIR;
 use bedcode_plugin_api::{CommandArgs, WasmHost};
@@ -13,60 +13,34 @@ fn host() -> WasmHost {
     WasmHost
 }
 
-/// 流式聊天：经宿主 http_fetch 后台推流，立即返回 streamId
+/// 流式聊天：透传前端适配层构建的 raw 请求（立即返回，宿主后台推流）
 pub fn chat_stream(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let args = CommandArgs::new(args);
     let stream_id = args
         .str("streamId")
         .ok_or_else(|| anyhow::anyhow!("chat_stream: missing streamId"))?;
-    let provider: ApiProvider = serde_json::from_value(
-        args.value_owned("provider")
-            .ok_or_else(|| anyhow::anyhow!("chat_stream: missing provider"))?,
-    )
-    .map_err(|e| anyhow::anyhow!("chat_stream: invalid provider: {}", e))?;
-    let messages: Vec<ChatMessage> = serde_json::from_value(
-        args.value_owned("messages")
-            .ok_or_else(|| anyhow::anyhow!("chat_stream: missing messages"))?,
-    )
-    .map_err(|e| anyhow::anyhow!("chat_stream: invalid messages: {}", e))?;
-
-    if provider.api_key.is_empty() {
-        return Err(anyhow::anyhow!("chat_stream: provider {} has no api key", provider.id));
-    }
-
-    client::chat_stream(&provider, &messages, &stream_id)?;
-    Ok(serde_json::json!({ "streamId": stream_id }))
+    let request = args
+        .value_owned("request")
+        .ok_or_else(|| anyhow::anyhow!("chat_stream: missing request"))?;
+    client::chat_stream(&stream_id, &request).map_err(|e| anyhow::anyhow!("chat_stream: {}", e))
 }
 
-/// 非流式聊天（测试连接用），返回回复文本
+/// 非流式聊天（测试连接用）：原样返回宿主响应（status/body/headers，前端解析）
 pub fn chat_complete(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let args = CommandArgs::new(args);
-    let provider: ApiProvider = serde_json::from_value(
-        args.value_owned("provider")
-            .ok_or_else(|| anyhow::anyhow!("chat_complete: missing provider"))?,
-    )
-    .map_err(|e| anyhow::anyhow!("chat_complete: invalid provider: {}", e))?;
-    let messages: Vec<ChatMessage> = serde_json::from_value(
-        args.value_owned("messages")
-            .ok_or_else(|| anyhow::anyhow!("chat_complete: missing messages"))?,
-    )
-    .map_err(|e| anyhow::anyhow!("chat_complete: invalid messages: {}", e))?;
-
-    let content = client::chat_complete(&provider, &messages)?;
-    Ok(serde_json::json!({ "content": content }))
+    let request = args
+        .value_owned("request")
+        .ok_or_else(|| anyhow::anyhow!("chat_complete: missing request"))?;
+    client::chat_complete(&request).map_err(|e| anyhow::anyhow!("chat_complete: {}", e))
 }
 
-/// 拉取模型列表：真实 GET /models，解析 data[].id
+/// 拉取模型列表：原样返回宿主响应（前端解析 data[].id）
 pub fn fetch_models(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let args = CommandArgs::new(args);
-    let provider: ApiProvider = serde_json::from_value(
-        args.value_owned("provider")
-            .ok_or_else(|| anyhow::anyhow!("fetch_models: missing provider"))?,
-    )
-    .map_err(|e| anyhow::anyhow!("fetch_models: invalid provider: {}", e))?;
-
-    let models = client::fetch_models(&provider)?;
-    Ok(serde_json::json!({ "models": models }))
+    let request = args
+        .value_owned("request")
+        .ok_or_else(|| anyhow::anyhow!("fetch_models: missing request"))?;
+    client::fetch_models(&request).map_err(|e| anyhow::anyhow!("fetch_models: {}", e))
 }
 
 /// 列出所有对话（index.jsonl，按 updatedAt DESC）

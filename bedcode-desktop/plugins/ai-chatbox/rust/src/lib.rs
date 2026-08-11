@@ -1,6 +1,7 @@
 //! AI Chatbox Plugin (WASM)
 //!
-//! 纯 AI 对话插件：JSONL 对话日志落盘 + 单一 OpenAI 兼容供应商协议。
+//! 纯 AI 对话插件：JSONL 对话日志落盘 + 多方言供应商协议（请求构建与 SSE 解析
+//! 在前端适配层 src/adapters/，Rust 仅透传 http_fetch 载荷）。
 //! 激活时集中目录授权（宿主 fs_auth 弹窗）：同意 → 初始化数据目录 → 激活成功；
 //! 拒绝/超时 → 激活失败（Error 状态），重新启用可重试。
 

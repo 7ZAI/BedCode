@@ -405,6 +405,8 @@ export default {
         contextLimitExceeded: '超出上下文长度，请新建对话',
         authRevoked: '目录授权已失效，请在设置中重新授权',
         requestFailed: '请求失败',
+        apiKeyRequired: '请先填写 API Key',
+        baseUrlInvalid: 'Base URL 地址无效',
       },
     },
   },

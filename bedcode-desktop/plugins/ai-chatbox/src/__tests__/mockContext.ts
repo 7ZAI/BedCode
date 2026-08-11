@@ -25,8 +25,14 @@ const DEFAULT_COMMANDS: Record<string, (args: any) => any> = {
   'ai-chatbox.save-conversation': () => ({ success: true }),
   'ai-chatbox.save-message': () => ({ success: true }),
   'ai-chatbox.delete-conversation': () => ({ success: true }),
-  'ai-chatbox.fetch-models': () => ({ models: ['model-a', 'model-b'] }),
-  'ai-chatbox.chat-complete': () => ({ content: 'pong' }),
+  'ai-chatbox.fetch-models': () => ({
+    status: 200,
+    body: JSON.stringify({ data: [{ id: 'model-a' }, { id: 'model-b' }] }),
+  }),
+  'ai-chatbox.chat-complete': () => ({
+    status: 200,
+    body: JSON.stringify({ choices: [{ message: { content: 'pong' } }] }),
+  }),
 }
 
 export function createMockContext(
@@ -90,7 +96,7 @@ export function makeProvider(overrides: Partial<any> = {}): any {
     name: 'DeepSeek',
     apiKey: 'sk-test',
     baseUrl: 'https://api.deepseek.com/v1',
-    apiFormat: 'openai',
+    apiStyle: 'openai',
     models: ['deepseek-chat', 'deepseek-reasoner'],
     activeModel: 'deepseek-chat',
     ...overrides,

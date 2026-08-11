@@ -405,6 +405,8 @@ export default {
         contextLimitExceeded: 'Context length exceeded — start a new conversation',
         authRevoked: 'Directory authorization revoked — re-authorize in settings',
         requestFailed: 'Request failed',
+        apiKeyRequired: 'API key is required',
+        baseUrlInvalid: 'Invalid Base URL',
       },
     },
   },
