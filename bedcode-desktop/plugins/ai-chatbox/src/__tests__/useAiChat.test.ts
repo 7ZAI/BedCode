@@ -7,6 +7,34 @@ import { createMockContext, makeProvider } from './mockContext'
 import { useAiChat } from '../composables/useAiChat'
 import { useAiConfig } from '../composables/useAiConfig'
 
+/** rAF 调度器 stub：手动触发帧回调，验证节流语义（接缝 3） */
+function makeRafStub() {
+  let nextId = 1
+  const pending: { id: number; cb: FrameRequestCallback }[] = []
+  const cancelled: number[] = []
+  return {
+    scheduler: {
+      requestAnimationFrame(cb: FrameRequestCallback) {
+        pending.push({ id: nextId, cb })
+        return nextId++
+      },
+      cancelAnimationFrame(id: number) {
+        cancelled.push(id)
+        const i = pending.findIndex(p => p.id === id)
+        if (i !== -1) pending.splice(i, 1)
+      },
+    },
+    pending,
+    cancelled,
+    /** 触发下一帧回调（模拟浏览器渲染帧） */
+    fire() {
+      pending.shift()?.cb(0)
+    },
+  }
+}
+
+type RafStub = ReturnType<typeof makeRafStub>
+
 function setup() {
   const mock = createMockContext()
   const config = useAiConfig(mock.context)
@@ -323,5 +351,174 @@ describe('useAiChat', () => {
     await chat.deleteConversation(convId)
     expect(chat.conversations.value.find(c => c.id === convId)).toBeUndefined()
     expect(chat.currentConvId.value).toBe('')
+  })
+})
+
+describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
+  /** 预置供应商 + 注入 stub 调度器 */
+  async function setupWithScheduler() {
+    const mock = createMockContext()
+    const config = useAiConfig(mock.context)
+    const stub: RafStub = makeRafStub()
+    const chat = useAiChat(mock.context, config, stub.scheduler)
+    await config.addProvider(makeProvider())
+    await config.setActiveProvider('p1')
+    await chat.sendMessage('hi')
+    return { mock, config, chat, stub }
+  }
+
+  it('多 chunk 合并到一帧：rAF 回调前不更新，回调后批量写回', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '你' } }] }) })
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '好' } }] }) })
+
+    // 一帧内多个 chunk 只挂起一次 flush
+    expect(stub.pending.length).toBe(1)
+    expect(chat.streamingContent.value).toBe('')
+    const last = chat.messages.value[chat.messages.value.length - 1]
+    expect(last.content).toBe('')
+
+    stub.fire()
+    expect(chat.streamingContent.value).toBe('你好')
+    expect(chat.messages.value[chat.messages.value.length - 1].content).toBe('你好')
+  })
+
+  it('帧回调执行后再来 chunk：重新挂起新帧', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '你' } }] }) })
+    stub.fire()
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '好' } }] }) })
+
+    expect(stub.pending.length).toBe(1)
+    expect(chat.streamingContent.value).toBe('你')
+    stub.fire()
+    expect(chat.streamingContent.value).toBe('你好')
+  })
+
+  it('reasoning 与正文同帧批量写回', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { content: '回', reasoning_content: '思' } }] }),
+    })
+    expect(chat.streamingReasoning.value).toBe('')
+
+    stub.fire()
+    expect(chat.streamingReasoning.value).toBe('思')
+    const last = chat.messages.value[chat.messages.value.length - 1]
+    expect(last.reasoning).toBe('思')
+  })
+
+  it('done 立即 flush：取消待决 rAF，终态含最后一批 chunk 与 usage', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '回复' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+    })
+    // 不触发帧回调，直接 [DONE] 终结：待决 rAF 应被取消并立即 flush
+    mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
+
+    expect(stub.cancelled.length).toBe(1)
+    expect(stub.pending.length).toBe(0)
+    expect(chat.sending.value).toBe(false)
+    const assistantSave = mock.calls.find(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    expect(assistantSave.args.content).toBe('部分回复')
+    expect(assistantSave.args.usage).toEqual({
+      promptTokens: 12,
+      completionTokens: 5,
+      totalTokens: 17,
+    })
+  })
+
+  it('停止生成：残留缓冲立即 flush 后落盘', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
+    chat.stopGeneration()
+
+    expect(stub.cancelled.length).toBe(1)
+    expect(chat.sending.value).toBe(false)
+    const assistantSave = mock.calls.find(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    expect(assistantSave.args.content).toBe('部分')
+  })
+
+  it('error 终态：缓冲内容同样 flush 后落盘', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
+    mock.emitStream(eventName, { error: 'boom', done: true })
+
+    expect(stub.cancelled.length).toBe(1)
+    const assistantSave = mock.calls.find(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    expect(assistantSave.args.content).toBe('部分')
+  })
+
+  it('迟到事件在收尾后不再累积（取消后的帧回调不会再触发）', async () => {
+    const { mock, chat, stub } = await setupWithScheduler()
+    const eventName = streamEventOf(mock)
+
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
+    chat.stopGeneration()
+    // 取消后帧回调已从队列移除，即使浏览器仍触发也不会写入
+    stub.fire()
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '迟到' } }] }) })
+
+    const last = chat.messages.value[chat.messages.value.length - 1]
+    expect(last.content).toBe('部分')
+  })
+
+  it('命令抛错：取消待决 rAF 并 flush 缓冲后收尾（catch → finishStream(false)）', async () => {
+    // 模拟"命令启动后、连接出错前服务端已推字节"：先派发一个 chunk 再抛错
+    const mock = createMockContext({
+      commands: {
+        'ai-chatbox.chat-stream': (args: any) => {
+          mock.listeners[`ai-chatbox:stream:${args.streamId}`]?.({
+            chunk: sse({ choices: [{ delta: { content: '部分' } }] }),
+          })
+          throw new Error('connection reset')
+        },
+      },
+    })
+    const config = useAiConfig(mock.context)
+    const stub: RafStub = makeRafStub()
+    const chat = useAiChat(mock.context, config, stub.scheduler)
+    await config.addProvider(makeProvider())
+    await config.setActiveProvider('p1')
+
+    await chat.sendMessage('hi')
+
+    // 抛错前 chunk 已挂起 rAF：收尾路径必须取消它并立即写回缓冲
+    expect(stub.cancelled.length).toBe(1)
+    expect(stub.pending.length).toBe(0)
+    expect(chat.sending.value).toBe(false)
+    const assistantSave = mock.calls.find(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    expect(assistantSave.args.content).toBe('部分')
+  })
+
+  it('无 rAF 环境（默认不注入调度器）：退化为同步写回，行为与 P1 一致', async () => {
+    const { mock, config, chat } = setup()
+    await presetProvider(config)
+    await chat.sendMessage('hi')
+
+    const eventName = streamEventOf(mock)
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '你' } }] }) })
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '好' } }] }) })
+
+    // 无需触发任何帧回调，chunk 立即生效
+    expect(chat.streamingContent.value).toBe('你好')
   })
 })

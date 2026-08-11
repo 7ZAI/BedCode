@@ -84,8 +84,9 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import hljs from 'highlight.js'
 import type { ChatMessage } from '../types'
+import { getClosedCodeBlocks, patchIncompleteMarkdown } from '../utils/markdown'
+import { createHljsHighlightEngine, type HighlightEngine } from '../utils/highlight'
 
 const props = defineProps<{
   message: ChatMessage
@@ -97,36 +98,56 @@ defineEmits<{ delete: [message: ChatMessage] }>()
 
 const { t } = useI18n()
 
+// 高亮引擎 seam（ADR-0011）：桌面注入 hljs 同步实现；移动端换 Shiki 异步实现
+const highlightEngine: HighlightEngine = createHljsHighlightEngine()
+
 const isUser = computed(() => props.message.role === 'user')
 
 /** Markdown → HTML（breaks 让单换行也换行，贴合聊天场景）
  *
  * LLM 输出不可信：marked 保留原始 HTML，prompt injection 可注入
  * `<img onerror>` 等脚本在插件上下文执行（插件持宿主命令桥接能力），
- * 必须经 DOMPurify 消毒后再进 v-html */
+ * 必须经 DOMPurify 消毒后再进 v-html。
+ *
+ * 流式期间先做未闭合标记补偿（fence/行尾行内码补全），保证每帧渲染的都是
+ * 闭合形态——fence 未闭合时不至于把后续文本整段吞进代码块（布局跳动） */
 const rendered = computed(() => {
-  const html = marked.parse(props.message.content, { async: false, breaks: true }) as string
+  const patched = patchIncompleteMarkdown(props.message.content)
+  const html = marked.parse(patched, { async: false, breaks: true }) as string
   return DOMPurify.sanitize(html)
 })
 
 const contentRef = ref<HTMLElement | null>(null)
 
-/** 代码块高亮 + 注入语言标签/复制按钮头部（渲染后执行；幂等避免重复注入） */
+/** 代码块高亮 + 注入语言标签/复制按钮头部（渲染后执行）
+ *
+ * 只处理已闭合块：流式期间未闭合块渲染为纯文本 pre（fence 补偿已保证其
+ * 位于代码块容器内），闭合后下一帧自然获得高亮与头部——避免语言标签/复制
+ * 按钮盖住仍在生长的代码块，也避免对增长中的块反复重扫（P2 延迟高亮） */
 function enhanceCodeBlocks(): void {
   const container = contentRef.value
   if (!container) return
-  container.querySelectorAll<HTMLElement>('pre').forEach(pre => {
+  const blocks = getClosedCodeBlocks(props.message.content)
+  // 未闭合块只会是文本中最后一个 fenced 块：fence 未闭合意味着其后内容全在块内，
+  // 补偿闭合后它必然是渲染结果的最后一个 pre（缩进代码块等都在它之前）
+  const lastUnclosed = blocks.length > 0 && !blocks[blocks.length - 1].closed
+  const pres = Array.from(container.querySelectorAll<HTMLElement>('pre'))
+  pres.forEach((pre, i) => {
+    // 未闭合块：纯文本 pre，不高亮、不注入头部
+    if (lastUnclosed && i === pres.length - 1) return
     const code = pre.querySelector('code')
-    // 流式期间重复触发：已高亮的跳过，避免反复重包 DOM
+    // v-html 每帧重建 DOM，classList 检查仅在帧内重复触发时生效
     if (code && !code.classList.contains('hljs')) {
-      try {
-        hljs.highlightElement(code)
-      } catch {
-        // 异常输入降级为无高亮纯文本，不影响消息渲染
-      }
+      highlightEngine.highlightElement(code)
     }
     if (pre.querySelector('.md-code-header')) return
-    const lang = code?.className.match(/language-([\w+-]+)/)?.[1] ?? ''
+    // 语言取自 marked 实际渲染的 language-* 类（HTML 解析器已解码实体），与
+    // getClosedCodeBlocks.lang 同源；按 classList 取首 token，避免 "js,x" 等
+    // 含标点的语言被 \w 正则截断（原有反解只显示前缀）
+    const lang =
+      Array.from(code?.classList ?? [])
+        .find(c => c.startsWith('language-'))
+        ?.slice('language-'.length) ?? ''
     const header = document.createElement('div')
     header.className = 'md-code-header'
     const langEl = document.createElement('span')
@@ -154,7 +175,10 @@ async function copyContent(): Promise<void> {
 }
 
 onMounted(enhanceCodeBlocks)
-watch(() => props.message.content, enhanceCodeBlocks)
+// flush: 'post'：等组件 DOM patch 完成后再注入——默认 'pre' 的 watch 会在新 DOM
+// 渲染前执行，注入落在上一帧 DOM 上、随后被 v-html 整段覆盖（宿主
+// TerminalPreview 在 watch 回调里 nextTick 后操作 DOM 的惯例同理）
+watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
 </script>
 
 <style scoped>

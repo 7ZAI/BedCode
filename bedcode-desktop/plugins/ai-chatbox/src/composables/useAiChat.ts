@@ -18,6 +18,12 @@ import type { useAiConfig } from './useAiConfig'
 
 type AiConfig = ReturnType<typeof useAiConfig>
 
+/** rAF 调度器抽象：vitest 等无 rAF 环境可注入 fake 实现（接缝 3） */
+export interface FrameScheduler {
+  requestAnimationFrame(callback: FrameRequestCallback): number
+  cancelAnimationFrame(handle: number): void
+}
+
 /** 错误分类：识别可提示的常见失败场景（返回宿主 i18n key，未命中返回 null） */
 function classifyError(message: string): string | null {
   const m = message.toLowerCase()
@@ -30,7 +36,7 @@ function classifyError(message: string): string | null {
   return null
 }
 
-export function useAiChat(context: PluginContext, config: AiConfig) {
+export function useAiChat(context: PluginContext, config: AiConfig, scheduler?: FrameScheduler) {
   const conversations = ref<ConversationMeta[]>([])
   const currentConvId = ref('')
   const messages = ref<ChatMessage[]>([])
@@ -43,6 +49,56 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
   const loadingHistory = ref(false)
   /** 最近一次错误（i18n key 或原始文本），组件展示后消费 */
   const lastError = ref('')
+
+  // ==================== rAF 节流 flush（P2 渲染管线） ====================
+  // chunk 先累积到缓冲，rAF 回调批量写回 streamingContent（每帧至多一次全量
+  // 渲染）；done/停止/失败时取消待决 rAF 并立即写回终态。无 rAF 环境（vitest
+  // node）退化为同步写回，保持既有行为。
+  const raf = scheduler?.requestAnimationFrame ?? globalThis.requestAnimationFrame
+  const caf = scheduler?.cancelAnimationFrame ?? globalThis.cancelAnimationFrame
+  const hasRaf = typeof raf === 'function'
+
+  /** 待 rAF 写回的流式内容缓冲（单流在途，composable 级即可） */
+  let pendingContent = ''
+  let pendingReasoning = ''
+  /** 待决 rAF 句柄（null 表示本帧无挂起 flush） */
+  let rafId: number | null = null
+
+  /** rAF 回调：批量把缓冲写回 streamingContent 与最后一条 assistant 消息 */
+  function flushStreamingState(): void {
+    rafId = null
+    if (!pendingContent && !pendingReasoning) return
+    streamingContent.value += pendingContent
+    streamingReasoning.value += pendingReasoning
+    const last = messages.value[messages.value.length - 1]
+    if (last && last.role === 'assistant') {
+      last.content = streamingContent.value
+      last.reasoning = streamingReasoning.value
+    }
+    pendingContent = ''
+    pendingReasoning = ''
+  }
+
+  /** 挂起本帧 flush（每帧至多一次）；无 rAF 环境直接同步写回 */
+  function scheduleFlush(): void {
+    if (hasRaf) {
+      if (rafId !== null) return
+      rafId = raf!(() => {
+        flushStreamingState()
+      })
+    } else {
+      flushStreamingState()
+    }
+  }
+
+  /** 立即写回缓冲（终态路径：done/停止/失败时取消待决 rAF 后调用） */
+  function flushStreamingNow(): void {
+    if (hasRaf && rafId !== null) {
+      caf?.(rafId)
+      rafId = null
+    }
+    flushStreamingState()
+  }
 
   let streamDisposable: { dispose(): void } | null = null
 
@@ -234,6 +290,8 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
     streamingContent.value = ''
     streamingReasoning.value = ''
     streamEnded.value = false
+    pendingContent = ''
+    pendingReasoning = ''
 
     const streamId = generateId()
     const requestMessages = buildRequestMessages()
@@ -246,18 +304,12 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
 
     function applyStreamEvent(ev: StreamEvent): void {
       if (ev.chunk) {
-        streamingContent.value += ev.chunk
-        const last = messages.value[messages.value.length - 1]
-        if (last && last.role === 'assistant') {
-          last.content = streamingContent.value
-        }
+        pendingContent += ev.chunk
+        scheduleFlush()
       }
       if (ev.reasoning) {
-        streamingReasoning.value += ev.reasoning
-        const last = messages.value[messages.value.length - 1]
-        if (last && last.role === 'assistant') {
-          last.reasoning = streamingReasoning.value
-        }
+        pendingReasoning += ev.reasoning
+        scheduleFlush()
       }
       if (ev.usage) {
         usageAcc = mergeUsage(usageAcc, ev.usage)
@@ -313,6 +365,8 @@ export function useAiChat(context: PluginContext, config: AiConfig) {
   ): Promise<void> {
     if (streamEnded.value) return
     streamEnded.value = true
+    // 取消待决 rAF 并立即写回缓冲：落盘/复位的必须是含最后一批 chunk 的终态
+    flushStreamingNow()
     streamDisposable?.dispose()
     streamDisposable = null
     sending.value = false
