@@ -2,6 +2,12 @@
 
 **Status**: accepted
 
+## 对比实验状态：进行中（P1–P4 已落地，人工验收待执行）
+
+P1–P4 已全部实施并提交（桌面 hljs / 移动 Shiki 双轨均已上线），自动化验证全绿：双端 vitest（桌面 131 / 移动 130）+ 双端 cargo test（15 / 16）+ 宿主根回归（桌面 249 / 移动 82），i18n 双端同步核对通过。
+
+剩余为不可自动化的**人工对比实验**（需真机 + 真实模型）：桌面/移动各跑同一条含多代码块的长回复，记录打字机流畅度、流式过程布局稳定性（fence 未闭合期）、闭合后高亮观感（hljs 低饱和 vs Shiki IDE 级）。结论决定后续统一引擎方向，实验完成前不启动统一引擎决策。实验完成后在本 ADR 追加结果与结论，并将 Status 更新为 resolved。
+
 ## Context
 
 AI 聊天代码高亮的引擎取舍：hljs（正则启发式、同步、轻）vs Shiki（VS Code 同款 TextMate grammar、保真度高、异步）。移动端宿主已集成 Shiki（`createHighlighterCore` + oniguruma WASM + 静态语言导入单例），桌面端宿主没有。

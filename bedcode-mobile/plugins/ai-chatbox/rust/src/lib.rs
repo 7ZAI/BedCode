@@ -4,6 +4,10 @@
 //! 激活时集中目录授权（宿主 fs_auth 弹窗）：同意 → 初始化数据目录 → 激活成功；
 //! 拒绝/超时 → 激活失败（Error 状态），重新启用可重试。
 //! 数据目录：`{AppDownloadsDir}/ai-chatbox/`（插件目录之外，卸载不清用户数据）。
+//! host 目标（cargo test/build）下 SDK 的 wasm_entry! 不生成任何导出（仅 wasm32 目标），
+//! pub 命令面在 host 构建中被判 dead_code —— 属 SDK ABI v3 有意设计（见其 wasm.rs 注释），
+//! 故仅对非 wasm32 目标放宽该 lint，wasm32 产物仍保留完整检查。
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
 mod client;
 mod commands;
