@@ -17,7 +17,8 @@ export interface MockContext {
   emitStream(event: string, payload: any): void
 }
 
-/** 默认命令行为（可被 overrides 覆盖） */
+/** 默认命令行为（可被 overrides 覆盖；chat-complete/fetch-models 返回宿主
+ * 响应形状 { status, body }——回复/模型解析已前移前端 adapter） */
 const DEFAULT_COMMANDS: Record<string, (args: any) => any> = {
   'ai-chatbox.list-conversations': () => ({ conversations: [] }),
   'ai-chatbox.get-messages': () => ({ messages: [] }),
@@ -25,8 +26,14 @@ const DEFAULT_COMMANDS: Record<string, (args: any) => any> = {
   'ai-chatbox.save-conversation': () => ({ success: true }),
   'ai-chatbox.save-message': () => ({ success: true }),
   'ai-chatbox.delete-conversation': () => ({ success: true }),
-  'ai-chatbox.fetch-models': () => ({ models: ['model-a', 'model-b'] }),
-  'ai-chatbox.chat-complete': () => ({ content: 'pong' }),
+  'ai-chatbox.fetch-models': () => ({
+    status: 200,
+    body: JSON.stringify({ data: [{ id: 'model-a' }, { id: 'model-b' }] }),
+  }),
+  'ai-chatbox.chat-complete': () => ({
+    status: 200,
+    body: JSON.stringify({ choices: [{ message: { content: 'pong' } }] }),
+  }),
 }
 
 export function createMockContext(
@@ -88,7 +95,7 @@ export function makeProvider(overrides: Partial<any> = {}): any {
     name: 'DeepSeek',
     apiKey: 'sk-test',
     baseUrl: 'https://api.deepseek.com/v1',
-    apiFormat: 'openai',
+    apiStyle: 'openai',
     models: ['deepseek-chat', 'deepseek-reasoner'],
     activeModel: 'deepseek-chat',
     ...overrides,

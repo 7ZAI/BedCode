@@ -25,7 +25,36 @@
         </span>
       </div>
 
-      <!-- 内容（user 文本右对齐，assistant 保持左对齐） -->
+      <!-- 思考过程块（assistant 专属，P3）：可折叠次级样式；流式期间默认展开；
+           showReasoning=false 时不渲染；reasoning 取自消息字段（历史重开可见） -->
+      <div
+        v-if="!isUser && showReasoning !== false && message.reasoning"
+        class="thinking-block"
+      >
+        <button
+          class="thinking-toggle"
+          :aria-expanded="reasoningExpanded"
+          :aria-controls="`thinking-body-${message.id}`"
+          :title="t('mobile.plugin.aiChatbox.thinkingProcess')"
+          @click="reasoningExpanded = !reasoningExpanded"
+        >
+          <svg
+            class="w-3 h-3 flex-shrink-0 transition-transform duration-200"
+            :class="reasoningExpanded ? 'rotate-90' : ''"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span class="truncate">{{ t('mobile.plugin.aiChatbox.thinkingProcess') }}</span>
+        </button>
+        <!-- 思考内容为模型 scratchpad 草稿，非成品 Markdown：纯文本展示（预换行），
+             不经过渲染管线，天然免疫 prompt injection 的 HTML 注入 -->
+        <div v-if="reasoningExpanded" :id="`thinking-body-${message.id}`" class="thinking-body">{{ message.reasoning }}</div>
+      </div>
+
+      <!-- 内容（user 纯文本右对齐气泡；assistant Markdown 渲染 + Shiki 高亮） -->
       <div
         v-if="isUser"
         class="whitespace-pre-wrap break-words text-[var(--font-size-base)] leading-relaxed text-[var(--mobile-text-primary)]"
@@ -73,111 +102,159 @@
 /**
  * ChatMessage — 单条聊天消息（移动端）
  *
- * user 消息纯文本；assistant 消息 Markdown 渲染（marked + highlight.js 代码高亮），
- * 支持整条复制、代码块一键复制、删除、token 用量显示、流式光标。
+ * user 消息纯文本；assistant 消息 Markdown 渲染（marked + Shiki 代码高亮
+ * + DOMPurify 消毒），支持整条复制、代码块语言标签 + 一键复制、删除、
+ * token 用量显示、流式光标、思考过程折叠块。
  * 移动端无 hover：复制/删除为常显操作条。
  */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import hljs from 'highlight.js'
 import type { ChatMessage } from '../types'
+import { getClosedCodeBlocks, patchIncompleteMarkdown } from '../utils/markdown'
+import { createShikiHighlightEngine, type HighlightEngine } from '../utils/highlight'
 
 const props = defineProps<{
   message: ChatMessage
   streaming?: boolean
   errorText?: string
+  /** 插件级 showReasoning 配置（false 时整体不渲染思考块） */
+  showReasoning?: boolean
 }>()
 
 defineEmits<{ delete: [message: ChatMessage] }>()
 
 const { t } = useI18n()
 
+// 高亮引擎 seam（ADR-0011）：移动端注入 Shiki 异步实现（懒加载单例 + 深浅色双主题）
+const highlightEngine: HighlightEngine = createShikiHighlightEngine()
+
 const isUser = computed(() => props.message.role === 'user')
+
+/** 思考块展开状态：流式期间默认展开（边生成边可见）；结束后保持用户当前折叠状态 */
+const reasoningExpanded = ref(false)
+watch(
+  () => props.streaming,
+  (streaming) => {
+    if (streaming) reasoningExpanded.value = true
+  },
+  { immediate: true },
+)
+// 消息列表 shift（如删除中间消息后组件按 :key="i" 复用）会残留上一消息的折叠状态：
+// 消息 id 变化即复位为「当前是否流式末位」——与 streaming watcher 同帧取值，
+// 流式消息默认展开、其余折叠，结果一致
+watch(
+  () => props.message.id,
+  () => {
+    reasoningExpanded.value = props.streaming === true
+  },
+)
 
 /** Markdown → HTML（breaks 让单换行也换行，贴合聊天场景）
  *
  * LLM 输出不可信：marked 保留原始 HTML，prompt injection 可注入
  * `<img onerror>` 等脚本在插件上下文执行（插件持宿主命令桥接能力），
- * 必须经 DOMPurify 消毒后再进 v-html */
+ * 必须经 DOMPurify 消毒后再进 v-html。
+ *
+ * 流式期间先做未闭合标记补偿（fence/行尾行内码补全），保证每帧渲染的都是
+ * 闭合形态——fence 未闭合时不至于把后续文本整段吞进代码块（布局跳动） */
 const rendered = computed(() => {
-  const html = marked.parse(props.message.content, { async: false, breaks: true }) as string
+  const patched = patchIncompleteMarkdown(props.message.content)
+  const html = marked.parse(patched, { async: false, breaks: true }) as string
   return DOMPurify.sanitize(html)
 })
 
 const contentRef = ref<HTMLElement | null>(null)
 
-/** 代码块高亮 + 注入一键复制按钮（渲染后执行；按钮幂等避免重复注入） */
+/** 代码块高亮 + 注入语言标签/复制按钮头部（渲染后执行）
+ *
+ * 只处理已闭合块：流式期间未闭合块渲染为纯文本 pre（fence 补偿已保证其
+ * 位于代码块容器内），闭合后下一帧自然获得高亮与头部——避免语言标签/复制
+ * 按钮盖住仍在生长的代码块，也避免对增长中的块反复重扫（P2 延迟高亮）。
+ * Shiki 为异步引擎：缓存命中同步回填，未命中懒加载 WASM 后异步回填 */
 function enhanceCodeBlocks(): void {
   const container = contentRef.value
   if (!container) return
-  container.querySelectorAll<HTMLElement>('pre').forEach(pre => {
+  const blocks = getClosedCodeBlocks(props.message.content)
+  // 未闭合块只会是文本中最后一个 fenced 块：fence 未闭合意味着其后内容全在块内，
+  // 补偿闭合后它必然是渲染结果的最后一个 pre（缩进代码块等都在它之前）
+  const lastUnclosed = blocks.length > 0 && !blocks[blocks.length - 1].closed
+  const pres = Array.from(container.querySelectorAll<HTMLElement>('pre'))
+  pres.forEach((pre, i) => {
+    // 未闭合块：纯文本 pre，不高亮、不注入头部
+    if (lastUnclosed && i === pres.length - 1) return
     const code = pre.querySelector('code')
-    if (code) {
-      hljs.highlightElement(code)
+    if (code && !pre.querySelector('.md-code-header')) {
+      // 语言取自 marked 实际渲染的 language-* 类（HTML 解析器已解码实体），与
+      // getClosedCodeBlocks.lang 同源；按 classList 取首 token，避免 "js,x" 等
+      // 含标点的语言被 \w 正则截断
+      const lang =
+        Array.from(code.classList)
+          .find(c => c.startsWith('language-'))
+          ?.slice('language-'.length) ?? ''
+      const header = document.createElement('div')
+      header.className = 'md-code-header'
+      const langEl = document.createElement('span')
+      langEl.className = 'md-code-lang'
+      langEl.textContent = lang
+      const btn = document.createElement('button')
+      btn.className = 'md-copy-btn'
+      btn.textContent = t('mobile.plugin.aiChatbox.copy')
+      btn.addEventListener('click', () => {
+        const text = code.innerText ?? ''
+        navigator.clipboard.writeText(text).catch(() => {})
+        btn.textContent = t('mobile.plugin.aiChatbox.copied')
+        setTimeout(() => {
+          btn.textContent = t('mobile.plugin.aiChatbox.copy')
+        }, 1500)
+      })
+      header.append(langEl, btn)
+      pre.prepend(header)
     }
-    if (pre.querySelector('.md-copy-btn')) return
-    const btn = document.createElement('button')
-    btn.className = 'md-copy-btn'
-    btn.textContent = t('mobile.plugin.aiChatbox.copy')
-    btn.addEventListener('click', () => {
-      const text = pre.querySelector('code')?.innerText ?? ''
-      navigator.clipboard.writeText(text).catch(() => {})
-    })
-    pre.appendChild(btn)
+    // v-html 每帧重建 DOM，data-highlighted 标记仅帧内幂等；跨帧幂等由引擎缓存保证
+    if (code && !code.dataset.highlighted) {
+      highlightEngine.highlightElement(code)
+    }
   })
 }
+
+/** 主题切换：清除旧主题的高亮标记后重扫（缓存按主题分键，切换后自动重算） */
+function onThemeChanged(): void {
+  const container = contentRef.value
+  if (!container) return
+  container
+    .querySelectorAll<HTMLElement>('code[data-highlighted]')
+    .forEach(c => delete c.dataset.highlighted)
+  enhanceCodeBlocks()
+}
+
+/** 宿主深浅色切换 = html.dark 类（useTheme.ts）；observer 监听类变化触发重高亮 */
+let themeObserver: MutationObserver | null = null
 
 /** 复制整条消息 */
 async function copyContent(): Promise<void> {
   await navigator.clipboard.writeText(props.message.content).catch(() => {})
 }
 
-onMounted(enhanceCodeBlocks)
-watch(() => props.message.content, enhanceCodeBlocks)
+onMounted(() => {
+  enhanceCodeBlocks()
+  themeObserver = new MutationObserver(onThemeChanged)
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+})
+onUnmounted(() => {
+  themeObserver?.disconnect()
+  themeObserver = null
+})
+// flush: 'post'：等组件 DOM patch 完成后再注入——默认 'pre' 的 watch 会在新 DOM
+// 渲染前执行，注入落在上一帧 DOM 上、随后被 v-html 整段覆盖
+watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
 </script>
 
 <style scoped>
 /* Markdown 正文样式（v-html 内容无 scoped 类，用 :deep 穿透） */
-/* highlight.js 语法高亮配色：低饱和、与宿主 Dracula 系调色板协调。
-   移动端默认深色（:root），浅色主题作用于 html:not(.dark)（两套配色） */
-.md-body :deep(.hljs-comment),
-.md-body :deep(.hljs-quote) {
-  color: var(--mobile-text-muted);
-  font-style: italic;
-}
-.md-body :deep(.hljs-keyword),
-.md-body :deep(.hljs-selector-tag) { color: #e08a6a; }
-.md-body :deep(.hljs-type),
-.md-body :deep(.hljs-class) { color: #7db8b0; }
-.md-body :deep(.hljs-string),
-.md-body :deep(.hljs-attr),
-.md-body :deep(.hljs-template-variable) { color: #a8c080; }
-.md-body :deep(.hljs-number),
-.md-body :deep(.hljs-literal) { color: #e0a06a; }
-.md-body :deep(.hljs-title),
-.md-body :deep(.hljs-function) { color: #d9b06a; }
-.md-body :deep(.hljs-built_in) { color: #c99ab8; }
-.md-body :deep(.hljs-meta) { color: var(--mobile-text-secondary); }
-
-/* 浅色主题（html 无 .dark 时）覆盖为暖色低饱和值 */
-:global(html:not(.dark)) .md-body :deep(.hljs-comment),
-:global(html:not(.dark)) .md-body :deep(.hljs-quote) { color: #6b7280; }
-:global(html:not(.dark)) .md-body :deep(.hljs-keyword),
-:global(html:not(.dark)) .md-body :deep(.hljs-selector-tag) { color: #8a3b2e; }
-:global(html:not(.dark)) .md-body :deep(.hljs-type),
-:global(html:not(.dark)) .md-body :deep(.hljs-class) { color: #2f6f6a; }
-:global(html:not(.dark)) .md-body :deep(.hljs-string),
-:global(html:not(.dark)) .md-body :deep(.hljs-attr),
-:global(html:not(.dark)) .md-body :deep(.hljs-template-variable) { color: #5a7a2f; }
-:global(html:not(.dark)) .md-body :deep(.hljs-number),
-:global(html:not(.dark)) .md-body :deep(.hljs-literal) { color: #a05a2c; }
-:global(html:not(.dark)) .md-body :deep(.hljs-title),
-:global(html:not(.dark)) .md-body :deep(.hljs-function) { color: #8a5a1d; }
-:global(html:not(.dark)) .md-body :deep(.hljs-built_in) { color: #7a4a6b; }
-:global(html:not(.dark)) .md-body :deep(.hljs-meta) { color: var(--mobile-text-secondary); }
-
+/* Shiki 语法配色由内置主题行内样式提供（vitesse 对），此处不映射 CSS token；
+   仅保留结构样式（容器/头部/行内码） */
 .md-body :deep(h1),
 .md-body :deep(h2),
 .md-body :deep(h3),
@@ -219,8 +296,8 @@ watch(() => props.message.content, enhanceCodeBlocks)
   background: var(--mobile-bg-secondary);
   border: 1px solid var(--mobile-border);
   border-radius: 0.75rem;
-  padding: 0.75rem;
-  padding-top: 1.75rem;
+  /* 顶部为代码块头部（语言标签 + 复制按钮）预留空间 */
+  padding: 2rem 0.75rem 0.75rem;
   overflow-x: auto;
   margin: 0.5em 0;
 }
@@ -230,10 +307,32 @@ watch(() => props.message.content, enhanceCodeBlocks)
   font-size: 0.8125rem;
   line-height: 1.6;
 }
-.md-body :deep(pre .md-copy-btn) {
+/* Shiki 行结构：行块不换行（横向滚动由 pre 承担） */
+.md-body :deep(pre code .line) {
+  display: block;
+  white-space: pre;
+}
+.md-body :deep(.md-code-header) {
   position: absolute;
-  top: 0.375rem;
-  right: 0.5rem;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid var(--mobile-border);
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--mobile-bg-tertiary);
+}
+.md-body :deep(.md-code-lang) {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  color: var(--mobile-text-muted);
+  text-transform: lowercase;
+}
+.md-body :deep(pre .md-copy-btn) {
   font-size: 0.6875rem;
   color: var(--mobile-text-muted);
   background: transparent;
@@ -245,6 +344,45 @@ watch(() => props.message.content, enhanceCodeBlocks)
 }
 .md-body :deep(pre .md-copy-btn:active) {
   color: var(--mobile-text-secondary);
+}
+
+/* ==================== 思考过程块（P3） ==================== */
+/* 次级样式：独立于正文的弱化容器，左缘品牌色竖条区分于代码块/引用 */
+.thinking-block {
+  border: 1px solid var(--mobile-border);
+  border-left: 3px solid var(--mobile-accent);
+  background: var(--mobile-bg-tertiary);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  margin: 0.5em 0;
+}
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.75rem;
+  color: var(--mobile-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s;
+  /* 触控目标 ≥ 44px（frontend-styles MOBILE.md 最小触控规范） */
+  min-height: 2.75rem;
+}
+.thinking-toggle:active {
+  color: var(--mobile-text-primary);
+}
+.thinking-body {
+  padding: 0 0.625rem 0.625rem 1.375rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--mobile-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 长思考过程限高内滚，避免占满整条消息 */
+  max-height: 18rem;
+  overflow-y: auto;
 }
 .md-body :deep(table) {
   border-collapse: collapse;

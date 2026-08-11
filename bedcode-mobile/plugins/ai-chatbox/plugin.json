@@ -65,6 +65,31 @@
       "icon": "💬",
       "component": "ChatView",
       "order": 150
+    },
+    "configuration": {
+      "title": "AI Chatbox 设置",
+      "properties": {
+        "thinkingMode": {
+          "type": "string",
+          "enum": ["default", "enabled", "disabled"],
+          "title": "思考模式",
+          "description": "default：跟随模型自身默认行为，不传思考参数；enabled：强制开启思考；disabled：强制关闭思考",
+          "default": "default"
+        },
+        "reasoningEffort": {
+          "type": "string",
+          "enum": ["low", "high", "max"],
+          "title": "推理强度",
+          "description": "仅思考模式为「强制开启」时生效（low / high / max）",
+          "default": "high"
+        },
+        "showReasoning": {
+          "type": "boolean",
+          "title": "显示思考过程",
+          "description": "关闭后聊天界面不展示思考过程块（思考内容仍随对话日志落盘）",
+          "default": true
+        }
+      }
     }
   }
 }

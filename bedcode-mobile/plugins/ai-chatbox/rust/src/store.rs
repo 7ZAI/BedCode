@@ -44,6 +44,9 @@ pub struct ChatMessageRecord {
     pub model: Option<String>,
     #[serde(default)]
     pub usage: Option<Usage>,
+    /// 思考过程全文（DeepSeek 思考模式；旧日志无此字段时反序列化为 None）
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 /// 对话文件单行（meta 首行 + message 行统一格式）
@@ -182,6 +185,7 @@ pub fn save_message<H: HostFs + HostLog>(
         "timestamp": msg.timestamp,
         "model": msg.model,
         "usage": msg.usage,
+        "reasoning": msg.reasoning,
     }))
     .map_err(|e| anyhow::anyhow!("failed to serialize message: {}", e))?;
 
@@ -350,6 +354,15 @@ mod tests {
         fn fs_request_auth(&self, _paths: &[String]) -> Result<bool, bedcode_plugin_api_mobile::host::HostError> {
             Ok(true)
         }
+        fn fs_write_media_downloads(
+            &self,
+            _src_path: &str,
+            _display_name: &str,
+            _mime_type: &str,
+        ) -> Result<(), bedcode_plugin_api_mobile::host::HostError> {
+            // 对话日志不写 MediaStore，stub 直接成功（满足 trait 最小实现）
+            Ok(())
+        }
     }
 
     impl HostLog for MockHost {
@@ -380,6 +393,7 @@ mod tests {
             timestamp: "2026-01-01T00:00:01Z".to_string(),
             model: None,
             usage: None,
+            reasoning: None,
         }
     }
 
@@ -477,6 +491,67 @@ mod tests {
         let messages = get_messages(&host, "/data", "c1").unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].content, "new answer");
+    }
+
+    #[test]
+    fn save_message_persists_reasoning_and_reads_back() {
+        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let conv = meta("c1", "2026-01-01T00:00:00Z");
+        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
+
+        let mut assistant = msg("assistant", "正文");
+        assistant.reasoning = Some("思考过程".to_string());
+        save_message(&host, "/data", "c1", &assistant, false).unwrap();
+
+        // JSONL 行含 reasoning 字段
+        let content = host.files.lock().unwrap().get("/data/conversations/c1.jsonl").unwrap().clone();
+        assert!(content.contains("\"reasoning\":\"思考过程\""));
+
+        // 读回：reasoning 与正文同消息还原
+        let messages = get_messages(&host, "/data", "c1").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "正文");
+        assert_eq!(messages[0].reasoning.as_deref(), Some("思考过程"));
+    }
+
+    #[test]
+    fn get_messages_legacy_lines_without_reasoning_read_as_none() {
+        // P3 前的历史日志无 reasoning 字段：必须读回 None 而非解析失败
+        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let conv = meta("c1", "2026-01-01T00:00:00Z");
+        let mut content = meta_json_line(&conv).unwrap();
+        content.push_str("\n{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"旧回复\",\"timestamp\":\"t\"}\n");
+        host.fs_write("/data/conversations/c1.jsonl", &content).unwrap();
+
+        let messages = get_messages(&host, "/data", "c1").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].reasoning, None);
+        assert_eq!(messages[0].content, "旧回复");
+    }
+
+    #[test]
+    fn save_message_replace_last_assistant_overwrites_reasoning() {
+        // 重新生成：正文与思考一并覆盖（旧 reasoning 不得残留）
+        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let conv = meta("c1", "2026-01-01T00:00:00Z");
+        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
+        save_message(&host, "/data", "c1", &msg("user", "q"), false).unwrap();
+
+        let mut old = msg("assistant", "旧正文");
+        old.reasoning = Some("旧思考".to_string());
+        save_message(&host, "/data", "c1", &old, false).unwrap();
+
+        let mut fresh = msg("assistant", "新正文");
+        fresh.reasoning = Some("新思考".to_string());
+        save_message(&host, "/data", "c1", &fresh, true).unwrap();
+
+        let messages = get_messages(&host, "/data", "c1").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].content, "新正文");
+        assert_eq!(messages[1].reasoning.as_deref(), Some("新思考"));
+        // 旧思考已随旧行一起被覆盖，不残留
+        let raw = host.files.lock().unwrap().get("/data/conversations/c1.jsonl").unwrap().clone();
+        assert!(!raw.contains("旧思考"));
     }
 
     #[test]

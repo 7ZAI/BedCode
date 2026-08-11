@@ -4,11 +4,14 @@
  * providers CRUD + activeProvider/activeModel + 拉取模型列表 + 测试连接。
  * 持久化走宿主 storage（`apiProviders` / `activeProvider` / `activeModel`，
  * 与 v1 同机制）；`{dataDir}/providers.json` 由 Rust 侧 init 创建占位。
- * 供应商对象始终 camelCase 直传 Rust 命令（ApiProvider serde camelCase）。
+ * 协议差异收敛在 `src/adapters/`（ADR-0010）：拉取模型 / 测试连接经适配层
+ * 构建 http_fetch 载荷，Rust 侧只做透传，不再持有方言知识。
  */
 import { ref, computed } from 'vue'
-import type { ApiProvider, ProviderPreset, ApiFormat } from '../types'
+import type { ApiProvider, ProviderPreset, ApiStyle } from '../types'
 import { generateId } from '../types'
+import { buildCompleteRequest, buildModelsRequest, getAdapter, parseModelsResponse } from '../adapters/registry'
+import { isValidBaseUrl } from '../adapters/utils'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 import { getI18n } from '@bedcode/plugin-sdk-mobile'
 
@@ -54,17 +57,24 @@ export function useAiConfig(context: PluginContext) {
     }
   }
 
-  /** 规范化旧数据（v1 可能缺 apiFormat / activeModel 字段） */
+  /** 规范化旧数据（v1 缺 apiStyle / activeModel；apiFormat 键映射到 apiStyle） */
   function normalizeProvider(p: Partial<ApiProvider>): ApiProvider {
     return {
       id: p.id || generateId(),
       name: p.name || 'Unnamed',
       apiKey: p.apiKey || '',
       baseUrl: p.baseUrl || '',
-      apiFormat: (p.apiFormat as ApiFormat) || 'openai',
+      apiStyle: normalizeApiStyle(p),
       models: p.models || [],
       activeModel: p.activeModel || (p.models && p.models[0]) || '',
     }
+  }
+
+  /** 协议方言归一化：旧数据 apiFormat 键映射到 apiStyle（缺失/未知一律按 openai 处理） */
+  function normalizeApiStyle(p: Partial<ApiProvider>): ApiStyle {
+    const legacy = (p as { apiFormat?: unknown }).apiFormat
+    const raw = p.apiStyle ?? legacy
+    return raw === 'anthropic' || raw === 'gemini' || raw === 'custom' ? raw : 'openai'
   }
 
   /** 持久化 providers 列表（同步 activeProviderId 有效性） */
@@ -88,7 +98,7 @@ export function useAiConfig(context: PluginContext) {
           name: (preset as ProviderPreset)?.name || getI18n().global.t('mobile.plugin.aiChatbox.customProviders'),
           apiKey: '',
           baseUrl: (preset as ProviderPreset)?.baseUrl || '',
-          apiFormat: 'openai',
+          apiStyle: 'openai',
           models: (preset as ProviderPreset)?.models ? [...(preset as ProviderPreset).models] : [],
           activeModel: (preset as ProviderPreset)?.models?.[0] || '',
         }
@@ -155,21 +165,36 @@ export function useAiConfig(context: PluginContext) {
     }
   }
 
-  /** 拉取模型列表（真实 GET /models；失败抛错，由调用方回退预设） */
+  /** 拉取模型列表（经适配层构建请求；失败抛错，由调用方回退预设） */
   async function fetchModels(provider: ApiProvider): Promise<string[]> {
-    const result = await context.commands.execute('ai-chatbox.fetch-models', { provider })
-    const models = result?.models
-    if (!Array.isArray(models)) throw new Error('bad response')
-    return models as string[]
+    // 与 sendMessage 同源的 baseUrl 校验前移：非法地址不发请求（宿主错误晦涩）
+    if (!isValidBaseUrl(provider.baseUrl)) {
+      throw new Error('invalid base url')
+    }
+    const request = buildModelsRequest(provider)
+    const result = await context.commands.execute('ai-chatbox.fetch-models', { request })
+    const status = Number(result?.status ?? 0)
+    const body = String(result?.body ?? '')
+    if (status !== 200) {
+      throw new Error(`API error ${status}: ${body}`)
+    }
+    return parseModelsResponse(provider.apiStyle, body)
   }
 
   /** 测试连接（非流式短请求）；成功返回回复文本，失败抛错 */
   async function testConnection(provider: ApiProvider): Promise<string> {
-    const result = await context.commands.execute('ai-chatbox.chat-complete', {
-      provider,
-      messages: [{ role: 'user', content: 'ping' }],
-    })
-    return result?.content ?? ''
+    // 同上：非法 baseUrl 直接拦截，避免透传到宿主的晦涩错误
+    if (!isValidBaseUrl(provider.baseUrl)) {
+      throw new Error('invalid base url')
+    }
+    const request = buildCompleteRequest(provider, [{ role: 'user', content: 'ping' }])
+    const result = await context.commands.execute('ai-chatbox.chat-complete', { request })
+    const status = Number(result?.status ?? 0)
+    const body = String(result?.body ?? '')
+    if (status !== 200) {
+      throw new Error(`API error ${status}: ${body}`)
+    }
+    return getAdapter(provider.apiStyle).parseCompleteResponse(body)
   }
 
   return {

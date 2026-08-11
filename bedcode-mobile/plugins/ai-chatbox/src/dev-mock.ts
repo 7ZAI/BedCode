@@ -36,7 +36,9 @@ const HOST_KEYS_ZH = {
         pleaseConfigure: '请先配置 AI 模型',
         you: '我',
         assistant: 'AI',
+        thinkingProcess: '思考过程',
         copy: '复制',
+        copied: '已复制',
         copyMessage: '复制消息',
         delete: '删除',
         deleteMessage: '删除消息',
@@ -78,6 +80,8 @@ const HOST_KEYS_ZH = {
         contextLimitExceeded: '超出上下文长度，请新建对话',
         authRevoked: '目录授权已失效，请在设置中重新授权',
         requestFailed: '请求失败',
+        apiKeyRequired: '请先填写 API Key',
+        baseUrlInvalid: 'Base URL 地址无效',
       },
     },
   },
@@ -105,7 +109,9 @@ const HOST_KEYS_EN = {
         pleaseConfigure: 'Configure an AI provider first',
         you: 'You',
         assistant: 'AI',
+        thinkingProcess: 'Thinking',
         copy: 'Copy',
+        copied: 'Copied',
         copyMessage: 'Copy message',
         delete: 'Delete',
         deleteMessage: 'Delete message',
@@ -147,6 +153,8 @@ const HOST_KEYS_EN = {
         contextLimitExceeded: 'Context length exceeded — start a new conversation',
         authRevoked: 'Directory authorization revoked — re-authorize in settings',
         requestFailed: 'Request failed',
+        apiKeyRequired: 'API Key is required',
+        baseUrlInvalid: 'Invalid Base URL',
       },
     },
   },
@@ -160,6 +168,7 @@ interface MockMessage {
   timestamp: string
   model?: string
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+  reasoning?: string
 }
 
 interface MockConversation {
@@ -180,7 +189,7 @@ const seedProviders = [
     name: 'DeepSeek',
     apiKey: 'sk-test-deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
-    apiFormat: 'openai' as const,
+    apiStyle: 'openai' as const,
     models: ['deepseek-chat', 'deepseek-reasoner'],
     activeModel: 'deepseek-chat',
   },
@@ -189,7 +198,7 @@ const seedProviders = [
     name: '通义千问 (Qwen)',
     apiKey: 'sk-test-qwen',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    apiFormat: 'openai' as const,
+    apiStyle: 'openai' as const,
     models: ['qwen-turbo', 'qwen-plus', 'qwen-max'],
     activeModel: 'qwen-plus',
   },
@@ -327,7 +336,7 @@ function registerCommands(context: PluginContext): void {
   })
 
   context.commands.register('ai-chatbox.save-message', (args: any) => {
-    const { conversationId, role, content, timestamp, model, usage } = args || {}
+    const { conversationId, role, content, timestamp, model, usage, reasoning } = args || {}
     if (!conversationId) return { ok: false }
     if (!messagesByConv[conversationId]) messagesByConv[conversationId] = []
     messagesByConv[conversationId].push({
@@ -336,6 +345,7 @@ function registerCommands(context: PluginContext): void {
       timestamp,
       model: model || undefined,
       usage: usage || undefined,
+      reasoning: reasoning || undefined,
     })
     return { ok: true }
   })
@@ -351,21 +361,28 @@ function registerCommands(context: PluginContext): void {
   context.commands.register('ai-chatbox.chat-stream', (args: any) => {
     const streamId = args?.streamId as string | undefined
     if (!streamId) return { ok: false }
+    // 与真实宿主 raw 模式一致：逐网络 chunk 推原始 SSE 字节（openai 方言
+    // data 行），前端 SseBuffer + adapter 自行解析；结尾补 usage 尾块与 [DONE]
     let i = 0
     const tick = () => {
       const step = 6 + Math.floor(Math.random() * 7)
-      const chunk = STREAM_REPLY.slice(i, i + step)
+      const textChunk = STREAM_REPLY.slice(i, i + step)
       i += step
       if (i >= STREAM_REPLY.length) {
         clearInterval(handle)
         const hIdx = timers.indexOf(handle)
         if (hIdx !== -1) timers.splice(hIdx, 1)
-        context.events.emit(`ai-chatbox:stream:${streamId}`, {
-          done: true,
-          usage: { prompt_tokens: 421, completion_tokens: 356, total_tokens: 777 },
-        })
+        const payload = {
+          chunk:
+            `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 421, completion_tokens: 356, total_tokens: 777 } })}\n\n` +
+            'data: [DONE]\n\n',
+        }
+        context.events.emit(`ai-chatbox:stream:${streamId}`, payload)
+        context.events.emit(`ai-chatbox:stream:${streamId}`, { done: true })
       } else {
-        context.events.emit(`ai-chatbox:stream:${streamId}`, { chunk })
+        context.events.emit(`ai-chatbox:stream:${streamId}`, {
+          chunk: `data: ${JSON.stringify({ choices: [{ delta: { content: textChunk } }] })}\n\n`,
+        })
       }
     }
     const handle = setInterval(tick, 30) as unknown as number
@@ -374,11 +391,13 @@ function registerCommands(context: PluginContext): void {
   })
 
   context.commands.register('ai-chatbox.chat-complete', () => ({
-    content: 'mock 测试连接回复：网络链路正常 ✅',
+    status: 200,
+    body: JSON.stringify({ choices: [{ message: { content: 'mock 测试连接回复：网络链路正常 ✅' } }] }),
   }))
 
   context.commands.register('ai-chatbox.fetch-models', () => ({
-    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'],
+    status: 200,
+    body: JSON.stringify({ data: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }, { id: 'deepseek-v3' }] }),
   }))
 }
 

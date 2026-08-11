@@ -157,7 +157,7 @@ const form = reactive<ApiProvider>({
   name: props.initialValues?.name || props.mode === 'add' && preset.value?.name ? preset.value!.name : '',
   apiKey: props.initialValues?.apiKey || '',
   baseUrl: props.initialValues?.baseUrl || preset.value?.baseUrl || '',
-  apiFormat: 'openai',
+  apiStyle: 'openai',
   models: props.initialValues?.models?.length
     ? [...props.initialValues.models]
     : preset.value?.models ? [...preset.value.models] : [],

@@ -10,7 +10,7 @@ import type { ChatMessage, ConversationMeta, PluginConfig, Usage } from '../type
 import { DEFAULT_PLUGIN_CONFIG, generateId } from '../types'
 import { SseBuffer } from '../adapters/sse'
 import { mergeUsage } from '../adapters/usage'
-import { buildStreamRequest, getAdapter, parseStreamEvent } from '../adapters/registry'
+import { buildStreamRequest, parseStreamEvent } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
 import type { AdapterMessage, StreamEvent, ThinkingOptions } from '../adapters/types'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
