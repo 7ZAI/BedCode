@@ -269,7 +269,7 @@
  * 设置视图 — 桌面端设置页面
  * Warm Workbench 风格：分段控件 + 方角开关 + section 分组；支持多主题色板预留
  */
-import { onMounted, ref, watch, computed } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
@@ -338,6 +338,26 @@ const paletteOptions = computed(() => [
     label: i18n.global.t('settings.appearance.paletteCool'),
     swatches: { page: '#F3F5F7', card: '#FBFCFD', primary: '#2563EB' },
   },
+  {
+    value: 'forest',
+    label: i18n.global.t('settings.appearance.paletteForest'),
+    swatches: { page: '#F6F5EF', card: '#FDFCF7', primary: '#3E6B4F' },
+  },
+  {
+    value: 'ocean',
+    label: i18n.global.t('settings.appearance.paletteOcean'),
+    swatches: { page: '#F2F7F9', card: '#FAFCFD', primary: '#0E7490' },
+  },
+  {
+    value: 'sunset',
+    label: i18n.global.t('settings.appearance.paletteSunset'),
+    swatches: { page: '#FBF5EF', card: '#FEFAF5', primary: '#D9532A' },
+  },
+  {
+    value: 'violet',
+    label: i18n.global.t('settings.appearance.paletteViolet'),
+    swatches: { page: '#F7F5FB', card: '#FCFBFE', primary: '#6D4FC6' },
+  },
 ])
 
 const languageOptions = [
@@ -345,16 +365,28 @@ const languageOptions = [
   { value: 'en', label: 'English' },
 ]
 
-// 直接读写 store，主题切换由 useTheme 全局监听即时生效
+// 直接读写 store，主题切换由 useTheme 全局监听即时生效；
+// setter 同时立即持久化——防抖 watch 有 500ms 窗口，切页/退出时会丢失
 const themeValue = computed({
   get: () => settingsStore.settings.ui.theme,
-  set: (value: string) => { settingsStore.settings.ui.theme = value },
+  set: (value: string) => {
+    settingsStore.settings.ui.theme = value
+    void settingsStore.saveSettings({
+      ui: { ...settingsStore.settings.ui, theme: value },
+    })
+  },
 })
 
-// 色板切换由 useTheme 监听 data-palette 即时生效
+// 色板切换由 useTheme 监听 data-palette 即时生效；同样立即持久化
+// （否则切到设备页等触发 loadSettings 的页面时被后端旧值覆盖回退）
 const paletteValue = computed({
   get: () => settingsStore.settings.ui.theme_palette || 'warm',
-  set: (value: string) => { settingsStore.settings.ui.theme_palette = value },
+  set: (value: string) => {
+    settingsStore.settings.ui.theme_palette = value
+    void settingsStore.saveSettings({
+      ui: { ...settingsStore.settings.ui, theme_palette: value },
+    })
+  },
 })
 
 const defaultEnvironment = computed({
@@ -382,23 +414,35 @@ async function saveQrTokenTtl() {
   await qrApi.setQrTokenTtl(val)
 }
 
-// 防抖保存逻辑（防止由保存触发的循环更新）
+// 防抖保存逻辑：设置变更 500ms 后统一持久化；组件卸载时立即 flush，
+// 避免 500ms 窗口内切页导致变更丢失（theme_palette/theme 的 setter 已即时保存，
+// 此处兜底字体/环境等其余字段）。
+// 保存回写（settings.value 被 store 重新赋值）会触发本 watch——经
+// store.isPersisted 比对引用后跳过，不会形成保存循环。
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
-let isSaving = false
 
 watch(
   () => settingsStore.settings,
   () => {
-    if (isSaving) return
+    if (settingsStore.isPersisted(settingsStore.settings)) return
     if (saveTimeout) clearTimeout(saveTimeout)
     saveTimeout = setTimeout(() => {
-      isSaving = true
-      settingsStore.saveSettings(settingsStore.settings)
-      setTimeout(() => { isSaving = false }, 100)
+      void settingsStore.saveSettings(settingsStore.settings)
     }, 500)
   },
   { deep: true },
 )
+
+onBeforeUnmount(() => {
+  // 立即 flush 未保存的变更（卸载后 watch 不再触发）
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+    if (!settingsStore.isPersisted(settingsStore.settings)) {
+      void settingsStore.saveSettings(settingsStore.settings)
+    }
+  }
+})
 
 onMounted(async () => {
   await settingsStore.loadSettings()

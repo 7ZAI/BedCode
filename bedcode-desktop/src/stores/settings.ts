@@ -69,6 +69,11 @@ const defaultSettings: Settings = {
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<Settings>(JSON.parse(JSON.stringify(defaultSettings)))
+  // 最近一次保存后写入 store 的对象引用：保存回写触发 deep watch 时，
+  // 若引用一致说明没有真实变更，调用方可跳过重复保存（防止保存循环）
+  let lastSavedRef: Settings | null = null
+  // 保存序号：并发保存时仅最后一次的响应回写 store，先发慢回的旧响应不得覆盖新值
+  let saveSeq = 0
 
   async function loadSettings() {
     try {
@@ -86,11 +91,20 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveSettings(newSettings: Partial<Settings>) {
     try {
       const merged = { ...settings.value, ...newSettings }
+      const mySeq = ++saveSeq
       await invoke('save_app_settings', { settings: merged })
+      // 期间已有更新的保存请求：回写会覆盖更新值，丢弃本次回写
+      if (mySeq !== saveSeq) return
       settings.value = merged
+      lastSavedRef = merged
     } catch (e) {
       console.error('[Settings] Failed to save settings:', e)
     }
+  }
+
+  /** 当前 store 状态是否与最近一次持久化一致（避免保存回写触发重复保存） */
+  function isPersisted(current: Settings): boolean {
+    return current === lastSavedRef
   }
 
   // 获��终端缓存最大数量
@@ -102,6 +116,7 @@ export const useSettingsStore = defineStore('settings', () => {
     settings,
     loadSettings,
     saveSettings,
+    isPersisted,
     getMaxCachedTerminals,
   }
 })

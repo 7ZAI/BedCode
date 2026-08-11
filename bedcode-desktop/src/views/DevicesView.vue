@@ -431,7 +431,9 @@ async function refreshDevices() {
 }
 
 onMounted(async () => {
-  await settingsStore.loadSettings()
+  // 注意：不在此重载全局设置——loadSettings 会整体覆盖 store（含用户刚切换的
+  // theme_palette/theme），导致切页时色板回退。设置已在 main.ts 启动时加载，
+  // qr_host 等网络字段直接读 store 即可（无 qr_host 时下方自动补写）
   await deviceStore.loadPairedDevices()
   await network.loadLocalAddresses()
 
