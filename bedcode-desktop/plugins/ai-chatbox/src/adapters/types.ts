@@ -4,7 +4,7 @@
  * 供应商方言差异全部收敛于此（ADR-0010）：请求构建 + 流式/完整响应解析，
  * 宿主与 SDK 零改动。流式统一走 raw 模式（sseFormat:""）+ 前端 SSE 缓冲解析。
  */
-import type { ApiProvider, ApiStyle, Usage } from '../types'
+import type { ApiProvider, ApiStyle, ReasoningEffort, ThinkingMode, Usage } from '../types'
 
 /** 请求消息（仅 role/content，不携带 timestamp/reasoning 等本地字段） */
 export interface AdapterMessage {
@@ -36,15 +36,24 @@ export interface HttpRequestPayload {
   sseFormat: ''
 }
 
+/** 思考类全局配置（插件级 contributes.configuration；各方言适配器自行映射为
+    方言参数——openai 写 thinking，无法映射的方言忽略请求侧参数）。
+    枚举复用插件类型域，避免与 PluginConfig 两处真源漂移 */
+export interface ThinkingOptions {
+  thinkingMode: ThinkingMode
+  reasoningEffort: ReasoningEffort
+}
+
 /** 供应商协议适配器（注册表按 apiStyle 分派） */
 export interface ProviderAdapter {
   /** 分派键（openai / anthropic / gemini / custom） */
   apiStyle: ApiStyle
-  /** 构建流式对话请求（chat-stream） */
+  /** 构建流式对话请求（chat-stream）；options 为思考类全局配置（P3） */
   buildRequest(
     provider: ApiProvider,
     messages: AdapterMessage[],
     streamId: string,
+    options?: ThinkingOptions,
   ): HttpRequestPayload
   /** 构建非流式对话请求（chat-complete / 测试连接） */
   buildCompleteRequest(provider: ApiProvider, messages: AdapterMessage[]): HttpRequestPayload

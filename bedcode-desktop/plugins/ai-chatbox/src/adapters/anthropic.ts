@@ -20,6 +20,9 @@ const DEFAULT_MAX_TOKENS = 4096
 export const anthropicAdapter: ProviderAdapter = {
   apiStyle: 'anthropic',
 
+  // 思考参数映射（P4 接入点）：本期仅 openai 方言消费 options；anthropic
+  // 请求侧应在此写入 `thinking: { type: 'enabled', budget_tokens }` 等预算类
+  // 参数，避免 thinkingMode=enabled 对本方言静默无操作成为隐性问题
   buildRequest(provider, messages, streamId) {
     const body = buildMessagesBody(provider, messages, true)
     return {

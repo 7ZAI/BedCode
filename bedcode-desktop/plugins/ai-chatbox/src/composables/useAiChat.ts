@@ -5,14 +5,14 @@
  * 停止（本地截断并落盘已接收内容）、重新生成（覆盖旧回复）。
  * 持久化经 `context.commands.execute`（Rust store.rs JSONL）+ 流事件监听。
  */
-import { ref, computed } from 'vue'
-import type { ChatMessage, ConversationMeta, Usage } from '../types'
-import { generateId } from '../types'
+import { ref, computed, type Ref } from 'vue'
+import type { ChatMessage, ConversationMeta, PluginConfig, Usage } from '../types'
+import { DEFAULT_PLUGIN_CONFIG, generateId } from '../types'
 import { SseBuffer } from '../adapters/sse'
 import { mergeUsage } from '../adapters/usage'
 import { buildStreamRequest, getAdapter, parseStreamEvent } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
-import type { AdapterMessage, StreamEvent } from '../adapters/types'
+import type { AdapterMessage, StreamEvent, ThinkingOptions } from '../adapters/types'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 import type { useAiConfig } from './useAiConfig'
 
@@ -36,7 +36,13 @@ function classifyError(message: string): string | null {
   return null
 }
 
-export function useAiChat(context: PluginContext, config: AiConfig, scheduler?: FrameScheduler) {
+export function useAiChat(
+  context: PluginContext,
+  config: AiConfig,
+  scheduler?: FrameScheduler,
+  /** 插件级全局配置（P3：thinkingMode/reasoningEffort）；未注入时按默认值构建请求 */
+  pluginConfig?: Ref<PluginConfig>,
+) {
   const conversations = ref<ConversationMeta[]>([])
   const currentConvId = ref('')
   const messages = ref<ChatMessage[]>([])
@@ -106,7 +112,12 @@ export function useAiChat(context: PluginContext, config: AiConfig, scheduler?: 
     conversations.value.find(c => c.id === currentConvId.value) || null
   )
 
-  const isStreaming = computed(() => sending.value && streamingContent.value !== '')
+  // 推理-only 阶段（deepseek-reasoner 思考期可达数十秒）正文为空但思考流已在写入：
+  // isStreaming 必须覆盖 reasoning，否则思考块不展开、停止按钮消失、输入框被
+  // disabled，用户无法中断（P3 审查 Major）
+  const isStreaming = computed(
+    () => sending.value && (streamingContent.value !== '' || streamingReasoning.value !== ''),
+  )
 
   function nowIso(): string {
     return new Date().toISOString()
@@ -162,6 +173,8 @@ export function useAiChat(context: PluginContext, config: AiConfig, scheduler?: 
         timestamp: msg.timestamp,
         model: msg.model || null,
         usage: msg.usage || null,
+        // 思考过程随正文一起落盘（P3）；重生成 replaceLast 时一并覆盖
+        reasoning: msg.reasoning || null,
         replaceLastAssistant,
       })
     } catch (e: any) {
@@ -295,8 +308,14 @@ export function useAiChat(context: PluginContext, config: AiConfig, scheduler?: 
 
     const streamId = generateId()
     const requestMessages = buildRequestMessages()
-    // 协议适配层构建请求（raw 模式：sseFormat 为空，SSE 语义由前端解析）
-    const request = buildStreamRequest(provider, requestMessages, streamId)
+    // 协议适配层构建请求（raw 模式：sseFormat 为空，SSE 语义由前端解析）；
+    // 思考类全局配置在发送时刻取值（P3：thinkingMode ≠ default 才写请求参数）
+    const pc = pluginConfig?.value ?? DEFAULT_PLUGIN_CONFIG
+    const thinkingOptions: ThinkingOptions = {
+      thinkingMode: pc.thinkingMode,
+      reasoningEffort: pc.reasoningEffort,
+    }
+    const request = buildStreamRequest(provider, requestMessages, streamId, thinkingOptions)
 
     // 每次发送独立的流状态：SSE 缓冲 + usage 累积（adapter 解析结果落地处）
     const sse = new SseBuffer()
@@ -382,8 +401,8 @@ export function useAiChat(context: PluginContext, config: AiConfig, scheduler?: 
         const classified = classifyError(errorText)
         lastError.value = classified || errorText
       }
-      // 流中断/失败也落盘已接收内容；重生成时无条件覆盖旧回复行（防旧回复复现）
-      if (completed || last.content.trim() || replaceAssistantRow) {
+      // 流中断/失败也落盘已接收内容（含思考过程）；重生成时无条件覆盖旧回复行（防旧回复复现）
+      if (completed || last.content.trim() || last.reasoning?.trim() || replaceAssistantRow) {
         await saveMessage(currentConvId.value, last, replaceAssistantRow)
       }
     }

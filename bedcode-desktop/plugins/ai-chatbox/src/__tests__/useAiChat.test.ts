@@ -3,9 +3,11 @@
  * / 双重终结幂等 / error 分类 / 停止 / 重新生成 / 发送前校验
  */
 import { describe, it, expect } from 'vitest'
+import { ref } from 'vue'
 import { createMockContext, makeProvider } from './mockContext'
 import { useAiChat } from '../composables/useAiChat'
 import { useAiConfig } from '../composables/useAiConfig'
+import type { PluginConfig } from '../types'
 
 /** rAF 调度器 stub：手动触发帧回调，验证节流语义（接缝 3） */
 function makeRafStub() {
@@ -131,7 +133,7 @@ describe('useAiChat', () => {
     expect(last.content).toBe('跨块')
   })
 
-  it('思考模式：reasoning_content 累积到消息 reasoning（P1 内存累积，P3 落盘）', async () => {
+  it('思考模式：reasoning_content 累积到消息 reasoning，流结束后随正文落盘', async () => {
     const { mock, config, chat } = setup()
     await presetProvider(config)
     await chat.sendMessage('hi')
@@ -139,9 +141,104 @@ describe('useAiChat', () => {
     const eventName = streamEventOf(mock)
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '思' } }] }) })
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '考' } }] }) })
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '正文' } }] }) })
+    mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
 
     const last = chat.messages.value[chat.messages.value.length - 1]
     expect(last.reasoning).toBe('思考')
+    // save-message 携带 reasoning（P3 落盘：历史重开可见）
+    const assistantSave = mock.calls.find(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    expect(assistantSave.args.reasoning).toBe('思考')
+    expect(assistantSave.args.content).toBe('正文')
+  })
+
+  it('重新生成：旧 reasoning 与新正文一并覆盖（replaceLast 覆盖语义）', async () => {
+    const { mock, config, chat } = setup()
+    await presetProvider(config)
+    await chat.sendMessage('问题')
+
+    // 第一轮：带思考的完整流
+    const firstEvent = streamEventOf(mock)
+    mock.emitStream(firstEvent, {
+      chunk: sse({ choices: [{ delta: { content: '旧正文', reasoning_content: '旧思考' } }] }),
+    })
+    mock.emitStream(firstEvent, { chunk: 'data: [DONE]\n\n' })
+
+    await chat.regenerate()
+    // 第二轮：新思考 + 新正文
+    const secondEvent = streamEventOf(mock)
+    mock.emitStream(secondEvent, {
+      chunk: sse({ choices: [{ delta: { content: '新正文', reasoning_content: '新思考' } }] }),
+    })
+    mock.emitStream(secondEvent, { chunk: 'data: [DONE]\n\n' })
+
+    const assistantSaves = mock.calls.filter(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    expect(assistantSaves.length).toBe(2)
+    // 第二轮落盘：replaceLast 覆盖 + 新正文 + 新思考（旧思考不残留）
+    expect(assistantSaves[1].args.replaceLastAssistant).toBe(true)
+    expect(assistantSaves[1].args.content).toBe('新正文')
+    expect(assistantSaves[1].args.reasoning).toBe('新思考')
+  })
+
+  it('插件配置：thinkingMode=enabled + effort 透传到 chat-stream 请求体', async () => {
+    const mock = createMockContext()
+    const config = useAiConfig(mock.context)
+    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'enabled', reasoningEffort: 'max', showReasoning: true })
+    const chat = useAiChat(mock.context, config, undefined, pluginConfig)
+    await config.addProvider(makeProvider())
+    await config.setActiveProvider('p1')
+
+    await chat.sendMessage('hi')
+
+    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const body = JSON.parse(streamCall.args.request.body)
+    expect(body.thinking).toEqual({ type: 'enabled', reasoning_effort: 'max' })
+  })
+
+  it('插件配置：thinkingMode=default 不写 thinking 字段（跟随模型）', async () => {
+    const mock = createMockContext()
+    const config = useAiConfig(mock.context)
+    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'default', reasoningEffort: 'high', showReasoning: true })
+    const chat = useAiChat(mock.context, config, undefined, pluginConfig)
+    await config.addProvider(makeProvider())
+    await config.setActiveProvider('p1')
+
+    await chat.sendMessage('hi')
+
+    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    expect(JSON.parse(streamCall.args.request.body).thinking).toBeUndefined()
+  })
+
+  it('停止生成：只有思考内容无正文时也落盘（不丢已接收的推理）', async () => {
+    const { mock, config, chat } = setup()
+    await presetProvider(config)
+    await chat.sendMessage('hi')
+
+    const eventName = streamEventOf(mock)
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '部分思考' } }] }) })
+    chat.stopGeneration()
+
+    expect(chat.sending.value).toBe(false)
+    const assistantSave = mock.calls.find(c =>
+      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    expect(assistantSave.args.content).toBe('')
+    expect(assistantSave.args.reasoning).toBe('部分思考')
+  })
+
+  it('推理-only 阶段 isStreaming=true（思考期思考块展开/停止按钮联动，可中断）', async () => {
+    const { mock, config, chat } = setup()
+    await presetProvider(config)
+    await chat.sendMessage('hi')
+
+    // 正文未到达、仅 reasoning chunk（deepseek-reasoner 思考期典型形态）
+    const eventName = streamEventOf(mock)
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '思考中' } }] }) })
+
+    expect(chat.isStreaming.value).toBe(true)
+    expect(chat.streamingContent.value).toBe('')
+    expect(chat.streamingReasoning.value).toBe('思考中')
   })
 
   it('usage：从流尾 include_usage 块提取（raw 模式宿主 done 不再透传）', async () => {

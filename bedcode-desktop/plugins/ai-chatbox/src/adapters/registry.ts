@@ -5,7 +5,13 @@
  * 处理（与 useAiConfig.normalizeProvider 的旧数据映射语义保持一致）。
  */
 import type { ApiProvider, ApiStyle } from '../types'
-import type { AdapterMessage, HttpRequestPayload, ProviderAdapter, StreamEvent } from './types'
+import type {
+  AdapterMessage,
+  HttpRequestPayload,
+  ProviderAdapter,
+  StreamEvent,
+  ThinkingOptions,
+} from './types'
 import { openaiAdapter } from './openai'
 import { anthropicAdapter } from './anthropic'
 import { geminiAdapter } from './gemini'
@@ -23,13 +29,15 @@ export function getAdapter(apiStyle: ApiStyle | undefined | null): ProviderAdapt
   return (apiStyle && ADAPTERS[apiStyle]) || openaiAdapter
 }
 
-/** 构建流式对话请求（chat-stream 载荷） */
+/** 构建流式对话请求（chat-stream 载荷）；options 为思考类全局配置（P3），
+    由各方言适配器自行映射为方言参数 */
 export function buildStreamRequest(
   provider: ApiProvider,
   messages: AdapterMessage[],
   streamId: string,
+  options?: ThinkingOptions,
 ): HttpRequestPayload {
-  return getAdapter(provider.apiStyle).buildRequest(provider, messages, streamId)
+  return getAdapter(provider.apiStyle).buildRequest(provider, messages, streamId, options)
 }
 
 /** 构建非流式对话请求（chat-complete / 测试连接载荷） */

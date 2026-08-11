@@ -8,13 +8,21 @@
  *   思考模式）/ `usage`（蛇形转驼峰）/ `[DONE]` 终结行
  */
 import type { ApiProvider, Usage } from '../types'
-import type { HttpRequestPayload, ProviderAdapter, StreamEvent } from './types'
+import type { HttpRequestPayload, ProviderAdapter, StreamEvent, ThinkingOptions } from './types'
 import { effectiveModel, joinUrl, parseDataIdModels, tryParseJson } from './utils'
 
 export const openaiAdapter: ProviderAdapter = {
   apiStyle: 'openai',
 
-  buildRequest(provider, messages, streamId) {
+  buildRequest(provider, messages, streamId, options) {
+    const body: Record<string, unknown> = {
+      model: effectiveModel(provider),
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      stream: true,
+      // usage 提取依赖 include_usage 尾块（raw 模式宿主不再透传 usage，P1 风险第一条）
+      stream_options: { include_usage: true },
+    }
+    applyThinking(body, options)
     return {
       method: 'POST',
       url: joinUrl(provider.baseUrl, '/chat/completions'),
@@ -22,12 +30,7 @@ export const openaiAdapter: ProviderAdapter = {
         Authorization: `Bearer ${provider.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: effectiveModel(provider),
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        stream: true,
-        stream_options: { include_usage: true },
-      }),
+      body: JSON.stringify(body),
       stream: true,
       streamEvent: `ai-chatbox:stream:${streamId}`,
       sseFormat: '',
@@ -93,4 +96,15 @@ export const openaiAdapter: ProviderAdapter = {
   parseModelsResponse(body) {
     return parseDataIdModels(body)
   },
+}
+
+/** 思考参数映射：仅 thinkingMode ≠ default 时写入 thinking（default 不传参、
+    跟随模型自身行为）；reasoning_effort 只在强制开启时有意义，disabled 不携带 */
+function applyThinking(body: Record<string, unknown>, options?: ThinkingOptions): void {
+  if (!options || options.thinkingMode === 'default') return
+  const thinking: Record<string, unknown> = { type: options.thinkingMode }
+  if (options.thinkingMode === 'enabled') {
+    thinking.reasoning_effort = options.reasoningEffort
+  }
+  body.thinking = thinking
 }

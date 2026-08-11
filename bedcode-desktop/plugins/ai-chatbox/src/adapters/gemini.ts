@@ -13,6 +13,9 @@ import { effectiveModel, joinUrl, tryParseJson } from './utils'
 export const geminiAdapter: ProviderAdapter = {
   apiStyle: 'gemini',
 
+  // 思考参数映射（P4 接入点）：本期仅 openai 方言消费 options；gemini
+  // 请求侧应在此写入 generationConfig.thinkingConfig.thinkingBudget 等预算类
+  // 参数，避免 thinkingMode=enabled 对本方言静默无操作成为隐性问题
   buildRequest(provider, messages, streamId) {
     const body = buildContentsBody(provider, messages)
     const modelPath = `/models/${encodeURIComponent(effectiveModel(provider))}:streamGenerateContent`

@@ -67,6 +67,35 @@ describe('openai adapter', () => {
     expect(bodyOf(req).model).toBe('deepseek-reasoner')
   })
 
+  it('thinking 映射：default 不写 thinking 字段（跟随模型自身行为）', () => {
+    const req = openaiAdapter.buildRequest(provider(), messages(), 's1', {
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+    })
+    expect(bodyOf(req).thinking).toBeUndefined()
+  })
+
+  it('thinking 映射：未传 options 与 default 等价（旧调用方不受影响）', () => {
+    const req = openaiAdapter.buildRequest(provider(), messages(), 's1')
+    expect(bodyOf(req).thinking).toBeUndefined()
+  })
+
+  it('thinking 映射：enabled 写 type=enabled + reasoning_effort', () => {
+    const req = openaiAdapter.buildRequest(provider(), messages(), 's1', {
+      thinkingMode: 'enabled',
+      reasoningEffort: 'max',
+    })
+    expect(bodyOf(req).thinking).toEqual({ type: 'enabled', reasoning_effort: 'max' })
+  })
+
+  it('thinking 映射：disabled 只写 type=disabled，不携带 reasoning_effort（强度仅对开启有意义）', () => {
+    const req = openaiAdapter.buildRequest(provider(), messages(), 's1', {
+      thinkingMode: 'disabled',
+      reasoningEffort: 'high',
+    })
+    expect(bodyOf(req).thinking).toEqual({ type: 'disabled' })
+  })
+
   it('非流式请求：stream false 且不带 streamEvent', () => {
     const req = openaiAdapter.buildCompleteRequest(provider(), messages())
     expect(req.stream).toBeUndefined()

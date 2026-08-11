@@ -173,6 +173,7 @@
               :message="msg"
               :streaming="isStreaming && i === messages.length - 1"
               :error-text="i === messages.length - 1 ? messageErrorText : ''"
+              :show-reasoning="showReasoning"
               @delete="onDeleteMessage"
             />
 
@@ -227,6 +228,7 @@ import ProviderConfigPage from './ProviderConfigPage.vue'
 import Select from '@bedcode/plugin-sdk-desktop/ui'
 import { useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
+import { usePluginConfig } from '../composables/usePluginConfig'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 import type { ChatMessage as ChatMessageType, ConversationMeta } from '../types'
 
@@ -236,7 +238,9 @@ const { t } = useI18n()
 const context = inject<PluginContext>('pluginContext')!
 
 const config = useAiConfig(context)
-const chat = useAiChat(context, config)
+// 插件级全局配置（P3：thinkingMode/reasoningEffort/showReasoning，宿主配置页 schema 渲染）
+const pluginConfig = usePluginConfig(context)
+const chat = useAiChat(context, config, undefined, pluginConfig.config)
 
 const {
   providers,
@@ -289,6 +293,12 @@ const currentTitle = computed(() => {
   }
   return title
 })
+
+// 配置加载完成前按 false 处理：避免用户已设 showReasoning=false 时，历史消息的
+// 思考块在首帧用默认值闪现后再消失（storage 读取为异步，与消息加载并行）
+const showReasoning = computed(
+  () => !pluginConfig.loading.value && pluginConfig.config.value.showReasoning,
+)
 
 const providerOptions = computed(() => providers.value.map(p => ({ value: p.id, label: p.name })))
 const modelOptions = computed(() => activeProvider.value?.models.map(m => ({ value: m, label: m })) || [])
@@ -360,17 +370,24 @@ async function clearSystemPrompt(): Promise<void> {
   await setSystemPrompt('')
 }
 
-// 自动滚动到底部
-watch(() => messages.value.length + (chat.streamingContent.value?.length || 0), () => {
-  nextTick(() => {
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-    }
-  })
-})
+// 自动滚动到底部（reasoning 流写入时正文可能仍为空，须一并跟踪才能跟上思考期增长）
+watch(
+  () =>
+    messages.value.length +
+    (chat.streamingContent.value?.length || 0) +
+    (chat.streamingReasoning.value?.length || 0),
+  () => {
+    nextTick(() => {
+      if (messagesContainer.value) {
+        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      }
+    })
+  },
+)
 
 onMounted(async () => {
   await loadConfig()
-  await loadConversations()
+  // 插件配置与供应商配置并行加载（缺失时 usePluginConfig 内部已回退默认值）
+  await Promise.all([pluginConfig.loadConfig(), loadConversations()])
 })
 </script>

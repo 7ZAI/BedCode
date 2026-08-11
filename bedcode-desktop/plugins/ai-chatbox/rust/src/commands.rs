@@ -93,6 +93,9 @@ pub fn save_message(args: serde_json::Value) -> anyhow::Result<serde_json::Value
         usage: args
             .value_owned("usage")
             .and_then(|v| serde_json::from_value(v).ok()),
+        reasoning: args
+            .value_owned("reasoning")
+            .and_then(|v| v.as_str().map(|s| s.to_string())),
     };
 
     store::save_message(

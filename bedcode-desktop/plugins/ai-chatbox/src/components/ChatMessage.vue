@@ -25,6 +25,34 @@
         </span>
       </div>
 
+      <!-- 思考过程块（assistant 专属，P3）：可折叠次级样式；流式期间默认展开；
+           showReasoning=false 时不渲染；reasoning 取自消息字段（历史重开可见） -->
+      <div
+        v-if="!isUser && showReasoning !== false && message.reasoning"
+        class="thinking-block"
+      >
+        <button
+          class="thinking-toggle"
+          :aria-expanded="reasoningExpanded"
+          :title="t('desktop.plugin.aiChatbox.thinkingProcess')"
+          @click="reasoningExpanded = !reasoningExpanded"
+        >
+          <svg
+            class="w-3 h-3 flex-shrink-0 transition-transform duration-200"
+            :class="reasoningExpanded ? 'rotate-90' : ''"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span class="truncate">{{ t('desktop.plugin.aiChatbox.thinkingProcess') }}</span>
+        </button>
+        <!-- 思考内容为模型 scratchpad 草稿，非成品 Markdown：纯文本展示（预换行），
+             不经过渲染管线，天然免疫 prompt injection 的 HTML 注入 -->
+        <div v-if="reasoningExpanded" class="thinking-body">{{ message.reasoning }}</div>
+      </div>
+
       <!-- 内容：user / assistant 均 Markdown 渲染（主流布局）；user 为右对齐气泡，assistant 全宽文本 -->
       <div
         v-if="isUser"
@@ -92,6 +120,8 @@ const props = defineProps<{
   message: ChatMessage
   streaming?: boolean
   errorText?: string
+  /** 插件级 showReasoning 配置（false 时整体不渲染思考块） */
+  showReasoning?: boolean
 }>()
 
 defineEmits<{ delete: [message: ChatMessage] }>()
@@ -102,6 +132,16 @@ const { t } = useI18n()
 const highlightEngine: HighlightEngine = createHljsHighlightEngine()
 
 const isUser = computed(() => props.message.role === 'user')
+
+/** 思考块展开状态：流式期间默认展开（边生成边可见）；结束后保持用户当前折叠状态 */
+const reasoningExpanded = ref(false)
+watch(
+  () => props.streaming,
+  (streaming) => {
+    if (streaming) reasoningExpanded.value = true
+  },
+  { immediate: true },
+)
 
 /** Markdown → HTML（breaks 让单换行也换行，贴合聊天场景）
  *
@@ -301,6 +341,43 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
 }
 .md-body :deep(pre .md-copy-btn:hover) {
   color: var(--text-secondary);
+}
+
+/* ==================== 思考过程块（P3） ==================== */
+/* 次级样式：独立于正文的弱化容器，左缘品牌色竖条区分于代码块/引用 */
+.thinking-block {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--color-primary);
+  background: var(--bg-hover);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  margin: 0.5em 0;
+}
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.thinking-toggle:hover {
+  color: var(--text-primary);
+}
+.thinking-body {
+  padding: 0 0.625rem 0.625rem 1.375rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 长思考过程限高内滚，避免占满整条消息 */
+  max-height: 18rem;
+  overflow-y: auto;
 }
 .md-body :deep(table) {
   border-collapse: collapse;
