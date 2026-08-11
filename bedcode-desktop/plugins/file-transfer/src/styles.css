@@ -44,17 +44,26 @@
   font-size: 12px;
   color: var(--text-primary);
   max-width: 200px;
-  /* 与紧随的设备切换按钮紧凑衔接，避免视觉“分家” */
+  min-width: 0;
+  /* 长设备名时内部不溢出 pill（dot/name/meta 的收缩由子项 min-width 控制） */
+  overflow: hidden;
+  /* 与紧随的设备切换按钮紧凑衔接，避免视觉”分家” */
   margin-right: 2px;
 }
 
+/* 设备名：min-width: 0 允许在 pill 宽度约束下收缩，触发省略号
+   （flex 子项默认 min-width:auto，长 nowrap 文本会撑破容器） */
 .ft-peer-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ft-peer-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--text-secondary);
 }
@@ -90,6 +99,11 @@
 }
 
 .ft-peer-switch-btn--open {
+  border-color: var(--color-primary);
+}
+
+/* 传输队列开关展开态：与对端切换按钮同语言（描边高亮） */
+.ft-btn--queue-open {
   border-color: var(--color-primary);
 }
 
@@ -208,6 +222,26 @@
   margin-left: 2px;
 }
 
+/* 窄窗口：顶栏按钮只留图标，保证对端 pill 与操作按钮不互相挤压溢出 */
+@media (max-width: 720px) {
+  .ft-topbar {
+    gap: 4px;
+    padding: 0 8px;
+  }
+
+  .ft-btn {
+    padding: 5px 8px;
+  }
+
+  .ft-btn-text {
+    display: none;
+  }
+
+  .ft-peer-pill {
+    max-width: 150px;
+  }
+}
+
 /* 按钮内 SVG 图标统一样式（1.5 描边，随按钮字号） */
 .ft-ico-btn {
   width: 14px;
@@ -221,6 +255,11 @@
   flex: 1;
   min-height: 0;
   display: grid;
+  /* 默认单栏（队列收起，文件表格全宽）；展开队列时切两栏 */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ft-main--queue {
   grid-template-columns: minmax(0, 1fr) 360px;
 }
 
@@ -486,6 +525,34 @@
 }
 
 /* ==================== 队列面板 ==================== */
+
+/* 面板头：队列名 + 任务数角标（常驻入口标识） */
+.ft-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ft-queue-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-queue-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 
 .ft-queue-body {
   flex: 1;

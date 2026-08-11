@@ -68,6 +68,10 @@ pub struct ListResponse {
     pub path: String,
     /// 条目列表（目录优先，按名称排序）
     pub entries: Vec<FileEntryDto>,
+    /// 非空时：列表结果可能被 Android 存储权限过滤（对端应提示用户授权）。
+    /// 对端 serde 解析默认忽略未知字段，无此字段的旧对端不受影响
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 /// 创建上传会话请求
@@ -381,6 +385,24 @@ fn read_dir_entries(dir: &Path) -> crate::Result<Vec<FileEntryDto>> {
     Ok(entries)
 }
 
+/// 判断路径是否需要「所有文件访问权限」（MANAGE_EXTERNAL_STORAGE）
+///
+/// Android 11+ 分区存储：仅 App 私有目录（`/storage/emulated/0/Android/data/`）
+/// 无需任何授权即可读写；其余主存储路径（含 DCIM/Download 等媒体集合，
+/// App 未声明 READ_MEDIA_*）的 read_dir 均受 FUSE 过滤，未授权时静默返回
+/// 空列表（不报错）。返回 true 且列表结果为空时，对端几乎可以确定是
+/// 权限问题而非真空目录。
+fn needs_all_files_access(path: &Path) -> bool {
+    let p = path.to_string_lossy().replace('\\', "/");
+    let normalized = p.trim_end_matches('/').to_lowercase();
+    if !normalized.starts_with("/storage/emulated/0") {
+        // 其他存储位置（外部 SD 卡等）也会被过滤，但 App 自身私有
+        // 目录（/data/user/0/...）不受影响——只对主存储判定，避免误报
+        return false;
+    }
+    !normalized.starts_with("/storage/emulated/0/android/data")
+}
+
 /// 解析 Range 头 `bytes=N-` / `bytes=N-M`（仅支持单段）
 ///
 /// 返回 (start, 可选 end)；非法/不支持的形式返回 None（走 200 全量）
@@ -461,6 +483,7 @@ async fn list_dir(
         return HttpResponse::Ok().json(ListResponse {
             path: String::new(),
             entries,
+            notice: None,
         });
     }
 
@@ -469,8 +492,25 @@ async fn list_dir(
         Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
     };
 
+    // spawn_blocking 会 move target，权限判定提前计算
+    let may_need_all_files_access = needs_all_files_access(&target);
+
     match tokio::task::spawn_blocking(move || read_dir_entries(&target)).await {
-        Ok(Ok(entries)) => HttpResponse::Ok().json(ListResponse { path: rel, entries }),
+        Ok(Ok(entries)) => {
+            // Android 分区存储：未授予「所有文件访问权限」时 read_dir 静默返回空列表
+            //（FUSE 过滤，不报错）——空结果 + 路径需要该权限 ≈ 权限问题而非真空目录，
+            // 经 notice 告知对端，对端据此提示用户（而非让用户反复刷新）
+            let notice = if entries.is_empty() && may_need_all_files_access {
+                tracing::warn!(
+                    path = %rel,
+                    "list: empty result in top-level storage dir; MANAGE_EXTERNAL_STORAGE may not be granted"
+                );
+                Some("all_files_access_may_be_required".to_string())
+            } else {
+                None
+            };
+            HttpResponse::Ok().json(ListResponse { path: rel, entries, notice })
+        }
         Ok(Err(e)) => {
             let status = if matches!(e, crate::AppError::NotFound(_)) {
                 actix_web::http::StatusCode::NOT_FOUND

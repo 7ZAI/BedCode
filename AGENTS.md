@@ -108,7 +108,7 @@ cargo test
 | 端 | 行为 | 日志位置（电脑端） | 说明 |
 |----|------|--------------------|------|
 | 桌面端 | 始终落盘（dev/release 均写文件） | `%LOCALAPPDATA%\com.bedcode.app\logs\`（如 `C:\Users\<user>\AppData\Local\com.bedcode.app\logs\`） | `runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR，按天轮转 |
-| 移动端 | **电脑端落盘需用 `npm run tauri:android:dev:log`**（普通 `tauri:android:dev` 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（UTC 日期） | 脚本把 Tauri CLI 转发的 logcat 同时写文件（无 ANSI 码，可 grep）；移动端进程在手机上，**无法直接写电脑磁盘**，故不设手机内部落盘（agent 读不到） |
+| 移动端 | **电脑端落盘需用 `npm run tauri:android:dev:log`**（普通 `tauri:android:dev` 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（本地日期，与设备 logcat 日期线一致） | 脚本把 Tauri CLI 转发的 logcat 同时写文件（无 ANSI 码，可 grep）；移动端进程在手机上，**无法直接写电脑磁盘**，故不设手机内部落盘（agent 读不到） |
 
 确认实际路径：桌面端 dev 控制台首行 `Logging initialized. Log directory: ...`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
 
@@ -226,7 +226,7 @@ cargo test
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、DeviceInfoPlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
+- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
 
 ---
 

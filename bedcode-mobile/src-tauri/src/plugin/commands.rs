@@ -639,6 +639,25 @@ async fn pick_file_native(
 }
 
 
+// ==================== All Files Access（分区存储授权引导） ====================
+
+/// 查询/引导「所有文件访问权限」（Android 11+ 分区存储）
+///
+/// 非媒体集合的顶层自定义目录（如存储根目录下的自定义文件夹）read_dir 被
+/// FUSE 过滤为空，需用户手动在系统设置授予 MANAGE_EXTERNAL_STORAGE
+/// （无运行时弹窗机制）。此命令跳转系统授权页并返回跳转前是否已授权；
+/// 非 Android 平台（桌面 dev 窗口 / iOS）返回明确错误。
+#[tauri::command]
+pub async fn open_all_files_settings(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<bool> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "open_all_files_settings").await?;
+    crate::plugin::android_plugins::open_all_files_settings_android().await
+}
+
+
 // ==================== Plugin Command Invoke ====================
 
 /// 调用 WASM 插件命令（前端 context.commands.execute 的回退桥）

@@ -343,6 +343,10 @@ export interface UIRegistry {
   openPage(routeId: string): void
   /** 返回上一页（router.back） */
   goBack(): void
+  /** 监听 Android 系统返回键（仅 Android 真机触发；注册后系统返回不再执行默认的 webview 后退/退出，改由回调接管）。
+   *  回调需自行决定行为：目录栈内返回上级，栈顶时可用 payload.canGoBack 恢复默认后退（如 history.back()）。
+   *  非 Android（dev-shell / iOS）静默降级为永不触发；Disposable.dispose = 取消监听并恢复默认行为。 */
+  onBackPressed(handler: (payload: { canGoBack: boolean }) => void): Disposable
 }
 
 /** 事件 API */
@@ -436,6 +440,10 @@ export interface FileServiceAPI {
    * Android 使用 SAF 文件选择器并解析为真实路径；不支持的 provider 或 iOS 会 reject，
    * 插件应捕获后改用手动路径输入 */
   pickFile(): Promise<string | null>
+  /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下，非媒体集合的顶层
+   * 自定义目录 read_dir 会被 FUSE 过滤为空，需该权限才能经真实路径读取；
+   * 无运行时弹窗，宿主跳转系统授权页）。返回当前是否已授权；非 Android 平台 reject */
+  requestAllFilesAccess(): Promise<boolean>
 }
 
 /** 国际化 API */

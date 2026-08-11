@@ -54,6 +54,8 @@ export const MOCK_FS_TREE: Record<string, RemoteEntry[]> = {
   '电影收藏': [
     { name: '星际穿越.mkv', size: 4_100_000_000, mtime: Date.now() - 30 * 86_400_000, isDir: false },
     { name: '千与千寻.mkv', size: 1_800_000_000, mtime: Date.now() - 45 * 86_400_000, isDir: false },
+    { name: '天空之城.flac', size: 28_000_000, mtime: Date.now() - 50 * 86_400_000, isDir: false },
+    { name: '电影原声带.mp3', size: 12_000_000, mtime: Date.now() - 51 * 86_400_000, isDir: false },
   ],
   '项目源码': [
     { name: 'src', size: 0, mtime: Date.now() - 7 * 86_400_000, isDir: true },

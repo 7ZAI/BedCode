@@ -16,6 +16,8 @@ export function useRemoteFs(context: PluginContext) {
   const entries = ref<RemoteEntry[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  /** 对端存储权限提示（列表为空且可能被分区存储过滤时由对端服务器置位） */
+  const notice = ref<string | null>(null)
 
   /** 已勾选文件名集合（当前目录内唯一） */
   const selected = ref<Set<string>>(new Set())
@@ -61,7 +63,9 @@ export function useRemoteFs(context: PluginContext) {
         peerId: '',
         path,
       })
+      // 兼容旧对端裸数组响应（新响应为 { entries, notice }）
       entries.value = Array.isArray(data) ? data : (data?.entries ?? [])
+      notice.value = Array.isArray(data) ? null : (data?.notice ?? null)
       currentPath.value = path
       selected.value = new Set()
       console.log(`[File Transfer] list-remote OK: path='${path}' entries=${entries.value.length}`)
@@ -130,6 +134,7 @@ export function useRemoteFs(context: PluginContext) {
     entries.value = []
     loading.value = false
     error.value = null
+    notice.value = null
     selected.value = new Set()
   }
 
@@ -143,6 +148,7 @@ export function useRemoteFs(context: PluginContext) {
     entries,
     loading,
     error,
+    notice,
     crumbs,
     selected,
     selectedCount,

@@ -60,6 +60,12 @@ const remoteFs: Record<string, Array<{ name: string; size: number; mtime: number
     { name: 'IMG_20240802_0815.jpg', size: 5124300, mtime: 1754676000, isDir: false },
     { name: '会议录音_产品周会.mp3', size: 12695376, mtime: 1754520000, isDir: false },
     { name: '4K测试视频_8分钟.mp4', size: 1258291200, mtime: 1754598000, isDir: false },
+    { name: '4K蓝光_星际穿越.mkv', size: 4_100_000_000, mtime: 1754600000, isDir: false },
+    { name: '产品说明书.pdf', size: 8_600_000, mtime: 1754580000, isDir: false },
+    { name: '销售数据汇总.xlsx', size: 96_000, mtime: 1754570000, isDir: false },
+    { name: 'BedCode-2.0.0.apk', size: 68_000_000, mtime: 1754560000, isDir: false },
+    { name: 'Ubuntu-24.04.iso', size: 4_720_000_000, mtime: 1754550000, isDir: false },
+    { name: 'main.ts', size: 12_480, mtime: 1754540000, isDir: false },
   ],
   'phone-xiaomi::DCIM': [
     { name: 'Camera', size: 0, mtime: 1754688000, isDir: true },

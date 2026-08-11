@@ -50,6 +50,11 @@ export interface MessageSchema {
   'transfer.task.resumeAll': string
   'transfer.task.download': string
   'transfer.task.upload': string
+  'transfer.task.empty': string
+
+  // ==================== 队列面板 ====================
+  'transfer.queue.title': string
+  'transfer.queue.count': string
 
   // ==================== 队列汇总 ====================
   'transfer.summary.active': string
@@ -82,6 +87,9 @@ export interface MessageSchema {
   'transfer.empty.noPeerHint': string
   'transfer.empty.noDownloadDir': string
   'transfer.empty.noDownloadDirHint': string
+
+  // ==================== 对端存储权限提示 ====================
+  'transfer.notice.storageAccess': string
 
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': string

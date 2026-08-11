@@ -430,6 +430,8 @@ button.group-row,
 .group-row-btn {
   width: 100%;
   cursor: pointer;
+  /* button 默认 text-align:center 会被后代标题继承，导致行内文字居中；统一左对齐 */
+  text-align: left;
   transition: background-color 0.15s ease;
 }
 

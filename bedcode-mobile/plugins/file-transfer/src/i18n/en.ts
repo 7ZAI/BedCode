@@ -69,8 +69,14 @@ export default {
   'transfer.minibar.speed': '{speed}/s',
   'transfer.minibar.openQueue': 'View queue',
 
+  // ==================== Pull to refresh ====================
+  'transfer.pull.pull': 'Pull to refresh',
+  'transfer.pull.ready': 'Release to refresh',
+  'transfer.pull.refreshing': 'Refreshing…',
+
   // ==================== Queue bottom sheet ====================
   'transfer.queue.title': 'Transfer queue',
+  'transfer.queue.entry': '{count} tasks',
   'transfer.queue.active': '{count} active',
   'transfer.queue.rejectedChip': 'Rejected',
   'transfer.queue.failedChip': 'Failed',
@@ -82,7 +88,11 @@ export default {
   'transfer.settings.pickRoot': 'Pick folder',
   'transfer.settings.picking': 'Picking…',
   'transfer.settings.addRootHint': 'Use the system picker (Android only) or enter an absolute local path',
-  'transfer.settings.scopedStorageHint': 'Android 11+ scoped storage: if the shared folder is outside the app-private dir or media collections (e.g. a custom top-level folder), the peer won\'t see its contents. Grant "All files access" in System settings → Apps → BedCode.',
+  'transfer.settings.scopedStorageHint': 'Android 11+ scoped storage: if the shared folder is outside the app-private dir or media collections (e.g. a custom top-level folder), the peer won\'t see its contents. The "All files access" permission is required.',
+  'transfer.settings.grantAllFilesAccess': 'Grant access',
+  'transfer.settings.granting': 'Opening…',
+  'transfer.settings.allFilesAccessGranted': 'All files access already granted',
+  'transfer.settings.allFilesAccessUnavailable': 'One-tap grant is Android-only; please enable it manually in System settings',
   'transfer.settings.pickFailed': 'Could not resolve the picked folder. Enter the path manually.',
   'transfer.settings.rootDuplicate': 'This folder is already in the share list',
   'transfer.settings.addRootFailed': 'Failed to add: could not mount the shared folder. Check the path.',
@@ -119,6 +129,10 @@ export default {
   'transfer.empty.emptyDirHint': "No files in the peer's shared folder yet",
   'transfer.empty.notSharingHint': 'Ask the peer to enable file sharing',
   'transfer.empty.unavailableHint': 'The peer may be offline or the folder was removed',
+
+  // ==================== Peer storage permission notice ====================
+  'transfer.notice.storageAccessTitle': 'The peer may not have storage access granted',
+  'transfer.notice.storageAccess': 'The shared folder lives in Android top-level storage, which requires "All files access" to read. Grant it in System settings → Apps → BedCode → Allow all files',
 
   // ==================== Units ====================
   'transfer.size.bytes': '{value} B',

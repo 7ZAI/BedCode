@@ -115,6 +115,18 @@ function reasonText(task: Task): string {
 <template>
   <div class="ft-queue">
     <div class="ft-queue-body">
+      <!-- 面板头：传输队列 + 任务总数（常驻入口标识，任何状态下可达） -->
+      <div class="ft-queue-head">
+        <span class="ft-queue-title">{{ t('transfer.queue.title') }}</span>
+        <span
+          v-if="tasks.length > 0"
+          class="ft-queue-count"
+          :title="t('transfer.queue.count', { count: tasks.length })"
+        >
+          {{ tasks.length }}
+        </span>
+      </div>
+
       <!-- 状态汇总 chips -->
       <div class="ft-chips">
         <span v-if="summary.active > 0" class="ft-chip ft-chip--active">
@@ -145,7 +157,7 @@ function reasonText(task: Task): string {
 
       <!-- 空队列 -->
       <div v-if="tasks.length === 0" class="ft-empty">
-        {{ t('transfer.table.empty') }}
+        {{ t('transfer.task.empty') }}
       </div>
 
       <!-- 任务卡列表 -->

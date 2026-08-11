@@ -35,6 +35,30 @@ const newRoot = ref('')
 const adding = ref(false)
 const picking = ref(false)
 
+/** 「所有文件访问权限」一键授权跳转中 */
+const granting = ref(false)
+
+/**
+ * 一键跳转系统「所有文件访问权限」授权页（Android 11+ 分区存储下读取
+ * 顶层自定义目录必需；无运行时弹窗，只能经系统设置手动开启）。
+ * 已授权时宿主直接返回 true（不跳转），失败（非 Android / 未激活）toast 提示。
+ */
+async function handleGrantAllFilesAccess(): Promise<void> {
+  if (!context || granting.value) return
+  granting.value = true
+  try {
+    const granted = await context.fileService.requestAllFilesAccess()
+    if (granted) {
+      context.dialogs.showToast(t('transfer.settings.allFilesAccessGranted'), 'success')
+    }
+    // 未授权：宿主已跳转系统设置页，回到 App 后用户手动开启
+  } catch {
+    context.dialogs.showToast(t('transfer.settings.allFilesAccessUnavailable'), 'error')
+  } finally {
+    granting.value = false
+  }
+}
+
 /** 系统目录选择器选目录（取消/失败静默，失败 toast 提示降级手动输入） */
 async function handlePickRoot(): Promise<void> {
   if (!context || picking.value) return
@@ -100,6 +124,13 @@ function incConcurrency(): void {
       <div class="ft-warning-box">
         <p class="ft-warning-text">{{ t('transfer.settings.addRootHint') }}</p>
         <p class="ft-warning-text mt-2">{{ t('transfer.settings.scopedStorageHint') }}</p>
+        <button
+          class="ft-grant-btn mt-2.5"
+          :disabled="granting"
+          @click="handleGrantAllFilesAccess()"
+        >
+          {{ granting ? t('transfer.settings.granting') : t('transfer.settings.grantAllFilesAccess') }}
+        </button>
       </div>
 
       <!-- 系统选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
@@ -326,5 +357,29 @@ function incConcurrency(): void {
   line-height: 1.5;
   color: var(--mobile-warning);
   margin: 0;
+}
+
+/* 「去授权」按钮：警告框内次要操作，主色文字 + 警示边框，44px 触控目标 */
+.ft-grant-btn {
+  min-height: clamp(2.5rem, 2.5rem + (100vw - 400px) / 800 * 2, 2.75rem);
+  padding: 0 1rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--mobile-warning-muted);
+  background: color-mix(in srgb, var(--mobile-warning) 10%, transparent);
+  color: var(--mobile-warning);
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s ease;
+}
+
+.ft-grant-btn:active {
+  opacity: 0.8;
+}
+
+.ft-grant-btn:disabled {
+  opacity: 0.5;
 }
 </style>

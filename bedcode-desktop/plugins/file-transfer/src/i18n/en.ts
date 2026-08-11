@@ -48,6 +48,11 @@ const en: MessageSchema = {
   'transfer.task.resumeAll': 'Resume all',
   'transfer.task.download': 'Download',
   'transfer.task.upload': 'Upload',
+  'transfer.task.empty': 'No tasks',
+
+  // ==================== Queue panel ====================
+  'transfer.queue.title': 'Transfer queue',
+  'transfer.queue.count': '{count} tasks',
 
   // ==================== Queue summary ====================
   'transfer.summary.active': '{count} active',
@@ -80,6 +85,9 @@ const en: MessageSchema = {
   'transfer.empty.noPeerHint': 'Make sure your phone and computer are on the same network and the phone is paired with sharing enabled',
   'transfer.empty.noDownloadDir': 'Configure a download folder in Settings first',
   'transfer.empty.noDownloadDirHint': 'Choose where received files are saved, then you can download files from your peer to this device',
+
+  // ==================== Peer storage permission notice ====================
+  'transfer.notice.storageAccess': 'The peer may share an Android top-level folder, but "All files access" is not granted on the phone. Grant it in System settings → Apps → BedCode → Allow all files, then refresh to see the contents',
 
   // ==================== ETA ====================
   'transfer.eta.seconds': '{count}s left',

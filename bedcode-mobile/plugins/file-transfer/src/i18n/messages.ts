@@ -79,6 +79,10 @@ export interface MessageSchema {
   'transfer.settings.picking': string
   'transfer.settings.addRootHint': string
   'transfer.settings.scopedStorageHint': string
+  'transfer.settings.grantAllFilesAccess': string
+  'transfer.settings.granting': string
+  'transfer.settings.allFilesAccessGranted': string
+  'transfer.settings.allFilesAccessUnavailable': string
   'transfer.settings.removeRoot': string
   'transfer.settings.noRoots': string
   'transfer.settings.downloadDir': string
@@ -111,6 +115,10 @@ export interface MessageSchema {
   'transfer.empty.emptyDirHint': string
   'transfer.empty.notSharingHint': string
   'transfer.empty.unavailableHint': string
+
+  // ==================== 对端存储权限提示 ====================
+  'transfer.notice.storageAccessTitle': string
+  'transfer.notice.storageAccess': string
 
   // ==================== 单位 ====================
   'transfer.size.bytes': string

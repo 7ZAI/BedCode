@@ -34,6 +34,7 @@ const {
   entries,
   loading,
   errorKey,
+  notice,
   breadcrumb,
   selectedNames,
   currentPath,
@@ -49,6 +50,9 @@ const {
 } = useRemoteFs(context, () => peer.value.id)
 
 const showSettings = ref(false)
+
+/** 传输队列面板是否展开（默认收起，顶栏按钮切换） */
+const queueVisible = ref(false)
 
 /**
  * 对端显示名：device-connected 缓存 → 任务快照 peer.name → peerId → IP。
@@ -88,13 +92,14 @@ const noPeerLabel = computed(() =>
   connOnline.value ? t('transfer.peer.notSharing') : t('transfer.empty.noPeer'),
 )
 
-/** 批量下载所选文件（remotePath 拼接当前目录路径） */
+/** 批量下载所选文件（remotePath 拼接当前目录路径）；入队成功后展开队列面板便于查看进度 */
 async function handleDownload(): Promise<void> {
   if (!canDownload.value) return
   const base = currentPath.value
   const paths = selectedEntries.value.map(e => (base ? `${base}/${e.name}` : e.name))
-  await enqueueDownload(paths, { id: peer.value.id, name: peerDisplayName.value })
+  const ok = await enqueueDownload(paths, { id: peer.value.id, name: peerDisplayName.value })
   clearSelection()
+  if (ok > 0) queueVisible.value = true
 }
 
 /** 顶栏刷新：任务列表 + 当前目录 + 主动探测对端状态 */
@@ -102,12 +107,13 @@ async function handleRefresh(): Promise<void> {
   await Promise.all([refreshTasks(), refreshDir(), queryPeer()])
 }
 
-/** 发送到手机：弹本地多文件选择 → 入队上传（对端根目录） */
+/** 发送到手机：弹本地多文件选择 → 入队上传（对端根目录）；入队成功后展开队列面板便于查看进度 */
 async function handleUpload(): Promise<void> {
   if (!peer.value.online) return
   const files = await context.fileService.pickFiles()
   if (!files.length) return
   const ok = await enqueueUpload(files, { id: peer.value.id, name: peerDisplayName.value })
+  if (ok > 0) queueVisible.value = true
   if (ok < files.length) {
     // 部分失败（如对端同名拒绝）时刷新任务列表让用户看到 rejected 原因
     void refreshTasks()
@@ -230,6 +236,25 @@ onUnmounted(() => {
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.refresh') }}</span>
       </button>
+      <!-- 传输队列开关：面板默认收起，点击展开/收起（带任务数角标） -->
+      <button
+        class="ft-btn"
+        :class="{ 'ft-btn--queue-open': queueVisible }"
+        :title="t('transfer.queue.title')"
+        @click="queueVisible = !queueVisible"
+      >
+        <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
+        </svg>
+        <span class="ft-btn-text">{{ t('transfer.queue.title') }}</span>
+        <span
+          v-if="tasks.length > 0"
+          class="ft-queue-count"
+          :title="t('transfer.queue.count', { count: tasks.length })"
+        >
+          {{ tasks.length }}
+        </span>
+      </button>
       <button class="ft-btn" @click="showSettings = true" :title="t('transfer.topbar.settings')">
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
@@ -238,60 +263,71 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 空态：未配置共享目录 -->
-    <div v-if="showNoRoots" class="ft-empty">
-      <div class="ft-empty-ico">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-        </svg>
+    <!-- 双栏工作台：左栏随状态切换（空态提示 / 文件表格）；右栏传输队列默认收起，顶栏按钮展开 -->
+    <div class="ft-main" :class="{ 'ft-main--queue': queueVisible }">
+      <!-- 空态：未配置共享目录 -->
+      <div v-if="showNoRoots" class="ft-empty">
+        <div class="ft-empty-ico">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+          </svg>
+        </div>
+        <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
+        <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
+        <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+          {{ t('transfer.topbar.settings') }}
+        </button>
       </div>
-      <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
-      <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
-      <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-        {{ t('transfer.topbar.settings') }}
-      </button>
-    </div>
 
-    <!-- 空态：对端未连接 / 已连接但未共享 -->
-    <div v-else-if="showNoPeer" class="ft-empty">
-      <div class="ft-empty-ico">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 18h2" />
-        </svg>
+      <!-- 空态：对端未连接 / 已连接但未共享 -->
+      <div v-else-if="showNoPeer" class="ft-empty">
+        <div class="ft-empty-ico">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 18h2" />
+          </svg>
+        </div>
+        <div class="ft-empty-title">{{ noPeerLabel }}</div>
+        <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
       </div>
-      <div class="ft-empty-title">{{ noPeerLabel }}</div>
-      <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
-    </div>
 
-    <!-- 空态：未设置下载目录 -->
-    <div v-else-if="settings.downloadDir === ''" class="ft-empty">
-      <div class="ft-empty-ico">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v12M5 12l7 7 7-7" />
-        </svg>
+      <!-- 空态：未设置下载目录 -->
+      <div v-else-if="settings.downloadDir === ''" class="ft-empty">
+        <div class="ft-empty-ico">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v12M5 12l7 7 7-7" />
+          </svg>
+        </div>
+        <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
+        <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
+        <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+          {{ t('transfer.topbar.settings') }}
+        </button>
       </div>
-      <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
-      <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
-      <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-        {{ t('transfer.topbar.settings') }}
-      </button>
-    </div>
 
-    <!-- 双栏工作台 -->
-    <div v-else class="ft-main">
-      <RemoteFileTable
-        :entries="entries"
-        :loading="loading"
-        :error-key="errorKey"
-        :breadcrumb="breadcrumb"
-        :selected-names="selectedNames"
-        @enter="enterDir"
-        @navigate="navigateTo"
-        @toggle="toggleSelect"
-        @toggle-all="toggleAll"
-      />
+      <!-- 工作态：远端文件表格（含对端存储权限提示） -->
+      <template v-else>
+        <!-- 对端存储权限提示：列表为空且对端（移动端）可能未授予「所有文件访问权限」 -->
+        <div v-if="notice === 'all_files_access_may_be_required'" class="ft-warning">
+          <span class="ft-warning-ico">⚠</span>
+          <span>{{ t('transfer.notice.storageAccess') }}</span>
+        </div>
+        <RemoteFileTable
+          :entries="entries"
+          :loading="loading"
+          :error-key="errorKey"
+          :breadcrumb="breadcrumb"
+          :selected-names="selectedNames"
+          @enter="enterDir"
+          @navigate="navigateTo"
+          @toggle="toggleSelect"
+          @toggle-all="toggleAll"
+        />
+      </template>
+
+      <!-- 传输队列：默认收起，顶栏「传输队列」按钮展开 -->
       <TaskPanel
+        v-if="queueVisible"
         :tasks="tasks"
         :speed-map="speedMap"
         :summary="summary"

@@ -148,6 +148,11 @@ export function createMockContext(pluginId: string): PluginContext {
     goBack(): void {
       goBackView()
     },
+    // Android 系统返回键：dev-shell 无系统返回概念，静默降级（回调永不触发），
+    // 保持与宿主插件 API 形状一致，避免插件在浏览器环境调用报错
+    onBackPressed() {
+      return { dispose() {} }
+    },
   }
 
   // ==================== EventAPI ====================
@@ -229,6 +234,11 @@ export function createMockContext(pluginId: string): PluginContext {
         inputValue: '/sdcard/Download/example.txt',
       })
       return value
+    },
+    // Android 11+ 分区存储的「所有文件访问权限」：浏览器环境无此概念，
+    // 恒返回 false（未授权），插件侧应展示引导 UI 而非报错，与真机行为对齐
+    async requestAllFilesAccess() {
+      return false
     },
   }
 

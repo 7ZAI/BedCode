@@ -17,6 +17,7 @@
     "network:http",
     "storage",
     "transfer",
+    "ui:back",
     "ui:route",
     "ui:settings",
     "ui:toolbox"

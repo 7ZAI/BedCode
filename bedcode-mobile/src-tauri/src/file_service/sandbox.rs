@@ -121,21 +121,46 @@ pub fn resolve_within_roots(roots: &[PathBuf], rel: &str) -> Result<PathBuf, San
         return Err(SandboxError::NoRoots);
     }
 
-    // 根别名：单段 rel 等于某 root 的最后一段时，视为浏览该 root 本身。
+    // 根别名：rel 首段等于某 root 的最后一段时，视为浏览该 root 本身。
     // 根目录列表（list path=""）以 root 最后一段作为顶层条目名，前端点击
-    // 进入会回传该名；若不解到此映射，会解析成 `root/<同名>`（不存在 → 404）
+    // 进入会回传该名；若不解到此映射，会解析成 `root/<同名>`（不存在 → 404）。
+    // 多段路径（"别名/sub"）同样剥掉别名段后在该 root 下解析——root 内存在
+    // 与基名同名的真实子目录时（"别名/别名"），剥离后恰好命中它，语义一致。
     //
-    // 歧义取舍：root 内存在与 root 基名同名的真实子目录时，解析到 root 本身
-    //（多 root 同名基名时取第一个）——与列表顶层条目语义一致，优先保证导航可达
-    if parts.len() == 1 {
+    // 歧义取舍：多 root 同名基名时取第一个（与列表顶层条目语义一致，优先保证
+    // 导航可达）；别名 root 下解析不到（不存在/逃逸）时落入下方全段循环，
+    // 兼容"该路径恰为其他 root 下的真实路径"的场景
+    if let Some(first) = parts.first() {
         for root in roots {
             let is_alias = root
                 .file_name()
-                .map(|n| n.to_string_lossy().as_ref() == parts[0])
+                .map(|n| n.to_string_lossy().as_ref() == first)
                 .unwrap_or(false);
-            if is_alias {
+            if !is_alias {
+                continue;
+            }
+            if parts.len() == 1 {
                 return Ok(root.clone());
             }
+            let mut candidate = root.clone();
+            for part in &parts[1..] {
+                candidate.push(part);
+            }
+            if !candidate.exists() {
+                break;
+            }
+            let canonical = candidate.canonicalize().map_err(|e| {
+                SandboxError::OutsideRoots(format!(
+                    "canonicalize failed for '{}': {}",
+                    candidate.display(),
+                    e
+                ))
+            })?;
+            if canonical.starts_with(root) {
+                return Ok(canonical);
+            }
+            // 逃逸 root（symlink）→ 交给下方全段循环统一报错
+            break;
         }
     }
 
@@ -195,6 +220,53 @@ pub fn resolve_upload_target_within_roots(
     }
     if roots.is_empty() {
         return Err(SandboxError::NoRoots);
+    }
+
+    // 根别名（同 resolve_within_roots）：首段为 root 基名时剥掉，在该 root 下
+    // 解析上传目标（前端回传 "别名/sub/file" 形态）。单段别名 = root 本身，
+    // 不是合法上传目标，直接拒绝；别名 root 下解析不到则落入下方全段循环
+    if let Some(first) = parts.first() {
+        for root in roots {
+            let is_alias = root
+                .file_name()
+                .map(|n| n.to_string_lossy().as_ref() == first)
+                .unwrap_or(false);
+            if !is_alias {
+                continue;
+            }
+            if parts.len() == 1 {
+                return Err(SandboxError::Traversal(
+                    "upload target must be a file path, not the mount root".to_string(),
+                ));
+            }
+            let mut candidate = root.clone();
+            for part in &parts[1..] {
+                candidate.push(part);
+            }
+
+            let (parent, file_name) = match (candidate.parent(), candidate.file_name()) {
+                (Some(p), Some(f)) => (p, f.to_owned()),
+                _ => continue,
+            };
+            if !parent.exists() || !parent.is_dir() {
+                // 别名 root 下父目录不存在 → 落入全段循环尝试其他 root
+                break;
+            }
+
+            let canonical_parent = parent.canonicalize().map_err(|e| {
+                SandboxError::OutsideRoots(format!(
+                    "canonicalize failed for parent '{}': {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+
+            if canonical_parent.starts_with(root) {
+                return Ok(canonical_parent.join(file_name));
+            }
+            // 逃逸 root（symlink）→ 交给下方全段循环统一报错
+            break;
+        }
     }
 
     let mut escape_detected = false;
@@ -316,6 +388,36 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_within_roots_root_alias_multi_segment() {
+        let (base, a, nested, _b) = make_tree();
+        let roots = normalize_roots(&[a.clone()]).unwrap();
+
+        // 前端回传 "a/nested/file.txt"（首段 "a" 是 root 基名）→ 剥别名段解析
+        let resolved = resolve_within_roots(&roots, "a/nested/file.txt").unwrap();
+        assert_eq!(resolved, a.canonicalize().unwrap().join("nested/file.txt"));
+
+        // 二级目录
+        let dir = resolve_within_roots(&roots, "a/nested").unwrap();
+        assert_eq!(dir, nested.canonicalize().unwrap());
+
+        // 不存在的二级路径 → 仍报 OutsideRoots（而非拼出 a/a/nested 误判）
+        assert!(matches!(
+            resolve_within_roots(&roots, "a/nested/nope.txt"),
+            Err(SandboxError::OutsideRoots(_))
+        ));
+
+        // root 内存在与基名同名的真实子目录："a/a/xyz.txt" 剥离别名后
+        // 恰好命中 a/a/xyz.txt，而非解析成 a/a/a/xyz.txt
+        let same = a.join("a");
+        fs::create_dir_all(&same).unwrap();
+        fs::write(same.join("xyz.txt"), b"x").unwrap();
+        let resolved = resolve_within_roots(&roots, "a/a/xyz.txt").unwrap();
+        assert_eq!(resolved, same.canonicalize().unwrap().join("xyz.txt"));
+
+        let _ = base;
+    }
+
+    #[test]
     fn test_resolve_rejects_traversal() {
         let (_base, a, _nested, _b) = make_tree();
         let roots = normalize_roots(&[a.clone()]).unwrap();
@@ -378,6 +480,29 @@ mod tests {
             ),
             "symlink escaping root must be rejected"
         );
+    }
+
+    #[test]
+    fn test_resolve_upload_target_root_alias() {
+        let (_base, a, nested, _b) = make_tree();
+        let roots = normalize_roots(&[a.clone()]).unwrap();
+
+        // 前端回传 "a/nested/new.bin"（首段是 root 基名）→ 剥别名段解析
+        let target = resolve_upload_target_within_roots(&roots, "a/nested/new.bin").unwrap();
+        assert_eq!(target, nested.canonicalize().unwrap().join("new.bin"));
+        assert!(!target.exists());
+
+        // 单段别名（root 本身）不是合法上传目标
+        assert!(matches!(
+            resolve_upload_target_within_roots(&roots, "a"),
+            Err(SandboxError::Traversal(_))
+        ));
+
+        // 别名 root 下父目录不存在 → 拒绝
+        assert!(matches!(
+            resolve_upload_target_within_roots(&roots, "a/ghost/new.bin"),
+            Err(SandboxError::OutsideRoots(_))
+        ));
     }
 
     #[test]

@@ -46,6 +46,27 @@ interface UploadHookEventPayload {
   meta: UploadRequestMeta
 }
 
+// ==================== Android 系统返回键（跨插件共享单例） ====================
+// Tauri AppPlugin 的行为：只要 JS 侧存在 back-button listener，系统返回一律转发到 JS，
+// 不再执行默认的 webview 后退/退出。故宿主只需注册一个原生 listener，向所有订阅者分发；
+// 最后一个订阅者取消时摘除原生监听，恢复默认返回行为。
+const backButtonSubscribers = new Set<(payload: { canGoBack: boolean }) => void>()
+let backButtonUnregister: (() => Promise<void>) | null = null
+
+async function ensureBackButtonListener(): Promise<void> {
+  if (backButtonUnregister) return
+  try {
+    const { onBackButtonPress } = await import('@tauri-apps/api/app')
+    const listener = await onBackButtonPress((payload) => {
+      for (const fn of backButtonSubscribers) fn(payload)
+    })
+    backButtonUnregister = () => listener.unregister()
+  } catch {
+    // 非 Tauri 环境（dev-shell 浏览器 / 单元测试）：静默降级，回调永不触发
+    backButtonUnregister = null
+  }
+}
+
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
   const disposables: Disposable[] = []
@@ -162,6 +183,22 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     goBack(): void {
       requirePermission('ui.goBack')
       getSharedModule('router').back()
+    },
+    onBackPressed(handler: (payload: { canGoBack: boolean }) => void): Disposable {
+      requirePermission('ui.onBackPressed')
+      backButtonSubscribers.add(handler)
+      void ensureBackButtonListener()
+      const disposable = {
+        dispose() {
+          backButtonSubscribers.delete(handler)
+          if (backButtonSubscribers.size === 0 && backButtonUnregister) {
+            backButtonUnregister()
+            backButtonUnregister = null
+          }
+        },
+      }
+      disposables.push(disposable)
+      return disposable
     },
   }
 
@@ -300,6 +337,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     async pickFile(): Promise<string | null> {
       requireFileservicePermission('fileService.pickFile')
       return pluginCmds.pluginPickFile(info.id)
+    },
+
+    /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下读取顶层自定义目录必需；
+     * 无运行时弹窗，跳转系统授权页）。返回当前是否已授权；非 Android 平台 reject */
+    async requestAllFilesAccess(): Promise<boolean> {
+      requireFileservicePermission('fileService.requestAllFilesAccess')
+      return pluginCmds.pluginOpenAllFilesSettings(info.id)
     },
   }
 

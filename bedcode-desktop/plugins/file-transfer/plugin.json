@@ -2,7 +2,7 @@
   "id": "com.bedcode.file-transfer",
   "name": "File Transfer",
   "version": "1.0.0",
-  "description": "内网文件传输",
+  "description": "内网文件传输：在线对端发现与切换、远程目录浏览、多任务并发传输（暂停 / 恢复 / 断点续传 / 失败重试），支持本地目录挂载供对端访问。\n使用：侧边栏「文件传输」→ 选择在线对端 → 浏览远程文件 → 加入传输队列；下载目录与并发数在设置面板调整。",
   "author": "BedCode",
   "main": "index.js",
   "sandbox": "inline",

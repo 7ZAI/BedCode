@@ -156,3 +156,12 @@ export async function pluginPickDirectory(pluginId: string): Promise<string | nu
 export async function pluginPickFile(pluginId: string): Promise<string | null> {
   return await invoke<string | null>('plugin_pick_file', { pluginId })
 }
+
+/**
+ * 查询/引导「所有文件访问权限」（Android 11+ 分区存储）
+ *
+ * 未授权时宿主跳转系统授权页；返回跳转前是否已授权。非 Android 平台 reject。
+ */
+export async function pluginOpenAllFilesSettings(pluginId: string): Promise<boolean> {
+  return await invoke<boolean>('open_all_files_settings', { pluginId })
+}

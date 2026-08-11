@@ -69,8 +69,14 @@ export default {
   'transfer.minibar.speed': '{speed}/s',
   'transfer.minibar.openQueue': '查看队列',
 
+  // ==================== 下拉刷新 ====================
+  'transfer.pull.pull': '下拉刷新',
+  'transfer.pull.ready': '释放立即刷新',
+  'transfer.pull.refreshing': '正在刷新…',
+
   // ==================== 队列 bottom sheet ====================
   'transfer.queue.title': '传输队列',
+  'transfer.queue.entry': '{count} 项任务',
   'transfer.queue.active': '{count} 传输中',
   'transfer.queue.rejectedChip': '同名被拒',
   'transfer.queue.failedChip': '失败',
@@ -82,7 +88,11 @@ export default {
   'transfer.settings.pickRoot': '选择目录',
   'transfer.settings.picking': '选择中…',
   'transfer.settings.addRootHint': '点「选择目录」用系统选择器（仅 Android 支持），或手动输入本地绝对路径',
-  'transfer.settings.scopedStorageHint': 'Android 11+ 分区存储：共享目录若在应用私有目录或媒体库之外（如存储根目录下的自定义文件夹），对端将看不到内容；请在系统设置 → 应用 → BedCode → 允许访问所有文件 中授权',
+  'transfer.settings.scopedStorageHint': 'Android 11+ 分区存储：共享目录若在应用私有目录或媒体库之外（如存储根目录下的自定义文件夹），对端将看不到内容；需授予「允许访问所有文件」权限',
+  'transfer.settings.grantAllFilesAccess': '去授权',
+  'transfer.settings.granting': '跳转中…',
+  'transfer.settings.allFilesAccessGranted': '已授予所有文件访问权限',
+  'transfer.settings.allFilesAccessUnavailable': '仅 Android 支持一键授权，请到系统设置手动开启',
   'transfer.settings.pickFailed': '无法解析所选目录，请手动输入路径',
   'transfer.settings.rootDuplicate': '该目录已在共享列表中',
   'transfer.settings.addRootFailed': '添加失败：无法挂载共享目录，请检查路径',
@@ -119,6 +129,10 @@ export default {
   'transfer.empty.emptyDirHint': '对端共享目录中还没有文件',
   'transfer.empty.notSharingHint': '请在对端设备上开启文件共享',
   'transfer.empty.unavailableHint': '对端可能已断开连接或目录被移除',
+
+  // ==================== 对端存储权限提示 ====================
+  'transfer.notice.storageAccessTitle': '对端可能未授予存储访问权限',
+  'transfer.notice.storageAccess': '共享的目录位于 Android 顶层存储，需要「所有文件访问权限」才能读取。请在手机系统设置 → 应用 → BedCode → 允许访问所有文件 中授权',
 
   // ==================== 单位 ====================
   'transfer.size.bytes': '{value} B',

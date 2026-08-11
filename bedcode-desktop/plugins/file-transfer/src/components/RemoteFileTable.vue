@@ -11,6 +11,7 @@ import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 import type { RemoteEntry } from '../types'
 import type { Crumb } from '../composables/useRemoteFs'
 import { formatBytes, formatModified } from '../utils/format'
+import FileTypeIcon from './FileTypeIcon.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -46,50 +47,6 @@ const someSelected = computed(() => {
 
 /** 当前是否根目录（面包屑仅剩根节点） */
 const isRoot = computed(() => props.breadcrumb.length <= 1)
-
-/** 文件类型 → 图标 SVG path 数据（目录/音频/视频/图片/压缩包/文档/通用） */
-const FILE_ICONS: Record<string, string> = {
-  dir: 'M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z',
-  audio: 'M9 18V5l12-2v13',
-  video: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z',
-  image: 'M4 15l4-4 5 5M20 4l-7.5 7.5M18 20l-7.5-7.5M3 3l18 18',
-  archive: 'M21 8l-9-5-9 5v8l9 5 9-5V8zM3 8l9 5 9-5M12 13v8',
-  doc: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8',
-  file: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6',
-}
-
-/** 分类 → 展示色（遵循宿主功能色，柔和区分；目录用品牌色） */
-const FILE_ICON_COLORS: Record<string, string> = {
-  dir: 'var(--color-primary)',
-  audio: 'var(--color-warning)',
-  video: 'var(--color-success)',
-  image: 'var(--color-primary)',
-  archive: 'var(--color-warning)',
-  doc: 'var(--text-secondary)',
-  file: 'var(--text-tertiary)',
-}
-
-/** 文件类型 → 分类（未知扩展名归类通用文件） */
-function fileKind(entry: RemoteEntry): string {
-  if (entry.isDir) return 'dir'
-  const name = entry.name.toLowerCase()
-  if (/\.(mp3|flac|wav|m4a|aac|ogg|wma)$/.test(name)) return 'audio'
-  if (/\.(mp4|mkv|avi|mov|wmv|flv|webm)$/.test(name)) return 'video'
-  if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|heic)$/.test(name)) return 'image'
-  if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(name)) return 'archive'
-  if (/\.(txt|md|pdf|docx?|xlsx?|pptx?)$/.test(name)) return 'doc'
-  return 'file'
-}
-
-/** 文件类型图标（目录用文件夹；其余按扩展名分类，未知归类通用文件） */
-function fileIcon(entry: RemoteEntry): string {
-  return FILE_ICONS[fileKind(entry)]
-}
-
-/** 文件类型图标展示色 */
-function fileIconColor(entry: RemoteEntry): string {
-  return FILE_ICON_COLORS[fileKind(entry)]
-}
 
 /** 双击行：目录进入，文件无操作 */
 function onRowDblClick(entry: RemoteEntry): void {
@@ -178,11 +135,8 @@ function onRowDblClick(entry: RemoteEntry): void {
             </td>
             <td>
               <div class="ft-fname">
-                <span class="ft-ico" :style="{ color: fileIconColor(entry) }">
-                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" :d="fileIcon(entry)" />
-                  </svg>
-                </span>
+                <!-- 类型图标（按扩展名匹配：音乐/视频/图片/PDF/文档等，未知回退通用文件） -->
+                <FileTypeIcon :name="entry.name" :is-dir="entry.isDir" />
                 <span class="ft-fname-text">{{ entry.name }}</span>
               </div>
             </td>

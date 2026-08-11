@@ -64,6 +64,17 @@ struct HttpResponse {
 
 // ==================== 目录列举 ====================
 
+/// 目录列举结果（条目 + 可选的存储权限提示）
+#[derive(Debug, Clone)]
+pub struct RemoteListResult {
+    /// 目录条目
+    pub entries: Vec<DirEntry>,
+    /// 非空时表示列表可能被对端存储权限过滤
+    /// （移动端未授予「所有文件访问权限」时 read_dir 静默返回空），
+    /// 透传给前端展示引导提示
+    pub notice: Option<String>,
+}
+
 /// 列举远端目录
 ///
 /// GET {base}/list?path={path}
@@ -72,7 +83,7 @@ pub fn list_remote(
     base: &str,
     auth: &str,
     path: &str,
-) -> Result<Vec<DirEntry>, String> {
+) -> Result<RemoteListResult, String> {
     let url = format!(
         "{}/list?path={}",
         base,
@@ -91,8 +102,13 @@ pub fn list_remote(
     } else {
         &body
     };
-    serde_json::from_value(entries.clone())
-        .map_err(|e| format!("list_remote: parse entries failed: {}", e))
+    let entries: Vec<DirEntry> = serde_json::from_value(entries.clone())
+        .map_err(|e| format!("list_remote: parse entries failed: {}", e))?;
+    let notice = unwrap_data(&body)
+        .get("notice")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok(RemoteListResult { entries, notice })
 }
 
 // ==================== 文件指纹 ====================
@@ -144,8 +160,9 @@ fn fingerprint_via_list(
     path: &str,
 ) -> Result<RemoteFingerprint, String> {
     let (parent, file_name) = split_parent_name(path);
-    let entries = list_remote(host, base, auth, &parent)?;
-    let entry = entries
+    let result = list_remote(host, base, auth, &parent)?;
+    let entry = result
+        .entries
         .iter()
         .find(|e| e.name == file_name)
         .ok_or_else(|| format!("file '{}' not found in list", path))?;

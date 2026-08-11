@@ -20,10 +20,11 @@
  * 经宿主 PluginViewHost 渲染（provide pluginContext），故此处直接断言非空。
  */
 import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, Disposable } from '@bedcode/plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
+import FileTypeIcon from './FileTypeIcon.vue'
 import TaskQueueSheet from './TaskQueueSheet.vue'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -34,6 +35,71 @@ const fs = useRemoteFs(context)
 
 /** 队列 bottom sheet 是否展开 */
 const queueOpen = ref(false)
+
+// ==================== 下拉刷新（与原生下拉刷新同语义） ====================
+/** 释放触发刷新的阈值（px） */
+const PULL_TRIGGER = 56
+/** 下拉最大位移（px） */
+const PULL_MAX = 96
+/** 阻尼系数：手指位移 → 指示器位移 */
+const PULL_RESISTANCE = 0.45
+
+/** 文件列表滚动容器（下拉手势作用域） */
+const scrollEl = ref<HTMLElement | null>(null)
+/** 指示器可见高度（随下拉位移变化；刷新中常驻阈值高度） */
+const pullDistance = ref(0)
+/** 下拉状态机：idle → pulling（未达阈值）/ ready（达阈值）→ refreshing → idle */
+const pullState = ref<'idle' | 'pulling' | 'ready' | 'refreshing'>('idle')
+/** 手指按住期间关闭回弹过渡（跟手），抬起后开启平滑回弹 */
+const pullingActive = ref(false)
+
+let pullStartY = 0
+
+/** 仅在容器位于顶部且非加载/刷新中时接管触摸 */
+function onPullStart(e: TouchEvent): void {
+  const el = scrollEl.value
+  if (!el || el.scrollTop > 0 || fs.loading.value || pullState.value === 'refreshing') return
+  pullingActive.value = true
+  pullStartY = e.touches[0].clientY
+}
+
+function onPullMove(e: TouchEvent): void {
+  if (!pullingActive.value) return
+  const dy = e.touches[0].clientY - pullStartY
+  if (dy <= 0) {
+    if (pullDistance.value !== 0) {
+      pullDistance.value = 0
+      pullState.value = 'idle'
+    }
+    return
+  }
+  pullDistance.value = Math.min(dy * PULL_RESISTANCE, PULL_MAX)
+  pullState.value = pullDistance.value >= PULL_TRIGGER ? 'ready' : 'pulling'
+}
+
+function onPullEnd(): void {
+  if (!pullingActive.value) return
+  pullingActive.value = false
+  if (pullState.value === 'ready') {
+    // 释放刷新：指示器常驻刷新态，目录加载完成后回弹
+    pullState.value = 'refreshing'
+    pullDistance.value = PULL_TRIGGER
+    void fs.refresh().finally(() => {
+      pullState.value = 'idle'
+      pullDistance.value = 0
+    })
+  } else {
+    pullState.value = 'idle'
+    pullDistance.value = 0
+  }
+}
+
+/**
+ * 系统返回拦截：队列面板 → 先关闭面板；目录栈内 → 逐级返回上级目录；
+ * 根目录 → 恢复默认后退（退出页面回上一页）。
+ * 经宿主 ui.onBackPressed 注册（Tauri AppPlugin 将 Android 系统返回转发到 JS）。
+ */
+let disposeBackPress: Disposable | null = null
 
 /** 对端展示名（实际名字或未连接文案） */
 const peerLabel = computed(() => tasks.displayPeerName.value)
@@ -65,6 +131,7 @@ const emptyKind = computed<EmptyKind>(() => {
 
 /** 空态主标题（按场景区分，避免无差别展示「此目录为空」） */
 const emptyTitle = computed(() => {
+  if (fs.notice.value) return t('transfer.notice.storageAccessTitle')
   switch (emptyKind.value) {
     case 'error': return t('transfer.table.dirUnavailable')
     case 'notSharing': return t('transfer.peer.notSharing')
@@ -74,6 +141,7 @@ const emptyTitle = computed(() => {
 
 /** 空态说明文案（引导用户下一步操作） */
 const emptyHint = computed(() => {
+  if (fs.notice.value) return t('transfer.notice.storageAccess')
   switch (emptyKind.value) {
     case 'error': return t('transfer.empty.unavailableHint')
     case 'notSharing': return t('transfer.empty.notSharingHint')
@@ -143,10 +211,11 @@ function onRowTap(entry: { name: string; isDir: boolean }): void {
   }
 }
 
-/** 批量下载勾选文件 */
+/** 批量下载勾选文件（remotePath 拼接当前目录路径，与桌面端 handleDownload 对齐） */
 async function downloadSelected(): Promise<void> {
   if (!tasks.peerOnline.value) return
-  const paths = fs.selectedFiles.value
+  const base = fs.currentPath.value
+  const paths = fs.selectedFiles.value.map(name => (base ? `${base}/${name}` : name))
   if (paths.length === 0) return
   const ok = await tasks.enqueueDownload(paths, {
     id: tasks.peerId.value,
@@ -206,6 +275,17 @@ watch(
 
 onMounted(() => {
   tasks.start()
+  disposeBackPress = context.ui.onBackPressed(({ canGoBack }) => {
+    if (queueOpen.value) {
+      queueOpen.value = false
+      return
+    }
+    if (fs.crumbs.value.length > 0) {
+      void fs.up()
+      return
+    }
+    if (canGoBack) history.back()
+  })
   if (tasks.peerOnline.value) {
     // 对端已就绪（视图挂载晚于事件）：直接加载
     void fs.load('')
@@ -217,6 +297,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposeBackPress?.dispose()
   tasks.stop()
 })
 </script>
@@ -284,7 +365,36 @@ onUnmounted(() => {
     </div>
 
     <!-- 文件列表：滚动容器（空态/加载态在可视区内垂直居中，列表态顶部对齐） -->
-    <div class="flex-1 overflow-y-auto min-h-0 overscroll-behavior-none">
+    <div
+      ref="scrollEl"
+      class="flex-1 overflow-y-auto min-h-0 overscroll-behavior-none"
+      @touchstart.passive="onPullStart"
+      @touchmove.passive="onPullMove"
+      @touchend="onPullEnd"
+      @touchcancel="onPullEnd"
+    >
+      <!-- 下拉刷新指示器：下拉时随位移露出；刷新中常驻直至加载完成 -->
+      <div
+        class="ft-pull"
+        :class="{ 'ft-pull-anim': !pullingActive }"
+        :style="{ height: pullDistance + 'px' }"
+      >
+        <span v-if="pullState === 'refreshing'" class="ft-spinner ft-pull-spinner"></span>
+        <svg
+          v-else
+          class="ft-pull-arrow"
+          :class="{ 'ft-pull-arrow--ready': pullState === 'ready' }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        </svg>
+        <span class="ft-pull-text">
+          {{ pullState === 'ready' ? t('transfer.pull.ready') : pullState === 'refreshing' ? t('transfer.pull.refreshing') : t('transfer.pull.pull') }}
+        </span>
+      </div>
+
       <!-- min-h-full + flex-col：空态/加载态在可视区内垂直居中，列表态保持顶部对齐 -->
       <div class="px-4 min-h-full flex flex-col">
         <!-- 加载态：扁平细线 spinner + 文案 -->
@@ -320,37 +430,20 @@ onUnmounted(() => {
             v-for="(entry, idx) in fs.entries.value"
             :key="entry.name"
             class="group-row group-row-btn"
-            :class="{ 'ft-row-last': idx === fs.entries.value.length - 1 }"
+            :class="{
+              'ft-row-last': idx === fs.entries.value.length - 1,
+              'ft-row-selected': !entry.isDir && fs.selected.value.has(entry.name),
+            }"
             @click="onRowTap(entry)"
           >
-            <!-- 类型图标 -->
-            <span
-              class="icon-chip flex-shrink-0"
-              :class="entry.isDir ? 'chip-cyan' : 'chip-zinc'"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  v-if="entry.isDir"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-                />
-                <path
-                  v-else
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-                />
-              </svg>
-            </span>
+            <!-- 类型图标（按扩展名匹配：音乐/视频/图片/PDF/文档等，未知回退通用文件） -->
+            <FileTypeIcon :name="entry.name" :is-dir="entry.isDir" />
 
-            <!-- 名称 + 元信息 -->
+            <!-- 名称 + 元信息（目录无元信息行，仅文件显示大小） -->
             <div class="flex-1 min-w-0">
               <p class="group-row-title truncate">{{ entry.name }}</p>
-              <p class="group-row-sub mt-0.5 truncate">
-                {{ entry.isDir ? '—' : formatBytes(entry.size, t) }}
+              <p v-if="!entry.isDir" class="group-row-sub mt-0.5 truncate">
+                {{ formatBytes(entry.size, t) }}
               </p>
             </div>
 
@@ -395,7 +488,7 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <!-- 迷你传输条 -->
+      <!-- 迷你传输条：活跃任务显示进度；空闲时显示队列入口（常驻，保证队列始终可达） -->
       <button
         v-if="primaryTask"
         class="w-full flex items-center gap-3 px-4 py-2.5 active:bg-[var(--mobile-bg-tertiary)] transition-colors"
@@ -420,6 +513,23 @@ onUnmounted(() => {
             ></div>
           </div>
         </div>
+        <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+
+      <!-- 空闲态队列入口：无活跃任务时保持可进入传输队列（含历史/暂停/失败任务） -->
+      <button
+        v-else
+        class="w-full flex items-center gap-3 px-4 py-2.5 active:bg-[var(--mobile-bg-tertiary)] transition-colors"
+        @click="queueOpen = true"
+      >
+        <svg class="w-5 h-5 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
+        </svg>
+        <span class="flex-1 min-w-0 text-left truncate ft-mini-text text-[var(--mobile-text-primary)]">
+          {{ tasks.tasks.value.length > 0 ? t('transfer.queue.entry', { count: tasks.tasks.value.length }) : t('transfer.minibar.noActive') }}
+        </span>
         <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
         </svg>
@@ -512,6 +622,52 @@ onUnmounted(() => {
   background: var(--mobile-accent);
   border-color: var(--mobile-accent);
   color: var(--mobile-text-on-accent);
+}
+
+/* 多选勾选行底色：accent 8% tint（与勾选框同色系）；按压反馈 :active 优先级更高，不冲突 */
+.ft-row-selected {
+  background: color-mix(in srgb, var(--mobile-accent) 8%, transparent);
+}
+
+/* ==================== 下拉刷新 ==================== */
+/* 指示器：贴滚动容器顶部，高度随下拉位移露出（内容整体下移，与原生下拉同语义） */
+.ft-pull {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  overflow: hidden;
+  color: var(--mobile-text-secondary);
+}
+
+/* 回弹过渡：仅在不跟手（手指抬起后 / 刷新结束）时启用 */
+.ft-pull-anim {
+  transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ft-pull-arrow {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+/* 达阈值：箭头翻转提示「释放立即刷新」 */
+.ft-pull-arrow--ready {
+  transform: rotate(180deg);
+  color: var(--mobile-accent);
+}
+
+.ft-pull-text {
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+}
+
+/* 刷新中小号 spinner（复用全局 .ft-spinner 圆环，缩小尺寸） */
+.ft-pull-spinner {
+  width: 1.125rem;
+  height: 1.125rem;
+  border-width: 2px;
+  flex-shrink: 0;
 }
 
 /* 顶栏操作按钮（上传 / 设置）：纯图标（无圆形底），置于行尾。

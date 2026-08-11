@@ -24,6 +24,8 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
   const loading = ref(false)
   /** 目录不可用时的 i18n key（空 = 无错误） */
   const errorKey = ref('')
+  /** 对端存储权限提示（列表为空且可能被分区存储过滤时由对端服务器置位） */
+  const notice = ref<string | null>(null)
   /** 面包屑栈（首个为根节点） */
   const breadcrumb = ref<Crumb[]>([{ name: 'transfer.breadcrumb.home', path: '' }]) as Ref<Crumb[]>
   /** 已选文件名（相对当前目录） */
@@ -55,7 +57,9 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
         path: target,
       })
       if (seq !== busySeq) return
+      // 兼容旧对端裸数组响应（新响应为 { entries, notice }）
       const arr = Array.isArray(data) ? data : (data?.entries ?? [])
+      notice.value = Array.isArray(data) ? null : (data?.notice ?? null)
       entries.value = arr.map((e: any) => ({
         name: e.name,
         size: e.size ?? 0,
@@ -69,6 +73,7 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
     } catch (e) {
       if (seq !== busySeq) return
       entries.value = []
+      notice.value = null
       errorKey.value = 'transfer.error.dirUnavailable'
       console.error(`[File Transfer] list-remote FAILED: path='${target}'`, e)
     } finally {
@@ -129,6 +134,7 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
     entries,
     loading,
     errorKey,
+    notice,
     breadcrumb,
     selectedNames,
     currentPath,

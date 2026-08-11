@@ -15,6 +15,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ui:settings': ['ui.registerSettingsSection'],
   'ui:input': ['ui.registerTerminalToolbarItem'],
   'ui:route': ['ui.registerRoute', 'ui.openPage', 'ui.goBack'],
+  'ui:back': ['ui.onBackPressed'],
   'network:http': ['http.registerEndpoint'],
   'storage': ['storage.get', 'storage.set', 'storage.delete'],
   'fs:read': ['fs.read', 'fs.copy'],
@@ -27,6 +28,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
     'fileService.getPeer',
     'fileService.pickDirectory',
     'fileService.pickFile',
+    'fileService.requestAllFilesAccess',
   ],
   // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   'transfer': [],
