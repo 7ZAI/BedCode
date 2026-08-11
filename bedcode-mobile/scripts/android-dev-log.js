@@ -7,7 +7,7 @@
  * 等价于 `npm run tauri:android:dev 2>&1 | tee ...`，跨平台（Windows cmd 无 tee）。
  *
  * 用法：npm run tauri:android:dev:log
- * 日志目录：bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log（UTC 日期，与设备日志一致）
+ * 日志目录：bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log（本地日期，与设备日志日期线一致）
  */
 import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync } from 'node:fs'
@@ -19,9 +19,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const LOG_DIR = join(__dirname, '..', '.dev-logs')
 mkdirSync(LOG_DIR, { recursive: true })
 
-// 按天轮转（UTC 日期与设备端 runtime.*.log 的日期线对齐）
-const logFile = join(LOG_DIR, `android-dev.${new Date().toISOString().slice(0, 10)}.log`)
-// flags 'w'：每次启动清空当天日志文件，保证一次 dev 会话从头开始可查（跨天仍按 UTC 轮转新文件）
+// 按天轮转。注意用本地日期：toISOString() 是 UTC，UTC+8 凌晨 0–7 点会
+// 把日志落进「昨天」的文件（设备 logcat 时间是本地时间，文件却少一天）。
+// 与桌面端 runtime.*.log（tracing_appender 用 UTC 命名）不同，此处以设备
+// 日志的本地日期线对齐，凌晨跨天时会按本地日期换新文件。
+const now = new Date()
+const localDate = [
+  now.getFullYear(),
+  String(now.getMonth() + 1).padStart(2, '0'),
+  String(now.getDate()).padStart(2, '0'),
+].join('-')
+const logFile = join(LOG_DIR, `android-dev.${localDate}.log`)
+// flags 'w'：每次启动清空当天日志文件，保证一次 dev 会话从头开始可查（跨天仍按本地日期轮转新文件）
 const stream = createWriteStream(logFile, { flags: 'w' })
 
 // stdout / stderr 是两条独立字节流，需各自维护解码状态，
