@@ -3,7 +3,7 @@
     <Transition name="splash">
       <div
         v-if="visible"
-        class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-dark-900"
+        class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-dark-900"
       >
         <!-- Logo -->
         <div class="mb-8">

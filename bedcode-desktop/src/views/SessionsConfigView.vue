@@ -309,16 +309,18 @@
       </template>
     </Modal>
 
-    <!-- 操作中遮罩 -->
-    <div v-if="isOperating" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-6 py-5 flex items-center gap-3">
-        <svg class="w-4 h-4 animate-spin text-[var(--text-secondary)]" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v2a6 6 0 00-6 6H4z"></path>
-        </svg>
-        <p class="wb-mono text-xs text-[var(--text-primary)]">{{ operatingMessage }}</p>
+    <!-- 操作中遮罩（Teleport：同 Modal 约定，避免父容器 overflow/transform 裁剪） -->
+    <Teleport to="body">
+      <div v-if="isOperating" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+        <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-6 py-5 flex items-center gap-3">
+          <svg class="w-4 h-4 animate-spin text-[var(--text-secondary)]" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v2a6 6 0 00-6 6H4z"></path>
+          </svg>
+          <p class="wb-mono text-xs text-[var(--text-primary)]">{{ operatingMessage }}</p>
+        </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 

@@ -151,14 +151,13 @@
                 <div
                   v-for="row in getDetailRows(plugin)"
                   :key="row.key"
-                  class="grid py-2 border-b border-[var(--border)] last:border-b-0"
-                  style="grid-template-columns: 80px 1fr"
+                  class="grid grid-cols-[80px_1fr] py-2 border-b border-[var(--border)] last:border-b-0"
                 >
                   <span class="text-[var(--text-tertiary)]">{{ row.label }}</span>
-                  <span class="break-all" :class="row.mono ? 'wb-mono' : ''" style="color: var(--text-secondary)">{{ row.value }}</span>
+                  <span class="break-all text-[var(--text-secondary)]" :class="row.mono ? 'wb-mono' : ''">{{ row.value }}</span>
                 </div>
                 <!-- 扩展路径 + 复制 -->
-                <div class="grid py-2" style="grid-template-columns: 80px 1fr">
+                <div class="grid grid-cols-[80px_1fr] py-2">
                   <span class="text-[var(--text-tertiary)]">{{ $t('desktop.plugin.copyPath') }}</span>
                   <div class="flex items-center gap-2 min-w-0">
                     <code class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] bg-[var(--bg-hover)] px-2 py-1 rounded-[4px] truncate">{{ plugin.extensionPath }}</code>
