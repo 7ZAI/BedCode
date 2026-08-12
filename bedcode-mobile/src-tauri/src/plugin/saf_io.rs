@@ -21,7 +21,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// SAF 目录树条目（Kotlin listTreeChildren 返回，wire 为 camelCase）
+///
+/// serde camelCase：经 Tauri command 返回前端，字段名必须匹配 SDK SafEntry
+/// 契约（isDir/documentId）——此前缺 rename 导致 is_dir/document_id 序列化为
+/// snake_case，前端 isDir/documentId 恒 undefined：目录被当文件（图标全
+/// fallback 为通用文件图标）、子目录无法进入
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SafEntry {
     /// 条目名
     pub name: String,
@@ -39,6 +45,7 @@ pub struct SafEntry {
 
 /// 中转复制启动结果
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SafCopyHandle {
     /// 复制句柄 id（copy_status / cancel_copy 用）
     pub copy_id: String,
@@ -48,6 +55,7 @@ pub struct SafCopyHandle {
 
 /// 中转复制进度快照
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SafCopyStatus {
     /// 复制句柄 id
     pub copy_id: String,
@@ -67,6 +75,7 @@ pub struct SafCopyStatus {
 
 /// SAF 流直传句柄（M3：上传 SAF 流直传的 Kotlin safOpen 返回）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SafStreamHandle {
     /// 句柄 id（safRead/safSeek/safClose 用；任务内重连复用同一句柄）
     pub handle_id: String,
@@ -518,6 +527,27 @@ pub fn parse_save_to_document_response(value: &serde_json::Value) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 契约：SafEntry 序列化必须为 camelCase（前端 SDK SafEntry 期望
+    /// isDir/documentId）——缺 rename 时 is_dir/document_id 泄漏为 snake_case，
+    /// 目录被当文件（图标全 fallback）、子目录无法进入（回归防护）
+    #[test]
+    fn saf_entry_serializes_camel_case() {
+        let e = SafEntry {
+            name: "photo.jpg".to_string(),
+            is_dir: false,
+            size: 10,
+            mime: "image/jpeg".to_string(),
+            uri: "content://x".to_string(),
+            document_id: "primary:DCIM".to_string(),
+        };
+        let json = serde_json::to_value(&e).unwrap();
+        assert!(json.get("isDir").is_some(), "missing isDir");
+        assert!(json.get("documentId").is_some(), "missing documentId");
+        assert!(json.get("is_dir").is_none(), "snake_case leaked");
+        assert!(json.get("document_id").is_none(), "snake_case leaked");
+        assert_eq!(json["name"], "photo.jpg");
+    }
 
     /// fake 实现：记录调用并返回固定结果（编排逻辑测试注入用）
     struct FakeSafIo {
