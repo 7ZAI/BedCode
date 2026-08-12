@@ -39,7 +39,8 @@
                 class="xterm-container"
                 :style="xtermContainerStyle"
               ></div>
-              <div class="scrollbar-track">
+              <!-- TUI 模式下隐藏滚动条：alt buffer 无 scrollback，全满 thumb 是误导 -->
+              <div v-if="!isTuiMode" class="scrollbar-track">
                 <div
                   class="scrollbar-thumb"
                   :class="{ visible: scrollbarVisible }"
@@ -177,6 +178,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
+import { useTuiCompat } from '@/composables/useTuiCompat'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import TerminalHeader from '@/components/TerminalHeader.vue'
 import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
@@ -267,6 +269,12 @@ const confirmModalStyle = computed(() => ({
   paddingBottom: `${safeArea.value.bottom}px`,
 }))
 
+// ==================== TUI 兼容 ====================
+// TUI 模式（alt screen + SGR 鼠标上报）下手势转滚轮事件转发给应用内部滚动；
+// 由 useTuiCompat 持有检测/发送，useTerminalScroll 仅注入模式门控分流
+
+const { isTuiMode, attach: attachTuiCompat, feedOutput: feedTuiOutput, sendWheel: sendTuiWheel, dispose: disposeTuiCompat } = useTuiCompat(sessionId.value)
+
 // ==================== Terminal Scroll ====================
 
 const {
@@ -291,7 +299,7 @@ const {
   dispose: disposeScroll,
   longPressTriggerPos,
   selectionViewportRange,
-} = useTerminalScroll(terminalRef, scrollContainer)
+} = useTerminalScroll(terminalRef, scrollContainer, { isTuiMode, sendWheel: sendTuiWheel })
 
 // ==================== Computed ====================
 
@@ -584,7 +592,10 @@ async function initTerminal() {
 
   // 注册实时 handler — 历史回放（订阅后服务端流式送达）与实时推送同通道，
   // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹仅 WebGL 模式启用）
-  registerRealtimeHandler(sessionId.value, term, webglActive)
+  registerRealtimeHandler(sessionId.value, term, webglActive, feedTuiOutput)
+
+  // TUI 兼容：挂接 onWriteParsed 检测备用屏幕（与嗅探器构成双条件门控）
+  attachTuiCompat(term)
 
   // 延迟 fit + 触摸滚动接管：等待 xterm 完成首帧布局，
   // 触摸监听挂到 viewport 上，需其在 DOM 中就绪
@@ -634,6 +645,7 @@ function disposeTerminal() {
     unregisterRealtimeHandler(sessionId.value)
   }
 
+  disposeTuiCompat()
   disposeScroll()
 
   if (terminalRef.value) {

@@ -26,6 +26,20 @@ _Avoid_: 「特殊键内容」（与 Special Key 冲突）
 UI 工具栏主动发出的成型按键组合（`KeyCombo`，如 Ctrl+C 按钮、方向键按钮）；走独立的 `send_special_key` 通道。
 _Avoid_: 控制字符、「快捷键」（指字节流中的按键时）
 
+### 终端滚动 (Terminal Scrolling)
+
+**TUI 应用 (TUI App)**:
+进入终端备用屏幕、视口滚动由应用自身管理（而非终端 scrollback）的全屏交互式程序，如 opencode、vim、htop。移动端对其提供滚动兼容转发，与普通 CLI 的 scrollback 滚动行为不同。
+_Avoid_: 全屏应用、交互式应用
+
+**备用屏幕 (Alternate Screen)**:
+终端中与主缓冲区互斥的显示区；TUI 应用在其上整体重绘，内容不进入终端 scrollback，故移动端无法用缓冲区滚动查看其历史。
+_Avoid_: 全屏模式、TUI 屏幕
+
+**应用内滚动 (In-app Scroll)**:
+TUI 应用内部的视口移动，由应用自行维护；终端只负责把用户的滚动意图（SGR 滚轮事件）转发给应用。
+_Avoid_: TUI 滚动（歧义）、内部滚动（泛称）
+
 ### 插件 (Plugin)
 
 **启用 (Enabled)**:

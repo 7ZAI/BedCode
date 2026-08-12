@@ -21,9 +21,20 @@ const LONG_PRESS_DURATION = 500
 /// 长按移动容差（像素）
 const LONG_PRESS_MOVE_THRESHOLD = 10
 
+/**
+ * 触摸滚动行为注入（TUI 兼容）：TUI 模式下手势提交改为发送 SGR 滚轮事件
+ */
+export interface TuiScrollCompat {
+  /** TUI 模式门控（useTuiCompat.isTuiMode） */
+  isTuiMode: Ref<boolean>
+  /** 提交滚轮事件：deltaLines > 0 向下查看（手指上滑），col/row 为 1-based 终端格坐标 */
+  sendWheel(deltaLines: number, col: number, row: number): void
+}
+
 export function useTerminalScroll(
   terminalRef: Ref<Terminal | null>,
   scrollContainerRef: Ref<HTMLDivElement | null>,
+  tuiCompat?: TuiScrollCompat,
 ) {
   const toast = useToast()
 
@@ -47,6 +58,7 @@ export function useTerminalScroll(
     startY: 0,
     startLine: 0,
     lastY: 0,
+    lastX: 0,
     lastTime: 0,
     velocity: 0,
     fractionalLine: 0,
@@ -224,6 +236,33 @@ export function useTerminalScroll(
     showScrollbar()
   }
 
+  /**
+   * 触摸位置 → 终端格坐标（1-based，clamp 到 cols/rows）。
+   * 供 TUI 模式滚轮序列使用；非 TUI 模式不受影响
+   */
+  function touchToCell(clientX: number, clientY: number): { col: number; row: number } {
+    const term = terminalRef.value
+    if (!term?.element || cellHeight.value <= 0) return { col: 1, row: 1 }
+    const viewport = term.element.querySelector('.xterm-viewport') as HTMLElement
+    if (!viewport) return { col: 1, row: 1 }
+    const rect = viewport.getBoundingClientRect()
+    const cellWidth = term.cols > 0 ? rect.width / term.cols : 8
+    const col = Math.max(1, Math.min(Math.floor((clientX - rect.left) / cellWidth) + 1, term.cols))
+    const row = Math.max(1, Math.min(Math.floor((clientY - rect.top) / cellHeight.value) + 1, term.rows))
+    return { col, row }
+  }
+
+  /** 手势提交：TUI 模式转滚轮事件，否则滚动 xterm 缓冲区 */
+  function commitGesture(deltaLines: number, clientX: number, clientY: number) {
+    if (tuiCompat?.isTuiMode.value) {
+      const cell = touchToCell(clientX, clientY)
+      tuiCompat.sendWheel(deltaLines, cell.col, cell.row)
+      return
+    }
+    isUserScrolling.value = true
+    syncViewportToLine(currentLine.value + deltaLines)
+  }
+
   function showScrollbar() {
     scrollbarVisible.value = true
     if (touchState.hideTimer) {
@@ -281,6 +320,7 @@ export function useTerminalScroll(
     touchState.startY = touch.clientY
     touchState.startLine = currentLine.value
     touchState.lastY = touch.clientY
+    touchState.lastX = touch.clientX
     touchState.lastTime = Date.now()
     touchState.velocity = 0
     touchState.fractionalLine = 0
@@ -327,6 +367,7 @@ export function useTerminalScroll(
     }
 
     touchState.lastY = touch.clientY
+    touchState.lastX = touch.clientX
     touchState.lastTime = Date.now()
 
     const rawLines = -deltaY / cellHeight.value
@@ -339,9 +380,8 @@ export function useTerminalScroll(
     }
 
     touchState.fractionalLine = totalLines - linesDelta
-    const newLine = currentLine.value + linesDelta
-    isUserScrolling.value = true
-    syncViewportToLine(newLine)
+    // TUI 模式下不设置 isUserScrolling（滚动条隐藏、底部按钮不显示）
+    commitGesture(linesDelta, touch.clientX, touch.clientY)
   }
 
   function onTouchEnd() {
@@ -418,9 +458,9 @@ export function useTerminalScroll(
 
       if (linesPerFrame !== 0) {
         touchState.fractionalLine = totalLines - linesPerFrame
-        // 直接更新滚动目标行，不立即调用 scrollToLine
-        // syncViewportToLine 内部的 rAF 节流确保每帧最多执行一次 scrollToLine
-        syncViewportToLine(currentLine.value + linesPerFrame)
+        // TUI 模式下惯性转为滚轮事件（坐标用最后触摸位置），
+        // 否则滚动 xterm 缓冲区（syncViewportToLine 内部 rAF 节流每帧至多一次）
+        commitGesture(linesPerFrame, touchState.lastX, touchState.lastY)
       } else {
         touchState.fractionalLine = totalLines
       }
@@ -701,6 +741,8 @@ export function useTerminalScroll(
 
     currentLine.value = 0
     cellHeight.value = 0
+    touchState.lastX = 0
+    touchState.lastY = 0
 
     if (longPressTimer.value) {
       clearTimeout(longPressTimer.value)

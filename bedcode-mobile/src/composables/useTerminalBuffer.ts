@@ -44,11 +44,18 @@ export function useTerminalBuffer() {
    * @param terminal - xterm Terminal 实例
    * @param wrapSyncOutput - 是否用 DEC 2026 包裹每次写入（仅 WebGL 渲染器需要；
    *   DOM 渲染器默认关闭，避免与 TUI 应用自身 2026 序列嵌套导致闪烁）
+   * @param onRawOutput - 原始输出字节钩子（合并前、写入前调用，供 TUI 兼容嗅探）
    */
-  function registerRealtimeHandler(sessionId: string, terminal: Terminal, wrapSyncOutput = false) {
+  function registerRealtimeHandler(
+    sessionId: string,
+    terminal: Terminal,
+    wrapSyncOutput = false,
+    onRawOutput?: (data: Uint8Array) => void,
+  ) {
     const writeCoalescer = createWriteCoalescer(terminal, { wrapSyncOutput })
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
+        onRawOutput?.(data)
         writeCoalescer(data)
       },
       onClear: () => {
