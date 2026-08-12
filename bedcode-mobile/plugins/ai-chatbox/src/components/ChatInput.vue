@@ -21,6 +21,7 @@
         :model-value="modelValue"
         :options="modelOptions"
         size="sm"
+        placement="top"
         :placeholder="t('mobile.plugin.aiChatbox.model')"
         class="max-w-[10.5rem]"
         @update:model-value="emit('update:modelValue', String($event))"

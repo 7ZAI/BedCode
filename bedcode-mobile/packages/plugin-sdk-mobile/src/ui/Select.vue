@@ -109,12 +109,15 @@ export interface Props {
   error?: string
   /** md：宿主表单默认（44px/14px）；sm：插件紧凑布局（36px/12px） */
   size?: 'md' | 'sm'
+  /** 面板弹出方向：auto=空间不足自动向上（默认）；top/bottom=固定方向（输入栏等贴底场景用 top） */
+  placement?: 'auto' | 'top' | 'bottom'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   disabled: false,
   required: false,
   size: 'md',
+  placement: 'auto',
 })
 
 const emit = defineEmits(['update:modelValue', 'open'])
@@ -147,8 +150,11 @@ function computePosition() {
   if (!trigger || !panel) return
   const rect = trigger.getBoundingClientRect()
   const panelHeight = panel.offsetHeight
-  // 下方空间不足时向上展开，避免面板超出视口底部（移动端小屏常见）
-  const openUpward = rect.bottom + PANEL_GAP + panelHeight > window.innerHeight
+  // 下方空间不足时向上展开，避免面板超出视口底部（移动端小屏常见）；
+  // placement 显式指定时优先：输入栏贴容器底部等场景固定向上，不受视口高度误判影响
+  const openUpward =
+    props.placement === 'top' ||
+    (props.placement === 'auto' && rect.bottom + PANEL_GAP + panelHeight > window.innerHeight)
   const top = openUpward
     ? Math.max(PANEL_GAP, rect.top - panelHeight - PANEL_GAP)
     : rect.bottom + PANEL_GAP
