@@ -19,8 +19,6 @@ pub struct ConversationMeta {
     pub provider_id: String,
     pub provider_name: String,
     pub model: String,
-    #[serde(default)]
-    pub system_prompt: String,
 }
 
 /// token 用量（流结束时由宿主 usage 透传携带）
@@ -256,7 +254,6 @@ fn meta_json_line(conv: &ConversationMeta) -> anyhow::Result<String> {
         "providerId": conv.provider_id,
         "providerName": conv.provider_name,
         "model": conv.model,
-        "systemPrompt": conv.system_prompt,
     }))
     .map_err(|e| anyhow::anyhow!("failed to serialize conversation meta: {}", e))
 }
@@ -369,7 +366,6 @@ mod tests {
             provider_id: "p1".to_string(),
             provider_name: "DeepSeek".to_string(),
             model: "deepseek-chat".to_string(),
-            system_prompt: String::new(),
         }
     }
 

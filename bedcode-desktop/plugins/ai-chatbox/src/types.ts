@@ -46,7 +46,6 @@ export interface ConversationMeta {
   providerId: string
   providerName: string
   model: string
-  systemPrompt: string
 }
 
 /** 预设模板 id（与 src/assets/providers/ 下品牌图标一一对应） */

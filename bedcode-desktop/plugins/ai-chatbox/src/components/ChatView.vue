@@ -47,13 +47,6 @@
             >
               {{ currentTitle }}
             </span>
-            <span
-              v-if="currentConversation?.systemPrompt"
-              class="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-hover)] text-[var(--text-tertiary)]"
-              :title="t('desktop.plugin.aiChatbox.systemPrompt')"
-            >
-              {{ t('desktop.plugin.aiChatbox.systemPromptOn') }}
-            </span>
           </div>
           <div class="flex items-center gap-2">
             <Select
@@ -67,19 +60,6 @@
             <button
               v-if="hasProvider"
               class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0"
-              :title="t('desktop.plugin.aiChatbox.systemPrompt')"
-              @click="showSystemPromptEditor = !showSystemPromptEditor"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2v6h6" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 13H8" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 17H8" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9H8" />
-              </svg>
-            </button>
-            <button
-              class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0"
               :title="t('desktop.plugin.aiChatbox.providerConfig')"
               @click="showConfigPage = true"
             >
@@ -90,44 +70,6 @@
             </button>
           </div>
         </header>
-
-        <!-- system prompt 编辑器（内联面板） -->
-        <div
-          v-if="showSystemPromptEditor"
-          class="px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-card)]"
-        >
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-medium text-[var(--text-secondary)]">
-              {{ t('desktop.plugin.aiChatbox.systemPrompt') }}
-            </span>
-            <button
-              class="text-xs text-[var(--color-primary)] hover:underline"
-              @click="clearSystemPrompt"
-            >
-              {{ t('desktop.plugin.aiChatbox.clear') }}
-            </button>
-          </div>
-          <textarea
-            v-model="systemPromptDraft"
-            rows="3"
-            class="w-full px-3 py-2 text-sm bg-[var(--bg-input)] text-[var(--text-primary)] border border-[var(--border-input)] rounded-input placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-brand transition-colors"
-            :placeholder="t('desktop.plugin.aiChatbox.systemPromptPlaceholder')"
-          ></textarea>
-          <div class="flex justify-end gap-2 mt-2">
-            <button
-              class="px-3 h-7 text-xs rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors"
-              @click="showSystemPromptEditor = false"
-            >
-              {{ t('desktop.plugin.aiChatbox.cancel') }}
-            </button>
-            <button
-              class="px-3 h-7 text-xs rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:bg-brand-hover transition-colors"
-              @click="applySystemPrompt"
-            >
-              {{ t('desktop.plugin.aiChatbox.save') }}
-            </button>
-          </div>
-        </div>
 
         <!-- 未配置供应商 -->
         <div v-if="!hasProvider" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
@@ -283,13 +225,10 @@ const {
   stopGeneration,
   regenerate,
   switchConversation,
-  setSystemPrompt,
 } = chat
 
 const messagesContainer = ref<HTMLElement | null>(null)
 const showConfigPage = ref(false)
-const showSystemPromptEditor = ref(false)
-const systemPromptDraft = ref('')
 const dismissedError = ref('')
 
 /** 对话列表折叠态（persist 到插件 storage，跨会话记忆） */
@@ -377,16 +316,6 @@ async function onDeleteMessage(msg: ChatMessageType): Promise<void> {
 
 function dismissError(): void {
   dismissedError.value = lastError.value
-}
-
-async function applySystemPrompt(): Promise<void> {
-  await setSystemPrompt(systemPromptDraft.value)
-  showSystemPromptEditor.value = false
-}
-
-async function clearSystemPrompt(): Promise<void> {
-  systemPromptDraft.value = ''
-  await setSystemPrompt('')
 }
 
 // 自动滚动到底部（reasoning 流写入时正文可能仍为空，须一并跟踪才能跟上思考期增长）

@@ -80,9 +80,6 @@ const HOST_KEYS_ZH = {
         testConnection: '测试连接',
         testing: '测试中...',
         testOk: '连接正常',
-        systemPrompt: '对话指令 (System Prompt)',
-        systemPromptOn: '指令已启用',
-        systemPromptPlaceholder: '为该对话设置专属指令（可选）...',
         clear: '清空',
         cancel: '取消',
         contextLimitExceeded: '超出上下文长度，请新建对话',
@@ -161,9 +158,6 @@ const HOST_KEYS_EN = {
         testConnection: 'Test Connection',
         testing: 'Testing...',
         testOk: 'Connection OK',
-        systemPrompt: 'System Prompt',
-        systemPromptOn: 'Prompt active',
-        systemPromptPlaceholder: 'Set a custom instruction for this conversation (optional)...',
         clear: 'Clear',
         cancel: 'Cancel',
         contextLimitExceeded: 'Context length exceeded — start a new conversation',
@@ -195,7 +189,6 @@ interface MockConversation {
   providerId: string
   providerName: string
   model: string
-  systemPrompt: string
 }
 
 /** 预置供应商（写入 storage，useAiConfig.loadConfig 读取） */
@@ -230,7 +223,6 @@ const seedConversations: MockConversation[] = [
     providerId: 'prov-deepseek',
     providerName: 'DeepSeek',
     model: 'deepseek-chat',
-    systemPrompt: '',
   },
   {
     id: 'conv-vue3-composables',
@@ -240,7 +232,6 @@ const seedConversations: MockConversation[] = [
     providerId: 'prov-qwen',
     providerName: '通义千问 (Qwen)',
     model: 'qwen-plus',
-    systemPrompt: '你是资深前端架构师，回答请附示例代码。',
   },
   {
     id: 'conv-weather-widget',
@@ -250,7 +241,6 @@ const seedConversations: MockConversation[] = [
     providerId: 'prov-deepseek',
     providerName: 'DeepSeek',
     model: 'deepseek-chat',
-    systemPrompt: '',
   },
 ]
 
