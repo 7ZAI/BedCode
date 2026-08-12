@@ -10,6 +10,7 @@
   "rustLibrary": "bedcode_plugin_ai_chatbox",
   "icon": "icon.svg",
   "permissions": [
+    "broadcast",
     "fs:read",
     "fs:write",
     "network:http",
@@ -64,14 +65,22 @@
       "properties": {
         "thinkingMode": {
           "type": "string",
-          "enum": ["default", "enabled", "disabled"],
+          "enum": [
+            "default",
+            "enabled",
+            "disabled"
+          ],
           "title": "思考模式",
           "description": "default：跟随模型自身默认行为，不传思考参数；enabled：强制开启思考；disabled：强制关闭思考",
           "default": "default"
         },
         "reasoningEffort": {
           "type": "string",
-          "enum": ["low", "high", "max"],
+          "enum": [
+            "low",
+            "high",
+            "max"
+          ],
           "title": "推理强度",
           "description": "仅思考模式为「强制开启」时生效（low / high / max）",
           "default": "high"
@@ -84,7 +93,11 @@
         },
         "codeLineHeight": {
           "type": "string",
-          "enum": ["compact", "normal", "relaxed"],
+          "enum": [
+            "compact",
+            "normal",
+            "relaxed"
+          ],
           "title": "代码块行距",
           "description": "compact：紧凑（1.35）；normal：常规（1.6）；relaxed：宽松（1.8）",
           "default": "compact"

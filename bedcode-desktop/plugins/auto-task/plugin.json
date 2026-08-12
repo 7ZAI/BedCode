@@ -106,6 +106,10 @@
         "title": "List Session Configs"
       },
       {
+        "id": "auto-task.list-supported-agents",
+        "title": "auto-task.list-supported-agents"
+      },
+      {
         "id": "auto-task.list-scheduled-jobs",
         "title": "List Scheduled Jobs"
       },
