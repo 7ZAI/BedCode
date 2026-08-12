@@ -702,11 +702,12 @@ impl TerminalWs {
         }
 
         // 创建输出转发通道
-        // 容量 4096：历史回放 + 实时输出并发到达时，subscribe() 的历史发送
+        // 容量 8192：历史回放 + 实时输出并发到达时，subscribe() 的历史发送
         // 会被 send_queue 背压阻塞（历史发不完 → subscribe_response 不回 →
-        // 客户端 send_and_wait 超时误判断开）。大容量显著降低背压概率
+        // 客户端 send_and_wait 超时误判断开）。大容量显著降低背压概率；
+        // 连续违反重订阅（客户端增量续传）期间也给实时输出留足缓冲余量
         let (output_tx, output_rx) =
-            tokio::sync::mpsc::channel::<crate::session::OutputEvent>(4096);
+            tokio::sync::mpsc::channel::<crate::session::OutputEvent>(8192);
 
         let session_id_for_sub = session_id.clone();
         let request_id = message_id.clone();

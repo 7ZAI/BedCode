@@ -219,7 +219,7 @@ describe('useTerminalOutputStream', () => {
     ])
   })
 
-  it('连续性不变量破坏：报错并按 reset 重订阅', async () => {
+  it('连续性不变量破坏：保留游标按增量重订阅（避免全量重播风暴）', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
@@ -235,20 +235,27 @@ describe('useTerminalOutputStream', () => {
     ws.binary([5], 4, 5)
     expect(frames).toHaveLength(5)
 
-    // 违反：帧起点 6 而非 5
+    // 违反：帧起点 6 而非 5（服务端背压丢事件 → 字节缺口）
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     ws.binary([9], 6, 7)
     expect(errorSpy).toHaveBeenCalled()
     errorSpy.mockRestore()
 
-    // 强制重连：旧连接关闭，新连接建立后自动重新订阅（游标丢弃 → start_seq null）
+    // 强制重连：旧连接关闭，新连接建立后自动重新订阅
+    // 游标必须保留（start_seq=5）→ 服务端裁决 incremental，只补缺口；
+    // 置 null 会导致全量重播（mode=Reset），大历史会话下反复重播形成自持风暴
     await flushAsync()
     expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2)
     const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]
     ws2.open()
     expect(ws2.sent).toHaveLength(1)
     const msg = JSON.parse(ws2.sent[0])
-    expect(msg.payload.payload.action.start_seq).toBeNull()
+    expect(msg.payload.payload.action.start_seq).toBe(5)
+
+    // 服务端以 incremental 续传：缺口帧从游标处无缝衔接
+    ws2.text(subscribeResponse('incremental', 0, 100))
+    ws2.binary([6, 7, 8], 5, 8)
+    expect(frames.map((f) => f.endOffset)).toEqual([1, 2, 3, 4, 5, 8])
   })
 
   it('断线自动重连：保留游标并从断点续传', async () => {

@@ -299,6 +299,7 @@ async fn execute_streaming_http(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let error_body = response.text().await.unwrap_or_default();
+        tracing::warn!(status, stream_event, "Streaming HTTP non-2xx response");
         // 非 2xx 响应通过事件通知前端，而非 bail（因为 tokio::spawn 中的 Err 只记录日志）
         let _ = app_handle.emit(
             stream_event,
@@ -310,6 +311,14 @@ async fn execute_streaming_http(
         return Ok(());
     }
 
+    tracing::debug!(
+        status = response.status().as_u16(),
+        sse_format = %sse_format,
+        stream_event,
+        "Streaming HTTP connected"
+    );
+
+    let mut emitted_events: usize = 0;
     if sse_format.is_empty() {
         // 原始模式：逐 chunk emit 原始字节
         let mut stream = response.bytes_stream();
@@ -317,6 +326,7 @@ async fn execute_streaming_http(
             match chunk_result {
                 Ok(chunk) => {
                     let chunk_str = String::from_utf8_lossy(&chunk).to_string();
+                    emitted_events += 1;
                     let _ = app_handle.emit(
                         stream_event,
                         serde_json::json!({
@@ -345,7 +355,8 @@ async fn execute_streaming_http(
             match chunk_result {
                 Ok(chunk) => {
                     buffer.push_str(&String::from_utf8_lossy(&chunk));
-                    parse_and_emit_sse(&mut buffer, sse_format, app_handle, stream_event);
+                    let events = parse_and_emit_sse(&mut buffer, sse_format, app_handle, stream_event);
+                    emitted_events += events;
                 }
                 Err(e) => {
                     tracing::error!(
@@ -366,6 +377,13 @@ async fn execute_streaming_http(
         serde_json::json!({ "done": true }),
     );
 
+    tracing::debug!(
+        emitted_events,
+        plugin_id = %plugin_id,
+        stream_event,
+        "Streaming HTTP finished"
+    );
+
     Ok(())
 }
 
@@ -375,13 +393,22 @@ async fn execute_streaming_http(
 /// 取缓冲区中最先出现的分隔符切分（部分服务端使用 CRLF 行尾）；
 /// 根据 format 解析 data 行中的 JSON，
 /// 提取文本增量后以 `{ chunk, done: false }` 格式 emit
+/// 解析 SSE 事件并提取 content delta 推送到前端
+///
+/// SSE 规范允许 `\n\n`、`\r\n\r\n`、`\r\r` 三种事件分隔符，
+/// 取缓冲区中最先出现的分隔符切分（部分服务端使用 CRLF 行尾）；
+/// 根据 format 解析 data 行中的 JSON，
+/// 提取文本增量后以 `{ chunk, done: false }` 格式 emit。
+///
+/// 返回本次解析 emit 的事件数（供调用方统计可观测性）。
 fn parse_and_emit_sse(
     buffer: &mut String,
     format: &str,
     app_handle: &tauri::AppHandle,
     stream_event: &str,
-) {
+) -> usize {
     let mut last_usage: Option<serde_json::Value> = None;
+    let mut emitted = 0usize;
     loop {
         // 查找最先出现的事件分隔符：(位置, 分隔符字节长度)
         let separator = [
@@ -411,7 +438,8 @@ fn parse_and_emit_sse(
                         payload.insert("usage".to_string(), usage);
                     }
                     let _ = app_handle.emit(stream_event, serde_json::Value::Object(payload));
-                    return;
+                    emitted += 1;
+                    return emitted;
                 }
 
                 match format {
@@ -430,6 +458,7 @@ fn parse_and_emit_sse(
                                         stream_event,
                                         serde_json::json!({ "chunk": content, "done": false }),
                                     );
+                                    emitted += 1;
                                 }
                             }
                         }
@@ -440,11 +469,13 @@ fn parse_and_emit_sse(
                             stream_event,
                             serde_json::json!({ "chunk": data, "done": false }),
                         );
+                        emitted += 1;
                     }
                 }
             }
         }
     }
+    emitted
 }
 
 /// 将 serde_json::Value 转换为 HashMap<String, String>

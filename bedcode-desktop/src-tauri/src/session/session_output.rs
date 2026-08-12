@@ -365,8 +365,9 @@ pub struct SubscriberState {
 }
 
 /// inactive 占位期间 pending 缓存上限：超出丢弃新事件（客户端激活后
-/// 字节游标连续性校验检测到缺口 → reset 重播自愈，事件仍留在输出队列）
-const PENDING_EVENT_CAP: usize = 8192;
+/// 字节游标连续性校验检测到缺口 → 增量重订阅自愈，事件仍留在输出队列）
+/// 16384：大历史重播（数万事件）期间实时输出缓存余量，降低重订阅风暴频率
+const PENDING_EVENT_CAP: usize = 16384;
 
 impl SubscriberState {
     pub fn new(client_id: String, send_queue: mpsc::Sender<OutputEvent>) -> Self {
@@ -451,10 +452,10 @@ impl SessionOutputManager {
     /// 保证订阅者拿到的每个事件都可做字节级连续性校验
     ///
     /// 背压保护：同步 try_send 而非 await send——慢订阅者（移动端弱网，
-    /// 4096 事件通道 + 有界合并 + 转发通道逐级排满）不能阻塞 on_output，
+    /// 8192 事件通道 + 有界合并 + 转发通道逐级排满）不能阻塞 on_output，
     /// 否则同会话所有订阅者（含桌面端本地 WS）输出同步冻结、PTY 读取
     /// 停摆。满时丢弃该事件：客户端字节游标连续性校验会检测到缺口并
-    /// 自愈（reset 全量重播补回，事件仍保留在输出队列中）
+    /// 自愈（增量重订阅补回，事件仍保留在输出队列中）
     pub async fn on_output(&self, event: OutputEvent) {
         let event = self.output_queue.write().await.push(event);
 

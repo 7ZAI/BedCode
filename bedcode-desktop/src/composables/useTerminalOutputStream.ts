@@ -142,18 +142,24 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     // 不变量：游标之后的首帧必须无缝衔接（字节级连续，无重无漏）
     if (cursor !== null && frame.startOffset !== cursor) {
       console.error(
-        `[useTerminalOutputStream] continuity violation: frame.start=${frame.startOffset}, cursor=${cursor}. Re-subscribing with reset`
+        `[useTerminalOutputStream] continuity violation: frame.start=${frame.startOffset}, cursor=${cursor}. Re-subscribing from cursor`
       )
-      forceResetResubscribe()
+      forceResubscribe()
       return
     }
     cursor = frame.endOffset
     options.onData(frame)
   }
 
-  /** 连续性不变量被破坏：丢弃游标，按 reset 语义重订阅（服务端给正确答案） */
-  function forceResetResubscribe() {
-    cursor = null
+  /** 连续性不变量被破坏：保留当前游标，按增量语义重订阅（服务端裁决补缺口）。
+   *
+   *  关键：不能把 cursor 置 null——置 null 会让服务端裁决 mode=Reset，触发环形
+   *  缓冲全量重播（长时间会话可达数万事件/数十 MB）。大历史重播期间 PTY 新输出
+   *  继续产生新缺口（订阅通道背压丢事件）→ 反复全量重播 → 重订阅风暴自持循环
+   *  （终端反复清屏滚动，永不停止）。保留游标 → 服务端返回 incremental，只补
+   *  缺口之后的少量数据，游标逐轮推进，收敛后自然恢复。
+   *  仅当服务端判定游标已失效（mode=Reset）时才清屏全量重播（handleControl 处理） */
+  function forceResubscribe() {
     subscribed = false
     closeWs()
     reconnectAttempts = 0
@@ -257,8 +263,8 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
           pendingFrames.push(frame)
           pendingBytes += frame.data.byteLength
           if (pendingBytes > MAX_PENDING_FRAME_BYTES) {
-            console.error('[useTerminalOutputStream] pending frame overflow, resetting subscription')
-            forceResetResubscribe()
+            console.error('[useTerminalOutputStream] pending frame overflow, re-subscribing from cursor')
+            forceResubscribe()
           }
           return
         }
