@@ -102,3 +102,156 @@ pub(crate) fn log_warn(plugin_id: &str, message: &str, file: &str, line: u32) {
 pub(crate) fn log_error(plugin_id: &str, message: &str, file: &str, line: u32) {
     emit_plugin_log(plugin_id, Level::ERROR, file, line, message);
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::Visit;
+    use tracing::span;
+    use tracing::subscriber::with_default;
+    use tracing::Subscriber;
+
+    /// 捕获的单个事件（level / 调用点 / 消息）
+    #[derive(Clone)]
+    struct CapturedEvent {
+        level: Level,
+        file: Option<&'static str>,
+        line: Option<u32>,
+        message: String,
+    }
+
+    /// 极简订阅者：把 event 原样记录到共享 vec，供断言
+    ///
+    /// 与项目默认订阅者（文件落盘）互不影响：with_default 只替换当前线程
+    /// 的默认订阅者，且测试通过共享 Arc 取回捕获结果
+    struct CaptureSubscriber {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    /// 从 event 字段集中提取 message（插件日志字段集仅 "message" 一项）
+    struct MessageVisitor(String);
+
+    impl Visit for MessageVisitor {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "message" {
+                self.0 = value.to_string();
+            }
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{:?}", value);
+            }
+        }
+    }
+
+    impl Subscriber for CaptureSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _attrs: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut visitor = MessageVisitor(String::new());
+            event.record(&mut visitor);
+            self.events.lock().unwrap().push(CapturedEvent {
+                level: *event.metadata().level(),
+                file: event.metadata().file(),
+                line: event.metadata().line(),
+                message: visitor.0,
+            });
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    /// 以捕获订阅者为默认订阅者执行闭包，返回捕获到的事件列表
+    fn capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CaptureSubscriber { events: events.clone() };
+        with_default(subscriber, f);
+        let captured = events.lock().unwrap();
+        captured.clone()
+    }
+
+    // ==================== plugin_log_metadata ====================
+
+    /// 同一调用点（file+line+level）命中缓存：返回同一 'static 指针
+    #[test]
+    fn plugin_log_metadata_cached_same_pointer() {
+        let m1 = plugin_log_metadata(Level::INFO, "guest.rs", 10);
+        let m2 = plugin_log_metadata(Level::INFO, "guest.rs", 10);
+        assert!(std::ptr::eq(m1, m2), "cache must return the same metadata");
+        assert_eq!(m1.level(), &Level::INFO);
+        assert_eq!(m1.file(), Some("guest.rs"));
+        assert_eq!(m1.line(), Some(10));
+        assert_eq!(m1.target(), "bedcode_lib::plugin::plugin_log");
+    }
+
+    /// 不同 level 视为不同调用点：各自独立缓存（字段集一致但级别不同）
+    #[test]
+    fn plugin_log_metadata_level_is_cache_key_part() {
+        let info = plugin_log_metadata(Level::INFO, "guest.rs", 10);
+        let warn = plugin_log_metadata(Level::WARN, "guest.rs", 10);
+        assert!(!std::ptr::eq(info, warn));
+        assert_eq!(info.level(), &Level::INFO);
+        assert_eq!(warn.level(), &Level::WARN);
+        // file/line 相同：证明 key 区分的是 level
+        assert_eq!(info.file(), warn.file());
+        assert_eq!(info.line(), warn.line());
+    }
+
+    /// 不同 file 视为不同调用点：各自独立缓存
+    #[test]
+    fn plugin_log_metadata_file_is_cache_key_part() {
+        let m1 = plugin_log_metadata(Level::DEBUG, "a.rs", 1);
+        let m2 = plugin_log_metadata(Level::DEBUG, "b.rs", 1);
+        assert!(!std::ptr::eq(m1, m2));
+        assert_eq!(m1.file(), Some("a.rs"));
+        assert_eq!(m2.file(), Some("b.rs"));
+    }
+
+    // ==================== emit_plugin_log ====================
+
+    /// 消息带 [plugin:{id}] 前缀（保持旧格式，日志可区分来源插件），
+    /// 调用点位置透传到 Metadata
+    #[test]
+    fn emit_plugin_log_formats_message_with_prefix() {
+        let captured = capture(|| {
+            emit_plugin_log("my-plugin", Level::WARN, "virtual.rs", 42, "boom");
+        });
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].level, Level::WARN);
+        assert_eq!(captured[0].file, Some("virtual.rs"));
+        assert_eq!(captured[0].line, Some(42));
+        assert_eq!(captured[0].message, "[plugin:my-plugin] boom");
+    }
+
+    /// 四个级别宏映射到对应 Level（组件形态调用点为空字符串/0）
+    #[test]
+    fn log_level_macros_map_to_levels() {
+        let captured = capture(|| {
+            log_info("p", "i", "", 0);
+            log_debug("p", "d", "", 0);
+            log_warn("p", "w", "", 0);
+            log_error("p", "e", "", 0);
+        });
+        assert_eq!(captured.len(), 4);
+        let levels: Vec<Level> = captured.iter().map(|e| e.level.clone()).collect();
+        assert_eq!(levels, vec![Level::INFO, Level::DEBUG, Level::WARN, Level::ERROR]);
+        // 前缀对各级别一致生效
+        assert_eq!(captured[3].message, "[plugin:p] e");
+    }
+}

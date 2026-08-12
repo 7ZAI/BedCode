@@ -160,3 +160,120 @@ pub(crate) fn session_close(
     });
     Ok(())
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+
+    const PLUGIN: &str = "test-plugin";
+
+    /// 无 session:read 权限：会话列表被拒绝
+    #[test]
+    fn session_list_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = session_list(&ctx, PLUGIN).unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 session:read 权限：单会话查询被拒绝
+    #[test]
+    fn session_get_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = session_get(&ctx, PLUGIN, "s1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 session:read 权限：配置列表被拒绝
+    #[test]
+    fn session_config_list_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = session_config_list(&ctx, PLUGIN).unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 session:write 权限：创建会话被拒绝
+    #[test]
+    fn session_create_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = session_create(&ctx, PLUGIN, "cfg-1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 空 config_id：权限通过后参数校验拒绝（避免无效会话创建）
+    #[test]
+    fn session_create_empty_config_id_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        let err = session_create(&ctx, PLUGIN, "").unwrap_err();
+        assert_eq!(err, "session error: empty config_id");
+    }
+
+    /// 无 session:write 权限：关闭会话被拒绝
+    #[test]
+    fn session_close_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = session_close(&ctx, PLUGIN, "s1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 空 session_id：权限通过后参数校验拒绝（防误杀全量会话）
+    #[test]
+    fn session_close_empty_session_id_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        let err = session_close(&ctx, PLUGIN, "").unwrap_err();
+        assert_eq!(err, "session error: empty session_id");
+    }
+
+    /// 空会话库：列表返回空 JSON 数组（内存 SessionManager）
+    #[tokio::test]
+    async fn session_list_empty_ok() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
+        let json = session_list(&ctx, PLUGIN).expect("list ok").expect("some value");
+        assert_eq!(json, "[]");
+    }
+
+    /// 空配置库：精简配置列表返回空 JSON 数组
+    #[tokio::test]
+    async fn session_config_list_empty_ok() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
+        let json = session_config_list(&ctx, PLUGIN).expect("list ok").expect("some value");
+        assert_eq!(json, "[]");
+    }
+
+    /// 不存在的会话：session_get 返回 Ok(None)（非错误）
+    #[tokio::test]
+    async fn session_get_missing_returns_none() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
+        let result = session_get(&ctx, PLUGIN, "no-such-session").expect("get ok");
+        assert!(result.is_none());
+    }
+
+    /// 预生成 session_id：同步返回 UUID v4，实际创建在后台异步执行
+    ///
+    /// 配置不存在时后台创建失败仅记录日志（插件侧由 creating 超时看门狗接管），
+    /// 同步路径不受影响 —— 断言返回值的 UUID 形态而非创建结果
+    #[tokio::test]
+    async fn session_create_returns_pre_generated_uuid() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        let sid = session_create(&ctx, PLUGIN, "no-such-config").expect("pre-generated id");
+        assert_eq!(sid.len(), 36);
+        let uuid = Uuid::parse_str(&sid).expect("valid uuid");
+        assert_eq!(uuid.get_version_num(), 4);
+    }
+
+    /// 关闭不存在的会话：同步返回 Ok（异步 kill 失败仅记录日志）
+    #[tokio::test]
+    async fn session_close_missing_session_returns_ok() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        session_close(&ctx, PLUGIN, "no-such-session").expect("close ok");
+    }
+}

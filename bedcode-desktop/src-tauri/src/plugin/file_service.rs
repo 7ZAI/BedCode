@@ -7,6 +7,10 @@
 //!
 //! 服务面无删除/改名/移动/覆盖端点；上传同名即拒由插件钩子实现。
 //! 挂载随插件生命周期：deactivate/停用/卸载立即摘除。
+//!
+//! 本模块为纯 re-export 壳，无独立逻辑；沙箱/上传/注册表/加密的实现
+//! 与测试均在四个子模块内（sandbox / upload / registry / cipher 各自的
+//! `#[cfg(test)] mod tests`），故本文件不设测试模块。
 
 pub mod cipher;
 pub mod registry;

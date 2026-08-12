@@ -218,3 +218,212 @@ pub(crate) fn fs_exists(
     }
     Ok(std::path::Path::new(path).exists())
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+
+    const PLUGIN: &str = "test-plugin";
+
+    /// 每个测试独立的临时目录 + .claude 白名单段根目录
+    ///
+    /// 无头 fs_auth 只放行白名单路径（弹窗通道不可用），`.claude` 目录段命中
+    /// 白名单直接绕过校验；TempDir 随测试结束自动清理，测试间互不干扰
+    fn claude_temp_root(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join(".claude").join(name);
+        std::fs::create_dir_all(&root).expect("create root");
+        (dir, root)
+    }
+
+    // ==================== 私有纯文件操作辅助 ====================
+
+    /// write_text_file 自动创建不存在的父目录 + 读写往返
+    #[test]
+    fn write_text_file_creates_parent_dirs_roundtrip() {
+        let (_dir, root) = claude_temp_root("roundtrip");
+        let path = root.join("a/b/c/roundtrip.txt");
+        write_text_file(path.to_str().unwrap(), "hello").expect("write ok");
+        assert_eq!(read_text_file(path.to_str().unwrap()).expect("read ok"), "hello");
+    }
+
+    /// read_text_file 不存在的文件返回 NotFound（与 std 语义一致，供上层翻译为 None）
+    #[test]
+    fn read_text_file_missing_returns_not_found() {
+        let (_dir, root) = claude_temp_root("missing");
+        let path = root.join("missing.txt");
+        let err = read_text_file(path.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// delete_file 幂等：不存在的文件视为成功
+    #[test]
+    fn delete_file_missing_idempotent() {
+        let (_dir, root) = claude_temp_root("delete");
+        let path = root.join("never-exists.txt");
+        delete_file(path.to_str().unwrap()).expect("delete missing ok");
+        // 写入后删除，再次删除仍 Ok
+        write_text_file(path.to_str().unwrap(), "x").unwrap();
+        delete_file(path.to_str().unwrap()).expect("delete ok");
+        delete_file(path.to_str().unwrap()).expect("delete again ok");
+    }
+
+    /// copy_file 目标父目录不存在时自动创建
+    #[test]
+    fn copy_file_creates_parent_dirs() {
+        let (_dir, root) = claude_temp_root("copy");
+        let src = root.join("src.txt");
+        let dst = root.join("deep/nested/dst.txt");
+        write_text_file(src.to_str().unwrap(), "payload").unwrap();
+        copy_file(src.to_str().unwrap(), dst.to_str().unwrap()).expect("copy ok");
+        assert_eq!(read_text_file(dst.to_str().unwrap()).unwrap(), "payload");
+    }
+
+    /// write_file_bytes / read_file_bytes 二进制往返
+    #[test]
+    fn write_read_file_bytes_roundtrip() {
+        let (_dir, root) = claude_temp_root("bytes");
+        let path = root.join("data.bin");
+        let bytes: Vec<u8> = (0..=255u8).collect();
+        write_file_bytes(path.to_str().unwrap(), &bytes).expect("write ok");
+        assert_eq!(read_file_bytes(path.to_str().unwrap()).unwrap(), bytes);
+    }
+
+    // ==================== 权限门禁 ====================
+
+    /// 无 fs:read 权限：读被拒绝
+    #[test]
+    fn fs_read_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = fs_read(&ctx, PLUGIN, "/tmp/x").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fs:write 权限：写被拒绝
+    #[test]
+    fn fs_write_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = fs_write(&ctx, PLUGIN, "/tmp/x", "data").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fs:write 权限：删被拒绝
+    #[test]
+    fn fs_delete_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = fs_delete(&ctx, PLUGIN, "/tmp/x").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fs:read 权限：存在性检查被拒绝
+    #[test]
+    fn fs_exists_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = fs_exists(&ctx, PLUGIN, "/tmp/x").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// fs_copy 需要读+写双权限：只授 fs:read 时在写校验处被拒绝
+    #[test]
+    fn fs_copy_requires_both_permissions() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let err = fs_copy(&ctx, PLUGIN, "/tmp/a", "/tmp/b").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// fs_request_auth 空路径数组：无需弹窗直接放行（批量请求约定）
+    #[test]
+    fn fs_request_auth_empty_paths_ok() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        assert!(fs_request_auth(&ctx, PLUGIN, "[]").expect("empty paths ok"));
+    }
+
+    /// fs_request_auth 非法 JSON：解析失败
+    #[test]
+    fn fs_request_auth_invalid_json_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let err = fs_request_auth(&ctx, PLUGIN, "not-json").unwrap_err();
+        assert!(err.contains("invalid paths json"), "got: {}", err);
+    }
+
+    /// 无 fs:read 权限：批量授权请求被拒绝
+    #[test]
+    fn fs_request_auth_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = fs_request_auth(&ctx, PLUGIN, "[]").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    // ==================== 端到端（白名单路径 + 内存上下文） ====================
+
+    /// 写→读往返（fs_write 自动建父目录；SDK 契约：文件不存在 fs_read 返回 Ok(None)）
+    #[tokio::test]
+    async fn fs_write_then_read_roundtrip() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
+        let (_dir, root) = claude_temp_root("e2e-roundtrip");
+        let path = root.join("roundtrip.txt");
+
+        fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "hello wasm").expect("write ok");
+        let content = fs_read(&ctx, PLUGIN, path.to_str().unwrap())
+            .expect("read ok")
+            .expect("value");
+        assert_eq!(content, "hello wasm");
+    }
+
+    /// 不存在的文件：fs_read 返回 Ok(None)（store.rs 等插件依赖此语义处理新建文件）
+    #[tokio::test]
+    async fn fs_read_missing_file_returns_none() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let (_dir, root) = claude_temp_root("e2e-missing");
+        let path = root.join("missing.txt");
+        assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap()).expect("read ok").is_none());
+    }
+
+    /// 存在性检查：写入后 true，删除后 false
+    #[tokio::test]
+    async fn fs_exists_tracks_file_lifecycle() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
+        let (_dir, root) = claude_temp_root("e2e-exists");
+        let path = root.join("exists.txt");
+        assert!(!fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("missing false"));
+        fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "x").unwrap();
+        assert!(fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("exists true"));
+        fs_delete(&ctx, PLUGIN, path.to_str().unwrap()).expect("delete ok");
+        assert!(!fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("deleted false"));
+    }
+
+    /// fs_delete 幂等：删除不存在的文件同样 Ok
+    #[tokio::test]
+    async fn fs_delete_missing_idempotent() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
+        let (_dir, root) = claude_temp_root("e2e-delete");
+        let path = root.join("delete-missing.txt");
+        fs_delete(&ctx, PLUGIN, path.to_str().unwrap()).expect("delete missing ok");
+    }
+
+    /// fs_copy 端到端：源读授权 + 目标写授权 + 自动创建父目录
+    #[tokio::test]
+    async fn fs_copy_end_to_end() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
+        let (_dir, root) = claude_temp_root("e2e-copy");
+        let src = root.join("copy-src.txt");
+        let dst = root.join("nested/copy-dst.txt");
+        fs_write(&ctx, PLUGIN, src.to_str().unwrap(), "payload").unwrap();
+        fs_copy(&ctx, PLUGIN, src.to_str().unwrap(), dst.to_str().unwrap()).expect("copy ok");
+        let content = fs_read(&ctx, PLUGIN, dst.to_str().unwrap())
+            .expect("read ok")
+            .expect("value");
+        assert_eq!(content, "payload");
+    }
+}

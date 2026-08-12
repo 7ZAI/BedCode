@@ -158,3 +158,61 @@ impl PluginDevWatcher {
 fn extract_plugin_id(path: &std::path::Path, plugins_dir: &std::path::Path) -> Option<String> {
     path.strip_prefix(plugins_dir).ok()?.iter().next()?.to_str().map(String::from)
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 可独立测试的面仅 extract_plugin_id（纯路径解析，不依赖文件系统）。
+    // start() 的回调闭包强耦合 notify 事件循环、tokio runtime_handle 与全局
+    // AppContext（触发热重载 / 前端 reload 事件），且防抖状态被闭包捕获，
+    // 需重构为可注入的处理器才能单测；事件回调行为暂不覆盖。
+
+    fn plugins_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from("/tmp/bedcode-plugins")
+    }
+
+    /// 标准产物路径：plugins_dir/{plugin-id}/{filename} → 插件 ID
+    #[test]
+    fn test_extract_plugin_id_from_nested_file() {
+        let dir = plugins_dir();
+        let path = dir.join("com.bedcode.ai-chatbox").join("bedcode_plugin_ai_chatbox.wasm");
+        assert_eq!(extract_plugin_id(&path, &dir), Some("com.bedcode.ai-chatbox".to_string()));
+    }
+
+    /// 路径不在 plugins_dir 下 → None（例如其他目录的产物）
+    #[test]
+    fn test_extract_plugin_id_path_outside_plugins_dir() {
+        let dir = plugins_dir();
+        let path = std::path::PathBuf::from("/other/plugin-a/x.wasm");
+        assert_eq!(extract_plugin_id(&path, &dir), None);
+    }
+
+    /// 路径就是 plugins_dir 本身（无第一段子目录）→ None
+    #[test]
+    fn test_extract_plugin_id_plugins_dir_itself() {
+        let dir = plugins_dir();
+        assert_eq!(extract_plugin_id(&dir, &dir), None);
+    }
+
+    /// 深层目录（插件子目录下再嵌套目录）仍取第一段为插件 ID
+    #[test]
+    fn test_extract_plugin_id_deeply_nested_path() {
+        let dir = plugins_dir();
+        let path = dir.join("plugin-a").join("dist").join("assets").join("main.js");
+        assert_eq!(extract_plugin_id(&path, &dir), Some("plugin-a".to_string()));
+    }
+
+    /// 非 UTF-8 路径段返回 None（to_str 失败）
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_plugin_id_non_utf8_segment() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = plugins_dir();
+        let plugin_dir = dir.join(std::ffi::OsStr::from_bytes(b"plugin-\xFF"));
+        let path = plugin_dir.join("x.wasm");
+        assert_eq!(extract_plugin_id(&path, &dir), None);
+    }
+}

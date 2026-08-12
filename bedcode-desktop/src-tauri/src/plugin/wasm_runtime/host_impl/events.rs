@@ -76,3 +76,54 @@ pub(crate) fn notify(
         )
         .map_err(|e| format!("notify error: emit failed: {}", e))
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+
+    /// 无头上下文（AppHandle=None）：事件无处投递但返回 Ok（幂等约定）
+    #[test]
+    fn emit_event_headless_returns_ok() {
+        let ctx = build_host_ctx();
+        assert!(emit_event(&ctx, "plugin:event", r#"{"ok":true}"#).is_ok());
+    }
+
+    /// 非法 JSON 载荷降级为原始字符串；无头上下文同样 Ok（不因载荷失败）
+    #[test]
+    fn emit_event_headless_invalid_json_ok() {
+        let ctx = build_host_ctx();
+        assert!(emit_event(&ctx, "plugin:event", "not-json").is_ok());
+    }
+
+    /// notify 与 emit 的降级约定不同：无头上下文明确报错（弹窗是强需求能力）
+    #[test]
+    fn notify_headless_rejected() {
+        let ctx = build_host_ctx();
+        let err = notify(&ctx, "test-plugin", "title", "body").unwrap_err();
+        assert!(err.contains("app_handle not available"), "got: {}", err);
+    }
+
+    /// 无 broadcast 权限：同步广播被权限门禁拒绝（AppContext 全局未初始化也不 panic）
+    #[test]
+    fn broadcast_sync_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = broadcast_sync(&ctx, "test-plugin", "{}").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 有权限但载荷畸形：类型化 SyncEvent 解析拒绝（未知/畸形事件不静默丢弃）
+    #[test]
+    fn broadcast_sync_malformed_payload_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "test-plugin", &[PERMISSION_BROADCAST]);
+        let err = broadcast_sync(&ctx, "test-plugin", "not-json").unwrap_err();
+        assert!(err.contains("unknown or malformed sync event"), "got: {}", err);
+    }
+
+    // 成功路径（反序列化 → AppContext::global().sync_tx 广播）依赖应用启动时初始化的
+    // AppContext 全局单例：测试环境未初始化会 panic，交由集成/手动测试覆盖，
+    // 此处只测可独立验证的权限门禁与载荷校验
+}

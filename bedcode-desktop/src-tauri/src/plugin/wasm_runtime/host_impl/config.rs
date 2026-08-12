@@ -53,3 +53,63 @@ pub(crate) fn config_get(plugin_id: &str, key: &str) -> Result<Option<String>, S
 
     Ok(Some(value))
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 白名单外 key：在触达任何全局单例前被拒绝（纯校验路径）
+    #[test]
+    fn config_get_key_not_in_whitelist_rejected() {
+        let err = config_get("test-plugin", "network.password").unwrap_err();
+        assert!(err.contains("not in whitelist"), "got: {}", err);
+        assert!(err.contains("network.password"));
+    }
+
+    /// 空 key 同样拒绝
+    #[test]
+    fn config_get_empty_key_rejected() {
+        let err = config_get("test-plugin", "").unwrap_err();
+        assert!(err.contains("not in whitelist"), "got: {}", err);
+    }
+
+    /// system.time_ms：返回接近当前的 Unix 毫秒（纯 std 时间，无全局状态）
+    ///
+    /// 该 key 是 wasm 插件唯一的时钟来源（wasm32 无 SystemTime），值必须可解析
+    #[test]
+    fn config_get_current_time_ms_ok() {
+        let before_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let value = config_get("test-plugin", "system.time_ms")
+            .expect("time key ok")
+            .expect("some value");
+        let parsed: u128 = value.parse().expect("parse ms");
+        assert!(parsed >= before_ms, "got {} before now {}", parsed, before_ms);
+    }
+
+    /// home_dir：返回非空主目录路径
+    #[test]
+    fn config_get_home_dir_ok() {
+        let value = config_get("test-plugin", "home_dir")
+            .expect("home dir ok")
+            .expect("some value");
+        assert!(!value.is_empty());
+    }
+
+    /// network.port：服务器未启动时回退默认端口，仍应返回合法端口号
+    ///
+    /// ServerSupervisor 为 LazyLock 全局单例（测试进程内默认端口 8765），
+    /// 不断言具体值（其它测试可能已改变端口），只验证语义：端口 > 0
+    #[tokio::test]
+    async fn config_get_network_port_ok() {
+        let value = config_get("test-plugin", "network.port")
+            .expect("port key ok")
+            .expect("some value");
+        let port: u16 = value.parse().expect("port is u16");
+        assert!(port > 0, "port must be > 0, got {}", port);
+    }
+}

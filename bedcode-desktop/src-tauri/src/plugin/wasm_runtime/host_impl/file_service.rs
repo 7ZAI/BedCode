@@ -120,3 +120,169 @@ pub(crate) fn filesrv_get_peer(
         None => Ok(None),
     }
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+    use bedcode_plugin_api::FileOperation;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    const PLUGIN: &str = "test-plugin";
+
+    /// 构造合法挂载选项 JSON（camelCase 线协议）
+    fn mount_options_json(mount_path: &str, roots: &[&str]) -> String {
+        json!({
+            "mountPath": mount_path,
+            "roots": roots,
+            "operations": ["list"],
+        })
+        .to_string()
+    }
+
+    /// 非法 MountOptions JSON：解析失败在权限校验前被拒绝
+    #[test]
+    fn filesrv_mount_invalid_options_json_rejected() {
+        let ctx = build_host_ctx();
+        let err = filesrv_mount(&ctx, PLUGIN, "not-json").unwrap_err();
+        assert!(err.contains("invalid MountOptions JSON"), "got: {}", err);
+    }
+
+    /// 无 fileservice 权限：挂载被权限门禁拒绝
+    #[test]
+    fn filesrv_mount_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_mount(&ctx, PLUGIN, &mount_options_json("m", &["/tmp"])).unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：卸载被拒绝
+    #[test]
+    fn filesrv_unmount_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_unmount(&ctx, PLUGIN, "m").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 非法 roots JSON：解析失败在权限校验前被拒绝
+    #[test]
+    fn filesrv_update_roots_invalid_json_rejected() {
+        let ctx = build_host_ctx();
+        let err = filesrv_update_roots(&ctx, PLUGIN, "m", "not-json").unwrap_err();
+        assert!(err.contains("invalid roots JSON"), "got: {}", err);
+    }
+
+    /// 无 fileservice 权限：更新根目录被拒绝
+    #[test]
+    fn filesrv_update_roots_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_update_roots(&ctx, PLUGIN, "m", "[]").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：对端查询被拒绝（不触达 WsSessionRegistry 全局）
+    #[test]
+    fn filesrv_query_peer_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_query_peer(&ctx, PLUGIN, "").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：对端信息读取被拒绝
+    #[test]
+    fn filesrv_get_peer_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_get_peer(&ctx, PLUGIN, "peer-1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 挂载/卸载往返：返回 MountResult 的挂载点与 base_path 约定
+    ///
+    /// base_path 固定为 /api/plugins/{pluginId}/{mountPath}（HTTP 端点前缀），
+    /// 插件据此拼 URL；根目录用临时目录下 .claude 白名单段，无头 fs_auth 直接放行
+    #[tokio::test]
+    async fn filesrv_mount_unmount_roundtrip() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FILESERVICE]);
+        let dir = tempdir().unwrap();
+        let root = dir.path().join(".claude");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let result_json = filesrv_mount(
+            &ctx,
+            PLUGIN,
+            &mount_options_json("test-mount", &[root.to_str().unwrap()]),
+        )
+        .expect("mount ok");
+        let result: MountResult = serde_json::from_str(&result_json).expect("valid MountResult");
+        assert_eq!(result.mount_path, "test-mount");
+        assert_eq!(result.base_path, format!("/api/plugins/{}/test-mount", PLUGIN));
+
+        filesrv_unmount(&ctx, PLUGIN, "test-mount").expect("unmount ok");
+        // 重复卸载：注册表对不存在的挂载点报错（非幂等，调用方应捕获）
+        assert!(filesrv_unmount(&ctx, PLUGIN, "test-mount").is_err());
+    }
+
+    /// 权限通过但挂载路径非法（大写字母不满足 ^[a-z0-9-_]+$）：注册表校验拒绝
+    #[tokio::test]
+    async fn filesrv_mount_invalid_mount_path_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FILESERVICE]);
+        let dir = tempdir().unwrap();
+        let root = dir.path().join(".claude");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let err = filesrv_mount(
+            &ctx,
+            PLUGIN,
+            &mount_options_json("Bad-Path", &[root.to_str().unwrap()]),
+        )
+        .unwrap_err();
+        assert!(err.contains("mount failed"), "got: {}", err);
+    }
+
+    /// 挂载失败路径不产生半挂载残留：重复挂载同插件同挂载点被拒绝
+    ///
+    /// 首次挂载成功后再次挂载相同 mount_path 应报错（注册表去重语义）
+    #[tokio::test]
+    async fn filesrv_mount_duplicate_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FILESERVICE]);
+        let dir = tempdir().unwrap();
+        let root = dir.path().join(".claude");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = mount_options_json("dup-mount", &[root.to_str().unwrap()]);
+
+        filesrv_mount(&ctx, PLUGIN, &opts).expect("first mount ok");
+        let err = filesrv_mount(&ctx, PLUGIN, &opts).unwrap_err();
+        assert!(err.contains("mount failed"), "got: {}", err);
+        // 清理：卸载避免影响其它测试
+        filesrv_unmount(&ctx, PLUGIN, "dup-mount").expect("cleanup unmount ok");
+    }
+
+    /// 未授权的根目录（非白名单、无弹窗通道）：挂载被拒绝
+    ///
+    /// 无头 fs_auth 保守拒绝非白名单路径，挂载校验应透传该拒绝
+    #[tokio::test]
+    async fn filesrv_mount_unauthorized_root_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FILESERVICE]);
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+
+        let err = filesrv_mount(&ctx, PLUGIN, &mount_options_json("root-denied", &[root])).unwrap_err();
+        assert!(err.contains("mount failed"), "got: {}", err);
+    }
+
+    /// 空 roots：注册表拒绝（规格：roots 不得为空）
+    #[tokio::test]
+    async fn filesrv_mount_empty_roots_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FILESERVICE]);
+        let err = filesrv_mount(&ctx, PLUGIN, &mount_options_json("no-roots", &[])).unwrap_err();
+        assert!(err.contains("mount failed"), "got: {}", err);
+    }
+}

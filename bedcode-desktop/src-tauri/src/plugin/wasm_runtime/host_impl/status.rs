@@ -19,3 +19,21 @@ pub(crate) fn mark_plugin_error(host_ctx: &crate::plugin::wasm_runtime::WasmHost
         }
     });
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::wasm_runtime::host_impl::tests::build_host_ctx;
+
+    /// services 未注入时静默降级（记录 error 日志，不 panic）
+    ///
+    /// 成功路径依赖 PluginHost 注入的 services（前端弹窗通知），测试环境无
+    /// PluginHost；函数返回 () 无错误通道，此处验证降级路径不崩溃即可
+    #[tokio::test]
+    async fn mark_plugin_error_services_not_ready_no_panic() {
+        let ctx = build_host_ctx();
+        mark_plugin_error(&ctx, "test-plugin".to_string(), "boom".to_string());
+    }
+}

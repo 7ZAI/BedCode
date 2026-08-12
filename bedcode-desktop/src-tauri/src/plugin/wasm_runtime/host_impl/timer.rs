@@ -37,3 +37,41 @@ pub(crate) fn timer_register(
     );
     Ok(())
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+
+    /// 无 timer:schedule 权限：注册被权限门禁拒绝
+    #[test]
+    fn timer_register_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = timer_register(&ctx, "test-plugin", 5, "my.command").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 空 command 名：权限通过后参数校验拒绝（防注册无效定时器空转）
+    #[test]
+    fn timer_register_empty_command_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "test-plugin", &[PERMISSION_TIMER]);
+        let err = timer_register(&ctx, "test-plugin", 5, "").unwrap_err();
+        assert_eq!(err, "timer error: empty command name");
+    }
+
+    /// 参数合法但 services 未注入（两阶段初始化完成前）：明确报错而非静默忽略
+    #[tokio::test]
+    async fn timer_register_services_not_ready() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "test-plugin", &[PERMISSION_TIMER]);
+        let err = timer_register(&ctx, "test-plugin", 5, "my.command").unwrap_err();
+        assert!(err.contains("not initialized yet"), "got: {}", err);
+    }
+
+    // 间隔钳制（interval_secs.max(MIN_TIMER_INTERVAL_SECS)）生效于 services 注入后：
+    // 注册的定时器句柄存于 PluginHost，测试环境无 PluginHost 无法观测最终间隔，
+    // 交由集成/手动测试覆盖；0 秒钳制为 1 秒的语义由常量注释保证
+}

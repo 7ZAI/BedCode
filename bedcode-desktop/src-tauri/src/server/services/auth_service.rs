@@ -637,3 +637,421 @@ pub fn format_device_display_name(device_name: &str, address: &str) -> String {
     let ip = address.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(address);
     format!("{} ({})", device_name, ip)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use std::path::Path;
+
+    // ==================== 可测性说明 ====================
+    // handle_auth 的 BiometricRequest / BiometricVerify 分支依赖
+    // AppContext::global()（Tauri 应用全局状态，测试环境无法初始化），
+    // 故未覆盖；其余分支（RequestPairing / VerifyCode / QrConnect）可脱离
+    // Tauri 运行时验证（app_handle 传 None 跳过事件发射，WebSocketManager
+    // 单例对未注册地址的 set_authenticated 为无副作用 no-op）。
+
+    fn test_addr() -> SocketAddr {
+        "127.0.0.1:8080".parse().unwrap()
+    }
+
+    /// 内存数据库：避免测试产生临时文件，schema 完整可用
+    fn test_db() -> Arc<Mutex<Database>> {
+        let db = Database::new(Path::new(":memory:")).expect("in-memory db");
+        db.init_schema().expect("init schema");
+        Arc::new(Mutex::new(db))
+    }
+
+    fn new_pairing_service() -> Arc<PairingService> {
+        Arc::new(PairingService::new())
+    }
+
+    fn new_qr_manager() -> Arc<QrTokenManager> {
+        Arc::new(QrTokenManager::new())
+    }
+
+    /// 解构 Auth 消息，提取断言所需的字段
+    fn unwrap_auth(msg: Message) -> (String, AuthStage, AuthPayload) {
+        match msg {
+            Message::Auth { message_id, expect_response, payload, .. } => {
+                assert!(!expect_response, "auth 响应不应要求客户端再回应");
+                (message_id, payload.stage.clone(), payload)
+            }
+            other => panic!("expected Message::Auth, got {:?}", other),
+        }
+    }
+
+    // ==================== format_device_display_name ====================
+
+    #[test]
+    fn test_display_name_extracts_ip_with_port() {
+        assert_eq!(
+            format_device_display_name("My Phone", "192.168.1.5:8080"),
+            "My Phone (192.168.1.5)"
+        );
+    }
+
+    #[test]
+    fn test_display_name_ipv6_with_port() {
+        // IPv6 地址带端口时，rsplit_once 只切最后一个冒号，括号保留
+        assert_eq!(
+            format_device_display_name("Phone", "[fe80::1]:8080"),
+            "Phone ([fe80::1])"
+        );
+    }
+
+    #[test]
+    fn test_display_name_without_port_keeps_address() {
+        assert_eq!(
+            format_device_display_name("Phone", "myhost"),
+            "Phone (myhost)"
+        );
+    }
+
+    // ==================== handle_jwt_auth ====================
+
+    #[tokio::test]
+    async fn test_jwt_auth_missing_token_returns_failed() {
+        // 未携带 session_token → 直接失败，无需 JWT 服务参与
+        let payload = AuthPayload {
+            stage: AuthStage::Reauthenticate,
+            device_id: Some("dev-1".to_string()),
+            ..Default::default()
+        };
+        let result = handle_jwt_auth(
+            "msg-1".to_string(),
+            Some("sess-1".to_string()),
+            12345,
+            payload,
+            test_addr(),
+            &JwtService::new(),
+            &None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (message_id, stage, resp) = unwrap_auth(result);
+        assert_eq!(message_id, "msg-1");
+        assert_eq!(stage, AuthStage::Failed);
+        assert_eq!(resp.error.as_deref(), Some("No JWT token provided"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_valid_token_authenticates() {
+        let jwt = JwtService::new();
+        let token = jwt
+            .generate_token(
+                "device-123".to_string(),
+                Some("My Phone".to_string()),
+                Some("fp-1".to_string()),
+            )
+            .unwrap();
+        let payload = AuthPayload {
+            stage: AuthStage::Reauthenticate,
+            device_id: Some("device-123".to_string()),
+            session_token: Some(token.clone()),
+            ..Default::default()
+        };
+        let result = handle_jwt_auth(
+            "msg-2".to_string(),
+            None,
+            12345,
+            payload,
+            test_addr(),
+            &jwt,
+            &None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (message_id, stage, resp) = unwrap_auth(result);
+        assert_eq!(message_id, "msg-2");
+        assert_eq!(stage, AuthStage::Authenticated);
+        assert_eq!(resp.device_id.as_deref(), Some("device-123"));
+        assert_eq!(resp.device_name.as_deref(), Some("My Phone"));
+        assert_eq!(resp.device_fingerprint.as_deref(), Some("fp-1"));
+        // 成功响应必须回传原 token，供客户端续用
+        assert_eq!(resp.session_token.as_deref(), Some(token.as_str()));
+        assert!(resp.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_invalid_token_returns_failed() {
+        let payload = AuthPayload {
+            stage: AuthStage::Reauthenticate,
+            session_token: Some("not-a-jwt".to_string()),
+            ..Default::default()
+        };
+        let result = handle_jwt_auth(
+            "msg-3".to_string(),
+            None,
+            12345,
+            payload,
+            test_addr(),
+            &JwtService::new(),
+            &None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (_, stage, resp) = unwrap_auth(result);
+        assert_eq!(stage, AuthStage::Failed);
+        assert_eq!(resp.error.as_deref(), Some("Invalid JWT token"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_expired_token_returns_failed() {
+        let jwt = JwtService::with_expiry(1);
+        let token = jwt.generate_token("device-123".to_string(), None, None).unwrap();
+        // exp 以秒级截断，睡 2.1s 确保越过 exp 边界（与 jwt.rs 既有测试口径一致）
+        std::thread::sleep(std::time::Duration::from_millis(2100));
+
+        let payload = AuthPayload {
+            stage: AuthStage::Reauthenticate,
+            session_token: Some(token),
+            ..Default::default()
+        };
+        let result = handle_jwt_auth(
+            "msg-4".to_string(),
+            None,
+            12345,
+            payload,
+            test_addr(),
+            &jwt,
+            &None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (_, stage, resp) = unwrap_auth(result);
+        assert_eq!(stage, AuthStage::Failed);
+        assert_eq!(
+            resp.error.as_deref(),
+            Some("JWT token expired, please re-authenticate")
+        );
+    }
+
+    // ==================== handle_auth: RequestPairing ====================
+
+    #[tokio::test]
+    async fn test_request_pairing_returns_verify_code_stage() {
+        let pairing_service = new_pairing_service();
+        let payload = AuthPayload {
+            stage: AuthStage::RequestPairing,
+            device_id: Some("dev-1".to_string()),
+            device_name: Some("Phone".to_string()),
+            ..Default::default()
+        };
+        let result = handle_auth(
+            payload,
+            "msg-rp".to_string(),
+            test_addr(),
+            &pairing_service,
+            &new_qr_manager(),
+            &JwtService::new(),
+            WebSocketManager::global(),
+            &None,
+            &test_db(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (message_id, stage, resp) = unwrap_auth(result);
+        assert_eq!(message_id, "msg-rp");
+        // 配对请求的响应必须引导客户端进入 VerifyCode 阶段
+        assert_eq!(stage, AuthStage::VerifyCode);
+        assert_eq!(resp.device_id.as_deref(), Some("dev-1"));
+        assert_eq!(resp.device_name.as_deref(), Some("Phone"));
+        assert!(resp.error.is_none());
+
+        // 配对码应已在服务端生成，且为 6 位数字
+        let code = pairing_service.get_current_code().await.expect("code generated");
+        assert_eq!(code.code.len(), 6);
+        assert!(code.code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    // ==================== handle_auth: VerifyCode ====================
+
+    #[tokio::test]
+    async fn test_verify_code_success_issues_session_token() {
+        let pairing_service = new_pairing_service();
+        let code = pairing_service.generate_code().await;
+        let payload = AuthPayload {
+            stage: AuthStage::VerifyCode,
+            device_id: Some("dev-1".to_string()),
+            device_name: Some("Phone".to_string()),
+            device_fingerprint: Some("fp-x".to_string()),
+            pairing_code: Some(code.code.clone()),
+            ..Default::default()
+        };
+        let result = handle_auth(
+            payload,
+            "msg-vc".to_string(),
+            test_addr(),
+            &pairing_service,
+            &new_qr_manager(),
+            &JwtService::new(),
+            WebSocketManager::global(),
+            &None,
+            &test_db(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (message_id, stage, resp) = unwrap_auth(result);
+        assert_eq!(message_id, "msg-vc");
+        assert_eq!(stage, AuthStage::Authenticated);
+        assert_eq!(resp.device_id.as_deref(), Some("dev-1"));
+        assert_eq!(resp.device_fingerprint.as_deref(), Some("fp-x"));
+        // 成功路径必须签发非空 JWT session token
+        let token = resp.session_token.expect("session token issued");
+        assert!(!token.is_empty());
+        assert!(resp.error.is_none());
+        // 配对码单次使用：验证后必须被消耗
+        assert!(pairing_service.get_current_code().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_verify_code_failure_no_code_available() {
+        // 服务端从未生成过配对码 → 明确提示先生成
+        let payload = AuthPayload {
+            stage: AuthStage::VerifyCode,
+            pairing_code: Some("123456".to_string()),
+            ..Default::default()
+        };
+        let result = handle_auth(
+            payload,
+            "msg-vc2".to_string(),
+            test_addr(),
+            &new_pairing_service(),
+            &new_qr_manager(),
+            &JwtService::new(),
+            WebSocketManager::global(),
+            &None,
+            &test_db(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (_, stage, resp) = unwrap_auth(result);
+        assert_eq!(stage, AuthStage::Failed);
+        assert_eq!(
+            resp.error.as_deref(),
+            Some("No pairing code available. Please generate a new code.")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_verify_code_failure_wrong_code() {
+        let pairing_service = new_pairing_service();
+        let code = pairing_service.generate_code().await;
+        // 生成码与字面量冲突的概率为 10^-6，做一个翻转保证必不同
+        let wrong = if code.code == "000000" { "111111" } else { "000000" };
+        let payload = AuthPayload {
+            stage: AuthStage::VerifyCode,
+            pairing_code: Some(wrong.to_string()),
+            ..Default::default()
+        };
+        let result = handle_auth(
+            payload,
+            "msg-vc3".to_string(),
+            test_addr(),
+            &pairing_service,
+            &new_qr_manager(),
+            &JwtService::new(),
+            WebSocketManager::global(),
+            &None,
+            &test_db(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (_, stage, resp) = unwrap_auth(result);
+        assert_eq!(stage, AuthStage::Failed);
+        assert_eq!(resp.error.as_deref(), Some("Invalid or expired pairing code"));
+        // 错误码不消耗配对码，正确码仍可重试
+        assert!(pairing_service.get_current_code().await.is_some());
+    }
+
+    // ==================== handle_auth: QrConnect ====================
+
+    #[tokio::test]
+    async fn test_qr_connect_success() {
+        let qr_manager = new_qr_manager();
+        let token = qr_manager.generate(300).await;
+        let payload = AuthPayload {
+            stage: AuthStage::QrConnect,
+            qr_token: Some(token),
+            device_id: Some("qr-dev".to_string()),
+            device_name: Some("QR Phone".to_string()),
+            device_fingerprint: Some("fp-qr".to_string()),
+            ..Default::default()
+        };
+        let result = handle_auth(
+            payload,
+            "msg-qr".to_string(),
+            test_addr(),
+            &new_pairing_service(),
+            &qr_manager,
+            &JwtService::new(),
+            WebSocketManager::global(),
+            &None,
+            &test_db(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (message_id, stage, resp) = unwrap_auth(result);
+        assert_eq!(message_id, "msg-qr");
+        assert_eq!(stage, AuthStage::Authenticated);
+        assert_eq!(resp.device_id.as_deref(), Some("qr-dev"));
+        assert_eq!(resp.device_name.as_deref(), Some("QR Phone"));
+        let session = resp.session_token.expect("session token issued");
+        assert!(!session.is_empty());
+        // 一次性 token 验证后必须被消耗
+        assert!(qr_manager.get_active().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_qr_connect_without_token_fails() {
+        // 桌面端未生成过二维码 → 返回 QrFailed 与中文引导提示
+        let payload = AuthPayload {
+            stage: AuthStage::QrConnect,
+            qr_token: Some("anything".to_string()),
+            ..Default::default()
+        };
+        let result = handle_auth(
+            payload,
+            "msg-qr2".to_string(),
+            test_addr(),
+            &new_pairing_service(),
+            &new_qr_manager(),
+            &JwtService::new(),
+            WebSocketManager::global(),
+            &None,
+            &test_db(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        match result {
+            Message::Auth { message_id, payload, .. } => {
+                assert_eq!(message_id, "msg-qr2");
+                assert_eq!(payload.stage, AuthStage::QrFailed);
+                assert_eq!(payload.error.as_deref(), Some("请先在桌面端生成二维码"));
+            }
+            other => panic!("expected Message::Auth, got {:?}", other),
+        }
+    }
+}
+

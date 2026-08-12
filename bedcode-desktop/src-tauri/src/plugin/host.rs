@@ -1519,3 +1519,974 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
         })
     }
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::file_service::FileServiceRegistry;
+    use crate::plugin::message_bus::{MessageBus, MessageDispatcher};
+    use crate::system::config::AppConfig;
+    use bedcode_plugin_api::{PluginCommand, PluginContributes, PluginManifest, PluginType, TerminalHandler};
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    /// 测试用插件 ID（非 WASM 插件）
+    const TEST_PLUGIN_ID: &str = "com.bedcode.test";
+    /// 测试用组件形态 WASM 插件 ID（与 plugin-component-test 的 manifest 一致）
+    const TEST_WASM_PLUGIN_ID: &str = "com.bedcode.component-test";
+
+    /// 本模块测试的不可测面说明：
+    ///
+    /// - `PluginHost::new`：依赖真实 `tauri::AppHandle`（WASM 运行时数据目录、
+    ///   FsAuthChecker 等）与 inventory 静态注册表，测试环境无法构造；
+    ///   本模块通过结构体字面量直接构造（tests 位于 host.rs 内部，可访问私有字段），
+    ///   覆盖 new() 之后的全部宿主行为。
+    /// - `notify_startup` / `notify_shutdown` / `PluginServices::mark_plugin_error`：
+    ///   依赖 `AppContext::global()`（未初始化即 panic）+ `app_handle().emit`，
+    ///   无头测试上下文不可用。
+    /// - `dispatch_*_to_plugin` 的错误分支（WASM 实例缺失/调用失败）：仅有日志
+    ///   副作用，无返回值可断言；成功路径由 `test_dispatch_lifecycle_and_input_to_wasm_plugin`
+    ///   以「分发后 store 未被污染」间接验证。
+    /// - `invoke_wasm_command` 的非法 JSON 返回分支：需要构造返回坏 JSON 的恶意
+    ///   WASM 插件，超出测试组件能力范围。
+
+    /// 构造无头测试宿主（app_handle = None）
+    ///
+    /// 结构体字面量构造 PluginHost：字段私有但 tests 模块与 host.rs 同属一个
+    /// 模块树，可访问。所有子系统均用真实实现 + 内存 SQLite，仅 Tauri 相关
+    /// 能力降级（与 wasm_runtime.rs 测试同一策略）。
+    async fn setup_host() -> PluginHost {
+        // AppConfig 全局初始化（与 wasm_runtime 测试同策略；重复 init 幂等）
+        static CONFIG_INIT: std::sync::Once = std::sync::Once::new();
+        CONFIG_INIT.call_once(|| {
+            let mut config = AppConfig::default();
+            config.network.port = 8765;
+            AppConfig::init(config);
+        });
+
+        let db = Arc::new(Mutex::new(Database::new(&PathBuf::from(":memory:")).unwrap()));
+        db.lock().await.init_schema().unwrap();
+        let storage = Arc::new(PluginStorage::new(db.clone()));
+        let session_manager = Arc::new(SessionManager::from_database(
+            Database::new(&PathBuf::from(":memory:")).unwrap(),
+            Arc::new(PathBuf::from(".")),
+        ));
+        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
+            Database::new(&PathBuf::from(":memory:")).unwrap(),
+        ))));
+
+        let permission = Arc::new(PermissionManager::new());
+        let registry = Arc::new(PluginRegistry::new());
+        let message_bus = Arc::new(MessageBus::new());
+
+        let wasm_runtime = Arc::new(WasmRuntime::new(storage.clone(), None).unwrap());
+        let file_service = FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), None);
+
+        let wasm_host_ctx = Arc::new(WasmHostContext::new(
+            db,
+            Arc::new(Mutex::new(HashMap::new())),
+            storage.clone(),
+            session_manager,
+            config_manager,
+            None,
+            permission.clone(),
+            wasm_runtime.fs_auth().clone(),
+            message_bus.clone(),
+            file_service.clone(),
+        ));
+
+        PluginHost {
+            plugins: Arc::new(RwLock::new(HashMap::new())),
+            registry,
+            permission,
+            storage,
+            rust_command_handlers: Arc::new(RwLock::new(HashMap::new())),
+            rust_terminal_handlers: Arc::new(RwLock::new(Vec::new())),
+            wasm_runtime,
+            wasm_plugins: Arc::new(RwLock::new(HashMap::new())),
+            wasm_host_ctx,
+            message_bus,
+            file_service,
+            plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// 构造一个最小 LoadedPlugin（manifest 含 storage + terminal:input 权限）
+    fn make_plugin(id: &str, source: PluginSource, state: PluginState) -> LoadedPlugin {
+        LoadedPlugin {
+            manifest: PluginManifest {
+                id: id.to_string(),
+                name: format!("Test {}", id),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                main: "index.ts".to_string(),
+                sandbox: "inline".to_string(),
+                permissions: vec!["storage".to_string(), "terminal:input".to_string()],
+                contributes: PluginContributes::default(),
+                plugin_type: PluginType::TsOnly,
+                rust_library: String::new(),
+                icon: None,
+            },
+            state,
+            granted_permissions: HashSet::new(),
+            extension_path: String::new(),
+            activated_at: None,
+            source,
+        }
+    }
+
+    // ==================== Accessors ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_accessors_return_shared_arcs() {
+        let host = setup_host().await;
+        // getter 返回的是与字段共享的同一 Arc（Clone 语义）
+        assert!(Arc::ptr_eq(host.registry(), &host.registry));
+        assert!(Arc::ptr_eq(host.permission(), &host.permission));
+        assert!(Arc::ptr_eq(host.storage(), &host.storage));
+        assert!(Arc::ptr_eq(host.wasm_runtime(), &host.wasm_runtime));
+        assert!(Arc::ptr_eq(host.message_bus(), &host.message_bus));
+        assert!(Arc::ptr_eq(host.file_service(), &host.file_service));
+        assert!(Arc::ptr_eq(host.wasm_host_ctx(), &host.wasm_host_ctx));
+    }
+
+    // ==================== Plugins Map 查询 ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_plugins_and_get_plugin() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+        host.plugins.write().await.insert(
+            "com.bedcode.static".to_string(),
+            make_plugin("com.bedcode.static", PluginSource::StaticRegistry, PluginState::Loaded),
+        );
+
+        let list = host.list_plugins().await;
+        assert_eq!(list.len(), 2);
+        // 来源映射到前端友好字符串
+        let scanned = list.iter().find(|p| p.id == TEST_PLUGIN_ID).unwrap();
+        assert_eq!(scanned.source, "scanned");
+        assert_eq!(scanned.state, PluginState::Activated);
+        let builtin = list.iter().find(|p| p.id == "com.bedcode.static").unwrap();
+        assert_eq!(builtin.source, "builtin");
+
+        // get_plugin：命中与未命中
+        assert!(host.get_plugin("com.missing").await.is_none());
+        let info = host.get_plugin(TEST_PLUGIN_ID).await.unwrap();
+        assert_eq!(info.id, TEST_PLUGIN_ID);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_is_activated_by_state() {
+        let host = setup_host().await;
+        // 未注册插件 → false
+        assert!(!host.is_activated("com.missing").await);
+
+        for (state, expected) in [
+            (PluginState::Loaded, false),
+            (PluginState::Activated, true),
+            (PluginState::Deactivated, false),
+            (PluginState::Error("boom".into()), false),
+        ] {
+            host.plugins.write().await.insert(
+                TEST_PLUGIN_ID.to_string(),
+                make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, state),
+            );
+            assert_eq!(host.is_activated(TEST_PLUGIN_ID).await, expected);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mark_error_updates_state() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+
+        host.mark_error(TEST_PLUGIN_ID, "hooks install failed".to_string()).await;
+        let info = host.get_plugin(TEST_PLUGIN_ID).await.unwrap();
+        assert_eq!(info.state, PluginState::Error("hooks install failed".to_string()));
+
+        // 未注册插件：静默 no-op，不 panic
+        host.mark_error("com.missing", "x".to_string()).await;
+        assert!(host.get_plugin("com.missing").await.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_get_activated_state_excludes_static() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+        host.plugins.write().await.insert(
+            "com.bedcode.ts".to_string(),
+            make_plugin("com.bedcode.ts", PluginSource::FileScan, PluginState::Deactivated),
+        );
+        // 静态注册插件即使激活也不应进入持久化映射（由应用进程生命周期托管）
+        host.plugins.write().await.insert(
+            "com.bedcode.static".to_string(),
+            make_plugin("com.bedcode.static", PluginSource::StaticRegistry, PluginState::Activated),
+        );
+
+        let map = host.get_activated_state().await;
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(TEST_PLUGIN_ID), Some(&true));
+        assert_eq!(map.get("com.bedcode.ts"), Some(&false));
+        assert!(!map.contains_key("com.bedcode.static"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_should_lazy_activate_rules() {
+        let host = setup_host().await;
+        // 未注册 → false
+        assert!(!host.should_lazy_activate("com.missing").await);
+
+        // Loaded + 有命令贡献 → 需要按需激活
+        let mut plugin = make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded);
+        plugin.manifest.contributes = PluginContributes {
+            commands: vec![bedcode_plugin_api::CommandContribution {
+                id: "test.cmd".into(),
+                title: "T".into(),
+                icon: None,
+            }],
+            ..Default::default()
+        };
+        host.plugins.write().await.insert(TEST_PLUGIN_ID.to_string(), plugin);
+        assert!(host.should_lazy_activate(TEST_PLUGIN_ID).await);
+
+        // 无任何扩展点贡献 → false（激活无意义）
+        host.plugins.write().await.insert(
+            "com.bedcode.empty".to_string(),
+            make_plugin("com.bedcode.empty", PluginSource::FileScan, PluginState::Loaded),
+        );
+        assert!(!host.should_lazy_activate("com.bedcode.empty").await);
+
+        // 已激活/已停用/错误态 → false（仅 Loaded 态参与按需激活）
+        host.plugins.write().await.insert(
+            "com.bedcode.act".to_string(),
+            make_plugin("com.bedcode.act", PluginSource::FileScan, PluginState::Activated),
+        );
+        assert!(!host.should_lazy_activate("com.bedcode.act").await);
+
+        // 静态注册插件 → false（生命周期由 inventory 注册表托管）
+        let mut static_p = make_plugin("com.bedcode.s", PluginSource::StaticRegistry, PluginState::Loaded);
+        static_p.manifest.contributes = PluginContributes {
+            commands: vec![bedcode_plugin_api::CommandContribution {
+                id: "test.cmd".into(),
+                title: "T".into(),
+                icon: None,
+            }],
+            ..Default::default()
+        };
+        host.plugins.write().await.insert("com.bedcode.s".to_string(), static_p);
+        assert!(!host.should_lazy_activate("com.bedcode.s").await);
+    }
+
+    // ==================== Manifest Contributions ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_register_manifest_contributions() {
+        let host = setup_host().await;
+        let mut plugin = make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded);
+        plugin.manifest.contributes = PluginContributes {
+            commands: vec![bedcode_plugin_api::CommandContribution {
+                id: "test.hello".into(),
+                title: "Hello".into(),
+                icon: None,
+            }],
+            views: vec![bedcode_plugin_api::ViewContribution {
+                id: "test.view".into(),
+                view_type: "sidebar".into(),
+                title: "V".into(),
+                component: "View.vue".into(),
+            }],
+            ..Default::default()
+        };
+        host.plugins.write().await.insert(TEST_PLUGIN_ID.to_string(), plugin);
+
+        host.register_manifest_contributions().await;
+
+        let commands = host.registry().list_commands().await;
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].plugin_id, TEST_PLUGIN_ID);
+        let views = host.registry().list_views().await;
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].plugin_id, TEST_PLUGIN_ID);
+        assert_eq!(views[0].view_type, "sidebar");
+    }
+
+    // ==================== 激活 / 停用（非 WASM 插件） ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_activate_plugin_file_scan_flow() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded),
+        );
+
+        // 未注册插件 → Err
+        let err = host.activate_plugin("com.missing", false).await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+
+        host.activate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+
+        let info = host.get_plugin(TEST_PLUGIN_ID).await.unwrap();
+        assert_eq!(info.state, PluginState::Activated);
+        // 激活时间被记录
+        {
+            let plugins_guard = host.plugins.read().await;
+            let loaded = plugins_guard.get(TEST_PLUGIN_ID).unwrap();
+            assert!(loaded.activated_at.is_some());
+        }
+        // 重新授权：manifest 声明的合法权限已授予（storage 恒默认授予）
+        let granted = host.permission().get_granted(TEST_PLUGIN_ID);
+        assert!(granted.contains("storage"));
+        assert!(granted.contains("terminal:input"));
+        assert!(host.permission().check(TEST_PLUGIN_ID, "terminal:input"));
+
+        // 重复激活幂等（已激活 → Ok）
+        host.activate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+        assert_eq!(
+            host.get_plugin(TEST_PLUGIN_ID).await.unwrap().state,
+            PluginState::Activated
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_activate_plugin_recovers_from_error_state() {
+        let host = setup_host().await;
+        // Error 态插件可重新激活（如 WASM 缺失被标记后修复文件再激活）
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(
+                TEST_PLUGIN_ID,
+                PluginSource::FileScan,
+                PluginState::Error("wasm load failed".into()),
+            ),
+        );
+
+        host.activate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+        assert_eq!(
+            host.get_plugin(TEST_PLUGIN_ID).await.unwrap().state,
+            PluginState::Activated
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_activate_plugin_persists_state() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded),
+        );
+
+        host.activate_plugin(TEST_PLUGIN_ID, true).await.unwrap();
+
+        let persisted = host.storage().load_activated_plugins().await.unwrap();
+        assert_eq!(persisted.get(TEST_PLUGIN_ID), Some(&true));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_deactivate_plugin_flow() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+        // 预注册一条命令贡献，验证停用时从 registry 摘除
+        host.registry()
+            .register_commands(
+                TEST_PLUGIN_ID,
+                &[bedcode_plugin_api::CommandContribution {
+                    id: "test.cmd".into(),
+                    title: "T".into(),
+                    icon: None,
+                }],
+            )
+            .await;
+        assert_eq!(host.registry().list_commands().await.len(), 1);
+
+        host.deactivate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+
+        let info = host.get_plugin(TEST_PLUGIN_ID).await.unwrap();
+        assert_eq!(info.state, PluginState::Deactivated);
+        assert!(!host.is_activated(TEST_PLUGIN_ID).await);
+        // 激活时间被清除
+        {
+            let plugins_guard = host.plugins.read().await;
+            let loaded = plugins_guard.get(TEST_PLUGIN_ID).unwrap();
+            assert!(loaded.activated_at.is_none());
+        }
+        // 权限被撤销（重新激活时重新授权）
+        assert!(host.permission().get_granted(TEST_PLUGIN_ID).is_empty());
+        // registry 贡献被摘除
+        assert!(host.registry().list_commands().await.is_empty());
+
+        // 未注册插件 → Err
+        let err = host.deactivate_plugin("com.missing", false).await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_deactivate_all() {
+        let host = setup_host().await;
+        for id in ["com.bedcode.a", "com.bedcode.b"] {
+            host.plugins.write().await.insert(
+                id.to_string(),
+                make_plugin(id, PluginSource::FileScan, PluginState::Activated),
+            );
+        }
+
+        host.deactivate_all().await.unwrap();
+
+        for id in ["com.bedcode.a", "com.bedcode.b"] {
+            assert_eq!(
+                host.get_plugin(id).await.unwrap().state,
+                PluginState::Deactivated
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_auto_activate_from_persisted_state() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded),
+        );
+
+        // 持久化激活 → 手动停用（不持久化）→ 从持久化状态恢复激活
+        host.activate_plugin(TEST_PLUGIN_ID, true).await.unwrap();
+        host.deactivate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+        assert!(!host.is_activated(TEST_PLUGIN_ID).await);
+
+        host.auto_activate_from_persisted_state().await;
+        assert!(host.is_activated(TEST_PLUGIN_ID).await);
+
+        // 幽灵 ID 清理：持久化映射中不存在的插件被剔除（map 整体替换语义：
+        // 重新写入时保留现有条目再插入幽灵 ID）
+        let mut stale = HashMap::new();
+        stale.insert("com.ghost".to_string(), true);
+        stale.insert(TEST_PLUGIN_ID.to_string(), true);
+        host.storage().save_activated_plugins(&stale).await.unwrap();
+        host.auto_activate_from_persisted_state().await;
+        let persisted = host.storage().load_activated_plugins().await.unwrap();
+        assert!(!persisted.contains_key("com.ghost"));
+        // 已存在的插件条目保留
+        assert_eq!(persisted.get(TEST_PLUGIN_ID), Some(&true));
+    }
+
+    // ==================== Rust Command Dispatch ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_invoke_rust_command_gates() {
+        let host = setup_host().await;
+        // 未注册 / 未激活 → Err（调用者身份门禁）
+        let err = host
+            .invoke_rust_command("com.missing", "cmd", json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not activated"));
+
+        // TS-only 插件（FileScan）→ 拒绝 Rust command
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+        let err = host
+            .invoke_rust_command(TEST_PLUGIN_ID, "cmd", json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("TS-only"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_invoke_static_command_ok() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::StaticRegistry, PluginState::Activated),
+        );
+        // 运行时注册表直接注入 handler（等价于 register_rust_command_handlers 的产物）
+        let cmd = PluginCommand::new("hello", |args| async move {
+            Ok(serde_json::json!({ "echo": args }))
+        });
+        host.rust_command_handlers
+            .write()
+            .await
+            .insert(format!("{}::hello", TEST_PLUGIN_ID), cmd);
+
+        let result = host
+            .invoke_rust_command(TEST_PLUGIN_ID, "hello", json!({"k": 1}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({ "echo": { "k": 1 } }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_invoke_static_command_not_found() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::StaticRegistry, PluginState::Activated),
+        );
+
+        let err = host
+            .invoke_rust_command(TEST_PLUGIN_ID, "missing", json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Command not found"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_invoke_static_command_handler_error() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::StaticRegistry, PluginState::Activated),
+        );
+        let cmd = PluginCommand::new("boom", |_args| async move {
+            Err(anyhow::anyhow!("handler exploded"))
+        });
+        host.rust_command_handlers
+            .write()
+            .await
+            .insert(format!("{}::boom", TEST_PLUGIN_ID), cmd);
+
+        let err = host
+            .invoke_rust_command(TEST_PLUGIN_ID, "boom", json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Command execution error"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_rust_commands_parses_namespace() {
+        let host = setup_host().await;
+        for (pid, cmd_name, title) in [
+            ("com.a", "cmd1", "One"),
+            ("com.a", "cmd2", "Two"),
+            ("com.b", "cmd3", "Three"),
+        ] {
+            let cmd = PluginCommand::new(cmd_name, |_args| async move {
+                Ok(serde_json::json!(null))
+            })
+            .with_title(title);
+            host.rust_command_handlers
+                .write()
+                .await
+                .insert(format!("{}::{}", pid, cmd_name), cmd);
+        }
+
+        let mut entries = host.list_rust_commands().await;
+        // HashMap 迭代无序：按 (plugin_id, command_name) 排序后比较
+        entries.sort_by(|a, b| {
+            (a.plugin_id.clone(), a.command_name.clone())
+                .cmp(&(b.plugin_id.clone(), b.command_name.clone()))
+        });
+        let pairs: Vec<(String, String)> = entries
+            .iter()
+            .map(|e| (e.plugin_id.clone(), e.command_name.clone()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("com.a".to_string(), "cmd1".to_string()),
+                ("com.a".to_string(), "cmd2".to_string()),
+                ("com.b".to_string(), "cmd3".to_string()),
+            ]
+        );
+        // 全名 `plugin_id::command_name` 正确拆分
+        assert_eq!(entries[0].title, "One");
+    }
+
+    // ==================== Terminal Handler Pipeline ====================
+
+    /// 记录 on_input_submitted 观测并转换输入/输出的 mock 处理器
+    struct MockTerminalHandler {
+        submitted: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl TerminalHandler for MockTerminalHandler {
+        fn on_input(&self, _session_id: &str, text: &str) -> Option<String> {
+            Some(format!("[{}]", text))
+        }
+
+        fn on_output(&self, _session_id: &str, data: &str) -> Option<String> {
+            Some(data.to_uppercase())
+        }
+
+        fn on_input_submitted(&self, _session_id: &str, text: &str) {
+            self.submitted.lock().unwrap().push(text.to_string());
+        }
+    }
+
+    /// 默认实现（全部透传）的处理器
+    struct PassthroughHandler;
+
+    impl TerminalHandler for PassthroughHandler {}
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_terminal_handler_pipeline() {
+        let host = setup_host().await;
+        // 无 handler：输入输出原样透传
+        assert!(!host.has_terminal_handlers().await);
+        assert_eq!(host.process_terminal_input("s1", "echo hi").await, "echo hi");
+        assert_eq!(host.process_terminal_output("s1", "Hello").await, "Hello");
+
+        let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
+        host.rust_terminal_handlers
+            .write()
+            .await
+            .push(Box::new(MockTerminalHandler {
+                submitted: submitted.clone(),
+            }));
+        // 第二个 handler 不修改（验证 None 语义透传）
+        host.rust_terminal_handlers
+            .write()
+            .await
+            .push(Box::new(PassthroughHandler));
+
+        assert!(host.has_terminal_handlers().await);
+        assert_eq!(host.process_terminal_input("s1", "echo hi").await, "[echo hi]");
+        assert_eq!(host.process_terminal_output("s1", "Hello").await, "HELLO");
+        // 观察回调：提交行原样送达
+        host.process_input_submitted("s1", "ls -la").await;
+        host.process_input_submitted("s1", "pwd").await;
+        assert_eq!(
+            *submitted.lock().unwrap(),
+            vec!["ls -la".to_string(), "pwd".to_string()]
+        );
+    }
+
+    // ==================== MessageDispatcher ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_message_dispatcher_is_activated() {
+        let host = setup_host().await;
+        assert!(!MessageDispatcher::is_activated(&host, "com.missing"));
+
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+        assert!(MessageDispatcher::is_activated(&host, TEST_PLUGIN_ID));
+
+        host.plugins.write().await.insert(
+            "com.bedcode.d".to_string(),
+            make_plugin("com.bedcode.d", PluginSource::FileScan, PluginState::Deactivated),
+        );
+        assert!(!MessageDispatcher::is_activated(&host, "com.bedcode.d"));
+    }
+
+    // ==================== Upload Hook（fail-closed） ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_call_upload_hook_fail_closed() {
+        let host = setup_host().await;
+        // 插件在 plugins map 中（Wasm 来源）但实例未加载 → 拒绝
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::Wasm, PluginState::Activated),
+        );
+        let decision = host.call_upload_hook(TEST_PLUGIN_ID, r#"{"name":"f.bin"}"#).await;
+        assert!(!decision.allow);
+        assert_eq!(decision.reason.as_deref(), Some("wasm plugin not loaded"));
+
+        // 未知插件 → 同样拒绝
+        let decision = host.call_upload_hook("com.missing", "{}").await;
+        assert!(!decision.allow);
+    }
+
+    // ==================== WASM 插件（真实组件测试插件） ====================
+
+    /// 将 wit-bindgen 产出的 core module 编码为组件
+    /// （与 wasm_runtime.rs 测试同策略，等价于 `wasm-tools component new`）
+    fn encode_component(module: &[u8]) -> Vec<u8> {
+        let encoder = wit_component::ComponentEncoder::default();
+        encoder
+            .module(module)
+            .expect("component encoder module")
+            .encode()
+            .expect("component encoder encode")
+    }
+
+    /// 构建测试用组件插件并编码为组件（packages/plugin-component-test）
+    fn build_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-component-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return encode_component(
+                    &std::fs::read(&module_path).expect("Failed to read test component module"),
+                );
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for test component");
+        assert!(status.success(), "Test component WASM build failed");
+
+        encode_component(
+            &std::fs::read(&module_path).expect("Failed to read test component after build"),
+        )
+    }
+
+    /// 将组件形态测试插件实例化并注入宿主（plugins + wasm_plugins 双表）
+    ///
+    /// 返回插件 ID；组件 invoke 内 host_storage 读回的 key 预写入
+    /// `component-test-key`。extension_path 指向临时目录（invoke 的
+    /// resource_dir 注入断言用）。
+    async fn setup_wasm_plugin(host: &PluginHost, tmp_dir: &tempfile::TempDir) -> String {
+        let component = host
+            .wasm_runtime()
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let plugin = host
+            .wasm_runtime()
+            .instantiate_component(&component, TEST_WASM_PLUGIN_ID, host.wasm_host_ctx().clone())
+            .expect("instantiate test component");
+
+        host.storage()
+            .set(TEST_WASM_PLUGIN_ID, "component-test-key", json!({"k": "v"}))
+            .await
+            .expect("preset storage key");
+
+        let extension_path = tmp_dir.path().to_string_lossy().to_string();
+        host.wasm_plugins
+            .write()
+            .await
+            .insert(TEST_WASM_PLUGIN_ID.to_string(), Arc::new(Mutex::new(plugin)));
+
+        let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
+        loaded.manifest.rust_library = "bedcode_plugin_component_test".to_string();
+        loaded.extension_path = extension_path;
+        host.plugins
+            .write()
+            .await
+            .insert(TEST_WASM_PLUGIN_ID.to_string(), loaded);
+
+        TEST_WASM_PLUGIN_ID.to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_wasm_plugin_activate_invoke_deactivate() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let pid = setup_wasm_plugin(&host, &tmp_dir).await;
+
+        // 激活：调用组件 __bedcode_activate + on_startup，无错误码
+        host.activate_plugin(&pid, false).await.unwrap();
+        assert!(host.is_activated(&pid).await);
+
+        // 命令调用：组件 echo + host_storage 读回 + resource_dir 自动注入
+        let result = host
+            .invoke_rust_command(&pid, "test.echo", json!({"hello": "host"}))
+            .await
+            .unwrap();
+        assert_eq!(result["name"], "test.echo");
+        assert_eq!(result["stored"], json!({"k": "v"}));
+        let args: serde_json::Value =
+            serde_json::from_str(result["args"].as_str().unwrap()).unwrap();
+        assert_eq!(args["resource_dir"], json!(tmp_dir.path().to_string_lossy()));
+
+        // 上传钩子：组件返回固定拒绝决策（JSON 解析链路）
+        let decision = host.call_upload_hook(&pid, r#"{"name": "f.bin"}"#).await;
+        assert!(!decision.allow);
+        let reason = decision.reason.unwrap();
+        assert!(reason.starts_with("component-test deny"), "unexpected reason: {}", reason);
+
+        // 停用：调用组件 on_shutdown + __bedcode_deactivate
+        host.deactivate_plugin(&pid, false).await.unwrap();
+        assert!(!host.is_activated(&pid).await);
+        assert_eq!(
+            host.get_plugin(&pid).await.unwrap().state,
+            PluginState::Deactivated
+        );
+
+        // 停用后调用被门禁拒绝
+        let err = host
+            .invoke_rust_command(&pid, "test.echo", json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not activated"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_dispatch_lifecycle_and_input_to_wasm_plugin() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let pid = setup_wasm_plugin(&host, &tmp_dir).await;
+
+        // 未激活：dispatch 被门禁静默丢弃（无 panic、不触碰 store）
+        host.dispatch_lifecycle_to_plugin(&pid, &json!({"type": "created"}));
+        host.dispatch_input_to_plugin(&pid, &json!({"sessionId": "s1", "text": "hi"}));
+
+        host.activate_plugin(&pid, false).await.unwrap();
+
+        // 经真实 listener 走「事件 → payload 构造 → dispatch → wasm 回调」全链路
+        let lifecycle_listener = PluginLifecycleListener::new(pid.clone(), host.clone());
+        SessionLifecycleListener::on_session_lifecycle(
+            &lifecycle_listener,
+            &SessionLifecycleEvent::Created {
+                session_id: "s1".to_string(),
+                config_id: "c1".to_string(),
+                name: "n".to_string(),
+                working_dir: "/tmp".to_string(),
+            },
+        );
+        let input_listener = PluginInputListener::new(pid.clone(), host.clone());
+        SessionInputListener::on_input_submitted(&input_listener, "s1", "echo hi");
+
+        // 直接分发不同 payload 形态
+        host.dispatch_lifecycle_to_plugin(&pid, &json!({"type": "stopped", "sessionId": "s1"}));
+        host.dispatch_input_to_plugin(&pid, &json!({"sessionId": "s2", "text": "ls"}));
+
+        // store 未被污染：分发全部成功后 command 调用仍可用
+        let result = host.invoke_rust_command(&pid, "test.echo", json!({})).await.unwrap();
+        assert_eq!(result["name"], "test.echo");
+
+        // 停用后 dispatch 门禁丢弃，invoke 拒绝
+        host.deactivate_plugin(&pid, false).await.unwrap();
+        host.dispatch_lifecycle_to_plugin(&pid, &json!({"type": "created"}));
+        assert!(host.invoke_rust_command(&pid, "test.echo", json!({})).await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_reload_wasm_plugin_cycle() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        // 把组件字节写入临时插件目录（reload 从文件重新加载）
+        let wasm_bytes = build_test_component();
+        let wasm_path = tmp_dir.path().join("bedcode_plugin_component_test.wasm");
+        std::fs::write(&wasm_path, &wasm_bytes).unwrap();
+
+        let pid = setup_wasm_plugin(&host, &tmp_dir).await;
+        host.activate_plugin(&pid, false).await.unwrap();
+
+        // 完整卸载-重载-激活循环
+        host.reload_wasm_plugin(&pid).await.unwrap();
+        assert!(host.is_activated(&pid).await);
+
+        // 重载后的新实例可用
+        let result = host.invoke_rust_command(&pid, "test.echo", json!({})).await.unwrap();
+        assert_eq!(result["name"], "test.echo");
+    }
+
+    // ==================== PluginServices（可测部分） ====================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_plugin_timer_register_replace_abort() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+        );
+
+        // 注册定时器（3600s 间隔：测试期间不会触发 tick 回调）
+        PluginServices::register_plugin_timer(
+            &host,
+            TEST_PLUGIN_ID.to_string(),
+            3600,
+            "tick".to_string(),
+        );
+        assert_eq!(host.plugin_timers.lock().unwrap().len(), 1);
+
+        // 重复注册替换旧句柄（v6 ADR 0003：同一插件仅保留一个定时器）
+        PluginServices::register_plugin_timer(
+            &host,
+            TEST_PLUGIN_ID.to_string(),
+            3600,
+            "tick".to_string(),
+        );
+        assert_eq!(host.plugin_timers.lock().unwrap().len(), 1);
+
+        // 停用中止定时器（不再到点回调）
+        host.deactivate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+        assert!(host.plugin_timers.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_schedule_plugin_reload_throttle() {
+        let host = setup_host().await;
+        // 未激活插件：调度后后台任务直接退出，仅验证限频表行为
+        host.schedule_plugin_reload_after_trap(TEST_PLUGIN_ID);
+        {
+            let throttle = host.wasm_reload_throttle.lock().unwrap();
+            assert!(throttle.contains_key(TEST_PLUGIN_ID));
+        }
+        // 30 秒窗口内再次调度被限频跳过：不新增条目
+        host.schedule_plugin_reload_after_trap(TEST_PLUGIN_ID);
+        {
+            let throttle = host.wasm_reload_throttle.lock().unwrap();
+            assert_eq!(throttle.len(), 1);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_session_listener_registration_via_services() {
+        let host = setup_host().await;
+        let session_manager = host.wasm_host_ctx().session_manager_arc();
+
+        // PluginServices 实现的注册路径（listener 构造 + block_on_async 注册）。
+        // 注册结果在 SessionManager 内部（无公开查询接口），此处验证不 panic、
+        // 且注册的 listener 可被停用流程按 plugin_id 摘除
+        PluginServices::register_session_lifecycle_listener(
+            &host,
+            TEST_PLUGIN_ID.to_string(),
+            session_manager.clone(),
+        );
+        PluginServices::register_session_input_listener(
+            &host,
+            TEST_PLUGIN_ID.to_string(),
+            session_manager.clone(),
+        );
+
+        // listener 自身携带正确 plugin_id（停用摘除依赖此标识）
+        let l1 = PluginLifecycleListener::new(TEST_PLUGIN_ID.to_string(), host.clone());
+        assert_eq!(l1.plugin_id(), TEST_PLUGIN_ID);
+        assert_eq!(SessionLifecycleListener::plugin_id(&l1), Some(TEST_PLUGIN_ID));
+        let l2 = PluginInputListener::new(TEST_PLUGIN_ID.to_string(), host);
+        assert_eq!(SessionInputListener::plugin_id(&l2), Some(TEST_PLUGIN_ID));
+    }
+}

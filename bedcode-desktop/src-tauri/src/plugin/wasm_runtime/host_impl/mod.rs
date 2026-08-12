@@ -49,3 +49,90 @@ pub(super) fn check_permission(
         false
     }
 }
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::plugin::file_service::FileServiceRegistry;
+    use crate::plugin::fs_auth::FsAuthChecker;
+    use crate::plugin::message_bus::MessageBus;
+    use crate::plugin::permission::PermissionManager;
+    use crate::plugin::storage::PluginStorage;
+    use crate::session::{SessionConfigManager, SessionManager};
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    /// 构造全内存、无头（AppHandle=None）的宿主上下文
+    ///
+    /// 与 wasm_runtime.rs 测试的 setup_wasm_runtime 等价，但不创建 WasmRuntime：
+    /// host_impl 测试只验证宿主能力实现本身，不加载 wasm 组件（免 wasmtime 依赖）
+    pub(crate) fn build_host_ctx() -> Arc<WasmHostContext> {
+        let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
+        db.init_schema().expect("init schema");
+        let db = Arc::new(Mutex::new(db));
+        let storage = Arc::new(PluginStorage::new(db.clone()));
+        let session_manager = Arc::new(SessionManager::from_database(
+            Database::new(&Path::new(":memory:")).expect("in-memory db"),
+            Arc::new(std::path::PathBuf::from(".")),
+        ));
+        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
+            {
+                let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
+                db.init_schema().expect("init schema");
+                db
+            }
+        ))));
+        let permission = Arc::new(PermissionManager::new());
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
+        let message_bus = Arc::new(MessageBus::new());
+        let file_service = FileServiceRegistry::new(fs_auth.clone(), None);
+        Arc::new(WasmHostContext::new(
+            db,
+            Arc::new(Mutex::new(HashMap::new())),
+            storage,
+            session_manager,
+            config_manager,
+            None,
+            permission,
+            fs_auth,
+            message_bus,
+            file_service,
+        ))
+    }
+
+    /// 为插件授予权限（manifest 授权路径的测试等价物）
+    pub(crate) fn grant_permissions(ctx: &WasmHostContext, plugin_id: &str, perms: &[&str]) {
+        let requested: Vec<String> = perms.iter().map(|s| s.to_string()).collect();
+        ctx.permission.grant_permissions(plugin_id, &requested);
+    }
+
+    // ==================== check_permission ====================
+
+    /// 已授权插件：校验通过
+    #[test]
+    fn check_permission_granted_returns_true() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "p1", &[crate::plugin::permission::PERMISSION_STORAGE]);
+        assert!(check_permission(&ctx, "p1", "storage", "host_test"));
+    }
+
+    /// 从未授权的插件：一律拒绝（grant 前 storage 也拿不到）
+    #[test]
+    fn check_permission_ungranted_plugin_rejected() {
+        let ctx = build_host_ctx();
+        assert!(!check_permission(&ctx, "p1", "storage", "host_test"));
+    }
+
+    /// 授权了 A 权限但请求 B 权限：拒绝（权限粒度隔离）
+    #[test]
+    fn check_permission_wrong_permission_rejected() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "p1", &[crate::plugin::permission::PERMISSION_STORAGE]);
+        assert!(!check_permission(&ctx, "p1", "fs:read", "host_test"));
+    }
+}
