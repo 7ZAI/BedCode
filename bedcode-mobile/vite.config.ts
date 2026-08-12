@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite'
+import type { Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
-import { readFileSync } from 'fs'
+import { readFileSync, rmSync } from 'fs'
 
 const host = process.env.TAURI_DEV_HOST
 
@@ -9,9 +10,21 @@ const host = process.env.TAURI_DEV_HOST
 const tauriConf = JSON.parse(readFileSync(resolve(__dirname, 'src-tauri/tauri.conf.json'), 'utf-8'))
 const appVersion = tauriConf.version || '0.0.0'
 
+// ==================== 构建时排除 dev-only 审查工具 ====================
+// public/mock-harness.html 仅用于 dev server 纯前端 UI 审查（见 .scratch/mobile-ui-review/spec.md），
+// 不允许进入生产构建产物。public 文件由 vite copyPublicDir 在 writeBundle 阶段复制（不经 rollup bundle，
+// generateBundle 中删除无效），故在 writeBundle 后删除。
+const excludeDevOnlyPublicAssets: Plugin = {
+  name: 'bedcode:exclude-dev-only-public',
+  apply: 'build',
+  writeBundle() {
+    rmSync(resolve(__dirname, 'dist', 'mock-harness.html'), { force: true })
+  },
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), excludeDevOnlyPublicAssets],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },

@@ -312,7 +312,8 @@ const sessionName = computed(() => session.value?.name || sessionId.value || t('
 const isSessionActive = computed(() => isMockSession(sessionId.value) || (session.value?.status || 'stopped') === 'running')
 
 const inputPlaceholder = computed(() => {
-  if (isMockSession(sessionId.value)) return t('mobile.session.mockName')
+  // mock 会话与标题（mockName）不再重复：直接使用通用命令占位文案
+  if (isMockSession(sessionId.value)) return t('mobile.input.commandPlaceholder')
   if (!isConnected.value) return t('mobile.input.disconnected') + '...'
   if (!isSessionActive.value) return t('mobile.connection.connectFailed')
   return t('mobile.input.commandPlaceholder')
@@ -869,7 +870,8 @@ onMounted(async () => {
   await nextTick()
   await initTerminal()
 
-  if (isMockSession(sessionId.value)) {
+  // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
+  if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
     if (terminalRef.value) {
       mockTerminal.startOutput(terminalRef.value)
     }
