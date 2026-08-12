@@ -133,12 +133,20 @@ internal class SaveToDocumentArgs {
  * 句柄表以 uri 为 key：任务内断线重连（fd 保持）重复 safOpen 同一 uri 时
  * 直接复用既有句柄，流位置延续上次中断点（顺序续读，不重读）——pipe 流
  * 不可 seek 时的任务内续传语义（spec M3）。
+ *
+ * **必须强引用持有 pfd**：ParcelFileDescriptor 实现了 Closeable，若 safOpen
+ * 返回后 pfd 局部变量失去引用，GC 会在某个时机 finalize 并 close 底层 fd，
+ * 后续 safRead 的 input.read() 即报 EBADF (Bad file descriptor)。此前仅把
+ * pfd.fileDescriptor / FileInputStream(pfd.fileDescriptor) 存进句柄，
+ * pfd 本身可被 GC，导致上传中途随机失败。修复：句柄强持有 pfd，
+ * closeStream 先关 input 再关 pfd（二者等价关底层 fd，双保险）。
  */
 internal class StreamHandle(
     val handleId: String,
     val uri: Uri,
     val input: FileInputStream,
     val fd: java.io.FileDescriptor,
+    val pfd: ParcelFileDescriptor,
     val seekable: Boolean,
     /** 文件总大小（statSize；pipe 流/未知为 0），safOpen 一并回报供进度条 */
     val size: Long,
@@ -490,7 +498,9 @@ class SafTransferPlugin(private val activity: Activity) : Plugin(activity) {
             val existing = streams[args.uri]
             if (existing != null) {
                 if (args.offset == 0L) {
-                    // 显式从头：关闭旧 fd 重开（重试/重建 session 语义）
+                    // 显式从头：关闭旧 fd 重开（重试/重建 session 语义）；
+                    // 立即移出表，后续 openFileDescriptor 失败也不残留已关句柄
+                    streams.remove(args.uri)
                     closeStream(existing)
                 } else {
                     // 任务内续读：复用 fd，effectiveOffset = 当前流位置
@@ -540,6 +550,7 @@ class SafTransferPlugin(private val activity: Activity) : Plugin(activity) {
                 uri = uri,
                 input = input,
                 fd = pfd.fileDescriptor,
+                pfd = pfd,
                 seekable = seekable,
                 size = if (pfd.statSize == -1L) 0L else pfd.statSize,
             )
@@ -834,6 +845,11 @@ class SafTransferPlugin(private val activity: Activity) : Plugin(activity) {
             handle.input.close()
         } catch (e: Exception) {
             android.util.Log.w(TAG, "closeStream input close failed: ${e.message}")
+        }
+        try {
+            handle.pfd.close()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "closeStream pfd close failed: ${e.message}")
         }
     }
 
