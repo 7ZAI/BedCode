@@ -6,32 +6,41 @@
     </div>
 
     <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
-      <!-- Category Entries -->
-      <div class="pt-2 space-y-2">
-        <button
-          v-for="cat in categories"
-          :key="cat.key"
-          class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
-          @click="router.push({ name: cat.route })"
-        >
-          <div class="flex items-center gap-3">
-            <span class="icon-chip" :class="cat.iconClass">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="cat.iconPath" />
+      <!-- 分组入口（连接 / 通知 / 安全 / 系统） -->
+      <template v-for="group in categoryGroups" :key="group.titleKey">
+        <div class="pt-4 pb-1.5">
+          <h2 class="settings-section-title">{{ $t(group.titleKey) }}</h2>
+        </div>
+        <div class="space-y-2">
+          <button
+            v-for="cat in group.items"
+            :key="cat.key"
+            class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+            @click="router.push({ name: cat.route })"
+          >
+            <div class="flex items-center gap-3">
+              <span class="icon-chip cat-unified">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="cat.iconPath" />
+                </svg>
+              </span>
+              <span class="flex-1 min-w-0">
+                <span class="block text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
+                <span class="block text-xs mt-0.5 text-[var(--mobile-text-muted)] truncate">{{ $t(cat.descKey) }}</span>
+              </span>
+              <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
               </svg>
-            </span>
-            <span class="flex-1 min-w-0 text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ $t(cat.labelKey) }}</span>
-            <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-            </svg>
-          </div>
-        </button>
-      </div>
+            </div>
+          </button>
+        </div>
+      </template>
 
       <!-- Footer Actions -->
-      <div class="mt-6 flex flex-col items-center gap-3">
+      <div class="mt-8 flex flex-col items-center gap-3">
         <button
-          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium text-[var(--mobile-text-secondary)] bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] transition-colors duration-200 hover:bg-[var(--mobile-bg-secondary)] hover:text-[var(--mobile-text-primary)] hover:border-[var(--mobile-border-hover)] active:scale-[0.98] active:opacity-80"
+          class="w-full max-w-xs flex items-center justify-center gap-2 py-3 rounded-xl text-base font-medium transition-colors duration-200 active:scale-[0.98] active:opacity-80"
+          style="background: transparent; color: var(--mobile-text-secondary); border: 1px solid var(--mobile-border-hover)"
           @click="resetSettings"
         >
           <svg class="w-[1.125rem] h-[1.125rem] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -98,56 +107,82 @@ interface SettingsCategory {
   key: string
   /** i18n 标签 key */
   labelKey: string
+  /** i18n 副标题 key */
+  descKey: string
   /** 目标路由名 */
   route: string
   /** SVG path（项目标准线性图标） */
   iconPath: string
-  /** 图标配色类（scoped 样式） */
-  iconClass: string
 }
 
-const categories: SettingsCategory[] = [
+/** 设置分组：标题 + 组内分类（单一主色，不用彩虹色区分） */
+interface SettingsGroup {
+  titleKey: string
+  items: SettingsCategory[]
+}
+
+const categoryGroups: SettingsGroup[] = [
   {
-    key: 'connection',
-    labelKey: 'settings.connection.title',
-    route: 'mobile-settings-connection',
-    iconPath: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0',
-    iconClass: 'cat-connection',
+    titleKey: 'settings.groups.connection',
+    items: [
+      {
+        key: 'connection',
+        labelKey: 'settings.connection.title',
+        descKey: 'settings.connection.subtitle',
+        route: 'mobile-settings-connection',
+        iconPath: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0',
+      },
+    ],
   },
   {
-    key: 'notification',
-    labelKey: 'settings.notification.title',
-    route: 'mobile-settings-notifications',
-    iconPath: 'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9',
-    iconClass: 'cat-notification',
+    titleKey: 'settings.groups.notification',
+    items: [
+      {
+        key: 'notification',
+        labelKey: 'settings.notification.title',
+        descKey: 'settings.notification.subtitle',
+        route: 'mobile-settings-notifications',
+        iconPath: 'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9',
+      },
+    ],
   },
   {
-    key: 'authentication',
-    labelKey: 'settings.authentication.title',
-    route: 'mobile-settings-authentication',
-    iconPath: 'M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 8a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4',
-    iconClass: 'cat-authentication',
+    titleKey: 'settings.groups.security',
+    items: [
+      {
+        key: 'authentication',
+        labelKey: 'settings.authentication.title',
+        descKey: 'settings.authentication.subtitle',
+        route: 'mobile-settings-authentication',
+        iconPath: 'M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 8a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4',
+      },
+    ],
   },
   {
-    key: 'appearance',
-    labelKey: 'settings.appearance.title',
-    route: 'mobile-settings-appearance',
-    iconPath: 'M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01',
-    iconClass: 'cat-appearance',
-  },
-  {
-    key: 'plugins',
-    labelKey: 'mobile.plugin.title',
-    route: 'mobile-plugins',
-    iconPath: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
-    iconClass: 'cat-plugins',
-  },
-  {
-    key: 'about',
-    labelKey: 'settings.about.title',
-    route: 'mobile-settings-about',
-    iconPath: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
-    iconClass: 'cat-about',
+    titleKey: 'settings.groups.system',
+    items: [
+      {
+        key: 'appearance',
+        labelKey: 'settings.appearance.title',
+        descKey: 'settings.appearance.subtitle',
+        route: 'mobile-settings-appearance',
+        iconPath: 'M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01',
+      },
+      {
+        key: 'plugins',
+        labelKey: 'mobile.plugin.title',
+        descKey: 'mobile.plugin.subtitle',
+        route: 'mobile-plugins',
+        iconPath: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
+      },
+      {
+        key: 'about',
+        labelKey: 'settings.about.title',
+        descKey: 'settings.about.subtitle',
+        route: 'mobile-settings-about',
+        iconPath: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+      },
+    ],
   },
 ]
 
@@ -278,34 +313,10 @@ async function executeConfirm() {
   border-color: color-mix(in srgb, var(--mobile-error) 50%, transparent);
 }
 
-.cat-connection {
-  color: var(--mobile-chip-cyan);
-  background-color: var(--mobile-chip-cyan-bg);
-}
-
-.cat-notification {
-  color: var(--mobile-chip-amber);
-  background-color: var(--mobile-chip-amber-bg);
-}
-
-.cat-authentication {
-  color: var(--mobile-chip-emerald);
-  background-color: var(--mobile-chip-emerald-bg);
-}
-
-.cat-appearance {
-  color: var(--mobile-chip-violet);
-  background-color: var(--mobile-chip-violet-bg);
-}
-
-.cat-plugins {
-  color: var(--mobile-chip-emerald);
-  background-color: var(--mobile-chip-emerald-bg);
-}
-
-.cat-about {
-  color: var(--mobile-chip-zinc);
-  background-color: var(--mobile-chip-zinc-bg);
+/* 设置分类图标：统一主色（单一色语言，与主按钮同源） */
+.cat-unified {
+  color: var(--mobile-accent);
+  background-color: var(--mobile-accent-muted);
 }
 
 .confirm-modal-overlay {

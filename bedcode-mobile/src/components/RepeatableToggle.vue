@@ -4,9 +4,9 @@
     <div class="flex gap-2">
       <button
         type="button"
-        class="flex-1 py-2 rounded-xl text-xs font-medium transition-colors"
+        class="flex-1 min-h-11 flex items-center justify-center py-2.5 rounded-xl text-xs font-medium transition-colors"
         :class="modelValue
-          ? 'border border-[var(--mobile-border-active)] bg-[var(--mobile-accent-secondary)] text-[var(--mobile-accent)]'
+          ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] shadow-[0_1px_4px_color-mix(in_srgb,var(--mobile-accent)_40%,transparent)]'
           : 'border border-[var(--mobile-border-hover)] bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-secondary)]'"
         @click="emit('update:modelValue', true)"
       >
@@ -14,9 +14,9 @@
       </button>
       <button
         type="button"
-        class="flex-1 py-2 rounded-xl text-xs font-medium transition-colors"
+        class="flex-1 min-h-11 flex items-center justify-center py-2.5 rounded-xl text-xs font-medium transition-colors"
         :class="!modelValue
-          ? 'border border-[var(--mobile-border-active)] bg-[var(--mobile-accent-secondary)] text-[var(--mobile-accent)]'
+          ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] shadow-[0_1px_4px_color-mix(in_srgb,var(--mobile-accent)_40%,transparent)]'
           : 'border border-[var(--mobile-border-hover)] bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-secondary)]'"
         @click="emit('update:modelValue', false)"
       >

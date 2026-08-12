@@ -373,7 +373,7 @@
             :disabled="!canSubmit"
             @click="handleExecute"
           >
-            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
           </button>
@@ -919,29 +919,30 @@ onMounted(() => {
   flex: 1;
 }
 
-/* 操作按钮：统一 2.25rem 圆形，保证移动端触摸目标 ≥ 36px */
+/* 操作按钮：圆角矩形 + clamp 流式尺寸，与快捷键面板按钮同风格（触控目标 ≥ 44px） */
 .inline-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: clamp(2.75rem, 9vw, 3rem);
+  height: clamp(2.75rem, 9vw, 3rem);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9999px;
+  border-radius: 0.5rem;
   border: 1px solid;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.15s ease;
   flex-shrink: 0;
+  padding: 0;
 }
 
 .toggle-btn {
   background: var(--mobile-bg-elevated);
   border-color: var(--mobile-border);
   color: var(--mobile-text-muted);
-  padding: 0;
 }
 
 .toggle-btn:active {
-  transform: scale(0.9);
+  transform: scale(0.93);
+  background: var(--mobile-bg-secondary);
 }
 
 .toggle-active {
@@ -994,7 +995,7 @@ onMounted(() => {
 }
 
 .send-btn:active:not(:disabled) {
-  transform: scale(0.9);
+  transform: scale(0.93);
   background: var(--mobile-send-active-bg);
 }
 
@@ -1004,15 +1005,13 @@ onMounted(() => {
 }
 
 .execute-btn {
-  width: 2.5rem;
-  height: 2.5rem;
   background: var(--mobile-execute-bg);
   border-color: var(--mobile-execute-border);
   color: var(--mobile-execute-color);
 }
 
 .execute-btn:active:not(:disabled) {
-  transform: scale(0.9);
+  transform: scale(0.93);
   background: var(--mobile-execute-active-bg);
 }
 

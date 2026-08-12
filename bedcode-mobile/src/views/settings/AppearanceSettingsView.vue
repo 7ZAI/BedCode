@@ -59,7 +59,6 @@
         <div class="settings-group">
           <div class="settings-row">
             <span class="settings-label">{{ $t('settings.appearance.fontSize') }}</span>
-            <span class="settings-value">{{ currentFontSizeLabel }}</span>
           </div>
           <div class="px-4 pb-4">
             <div
@@ -96,16 +95,36 @@
               <div class="settings-label">{{ $t('settings.appearance.maxOpenTerminals') }}</div>
               <div class="settings-desc">{{ $t('settings.appearance.maxOpenTerminalsDesc') }}</div>
             </div>
-            <input
-              v-model.number="settings.maxOpenTerminals"
-              type="number"
-              inputmode="numeric"
-              min="1"
-              max="20"
-              class="settings-number-input shrink-0"
-              @change="clampMaxOpenTerminals"
-              @blur="clampMaxOpenTerminals"
-            />
+            <div class="settings-stepper shrink-0">
+              <button
+                type="button"
+                class="settings-stepper-btn"
+                :disabled="Number(settings.maxOpenTerminals) <= 1"
+                @click="stepMaxOpenTerminals(-1)"
+                :aria-label="t('common.button.decrease')"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4" /></svg>
+              </button>
+              <input
+                v-model.number="settings.maxOpenTerminals"
+                type="number"
+                inputmode="numeric"
+                min="1"
+                max="20"
+                class="settings-number-input"
+                @change="clampMaxOpenTerminals"
+                @blur="clampMaxOpenTerminals"
+              />
+              <button
+                type="button"
+                class="settings-stepper-btn"
+                :disabled="Number(settings.maxOpenTerminals) >= 20"
+                @click="stepMaxOpenTerminals(1)"
+                :aria-label="t('common.button.increase')"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" /></svg>
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -149,13 +168,6 @@ const languageOptions = computed(() => [
   { value: 'en', label: t('settings.appearance.languageEnglish') },
 ])
 
-/** 字体大小选项（i18n 标签，值保持与 store 一致） */
-const fontSizeOptions = computed(() => [
-  { value: 'normal', label: t('settings.appearance.fontNormal') },
-  { value: 'large', label: t('settings.appearance.fontLarge') },
-  { value: 'xlarge', label: t('settings.appearance.fontXLarge') },
-])
-
 // ==================== 字体大小滑块（3 档） ====================
 
 /** 档位顺序：normal → large → xlarge */
@@ -167,11 +179,6 @@ const fontStepIndex = computed(() => {
   const idx = FONT_STEPS.indexOf(settings.value.fontSize as FontStep)
   return idx === -1 ? 0 : idx
 })
-
-/** 当前档位名称（滑块右侧同步显示） */
-const currentFontSizeLabel = computed(() =>
-  fontSizeOptions.value.find(o => o.value === settings.value.fontSize)?.label ?? ''
-)
 
 const fontSliderTrackRef = ref<HTMLElement | null>(null)
 
@@ -215,6 +222,12 @@ function clampMaxOpenTerminals() {
   settings.value.maxOpenTerminals = Number.isFinite(v) && v > 0
     ? Math.min(20, Math.round(v))
     : defaultMobileSettings.maxOpenTerminals
+}
+
+/** −/+ 步进：按档位增减并钳制到 1-20 */
+function stepMaxOpenTerminals(delta: number) {
+  const next = Number(settings.value.maxOpenTerminals) + delta
+  settings.value.maxOpenTerminals = Math.max(1, Math.min(20, Number.isFinite(next) ? next : 1))
 }
 
 onMounted(loadSettings)

@@ -128,15 +128,21 @@ const fileColor = computed(() => {
 const LONG_PRESS_DURATION = 500
 const LONG_PRESS_MOVE_THRESHOLD = 10
 let longPressTimer: ReturnType<typeof setTimeout> | null = null
+/** touch 长按已触发：用于抑制长按后的 click，以及 contextmenu 重复触发 */
 let longPressTriggered = false
+/** contextmenu 已处理：桌面右键/移动长按派生的 contextmenu 先于 timer 时防重 */
+let contextMenuHandled = false
 let touchStartX = 0
 let touchStartY = 0
 
 function onTouchStart(e: TouchEvent) {
   longPressTriggered = false
+  contextMenuHandled = false
   touchStartX = e.touches[0].clientX
   touchStartY = e.touches[0].clientY
   longPressTimer = setTimeout(() => {
+    // contextmenu 已触发过（移动端长按会派生该事件），避免二次复制弹窗
+    if (contextMenuHandled) return
     longPressTriggered = true
     // 触觉反馈（受 vibrate 设置控制）
     const saved = localStorage.getItem('mobile-settings')
@@ -170,6 +176,9 @@ function onTouchMove(e: TouchEvent) {
 function onContextMenu(e: Event) {
   // 桌面端右键菜单也触发长按
   e.preventDefault()
+  // 移动端长按已通过 touch 路径触发过，跳过派生的 contextmenu 避免重复
+  if (longPressTriggered) return
+  contextMenuHandled = true
   emit('long-press', props.node.name, props.node.path ?? props.node.name)
 }
 

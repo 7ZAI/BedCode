@@ -154,6 +154,14 @@ export function markInterrupted(id: string) {
   saveToStorage()
 }
 
+/** 按队列项 id 落中断（桌面端超时取消/会话终止广播）：匹配预设 → interrupted（不匹配忽略） */
+export function markInterruptedByTaskId(taskId: string) {
+  const index = tasks.value.findIndex(t => t.pendingTaskId === taskId)
+  if (index === -1) return
+  tasks.value[index] = migrateTask({ ...tasks.value[index], ...reconcile(tasks.value[index]) })
+  saveToStorage()
+}
+
 /** 队列项移除（面板删除/清空）：按队列项 id 回退未使用（不匹配忽略） */
 export function revertToUnusedByTaskId(taskId: string) {
   const index = tasks.value.findIndex(t => t.pendingTaskId === taskId)
@@ -180,8 +188,17 @@ export async function reconcileWithQueue(sessionId: string) {
   }
   if (result.code !== 0) return
   const pendingIds = new Set((result.data?.tasks ?? []).map(q => q.id))
+  // 处理中的队列项（waiting/executing）不算丢失：桌面端返回 active_task，
+  // 对账仅覆盖"已不在队列且未在处理中"的预设，避免任务执行中误落中断
+  const activeId = result.data?.active_task?.id ?? null
   for (const task of tasks.value) {
-    if (task.status === 'executing' && task.pendingSessionId === sessionId && task.pendingTaskId && !pendingIds.has(task.pendingTaskId)) {
+    if (
+      task.status === 'executing' &&
+      task.pendingSessionId === sessionId &&
+      task.pendingTaskId &&
+      !pendingIds.has(task.pendingTaskId) &&
+      task.pendingTaskId !== activeId
+    ) {
       markInterrupted(task.id)
     }
   }
@@ -201,6 +218,7 @@ export function usePresetTasks() {
     markEnqueued,
     markCompletedByTaskId,
     markInterrupted,
+    markInterruptedByTaskId,
     revertToUnusedByTaskId,
     reconcileWithQueue,
     canEnqueue: canEnqueueState,

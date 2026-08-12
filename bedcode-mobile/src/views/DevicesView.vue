@@ -14,7 +14,16 @@
               </span>
             </template>
             <template v-else>
-              {{ connectionStatusText }}
+              <span
+                class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border"
+                style="border-color: color-mix(in srgb, var(--mobile-accent) 30%, transparent)"
+              >
+                <span
+                  class="status-dot"
+                  :style="{ background: connectionStatus === 'connecting' ? 'var(--mobile-accent)' : 'var(--mobile-text-muted)' }"
+                ></span>
+                <span class="text-[var(--mobile-text-secondary)]">{{ connectionStatusText }}</span>
+              </span>
             </template>
           </p>
         </div>
@@ -121,9 +130,9 @@
             </div>
           </div>
 
-          <!-- Empty -->
-          <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="text-center py-12">
-            <svg class="w-12 h-12 mx-auto mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <!-- Empty（垂直居中占满剩余空间，避免大片空白） -->
+          <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="min-h-[45vh] flex flex-col items-center justify-center text-center">
+            <svg class="w-14 h-14 mx-auto mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             <p class="group-row-sub">{{ t('mobile.connection.noConfig') }}</p>
@@ -150,14 +159,17 @@
       <!-- Not Connected: History + Actions -->
       <div v-else class="pb-8">
         <div class="pt-2 space-y-3">
-          <!-- Connection History header -->
-          <div class="flex items-center justify-between">
-            <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.connectionHistory') }}</span>
+          <!-- Connection History header（带条数） -->
+          <div class="flex items-center justify-between pt-2">
+            <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
+              {{ t('mobile.connection.connectionHistory') }}
+              <span v-if="connectionHistory.length > 0" class="ml-1 px-1.5 py-0.5 rounded-full text-xs" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">{{ connectionHistory.length }}</span>
+            </span>
             <button
               v-if="connectionHistory.length > 0"
               class="text-sm transition-colors active:opacity-80"
               style="color: var(--mobile-text-muted)"
-              @click="clearHistory"
+              @click="showClearHistoryConfirm = true"
             >
               {{ t('mobile.connection.clearHistory') }}
             </button>
@@ -185,6 +197,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="text-base font-medium text-[var(--mobile-text-primary)] truncate">{{ item.name || item.address }}</div>
                   <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ item.address }}</p>
+                  <p class="text-xs mt-0.5" style="color: var(--mobile-text-disabled)">{{ formatLastConnected(item.lastConnected) }}</p>
                 </div>
                 <button
                   class="p-1.5 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
@@ -207,7 +220,7 @@
     <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
       <button
         class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
-        style="background: color-mix(in srgb, var(--mobile-accent) 10%, transparent); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)"
+        style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
         @click="$router.push({ name: 'mobile-scan' })"
@@ -260,6 +273,19 @@
       @switch="handleSwitchToBiometric"
       @close="handlePairingClose"
     />
+
+    <!-- Clear History Confirmation Modal -->
+    <Modal v-model="showClearHistoryConfirm" :title="t('mobile.connection.clearHistory')" size="sm">
+      <p style="color: var(--mobile-text-disabled)">
+        {{ t('mobile.connection.clearHistoryConfirm') }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="showClearHistoryConfirm = false">{{ t('common.button.cancel') }}</Button>
+          <Button variant="danger" @click="confirmClearHistory">{{ t('common.button.confirm') }}</Button>
+        </div>
+      </template>
+    </Modal>
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" :title="t('mobile.connection.confirmStop')" size="sm">
@@ -445,6 +471,33 @@ function removeFromHistory(address: string) {
 
 function clearHistory() {
   connection.clearConnectionHistory()
+}
+
+// 清除连接历史（带确认弹窗，防误触）
+const showClearHistoryConfirm = ref(false)
+
+function confirmClearHistory() {
+  showClearHistoryConfirm.value = false
+  connection.clearConnectionHistory()
+}
+
+// ==================== 相对时间格式化（连接历史 meta） ====================
+
+/** 上次连接时间 → 友好相对文案（刚刚 / x 分钟前 / x 小时前 / x 天前 / 日期） */
+function formatLastConnected(iso?: string): string {
+  if (!iso) return ''
+  const ts = new Date(iso).getTime()
+  if (Number.isNaN(ts)) return ''
+  const diffMs = Date.now() - ts
+  const minutes = Math.floor(diffMs / 60000)
+  if (minutes < 1) return t('mobile.time.justNow')
+  if (minutes < 60) return t('mobile.time.minutesAgo', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t('mobile.time.hoursAgo', { count: hours })
+  const days = Math.floor(hours / 24)
+  if (days < 30) return t('mobile.time.daysAgo', { count: days })
+  const d = new Date(ts)
+  return `${String(d.getFullYear())}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 // 刷新会话配置

@@ -3,6 +3,12 @@ export default {
     title: 'Settings',
     general: 'General',
     dangerZone: 'Reset',
+    groups: {
+      connection: 'Connection',
+      notification: 'Notifications',
+      security: 'Security',
+      system: 'System',
+    },
     network: {
       title: 'Network Settings',
       websocketPort: 'WebSocket Port',
@@ -23,6 +29,7 @@ export default {
     },
     appearance: {
       title: 'Appearance',
+      subtitle: 'Theme, language, font and terminal count',
       theme: 'Theme',
       lightMode: 'Light Mode',
       darkMode: 'Dark Mode',
@@ -48,6 +55,7 @@ export default {
     },
     connection: {
       title: 'Connection Settings',
+      subtitle: 'Auto reconnect, port and other connection options',
       autoReconnect: 'Auto Reconnect',
       keepAlive: 'Keep Alive',
       reconnectInterval: 'Reconnect Interval (s)',
@@ -57,6 +65,7 @@ export default {
     },
     authentication: {
       title: 'Authentication Settings',
+      subtitle: 'Pairing method and biometric credentials',
       preferredMethod: 'Preferred Auth Method',
       pairingCode: 'Pairing Code',
       biometric: 'Biometric',
@@ -84,6 +93,7 @@ export default {
     },
     notification: {
       title: 'Notification Settings',
+      subtitle: 'Notification timing, vibration and sounds',
       notifyOnWaiting: 'Notify on Waiting Input',
       notifyOnConnection: 'Notify on Connection Change',
       vibrate: 'Vibrate',
@@ -94,6 +104,7 @@ export default {
     },
     about: {
       title: 'About',
+      subtitle: 'Version info and updates',
       infoSection: 'Info',
       updateSection: 'Updates',
       githubRepo: 'GitHub Repository',

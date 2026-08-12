@@ -178,6 +178,36 @@
       </div>
     </div>
 
+    <!-- Confirm Delete Dialog -->
+    <Teleport to="body">
+      <Transition name="center-modal">
+        <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+          <div class="absolute inset-0" style="background: var(--mobile-overlay-heavy)" @click="showDeleteConfirm = false"></div>
+          <div class="relative w-full max-w-[clamp(280px,384px,440px)] rounded-2xl p-6 shadow-xl modal-panel" style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border)">
+            <h3 class="page-title text-lg mb-2">{{ t('mobile.toolbox.confirmDeleteTask') }}</h3>
+            <p class="text-sm rounded-lg p-3 mb-4 line-clamp-3" style="color: var(--mobile-row-title); background: var(--mobile-bg-primary)">{{ pendingDeleteTask?.content }}</p>
+
+            <div class="flex gap-3">
+              <button
+                class="flex-1 h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+                style="background: var(--mobile-bg-primary); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
+                @click="showDeleteConfirm = false"
+              >
+                {{ t('common.button.cancel') }}
+              </button>
+              <button
+                class="flex-1 h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+                style="background: var(--mobile-error-muted); color: var(--mobile-error); border: 1px solid color-mix(in srgb, var(--mobile-error) 40%, transparent)"
+                @click="confirmDeleteTask"
+              >
+                {{ t('common.button.delete') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
     <!-- Session Picker Dialog -->
     <Teleport to="body">
       <Transition name="bottom-sheet">
@@ -263,6 +293,7 @@
               mode="emit"
               :title="selectedDirLabel"
               @close="showFileExplorer = false"
+              @navigate-settings="handleNavigateSettings"
             />
           </div>
         </div>
@@ -420,6 +451,15 @@ function openEditTask(task: PresetTask) {
 }
 
 async function handleDeleteTask(id: string) {
+  pendingDeleteTask.value = tasks.value.find(t => t.id === id) || null
+  showDeleteConfirm.value = true
+}
+
+async function confirmDeleteTask() {
+  const id = pendingDeleteTask.value?.id
+  if (!id) return
+  showDeleteConfirm.value = false
+  pendingDeleteTask.value = null
   await deleteTask(id)
   // 删除的正是编辑中的任务时退出编辑模式
   if (editingTask.value?.id === id) {
@@ -428,12 +468,22 @@ async function handleDeleteTask(id: string) {
   }
 }
 
+/** 文件浏览未连接（base URL 缺失）→ 引导去连接设置 */
+function handleNavigateSettings() {
+  showFileExplorer.value = false
+  router.push({ name: 'mobile-settings-connection' })
+}
+
 // ==================== 执行流程 ====================
 
 const showSessionPicker = ref(false)
 const showConfirmDialog = ref(false)
 const pendingTask = ref<PresetTask | null>(null)
 const pendingSessionId = ref('')
+
+// 删除确认弹窗（防误触）
+const showDeleteConfirm = ref(false)
+const pendingDeleteTask = ref<PresetTask | null>(null)
 
 onMounted(async () => {
   await load()

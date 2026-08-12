@@ -22,6 +22,8 @@ export default {
       clear: 'Clear',
       copy: 'Copy',
       loading: 'Loading...',
+      decrease: 'Decrease',
+      increase: 'Increase',
     },
     status: {
       connected: 'Connected',

@@ -3,6 +3,12 @@ export default {
     title: '设置',
     general: '通用',
     dangerZone: '重置',
+    groups: {
+      connection: '连接',
+      notification: '通知',
+      security: '安全',
+      system: '系统',
+    },
     network: {
       title: '网络设置',
       websocketPort: 'WebSocket 端口',
@@ -23,6 +29,7 @@ export default {
     },
     appearance: {
       title: '外观',
+      subtitle: '主题、语言、字体与终端数量',
       theme: '主题',
       lightMode: '浅色模式',
       darkMode: '深色模式',
@@ -48,6 +55,7 @@ export default {
     },
     connection: {
       title: '连接设置',
+      subtitle: '自动重连、端口等连接参数',
       autoReconnect: '自动重连',
       keepAlive: '保持连接',
       reconnectInterval: '重连间隔 (秒)',
@@ -57,6 +65,7 @@ export default {
     },
     authentication: {
       title: '认证设置',
+      subtitle: '配对方式与生物凭证',
       preferredMethod: '优先认证方式',
       pairingCode: '配对码',
       biometric: '生物认证',
@@ -84,6 +93,7 @@ export default {
     },
     notification: {
       title: '通知设置',
+      subtitle: '通知时机、振动与提示音',
       notifyOnWaiting: '等待输入时通知',
       notifyOnConnection: '连接状态变化通知',
       vibrate: '振动反馈',
@@ -94,6 +104,7 @@ export default {
     },
     about: {
       title: '关于',
+      subtitle: '版本信息与更新',
       infoSection: '信息',
       updateSection: '更新',
       githubRepo: 'GitHub 仓库',

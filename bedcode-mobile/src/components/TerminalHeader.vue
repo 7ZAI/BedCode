@@ -161,7 +161,7 @@ function emitAction(key: string) {
 }
 
 .back-btn:hover {
-  color: var(--accent, #00d4ff);
+  color: var(--accent, #ece8dc);
 }
 
 .header-title-area {

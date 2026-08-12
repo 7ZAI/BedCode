@@ -47,6 +47,9 @@
                 </div>
                 <p class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">{{ presetEntryDesc }}</p>
               </div>
+              <svg class="w-4 h-4 flex-shrink-0 mt-1" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
             </div>
           </button>
 
@@ -81,6 +84,29 @@
               </div>
             </template>
           </button>
+
+          <!-- 插件区空态：无插件工具箱视图时的次级入口占位，避免孤岛空白 -->
+          <div
+            v-if="pluginRegistry.toolboxViews.value.length === 0"
+            class="flex items-center gap-3 w-full border border-dashed border-[var(--mobile-border-hover)] rounded-xl px-4 py-5"
+          >
+            <span class="toolbox-icon chip-zinc">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+              </svg>
+            </span>
+            <div class="flex-1 min-w-0">
+              <div class="text-base font-medium text-[var(--mobile-text-primary)]">{{ t('mobile.toolbox.pluginViews') }}</div>
+              <p class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)]">{{ t('mobile.toolbox.pluginEmptyHint') }}</p>
+            </div>
+            <button
+              class="flex-shrink-0 h-11 px-4 rounded-lg text-xs font-medium transition-colors active:opacity-80"
+              style="background: var(--mobile-accent-muted); color: var(--mobile-accent)"
+              @click="router.push({ name: 'mobile-plugins' })"
+            >
+              {{ t('mobile.toolbox.pluginManage') }}
+            </button>
+          </div>
         </div>
       </div>
     </template>

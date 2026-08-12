@@ -1,12 +1,9 @@
 <template>
   <div class="group-row">
-    <!-- 左侧执行图标（点击直接执行） -->
-    <span
-      class="icon-chip chip-cyan flex-shrink-0 cursor-pointer active:opacity-80 transition-opacity"
-      @click.stop="handleExecute"
-    >
+    <!-- 左侧任务图标（装饰性，执行入口统一在右侧操作组） -->
+    <span class="icon-chip chip-cyan flex-shrink-0">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
       </svg>
     </span>
 
@@ -73,9 +70,10 @@ const emit = defineEmits<{
   delete: [id: string]
 }>()
 
-/** 执行状态徽章颜色（与 auto-task 面板状态色一致，全部走 token） */
+/** 执行状态徽章颜色（与 auto-task 面板状态色一致，全部走 token；
+    小字号下对比度满足 WCAG AA，unused 用浅灰而非 disabled 深灰） */
 const statusColor: Record<string, string> = {
-  unused: 'var(--mobile-text-disabled)',
+  unused: 'var(--mobile-chip-zinc)',
   executing: 'var(--mobile-accent)',
   completed: 'var(--mobile-success)',
   interrupted: 'var(--mobile-error)',
@@ -153,12 +151,11 @@ function handleDelete() {
 
 /* 执行状态徽章 */
 .preset-status-badge {
-  font-size: 0.625rem;
+  font-size: clamp(0.625rem, 0.6875rem + (100cqw - 360px) / 800, 0.75rem);
   line-height: 1.4;
-  padding: 0 0.375rem;
+  padding: 0.125rem 0.5rem;
   border-radius: 9999px;
   border: 1px solid;
-  opacity: 0.85;
   flex-shrink: 0;
 }
 </style>

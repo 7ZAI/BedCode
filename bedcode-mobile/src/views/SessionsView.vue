@@ -6,10 +6,10 @@
         <div class="min-w-0 flex-1">
           <h1 class="page-title">{{ t('mobile.session.title') }}</h1>
         </div>
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-2">
           <button
             v-if="mockTerminal.isDev"
-            class="p-2 rounded-lg transition-colors active:opacity-80"
+            class="w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
             :class="mockTerminal.enabled.value ? 'chip-cyan' : ''"
             style="color: var(--mobile-text-muted)"
             @click="mockTerminal.toggle()"
@@ -21,7 +21,7 @@
           </button>
           <button
             v-if="isConnected"
-            class="p-2 rounded-lg transition-colors active:opacity-80"
+            class="w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
             style="color: var(--mobile-accent)"
             @click="refreshSessions"
             :title="t('mobile.session.refresh')"
@@ -36,9 +36,20 @@
 
     <!-- Content -->
     <div class="flex-1 overflow-auto px-4 pb-8">
-      <!-- 未连接提示 -->
-      <div v-if="!isConnected" class="text-center py-8">
+      <!-- 未连接提示（图标 + 引导） -->
+      <div v-if="!isConnected" class="min-h-[45vh] flex flex-col items-center justify-center text-center">
+        <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
         <p class="group-row-sub">{{ t('mobile.session.notConnected') }}</p>
+        <p class="text-sm mt-1" style="color: var(--mobile-text-disabled)">{{ t('mobile.session.notConnectedHint') }}</p>
+        <button
+          class="mt-5 h-11 px-6 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+          style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
+          @click="router.push({ name: 'mobile-home', query: { page: '0' } })"
+        >
+          {{ t('mobile.connection.scanConnect') }}
+        </button>
       </div>
 
       <template v-else>
@@ -54,9 +65,13 @@
           </div>
         </div>
 
-        <!-- 真实会话列表 -->
-        <div v-if="realSessions.length === 0" class="text-center py-8">
+        <!-- 真实会话列表空态 -->
+        <div v-if="realSessions.length === 0" class="min-h-[40vh] flex flex-col items-center justify-center text-center">
+          <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
           <p class="group-row-sub">{{ t('mobile.session.noSessions') }}</p>
+          <p class="text-sm mt-1" style="color: var(--mobile-text-disabled)">{{ t('mobile.session.noSessionsHint') }}</p>
         </div>
 
         <div v-else class="group-card">

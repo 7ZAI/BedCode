@@ -8,10 +8,10 @@
           <button
             v-for="method in authMethods"
             :key="method.value"
-            class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-sm font-medium transition-opacity duration-200 active:opacity-80"
+            class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-sm font-medium transition-opacity duration-200 active:opacity-80"
             :class="settings.preferredAuthMethod === method.value
-              ? 'bg-[color:color-mix(in_srgb,var(--mobile-accent)_15%,transparent)] border-[var(--mobile-accent)] text-[var(--mobile-accent)]'
-              : 'bg-[var(--mobile-bg-elevated)] border-[var(--mobile-border)] text-[var(--mobile-text-secondary)]'"
+              ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] shadow-[0_1px_4px_color-mix(in_srgb,var(--mobile-accent)_40%,transparent)]'
+              : 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)]'"
             @click="settings.preferredAuthMethod = method.value"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -64,8 +64,6 @@
         </button>
 
         <p v-if="!hasKey && deviceSupported" class="text-xs text-[var(--mobile-text-muted)]">{{ $t('settings.authentication.bindHint') }}</p>
-        <p v-if="statusError" class="text-xs text-[var(--mobile-error)]">{{ $t('settings.authentication.statusError') }}</p>
-        <p v-if="!deviceSupported && !statusError" class="text-xs text-[var(--mobile-warning)]">{{ $t(unsupportedReasonKey) }}</p>
       </section>
     </div>
   </SettingsSubPage>

@@ -148,6 +148,20 @@ async function init() {
   // 加载已配对设备列表
   loadPairedDevices()
 
+  // DEV 模式 UI 审查 mock：localStorage 开关 mock_connected=1 时注入已连接状态，
+  // 配合 public/mock-harness.html 纯前端审查使用；生产构建 DEV=false 自动移除
+  if (import.meta.env.DEV && localStorage.getItem('mock_connected') === '1') {
+    currentDevice.value = {
+      id: 'mock-device',
+      name: 'DESKTOP-7ZAI',
+      address: '192.168.1.100',
+      port: 8765,
+      isPaired: true,
+      fingerprint: 'mock-fingerprint',
+    }
+    connectionStatus.value = 'connected'
+  }
+
   // 初始化通知
   const { showTaskNotification, cancelTaskNotification, cancelAllTaskNotifications, showConnectionNotification } = useNotification()
 

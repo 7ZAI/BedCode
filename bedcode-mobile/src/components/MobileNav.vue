@@ -17,13 +17,22 @@
         :style="currentPage !== item.pageIndex ? { color: 'var(--mobile-nav-inactive)' } : {}"
         @click="navigateTo(item)"
       >
-        <component :is="item.icon" class="w-[22px] h-[22px]" />
-        <span class="text-xs font-medium">{{ item.label }}</span>
+        <!-- 激活态顶部指示条：与图标严格等宽同轴（left/right 锚定 + margin auto，不依赖 transform 精度） -->
         <span
-          v-if="item.isPlugin"
-          class="absolute mt-[-3px] ml-[18px] w-1.5 h-1.5 rounded-full"
-          style="background: var(--mobile-chip-emerald)"
+          v-if="currentPage === item.pageIndex"
+          class="absolute top-0 left-0 right-0 mx-auto w-[22px] h-[2px] rounded-full"
+          style="background: var(--mobile-nav-active)"
         ></span>
+        <span class="relative flex-shrink-0">
+          <component :is="item.icon" class="w-[22px] h-[22px]" />
+          <!-- 插件 tab 绿点：锚定图标右上角（随图标，不随 label 宽度漂移） -->
+          <span
+            v-if="item.isPlugin"
+            class="absolute -top-0.5 -right-1 w-1.5 h-1.5 rounded-full"
+            style="background: var(--mobile-chip-emerald)"
+          ></span>
+        </span>
+        <span class="text-xs" :class="currentPage === item.pageIndex ? 'font-semibold' : 'font-medium'">{{ item.label }}</span>
       </button>
     </div>
   </nav>
@@ -73,8 +82,21 @@ const navItems = computed<NavItem[]>(() => {
             'stroke-linecap': 'round',
             'stroke-linejoin': 'round',
             'stroke-width': '2',
-            d: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'
-          })
+            d: 'M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8'
+          }),
+          h('path', {
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+            'stroke-width': '2',
+            d: 'M10 19v-3.96 3.15'
+          }),
+          h('path', {
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+            'stroke-width': '2',
+            d: 'M7 19h5'
+          }),
+          h('rect', { width: 6, height: 10, x: 16, y: 12, rx: 2 })
         ])
       }
     },
@@ -107,7 +129,7 @@ const navItems = computed<NavItem[]>(() => {
             'stroke-linecap': 'round',
             'stroke-linejoin': 'round',
             'stroke-width': '2',
-            d: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z'
+            d: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z'
           })
         ])
       }
