@@ -692,3 +692,51 @@ pub fn wasm_write_result_to_out_ptr(out_ptr: u32, ptr: u32, len: u32) {
         std::ptr::copy_nonoverlapping(len.to_le_bytes().as_ptr(), out.add(4), 4);
     }
 }
+
+#[cfg(all(test, feature = "wasm"))]
+mod tests {
+    use super::*;
+
+    // 注意：本机测试仅覆盖 (0,0)/空入参的早退路径。非空路径涉及
+    // 将指针按 u32 传递 —— 64 位宿主上截断后解引用是 UB（wasm32 上
+    // 才是合法线性内存地址），故不在宿主侧测试，由宿主 wasmtime 集成测试覆盖。
+    //
+    // `wasm_dealloc_string` 引用 extern `__bedcode_deallocate`，该符号仅
+    // wasm32 目标由 wasm_entry! 宏定义；宿主测试二进制需要它才能链接。
+    // 此处提供 test-only 桩满足链接，测试仅触发 (0,0) 早退路径，桩体不会被执行。
+    #[no_mangle]
+    extern "C" fn __bedcode_deallocate(_ptr: u32, _len: u32) {}
+
+    #[test]
+    fn test_alloc_empty_string_returns_zero_pair() {
+        // 空串不分配内存，返回 (0, 0) —— 宿主按此识别空结果
+        assert_eq!(wasm_alloc_string(""), (0, 0));
+    }
+
+    #[test]
+    fn test_read_zero_pair_returns_empty() {
+        // (0, 0) 语义 = 无结果/空串，读取不触碰内存
+        assert_eq!(wasm_read_string(0, 0), "");
+    }
+
+    #[test]
+    fn test_dealloc_zero_pair_is_noop() {
+        // 零指针/零长度直接返回，不触发 extern `__bedcode_deallocate` 调用
+        // （宿主侧该符号仅在 wasm32 目标存在，此处验证早退避免链接依赖）
+        wasm_dealloc_string(0, 0);
+        wasm_dealloc_string(0, 4);
+        wasm_dealloc_string(4, 0);
+    }
+
+    #[test]
+    fn test_write_result_to_out_ptr_zero_is_noop() {
+        // out_ptr=0（未提供输出槽）时直接返回，不写内存
+        wasm_write_result_to_out_ptr(0, 123, 45);
+    }
+
+    #[test]
+    fn test_read_and_free_zero_pair() {
+        // 读后即释组合函数在 (0,0) 输入下返回空串且不触碰 extern 符号
+        assert_eq!(read_and_free_string(0, 0), "");
+    }
+}

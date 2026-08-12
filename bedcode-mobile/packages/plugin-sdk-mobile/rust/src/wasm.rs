@@ -44,6 +44,135 @@ pub trait WasmPlugin: Send + Sync + 'static {
     }
 }
 
+#[cfg(all(test, feature = "wasm"))]
+mod tests {
+    use super::*;
+    use crate::types::{PluginContributes, PluginType, UploadHookDecision, UploadRequestMeta};
+    use crate::BusMessage;
+
+    /// 最小 WASM 测试插件：仅实现必需方法，其余走 trait 默认
+    struct TestWasmPlugin;
+
+    impl WasmPlugin for TestWasmPlugin {
+        const ID: &'static str = "com.bedcode.test-wasm";
+
+        fn manifest() -> PluginManifest {
+            PluginManifest {
+                id: Self::ID.to_string(),
+                name: "Test Wasm".to_string(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                main: String::new(),
+                plugin_type: PluginType::Wasm,
+                permissions: vec![],
+                contributes: PluginContributes::default(),
+                icon: None,
+                wasm_hash: String::new(),
+                rust_library: String::new(),
+            }
+        }
+
+        fn activate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn deactivate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+    }
+
+    /// 覆盖上传钩子的插件：验证插件可自主决定允许/拒绝
+    struct AllowUploadPlugin;
+
+    impl WasmPlugin for AllowUploadPlugin {
+        const ID: &'static str = "com.bedcode.test-allow";
+
+        fn manifest() -> PluginManifest {
+            PluginManifest {
+                id: Self::ID.to_string(),
+                name: "Allow".to_string(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                main: String::new(),
+                plugin_type: PluginType::Wasm,
+                permissions: vec![],
+                contributes: PluginContributes::default(),
+                icon: None,
+                wasm_hash: String::new(),
+                rust_library: String::new(),
+            }
+        }
+
+        fn activate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn deactivate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+
+        fn on_upload_request(_meta: &UploadRequestMeta) -> UploadHookDecision {
+            UploadHookDecision::allow()
+        }
+    }
+
+    #[test]
+    fn test_default_terminal_hooks_are_pass_through() {
+        // 默认行为 = 不修改管道（None），宿主按原样放行
+        assert_eq!(TestWasmPlugin::on_terminal_input("s1", "ls"), None);
+        assert_eq!(TestWasmPlugin::on_terminal_output("s1", "out"), None);
+    }
+
+    #[test]
+    fn test_default_lifecycle_hooks_succeed() {
+        // 未覆盖的启动/关闭/认证/断开/会话回调默认成功，不干扰宿主流程
+        assert!(TestWasmPlugin::on_startup().is_ok());
+        assert!(TestWasmPlugin::on_shutdown().is_ok());
+        // 移动端特有：WebSocket 认证成功/断开/会话创建/停止
+        assert!(TestWasmPlugin::on_auth_success().is_ok());
+        assert!(TestWasmPlugin::on_disconnect("ws closed").is_ok());
+        assert!(TestWasmPlugin::on_session_created("s1").is_ok());
+        assert!(TestWasmPlugin::on_session_stopped("s1").is_ok());
+    }
+
+    #[test]
+    fn test_default_bus_message_hook_succeeds() {
+        let msg = BusMessage {
+            topic: "t".into(),
+            sender: "s".into(),
+            payload: serde_json::Value::Null,
+            timestamp: 0,
+        };
+        assert!(TestWasmPlugin::on_bus_message(&msg).is_ok());
+    }
+
+    #[test]
+    fn test_default_upload_hook_is_fail_closed() {
+        // 安全契约：未实现钩子的插件默认拒绝一切上传，并给出明确原因
+        let meta = UploadRequestMeta { relative_path: "a.txt".into(), size: 1 };
+        let decision = TestWasmPlugin::on_upload_request(&meta);
+        assert!(!decision.allow);
+        assert_eq!(decision.reason.as_deref(), Some("plugin does not implement on_upload_request"));
+    }
+
+    #[test]
+    fn test_upload_hook_override_can_allow() {
+        // 插件可覆盖钩子放行上传（决策完全由插件表达）
+        let meta = UploadRequestMeta { relative_path: "a.txt".into(), size: 1 };
+        assert!(AllowUploadPlugin::on_upload_request(&meta).allow);
+    }
+}
+
 /// 自动生成 WASM 导出函数 + 线性内存分配器/回收器
 ///
 /// 生成以下导出：

@@ -217,3 +217,134 @@ pub const PLUGIN_EXPORT_SIGNATURES: &[(&str, usize, usize)] = &[
     (export::ON_BUS_MESSAGE, 7, 1),
     (export::ON_UPLOAD_REQUEST, 3, 1),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_abi_magic_constants() {
+        // 锁死核心 ABI 常量：命名空间/内存导出名/out_ptr 大小/版本号均被
+        // 宿主 Linker 与插件二进制双向引用，漂移会导致加载失败
+        assert_eq!(NAMESPACE, "bedcode");
+        assert_eq!(MEMORY, "memory");
+        assert_eq!(RESULT_PAIR_SIZE, 8);
+        assert_eq!(ABI_VERSION, 5);
+    }
+
+    #[test]
+    fn test_export_names_are_abi_contract() {
+        // 插件导出符号名：宿主按字面量在模块中查找，改名即失配 —— 全部锁死
+        assert_eq!(export::ALLOCATE, "__bedcode_allocate");
+        assert_eq!(export::DEALLOCATE, "__bedcode_deallocate");
+        assert_eq!(export::ABI_VERSION, "__bedcode_abi_version");
+        assert_eq!(export::MANIFEST, "__bedcode_manifest");
+        assert_eq!(export::ACTIVATE, "__bedcode_activate");
+        assert_eq!(export::DEACTIVATE, "__bedcode_deactivate");
+        assert_eq!(export::INVOKE_COMMAND, "__bedcode_invoke_command");
+        assert_eq!(export::ON_TERMINAL_INPUT, "__bedcode_on_terminal_input");
+        assert_eq!(export::ON_TERMINAL_OUTPUT, "__bedcode_on_terminal_output");
+        assert_eq!(export::ON_STARTUP, "__bedcode_on_startup");
+        assert_eq!(export::ON_SHUTDOWN, "__bedcode_on_shutdown");
+        // 移动端特有回调（WebSocket 认证/断开/会话生命周期）
+        assert_eq!(export::ON_AUTH_SUCCESS, "__bedcode_on_auth_success");
+        assert_eq!(export::ON_DISCONNECT, "__bedcode_on_disconnect");
+        assert_eq!(export::ON_SESSION_CREATED, "__bedcode_on_session_created");
+        assert_eq!(export::ON_SESSION_STOPPED, "__bedcode_on_session_stopped");
+        assert_eq!(export::ON_BUS_MESSAGE, "__bedcode_on_bus_message");
+        assert_eq!(export::ON_UPLOAD_REQUEST, "__bedcode_on_upload_request");
+    }
+
+    #[test]
+    fn test_import_names_are_abi_contract() {
+        // 宿主导入符号名：WasmHost 侧 extern 声明与宿主 Linker 注册按此字面量配对
+        assert_eq!(import::STORAGE_GET, "host_storage_get");
+        assert_eq!(import::STORAGE_SET, "host_storage_set");
+        assert_eq!(import::STORAGE_DELETE, "host_storage_delete");
+        assert_eq!(import::DB_EXECUTE, "host_db_execute");
+        assert_eq!(import::DB_QUERY, "host_db_query");
+        assert_eq!(import::TERMINAL_SEND, "host_terminal_send");
+        assert_eq!(import::SESSION_LIST, "host_session_list");
+        assert_eq!(import::SESSION_GET, "host_session_get");
+        assert_eq!(import::EMIT_EVENT, "host_emit_event");
+        assert_eq!(import::HTTP_FETCH, "host_http_fetch");
+        assert_eq!(import::LOG_INFO, "host_log_info");
+        assert_eq!(import::LOG_DEBUG, "host_log_debug");
+        assert_eq!(import::LOG_WARN, "host_log_warn");
+        assert_eq!(import::LOG_ERROR, "host_log_error");
+        assert_eq!(import::NOTIFY, "host_notify");
+        assert_eq!(import::FS_READ, "host_fs_read");
+        assert_eq!(import::FS_WRITE, "host_fs_write");
+        assert_eq!(import::FS_COPY, "host_fs_copy");
+        assert_eq!(import::FS_EXISTS, "host_fs_exists");
+        assert_eq!(import::FS_DELETE, "host_fs_delete");
+        assert_eq!(import::BUS_PUBLISH, "host_bus_publish");
+        assert_eq!(import::BUS_SUBSCRIBE, "host_bus_subscribe");
+        assert_eq!(import::BUS_UNSUBSCRIBE, "host_bus_unsubscribe");
+        assert_eq!(import::MARK_PLUGIN_ERROR, "host_mark_plugin_error");
+        // v4 文件服务 / 传输
+        assert_eq!(import::FILESRV_MOUNT, "host_filesrv_mount");
+        assert_eq!(import::FILESRV_UNMOUNT, "host_filesrv_unmount");
+        assert_eq!(import::FILESRV_UPDATE_ROOTS, "host_filesrv_update_roots");
+        assert_eq!(import::FILESRV_GET_PEER, "host_filesrv_get_peer");
+        assert_eq!(import::TRANSFER_START, "host_transfer_start");
+        assert_eq!(import::TRANSFER_CANCEL, "host_transfer_cancel");
+        // v5 配置读取
+        assert_eq!(import::CONFIG_GET, "host_config_get");
+    }
+
+    #[test]
+    fn test_host_signature_table_contract() {
+        // 宿主侧测试遍历此表校验 Linker 实际注册签名，漂移在测试期暴露；
+        // 锁死总数与关键行（参数/返回个数 = 宿主 RegisterFunc 签名）
+        assert_eq!(HOST_FN_SIGNATURES.len(), 31);
+        // 无重复名称（宿主注册冲突会 panic）
+        let mut names: Vec<&str> = HOST_FN_SIGNATURES.iter().map(|(n, _, _)| *n).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 31);
+        // 关键行锁死：out_ptr 函数 (ptr,len)+out_ptr = 3 参数，返回状态码
+        assert_eq!(HOST_FN_SIGNATURES[0], (import::STORAGE_GET, 3, 1));
+        assert_eq!(HOST_FN_SIGNATURES[1], (import::STORAGE_SET, 4, 1));
+        assert_eq!(HOST_FN_SIGNATURES[8], (import::EMIT_EVENT, 4, 0));
+        assert_eq!(HOST_FN_SIGNATURES[9], (import::HTTP_FETCH, 3, 1));
+        assert_eq!(HOST_FN_SIGNATURES[18], (import::FS_EXISTS, 2, 1));
+        assert_eq!(HOST_FN_SIGNATURES[23], (import::MARK_PLUGIN_ERROR, 2, 0));
+        assert_eq!(HOST_FN_SIGNATURES[24], (import::FILESRV_MOUNT, 3, 1));
+        assert_eq!(HOST_FN_SIGNATURES[29], (import::TRANSFER_CANCEL, 2, 1));
+        assert_eq!(HOST_FN_SIGNATURES[30], (import::CONFIG_GET, 3, 1));
+    }
+
+    #[test]
+    fn test_plugin_export_signature_table_contract() {
+        // 宿主加载 WASM 模块后按此表校验导出签名；锁死总数与关键行
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES.len(), 17);
+        let mut names: Vec<&str> = PLUGIN_EXPORT_SIGNATURES.iter().map(|(n, _, _)| *n).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 17);
+        // 版本协商：无参数返回 i32；out_ptr 型导出：参数 + 1 个 out_ptr，无返回值
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[0], (export::ALLOCATE, 1, 1));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[2], (export::ABI_VERSION, 0, 1));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[6], (export::INVOKE_COMMAND, 5, 0));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[9], (export::ON_STARTUP, 0, 0));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[11], (export::ON_AUTH_SUCCESS, 0, 0));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[12], (export::ON_DISCONNECT, 2, 0));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[15], (export::ON_BUS_MESSAGE, 7, 1));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[16], (export::ON_UPLOAD_REQUEST, 3, 1));
+    }
+
+    #[test]
+    fn test_signature_tables_are_sorted_and_complete() {
+        // 表按 import/export 模块声明顺序组织：新增 host function 必须同步
+        // 追加到表尾（索引断言依赖此顺序，顺序变更会在此测试暴露）
+        assert_eq!(HOST_FN_SIGNATURES[10].0, import::LOG_INFO);
+        assert_eq!(HOST_FN_SIGNATURES[11].0, import::LOG_DEBUG);
+        assert_eq!(HOST_FN_SIGNATURES[12].0, import::LOG_WARN);
+        assert_eq!(HOST_FN_SIGNATURES[13].0, import::LOG_ERROR);
+        assert_eq!(HOST_FN_SIGNATURES[14].0, import::NOTIFY);
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[3].0, export::MANIFEST);
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[4].0, export::ACTIVATE);
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[5].0, export::DEACTIVATE);
+    }
+}

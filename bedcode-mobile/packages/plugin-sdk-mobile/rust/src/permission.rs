@@ -113,3 +113,118 @@ impl PermissionManager {
 impl Default for PermissionManager {
     fn default() -> Self { Self::new() }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grant_filters_invalid() {
+        let pm = PermissionManager::new();
+        let granted = pm.grant_permissions("test-plugin", &[
+            "terminal:input".to_string(),
+            "invalid:permission".to_string(),
+        ]);
+        assert!(granted.contains("terminal:input"));
+        assert!(!granted.contains("invalid:permission"));
+        // storage 无条件默认授予
+        assert!(granted.contains("storage"));
+    }
+
+    #[test]
+    fn test_check_permission() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
+        assert!(pm.check("test-plugin", "terminal:input"));
+        assert!(!pm.check("test-plugin", "terminal:output"));
+        assert!(pm.check("test-plugin", "storage"));
+    }
+
+    #[test]
+    fn test_check_api() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
+        assert!(pm.check_api("test-plugin", "terminal.sendInput"));
+        assert!(!pm.check_api("test-plugin", "terminal.onOutput"));
+    }
+
+    #[test]
+    fn test_check_api_mobile_specific() {
+        // 移动端特有权限门：文件服务/传输/UI 扩展点按 API 方法名映射
+        let pm = PermissionManager::new();
+        pm.grant_permissions("p", &[
+            "fileservice".to_string(),
+            "transfer".to_string(),
+            "ui:navtab".to_string(),
+            "ui:settings".to_string(),
+            "ui:route".to_string(),
+            "ui:input".to_string(),
+        ]);
+        assert!(pm.check_api("p", "fileService.mount"));
+        assert!(pm.check_api("p", "fileService.requestAllFilesAccess"));
+        assert!(pm.check_api("p", "transfer.start"));
+        assert!(pm.check_api("p", "transfer.cancel"));
+        assert!(pm.check_api("p", "ui.registerNavTab"));
+        assert!(pm.check_api("p", "ui.registerSettingsSection"));
+        assert!(pm.check_api("p", "ui.registerRoute"));
+        assert!(pm.check_api("p", "ui.openPage"));
+        assert!(pm.check_api("p", "ui.goBack"));
+        assert!(pm.check_api("p", "ui.registerTerminalToolbarItem"));
+        // 未授予的权限族对应 API 一律拒绝
+        assert!(!pm.check_api("p", "terminal.sendInput"));
+        assert!(!pm.check_api("p", "session.list"));
+    }
+
+    #[test]
+    fn test_valid_permission_whitelist_complete() {
+        // 白名单 = VALID_PERMISSIONS 静态表：任何新增权限必须同步登记，
+        // 否则 grant 静默丢弃（此处锁死 16 项，含移动端特有 ui:navtab/ui:settings/ui:route）
+        assert_eq!(VALID_PERMISSIONS.len(), 16);
+        for p in [
+            PERMISSION_TERMINAL_INPUT,
+            PERMISSION_TERMINAL_OUTPUT,
+            PERMISSION_SESSION_READ,
+            PERMISSION_SESSION_WRITE,
+            PERMISSION_UI_TOOLBOX,
+            PERMISSION_UI_NAVTAB,
+            PERMISSION_UI_SETTINGS,
+            PERMISSION_UI_INPUT,
+            PERMISSION_UI_ROUTE,
+            PERMISSION_NETWORK_HTTP,
+            PERMISSION_STORAGE,
+            PERMISSION_FS_READ,
+            PERMISSION_FS_WRITE,
+            PERMISSION_BUS,
+            PERMISSION_FILESERVICE,
+            PERMISSION_TRANSFER,
+        ] {
+            assert!(VALID_PERMISSIONS.contains(&p), "{} not in whitelist", p);
+        }
+    }
+
+    #[test]
+    fn test_revoke_all() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
+        pm.revoke_all("test-plugin");
+        assert!(!pm.check("test-plugin", "terminal:input"));
+        assert!(!pm.check("test-plugin", "storage"));
+    }
+
+    #[test]
+    fn test_get_granted() {
+        let pm = PermissionManager::new();
+        // 未注册插件返回空集
+        assert!(pm.get_granted("unknown").is_empty());
+        let granted = pm.grant_permissions("p", &["bus".to_string()]);
+        assert_eq!(pm.get_granted("p"), granted);
+        assert!(pm.get_granted("p").contains("storage"));
+    }
+
+    #[test]
+    fn test_unknown_plugin_has_no_permissions() {
+        let pm = PermissionManager::new();
+        assert!(!pm.check("unknown", "storage"));
+        assert!(!pm.check_api("unknown", "storage.get"));
+    }
+}

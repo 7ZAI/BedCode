@@ -87,6 +87,51 @@ impl std::fmt::Display for HostError {
 
 impl std::error::Error for HostError {}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_call_failed() {
+        // 默认调用失败：code=-1，消息含 API 名（详细原因在宿主日志）
+        let e = HostError::call_failed("db_execute");
+        assert_eq!(e.code, -1);
+        assert_eq!(e.message, "db_execute failed (see host log for details)");
+    }
+
+    #[test]
+    fn test_unsupported() {
+        // 能力不可用：code 必须等于 CODE_UNSUPPORTED（-2），与调用失败区分
+        let e = HostError::unsupported("fs_read");
+        assert_eq!(e.code, HostError::CODE_UNSUPPORTED);
+        assert_eq!(e.code, -2);
+        assert_eq!(e.message, "fs_read is not available in this context");
+    }
+
+    #[test]
+    fn test_custom() {
+        let e = HostError::custom(42, "custom failure");
+        assert_eq!(e.code, 42);
+        assert_eq!(e.message, "custom failure");
+    }
+
+    #[test]
+    fn test_display() {
+        // Display 格式被宿主日志引用，锁定格式防破坏性改动
+        let e = HostError::custom(-1, "boom");
+        assert_eq!(e.to_string(), "host error -1: boom");
+    }
+
+    #[test]
+    fn test_error_trait_and_partial_eq() {
+        // 可放入 anyhow 错误链（插件侧 `?` 透传）
+        let e = HostError::call_failed("x");
+        let err: anyhow::Error = e.into();
+        assert!(err.to_string().contains("x failed"));
+        assert_eq!(HostError::call_failed("x"), HostError::call_failed("x"));
+    }
+}
+
 /// 宿主能力聚合 trait
 ///
 /// 需要全部宿主能力的插件入口可用 `&impl HostApi` 作为参数类型；
