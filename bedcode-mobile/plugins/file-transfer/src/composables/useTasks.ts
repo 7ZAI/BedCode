@@ -77,6 +77,17 @@ function isRejectedTask(result: any): boolean {
   )
 }
 
+/**
+ * 队列结算通知去重标记（模块级共享）。
+ *
+ * useTasks 会被多个组件实例化（主视图 FileTransferView + 常驻入口卡片
+ * ToolboxEntry），若各实例独立结算，同一批失败会各自弹一次系统通知
+ * （表现为「发了两条/不停发」）。共享标记保证每批只通知一次。
+ */
+let settledNotified = false
+/** saveTo 结果 toast 去重（模块级共享，防多实例重复弹） */
+const notifiedSaveTo = new Set<string>()
+
 export function useTasks(context: PluginContext) {
   /** 任务列表（按 WASM 快照时间序，最新在前） */
   const tasks = ref<Task[]>([])
@@ -92,12 +103,6 @@ export function useTasks(context: PluginContext) {
   const peerId = ref('')
   /** 对端展示名：优先 tasks 中的 peer.name，其次对端 id */
   const peerName = ref('')
-
-  /** 队列是否已结算（避免重复通知） */
-  let notifiedSettled = false
-
-  /** 「保存到…」结果提示去重（taskId+place 已提示过的组合不再重复弹） */
-  const notifiedSaveTo = new Set<string>()
 
   /** 快照差分样本表（任务生命周期内持续累积） */
   const offsetSamples = new Map<string, OffsetSample>()
@@ -467,16 +472,16 @@ export function useTasks(context: PluginContext) {
   function checkSettledNotification(): void {
     const list = tasks.value
     if (list.length === 0) {
-      notifiedSettled = false
+      settledNotified = false
       return
     }
     if (list.some(t => !isTerminalState(t.state))) {
       // 仍有活跃任务：重置结算标记，等待下一批
-      notifiedSettled = false
+      settledNotified = false
       return
     }
-    if (notifiedSettled) return
-    notifiedSettled = true
+    if (settledNotified) return
+    settledNotified = true
     const completed = list.filter(t => t.state === 'completed').length
     const failed = list.filter(t => t.state === 'failed' || t.state === 'rejected').length
     const cancelled = list.filter(t => t.state === 'cancelled').length

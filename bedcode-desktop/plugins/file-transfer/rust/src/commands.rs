@@ -781,6 +781,13 @@ pub fn handle_transfer_progress(
         None => return,
     };
 
+    // 终态幂等守卫：宿主终态事件可能迟到/重复（取消清理等），任务已终态时
+    // 直接忽略——否则 Cancelled 分支兜底会把终态任务拉回活跃循环，
+    // 前端每轮「失败→复活→再失败」重发一次通知
+    if task.state.is_terminal() {
+        return;
+    }
+
     // 更新偏移
     task.offset = progress.transferred;
     if progress.total > 0 {
@@ -825,6 +832,8 @@ pub fn handle_transfer_progress(
             } else {
                 task.state = TaskState::Failed;
                 task.reason = Some(reason.clone());
+                // 失败终态：清除断线自动续传标记，防止后续事件路径再复活
+                task.auto_resumable = false;
             }
             state.queue.release(&task_id);
         }
@@ -962,8 +971,10 @@ pub fn handle_peer_changed(
             state.tasks.save(host);
             emit_tasks_changed(host, &state.tasks);
         }
-    } else {
-        // 该对端上线：其 auto_resumable 的 resumable 任务自动重新调度（spec §7.2）
+    } else if peers_changed {
+        // 该对端上线（仅上下线边沿触发一次）：其 auto_resumable 的 resumable
+        // 任务自动重新调度（spec §7.2）。重复公告（changed=false）不触发恢复
+        // ——否则对端反复重连时任务被反复复活重启，每轮失败触发一次通知
         let auto_ids: Vec<String> = state
             .tasks
             .values()

@@ -26,6 +26,10 @@ use std::path::PathBuf;
 /// 设置 storage key
 const SETTINGS_KEY: &str = "file-transfer-settings";
 
+/// SAF pipe 流 not-seekable-resume 重建上限（超过视为异常置失败，
+/// 防止宿主异常持续回报时无限重建循环）
+const MAX_RESUME_RETRIES: u32 = 2;
+
 /// 插件设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -344,6 +348,8 @@ pub fn resume(
         .unwrap()
         .transition(TaskState::Queued)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+    // 手动恢复 = 全新机会：重置 pipe 流重建计数
+    state.tasks.get_mut(task_id).unwrap().resume_retries = 0;
     state.queue.enqueue(task_id);
     state.tasks.save(host);
     emit_tasks_changed(host, &state.tasks);
@@ -482,6 +488,8 @@ pub fn retry(
     task.offset = 0;
     task.host_task_id = None;
     task.upload_session_id = None;
+    // 手动重试 = 全新机会：重置 pipe 流重建计数
+    task.resume_retries = 0;
     let id = task.id.clone();
     state.queue.enqueue(&id);
     state.tasks.save(host);
@@ -899,6 +907,14 @@ pub fn handle_transfer_progress(
         None => return,
     };
 
+    // 终态幂等守卫：宿主终态事件可能迟到/重复（取消清理、not-seekable-resume
+    // 重建后的旧 host 回报等），任务已终态时直接忽略——否则 Cancelled 分支
+    // 兜底 / not-seekable-resume 分支会把终态任务拉回活跃循环，前端每轮
+    // 「失败→复活→再失败」重发一次通知
+    if task.state.is_terminal() {
+        return;
+    }
+
     // 更新偏移
     task.offset = progress.transferred;
     if progress.total > 0 {
@@ -973,15 +989,26 @@ pub fn handle_transfer_progress(
                 // （Kotlin 侧 offset=0 重开会强制重开 fd 从头，见 spec M3
                 // 续传策略）。直接重新入队，不置终态——对端 session 以旧
                 // 偏移累计，必须废弃重建
-                task.state = TaskState::Queued;
-                task.offset = 0;
-                task.upload_session_id = None;
-                task.reason = None;
-                let id = task.id.clone();
-                state.queue.enqueue(&id);
+                if task.resume_retries >= MAX_RESUME_RETRIES {
+                    // 连续多次重建仍失败 → 宿主异常/对端持续不可用，落终态
+                    // 终止循环（否则每次重建失败都触发一次前端失败通知）
+                    task.state = TaskState::Failed;
+                    task.reason = Some("resume-limit-exceeded".to_string());
+                    task.auto_resumable = false;
+                } else {
+                    task.state = TaskState::Queued;
+                    task.offset = 0;
+                    task.upload_session_id = None;
+                    task.reason = None;
+                    task.resume_retries += 1;
+                    let id = task.id.clone();
+                    state.queue.enqueue(&id);
+                }
             } else {
                 task.state = TaskState::Failed;
                 task.reason = Some(reason.clone());
+                // 失败终态：清除断线自动续传标记，防止后续事件路径再复活
+                task.auto_resumable = false;
             }
             state.queue.release(&task_id);
         }
@@ -1204,8 +1231,11 @@ pub fn handle_peer_changed(
             state.tasks.save(host);
             emit_tasks_changed(host, &state.tasks);
         }
-    } else {
-        // 该对端上线：其 auto_resumable 的 resumable 任务自动重新调度（spec §7.2）
+    } else if peers_changed {
+        // 该对端上线（仅上下线边沿触发一次）：其 auto_resumable 的 resumable
+        // 任务自动重新调度（spec §7.2）。重复公告（changed=false，WS 控制面
+        // 周期推送，实测约每秒一次）不触发恢复——否则对端网络抖动时任务被
+        // 反复复活重启，每轮「复活→失败」都触发一次前端失败通知
         let auto_ids: Vec<String> = state
             .tasks
             .values()
@@ -1379,6 +1409,7 @@ fn make_task(
         host_task_id: None,
         cleanup_local: false,
         auto_resumable: false,
+        resume_retries: 0,
         last_flush: 0,
     }
 }

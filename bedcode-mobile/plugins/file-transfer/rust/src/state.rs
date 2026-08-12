@@ -178,6 +178,10 @@ pub struct Task {
     /// 是否因断线自动转为 resumable（重连自动续传标记）
     #[serde(skip)]
     pub auto_resumable: bool,
+    /// SAF pipe 流 not-seekable-resume 重建次数（运行时字段；超过上限
+    /// 置失败，防止宿主异常持续回报时无限重建循环）
+    #[serde(skip)]
+    pub resume_retries: u32,
     /// 上次持久化时间戳（毫秒，用于 1s 节流）
     #[serde(skip)]
     pub last_flush: u64,
@@ -402,6 +406,7 @@ mod tests {
             host_task_id: None,
             cleanup_local: false,
             auto_resumable: false,
+            resume_retries: 0,
             last_flush: 0,
         };
         assert!(task.transition(TaskState::Transferring).is_ok());
