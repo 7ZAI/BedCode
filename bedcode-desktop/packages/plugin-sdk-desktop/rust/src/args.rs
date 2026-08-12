@@ -60,3 +60,74 @@ impl From<serde_json::Value> for CommandArgs {
         Self::new(v)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_null_normalized_to_empty_object() {
+        // ABI 层解析失败时传入 Null，提取应一律返回默认值而非 panic
+        let args = CommandArgs::new(serde_json::Value::Null);
+        assert_eq!(args.str_or("session_id", "default"), "default");
+        assert_eq!(args.str("session_id"), None);
+        assert_eq!(args.bool_or("auto", true), true);
+        assert_eq!(args.value("x"), None);
+        assert_eq!(args.value_owned("x"), None);
+    }
+
+    #[test]
+    fn test_str_or_missing_or_wrong_type_returns_default() {
+        let args = CommandArgs::new(serde_json::json!({
+            "name": "claude",
+            "count": 3,
+            "flag": true
+        }));
+        assert_eq!(args.str_or("name", ""), "claude");
+        assert_eq!(args.str_or("missing", "fallback"), "fallback");
+        // 非字符串字段（数字/bool/对象）一律按缺失处理
+        assert_eq!(args.str_or("count", "fallback"), "fallback");
+        assert_eq!(args.str_or("flag", "fallback"), "fallback");
+        assert_eq!(args.str_or("name", ""), "claude");
+    }
+
+    #[test]
+    fn test_str_filters_empty_string() {
+        // 空字符串视为无（可选参数语义），与 str_or 的显式默认值区分
+        let args = CommandArgs::new(serde_json::json!({ "a": "", "b": "x" }));
+        assert_eq!(args.str("a"), None);
+        assert_eq!(args.str("b"), Some("x".to_string()));
+        assert_eq!(args.str("missing"), None);
+        assert_eq!(args.str("b"), Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_bool_or() {
+        let args = CommandArgs::new(serde_json::json!({
+            "yes": true,
+            "no": false,
+            "wrong": "true"
+        }));
+        assert!(args.bool_or("yes", false));
+        assert!(!args.bool_or("no", true));
+        // 字符串 "true" 不是 bool，按缺失处理
+        assert!(!args.bool_or("wrong", false));
+        assert!(args.bool_or("missing", true));
+    }
+
+    #[test]
+    fn test_value_and_value_owned() {
+        let inner = serde_json::json!({ "nested": [1, 2] });
+        let args = CommandArgs::new(serde_json::json!({ "obj": inner.clone() }));
+        assert_eq!(args.value("obj"), Some(&inner));
+        assert_eq!(args.value_owned("obj"), Some(inner));
+        assert_eq!(args.value_owned("missing"), None);
+    }
+
+    #[test]
+    fn test_from_value_conversion() {
+        // 插件代码常用 `let args = CommandArgs::from(value);`，与 new 语义一致
+        let args: CommandArgs = serde_json::json!(null).into();
+        assert_eq!(args.str_or("k", "d"), "d");
+    }
+}

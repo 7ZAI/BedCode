@@ -172,3 +172,286 @@ pub struct PluginQuestionOption {
     #[serde(default)]
     pub description: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== SessionLifecycleEvent ====================
+
+    #[test]
+    fn test_session_lifecycle_creating_wire_format() {
+        // 线协议：event_type 内部标签 + snake_case 变体名；
+        // source_device/resource_dir 无 skip 标记，None/默认值也序列化
+        let event = SessionLifecycleEvent::Creating {
+            config_id: "c1".into(),
+            command: "claude".into(),
+            working_dir: "/work".into(),
+            source_device: None,
+            resource_dir: "/plugins/x".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "event_type": "creating",
+                "config_id": "c1",
+                "command": "claude",
+                "working_dir": "/work",
+                "source_device": null,
+                "resource_dir": "/plugins/x"
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_lifecycle_created_wire_format() {
+        let event = SessionLifecycleEvent::Created {
+            session_id: "s1".into(),
+            config_id: "c1".into(),
+            name: "daily".into(),
+            working_dir: "/work".into(),
+            resource_dir: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "event_type": "created",
+                "session_id": "s1",
+                "config_id": "c1",
+                "name": "daily",
+                "working_dir": "/work",
+                "resource_dir": ""
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_lifecycle_stopping_and_stopped_wire_format() {
+        let stopping = SessionLifecycleEvent::Stopping {
+            session_id: "s1".into(),
+            source_device: Some("phone".into()),
+            resource_dir: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&stopping).unwrap(),
+            serde_json::json!({
+                "event_type": "stopping",
+                "session_id": "s1",
+                "source_device": "phone",
+                "resource_dir": ""
+            })
+        );
+
+        let stopped = SessionLifecycleEvent::Stopped {
+            session_id: "s1".into(),
+            source_device: None,
+            resource_dir: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&stopped).unwrap(),
+            serde_json::json!({
+                "event_type": "stopped",
+                "session_id": "s1",
+                "source_device": null,
+                "resource_dir": ""
+            })
+        );
+    }
+
+    #[test]
+    fn test_session_lifecycle_parse_with_missing_optionals() {
+        // 宿主旧版本可能不携带 source_device/resource_dir，#[serde(default)] 保证可解析
+        let json = serde_json::json!({
+            "event_type": "creating",
+            "config_id": "c1",
+            "command": "claude",
+            "working_dir": "/work"
+        });
+        let event: SessionLifecycleEvent = serde_json::from_value(json).unwrap();
+        match event {
+            SessionLifecycleEvent::Creating { source_device, resource_dir, .. } => {
+                assert_eq!(source_device, None);
+                assert_eq!(resource_dir, "");
+            }
+            other => panic!("expected Creating, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_session_lifecycle_rejects_unknown_variant() {
+        // 未知 event_type 必须失败（协议严格性，防静默吞掉拼写漂移）
+        let json = serde_json::json!({ "event_type": "paused", "session_id": "s1" });
+        assert!(serde_json::from_value::<SessionLifecycleEvent>(json).is_err());
+    }
+
+    // ==================== InputSubmittedEvent ====================
+
+    #[test]
+    fn test_input_submitted_wire_format() {
+        let event = InputSubmittedEvent {
+            session_id: "s1".into(),
+            text: "npm test".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({ "session_id": "s1", "text": "npm test" })
+        );
+        // 空提交（空行回车）同样是合法事件，宿主不做语义过滤
+        let empty = InputSubmittedEvent { session_id: "s1".into(), text: String::new() };
+        let back: InputSubmittedEvent =
+            serde_json::from_value(serde_json::to_value(&empty).unwrap()).unwrap();
+        assert_eq!(back.text, "");
+    }
+
+    // ==================== SyncEvent ====================
+
+    #[test]
+    fn test_sync_task_status_changed_full_and_minimal() {
+        let full = SyncEvent::TaskStatusChanged {
+            session_id: "s1".into(),
+            task_status: "asking".into(),
+            task_reason: Some("need input".into()),
+            task_questions: Some(vec![PluginQuestion {
+                question: "pick one".into(),
+                header: "choose".into(),
+                multi_select: true,
+                options: vec![
+                    PluginQuestionOption { label: "a".into(), description: "opt a".into() },
+                    PluginQuestionOption { label: "b".into(), description: String::new() },
+                ],
+            }]),
+        };
+        assert_eq!(
+            serde_json::to_value(&full).unwrap(),
+            serde_json::json!({
+                "type": "TaskStatusChanged",
+                "session_id": "s1",
+                "task_status": "asking",
+                "task_reason": "need input",
+                "task_questions": [{
+                    "question": "pick one",
+                    "header": "choose",
+                    "multi_select": true,
+                    "options": [
+                        { "label": "a", "description": "opt a" },
+                        { "label": "b", "description": "" }
+                    ]
+                }]
+            })
+        );
+
+        // 可选字段缺失时序列化必须跳过（skip_serializing_if），保持负载精简
+        let minimal = SyncEvent::TaskStatusChanged {
+            session_id: "s1".into(),
+            task_status: "idle".into(),
+            task_reason: None,
+            task_questions: None,
+        };
+        let json = serde_json::to_value(&minimal).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "TaskStatusChanged", "session_id": "s1", "task_status": "idle" })
+        );
+        assert!(json.get("task_reason").is_none());
+        assert!(json.get("task_questions").is_none());
+    }
+
+    #[test]
+    fn test_sync_session_mode_changed() {
+        let event = SyncEvent::SessionModeChanged { session_id: "s1".into(), auto_approve: true };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({ "type": "SessionModeChanged", "session_id": "s1", "auto_approve": true })
+        );
+    }
+
+    #[test]
+    fn test_sync_task_queue_changed() {
+        let with_id = SyncEvent::TaskQueueChanged {
+            session_id: "s1".into(),
+            queue_count: 3,
+            action: "done".into(),
+            task_id: Some("t1".into()),
+            status: Some("done".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&with_id).unwrap(),
+            serde_json::json!({
+                "type": "TaskQueueChanged",
+                "session_id": "s1",
+                "queue_count": 3,
+                "action": "done",
+                "task_id": "t1",
+                "status": "done"
+            })
+        );
+
+        let minimal = SyncEvent::TaskQueueChanged {
+            session_id: "s1".into(),
+            queue_count: 0,
+            action: "clear".into(),
+            task_id: None,
+            status: None,
+        };
+        let json = serde_json::to_value(&minimal).unwrap();
+        assert!(json.get("task_id").is_none());
+        assert!(json.get("status").is_none());
+    }
+
+    #[test]
+    fn test_sync_task_scheduled_changed() {
+        let event = SyncEvent::TaskScheduledChanged {
+            job_id: "job-1".into(),
+            status: "pending".into(),
+            action: "create".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "type": "TaskScheduledChanged",
+                "job_id": "job-1",
+                "status": "pending",
+                "action": "create"
+            })
+        );
+    }
+
+    #[test]
+    fn test_sync_event_parse_round_trip() {
+        // 移动端按同一 JSON 反序列化 —— 解析往返锁死两侧共享的线协议
+        let json = serde_json::json!({
+            "type": "TaskStatusChanged",
+            "session_id": "s1",
+            "task_status": "completed",
+            "task_reason": null,
+            "task_questions": null
+        });
+        let event: SyncEvent = serde_json::from_value(json).unwrap();
+        match event {
+            SyncEvent::TaskStatusChanged { task_reason, task_questions, .. } => {
+                assert_eq!(task_reason, None);
+                // PluginQuestion 未实现 PartialEq，按空判断
+                assert!(task_questions.is_none());
+            }
+            other => panic!("expected TaskStatusChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_sync_event_rejects_unknown_type() {
+        // 未知 type 必须失败 —— 宿主穷尽 match 的前提是解析器严格
+        let json = serde_json::json!({ "type": "WhateverChanged", "session_id": "s1" });
+        assert!(serde_json::from_value::<SyncEvent>(json).is_err());
+    }
+
+    // ==================== PluginQuestion ====================
+
+    #[test]
+    fn test_plugin_question_defaults() {
+        // 宿主/移动端可能构造缺省字段的旧载荷，default 保证可解析
+        let json = serde_json::json!({ "question": "q", "header": "h" });
+        let q: PluginQuestion = serde_json::from_value(json).unwrap();
+        assert!(!q.multi_select);
+        assert!(q.options.is_empty());
+    }
+}

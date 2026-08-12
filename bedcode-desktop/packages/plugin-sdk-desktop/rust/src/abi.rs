@@ -27,3 +27,22 @@ pub const ABI_VERSION: u32 = 7;
 /// 不 bump ABI 大版本，仅区分加载路径（core module vs component，
 /// 后者为迁移后唯一形态；FORM_CORE=0 已在阶段 C 删除）
 pub const FORM_COMPONENT: u32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_abi_version_is_v7() {
+        // 版本号序列与历史 core ABI 共用：v7 = 新增 SESSION_CLOSE（ADR 0003 配套）
+        assert_eq!(ABI_VERSION, 7);
+    }
+
+    #[test]
+    fn test_form_component_constant() {
+        // 迁移阶段 C 后唯一形态是组件；FORM_CORE=0 已删除，
+        // 锁定 1 防未来误引入 0 值导致宿主加载路径回退
+        assert_eq!(FORM_COMPONENT, 1);
+        assert_ne!(FORM_COMPONENT, 0);
+    }
+}

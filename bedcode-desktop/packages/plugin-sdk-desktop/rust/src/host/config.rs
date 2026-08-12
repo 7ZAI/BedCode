@@ -50,3 +50,41 @@ pub trait HostConfig {
     /// 读取白名单内的配置项；配置不可用返回 `Ok(None)`
     fn config_get(&self, key: ConfigKey) -> Result<Option<String>, HostError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wire_strings_are_contract() {
+        // 线上协议字符串被 host function 传参直接使用，宿主侧按字面量解析，
+        // 改动会导致新旧插件/宿主失配 —— 逐字面量锁死
+        assert_eq!(ConfigKey::NetworkPort.as_str(), "network.port");
+        assert_eq!(ConfigKey::HomeDir.as_str(), "home_dir");
+        assert_eq!(ConfigKey::CurrentTimeMs.as_str(), "system.time_ms");
+    }
+
+    #[test]
+    fn test_round_trip_all_keys() {
+        for key in ConfigKey::ALL {
+            assert_eq!(ConfigKey::from_str(key.as_str()), Some(*key));
+        }
+    }
+
+    #[test]
+    fn test_all_contains_exactly_three_keys() {
+        // 白名单即枚举本身：ALL 必须穷尽全部变体，新增配置项时此处同步断言
+        assert_eq!(ConfigKey::ALL.len(), 3);
+        assert!(ConfigKey::ALL.contains(&ConfigKey::NetworkPort));
+        assert!(ConfigKey::ALL.contains(&ConfigKey::HomeDir));
+        assert!(ConfigKey::ALL.contains(&ConfigKey::CurrentTimeMs));
+    }
+
+    #[test]
+    fn test_unknown_key_returns_none() {
+        // 宿主白名单校验依赖 from_str 拒绝未知键，勿放行模糊匹配
+        assert_eq!(ConfigKey::from_str("network.port2"), None);
+        assert_eq!(ConfigKey::from_str("PORT"), None);
+        assert_eq!(ConfigKey::from_str(""), None);
+    }
+}

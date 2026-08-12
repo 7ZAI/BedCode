@@ -117,3 +117,120 @@ impl RustPluginContext {
         self.event_emitter.emit(event, payload);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{block_on, MockEventEmitter, MockSessionQuery, MockStorage};
+    use crate::PermissionManager;
+
+    /// 构造带指定权限的测试上下文
+    fn make_context(permissions: &[&str]) -> (RustPluginContext, Arc<MockStorage>, Arc<MockEventEmitter>) {
+        let pm = Arc::new(PermissionManager::new());
+        pm.grant_permissions(
+            "test.plugin",
+            &permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        let storage = Arc::new(MockStorage::default());
+        let emitter = Arc::new(MockEventEmitter::default());
+        let ctx = RustPluginContext::new(
+            "test.plugin".into(),
+            storage.clone(),
+            Arc::new(MockSessionQuery),
+            emitter.clone(),
+            pm,
+            permissions.iter().map(|s| s.to_string()).collect(),
+        );
+        (ctx, storage, emitter)
+    }
+
+    // ==================== 基础访问器 ====================
+
+    #[test]
+    fn test_plugin_id_and_granted_permissions() {
+        let (ctx, _, _) = make_context(&["storage"]);
+        assert_eq!(ctx.plugin_id(), "test.plugin");
+        assert!(ctx.granted_permissions().contains("storage"));
+        assert!(!ctx.granted_permissions().contains("session:read"));
+    }
+
+    #[test]
+    fn test_has_permission_consults_manager() {
+        let (ctx, _, _) = make_context(&["terminal:input"]);
+        // storage 默认授予，无需显式请求
+        assert!(ctx.has_permission("storage"));
+        assert!(ctx.has_permission("terminal:input"));
+        assert!(!ctx.has_permission("terminal:output"));
+    }
+
+    // ==================== Storage API（透传 plugin_id 前缀） ====================
+
+    #[test]
+    fn test_storage_get_passes_plugin_id_and_key() {
+        let (ctx, storage, _) = make_context(&[]);
+        let value = block_on(ctx.storage_get("my_key")).unwrap();
+        // mock 返回 { "stored": key }，验证调用链上 plugin_id 与 key 均透传
+        assert_eq!(value, Some(serde_json::json!({ "stored": "my_key" })));
+        let calls = storage.calls.lock().unwrap().clone();
+        assert_eq!(calls, vec![("test.plugin".to_string(), "my_key".to_string())]);
+    }
+
+    #[test]
+    fn test_storage_set_and_delete_pass_plugin_id_and_key() {
+        let (ctx, storage, _) = make_context(&[]);
+        block_on(ctx.storage_set("k1", serde_json::json!({ "v": 1 }))).unwrap();
+        block_on(ctx.storage_delete("k2")).unwrap();
+        let calls = storage.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], ("test.plugin".to_string(), "k1".to_string()));
+        assert_eq!(calls[1], ("test.plugin".to_string(), "k2".to_string()));
+    }
+
+    // ==================== Session API（权限闸门） ====================
+
+    #[test]
+    fn test_list_sessions_requires_session_read() {
+        let (ctx, _, _) = make_context(&[]);
+        let err = block_on(ctx.list_sessions()).unwrap_err();
+        // 权限拒绝信息含插件 ID 与所需权限，宿主据此定位
+        assert!(err.to_string().contains("test.plugin"));
+        assert!(err.to_string().contains("session:read"));
+    }
+
+    #[test]
+    fn test_list_sessions_with_permission() {
+        let (ctx, _, _) = make_context(&["session:read"]);
+        let sessions = block_on(ctx.list_sessions()).unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0], serde_json::json!({ "id": "s1" }));
+    }
+
+    #[test]
+    fn test_get_session_requires_session_read() {
+        let (ctx, _, _) = make_context(&[]);
+        let err = block_on(ctx.get_session("s1")).unwrap_err();
+        assert!(err.to_string().contains("session:read"));
+    }
+
+    #[test]
+    fn test_get_session_existing_and_missing() {
+        let (ctx, _, _) = make_context(&["session:read"]);
+        let existing = block_on(ctx.get_session("s1")).unwrap();
+        assert_eq!(existing, Some(serde_json::json!({ "id": "s1" })));
+        // mock 对未知 session 返回 None，验证 Option 透传
+        let missing = block_on(ctx.get_session("nope")).unwrap();
+        assert_eq!(missing, None);
+    }
+
+    // ==================== Event API ====================
+
+    #[test]
+    fn test_emit_event_forwards_to_emitter() {
+        let (ctx, _, emitter) = make_context(&[]);
+        let payload = serde_json::json!({ "status": "done" });
+        ctx.emit_event("plugin:event", payload.clone());
+        assert_eq!(emitter.emit_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let emitted = emitter.emitted.lock().unwrap().clone();
+        assert_eq!(emitted, vec![("plugin:event".to_string(), payload)]);
+    }
+}

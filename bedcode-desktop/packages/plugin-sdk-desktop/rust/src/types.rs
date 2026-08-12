@@ -406,3 +406,383 @@ pub struct PeerFileService {
     #[serde(default)]
     pub mounts: Vec<PeerMountAnnouncement>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== PluginManifest ====================
+
+    #[test]
+    fn test_manifest_parse_with_defaults() {
+        // 缺省字段（description/author/main/icon/contributes）全部走 default，
+        // 宿主加载最小化 plugin.json 不应失败
+        let json = serde_json::json!({
+            "id": "com.bedcode.demo",
+            "name": "Demo",
+            "version": "0.1.0",
+            "sandbox": "inline",
+            "permissions": ["storage", "terminal:input"],
+            "pluginType": "rust-ts",
+            "contributes": {
+                "commands": [{ "id": "run", "title": "Run", "icon": "run.svg" }],
+                "subscribes": ["task:status-changed"]
+            }
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(m.id, "com.bedcode.demo");
+        assert_eq!(m.version, "0.1.0");
+        assert_eq!(m.description, "");
+        assert_eq!(m.sandbox, "inline");
+        assert_eq!(m.plugin_type, PluginType::RustTs);
+        assert_eq!(m.permissions, vec!["storage", "terminal:input"]);
+        assert_eq!(m.contributes.commands.len(), 1);
+        assert_eq!(m.contributes.commands[0].id, "run");
+        assert_eq!(m.contributes.commands[0].title, "Run");
+        assert_eq!(m.contributes.commands[0].icon.as_deref(), Some("run.svg"));
+        assert_eq!(m.contributes.subscribes, vec!["task:status-changed"]);
+    }
+
+    #[test]
+    fn test_manifest_round_trip_fills_defaults() {
+        // 宿主加载最小化 plugin.json 后序列化回写：缺省字段应已填充默认值
+        // （serde default 在反序列化时生效，序列化反映内存中的实际值）
+        let json = serde_json::json!({ "id": "com.bedcode.x", "name": "X", "version": "1.0.0" });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back["pluginType"], serde_json::json!("ts-only"));
+        assert_eq!(back["sandbox"], serde_json::json!("inline"));
+        assert_eq!(back["description"], serde_json::json!(""));
+        // contributes 序列化时带全部字段（serde(default) 只影响反序列化）
+        assert_eq!(back["contributes"]["commands"], serde_json::json!([]));
+        assert_eq!(back["contributes"]["subscribes"], serde_json::json!([]));
+    }
+
+    // ==================== PluginType / PluginState ====================
+
+    #[test]
+    fn test_plugin_type_kebab_case() {
+        // 线协议 kebab-case：宿主按字面量解析 plugin.json 的 pluginType 字段
+        assert_eq!(serde_json::to_value(PluginType::Rust).unwrap(), serde_json::json!("rust"));
+        assert_eq!(serde_json::to_value(PluginType::RustTs).unwrap(), serde_json::json!("rust-ts"));
+        assert_eq!(serde_json::to_value(PluginType::TsOnly).unwrap(), serde_json::json!("ts-only"));
+        assert_eq!(serde_json::from_value::<PluginType>(serde_json::json!("rust-ts")).unwrap(), PluginType::RustTs);
+        assert!(serde_json::from_value::<PluginType>(serde_json::json!("rust_ts")).is_err());
+    }
+
+    #[test]
+    fn test_plugin_state_adjacent_tagging() {
+        // state/error 相邻标签：unit 变体无 error 字段，Error 携带消息
+        assert_eq!(
+            serde_json::to_value(PluginState::Activated).unwrap(),
+            serde_json::json!({ "state": "Activated" })
+        );
+        assert_eq!(
+            serde_json::to_value(PluginState::Error("boom".into())).unwrap(),
+            serde_json::json!({ "state": "Error", "error": "boom" })
+        );
+        let back: PluginState =
+            serde_json::from_value(serde_json::json!({ "state": "Error", "error": "x" })).unwrap();
+        assert_eq!(back, PluginState::Error("x".into()));
+    }
+
+    // ==================== 扩展点声明 ====================
+
+    #[test]
+    fn test_view_contribution_type_field() {
+        // view_type 序列化为 "type"（与前端 vscode 风格扩展点一致）
+        let v = ViewContribution {
+            id: "v1".into(),
+            view_type: "sidebar".into(),
+            title: "Side".into(),
+            component: "SidePanel".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&v).unwrap(),
+            serde_json::json!({
+                "id": "v1",
+                "type": "sidebar",
+                "title": "Side",
+                "component": "SidePanel"
+            })
+        );
+    }
+
+    #[test]
+    fn test_config_property_type_field() {
+        // 属性类型字段序列化为 "type"，缺省字段（description/default/enumValues）为 null
+        let p = ConfigProperty {
+            prop_type: "string".into(),
+            title: "API Key".into(),
+            description: None,
+            default: None,
+            enum_values: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            serde_json::json!({
+                "type": "string",
+                "title": "API Key",
+                "description": null,
+                "default": null,
+                "enumValues": null
+            })
+        );
+    }
+
+    #[test]
+    fn test_contributes_defaults_and_full_parse() {
+        // 全量贡献点解析：terminal/toolProviders/fileHandlers/configuration/lifecycle
+        let json = serde_json::json!({
+            "commands": [{ "id": "c1", "title": "C1" }],
+            "views": [{ "id": "v1", "type": "toolbox", "title": "V1", "component": "C" }],
+            "terminal": {
+                "inputHandlers": ["in1"],
+                "outputParsers": ["out1"]
+            },
+            "toolProviders": [{ "id": "tp1", "name": "N", "endpoint": "http://x" }],
+            "fileHandlers": [{ "id": "fh1", "extensions": ["md"], "viewer": "V" }],
+            "configuration": {
+                "title": "Config",
+                "properties": {
+                    "key": { "type": "string", "title": "Key" }
+                }
+            },
+            "lifecycle": { "onStartup": true, "onShutdown": false },
+            "provides": ["topic:a"],
+            "subscribes": ["topic:b"]
+        });
+        let c: PluginContributes = serde_json::from_value(json).unwrap();
+        assert_eq!(c.terminal.as_ref().unwrap().input_handlers, vec!["in1"]);
+        assert_eq!(c.tool_providers[0].endpoint, "http://x");
+        assert_eq!(c.file_handlers[0].extensions, vec!["md"]);
+        assert_eq!(c.configuration.as_ref().unwrap().properties.len(), 1);
+        assert!(c.lifecycle.as_ref().unwrap().on_startup);
+        assert!(!c.lifecycle.as_ref().unwrap().on_shutdown);
+        assert_eq!(c.provides, vec!["topic:a"]);
+    }
+
+    // ==================== FileOperation / Mount ====================
+
+    #[test]
+    fn test_file_operation_lowercase() {
+        // 线协议 lowercase：HTTP 端点与 WASM ABI JSON 直接使用
+        assert_eq!(serde_json::to_value(FileOperation::List).unwrap(), serde_json::json!("list"));
+        assert_eq!(serde_json::to_value(FileOperation::Download).unwrap(), serde_json::json!("download"));
+        assert_eq!(serde_json::to_value(FileOperation::Upload).unwrap(), serde_json::json!("upload"));
+        assert_eq!(
+            serde_json::from_value::<FileOperation>(serde_json::json!("download")).unwrap(),
+            FileOperation::Download
+        );
+        assert!(serde_json::from_value::<FileOperation>(serde_json::json!("Download")).is_err());
+    }
+
+    #[test]
+    fn test_mount_options_and_result_camel_case() {
+        let opts = MountOptions {
+            mount_path: "shared".into(),
+            roots: vec!["/data".into()],
+            operations: vec![FileOperation::List, FileOperation::Download],
+        };
+        assert_eq!(
+            serde_json::to_value(&opts).unwrap(),
+            serde_json::json!({
+                "mountPath": "shared",
+                "roots": ["/data"],
+                "operations": ["list", "download"]
+            })
+        );
+        let result = MountResult {
+            mount_path: "shared".into(),
+            base_path: "/api/plugins/com.bedcode.x/shared".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            serde_json::json!({
+                "mountPath": "shared",
+                "basePath": "/api/plugins/com.bedcode.x/shared"
+            })
+        );
+    }
+
+    // ==================== UploadHookDecision ====================
+
+    #[test]
+    fn test_upload_hook_decision_constructors() {
+        let allow = UploadHookDecision::allow();
+        assert!(allow.allow);
+        assert_eq!(allow.reason, None);
+        let deny = UploadHookDecision::deny("duplicate-name");
+        assert!(!deny.allow);
+        assert_eq!(deny.reason.as_deref(), Some("duplicate-name"));
+    }
+
+    #[test]
+    fn test_upload_hook_decision_fail_closed_default() {
+        // fail-closed：Default 必须是拒绝，且携带 "no decision" 原因
+        let d = UploadHookDecision::default();
+        assert!(!d.allow);
+        assert_eq!(d.reason.as_deref(), Some("no decision"));
+    }
+
+    #[test]
+    fn test_upload_hook_decision_wire_format() {
+        // allow 时 reason 被跳过（skip_serializing_if），拒绝时携带原因
+        assert_eq!(
+            serde_json::to_value(UploadHookDecision::allow()).unwrap(),
+            serde_json::json!({ "allow": true })
+        );
+        assert_eq!(
+            serde_json::to_value(UploadHookDecision::deny("duplicate-name")).unwrap(),
+            serde_json::json!({ "allow": false, "reason": "duplicate-name" })
+        );
+    }
+
+    #[test]
+    fn test_upload_request_meta_wire_format() {
+        let meta = UploadRequestMeta { relative_path: "dir/a.txt".into(), size: 1024 };
+        assert_eq!(
+            serde_json::to_value(&meta).unwrap(),
+            serde_json::json!({ "relativePath": "dir/a.txt", "size": 1024 })
+        );
+        let back: UploadRequestMeta =
+            serde_json::from_value(serde_json::json!({ "relativePath": "a", "size": 1 })).unwrap();
+        assert_eq!(back.relative_path, "a");
+    }
+
+    // ==================== Transfer ====================
+
+    #[test]
+    fn test_transfer_direction_lowercase() {
+        assert_eq!(serde_json::to_value(TransferDirection::Upload).unwrap(), serde_json::json!("upload"));
+        assert_eq!(serde_json::to_value(TransferDirection::Download).unwrap(), serde_json::json!("download"));
+        assert!(serde_json::from_value::<TransferDirection>(serde_json::json!("UP")).is_err());
+    }
+
+    #[test]
+    fn test_transfer_request_wire_format() {
+        let req = TransferRequest {
+            task_id: "t1".into(),
+            direction: TransferDirection::Download,
+            url: "http://peer:8899/api/plugins/x/m/file".into(),
+            headers: {
+                let mut h = HashMap::new();
+                h.insert("Authorization".into(), "Bearer abc".into());
+                h
+            },
+            local_path: "/tmp/t1.part".into(),
+            offset: 4096,
+            expected_size: 0,
+            final_path: Some("/tmp/t1".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&req).unwrap(),
+            serde_json::json!({
+                "taskId": "t1",
+                "direction": "download",
+                "url": "http://peer:8899/api/plugins/x/m/file",
+                "headers": { "Authorization": "Bearer abc" },
+                "localPath": "/tmp/t1.part",
+                "offset": 4096,
+                "expectedSize": 0,
+                "finalPath": "/tmp/t1"
+            })
+        );
+    }
+
+    #[test]
+    fn test_transfer_request_minimal_round_trip() {
+        // 缺省字段（headers/offset/expectedSize/finalPath）不携带时按默认值解析
+        let json = serde_json::json!({
+            "taskId": "t2",
+            "direction": "upload",
+            "url": "http://peer/up",
+            "localPath": "/data/f.bin"
+        });
+        let req: TransferRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.direction, TransferDirection::Upload);
+        assert!(req.headers.is_empty());
+        assert_eq!(req.offset, 0);
+        assert_eq!(req.expected_size, 0);
+        assert_eq!(req.final_path, None);
+    }
+
+    #[test]
+    fn test_transfer_state_wire_format() {
+        // state/reason 相邻标签，变体名显式锁定小写
+        assert_eq!(
+            serde_json::to_value(TransferState::Running).unwrap(),
+            serde_json::json!({ "state": "running" })
+        );
+        assert_eq!(
+            serde_json::to_value(TransferState::Failed("network".into())).unwrap(),
+            serde_json::json!({ "state": "failed", "reason": "network" })
+        );
+        assert_eq!(
+            serde_json::to_value(TransferState::Cancelled).unwrap(),
+            serde_json::json!({ "state": "cancelled" })
+        );
+        let back: TransferState =
+            serde_json::from_value(serde_json::json!({ "state": "completed" })).unwrap();
+        assert_eq!(back, TransferState::Completed);
+    }
+
+    #[test]
+    fn test_transfer_progress_wire_format() {
+        let p = TransferProgress {
+            task_id: "t1".into(),
+            transferred: 2048,
+            total: 8192,
+            bytes_per_sec: 512,
+            state: TransferState::Running,
+        };
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            serde_json::json!({
+                "taskId": "t1",
+                "transferred": 2048,
+                "total": 8192,
+                "bytesPerSec": 512,
+                "state": { "state": "running" }
+            })
+        );
+    }
+
+    // ==================== Peer 公告 ====================
+
+    #[test]
+    fn test_peer_file_service_round_trip() {
+        let peer = PeerFileService {
+            ip: "192.168.1.5".into(),
+            port: 8899,
+            token: String::new(),
+            device_name: "phone".into(),
+            mounts: vec![PeerMountAnnouncement {
+                plugin_id: "com.bedcode.x".into(),
+                mount_path: "shared".into(),
+                operations: vec![FileOperation::List],
+            }],
+        };
+        let json = serde_json::to_value(&peer).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "ip": "192.168.1.5",
+                "port": 8899,
+                "token": "",
+                "deviceName": "phone",
+                "mounts": [{
+                    "pluginId": "com.bedcode.x",
+                    "mountPath": "shared",
+                    "operations": ["list"]
+                }]
+            })
+        );
+        // 缺省字段（token/deviceName/mounts）解析为默认值
+        let minimal = serde_json::json!({ "ip": "10.0.0.1", "port": 8899 });
+        let back: PeerFileService = serde_json::from_value(minimal).unwrap();
+        assert_eq!(back.token, "");
+        assert_eq!(back.device_name, "");
+        assert!(back.mounts.is_empty());
+    }
+}

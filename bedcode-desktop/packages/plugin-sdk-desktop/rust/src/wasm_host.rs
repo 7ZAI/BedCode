@@ -43,6 +43,34 @@ fn parse_json(api: &str, s: String) -> Result<serde_json::Value, HostError> {
         .map_err(|e| HostError::custom(-1, format!("{}: invalid JSON from host: {}", api, e)))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_host_err_format() {
+        // WIT result<T, string> 的错误串 → HostError：code 固定 -1，消息带 API 名前缀
+        let e = host_err("db_execute", "permission denied".to_string());
+        assert_eq!(e.code, -1);
+        assert_eq!(e.message, "db_execute: permission denied");
+    }
+
+    #[test]
+    fn test_parse_json_valid() {
+        let v = parse_json("storage_get", "{\"k\": 1}".to_string()).unwrap();
+        assert_eq!(v, serde_json::json!({ "k": 1 }));
+    }
+
+    #[test]
+    fn test_parse_json_invalid_reports_api() {
+        // 解析失败时错误消息必须包含 API 名，插件据此定位宿主侧问题
+        let e = parse_json("session_get", "not json".to_string()).unwrap_err();
+        assert_eq!(e.code, -1);
+        assert!(e.message.contains("session_get"), "got: {}", e.message);
+        assert!(e.message.contains("invalid JSON from host"));
+    }
+}
+
 // ==================== HostStorage ====================
 
 impl HostStorage for WasmHost {
