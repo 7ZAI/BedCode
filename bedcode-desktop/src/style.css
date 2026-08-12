@@ -666,3 +666,53 @@ body {
 .animate-fade-slide-up {
   animation: fade-slide-up 0.3s ease both;
 }
+
+/* ==================== Toast 等级配色（vue-sonner richColors 变量覆盖） ====================
+ * 覆盖 sonner 默认 HSL 色板，改用主题语义 token：
+ * 成功绿 --color-success / 警告黄 --color-warning / 错误红 --color-danger / info 用 --color-primary。
+ * 背景取 -light 淡色、边框用 color-mix 淡化语义色、浅色模式文字加深 35% 保证对比度；
+ * 深色模式文字直接用亮色语义色。default/loading 类通知保持卡片统一风格。 */
+[data-sonner-toaster][data-sonner-theme='light'] {
+  --success-bg: var(--color-success-light) !important;
+  --success-border: color-mix(in srgb, var(--color-success) 35%, transparent) !important;
+  --success-text: color-mix(in srgb, var(--color-success) 65%, black) !important;
+
+  --warning-bg: var(--color-warning-light) !important;
+  --warning-border: color-mix(in srgb, var(--color-warning) 35%, transparent) !important;
+  --warning-text: color-mix(in srgb, var(--color-warning) 65%, black) !important;
+
+  --error-bg: var(--color-danger-light) !important;
+  --error-border: color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
+  --error-text: color-mix(in srgb, var(--color-danger) 65%, black) !important;
+
+  --info-bg: var(--color-primary-light) !important;
+  --info-border: color-mix(in srgb, var(--color-primary) 30%, transparent) !important;
+  --info-text: color-mix(in srgb, var(--color-primary) 65%, black) !important;
+}
+
+[data-sonner-toaster][data-sonner-theme='dark'] {
+  --success-bg: var(--color-success-light) !important;
+  --success-border: color-mix(in srgb, var(--color-success) 25%, transparent) !important;
+  --success-text: var(--color-success) !important;
+
+  --warning-bg: var(--color-warning-light) !important;
+  --warning-border: color-mix(in srgb, var(--color-warning) 25%, transparent) !important;
+  --warning-text: var(--color-warning) !important;
+
+  --error-bg: var(--color-danger-light) !important;
+  --error-border: color-mix(in srgb, var(--color-danger) 25%, transparent) !important;
+  --error-text: var(--color-danger) !important;
+
+  --info-bg: var(--color-primary-light) !important;
+  --info-border: color-mix(in srgb, var(--color-primary) 20%, transparent) !important;
+  --info-text: var(--color-primary) !important;
+}
+
+/* default/loading 类通知：卡片统一风格，随主题 token（bg-card / border / text）联动 */
+[data-sonner-toaster] {
+  --normal-bg: var(--bg-card) !important;
+  --normal-border: var(--border) !important;
+  --normal-text: var(--text-primary) !important;
+  --normal-bg-hover: var(--bg-hover) !important;
+  --normal-border-hover: var(--border-strong) !important;
+}
