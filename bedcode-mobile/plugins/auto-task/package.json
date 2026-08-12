@@ -9,7 +9,8 @@
     "dev": "bedcode-plugin dev"
   },
   "dependencies": {
-    "@bedcode/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"
+    "@bedcode/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile",
+    "@vuepic/vue-datepicker": "^9.0.3"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

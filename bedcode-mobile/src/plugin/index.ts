@@ -25,6 +25,9 @@ import {
   httpSetSessionMode,
   httpCurrentTask,
   httpListSupportedAgents,
+  httpTaskHistoryList,
+  httpScheduledJobsList,
+  httpScheduledJobCreate,
 } from '@/composables/useHttpApi'
 
 /**
@@ -64,6 +67,9 @@ export async function initPluginSystem(
       httpSetSessionMode,
       httpCurrentTask,
       httpListSupportedAgents,
+      httpTaskHistoryList,
+      httpScheduledJobsList,
+      httpScheduledJobCreate,
     },
   )
 

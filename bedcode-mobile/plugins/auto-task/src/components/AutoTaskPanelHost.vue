@@ -257,8 +257,11 @@ interface CurrentTask {
 
 // ==================== State ====================
 
-const { tasks: presetTasks, markEnqueued, markCompletedByTaskId, revertToUnusedByTaskId, reconcileWithQueue, canEnqueue } = getPresetTasks().usePresetTasks()
+const { tasks: presetTasks, markEnqueued, markCompletedByTaskId, markInterruptedByTaskId, revertToUnusedByTaskId, reconcileWithQueue, canEnqueue } = getPresetTasks().usePresetTasks()
 const queue = ref<QueueTaskItem[]>([])
+// 当前处理中的队列项（waiting/executing）：displayTask 的补充来源，
+// 队列项进入 waiting/executing 后不在 pending 列表，但仍在处理中需要展示
+const activeTask = ref<QueueTaskItem | null>(null)
 const loading = ref(false)
 const manualInput = ref('')
 
@@ -288,6 +291,8 @@ const statusLabel: Record<string, string> = {
   completed: t('completed'),
   interrupted: t('interrupted'),
   pending: t('pending'),
+  // 队列项处理中状态（active_task）
+  waiting: t('waiting'),
   // 预设任务执行状态（本地，入队即视为已执行）
   unused: t('unused'),
   executing: t('inProgress'),
@@ -305,16 +310,25 @@ const statusColor: Record<string, string> = {
   completed: '#22c55e',
   interrupted: 'var(--mobile-error)',
   pending: 'var(--mobile-text-disabled)',
+  // 队列项处理中状态（active_task）
+  waiting: '#f59e0b',
   // 预设任务执行状态（本地，入队即视为已执行）
   unused: 'var(--mobile-text-disabled)',
   executing: 'var(--mobile-accent)',
 }
 
+/** 状态区显示：优先任务历史（执行中/等待输入），否则队列处理中项（等待下发/已下发） */
 const displayTask = computed(() => {
-  if (currentTask.value && ['in_progress', 'asking'].includes(currentTask.value.status)) {
-    return currentTask.value
+  const t =
+    currentTask.value && ['in_progress', 'asking'].includes(currentTask.value.status)
+      ? currentTask.value
+      : activeTask.value
+  if (!t) return null
+  return {
+    status: t.status,
+    // QueueTaskItem 用 prompt 承载描述，CurrentTask 用 description
+    description: (t as any).description ?? (t as any).prompt ?? null,
   }
-  return null
 })
 
 function showError(message: string) {
@@ -333,6 +347,7 @@ async function loadQueue() {
     const result = await mobileApi.httpTaskQueueList(activeSessionId.value)
     if (result.code === 0 && result.data) {
       queue.value = result.data.tasks || []
+      activeTask.value = result.data.active_task || null
     }
   } catch (e) {
     console.error('[AutoTask] Failed to load queue:', e)
@@ -591,7 +606,7 @@ onUnmounted(() => {
   window.removeEventListener('bedcode:task_queue_changed', handleTaskQueueChanged)
 })
 
-/** 桌面端任务队列变更（宿主转发的 CustomEvent）——完成广播按 task_id 匹配预设。
+/** 桌面端任务队列变更（宿主转发的 CustomEvent）——完成/取消/回退按 task_id 匹配预设。
  * 不校验 session_id：预设可入队到任意会话（活动会话切换后广播仍应生效），
  * 匹配唯一性由队列项 UUID 保证（手动输入项无本地记录，自然忽略） */
 function handleTaskQueueChanged(e: Event) {
@@ -602,8 +617,15 @@ function handleTaskQueueChanged(e: Event) {
     task_id?: string | null
     status?: string | null
   }
-  if (detail?.action === 'done' && detail.task_id) {
+  if (!detail?.task_id) return
+  if (detail.action === 'done') {
     markCompletedByTaskId(detail.task_id)
+  } else if (detail.action === 'cancel' || detail.action === 'interrupted') {
+    // 队列项被放弃（等待超时取消 / 会话终止兜底）：对应预设落中断
+    markInterruptedByTaskId(detail.task_id)
+  } else if (detail.action === 'revert') {
+    // clear 发送失败回退 pending：任务重新排队，刷新队列重新显示
+    loadQueue()
   }
 }
 </script>

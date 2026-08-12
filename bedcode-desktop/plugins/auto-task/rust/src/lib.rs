@@ -610,37 +610,6 @@ impl WasmPlugin for AutoTaskPlugin {
         }
         host.log_info("session_settings table initialized");
 
-        // 2.1 迁移：移除旧版 task_history.name 列（标题字段）
-        // 旧库的 name 列为 NOT NULL，新 INSERT 不再写入会触发约束错误；
-        // 先通过 PRAGMA table_info 确认列存在再 DROP：宿主 plugin_db_execute
-        // 对失败语句会记 ERROR 日志，不能把可预期的"无此列"场景当作错误处理
-        let legacy_name_column_exists = host
-            .plugin_db_query("PRAGMA table_info(task_history)")
-            .ok()
-            .flatten()
-            .and_then(|v| v.as_array().cloned())
-            .map(|rows| {
-                rows.iter().any(|row| {
-                    row.get("name")
-                        .and_then(|n| n.as_str())
-                        .map(|n| n == "name")
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false);
-
-        if legacy_name_column_exists {
-            match host.plugin_db_execute("ALTER TABLE task_history DROP COLUMN name") {
-                Ok(_) => host.log_info("task_history migration: dropped legacy 'name' column"),
-                Err(e) => host.log_warn(&format!(
-                    "task_history migration: failed to drop 'name' column: {}",
-                    e
-                )),
-            }
-        } else {
-            host.log_debug("task_history migration: 'name' column not present, skip drop");
-        }
-
         // 3. 初始化 session 映射表
         for stmt in SESSION_MAPPING_SCHEMA {
             match host.plugin_db_execute(stmt) {
@@ -668,54 +637,6 @@ impl WasmPlugin for AutoTaskPlugin {
         }
         host.log_info("task_queue table initialized");
 
-        // 4.1 迁移：旧库 task_queue 无 dispatch_attempts 列（调度重试计数），按需补建
-        ensure_column(
-            &host,
-            "task_queue",
-            "dispatch_attempts",
-            "ALTER TABLE task_queue ADD COLUMN dispatch_attempts INTEGER NOT NULL DEFAULT 0",
-        );
-
-        // 4.2 迁移：task_queue.source 列（queue / scheduled，定时任务 v6 引入）
-        ensure_column(
-            &host,
-            "task_queue",
-            "source",
-            "ALTER TABLE task_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'queue'",
-        );
-
-        // 4.2.1 迁移：task_queue.clear_due_at 列（clear 延迟发送时刻，见 queue.rs send_due_clears）
-        ensure_column(
-            &host,
-            "task_queue",
-            "clear_due_at",
-            "ALTER TABLE task_queue ADD COLUMN clear_due_at TEXT",
-        );
-
-        // 4.3 迁移：task_history 预留 token 统计列（v1 不解析，JSONL 深化需求回填）
-        ensure_column(
-            &host,
-            "task_history",
-            "input_tokens",
-            "ALTER TABLE task_history ADD COLUMN input_tokens INTEGER",
-        );
-        ensure_column(
-            &host,
-            "task_history",
-            "output_tokens",
-            "ALTER TABLE task_history ADD COLUMN output_tokens INTEGER",
-        );
-
-        // 4.3.1 迁移：task_history.event_time 列（事件发生时刻，时序保护基线）。
-        // 脚本每次推送携带 event_time，宿主仅在 event_time >= 行内已应用事件时应用，
-        // 拒绝网络阻塞导致的迟到旧事件覆盖最新状态（状态回跳 / 队列调度错乱）
-        ensure_column(
-            &host,
-            "task_history",
-            "event_time",
-            "ALTER TABLE task_history ADD COLUMN event_time TEXT",
-        );
-
         // 4.4 初始化预设任务表（无会话/未选会话时创建的待投递任务，一次性消耗）
         for stmt in preset::PRESET_TASKS_SCHEMA {
             match host.plugin_db_execute(stmt) {
@@ -739,14 +660,6 @@ impl WasmPlugin for AutoTaskPlugin {
             }
         }
         host.log_info("scheduled_jobs table initialized");
-
-        // 5.1 迁移：旧库 scheduled_jobs 无 session_id 列（触发时会话关联键）
-        ensure_column(
-            &host,
-            "scheduled_jobs",
-            "session_id",
-            "ALTER TABLE scheduled_jobs ADD COLUMN session_id TEXT",
-        );
 
         // 6. 启动恢复 + 定时器注册（定时自动任务，ADR 0003）
         // 重启前处于 creating 态的任务：其会话已随上次进程退出而丢失，
@@ -944,47 +857,6 @@ bedcode_plugin_api::wasm_entry!(AutoTaskPlugin);
 
 // ==================== 辅助函数 ====================
 
-/// 按需补建表列（幂等迁移）：PRAGMA table_info 确认列不存在才执行 ALTER，
-/// 避免可预期的"duplicate column"错误污染宿主 ERROR 日志
-fn ensure_column(
-    host: &bedcode_plugin_api::wasm_host::WasmHost,
-    table: &str,
-    column: &str,
-    alter_sql: &str,
-) {
-    use bedcode_plugin_api::host::HostPluginDatabase;
-
-    let exists = host
-        .plugin_db_query(&format!("PRAGMA table_info({})", table))
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_array().cloned())
-        .map(|rows| {
-            rows.iter().any(|row| {
-                row.get("name")
-                    .and_then(|n| n.as_str())
-                    .map(|n| n == column)
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-
-    if exists {
-        host.log_debug(&format!(
-            "migration: {}.{} already exists, skip",
-            table, column
-        ));
-        return;
-    }
-
-    match host.plugin_db_execute(alter_sql) {
-        Ok(_) => host.log_info(&format!("migration: added {}.{}", table, column)),
-        Err(e) => host.log_warn(&format!(
-            "migration: failed to add {}.{}: {}",
-            table, column, e
-        )),
-    }
-}
 
 /// 从命令参数组装任务历史查询筛选条件
 ///

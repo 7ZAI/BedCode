@@ -85,7 +85,9 @@ class PluginRegistryClass {
       // markRaw：组件进入响应式数组会被 Vue 深代理，渲染时触发
       // "Component was made a reactive object" 警告且增加无谓开销
       component: markRaw(page.component),
-      entry: markRaw(page.entry),
+      // entry 为可选字段（缺省时宿主用统一卡片渲染，见 ToolboxPageDescriptor）：
+      // markRaw(undefined) 会抛 TypeError: Cannot convert undefined or null to object
+      entry: page.entry ? markRaw(page.entry) : undefined,
     })
     this.updateReactiveToolboxViews()
     return {

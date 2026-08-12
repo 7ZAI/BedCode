@@ -251,6 +251,8 @@ export interface QueueListResponse {
   session_id: string
   tasks: AutoTaskQueueItem[]
   queue_count: number
+  /** 当前处理中的队列项（waiting=等待 clear 后下发 / executing=已下发未完成），对账与状态展示用 */
+  active_task?: AutoTaskQueueItem | null
 }
 
 /** 查询任务队列 */
@@ -339,6 +341,106 @@ export async function httpCurrentTask(sessionId: string) {
 export async function httpListSupportedAgents() {
   return request<{ agents: string[] }>(
     '/api/plugin/com.bedcode.auto-task/supported-agents'
+  )
+}
+
+// ==================== Auto Task History & Scheduled ====================
+
+/** 任务历史条目 */
+export interface TaskHistoryItem {
+  id: string
+  description: string | null
+  status: string
+  agent: string | null
+  source: string | null
+  session_id: string
+  claude_sid: string | null
+  working_dir: string | null
+  auto_approve: number
+  exit_reason: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+}
+
+/** 任务历史列表响应（分页字段由后端原样返回） */
+export interface TaskHistoryListResponse {
+  tasks: TaskHistoryItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/**
+ * 查询任务历史列表
+ *
+ * 只拼接已提供的筛选参数，空值不出现；时间字段（since/until）
+ * 为 UTC `YYYY-MM-DD HH:MM:SS` 字符串。
+ */
+export async function httpTaskHistoryList(params?: {
+  status?: string
+  agent?: string
+  source?: string
+  since?: string
+  until?: string
+  limit?: number
+  offset?: number
+}) {
+  const query = new URLSearchParams()
+  if (params?.status) query.set('status', params.status)
+  if (params?.agent) query.set('agent', params.agent)
+  if (params?.source) query.set('source', params.source)
+  if (params?.since) query.set('since', params.since)
+  if (params?.until) query.set('until', params.until)
+  if (params?.limit !== undefined) query.set('limit', String(params.limit))
+  if (params?.offset !== undefined) query.set('offset', String(params.offset))
+  const qs = query.toString()
+  return request<TaskHistoryListResponse>(
+    `/api/plugin/com.bedcode.auto-task/task-history/list${qs ? `?${qs}` : ''}`
+  )
+}
+
+/** 定时任务条目 */
+export interface ScheduledJob {
+  id: string
+  name: string | null
+  config_id: string
+  trigger_at: string
+  prompts: string
+  status: string
+  session_id: string | null
+  created_at: string
+  executed_at: string | null
+  error: string | null
+}
+
+/** 定时任务列表响应 */
+export interface ScheduledJobsListResponse {
+  jobs: ScheduledJob[]
+}
+
+/** 查询定时任务列表 */
+export async function httpScheduledJobsList() {
+  return request<ScheduledJobsListResponse>(
+    '/api/plugin/com.bedcode.auto-task/scheduled-jobs/list'
+  )
+}
+
+/** 创建定时任务请求体 */
+export interface ScheduledJobCreateBody {
+  name?: string
+  config_id: string
+  trigger_at: string
+  prompts: string[]
+}
+
+/** 创建定时任务（trigger_at 为 UTC `YYYY-MM-DD HH:MM:SS`） */
+export async function httpScheduledJobCreate(body: ScheduledJobCreateBody) {
+  return request<{ job_id: string }>(
+    '/api/plugin/com.bedcode.auto-task/scheduled-jobs/create',
+    { method: 'POST', body: JSON.stringify(body) }
   )
 }
 
@@ -467,6 +569,10 @@ export function useHttpApi() {
     httpTaskQueueReorder,
     httpSessionSettings,
     httpCurrentTask,
+    // Auto Task History & Scheduled
+    httpTaskHistoryList,
+    httpScheduledJobsList,
+    httpScheduledJobCreate,
     // Git
     httpGetGitBranches,
     httpGetGitStatus,

@@ -216,7 +216,46 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
         )
         .unwrap_or(0);
 
-    // 无运行中任务（正常退出 / 空闲会话）无需广播
+    // 队列项兜底（与 task_history 独立）：下发后状态回传丢失、等待 idle 期间
+    // 会话被杀等场景会残留 waiting/executing 队列项，没有终态归档将永久卡在
+    // 处理中（历史数据里存在大量这类悬挂项）。统一标 interrupted 并逐项广播
+    // （带 task_id，移动端据此把对应预设落 interrupted）
+    let queued_ids: Vec<String> = host
+        .plugin_db_query_params(
+            "SELECT id FROM task_queue WHERE session_id = ?1 AND status IN ('executing', 'waiting')",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+    if !queued_ids.is_empty() {
+        let _ = host.plugin_db_execute_params(
+            "UPDATE task_queue SET status = 'interrupted', updated_at = datetime('now') \
+             WHERE session_id = ?1 AND status IN ('executing', 'waiting')",
+            &sql_params![session_id],
+        );
+        for id in &queued_ids {
+            crate::queue::broadcast_queue_changed(
+                host,
+                session_id,
+                crate::queue::pending_count(host, session_id),
+                "interrupted",
+                Some(id),
+                Some("interrupted"),
+            );
+        }
+        host.log_info(&format!(
+            "Session ended: interrupted {} queued task(s) for session_id={}",
+            queued_ids.len(),
+            session_id
+        ));
+    }
+
+    // 无运行中任务（正常退出 / 空闲会话）无需广播 task_history 变更
     if affected <= 0 {
         return;
     }
@@ -384,6 +423,7 @@ pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
 /// - GET /session-mode → get_session_mode
 /// - GET /session-settings → get_session_settings (auto_execute + auto_answer)
 /// - GET /task-history/current → get current task for session
+/// - GET /task-history/list → list_task_history with filter
 pub fn handle_http_endpoint(
     host: &WasmHost,
     method: &str,
@@ -400,6 +440,7 @@ pub fn handle_http_endpoint(
         ("GET", "session-mode") => handle_get_session_mode(host, query),
         ("GET", "session-settings") => handle_get_session_settings_http(host, query),
         ("GET", "task-history/current") => handle_get_current_task(host, query),
+        ("GET", "task-history/list") => handle_list_task_history_http(host, query),
         ("GET", "supported-agents") => {
             let agents = crate::agent::list_supported();
             http_response::ok_with_data(serde_json::json!({ "agents": agents }))
@@ -860,6 +901,57 @@ fn handle_get_session_settings_http(host: &WasmHost, query: &Value) -> Value {
     }))
 }
 
+/// GET /task-history/list — 移动端工具箱的任务记录页数据源
+///
+/// query 支持 status / agent / source / since / until / limit / offset，
+/// 语义与 `TaskHistoryFilter` 一致；limit 缺省 100，clamp 到 1..=500。
+fn handle_list_task_history_http(host: &WasmHost, query: &Value) -> Value {
+    let filter = task_history_filter_from_query(query);
+    match list_task_history(host, &filter) {
+        Ok(v) => http_response::ok_with_data(v),
+        Err(e) => {
+            host.log_error(&format!(
+                "task-history/list failed: {} (filter: {:?})",
+                e, filter
+            ));
+            http_response::error(500, &format!("Failed to list task history: {}", e))
+        }
+    }
+}
+
+/// 从 HTTP query 组装任务历史筛选条件
+///
+/// 空串视作未提供（透传 None）；limit/offset 非数字时回退默认值，
+/// 分页上下限由 list_task_history 内 clamp，此处只做解析不校验。
+fn task_history_filter_from_query(query: &Value) -> TaskHistoryFilter {
+    let opt = |key: &str| -> Option<String> {
+        let v = query.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.to_string())
+        }
+    };
+    TaskHistoryFilter {
+        session_id: None,
+        status: opt("status"),
+        agent: opt("agent"),
+        source: opt("source"),
+        since: opt("since"),
+        until: opt("until"),
+        limit: query
+            .get("limit")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(100),
+        offset: query
+            .get("offset")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0),
+    }
+}
+
 /// GET /task-history/current — 查询会话当前任务（最新一条历史记录）
 fn handle_get_current_task(host: &WasmHost, query: &Value) -> Value {
     let session_id = query
@@ -885,7 +977,7 @@ fn handle_get_current_task(host: &WasmHost, query: &Value) -> Value {
 /// 解析 Claude Code session_id → BedCode PTY session_id
 ///
 /// 优先从 session_mapping 表查找映射，fallback 到 task_history 表
-fn resolve_session_id(host: &WasmHost, claude_session_id: &str) -> String {
+pub(crate) fn resolve_session_id(host: &WasmHost, claude_session_id: &str) -> String {
     // 优先查 session_mapping 表
     if let Some(mapped) = find_mapping_by_claude_sid(host, claude_session_id) {
         host.log_debug(&format!(
@@ -922,6 +1014,7 @@ pub fn get_task_status(host: &WasmHost, session_id: &str) -> anyhow::Result<Valu
 }
 
 /// 任务历史查询筛选条件（字段均为可选，空/None 不参与过滤）
+#[derive(Debug)]
 pub struct TaskHistoryFilter {
     pub session_id: Option<String>,
     pub status: Option<String>,
@@ -1464,4 +1557,66 @@ pub fn get_session_settings(host: &WasmHost, session_id: &str) -> anyhow::Result
         "auto_execute": auto_execute,
         "auto_answer": auto_answer,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造 query JSON：key 存在则放入，避免空 value 键干扰
+    fn query(pairs: &[(&str, &str)]) -> Value {
+        let mut m = serde_json::Map::new();
+        for (k, v) in pairs {
+            m.insert(k.to_string(), Value::String(v.to_string()));
+        }
+        Value::Object(m)
+    }
+
+    // ---------- task_history_filter_from_query ----------
+
+    #[test]
+    fn filter_from_query_empty_returns_defaults() {
+        let f = task_history_filter_from_query(&query(&[]));
+        assert_eq!(f.status, None);
+        assert_eq!(f.agent, None);
+        assert_eq!(f.source, None);
+        assert_eq!(f.since, None);
+        assert_eq!(f.until, None);
+        assert_eq!(f.limit, 100);
+        assert_eq!(f.offset, 0);
+    }
+
+    #[test]
+    fn filter_from_query_passes_through_provided_fields() {
+        let f = task_history_filter_from_query(&query(&[
+            ("status", "completed"),
+            ("agent", "claude"),
+            ("source", "queue"),
+            ("since", "2025-01-01 00:00:00"),
+            ("until", "2025-01-02 00:00:00"),
+            ("limit", "20"),
+            ("offset", "40"),
+        ]));
+        assert_eq!(f.status.as_deref(), Some("completed"));
+        assert_eq!(f.agent.as_deref(), Some("claude"));
+        assert_eq!(f.source.as_deref(), Some("queue"));
+        assert_eq!(f.since.as_deref(), Some("2025-01-01 00:00:00"));
+        assert_eq!(f.until.as_deref(), Some("2025-01-02 00:00:00"));
+        assert_eq!(f.limit, 20);
+        assert_eq!(f.offset, 40);
+    }
+
+    #[test]
+    fn filter_from_query_empty_string_treated_as_none() {
+        let f = task_history_filter_from_query(&query(&[("status", ""), ("agent", "")]));
+        assert_eq!(f.status, None);
+        assert_eq!(f.agent, None);
+    }
+
+    #[test]
+    fn filter_from_query_invalid_numbers_fall_back_to_defaults() {
+        let f = task_history_filter_from_query(&query(&[("limit", "abc"), ("offset", "-3")]));
+        assert_eq!(f.limit, 100);
+        assert_eq!(f.offset, -3); // 负偏移原样透传，clamp 交给 list_task_history
+    }
 }
