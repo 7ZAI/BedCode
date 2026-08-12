@@ -57,7 +57,7 @@ const errorCount = computed(() => logs.value.filter((l) => l.level === 'error').
         class="px-2 py-0.5 rounded text-[12px] transition-colors duration-200"
         :class="
           locale === opt.value
-            ? 'bg-[#00d4ff]/20 text-[#00d4ff]'
+            ? 'bg-[#ECE8DC]/20 text-[#ECE8DC]'
             : 'text-[#9ca3af] hover:text-[#d1d5db]'
         "
         @click="setLocale(opt.value)"
@@ -74,7 +74,7 @@ const errorCount = computed(() => logs.value.filter((l) => l.level === 'error').
         class="px-2 py-0.5 rounded text-[12px] transition-colors duration-200"
         :class="
           theme === opt.value
-            ? 'bg-[#00d4ff]/20 text-[#00d4ff]'
+            ? 'bg-[#ECE8DC]/20 text-[#ECE8DC]'
             : 'text-[#9ca3af] hover:text-[#d1d5db]'
         "
         @click="setTheme(opt.value)"
