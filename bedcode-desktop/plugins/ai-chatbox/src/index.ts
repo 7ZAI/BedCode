@@ -40,6 +40,8 @@ function registerPluginUi(context: PluginContext) {
   sidebarDisposable = context.ui.registerSidebarPanel({
     id: 'ai-chatbox.sidebar',
     title: context.i18n.t('sidebarTitle'),
+    // 菜单排序：紧跟文件传输（220）之后，位于插件管理（内置 400）之前
+    order: 230,
     component: ChatView,
   })
 }

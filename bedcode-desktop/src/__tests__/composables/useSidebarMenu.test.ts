@@ -43,13 +43,14 @@ describe('useSidebarMenu', () => {
     expect(menuItems.value[0].isI18nKey).toBe(true)
   })
 
-  it('插件面板与内置菜单合并为单一列表，未指定 order 时排在设置之前', () => {
+  it('插件面板与内置菜单合并为单一列表，未指定 order 时排在设置/插件管理之前', () => {
     registerPluginView('p1', 'v1', 'sidebar')
     registerPluginView('p2', 'v2', 'toolbox')
 
     const { menuItems } = useSidebarMenu()
     const ids = menuItems.value.map((m) => m.id)
-    expect(ids).toEqual(['devices', 'sessions', 'plugins', 'plugin-p1-v1', 'plugin-p2-v2', 'settings'])
+    // 插件默认 order 600：位于内置业务菜单（sessions 200）之后，但始终排在插件管理(9998)/设置(9999)之前
+    expect(ids).toEqual(['devices', 'sessions', 'plugin-p1-v1', 'plugin-p2-v2', 'plugins', 'settings'])
   })
 
   it('插件可通过 order 插入到任意内置菜单项之间', () => {

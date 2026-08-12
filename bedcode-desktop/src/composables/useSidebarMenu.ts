@@ -42,14 +42,14 @@ export interface SidebarMenuItemDescriptor {
 }
 
 /** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设备配对(100) 置于首位；设置(700) 置于插件默认排序值(600) 之后，保证默认位于最末位。
- * 说明：server 槽位(300) 保留不复用，防止插件排序撞位 */
+ * 设备配对(100) 置于首位；插件管理(9998) 与设置(9999) 置于所有插件排序值之后，
+ * 保证这两个入口永远排在菜单最末。说明：server 槽位(300) 保留不复用，防止插件排序撞位 */
 export const BUILTIN_MENU_ORDERS = {
   devices: 100,
   sessions: 200,
   server: 300,
-  plugins: 400,
-  settings: 700,
+  plugins: 9998,
+  settings: 9999,
 } as const
 
 /** 插件/自定义项未指定 icon 时的兜底图标 */
@@ -68,7 +68,8 @@ export const builtinMenuItems: SidebarMenuItem[] = [
     path: '/sessions',
     labelKey: 'desktop.sidebar.terminalSession',
     isI18nKey: true,
-    icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01',
+    // 终端图标（与 /sessions 页面头部一致），替代原文档图标以符合"终端会话"含义
+    icon: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
     order: BUILTIN_MENU_ORDERS.sessions,
   },
   // 服务器管理入口已移除：页面保留于 /server 供调试者直接访问 URL 预览。
