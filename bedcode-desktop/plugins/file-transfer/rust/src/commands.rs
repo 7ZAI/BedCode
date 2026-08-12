@@ -186,8 +186,20 @@ fn enqueue_download(
         .next()
         .unwrap_or(remote_path);
 
-    let local_path = format!("{}/{}.part", download_dir, file_name);
-    let final_path = format!("{}/{}", download_dir, file_name);
+    // 路径用 PathBuf::join 拼接以得到原生分隔符（Windows 反斜杠），
+    // 避免 HomeDir 返回反斜杠 + format! 拼接 `/` 产出混合分隔符路径
+    // `C:\Users\x/Downloads/file.mkv`——后续 fs_exists / rename / explorer /select
+    // 收到混合路径会定位失败。home_dir/Downloads 在 HomeDir 已为原生分隔符，
+    // join 再补原生分隔符，结尾 .part 串为纯文件名（不含分隔符），
+    // 附加后仍是原生形态。
+    let local_path = std::path::Path::new(&download_dir)
+        .join(format!("{}.part", file_name))
+        .to_string_lossy()
+        .into_owned();
+    let final_path = std::path::Path::new(&download_dir)
+        .join(file_name)
+        .to_string_lossy()
+        .into_owned();
 
     // 目标存在性预检（spec §7.4：目标已存在 → rejected duplicate-name）
     if let Ok(true) = host.fs_exists(&final_path) {
@@ -1227,8 +1239,10 @@ fn resolve_download_dir(
 
     // 桌面端：尝试 HostConfig::HomeDir + /Downloads
     if let Ok(Some(home)) = host.config_get(bedcode_plugin_api::host::ConfigKey::HomeDir) {
-        let downloads = format!("{}/Downloads", home);
-        return Ok(downloads);
+        // 用 PathBuf::join 产出原生分隔符，避免 HomeDir 反斜杠 + format! 的 `/`
+        // 拼出混合分隔符路径 `C:\Users\x/Downloads`。
+        let downloads = std::path::PathBuf::from(&home).join("Downloads");
+        return Ok(downloads.to_string_lossy().into_owned());
     }
 
     Err(anyhow::anyhow!(

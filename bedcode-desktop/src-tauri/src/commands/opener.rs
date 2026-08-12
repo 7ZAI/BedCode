@@ -35,7 +35,10 @@ async fn require_system_open(
 
 /// 在系统文件管理器中显示文件/目录
 ///
-/// - Windows：`explorer /select,<path>`（选中目标文件）
+/// - Windows：`explorer /select,"<path>"`（选中目标文件）。路径先
+///   canonicalize 取原生反斜杠绝对路径并剥 `\\?\` 前缀，避免混合
+///   分隔符（HomeDir 带反斜杠 / format! 拼接的 `/`）致 explorer 定位
+///   失败；`/select,<path>` 整段加引号容纳路径中的空格/特殊字符。
 /// - macOS：`open -R <path>`（Reveal in Finder）
 /// - Linux：`xdg-open` 打开所在目录（无 reveal 语义，退化为打开目录）
 ///
@@ -57,8 +60,29 @@ pub async fn plugin_reveal_in_dir(
     }
 
     let result = if cfg!(target_os = "windows") {
+        // 规范路径给 explorer：同时解两个 Windows /select 剔病
+        //   1. 分隔符：HomeDir 返回反斜杠，而 enqueue_download 用 format! 拼成
+        //      `C:\Users\x/Downloads/file.mkv` 这类混合分隔符路径；explorer 的
+        //      /select 参数不识别反斜杠外的分隔符，会定位失败、打开错位置。
+        //   2. 空格/特殊字符：不加引号时 explorer 以空格拆 token，定位到首
+        //      个空格前的截断路径。
+        // canonicalize 解析 symlink 给出原生反斜杠绝对路径，但会给本地路径加
+        //      `\\?\` verbatim 前缀 explorer 不识别，需剖除。网络路径不走日常
+        //      Downloads 场景，剩 `\server\...` 形态时直接交给 explorer。
+        let clean = path.canonicalize().map_err(|e| {
+            crate::AppError::Internal(format!(
+                "reveal: canonicalize '{}' failed: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let display = clean.display().to_string();
+        let display = display
+            .strip_prefix(r"\\?\")
+            .map(|s| s.to_string())
+            .unwrap_or(display);
         std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
+            .arg(format!("/select,\"{}\"", display))
             .spawn()
     } else if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg("-R").arg(&path).spawn()
