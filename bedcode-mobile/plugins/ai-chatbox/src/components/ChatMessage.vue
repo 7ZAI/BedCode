@@ -100,7 +100,7 @@
           @click="$emit('regenerate')"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 4A9.753 9.753 0 0020.944 12.5 8.959 8.959 0 0018.248 5.75M20 20v-5h-.581m-15.357-4A8.959 8.959 0 004.056 11.5 9.753 9.753 0 005.752 18.25" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16M8 16H3v5" />
           </svg>
         </button>
       </div>
