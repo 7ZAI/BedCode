@@ -1033,6 +1033,17 @@ async fn create_upload(
             reason = %reason,
             "upload rejected by policy hook"
         );
+        // 同名拒绝返回 409 (Conflict)，对齐桌面 handshake create_session
+        // 的 DuplicateName 解析路径（409 → Rejected(duplicate-name) 变秒显
+        // 可重设/备远端同名文件）；其他钩子拒绝（invalid-path / 钩子不可用 /
+        // 超时）仍返 403，供发起方抖出真实原因。
+        if reason == "duplicate-name" {
+            return error_response(
+                actix_web::http::StatusCode::CONFLICT,
+                409,
+                "duplicate-name",
+            );
+        }
         return error_response(actix_web::http::StatusCode::FORBIDDEN, 403, &reason);
     }
 

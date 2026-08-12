@@ -200,10 +200,14 @@ pub fn create_session(
                 .map_err(|e| CreateSessionError::Other(format!("parse session response: {}", e)))
         }
         409 => Err(CreateSessionError::DuplicateName),
-        _ => Err(CreateSessionError::Other(format!(
-            "create_session: HTTP {}",
-            resp.status
-        ))),
+        _ => {
+            // 对端返了非 200/201/409：尽量从 body 抽出 message 透传
+            // （移动端 deny 返 {code,message} 供发起方Loc 溯原因），抽不到回退 status-only
+            let msg = body_message(&resp.body)
+                .map(|m| format!("create_session: HTTP {} ({})", resp.status, m))
+                .unwrap_or_else(|| format!("create_session: HTTP {}", resp.status));
+            Err(CreateSessionError::Other(msg))
+        }
     }
 }
 
@@ -294,6 +298,13 @@ pub enum QuerySessionError {
 }
 
 // ==================== 内部辅助 ====================
+
+/// 从错误响应体抽 `message` 字段（两端错误体形态：`{code,message}`
+/// 或桌面 ApiResponse `{code,message,data}`），失败返回 None
+fn body_message(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string())
+}
 
 /// 提取响应体中的业务数据（兼容两端 server 的响应包装差异）：
 /// - 桌面端统一 ApiResponse 包装：`{ code, message, data: {...} }`
