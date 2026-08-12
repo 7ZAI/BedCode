@@ -199,20 +199,8 @@
       </div>
     </div>
 
-    <!-- ==================== 启停遮罩弹窗 ==================== -->
-    <Teleport to="body">
-      <Transition name="overlay">
-        <div
-          v-if="togglingPluginInfo"
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-        >
-          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-8 py-6 shadow-xl flex flex-col items-center gap-4">
-            <div class="w-8 h-8 border-3 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin"></div>
-            <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ togglingPluginInfo.message }}</p>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <!-- ==================== 启停遮罩弹窗（通用 LoadingOverlay 组件） ==================== -->
+    <LoadingOverlay :visible="!!togglingPluginInfo" :message="togglingPluginInfo?.message" />
   </div>
 </template>
 
@@ -227,6 +215,7 @@
 import { computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePluginManager } from '@/composables/usePluginManager'
+import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import PluginIcon from '@/components/PluginIcon.vue'
 import {

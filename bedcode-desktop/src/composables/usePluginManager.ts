@@ -18,6 +18,9 @@ import type { PluginInfo } from '@/plugin/types'
 /** 启停操作总超时：后端激活/停用含 hooks 清理（wsl.exe 桥接最长约 15s）与 fs 授权弹窗（30s），给足余量 */
 const TOGGLE_TIMEOUT_MS = 30000
 
+/** 遮罩最小展示时长：操作完成过快（WASM 插件毫秒级）时仍保持遮罩可见，避免弹窗瞬闪假象 */
+const MIN_TOGGLE_VISIBLE_MS = 500
+
 export function usePluginManager() {
   const toast = useToast()
   const t = i18n.global.t
@@ -67,6 +70,7 @@ export function usePluginManager() {
     if (togglingId.value) return false
     togglingId.value = id
     togglingDirection.value = enable
+    const startedAt = Date.now()
     console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -94,6 +98,11 @@ export function usePluginManager() {
       return false
     } finally {
       clearTimeout(timer)
+      // 遮罩最小展示时长：加载/卸载过快时延迟收起，避免全屏遮罩一闪而过造成闪烁假象
+      const elapsed = Date.now() - startedAt
+      if (elapsed < MIN_TOGGLE_VISIBLE_MS) {
+        await new Promise((resolve) => setTimeout(resolve, MIN_TOGGLE_VISIBLE_MS - elapsed))
+      }
       togglingId.value = null
     }
   }

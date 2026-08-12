@@ -11,5 +11,6 @@ export { default as Modal } from './Modal.vue'
 // 新增组件
 export { default as Spinner } from './Spinner.vue'
 export { default as SplashLoading } from './SplashLoading.vue'
+export { default as LoadingOverlay } from './LoadingOverlay.vue'
 export { default as Tooltip } from './Tooltip.vue'
 export { default as NotificationBadge } from './NotificationBadge.vue'
