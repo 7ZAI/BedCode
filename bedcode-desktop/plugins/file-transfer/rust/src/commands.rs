@@ -338,12 +338,25 @@ pub fn cancel(
         )
     };
 
-    // 取消宿主传输
+    // 取消宿主传输（token 取消瞬时完成，不阻塞）
     if let Some(ref htid) = host_task_id {
         let _ = host.transfer_cancel(htid);
     }
 
-    // 上传：取消远端 session（失败记日志，不阻塞本地终态）
+    // 下载：删除 .part 文件（桌面端有 fs_delete；移动端没有，跳过）
+    if direction == Direction::Download {
+        delete_part_file(host, &local_path);
+    }
+
+    // 本地终态先落地并推送：UI 即时响应取消，不依赖对端可达性。
+    // 远端 cancel_session 为同步 HTTP（对端失联时最长卡 120s），
+    // 若放在 emit 之后执行，WASM 单线程被阻塞，前端表现为「取消无反应」
+    state.queue.release(task_id);
+    state.queue.remove(task_id);
+    state.tasks.save(host);
+    emit_tasks_changed(host, &state.tasks);
+
+    // 上传：取消远端 session（尽力而为；失败仅记日志，不阻塞本地终态）
     if direction == Direction::Upload {
         if let Some(ref sid) = upload_session_id {
             if let Ok((base, auth)) = state.peer.base_and_auth_for(&peer_id) {
@@ -357,15 +370,6 @@ pub fn cancel(
         }
     }
 
-    // 下载：删除 .part 文件（桌面端有 fs_delete；移动端没有，跳过）
-    if direction == Direction::Download {
-        delete_part_file(host, &local_path);
-    }
-
-    state.queue.release(task_id);
-    state.queue.remove(task_id);
-    state.tasks.save(host);
-    emit_tasks_changed(host, &state.tasks);
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -805,9 +809,15 @@ pub fn handle_transfer_progress(
             }
         }
         TransferState::Failed(reason) => {
+            // 用户已取消（cancel() 先置 Cancelled）：取消竞态中宿主回报的
+            // 失败（如远端已删 session 致 PUT 404）不覆写取消终态，
+            // 否则用户看到「已取消」又跳回「失败」，表现为取消无效
+            if task.state == TaskState::Cancelled {
+                // 保持 cancelled，不进入 failed
+            }
             // 对端下线已置恢复态（handle_peer_changed）→ 保持不覆写，
             // 续传握手会重校验文件指纹，避免把可恢复任务误判为终态
-            if task.state == TaskState::Resumable && task.auto_resumable {
+            else if task.state == TaskState::Resumable && task.auto_resumable {
                 // 保持 resumable，不进入终态
             } else if reason == "duplicate-name" {
                 task.state = TaskState::Rejected;

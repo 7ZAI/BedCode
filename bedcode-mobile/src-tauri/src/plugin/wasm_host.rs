@@ -16,6 +16,14 @@ use tauri::Emitter;
 /// 32MB 对目录列举/元数据绰绰有余（guest 解析约几 G 指令，远低于 FUEL_PER_CALL）。
 const PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
+/// 非流式 `http_fetch` 连接超时（秒，与桌面端常量对齐）
+const PLUGIN_HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
+/// 非流式 `http_fetch` 总超时（秒，与桌面端常量对齐）
+///
+/// 插件同步 HTTP 调用（如取消上传会话）阻塞 WASM 单线程执行，
+/// 对端失联时必须有界返回，否则前端表现为「取消无反应」
+const PLUGIN_HTTP_TIMEOUT_SECS: u64 = 120;
+
 // ==================== SQL Table Name Validation ====================
 
 /// 验证 SQL 语句中的表名是否以插件专属前缀开头
@@ -168,7 +176,12 @@ pub async fn execute_http_request(
     let headers = request.get("headers").and_then(|v| as_string_map(v));
     let body = request.get("body").and_then(|v| v.as_str());
 
-    let client = reqwest::Client::new();
+    // 连接 + 总超时：插件同步 HTTP 调用（如取消上传会话）阻塞 WASM 单线程，
+    // 无总超时时对端失联最长卡 30s connect + 无限响应等待，UI 全程无响应
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(std::time::Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
+        .build()?;
     let mut req_builder = client.request(method.parse()?, url);
 
     if let Some(hdrs) = &headers {

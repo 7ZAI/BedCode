@@ -121,7 +121,7 @@ function onRowTap(entry: SharedEntry): void {
 
           <!-- 面包屑（树视图） -->
           <div v-if="view === 'tree'" class="flex-shrink-0 flex items-center gap-1 px-4 pb-2 overflow-x-auto">
-            <template v-for="(seg, i) in crumbs" :key="seg">
+            <template v-for="(seg, i) in crumbs" :key="i">
               <svg v-if="i > 0" class="w-3.5 h-3.5 flex-shrink-0 text-[var(--mobile-text-disabled)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
               </svg>

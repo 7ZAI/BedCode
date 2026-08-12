@@ -79,10 +79,18 @@ export function useSharedUpload(
     loading.value = true
     listError.value = null
     try {
-      entries.value =
-        root.kind === KIND_PRIVATE_DOWNLOADS
-          ? await context.fileService.listDir(root.id)
-          : await context.fileService.saf.listTree(root.id, documentId)
+      if (root.kind === KIND_PRIVATE_DOWNLOADS) {
+        // 真实路径根（免授权特殊条目）无 SAF documentId 语义：子目录以
+        // 面包屑名拼相对路径（listDir 白名单 canonicalize 前缀放行子路径）；
+        // 忽略 documentId 参数，否则点击子目录永远重新列出根（同名目录
+        // 无限点击、路径卡在一层）
+        const rel = crumbs.value.map((c) => c.name).join('/')
+        entries.value = await context.fileService.listDir(
+          rel ? `${root.id}/${rel}` : root.id,
+        )
+      } else {
+        entries.value = await context.fileService.saf.listTree(root.id, documentId)
+      }
     } catch (e) {
       console.error(`[File Transfer] shared dir list failed: root=${root.id}`, e)
       listError.value = context.i18n.t('transfer.upload.dirUnavailable')
