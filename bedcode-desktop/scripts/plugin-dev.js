@@ -27,6 +27,9 @@ const PLUGINS = {
   'com.bedcode.auto-task': {
     pluginDir: 'plugins/auto-task',
   },
+  'com.bedcode.file-transfer': {
+    pluginDir: 'plugins/file-transfer',
+  },
 }
 
 // 解析参数

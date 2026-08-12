@@ -8,6 +8,7 @@ import { execSync } from 'child_process'
 import { cpSync, mkdirSync, existsSync, rmSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { startPluginWatch } from '../../../scripts/plugin-watch.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -94,10 +95,14 @@ const frontendOnly = args.includes('--frontend-only')
 const rustOnly = args.includes('--rust-only')
 
 if (watchMode) {
-  console.log('[build] Watch mode not yet implemented, running one-shot build')
-}
-
-if (frontendOnly) {
+  // 前端 watch 构建：改源码自动重建 + 复制产物（配合宿主 PluginDevWatcher 触发前端热重载）。
+  // vite 子进程 + fs.watch 保持事件循环常驻，Ctrl+C 退出
+  startPluginWatch({
+    root: ROOT,
+    resourcesDir: RESOURCES_DIR,
+    wasmFile: `rust/target/wasm32-unknown-unknown/release/${RUST_LIB_NAME}.wasm`,
+  })
+} else if (frontendOnly) {
   buildFrontend()
   copyArtifacts()
 } else if (rustOnly) {
@@ -109,4 +114,6 @@ if (frontendOnly) {
   copyArtifacts()
 }
 
-console.log('\n[build] ====== Build complete! ======')
+if (!watchMode) {
+  console.log('\n[build] ====== Build complete! ======')
+}

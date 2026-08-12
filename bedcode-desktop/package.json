@@ -23,7 +23,7 @@
     "test:e2e:debug": "playwright test --debug",
     "playwright:install": "playwright install",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "node scripts/dev-run.js",
     "tauri:build": "node scripts/tauri-build.js",
     "target:size": "node scripts/check-target-size.js",
     "target:clean": "cd src-tauri && cargo clean",

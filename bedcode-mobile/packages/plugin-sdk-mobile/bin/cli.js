@@ -4,7 +4,7 @@
  *
  * 用法：
  *   bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--ts-only] [--registry]
- *   bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]
+ *   bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only] [--watch]
  *   bedcode-plugin package [-o <file>] [--hash]
  *   bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]
  *   bedcode-plugin manifest [--check]
@@ -13,7 +13,8 @@
  *
  * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）；
  *          --ts-only 生成纯前端插件（无 rust/ 目录）；--registry 时引用已发布版本
- * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录
+ * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录；
+ *          --watch 时 vite 长驻构建前端，重建后自动复制产物（前端热更）
  * package 将产物打包为 {id}.zip 插件包（分发单元）；--hash 时计算并写入 wasmHash
  * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR，插件源码在
  *          mock 宿主的移动端骨架中实时预览（WASM 后端不在浏览器运行）；
@@ -33,6 +34,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  watch,
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -368,6 +370,87 @@ function cmdManifest(flags) {
   }
 }
 
+/** 从目录向上查找 vite 可执行文件（兼容 npm workspace 依赖 hoist 到仓库根的场景） */
+function findViteBin(startDir) {
+  let dir = startDir
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, 'node_modules/vite/bin/vite.js')
+    if (existsSync(candidate)) return candidate
+    const parent = resolve(dir, '..')
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+// ==================== 命令：build（watch 模式） ====================
+
+/**
+ * watch 模式：vite build --watch 长驻构建前端，重建完成后自动复制产物到宿主资源目录。
+ *
+ * 只 watch 前端：WASM 产物不参与（已构建时随复制一并带上；Rust 改动需一次性 `bedcode-plugin build`）。
+ */
+function startBuildWatch(cwd, resourcesDir, manifest) {
+  const { id, main = 'index.js', rustLibrary, pluginType } = manifest
+  const hasWasm = pluginType === 'wasm' && rustLibrary
+  const viteBin = findViteBin(cwd)
+  if (!viteBin) {
+    console.error('[bedcode-plugin] vite 未找到（自插件目录向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 npm install')
+    process.exit(1)
+  }
+
+  const dest = join(resolve(cwd, resourcesDir), id)
+  const distDir = join(cwd, 'dist')
+  const wasmPath = hasWasm
+    ? join(cwd, 'rust/target/wasm32-unknown-unknown/release', `${rustLibrary}.wasm`)
+    : null
+
+  console.log('\n[bedcode-plugin] ====== watch 前端构建（vite build --watch） ======')
+  console.log(`[bedcode-plugin] 产物自动复制到: ${dest}`)
+  console.log('[bedcode-plugin] 修改插件前端源码后自动重建 + 复制（WASM 改动需一次性 npm run build）')
+  console.log('[bedcode-plugin] Ctrl+C 退出\n')
+
+  // WASM 缺失预检：全新 resources 目录（从未跑过全量 build）时，复制完成后插件
+  // 加载仍会因缺 .wasm 失败，提前给出可执行指引
+  if (hasWasm && !existsSync(wasmPath)) {
+    console.warn(`[bedcode-plugin] ⚠ WASM 产物缺失：${wasmPath}`)
+    console.warn('[bedcode-plugin]   watch 只重建前端。首次请先执行一次全量构建：')
+    console.warn('[bedcode-plugin]   npm run build（含 cargo wasm32 构建）')
+  }
+
+  // 长驻 vite watch 构建（首次启动即完整构建一次）
+  const child = spawn(process.execPath, [viteBin, 'build', '--watch'], { cwd, stdio: 'inherit' })
+  child.on('exit', (code) => process.exit(code ?? 0))
+
+  // 复制产物到宿主资源目录（覆盖式，不删目录：宿主运行时可能正持有文件句柄）
+  const copy = () => {
+    try {
+      if (!existsSync(join(distDir, main))) return
+      mkdirSync(dest, { recursive: true })
+      copyDirContents(distDir, dest)
+      copyFileSync(join(cwd, 'plugin.json'), join(dest, 'plugin.json'))
+      // WASM 已构建则一并带上（缺失不报错：watch 场景以前端热更为主）
+      if (hasWasm && wasmPath && existsSync(wasmPath)) {
+        copyFileSync(wasmPath, join(dest, `${rustLibrary}.wasm`))
+      }
+      console.log(`[bedcode-plugin] ${new Date().toLocaleTimeString()} 产物已复制 → ${dest}`)
+    } catch (e) {
+      console.error(`[bedcode-plugin] 复制失败: ${e.message}`)
+    }
+  }
+
+  // dist 任意文件事件都防抖复制（Windows 上 fs.watch 的 filename 常为 null，按时间聚合最稳）
+  let timer = null
+  const schedule = () => {
+    clearTimeout(timer)
+    timer = setTimeout(copy, 500)
+  }
+
+  if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true })
+  const watcher = watch(distDir, { persistent: true }, schedule)
+  watcher.on('error', (e) => console.error(`[bedcode-plugin] dist 监听错误: ${e.message}`))
+}
+
 // ==================== 命令：build ====================
 
 function cmdBuild(flags) {
@@ -395,6 +478,16 @@ function cmdBuild(flags) {
   } catch (e) {
     console.error(`[bedcode-plugin] manifest 自动填充失败: ${e.message}`)
     process.exit(1)
+  }
+
+  // 0.5 watch 模式：vite 长驻构建 + 产物变化自动复制（需 --resources-dir 指定复制目标）
+  if (flags.watch) {
+    if (!resourcesDir) {
+      console.error('[bedcode-plugin] --watch 需要 --resources-dir <宿主资源目录>（前端产物复制目标）')
+      process.exit(1)
+    }
+    startBuildWatch(cwd, resourcesDir, manifest)
+    return
   }
 
   const distMain = join(cwd, 'dist', main || 'index.js')
@@ -699,7 +792,7 @@ function main() {
     console.log('\nBedCode 移动端插件开发工具包\n')
     console.log('用法:')
     console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--ts-only] [--registry]')
-    console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
+    console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only] [--watch]')
     console.log('  bedcode-plugin package [-o <file>] [--hash]   # --hash 写入 wasmHash 完整性校验')
     console.log('  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR；--host 供手机访问）')
     console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')
