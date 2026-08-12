@@ -76,6 +76,22 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
 | `getPresetTasks()` | tasks 本地持久化；`sendTask`/`executeTask` 需对端桌面端，浏览器不可用（记 warn） |
 | 权限检查 | dev-shell 跳过（视为全部授予），权限逻辑需在真机复核 |
 
+## 插件领域数据（devMock 协议）
+
+上表中的 mock 都是**宿主能力**（会话/对话框/事件/HTTP 接口，固定在 dev-shell 内实现）；
+各插件自己的**业务演示数据**（队列种子、SAF 目录树、目录浏览条目）由插件入口导出 `devMock`
+（SDK 类型 `PluginDevMock`），dev-shell 加载插件时按 pluginId 注册、`createMockContext` 按需合并：
+
+| 字段 | 消费方 | 插件 |
+|---|---|---|
+| `queueSeed` | `mobileApi` 初始任务队列（localStorage 无缓存时） | auto-task |
+| `safTree` | `fileService.saf.listTree` 目录树 | file-transfer |
+| `listDirEntries` | `fileService.listDir` 返回条目（uri 由 mock 宿主拼装） | file-transfer |
+
+- 未注册 devMock 的插件访问对应能力时返回空列表/空树（不报错），适合仅调试单插件
+- 真实宿主忽略 `devMock` 导出（`PluginModule` 多余字段对 `activate` 无影响），无需条件编译
+- 停用插件时 devMock 随 `registerDevMock` 的 Disposable 一并清理
+
 ## 常见问题
 
 - **插件样式缺失**：插件 SFC 使用宿主 Tailwind 工具类，dev-shell 的

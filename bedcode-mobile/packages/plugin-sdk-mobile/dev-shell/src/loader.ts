@@ -13,6 +13,7 @@ import {
   getPluginRecord,
   plugins,
   pushLog,
+  registerDevMock,
   type DevPluginRecord,
 } from './registry'
 
@@ -45,9 +46,14 @@ export async function loadPlugins(): Promise<void> {
       pushLog('info', pluginId, `开始加载（${spec.dir}）`)
 
       try {
+        // 领域数据（devMock）先注册，createMockContext 按 pluginId 合并
+        const module = spec.entry as PluginModule
+        if (module.devMock) {
+          record.devMockDisposable = registerDevMock(pluginId, module.devMock)
+          pushLog('info', pluginId, '已注册 devMock（领域种子数据）')
+        }
         const context: PluginContext = createMockContext(pluginId)
         record.context = context
-        const module = spec.entry as PluginModule
         if (typeof module.activate === 'function') {
           await module.activate(context)
           record.state = 'activated'
@@ -66,15 +72,25 @@ export async function loadPlugins(): Promise<void> {
     pushLog('error', 'dev-shell', `加载插件失败: ${e?.message || e}`)
   }
 
-  // 与宿主一致：应用启动完成后再触发 onStartup 生命周期
+  // 与宿主一致：应用启动完成后再触发 onStartup 生命周期；
+  // 队列种子注入（mobileApi 无 pluginId，需等全部 devMock 注册完成后播种）
   emitDevEvent('plugin:lifecycle:appStartup', {})
+  syncQueueSeedNow()
   ready.value = true
+}
+
+/** 全部插件加载完成后同步队列种子（mobileApi 无 pluginId，惰性播种入口） */
+export function syncQueueSeedNow(): void {
+  // 动态 import 避免 loader ↔ mock 循环依赖
+  void import('./mock/mobile-api').then((m) => m.syncQueueSeed())
 }
 
 /** 停用单个插件（dispose 全部资源 + 调用 deactivate） */
 export async function deactivatePlugin(pluginId: string): Promise<void> {
   const record = getPluginRecord(pluginId)
   if (!record || record.state === 'deactivated') return
+  record.devMockDisposable?.dispose()
+  record.devMockDisposable = undefined
   const context = record.context as PluginContext | null
   if (context) {
     for (const d of [...context._disposables]) {

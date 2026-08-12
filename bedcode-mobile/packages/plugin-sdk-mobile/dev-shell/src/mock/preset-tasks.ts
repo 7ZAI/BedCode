@@ -18,6 +18,7 @@ export interface PresetTaskItem {
   createdAt: string
   repeatable: boolean
   pendingTaskId: string | null
+  pendingSessionId: string | null
 }
 
 const tasks = ref<PresetTaskItem[]>(load())
@@ -33,6 +34,7 @@ function load(): PresetTaskItem[] {
       createdAt: t.createdAt ?? '',
       repeatable: t.repeatable ?? true,
       pendingTaskId: t.pendingTaskId ?? null,
+      pendingSessionId: t.pendingSessionId ?? null,
     }))
   } catch {
     return []
@@ -126,6 +128,16 @@ async function markInterrupted(id: string): Promise<void> {
   saveToStorage()
 }
 
+/** 按队列项 id 落中断（取消/会话终止广播，与宿主 usePresetTasks 对齐） */
+async function markInterruptedByTaskId(taskId: string): Promise<void> {
+  const task = tasks.value.find((t) => t.pendingTaskId === taskId)
+  if (!task || task.status !== 'executing') return
+  task.status = 'interrupted'
+  task.pendingTaskId = null
+  task.pendingSessionId = null
+  saveToStorage()
+}
+
 /** 队列项移除：按队列项 id 回退未使用（不匹配忽略） */
 async function revertToUnusedByTaskId(taskId: string): Promise<void> {
   const task = tasks.value.find((t) => t.pendingTaskId === taskId)
@@ -163,6 +175,7 @@ export function usePresetTasks() {
     markEnqueued,
     markCompletedByTaskId,
     markInterrupted,
+    markInterruptedByTaskId,
     revertToUnusedByTaskId,
     canEnqueue: canEnqueueTask,
   }

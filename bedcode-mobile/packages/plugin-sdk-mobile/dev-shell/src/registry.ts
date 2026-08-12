@@ -13,11 +13,36 @@ import { reactive, ref } from 'vue'
 import type {
   Disposable,
   NavTabDescriptor,
+  PluginDevMock,
   PluginRouteDescriptor,
   SettingsSectionDescriptor,
   TerminalToolbarItemDescriptor,
   ToolboxPageDescriptor,
 } from '../../src/types'
+
+// ==================== 插件 devMock（领域数据注册） ====================
+
+/** 按 pluginId 注册的开发期领域数据（loader 在 activate 前调用，deactivate 时清理） */
+const devMocks = new Map<string, PluginDevMock>()
+
+export function registerDevMock(pluginId: string, mock: PluginDevMock): Disposable {
+  devMocks.set(pluginId, mock)
+  return {
+    dispose() {
+      devMocks.delete(pluginId)
+    },
+  }
+}
+
+/** 取指定插件的领域数据（createMockContext 按 pluginId 合并用） */
+export function getDevMock(pluginId: string): PluginDevMock | undefined {
+  return devMocks.get(pluginId)
+}
+
+/** 全部已注册领域数据（mobileApi 等全局单例能力按序合并用，如队列种子） */
+export function getAllDevMocks(): PluginDevMock[] {
+  return [...devMocks.values()]
+}
 
 // ==================== 日志 ====================
 
@@ -68,6 +93,8 @@ export interface DevPluginRecord {
   state: DevPluginState
   error?: string
   context: any
+  /** devMock 注册句柄（deactivate 时清理） */
+  devMockDisposable?: Disposable
 }
 
 const plugins = ref<DevPluginRecord[]>([])

@@ -255,6 +255,69 @@ export interface MobileHostApi {
   }>>
   /** 查询 auto-task 支持的 agent 列表 */
   httpListSupportedAgents(): Promise<MobileHttpResult<{ agents: string[] }>>
+  /**
+   * 查询任务历史列表（分页 + 筛选）
+   *
+   * 只拼接已提供的筛选参数；返回 { tasks, total, limit, offset }，
+   * 时间字段为 UTC `YYYY-MM-DD HH:MM:SS` 字符串，需前端自行转本地时区。
+   */
+  httpTaskHistoryList(params?: {
+    status?: string
+    agent?: string
+    source?: string
+    since?: string
+    until?: string
+    limit?: number
+    offset?: number
+  }): Promise<MobileHttpResult<{
+    tasks: {
+      id: string
+      description: string | null
+      status: string
+      agent: string | null
+      source: string | null
+      session_id: string
+      claude_sid: string | null
+      working_dir: string | null
+      auto_approve: number
+      exit_reason: string | null
+      created_at: string
+      started_at: string | null
+      completed_at: string | null
+      input_tokens: number | null
+      output_tokens: number | null
+    }[]
+    total: number
+    limit: number
+    offset: number
+  }>>
+  /** 查询定时任务列表（返回 { jobs }） */
+  httpScheduledJobsList(): Promise<MobileHttpResult<{
+    jobs: {
+      id: string
+      name: string | null
+      config_id: string
+      trigger_at: string
+      prompts: string
+      status: string
+      session_id: string | null
+      created_at: string
+      executed_at: string | null
+      error: string | null
+    }[]
+  }>>
+  /**
+   * 创建定时任务
+   *
+   * trigger_at 为 UTC `YYYY-MM-DD HH:MM:SS`；prompts 为任务 prompt 数组。
+   * 后端 400 时 message 含具体缺失字段。
+   */
+  httpScheduledJobCreate(body: {
+    name?: string
+    config_id: string
+    trigger_at: string
+    prompts: string[]
+  }): Promise<MobileHttpResult<{ job_id: string }>>
 }
 
 // ==================== 对话框 ====================
