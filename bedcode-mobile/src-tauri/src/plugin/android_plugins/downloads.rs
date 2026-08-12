@@ -110,7 +110,9 @@ pub async fn open_download_file(path: &str, display_name: &str) -> crate::Result
         crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string())
     })?;
     let payload = serde_json::json!({ "path": path, "displayName": display_name });
-    handle
+    // 显式标注 Ok 类型：run_mobile_plugin_async 的 Ok 在无约束时会退化为
+    // never type fallback（编译错误），与 android_plugins 其他调用点同模式
+    let _response: serde_json::Value = handle
         .run_mobile_plugin_async("openFile", payload)
         .await
         .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke openFile: {}", e)))?;
