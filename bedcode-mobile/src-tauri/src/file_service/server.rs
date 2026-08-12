@@ -1456,6 +1456,19 @@ mod tests {
         tokio::runtime::Runtime::new().unwrap()
     }
 
+    /// 收集下载流全部字节（流 Item 为 Result，出错即 panic）
+    async fn collect_stream<S>(stream: S) -> Vec<web::Bytes>
+    where
+        S: futures_util::Stream<Item = Result<web::Bytes, std::io::Error>>,
+    {
+        stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|c| c.expect("下载流不应出错"))
+            .collect()
+    }
+
     #[test]
     fn list_dir_lists_saf_root_and_traverses_tree() {
         let rt = runtime();
@@ -1545,6 +1558,216 @@ mod tests {
         assert_eq!(parse_range_header("bytes=10-5", 100), None);
         assert_eq!(parse_range_header("bytes=0-1,2-3", 100), None);
         assert_eq!(parse_range_header("chars=0-", 100), None);
+    }
+
+    // ==================== 纯逻辑补充测试 ====================
+
+    #[test]
+    fn needs_all_files_access_classifies_paths() {
+        // 主存储（/storage/emulated/0）下除 Android/data 私有目录外均需授权
+        assert!(needs_all_files_access(Path::new("/storage/emulated/0/DCIM")));
+        assert!(needs_all_files_access(Path::new("/storage/emulated/0")));
+        // 尾斜杠归一化后仍判定主存储
+        assert!(needs_all_files_access(Path::new("/storage/emulated/0/")));
+        // App 私有目录（Android/data）无需授权
+        assert!(!needs_all_files_access(Path::new(
+            "/storage/emulated/0/Android/data/com.bedcode.mobile"
+        )));
+        // 小写变体同样识别（路径统一转小写判定）
+        assert!(!needs_all_files_access(Path::new(
+            "/storage/emulated/0/android/data"
+        )));
+        // Android/obb 非 data 子目录，FUSE 同样过滤
+        assert!(needs_all_files_access(Path::new(
+            "/storage/emulated/0/Android/obb"
+        )));
+        // 非主存储位置不判定（避免误报）：外部 SD 卡、App 私有 /data 目录
+        assert!(!needs_all_files_access(Path::new("/sdcard/foo")));
+        assert!(!needs_all_files_access(Path::new(
+            "/data/user/0/com.bedcode.mobile/files"
+        )));
+        // 反斜杠分隔（异常输入防御）统一后仍命中主存储
+        assert!(needs_all_files_access(Path::new(
+            "/storage/emulated/0\\DCIM"
+        )));
+    }
+
+    #[test]
+    fn read_dir_entries_sorts_dirs_first_and_filters_part_files() {
+        // 排序规则：目录优先 → 名称升序；*.part 上传临时文件对端不可见
+        let base = tempfile::tempdir().unwrap();
+        std::fs::create_dir(base.path().join("dir_z")).unwrap();
+        std::fs::create_dir(base.path().join("dir_a")).unwrap();
+        std::fs::write(base.path().join("b.txt"), b"hello").unwrap();
+        std::fs::write(base.path().join("z.bin"), b"zz").unwrap();
+        std::fs::write(base.path().join("pending.part"), b"tmp").unwrap();
+
+        let entries = read_dir_entries(base.path()).expect("目录读取应成功");
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        // .part 被过滤；目录（按名）在前，文件（按名）在后
+        assert_eq!(names, vec!["dir_a", "dir_z", "b.txt", "z.bin"]);
+        assert!(entries[0].is_dir && entries[1].is_dir);
+        assert!(!entries[2].is_dir && !entries[3].is_dir);
+        // 文件大小与目录占位值
+        assert_eq!(entries[2].size, 5);
+        assert_eq!(entries[0].size, 0);
+        // 真实目录 mtime 非 0（Unix 秒）
+        assert!(entries[0].mtime > 0);
+    }
+
+    #[test]
+    fn read_dir_entries_rejects_non_directory() {
+        // 根失效/路径不是目录时返回明确 NotFound（规格 4.3 第 4 条）
+        let base = tempfile::tempdir().unwrap();
+        let file = base.path().join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let err = read_dir_entries(&file).expect_err("非目录应报错");
+        assert!(matches!(err, crate::AppError::NotFound(_)));
+        // 不存在的路径同样 NotFound
+        let missing = base.path().join("missing");
+        assert!(matches!(
+            read_dir_entries(&missing),
+            Err(crate::AppError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn build_download_response_range_returns_206_with_headers() {
+        // Range 命中 → 206 + Content-Range + Accept-Ranges + 段长度
+        let stream = futures_util::stream::empty::<Result<web::Bytes, std::io::Error>>();
+        let resp = build_download_response(Some((10, Some(19))), 10, 19, 100, 10, stream);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers().get(actix_web::http::header::CONTENT_RANGE).unwrap(),
+            "bytes 10-19/100"
+        );
+        assert_eq!(
+            resp.headers().get(actix_web::http::header::CONTENT_LENGTH).unwrap(),
+            "10"
+        );
+        assert_eq!(
+            resp.headers().get(actix_web::http::header::ACCEPT_RANGES).unwrap(),
+            "bytes"
+        );
+        assert_eq!(
+            resp.headers().get(actix_web::http::header::CONTENT_TYPE).unwrap(),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn build_download_response_full_returns_200_without_content_range() {
+        // 无 Range（或解析失败）→ 200 全量，不带 Content-Range
+        let stream = futures_util::stream::empty::<Result<web::Bytes, std::io::Error>>();
+        let resp = build_download_response(None, 0, 99, 100, 100, stream);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        assert!(resp.headers().get(actix_web::http::header::CONTENT_RANGE).is_none());
+        assert_eq!(
+            resp.headers().get(actix_web::http::header::CONTENT_LENGTH).unwrap(),
+            "100"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_download_stream_serves_exact_bytes_and_stops_at_early_eof() {
+        use futures_util::StreamExt;
+        let base = tempfile::tempdir().unwrap();
+        let file_path = base.path().join("payload.bin");
+        std::fs::write(&file_path, b"0123456789").unwrap();
+
+        // content_len 与实际一致：单块输出全文（512KB 缓冲 > 10 字节）
+        let file = tokio::fs::File::open(&file_path).await.unwrap();
+        let stream = build_download_stream(file, 10, Arc::new(PassthroughCipher), None);
+        let chunks = collect_stream(stream).await;
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(&chunks[0][..], b"0123456789");
+
+        // content_len 超过实际文件（对端声称更大、文件被截断）：
+        // EOF 提前到达 → 流终止，绝不发送缺失字节
+        let file = tokio::fs::File::open(&file_path).await.unwrap();
+        let stream = build_download_stream(file, 100, Arc::new(PassthroughCipher), None);
+        let chunks = collect_stream(stream).await;
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        assert_eq!(total, 10);
+    }
+
+    #[tokio::test]
+    async fn build_download_stream_splits_at_chunk_boundary() {
+        use futures_util::StreamExt;
+        let base = tempfile::tempdir().unwrap();
+        let file_path = base.path().join("big.bin");
+        let data = vec![0xABu8; DOWNLOAD_CHUNK_SIZE + 100];
+        std::fs::write(&file_path, &data).unwrap();
+
+        let file = tokio::fs::File::open(&file_path).await.unwrap();
+        let stream = build_download_stream(
+            file,
+            data.len() as u64,
+            Arc::new(PassthroughCipher),
+            None,
+        );
+        let chunks = collect_stream(stream).await;
+        // 首块 512KB、末块余量，切分边界精确
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), DOWNLOAD_CHUNK_SIZE);
+        assert_eq!(chunks[1].len(), 100);
+        assert_eq!(chunks[0][0], 0xAB);
+        assert_eq!(chunks[1][99], 0xAB);
+    }
+
+    #[tokio::test]
+    async fn build_download_stream_with_relay_cleanup_completes() {
+        // SAF 下载路径携带中转副本清理钩子：流正常结束不 panic，数据完整
+        use futures_util::StreamExt;
+        let base = tempfile::tempdir().unwrap();
+        let relay = base.path().join("relay");
+        let cache = relay.join("cache.bin");
+        std::fs::create_dir_all(&relay).unwrap();
+        std::fs::write(&cache, b"relay-data").unwrap();
+
+        let file = tokio::fs::File::open(&cache).await.unwrap();
+        let stream = build_download_stream(
+            file,
+            10,
+            Arc::new(PassthroughCipher),
+            Some((relay.clone(), cache.clone())),
+        );
+        let chunks = collect_stream(stream).await;
+        assert_eq!(&chunks[0][..], b"relay-data");
+    }
+
+    #[test]
+    fn require_op_enforces_mount_operations() {
+        // 已声明操作放行；未声明一律 403（含响应体 code）
+        let entry = saf_mount_entry();
+        assert!(require_op(&entry, FileOperation::List).is_ok());
+        assert!(require_op(&entry, FileOperation::Download).is_ok());
+        assert!(require_op(&entry, FileOperation::Upload).is_ok());
+
+        let mut restricted = saf_mount_entry();
+        restricted.operations = vec![FileOperation::List];
+        let err = require_op(&restricted, FileOperation::Download).expect_err("未声明操作应 403");
+        assert_eq!(err.status(), actix_web::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn error_response_serializes_code_and_message() {
+        // 统一错误响应形状：HTTP 状态码 + JSON {code, message}
+        let resp = error_response(actix_web::http::StatusCode::BAD_REQUEST, 400, "bad input");
+        assert_eq!(resp.status(), actix_web::http::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+        assert_eq!(body["code"], 400);
+        assert_eq!(body["message"], "bad input");
+    }
+
+    #[test]
+    fn mtime_unix_secs_reports_file_mtime() {
+        // 真实文件 mtime 应为非零 Unix 秒（读取失败才返回 0）
+        let base = tempfile::tempdir().unwrap();
+        let file = base.path().join("m.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let meta = std::fs::metadata(&file).unwrap();
+        assert!(mtime_unix_secs(&meta) > 0);
     }
 }
 
