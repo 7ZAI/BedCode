@@ -385,6 +385,34 @@ const session = computed(() => {
   return connection.activeSessions.value.find(s => s.id === sessionId.value)
 })
 
+// ==================== Agent CLI 预设（命令面板） ====================
+// 预设识别依赖两个异步数据源：session.config_id（activeSessions）与
+// sessionConfigs（仅 DevicesView 在认证/配对后调用 loadSessionConfigs 填充）。
+// 通知跳转/路由恢复等直接进入终端页的路径两者可能都未就绪，且识别结果需随
+// 会话切换更新——故不做 onMounted 一次性识别，改由 watch 响应式触发：
+// 任一数据到位即识别，识别为 generic（未识别）时面板仅保留用户自定义命令。
+let agentOverridesLoaded = false
+
+/** 识别并应用当前会话的命令预设；数据未就绪时静默跳过（watch 稍后重触发） */
+async function applyAgentPreset() {
+  if (!agentOverridesLoaded) {
+    await assistStore.loadAgentTypeOverrides()
+    agentOverridesLoaded = true
+  }
+  const configId = session.value?.config_id
+  if (!configId) return // 会话未就绪（含 mock 会话，无 config_id）
+  const config = connection.sessionConfigs.value.find(c => c.id === configId)
+  if (!config) return // 配置列表未加载，等待 loadSessionConfigs 完成
+  assistStore.setAgentPreset(assistStore.getEffectiveAgentType(configId, config.command))
+}
+
+// session/config 任一就绪或切换即重新识别（deep：SyncConfigCreated push 也能触发）
+watch(
+  [() => session.value?.config_id, () => connection.sessionConfigs.value],
+  () => { applyAgentPreset() },
+  { immediate: true, deep: true },
+)
+
 const sessionName = computed(() => session.value?.name || sessionId.value || t('desktop.terminal.title'))
 
 const isSessionActive = computed(() => isMockSession(sessionId.value) || (session.value?.status || 'stopped') === 'running')
@@ -960,14 +988,11 @@ onMounted(async () => {
   // 通道 2: 监听插件 safeAreaChanged 事件
   window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
 
-  // 识别当前会话的 Agent CLI 并加载命令预设：手动覆盖优先，否则按会话配置
-  // 启动命令关键词识别（见 CONTEXT.md「Agent CLI」术语）
-  const assistStore = useInputAssistantStore()
-  await assistStore.loadAgentTypeOverrides()
-  const configId = session.value?.config_id
-  const config = connection.sessionConfigs.value.find(c => c.id === configId)
-  const agentType = assistStore.getEffectiveAgentType(configId, config?.command || '')
-  assistStore.setAgentPreset(agentType)
+  // 兜底加载会话配置：DevicesView 之外的进入路径（通知跳转/路由恢复）从未调用过
+  // loadSessionConfigs，预设识别需要其中的启动命令；加载完成后由上方 watch 触发识别
+  if (!connection.hasLoadedConfigs.value && !connection.isLoadingConfigs.value) {
+    connection.loadSessionConfigs().catch(() => {})
+  }
 
   await nextTick()
   await initTerminal()
