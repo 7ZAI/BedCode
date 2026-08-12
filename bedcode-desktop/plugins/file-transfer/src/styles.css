@@ -8,6 +8,18 @@
  * 三组 token），跟随宿主明暗主题，不写死颜色。类名统一 `ft-` 前缀避免与宿主冲突。
  */
 
+/* 系统减弱动态效果时默认降级为瞬时（优先级最低：位于文件顶部且无 !important，
+   文件后续定义的显式过渡类会覆盖它，保证面板滑出/收回等状态过渡动画始终保留） */
+@media (prefers-reduced-motion: reduce) {
+  .ft-view *,
+  .ft-view *::before,
+  .ft-view *::after {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
+}
+
 .ft-view {
   height: 100%;
   display: flex;
@@ -844,16 +856,7 @@
   position: absolute;
 }
 
-/* 无障碍：系统减弱动态效果时所有过渡降为瞬时（进度条跳变可接受，与宿主约定一致） */
-@media (prefers-reduced-motion: reduce) {
-  .ft-view *,
-  .ft-view *::before,
-  .ft-view *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
+/* 面板/队列/页面/任务卡过渡保持全时长（曾用 prefers-reduced-motion 压成 0.01ms 导致动画失效） */
 
 /* ==================== 设置面板（覆盖层） ==================== */
 
