@@ -457,7 +457,7 @@ const themeSelectOptions = computed(() =>
   Object.entries(themeNames).map(([value, label]) => ({ value, label })),
 )
 const fontSizeSelectOptions = computed(() =>
-  [12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
+  [8, 10, 12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
 )
 
 function getTheme() {
@@ -654,7 +654,7 @@ function initTerminal() {
   wheelHandler = (e: WheelEvent) => {
     if (!e.ctrlKey) return
     e.preventDefault()
-    const sizes = [12, 14, 16, 18, 20]
+    const sizes = [8, 10, 12, 14, 16, 18, 20]
     const idx = sizes.indexOf(fontSize.value)
     const next = Math.min(
       sizes.length - 1,

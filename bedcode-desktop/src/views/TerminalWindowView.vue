@@ -295,7 +295,7 @@ const themeSelectOptions = computed(() =>
   Object.entries(themeOptions.value).map(([value, label]) => ({ value, label })),
 )
 const fontSizeSelectOptions = computed(() =>
-  [12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
+  [8, 10, 12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
 )
 
 // ==================== 状态展示 ====================
