@@ -75,7 +75,7 @@ pub fn normalize_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>, SandboxError> 
 /// - 绝对路径（前导 `/` 或 `\`）拒绝
 /// - 含 `:` 的分量拒绝（Windows 盘符前缀 / NTFS ADS 流）
 /// - `\` 统一按 `/` 处理（移动端客户端一律发正斜杠）
-fn clean_relative_parts(rel: &str) -> Result<Vec<String>, SandboxError> {
+pub fn clean_relative_parts(rel: &str) -> Result<Vec<String>, SandboxError> {
     if rel.starts_with('/') || rel.starts_with('\\') {
         return Err(SandboxError::Traversal(format!(
             "absolute path rejected: {}",

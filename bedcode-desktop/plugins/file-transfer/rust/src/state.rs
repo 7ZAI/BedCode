@@ -67,11 +67,13 @@ pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), &'stati
         (TaskState::Transferring, TaskState::Rejected) => Ok(()),
         (TaskState::Transferring, TaskState::Cancelled) => Ok(()),
 
-        // paused → transferring（恢复）/ cancelled
+        // paused → queued（用户恢复，重新入队调度）/ transferring（恢复）/ cancelled
+        (TaskState::Paused, TaskState::Queued) => Ok(()),
         (TaskState::Paused, TaskState::Transferring) => Ok(()),
         (TaskState::Paused, TaskState::Cancelled) => Ok(()),
 
-        // resumable → transferring（恢复）/ cancelled
+        // resumable → queued（用户恢复 / 重连后自动恢复，重新入队）/ transferring（恢复）/ cancelled
+        (TaskState::Resumable, TaskState::Queued) => Ok(()),
         (TaskState::Resumable, TaskState::Transferring) => Ok(()),
         (TaskState::Resumable, TaskState::Cancelled) => Ok(()),
 
@@ -323,10 +325,12 @@ mod tests {
         assert!(validate_transition(TaskState::Transferring, TaskState::Failed).is_ok());
         assert!(validate_transition(TaskState::Transferring, TaskState::Rejected).is_ok());
         assert!(validate_transition(TaskState::Transferring, TaskState::Cancelled).is_ok());
-        // paused → transferring / cancelled
+        // paused → queued（用户恢复） / transferring / cancelled
+        assert!(validate_transition(TaskState::Paused, TaskState::Queued).is_ok());
         assert!(validate_transition(TaskState::Paused, TaskState::Transferring).is_ok());
         assert!(validate_transition(TaskState::Paused, TaskState::Cancelled).is_ok());
-        // resumable → transferring / cancelled
+        // resumable → queued（重连自动恢复） / transferring / cancelled
+        assert!(validate_transition(TaskState::Resumable, TaskState::Queued).is_ok());
         assert!(validate_transition(TaskState::Resumable, TaskState::Transferring).is_ok());
         assert!(validate_transition(TaskState::Resumable, TaskState::Cancelled).is_ok());
         // failed → queued (retry) / cancelled

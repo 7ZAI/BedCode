@@ -55,15 +55,7 @@ impl WasmPlugin for FileTransferPlugin {
 
         // 2. 挂载文件服务（roots 非空时）
         if !s.settings.roots.is_empty() {
-            let options = MountOptions {
-                mount_path: MOUNT_PATH.to_string(),
-                roots: s.settings.roots.clone(),
-                operations: vec![
-                    FileOperation::List,
-                    FileOperation::Download,
-                    FileOperation::Upload,
-                ],
-            };
+            let options = commands::build_mount_options(&s.settings.roots, &commands::resolve_download_dir(&s, &host).ok());
             match host.filesrv_mount(&options) {
                 Ok(result) => {
                     s.mounted = true;

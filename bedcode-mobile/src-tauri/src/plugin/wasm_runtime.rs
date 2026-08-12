@@ -568,6 +568,14 @@ impl LoadedWasmPlugin {
 
         let func = self
             .get_export_func(bedcode_plugin_api_mobile::abi::export::ON_UPLOAD_REQUEST)?;
+        // 导出签名 `__bedcode_on_upload_request(meta_ptr, meta_len, out_ptr) -> i32`
+        // （见 SDK wasm.rs PLUGIN_EXPORT_SIGNATURES 中 (ON_UPLOAD_REQUEST, 3, 1)）。
+        // 返回 i32 为状态码（SDK 当前实现恒返 0；拒绝语义由写入 out_ptr 的决定
+        // JSON 表达，返回值仅供宿主侧诊断）。必须提供 1 个返回 slot 接这个 i32，
+        // 否则 wasmtime 报 "expected 1 results, got 0"——该错曾被上层误提为
+        // “call_upload_hook 返 None → upload hook unavailable” fail-closed 拒绝。
+        // 这里只接返回值，不阻断 out_ptr 决定的读取（与 SDK 当前语义一致）。
+        let mut ret = [wasmtime::Val::I32(0)];
         func.call(
             &mut self.store,
             &[
@@ -575,11 +583,17 @@ impl LoadedWasmPlugin {
                 wasmtime::Val::I32(meta_len as i32),
                 wasmtime::Val::I32(out_ptr as i32),
             ],
-            &mut [],
+            &mut ret,
         )
         .map_err(|e| {
             crate::AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e))
         })?;
+        if ret[0].i32().unwrap_or(0) != 0 {
+            tracing::warn!(
+                status = ret[0].i32().unwrap_or(0),
+                "WASM on_upload_request() returned non-zero status (decision JSON still read from out_ptr)"
+            );
+        }
 
         let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
         let result = self.read_string_from_memory(ptr, len)?;

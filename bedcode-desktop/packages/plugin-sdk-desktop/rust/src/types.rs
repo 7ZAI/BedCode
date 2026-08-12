@@ -241,10 +241,16 @@ pub enum FileOperation {
 pub struct MountOptions {
     /// 挂载点名称（小写字母数字 `-_`，暴露为 /plugins/{pluginId}/{mountPath}/**）
     pub mount_path: String,
-    /// 允许目录根（绝对路径，来自插件 storage 的用户配置）
+    /// 允许目录根（绝对路径，来自插件 storage 的用户配置）；供对端浏览/下载（只读暴露），
+    /// 声明 Upload 操作时同时作为接收落点的兼容回退（旧语义）。
     pub roots: Vec<String>,
     /// 允许的操作集合（未声明的操作端点返回 403）
     pub operations: Vec<FileOperation>,
+    /// 接收落点（接收对端 upload 的目录，spec 方向模型：“下载目录 = 接收落点”，
+    /// 不落共享 roots）。存在时 POST /upload 创建 session 的目标名解析以此为准，
+    /// 跳 roots 沙箱；为 None（旧插件）时回退到 roots 语义保后兼容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloads_dir: Option<String>,
 }
 
 /// 挂载结果（宿主 → 插件）

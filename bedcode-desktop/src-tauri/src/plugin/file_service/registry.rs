@@ -43,6 +43,8 @@ pub struct MountEntry {
     /// 挂载点名称（URL 段）
     pub mount_path: String,
     /// 允许目录根（canonicalize 后，已去重取最外层）
+    /// 供对端 browse/download（只读暴露）；旧语义中 Upload 也落此，已被
+    /// `downloads_dir` 取代（spec 方向模型：接收落点 = 下载目录，不落共享 roots）。
     pub roots: Vec<PathBuf>,
     /// 允许的操作集合
     pub operations: Vec<FileOperation>,
@@ -50,6 +52,10 @@ pub struct MountEntry {
     pub hook: HookTarget,
     /// 传输加密拦截器（MVP 为直通，见 cipher 模块）
     pub cipher: Arc<dyn TransportCipher>,
+    /// 接收落点（接收对端 upload 的目录，对齐 spec“下载目录 = 接收落点语义”
+    /// 与移动端 MediaStore.Downloads 设计对称）。声明 Upload 时优先用此解析目标路径，
+    /// 跳 roots 沙箱；为 None（旧插件未传）时回退到 roots 语义保后兼容。
+    pub downloads_dir: Option<PathBuf>,
 }
 
 /// 文件服务注册表（AppContext 全局持有）
@@ -163,6 +169,35 @@ impl FileServiceRegistry {
             ))
         })?;
 
+        // 接收落点（downloads_dir，spec 方向模型：上传接收不落共享 roots，落专设
+        // 下载目录）。与 roots 同级校验：过宿主写授权（对端 upload 的写入边界，
+        // 绕过等于任意插件可声明任意绝对路径为落点）、canonicalize 且必须是目录
+        // （fail-fast，避免上传时才 500）。空字符串视作未传（回退 roots 语义）
+        let downloads_dir = match options.downloads_dir.as_deref().filter(|s| !s.is_empty()) {
+            Some(dir) => {
+                if !self.fs_auth.check(plugin_id, dir, FsOp::Write).await {
+                    return Err(crate::AppError::Auth(format!(
+                        "mount '{}': downloads_dir '{}' not authorized by user",
+                        options.mount_path, dir
+                    )));
+                }
+                let canonical = PathBuf::from(dir).canonicalize().map_err(|e| {
+                    crate::AppError::InvalidInput(format!(
+                        "mount '{}': downloads_dir '{}' not accessible: {}",
+                        options.mount_path, dir, e
+                    ))
+                })?;
+                if !canonical.is_dir() {
+                    return Err(crate::AppError::InvalidInput(format!(
+                        "mount '{}': downloads_dir '{}' is not a directory",
+                        options.mount_path, canonical.display()
+                    )));
+                }
+                Some(canonical)
+            }
+            None => None,
+        };
+
         let entry = MountEntry {
             plugin_id: plugin_id.to_string(),
             mount_path: options.mount_path.clone(),
@@ -171,6 +206,9 @@ impl FileServiceRegistry {
             hook,
             // MVP 直通加密缝；未来接入 E2E 加密时在此注入真实实现
             cipher: Arc::new(PassthroughCipher),
+            // 接收落点：canonical 绝对路径，上传目标解析经 resolve_upload_target_within_roots
+            // 再校验（父目录 canonicalize + starts_with，拦 symlink 逃逸）
+            downloads_dir,
         };
 
         {

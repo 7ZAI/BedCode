@@ -436,16 +436,59 @@ pub async fn create_upload(
         );
     };
 
-    // 沙箱解析：父目录必须存在于某 root 内（最终文件尚不存在）
+    // 沙箱解析：接收落点优先使用 downloads_dir（spec 方向模型：接收上传
+    // 不落共享 roots，专设下载目录，与移动端 MediaStore.Downloads 对称）。
+    // 旧插件未传 downloads_dir 时回退到 roots 沙箱语义保后兼容。
+    //
+    // downloads_dir 为插件 resolve_download_dir 给出的绝对路径（用户设置或
+    // HomeDir/Downloads）。复用 roots 沙箱解析器：canonicalize 父目录 +
+    // starts_with 校验可拦截 downloads_dir 内 symlink/junction 指向外部的
+    // 逃逸（Windows 用户态无需管理员即可建 junction），父目录必须存在
+    // （不存在即 400 拒绝，避免创建 session 后流式写入中途才失败）。
+    // 单根时首段等于基名的别名剥除语义与共享 roots 一致，无害。
     let rel = body.relative_path.trim_matches('/').to_string();
-    let target = match sandbox::resolve_upload_target_within_roots(&entry.roots, &rel) {
-        Ok(p) => p,
-        Err(e) => {
+    let target = if let Some(ref downloads_dir) = entry.downloads_dir {
+        let canonical_dir = match std::fs::canonicalize(downloads_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                return error_response(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    500,
+                    &format!(
+                        "downloads_dir '{}' not accessible: {}",
+                        downloads_dir.display(),
+                        e
+                    ),
+                )
+            }
+        };
+        if !canonical_dir.is_dir() {
             return error_response(
-                actix_web::http::StatusCode::BAD_REQUEST,
-                400,
-                &e.to_string(),
-            )
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                500,
+                &format!("downloads_dir '{}' is not a directory", canonical_dir.display()),
+            );
+        }
+        match sandbox::resolve_upload_target_within_roots(&[canonical_dir], &rel) {
+            Ok(p) => p,
+            Err(e) => {
+                return error_response(
+                    actix_web::http::StatusCode::BAD_REQUEST,
+                    400,
+                    &e.to_string(),
+                )
+            }
+        }
+    } else {
+        match sandbox::resolve_upload_target_within_roots(&entry.roots, &rel) {
+            Ok(p) => p,
+            Err(e) => {
+                return error_response(
+                    actix_web::http::StatusCode::BAD_REQUEST,
+                    400,
+                    &e.to_string(),
+                )
+            }
         }
     };
 

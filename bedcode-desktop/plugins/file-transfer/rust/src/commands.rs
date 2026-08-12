@@ -312,6 +312,16 @@ pub fn resume(
     host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostFileService),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
+    host.log_info(&format!(
+        "resume: enter task_id={} state={:?} offset={} peer_id={} peer_online={}",
+        task_id,
+        state.tasks.get(task_id).map(|t| t.state),
+        state.tasks.get(task_id).map(|t| t.offset).unwrap_or(0),
+        state.tasks.get(task_id).map(|t| t.peer.device_id.clone()).unwrap_or_default(),
+        state.peer.base_and_auth_for(
+            &state.tasks.get(task_id).map(|t| t.peer.device_id.clone()).unwrap_or_default()
+        ).is_ok(),
+    ));
     let task = state.tasks.get(task_id)
         .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
     if !matches!(task.state, TaskState::Paused | TaskState::Resumable) {
@@ -324,6 +334,7 @@ pub fn resume(
     state.queue.enqueue(task_id);
     state.tasks.save(host);
     emit_tasks_changed(host, &state.tasks);
+    host.log_info(&format!("resume: enqueued task_id={} queue_active={} pending={}", task_id, state.queue.active_count(), state.queue.pending_count()));
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -529,7 +540,7 @@ pub fn get_settings(state: &PluginState) -> serde_json::Value {
 /// set-settings：更新设置
 pub fn set_settings(
     state: &mut PluginState,
-    host: &(impl HostStorage + HostLog + HostFileService),
+    host: &(impl HostStorage + HostLog + HostFileService + HostConfig),
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     if let Some(roots) = args.get("roots").and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok()) {
@@ -545,11 +556,7 @@ pub fn set_settings(
             let _ = host.filesrv_update_roots(MOUNT_PATH, &roots);
         } else {
             // 之前未挂载（如清空后重配目录）：与激活逻辑一致重新挂载
-            let options = MountOptions {
-                mount_path: MOUNT_PATH.to_string(),
-                roots: roots.clone(),
-                operations: vec![FileOperation::List, FileOperation::Download, FileOperation::Upload],
-            };
+            let options = build_mount_options(&roots, &resolve_download_dir(state, host).ok());
             match host.filesrv_mount(&options) {
                 Ok(result) => {
                     state.mounted = true;
@@ -562,7 +569,39 @@ pub fn set_settings(
         }
     }
     if let Some(dir) = args.get("downloadDir").and_then(|v| v.as_str()) {
+        let changed = state.settings.download_dir != dir;
         state.settings.download_dir = dir.to_string();
+        // 挂载后刷新接收落点：宿主只提供 filesrv_update_roots，downloads_dir 变化
+        // 需 unmount + remount 生效——否则同名预检按新目录、实际落盘仍旧目录，
+        // 与“下载目录 = 接收落点”模型自相矛盾
+        if changed && state.mounted {
+            if let Err(e) = host.filesrv_unmount(MOUNT_PATH) {
+                return Err(anyhow::anyhow!(
+                    "unmount failed before download dir change: {}",
+                    e
+                ));
+            }
+            let options = build_mount_options(
+                &state.settings.roots.clone(),
+                &resolve_download_dir(state, host).ok(),
+            );
+            match host.filesrv_mount(&options) {
+                Ok(result) => {
+                    state.mounted = true;
+                    host.log_info(&format!(
+                        "remounted with new downloads_dir, base={}",
+                        result.base_path
+                    ));
+                }
+                // 重挂失败必须回报（挂载失败即失效，对端上传会 403/500）
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "remount failed after download dir change: {}",
+                        e
+                    ))
+                }
+            }
+        }
     }
     if let Some(n) = args.get("concurrency").and_then(|v| v.as_u64()) {
         state.queue.set_concurrency(n as usize);
@@ -584,7 +623,7 @@ pub fn pick_download_dir() -> anyhow::Result<serde_json::Value> {
 /// mount-local：挂载本地目录
 pub fn mount_local(
     state: &mut PluginState,
-    host: &(impl HostFileService + HostLog),
+    host: &(impl HostFileService + HostLog + HostConfig),
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let roots = args
@@ -596,12 +635,7 @@ pub fn mount_local(
         return Err(anyhow::anyhow!("no roots to mount"));
     }
 
-    let options = MountOptions {
-        mount_path: MOUNT_PATH.to_string(),
-        roots: roots.clone(),
-        operations: vec![FileOperation::List, FileOperation::Download, FileOperation::Upload],
-    };
-
+    let options = build_mount_options(&roots, &resolve_download_dir(state, host).ok());
     match host.filesrv_mount(&options) {
         Ok(result) => {
             state.mounted = true;
@@ -650,6 +684,10 @@ pub fn schedule_and_start(
     host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostFileService + HostBus),
 ) {
     let actions = state.queue.schedule();
+    host.log_info(&format!(
+        "schedule_and_start: actions={:?} active={} pending={}",
+        actions, state.queue.active_count(), state.queue.pending_count()
+    ));
     for task_id in actions {
         if let Err(e) = start_single_task(state, host, &task_id) {
             host.log_error(&format!("start task {} failed: {}", task_id, e));
@@ -671,9 +709,14 @@ fn start_single_task(
     host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostFileService + HostBus),
     task_id: &str,
 ) -> Result<(), String> {
+    host.log_info(&format!("start_single_task: enter task_id={}", task_id));
     let task = state.tasks.get(task_id).ok_or("task not found")?;
     // 任务从入队起绑定对端：调度用任务自己的 endpoint，切换激活对端不影响排队任务
     let (base, auth) = state.peer.base_and_auth_for(&task.peer.device_id)?;
+    host.log_info(&format!(
+        "start_single_task: task_id={} base={} auth_present={} offset={} direction={:?}",
+        task_id, base, !auth.is_empty(), task.offset, task.direction
+    ));
     let direction = task.direction;
     let remote_path = task.remote_path.clone();
     let local_path = task.local_path.clone();
@@ -684,7 +727,15 @@ fn start_single_task(
     match direction {
         Direction::Download => {
             // 续传指纹校验（spec §7.4）
+            host.log_info(&format!(
+                "start_single_task: HEAD fingerprint task_id={} base={} remote={}",
+                task_id, base, remote_path
+            ));
             let remote_fp = handshake::fingerprint(host, &base, &auth, &remote_path)?;
+            host.log_info(&format!(
+                "start_single_task: fingerprint size={} mtime={}",
+                remote_fp.size, remote_fp.mtime
+            ));
 
             if let Some(ref saved_fp) = fingerprint {
                 if saved_fp.size != remote_fp.size || saved_fp.mtime != remote_fp.mtime {
@@ -1113,15 +1164,10 @@ fn emit_peers_changed(host: &(impl HostEvents + HostLog), peer: &PeerStore) {
 /// 宿主沙箱已在上传创建前完成路径合法性校验，插件只需同名即拒。
 pub fn handle_upload_request(
     state: &PluginState,
-    host: &impl HostFs,
+    host: &(impl HostFs + HostConfig),
     meta: &UploadRequestMeta,
 ) -> UploadHookDecision {
     let rel = meta.relative_path.trim_matches('/');
-    let roots: Vec<PathBuf> = state.settings.roots.iter().map(PathBuf::from).collect();
-
-    if roots.is_empty() {
-        return UploadHookDecision::deny("no-roots");
-    }
 
     // 清洗相对路径（复刻 sandbox::clean_relative_parts，拒绝 ..、绝对路径、:）
     let parts = match clean_relative_parts(rel) {
@@ -1132,16 +1178,19 @@ pub fn handle_upload_request(
         return UploadHookDecision::deny("invalid-path");
     }
 
-    // 任一根下目标已存在 → 同名拒绝；全部不存在 → allow
-    // （host.fs_exists 缺 fs:read 权限时 fail-closed 返回 Err，同名预检静默失效）
-    for root in &roots {
-        let mut target = root.clone();
-        for part in &parts {
-            target.push(part);
-        }
-        if let Ok(true) = host.fs_exists(target.to_string_lossy().as_ref()) {
-            return UploadHookDecision::deny("duplicate-name");
-        }
+    // 接收落点固定为下载目录（与 enqueue_download 同源），与移动端 MediaStore.Downloads
+    // 对称——spec §8.5 方向模型：接收统一落下载目录，不落共享 roots。下载目录未配置
+    // 则拒绝，避免落到宿主默认或不可预期位置。
+    let download_dir = match resolve_download_dir(state, host) {
+        Ok(d) => d,
+        Err(e) => return UploadHookDecision::deny(&format!("no-download-dir: {}", e)),
+    };
+    let mut target = std::path::PathBuf::from(&download_dir);
+    for part in &parts {
+        target.push(part);
+    }
+    if let Ok(true) = host.fs_exists(target.to_string_lossy().as_ref()) {
+        return UploadHookDecision::deny("duplicate-name");
     }
 
     UploadHookDecision::allow()
@@ -1228,7 +1277,11 @@ fn now_ms(host: &impl HostConfig) -> u64 {
 }
 
 /// 解析下载目录
-fn resolve_download_dir(
+///
+/// 两个用法：下载任务 `.part` 落点（[`enqueue_download`]）；以及文件服务挂载的
+/// 接收落点（[`build_mount_options`] → `MountOptions.downloads_dir`，使对端 upload
+/// 接收按 spec“下载目录 = 接收落点”语义落在下载目录而非共享 roots）。
+pub fn resolve_download_dir(
     state: &PluginState,
     host: &impl HostConfig,
 ) -> anyhow::Result<String> {
@@ -1248,6 +1301,25 @@ fn resolve_download_dir(
     Err(anyhow::anyhow!(
         "download directory not configured; use set-settings to set downloadDir"
     ))
+}
+
+/// 构造文件服务挂载选项
+///
+/// 三处调用点（activate / set-settings / mount-local）共用。`downloads_dir`
+/// 为 `resolve_download_dir` 结果（失败则为 None：接收 upload 落点回退到共享
+/// roots 语义，不中断挂载），与供对端浏览的共享 roots 分离，对齐 spec“下载
+/// 目录 = 接收落点”方向模型。
+pub fn build_mount_options(roots: &[String], downloads_dir: &Option<String>) -> MountOptions {
+    MountOptions {
+        mount_path: MOUNT_PATH.to_string(),
+        roots: roots.to_vec(),
+        operations: vec![
+            FileOperation::List,
+            FileOperation::Download,
+            FileOperation::Upload,
+        ],
+        downloads_dir: downloads_dir.clone().filter(|s| !s.is_empty()),
+    }
 }
 
 /// 构造 Authorization headers

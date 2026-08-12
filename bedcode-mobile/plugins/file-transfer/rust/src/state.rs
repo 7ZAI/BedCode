@@ -67,11 +67,13 @@ pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), &'stati
         (TaskState::Transferring, TaskState::Rejected) => Ok(()),
         (TaskState::Transferring, TaskState::Cancelled) => Ok(()),
 
-        // paused → transferring（恢复）/ cancelled
+        // paused → queued（用户恢复，重新入队调度）/ transferring（恢复）/ cancelled
+        (TaskState::Paused, TaskState::Queued) => Ok(()),
         (TaskState::Paused, TaskState::Transferring) => Ok(()),
         (TaskState::Paused, TaskState::Cancelled) => Ok(()),
 
-        // resumable → transferring（恢复）/ cancelled
+        // resumable → queued（用户恢复 / 重连后自动恢复，重新入队）/ transferring（恢复）/ cancelled
+        (TaskState::Resumable, TaskState::Queued) => Ok(()),
         (TaskState::Resumable, TaskState::Transferring) => Ok(()),
         (TaskState::Resumable, TaskState::Cancelled) => Ok(()),
 
