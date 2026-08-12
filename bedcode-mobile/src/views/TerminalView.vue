@@ -189,6 +189,7 @@ import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import { useToast } from '@/composables/useToast'
+import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
 import { TERMINAL_THEMES } from '@/config/terminalThemes'
 import type { PresetTask } from '@/composables/model'
@@ -494,9 +495,14 @@ watch(isSystemDark, () => {
  * 在 TUI 全屏重绘（opencode/vim 每帧清屏+重绘）时可能闪烁/撕裂，故开启
  * 时用 DEC 2026 同步输出包裹（writeCoalescer wrapSyncOutput）防双缓冲重影；
  * WebGL 不可用（context loss / 初始化失败）时自动回退 DOM 渲染器。
- * 切换为 false 即禁用 WebGL addon，仅影响移动端；桌面端不受此开关影响
+ * 切换为 false 即禁用 WebGL addon，仅影响移动端；桌面端不受此开关影响。
+ *
+ * 默认关闭：addon-webgl 0.19 无公开调优 API（DPR 强制跟随设备、图集页数无上限、
+ * 新字符动态光栅化），长会话下 GPU 显存膨胀 + 图集光栅化卡顿 + context loss 重建
+ * 是移动端越用越卡的来源之一。内置 DOM 渲染器（canvas 2D 行渲染）对 ~40 行可视区
+ * 性能足够，且无上述开销；如需验证可临时切回 true 做 A/B 对比。
  */
-const USE_WEBGL_RENDERER = true
+const USE_WEBGL_RENDERER = false
 
 /**
  * WebGL 渲染器：动态加载（移动端包体积/启动优化），
@@ -882,6 +888,15 @@ onMounted(async () => {
 
   // 通道 2: 监听插件 safeAreaChanged 事件
   window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
+
+  // 识别当前会话的 Agent CLI 并加载命令预设：手动覆盖优先，否则按会话配置
+  // 启动命令关键词识别（见 CONTEXT.md「Agent CLI」术语）
+  const assistStore = useInputAssistantStore()
+  await assistStore.loadAgentTypeOverrides()
+  const configId = session.value?.config_id
+  const config = connection.sessionConfigs.value.find(c => c.id === configId)
+  const agentType = assistStore.getEffectiveAgentType(configId, config?.command || '')
+  assistStore.setAgentPreset(agentType)
 
   await nextTick()
   await initTerminal()

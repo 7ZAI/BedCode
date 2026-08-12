@@ -26,7 +26,7 @@
             <div class="custom-commands-layout">
               <div class="custom-commands-grid">
                 <button
-                  v-for="cmd in customCommands"
+                  v-for="cmd in displayCommands"
                   :key="'clone-end-' + cmd.id"
                   class="custom-cmd-btn"
                   :class="{ 'editing': isEditingCommands }"
@@ -35,7 +35,7 @@
                   <span class="cmd-label">{{ cmd.command }}</span>
                   <transition name="delete-badge">
                     <button
-                      v-if="isEditingCommands"
+                      v-if="isEditingCommands && !cmd.builtin"
                       class="cmd-delete-btn"
                       @click.stop="deleteCustomCommand(cmd.id)"
                     >
@@ -154,7 +154,7 @@
             <div class="custom-commands-layout">
               <div class="custom-commands-grid">
                 <button
-                  v-for="cmd in customCommands"
+                  v-for="cmd in displayCommands"
                   :key="cmd.id"
                   class="custom-cmd-btn"
                   :class="{ 'editing': isEditingCommands }"
@@ -163,7 +163,7 @@
                   <span class="cmd-label">{{ cmd.command }}</span>
                   <transition name="delete-badge">
                     <button
-                      v-if="isEditingCommands"
+                      v-if="isEditingCommands && !cmd.builtin"
                       class="cmd-delete-btn"
                       @click.stop="deleteCustomCommand(cmd.id)"
                     >
@@ -388,16 +388,14 @@ import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useInputAssistantStore } from '@/stores/inputAssistant'
+import { useInputAssistantStore, type QuickCommand } from '@/stores/inputAssistant'
 import type { QuickBarItem } from '@/stores/inputAssistant'
 import { useToast } from '@/composables/useToast'
 
 // ==================== Types ====================
 
-interface CustomCommand {
-  id: string
-  command: string
-}
+/** 面板命令项：用户自定义命令 + 命令预设（builtin）的并集 */
+type PanelCommand = QuickCommand
 
 // ==================== Props ====================
 
@@ -474,16 +472,25 @@ const trackStyle = computed(() => ({
 
 // ==================== Custom Commands ====================
 
-const customCommands = ref<CustomCommand[]>([])
+const customCommands = ref<QuickCommand[]>([])
 const isEditingCommands = ref(false)
 
-// 从 Tauri settings 持久化加载自定义命令
+/** 面板命令 = 命令预设（builtin，在前） + 用户自定义命令 */
+const displayCommands = computed(() => [...assistStore.presetCommands, ...customCommands.value])
+
+// 从 Tauri settings（JSON 文件）持久化加载自定义命令
 async function loadCustomCommands() {
   try {
     const settings = await invoke<{ key: string; value: string }[]>('get_all_db_settings_mobile')
     const found = settings?.find(s => s.key === 'custom_commands')
     if (found?.value) {
-      customCommands.value = JSON.parse(found.value)
+      customCommands.value = (JSON.parse(found.value) as Partial<QuickCommand>[]).map(c => ({
+        id: c.id || Date.now().toString(),
+        command: c.command || '',
+        // 旧数据无 mode/builtin：默认执行模式、非内置
+        mode: c.mode || 'execute',
+        builtin: c.builtin ?? false,
+      }))
     }
   } catch {
     // 首次加载或非移动端环境，使用空列表
@@ -509,17 +516,24 @@ function addCustomCommand() {
   customCommands.value.push({
     id: Date.now().toString(),
     command: cmd,
+    mode: 'execute',
+    builtin: false,
   })
   saveCustomCommands()
   newCommand.value = ''
   showAddDialog.value = false
 }
 
-function handleCustomCommandClick(cmd: CustomCommand) {
+function handleCustomCommandClick(cmd: PanelCommand) {
   // 编辑模式下点击不执行命令
   if (isEditingCommands.value) return
   assistStore.recordCustomCommand(cmd.id)
-  emit('execute', cmd.command)
+  // 发送模式（skills 类补全场景）：文本不带回车发到终端输入行；否则执行（文本 + Enter）
+  if (cmd.mode === 'send') {
+    emit('submit', cmd.command)
+  } else {
+    emit('execute', cmd.command)
+  }
 }
 
 function deleteCustomCommand(id: string) {
@@ -682,8 +696,8 @@ function handleShortcutClick(code: string) {
 
 // ==================== Quick Bar ====================
 
-/// 快捷键条项目：合并快捷键和自定义命令，按使用频次排序
-const quickBarItems = computed(() => assistStore.getQuickBarItems(customCommands.value))
+/// 快捷键条项目：合并快捷键和快捷命令，按使用频次排序
+const quickBarItems = computed(() => assistStore.getQuickBarItems(displayCommands.value))
 
 /// 快捷键条按钮点击处理
 function handleQuickBarClick(item: QuickBarItem) {
@@ -691,11 +705,15 @@ function handleQuickBarClick(item: QuickBarItem) {
     assistStore.recordShortcut(item.key)
     emit('specialKey', item.key)
   } else {
-    // 自定义命令：找到对应命令文本，执行（文本+Enter）
-    const cmd = customCommands.value.find(c => c.id === item.key)
+    // 快捷命令：找到对应命令项，按模式分发（发送 = 不带回车，执行 = 文本 + Enter）
+    const cmd = displayCommands.value.find(c => c.id === item.key)
     if (cmd) {
       assistStore.recordCustomCommand(cmd.id)
-      emit('execute', cmd.command)
+      if (cmd.mode === 'send') {
+        emit('submit', cmd.command)
+      } else {
+        emit('execute', cmd.command)
+      }
     }
   }
 }

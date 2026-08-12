@@ -1,6 +1,6 @@
 # BedCode
 
-BedCode 是跨平台远程控制应用：桌面端作为主机运行终端会话，移动端作为远程终端控制它们，插件系统观察和扩展会话行为。本词汇表固定跨桌面/移动/插件使用的核心领域语言。
+BedCode 是局域网远程终端应用：桌面端作为主机运行终端会话，移动端作为远程终端控制它们，插件系统观察和扩展会话行为。本词汇表固定跨桌面/移动/插件使用的核心领域语言。
 
 ## Language
 
@@ -25,6 +25,18 @@ _Avoid_: 「特殊键内容」（与 Special Key 冲突）
 **特殊按键 (Special Key)**:
 UI 工具栏主动发出的成型按键组合（`KeyCombo`，如 Ctrl+C 按钮、方向键按钮）；走独立的 `send_special_key` 通道。
 _Avoid_: 控制字符、「快捷键」（指字节流中的按键时）
+
+**快捷命令 (Quick Command)**:
+移动端输入面板中可点击发送的单个命令项（命令文本 + 模式）。来源 = 命令预设（内置）或用户自定义（移动端本地存储）；点击行为由模式决定（见发送 / 执行）。
+_Avoid_: 自定义命令（指内置预设项时）、快捷指令（协议层 QuickAction 未实装，避免混用）
+
+**命令预设 (Command Preset)**:
+按 Agent CLI 分组的内置快捷命令集（每套 12 条：新会话/换会话/skills/压缩/查看上下文 5 类必选 + 7 条该 CLI 高频命令）；内置移动端本地、随 App 版本演进；切换 Agent CLI 时直接覆盖面板命令列表，不合并用户数据。
+_Avoid_: 快捷键预设（按键集全局一套，不分 agent）、命令集（泛称）
+
+**发送 / 执行 (Send / Execute Mode)**:
+快捷命令的两种点击行为。发送：命令文本发送到终端输入行、不带回车，供用户继续补全后自行提交（skills 类命令用）；执行：命令文本 + Enter 直接提交（其余命令）。
+_Avoid_: 提交、回车（指执行时）
 
 ### 终端滚动 (Terminal Scrolling)
 
@@ -147,8 +159,12 @@ _Avoid_: 任务日志、任务历史（指单个记录行时）
 _Avoid_: 斜杠命令、指令
 
 **执行 agent (Executing Agent)**:
-执行任务的 agent CLI 身份（claude / codex / opencode / pi），会话创建时由启动命令检测得出，写入任务记录。粒度到 CLI，不细分 subagent 类型或模型名。
-_Avoid_: agent 类型、模型
+执行任务的 agent CLI 身份（claude / codex / opencode / pi），会话创建时由启动命令检测得出，写入任务记录。粒度到 CLI，不细分 subagent 类型或模型名。与移动端命令预设的加载键（Agent CLI）概念独立，互不依赖。
+_Avoid_: 模型、Agent CLI（指移动端命令预设加载键时）
+
+**Agent CLI**:
+移动端输入面板命令预设的加载键（claude_code / pi / codex / opencode / generic）。移动端对会话配置的启动命令（command 字段）做关键词检测识别（claude/codex/opencode/pi），识别结果与用户手动覆盖存移动端本地 JSON（按会话配置 id 映射）；未识别（generic）不加载预设。与执行 agent（任务记录中的最终身份，桌面端启动命令检测）可同源但各属一端，互不依赖。
+_Avoid_: agent 类型、执行 agent（指桌面端任务记录时）
 
 **常规自动任务 (Regular Auto Task)**:
 面向运行中会话的队列化自动执行：任务加入会话队列，当前任务终态后自动出队执行，队列非空时联动自动授权。是任务队列的调度语义，与定时自动任务并列。

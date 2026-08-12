@@ -28,7 +28,7 @@ describe('inputAssistant store', () => {
     return useInputAssistantStore()
   }
 
-  it('defaults: 12 builtin shortcuts, size 48, quickBarCount 6, floating ball off', () => {
+  it('defaults: 18 builtin shortcuts (16 grid keys + enter/backspace), size 48, quickBarCount 6, floating ball off', () => {
     const store = newStore()
     expect(store.position).toEqual({ x: -1, y: -1 })
     expect(store.isExpanded).toBe(false)
@@ -46,8 +46,18 @@ describe('inputAssistant store', () => {
       swipeLeft: true,
       swipeRight: true,
     })
-    expect(store.shortcutConfig).toHaveLength(12)
+    expect(store.shortcutConfig).toHaveLength(18)
     expect(store.shortcutConfig.every((s) => s.builtin && s.visible)).toBe(true)
+    // 16 个网格键（agent CLI 场景精选）：无 ctrl+z（挂起语义对移动端无意义）
+    const codes = store.shortcutConfig.map((s) => s.code)
+    expect(codes).toContain('shift+tab')
+    expect(codes).toContain('ctrl+o')
+    expect(codes).toContain('ctrl+t')
+    expect(codes).toContain('ctrl+r')
+    expect(codes).toContain('ctrl+w')
+    expect(codes).toContain('alt+p')
+    expect(codes).toContain('ctrl+g')
+    expect(codes).not.toContain('ctrl+z')
   })
 
   it('savePosition updates state and persists; new store instance restores it', () => {
@@ -106,8 +116,8 @@ describe('inputAssistant store', () => {
   it('addShortcut appends a non-builtin shortcut and persists; duplicate code is ignored', () => {
     const store = newStore()
     store.addShortcut('ctrl+shift+p', 'Ctrl+Shift+P')
-    expect(store.shortcutConfig).toHaveLength(13)
-    expect(store.shortcutConfig[12]).toEqual({
+    expect(store.shortcutConfig).toHaveLength(19)
+    expect(store.shortcutConfig[18]).toEqual({
       code: 'ctrl+shift+p',
       label: 'Ctrl+Shift+P',
       visible: true,
@@ -116,22 +126,22 @@ describe('inputAssistant store', () => {
     // 重复 code 与内置 code 冲突均忽略
     store.addShortcut('ctrl+shift+p', 'Dup')
     store.addShortcut('tab', 'Tab')
-    expect(store.shortcutConfig).toHaveLength(13)
+    expect(store.shortcutConfig).toHaveLength(19)
     const persisted = JSON.parse(localStorage.getItem(KEYS.shortcutConfig)!) as ShortcutItem[]
-    expect(persisted).toHaveLength(13)
+    expect(persisted).toHaveLength(19)
   })
 
   it('removeShortcut deletes custom shortcuts but protects builtin ones', () => {
     const store = newStore()
     store.addShortcut('ctrl+shift+p', 'Ctrl+Shift+P')
     store.removeShortcut('ctrl+shift+p')
-    expect(store.shortcutConfig).toHaveLength(12)
+    expect(store.shortcutConfig).toHaveLength(18)
     // builtin 不可删除
     store.removeShortcut('tab')
     expect(store.shortcutConfig.some((s) => s.code === 'tab')).toBe(true)
     // 未知 code 无操作
     store.removeShortcut('nope')
-    expect(store.shortcutConfig).toHaveLength(12)
+    expect(store.shortcutConfig).toHaveLength(18)
   })
 
   it('toggleShortcutVisibility flips visible flag and persists; unknown code no-op', () => {
@@ -144,7 +154,7 @@ describe('inputAssistant store', () => {
     expect(persisted.find((s) => s.code === 'tab')!.visible).toBe(true)
     // 未知 code 无操作
     store.toggleShortcutVisibility('nope')
-    expect(store.shortcutConfig).toHaveLength(12)
+    expect(store.shortcutConfig).toHaveLength(18)
   })
 
   it('visiblePanelShortcuts excludes enter/backspace and hidden entries', () => {
@@ -154,7 +164,8 @@ describe('inputAssistant store', () => {
     expect(visible).not.toContain('tab')
     expect(visible).not.toContain('enter')
     expect(visible).not.toContain('backspace')
-    expect(visible).toHaveLength(9)
+    // 16 网格键 - 1 隐藏 = 15
+    expect(visible).toHaveLength(15)
     expect(visible).toContain('escape')
   })
 
@@ -172,7 +183,7 @@ describe('inputAssistant store', () => {
   it('getQuickBarItems: no stats → default quick keys, top N with count 0', () => {
     const store = newStore()
     const items = store.getQuickBarItems([])
-    expect(items.map((i) => i.key)).toEqual(['tab', 'enter', 'escape', 'ctrl_c', 'ctrl_z', 'arrow_up'])
+    expect(items.map((i) => i.key)).toEqual(['escape', 'enter', 'tab', 'shift+tab', 'ctrl+c', 'ctrl+o'])
     expect(items.every((i) => i.count === 0)).toBe(true)
   })
 
@@ -231,24 +242,24 @@ describe('inputAssistant store', () => {
 
   it('loadShortcutConfig merges missing default shortcuts into saved config without duplicates', () => {
     const store = newStore()
-    // 模拟旧版本保存的配置：缺少后来新增的 ctrl+e
-    const oldConfig = store.shortcutConfig.filter((s) => s.code !== 'ctrl+e')
+    // 模拟旧版本保存的配置：缺少后来新增的 ctrl+w
+    const oldConfig = store.shortcutConfig.filter((s) => s.code !== 'ctrl+w')
     localStorage.setItem(KEYS.shortcutConfig, JSON.stringify(oldConfig))
     store.loadFromStorage()
     const codes = store.shortcutConfig.map((s) => s.code)
-    expect(codes).toContain('ctrl+e')
+    expect(codes).toContain('ctrl+w')
     expect(new Set(codes).size).toBe(codes.length)
-    expect(store.shortcutConfig).toHaveLength(12)
+    expect(store.shortcutConfig).toHaveLength(18)
   })
 
-  it('resetShortcutConfig restores 12 builtin defaults and persists', () => {
+  it('resetShortcutConfig restores 18 builtin defaults and persists', () => {
     const store = newStore()
     store.addShortcut('ctrl+shift+p', 'Ctrl+Shift+P')
     store.resetShortcutConfig()
-    expect(store.shortcutConfig).toHaveLength(12)
+    expect(store.shortcutConfig).toHaveLength(18)
     expect(store.shortcutConfig.every((s) => s.builtin)).toBe(true)
     const persisted = JSON.parse(localStorage.getItem(KEYS.shortcutConfig)!) as ShortcutItem[]
-    expect(persisted).toHaveLength(12)
+    expect(persisted).toHaveLength(18)
   })
 
   it('toggleExpanded / collapse manage the expanded flag', () => {
@@ -261,5 +272,52 @@ describe('inputAssistant store', () => {
     store.toggleExpanded()
     store.collapse()
     expect(store.isExpanded).toBe(false)
+  })
+
+  // ==================== Agent CLI 预设 ====================
+
+  it('setAgentPreset: claude_code loads 12 builtin preset commands, generic clears', () => {
+    const store = newStore()
+    store.setAgentPreset('claude_code')
+    expect(store.activeAgentType).toBe('claude_code')
+    expect(store.presetCommands).toHaveLength(12)
+    expect(store.presetCommands.every((c) => c.builtin)).toBe(true)
+    // skills 位为发送模式
+    const skills = store.presetCommands.find((c) => c.command === '/')
+    expect(skills?.mode).toBe('send')
+    // 其余执行
+    expect(store.presetCommands.filter((c) => c.mode === 'execute')).toHaveLength(11)
+    // generic 清空预设
+    store.setAgentPreset('generic')
+    expect(store.presetCommands).toHaveLength(0)
+  })
+
+  it('setAgentPreset: pi preset has /skill: in send mode; codex/opencode have execute substitutes', () => {
+    const store = newStore()
+    store.setAgentPreset('pi')
+    expect(store.presetCommands.find((c) => c.command === '/skill:')?.mode).toBe('send')
+    store.setAgentPreset('codex')
+    const codex = store.presetCommands.map((c) => c.command)
+    expect(codex).toContain('/init') // skills 替代
+    expect(store.presetCommands.every((c) => c.mode === 'execute')).toBe(true)
+    store.setAgentPreset('opencode')
+    const opencode = store.presetCommands.map((c) => c.command)
+    expect(opencode).toContain('/templates')
+    expect(store.presetCommands.every((c) => c.mode === 'execute')).toBe(true)
+  })
+
+  it('getEffectiveAgentType: override wins, otherwise keyword detection from command', async () => {
+    // 测试环境无 Tauri invoke：覆盖表为空，保存失败仅打日志
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const store = newStore()
+    // 无覆盖：按启动命令关键词识别
+    expect(store.getEffectiveAgentType('cfg-1', 'claude --dangerously-skip-permissions')).toBe('claude_code')
+    expect(store.getEffectiveAgentType('cfg-1', 'npx opencode')).toBe('opencode')
+    expect(store.getEffectiveAgentType('cfg-1', 'pi')).toBe('pi')
+    expect(store.getEffectiveAgentType('cfg-1', 'npm run dev')).toBe('generic')
+    // 手动覆盖优先：包装脚本启动 codex 但配置里声明 claude_code
+    await store.setAgentTypeOverride('cfg-1', 'codex')
+    expect(store.getEffectiveAgentType('cfg-1', 'claude')).toBe('codex')
+    errorSpy.mockRestore()
   })
 })
