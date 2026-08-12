@@ -716,3 +716,12 @@ body {
   --normal-bg-hover: var(--bg-hover) !important;
   --normal-border-hover: var(--border-strong) !important;
 }
+
+/* 覆盖 vue-sonner 自带的 prefers-reduced-motion 禁用规则：保留 toast 进出场过渡
+   （滑入淡入/滑出淡出），系统减弱动态效果不影响通知的可见性反馈 */
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toast],
+  [data-sonner-toast] > * {
+    transition: transform 400ms, opacity 400ms, height 400ms, box-shadow 200ms !important;
+  }
+}

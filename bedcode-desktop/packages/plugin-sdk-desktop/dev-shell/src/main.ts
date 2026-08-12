@@ -13,6 +13,7 @@ import { loadPlugins } from './loader'
 import { zhCN, en } from './locales'
 import { readSavedLocale } from './locale'
 import { initHostUi } from './theme'
+import 'vue-sonner/style.css'
 import './styles/style.css'
 import './styles/dev.css'
 

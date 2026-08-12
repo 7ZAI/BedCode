@@ -7,6 +7,7 @@
  */
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { toast, Toaster, type ToasterProps } from 'vue-sonner'
 import {
   activeView,
   openActiveView,
@@ -32,6 +33,24 @@ const activeTab = ref<BaseTab>('toolbox')
 const logOpen = ref(false)
 
 const { t, locale } = useI18n()
+
+// Toaster 配置与宿主 App.vue 保持一致（expand 防重叠、visible-toasts 放宽批量通知）
+const toasterTheme = computed(() => 'light' as ToasterProps['theme'])
+const toastOptions: ToasterProps['toastOptions'] = {
+  classes: {
+    toast: '!rounded-[10px] !shadow-lg',
+    title: '!text-[13px] !font-medium',
+    description: '!text-[var(--text-secondary)]',
+    closeButton: '!bg-transparent !border-transparent !text-[var(--text-secondary)] hover:!text-[var(--text-primary)]',
+  },
+}
+
+/** 顶栏演示按钮：连发 3 条不同级别 toast，用于验证进出场动画与多 toast 堆叠 */
+function fireDemoToasts() {
+  toast.success('成功：传输队列已入队', { duration: 5000 })
+  toast.error('错误：对端拒绝同名文件', { duration: 5000 })
+  toast.info('信息：文件传输完成', { duration: 5000 })
+}
 
 // 语言切换选项（语言名用自身文字展示，无需翻译）
 const localeOptions: { value: DevLocale; label: string }[] = [
@@ -149,6 +168,12 @@ window.addEventListener('beforeunload', () => {
       </div>
       <button
         class="px-2.5 py-1 rounded-btn text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors duration-200"
+        @click="fireDemoToasts"
+      >
+        🍞 Toast 演示
+      </button>
+      <button
+        class="px-2.5 py-1 rounded-btn text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors duration-200"
         @click="logOpen = !logOpen"
       >
         {{ t('devshell.logs.title') }}
@@ -184,11 +209,14 @@ window.addEventListener('beforeunload', () => {
       <!-- 主内容 -->
       <main class="flex-1 min-w-0 flex flex-col">
         <div class="flex-1 min-h-0 overflow-y-auto">
-          <PanelView v-if="activeView" @back="backHome" />
-          <TerminalView v-else-if="activeTab === 'terminal'" />
-          <ToolboxView v-else-if="activeTab === 'toolbox'" />
-          <PluginsView v-else-if="activeTab === 'plugins'" />
-          <SettingsView v-else />
+          <!-- 页面切换过渡（.page-* 类定义于 styles/style.css）：面板/页面跳转淡入淡出 -->
+          <Transition name="page" mode="out-in">
+            <PanelView v-if="activeView" :key="activeView.pluginId + ':' + activeView.title" @back="backHome" />
+            <TerminalView v-else-if="activeTab === 'terminal'" />
+            <ToolboxView v-else-if="activeTab === 'toolbox'" />
+            <PluginsView v-else-if="activeTab === 'plugins'" />
+            <SettingsView v-else />
+          </Transition>
         </div>
 
         <!-- 状态栏 -->
@@ -217,5 +245,15 @@ window.addEventListener('beforeunload', () => {
 
     <LogPanel v-model:log-open="logOpen" />
     <PromptHost />
+
+    <!-- 宿主同款 Toast 容器（expand 防重叠；主题跟随宿主设置） -->
+    <Toaster
+      :theme="toasterTheme"
+      position="top-center"
+      rich-colors
+      expand
+      :visible-toasts="6"
+      :toast-options="toastOptions"
+    />
   </div>
 </template>

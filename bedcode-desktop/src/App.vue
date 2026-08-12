@@ -7,6 +7,8 @@
       :theme="toasterTheme"
       position="top-center"
       rich-colors
+      expand
+      :visible-toasts="6"
       :toast-options="toastOptions"
     />
 
