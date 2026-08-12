@@ -1,6 +1,6 @@
 <template>
   <!-- user 消息右对齐，assistant 消息左对齐（flex-row-reverse 实现左右分列） -->
-  <div class="flex gap-2.5" :class="isUser ? 'flex-row-reverse' : ''">
+  <div class="flex gap-2.5" :class="isUser ? 'flex-row-reverse' : ''" :style="codeLineHeightStyle">
     <!-- 头像 -->
     <div
       class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-sm mt-0.5"
@@ -8,16 +8,18 @@
         ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'
         : 'bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)]'"
     >
-      <svg v-if="isUser" class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg v-if="isUser" class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
       </svg>
-      <span v-else>{{ t('mobile.plugin.aiChatbox.assistant') }}</span>
+      <!-- 身份由图标表明，不显示文字 -->
+      <svg v-else class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 17v2a2 2 0 002 2h2a2 2 0 002-2v-2M9 4h6M5 12h14a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4a1 1 0 011-1z" />
+      </svg>
     </div>
 
     <div class="flex-1 min-w-0 space-y-1" :class="isUser ? 'text-right' : ''">
-      <!-- 元信息行（user 反向排列，名称靠右端） -->
+      <!-- 元信息行（user 反向排列；身份由头像图标表明，不再重复文字） -->
       <div class="flex items-center gap-2 text-xs text-[var(--mobile-text-muted)]" :class="isUser ? 'flex-row-reverse' : ''">
-        <span>{{ isUser ? t('mobile.plugin.aiChatbox.you') : t('mobile.plugin.aiChatbox.assistant') }}</span>
         <span v-if="message.model" class="font-mono">{{ message.model }}</span>
         <!-- token 用量 -->
         <span v-if="message.usage" class="font-mono rounded-md bg-[var(--mobile-bg-tertiary)] px-1.5 py-0.5">
@@ -111,7 +113,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import type { ChatMessage } from '../types'
+import type { ChatMessage, CodeLineHeight } from '../types'
 import { getClosedCodeBlocks, patchIncompleteMarkdown } from '../utils/markdown'
 import { createShikiHighlightEngine, type HighlightEngine } from '../utils/highlight'
 
@@ -121,6 +123,8 @@ const props = defineProps<{
   errorText?: string
   /** 插件级 showReasoning 配置（false 时整体不渲染思考块） */
   showReasoning?: boolean
+  /** 插件级代码块行距配置（缺省走默认档） */
+  codeLineHeight?: CodeLineHeight
 }>()
 
 defineEmits<{ delete: [message: ChatMessage] }>()
@@ -131,6 +135,16 @@ const { t } = useI18n()
 const highlightEngine: HighlightEngine = createShikiHighlightEngine()
 
 const isUser = computed(() => props.message.role === 'user')
+
+/** 代码块行距档位 → line-height（CSS 变量下发，:deep 样式消费） */
+const CODE_LINE_HEIGHTS: Record<CodeLineHeight, string> = {
+  compact: '1.35',
+  normal: '1.6',
+  relaxed: '1.8',
+}
+const codeLineHeightStyle = computed(() => ({
+  '--md-code-lh': CODE_LINE_HEIGHTS[props.codeLineHeight ?? 'compact'],
+}))
 
 /** 思考块展开状态：流式期间默认展开（边生成边可见）；结束后保持用户当前折叠状态 */
 const reasoningExpanded = ref(false)
@@ -305,7 +319,8 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
   background: transparent;
   padding: 0;
   font-size: 0.8125rem;
-  line-height: 1.6;
+  /* 行距由插件级配置 codeLineHeight 决定（CSS 变量在消息根节点下发） */
+  line-height: var(--md-code-lh, 1.6);
 }
 /* Shiki 行结构：行块不换行（横向滚动由 pre 承担） */
 .md-body :deep(pre code .line) {

@@ -15,8 +15,10 @@
       <div class="w-20"></div>
     </header>
 
-    <!-- 视图一：已保存供应商实例列表 -->
-    <div v-if="view === 'list'" class="flex-1 overflow-y-auto p-4">
+    <!-- 视图切换：列表 / 模板选择 / 表单（淡入 + 横向滑入，先出后进避免布局跳动） -->
+    <Transition name="view-slide" mode="out-in">
+      <!-- 视图一：已保存供应商实例列表 -->
+      <div v-if="view === 'list'" key="list" class="flex-1 overflow-y-auto p-4">
       <!-- 添加按钮置顶 -->
       <button
         class="w-full h-10 flex items-center justify-center gap-1.5 text-sm rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:opacity-90 transition-opacity"
@@ -66,7 +68,7 @@
     </div>
 
     <!-- 视图二：模板选择（4 预设 + 自定义） -->
-    <div v-else-if="view === 'templates'" class="flex-1 overflow-y-auto p-4">
+    <div v-else-if="view === 'templates'" key="templates" class="flex-1 overflow-y-auto p-4">
       <p class="text-xs text-[var(--text-secondary)] mb-3">{{ t('desktop.plugin.aiChatbox.selectTemplate') }}</p>
       <div class="grid grid-cols-2 gap-2">
         <button
@@ -95,7 +97,7 @@
     </div>
 
     <!-- 视图三：表单（预设回填或全空；编辑已有实例） -->
-    <div v-else class="flex-1 overflow-y-auto p-6">
+    <div v-else key="form" class="flex-1 overflow-y-auto p-6">
       <ProviderForm
         :key="formKey"
         :mode="editingMode"
@@ -108,6 +110,7 @@
         @delete="handleDelete"
       />
     </div>
+    </Transition>
 
     <!-- 行删除确认（表单内删除走 ProviderForm 自己的弹窗） -->
     <ConfirmDialog
@@ -251,3 +254,19 @@ function confirmDelete(): void {
   }
 }
 </script>
+
+<style scoped>
+/* 视图切换（列表 → 模板选择 → 表单）：淡入 + 横向滑入，出向轻微左移 */
+.view-slide-enter-active,
+.view-slide-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.view-slide-enter-from {
+  opacity: 0;
+  transform: translateX(12px);
+}
+.view-slide-leave-to {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+</style>

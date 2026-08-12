@@ -1,27 +1,29 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
-    <!-- 配置页模式（全屏覆盖） -->
-    <ProviderConfigPage
-      v-if="showConfigPage"
-      class="w-full h-full"
-      :providers="providers"
-      :active-provider-id="activeProviderId"
-      :fetch-models="config.fetchModels"
-      :test-connection="config.testConnection"
-      @back="showConfigPage = false"
-      @add="addProvider"
-      @update="updateProvider"
-      @remove="removeProvider"
-    />
+    <!-- 配置页 / 聊天区切换（淡入淡出 + 轻微位移，避免闪现） -->
+    <Transition name="page-fade" mode="out-in">
+      <ProviderConfigPage
+        v-if="showConfigPage"
+        key="config"
+        class="w-full h-full"
+        :providers="providers"
+        :active-provider-id="activeProviderId"
+        :fetch-models="config.fetchModels"
+        :test-connection="config.testConnection"
+        @back="showConfigPage = false"
+        @add="addProvider"
+        @update="updateProvider"
+        @remove="removeProvider"
+      />
 
-    <!-- 聊天模式 -->
-    <template v-else>
-      <!-- 头部工具条：对话列表 + 标题 + 指令/设置 -->
+      <!-- 聊天模式 -->
+      <div v-else key="chat" class="flex flex-col w-full h-full min-w-0">
+        <!-- 头部工具条：对话列表 + 标题 + 新对话/指令/设置 -->
       <header class="mobile-header-safe flex items-center justify-between px-2 pb-2 pt-1 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl">
         <button
           class="w-11 h-11 -ml-1 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
           :title="t('mobile.plugin.aiChatbox.conversations')"
-          @click="showConversationSheet = true"
+          @click="showConversationDrawer = true"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
@@ -42,6 +44,16 @@
         </div>
 
         <div class="flex items-center">
+          <button
+            v-if="hasProvider"
+            class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
+            :title="t('mobile.plugin.aiChatbox.newConversation')"
+            @click="onNewConversation"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+          </button>
           <button
             v-if="hasProvider"
             class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
@@ -159,6 +171,7 @@
             :streaming="isStreaming && i === messages.length - 1"
             :error-text="i === messages.length - 1 ? messageErrorText : ''"
             :show-reasoning="showReasoning"
+            :code-line-height="pluginConfig.config.value.codeLineHeight"
             @delete="onDeleteMessage"
           />
 
@@ -189,29 +202,28 @@
         </div>
       </template>
 
-      <!-- 对话列表面板（底部抽屉） -->
+      <!-- 对话列表面板（左侧抽屉，DeepSeek 式滑入） -->
       <Teleport to="body">
-        <Transition name="sheet">
-          <div v-if="showConversationSheet" class="fixed inset-0 z-50">
-            <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="showConversationSheet = false"></div>
-            <div class="sheet-panel absolute bottom-0 left-0 right-0 max-h-[70vh] flex flex-col rounded-t-2xl overflow-hidden bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]">
-              <div class="w-10 h-1 rounded-full mx-auto mt-2 mb-1 flex-shrink-0 bg-[var(--mobile-bg-tertiary)]"></div>
-              <div class="flex-1 overflow-hidden">
-                <ConversationList
-                  :conversations="conversations"
-                  :current-id="currentConvId"
-                  :loading="loadingHistory"
-                  @select="onSelectConversation"
-                  @new="onNewConversation"
-                  @rename="onRenameConversation"
-                  @delete="onDeleteConversation"
-                />
-              </div>
+        <Transition name="drawer">
+          <div v-if="showConversationDrawer" class="fixed inset-0 z-50">
+            <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="showConversationDrawer = false"></div>
+            <div class="drawer-panel absolute left-0 top-0 bottom-0 w-[82vw] max-w-[320px] flex flex-col overflow-hidden rounded-r-2xl bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]">
+              <ConversationList
+                :conversations="conversations"
+                :current-id="currentConvId"
+                :loading="loadingHistory"
+                @select="onSelectConversation"
+                @new="onNewConversation"
+                @close="showConversationDrawer = false"
+                @rename="onRenameConversation"
+                @delete="onDeleteConversation"
+              />
             </div>
           </div>
         </Transition>
       </Teleport>
-    </template>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -277,7 +289,7 @@ const {
 
 const messagesContainer = ref<HTMLElement | null>(null)
 const showConfigPage = ref(false)
-const showConversationSheet = ref(false)
+const showConversationDrawer = ref(false)
 const showSystemPromptEditor = ref(false)
 const systemPromptDraft = ref('')
 const dismissedError = ref('')
@@ -332,13 +344,13 @@ function onModelChange(value: string | number): void {
 
 async function onNewConversation(): Promise<void> {
   if (!hasProvider.value) return
-  showConversationSheet.value = false
+  showConversationDrawer.value = false
   await newConversation()
 }
 
 /** 切换对话：关闭抽屉后再加载（避免抽屉遮挡消息区滚动动画） */
 async function onSelectConversation(id: string): Promise<void> {
-  showConversationSheet.value = false
+  showConversationDrawer.value = false
   await switchConversation(id)
 }
 
@@ -397,21 +409,34 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 底部抽屉过渡：位移 + 淡入（GPU 合成属性） */
-.sheet-enter-active,
-.sheet-leave-active {
+/* 左侧抽屉过渡：平移 + 淡入（GPU 合成属性） */
+.drawer-enter-active,
+.drawer-leave-active {
   transition: opacity 0.2s ease;
 }
-.sheet-enter-active .sheet-panel,
-.sheet-leave-active .sheet-panel {
+.drawer-enter-active .drawer-panel,
+.drawer-leave-active .drawer-panel {
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.sheet-enter-from,
-.sheet-leave-to {
+.drawer-enter-from,
+.drawer-leave-to {
   opacity: 0;
 }
-.sheet-enter-from .sheet-panel,
-.sheet-leave-to .sheet-panel {
-  transform: translateY(100%);
+.drawer-enter-from .drawer-panel,
+.drawer-leave-to .drawer-panel {
+  transform: translateX(-100%);
+}
+/* 配置页 / 聊天区切换：淡入淡出 + 轻微纵向位移（mode="out-in" 先出后进） */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-2px);
 }
 </style>

@@ -2,7 +2,7 @@
  * 供应商图标解析单测（接缝 2）：resolveProviderIcon 映射、首字母取色确定性
  */
 import { describe, it, expect } from 'vitest'
-import { resolveProviderIcon, providerAvatarColor } from '../utils/providerIcons'
+import { resolveProviderIcon, providerAvatarColor, brandColorOf } from '../utils/providerIcons'
 
 describe('resolveProviderIcon', () => {
   it('内置预设 id → 对应品牌图标（非空资源引用）', () => {
@@ -21,6 +21,26 @@ describe('resolveProviderIcon', () => {
     expect(resolveProviderIcon(undefined)).toBeNull()
     expect(resolveProviderIcon('')).toBeNull()
     expect(resolveProviderIcon('unknown-vendor')).toBeNull()
+  })
+})
+
+describe('brandColorOf', () => {
+  it('彩色品牌预设 → 各自官方品牌色（互不相同）', () => {
+    const colors = {
+      deepseek: brandColorOf('deepseek'),
+      qwen: brandColorOf('qwen'),
+      anthropic: brandColorOf('anthropic'),
+    }
+    expect(colors.deepseek).toMatch(/^#[0-9a-fA-F]{6}$/)
+    expect(colors.qwen).toMatch(/^#[0-9a-fA-F]{6}$/)
+    expect(colors.anthropic).toMatch(/^#[0-9a-fA-F]{6}$/)
+    expect(new Set(Object.values(colors)).size).toBe(3)
+  })
+
+  it('单色品牌（openai）/无预设/未知 id → null（随主题文字色渲染）', () => {
+    expect(brandColorOf('openai')).toBeNull()
+    expect(brandColorOf(undefined)).toBeNull()
+    expect(brandColorOf('unknown-vendor')).toBeNull()
   })
 })
 

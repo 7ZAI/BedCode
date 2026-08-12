@@ -1,31 +1,38 @@
 <template>
   <div class="h-full flex bg-[var(--bg-page)]">
-    <!-- 配置页模式（全宽覆盖） -->
-    <ProviderConfigPage
-      v-if="showConfigPage"
-      class="w-full"
-      :providers="providers"
-      :active-provider-id="activeProviderId"
-      :fetch-models="config.fetchModels"
-      :test-connection="config.testConnection"
-      @back="showConfigPage = false"
-      @add="addProvider"
-      @update="updateProvider"
-      @remove="removeProvider"
-    />
+    <!-- 配置页 / 聊天区切换（淡入淡出 + 轻微位移，避免闪现） -->
+    <Transition name="page-fade" mode="out-in">
+      <ProviderConfigPage
+        v-if="showConfigPage"
+        key="config"
+        class="w-full"
+        :providers="providers"
+        :active-provider-id="activeProviderId"
+        :fetch-models="config.fetchModels"
+        :test-connection="config.testConnection"
+        @back="showConfigPage = false"
+        @add="addProvider"
+        @update="updateProvider"
+        @remove="removeProvider"
+      />
 
-    <!-- 聊天模式 -->
-    <template v-else>
-      <!-- 对话列表 -->
-      <div class="w-52 flex-shrink-0">
+      <!-- 聊天模式 -->
+      <div v-else key="chat" class="flex w-full min-w-0">
+        <!-- 对话列表（可折叠：展开 w-52 / 折叠 w-9 窄条） -->
+      <div
+        class="flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-in-out"
+        :class="sidebarCollapsed ? 'w-9' : 'w-52'"
+      >
         <ConversationList
           :conversations="conversations"
           :current-id="currentConvId"
           :loading="loadingHistory"
+          :collapsed="sidebarCollapsed"
           @select="switchConversation"
           @new="onNewConversation"
           @rename="onRenameConversation"
           @delete="onDeleteConversation"
+          @toggle-collapse="toggleSidebar"
         />
       </div>
 
@@ -174,6 +181,8 @@
               :streaming="isStreaming && i === messages.length - 1"
               :error-text="i === messages.length - 1 ? messageErrorText : ''"
               :show-reasoning="showReasoning"
+              :code-line-height="pluginConfig.config.value.codeLineHeight"
+              :assistant-provider="activeProvider"
               @delete="onDeleteMessage"
             />
 
@@ -211,7 +220,8 @@
           </div>
         </template>
       </div>
-    </template>
+    </div>
+    </Transition>
   </div>
 </template>
 
@@ -281,6 +291,15 @@ const showConfigPage = ref(false)
 const showSystemPromptEditor = ref(false)
 const systemPromptDraft = ref('')
 const dismissedError = ref('')
+
+/** 对话列表折叠态（persist 到插件 storage，跨会话记忆） */
+const sidebarCollapsed = ref(false)
+const SIDEBAR_COLLAPSED_KEY = 'chatSidebarCollapsed'
+
+function toggleSidebar(): void {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  void context.storage.set(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value)
+}
 
 /** 当前对话标题（无对话选中时显示面板名；新对话占位显示默认文案） */
 const currentTitle = computed(() => {
@@ -389,5 +408,26 @@ onMounted(async () => {
   await loadConfig()
   // 插件配置与供应商配置并行加载（缺失时 usePluginConfig 内部已回退默认值）
   await Promise.all([pluginConfig.loadConfig(), loadConversations()])
+  // 恢复上次会话的列表折叠状态（存储缺失时保持展开）
+  const saved = await context.storage.get<boolean>(SIDEBAR_COLLAPSED_KEY)
+  if (saved !== null && saved !== undefined) {
+    sidebarCollapsed.value = saved
+  }
 })
 </script>
+
+<style scoped>
+/* 配置页 / 聊天区切换：淡入淡出 + 轻微纵向位移（mode="out-in" 先出后进） */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-2px);
+}
+</style>

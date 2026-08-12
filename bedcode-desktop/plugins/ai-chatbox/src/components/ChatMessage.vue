@@ -1,7 +1,7 @@
 <template>
   <!-- user 消息右对齐，assistant 消息左对齐（flex-row-reverse 实现左右分列） -->
-  <div class="group flex gap-3" :class="isUser ? 'flex-row-reverse' : ''">
-    <!-- 头像 -->
+  <div class="group flex gap-3" :class="isUser ? 'flex-row-reverse' : ''" :style="codeLineHeightStyle">
+    <!-- 头像：user 人形图标；assistant 受支持供应商显示品牌 logo，其余 bot 图标 -->
     <div
       class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-sm mt-0.5"
       :class="isUser
@@ -11,13 +11,20 @@
       <svg v-if="isUser" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
       </svg>
-      <span v-else>{{ t('desktop.plugin.aiChatbox.assistant') }}</span>
+      <ProviderAvatar
+        v-else-if="assistantProvider?.presetId"
+        :preset-id="assistantProvider.presetId"
+        :name="assistantProvider.name"
+        :size="32"
+      />
+      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 17v2a2 2 0 002 2h2a2 2 0 002-2v-2M9 4h6M5 12h14a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4a1 1 0 011-1z" />
+      </svg>
     </div>
 
     <div class="flex-1 min-w-0 space-y-1" :class="isUser ? 'text-right' : ''">
-      <!-- 元信息行（user 反向排列，名称靠右端） -->
+      <!-- 元信息行（user 反向排列；身份由头像 logo/图标表明，不再重复文字） -->
       <div class="flex items-center gap-2 text-xs text-[var(--text-tertiary)]" :class="isUser ? 'flex-row-reverse' : ''">
-        <span>{{ isUser ? t('desktop.plugin.aiChatbox.you') : t('desktop.plugin.aiChatbox.assistant') }}</span>
         <span v-if="message.model" class="font-mono">{{ message.model }}</span>
         <!-- token 用量 -->
         <span v-if="message.usage" class="font-mono rounded-tag bg-[var(--bg-hover)] px-1.5 py-0.5">
@@ -56,7 +63,7 @@
       <!-- 内容：user / assistant 均 Markdown 渲染（主流布局）；user 为右对齐气泡，assistant 全宽文本 -->
       <div
         v-if="isUser"
-        class="md-body inline-block max-w-[85%] text-left rounded-lg px-3 py-2 bg-[var(--color-primary)]/10"
+        class="md-body inline-block max-w-[85%] text-left rounded-input px-3.5 py-2.5 border border-[var(--border-input)] bg-[var(--bg-input)]"
         v-html="rendered"
       />
       <div v-else ref="contentRef" class="text-sm leading-relaxed text-[var(--text-primary)] md-body" v-html="rendered" />
@@ -112,9 +119,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import type { ChatMessage } from '../types'
+import type { ChatMessage, CodeLineHeight } from '../types'
 import { getClosedCodeBlocks, patchIncompleteMarkdown } from '../utils/markdown'
 import { createHljsHighlightEngine, type HighlightEngine } from '../utils/highlight'
+import ProviderAvatar from './ProviderAvatar.vue'
 
 const props = defineProps<{
   message: ChatMessage
@@ -122,6 +130,10 @@ const props = defineProps<{
   errorText?: string
   /** 插件级 showReasoning 配置（false 时整体不渲染思考块） */
   showReasoning?: boolean
+  /** 插件级代码块行距配置（缺省走默认档） */
+  codeLineHeight?: CodeLineHeight
+  /** 当前供应商（assistant 头像 logo 来源；无 presetId 时显示 bot 图标） */
+  assistantProvider?: { presetId?: string; name: string } | null
 }>()
 
 defineEmits<{ delete: [message: ChatMessage] }>()
@@ -132,6 +144,16 @@ const { t } = useI18n()
 const highlightEngine: HighlightEngine = createHljsHighlightEngine()
 
 const isUser = computed(() => props.message.role === 'user')
+
+/** 代码块行距档位 → line-height（CSS 变量下发，:deep 样式消费） */
+const CODE_LINE_HEIGHTS: Record<CodeLineHeight, string> = {
+  compact: '1.35',
+  normal: '1.6',
+  relaxed: '1.8',
+}
+const codeLineHeightStyle = computed(() => ({
+  '--md-code-lh': CODE_LINE_HEIGHTS[props.codeLineHeight ?? 'compact'],
+}))
 
 /** 思考块展开状态：流式期间默认展开（边生成边可见）；结束后保持用户当前折叠状态 */
 const reasoningExpanded = ref(false)
@@ -307,7 +329,8 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
   background: transparent;
   padding: 0;
   font-size: 0.8125rem;
-  line-height: 1.6;
+  /* 行距由插件级配置 codeLineHeight 决定（CSS 变量在消息根节点下发） */
+  line-height: var(--md-code-lh, 1.6);
 }
 .md-body :deep(.md-code-header) {
   position: absolute;

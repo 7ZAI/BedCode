@@ -24,7 +24,7 @@
 
 <script setup lang="ts">
 /**
- * ProviderAvatar — 供应商头像
+ * ProviderAvatar — 供应商头像（移动端）
  *
  * 有 presetId → 内置品牌 SVG；否则圆形底色 + 名称首字符（哈希取色，确定性）。
  * 名称为空时渲染通用 bot 图标兜底，避免空圆点。
@@ -46,7 +46,7 @@ const icon = computed(() => resolveProviderIcon(props.presetId))
 const avatarColor = computed(() => providerAvatarColor(props.name))
 /** 品牌色（内联 style 优先于 class）；无品牌色时回退主题文字色 */
 const iconColorStyle = computed(() => ({
-  color: brandColorOf(props.presetId) ?? 'var(--text-primary)',
+  color: brandColorOf(props.presetId) ?? 'var(--mobile-text-primary)',
 }))
 /** 首字符按码点截取，避免代理对（emoji）被拆成半个 */
 const initial = computed(() => Array.from(props.name.trim())[0] || '')

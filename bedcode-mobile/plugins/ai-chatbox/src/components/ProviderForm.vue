@@ -102,7 +102,7 @@
         class="min-h-[44px] px-4 text-[var(--font-size-sm)] rounded-xl bg-[var(--mobile-error-muted)] text-[var(--mobile-error)] active:opacity-80 transition-opacity"
         @click="askDelete"
       >
-        {{ deleting ? t('mobile.plugin.aiChatbox.confirmDeleteShort') : t('mobile.plugin.aiChatbox.deleteProvider') }}
+        {{ t('mobile.plugin.aiChatbox.deleteProvider') }}
       </button>
       <span v-else></span>
       <button
@@ -118,21 +118,27 @@
 
 <script setup lang="ts">
 /**
- * ProviderForm — 供应商编辑表单（移动端）
+ * ProviderForm — 供应商编辑表单（移动端，与桌面端字段对齐）
  *
  * 预设/自定义共用：名称 + BaseURL + API Key（明文存储，与现状一致）+ 拉取模型
  * （真实 GET /models，失败回退不阻塞）+ 测试连接（非流式短请求）+ 模型列表编辑。
- * 删除用内联二次确认（禁原生 confirm 弹窗）。
+ * 添加模式由 preset 模板回填（自定义模板传 null 全空）；编辑模式 initialValues 回填，
+ * presetId / apiStyle 保持原值（避免编辑把 anthropic/gemini 重置成 openai）；
+ * 删除走宿主确认弹窗（禁原生 confirm 弹窗）。
  */
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ModelListEditor from './ModelListEditor.vue'
-import { PROVIDER_PRESETS, generateId } from '../types'
-import type { ApiProvider } from '../types'
+import { generateId } from '../types'
+import type { ApiProvider, ProviderPreset } from '../types'
+import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
 
 const props = defineProps<{
   mode: 'add' | 'edit'
+  /** 编辑模式的已有数据（add 模式为 undefined） */
   initialValues?: ApiProvider
+  /** 添加模式的预设模板（自定义模板传 null 表示全空表单） */
+  preset?: ProviderPreset | null
   existingNames: string[]
   /** 拉取模型列表（经宿主命令，由 ChatView 注入 config.fetchModels） */
   fetchModels: (provider: ApiProvider) => Promise<string[]>
@@ -147,21 +153,26 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-/** 预设回填（无 initialValues 且匹配预设名时） */
-const preset = computed(() =>
-  PROVIDER_PRESETS.find(p => p.name === props.initialValues?.name) || null
+// 宿主注入 PluginContext（PluginViewHost provide），删除确认走宿主弹窗
+const context = inject<PluginContext>('pluginContext')!
+
+/** 回填来源：编辑取已有数据，添加取预设模板（自定义模板为 null → 全空） */
+const source = computed(() =>
+  props.mode === 'edit' ? props.initialValues : props.preset ?? null,
 )
 
 const form = reactive<ApiProvider>({
   id: props.initialValues?.id || generateId(),
-  name: props.initialValues?.name || props.mode === 'add' && preset.value?.name ? preset.value!.name : '',
+  name: source.value?.name || '',
   apiKey: props.initialValues?.apiKey || '',
-  baseUrl: props.initialValues?.baseUrl || preset.value?.baseUrl || '',
-  apiStyle: 'openai',
-  models: props.initialValues?.models?.length
-    ? [...props.initialValues.models]
-    : preset.value?.models ? [...preset.value.models] : [],
-  activeModel: props.initialValues?.activeModel || '',
+  baseUrl: source.value?.baseUrl || '',
+  // 编辑模式回填已有方言（否则保存会把 anthropic/gemini 重置成 openai）；添加模式默认 openai（预设全为 OpenAI 兼容协议）
+  apiStyle: props.initialValues?.apiStyle || 'openai',
+  models: source.value?.models?.length ? [...source.value.models] : [],
+  // 编辑模式回填已有选择；添加模式随 models 回填首个（否则空 activeModel 靠运行时兑底，保存后再进编辑才可见）
+  activeModel: props.initialValues?.activeModel || source.value?.models?.[0] || '',
+  // 编辑保持原值；添加取模板 id（自定义模板为 undefined）
+  presetId: props.mode === 'edit' ? props.initialValues?.presetId : props.preset?.id,
 })
 
 const showKey = ref(false)
@@ -170,7 +181,6 @@ const testing = ref(false)
 const fetchError = ref('')
 const testResult = ref<string | null>(null)
 const testOk = ref(false)
-const deleting = ref(false)
 
 const canSave = computed(() =>
   form.name.trim() !== '' && form.baseUrl.trim() !== '' && form.apiKey.trim() !== ''
@@ -210,15 +220,16 @@ async function onTestConnection(): Promise<void> {
   }
 }
 
-function askDelete(): void {
-  if (deleting.value) {
-    emit('delete', props.initialValues!.id)
-    deleting.value = false
-  } else {
-    deleting.value = true
-    // 3 秒后复位，避免误触
-    setTimeout(() => { deleting.value = false }, 3000)
-  }
+/** 删除：宿主确认弹窗（禁原生 confirm） */
+async function askDelete(): Promise<void> {
+  if (!props.initialValues) return
+  const ok = await context.dialogs.showConfirm({
+    title: t('mobile.plugin.aiChatbox.confirmDeleteTitle'),
+    message: t('mobile.plugin.aiChatbox.confirmDeleteBody', { name: props.initialValues.name }),
+    confirmText: t('mobile.plugin.aiChatbox.delete'),
+    variant: 'danger',
+  })
+  if (ok) emit('delete', props.initialValues.id)
 }
 
 function save(): void {

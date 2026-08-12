@@ -30,6 +30,7 @@ describe('usePluginConfig', () => {
       thinkingMode: 'enabled',
       reasoningEffort: 'high',
       showReasoning: true,
+      codeLineHeight: 'compact',
     })
   })
 
@@ -39,12 +40,14 @@ describe('usePluginConfig', () => {
       thinkingMode: 'disabled',
       reasoningEffort: 'max',
       showReasoning: false,
+      codeLineHeight: 'relaxed',
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual({
       thinkingMode: 'disabled',
       reasoningEffort: 'max',
       showReasoning: false,
+      codeLineHeight: 'relaxed',
     })
   })
 
@@ -54,6 +57,7 @@ describe('usePluginConfig', () => {
       thinkingMode: 'bogus',
       reasoningEffort: 42,
       showReasoning: 'yes',
+      codeLineHeight: 'huge',
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual(DEFAULT_PLUGIN_CONFIG)

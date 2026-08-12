@@ -25,6 +25,21 @@ describe('useAiConfig', () => {
   })
 
 
+  it('从预设模板添加：写入 presetId（首个自动激活）', async () => {
+    const { config } = setup()
+    const p = await config.addProvider({
+      id: 'qwen',
+      name: '通义千问 (Qwen)',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-turbo'],
+    })
+
+    expect(p.presetId).toBe('qwen')
+    expect(config.providers.value[0].presetId).toBe('qwen')
+    // 首个供应商仍自动激活（既有逻辑保留）
+    expect(config.activeProviderId.value).toBe(p.id)
+  })
+
   it('新增供应商不自动激活（首个除外）：不打断当前对话的激活供应商', async () => {
     const { config } = setup()
     const first = await config.addProvider(makeProvider())
@@ -41,6 +56,13 @@ describe('useAiConfig', () => {
     expect(config.activeModel.value).toBe('deepseek-chat')
   })
 
+
+  it('已带 presetId 的表单对象：原样保留（编辑/保存路径）', async () => {
+    const { config } = setup()
+    const p = await config.addProvider(makeProvider({ presetId: 'deepseek' }))
+    expect(p.presetId).toBe('deepseek')
+    expect(config.providers.value[0].presetId).toBe('deepseek')
+  })
 
   it('持久化：providers/active 写入 storage', async () => {
     const { mock, config } = setup()

@@ -13,7 +13,6 @@ import { generateId } from '../types'
 import { buildCompleteRequest, buildModelsRequest, getAdapter, parseModelsResponse } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
-import { getI18n } from '@bedcode/plugin-sdk-mobile'
 
 const STORAGE_PROVIDERS = 'apiProviders'
 const STORAGE_ACTIVE_PROVIDER = 'activeProvider'
@@ -67,6 +66,7 @@ export function useAiConfig(context: PluginContext) {
       apiStyle: normalizeApiStyle(p),
       models: p.models || [],
       activeModel: p.activeModel || (p.models && p.models[0]) || '',
+      presetId: p.presetId,
     }
   }
 
@@ -86,24 +86,32 @@ export function useAiConfig(context: PluginContext) {
     }
   }
 
-  /** 新增供应商（从预设、自定义模板或完整表单对象；已带 id 的表单对象原样保留） */
+  /** 判别表单对象：ApiProvider 必含 activeModel（表单保存/normalize 均保证），
+      ProviderPreset 永不含——两者现在都有 id 字段，不能再用 id 判别 */
+  function isApiProvider(p: ProviderPreset | ApiProvider): p is ApiProvider {
+    return 'activeModel' in p
+  }
+
+  /** 新增供应商（从预设模板、自定义模板或完整表单对象；表单对象原样保留） */
   async function addProvider(preset?: ProviderPreset | ApiProvider): Promise<ApiProvider> {
-    const hasId = preset && 'id' in preset && !!(preset as ApiProvider).id
-    const provider: ApiProvider = hasId
+    const isFormObject = preset != null && isApiProvider(preset)
+    const provider: ApiProvider = isFormObject
       ? { ...(preset as ApiProvider) }
       : {
           id: generateId(),
-          // 默认名取宿主 i18n（composable 禁用中文硬编码）；存翻译后文本以便
-          // 列表/表单直接展示，语言切换后新创建的供应商才用新语言（既有行为）
-          name: (preset as ProviderPreset)?.name || getI18n().global.t('mobile.plugin.aiChatbox.customProviders'),
+          // 自定义模板名称留空，由用户填写（composable 不持有中文硬编码）
+          name: (preset as ProviderPreset)?.name || '',
           apiKey: '',
           baseUrl: (preset as ProviderPreset)?.baseUrl || '',
           apiStyle: 'openai',
           models: (preset as ProviderPreset)?.models ? [...(preset as ProviderPreset).models] : [],
           activeModel: (preset as ProviderPreset)?.models?.[0] || '',
+          // 从预设模板创建时写入模板 id（自定义/旧数据保持 undefined）
+          presetId: (preset as ProviderPreset)?.id,
         }
     providers.value.push(provider)
     await saveProviders()
+    // 仅首个供应商自动激活；后续新增不打断当前对话的激活供应商
     if (!activeProviderId.value) {
       await setActiveProvider(provider.id)
     }

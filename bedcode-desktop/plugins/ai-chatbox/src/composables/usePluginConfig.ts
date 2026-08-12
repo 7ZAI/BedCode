@@ -9,11 +9,12 @@
 import { ref } from 'vue'
 import { PLUGIN_CONFIG_STORAGE_KEY } from '@bedcode/plugin-sdk-desktop'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
-import type { PluginConfig, ReasoningEffort, ThinkingMode } from '../types'
+import type { PluginConfig, ReasoningEffort, ThinkingMode, CodeLineHeight } from '../types'
 import { DEFAULT_PLUGIN_CONFIG } from '../types'
 
 const THINKING_MODES: ThinkingMode[] = ['default', 'enabled', 'disabled']
 const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'high', 'max']
+const CODE_LINE_HEIGHTS: CodeLineHeight[] = ['compact', 'normal', 'relaxed']
 
 export function usePluginConfig(context: PluginContext) {
   /** 当前生效配置（未加载/加载失败时即默认值，保证请求构建永远拿得到合法值） */
@@ -30,6 +31,7 @@ export function usePluginConfig(context: PluginContext) {
         thinkingMode: normalizeEnum(saved.thinkingMode, THINKING_MODES, DEFAULT_PLUGIN_CONFIG.thinkingMode),
         reasoningEffort: normalizeEnum(saved.reasoningEffort, REASONING_EFFORTS, DEFAULT_PLUGIN_CONFIG.reasoningEffort),
         showReasoning: typeof saved.showReasoning === 'boolean' ? saved.showReasoning : DEFAULT_PLUGIN_CONFIG.showReasoning,
+        codeLineHeight: normalizeEnum(saved.codeLineHeight, CODE_LINE_HEIGHTS, DEFAULT_PLUGIN_CONFIG.codeLineHeight),
       }
     } catch (e) {
       // 读取失败保持默认值（配置缺失不阻断聊天），仅记录日志

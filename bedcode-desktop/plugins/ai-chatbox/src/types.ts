@@ -74,12 +74,16 @@ export type ThinkingMode = 'default' | 'enabled' | 'disabled'
 /** 推理强度（DeepSeek `reasoning_effort` 语义；仅 thinkingMode=enabled 时写入请求） */
 export type ReasoningEffort = 'low' | 'high' | 'max'
 
+/** 代码块行距档位（渲染配置：compact 1.35 / normal 1.6 / relaxed 1.8） */
+export type CodeLineHeight = 'compact' | 'normal' | 'relaxed'
+
 /** 插件级全局配置（contributes.configuration，storage key `config`；
     宿主配置页保存的值可能缺项，读取侧必须合并默认值） */
 export interface PluginConfig {
   thinkingMode: ThinkingMode
   reasoningEffort: ReasoningEffort
   showReasoning: boolean
+  codeLineHeight: CodeLineHeight
 }
 
 /** 配置默认值（与 plugin.json configuration 的 default 字段保持一致） */
@@ -87,6 +91,7 @@ export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
   thinkingMode: 'default',
   reasoningEffort: 'high',
   showReasoning: true,
+  codeLineHeight: 'compact',
 }
 
 /** 生成简短 ID（时间戳 + 随机段，对话/供应商/流共用） */

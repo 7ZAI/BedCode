@@ -88,6 +88,13 @@
           "title": "显示思考过程",
           "description": "关闭后聊天界面不展示思考过程块（思考内容仍随对话日志落盘）",
           "default": true
+        },
+        "codeLineHeight": {
+          "type": "string",
+          "enum": ["compact", "normal", "relaxed"],
+          "title": "代码块行距",
+          "description": "compact：紧凑（1.35）；normal：常规（1.6）；relaxed：宽松（1.8）",
+          "default": "compact"
         }
       }
     }
