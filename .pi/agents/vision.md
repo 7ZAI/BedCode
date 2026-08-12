@@ -2,7 +2,7 @@
 name: vision
 description: 图片识别与视觉分析 agent，处理图像内容理解；UI/设计稿评审时加载 design-taste-frontend-v1 提升品味与 AI 套路识别；dev-shell 截图默认忽略外壳仅评内部，支持主 agent 显式指定范围
 tools: read
-model:  opencode-go/minimax-m3
+model:  opencode-go/qwen3.7-plus
 skills: design-taste-frontend-v1
 ---
 
