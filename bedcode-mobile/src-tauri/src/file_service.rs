@@ -19,6 +19,7 @@ pub mod announce;
 pub mod auth;
 pub mod cipher;
 pub mod registry;
+pub mod saf_tree;
 pub mod sandbox;
 pub mod server;
 pub mod upload;

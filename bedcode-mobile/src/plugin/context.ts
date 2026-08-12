@@ -25,6 +25,10 @@ import type {
   MountOptions,
   PeerFileServiceInfo,
   UploadRequestMeta,
+  SafEntry,
+  SafCopyHandle,
+  SafCopyStatus,
+  PickedSharedDirectory,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
@@ -337,6 +341,44 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     async pickFile(): Promise<string | null> {
       requireFileservicePermission('fileService.pickFile')
       return pluginCmds.pluginPickFile(info.id)
+    },
+
+    async pickSharedDirectory(): Promise<PickedSharedDirectory | null> {
+      requireFileservicePermission('fileService.pickSharedDirectory')
+      return pluginCmds.pluginPickSharedDirectory(info.id)
+    },
+
+    async listDir(path: string): Promise<SafEntry[]> {
+      requireFileservicePermission('fileService.listDir')
+      return pluginCmds.pluginSafListDir(info.id, path)
+    },
+
+    // SAF 存储访问（共享目录遍历 + 中转复制；Android 真机可用，其他平台 reject）
+    saf: {
+      async listTree(treeUri: string, documentId: string): Promise<SafEntry[]> {
+        requireFileservicePermission('fileService.saf.listTree')
+        return pluginCmds.pluginSafListTree(info.id, treeUri, documentId)
+      },
+      async copyStart(uri: string, destName: string): Promise<SafCopyHandle> {
+        requireFileservicePermission('fileService.saf.copyStart')
+        return pluginCmds.pluginSafCopyStart(info.id, uri, destName)
+      },
+      async copyStatus(copyId: string): Promise<SafCopyStatus> {
+        requireFileservicePermission('fileService.saf.copyStatus')
+        return pluginCmds.pluginSafCopyStatus(info.id, copyId)
+      },
+      async copyCancel(copyId: string): Promise<void> {
+        requireFileservicePermission('fileService.saf.copyCancel')
+        return pluginCmds.pluginSafCopyCancel(info.id, copyId)
+      },
+      async cleanupStaleCopies(): Promise<void> {
+        requireFileservicePermission('fileService.saf.cleanupStaleCopies')
+        return pluginCmds.pluginSafCleanupStaleCopies(info.id)
+      },
+      async checkAuthorized(treeUri: string): Promise<boolean> {
+        requireFileservicePermission('fileService.saf.checkAuthorized')
+        return pluginCmds.pluginSafCheckAuthorized(info.id, treeUri)
+      },
     },
 
     /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下读取顶层自定义目录必需；

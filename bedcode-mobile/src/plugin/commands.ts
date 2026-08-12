@@ -5,7 +5,14 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import type { PluginInfo, PeerFileServiceInfo } from './types'
+import type {
+  PluginInfo,
+  PeerFileServiceInfo,
+  SafEntry,
+  SafCopyHandle,
+  SafCopyStatus,
+  PickedSharedDirectory,
+} from './types'
 
 /** 获取所有已加载插件信息 */
 export async function pluginListLoaded(): Promise<PluginInfo[]> {
@@ -164,4 +171,66 @@ export async function pluginPickFile(pluginId: string): Promise<string | null> {
  */
 export async function pluginOpenAllFilesSettings(pluginId: string): Promise<boolean> {
   return await invoke<boolean>('open_all_files_settings', { pluginId })
+}
+
+// ==================== SAF 存储访问（SafIo 主 seam） ====================
+
+/** SAF：列出目录树子条目（共享目录 App 内遍历） */
+export async function pluginSafListTree(
+  pluginId: string,
+  treeUri: string,
+  documentId: string,
+): Promise<SafEntry[]> {
+  return await invoke<SafEntry[]>('plugin_saf_list_tree', { pluginId, treeUri, documentId })
+}
+
+/** SAF：启动中转复制（SAF 源 → app 私有 cache），返回 {copyId, destPath} */
+export async function pluginSafCopyStart(
+  pluginId: string,
+  uri: string,
+  destName: string,
+): Promise<SafCopyHandle> {
+  return await invoke<SafCopyHandle>('plugin_saf_copy_start', { pluginId, uri, destName })
+}
+
+/** SAF：轮询中转复制进度 */
+export async function pluginSafCopyStatus(
+  pluginId: string,
+  copyId: string,
+): Promise<SafCopyStatus> {
+  return await invoke<SafCopyStatus>('plugin_saf_copy_status', { pluginId, copyId })
+}
+
+/** SAF：取消中转复制 */
+export async function pluginSafCopyCancel(pluginId: string, copyId: string): Promise<void> {
+  return await invoke<void>('plugin_saf_copy_cancel', { pluginId, copyId })
+}
+
+/** SAF：清扫中转复制残留（file-transfer 插件激活时调用） */
+export async function pluginSafCleanupStaleCopies(pluginId: string): Promise<void> {
+  return await invoke<void>('plugin_saf_cleanup_stale_copies', { pluginId })
+}
+
+/** SAF：检测树授权是否仍有效 */
+export async function pluginSafCheckAuthorized(
+  pluginId: string,
+  treeUri: string,
+): Promise<boolean> {
+  return await invoke<boolean>('plugin_saf_check_authorized', { pluginId, treeUri })
+}
+
+/** 弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用；取消返回 null） */
+export async function pluginPickSharedDirectory(
+  pluginId: string,
+): Promise<PickedSharedDirectory | null> {
+  const picked = await invoke<[string, string, string] | null>('plugin_pick_shared_directory', {
+    pluginId,
+  })
+  if (!picked) return null
+  return { uri: picked[0], documentId: picked[1], displayName: picked[2] }
+}
+
+/** 列出真实路径目录条目（免授权特殊条目「app 私有下载目录」浏览用） */
+export async function pluginSafListDir(pluginId: string, path: string): Promise<SafEntry[]> {
+  return await invoke<SafEntry[]>('plugin_saf_list_dir', { pluginId, path })
 }

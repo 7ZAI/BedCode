@@ -55,9 +55,26 @@ static RELAY_STATE: LazyLock<Mutex<RelayState>> = LazyLock::new(|| {
 
 // ==================== 树 URI 解析 ====================
 
-/// 挂载根是否为 SAF 树 URI（content://tree/...）
+/// 挂载根是否为 SAF 树 URI
+///
+/// 识别两种形态：
+/// - 紧凑内部形态 `content://tree/<treeId>`（mock/单测/历史条目）
+/// - 系统目录树选择器返回的完整形态 `content://<authority>/tree/<treeId>`
+///   （如 content://com.android.externalstorage.documents/tree/primary%3A…）
+/// 两种形态的 treeId 均为 URI 末段，`tree_document_id` / `tree_alias` 通用；
+/// 完整形态必须识别，否则挂载时 SAF 根被误当作真实路径根（canonicalize
+/// 失败 → 挂载失败；或作为伪真实根被 list 静默跳过 → 对端永远看不到该目录）
 pub fn is_saf_tree_uri(root: &str) -> bool {
-    root.starts_with("content://tree/")
+    if root.starts_with("content://tree/") {
+        return true;
+    }
+    if let Some(rest) = root.strip_prefix("content://") {
+        // content://<authority>/tree/<treeId>：路径段数 >= 3 且第 2 段为 "tree"
+        let segments: Vec<&str> = rest.split('/').collect();
+        segments.len() >= 3 && segments[1] == "tree"
+    } else {
+        false
+    }
 }
 
 /// 树 URI → 根 document id（content://tree/<treeId> 取末段）
@@ -421,6 +438,34 @@ mod tests {
         assert!(is_saf_tree_uri("content://tree/primary%3ADownload"));
         assert!(!is_saf_tree_uri("/storage/emulated/0/Download"));
         assert!(!is_saf_tree_uri("content://com.android.externalstorage.documents"));
+        // 完整形态（系统目录树选择器返回）：同样识别，treeId 为末段
+        assert!(is_saf_tree_uri(
+            "content://com.android.externalstorage.documents/tree/primary%3ADownload"
+        ));
+        assert!(is_saf_tree_uri(
+            "content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD"
+        ));
+        assert!(!is_saf_tree_uri(
+            "content://com.android.externalstorage.documents/document/primary%3ADownload"
+        ));
+        assert!(!is_saf_tree_uri(
+            "content://com.android.externalstorage.documents/tree"
+        ));
+        // 根 document id / 别名解析对完整形态同样生效
+        assert_eq!(
+            tree_document_id(
+                "content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD"
+            )
+            .as_deref(),
+            Some("primary:下载")
+        );
+        assert_eq!(
+            tree_alias(
+                "content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD"
+            )
+            .as_deref(),
+            Some("下载")
+        );
         // 根 document id = 解码形态（与 Kotlin getTreeDocumentId / SafEntry.document_id 一致）
         assert_eq!(
             tree_document_id("content://tree/primary%3ADownload").as_deref(),

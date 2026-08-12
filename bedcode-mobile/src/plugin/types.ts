@@ -49,6 +49,10 @@ export type {
   PeerMountAnnouncement,
   PeerFileServiceInfo,
   FileServiceAPI,
+  SafEntry,
+  SafCopyHandle,
+  SafCopyStatus,
+  PickedSharedDirectory,
 } from '@bedcode/plugin-sdk-mobile'
 
 /** 插件信息（从后端获取，含 source 字段） */

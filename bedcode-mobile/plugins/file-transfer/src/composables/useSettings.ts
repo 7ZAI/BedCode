@@ -16,6 +16,18 @@ import { MOCK_ENABLED } from '../mock'
 /** 并发数上限（与 WASM Queue 一致） */
 export const CONCURRENCY_MAX = 8
 
+/**
+ * 从 SAF 树 document id 派生展示名（displayName 缺失时兜底）
+ *
+ * documentId 为 Kotlin 解码形态（primary:下载文件夹 / 0123-4567:DCIM/相机），
+ * 取末段并剥 volume 前缀；空则回退完整 URI（最坏情况仍是可辨识的原始值）
+ */
+function deriveName(documentId: string): string {
+  const last = documentId.split('/').filter(Boolean).pop() ?? ''
+  const name = last.includes(':') ? (last.split(':').pop() ?? '') : last
+  return name || ''
+}
+
 /** 将 WASM get-settings 返回（snake_case download_dir / document_id）归一化为 camelCase */
 function mapWireRoot(raw: any): SharedRoot {
   return {
@@ -109,7 +121,7 @@ export function useSettings(context: PluginContext) {
     const entry: SharedRoot = {
       id: picked.uri,
       kind: 'saf',
-      name: picked.displayName || picked.uri,
+      name: picked.displayName || deriveName(picked.documentId) || picked.uri,
       documentId: picked.documentId,
       authorized: true,
     }
@@ -128,7 +140,7 @@ export function useSettings(context: PluginContext) {
     if (!picked) return false
     const next = settings.value.roots.map((r) =>
       r.id === root.id
-        ? { ...r, id: picked.uri, name: picked.displayName || picked.uri, documentId: picked.documentId, authorized: true }
+        ? { ...r, id: picked.uri, name: picked.displayName || deriveName(picked.documentId) || picked.uri, documentId: picked.documentId, authorized: true }
         : r,
     )
     return persist({ roots: next })
