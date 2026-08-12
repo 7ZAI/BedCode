@@ -5,7 +5,9 @@
 /// Broadcast channel 默认容量
 ///
 /// 用于所有 broadcast::channel() 创建，统一缓冲区大小
-pub const BROADCAST_CHANNEL_CAPACITY: usize = 1024;
+/// 客户端事件广播容量：回放洪峰时（历史全量重播）短时间涌入大量输出帧，
+/// 容量过小 + 转发循环被慢路径（插件回调）阻塞会溢出丢帧（移动端游标连续性破坏）
+pub const BROADCAST_CHANNEL_CAPACITY: usize = 8192;
 
 /// WebSocket 接收任务轮询间隔（毫秒）
 pub const RECEIVER_POLL_INTERVAL_MS: u64 = 50;

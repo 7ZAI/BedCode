@@ -228,15 +228,21 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
                 tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
             }
 
-            // 通知插件终端输出（只读通知，仅传递 session_id 避免大量数据拷贝）
+            // 通知插件终端输出（只读通知，仅传递 session_id 避免大量数据拷贝）。
+            // 必须异步分发（不 await）：插件 WASM 回调串行执行，若在此 await，
+            // 输出转发循环被插件回调阻塞 → broadcast 通道积压溢出 → 静默丢帧 →
+            // 移动端游标连续性破坏（violation 风暴）
             {
                 let pm = crate::state::get_plugin_manager();
-                pm.dispatch_lifecycle_event(
-                    crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
-                        session_id: session_id.clone(),
-                        data: String::new(),
-                    }
-                ).await;
+                // 用 error boundary 包装：插件 WASM 回调 panic 时记录日志而非静默吞掉
+                spawn_with_error_boundary("plugin_terminal_output_notify", async move {
+                    pm.dispatch_lifecycle_event(
+                        crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
+                            session_id,
+                            data: String::new(),
+                        }
+                    ).await;
+                });
             }
         }
 
