@@ -171,7 +171,14 @@
       <!-- 错误状态 -->
       <div v-else-if="error" class="sidebar-state error-state">
         <span class="state-text">{{ error }}</span>
-        <button class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
+        <!-- 未设置 base URL（未连接）时重试无意义，引导去连接设置 -->
+        <template v-if="isBaseUrlError">
+          <button class="go-settings-btn" @click="$emit('navigate-settings')">
+            {{ t('mobile.codeViewer.goToSettings') }}
+          </button>
+          <button class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
+        </template>
+        <button v-else class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
       </div>
 
       <!-- 空状态 -->
@@ -244,6 +251,8 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'file-select': [name: string, path: string, isDiff: boolean]
   'settings-input-focus': [focused: boolean]
+  /** 未连接（base URL 缺失）时由宿主引导去连接设置 */
+  'navigate-settings': []
 }>()
 const { t } = useI18n()
 const { isLandscape } = useOrientation()
@@ -252,6 +261,9 @@ const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggl
 
 const isRefreshing = ref(false)
 const showSettingsPanel = ref(false)
+
+/** 是否因未连接（base URL 缺失）导致加载失败：重试无意义，引导去连接设置 */
+const isBaseUrlError = computed(() => /no base url|not connected/i.test(error.value || ''))
 const showFileViewer = ref(false)
 const selectedFile = ref('')
 const selectedFilePath = ref('')
@@ -1119,6 +1131,16 @@ onUnmounted(() => {
 
 .error-state .state-text {
   color: var(--mobile-error);
+}
+
+.go-settings-btn {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .retry-btn {

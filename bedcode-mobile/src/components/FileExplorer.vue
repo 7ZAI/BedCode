@@ -55,6 +55,7 @@
           resize-side="right"
           @file-select="handleFileSelect"
           @long-press="handleLongPress"
+          @navigate-settings="$emit('navigate-settings')"
         />
       </transition>
 
@@ -79,6 +80,12 @@
         <!-- 错误 -->
         <div v-else-if="fileError" class="code-state">
           <p class="text-red-400 text-sm">{{ fileError }}</p>
+          <!-- 未设置 base URL（未连接）时重试无意义，引导去连接设置 -->
+          <template v-if="isBaseUrlError">
+            <button class="h-11 px-4 mt-3 rounded-lg text-xs font-medium transition-colors active:opacity-80" style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)" @click="$emit('navigate-settings')">
+              {{ t('mobile.codeViewer.goToSettings') }}
+            </button>
+          </template>
           <button class="text-xs text-[var(--mobile-accent)] mt-2" @click="retryLoadFile">{{ t('mobile.codeViewer.retry') }}</button>
         </div>
 
@@ -158,6 +165,8 @@ const emit = defineEmits<{
   fileSelect: [name: string, path: string, isDiff: boolean]
   longPress: [name: string, path: string]
   close: []
+  /** 未连接（base URL 缺失）时由宿主引导去连接设置 */
+  'navigate-settings': []
 }>()
 
 const { t } = useI18n()
@@ -209,6 +218,11 @@ const selectedFilePath = ref('')
 const fileContent = ref('')
 const fileLoading = ref(false)
 const fileError = ref<string | null>(null)
+
+/** 是否因未连接（base URL 缺失）导致加载失败：重试无意义，引导去连接设置 */
+const isBaseUrlError = computed(() =>
+  /no base url|not connected/i.test(fileError.value || '')
+)
 
 const displayLang = computed(() => getLangByFilename(selectedFile.value))
 
