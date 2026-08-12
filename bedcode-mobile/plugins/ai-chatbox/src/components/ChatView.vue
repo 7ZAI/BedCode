@@ -34,13 +34,6 @@
           <span class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate max-w-[12rem]">
             {{ currentTitle }}
           </span>
-          <span
-            v-if="currentConversation?.systemPrompt"
-            class="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-muted)]"
-            :title="t('mobile.plugin.aiChatbox.systemPrompt')"
-          >
-            {{ t('mobile.plugin.aiChatbox.systemPromptOn') }}
-          </span>
         </div>
 
         <div class="flex items-center">
@@ -55,20 +48,6 @@
             </svg>
           </button>
           <button
-            v-if="hasProvider"
-            class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
-            :title="t('mobile.plugin.aiChatbox.systemPrompt')"
-            @click="showSystemPromptEditor = !showSystemPromptEditor"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2v6h6" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 13H8" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 17H8" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9H8" />
-            </svg>
-          </button>
-          <button
             class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
             :title="t('mobile.plugin.aiChatbox.providerConfig')"
             @click="showConfigPage = true"
@@ -80,44 +59,6 @@
           </button>
         </div>
       </header>
-
-      <!-- system prompt 编辑器（内联面板） -->
-      <div
-        v-if="showSystemPromptEditor"
-        class="px-4 py-3 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-card)]"
-      >
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-xs font-medium text-[var(--mobile-text-secondary)]">
-            {{ t('mobile.plugin.aiChatbox.systemPrompt') }}
-          </span>
-          <button
-            class="h-8 px-2 text-xs text-[var(--mobile-accent)] active:opacity-80"
-            @click="clearSystemPrompt"
-          >
-            {{ t('mobile.plugin.aiChatbox.clear') }}
-          </button>
-        </div>
-        <textarea
-          v-model="systemPromptDraft"
-          rows="3"
-          class="w-full px-3 py-2 text-[var(--font-size-sm)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-border)] rounded-xl placeholder:text-[var(--mobile-input-placeholder)] focus:outline-none focus:border-[var(--mobile-input-focus)] transition-colors"
-          :placeholder="t('mobile.plugin.aiChatbox.systemPromptPlaceholder')"
-        ></textarea>
-        <div class="flex justify-end gap-2 mt-2">
-          <button
-            class="h-11 px-4 text-xs rounded-xl bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity"
-            @click="showSystemPromptEditor = false"
-          >
-            {{ t('mobile.plugin.aiChatbox.cancel') }}
-          </button>
-          <button
-            class="h-11 px-4 text-xs rounded-xl bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity"
-            @click="applySystemPrompt"
-          >
-            {{ t('mobile.plugin.aiChatbox.save') }}
-          </button>
-        </div>
-      </div>
 
       <!-- 未配置供应商 -->
       <div v-if="!hasProvider" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
@@ -172,18 +113,10 @@
             :error-text="i === messages.length - 1 ? messageErrorText : ''"
             :show-reasoning="showReasoning"
             :code-line-height="pluginConfig.config.value.codeLineHeight"
+            :show-regenerate="canRegenerate && i === messages.length - 1"
             @delete="onDeleteMessage"
+            @regenerate="regenerate"
           />
-
-          <!-- 重新生成（最后一条是 assistant 且非流式时） -->
-          <div v-if="canRegenerate" class="flex justify-center">
-            <button
-              class="h-11 px-4 text-xs rounded-xl bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity"
-              @click="regenerate"
-            >
-              {{ t('mobile.plugin.aiChatbox.regenerate') }}
-            </button>
-          </div>
         </div>
 
         <!-- 输入区：模型 pill + 输入框内联（DeepSeek/Claude 式，键盘避让 safe area） -->
@@ -284,14 +217,11 @@ const {
   stopGeneration,
   regenerate,
   switchConversation,
-  setSystemPrompt,
 } = chat
 
 const messagesContainer = ref<HTMLElement | null>(null)
 const showConfigPage = ref(false)
 const showConversationDrawer = ref(false)
-const showSystemPromptEditor = ref(false)
-const systemPromptDraft = ref('')
 const dismissedError = ref('')
 
 /** 当前对话标题（无对话选中时显示面板名；新对话占位显示默认文案） */
@@ -380,16 +310,6 @@ function onDeleteMessage(msg: ChatMessageType): void {
 
 function dismissError(): void {
   dismissedError.value = lastError.value
-}
-
-async function applySystemPrompt(): Promise<void> {
-  await setSystemPrompt(systemPromptDraft.value)
-  showSystemPromptEditor.value = false
-}
-
-async function clearSystemPrompt(): Promise<void> {
-  systemPromptDraft.value = ''
-  await setSystemPrompt('')
 }
 
 // 自动滚动到底部（reasoning 流写入时正文可能仍为空，须一并跟踪才能跟上思考期增长）

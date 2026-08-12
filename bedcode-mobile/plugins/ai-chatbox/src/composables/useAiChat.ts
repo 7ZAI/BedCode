@@ -204,7 +204,6 @@ export function useAiChat(
       providerId: config.activeProviderId.value,
       providerName: provider?.name || '',
       model: config.activeModel.value || provider?.activeModel || '',
-      systemPrompt: '',
     }
     conversations.value.unshift(conv)
     await saveConversation(conv)
@@ -243,13 +242,9 @@ export function useAiChat(
     await saveConversation(conv)
   }
 
-  /** 组装请求消息：systemPrompt（如有） + 全部历史（全量发送，超限由模型报错） */
+  /** 组装请求消息：全部历史（全量发送，超限由模型报错） */
   function buildRequestMessages(): AdapterMessage[] {
     const result: AdapterMessage[] = []
-    const sys = currentConversation.value?.systemPrompt?.trim()
-    if (sys) {
-      result.push({ role: 'system', content: sys })
-    }
     for (const m of messages.value) {
       // 跳过空消息与正在生成的 assistant 占位
       if (!m.content) continue
@@ -443,14 +438,6 @@ export function useAiChat(
     await loadMessages(convId)
   }
 
-  /** 设置对话 system prompt（对话级） */
-  async function setSystemPrompt(prompt: string): Promise<void> {
-    const conv = currentConversation.value
-    if (!conv) return
-    conv.systemPrompt = prompt
-    await saveConversation(conv)
-  }
-
   return {
     conversations,
     currentConvId,
@@ -471,6 +458,5 @@ export function useAiChat(
     stopGeneration,
     regenerate,
     switchConversation,
-    setSystemPrompt,
   }
 }

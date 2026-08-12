@@ -56,10 +56,10 @@
         <div v-if="reasoningExpanded" :id="`thinking-body-${message.id}`" class="thinking-body">{{ message.reasoning }}</div>
       </div>
 
-      <!-- 内容（user 纯文本右对齐气泡；assistant Markdown 渲染 + Shiki 高亮） -->
+      <!-- 内容（user 右对齐气泡卡片；assistant Markdown 渲染 + Shiki 高亮） -->
       <div
         v-if="isUser"
-        class="whitespace-pre-wrap break-words text-[var(--font-size-base)] leading-relaxed text-[var(--mobile-text-primary)]"
+        class="inline-block max-w-[85%] text-left whitespace-pre-wrap break-words px-3.5 py-2.5 text-[var(--font-size-base)] leading-relaxed text-[var(--mobile-text-primary)] rounded-2xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-card)]"
       >{{ message.content }}</div>
       <div v-else ref="contentRef" class="text-[var(--font-size-base)] leading-relaxed text-[var(--mobile-text-primary)] md-body" v-html="rendered" />
 
@@ -69,25 +69,39 @@
         class="text-xs text-[var(--mobile-error)]"
       >{{ errorText }}</div>
 
-      <!-- 操作条（移动端无 hover，常显：复制 / 删除） -->
-      <div class="flex items-center gap-1" :class="isUser ? 'justify-end' : ''">
+      <!-- 操作条（移动端无 hover，常显：复制 / 删除 / 重新生成（仅最后一条 assistant）；仅图标无背景，与宿主页头按钮同款） -->
+      <div class="flex items-center gap-0.5" :class="isUser ? 'justify-end' : ''">
         <button
-          class="h-9 min-w-11 px-2.5 inline-flex items-center justify-center gap-1 text-xs text-[var(--mobile-text-muted)] bg-[var(--mobile-bg-tertiary)] rounded-lg active:opacity-80 transition-opacity"
+          class="w-9 h-9 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
+          :title="t('mobile.plugin.aiChatbox.copy')"
+          :aria-label="t('mobile.plugin.aiChatbox.copy')"
           @click="copyContent"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9h11a2 2 0 012 2v9a2 2 0 01-2 2H9a2 2 0 01-2-2v-9a2 2 0 012-2zM5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
           </svg>
-          {{ t('mobile.plugin.aiChatbox.copy') }}
         </button>
         <button
-          class="h-9 min-w-11 px-2.5 inline-flex items-center justify-center gap-1 text-xs text-[var(--mobile-text-muted)] bg-[var(--mobile-bg-tertiary)] rounded-lg active:opacity-80 transition-opacity"
+          class="w-9 h-9 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
+          :title="t('mobile.plugin.aiChatbox.delete')"
+          :aria-label="t('mobile.plugin.aiChatbox.delete')"
           @click="$emit('delete', message)"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
-          {{ t('mobile.plugin.aiChatbox.delete') }}
+        </button>
+        <!-- 重新生成（仅最后一条 assistant 且非流式）：跟在删除符号后面 -->
+        <button
+          v-if="showRegenerate"
+          class="w-9 h-9 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
+          :title="t('mobile.plugin.aiChatbox.regenerate')"
+          :aria-label="t('mobile.plugin.aiChatbox.regenerate')"
+          @click="$emit('regenerate')"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 4A9.753 9.753 0 0020.944 12.5 8.959 8.959 0 0018.248 5.75M20 20v-5h-.581m-15.357-4A8.959 8.959 0 004.056 11.5 9.753 9.753 0 005.752 18.25" />
+          </svg>
         </button>
       </div>
 
@@ -125,9 +139,11 @@ const props = defineProps<{
   showReasoning?: boolean
   /** 插件级代码块行距配置（缺省走默认档） */
   codeLineHeight?: CodeLineHeight
+  /** 是否显示重新生成按钮（仅最后一条 assistant 且非流式） */
+  showRegenerate?: boolean
 }>()
 
-defineEmits<{ delete: [message: ChatMessage] }>()
+defineEmits<{ delete: [message: ChatMessage]; regenerate: [] }>()
 
 const { t } = useI18n()
 
@@ -138,7 +154,7 @@ const isUser = computed(() => props.message.role === 'user')
 
 /** 代码块行距档位 → line-height（CSS 变量下发，:deep 样式消费） */
 const CODE_LINE_HEIGHTS: Record<CodeLineHeight, string> = {
-  compact: '1.35',
+  compact: '0.7',
   normal: '1.6',
   relaxed: '1.8',
 }
@@ -320,7 +336,7 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
   padding: 0;
   font-size: 0.8125rem;
   /* 行距由插件级配置 codeLineHeight 决定（CSS 变量在消息根节点下发） */
-  line-height: var(--md-code-lh, 1.6);
+  line-height: var(--md-code-lh, 0.7);
 }
 /* Shiki 行结构：行块不换行（横向滚动由 pre 承担） */
 .md-body :deep(pre code .line) {

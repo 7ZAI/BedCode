@@ -46,7 +46,6 @@ export interface ConversationMeta {
   providerId: string
   providerName: string
   model: string
-  systemPrompt: string
 }
 
 /** 预设模板 id（与 src/assets/providers/ 下品牌图标一一对应） */
@@ -74,7 +73,7 @@ export type ThinkingMode = 'default' | 'enabled' | 'disabled'
 /** 推理强度（DeepSeek `reasoning_effort` 语义；仅 thinkingMode=enabled 时写入请求） */
 export type ReasoningEffort = 'low' | 'high' | 'max'
 
-/** 代码块行距档位（渲染配置：compact 1.35 / normal 1.6 / relaxed 1.8） */
+/** 代码块行距档位（渲染配置：compact 0.7 / normal 1.6 / relaxed 1.8） */
 export type CodeLineHeight = 'compact' | 'normal' | 'relaxed'
 
 /** 插件级全局配置（contributes.configuration，storage key `config`；

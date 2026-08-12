@@ -42,7 +42,8 @@ function registerPluginUi(context: PluginContext): void {
   navTabDisposable = context.ui.registerNavTab({
     id: 'ai-chatbox.navtab',
     title: context.i18n.t('navTitle'),
-    icon: '💬',
+    // Heroicons outline 风格 SVG path（宿主 MobileNav 以 stroke=currentColor 渲染）
+    icon: 'M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z',
     component: ChatView,
     // 内置插槽：连接=0、会话=100、工具箱=200、设置=300；150 = 会话右侧
     order: 150,
