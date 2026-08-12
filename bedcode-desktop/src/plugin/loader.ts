@@ -162,11 +162,19 @@ class PluginLoaderClass {
       }
     })
 
-    // 清理事件监听
-    clearPluginEvents(pluginId)
+    // 清理事件监听（兜底清理失败不中断后续流程，避免注册表残留）
+    try {
+      clearPluginEvents(pluginId)
+    } catch (e) {
+      console.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
+    }
 
     // 清理注册表中的 context 和 UI 注册
-    getPluginRegistry().clearPlugin(pluginId)
+    try {
+      getPluginRegistry().clearPlugin(pluginId)
+    } catch (e) {
+      console.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
+    }
 
     // 调用插件的 deactivate
     if (plugin.module.deactivate) {
@@ -210,16 +218,26 @@ class PluginLoaderClass {
     const plugin = this.plugins.get(pluginId)
     const ACTIVATE_TIMEOUT = 5000
 
-    // 1. 停用旧插件（清理 disposables、事件、注册表、调用 deactivate）
+    // 1. 停用旧插件（清理 disposables、事件、注册表、调用 deactivate）。
+    // 清理顺序契约：先清注册表/事件，再调 deactivate——因此插件的
+    // deactivate 不得依赖 registry/context（此时已不可用），注册表清理是
+    // 兜底语义（deactivate 挂起也保证注册表干净）。错误均记录不中断，
+    // 热重载失败时残留痕迹可查
     if (plugin) {
       plugin.context._disposables.forEach(d => {
         try { d.dispose() } catch { /* ignore */ }
       })
-      clearPluginEvents(pluginId)
-      getPluginRegistry().clearPlugin(pluginId)
+      try { clearPluginEvents(pluginId) } catch (e) {
+        console.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
+      }
+      try { getPluginRegistry().clearPlugin(pluginId) } catch (e) {
+        console.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
+      }
 
       if (plugin.module.deactivate) {
-        try { await plugin.module.deactivate() } catch { /* ignore */ }
+        try { await plugin.module.deactivate() } catch (e) {
+          console.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
+        }
       }
       this.plugins.delete(pluginId)
     }

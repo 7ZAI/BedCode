@@ -133,11 +133,19 @@ class PluginLoaderClass {
       }
     })
 
-    // 清理事件监听
-    clearPluginEvents(pluginId)
+    // 清理事件监听（兜底清理失败不中断后续流程，避免注册表残留）
+    try {
+      clearPluginEvents(pluginId)
+    } catch (e) {
+      console.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
+    }
 
     // 清理注册表中的 context 和 UI 注册
-    getPluginRegistry().clearPlugin(pluginId)
+    try {
+      getPluginRegistry().clearPlugin(pluginId)
+    } catch (e) {
+      console.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
+    }
 
     // 调用插件的 deactivate
     if (plugin.module.deactivate) {

@@ -76,6 +76,13 @@ export async function activate(context: PluginContext): Promise<void> {
 
 export async function deactivate(): Promise<void> {
   stopLocaleWatch?.()
+  stopLocaleWatch = null
+  // 释放手动持有的注册句柄：宿主 loader 虽会经 _disposables + clearPlugin 兜底清理，
+  // 插件自身也应释放（语言切换重注册时也会先 dispose 旧句柄，语义一致）
+  toolboxDisposable?.dispose()
+  toolboxDisposable = null
+  navTabDisposable?.dispose()
+  navTabDisposable = null
   disposeDevMock()
   console.log('[AI Chatbox] Plugin deactivated')
 }
