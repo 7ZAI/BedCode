@@ -22,21 +22,70 @@ interface ActivePlugin {
 /** 前端模块导入超时（毫秒） */
 const IMPORT_TIMEOUT = 5000
 
+/** 启动扫描就绪轮询间隔（毫秒） */
+const STARTUP_SCAN_POLL_MS = 250
+
+/** 启动扫描就绪等待上限（毫秒） */
+const STARTUP_SCAN_TIMEOUT_MS = 20000
+
 /** 插件加载器 */
 class PluginLoaderClass {
   private plugins: Map<string, ActivePlugin> = new Map()
+  private scanRetryTimer: ReturnType<typeof setTimeout> | null = null
+  private scanRetryStartedAt = 0
 
   /** 应用启动时加载所有已启用插件的前端模块 */
   async loadAll(): Promise<void> {
     const manifests = await pluginCmds.pluginListLoaded()
     console.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
+    await this.loadManifests(manifests)
 
+    // 后端在 setup 的异步任务里解压内置插件 → 初始化 WASM 运行时 → 扫描加载，
+    // 实测全程数秒（设备上 WASM 编译慢）。前端首次查询 plugin_list_loaded 极可能
+    // 落在扫描完成前，拿到空列表 → 遍历 0 个 manifest → 扩展点（工具箱/导航/设置/
+    // 终端）全部丢失，直到手动重开插件才恢复。此处异步轮询兜底：扫描完成（列表
+    // 非空）即补载；不阻塞 app.mount()（挂载不受插件初始化延迟）。
+    if (manifests.length === 0) {
+      this.scheduleScanRetry()
+    }
+  }
+
+  /** 启动扫描未完成时按间隔轮询补载，直到列表非空或超时放弃 */
+  private scheduleScanRetry(): void {
+    if (this.scanRetryTimer) return
+    this.scanRetryStartedAt = Date.now()
+    const tick = async () => {
+      this.scanRetryTimer = null
+      try {
+        const manifests = await pluginCmds.pluginListLoaded()
+        console.log(`[PluginLoader] Scan retry: found ${manifests.length} plugin(s)`)
+        if (manifests.length > 0) {
+          await this.loadManifests(manifests)
+          return
+        }
+      } catch (e) {
+        // 后端尚未就绪时命令异常：继续轮询，直到超时
+        console.warn('[PluginLoader] Scan retry query failed, will retry:', e)
+      }
+      if (Date.now() - this.scanRetryStartedAt < STARTUP_SCAN_TIMEOUT_MS) {
+        this.scanRetryTimer = setTimeout(tick, STARTUP_SCAN_POLL_MS)
+      } else {
+        console.warn('[PluginLoader] Plugin scan not ready after timeout; entries need manual re-toggle')
+      }
+    }
+    this.scanRetryTimer = setTimeout(tick, STARTUP_SCAN_POLL_MS)
+  }
+
+  /** 逐插件加载前端模块（幂等：重试/重复调用时跳过已加载插件） */
+  private async loadManifests(manifests: PluginInfo[]): Promise<void> {
     for (const manifest of manifests) {
       // Rust-only 插件：前端无需加载
       if (manifest.pluginType === 'rust') {
         console.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend`)
         continue
       }
+
+      if (this.plugins.has(manifest.id)) continue
 
       // 以持久化启用状态为准，而非当前运行时激活状态。
       // 原因：后端在 setup 的异步任务里自动激活已启用插件，前端首次查询

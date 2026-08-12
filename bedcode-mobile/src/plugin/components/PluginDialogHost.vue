@@ -10,7 +10,7 @@
  * 单例组件，由 App.vue 挂载一次。
  */
 import { ref } from 'vue'
-import { pluginDialogHost } from './dialog-host'
+import { pluginDialogHost } from '../dialog-host'
 
 const inputValue = ref('')
 
