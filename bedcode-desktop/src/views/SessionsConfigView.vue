@@ -320,6 +320,16 @@
           <p class="wb-mono text-xs text-[var(--text-primary)]">{{ operatingMessage }}</p>
         </div>
       </div>
+      <!-- 终端窗口打开中遮罩：窗口就绪（就绪事件或 4s 兜底）后消失 -->
+      <div v-if="isTerminalOpening" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+        <div class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-6 py-5 flex items-center gap-3">
+          <svg class="w-4 h-4 animate-spin text-[var(--text-secondary)]" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v2a6 6 0 00-6 6H4z"></path>
+          </svg>
+          <p class="wb-mono text-xs text-[var(--text-primary)]">{{ t('desktop.terminal.opening') }}</p>
+        </div>
+      </div>
     </Teleport>
   </div>
 </template>
@@ -345,7 +355,7 @@ import { useSessionStatusListener } from '@/composables/useSessionStatusListener
 const sessionStore = useSessionStore()
 const { t } = useI18n()
 const toast = useToast()
-const { openTerminalWindow, closeTerminalWindow } = useSessionWindows()
+const { openTerminalWindow, closeTerminalWindow, windows } = useSessionWindows()
 const { startListening, stopListening } = useSessionStatusListener()
 
 const configs = computed(() => sessionStore.configs)
@@ -378,6 +388,8 @@ const pendingSession = ref<SessionInfo | null>(null)
 // 操作中的 loading 状态
 const isOperating = ref(false)
 const operatingMessage = ref(t('desktop.session.processing'))
+// 终端窗口打开中的 loading 状态（新建窗口时显示，直到窗口就绪）
+const isTerminalOpening = ref(false)
 
 // 每秒刷新一次 now，用于运行时长显示
 const now = ref(Date.now())
@@ -565,14 +577,27 @@ async function confirmDeleteConfig() {
   pendingDeleteConfigId.value = null
 }
 
-function viewSession(session: SessionInfo) {
+async function viewSession(session: SessionInfo) {
   // 检查会话是否在运行
   if (session.status !== 'running' && session.status !== 'waitingInput') {
     toast.info(t('desktop.session.notRunning'))
     return
   }
-  // 打开独立终端窗口
-  openTerminalWindow(session)
+  // 已有终端窗口：直接聚焦，无需 loading
+  if (windows.value.has(session.id)) {
+    openTerminalWindow(session)
+    return
+  }
+  // 新建终端窗口：弹 loading 直到窗口就绪（就绪事件或 4s 兜底）
+  isTerminalOpening.value = true
+  try {
+    await openTerminalWindow(session)
+  } catch (e) {
+    console.error('[SessionsConfigView] openTerminalWindow error:', e)
+    toast.error(t('desktop.terminal.openFailed'))
+  } finally {
+    isTerminalOpening.value = false
+  }
 }
 
 function confirmStopSession(session: SessionInfo) {

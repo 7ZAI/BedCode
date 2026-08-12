@@ -48,6 +48,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
     'fileService.pickDirectory',
     'fileService.pickFiles',
   ],
+  'system:open': ['system.revealInDir'],
   // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   'transfer': [],
 }

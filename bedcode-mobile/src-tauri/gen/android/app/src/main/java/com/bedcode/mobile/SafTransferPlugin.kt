@@ -140,6 +140,8 @@ internal class StreamHandle(
     val input: FileInputStream,
     val fd: java.io.FileDescriptor,
     val seekable: Boolean,
+    /** 文件总大小（statSize；pipe 流/未知为 0），safOpen 一并回报供进度条 */
+    val size: Long,
 ) {
     /** 最近使用时间（safOpen 时清扫超时句柄，防泄漏） */
     @Volatile
@@ -504,6 +506,7 @@ class SafTransferPlugin(private val activity: Activity) : Plugin(activity) {
                             put("handleId", existing.handleId)
                             put("effectiveOffset", pos)
                             put("seekable", existing.seekable)
+                            put("size", existing.size)
                         },
                     )
                     return
@@ -538,6 +541,7 @@ class SafTransferPlugin(private val activity: Activity) : Plugin(activity) {
                 input = input,
                 fd = pfd.fileDescriptor,
                 seekable = seekable,
+                size = if (pfd.statSize == -1L) 0L else pfd.statSize,
             )
             streams[args.uri] = handle
             invoke.resolve(
@@ -545,6 +549,7 @@ class SafTransferPlugin(private val activity: Activity) : Plugin(activity) {
                     put("handleId", handle.handleId)
                     put("effectiveOffset", effectiveOffset)
                     put("seekable", seekable)
+                    put("size", handle.size)
                 },
             )
         } catch (e: Exception) {

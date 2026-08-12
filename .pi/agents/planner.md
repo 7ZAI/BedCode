@@ -1,7 +1,7 @@
 ---
 name: planner
-description: 根据上下文和需求生成符合 BedCode 规范的实现计划，只读不写
-tools: read, grep, find, ls
+description: BedCode 规划 agent：根据需求产出符合项目规范的实现计划，只读不写。实现前需要方案时使用（含 scout 侦察后的规划）
+tools: read, grep, find, ls, codegraph_explore, codegraph_search, codegraph_node
 model: opencode-go/deepseek-v4-flash
 ---
 
@@ -35,4 +35,4 @@ model: opencode-go/deepseek-v4-flash
 需要新增的 key 及 zh-CN / en 文案。
 
 ## Verification
-- 需要运行的测试（`cargo test` / `npm run test`）与验证点
+- 需要运行的测试（`cargo test` / `npm run test:run`）与验证点

@@ -45,7 +45,6 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
@@ -53,6 +52,7 @@ pub fn run() {
         .plugin(tauri_plugin_machine_uid::init())
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
+        .plugin(crate::plugin::android_plugins::task_notification_plugin())
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())
         .plugin(crate::plugin::android_plugins::downloads_dir_plugin())
         .plugin(crate::plugin::android_plugins::file_delete_plugin())
@@ -269,6 +269,7 @@ pub fn run() {
             crate::plugin::commands::plugin_filesrv_dispose,
             crate::plugin::commands::plugin_filesrv_respond_upload_request,
             crate::plugin::commands::plugin_filesrv_get_peer,
+            crate::plugin::commands::plugin_open_file,
             crate::plugin::commands::plugin_pick_directory,
             crate::plugin::commands::plugin_pick_file,
             crate::plugin::commands::open_all_files_settings,

@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-plugin-auto-task"
-version = "1.0.0"
+version = "1.0.0-beta"
 description = "Auto Task Plugin — agent task status sync and auto-approve (Claude Code / pi / opencode / Codex)"
 authors = ["BedCode"]
 edition = "2021"

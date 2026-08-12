@@ -601,6 +601,8 @@ onUnmounted(() => {
       @resume="(id) => tasks.resume(id)"
       @cancel="(id) => tasks.cancel(id)"
       @retry="(id) => tasks.retry(id)"
+      @remove="(id) => tasks.removeTask(id)"
+      @open="(id) => tasks.openTask(id)"
       @resume-all="() => tasks.resumeAll()"
     />
 

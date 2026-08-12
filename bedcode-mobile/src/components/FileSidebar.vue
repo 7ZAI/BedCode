@@ -223,6 +223,17 @@
         </div>
       </template>
     </Modal>
+
+    <!-- 长按操作面板（终端引用模式）：复制路径 / 查看文件 -->
+    <Modal v-model="showLongPressMenu" :title="longPressTarget?.name || ''" size="sm">
+      <p class="text-[var(--mobile-text-disabled)] text-sm break-all">{{ longPressTarget?.path }}</p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <Button variant="ghost" @click="handleLongPressCopy">{{ t('mobile.file.copyPath') }}</Button>
+          <Button variant="primary" @click="handleLongPressView">{{ t('mobile.file.viewFile') }}</Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -243,9 +254,12 @@ const props = withDefaults(defineProps<{
   sessionId: string
   mode?: 'standalone' | 'emit'
   resizeSide?: 'left' | 'right'
+  /** 终端侧栏引用模式：点选文件把 @路径 填入输入框（查看/复制走长按面板） */
+  refInsert?: boolean
 }>(), {
   mode: 'standalone',
   resizeSide: 'left',
+  refInsert: false,
 })
 
 const emit = defineEmits<{
@@ -253,6 +267,8 @@ const emit = defineEmits<{
   'settings-input-focus': [focused: boolean]
   /** 未连接（base URL 缺失）时由宿主引导去连接设置 */
   'navigate-settings': []
+  /** 引用模式：把文件路径作为 @引用 交给宿主填入输入框 */
+  'insert-ref': [path: string]
 }>()
 const { t } = useI18n()
 const { isLandscape } = useOrientation()
@@ -261,6 +277,10 @@ const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggl
 
 const isRefreshing = ref(false)
 const showSettingsPanel = ref(false)
+
+// 长按操作面板（引用模式）状态
+const showLongPressMenu = ref(false)
+const longPressTarget = ref<{ name: string; path: string } | null>(null)
 
 /** 是否因未连接（base URL 缺失）导致加载失败：重试无意义，引导去连接设置 */
 const isBaseUrlError = computed(() => /no base url|not connected/i.test(error.value || ''))
@@ -510,6 +530,17 @@ async function handleFileClick(name: string, path: string) {
     return
   }
 
+  // 终端引用模式：点选即把 @路径 交给输入条（查看/复制走长按操作面板）
+  if (props.refInsert) {
+    emit('insert-ref', path)
+    return
+  }
+
+  openFileViewer(name, path)
+}
+
+/** 打开文件查看弹窗（standalone 模式共享：点击与长按面板共用） */
+async function openFileViewer(name: string, path: string) {
   // standalone 模式
   selectedFile.value = name
   selectedFilePath.value = path
@@ -581,15 +612,40 @@ function onResizePointerDown(e: PointerEvent) {
   document.addEventListener('pointerup', onUp)
 }
 
-// ==================== Long Press Copy Path ====================
+// ==================== Long Press: Copy Path / Insert Ref ====================
 
 async function handleLongPress(name: string, path: string) {
+  // 终端引用模式：弹操作面板（复制路径 / 查看文件），避免误触直接复制
+  if (props.refInsert) {
+    longPressTarget.value = { name, path }
+    showLongPressMenu.value = true
+    return
+  }
+  copyPath(path)
+}
+
+async function copyPath(path: string) {
   try {
     await writeClipboardText(path)
     toast.success(t('mobile.file.copied', { path }))
   } catch {
     toast.error(t('mobile.file.copyFailed'))
   }
+}
+
+function handleLongPressCopy() {
+  if (longPressTarget.value) {
+    copyPath(longPressTarget.value.path)
+  }
+  showLongPressMenu.value = false
+}
+
+function handleLongPressView() {
+  const target = longPressTarget.value
+  if (target) {
+    openFileViewer(target.name, target.path)
+  }
+  showLongPressMenu.value = false
 }
 
 // ==================== Branch Lifecycle ====================

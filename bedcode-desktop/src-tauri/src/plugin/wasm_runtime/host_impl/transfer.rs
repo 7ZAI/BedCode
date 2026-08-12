@@ -152,7 +152,16 @@ async fn run_transfer(
     token: CancellationToken,
 ) {
     let transferred = Arc::new(AtomicU64::new(request.offset));
-    let total = request.expected_size;
+    // 上传总大小：插件 expected_size 恒为 0（见插件 start_single_task），此处
+    // 从本地文件 metadata 取真实大小，进度事件携带真实 total → 插件更新
+    // task.size → 前端进度条可动；下载沿用插件上报值
+    let total = match request.direction {
+        TransferDirection::Upload => tokio::fs::metadata(&request.local_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0),
+        TransferDirection::Download => request.expected_size,
+    };
 
     // 进度 reporter：每 500ms 推送 Running 进度（含瞬时速率）
     let reporter_token = token.child_token();

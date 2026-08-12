@@ -205,6 +205,24 @@ export function useTasks(context: PluginContext) {
   async function retry(id: string): Promise<void> {
     await context.commands.execute('file-transfer.retry', { taskId: id })
   }
+  async function removeTask(id: string): Promise<void> {
+    await context.commands.execute('file-transfer.remove-task', { taskId: id })
+  }
+  /** 在系统文件管理器中显示已完成任务的本地文件（仅 completed 有落盘文件） */
+  async function openInDir(id: string): Promise<void> {
+    const task = tasks.value.find((tk) => tk.id === id)
+    if (!task || task.state !== 'completed' || !task.localPath) return
+    // 下载方向 local_path 为 .part 临时名，完成后已 rename 到最终路径（去后缀）
+    const finalPath = task.localPath.endsWith('.part')
+      ? task.localPath.slice(0, -'.part'.length)
+      : task.localPath
+    try {
+      await context.system.revealInDir(finalPath)
+    } catch (err) {
+      // 与 enqueue 失败同模式：仅 console 记录，不打断用户操作流
+      console.error(`[File Transfer] reveal failed for "${finalPath}":`, err)
+    }
+  }
   async function resumeAll(): Promise<void> {
     await context.commands.execute('file-transfer.resume-all', {})
   }
@@ -280,6 +298,8 @@ export function useTasks(context: PluginContext) {
     resume,
     cancel,
     retry,
+    removeTask,
+    openInDir,
     resumeAll,
     start,
     stop,

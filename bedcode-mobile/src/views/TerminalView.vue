@@ -79,7 +79,9 @@
             class="sidebar-overlay"
             :class="{ 'sidebar-hidden': !showSidebar }"
             :session-id="sessionId"
+            ref-insert
             @settings-input-focus="handleSettingsInputFocus"
+            @insert-ref="handleInsertRef"
           />
           <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
         </div>
@@ -90,10 +92,13 @@
           :is-connected="isConnected"
           :placeholder="inputPlaceholder"
           :is-landscape="isLandscape"
+          :interrupting="isSessionBusy"
+          :pending-ref="pendingRefPath"
           @submit="handleInputSubmit"
           @execute="handleInputExecute"
           @special-key="handleSpecialKey"
           @shortcuts-panel-toggle="handleShortcutsPanelToggle"
+          @ref-consumed="pendingRefPath = null"
         />
       </div>
     </div>
@@ -180,6 +185,7 @@ import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
 import { useTuiCompat } from '@/composables/useTuiCompat'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
+import { isIdlePromptLine } from '@/utils/terminalIdle'
 import TerminalHeader from '@/components/TerminalHeader.vue'
 import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
 import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
@@ -189,7 +195,6 @@ import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import { useToast } from '@/composables/useToast'
-import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
 import { TERMINAL_THEMES } from '@/config/terminalThemes'
 import type { PresetTask } from '@/composables/model'
@@ -252,6 +257,66 @@ const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
 const showShortcutConfig = ref(false)
+
+// 侧栏「插入引用」待填入路径：TerminalInputBar 消费后置回 null
+const pendingRefPath = ref<string | null>(null)
+
+// ==================== 会话忙闲判定（生成中一键中断） ====================
+// 桌面端会话状态事件目前只有 running/stopped 会实际变化（waitingInput 检测与
+// 插件 taskStatus 均为预留、未接入），通用 PTY 会话的「生成中」靠双条件推断：
+// 空闲 = 缓冲末行是 CLI 提示符/提问行 且 近期无输出；其余运行时间一律视为生成中，
+// 输入条发送键切换为中断按钮（等价 Esc），回到提示符后自动恢复发送。
+// 轮询（400ms）读 xterm 缓冲末行，文本变化即视为有输出——不侵入写入管线。
+
+const lastTerminalLine = ref('')
+const lastOutputAt = ref(0)
+/** 最近 IDLE_SETTLE_MS 内是否有终端输出（轮询周期刷新，供计算属性依赖） */
+const outputActivity = ref(false)
+
+/** 输出停止多久后视为空闲（生成停顿 + 提示符重绘的余量） */
+const IDLE_SETTLE_MS = 1200
+const IDLE_POLL_MS = 400
+let idlePollTimer: ReturnType<typeof setInterval> | null = null
+
+function pollTerminalIdle() {
+  const buffer = terminalRef.value?.buffer?.active
+  const line = buffer ? (buffer.getLine(buffer.length - 1)?.translateToString() ?? '') : ''
+  if (line !== lastTerminalLine.value) {
+    lastTerminalLine.value = line
+    lastOutputAt.value = Date.now()
+  }
+  outputActivity.value = Date.now() - lastOutputAt.value < IDLE_SETTLE_MS
+}
+
+/**
+ * 生成/等待中标记：驱动输入条发送键 → 中断按钮切换
+ *
+ * 优先级：插件 taskStatus（预留，接入后直接驱动）> 会话状态 > 末行提示符推断
+ */
+const isSessionBusy = computed(() => {
+  if (!isSessionActive.value) return false
+  const s = session.value
+  // 会话已明确回到「等待输入」（桌面端预留状态）：生成结束，恢复发送按钮
+  if (s?.status === 'waitingInput') return false
+  const task = s?.taskStatus
+  if (task === 'in_progress' || task === 'asking') return true
+  if (task === 'completed' || task === 'interrupted' || task === 'idle') return false
+  // 通用 PTY（无 task 状态）：空闲 = 末行提示符 + 近期无输出
+  const idle = isIdlePromptLine(lastTerminalLine.value) && !outputActivity.value
+  return !idle
+})
+
+function startIdlePoll() {
+  if (idlePollTimer) return
+  idlePollTimer = setInterval(pollTerminalIdle, IDLE_POLL_MS)
+}
+
+function stopIdlePoll() {
+  if (idlePollTimer) {
+    clearInterval(idlePollTimer)
+    idlePollTimer = null
+  }
+}
 
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
 const terminalSettings = ref({
@@ -800,6 +865,12 @@ function handleSettingsInputFocus(focused: boolean) {
   settingsInputFocused.value = focused
 }
 
+/** 侧栏「插入引用」：把 @路径 传给输入条填充，并收起侧栏露出输入区 */
+function handleInsertRef(path: string) {
+  pendingRefPath.value = path
+  showSidebar.value = false
+}
+
 function handleBack() {
   router.back()
 }
@@ -900,6 +971,8 @@ onMounted(async () => {
 
   await nextTick()
   await initTerminal()
+  // 空闲判定轮询：xterm 就绪后启动，卸载时停止
+  startIdlePoll()
 
   // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
   if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
@@ -925,6 +998,7 @@ onMounted(async () => {
 onUnmounted(async () => {
   disposed = true
   clearSubscribeRetry()
+  stopIdlePoll()
 
   // 移除 visualViewport 事件监听
   if (window.visualViewport) {

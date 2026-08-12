@@ -589,6 +589,7 @@ pub fn run() {
             commands::plugin::plugin_fs_auth_respond,
             // File Service (Plugin)
             commands::file_service::plugin_filesrv_mount,
+            commands::opener::plugin_reveal_in_dir,
             commands::file_service::plugin_filesrv_update_roots,
             commands::file_service::plugin_filesrv_dispose,
             commands::file_service::plugin_filesrv_respond_upload_request,

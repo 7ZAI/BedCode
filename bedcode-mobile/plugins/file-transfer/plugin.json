@@ -1,7 +1,7 @@
 {
   "id": "com.bedcode.file-transfer",
   "name": "File Transfer",
-  "version": "1.0.0",
+  "version": "1.0.0-beta",
   "description": "内网文件传输",
   "author": "BedCode",
   "icon": "📁",
@@ -16,6 +16,7 @@
     "fs:write",
     "network:http",
     "storage",
+    "system:open",
     "transfer",
     "ui:back",
     "ui:route",
@@ -59,6 +60,10 @@
       {
         "id": "file-transfer.cancel",
         "title": "Cancel Transfer"
+      },
+      {
+        "id": "file-transfer.remove-task",
+        "title": "Remove Task"
       },
       {
         "id": "file-transfer.resume-all",

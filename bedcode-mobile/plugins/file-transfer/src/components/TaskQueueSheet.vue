@@ -32,6 +32,8 @@ const emit = defineEmits<{
   (e: 'resume', id: string): void
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
+  (e: 'remove', id: string): void
+  (e: 'open', id: string): void
   (e: 'resume-all'): void
 }>()
 
@@ -115,6 +117,12 @@ function actionButtons(task: Task): Array<{ key: string; label: string; color: s
   }
   if (canCancel(task)) {
     btns.push({ key: 'cancel', label: t('transfer.task.cancel'), color: 'ft-btn-neutral', onClick: () => emit('cancel', task.id) })
+  }
+  // 删除：任意状态可用（终态任务无生命周期动作，删除是唯一清理途径）
+  btns.push({ key: 'remove', label: t('transfer.task.remove'), color: 'ft-btn-neutral', onClick: () => emit('remove', task.id) })
+  // 打开本地文件：仅已完成任务（文件已落盘）
+  if (task.state === 'completed') {
+    btns.push({ key: 'open', label: t('transfer.task.open'), color: 'ft-btn-accent', onClick: () => emit('open', task.id) })
   }
   return btns
 }

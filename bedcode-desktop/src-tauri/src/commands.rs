@@ -5,6 +5,7 @@
 pub mod devices;
 pub mod file_service;
 pub mod mdns;
+pub mod opener;
 pub mod plugin;
 pub mod pty_input;
 pub mod qr;

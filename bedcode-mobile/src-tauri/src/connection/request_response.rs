@@ -85,17 +85,19 @@ impl RequestResponseManager {
         );
 
         if let Some(id) = id {
-            let pending_count_before = self.pending.lock().await.len();
             if let Some(pending) = self.pending.lock().await.remove(&id) {
                 tracing::debug!("[RequestResponseManager] ✓ Matched pending request for id={}", id);
                 let _ = pending.tx.send(Ok(message));
                 return None;  // 已匹配，不返回消息
-            } else {
-                tracing::warn!(
-                    "[RequestResponseManager] ✗ No pending request for id={}, pending_count={}",
-                    id, pending_count_before
-                );
             }
+            // 调试终端组件订阅偏移量时使用：推送消息（含终端输出广播）每帧都会命中
+            // 此分支（带 message_id 但无 pending 请求），逐帧 WARN 刷屏，已注释；
+            // 排查订阅/匹配问题时恢复即可
+            // let pending_count_before = self.pending.lock().await.len();
+            // tracing::warn!(
+            //     "[RequestResponseManager] ✗ No pending request for id={}, pending_count={}",
+            //     id, pending_count_before
+            // );
         } else {
             tracing::warn!("[RequestResponseManager] Message has no id, cannot match");
         }

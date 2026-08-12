@@ -415,6 +415,46 @@ pub fn cancel(
     Ok(serde_json::json!({"ok": true}))
 }
 
+/// remove-task：从传输队列移除任务（任意状态，含终态）
+///
+/// 终态任务（completed/cancelled/failed/rejected）无生命周期动作可做，
+/// 列表只增不减；remove 是唯一清理途径：摘除队列引用、移除任务存储、
+/// 持久化并推送变更。活跃任务先取消宿主传输并清理 .part 残留；
+/// 上传的远端 session 不做显式取消（本地移除，对端 session 由 TTL/取消兜底）。
+pub fn remove_task(
+    state: &mut PluginState,
+    host: &(impl HostTransfer + HostFs + HostStorage + HostEvents + HostLog),
+    task_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let (host_task_id, direction, local_path) = {
+        let task = state
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
+        (
+            task.host_task_id.clone(),
+            task.direction,
+            task.local_path.clone(),
+        )
+    };
+
+    // 活跃任务：取消宿主传输（token 取消瞬时完成，不阻塞）
+    if let Some(ref htid) = host_task_id {
+        let _ = host.transfer_cancel(htid);
+    }
+
+    // 下载：删除 .part 临时文件（幂等，残留不阻塞移除）
+    if direction == Direction::Download {
+        delete_part_file(host, &local_path);
+    }
+
+    state.queue.remove(task_id);
+    state.tasks.remove(task_id);
+    state.tasks.save(host);
+    emit_tasks_changed(host, &state.tasks);
+    Ok(serde_json::json!({"ok": true}))
+}
+
 /// resume-all：恢复所有 paused/resumable 任务
 pub fn resume_all(
     state: &mut PluginState,

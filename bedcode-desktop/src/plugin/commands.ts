@@ -197,3 +197,8 @@ export async function pluginPickDirectory(pluginId: string): Promise<string | nu
 export async function pluginPickFiles(pluginId: string): Promise<string[]> {
   return await invoke<string[]>('plugin_pick_files', { pluginId })
 }
+
+/** 在系统文件管理器中显示文件/目录（需 system:open 权限） */
+export async function pluginRevealInDir(pluginId: string, path: string): Promise<void> {
+  return await invoke<void>('plugin_reveal_in_dir', { pluginId, path })
+}

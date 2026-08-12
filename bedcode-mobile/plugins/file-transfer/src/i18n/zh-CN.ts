@@ -51,6 +51,8 @@ export default {
   'transfer.task.pause': '暂停',
   'transfer.task.resume': '恢复',
   'transfer.task.cancel': '取消',
+  'transfer.task.remove': '删除任务',
+  'transfer.task.open': '打开',
   'transfer.task.retry': '重新排队',
   'transfer.task.resumeAll': '全部恢复',
   'transfer.task.download': '下载',

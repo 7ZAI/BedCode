@@ -709,7 +709,10 @@ async fn download_file(
             .and_then(|v| parse_range_header(v, file_len));
         let (start, end) = range.unwrap_or((0, None));
         let end = end.unwrap_or(file_len.saturating_sub(1)).min(file_len.saturating_sub(1));
-        let content_len = end - start + 1;
+        // 空文件（file_len==0）无 Range 时 end=0，end-start+1=1 与实际空 body
+        // 不符 → 对端 reqwest 报「error decoding response body」，0 字节文件
+        // 必然下载失败；空文件 content_len 必须为 0
+        let content_len = if file_len == 0 { 0 } else { end - start + 1 };
 
         let file = match tokio::fs::File::open(&cache_path).await {
             Ok(f) => f,
@@ -770,7 +773,10 @@ async fn download_file(
 
     let (start, end) = range.unwrap_or((0, None));
     let end = end.unwrap_or(file_len.saturating_sub(1)).min(file_len.saturating_sub(1));
-    let content_len = end - start + 1;
+    // 空文件（file_len==0）无 Range 时 end=0，end-start+1=1 与实际空 body
+    // 不符 → 对端 reqwest 报「error decoding response body」，0 字节文件
+    // 必然下载失败；空文件 content_len 必须为 0
+    let content_len = if file_len == 0 { 0 } else { end - start + 1 };
 
     let file = match tokio::fs::File::open(&target).await {
         Ok(f) => f,
@@ -1347,6 +1353,7 @@ mod tests {
                 handle_id: "stream-1".to_string(),
                 effective_offset: offset,
                 seekable: true,
+                size: 0,
             })
         }
 

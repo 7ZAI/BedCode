@@ -5,12 +5,12 @@ import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 
 /**
  * 回归测试：终端可滚动历史行数（bug：scrollback 硬编码 10000，
- * 后端队列 50000 事件的历史写入后最早部分被 xterm buffer 丢弃，
+ * 后端队列 25000 事件的历史写入后最早部分被 xterm buffer 丢弃，
  * 只能滚动最近 10000 行）
  */
 
 // Rust 端 channels.global_queue_capacity 默认值（事件数）
-const BACKEND_QUEUE_EVENTS = 50000
+const BACKEND_QUEUE_EVENTS = 25000
 
 function createTerminal(scrollback: number) {
   const container = document.createElement('div')
@@ -33,12 +33,12 @@ describe('terminal scrollback', () => {
     expect(TERMINAL_SCROLLBACK).toBeGreaterThanOrEqual(BACKEND_QUEUE_EVENTS)
   })
 
-  it('写入 50000 行后 buffer 完整保留（可滚动全部历史）', async () => {
+  it('写入 25000 行后 buffer 完整保留（可滚动全部历史）', async () => {
     const { t, container } = createTerminal(TERMINAL_SCROLLBACK)
     const line = 'x'.repeat(10) + '\r\n'
     t.write(line.repeat(BACKEND_QUEUE_EVENTS))
     await flushRaf()
-    // 50000 行 + 当前屏 24 行，全部保留
+    // 25000 行 + 当前屏 24 行，全部保留
     expect(t.buffer.active.length).toBeGreaterThanOrEqual(BACKEND_QUEUE_EVENTS)
     t.dispose()
     container.remove()
@@ -49,7 +49,7 @@ describe('terminal scrollback', () => {
     const line = 'x'.repeat(10) + '\r\n'
     t.write(line.repeat(BACKEND_QUEUE_EVENTS))
     await flushRaf()
-    // 只有 scrollback 10000 + 可见 24 行，40000 行历史不可滚动
+    // 只有 scrollback 10000 + 可见 24 行，写入 25000 行后仅保留最近 10024 行
     expect(t.buffer.active.length).toBeLessThanOrEqual(10000 + 24)
     t.dispose()
     container.remove()

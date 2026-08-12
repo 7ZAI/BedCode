@@ -85,6 +85,29 @@ export const AGENT_PRESETS: Record<Exclude<AgentType, 'generic'>, PresetCommand[
   ],
 }
 
+/**
+ * 获取某 Agent CLI 预设的命令文本列表（`/` 补全数据源）
+ *
+ * generic（未识别）无预设，返回空列表；调用方据此决定是否启用补全弹层。
+ */
+export function getPresetCommandTexts(type: AgentType): string[] {
+  if (type === 'generic' || !AGENT_PRESETS[type]) return []
+  return AGENT_PRESETS[type].map(c => c.command)
+}
+
+/**
+ * `/` 补全过滤：返回以输入前缀开头（大小写不敏感）的命令文本
+ *
+ * 与 agent 内部补全同构（前缀匹配），但走本地数据零延迟；
+ * 排除裸 `/`（补全自身无意义，skills 入口仍走快捷键面板的发送模式）。
+ */
+export function filterPresetCommands(commands: string[], input: string): string[] {
+  const trimmed = input.trim()
+  if (!trimmed.startsWith('/')) return []
+  const keyword = trimmed.slice(1).toLowerCase()
+  return commands.filter(c => c.length > 1 && c.toLowerCase().startsWith(`/${keyword}`))
+}
+
 /** 会话启动命令 → Agent CLI 关键词包含匹配（命中即返回，按序优先） */
 const AGENT_KEYWORDS: Array<[Exclude<AgentType, 'generic'>, string]> = [
   ['claude_code', 'claude'],

@@ -46,6 +46,7 @@ export type {
   PeerMountAnnouncement,
   PeerFileServiceInfo,
   FileServiceAPI,
+  SystemAPI,
   SafAPI,
   SafEntry,
   SafCopyHandle,

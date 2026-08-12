@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "bedcode-plugin-file-transfer"
-version = "1.0.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "bedcode-plugin-api",

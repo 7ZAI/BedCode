@@ -5,7 +5,7 @@
  * （每套 12 条、5 类必选齐全、skills 位模式正确）。
  */
 import { describe, it, expect } from 'vitest'
-import { AGENT_PRESETS, AGENT_TYPES, detectAgentType } from '@/config/agentPresets'
+import { AGENT_PRESETS, AGENT_TYPES, detectAgentType, getPresetCommandTexts, filterPresetCommands } from '@/config/agentPresets'
 
 describe('detectAgentType', () => {
   it('matches keywords by substring inclusion (case-insensitive)', () => {
@@ -58,5 +58,46 @@ describe('AGENT_PRESETS', () => {
     // 替代位为执行模式
     expect(AGENT_PRESETS.codex.find((c) => c.command === '/init')?.mode).toBe('execute')
     expect(AGENT_PRESETS.opencode.find((c) => c.command === '/templates')?.mode).toBe('execute')
+  })
+})
+
+describe('getPresetCommandTexts', () => {
+  it('returns 12 slash commands for each agent type', () => {
+    for (const type of AGENT_TYPES) {
+      const texts = getPresetCommandTexts(type)
+      expect(texts).toHaveLength(12)
+      expect(texts.every((c) => c.startsWith('/'))).toBe(true)
+    }
+  })
+
+  it('returns empty list for generic (未识别无预设)', () => {
+    expect(getPresetCommandTexts('generic')).toEqual([])
+  })
+})
+
+describe('filterPresetCommands', () => {
+  const commands = ['/model', '/new', '/compact', '/skill:', '/settings', '/']
+
+  it('matches prefix case-insensitively', () => {
+    expect(filterPresetCommands(commands, '/M')).toEqual(['/model'])
+    expect(filterPresetCommands(commands, '/c')).toEqual(['/compact'])
+    expect(filterPresetCommands(commands, '/skill')).toEqual(['/skill:'])
+  })
+
+  it('returns all candidates when only slash is typed', () => {
+    const all = filterPresetCommands(commands, '/')
+    expect(all).toContain('/model')
+    expect(all).toContain('/settings')
+    expect(all).toHaveLength(5)
+  })
+
+  it('excludes the bare slash command itself (skills 入口走面板)', () => {
+    expect(filterPresetCommands(['/'], '/')).toEqual([])
+  })
+
+  it('returns empty for non-slash input or no match', () => {
+    expect(filterPresetCommands(commands, 'model')).toEqual([])
+    expect(filterPresetCommands(commands, '/zzz')).toEqual([])
+    expect(filterPresetCommands(commands, '')).toEqual([])
   })
 })

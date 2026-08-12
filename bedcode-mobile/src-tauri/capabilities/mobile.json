@@ -13,8 +13,6 @@
     "core:webview:default",
     "dialog:default",
     "os:default",
-    "notification:default",
-    "os:default",
     {
       "identifier": "http:default",
       "allow": [

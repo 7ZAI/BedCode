@@ -329,6 +329,19 @@
 
     <!-- 输入区域 -->
     <div class="input-area">
+      <!-- `/` 命令补全弹层：输入框上方，点选即填充输入框（复用 agentPresets 本地数据，零延迟） -->
+      <transition name="completion-fade">
+        <div v-if="showCompletion" class="completion-panel" @mousedown.prevent>
+          <button
+            v-for="cmd in completionItems"
+            :key="cmd"
+            class="completion-item"
+            @click="applyCompletion(cmd)"
+          >
+            <span class="completion-cmd">{{ cmd }}</span>
+          </button>
+        </div>
+      </transition>
       <div class="input-box" :class="{ 'input-box--expanded': isInputFocused }">
         <!-- 输入框：占满整行宽度 -->
         <textarea
@@ -359,12 +372,26 @@
           </button>
 
           <button
+            v-if="!interrupting"
             class="inline-btn send-btn"
             :disabled="!canSubmit"
             @click="handleSubmit"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
+          <!-- 生成/等待中：发送键切换为常驻中断按钮（等价 Esc 特殊键） -->
+          <button
+            v-else
+            class="inline-btn interrupt-btn"
+            :disabled="props.disabled"
+            :title="t('mobile.input.interrupt')"
+            :aria-label="t('mobile.input.interrupt')"
+            @click="handleInterrupt"
+          >
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M6 6h12v12H6z" />
             </svg>
           </button>
 
@@ -390,6 +417,7 @@ import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useInputAssistantStore, type QuickCommand } from '@/stores/inputAssistant'
 import type { QuickBarItem } from '@/stores/inputAssistant'
+import { filterPresetCommands } from '@/config/agentPresets'
 import { useToast } from '@/composables/useToast'
 
 // ==================== Types ====================
@@ -404,11 +432,17 @@ const props = withDefaults(defineProps<{
   isConnected?: boolean
   placeholder?: string
   isLandscape?: boolean
+  /** 会话生成/等待中：发送键切换为中断按钮（等价 Esc） */
+  interrupting?: boolean
+  /** 侧栏「插入引用」待填入的路径（消费后 emit ref-consumed） */
+  pendingRef?: string | null
 }>(), {
   disabled: false,
   isConnected: false,
   placeholder: '',
   isLandscape: false,
+  interrupting: false,
+  pendingRef: null,
 })
 
 // ==================== Emits ====================
@@ -419,6 +453,8 @@ const emit = defineEmits<{
   specialKey: [key: string]
   /** 快捷键面板展开/收起时通知终端，传入面板高度用于偏移 */
   shortcutsPanelToggle: [height: number]
+  /** pendingRef 已被填入输入框，通知父组件复位 */
+  refConsumed: []
 }>()
 
 // ==================== Safe Area ====================
@@ -469,6 +505,61 @@ const trackStyle = computed(() => ({
   transform: `translateX(${-(currentSlide.value + 1) * 100 + touchDeltaX.value}%)`,
   transition: isSwiping.value || isLooping.value ? 'none' : 'transform 0.3s ease',
 }))
+
+// ==================== `/` 命令补全 ====================
+// 与 agent 内部补全同构（前缀匹配），但数据来自本地预设（agentPresets），零延迟；
+// 当前会话 agent 预设为空（generic 未识别）时候选为空，弹层不出现
+
+const completionItems = computed(() => {
+  if (!inputText.value.startsWith('/')) return []
+  return filterPresetCommands(
+    assistStore.presetCommands.map(c => c.command),
+    inputText.value,
+  )
+})
+
+/** 点选后关闭弹层（对齐 agent 内部补全行为）；下次输入时自动恢复 */
+const completionDismissed = ref(false)
+
+// flush:sync —— applyCompletion 写入后同步复位标记，保证点选必然关闭弹层
+watch(inputText, () => {
+  completionDismissed.value = false
+  // 用户开始打字时收起快捷键面板，避免补全弹层与面板重叠遮挡
+  if (showShortcutsPanel.value) {
+    showShortcutsPanel.value = false
+    emit('shortcutsPanelToggle', 0)
+  }
+}, { flush: 'sync' })
+
+const showCompletion = computed(() =>
+  isInputFocused.value && !completionDismissed.value && completionItems.value.length > 0
+)
+
+/** 点选补全项：整体填充输入框并保持焦点，由用户决定补全/发送 */
+function applyCompletion(command: string) {
+  inputText.value = command
+  // 覆盖 sync watcher 的复位：点选后弹层关闭，等下一次真实输入再出现
+  completionDismissed.value = true
+  nextTick(() => {
+    adjustTextareaHeight()
+    inputRef.value?.focus()
+  })
+}
+
+// ==================== Pending Ref ====================
+
+// 侧栏「插入引用」：把 @路径 填入输入框（已有内容时补空格分隔）并聚焦，便于继续输入
+watch(() => props.pendingRef, (path) => {
+  if (!path) return
+  const refText = `@${path}`
+  const text = inputText.value
+  inputText.value = text && !text.endsWith(' ') ? `${text} ${refText}` : `${text}${refText}`
+  emit('refConsumed')
+  nextTick(() => {
+    adjustTextareaHeight()
+    inputRef.value?.focus()
+  })
+})
 
 // ==================== Custom Commands ====================
 
@@ -692,6 +783,12 @@ function handleExecute() {
 function handleShortcutClick(code: string) {
   assistStore.recordShortcut(code)
   emit('specialKey', code)
+}
+
+/** 生成中中断：等价发送 Esc 特殊键（与快捷键面板 Esc 同一通道） */
+function handleInterrupt() {
+  assistStore.recordShortcut('escape')
+  emit('specialKey', 'escape')
 }
 
 // ==================== Quick Bar ====================
@@ -1036,6 +1133,89 @@ onMounted(() => {
 .execute-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* 生成中中断按钮：danger 语义（等价 Esc），与 Del 键同色系 */
+.interrupt-btn {
+  background: var(--mobile-danger-bg);
+  border-color: var(--mobile-danger-border);
+  color: var(--mobile-danger-color);
+}
+
+.interrupt-btn:active:not(:disabled) {
+  transform: scale(0.93);
+  background: var(--mobile-danger-bg);
+  filter: brightness(1.2);
+}
+
+.interrupt-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ==================== `/` Command Completion ==================== */
+
+.completion-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 50;
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.875rem;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  overflow-y: auto;
+  max-height: clamp(8rem, 30vh, 14rem);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.completion-panel::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.completion-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  height: clamp(2.75rem, 9vw, 3rem);
+  padding: 0 1rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mobile-border);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.completion-item:last-child {
+  border-bottom: none;
+}
+
+.completion-item:active {
+  background: var(--mobile-accent-muted);
+}
+
+.completion-cmd {
+  font-family: 'Courier New', monospace;
+  font-size: var(--font-size-base);
+  color: var(--mobile-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.completion-fade-enter-active,
+.completion-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.completion-fade-enter-from,
+.completion-fade-leave-to {
+  opacity: 0;
 }
 
 /* ==================== Carousel ==================== */

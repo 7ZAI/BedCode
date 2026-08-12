@@ -21,6 +21,8 @@ pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BUS: &str = "bus";
 /// 文件服务：挂载受控文件服务端点（与桌面端同名权限，见内网文件传输插件规格）
 pub const PERMISSION_FILESERVICE: &str = "fileservice";
+/// 系统文件操作：用系统查看器打开本地文件（传输完成「打开本地文件」）
+pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
 /// 传输引擎：发起断点续传的文件上传/下载任务
 pub const PERMISSION_TRANSFER: &str = "transfer";
 
@@ -40,6 +42,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FS_WRITE,
     PERMISSION_BUS,
     PERMISSION_FILESERVICE,
+    PERMISSION_SYSTEM_OPEN,
     PERMISSION_TRANSFER,
 ];
 
@@ -66,6 +69,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "fileService.pickDirectory",
         "fileService.requestAllFilesAccess",
     ]),
+    (PERMISSION_SYSTEM_OPEN, &["system.openFile"]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
 ];
 

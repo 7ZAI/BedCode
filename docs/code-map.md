@@ -1,5 +1,7 @@
 # BedCode Code Map
 
+> **已废弃（2026-08）**：本文档已被 `.codegraph/` 索引（CodeGraph 工具）取代，不再维护，且内容停留在 WASM 组件迁移之前，其中描述的链路（`bedcode_hook.py`、`scripts/bedcode-plugin/`、`useAutoExecutor`）已随重构移除。代码探索请使用 CodeGraph 工具，模块索引不再人工维护。
+
 本文档作为项目代码探索的索引入口，记录完整的目录结构和各模块职责。
 
 

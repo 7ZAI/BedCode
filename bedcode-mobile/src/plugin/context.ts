@@ -21,6 +21,7 @@ import type {
   NotificationAPI,
   StatusAPI,
   FileServiceAPI,
+  SystemAPI,
   FileServiceMount,
   MountOptions,
   PeerFileServiceInfo,
@@ -41,6 +42,7 @@ import * as pluginEvents from './events'
 import { getPluginRegistry } from './registry'
 import { registerPluginRoute, openPluginRoute } from './routes'
 import { getSharedModule } from './shared-runtime'
+import { invoke } from '@tauri-apps/api/core'
 
 /** Webview 上传策略钩子事件载荷（宿主 emit，camelCase 与 Rust 侧一致） */
 interface UploadHookEventPayload {
@@ -389,6 +391,26 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
+  // ==================== SystemAPI ====================
+
+  /** 检查 system:open 权限，失败时抛 i18n 文案错误 */
+  function requireSystemOpenPermission(apiMethod: string): void {
+    if (!hasPermissionForApi(permissions, apiMethod)) {
+      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
+      const message = hostI18n
+        ? hostI18n.global.t('mobile.plugin.noSystemOpenPermission', { plugin: info.id })
+        : 'mobile.plugin.noSystemOpenPermission'
+      throw new Error(message)
+    }
+  }
+
+  const system: SystemAPI = {
+    async openFile(path: string, displayName?: string): Promise<void> {
+      requireSystemOpenPermission('system.openFile')
+      return pluginCmds.pluginOpenFile(info.id, path, displayName ?? '')
+    },
+  }
+
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
     registerMessages(locale: string, messages: Record<string, any>): void {
@@ -480,14 +502,17 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   // ==================== NotificationAPI ====================
   const notifications: NotificationAPI = {
     async notify(title, body) {
-      const { sendNotification, isPermissionGranted, requestPermission } = await import(
-        '@tauri-apps/plugin-notification',
-      )
-      if (!(await isPermissionGranted())) {
-        const granted = await requestPermission()
-        if (!granted) return
+      // 走自定义 Kotlin 插件（TaskNotificationPlugin）：插件自主通知，不受设置页开关控制
+      try {
+        const check = await invoke<{ granted: boolean }>('plugin:task-notification|checkNotificationPermission')
+        if (!check.granted) {
+          const req = await invoke<{ granted: boolean }>('plugin:task-notification|requestNotificationPermission')
+          if (!req.granted) return
+        }
+        await invoke('plugin:task-notification|showPluginNotification', { title, body })
+      } catch (e) {
+        console.warn('[PluginContext] notify failed:', e)
       }
-      sendNotification({ title, body })
     },
   }
 
@@ -515,6 +540,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     logger,
     dialogs,
     notifications,
+    system,
     status,
     _disposables: disposables,
   }

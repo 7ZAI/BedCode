@@ -28,7 +28,7 @@ const {
   start: startPeer,
   stop: stopPeer,
 } = usePeer(context)
-const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
+const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, removeTask, openInDir, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
 const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency } = useSettings(context)
 const {
   entries,
@@ -343,6 +343,8 @@ onUnmounted(() => {
           @resume="resume"
           @cancel="cancel"
           @retry="retry"
+          @remove="removeTask"
+          @open-dir="openInDir"
           @resume-all="resumeAll"
         />
       </Transition>

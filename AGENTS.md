@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-BedCode 是一个跨平台应用，桌面端作为主机，移动端作为远程终端，通过 WebSocket + HTTP 通信。也可作为通用远程终端使用。
+BedCode 是局域网远程终端应用：桌面端作为主机运行终端会话（Claude Code 等），移动端作为远程终端控制，通过 WebSocket + HTTP 通信，当前适配两端同一 WiFi 场景。也可作为通用远程终端使用。
 
 **Tech Stack:** Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS + Rust (Tokio) + SQLite + vue-i18n@9
 
@@ -15,18 +15,24 @@ BedCode 是一个跨平台应用，桌面端作为主机，移动端作为远程
 
 ## Code Exploration
 
-项目根目录已有 `.codegraph/` 索引（tree-sitter 解析的知识图谱），**探索代码优先使用 CodeGraph 工具**，取代人工维护的 `docs/code-map.md` 模块索引。
+项目根目录已有 `.codegraph/` 索引（预建知识图谱：全部符号、调用边、依赖，30+ 语言），**代码探索与改动前分析必须直接使用 CodeGraph 工具，禁止用 grep/read 循环重复推导结构**。explore 返回的源码视为已 Read，可直接 Edit。
+
+### 核心原则（官方最佳实践）
+
+- **`codegraph_explore` 是唯一主力工具**：接受自然语言问题或符号/文件名组合，一次返回相关符号的逐字源码（按文件分组）+ 调用路径（含 grep 追不上的动态分派：回调、事件、interface→impl）+ 影响面摘要。其他工具（node/search/callers/callees/impact）的信息已内联在 explore 的返回中，仅当 explore 不足以回答时才补用
+- **信任结果，禁止用 grep 重新验证**——结果来自完整 AST 解析，grep 复检更慢、更不准且浪费上下文
+- **编辑前后都用 explore**：改代码前先查目标符号（谁调用它、改它影响什么），改完后再查关联面
+- **响应出现 `⚠️` staleness banner**：banner 列出的文件刚被编辑、索引尚未同步（滞后约 1s）——只对这些文件用 Read 取最新内容，banner 之外的文件仍然可信
+- **「Already sent earlier in this conversation」是提示不是缺口**：本会话先前已返回过该文件且未变化——不要重新获取
+- **不要将结构探索委派给读文件的 subagent**——subagent 重新读文件会重复 CodeGraph 已做的工作；仅当 subagent 自己也用 CodeGraph 时例外
 
 ### 工具选择
 
-- **几乎任何问题** — “X 如何工作”、架构、调用链（“X 如何到达 Y”）、浏览代码区域、改动前影响评估 → `codegraph_explore`（首选，接受自然语言问题，返回按文件分组的源码 + 紧凑的依赖影响面，一次调用通常足够）
-- 仅定位符号位置 → `codegraph_search`
-- 调用/被调用关系 → `codegraph_callers` / `codegraph_callees`
-- 超出 explore 影响面的深入影响分析 → `codegraph_impact`
-- 单个符号完整源码或重载名 → `codegraph_node`
 - 符号名不确定时，先用 `semble search "概念或描述" .` 定位符号
-- 字面量问题（字符串内容、注释、日志、配置文本）或已定位的小范围 → 原生 grep/read
-- Store/handler action（Pinia、route map 等）被索引为真实符号，直接用 `codegraph_explore` / `codegraph_node`，无需通读整个 store 文件
+- 仅定位符号位置 → `codegraph_search`；调用/被调用关系 → `codegraph_callers` / `codegraph_callees`；超出 explore 影响面的深入分析 → `codegraph_impact`；单个符号完整源码或重载名 → `codegraph_node`
+- Store/handler action（Pinia、route map 等）被索引为真实符号，直接用 `codegraph_explore`，无需通读整个 store 文件
+- 字面量问题（字符串内容、注释、日志、配置文本）或 CodeGraph 不索引的内容（docs、配置文件）→ 原生 grep/read
+- 无 `.codegraph/` 索引的项目 → 停止调用 CodeGraph，用内置工具
 
 ### 预算与边界
 
@@ -73,19 +79,11 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 
 ---
 
-## Rust Backend
-
-### Module Organization
-
-桌面端和移动端模块均按领域扁平组织在 `src/` 下，无中间层级。
-
-桌面端核心模块：`commands/`、`db/`、`enums/`、`events/`、`plugin/`、`pty/`、`server/`、`session/`、`system/`、`utils/`
-
-移动端核心模块：`auth/`、`commands/`、`connection/`、`enums/`、`handler/`、`model/`、`router/`、`system/`、`session.rs`、`state.rs`
+## Rust (Backend)
 
 ### File Naming
 
-模块入口文件与目录同名（`module.rs`），不使用旧式 `mod.rs`。
+Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`），不使用旧式 `mod.rs`；测试文件 `*_test.rs`。
 
 ### Error Handling
 
@@ -139,9 +137,11 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 
 使用 `@tauri-apps/plugin-os`，**禁止使用屏幕宽度检测桌面/移动端**。
 
-### Styles & Layout
+### Styles & Layout（必读 skill，强制）
 
-修改 CSS / layout / animation / theme / 移动端安全区时，加载 `frontend-styles` skill。
+**任何前端 UI 改动（新建 Vue 组件、布局重构、CSS/Tailwind 类、design token、动画/过渡、深浅色主题、响应式适配、移动端安全区、字体/行高）都必须先加载 `frontend-styles` skill，并以其规范为准，禁止凭通用前端经验自行发挥。**
+
+该 skill 给出：token-bound 取值优先级、class 书写顺序、safe-stack z-index 层级、过渡/动画规范、反模式清单、新组件 checklist；配套文件（`TOKENS.md` / `ANIMATIONS.md` / `MOBILE.md` / `BLUEPRINTS.md` / `I18N.md` / `PERFORMANCE.md` / `VUE3-STYLING.md` / `MODERN-CSS.md` / `LINTING.md`）位于 `.agents/skills/frontend-styles/`。
 
 ---
 
@@ -166,6 +166,8 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 3. 自实现小型组件（自绘外观 + 原生交互内核），放入共享组件库（宿主或 SDK）供复用
 
 新增共享组件须同时考虑桌面端与移动端（或至少放入对应 SDK 供插件引用）。
+
+> 所有组件的视觉实现（颜色/圆角/阴影/间距/动画/响应式）一律遵循 `frontend-styles` skill 的 token 体系（token-bound），禁止硬编码视觉值。
 
 ---
 
@@ -200,38 +202,26 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 | Vue Component | PascalCase (`TitleBar.vue`) |
 | Composable | camelCase with `use` prefix |
 | Store | camelCase |
-| Rust module | snake_case |
-| Rust test | `*_test.rs` |
 
----
-
-## Security
-
-- JWT 认证（HS256，7 天过期）
-- QR Token 一次性使用，可配置 TTL
-- 配对码 60 秒过期
-- 设备指纹验证
-- Plugin Token 用于 Claude Code hooks 认证
-- 当前 WebSocket 通信未加密（`ws://`），端到端加密（X25519 + AES-GCM）计划中
+> Rust 文件命名见上文 `## Rust (Backend)` 的 File Naming。
 
 ---
 
 ## Architecture Decisions
 
 1. Multi-Project Monorepo（各自独立 `src/` 和 `src-tauri/`）
-2. Separation of Concerns（composables 处理 API，stores 管理状态，components 只做 UI）
-3. Async Everywhere（Rust Tokio，前端 async/await + Tauri commands）
-4. Event-Driven（PTY 输出通过 `broadcast` 通道分发）
-5. Graceful Shutdown（`AtomicBool` 信号通知后台任务关闭）
-6. Flat Module Structure（按领域扁平组织）
-7. Plugin System（Rust API crate + 前端加载器双层架构）
+2. Async Everywhere（Rust Tokio，前端 async/await + Tauri commands）
+3. Event-Driven（PTY 输出通过 `broadcast` 通道分发）
+4. Graceful Shutdown（`AtomicBool` 信号通知后台任务关闭）
+5. Flat Module Structure（按领域扁平组织）
+6. Plugin System（Rust API crate + 前端加载器双层架构）
 
 ---
 
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
+- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源
 
 ---
 
@@ -290,7 +280,7 @@ sh scripts/doc-tracking.sh untrack && git commit
 - 禁止 panic hook 中调用 `tracing::error!`
 - 禁止无上下文的裸字符串错误
 - 禁止 `.pi/sessions/` 会话日志入库（用 `git add -f .pi/<子路径>`，勿整目录添加）
-- 修改样式时加载 `frontend-styles` skill
+- 前端 UI/样式改动（组件、布局、主题、动画）必须先加载 `frontend-styles` skill 再动手
 
 ---
 
@@ -302,6 +292,7 @@ sh scripts/doc-tracking.sh untrack && git commit
 - i18n key 同步出现在 zh-CN 和 en 文件中
 - 公开项有文档注释
 - 错误处理使用 `AppError` 而非裸字符串
+- 前端 UI 改动通过 `frontend-styles` 自查（token-bound、无原生控件外观、无反模式）
 
 ---
 
@@ -352,14 +343,14 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 
 可用 agent：
 
-| Agent | 用途 | 模型 |
-|-------|------|------|
-| `scout` | 代码侦察，返回压缩上下文 | deepseek-v4-flash |
-| `planner` | 制定实现计划（只读） | deepseek-v4-flash |
-| `reviewer` | 代码审查（只读） | deepseek-v4-flash |
-| `worker` | 通用实现（完整能力） | deepseek-v4-flash |
-| `tester` | 运行测试并报告 | deepseek-v4-flash |
-| `vision` | 视觉分析（图片识别 / UI 评审 / 设计稿解读），详见下节 | opencode-go/minimax-m3 |
+| Agent | 用途 |
+|-------|------|
+| `scout` | 代码侦察，返回压缩上下文 |
+| `planner` | 制定实现计划（只读） |
+| `reviewer` | 代码审查（只读） |
+| `worker` | 通用实现（完整能力） |
+| `tester` | 运行测试并报告 |
+| `vision` | 视觉分析（图片识别 / UI 评审 / 设计稿解读），详见下节 |
 
 三种模式：
 - 单任务：`{ agent, task, agentScope: "both" }`
@@ -431,4 +422,4 @@ subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路�
 
 输出格式固定:基础描述 → 详细分析 → Pre-Flight 自查 → 建议。详见 `.pi/agents/vision.md`。
 
-适用场景：大范围代码调查、可并行的独立子任务、需要隔离上下文的重型任务。简单的定位/小改动直接用 codegraph 工具即可，不必启动 subagent。
+适用场景：可并行的独立子任务、需要隔离上下文的重型任务。**结构/探索类任务不要委派**（见上 Code Exploration：subagent 重新读文件是重复劳动），直接自己用 CodeGraph 回答；简单的定位/小改动也直接用 codegraph 工具，不必启动 subagent。

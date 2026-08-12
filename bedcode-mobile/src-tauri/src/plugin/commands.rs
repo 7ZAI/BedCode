@@ -321,6 +321,33 @@ async fn require_fileservice(
     Ok(())
 }
 
+/// 身份 + system:open 权限校验（Rust 端为最终仲裁）
+async fn require_system_open(
+    manager: &PluginManager,
+    plugin_id: &str,
+    op: &str,
+) -> Result<()> {
+    if !manager.is_activated(plugin_id).await {
+        return Err(crate::AppError::Plugin(format!(
+            "{}: plugin '{}' is not activated",
+            op, plugin_id
+        )));
+    }
+    if !manager
+        .has_permission(
+            plugin_id,
+            bedcode_plugin_api_mobile::permission::PERMISSION_SYSTEM_OPEN,
+        )
+        .await
+    {
+        return Err(crate::AppError::Plugin(format!(
+            "{}: plugin '{}' has no system:open permission",
+            op, plugin_id
+        )));
+    }
+    Ok(())
+}
+
 /// 挂载文件服务（TS 通道，hook=Webview）
 ///
 /// options_json 为 SDK `MountOptions` 的 camelCase JSON；返回 `MountResult`
@@ -476,6 +503,22 @@ pub async fn plugin_filesrv_get_peer(
     require_fileservice(&manager, &plugin_id, "plugin_filesrv_get_peer").await?;
     let fs = crate::state::get_file_service();
     Ok(fs.registry.get_peer(&peer_id).await)
+}
+
+/// 用系统查看器打开已下载文件（传输完成「打开本地文件」）
+///
+/// 经 Kotlin DownloadsDirPlugin.openFile：MediaStore 公共下载按名命中优先，
+/// 未命中回退 FileProvider。需 system:open 权限。
+#[tauri::command]
+pub async fn plugin_open_file(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    path: String,
+    display_name: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_system_open(&manager, &plugin_id, "plugin_open_file").await?;
+    crate::plugin::android_plugins::open_download_file(&path, &display_name).await
 }
 
 /// 弹出系统目录选择对话框（插件设置页选择允许目录用）
@@ -1038,6 +1081,7 @@ mod tests {
                     handle_id: "stream-1".to_string(),
                     effective_offset: offset,
                     seekable: true,
+                    size: 0,
                 }),
             }
         }

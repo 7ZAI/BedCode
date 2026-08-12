@@ -180,12 +180,16 @@ async fn run_transfer(
             .map(|s| s.inner().0.clone())
     };
     let transferred = Arc::new(AtomicU64::new(request.offset));
-    let total = request.expected_size;
+    // 上传总大小由 upload() 打开源后填充（File metadata / SAF statSize），
+    // 插件侧 expected_size 恒为 0（见 start_single_task），此处用 Arc 让
+    // reporter 与传输本体并发安全地读取真实总量；下载沿用插件上报值
+    let total = Arc::new(AtomicU64::new(request.expected_size));
 
     // 进度 reporter：每 500ms 推送 Running 进度（含瞬时速率）
     let reporter_token = token.child_token();
     {
         let transferred = transferred.clone();
+        let total = total.clone();
         let app_handle = app_handle.clone();
         let bus = bus.clone();
         let task_id = task_id.clone();
@@ -216,7 +220,7 @@ async fn run_transfer(
                     &bus,
                     &task_id,
                     current,
-                    total,
+                    total.load(Ordering::Relaxed),
                     bytes_per_sec,
                     TransferState::Running,
                 );
@@ -227,10 +231,18 @@ async fn run_transfer(
     // 取消立即中断传输 future（下载中断流读取 / 上传丢弃请求体）
     let outcome = tokio::select! {
         _ = token.cancelled() => Outcome::Cancelled,
-        result = execute_transfer(&request, transferred.clone(), token.clone(), saf) => match result {
-            Ok(()) => Outcome::Completed,
-            Err(reason) => Outcome::Failed(reason),
-        },
+        result = execute_transfer(&request, transferred.clone(), total.clone(), token.clone(), saf) => {
+            match result {
+                Ok(()) => Outcome::Completed,
+                // 取消竞态兜底：token 已取消（含流内检查回报 "cancelled" 被
+                // reqwest 包装为通用发送错误的场景）→ 一律落 Cancelled，
+                // 避免取消被误报为 Failed
+                Err(reason) if reason == "cancelled" || token.is_cancelled() => {
+                    Outcome::Cancelled
+                }
+                Err(reason) => Outcome::Failed(reason),
+            }
+        }
     };
 
     reporter_token.cancel();
@@ -243,7 +255,15 @@ async fn run_transfer(
         Outcome::Cancelled => TransferState::Cancelled,
         Outcome::Failed(reason) => TransferState::Failed(reason.clone()),
     };
-    emit_progress(&app_handle, &bus, &task_id, final_bytes, total, 0, state);
+    emit_progress(
+        &app_handle,
+        &bus,
+        &task_id,
+        final_bytes,
+        total.load(Ordering::Relaxed),
+        0,
+        state,
+    );
 
     match &outcome {
         Outcome::Completed => {
@@ -262,12 +282,13 @@ async fn run_transfer(
 async fn execute_transfer(
     request: &TransferRequest,
     transferred: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
     token: CancellationToken,
     saf: Option<Arc<dyn crate::plugin::saf_io::SafIo>>,
 ) -> Result<(), String> {
     match request.direction {
         TransferDirection::Download => download(request, transferred, token).await,
-        TransferDirection::Upload => upload(request, transferred, saf).await,
+        TransferDirection::Upload => upload(request, transferred, total, token, saf).await,
     }
 }
 
@@ -391,6 +412,9 @@ struct SafStreamReader {
     handle_id: String,
     saf: Arc<dyn crate::plugin::saf_io::SafIo>,
     eof: bool,
+    /// 取消令牌：桥读为同步阻塞（block_in_place + block_on），先查令牌再
+    /// 跨桥，取消无需等下一次读返回（select 无法在被阻塞的 poll 内运行）
+    token: CancellationToken,
 }
 
 impl tokio::io::AsyncRead for SafStreamReader {
@@ -400,6 +424,13 @@ impl tokio::io::AsyncRead for SafStreamReader {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let this = &mut *self;
+        // 取消优先：被取消后立即中断流（reqwest 据此中止 PUT），不等桥读返回
+        if this.token.is_cancelled() {
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            )));
+        }
         if this.eof {
             return std::task::Poll::Ready(Ok(()));
         }
@@ -439,9 +470,16 @@ impl tokio::io::AsyncRead for SafStreamReader {
 ///   插件重建 session 全量重传（fd 保留，重传时 offset=0 强制重开从头）
 /// - 上传成功显式 close_stream 释放 fd；失败/取消不 close（任务内保 fd
 ///   顺序续读，spec M3）
+///
+/// 取消语义：token 传入并下沉到读侧（File 的 map / SafStreamReader poll
+/// 前置检查），被取消时流回报 "cancelled" 错误，reqwest 立即中止 PUT ——
+/// 不依赖外层 select 恰好能 poll 到 token（同步桥读不会让 send future
+/// 让出 select，快局域网上可能整个上传期间都无法观察取消）。
 async fn upload(
     request: &TransferRequest,
     transferred: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
+    token: CancellationToken,
     saf: Option<Arc<dyn crate::plugin::saf_io::SafIo>>,
 ) -> Result<(), String> {
     use tokio::io::AsyncSeekExt;
@@ -465,16 +503,23 @@ async fn upload(
             return Err("not-seekable-resume".to_string());
         }
         saf_handle_id = Some(handle.handle_id.clone());
+        // 总大小：safOpen 即得 statSize（pipe 流为 0 = 未知，进度条退化为偏移量）
+        total.store(handle.size, Ordering::Relaxed);
         UploadSource::Saf(Box::new(SafStreamReader {
             handle_id: handle.handle_id,
             saf,
             eof: false,
+            token,
         }))
     } else {
         saf_handle_id = None;
         let mut file = tokio::fs::File::open(local_path)
             .await
             .map_err(|e| format!("open local file '{}' failed: {}", local_path, e))?;
+        // 总大小：本地文件 metadata（进度条需要真实总量，插件侧恒传 0）
+        if let Ok(meta) = file.metadata().await {
+            total.store(meta.len(), Ordering::Relaxed);
+        }
         if request.offset > 0 {
             file.seek(std::io::SeekFrom::Start(request.offset))
                 .await
@@ -763,6 +808,11 @@ mod tests {
         Arc::new(AtomicU64::new(0))
     }
 
+    /// 总大小计数器（upload 填充真实总量用）
+    fn total_counter() -> Arc<AtomicU64> {
+        Arc::new(AtomicU64::new(0))
+    }
+
     // ==================== download ====================
 
     #[tokio::test]
@@ -979,12 +1029,42 @@ mod tests {
                 local.to_str().unwrap(),
             ),
             counter(),
+            total_counter(),
+            CancellationToken::new(),
             None,
         )
         .await
         .unwrap();
 
         assert_eq!(*received.lock().unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn upload_fills_total_from_file_metadata() {
+        disable_proxy_for_loopback();
+        // 进度条修复：真实路径上传须把文件大小写入 total（插件 expected_size 恒 0）
+        let data: Vec<u8> = vec![7u8; 123_456];
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok(""))).await;
+        let dir = tempdir().unwrap();
+        let local = dir.path().join("src.bin");
+        std::fs::write(&local, &data).unwrap();
+        let total = total_counter();
+
+        upload(
+            &make_request(
+                TransferDirection::Upload,
+                &format!("http://{}/upload/sid", addr),
+                local.to_str().unwrap(),
+            ),
+            counter(),
+            total.clone(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(total.load(Ordering::Relaxed), data.len() as u64);
     }
 
     #[tokio::test]
@@ -1009,7 +1089,9 @@ mod tests {
         );
         req.offset = 2;
 
-        upload(&req, counter(), None).await.unwrap();
+        upload(&req, counter(), total_counter(), CancellationToken::new(), None)
+            .await
+            .unwrap();
 
         // seek 到 offset 后只发送尾部（续传语义）
         assert_eq!(*received.lock().unwrap(), b"cdef");
@@ -1030,6 +1112,8 @@ mod tests {
                 local.to_str().unwrap(),
             ),
             counter(),
+            total_counter(),
+            CancellationToken::new(),
             None,
         )
         .await
@@ -1107,6 +1191,7 @@ mod tests {
                 handle_id: "stream-1".to_string(),
                 effective_offset: effective,
                 seekable: self.effective_offset.lock().unwrap().is_none(),
+                size: self.data.len() as u64,
             })
         }
         fn read_stream(&self, _h: &str, len: usize) -> crate::Result<Vec<u8>> {
@@ -1155,6 +1240,8 @@ mod tests {
         upload(
             &make_request(TransferDirection::Upload, &format!("http://{}/upload/sid", addr), uri),
             counter(),
+            total_counter(),
+            CancellationToken::new(),
             Some(saf.clone()),
         )
         .await
@@ -1166,6 +1253,32 @@ mod tests {
         assert_eq!(saf.opened.lock().unwrap().as_slice(), &[(uri.to_string(), 0)]);
         // 成功后必须显式 close（否则 fd 泄漏）
         assert_eq!(saf.closed.lock().unwrap().as_slice(), &["stream-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn upload_saf_fills_total_from_handle_size() {
+        disable_proxy_for_loopback();
+        // 进度条修复：SAF 流直传须把 Kotlin statSize 写入 total
+        let data: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok(""))).await;
+        let saf = Arc::new(FakeSafIo::new(data.clone()));
+        let total = total_counter();
+
+        upload(
+            &make_request(
+                TransferDirection::Upload,
+                &format!("http://{}/upload/sid", addr),
+                "content://tree/root/document/f1",
+            ),
+            counter(),
+            total.clone(),
+            CancellationToken::new(),
+            Some(saf.clone()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(total.load(Ordering::Relaxed), data.len() as u64);
     }
 
     #[tokio::test]
@@ -1188,7 +1301,15 @@ mod tests {
         let mut req = make_request(TransferDirection::Upload, &format!("http://{}/upload/sid", addr), uri);
         req.offset = 1024;
 
-        upload(&req, counter(), Some(saf.clone())).await.unwrap();
+        upload(
+            &req,
+            counter(),
+            total_counter(),
+            CancellationToken::new(),
+            Some(saf.clone()),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(*received.lock().unwrap(), data[1024..]);
         assert_eq!(saf.opened.lock().unwrap().as_slice(), &[(uri.to_string(), 1024)]);
@@ -1207,7 +1328,15 @@ mod tests {
         let mut req = make_request(TransferDirection::Upload, "http://127.0.0.1:1/upload/sid", uri);
         req.offset = 10;
 
-        let err = upload(&req, counter(), Some(saf.clone())).await.unwrap_err();
+        let err = upload(
+            &req,
+            counter(),
+            total_counter(),
+            CancellationToken::new(),
+            Some(saf.clone()),
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(err, "not-seekable-resume");
         assert!(saf.closed.lock().unwrap().is_empty(), "失败不得 close（fd 保留续读）");
@@ -1222,11 +1351,45 @@ mod tests {
         let err = upload(
             &make_request(TransferDirection::Upload, "http://127.0.0.1:1/upload/sid", uri),
             counter(),
+            total_counter(),
+            CancellationToken::new(),
             None,
         )
         .await
         .unwrap_err();
         assert!(err.contains("SafIo unavailable"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn upload_saf_cancelled_token_aborts_before_bridge_read() {
+        disable_proxy_for_loopback();
+        // 取消修复：SAF 直传的桥读是同步阻塞，poll 前置 token 检查保证
+        // 取消即时中断流。reqwest 会把流中断错误包装为通用发送错误，
+        // 终态归一（Cancelled）由 run_transfer 的 token.is_cancelled() 兜底
+        let data: Vec<u8> = vec![9u8; 2 * 1024 * 1024];
+        let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok(""))).await;
+        let saf = Arc::new(FakeSafIo::new(data));
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = upload(
+            &make_request(
+                TransferDirection::Upload,
+                &format!("http://{}/upload/sid", addr),
+                "content://tree/root/document/f1",
+            ),
+            counter(),
+            total_counter(),
+            token,
+            Some(saf.clone()),
+        )
+        .await
+        .unwrap_err();
+
+        // 关键断言：取消后立即失败（而非继续跨桥读 / 挂起）；错误被包装
+        assert!(err.contains("failed"), "got: {}", err);
+        // 取消后不得有任何字节被读出（poll 前置检查，不跨桥）
+        assert!(saf.closed.lock().unwrap().is_empty());
     }
 
     // ==================== dispatch ====================
@@ -1255,6 +1418,7 @@ mod tests {
                 dl.to_str().unwrap(),
             ),
             counter(),
+            total_counter(),
             token.clone(),
             None,
         )
@@ -1267,6 +1431,7 @@ mod tests {
                 up.to_str().unwrap(),
             ),
             counter(),
+            total_counter(),
             token.clone(),
             None,
         )

@@ -153,6 +153,8 @@ export default {
       maximize: 'Maximize',
       close: 'Close',
       loadingSession: 'Loading session...',
+      opening: 'Opening terminal window...',
+      openFailed: 'Failed to open terminal window',
       expandDetail: 'Expand Details',
       viewTerminal: 'View Terminal',
       stopSession: 'Stop Session',
@@ -274,6 +276,7 @@ export default {
       fsAuthDeny: 'Deny',
       alwaysOn: 'Always on',
       noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
+      noSystemOpenPermission: 'Plugin {plugin} lacks the system:open permission',
       toolboxPanels: 'Toolbox',
       // ==================== Detail page additions ====================
       togglingEnable: 'Enabling {name}...',

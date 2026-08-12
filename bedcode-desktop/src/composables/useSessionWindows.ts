@@ -70,8 +70,11 @@ export function useSessionWindows() {
 
   /**
    * 为会话创建或聚焦终端窗口
+   *
+   * 返回 Promise：新窗口时在窗口 show 完成后 resolve（页面就绪事件或 4s 兜底），
+   * 创建失败时 reject；已有窗口时直接聚焦立即返回（调用方据此决定是否显示 loading）
    */
-  async function openTerminalWindow(session: SessionInfo) {
+  async function openTerminalWindow(session: SessionInfo): Promise<void> {
     // 检查是否已有窗口
     const existingState = windows.value.get(session.id)
     if (existingState) {
@@ -141,6 +144,15 @@ export function useSessionWindows() {
       backgroundColor: '#111827',
     })
 
+    // 就绪 Promise：窗口 show 完成后 resolve（调用方据此关闭 loading），
+    // 创建失败时 reject 让调用方提示错误
+    let resolveReady: (() => void) | null = null
+    let rejectReady: ((e: unknown) => void) | null = null
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    })
+
     let unlistenReady: UnlistenFn | null = null
     let readyTimeout: number | null = null
     let readyShown = false
@@ -159,13 +171,23 @@ export function useSessionWindows() {
         window.clearTimeout(readyTimeout)
         readyTimeout = null
       }
-      await terminalWindow.show()
-      await terminalWindow.setFocus()
-      // 通知终端页面播放显现动画
       try {
-        await emitTo(windowLabel, 'terminal-show', { sessionId: session.id })
+        // show 成功即视为就绪：焦点与动画是锦上添花，失败不影响窗口展示
+        await terminalWindow.show()
+        resolveReady?.()
+        try {
+          await terminalWindow.setFocus()
+        } catch (e) {
+          console.error('[useSessionWindows] Focus error after show:', e)
+        }
+        // 通知终端页面播放显现动画
+        try {
+          await emitTo(windowLabel, 'terminal-show', { sessionId: session.id })
+        } catch (e) {
+          console.error('[useSessionWindows] Emit terminal-show error:', e)
+        }
       } catch (e) {
-        console.error('[useSessionWindows] Emit terminal-show error:', e)
+        rejectReady?.(e)
       }
     }
 
@@ -211,7 +233,11 @@ export function useSessionWindows() {
       cleanup()
       console.error('[useSessionWindows] Window creation error:', e)
       windows.value.delete(session.id)
+      rejectReady?.(e)
     })
+
+    // 等待窗口就绪（就绪事件或 4s 兜底超时）
+    await ready
   }
 
   /**

@@ -7,7 +7,7 @@
  * - 锁屏优化
  *
  * 通知权限管理已迁移到 useNotification，
- * 任务状态通知由 useNotification + @tauri-apps/plugin-notification 处理
+ * 任务状态通知由 useNotification + Kotlin TaskNotificationPlugin 处理
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'

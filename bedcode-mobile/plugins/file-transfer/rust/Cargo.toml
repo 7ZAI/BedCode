@@ -1,6 +1,6 @@
 [package]
 name = "bedcode_plugin_file_transfer"
-version = "1.0.0"
+version = "1.0.0-beta"
 description = "File Transfer Plugin (Mobile)"
 authors = ["BedCode"]
 edition = "2021"

@@ -83,6 +83,10 @@ pub struct SafStreamHandle {
     pub effective_offset: u64,
     /// 是否可 seek（getStatSize()==-1 探测；pipe 流为 false）
     pub seekable: bool,
+    /// 文件总大小（statSize；pipe 流/未知为 0）。宿主上传进度用它作为 total，
+    /// 插件据此展示真实进度条（插件侧 expected_size 恒为 0）
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// SAF 存储访问能力（主 seam）
@@ -326,16 +330,48 @@ impl SafIo for KotlinSafIo {
 
 /// 在同步 trait 方法内阻塞等待 Kotlin 插件异步调用
 ///
-/// 命令在 Tokio 异步上下文执行（多线程运行时），block_in_place 允许当前
-/// worker 线程执行阻塞代码而不拖垮调度器（与 wasm_runtime.rs 的
-/// guarded_host_call 中 block_in_place + block_on 模式一致）。
+/// 调用方有两类线程上下文：
+/// - tauri 全局多线程 runtime（wasm host 函数，见 wasm_runtime.rs 的
+///   guarded_host_call 模式）——`block_in_place` 可用；
+/// - actix file service worker（actix-rt 2.x 默认 current_thread runtime）
+///   ——`block_in_place` 会 panic（「can call blocking only when running on
+///   the multi-threaded runtime」），panic 掐断连接，对端表现为连接错误
+///   （桌面端浏览 SAF 根目录即触发）。
+///
+/// 统一改法：起 scoped 线程（无任何 runtime 上下文）经 tauri 全局
+/// 多线程 runtime 驱动 future，本线程阻塞等待结果。scoped 线程可借用
+/// 调用方栈上的非 'static 数据，各调用点无需改动。驱动线程 panic 时
+/// catch_unwind 兜底为错误（scope join 不再向 actix worker 传播 panic），
+/// 对端拿到 500 而非连接被掐断。
 #[cfg(target_os = "android")]
 fn block_on_plugin<F, Fut, T>(f: F) -> Result<T>
 where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
+    F: FnOnce() -> Fut + Send,
+    Fut: std::future::Future<Output = Result<T>> + Send,
+    T: Send,
 {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f()))
+    std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tauri::async_runtime::block_on(f())
+            }));
+            // None = 驱动线程 panic（连接接缝 fail-soft）
+            let _ = tx.send(result.ok());
+        });
+        match rx.recv() {
+            // 正常：透传插件调用结果（Ok/Err 均来自 Kotlin 侧）
+            Ok(Some(result)) => result,
+            // 驱动线程 panic：catch_unwind 兜底，不给 actix worker 传播 panic
+            Ok(None) => Err(crate::AppError::Plugin(
+                "SAF plugin call panicked in bridge thread".to_string(),
+            )),
+            // channel 断开：驱动线程异常退出
+            Err(_) => Err(crate::AppError::Plugin(
+                "SAF plugin task dropped before completion".to_string(),
+            )),
+        }
+    })
 }
 
 #[cfg(not(target_os = "android"))]
@@ -465,6 +501,7 @@ pub fn parse_saf_stream_handle(value: &serde_json::Value) -> Result<SafStreamHan
         handle_id,
         effective_offset: value.get("effectiveOffset").and_then(|v| v.as_u64()).unwrap_or(0),
         seekable: value.get("seekable").and_then(|v| v.as_bool()).unwrap_or(false),
+        size: value.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
 
@@ -609,6 +646,7 @@ mod tests {
                 handle_id: "stream-1".to_string(),
                 effective_offset: offset,
                 seekable: true,
+                size: 0,
             })
         }
 
@@ -799,11 +837,13 @@ mod tests {
             "handleId": "stream-1",
             "effectiveOffset": 2048,
             "seekable": false,
+            "size": 4096,
         });
         let handle = parse_saf_stream_handle(&json).expect("handle should parse");
         assert_eq!(handle.handle_id, "stream-1");
         assert_eq!(handle.effective_offset, 2048);
         assert!(!handle.seekable);
+        assert_eq!(handle.size, 4096);
     }
 
     #[test]

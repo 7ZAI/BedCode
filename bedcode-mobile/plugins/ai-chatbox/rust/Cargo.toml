@@ -1,6 +1,6 @@
 [package]
 name = "bedcode_plugin_ai_chatbox"
-version = "2.0.0"
+version = "1.0.0-beta"
 description = "AI Chatbox Plugin (Mobile)"
 authors = ["BedCode"]
 edition = "2021"

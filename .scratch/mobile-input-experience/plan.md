@@ -1,6 +1,7 @@
 # 移动端终端输入体验优化计划
 
 > 状态: 计划 (未排期)
+> 已实施: P0-1 一键中断、P0-2 `/` 补全、P0-4 @ 文件引用插入（移动端仅，延续 ADR-0014 边界）
 > 背景: 本项目的初衷是通过移动端远程控制 agent CLI（Claude Code / pi / Codex / OpenCode）。
 > 已落地（commit 392dcdeca）: Agent CLI 命令预设（12×4）+ 16 键默认快捷键 + 会话自动识别。
 > 本文档记录下一轮输入体验优化方向，按优先级分组，不设实现期限。
@@ -13,21 +14,26 @@
 
 ## P0 — 高价值（直击日常痛点，改动小体感大）
 
-### 1. 生成中一键中断
+### 1. 生成中一键中断 ✅ 已实施
 
 - 现状: agent 输出时中断需「展开面板 → 按 Esc」，路径过长
 - 方案: 输入条在会话生成/等待时自动切换为常驻**中断按钮**（等价 Esc 特殊键发送），
   生成结束后恢复原按钮；按钮状态由会话 waiting/running 状态驱动
 - 涉及: `TerminalInputBar.vue`、`TerminalView.vue`（状态透传）、会话状态事件
 - 成本: 小
+- 实施说明: 桌面端 waitingInput 检测与插件 taskStatus 均为预留未接入，通用 PTY 会话
+  用「xterm 末行提示符 + 近期无输出」双条件推断空闲（`utils/terminalIdle.ts`，400ms 轮询），
+  taskStatus 接入后自动优先生效；中断按钮复用 Esc 特殊键通道（`handleInterrupt`）
 
-### 2. 输入框 `/` 命令补全
+### 2. 输入框 `/` 命令补全 ✅ 已实施
 
 - 现状: 命令预设只能点面板按钮发送，输入框内打 `/` 无任何提示
 - 方案: 输入框输入 `/` 时弹出本地预设命令补全列表（复用 `agentPresets.ts` 数据），
   点选即填充输入框；与 agent 内部补全同构，本地零延迟
 - 涉及: `TerminalInputBar.vue`、`agentPresets.ts`（导出命令文本列表）
 - 成本: 中
+- 实施说明: `agentPresets.ts` 新增 `getPresetCommandTexts` / `filterPresetCommands`
+  （前缀过滤 + 排除裸 `/`），弹层仅在当前会话预设非空时出现（generic 不弹）
 
 ### 3. prompt 历史与草稿保护
 
@@ -39,12 +45,14 @@
 - 涉及: `TerminalInputBar.vue`（草稿状态）、`inputAssistant.ts`（历史存储，localStorage）
 - 成本: 中
 
-### 4. @ 文件引用插入
+### 4. @ 文件引用插入 ✅ 已实施
 
 - 现状: CC/codex 支持 `@路径` 引用文件，移动端只能手打 Windows 路径
 - 方案: 文件侧栏选中文件 → 「插入引用」把路径作为 `@引用` 填入输入框
 - 涉及: `FileSidebar.vue` / 侧栏选中状态 → 输入框联动
 - 成本: 中
+- 实施说明: 终端侧栏启用 `ref-insert` 模式（点选文件 → `@路径` 填入输入框并聚焦，
+  自动收起侧栏）；查看/复制改为长按操作面板，保留原能力
 
 ## P1 — 中价值（输入效率提升）
 

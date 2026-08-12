@@ -23,6 +23,8 @@ pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BROADCAST: &str = "broadcast";
 /// 文件服务：挂载受控文件服务端点（/api/plugins/{pluginId}/{mount}/**）
 pub const PERMISSION_FILESERVICE: &str = "fileservice";
+/// 系统文件操作：在系统文件管理器中显示本地文件/目录（传输完成「打开本地目录」）
+pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
 /// 传输引擎：发起断点续传的文件上传/下载任务
 pub const PERMISSION_TRANSFER: &str = "transfer";
 /// 定时器：注册宿主周期回调（到点调用插件 command，见 ADR 0003）
@@ -45,6 +47,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FS_WRITE,
     PERMISSION_BROADCAST,
     PERMISSION_FILESERVICE,
+    PERMISSION_SYSTEM_OPEN,
     PERMISSION_TRANSFER,
     PERMISSION_TIMER,
 ];
@@ -73,6 +76,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "fileService.pickDirectory",
         "fileService.pickFiles",
     ]),
+    (PERMISSION_SYSTEM_OPEN, &["system.revealInDir"]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
     (PERMISSION_TIMER, &["timer.register"]),
 ];

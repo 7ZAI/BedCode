@@ -206,6 +206,17 @@ impl WasmPlugin for FileTransferPlugin {
                 Ok(result)
             }
 
+            "file-transfer.remove-task" => {
+                let task_id = args
+                    .get("taskId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing taskId"))?
+                    .to_string();
+                let result = commands::remove_task(&mut s, &host, &task_id)?;
+                commands::schedule_and_start(&mut s, &host);
+                Ok(result)
+            }
+
             "file-transfer.resume-all" => {
                 let result = commands::resume_all(&mut s, &host)?;
                 commands::schedule_and_start(&mut s, &host);

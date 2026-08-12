@@ -31,6 +31,8 @@ const emit = defineEmits<{
   (e: 'resume', id: string): void
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
+  (e: 'remove', id: string): void
+  (e: 'openDir', id: string): void
   (e: 'resumeAll'): void
 }>()
 
@@ -195,6 +197,14 @@ function reasonText(task: Task): string {
             </button>
             <button v-if="canCancel(task)" class="ft-mini-btn" :title="t('transfer.task.cancel')" @click="emit('cancel', task.id)">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
+            <!-- 删除：任意状态可用（终态任务无生命周期动作，删除是唯一清理途径） -->
+            <button class="ft-mini-btn" :title="t('transfer.task.remove')" @click="emit('remove', task.id)">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </button>
+            <!-- 打开本地目录：仅已完成任务（文件已落盘） -->
+            <button v-if="task.state === 'completed'" class="ft-mini-btn" :title="t('transfer.task.openDir')" @click="emit('openDir', task.id)">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" /></svg>
             </button>
           </div>
 

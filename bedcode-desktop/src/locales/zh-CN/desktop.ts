@@ -153,6 +153,8 @@ export default {
       maximize: '最大化',
       close: '关闭',
       loadingSession: '加载会话中...',
+      opening: '正在打开终端窗口...',
+      openFailed: '打开终端窗口失败',
       expandDetail: '展开详情',
       viewTerminal: '查看终端',
       stopSession: '停止会话',
@@ -274,6 +276,7 @@ export default {
       fsAuthDeny: '拒绝',
       alwaysOn: '始终启用',
       noFileservicePermission: '插件 {plugin} 缺少 fileservice 权限',
+      noSystemOpenPermission: '插件 {plugin} 缺少 system:open 权限',
       toolboxPanels: '工具箱',
       // ==================== 详情页新增 ====================
       togglingEnable: '正在启用 {name}...',

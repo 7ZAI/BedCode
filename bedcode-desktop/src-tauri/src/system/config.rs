@@ -356,8 +356,8 @@ impl Default for ChannelsConfig {
             restart_broadcast_capacity: 64,
             event_broadcast_capacity: 256,
             pty_subscription_capacity: 1024,
-            global_queue_capacity: 50000,
-            global_queue_max_bytes: 256 * 1024 * 1024, // 256MB
+            global_queue_capacity: 25000,
+            global_queue_max_bytes: 128 * 1024 * 1024, // 128MB
             ws_event_capacity: 1024,
             lifecycle_capacity: 16,
         }
@@ -546,8 +546,8 @@ impl AppConfig {
                 restart_broadcast_capacity: parse_value(props, "channels.restart_broadcast_capacity", 64),
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
                 pty_subscription_capacity: parse_value(props, "channels.pty_subscription_capacity", 1024),
-                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 50000),
-                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 256 * 1024 * 1024),
+                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 25000),
+                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 128 * 1024 * 1024),
                 ws_event_capacity: parse_value(props, "channels.ws_event_capacity", 1024),
                 lifecycle_capacity: parse_value(props, "channels.lifecycle_capacity", 16),
             },

@@ -38,6 +38,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
     'fileService.saf.checkAuthorized',
     'fileService.requestAllFilesAccess',
   ],
+  'system:open': ['system.openFile'],
   // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   'transfer': [],
 }

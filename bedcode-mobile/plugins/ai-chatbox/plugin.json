@@ -1,7 +1,7 @@
 {
   "id": "com.bedcode.ai-chatbox",
   "name": "AI Chatbox",
-  "version": "2.0.0",
+  "version": "1.0.0-beta",
   "description": "AI 大模型对话（OpenAI 兼容供应商，JSONL 对话日志落盘）",
   "author": "BedCode",
   "icon": "💬",

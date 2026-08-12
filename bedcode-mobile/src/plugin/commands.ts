@@ -173,6 +173,15 @@ export async function pluginOpenAllFilesSettings(pluginId: string): Promise<bool
   return await invoke<boolean>('open_all_files_settings', { pluginId })
 }
 
+/** 用系统查看器打开已下载文件（需 system:open 权限） */
+export async function pluginOpenFile(
+  pluginId: string,
+  path: string,
+  displayName: string,
+): Promise<void> {
+  return await invoke<void>('plugin_open_file', { pluginId, path, displayName })
+}
+
 // ==================== SAF 存储访问（SafIo 主 seam） ====================
 
 /** SAF：列出目录树子条目（共享目录 App 内遍历） */

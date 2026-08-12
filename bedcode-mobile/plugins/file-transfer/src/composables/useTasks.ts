@@ -393,6 +393,30 @@ export function useTasks(context: PluginContext) {
     }
     await context.commands.execute('file-transfer.retry', { taskId: id })
   }
+  async function removeTask(id: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      applySnapshot(tasks.value.filter((tk) => tk.id !== id))
+      return
+    }
+    await context.commands.execute('file-transfer.remove-task', { taskId: id })
+  }
+  /** 用系统查看器打开已完成任务的本地文件（仅 completed 有落盘文件） */
+  async function openTask(id: string): Promise<void> {
+    const task = tasks.value.find((tk) => tk.id === id)
+    if (!task || task.state !== 'completed' || !task.localPath) return
+    // 下载方向 local_path 为 .part 临时名，完成后已 rename 到最终路径（去后缀）
+    const finalPath = task.localPath.endsWith('.part')
+      ? task.localPath.slice(0, -'.part'.length)
+      : task.localPath
+    // MediaStore 按文件名命中公共下载副本（displayName = 远端文件名）
+    const displayName = task.remotePath.split('/').pop() ?? ''
+    try {
+      await context.system.openFile(finalPath, displayName)
+    } catch (err) {
+      console.error(`[File Transfer] open failed for "${finalPath}":`, err)
+      context.dialogs.showToast(String(err), 'error')
+    }
+  }
   async function resumeAll(): Promise<void> {
     if (MOCK_ENABLED) {
       const next = tasks.value.map((tk) =>
@@ -586,6 +610,8 @@ export function useTasks(context: PluginContext) {
     resume,
     cancel,
     retry,
+    removeTask,
+    openTask,
     resumeAll,
     showDuplicateDialog,
     start,

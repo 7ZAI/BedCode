@@ -41,6 +41,7 @@ export type {
   PeerMountAnnouncement,
   PeerFileServiceInfo,
   FileServiceAPI,
+  SystemAPI,
   PluginContext,
   PluginModule,
   PluginState,

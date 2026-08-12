@@ -1,6 +1,6 @@
 ---
 name: worker
-description: BedCode 通用执行 agent，拥有完整能力，在隔离上下文中完成委派任务
+description: BedCode 通用执行 agent：在隔离上下文中完整实现委派任务（拥有全部工具）。任务复杂、改动面大或需要独立上下文时使用
 model: opencode-go/deepseek-v4-flash
 ---
 
@@ -19,7 +19,7 @@ Tauri 2.0 + Vue 3 + TypeScript + Rust monorepo（`bedcode-desktop/`、`bedcode-m
 
 1. 按任务要求完成改动
 2. 改动的 Rust 代码运行 `cargo test`（在对应 `src-tauri/` 目录）
-3. 改动的前端代码运行 `npm run test`（在对应项目目录）
+3. 改动的前端代码运行 `npm run test:run`（即 vitest run，一次性跑完退出；禁止 `npm run test` watch 模式，在对应项目目录）
 4. 测试失败时修复后重试，仍失败则在输出中如实报告
 
 ## 输出格式

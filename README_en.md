@@ -1,10 +1,12 @@
 <div align="center">
 
+<img src="bedcode-desktop/public/favicon.svg" width="96" alt="BedCode logo">
+
 # BedCode
 
-**Use your phone to control Claude Code on your desktop**
+**Control your desktop Agent CLI from your phone — from bed**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-1.1.11-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
@@ -13,261 +15,116 @@ English | [简体中文](README.md)
 
 </div>
 
----
+BedCode is a LAN remote terminal application: the desktop app acts as the host running terminal sessions (Agent CLIs like Claude Code, opencode), while your phone becomes a remote terminal with an optimized touch interface — take over your terminal from anywhere on the same WiFi. Any command-line program (including TUI apps) can be started on the desktop and operated remotely from your phone.
 
-BedCode is a cross-platform application that lets you remotely control [Claude Code](https://claude.ai/code) from your mobile device within the same local network. The desktop app (Tauri + Vue 3) acts as the host running terminal sessions, while your phone becomes a powerful remote terminal with an optimized touch interface. While designed as a Claude Code remote control app, it also works as a general-purpose remote terminal.
+> Use cases: as the name suggests — coding from bed; or handling programming tasks in parallel with chores, childcare, or sleep at home.
 
-Typical use cases: as the name suggests — coding from bed; handling other tasks at home while programming, such as bathroom breaks, cooking, childcare, or just before sleep.
-
-> Currently only supports desktop and mobile on the same WiFi network.
-
-Internet connectivity interface or NAT traversal protocol will be reserved in the future (requires a server).
+> [!NOTE]
+> Currently supports desktop and mobile on the same WiFi network. An internet connectivity interface / NAT traversal protocol (requires a server) is planned for the future.
 
 ## Features
 
 ### Desktop (Host)
-- **Session Management** - Create, configure, and manage multiple Claude Code sessions with SQLite persistence
-- **Terminal Preview** - Real-time xterm.js terminal output preview
-- **Device Pairing** - QR code + 6-digit code authentication for secure device pairing
-- **Plugin System** - cdylib dynamic loading plugin architecture with host API bridge, permission control, and storage
-- **HTTP + WebSocket Server** - Actix Web based HTTP API + WebSocket for terminal communication, with advanced network configuration (workers, keep-alive, timeouts, frame size limits)
-- **Server Management** - Dedicated server view with status monitoring, metrics dashboard, and network config editor
-- **System Tray** - Quick actions from the system tray
-- **WSL2 Support** - Run sessions inside Windows Subsystem for Linux with distro selection
-- **mDNS Discovery** - mDNS service advertisement for mobile device discovery
+
+- **Session Management** — multiple Agent CLI / terminal sessions with SQLite persistence and real-time xterm.js output preview
+- **Device Pairing** — QR code + 6-digit code secure pairing, mDNS service advertisement for automatic mobile discovery
+- **HTTP + WebSocket Server** — Actix Web with advanced network configuration (worker threads, Keep-Alive, timeouts, frame size limits, etc.), dedicated server management view and metrics dashboard
+- **Plugin System** — WASM (wasmtime sandbox) + cdylib dynamic loading, host API bridge, permission control, hooks integration
+- **WSL2 Support** — run sessions inside Windows Subsystem for Linux with distro selection
+- **System Tray** — quick actions
 
 ### Mobile (Remote)
-- **Device Discovery & Pairing** - mDNS-based device discovery, QR code scanning, or pairing code input
-- **Terminal Output** - Enhanced mode (parsed ANSI/Markdown) and raw mode toggle
-- **Smart Input Bar** - Special keys (Tab, Ctrl+C, Esc, arrows), input assistant, and shortcut config
-- **Code Explorer** - Browse project files, view code with syntax highlighting, and diff rendering
-- **Preset Tasks** - Pre-configured task cards with type badges, edit dialog, and one-tap execution
-- **Toolbox** - Quick action panel with customizable commands
-- **Task Notifications** - Per-session task status notifications
-- **Auto-Reconnect** - Automatic reconnection on unexpected disconnects
-- **Foreground Service** - Keep connection alive in background with WakeLock (Android)
-- **Edge-to-Edge Display** - Modern full-screen mobile experience
+
+- **Device Discovery & Pairing** — mDNS-based discovery, QR code scanning, or pairing code input
+- **Terminal Output** — enhanced mode (parsed ANSI / Markdown) and raw mode toggle
+- **Smart Input Bar** — special keys (Tab, Ctrl+C, Esc, arrows), input assistant, shortcut config
+- **Code Explorer** — browse project files with syntax highlighting and Git diff rendering
+- **Preset Tasks** — task cards with type badges, edit dialog, one-tap execution
+- **Toolbox** — quick action panel with customizable commands
+- **Task Notifications** — per-session task status notifications, foreground service with screen WakeLock (Android)
+- **Auto-Reconnect** — automatic reconnection on unexpected disconnects, edge-to-edge fullscreen display
 
 ### Security
-- JWT-based session authentication (HS256, 7-day expiry)
-- QR token with one-time use and configurable TTL
-- Plugin token for Claude Code hooks authentication
-- Pairing codes expire after 60 seconds
-- Device fingerprint verification on connection
 
-> **Note:** End-to-end encryption (X25519 key exchange + AES-GCM) is planned but not yet implemented. Current WebSocket communication is unencrypted (ws://). See [Roadmap](#roadmap).
+- **Pairing** — 6-digit pairing codes (60s expiry), one-time QR tokens (configurable TTL)
+- **Biometric Authentication** — mobile biometric credentials bound to a public key, challenge-response signature verification issues session credentials (replay-resistant)
+- **JWT Session Auth** (HS256, 7-day expiry) + device fingerprint verification; plugin token for Agent CLI hooks authentication
+
+> [!WARNING]
+> The end-to-end encryption toolkit (X25519 ECDH + AES-256-GCM) is implemented, but WebSocket / file transfer integration is still in progress — terminal communication is currently plaintext (`ws://`). See [Roadmap](#roadmap).
 
 ### Internationalization
-- Full i18n support via vue-i18n (zh-CN / en)
-- Language switcher in settings with persistent preference
-- Error code mapping system for localized error messages
+
+Full vue-i18n support (zh-CN / en) with persistent language switcher in settings; error code mapping system for localized error messages.
 
 ## Architecture
 
-```
-┌─────────────────────────────────┐                ┌─────────────────────────────────┐
-│         Desktop App              │                │         Mobile App               │
-│        (Tauri + Vue 3)           │                │        (Tauri + Vue 3)           │
-│                                  │                │                                  │
-│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
-│  │ PTY Manager│  │ WS Server  │ │   WebSocket    │  │ WS Client  │  │ Code       │ │
-│  │ (Claude)   │  │ (Actix)    │◄├───────────────►├►│            │  │ Explorer   │ │
-│  └────────────┘  └────────────┘ │   + HTTP API   │  └────────────┘  └────────────┘ │
-│  ┌────────────┐  ┌────────────┐ │                │  ┌────────────┐  ┌────────────┐ │
-│  │ Plugin Mgr │  │ HTTP API   │ │                │  │ Preset     │  │ Touch UI   │ │
-│  │ (cdylib)   │  │ (Actix)    │ │                │  │ Tasks      │  │            │ │
-│  └────────────┘  └────────────┘ │                │  └────────────┘  └────────────┘ │
-└─────────────────────────────────┘                └─────────────────────────────────┘
-```
+Monorepo with two independent projects, each containing `src/` (frontend) + `src-tauri/` (Rust backend):
 
-The project uses a **monorepo with independent platform projects**:
+| End | Frontend (Vue 3) | Backend (Rust) |
+|-----|------------------|----------------|
+| **Desktop** | Session manager, terminal preview, server view, plugin config | PTY, Actix Web (HTTP + WS), session management, cdylib plugin system, mDNS advertisement |
+| **Mobile** | Terminal view, code explorer, preset tasks, toolbox, device discovery | WS/HTTP client, remote connection & routing, file service, mDNS discovery |
 
-| Layer | Frontend (Vue 3) | Backend (Rust) |
-|-------|-------------------|-----------------|
-| **Desktop** | Session manager, terminal preview, server view, plugin config, sidebar | PTY, Actix Web server, session management, cdylib plugin system, mDNS advertiser |
-| **Mobile** | Terminal view, code explorer, preset tasks, toolbox, device discovery | WS client, HTTP client, remote connection, routing, mDNS discovery |
+Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API** (plugin hooks, file service).
 
 ## Tech Stack
 
 | Category | Technology |
 |----------|------------|
-| Framework | Tauri 2.0 |
-| Frontend | Vue 3 + TypeScript |
-| Styling | TailwindCSS |
-| State | Pinia |
-| Backend | Rust (Tokio async runtime) |
-| HTTP Server | Actix Web 4 |
+| Framework | Tauri 2.0 (Windows desktop / Android mobile) |
+| Frontend | Vue 3 + TypeScript + Vite |
+| Styling | TailwindCSS, state management with Pinia + vue-router |
+| Backend | Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite |
 | Database | SQLite (rusqlite) |
-| Communication | WebSocket + HTTP REST API |
-| Terminal | @xterm/xterm + @xterm/addon-fit + @xterm/addon-web-links + @xterm/addon-webgl |
-| I18n | vue-i18n@9 |
-| Testing | Vitest, Rust test |
+| Terminal | @xterm/xterm + addon-fit / web-links / webgl |
+| Auth | JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint |
+| Crypto | X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS |
+| Discovery | mDNS (mdns-sd) |
+| Plugin System | wasmtime (WASM component runtime) + cdylib dynamic loading |
+| Other | shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging |
 
-## Getting Started
+## Quick Start
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18
-- [Rust](https://www.rust-lang.org/tools/install) >= 1.70
-- [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) dependencies for your platform
-- [Claude Code CLI](https://claude.ai/code) installed and configured
+- [Node.js](https://nodejs.org/) >= 18, [Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) and platform dependencies
+- An Agent CLI installed and configured (e.g. [Claude Code](https://claude.ai/code))
 
-### Install Dependencies
-
-```bash
-# Desktop
-cd bedcode-desktop
-npm install
-
-# Mobile
-cd bedcode-mobile
-npm install
-
-# Rust dependencies are fetched automatically by Cargo
-```
-
-### Development
+### Install & Run
 
 ```bash
-# Start desktop app in dev mode
-cd bedcode-desktop
-npm run tauri:dev
+# Install dependencies
+cd bedcode-desktop && npm install
+cd bedcode-mobile && npm install
 
-# Start mobile app in dev mode
-cd bedcode-mobile
-npm run tauri:android:dev
+# Development
+cd bedcode-desktop && npm run tauri:dev         # Desktop
+cd bedcode-mobile && npm run tauri:android:dev  # Mobile (Android logs: tauri:android:dev:log)
+
+# Build
+cd bedcode-desktop && npm run tauri:build
+cd bedcode-mobile && npm run tauri:android:build
+
+# Testing
+cd bedcode-desktop && npm run test:run          # Frontend (vitest run)
+cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
-
-### Build
-
-```bash
-# Build desktop app
-cd bedcode-desktop
-npm run tauri:build
-
-# Build Android APK (release)
-cd bedcode-mobile
-npm run tauri:android:build
-
-# Build Android APK (debug fast)
-cd bedcode-mobile
-npm run tauri:android:build:fast
-```
-
-### Testing
-
-```bash
-# Frontend unit tests
-npm run test
-
-# Rust tests
-cargo test
-```
-
-### Linting & Formatting
-
-```bash
-# Lint
-npm run lint
-
-# Format
-npm run format
-```
-
-## Configuration
-
-BedCode uses a `config.properties` file (bundled as a Tauri resource) for runtime configuration. The file supports comments and is organized by category:
-
-### Network
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `network.port` | `8765` | WebSocket server port |
-| `network.auto_start` | `true` | Auto-start server on app launch |
-| `network.prevent_sleep` | `true` | Prevent system sleep while server is running |
-| `network.workers` | `0` | Actix Web worker threads (0 = CPU core count) |
-| `network.keep_alive_secs` | `5` | HTTP Keep-Alive timeout in seconds (0 = disabled) |
-| `network.client_request_timeout_secs` | `5` | Client request header read timeout |
-| `network.client_disconnect_timeout_secs` | `3` | Client disconnect wait timeout |
-| `network.max_connections` | `256` | Max concurrent connections per worker |
-| `network.backlog` | `2048` | TCP half-open connection queue limit |
-| `network.tcp_nodelay` | `true` | Enable TCP_NODELAY (disable Nagle algorithm) |
-| `network.shutdown_timeout_secs` | `30` | Graceful shutdown timeout |
-| `network.ws_max_frame_size_kb` | `64` | WebSocket max frame size (KB) |
-| `network.ws_max_message_size_mb` | `16` | WebSocket max message size (MB, across frames) |
-
-### Session
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `session.default_environment` | `windows` | Default execution environment (windows / wsl2) |
-| `session.default_wsl_distro` | *(empty)* | Default WSL distro (only for wsl2, empty = default) |
-| `session.default_working_dir` | *(empty)* | Default working directory (empty = user home) |
-| `session.default_command` | `claude` | Default terminal command |
-| `session.session_timeout` | `3600` | Session timeout in seconds (auto-close on inactivity) |
-
-### UI
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `ui.theme` | `system` | Theme (system/light/dark) |
-| `ui.terminal_font_size` | `12` | Terminal font size |
-| `ui.terminal_font_family` | `Consolas` | Terminal font family |
-| `ui.terminal_theme` | `dracula` | Terminal color theme name |
-| `ui.show_preview` | `true` | Show terminal preview |
-
-### Terminal
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `terminal.default_cols` | `120` | Default terminal columns |
-| `terminal.default_rows` | `40` | Default terminal rows |
-| `terminal.flush_interval_ms` | `50` | Output buffer flush interval (ms) |
-| `terminal.max_buffer_size` | `65536` | Max output buffer size (bytes) |
-| `terminal.read_buffer_size` | `4096` | PTY read buffer size (bytes) |
-
-### Channels
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `channels.output_broadcast_capacity` | `2048` | PTY output broadcast capacity |
-| `channels.status_broadcast_capacity` | `64` | Session status broadcast capacity |
-| `channels.restart_broadcast_capacity` | `64` | Session restart broadcast capacity |
-| `channels.event_broadcast_capacity` | `256` | Unified event broadcast capacity |
-| `channels.pty_subscription_capacity` | `1024` | PTY subscription broadcast capacity |
-| `channels.global_queue_capacity` | `50000` | Global output queue capacity (for mobile replay) |
-| `channels.ws_event_capacity` | `1024` | WebSocket event broadcast capacity |
-| `channels.lifecycle_capacity` | `16` | Lifecycle event broadcast capacity |
-
-### Plugin
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `plugin.token` | *(empty)* | HTTP API auth token for plugin status push (empty = skip verification, dev mode) |
-
-## How It Works
-
-1. **Start Desktop App** - Launch BedCode on your desktop, which starts the Actix Web server (HTTP + WebSocket) and mDNS discovery service
-2. **Pair Your Phone** - Open BedCode on your phone, discover the desktop via mDNS, scan the QR code or enter the 6-digit pairing code
-3. **Control Remotely** - Once paired, select a session and start sending commands from your phone
-4. **Real-time Output** - Terminal output is streamed to your phone in real-time with ANSI rendering
-5. **Browse Code** - Use the code explorer to browse project files and view diffs with syntax highlighting
-6. **Preset Tasks** - Configure common tasks as preset cards for one-tap execution
 
 ## Plugin System
 
-BedCode features a cdylib-based dynamic plugin system on the desktop:
+Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: plugins are compiled to WASM components (from Rust / TypeScript) and loaded sandboxed inside the host, while cdylib dynamic-library plugins remain supported. Plugins can observe and extend host session behavior:
 
-- **Dynamic Loading** - Plugins are compiled as `.cdylib` shared libraries and loaded at runtime
-- **Host API Bridge** - Plugins access host functionality (send input, read output, session info) through a versioned API bridge
-- **Permission Control** - Each plugin declares required permissions; the host enforces access boundaries
-- **Persistent Storage** - Plugins can store key-value data through the host-provided storage interface
-- **Auto-Configuration** - Project-scoped Claude Code hooks are automatically configured when a session starts
-- **Task Status Tracking** - Claude Code hooks push task status (idle/in_progress/asking/completed/interrupted) to the desktop app via HTTP API
-- **Session ID Binding** - PTY sessions inject `BEDCODE_SESSION_ID` environment variable to bind Claude Code sessions with BedCode sessions
+- **WASM Sandbox Runtime** — resource-constrained, memory-isolated; a plugin crash never affects the host
+- **Dynamic Loading** — scanned from `plugins/desktop/{plugin-id}/plugin.json` at runtime, no host recompilation needed
+- **Host API Bridge** — versioned API for host functionality (send input, read output, session info) with unified permission checks
+- **Permission Control** — plugins declare required permissions; the host enforces access boundaries
+- **Hooks Integration** — project-scoped hooks auto-configured on session start, pushing task status (idle / in_progress / asking / completed / interrupted) via HTTP API
+- **Session ID Binding** — PTY injects `BEDCODE_SESSION_ID` to bind Agent CLI sessions with BedCode sessions
 
 ```
-Claude Code Hook (Python)
+Agent CLI Hook (Python)
     ↓ HTTP POST
 Rust HTTP API (plugin_controller)
     ↓ DesktopSyncEvent
@@ -275,78 +132,31 @@ SyncEventHandler → WebSocket broadcast
     ↓ ws_sync_task_status_changed
 Mobile Tauri Event → Preset Tasks / UI
     ↓ sendInput / HTTP API
-Claude Code (PTY)
+Agent CLI (PTY)
 ```
 
-## Project Structure
+### Official Plugins
 
-```
-BedCode/
-├── bedcode-desktop/               # Desktop app (Tauri + Vue 3)
-│   ├── src/                       # Vue 3 frontend
-│   │   ├── components/            # UI components
-│   │   ├── composables/           # Business logic composables
-│   │   ├── stores/                # Pinia state stores
-│   │   ├── views/                 # Page views
-│   │   ├── locales/               # i18n translations (zh-CN / en)
-│   │   └── plugins/               # Frontend plugin loader
-│   ├── src-tauri/
-│   │   ├── src/
-│   │   │   ├── commands/          # Tauri invoke commands
-│   │   │   ├── db/                # SQLite database layer
-│   │   │   ├── enums/             # Enum types
-│   │   │   ├── events/            # Global event system
-│   │   │   ├── mdns/              # mDNS service advertisement
-│   │   │   ├── plugin/            # cdylib plugin system
-│   │   │   ├── pty/               # PTY management (Windows + WSL2)
-│   │   │   ├── server/            # Actix Web HTTP/WS server
-│   │   │   ├── session/           # Session management
-│   │   │   ├── system/            # Config, error handling, app context
-│   │   │   └── utils/             # Auth (JWT, pairing), parsers (ANSI, Markdown)
-│   │   └── resources/
-│   │       └── config.properties  # Runtime configuration
-│   └── docs/
-│       └── code-map.md            # Desktop module index
-│
-├── bedcode-mobile/                # Mobile app (Tauri + Vue 3)
-│   ├── src/                       # Vue 3 frontend
-│   │   ├── components/            # UI components
-│   │   ├── composables/           # Business logic composables
-│   │   ├── stores/                # Pinia state stores
-│   │   ├── views/                 # Page views
-│   │   └── locales/               # i18n translations (zh-CN / en)
-│   ├── src-tauri/
-│   │   └── src/
-│   │       ├── auth/              # Authentication (manager, pairing)
-│   │       ├── commands/          # Tauri invoke commands
-│   │       ├── connection/        # Remote connection (WS client, heartbeat, reconnect)
-│   │       ├── enums/             # Enum types
-│   │       ├── handler/           # Message handlers
-│   │       ├── mdns/              # mDNS service discovery
-│   │       ├── model/             # Data models
-│   │       ├── plugin/            # Android plugin bridge
-│   │       ├── router/            # Message routing
-│   │       ├── system/            # Config, error handling, settings
-│   │       ├── session.rs         # Remote session management
-│   │       └── state.rs           # Global state
-│   └── docs/
-│       └── code-map.md            # Mobile module index
-│
-├── docs/                          # Shared documentation
-└── .github/                       # CI/CD workflows
-```
+| Plugin | Version | Description |
+|--------|---------|-------------|
+| **AI Chatbox** | 1.0.0-beta | LLM chat: connect to any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming chat, multi-conversation management, JSONL chat logs persisted to disk |
+| **Auto Task** | 1.0.0-beta | Agent task queue & auto-approval: sync task status from Claude Code / pi / opencode / Codex, task queue scheduling, preset & scheduled tasks, history statistics; auto-approves agent permission requests |
+| **File Transfer** | 1.0.0-beta | LAN file transfer: online peer discovery & switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers |
 
-See [bedcode-desktop/docs/code-map.md](bedcode-desktop/docs/code-map.md) and [bedcode-mobile/docs/code-map.md](bedcode-mobile/docs/code-map.md) for complete module indexes.
+### Plugin Development SDK
+
+- **`@bedcode/plugin-sdk-desktop`** / **`@bedcode/plugin-sdk-mobile`** (npm, MIT) — subpath exports: main API, Vite plugin (`./vite`), shared UI components (`./ui`), type definitions (`./types`)
+- **Scaffolding CLI** — `bedcode-plugin-desktop` (mobile: `bedcode-plugin`): `create` scaffolds a plugin project, `dev` browser HMR dev environment, `build`, `manifest` auto-fills declarations, `validate`, `doctor` environment self-check
+- **Docs** — `docs/plugin-dev-desktop.md` (desktop) and `docs/plugin-dev-mobile.md` (mobile)
 
 ## Roadmap
 
-- [x] Plugin system for Claude Code hooks and cdylib dynamic loading
+- [x] Agent CLI hooks plugin system and cdylib dynamic loading
 - [x] Mobile file browser and code viewer with diff rendering
 - [x] Multi-language support (i18n: zh-CN / en)
 - [x] Preset task cards with one-tap execution
-- [x] Advanced network configuration for Actix Web server
-- [x] Server management view with metrics dashboard
-- [ ] End-to-end encryption (X25519 + AES-GCM)
+- [x] Advanced Actix Web network configuration, server management view and metrics dashboard
+- [ ] End-to-end encryption for WebSocket and file transfer (X25519 + AES-GCM toolkit done)
 - [ ] Linux desktop support
 - [ ] Internet connectivity interface
 - [ ] FCM push notifications
@@ -358,10 +168,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feat/my-feature`)
-3. Commit your changes (`git commit -m 'feat: add my feature'`)
-4. Push to the branch (`git push origin feat/my-feature`)
-5. Open a Pull Request
+3. Commit your changes (`git commit -m 'feat: ...'`)
+4. Push to the branch and open a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT - see the [LICENSE](LICENSE) file for details.

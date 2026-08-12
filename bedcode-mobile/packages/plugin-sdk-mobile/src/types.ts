@@ -582,6 +582,12 @@ export interface FileServiceAPI {
   requestAllFilesAccess(): Promise<boolean>
 }
 
+/** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
+export interface SystemAPI {
+  /** 用系统查看器打开本地文件（传输完成「打开本地文件」；Android ACTION_VIEW） */
+  openFile(path: string, displayName?: string): Promise<void>
+}
+
 // ==================== 插件开发期领域数据（dev-shell mock 协议） ====================
 
 /** SAF 目录树条目（dev-shell safTree 用；docId 为子目录遍历 key） */
@@ -652,6 +658,8 @@ export interface PluginContext {
   readonly dialogs: DialogAPI
   /** 系统通知 */
   readonly notifications: NotificationAPI
+  /** 系统 API（需 system:open 权限） */
+  readonly system: SystemAPI
   /** 生命周期状态上报（启用成功/失败） */
   readonly status: StatusAPI
   readonly _disposables: Disposable[]
