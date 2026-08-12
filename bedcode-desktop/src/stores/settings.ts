@@ -69,9 +69,10 @@ const defaultSettings: Settings = {
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<Settings>(JSON.parse(JSON.stringify(defaultSettings)))
-  // 最近一次保存后写入 store 的对象引用：保存回写触发 deep watch 时，
-  // 若引用一致说明没有真实变更，调用方可跳过重复保存（防止保存循环）
-  let lastSavedRef: Settings | null = null
+  // 最近一次成功保存内容的 JSON 快照：deep watch 触发时对比内容判断是否已持久化。
+  // 不能用对象引用比对——Pinia ref 赋值会包一层 reactive proxy，settings.value
+  // 永远不等于原始对象；且用户变更发生在同一对象上，引用比对也无法区分新旧状态
+  let lastSavedSnapshot: string | null = null
   // 保存序号：并发保存时仅最后一次的响应回写 store，先发慢回的旧响应不得覆盖新值
   let saveSeq = 0
 
@@ -96,7 +97,7 @@ export const useSettingsStore = defineStore('settings', () => {
       // 期间已有更新的保存请求：回写会覆盖更新值，丢弃本次回写
       if (mySeq !== saveSeq) return
       settings.value = merged
-      lastSavedRef = merged
+      lastSavedSnapshot = JSON.stringify(merged)
     } catch (e) {
       console.error('[Settings] Failed to save settings:', e)
     }
@@ -104,7 +105,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   /** 当前 store 状态是否与最近一次持久化一致（避免保存回写触发重复保存） */
   function isPersisted(current: Settings): boolean {
-    return current === lastSavedRef
+    return lastSavedSnapshot !== null && JSON.stringify(current) === lastSavedSnapshot
   }
 
   // 获��终端缓存最大数量

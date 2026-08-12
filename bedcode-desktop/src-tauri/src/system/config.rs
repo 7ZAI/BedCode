@@ -29,6 +29,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("session.default_command", "默认启动命令"),
     ("session.session_timeout", "会话超时时间（秒）- 无活动自动关闭"),
     ("ui.theme", "主题（light / dark / system）"),
+    ("ui.theme_palette", "主题色板（warm 暖调 / cool 冷调 / forest / ocean / sunset / violet）"),
     ("ui.font_size", "全局界面字体大小（终端字体在终端设置中独立配置）"),
     ("ui.terminal_font_size", "终端字体大小"),
     ("ui.terminal_font_family", "终端字体名称"),
@@ -85,6 +86,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
     ]),
     ("UI 界面配置", &[
         "ui.theme",
+        "ui.theme_palette",
         "ui.font_size",
         "ui.terminal_font_size",
         "ui.terminal_font_family",
@@ -388,7 +390,7 @@ impl Default for TerminalConfig {
         Self {
             default_cols: 120,
             default_rows: 40,
-            flush_interval_ms: 20,
+            flush_interval_ms: 30,
             merge_output: true,
             max_buffer_size: 64 * 1024,
             read_buffer_size: 4096,
@@ -633,6 +635,7 @@ impl AppConfig {
         map.insert("terminal.default_cols".to_string(), self.terminal.default_cols.to_string());
         map.insert("terminal.default_rows".to_string(), self.terminal.default_rows.to_string());
         map.insert("terminal.flush_interval_ms".to_string(), self.terminal.flush_interval_ms.to_string());
+        map.insert("terminal.merge_output".to_string(), self.terminal.merge_output.to_string());
         map.insert("terminal.max_buffer_size".to_string(), self.terminal.max_buffer_size.to_string());
         map.insert("terminal.read_buffer_size".to_string(), self.terminal.read_buffer_size.to_string());
         map.insert("log.file_level".to_string(), self.log.file_level.clone());
@@ -774,6 +777,11 @@ channels.output_broadcast_capacity=2048
         assert_eq!(config.network.port, loaded.network.port);
         assert_eq!(config.network.auto_start, loaded.network.auto_start);
         assert_eq!(config.channels.output_broadcast_capacity, loaded.channels.output_broadcast_capacity);
+        // 色板与输出合并开关必须写入 properties 文件并能往返（曾遗漏导致重启后色板重置 / merge_output 写空）
+        assert_eq!(config.ui.theme_palette, loaded.ui.theme_palette);
+        assert_eq!(config.terminal.merge_output, loaded.terminal.merge_output);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("ui.theme_palette=warm"));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("terminal.merge_output=true"));
     }
 
     #[test]

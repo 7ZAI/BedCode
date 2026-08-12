@@ -98,10 +98,10 @@
                       type="range"
                       :min="MIN_FONT_SIZE"
                       :max="MAX_FONT_SIZE"
-                      step="0.1"
+                      step="1"
                       :value="settingsStore.settings.ui.font_size"
                       class="w-full h-1 appearance-none bg-[var(--border-strong)] cursor-pointer accent-[var(--color-primary)]"
-                      @input="settingsStore.settings.ui.font_size = Number(($event.target as HTMLInputElement).value)"
+                      @input="settingsStore.settings.ui.font_size = Math.round(Number(($event.target as HTMLInputElement).value))"
                     />
                     <!-- 档位标签：点击跳到对应档位 -->
                     <div class="flex justify-between mt-1.5">
@@ -418,7 +418,7 @@ async function saveQrTokenTtl() {
 // 避免 500ms 窗口内切页导致变更丢失（theme_palette/theme 的 setter 已即时保存，
 // 此处兜底字体/环境等其余字段）。
 // 保存回写（settings.value 被 store 重新赋值）会触发本 watch——经
-// store.isPersisted 比对引用后跳过，不会形成保存循环。
+// store.isPersisted 比对内容后跳过，不会形成保存循环。
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
 
 watch(
