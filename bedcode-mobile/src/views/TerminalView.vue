@@ -92,7 +92,6 @@
           :is-connected="isConnected"
           :placeholder="inputPlaceholder"
           :is-landscape="isLandscape"
-          :interrupting="isSessionBusy"
           :pending-ref="pendingRefPath"
           @submit="handleInputSubmit"
           @execute="handleInputExecute"
@@ -139,6 +138,8 @@
 
   <!-- Shortcut Config -->
   <ShortcutConfigModal :visible="showShortcutConfig" @close="showShortcutConfig = false" />
+  <!-- 便捷功能教程弹窗（标题栏 ? 入口） -->
+  <TerminalHelpModal :visible="showHelp" @close="showHelp = false" />
 </template>
 
 <script setup lang="ts">
@@ -185,7 +186,6 @@ import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
 import { useTuiCompat } from '@/composables/useTuiCompat'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
-import { isIdlePromptLine } from '@/utils/terminalIdle'
 import TerminalHeader from '@/components/TerminalHeader.vue'
 import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
 import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
@@ -194,6 +194,7 @@ import TerminalInputBar from '@/components/TerminalInputBar.vue'
 import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
+import TerminalHelpModal from '@/components/TerminalHelpModal.vue'
 import { useToast } from '@/composables/useToast'
 import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
 import { TERMINAL_THEMES } from '@/config/terminalThemes'
@@ -257,66 +258,11 @@ const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
 const showShortcutConfig = ref(false)
+// 标题栏 ? 按钮：终端输入组件便捷功能教程弹窗
+const showHelp = ref(false)
 
 // 侧栏「插入引用」待填入路径：TerminalInputBar 消费后置回 null
 const pendingRefPath = ref<string | null>(null)
-
-// ==================== 会话忙闲判定（生成中一键中断） ====================
-// 桌面端会话状态事件目前只有 running/stopped 会实际变化（waitingInput 检测与
-// 插件 taskStatus 均为预留、未接入），通用 PTY 会话的「生成中」靠双条件推断：
-// 空闲 = 缓冲末行是 CLI 提示符/提问行 且 近期无输出；其余运行时间一律视为生成中，
-// 输入条发送键切换为中断按钮（等价 Esc），回到提示符后自动恢复发送。
-// 轮询（400ms）读 xterm 缓冲末行，文本变化即视为有输出——不侵入写入管线。
-
-const lastTerminalLine = ref('')
-const lastOutputAt = ref(0)
-/** 最近 IDLE_SETTLE_MS 内是否有终端输出（轮询周期刷新，供计算属性依赖） */
-const outputActivity = ref(false)
-
-/** 输出停止多久后视为空闲（生成停顿 + 提示符重绘的余量） */
-const IDLE_SETTLE_MS = 1200
-const IDLE_POLL_MS = 400
-let idlePollTimer: ReturnType<typeof setInterval> | null = null
-
-function pollTerminalIdle() {
-  const buffer = terminalRef.value?.buffer?.active
-  const line = buffer ? (buffer.getLine(buffer.length - 1)?.translateToString() ?? '') : ''
-  if (line !== lastTerminalLine.value) {
-    lastTerminalLine.value = line
-    lastOutputAt.value = Date.now()
-  }
-  outputActivity.value = Date.now() - lastOutputAt.value < IDLE_SETTLE_MS
-}
-
-/**
- * 生成/等待中标记：驱动输入条发送键 → 中断按钮切换
- *
- * 优先级：插件 taskStatus（预留，接入后直接驱动）> 会话状态 > 末行提示符推断
- */
-const isSessionBusy = computed(() => {
-  if (!isSessionActive.value) return false
-  const s = session.value
-  // 会话已明确回到「等待输入」（桌面端预留状态）：生成结束，恢复发送按钮
-  if (s?.status === 'waitingInput') return false
-  const task = s?.taskStatus
-  if (task === 'in_progress' || task === 'asking') return true
-  if (task === 'completed' || task === 'interrupted' || task === 'idle') return false
-  // 通用 PTY（无 task 状态）：空闲 = 末行提示符 + 近期无输出
-  const idle = isIdlePromptLine(lastTerminalLine.value) && !outputActivity.value
-  return !idle
-})
-
-function startIdlePoll() {
-  if (idlePollTimer) return
-  idlePollTimer = setInterval(pollTerminalIdle, IDLE_POLL_MS)
-}
-
-function stopIdlePoll() {
-  if (idlePollTimer) {
-    clearInterval(idlePollTimer)
-    idlePollTimer = null
-  }
-}
 
 // 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
 const terminalSettings = ref({
@@ -386,29 +332,63 @@ const session = computed(() => {
 })
 
 // ==================== Agent CLI 预设（命令面板） ====================
-// 预设识别依赖两个异步数据源：session.config_id（activeSessions）与
-// sessionConfigs（仅 DevicesView 在认证/配对后调用 loadSessionConfigs 填充）。
-// 通知跳转/路由恢复等直接进入终端页的路径两者可能都未就绪，且识别结果需随
-// 会话切换更新——故不做 onMounted 一次性识别，改由 watch 响应式触发：
-// 任一数据到位即识别，识别为 generic（未识别）时面板仅保留用户自定义命令。
-let agentOverridesLoaded = false
+// 预设识别需要会话的 config_id（activeSessions）与对应配置的启动命令
+// （sessionConfigs）。两条数据源在通知跳转/路由恢复等直接进入终端页的路径上
+// 都可能未就绪（loadActiveSessions 仅 DevicesView/SessionsView 调用），
+// 故识别时按需补齐：会话缺失则按 sessionId 拉取会话列表反查 config_id，
+// 配置缺失则现场拉取配置列表；识别结果需随会话切换更新，由 watch 响应式触发。
+// 识别为 generic（未识别）时面板仅保留用户自定义命令。
+// 会话的 config_id：WS 事件推送的会话对象为 camelCase（configId），
+// HTTP /api/sessions 响应为 snake_case（config_id），两端来源需兼容（同 DevicesView 等）
+const sessionConfigId = computed(() => session.value?.config_id ?? session.value?.configId)
 
-/** 识别并应用当前会话的命令预设；数据未就绪时静默跳过（watch 稍后重触发） */
+let agentOverridesLoaded = false
+// 按需拉取标记：并发触发（watch immediate + 数据到位）时只拉一次
+let sessionsFetchStarted = false
+let configsFetchStarted = false
+
+/** 识别并应用当前会话的命令预设；数据未就绪时按需补齐（会话列表/配置列表）后重试 */
 async function applyAgentPreset() {
+  if (isMockSession(sessionId.value)) return // mock 会话无配置，不加载预设
   if (!agentOverridesLoaded) {
     await assistStore.loadAgentTypeOverrides()
     agentOverridesLoaded = true
   }
-  const configId = session.value?.config_id
-  if (!configId) return // 会话未就绪（含 mock 会话，无 config_id）
-  const config = connection.sessionConfigs.value.find(c => c.id === configId)
-  if (!config) return // 配置列表未加载，等待 loadSessionConfigs 完成
-  assistStore.setAgentPreset(assistStore.getEffectiveAgentType(configId, config.command))
+  // 会话未就绪：按会话 id 拉取会话列表（GET /api/sessions 自带 config_id）反查
+  if (!sessionConfigId.value && !sessionsFetchStarted) {
+    sessionsFetchStarted = true
+    await connection.loadActiveSessions()
+  }
+  const configId = sessionConfigId.value
+  if (!configId) {
+    const found = connection.activeSessions.value.find(s => s.id === sessionId.value)
+    console.warn('[TerminalView] applyAgentPreset: 会话未就绪（无 config_id）', JSON.stringify({
+      sessionId: sessionId.value,
+      activeSessionsCount: connection.activeSessions.value.length,
+      foundSession: found,
+    }))
+    return // 列表拉取失败或会话确实无配置，保留用户自定义命令
+  }
+  let config = connection.sessionConfigs.value.find(c => c.id === configId)
+  // 配置列表未加载（DevicesView 之外的进入路径）：主动拉取一次，仍失败则等 watch 重触发
+  if (!config && !configsFetchStarted) {
+    configsFetchStarted = true
+    await connection.loadSessionConfigs().catch(() => {})
+    config = connection.sessionConfigs.value.find(c => c.id === configId)
+  }
+  if (!config) {
+    console.warn('[TerminalView] applyAgentPreset: 配置列表无匹配 config_id，预设不加载', { configId })
+    return
+  }
+  const agentType = assistStore.getEffectiveAgentType(configId, config.command)
+  console.log('[TerminalView] applyAgentPreset:', { configId, command: config.command, agentType })
+  assistStore.setAgentPreset(agentType)
+  console.log('[TerminalView] presetCommands 数量:', assistStore.presetCommands.length, '首个:', assistStore.presetCommands[0]?.command)
 }
 
 // session/config 任一就绪或切换即重新识别（deep：SyncConfigCreated push 也能触发）
 watch(
-  [() => session.value?.config_id, () => connection.sessionConfigs.value],
+  [() => sessionConfigId.value, () => connection.sessionConfigs.value],
   () => { applyAgentPreset() },
   { immediate: true, deep: true },
 )
@@ -817,6 +797,7 @@ function handleToolbarAction(key: string) {
     case 'refresh': refreshTerminal(); break
     case 'settings': showSettings.value = true; break
     case 'folder': showSidebar.value = !showSidebar.value; break
+    case 'help': showHelp.value = true; break
   }
 }
 
@@ -989,15 +970,14 @@ onMounted(async () => {
   window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
 
   // 兜底加载会话配置：DevicesView 之外的进入路径（通知跳转/路由恢复）从未调用过
-  // loadSessionConfigs，预设识别需要其中的启动命令；加载完成后由上方 watch 触发识别
+  // loadSessionConfigs，预设识别需要其中的启动命令；加载完成后由上方 watch 触发识别。
+  // 会话列表（activeSessions）不在此兜底——由 applyAgentPreset 按 sessionId 按需反查。
   if (!connection.hasLoadedConfigs.value && !connection.isLoadingConfigs.value) {
     connection.loadSessionConfigs().catch(() => {})
   }
 
   await nextTick()
   await initTerminal()
-  // 空闲判定轮询：xterm 就绪后启动，卸载时停止
-  startIdlePoll()
 
   // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
   if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
@@ -1023,7 +1003,6 @@ onMounted(async () => {
 onUnmounted(async () => {
   disposed = true
   clearSubscribeRetry()
-  stopIdlePoll()
 
   // 移除 visualViewport 事件监听
   if (window.visualViewport) {

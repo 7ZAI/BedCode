@@ -372,26 +372,12 @@
           </button>
 
           <button
-            v-if="!interrupting"
             class="inline-btn send-btn"
             :disabled="!canSubmit"
             @click="handleSubmit"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
-            </svg>
-          </button>
-          <!-- 生成/等待中：发送键切换为常驻中断按钮（等价 Esc 特殊键） -->
-          <button
-            v-else
-            class="inline-btn interrupt-btn"
-            :disabled="props.disabled"
-            :title="t('mobile.input.interrupt')"
-            :aria-label="t('mobile.input.interrupt')"
-            @click="handleInterrupt"
-          >
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 6h12v12H6z" />
             </svg>
           </button>
 
@@ -432,8 +418,6 @@ const props = withDefaults(defineProps<{
   isConnected?: boolean
   placeholder?: string
   isLandscape?: boolean
-  /** 会话生成/等待中：发送键切换为中断按钮（等价 Esc） */
-  interrupting?: boolean
   /** 侧栏「插入引用」待填入的路径（消费后 emit ref-consumed） */
   pendingRef?: string | null
 }>(), {
@@ -441,7 +425,6 @@ const props = withDefaults(defineProps<{
   isConnected: false,
   placeholder: '',
   isLandscape: false,
-  interrupting: false,
   pendingRef: null,
 })
 
@@ -742,6 +725,10 @@ function toggleShortcuts() {
   }
   showShortcutsPanel.value = !showShortcutsPanel.value
   if (showShortcutsPanel.value) {
+    // 面板渲染前确认命令列表构成（预设 + 自定义），排查第二页缺失问题
+    console.log('[TerminalInputBar] 面板打开：displayCommands =', displayCommands.value.length,
+      '（预设', assistStore.presetCommands.length, '+ 自定义', customCommands.value.length, '）',
+      displayCommands.value.slice(0, 3).map(c => c.command))
     // 面板渲染后测量高度并通知终端，同时计算左侧网格列数
     nextTick(() => {
       const h = shortcutsPanelRef.value?.offsetHeight || 0
@@ -783,12 +770,6 @@ function handleExecute() {
 function handleShortcutClick(code: string) {
   assistStore.recordShortcut(code)
   emit('specialKey', code)
-}
-
-/** 生成中中断：等价发送 Esc 特殊键（与快捷键面板 Esc 同一通道） */
-function handleInterrupt() {
-  assistStore.recordShortcut('escape')
-  emit('specialKey', 'escape')
 }
 
 // ==================== Quick Bar ====================
@@ -1041,7 +1022,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.5rem;
+  /* 圆形按钮：宽高相等 + 50% 圆角 */
+  border-radius: 50%;
   border: 1px solid;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -1131,24 +1113,6 @@ onMounted(() => {
 }
 
 .execute-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* 生成中中断按钮：danger 语义（等价 Esc），与 Del 键同色系 */
-.interrupt-btn {
-  background: var(--mobile-danger-bg);
-  border-color: var(--mobile-danger-border);
-  color: var(--mobile-danger-color);
-}
-
-.interrupt-btn:active:not(:disabled) {
-  transform: scale(0.93);
-  background: var(--mobile-danger-bg);
-  filter: brightness(1.2);
-}
-
-.interrupt-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

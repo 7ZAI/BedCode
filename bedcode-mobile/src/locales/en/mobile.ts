@@ -138,6 +138,9 @@ export default {
       theme: 'Theme',
       shortcutCount: 'Shortcut Count',
       persistentToolbar: 'Persistent Toolbar',
+      persistentToolbarHint: 'Choose buttons pinned to the header; the rest move into the overflow menu',
+      tabAppearance: 'Appearance',
+      tabMisc: 'Misc',
       toolbarTask: 'Task',
       toolbarShortcut: 'Shortcut',
       toolbarClear: 'Clear',
@@ -170,7 +173,6 @@ export default {
       input: 'Input',
       shortcuts: 'Shortcuts',
       shortcutsLandscapeUnavailable: 'Shortcut panel is unavailable in landscape mode',
-      interrupt: 'Interrupt',
     },
     inputAssistant: {
       title: 'Input Assistant Settings',
@@ -214,6 +216,9 @@ export default {
       deleteShortcut: 'Delete',
       deleteConfirm: 'Delete shortcut {label}?',
       help: 'Shortcut Help',
+    },
+    terminalHelp: {
+      title: 'Terminal Quick Guide',
     },
     shortcutHelp: {
       title: 'Shortcut Help',

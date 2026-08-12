@@ -138,6 +138,9 @@ export default {
       theme: '主题',
       shortcutCount: '快捷键数量',
       persistentToolbar: '常驻工具栏',
+      persistentToolbarHint: '选择常驻在标题栏的按钮，其余收进溢出菜单',
+      tabAppearance: '外观',
+      tabMisc: '杂项配置',
       toolbarTask: '任务',
       toolbarShortcut: '快捷键',
       toolbarClear: '清屏',
@@ -170,7 +173,6 @@ export default {
       input: '输入',
       shortcuts: '快捷键',
       shortcutsLandscapeUnavailable: '横屏模式不支持快捷键面板',
-      interrupt: '中断生成',
     },
     inputAssistant: {
       title: '输入助手设置',
@@ -214,6 +216,9 @@ export default {
       deleteShortcut: '删除',
       deleteConfirm: '确认删除快捷键 {label}？',
       help: '快捷键说明',
+    },
+    terminalHelp: {
+      title: '终端便捷功能指南',
     },
     shortcutHelp: {
       title: '快捷键说明',
