@@ -207,6 +207,10 @@ const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, 
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
+// 挂载时固定会话 ID：卸载时路由导航已完成、route.params 已失效（undefined），
+// 若仍读 sessionId.value 会导致 ws_leave_session 调用失败 → 桌面端订阅泄漏 →
+// 重进会话时旧订阅流干扰游标连续性（violation 循环，终端多次进入才渲染完整）
+const mountedSessionId = sessionId.value
 
 // 安全区域从 App.vue inject
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
@@ -914,15 +918,15 @@ onUnmounted(async () => {
   }
   window.removeEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
 
-  if (isMockSession(sessionId.value)) {
+  if (isMockSession(mountedSessionId)) {
     mockTerminal.stopOutput()
   }
   disposeTerminal()
 
   // 页面卸载即取消订阅：后台期间的输出由服务端环形保留，
   // 重新进入时强制全量重播（forceReplay + 服务端 reset 裁决）
-  if (!isMockSession(sessionId.value)) {
-    await unsubscribeSession(sessionId.value)
+  if (!isMockSession(mountedSessionId)) {
+    await unsubscribeSession(mountedSessionId)
   }
 })
 
