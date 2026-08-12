@@ -70,81 +70,83 @@ function onRowDblClick(entry: RemoteEntry): void {
       </template>
     </div>
 
-    <!-- 加载 / 错误 / 空态 -->
-    <div v-if="loading" class="ft-loading">{{ t('transfer.table.loading') }}</div>
-    <div v-else-if="errorKey" class="ft-empty">{{ t(errorKey) }}</div>
-    <div v-else-if="entries.length === 0" class="ft-empty">
-      <!-- 根目录空 = 对方尚未设置共享目录（spec §8 默认安全），子目录空 = 普通空目录 -->
-      {{ isRoot ? t('transfer.peer.noSharedRoots') : t('transfer.table.empty') }}
-    </div>
+    <!-- 加载 / 错误 / 空态 / 表格：状态切换交叉淡入，避免目录跳转闪烁 -->
+    <Transition name="ft-swap" mode="out-in">
+      <div v-if="loading" class="ft-loading">{{ t('transfer.table.loading') }}</div>
+      <div v-else-if="errorKey" class="ft-empty">{{ t(errorKey) }}</div>
+      <div v-else-if="entries.length === 0" class="ft-empty">
+        <!-- 根目录空 = 对方尚未设置共享目录（spec §8 默认安全），子目录空 = 普通空目录 -->
+        {{ isRoot ? t('transfer.peer.noSharedRoots') : t('transfer.table.empty') }}
+      </div>
 
-    <!-- 目录表格 -->
-    <div v-else class="ft-table-wrap">
-      <table class="ft-table">
-        <thead>
-          <tr>
-            <th style="width: 32px">
-              <label class="ft-checkbox">
-                <!-- 原生 checkbox 仅作交互内核（绝对定位覆盖 + 透明），change/indeterminate 语义不变 -->
-                <input
-                  type="checkbox"
-                  class="ft-checkbox-input"
-                  :checked="allSelected"
-                  :indeterminate="someSelected"
-                  @change="emit('toggleAll')"
-                />
-                <span class="ft-checkbox-box" aria-hidden="true">
-                  <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span class="ft-checkbox-indet"></span>
-                </span>
-              </label>
-            </th>
-            <th>{{ t('transfer.table.name') }}</th>
-            <th style="width: 90px">{{ t('transfer.table.size') }}</th>
-            <th style="width: 130px">{{ t('transfer.table.modified') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="entry in entries"
-            :key="entry.name"
-            :class="{ 'ft-row--sel': !entry.isDir && selectedNames.includes(entry.name) }"
-            @dblclick="onRowDblClick(entry)"
-          >
-            <td>
-              <label
-                class="ft-checkbox"
-                :class="{ 'ft-checkbox--disabled': entry.isDir }"
-              >
-                <!-- 原生 checkbox 仅作交互内核；目录行隐藏（与目录不可勾选语义一致） -->
-                <input
-                  type="checkbox"
-                  class="ft-checkbox-input"
-                  :disabled="entry.isDir"
-                  :checked="!entry.isDir && selectedNames.includes(entry.name)"
-                  @change="emit('toggle', entry.name)"
-                />
-                <span class="ft-checkbox-box" aria-hidden="true">
-                  <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 13l4 4L19 7" />
-                  </svg>
-                </span>
-              </label>
-            </td>
-            <td>
-              <div class="ft-fname">
-                <!-- 类型图标（按扩展名匹配：音乐/视频/图片/PDF/文档等，未知回退通用文件） -->
-                <FileTypeIcon :name="entry.name" :is-dir="entry.isDir" />
-                <span class="ft-fname-text">{{ entry.name }}</span>
-              </div>
-            </td>
-            <td class="ft-dim">{{ entry.isDir ? '—' : formatBytes(entry.size) }}</td>
-            <td class="ft-dim">{{ formatModified(entry.mtime) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+      <!-- 目录表格 -->
+      <div v-else class="ft-table-wrap">
+        <table class="ft-table">
+          <thead>
+            <tr>
+              <th style="width: 32px">
+                <label class="ft-checkbox">
+                  <!-- 原生 checkbox 仅作交互内核（绝对定位覆盖 + 透明），change/indeterminate 语义不变 -->
+                  <input
+                    type="checkbox"
+                    class="ft-checkbox-input"
+                    :checked="allSelected"
+                    :indeterminate="someSelected"
+                    @change="emit('toggleAll')"
+                  />
+                  <span class="ft-checkbox-box" aria-hidden="true">
+                    <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span class="ft-checkbox-indet"></span>
+                  </span>
+                </label>
+              </th>
+              <th>{{ t('transfer.table.name') }}</th>
+              <th style="width: 90px">{{ t('transfer.table.size') }}</th>
+              <th style="width: 130px">{{ t('transfer.table.modified') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="entry in entries"
+              :key="entry.name"
+              :class="{ 'ft-row--sel': !entry.isDir && selectedNames.includes(entry.name) }"
+              @dblclick="onRowDblClick(entry)"
+            >
+              <td>
+                <label
+                  class="ft-checkbox"
+                  :class="{ 'ft-checkbox--disabled': entry.isDir }"
+                >
+                  <!-- 原生 checkbox 仅作交互内核；目录行隐藏（与目录不可勾选语义一致） -->
+                  <input
+                    type="checkbox"
+                    class="ft-checkbox-input"
+                    :disabled="entry.isDir"
+                    :checked="!entry.isDir && selectedNames.includes(entry.name)"
+                    @change="emit('toggle', entry.name)"
+                  />
+                  <span class="ft-checkbox-box" aria-hidden="true">
+                    <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 13l4 4L19 7" />
+                    </svg>
+                  </span>
+                </label>
+              </td>
+              <td>
+                <div class="ft-fname">
+                  <!-- 类型图标（按扩展名匹配：音乐/视频/图片/PDF/文档等，未知回退通用文件） -->
+                  <FileTypeIcon :name="entry.name" :is-dir="entry.isDir" />
+                  <span class="ft-fname-text">{{ entry.name }}</span>
+                </div>
+              </td>
+              <td class="ft-dim">{{ entry.isDir ? '—' : formatBytes(entry.size) }}</td>
+              <td class="ft-dim">{{ formatModified(entry.mtime) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Transition>
   </div>
 </template>

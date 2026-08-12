@@ -160,8 +160,8 @@ function reasonText(task: Task): string {
         {{ t('transfer.task.empty') }}
       </div>
 
-      <!-- 任务卡列表 -->
-      <div v-else class="ft-task-list">
+      <!-- 任务卡列表（TransitionGroup：新增任务滑入、移除淡出、顺序变化 FLIP 位移） -->
+      <TransitionGroup v-else tag="div" name="ft-task" class="ft-task-list">
         <div v-for="task in tasks" :key="task.id" class="ft-task">
           <div class="ft-task-head">
             <span class="ft-task-dir" :class="task.direction === 'upload' ? 'ft-task-dir--up' : ''">
@@ -215,7 +215,7 @@ function reasonText(task: Task): string {
           </div>
           <div v-if="reasonText(task)" class="ft-task-reason">{{ reasonText(task) }}</div>
         </div>
-      </div>
+      </TransitionGroup>
     </div>
   </div>
 </template>

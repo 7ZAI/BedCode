@@ -265,8 +265,10 @@ onUnmounted(() => {
 
     <!-- 双栏工作台：左栏随状态切换（空态提示 / 文件表格）；右栏传输队列默认收起，顶栏按钮展开 -->
     <div class="ft-main" :class="{ 'ft-main--queue': queueVisible }">
-      <!-- 空态：未配置共享目录 -->
-      <div v-if="showNoRoots" class="ft-empty">
+      <!-- 页面切换：空态 ↔ 工作台 out-in 交叉过渡，避免状态跳变闪烁 -->
+      <Transition name="ft-page" mode="out-in">
+        <!-- 空态：未配置共享目录 -->
+        <div v-if="showNoRoots" class="ft-empty">
         <div class="ft-empty-ico">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
@@ -305,51 +307,58 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <!-- 工作态：远端文件表格（含对端存储权限提示） -->
-      <template v-else>
-        <!-- 对端存储权限提示：列表为空且对端（移动端）可能未授予「所有文件访问权限」 -->
-        <div v-if="notice === 'all_files_access_may_be_required'" class="ft-warning">
-          <span class="ft-warning-ico">⚠</span>
-          <span>{{ t('transfer.notice.storageAccess') }}</span>
+        <!-- 工作态：远端文件表格（含对端存储权限提示） -->
+        <div v-else class="ft-browse">
+          <!-- 对端存储权限提示：列表为空且对端（移动端）可能未授予「所有文件访问权限」 -->
+          <Transition name="ft-fade">
+            <div v-if="notice === 'all_files_access_may_be_required'" class="ft-warning">
+              <span class="ft-warning-ico">⚠</span>
+              <span>{{ t('transfer.notice.storageAccess') }}</span>
+            </div>
+          </Transition>
+          <RemoteFileTable
+            :entries="entries"
+            :loading="loading"
+            :error-key="errorKey"
+            :breadcrumb="breadcrumb"
+            :selected-names="selectedNames"
+            @enter="enterDir"
+            @navigate="navigateTo"
+            @toggle="toggleSelect"
+            @toggle-all="toggleAll"
+          />
         </div>
-        <RemoteFileTable
-          :entries="entries"
-          :loading="loading"
-          :error-key="errorKey"
-          :breadcrumb="breadcrumb"
-          :selected-names="selectedNames"
-          @enter="enterDir"
-          @navigate="navigateTo"
-          @toggle="toggleSelect"
-          @toggle-all="toggleAll"
-        />
-      </template>
+      </Transition>
 
-      <!-- 传输队列：默认收起，顶栏「传输队列」按钮展开 -->
-      <TaskPanel
-        v-if="queueVisible"
-        :tasks="tasks"
-        :speed-map="speedMap"
-        :summary="summary"
-        :resumable-count="resumableCount"
-        :total-speed="totalSpeed"
-        @pause="pause"
-        @resume="resume"
-        @cancel="cancel"
-        @retry="retry"
-        @resume-all="resumeAll"
-      />
+      <!-- 传输队列：默认收起，顶栏「传输队列」按钮展开；随网格列宽同步滑入/滑出 -->
+      <Transition name="ft-queue-panel">
+        <TaskPanel
+          v-if="queueVisible"
+          :tasks="tasks"
+          :speed-map="speedMap"
+          :summary="summary"
+          :resumable-count="resumableCount"
+          :total-speed="totalSpeed"
+          @pause="pause"
+          @resume="resume"
+          @cancel="cancel"
+          @retry="retry"
+          @resume-all="resumeAll"
+        />
+      </Transition>
     </div>
 
-    <!-- 设置覆盖层 -->
-    <SettingsPanel
-      v-if="showSettings"
-      :settings="settings"
-      @add-root="addRoot"
-      @remove-root="removeRoot"
-      @pick-download-dir="pickDownloadDir"
-      @set-concurrency="setConcurrency"
-      @close="showSettings = false"
-    />
+    <!-- 设置覆盖层（淡入 + 上滑） -->
+    <Transition name="ft-settings">
+      <SettingsPanel
+        v-if="showSettings"
+        :settings="settings"
+        @add-root="addRoot"
+        @remove-root="removeRoot"
+        @pick-download-dir="pickDownloadDir"
+        @set-concurrency="setConcurrency"
+        @close="showSettings = false"
+      />
+    </Transition>
   </div>
 </template>

@@ -251,16 +251,25 @@
 
 /* ==================== 双栏主体 ==================== */
 
+/* 队列列宽注册为可插值属性：展开/收起时网格列宽可平滑过渡（Chromium/WebKit 支持；
+   不支持的引擎回退为瞬时切换，功能不受影响） */
+@property --ft-queue-w {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
 .ft-main {
   flex: 1;
   min-height: 0;
   display: grid;
-  /* 默认单栏（队列收起，文件表格全宽）；展开队列时切两栏 */
-  grid-template-columns: minmax(0, 1fr);
+  /* 默认单栏（队列收起，文件表格全宽）；展开队列时第二列由 --ft-queue-w 展开到 360px */
+  grid-template-columns: minmax(0, 1fr) var(--ft-queue-w);
+  transition: --ft-queue-w 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .ft-main--queue {
-  grid-template-columns: minmax(0, 1fr) 360px;
+  --ft-queue-w: 360px;
 }
 
 .ft-browse {
@@ -620,6 +629,7 @@
 }
 
 .ft-task-list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -744,6 +754,105 @@
   margin-top: 5px;
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* ==================== 过渡动画 ==================== */
+
+/* 页面状态切换（空态 ↔ 工作台）：淡入 + 轻微上移，out-in 交叉过渡避免闪烁 */
+.ft-page-enter-active,
+.ft-page-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  will-change: transform, opacity;
+}
+
+.ft-page-leave-active {
+  transition-duration: 0.15s;
+}
+
+.ft-page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.ft-page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* 传输队列面板：内容淡入 + 自右滑入，与网格列宽动画（280ms）同步 */
+.ft-queue-panel-enter-active,
+.ft-queue-panel-leave-active {
+  transition: opacity 0.2s ease, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
+}
+
+.ft-queue-panel-enter-from,
+.ft-queue-panel-leave-to {
+  opacity: 0;
+  transform: translateX(24px);
+}
+
+/* 设置覆盖层：淡入 + 上滑 */
+.ft-settings-enter-active,
+.ft-settings-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  will-change: transform, opacity;
+}
+
+.ft-settings-enter-from,
+.ft-settings-leave-to {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+/* 通用淡入淡出（如对端存储权限提示条） */
+.ft-fade-enter-active,
+.ft-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.ft-fade-enter-from,
+.ft-fade-leave-to {
+  opacity: 0;
+}
+
+/* 文件表格内部状态切换（加载/错误/空态/表格）：短时交叉淡入，避免目录跳转闪烁 */
+.ft-swap-enter-active,
+.ft-swap-leave-active {
+  transition: opacity 0.12s ease;
+}
+
+.ft-swap-enter-from,
+.ft-swap-leave-to {
+  opacity: 0;
+}
+
+/* 任务卡进入/移除：淡入上移；顺序变化（FLIP）平滑位移，移除时脱离文档流不挤占 */
+.ft-task-enter-active,
+.ft-task-leave-active,
+.ft-task-move {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.ft-task-enter-from,
+.ft-task-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.ft-task-leave-active {
+  position: absolute;
+}
+
+/* 无障碍：系统减弱动态效果时所有过渡降为瞬时（进度条跳变可接受，与宿主约定一致） */
+@media (prefers-reduced-motion: reduce) {
+  .ft-view *,
+  .ft-view *::before,
+  .ft-view *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ==================== 设置面板（覆盖层） ==================== */
