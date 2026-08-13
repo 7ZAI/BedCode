@@ -159,7 +159,7 @@ describe('terminalBuffer store', () => {
     expect(buf.cursor).toBe(22)
   })
 
-  it('连续性违反（已订阅后）：清屏 + 丢弃游标 + 重新订阅（服务端裁决）', async () => {
+  it('连续性违反（已订阅后）：丢弃游标 + 重新订阅（裁决 reset 确认后清屏）', async () => {
     store.ensureBuffer('s1')
     store.markSubscribed('s1')
     store.getBuffer('s1')!.cursor = 5
@@ -171,17 +171,27 @@ describe('terminalBuffer store', () => {
     // 帧起点 6 而非 5 → 不变量破坏
     listener!({ payload: payload('s1', 'xy', 6, 8) })
 
-    // 同步部分：清屏 + 游标/订阅状态重置
-    expect(onClear).toHaveBeenCalledTimes(1)
+    // 同步部分：游标/订阅状态重置；清屏推迟到裁决确认后（自愈失败时
+    // 不提前清屏 → 不留永久黑屏，旧内容展示到新回放到达）
     const buf = store.getBuffer('s1')!
     expect(buf.cursor).toBe(-1)
     expect(buf.subscribed).toBe(false)
+    expect(onClear).not.toHaveBeenCalled()
 
-    // 自愈重订阅（doSubscribe 先 await 监听器注册，invoke 异步发出）
+    // 自愈重订阅（doSubscribe 先 await 监听器注册，invoke 异步发出）；
+    // 游标已丢弃 → startSeq null → 服务端裁决 reset 全量重播
+    invokeMock.mockResolvedValueOnce({
+      minSeq: 0,
+      maxSeq: 10,
+      historyCount: 5,
+      mode: 'reset',
+      minOffset: 5,
+      maxOffset: 30,
+    })
     await flushAsync()
-    // 游标丢弃 → startSeq null → 全量重播
     expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: null })
     expect(buf.subscribed).toBe(true)
+    expect(onClear).toHaveBeenCalledTimes(1)
   })
 
   it('订阅请求在途时重复订阅跳过（subscribing 防重）', async () => {

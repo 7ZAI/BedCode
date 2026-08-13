@@ -80,10 +80,16 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 订阅确认前缓冲回放帧的上限（防御性；服务端环形容量远小于此） */
   const MAX_PENDING_FRAME_BYTES = 8 * 1024 * 1024
 
-  /** 自愈重订阅冷却间隔（毫秒）：限制同一会话连续性自愈的频率 */
-  const RESUBSCRIBE_COOLDOWN_MS = 2000
+  /** 自愈重订阅冷却间隔下限（毫秒）：限制同一会话连续性自愈的频率 */
+  const RESUBSCRIBE_COOLDOWN_MIN_MS = 2000
+  /** 自愈重订阅冷却间隔上限（毫秒）：连续自愈风暴（violation 循环）时指数退避封顶 */
+  const RESUBSCRIBE_COOLDOWN_MAX_MS = 30000
+  /** 连续自愈计数复位窗口（毫秒）：超过该时长无自愈，视为风暴结束，退避计数清零 */
+  const RESUBSCRIBE_STREAK_RESET_MS = 60000
   /** sessionId → 上次 resubscribeWithReset 的时间戳 */
   const lastResubscribeAt = reactive(new Map<string, number>())
+  /** sessionId → 连续自愈次数（指数退避用，风暴平息后经 STREAK_RESET 窗口清零） */
+  const resubscribeStreak = reactive(new Map<string, number>())
 
   /** 预加载已就绪的会话（会话页 prepareSession 成功后标记，终端页挂载时消费一次） */
   const preparedSessionId = ref<string | null>(null)
@@ -143,7 +149,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
             buffer.pendingBytes += payload.data_base64.length
             if (buffer.pendingBytes > MAX_PENDING_FRAME_BYTES) {
               console.error('[terminalBuffer] pending frame overflow, resubscribing with reset')
-              resubscribeWithReset(sessionId, buffer, handler)
+              resubscribeWithReset(sessionId, buffer)
             }
             return
           }
@@ -188,7 +194,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       console.error(
         `[terminalBuffer] continuity violation: start=${payload.start_offset}, cursor=${buffer.cursor}. Resubscribing with reset`
       )
-      resubscribeWithReset(sessionId, buffer, handler)
+      resubscribeWithReset(sessionId, buffer)
       return false
     }
 
@@ -312,28 +318,42 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     return doSubscribe(sessionId, buffer)
   }
 
-  /** 连续性不变量破坏后的自愈：丢弃游标与缓冲帧，重新订阅（服务端给正确答案）
+  /**
+   * 连续性不变量破坏后的自愈：丢弃游标与缓冲帧，重新订阅（服务端给正确答案）
    *
-   * 带冷却：同一会话反复违反时（重复流等异常场景），限制自愈频率，防止
-   * "违反 → 重订阅 → 重复流 → 再违反"自持风暴——每次自愈都清屏，高频下
-   * 表现为终端闪烁 / 白屏（TUI 应用全屏重绘时最明显）。冷却期内违反帧
-   * 仍被拒绝写入，冷却结束后一次重订阅即可恢复 */
+   * 指数退避冷却：连续违反（"违反 → 重订阅 → 重复流 → 再违反"自持风暴）时
+   * 冷却从 2s 指数递增到 30s 封顶（窗口内无自愈则复位），限制清屏+全量重播
+   * 的频率——每次自愈都清屏，高频下表现为终端闪烁/白屏（TUI 应用全屏重绘时
+   * 最明显）。冷却期内违反帧仍被拒绝写入，风暴随退避自然平息，一次重订阅
+   * 即可恢复
+   */
   async function resubscribeWithReset(
     sessionId: string,
     buffer: SessionBuffer,
-    handler?: RealtimeHandler,
   ) {
     invalidatePrepared(sessionId)
     const now = Date.now()
     const last = lastResubscribeAt.get(sessionId) ?? 0
-    if (now - last < RESUBSCRIBE_COOLDOWN_MS) return
+    // 退避计数：风暴平息（RESET 窗口内无自愈）后清零
+    if (now - last > RESUBSCRIBE_STREAK_RESET_MS) {
+      resubscribeStreak.set(sessionId, 0)
+    }
+    const streak = resubscribeStreak.get(sessionId) ?? 0
+    resubscribeStreak.set(sessionId, streak + 1)
     lastResubscribeAt.set(sessionId, now)
+    const cooldown = Math.min(
+      RESUBSCRIBE_COOLDOWN_MIN_MS * 2 ** Math.min(streak, 4),
+      RESUBSCRIBE_COOLDOWN_MAX_MS,
+    )
+    if (now - last < cooldown) return
 
     buffer.cursor = -1
     buffer.subscribed = false
     buffer.pending = []
     buffer.pendingBytes = 0
-    handler?.onClear?.()
+    // 不在此清屏：真正清屏时机由 doSubscribe 的 reset 裁决分支决定（订阅确认后、
+    // 全量回放帧到达前）。提前清屏会把黑屏窗口拉长到整个订阅往返耗时，
+    // 且重订阅失败/超时时留下永久黑屏（旧内容本可继续展示到裁决到达）
     // 原订阅请求仍在途：标记重播请求（其按旧游标 incremental 裁决完成时，
     // doSubscribe 会以重置游标重订阅全量重播），不再发起新订阅
     if (buffer.subscribing) {
@@ -491,7 +511,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       console.warn(
         `[terminalBuffer] continuity violation (no handler): start=${payload.start_offset}, cursor=${buffer.cursor}. Resubscribing with reset`
       )
-      resubscribeWithReset(sessionId, buffer, undefined)
+      resubscribeWithReset(sessionId, buffer)
       return
     }
     buffer.cursor = payload.end_offset ?? buffer.cursor
@@ -504,7 +524,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       console.warn(
         `[terminalBuffer] preload frame overflow (session ${sessionId}), resubscribing with reset`
       )
-      resubscribeWithReset(sessionId, buffer, undefined)
+      resubscribeWithReset(sessionId, buffer)
     }
   }
 

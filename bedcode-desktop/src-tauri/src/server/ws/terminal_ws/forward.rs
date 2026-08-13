@@ -3,6 +3,8 @@
 //! 从 `terminal_ws` 拆出的纯逻辑部分：不依赖 actor 状态，独立可测。
 //! 合并/直通时序语义由 `forward_loop` 统一保证（见其文档注释与内联测试）。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::session::OutputEvent;
@@ -125,6 +127,13 @@ impl OutputBuffer {
 ///   flush（先到先发），持续输出下延迟恒 ≤ flush_interval。不能用 timeout 重计时代替
 ///   时间窗——持续输出时 timeout 永不触发，flush 会退化成仅容量触发，慢速输出
 ///   延迟 = 容量/速率（可达数百 ms）
+///
+/// 流代数（stream generation）门控：
+/// 订阅者被替换/取消订阅时旧 forward_loop 被 abort——但 abort 是异步信号，
+/// 任务可能在 await 点之间已把帧投递到 actor 邮箱，Handler 仍会将其发出，
+/// 旧流尾帧与新生订阅帧交错到达 → 客户端字节游标错位 → 连续性违反 → 重订阅风暴。
+/// 每次转发前校验代数：订阅/取消订阅时代数递增，旧代 forward_loop 的残留帧
+/// 直接丢弃，从根源杜绝旧流帧注入新订阅通道
 pub(super) async fn forward_loop(
     mut output_rx: tokio::sync::mpsc::Receiver<crate::session::OutputEvent>,
     out_tx: tokio::sync::mpsc::Sender<ForwardOutput>,
@@ -132,12 +141,17 @@ pub(super) async fn forward_loop(
     max_buffer_size: usize,
     binary: bool,
     session_id: String,
+    stream_generation: Arc<AtomicU64>,
+    my_gen: u64,
 ) {
     let mut buffer = OutputBuffer::new(binary);
 
     if flush_interval.is_zero() {
         // 零缓冲直通：每条事件立即转发，不等待
         while let Some(event) = output_rx.recv().await {
+            if stream_generation.load(Ordering::SeqCst) != my_gen {
+                break;
+            }
             buffer.append(&event);
             if out_tx.send(buffer.flush(&session_id)).await.is_err() {
                 break;
@@ -151,6 +165,10 @@ pub(super) async fn forward_loop(
     loop {
         match tokio::time::timeout(flush_interval, output_rx.recv()).await {
             Ok(Some(event)) => {
+                // 流代数失效（订阅被替换/取消）：残留帧直接丢弃，不转发
+                if stream_generation.load(Ordering::SeqCst) != my_gen {
+                    break;
+                }
                 buffer.append(&event);
                 if buffer.data.len() >= max_buffer_size
                     || last_flush.elapsed() >= flush_interval
@@ -173,6 +191,9 @@ pub(super) async fn forward_loop(
                 // 空 buffer 也重置会把持续输出场景的时间窗进度抹掉（timeout 与
                 // 事件同时就绪时 Err 分支先执行，内容 flush 将永远等不到）
                 if !buffer.is_empty() {
+                    if stream_generation.load(Ordering::SeqCst) != my_gen {
+                        break;
+                    }
                     if out_tx.send(buffer.flush(&session_id)).await.is_err() {
                         break;
                     }
@@ -300,11 +321,22 @@ mod tests {
         tokio::sync::mpsc::Sender<crate::session::OutputEvent>,
         tokio::sync::mpsc::Receiver<ForwardOutput>,
         tokio::task::JoinHandle<()>,
+        Arc<AtomicU64>,
     ) {
         let (tx, rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(128);
         let (out_tx, out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(128);
-        let fwd = tokio::spawn(forward_loop(rx, out_tx, flush_interval, max_buffer_size, binary, "s".into()));
-        (tx, out_rx, fwd)
+        let generation = Arc::new(AtomicU64::new(0));
+        let fwd = tokio::spawn(forward_loop(
+            rx,
+            out_tx,
+            flush_interval,
+            max_buffer_size,
+            binary,
+            "s".into(),
+            generation.clone(),
+            0,
+        ));
+        (tx, out_rx, fwd, generation)
     }
 
     /// 持续输出（事件间隔 < flush_interval）：合并生效且首条消息延迟有界（≤ 时间窗）
@@ -314,7 +346,7 @@ mod tests {
     /// 记录的是消息实际发出的时刻而非测试开始接收的时刻
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_sustained_output_bounded_delay_and_merging() {
-        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(20), 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(20), 64 * 1024, false);
 
         let start = tokio::time::Instant::now();
         let (res_tx, mut res_rx) = tokio::sync::mpsc::channel::<(usize, Option<Duration>)>(4);
@@ -358,7 +390,7 @@ mod tests {
     /// 字节窗：单条大事件 ≥ max_buffer_size 时立即 flush，不等待时间窗
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_byte_window_flushes_immediately() {
-        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(500), 8, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(500), 8, false);
 
         let start = tokio::time::Instant::now();
         tx.send(event("s", b"0123456789", 0, 0, 10)).await.unwrap(); // 10 字节 > 8
@@ -393,7 +425,7 @@ mod tests {
     /// 而非空闲超时路径
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_idle_flush_within_interval() {
-        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(30), 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(30), 64 * 1024, false);
 
         let start = tokio::time::Instant::now();
         tx.send(event("s", b"hi", 0, 0, 2)).await.unwrap();
@@ -417,7 +449,7 @@ mod tests {
     /// 零间隔（直通模式）：每条事件立即转发，消息数 = 事件数，无合并
     #[tokio::test]
     async fn test_forward_loop_zero_interval_passthrough() {
-        let (tx, mut out_rx, fwd) = spawn_forward(Duration::ZERO, 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, false);
 
         for i in 0..5u64 {
             tx.send(event("s", b"x", i, i, i + 1)).await.unwrap();
@@ -438,7 +470,7 @@ mod tests {
     /// 通道关闭：未达时间窗/字节窗的残留缓冲最终 flush（合并语义收尾）
     #[tokio::test]
     async fn test_forward_loop_final_flush_on_channel_close() {
-        let (tx, mut out_rx, fwd) = spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
 
         tx.send(event("s", b"ab", 0, 0, 2)).await.unwrap();
         tx.send(event("s", b"cd", 1, 2, 4)).await.unwrap();
@@ -473,6 +505,48 @@ mod tests {
             ),
             "forward_loop must exit after channel close"
         );
+        let _ = fwd.await;
+    }
+
+    /// 流代数门控：代数递增（订阅被替换/取消）后，旧 forward_loop 的残留帧
+    /// 不再转发——abort 是异步信号，旧任务在 await 点之间仍可能拿到帧，
+    /// 代数校验保证这些帧被丢弃，杜绝旧流注入新订阅通道（移动端连续性
+    /// 违反风暴的根源）
+    #[tokio::test]
+    async fn test_forward_loop_generation_gate_drops_stale_frames() {
+        let (tx, mut out_rx, fwd, generation) =
+            spawn_forward(Duration::from_millis(20), 64 * 1024, false);
+
+        // 订阅被替换：代数递增，旧 forward_loop 立即失效
+        generation.fetch_add(1, Ordering::SeqCst);
+
+        tx.send(event("s", b"stale", 0, 0, 5)).await.unwrap();
+        drop(tx);
+
+        // 旧代 forward_loop 应丢弃残留帧并退出：无任何消息发出
+        assert!(
+            matches!(
+                tokio::time::timeout(Duration::from_millis(100), out_rx.recv()).await,
+                Ok(None)
+            ),
+            "stale forward_loop must drop buffered frames"
+        );
+        let _ = fwd.await;
+    }
+
+    /// 代数未变：正常转发不受影响（门控仅在替换/取消订阅时生效）
+    #[tokio::test]
+    async fn test_forward_loop_generation_gate_passthrough_when_current() {
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, false);
+
+        tx.send(event("s", b"live", 0, 0, 4)).await.unwrap();
+        drop(tx);
+
+        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
+            .await
+            .expect("current generation must forward")
+            .expect("forward_loop exited");
+        assert!(matches!(out, ForwardOutput::Text(_)));
         let _ = fwd.await;
     }
 }
