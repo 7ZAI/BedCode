@@ -162,7 +162,7 @@
 
 <script setup lang="ts">
 /**
- * AI Chatbox 面板（移动端 navtab + toolbox 共用）— 消息流 + 输入区 + 对话列表抽屉 + 供应商配置
+ * AI Chatbox 面板（移动端 navtab）— 消息流 + 输入区 + 对话列表抽屉 + 供应商配置
  */
 import { ref, computed, watch, nextTick, onMounted, inject } from 'vue'
 import { useI18n } from 'vue-i18n'

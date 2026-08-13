@@ -1,7 +1,7 @@
 /**
  * AI Chatbox 插件入口 (Mobile)
  *
- * 工具箱 AI 对话面板 + 底部导航 Tab（纯 AI 对话：供应商配置 + JSONL 对话日志）。
+ * 底部导航 Tab（纯 AI 对话：供应商配置 + JSONL 对话日志）。
  * 标题随宿主语言切换重注册（注册时标题被宿主静态捕获，不随 vue-i18n 自动更新）。
  */
 import ChatView from './components/ChatView.vue'
@@ -24,20 +24,12 @@ function isTauriHost(): boolean {
 
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 
-let toolboxDisposable: { dispose(): void } | null = null
 let navTabDisposable: { dispose(): void } | null = null
 let stopLocaleWatch: (() => void) | null = null
 
-/** 注册工具箱页 + 导航 Tab（语言切换时先释放旧注册再重注册） */
+/** 注册导航 Tab（语言切换时先释放旧注册再重注册） */
 function registerPluginUi(context: PluginContext): void {
-  toolboxDisposable?.dispose()
   navTabDisposable?.dispose()
-
-  toolboxDisposable = context.ui.registerToolboxPage({
-    id: 'ai-chatbox.toolbox',
-    title: context.i18n.t('toolboxTitle'),
-    component: ChatView,
-  })
 
   navTabDisposable = context.ui.registerNavTab({
     id: 'ai-chatbox.navtab',
@@ -79,8 +71,6 @@ export async function deactivate(): Promise<void> {
   stopLocaleWatch = null
   // 释放手动持有的注册句柄：宿主 loader 虽会经 _disposables + clearPlugin 兜底清理，
   // 插件自身也应释放（语言切换重注册时也会先 dispose 旧句柄，语义一致）
-  toolboxDisposable?.dispose()
-  toolboxDisposable = null
   navTabDisposable?.dispose()
   navTabDisposable = null
   disposeDevMock()

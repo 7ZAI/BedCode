@@ -7,7 +7,6 @@ import type { MessageSchema } from './messages'
  */
 const en: MessageSchema = {
   navTitle: 'AI',
-  toolboxTitle: 'AI Chat',
 }
 
 export default en

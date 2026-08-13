@@ -8,5 +8,4 @@
 export interface MessageSchema {
   // ==================== 菜单/路由显示文本 ====================
   navTitle: string
-  toolboxTitle: string
 }

@@ -7,7 +7,6 @@ import type { MessageSchema } from './messages'
  */
 const zhCN: MessageSchema = {
   navTitle: 'AI',
-  toolboxTitle: 'AI 对话',
 }
 
 export default zhCN
