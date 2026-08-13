@@ -1,6 +1,8 @@
 # BedCode 内网文件传输插件（桌面 + 移动）实现规格
 
 > 本规格由 Wayfinder 地图的全部决策票据汇编而成（见 `map.md` 与各 `issues/`）。实现者无需再做重大决策；文中标注【开放问题】的条目在实现前按 fog 区说明处理即可。
+>
+> **v2 增补（2024 接收策略）**：新增接收策略、异步批量批准协议、发送/接收队列分类与传输历史，见**第 14 节**；受影响的 v1 章节（4.2 钩子、8 安全模型）已就地标注修订。架构决策见 `docs/adr/0016`。
 
 ## 1. 概述与目标
 
@@ -64,8 +66,9 @@ mount.dispose()                           // deactivate 时摘除
 
 ### 4.2 策略钩子
 
-- MVP 仅 `onUploadRequest`（接口预留扩展）。
-- 仅在**上传会话创建时调用一次**（相对路径 + 大小），拒绝发生在写任何字节前。
+> **v2 修订**：钩子三路化（`allow / deny / ask`）并新增批级钩子 `onTransferRequest`，异步批准机制见第 14.2 节；本节为 v1 同步语义（accept/reject 策略与兼容路径仍适用）。
+
+- 钩子在**上传会话创建时调用一次**（相对路径 + 大小），拒绝发生在写任何字节前。
 - 同步阻塞上传握手，**2 秒超时；超时/插件异常一律拒绝（fail-closed）**。
 - 「同名即拒」由插件在钩子内实现（目标目录存在同名文件 → `{ allow: false, reason: 'duplicate-name' }`）。
 
@@ -158,7 +161,7 @@ mount.dispose()                           // deactivate 时摘除
 
 ## 8. 安全模型
 
-- **信任模型**：配对 + 允许目录白名单，无第二层开关。停用插件 = 服务消失。
+- **信任模型**：配对 + 允许目录白名单 + **接收策略（v2 第二层开关，默认每次询问，见 14.1）**。停用插件 = 服务消失。
 - **默认安全**：新装插件共享列表为空；对端看到「对方尚未设置共享目录」。
 - **目录沙箱**：见 4.3（宿主强制，插件无法绕过）。
 - **只放入与取出**：服务面无删除/改名/移动/覆盖端点；上传同名即拒（钩子）。
@@ -241,4 +244,105 @@ mount.dispose()                           // deactivate 时摘除
 
 ## 13. 开放问题
 
-**无** —— 全部决策已定案，规格可直接交付实现。
+**无** —— 全部决策已定案（含 v2 增补，见下节），规格可直接交付实现。
+
+## 14. v2 增补：接收策略、异步批量批准与传输历史
+
+> 决策票据：`issues/10`（策略与协议）、`issues/11`（历史与队列分类）；架构决策：`docs/adr/0016`。本节为 v2 完整规格，与 v1 冲突处以本节为准。
+
+### 14.1 接收策略（插件配置，全局单开关）
+
+| 字段 | 类型 | 取值 | 默认 |
+|---|---|---|---|
+| `receivingPolicy` | enum | `ask` 每次询问 / `accept` 直接接收 / `reject` 直接拒绝 | `ask` |
+| `approvalTimeoutSec` | number | 10–600，仅 `ask` 生效 | `60` |
+
+- 与 `roots / download_dir / concurrency` 并列存插件 storage；设置区新增 UI（自绘控件，禁原生 select；超时输入仅策略为 `ask` 时显示）。
+- 接收端本地生效、发送方不感知（发送方一律发请求，接收端钩子分流）：`reject` → 403、无任务无记录；`accept` → 直接放行；`ask` → 批 pending。
+
+### 14.2 异步批准协议
+
+**三路钩子**：`UploadHookDecision` 扩展为 `allow / deny / ask`。新增批级钩子：
+
+```ts
+onTransferRequest(meta: { batchId: string; files: { relativePath: string; size: number }[]; totalSize: number })
+  => Promise<{ decision: 'allow' | 'deny' | 'ask'; reason?: string }>
+```
+
+per-file `onUploadRequest` 保留（accept/reject 策略路径）。
+
+**端点（挂载点下）**：
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/transfer-request` | POST | 批量传输请求：body 含批 ID + 文件清单 + 总大小 → 钩子分流：`allow` 直接批准返回批状态；`ask` 批进入 pending（202）；`deny` 403 |
+
+**批准/拒绝 = 接收端本地宿主命令**（非 HTTP 端点）：`approve_transfer_request(batchId)` / `reject_transfer_request(batchId)`，插件应答按钮调用；结果经 WS 控制面推送发送端。
+
+**核心规则**：
+- **上传拆两段**：先询问同意，批准后才开始数据流；批准后批内文件 session 创建**免钩子**（宿主持有批状态）。
+- **ask 模式强制批上下文（防绕过）**：session 创建带可选批 ID；策略为 ask 时，无已批准批 ID 的 session 创建一律 403。
+- pending 批 TTL 扫描在宿主，超时自动拒绝（默认 60s，`approvalTimeoutSec` 可配置）。
+- 批准状态随批保留至**批内全部 session 终态**（+24h TTL 兜底，复用 session TTL）；发送方断线重连续传免问。
+- **等待同意期间断线不重发**：任务直接转 `rejected (timeout)`；接收端 pending 批自然超时消失。
+- 批内文件同名沿用 v1 per-file 同名即拒，该文件 rejected、批内其他不受影响。
+
+### 14.3 状态机（v2 扩展）
+
+**发送方（上传）**：`queued → waiting-approval（等待对方同意，仅 ask 模式）→ transferring → completed / failed / paused / resumable`；`waiting-approval → rejected / cancelled`。
+**接收方（新增任务记录，「正在接收」分类）**：`pending（批）→ transferring（批准后文件逐条）→ completed / failed`；`pending → rejected（用户拒绝/超时）`；`transferring → rejected（用户中途取消）`。
+
+- rejected reason 扩展枚举：`duplicate-name`（已有）/ `user-rejected` / `timeout` / `policy-denied`。
+- 发送方区分三种拒绝文案：对方拒绝 / 对方未响应（超时）/ 对方策略拒绝。
+- **接收方任务只可取消、不可暂停/恢复**；暂停/恢复仅限发起方。
+- 接收方任务不跨重启持久化（宿主孤儿清理兜底，发送方 session 丢失自动重建从头传，同 v1）。
+
+### 14.4 队列分类与提示呈现（两端一致）
+
+- 队列分类 tabs：**全部 | 正在发送 | 正在接收 | 历史**（发送/接收以发起方区分，术语见 CONTEXT.md）。
+- 批量请求应答：移动端前台 = 应用内对话框、后台/锁屏 = 系统通知 action 按钮（**接受全部 / 拒绝全部**，无逐个选择）；桌面端 = 应用内横幅，最小化时系统通知仅「打开应用」。
+- 接收中 toast「xx 正在向你上传 N 个文件」：ask 模式 = 同意后批级一条；accept 模式 = 传输开始时发、**3 秒窗口合并去重**；reject 模式无 toast。
+- 待同意批 = 一张 pending 卡片（对端名 + N 个文件 + 总大小 + 两按钮）；批准后批卡片消失、文件逐条出现；拒绝/超时后批卡片消失且接收方不记历史。
+- 接收中持续状态走「正在接收」tab（移动端另有前台服务通知带取消动作，复用 TaskNotification 机制）。
+
+### 14.5 传输历史
+
+- 记录范围：两端各自的全部终态任务（发送 + 接收、完成/失败/被拒/取消），终态即归档（替代 v1「重启清除」）；直接拒绝模式无任务记录不补记。
+- 保留：封顶 **200 条**、滚动淘汰最旧（插件 storage JSON）。
+- UI：队列「历史」tab 只读条目（时间、方向 ↑/↓、文件名、大小、结果）+「清空历史」；无单条删除。
+- 打开所在文件夹：已完成且有本地文件的任务提供——桌面 `context.system.revealInDir`，移动复用「系统查看器打开文件」；历史与队列内已完成任务一致提供。
+- 两端对称、各自记录，不跨端同步；批维度不记（per-file 记）。
+
+### 14.6 宿主 / SDK 脚印
+
+| 层 | 改动 |
+|---|---|
+| 宿主 file_service（两端） | 批状态机（pending/approved/rejected + TTL 扫描）、`POST /transfer-request`、`approve/reject_transfer_request` 宿主命令、批 ID 校验（ask 强制）、WS 新消息类型（请求推送/应答）、session 创建免钩子路径 |
+| SDK | `UploadHookDecision` 扩展 `ask`、新增 `onTransferRequest` 钩子、approve/reject 命令封装 |
+| 插件（两端） | 配置 2 字段 + 设置 UI、状态机（waiting-approval / 接收任务）、队列 4 tab、批量应答对话框/横幅、toast（合并去重）、历史 + 打开能力、i18n |
+| Kotlin（仅移动） | 通知 action 按钮（接受全部/拒绝全部）+ PendingIntent 路由回插件命令（TaskNotificationManager 扩展） |
+
+### 14.7 i18n 新增 key（zh-CN / en 同步）
+
+| key | zh-CN | en |
+|---|---|---|
+| `transfer.settings.receivingPolicy` | 接收策略 | Receiving policy |
+| `transfer.settings.receivingPolicyAsk` | 每次询问 | Ask every time |
+| `transfer.settings.receivingPolicyAccept` | 直接接收 | Accept automatically |
+| `transfer.settings.receivingPolicyReject` | 直接拒绝 | Reject automatically |
+| `transfer.settings.receivingPolicyHint` | 对端发送文件前是否需要你同意 | Whether to ask before receiving files from peers |
+| `transfer.settings.approvalTimeout` | 同意超时（秒） | Approval timeout (s) |
+| `transfer.request.title` | 文件传输请求 | File transfer request |
+| `transfer.request.body` | {name} 想向你发送 {count} 个文件（共 {size}） | {name} wants to send you {count} files ({size} total) |
+| `transfer.request.acceptAll` | 接受全部 | Accept all |
+| `transfer.request.rejectAll` | 拒绝全部 | Reject all |
+| `transfer.toast.receiving` | {name} 正在向你上传 {count} 个文件 | {name} is sending you {count} files |
+| `transfer.task.waitingApproval` | 等待对方同意 | Waiting for approval |
+| `transfer.task.receiving` | 正在接收 | Receiving |
+| `transfer.error.rejectedByUser` | 对方拒绝了传输 | The transfer was rejected by the peer |
+| `transfer.error.noResponse` | 对方未响应，请求已超时 | No response from the peer; the request timed out |
+| `transfer.error.policyDenied` | 对方设置了直接拒绝 | The peer is set to reject incoming transfers |
+| `transfer.history.title` | 历史 | History |
+| `transfer.history.clear` | 清空历史 | Clear history |
+| `transfer.history.empty` | 暂无传输历史 | No transfer history |
+| `transfer.history.openFolder` | 打开所在文件夹 | Show in folder |

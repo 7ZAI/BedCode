@@ -3,6 +3,8 @@
 Label: wayfinder:map
 
 > ✅ **已到达目的地**：全部 6 张决策票据已关闭，最终规格见 **[spec.md](spec.md)**，可直接交给实现会话。
+>
+> 🔄 **v2 增补**（grilling 补充需求，已定案）：接收策略（每次询问/直接接收/直接拒绝）+ 异步批量批准协议 + 「正在发送/正在接收」队列分类 + 传输历史。票据 [10](issues/10-接收策略与批量批准协议.md)、[11](issues/11-传输历史与队列分类.md)，架构决策见 `docs/adr/0016`，spec 增补见 [spec.md](spec.md) 第 14 节。
 
 ## Destination
 
@@ -39,6 +41,10 @@ Label: wayfinder:map
 - [桌面端插件 UI 规格](issues/04-桌面端插件UI规格.md) — 选定 Variant A 双栏工作台：左目录表格（多选）+ 右常驻传输队列（状态汇总 chips + 任务卡）；四色状态标签体系。原型：prototypes/desktop-ui/index.html#A。
 - [移动端插件 UI 规格](issues/05-移动端插件UI规格.md) — 工具箱长条入口块（实时状态角标）+ 页面方案 A：浏览为主 + 迷你传输条/底部抽屉队列；同名被拒用 Material 对话框即时提醒。原型：prototypes/mobile-ui/index.html#A。
 - [用户授权流与安全细节](issues/06-用户授权流与安全细节.md) — 白名单默认空即默认安全；配对+白名单即完整信任模型；不做审计；明文告知一行文案 + **传输层加密拦截预留缝（MVP 空实现）**；同名被拒仅发起方感知，四条 i18n 文案定稿。
+- [接收策略与批量批准协议](issues/10-接收策略与批量批准协议.md)（v2）— 接收策略三取值全局单开关（默认每次询问）+ 同意超时可配置（默认 60s）；三路钩子 + `POST /transfer-request` 批量请求（接受全部/拒绝全部）+ 宿主 approve/reject 命令 + WS 推送；上传拆两段（先询问后数据流）；ask 模式强制批上下文防绕过；发送方新增 waiting-approval 状态、接收方新增任务记录（pending/接收中，只可取消不可暂停）；rejected reason 扩展四值；断线边界五条定案。推翻了 v1「无第二层开关」与同步钩子两处定案（ADR 0016）。
+- [传输历史与队列分类](issues/11-传输历史与队列分类.md)（v2）— 发送/接收以发起方区分（已入 CONTEXT.md）；队列四 tab（全部/正在发送/正在接收/历史）；批量请求对话框/通知（接受全部/拒绝全部，无逐个选择）；接收中 toast 批级一条 + 3 秒窗口合并去重；传输历史纳入范围（原 out of scope）：全部终态归档、封顶 200 条、只读可清空、完成条目提供打开所在文件夹（桌面 revealInDir / 移动系统查看器）。
+
+**v2 实施完成**（2025，双 subagent 并行 + 主 agent 交叉验证）：方案见 [v2-implementation-plan.md](v2-implementation-plan.md)（17 节施工图纸：线协议/批状态机/SDK 四处同步/事件控制面/插件发送接收/历史/前端/Kotlin/测试）；两端单测全绿（宿主 473+283、SDK 86+80、插件 10+18、前端 345+172、gradlew BUILD SUCCESSFUL），wire 定义逐字一致（修复 3 处两端漂移：ask 序列化形状、终态任务保留、接收方向归档）。**剩余：双端真机联调验收**，清单见 [issues/12-联调验收清单.md](issues/12-联调验收清单.md)（A 策略/批量批准、B 断线边界、C 接收任务与历史、D Kotlin 通知、E v1 回归）。
 - [移动端 cargo test 崩溃与 SAF 根 documentId 解码修复](issues/09-移动端cargo-test崩溃与SAF根documentId解码修复.md) — 0xc0000139 根因：测试 exe 无应用级 manifest，加载 System32 comctl32 5.82 桩缺 `TaskDialogIndirect`（rfd win_cid 后端）；修复：app.manifest + build.rs 统一注入 common-controls v6（bin 改 `new_without_app_manifest` 防 RT_MANIFEST 重复），`CARGO_CFG_TARGET_OS` 判定防泄漏到 Android 目标。顺带修复被掩盖的生产 bug：`tree_document_id` 改为返回解码形态（`primary:Download`），对齐 Kotlin `getTreeDocumentId`/`buildChildDocumentsUriUsingTree` 契约——SAF 根级列目录/下载此前必空。
 
 ## Not yet specified
@@ -59,7 +65,7 @@ Label: wayfinder:map
 - **对端发现（mDNS/广播）**：一切基于已建立的配对连接，用户明确不再处理发现问题。
 - **覆盖/重命名/移动/删除远端文件**：访问语义已锁死为"只可放入与取出"。
 - **独立认证体系 / 独立传输端口**：已决定完全复用宿主 server 与 JWT。
-- **限速、定时传输、传输历史长期留存**：体验范围已排除。
+- **限速、定时传输**：体验范围已排除（传输历史已纳入 v2，见 issues/11）。
 - **跨外网/远程传输**：目的地限定内网 WiFi 场景。
 - **端到端加密的实际实现**：本期只预留传输层加密拦截缝（空实现）；真正的 X25519 + AES-GCM 接入属宿主远期计划，另起努力。
 - **访问审计日志**：用户明确 MVP 不做；若未来需要，作为宿主通用能力扩展项另起努力。
