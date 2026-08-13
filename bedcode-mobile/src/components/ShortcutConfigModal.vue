@@ -7,7 +7,7 @@
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="scm-panel relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
+      <div class="scm-panel relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg h-[min(85vh,44rem)] flex flex-col shadow-xl modal-panel">
         <!-- 拖拽指示条 -->
         <div class="flex justify-center pt-2">
           <div class="w-10 h-1 rounded-full bg-[var(--mobile-border)]"></div>
@@ -61,7 +61,7 @@
 
         <!-- ==================== Tab: 快捷键列表 ==================== -->
         <template v-if="activeTab === 'list'">
-          <div class="flex-1 overflow-y-auto px-4 pb-2">
+          <div class="flex-1 overflow-y-auto px-4 pb-2" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
             <!-- 内置快捷键 -->
             <div class="section-title">{{ t('mobile.shortcutConfig.builtinSection') }}</div>
             <div class="space-y-2">
@@ -130,7 +130,7 @@
 
         <!-- ==================== Tab: 添加快捷键 ==================== -->
         <template v-else>
-          <div class="flex-1 overflow-y-auto px-4 pb-2 space-y-4">
+          <div class="flex-1 overflow-y-auto px-4 pb-2 space-y-4" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
             <!-- 实时预览 -->
             <div class="preview-box" :class="{ filled: !!previewLabel }">
               <template v-if="previewLabel">
@@ -319,6 +319,7 @@
  */
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useSwipeTabs } from '@/composables/useSwipeTabs'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import ShortcutHelpModal from '@/components/ShortcutHelpModal.vue'
 
@@ -338,6 +339,12 @@ const store = useInputAssistantStore()
 
 type Tab = 'list' | 'add'
 const activeTab = ref<Tab>('list')
+
+// 内容区左右滑动切换 Tab：左滑 → 添加页，右滑 → 列表页
+const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs((dir) => {
+  if (dir === 'left' && activeTab.value === 'list') activeTab.value = 'add'
+  else if (dir === 'right' && activeTab.value === 'add') activeTab.value = 'list'
+})
 
 // ==================== Shortcut List ====================
 

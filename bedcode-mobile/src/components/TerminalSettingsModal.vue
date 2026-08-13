@@ -12,7 +12,29 @@
         </button>
       </div>
 
-      <div class="settings-content">
+      <!-- Tab 切换：外观 / 杂项配置（减少弹窗高度，同快捷键配置弹窗） -->
+      <div class="settings-tabs">
+        <div class="segmented">
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTab === 'appearance' }"
+            @click="activeTab = 'appearance'"
+          >
+            {{ t('mobile.terminal.tabAppearance') }}
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTab === 'misc' }"
+            @click="activeTab = 'misc'"
+          >
+            {{ t('mobile.terminal.tabMisc') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- ==================== Tab: 外观 ==================== -->
+      <template v-if="activeTab === 'appearance'">
+      <div class="settings-content" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
         <!-- Font Size -->
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.terminal.fontSize') }}</label>
@@ -39,7 +61,12 @@
             </button>
           </div>
         </div>
+      </div>
+      </template>
 
+      <!-- ==================== Tab: 杂项配置 ==================== -->
+      <template v-else>
+      <div class="settings-content" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
         <!-- Quick Bar Count -->
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.terminal.shortcutCount') }}</label>
@@ -53,7 +80,7 @@
         <!-- Header Toolbar Items -->
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.terminal.persistentToolbar') }}</label>
-          <p class="settings-hint">{{ t('mobile.terminal.persistentToolbar') }}</p>
+          <p class="settings-hint">{{ t('mobile.terminal.persistentToolbarHint') }}</p>
           <div class="toolbar-toggle-grid">
             <button
               v-for="item in allToolbarItems"
@@ -67,6 +94,7 @@
           </div>
         </div>
       </div>
+      </template>
 
       <!-- Settings Footer -->
       <div class="settings-footer">
@@ -90,7 +118,11 @@ defineOptions({ name: 'TerminalSettingsModal' })
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from '@/composables/useTheme'
+import { useSwipeTabs } from '@/composables/useSwipeTabs'
 import { TERMINAL_THEMES, resolveThemeLabel } from '@/config/terminalThemes'
+
+/** 设置分组 Tab：外观（字体/主题）与杂项配置（快捷栏/工具栏） */
+type SettingsTab = 'appearance' | 'misc'
 
 export interface TerminalSettings {
   fontSize: number
@@ -129,6 +161,13 @@ const tempFontSize = ref(props.fontSize)
 const tempTheme = ref<string>(props.isThemeUserSet ? props.theme : 'system')
 const tempQuickBarCount = ref(props.quickBarCount)
 const tempToolbarItems = ref<string[]>([...props.toolbarItems])
+const activeTab = ref<SettingsTab>('appearance')
+
+// 内容区左右滑动切换 Tab：左滑 → 杂项配置，右滑 → 外观
+const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs((dir) => {
+  if (dir === 'left' && activeTab.value === 'appearance') activeTab.value = 'misc'
+  else if (dir === 'right' && activeTab.value === 'misc') activeTab.value = 'appearance'
+})
 
 // 打开时同步 props 到临时状态
 watch(() => props.visible, (visible) => {
@@ -137,6 +176,8 @@ watch(() => props.visible, (visible) => {
     tempTheme.value = props.isThemeUserSet ? props.theme : 'system'
     tempQuickBarCount.value = props.quickBarCount
     tempToolbarItems.value = [...props.toolbarItems]
+    // 每次打开回到「外观」页，避免停留在上一回的分组
+    activeTab.value = 'appearance'
   }
 })
 
@@ -200,12 +241,53 @@ function handleConfirm() {
   --size-btn: clamp(2rem, 2.5rem, 3rem);
   --footer-btn-py: clamp(0.625rem, 0.75rem, 1rem);
 
+  display: flex;
+  flex-direction: column;
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 100%;
   max-width: clamp(280px, 360px, 420px);
-  max-height: 80vh;
-  overflow-y: auto;
+  /* 固定高度：不随 Tab 切换变化，内容超出由内容区滚动 */
+  height: clamp(26rem, 72vh, 34rem);
+  overflow: hidden;
+}
+
+.settings-tabs {
+  padding: 0.75rem 1rem 0;
+  flex-shrink: 0;
+}
+
+/* 分段控件（同快捷键配置弹窗） */
+.segmented {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+}
+
+.segmented-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  height: 2.25rem;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  border-radius: 0.5rem;
+  color: var(--mobile-text-muted);
+  transition: all 0.2s ease;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.segmented-btn.active {
+  background: var(--mobile-bg-card);
+  color: var(--mobile-text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
 .settings-header {
@@ -239,6 +321,8 @@ function handleConfirm() {
 }
 
 .settings-content {
+  flex: 1;
+  overflow-y: auto;
   padding: 1rem;
 }
 

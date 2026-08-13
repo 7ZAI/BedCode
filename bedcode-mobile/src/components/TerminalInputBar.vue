@@ -377,7 +377,7 @@
             @click="handleSubmit"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 13l8-9 8 9M12 4v16" />
             </svg>
           </button>
 
@@ -403,7 +403,7 @@ import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useInputAssistantStore, type QuickCommand } from '@/stores/inputAssistant'
 import type { QuickBarItem } from '@/stores/inputAssistant'
-import { filterPresetCommands } from '@/config/agentPresets'
+import { filterPresetCommands, getAllPresetCommandTexts } from '@/config/agentPresets'
 import { useToast } from '@/composables/useToast'
 
 // ==================== Types ====================
@@ -491,14 +491,11 @@ const trackStyle = computed(() => ({
 
 // ==================== `/` 命令补全 ====================
 // 与 agent 内部补全同构（前缀匹配），但数据来自本地预设（agentPresets），零延迟；
-// 当前会话 agent 预设为空（generic 未识别）时候选为空，弹层不出现
+// 候选为四套 Agent CLI 预设命令的合集（去重），generic 会话同样可用
 
 const completionItems = computed(() => {
   if (!inputText.value.startsWith('/')) return []
-  return filterPresetCommands(
-    assistStore.presetCommands.map(c => c.command),
-    inputText.value,
-  )
+  return filterPresetCommands(getAllPresetCommandTexts(), inputText.value)
 })
 
 /** 点选后关闭弹层（对齐 agent 内部补全行为）；下次输入时自动恢复 */
@@ -1102,14 +1099,16 @@ onMounted(() => {
 }
 
 .execute-btn {
-  background: var(--mobile-execute-bg);
-  border-color: var(--mobile-execute-border);
-  color: var(--mobile-execute-color);
+  /* 黑底白图标：终端「执行」语义（用户指定，跨主题稳定） */
+  background: #0a0a0f;
+  border-color: #0a0a0f;
+  color: #ffffff;
 }
 
 .execute-btn:active:not(:disabled) {
   transform: scale(0.93);
-  background: var(--mobile-execute-active-bg);
+  background: #0a0a0f;
+  filter: brightness(1.3);
 }
 
 .execute-btn:disabled {
@@ -1130,7 +1129,9 @@ onMounted(() => {
   border-radius: 0.875rem;
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
   overflow-y: auto;
-  max-height: clamp(8rem, 30vh, 14rem);
+  /* 紧凑布局：面板内边距 + 圆角块式项（分隔线已移除） */
+  padding: 0.25rem;
+  max-height: clamp(7rem, 26vh, 12rem);
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -1146,17 +1147,14 @@ onMounted(() => {
   justify-content: space-between;
   gap: 0.5rem;
   width: 100%;
-  height: clamp(2.75rem, 9vw, 3rem);
-  padding: 0 1rem;
+  /* 触控下限保持 44px，上限收紧让列表更紧凑 */
+  height: clamp(2.75rem, 8vw, 2.875rem);
+  padding: 0 0.75rem;
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--mobile-border);
+  border-radius: 0.5rem;
   cursor: pointer;
   transition: background-color 0.15s ease;
-}
-
-.completion-item:last-child {
-  border-bottom: none;
 }
 
 .completion-item:active {
@@ -1165,7 +1163,7 @@ onMounted(() => {
 
 .completion-cmd {
   font-family: 'Courier New', monospace;
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-primary);
   white-space: nowrap;
   overflow: hidden;

@@ -31,7 +31,8 @@
 - 涉及: `TerminalInputBar.vue`、`agentPresets.ts`（导出命令文本列表）
 - 成本: 中
 - 实施说明: `agentPresets.ts` 新增 `getPresetCommandTexts` / `filterPresetCommands`
-  （前缀过滤 + 排除裸 `/`），弹层仅在当前会话预设非空时出现（generic 不弹）
+  （前缀过滤 + 排除裸 `/`）；候选为**四套 Agent 预设命令合集**（`getAllPresetCommandTexts`
+  去重），generic（未识别）会话同样可用
 
 ### 3. prompt 历史与草稿保护
 
@@ -116,5 +117,5 @@
 ## 备注
 
 - P0-3 的历史存储沿用 inputAssistant 的 localStorage 模式（与频次统计同源）
-- P0-2 补全列表仅在当前会话 agent 预设非空时启用（generic 不弹出）
+- P0-2 补全候选为四套 Agent 预设命令合集（去重），generic 会话同样可用
 - 所有改动仅涉及移动端，桌面端不受影响（延续 ADR-0014 边界）

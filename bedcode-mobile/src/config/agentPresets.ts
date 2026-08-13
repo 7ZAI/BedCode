@@ -96,6 +96,26 @@ export function getPresetCommandTexts(type: AgentType): string[] {
 }
 
 /**
+ * 全部 Agent CLI 预设命令合集（去重，按预设分组顺序）：`/` 补全数据源
+ *
+ * 与单会话预设（AGENT_PRESETS）不同，补全展示所有 Agent CLI 的命令，
+ * 便于跨 CLI 探索；generic（未识别）会话同样可用。
+ */
+export function getAllPresetCommandTexts(): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const type of AGENT_TYPES) {
+    for (const c of AGENT_PRESETS[type]) {
+      if (!seen.has(c.command)) {
+        seen.add(c.command)
+        result.push(c.command)
+      }
+    }
+  }
+  return result
+}
+
+/**
  * `/` 补全过滤：返回以输入前缀开头（大小写不敏感）的命令文本
  *
  * 与 agent 内部补全同构（前缀匹配），但走本地数据零延迟；
