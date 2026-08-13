@@ -80,6 +80,14 @@
           </div>
         </transition>
       </div>
+
+      <!-- 输入导航条：右侧悬浮，默认透明仅横线，hover 展开列表，点击滚动到对应输入 -->
+      <TerminalInputRail
+        :markers="visibleMarkers"
+        :buffer-length="bufferLength"
+        :is-alt-buffer="isAltBuffer"
+        @navigate="handleNavigate"
+      />
     </div>
   </div>
 </template>
@@ -111,6 +119,8 @@ import Button from '@/components/Button.vue'
 import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
+import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
+import TerminalInputRail from '@bedcode/plugin-sdk-desktop/ui/terminal-input-rail'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -197,6 +207,14 @@ let wheelHandler: ((e: WheelEvent) => void) | null = null
 
 // 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
 let currentLineBuffer = ''
+
+// 输入导航条数据：每次回车提交记录一条输入标记（供右侧 TerminalInputRail 渲染横线）
+const inputMarkers = useTerminalInputMarkers()
+// 模板顶层绑定：ComputedRef 在模板中自动 unwrap
+const { visibleMarkers } = inputMarkers
+// 导航条位置计算依赖的 buffer 总行数 / alternate buffer 状态（输出解析后更新）
+const bufferLength = ref(0)
+const isAltBuffer = ref(false)
 
 const sessionId = computed(() => props.session?.id || '')
 
@@ -306,6 +324,8 @@ const terminalStream = useTerminalOutputStream({
     if (terminal) {
       terminal.clear()
     }
+    // 流重置（清屏重播）：输入位置坐标失效，清除导航条标记
+    inputMarkers.clear()
   },
   onTruncated: (minOffset: number) => {
     console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minOffset=${minOffset}，会话开头输出不可用`)
@@ -648,6 +668,8 @@ function initTerminal() {
     if (props.session) {
       sessionStore.resizeSession(props.session.id, cols, rows).then(applyResizeOutcome)
     }
+    // resize 改变 rows → buffer 总行数变化，刷新导航条位置分母
+    bufferLength.value = terminal?.buffer.active.length ?? 0
   })
 
   // ResizeObserver — rAF 节流，避免快速连续 fit 导致的重复渲染；
@@ -675,6 +697,14 @@ function initTerminal() {
     const buffer = terminal.buffer.active
     const viewportBottom = buffer.viewportY + terminal.rows
     isUserScrolling.value = viewportBottom < buffer.length - 1
+  })
+
+  // buffer 变化（输出解析完成）：刷新导航条的总行数与 alternate buffer 状态；
+  // onWriteParsed 在每次 write 解析完成后触发，覆盖输出/清屏/TUI 切换全部场景
+  terminal.onWriteParsed(() => {
+    if (!terminal) return
+    bufferLength.value = terminal.buffer.active.length
+    isAltBuffer.value = terminal.buffer.active.type === 'alternate'
   })
 
   // 选区状态跟踪：有选区时 Ctrl+C 复制（VS Code 终端行为），不发送 SIGINT
@@ -711,8 +741,19 @@ function initTerminal() {
 
     sessionStore.writeToSession(props.session.id, data)
 
+    // 多行粘贴（一次事件含换行）：每行视为一次独立输入，逐行记录
+    if (data.length > 1 && /[\r\n]/.test(data)) {
+      for (const line of data.split(/\r\n|\r|\n/)) {
+        if (line.length > 0) inputMarkers.record(terminal!, line)
+      }
+      currentLineBuffer = ''
+      return
+    }
+
     // 追踪当前行输入
     if (data === '\r' || data === '\n') {
+      // 回车提交：先记录本次输入（供导航条），再清空追踪
+      inputMarkers.record(terminal!, currentLineBuffer)
       currentLineBuffer = ''
     } else if (data === '\x7f' || data === '\b') {
       currentLineBuffer = currentLineBuffer.slice(0, -1)
@@ -770,9 +811,16 @@ function scrollToBottomManual() {
   terminal?.scrollToBottom()
 }
 
+/** 导航条点击：滚动终端到指定 buffer 行（触发 onScroll → 自动显示"回到底部"指示器） */
+function handleNavigate(line: number) {
+  terminal?.scrollToLine(line)
+}
+
 function clearTerminal() {
   if (!terminal) return
   terminal.clear()
+  // 清屏后历史输入位置全部失效，同步清除导航条标记
+  inputMarkers.clear()
 }
 
 // ==================== 设置同步 ====================
@@ -918,6 +966,9 @@ onUnmounted(() => {
 
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
+
+  // 清理输入导航条标记（dispose 全部 xterm marker）
+  inputMarkers.clear()
 
   // 清理 xterm onScroll 监听
   if (scrollDisposable) {

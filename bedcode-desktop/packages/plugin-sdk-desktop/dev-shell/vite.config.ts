@@ -73,6 +73,7 @@ export default defineConfig(() => {
   const plugins = parseDevPlugins()
 
   const allow = new Set<string>([DEV_SHELL_ROOT])
+  // 允许导入被调试插件目录（SDK 组件/dev-shell 视图均在包内，无需宿主源码路径）
   for (const p of plugins) {
     allow.add(p.dir)
     try {
