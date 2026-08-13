@@ -21,7 +21,7 @@
 //!   （`exports::bedcode::plugin::<iface>::Guest`）随宏体解析到 SDK
 
 use crate::events::{InputSubmittedEvent, SessionLifecycleEvent};
-use crate::types::{PluginManifest, UploadHookDecision, UploadRequestMeta};
+use crate::types::{PluginManifest, TransferRequestMeta, UploadHookDecision, UploadRequestMeta};
 use crate::BusMessage;
 
 wit_bindgen::generate!({
@@ -108,6 +108,16 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_upload_request(_meta: &UploadRequestMeta) -> UploadHookDecision {
         UploadHookDecision::deny("plugin does not implement on_upload_request")
     }
+
+    /// 批量传输请求钩子（v2，可选，默认 fail-closed 拒绝）
+    ///
+    /// 宿主在 POST /transfer-request 时调用一次（批 ID + 文件清单 + 总大小）。
+    /// 三路决定：allow = 直接批准；ask = 批置 pending 等待用户应答；
+    /// deny = 403 拒绝（reason 如 policy-denied）。
+    /// 默认拒绝：插件未覆盖此方法时，批量传输一律被拒（fail-closed，安全优先）
+    fn on_transfer_request(_meta: &TransferRequestMeta) -> UploadHookDecision {
+        UploadHookDecision::deny("plugin does not implement on_transfer_request")
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +201,46 @@ mod tests {
         }
     }
 
+    /// 覆盖批钩子的插件：验证插件可返回 ask（v2 异步批准）
+    struct AskTransferPlugin;
+
+    impl WasmPlugin for AskTransferPlugin {
+        const ID: &'static str = "com.bedcode.test-ask";
+
+        fn manifest() -> PluginManifest {
+            PluginManifest {
+                id: Self::ID.to_string(),
+                name: "Ask".to_string(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                main: String::new(),
+                sandbox: "inline".to_string(),
+                permissions: vec![],
+                contributes: PluginContributes::default(),
+                plugin_type: PluginType::Rust,
+                rust_library: String::new(),
+                icon: None,
+            }
+        }
+
+        fn activate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn deactivate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+
+        fn on_transfer_request(_meta: &crate::types::TransferRequestMeta) -> UploadHookDecision {
+            UploadHookDecision::ask()
+        }
+    }
+
     #[test]
     fn test_default_terminal_hooks_are_pass_through() {
         // 默认行为 = 不修改管道（None），宿主按原样放行
@@ -234,6 +284,36 @@ mod tests {
         // 插件可覆盖钩子放行上传（决策完全由插件表达）
         let meta = UploadRequestMeta { relative_path: "a.txt".into(), size: 1 };
         assert!(AllowUploadPlugin::on_upload_request(&meta).allow);
+    }
+
+    #[test]
+    fn test_default_transfer_hook_is_fail_closed() {
+        // 安全契约：未实现批钩子的插件默认拒绝一切批量传输请求
+        let meta = crate::types::TransferRequestMeta {
+            batch_id: "b1".into(),
+            files: vec![UploadRequestMeta { relative_path: "a.txt".into(), size: 1 }],
+            total_size: 1,
+        };
+        let decision = TestWasmPlugin::on_transfer_request(&meta);
+        assert!(!decision.allow);
+        assert!(!decision.ask);
+        assert_eq!(
+            decision.reason.as_deref(),
+            Some("plugin does not implement on_transfer_request")
+        );
+    }
+
+    #[test]
+    fn test_transfer_hook_override_can_ask() {
+        // 插件可覆盖批钩子返回 ask（批置 pending 等待用户应答）
+        let meta = crate::types::TransferRequestMeta {
+            batch_id: "b2".into(),
+            files: Vec::new(),
+            total_size: 0,
+        };
+        let decision = AskTransferPlugin::on_transfer_request(&meta);
+        assert!(decision.ask);
+        assert!(!decision.allow);
     }
 }
 
@@ -414,7 +494,32 @@ macro_rules! wasm_entry {
 
                 // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
                 serde_json::to_string(&decision)
-                    .unwrap_or_else(|_| r#"{"allow":false,"reason":"serialize decision failed"}"#.to_string())
+                    .unwrap_or_else(|_| r#"{"allow":false,"ask":false,"reason":"serialize decision failed"}"#.to_string())
+            }
+        }
+
+        // ==================== transfer-request-hook（v2，原 __bedcode_on_transfer_request） ====================
+
+        impl $crate::wasm::exports::bedcode::plugin::transfer_request_hook::Guest for $plugin_type {
+            /// 批量传输请求钩子：fail-closed（入参解析失败时直接拒绝，不调用插件逻辑），
+            /// 与 upload-hook 同构。
+            fn on_transfer_request(meta_json: String) -> String {
+                let decision =
+                    match serde_json::from_str::<$crate::types::TransferRequestMeta>(&meta_json) {
+                        Ok(meta) => <$plugin_type as $crate::wasm::WasmPlugin>::on_transfer_request(&meta),
+                        Err(e) => {
+                            let host = $crate::wasm_host::WasmHost;
+                            $crate::host::HostLog::log_error(
+                                &host,
+                                &format!("on_transfer_request: invalid meta payload: {}", e),
+                            );
+                            $crate::types::UploadHookDecision::deny("invalid transfer request meta")
+                        }
+                    };
+
+                // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
+                serde_json::to_string(&decision)
+                    .unwrap_or_else(|_| r#"{"allow":false,"ask":false,"reason":"serialize decision failed"}"#.to_string())
             }
         }
 

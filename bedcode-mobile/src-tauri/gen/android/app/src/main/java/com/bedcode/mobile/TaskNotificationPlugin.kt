@@ -45,6 +45,21 @@ internal class ShowPluginNotificationArgs {
 }
 
 @InvokeArg
+internal class ShowTransferRequestNotificationArgs {
+    var batchId: String = ""
+    var pluginId: String = ""
+    var title: String = ""
+    var body: String = ""
+    var acceptLabel: String = ""
+    var rejectLabel: String = ""
+}
+
+@InvokeArg
+internal class CancelTransferRequestNotificationArgs {
+    var batchId: String = ""
+}
+
+@InvokeArg
 internal class CancelTaskNotificationArgs {
     var sessionId: String = ""
 }
@@ -159,6 +174,54 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
 
         try {
             manager.showPluginNotification(args.title, args.body)
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
+
+    /**
+     * 显示批量传输请求通知（v2 后台/锁屏应答，带接受全部/拒绝全部 action）
+     *
+     * 由宿主 Rust（file_service/notify.rs）在批 pending 且 App 后台时调用；
+     * action 点击经 PendingIntent → MainActivity → 宿主命令路由回 Rust。
+     */
+    @Command
+    fun showTransferRequestNotification(invoke: Invoke) {
+        val args = invoke.parseArgs(ShowTransferRequestNotificationArgs::class.java)
+
+        try {
+            manager.showTransferRequestNotification(
+                batchId = args.batchId,
+                pluginId = args.pluginId,
+                title = args.title,
+                body = args.body,
+                acceptLabel = args.acceptLabel,
+                rejectLabel = args.rejectLabel
+            )
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
+
+    /** 取消批量传输请求通知（批已解决后由宿主 Rust 调用） */
+    @Command
+    fun cancelTransferRequestNotification(invoke: Invoke) {
+        val args = invoke.parseArgs(CancelTransferRequestNotificationArgs::class.java)
+
+        try {
+            manager.cancelTransferRequestNotification(args.batchId)
             val result = JSObject()
             result.put("success", true)
             invoke.resolve(result)

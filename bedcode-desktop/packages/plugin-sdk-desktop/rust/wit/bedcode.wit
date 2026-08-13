@@ -136,6 +136,14 @@ interface host-file-service {
     update-roots: func(mount-path: string, roots-json: string) -> result<_, string>;
     get-peer: func(peer-id: string) -> result<option<string>, string>;
     query-peer: func(peer-id: string) -> result<_, string>;
+    /// v2：批准传输批（接收端用户应答「接受全部」）
+    approve-transfer: func(batch-id: string) -> result<_, string>;
+    /// v2：拒绝传输批（接收端用户应答「拒绝全部」）
+    reject-transfer: func(batch-id: string) -> result<_, string>;
+    /// v2：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+    set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
+    /// v2：取消接收中的上传会话（接收端本地取消，session 级）
+    cancel-receiving: func(session-id: string) -> result<_, string>;
 }
 
 // ==================== 插件导出（原 __bedcode_* 导出函数） ====================
@@ -169,6 +177,11 @@ interface terminal-hooks {
 /// 上传策略钩子（原 on_upload_request，fail-closed 语义由宿主保持）
 interface upload-hook {
     on-upload-request: func(meta-json: string) -> string;
+}
+
+/// 批量传输请求钩子（v2：POST /transfer-request 时调用一次，fail-closed 同上传钩子）
+interface transfer-request-hook {
+    on-transfer-request: func(meta-json: string) -> string;
 }
 
 /// 插件 manifest（原 __bedcode_manifest，JSON 字符串）
@@ -209,6 +222,7 @@ world plugin {
     export events;
     export terminal-hooks;
     export upload-hook;
+    export transfer-request-hook;
     export manifest;
     export abi;
 }

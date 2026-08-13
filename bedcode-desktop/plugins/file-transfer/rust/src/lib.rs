@@ -11,7 +11,8 @@ mod state;
 
 use bedcode_plugin_api::host::{HostBus, HostFileService, HostLog, HostTransfer};
 use bedcode_plugin_api::types::{
-    FileOperation, MountOptions, PluginManifest, UploadHookDecision, UploadRequestMeta,
+    PluginManifest, TransferRequestMeta, UploadHookDecision,
+    UploadRequestMeta,
 };
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{BusMessage, WasmPlugin};
@@ -60,6 +61,8 @@ impl WasmPlugin for FileTransferPlugin {
                 Ok(result) => {
                     s.mounted = true;
                     host.log_info(&format!("mounted at {}", result.base_path));
+                    // v2：挂载后同步批准超时（宿主 pending 批 TTL 扫描配置）
+                    commands::sync_approval_timeout(&s, &host);
                 }
                 Err(e) => {
                     host.log_warn(&format!("mount failed (will retry later): {}", e));
@@ -67,15 +70,22 @@ impl WasmPlugin for FileTransferPlugin {
             }
         }
 
-        // 3. 加载持久化任务（保留 paused/resumable，传输中残留降级为 resumable）
+        // 3. 加载持久化任务（保留 paused/resumable，传输中残留降级为 resumable；
+        //    v2：WaitingApproval 丢弃——批上下文不可恢复）与传输历史
         s.tasks.load(&host);
+        s.history.load(&host);
 
         // 4. 初始化对端存储（is_peer_desktop=false：桌面插件的对端是移动端，
         //    base 无 /api/plugins 前缀；对端列表由 peer_changed 事件驱动增删）
         s.peer = PeerStore::new(false);
 
-        // 5. 订阅总线 topics
+        // 5. 订阅总线 topics（v2 新增接收端 4 topic + 发送端应答 topic）
         let _ = host.bus_subscribe("filesrv:peer_changed");
+        let _ = host.bus_subscribe("filesrv:transfer_request");
+        let _ = host.bus_subscribe("filesrv:transfer_resolved");
+        let _ = host.bus_subscribe("filesrv:receiving_started");
+        let _ = host.bus_subscribe("filesrv:receiving_done");
+        let _ = host.bus_subscribe("filesrv:transfer_approval");
 
         // 6. 主动探测对端（修复插件激活晚于认证导致的总线事件丢失：
         //    activate 完成即广播 Query，对端回复后宿主推送 peer_changed）
@@ -122,6 +132,20 @@ impl WasmPlugin for FileTransferPlugin {
 
         // 取消订阅
         let _ = host.bus_unsubscribe("filesrv:peer_changed");
+        let _ = host.bus_unsubscribe("filesrv:transfer_request");
+        let _ = host.bus_unsubscribe("filesrv:transfer_resolved");
+        let _ = host.bus_unsubscribe("filesrv:receiving_started");
+        let _ = host.bus_unsubscribe("filesrv:receiving_done");
+        let _ = host.bus_unsubscribe("filesrv:transfer_approval");
+
+        // v2 接收状态清空：WASM 静态 state 跨 deactivate/activate 存活，残留
+        // 批卡/接收任务会在下次激活时陈旧复现（spec §9.5：接收状态不跨生命周期）
+        s.batches.clear();
+        s.pending_batches.clear();
+        s.receiving.clear();
+
+        // flush 历史（终态归档不丢）
+        s.history.save(&host);
 
         host.log_info("File Transfer plugin deactivated (wasm, desktop)");
         Ok(())
@@ -227,6 +251,41 @@ impl WasmPlugin for FileTransferPlugin {
                 Ok(result)
             }
 
+            "file-transfer.list-batches" => Ok(commands::list_batches(&s)),
+
+            "file-transfer.approve-batch" => {
+                let batch_id = args
+                    .get("batchId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing batchId"))?
+                    .to_string();
+                commands::approve_batch(&mut s, &host, &batch_id)
+            }
+
+            "file-transfer.reject-batch" => {
+                let batch_id = args
+                    .get("batchId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing batchId"))?
+                    .to_string();
+                commands::reject_batch(&mut s, &host, &batch_id)
+            }
+
+            "file-transfer.list-receiving" => Ok(commands::list_receiving(&s)),
+
+            "file-transfer.cancel-receiving" => {
+                let session_id = args
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing sessionId"))?
+                    .to_string();
+                commands::cancel_receiving(&mut s, &host, &session_id)
+            }
+
+            "file-transfer.list-history" => Ok(commands::list_history(&s)),
+
+            "file-transfer.clear-history" => commands::clear_history(&mut s, &host),
+
             "file-transfer.pick-download-dir" => commands::pick_download_dir(),
 
             "file-transfer.mount-local" => commands::mount_local(&mut s, &host, &args),
@@ -267,6 +326,36 @@ impl WasmPlugin for FileTransferPlugin {
             return Ok(());
         }
 
+        // v2 接收端：批量传输请求 / 已解决（pending 批卡数据源）
+        if msg.topic == "filesrv:transfer_request" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_transfer_request(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        if msg.topic == "filesrv:transfer_resolved" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_transfer_resolved(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        // v2 接收端：接收任务开始/结束（正在接收 tab + 历史归档）
+        if msg.topic == "filesrv:receiving_started" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_receiving_started(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        if msg.topic == "filesrv:receiving_done" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_receiving_done(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        // v2 发送端：传输批应答（批准后批内任务重新调度 / 拒绝终态）
+        if msg.topic == "filesrv:transfer_approval" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_transfer_approval(&mut s, &host, &msg.payload);
+            commands::schedule_and_start(&mut s, &host);
+            return Ok(());
+        }
+
         Ok(())
     }
 
@@ -274,6 +363,13 @@ impl WasmPlugin for FileTransferPlugin {
         let host = host();
         let s = state().lock().unwrap_or_else(|e| e.into_inner());
         commands::handle_upload_request(&s, &host, meta)
+    }
+
+    fn on_transfer_request(meta: &TransferRequestMeta) -> UploadHookDecision {
+        // v2：按接收策略分流（accept → allow；reject → deny；ask → ask）
+        let _ = meta;
+        let s = state().lock().unwrap_or_else(|e| e.into_inner());
+        commands::handle_transfer_request_hook(&s)
     }
 
     fn on_shutdown() -> anyhow::Result<()> {

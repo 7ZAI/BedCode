@@ -113,6 +113,20 @@ pub enum DesktopSyncEvent {
         /// 挂载支持的操作集合（unmount 时为空）
         operations: Vec<bedcode_plugin_api::FileOperation>,
     },
+
+    // === 传输批应答（v2） ===
+    /// 桌面端（接收端宿主）对传输批的应答：批准/拒绝/超时 → 移动端发送方
+    ///
+    /// 由 registry.publish_batch_resolved 经 sync_tx 发出，SyncEventHandler
+    /// 映射为 SyncPayload::TransferApproval 广播到 WS
+    TransferApproval {
+        /// 批 ID
+        batch_id: String,
+        /// "approved" | "rejected"
+        decision: String,
+        /// "" | "user-rejected" | "timeout"
+        reason: String,
+    },
 }
 
 impl AppEvent for DesktopSyncEvent {}

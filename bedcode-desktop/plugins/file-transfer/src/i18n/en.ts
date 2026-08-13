@@ -51,10 +51,29 @@ const en: MessageSchema = {
   'transfer.task.download': 'Download',
   'transfer.task.upload': 'Upload',
   'transfer.task.empty': 'No tasks',
+  'transfer.task.receivingEmpty': 'Nothing being received',
+  'transfer.task.waitingApproval': 'Waiting for approval',
+  'transfer.task.receiving': 'Receiving',
 
   // ==================== Queue panel ====================
   'transfer.queue.title': 'Transfer queue',
   'transfer.queue.count': '{count} tasks',
+
+  // ==================== Queue tabs (v2) ====================
+  'transfer.queue.all': 'All',
+  'transfer.queue.sending': 'Sending',
+  'transfer.queue.receiving': 'Receiving',
+  'transfer.queue.history': 'History',
+
+  // ==================== Batch request (v2) ====================
+  'transfer.batch.pendingTitle': 'File transfer request',
+  'transfer.batch.acceptAll': 'Accept all',
+  'transfer.batch.rejectAll': 'Reject all',
+  'transfer.request.title': 'File transfer request',
+  'transfer.request.body': '{name} wants to send you {count} files ({size} total)',
+  'transfer.request.acceptAll': 'Accept all',
+  'transfer.request.rejectAll': 'Reject all',
+  'transfer.toast.receiving': '{name} is sending you {count} files',
 
   // ==================== Queue summary ====================
   'transfer.summary.active': '{count} active',
@@ -74,11 +93,30 @@ const en: MessageSchema = {
   'transfer.settings.concurrency': 'Concurrency',
   'transfer.settings.concurrencyHint': 'Number of simultaneous transfers; increasing it may use more bandwidth',
   'transfer.settings.plainWarning': 'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
+  'transfer.settings.receivingPolicy': 'Receiving policy',
+  'transfer.settings.receivingPolicyAsk': 'Ask every time',
+  'transfer.settings.receivingPolicyAccept': 'Accept automatically',
+  'transfer.settings.receivingPolicyReject': 'Reject automatically',
+  'transfer.settings.receivingPolicyHint': 'Whether to ask before receiving files from peers',
+  'transfer.settings.approvalTimeout': 'Approval timeout (s)',
 
-  // ==================== Errors (spec §10) ====================
+  // ==================== Errors (spec §10 + v2 reject reasons) ====================
   'transfer.error.duplicateName': 'Upload failed: a file with the same name already exists in the target folder',
   'transfer.error.remoteChanged': "The remote file has changed and can't be resumed. Please start over.",
   'transfer.error.dirUnavailable': 'This folder is currently unavailable',
+  'transfer.error.rejectedByUser': 'The transfer was rejected by the peer',
+  'transfer.error.noResponse': 'No response from the peer; the request timed out',
+  'transfer.error.policyDenied': 'The peer is set to reject incoming transfers',
+
+  // ==================== Transfer history (v2) ====================
+  'transfer.history.title': 'History',
+  'transfer.history.clear': 'Clear history',
+  'transfer.history.empty': 'No transfer history',
+  'transfer.history.openFolder': 'Show in folder',
+  'transfer.history.results.completed': 'Completed',
+  'transfer.history.results.failed': 'Failed',
+  'transfer.history.results.rejected': 'Rejected',
+  'transfer.history.results.cancelled': 'Cancelled',
 
   // ==================== Empty states ====================
   'transfer.empty.noRoots': 'Configure shared folders in Settings first',

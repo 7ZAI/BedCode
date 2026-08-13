@@ -74,6 +74,9 @@ impl SyncEventHandler {
             DesktopSyncEvent::FileServiceChanged { plugin_id, mount_path, available, operations } => {
                 self.handle_file_service_changed(&plugin_id, &mount_path, available, operations).await;
             }
+            DesktopSyncEvent::TransferApproval { batch_id, decision, reason } => {
+                self.handle_transfer_approval(&batch_id, &decision, &reason).await;
+            }
         }
     }
 
@@ -319,6 +322,18 @@ impl SyncEventHandler {
         };
 
         // 挂载可用性广播给所有客户端（移动端插件经 sync:file_service 订阅）
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理传输批应答事件（桌面接收端宿主 → 移动端发送方，v2）
+    async fn handle_transfer_approval(&self, batch_id: &str, decision: &str, reason: &str) {
+        let payload = SyncPayload::TransferApproval {
+            batch_id: batch_id.to_string(),
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+        };
+
+        // 广播给所有客户端（移动端发送方插件经 sync:file_service 订阅后转 MessageBus）
         self.broadcast_sync_data(payload, None).await;
     }
 

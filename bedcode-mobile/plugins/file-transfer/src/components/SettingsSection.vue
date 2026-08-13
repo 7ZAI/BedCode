@@ -23,6 +23,7 @@ import type { useSettings } from '../composables/useSettings'
 import type { SharedRoot } from '../types'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import { CONCURRENCY_MAX } from '../composables/useSettings'
+import type { ReceivingPolicy } from '../types'
 
 type SettingsApi = ReturnType<typeof useSettings>
 
@@ -89,6 +90,49 @@ function decConcurrency(): void {
 function incConcurrency(): void {
   const cur = props.settingsApi.settings.value.concurrency
   if (cur < CONCURRENCY_MAX) void props.settingsApi.setConcurrency(cur + 1)
+}
+
+// ==================== v2 接收策略 ====================
+
+/** 接收策略选项（自绘 segmented，禁原生 select） */
+const POLICY_OPTIONS: { value: ReceivingPolicy; labelKey: string }[] = [
+  { value: 'ask', labelKey: 'transfer.settings.receivingPolicyAsk' },
+  { value: 'accept', labelKey: 'transfer.settings.receivingPolicyAccept' },
+  { value: 'reject', labelKey: 'transfer.settings.receivingPolicyReject' },
+]
+
+/** 切换接收策略（本地生效，发送方不感知） */
+async function handleSetPolicy(policy: ReceivingPolicy): Promise<void> {
+  const ok = await props.settingsApi.setReceivingPolicy(policy)
+  if (ok && context) {
+    context.dialogs.showToast(t('transfer.settings.saved'), 'success')
+  }
+}
+
+/** 同意超时输入（秒，10–600；仅 ask 策略显示）。原生数字输入外观完全自绘
+ *（输入框 + 步进按钮），不呈现系统控件外观 */
+const timeoutInput = ref('')
+
+/** 输入框聚焦/失焦时与设置值同步 */
+function syncTimeoutInput(): void {
+  timeoutInput.value = String(props.settingsApi.settings.value.approvalTimeoutSec ?? 60)
+}
+
+/** 提交超时（失焦/回车时校验 10–600，越界回弹显示值） */
+async function commitTimeout(): Promise<void> {
+  const n = Number(timeoutInput.value)
+  if (Number.isFinite(n)) {
+    await props.settingsApi.setApprovalTimeout(n)
+  }
+  syncTimeoutInput()
+}
+
+/** 超时步进（±10s，clamp 10–600） */
+async function stepTimeout(delta: number): Promise<void> {
+  const cur = props.settingsApi.settings.value.approvalTimeoutSec ?? 60
+  const next = Math.min(Math.max(cur + delta, 10), 600)
+  await props.settingsApi.setApprovalTimeout(next)
+  syncTimeoutInput()
 }
 </script>
 
@@ -209,6 +253,56 @@ function incConcurrency(): void {
             >
               +
             </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 接收策略（v2） ==================== -->
+    <section class="space-y-2">
+      <h2 class="settings-section-title">{{ t('transfer.settings.receivingPolicy') }}</h2>
+      <div class="settings-group">
+        <div class="settings-row ft-policy-row">
+          <div class="min-w-0 flex-1">
+            <div class="settings-label">{{ t('transfer.settings.receivingPolicy') }}</div>
+            <div class="settings-desc">{{ t('transfer.settings.receivingPolicyHint') }}</div>
+          </div>
+          <!-- 自绘分段控件（禁原生 select）：ask/accept/reject 三档 -->
+          <div class="ft-segmented flex-shrink-0" role="radiogroup">
+            <button
+              v-for="opt in POLICY_OPTIONS"
+              :key="opt.value"
+              role="radio"
+              :aria-checked="(settingsApi?.settings.value.receivingPolicy ?? 'ask') === opt.value"
+              class="ft-segmented-item"
+              :class="{ 'ft-segmented-item--active': (settingsApi?.settings.value.receivingPolicy ?? 'ask') === opt.value }"
+              @click="handleSetPolicy(opt.value)"
+            >
+              {{ t(opt.labelKey) }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 同意超时（仅 ask 策略显示）：自绘数字输入（禁原生 input 外观） -->
+        <div v-if="(settingsApi?.settings.value.receivingPolicy ?? 'ask') === 'ask'" class="settings-row">
+          <div class="min-w-0 flex-1">
+            <div class="settings-label">{{ t('transfer.settings.approvalTimeout') }}</div>
+            <div class="settings-desc">10–600</div>
+          </div>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <button class="ft-step-btn" @click="stepTimeout(-10)">−</button>
+            <input
+              v-model="timeoutInput"
+              class="ft-timeout-input"
+              type="number"
+              min="10"
+              max="600"
+              inputmode="numeric"
+              @focus="syncTimeoutInput()"
+              @blur="commitTimeout()"
+              @keyup.enter="($event.target as HTMLInputElement).blur()"
+            />
+            <button class="ft-step-btn" @click="stepTimeout(10)">+</button>
           </div>
         </div>
       </div>
@@ -345,6 +439,72 @@ function incConcurrency(): void {
   background: var(--mobile-bg-tertiary);
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   color: var(--mobile-text-muted);
+}
+
+/* 接收策略行：分段控件与说明同行（窄屏允许换行） */
+.ft-policy-row {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* 自绘分段控件（禁原生 select）：胶囊容器 + 激活项 accent tint */
+.ft-segmented {
+  display: inline-flex;
+  padding: 0.1875rem;
+  border-radius: 0.625rem;
+  background: var(--mobile-bg-tertiary);
+  gap: 0.1875rem;
+}
+
+.ft-segmented-item {
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-weight: 500;
+  color: var(--mobile-text-secondary);
+  background: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+
+.ft-segmented-item:active {
+  opacity: 0.8;
+}
+
+.ft-segmented-item--active {
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-accent);
+}
+
+/* 同意超时数字输入：完全自绘外观（token 边框/圆角/字号，无系统控件观感） */
+.ft-timeout-input {
+  width: 4.5rem;
+  height: 2.75rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-primary);
+  text-align: center;
+  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s ease;
+  -webkit-appearance: none;
+  appearance: none;
+  -moz-appearance: textfield;
+}
+
+.ft-timeout-input:focus {
+  outline: none;
+  border-color: var(--mobile-accent);
+}
+
+.ft-timeout-input::-webkit-outer-spin-button,
+.ft-timeout-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* 黄色提醒框（使用说明 / 安全告知共用） */

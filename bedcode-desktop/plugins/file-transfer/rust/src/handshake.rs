@@ -7,6 +7,7 @@
 //! - GET /list?path=… — 目录列举
 //! - GET /file?path=… — 文件下载（Range）
 //! - HEAD /file?path=… — 文件指纹（X-File-Size / X-File-Mtime）
+//! - POST /transfer-request — 批量传输请求（v2）
 //! - POST /upload — 创建 upload session
 //! - GET /upload/{id} — 查询 session 已收字节
 //! - POST /upload/{id}/complete — 完成上传
@@ -172,24 +173,84 @@ fn fingerprint_via_list(
     })
 }
 
+// ==================== 批量传输请求（v2） ====================
+
+/// 批量传输请求结果（200 approved / 202 pending）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferRequestOutcome {
+    /// 钩子 allow：批已批准，批内任务可直接建 session
+    Approved,
+    /// 钩子 ask：批置 pending，批内任务等待接收端用户应答
+    Pending,
+}
+
+/// 批量传输请求错误
+#[derive(Debug, Clone)]
+pub enum TransferRequestError {
+    /// 钩子 deny（403）：reason 为钩子返回原因（如 policy-denied）
+    Denied(String),
+    /// 网络错误/非预期状态码（任务转 failed）
+    Network(String),
+}
+
+/// 发起批量传输请求（v2，spec 2.1）
+///
+/// POST {base}/transfer-request body={batchId, files:[{relativePath,size}], totalSize}
+/// 200 → Approved；202 → Pending；403 → Denied(reason)；其他 → Network
+pub fn request_transfer(
+    host: &impl HostHttp,
+    base: &str,
+    auth: &str,
+    batch_id: &str,
+    files: &[bedcode_plugin_api::types::UploadRequestMeta],
+    total_size: u64,
+) -> Result<TransferRequestOutcome, TransferRequestError> {
+    let url = format!("{}/transfer-request", base);
+    let body = serde_json::json!({
+        "batchId": batch_id,
+        "files": files,
+        "totalSize": total_size,
+    });
+    let resp = do_fetch(host, "POST", &url, auth, Some(&body))
+        .map_err(|e| TransferRequestError::Network(e))?;
+    match resp.status {
+        200 => Ok(TransferRequestOutcome::Approved),
+        202 => Ok(TransferRequestOutcome::Pending),
+        403 => {
+            // 钩子 deny：尽量透传 reason（如 policy-denied），抽不到回退 status-only
+            let reason = body_message(&resp.body).unwrap_or_else(|| "policy-denied".to_string());
+            Err(TransferRequestError::Denied(reason))
+        }
+        status => Err(TransferRequestError::Network(format!(
+            "request_transfer: HTTP {}",
+            status
+        ))),
+    }
+}
+
 // ==================== 上传会话 ====================
 
 /// 创建上传会话
 ///
-/// POST {base}/upload body={relativePath, size}
-/// 成功返回 SessionCreated；409 = 同名被拒；其他 = 错误
+/// POST {base}/upload body={relativePath, size, batchId?}
+/// 成功返回 SessionCreated；409 = 同名被拒；其他 = 错误。
+/// v2：batch_id 非空时携带批上下文（批准后免钩子创建）
 pub fn create_session(
     host: &impl HostHttp,
     base: &str,
     auth: &str,
     relative_path: &str,
     size: u64,
+    batch_id: Option<&str>,
 ) -> Result<SessionCreated, CreateSessionError> {
     let url = format!("{}/upload", base);
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "relativePath": relative_path,
         "size": size,
     });
+    if let Some(bid) = batch_id {
+        body["batchId"] = serde_json::json!(bid);
+    }
     let resp = do_fetch(host, "POST", &url, auth, Some(&body))
         .map_err(|e| CreateSessionError::Other(e))?;
     match resp.status {

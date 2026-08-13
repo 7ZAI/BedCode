@@ -69,6 +69,31 @@ pub struct CreateUploadRequest {
     pub relative_path: String,
     /// 声明的文件总大小（字节）
     pub size: u64,
+    /// v2：所属传输批 ID（ask 模式批准后免钩子创建；缺省走 v1 per-file 钩子）
+    #[serde(default)]
+    pub batch_id: Option<String>,
+}
+
+/// 批量传输请求体（v2，POST /transfer-request）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferRequestBody {
+    /// 批 ID（发送方生成，UUID）
+    pub batch_id: String,
+    /// 批内文件清单
+    pub files: Vec<bedcode_plugin_api::UploadRequestMeta>,
+    /// 批总大小（字节）
+    pub total_size: u64,
+}
+
+/// 批量传输请求响应（v2：200 approved / 202 pending）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferRequestResponse {
+    /// 批 ID
+    pub batch_id: String,
+    /// 批状态："approved" | "pending"
+    pub decision: String,
 }
 
 /// 上传会话响应
@@ -493,21 +518,51 @@ pub async fn create_upload(
     };
 
     // 策略钩子：同名即拒等策略由插件实现；超时/异常 fail-closed
+    //
+    // v2 批 gating（spec 14.2，顺序：沙箱解析 → gating → 建 session）：
+    // 1. 带 batchId → 批已批准则免钩子（批准状态随批保留）；
+    //    批 pending/rejected/不存在一律 403（防 ask 模式绕过批上下文）
+    // 2. 无 batchId → 走 v1 per-file 钩子；钩子 ask → 403 batch-context-required（fail-closed）
     let meta = bedcode_plugin_api::UploadRequestMeta {
         relative_path: rel.clone(),
         size: body.size,
     };
-    let decision = registry.call_upload_hook(&plugin_id, &mount, &meta).await;
-    if !decision.allow {
-        let reason = decision.reason.unwrap_or_else(|| "rejected by upload hook".to_string());
-        tracing::info!(
-            plugin_id = %plugin_id,
-            mount = %mount,
-            relative_path = %rel,
-            reason = %reason,
-            "upload rejected by policy hook"
-        );
-        return error_response(actix_web::http::StatusCode::FORBIDDEN, 403, &reason);
+    let batch_id = body.batch_id.clone();
+    let batch_approved = if let Some(ref batch_id) = batch_id {
+        match registry.check_batch(&plugin_id, &mount, batch_id).await {
+            Ok(_) => true,
+            Err(e) => {
+                // GatingDenied 消息即 wire 值（batch-not-approved 等），发送方据此区分
+                return error_response(actix_web::http::StatusCode::FORBIDDEN, 403, &e.to_string());
+            }
+        }
+    } else {
+        false
+    };
+
+    if !batch_approved {
+        let decision = registry.call_upload_hook(&plugin_id, &mount, &meta).await;
+        if !decision.allow {
+            // v2：ask 模式下无批上下文的上传一律拒绝（防绕过 /upload）
+            if decision.ask {
+                return error_response(
+                    actix_web::http::StatusCode::FORBIDDEN,
+                    403,
+                    "batch-context-required",
+                );
+            }
+            let reason = decision
+                .reason
+                .unwrap_or_else(|| "rejected by upload hook".to_string());
+            tracing::info!(
+                plugin_id = %plugin_id,
+                mount = %mount,
+                relative_path = %rel,
+                reason = %reason,
+                "upload rejected by policy hook"
+            );
+            return error_response(actix_web::http::StatusCode::FORBIDDEN, 403, &reason);
+        }
     }
 
     match registry
@@ -515,15 +570,102 @@ pub async fn create_upload(
         .create(&plugin_id, &mount, target, body.size)
         .await
     {
-        Ok(session) => HttpResponse::Ok().json(ApiResponse::ok_with_data(UploadSessionResponse {
-            session_id: session.id,
-            received: 0,
-        })),
+        Ok(session) => {
+            // v2：session 创建成功（钩子路径与批路径都发）→ 接收端「正在接收」任务
+            let session_id = session.id.clone();
+            registry
+                .emit_filesrv_event(
+                    "filesrv:receiving_started",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        // 无批（accept/reject 策略路径）为 null，与移动端 wire 一致
+                        "batchId": batch_id,
+                        "relativePath": rel,
+                        "size": body.size,
+                    }),
+                )
+                .await;
+            // 批内 session 活动刷新（approved 批 24h TTL 依据）
+            if let Some(ref batch_id) = batch_id {
+                registry.touch_batch(batch_id).await;
+            }
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(UploadSessionResponse {
+                session_id: session.id,
+                received: 0,
+            }))
+        }
         Err(e) => error_response(
             actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
             500,
             &e.to_string(),
         ),
+    }
+}
+
+/// POST {mount}/transfer-request — 批量传输请求（v2，spec 2.1）
+///
+/// 批钩子三路分流：allow → 200 {batchId, decision:"approved"}；
+/// ask → 批 pending + 本地事件 filesrv:transfer_request → 202 {decision:"pending"}；
+/// deny → 403（message 为钩子 reason，如 policy-denied）。
+/// 钩子 fail-closed：超时/插件异常/挂载不存在一律 deny（2s 超时，UPLOAD_HOOK_TIMEOUT）。
+/// 沙箱不需要（仅元数据，不落盘）；不建任务不写记录（deny 零打扰）。
+pub async fn transfer_request(
+    params: web::Path<(String, String)>,
+    body: web::Json<TransferRequestBody>,
+) -> HttpResponse {
+    let (plugin_id, mount) = params.into_inner();
+
+    let entry = match get_mount(&plugin_id, &mount).await {
+        Ok(e) => e,
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = require_op(&entry, FileOperation::Upload) {
+        return resp;
+    }
+
+    let Some(registry) = registry() else {
+        return error_response(
+            actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+            503,
+            "file service not initialized",
+        );
+    };
+
+    let dto = crate::plugin::file_service::transfer::TransferRequestDto {
+        batch_id: body.batch_id.clone(),
+        files: body.files.clone(),
+        total_size: body.total_size,
+    };
+    match registry
+        .create_transfer_request(&plugin_id, &mount, &dto)
+        .await
+    {
+        Ok(crate::plugin::file_service::transfer::BatchDecision::Approved) => {
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(TransferRequestResponse {
+                batch_id: dto.batch_id,
+                decision: "approved".to_string(),
+            }))
+        }
+        Ok(crate::plugin::file_service::transfer::BatchDecision::Pending) => {
+            // 202：批已建 pending，等待接收端用户应答（异步批准协议）
+            HttpResponse::Accepted().json(ApiResponse::ok_with_data(TransferRequestResponse {
+                batch_id: dto.batch_id,
+                decision: "pending".to_string(),
+            }))
+        }
+        Err(e) => match e {
+            crate::plugin::file_service::transfer::BatchError::PolicyDenied(reason) => {
+                error_response(actix_web::http::StatusCode::FORBIDDEN, 403, &reason)
+            }
+            crate::plugin::file_service::transfer::BatchError::GatingDenied(msg) => {
+                error_response(actix_web::http::StatusCode::FORBIDDEN, 403, &msg)
+            }
+            other => error_response(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                500,
+                &other.to_string(),
+            ),
+        },
     }
 }
 
@@ -667,13 +809,34 @@ pub async fn complete_upload(params: web::Path<(String, String, String)>) -> Htt
                 target = %target.display(),
                 "upload completed"
             );
+            // v2：接收端任务终态 + 归档（complete 成功）
+            registry
+                .emit_filesrv_event(
+                    "filesrv:receiving_done",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "state": "completed",
+                        "reason": null,
+                    }),
+                )
+                .await;
             HttpResponse::Ok().json(ApiResponse::ok())
         }
-        Err(UploadSessionError::DuplicateName(_)) => error_response(
-            actix_web::http::StatusCode::CONFLICT,
-            409,
-            "duplicate-name",
-        ),
+        Err(UploadSessionError::DuplicateName(_)) => {
+            // v2：complete 409 竞态 → 该文件 receiving_done(failed, duplicate-name)，
+            // 批内其他文件不受影响（spec 14.2 边界 5）
+            registry
+                .emit_filesrv_event(
+                    "filesrv:receiving_done",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "state": "failed",
+                        "reason": "duplicate-name",
+                    }),
+                )
+                .await;
+            error_response(actix_web::http::StatusCode::CONFLICT, 409, "duplicate-name")
+        }
         Err(UploadSessionError::NotFound(id)) => error_response(
             actix_web::http::StatusCode::NOT_FOUND,
             404,
@@ -703,7 +866,20 @@ pub async fn cancel_upload(params: web::Path<(String, String, String)>) -> HttpR
         .cancel(&sid, &plugin_id, &mount)
         .await
     {
-        Ok(()) => HttpResponse::Ok().json(ApiResponse::ok()),
+        Ok(()) => {
+            // v2：接收端任务终态（取消：用户 / 发送方 DELETE 均走此端点）
+            registry
+                .emit_filesrv_event(
+                    "filesrv:receiving_done",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "state": "cancelled",
+                        "reason": null,
+                    }),
+                )
+                .await;
+            HttpResponse::Ok().json(ApiResponse::ok())
+        }
         Err(UploadSessionError::NotFound(id)) => error_response(
             actix_web::http::StatusCode::NOT_FOUND,
             404,

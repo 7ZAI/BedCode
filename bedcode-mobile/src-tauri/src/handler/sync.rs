@@ -120,6 +120,24 @@ impl ClientRouteHandler for SyncHandler {
                         operations,
                     });
                 }
+                SyncPayload::TransferApproval {
+                    batch_id,
+                    decision,
+                    reason,
+                } => {
+                    // 传输批应答（v2）：接收端批准/拒绝/超时 → 发送端
+                    // 双通道发布 filesrv:transfer_approval，发送方插件据此调度批内任务
+                    tracing::info!(
+                        "[SyncHandler] TransferApproval: batch_id={}, decision={}, reason={}",
+                        batch_id,
+                        decision,
+                        reason
+                    );
+                    crate::state::get_file_service()
+                        .registry
+                        .publish_transfer_approval(&batch_id, &decision, &reason)
+                        .await;
+                }
             }
         }
         Ok(None)

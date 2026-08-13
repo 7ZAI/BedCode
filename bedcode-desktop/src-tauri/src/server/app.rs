@@ -246,6 +246,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     .route("/{mount}/file", web::get().to(file_service_controller::download_file))
                     .route("/{mount}/file", web::head().to(file_service_controller::head_file))
                     .route("/{mount}/upload", web::post().to(file_service_controller::create_upload))
+                    .route("/{mount}/transfer-request", web::post().to(file_service_controller::transfer_request))
                     .route("/{mount}/upload/{sid}", web::put().to(file_service_controller::append_upload))
                     .route("/{mount}/upload/{sid}", web::get().to(file_service_controller::query_upload))
                     .route("/{mount}/upload/{sid}", web::delete().to(file_service_controller::cancel_upload))

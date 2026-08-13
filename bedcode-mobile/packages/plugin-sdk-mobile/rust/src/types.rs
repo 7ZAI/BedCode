@@ -279,26 +279,41 @@ pub struct UploadRequestMeta {
 
 /// 上传策略钩子决定（插件 → 宿主）
 ///
-/// fail-closed：任何异常（超时/解析失败/插件未实现）宿主一律视为拒绝
+/// fail-closed：任何异常（超时/解析失败/插件未实现）宿主一律视为拒绝。
+/// v2 三路化：`allow` / `ask`（请求用户批准，批上下文）/ `deny`。
+/// wire 兼容：旧插件返回 `{ allow: false }` → deny；`{ allow: true }` → allow。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadHookDecision {
     /// 是否允许上传
     pub allow: bool,
-    /// 拒绝原因（如 duplicate-name），允许时为空
+    /// v2：true = 需要用户批准（批上下文）；与 allow 互斥（ask 时 allow 必为 false）
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ask: bool,
+    /// 拒绝原因（如 duplicate-name / policy-denied），允许时为空
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// serde skip 辅助：false 时不序列化（保持 v1 wire 形状，两端字节一致）
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl UploadHookDecision {
     /// 允许上传
     pub fn allow() -> Self {
-        Self { allow: true, reason: None }
+        Self { allow: true, ask: false, reason: None }
     }
 
     /// 拒绝上传（fail-closed 语义）
     pub fn deny(reason: impl Into<String>) -> Self {
-        Self { allow: false, reason: Some(reason.into()) }
+        Self { allow: false, ask: false, reason: Some(reason.into()) }
+    }
+
+    /// v2：请求用户批准（批上下文，宿主建 pending 批并等待应答）
+    pub fn ask() -> Self {
+        Self { allow: false, ask: true, reason: None }
     }
 }
 
@@ -307,6 +322,21 @@ impl Default for UploadHookDecision {
     fn default() -> Self {
         Self::deny("no decision")
     }
+}
+
+/// 批量传输请求元信息（宿主 → 插件批钩子入参，camelCase 线协议）
+///
+/// v2：POST /transfer-request 时宿主调用一次批钩子（`on_transfer_request`），
+/// 载荷为整批文件清单 + 总大小，插件按接收策略三路分流。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferRequestMeta {
+    /// 批 ID（发送方生成，跨端唯一标识一次「发送」动作）
+    pub batch_id: String,
+    /// 批内文件清单（相对路径 + 大小）
+    pub files: Vec<UploadRequestMeta>,
+    /// 批内文件总大小（字节）
+    pub total_size: u64,
 }
 
 /// 传输方向
@@ -716,10 +746,17 @@ mod tests {
     fn test_upload_hook_decision_constructors() {
         let allow = UploadHookDecision::allow();
         assert!(allow.allow);
+        assert!(!allow.ask);
         assert_eq!(allow.reason, None);
         let deny = UploadHookDecision::deny("duplicate-name");
         assert!(!deny.allow);
+        assert!(!deny.ask);
         assert_eq!(deny.reason.as_deref(), Some("duplicate-name"));
+        // v2 ask：请求用户批准（与 allow 互斥）
+        let ask = UploadHookDecision::ask();
+        assert!(!ask.allow);
+        assert!(ask.ask);
+        assert_eq!(ask.reason, None);
     }
 
     #[test]
@@ -732,7 +769,8 @@ mod tests {
 
     #[test]
     fn test_upload_hook_decision_wire_format() {
-        // allow 时 reason 被跳过（skip_serializing_if），拒绝时携带原因
+        // allow/deny 时 ask 被跳过（skip_serializing_if）：保持 v1 wire 形状
+        // （旧对端/宿主按无 ask 字段解析），ask 时序列化 ask=true
         assert_eq!(
             serde_json::to_value(UploadHookDecision::allow()).unwrap(),
             serde_json::json!({ "allow": true })
@@ -741,6 +779,51 @@ mod tests {
             serde_json::to_value(UploadHookDecision::deny("duplicate-name")).unwrap(),
             serde_json::json!({ "allow": false, "reason": "duplicate-name" })
         );
+        assert_eq!(
+            serde_json::to_value(UploadHookDecision::ask()).unwrap(),
+            serde_json::json!({ "allow": false, "ask": true })
+        );
+        // 反序列化兼容：旧插件返回 { allow: false } → deny；缺省 ask 字段不报错
+        let back: UploadHookDecision =
+            serde_json::from_value(serde_json::json!({ "allow": true })).unwrap();
+        assert!(back.allow);
+        assert!(!back.ask);
+        assert_eq!(back.reason, None);
+        let ask_back: UploadHookDecision =
+            serde_json::from_value(serde_json::json!({ "allow": false, "ask": true })).unwrap();
+        assert!(ask_back.ask);
+    }
+
+    #[test]
+    fn test_transfer_request_meta_wire_format() {
+        let meta = TransferRequestMeta {
+            batch_id: "b1".to_string(),
+            files: vec![
+                UploadRequestMeta { relative_path: "dir/a.mp4".into(), size: 123456 },
+                UploadRequestMeta { relative_path: "b.txt".into(), size: 2 },
+            ],
+            total_size: 123458,
+        };
+        assert_eq!(
+            serde_json::to_value(&meta).unwrap(),
+            serde_json::json!({
+                "batchId": "b1",
+                "files": [
+                    { "relativePath": "dir/a.mp4", "size": 123456 },
+                    { "relativePath": "b.txt", "size": 2 }
+                ],
+                "totalSize": 123458
+            })
+        );
+        let back: TransferRequestMeta =
+            serde_json::from_value(serde_json::json!({
+                "batchId": "b1",
+                "files": [{ "relativePath": "a", "size": 1 }],
+                "totalSize": 1
+            }))
+            .unwrap();
+        assert_eq!(back.batch_id, "b1");
+        assert_eq!(back.files.len(), 1);
     }
 
     #[test]

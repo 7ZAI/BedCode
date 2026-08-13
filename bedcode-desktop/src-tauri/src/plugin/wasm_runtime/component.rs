@@ -250,6 +250,22 @@ impl bedcode::plugin::host_file_service::Host for WasmPluginState {
     fn query_peer(&mut self, peer_id: String) -> Result<(), String> {
         file_service::filesrv_query_peer(&self.host_ctx, &self.plugin_id, &peer_id)
     }
+
+    fn approve_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        file_service::filesrv_approve_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn reject_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        file_service::filesrv_reject_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn set_approval_timeout(&mut self, mount_path: String, seconds: u64) -> Result<(), String> {
+        file_service::filesrv_set_approval_timeout(&self.host_ctx, &self.plugin_id, &mount_path, seconds)
+    }
+
+    fn cancel_receiving(&mut self, session_id: String) -> Result<(), String> {
+        file_service::filesrv_cancel_receiving(&self.host_ctx, &self.plugin_id, &session_id)
+    }
 }
 
 impl bedcode::plugin::host_transfer::Host for WasmPluginState {
@@ -538,6 +554,15 @@ impl LoadedWasmPlugin {
         let hooks = exports.bedcode_plugin_upload_hook();
         hooks.call_on_upload_request(&mut self.store, meta_json).map_err(|e| {
             AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e))
+        })
+    }
+
+    /// 调用插件的批量传输请求钩子导出（v2，fail-closed 语义由调用方保持）
+    pub(crate) fn on_transfer_request(&mut self, meta_json: &str) -> crate::Result<String> {
+        let exports = self.exports()?;
+        let hooks = exports.bedcode_plugin_transfer_request_hook();
+        hooks.call_on_transfer_request(&mut self.store, meta_json).map_err(|e| {
+            AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e))
         })
     }
 

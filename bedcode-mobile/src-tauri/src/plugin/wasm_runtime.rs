@@ -561,8 +561,7 @@ impl LoadedWasmPlugin {
     /// 调用上传策略钩子导出（ABI v4，可选导出；不存在返回 Err，调用方 fail-closed）
     ///
     /// 入参 meta_json 为 UploadRequestMeta JSON，返回插件写入 out_ptr 的决定 JSON
-    pub fn call_upload_hook(&mut self, meta_json: &str) -> crate::Result<String> {
-        let (meta_ptr, meta_len) = self.write_string_to_memory(meta_json)?;
+    pub fn call_upload_hook(&mut self, meta_json: &str) -> crate::Result<String> {        let (meta_ptr, meta_len) = self.write_string_to_memory(meta_json)?;
         let out_ptr =
             self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
 
@@ -606,7 +605,52 @@ impl LoadedWasmPlugin {
         Ok(result)
     }
 
-    /// 调用生命周期事件回调（可选导出，不存在则跳过）
+    /// 调用批量传输请求钩子导出（ABI v6，可选导出；不存在返回 Err，调用方 fail-closed）
+    ///
+    /// 与 [`call_upload_hook`](Self::call_upload_hook) 完全同构：入参 meta_json 为
+    /// TransferRequestMeta JSON，返回插件写入 out_ptr 的决定 JSON
+    pub fn call_transfer_request(&mut self, meta_json: &str) -> crate::Result<String> {
+        let (meta_ptr, meta_len) = self.write_string_to_memory(meta_json)?;
+        let out_ptr =
+            self.allocate_memory(bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE)?;
+
+        let func = self
+            .get_export_func(bedcode_plugin_api_mobile::abi::export::ON_TRANSFER_REQUEST)?;
+        // 导出签名 `__bedcode_on_transfer_request(meta_ptr, meta_len, out_ptr) -> i32`
+        //（见 SDK wasm.rs PLUGIN_EXPORT_SIGNATURES 中 (ON_TRANSFER_REQUEST, 3, 1)）。
+        // 返回 i32 为状态码（SDK 当前实现恒返 0；拒绝语义由写入 out_ptr 的决定
+        // JSON 表达，返回值仅供宿主侧诊断）——必须提供 1 个返回 slot，
+        // 否则 wasmtime 报 "expected 1 results, got 0"（同 call_upload_hook 坑）
+        let mut ret = [wasmtime::Val::I32(0)];
+        func.call(
+            &mut self.store,
+            &[
+                wasmtime::Val::I32(meta_ptr as i32),
+                wasmtime::Val::I32(meta_len as i32),
+                wasmtime::Val::I32(out_ptr as i32),
+            ],
+            &mut ret,
+        )
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e))
+        })?;
+        if ret[0].i32().unwrap_or(0) != 0 {
+            tracing::warn!(
+                status = ret[0].i32().unwrap_or(0),
+                "WASM on_transfer_request() returned non-zero status (decision JSON still read from out_ptr)"
+            );
+        }
+
+        let (ptr, len) = self.read_result_from_out_ptr(out_ptr)?;
+        let result = self.read_string_from_memory(ptr, len)?;
+        // 回收插件分配的决定缓冲区与 out_ptr 本身，防止线性内存单调增长
+        self.dealloc_plugin_memory(ptr, len);
+        self.dealloc_plugin_memory(
+            out_ptr,
+            bedcode_plugin_api_mobile::abi::RESULT_PAIR_SIZE as u32,
+        );
+        Ok(result)
+    }
     pub fn call_lifecycle_event(&mut self, event: &crate::plugin::types::PluginLifecycleEvent) -> crate::Result<()> {
         use crate::plugin::types::PluginLifecycleEvent;
 
@@ -1028,6 +1072,20 @@ fn register_host_functions(linker: &mut Linker<WasmPluginState>) -> crate::Resul
     linker
         .func_wrap("bedcode", "host_filesrv_query_peer", host_filesrv_query_peer)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_query_peer: {}", e)))?;
+
+    // 批量传输批准（ABI v6）
+    linker
+        .func_wrap("bedcode", "host_filesrv_approve_transfer", host_filesrv_approve_transfer)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_approve_transfer: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_reject_transfer", host_filesrv_reject_transfer)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_reject_transfer: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_set_approval_timeout", host_filesrv_set_approval_timeout)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_set_approval_timeout: {}", e)))?;
+    linker
+        .func_wrap("bedcode", "host_filesrv_cancel_receiving", host_filesrv_cancel_receiving)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to register host_filesrv_cancel_receiving: {}", e)))?;
 
     // 传输引擎（ABI v4）
     linker

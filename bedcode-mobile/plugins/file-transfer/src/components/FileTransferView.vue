@@ -27,6 +27,7 @@ import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
 import { useSharedUpload } from '../composables/useSharedUpload'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
+import type { PendingBatch } from '../types'
 import FileTypeIcon from './FileTypeIcon.vue'
 import TaskQueueSheet from './TaskQueueSheet.vue'
 import SharedDirSheet from './SharedDirSheet.vue'
@@ -41,6 +42,68 @@ const upload = useSharedUpload(context, tasks, settings)
 
 /** 队列 bottom sheet 是否展开 */
 const queueOpen = ref(false)
+
+// ==================== v2 批量传输请求应答（前台 Material 对话框） ====================
+//
+// spec 14.4：移动端前台 = 应用内对话框（标题 + 正文 + 接受全部/拒绝全部两按钮）；
+// 后台/锁屏 = 系统通知 action 按钮（Kotlin 侧，见 TaskNotificationManager）。
+// 数据源为 batches-changed 事件 + list-batches 初始拉取；应答后批卡经
+// batches-changed 消失（宿主 resolved 事件驱动）。
+
+/** 已提示过的批 ID（防同一批重复弹框；批 resolved 后从列表消失即视为已处理） */
+const promptedBatches = new Set<string>()
+/** 应答弹框进行中（防并发弹框叠加） */
+let batchDialogOpen = false
+
+/**
+ * 弹出批应答对话框（取第一个未提示的 pending 批）
+ *
+ * confirm = 接受全部；cancel/dismiss = 拒绝全部（批卡消失语义一致）。
+ * 多批并发时逐个提示（批独立、各自应答，spec 14.2 边界 4）。
+ */
+async function promptNextBatch(batches: PendingBatch[]): Promise<void> {
+  if (batchDialogOpen) return
+  const batch = batches.find(b => !promptedBatches.has(b.batchId))
+  if (!batch) return
+  batchDialogOpen = true
+  promptedBatches.add(batch.batchId)
+  try {
+    const count = batch.files.length
+    const size = formatBytes(batch.totalSize, t)
+    const result = await context.dialogs.showDialog({
+      title: t('transfer.request.title'),
+      message: t('transfer.request.body', {
+        name: batch.peerName || context.i18n.t('transfer.peer.unknown'),
+        count,
+        size,
+      }),
+      variant: 'info',
+      confirmText: t('transfer.request.acceptAll'),
+      cancelText: t('transfer.request.rejectAll'),
+      dismissible: false,
+    })
+    if (result.action === 'confirm') {
+      await tasks.approveBatch(batch.batchId)
+    } else {
+      await tasks.rejectBatch(batch.batchId)
+    }
+  } catch (e) {
+    console.warn('[File Transfer] batch approval dialog failed:', e)
+  } finally {
+    batchDialogOpen = false
+    // 处理完当前批后继续提示下一批（若有）
+    void promptNextBatch(tasks.batches.value)
+  }
+}
+
+/** 批快照变化驱动应答弹框（新批到达即提示；resolved 后列表移除自然不再弹） */
+watch(
+  () => tasks.batches.value,
+  (batches) => {
+    if (batches.length > 0) void promptNextBatch(batches)
+  },
+  { deep: true },
+)
 
 // ==================== 下拉刷新（与原生下拉刷新同语义） ====================
 /** 释放触发刷新的阈值（px） */
@@ -322,6 +385,7 @@ watch(
 
 onMounted(() => {
   tasks.start()
+  void tasks.refreshV2()
   disposeBackPress = context.ui.onBackPressed(({ canGoBack }) => {
     if (queueOpen.value) {
       queueOpen.value = false
@@ -588,10 +652,12 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 队列 bottom sheet -->
+    <!-- 队列 bottom sheet（v2 四 tab：全部/发送/接收/历史） -->
     <TaskQueueSheet
       :open="queueOpen"
       :tasks="tasks.tasks.value"
+      :receiving="tasks.receivingTasks.value"
+      :history="tasks.history.value"
       :speed-map="tasks.speedMap.value"
       :total-speed="tasks.totalSpeed.value"
       :resumable-count="tasks.resumableCount.value"
@@ -604,6 +670,9 @@ onUnmounted(() => {
       @remove="(id) => tasks.removeTask(id)"
       @open="(id) => tasks.openTask(id)"
       @resume-all="() => tasks.resumeAll()"
+      @cancel-receiving="(sessionId) => tasks.cancelReceiving(sessionId)"
+      @clear-history="() => tasks.clearHistory()"
+      @open-history="(entry) => tasks.openHistoryEntry(entry)"
     />
 
     <!-- 共享目录上传页（M1：共享目录文件列表 + 准备中进度 + 取消） -->

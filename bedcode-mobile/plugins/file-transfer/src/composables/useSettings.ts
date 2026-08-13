@@ -41,10 +41,13 @@ function mapWireRoot(raw: any): SharedRoot {
 
 /** 将 WASM get-settings 返回（snake_case download_dir）归一化为 camelCase */
 function mapWireSettings(raw: any): Settings {
+  const policy = raw?.receiving_policy ?? raw?.receivingPolicy ?? 'ask'
   return {
     roots: Array.isArray(raw?.roots) ? raw.roots.map(mapWireRoot) : [],
     downloadDir: raw?.download_dir ?? raw?.downloadDir ?? '',
     concurrency: raw?.concurrency ?? 3,
+    receivingPolicy: policy === 'accept' || policy === 'reject' ? policy : 'ask',
+    approvalTimeoutSec: raw?.approval_timeout_sec ?? raw?.approvalTimeoutSec ?? 60,
   }
 }
 
@@ -53,6 +56,8 @@ export function useSettings(context: PluginContext) {
     roots: [],
     downloadDir: '',
     concurrency: 3,
+    receivingPolicy: 'ask',
+    approvalTimeoutSec: 60,
   })
   const loading = ref(false)
 
@@ -68,6 +73,8 @@ export function useSettings(context: PluginContext) {
           ],
           downloadDir: '/storage/emulated/0/Download',
           concurrency: 4,
+          receivingPolicy: 'ask',
+          approvalTimeoutSec: 60,
         }
         return
       }
@@ -167,6 +174,19 @@ export function useSettings(context: PluginContext) {
     return persist({ concurrency: clamped })
   }
 
+  /** v2 设置接收策略（ask/accept/reject；本地生效，发送方不感知） */
+  async function setReceivingPolicy(
+    policy: 'ask' | 'accept' | 'reject',
+  ): Promise<boolean> {
+    return persist({ receivingPolicy: policy })
+  }
+
+  /** v2 设置同意超时（秒，10–600，仅 ask 策略生效；越界 clamp） */
+  async function setApprovalTimeout(secs: number): Promise<boolean> {
+    const clamped = Math.min(Math.max(Math.round(secs), 10), 600)
+    return persist({ approvalTimeoutSec: clamped })
+  }
+
   /** 写入 WASM 并同步本地状态（挂载失败时 set-settings 返回错误 → false；mock 下直接本地持久） */
   async function persist(patch: Partial<Settings>): Promise<boolean> {
     if (MOCK_ENABLED) {
@@ -185,6 +205,8 @@ export function useSettings(context: PluginContext) {
         // 不回传 downloadDir：下载目录为只读展示（M1 无选择入口），全量回传
         // 会把 WASM get-settings 派生的默认值写回 storage，静默覆写存储值
         concurrency: patch.concurrency ?? settings.value.concurrency,
+        receivingPolicy: patch.receivingPolicy ?? settings.value.receivingPolicy,
+        approvalTimeoutSec: patch.approvalTimeoutSec ?? settings.value.approvalTimeoutSec,
       })
       settings.value = { ...settings.value, ...patch }
       return true
@@ -203,5 +225,7 @@ export function useSettings(context: PluginContext) {
     removeRoot,
     markRootInvalid,
     setConcurrency,
+    setReceivingPolicy,
+    setApprovalTimeout,
   }
 }

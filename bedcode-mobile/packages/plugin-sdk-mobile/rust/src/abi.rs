@@ -39,7 +39,11 @@ pub const RESULT_PAIR_SIZE: usize = 8;
 ///   + 可选导出 `ON_UPLOAD_REQUEST` 上传策略钩子），与桌面端 ABI v5 同构，
 ///   见内网文件传输插件规格（移动端 ABI 基线从 v3 起算，故为 v4）
 /// - v5: 新增 `host_config_get` 宿主配置读取能力（`AppDownloadsDir` 下载目录）
-pub const ABI_VERSION: u32 = 5;
+/// - v6: 新增批量传输批准协议（host functions `FILESRV_APPROVE_TRANSFER` /
+///   `FILESRV_REJECT_TRANSFER` / `FILESRV_SET_APPROVAL_TIMEOUT` /
+///   `FILESRV_CANCEL_RECEIVING` + 可选导出 `ON_TRANSFER_REQUEST` 批钩子），
+///   见内网文件传输插件 v2 规格（接收策略 / 异步批量批准）
+pub const ABI_VERSION: u32 = 6;
 
 /// 插件导出函数名（`wasm_entry!` 宏生成，宿主调用）
 pub mod export {
@@ -81,6 +85,12 @@ pub mod export {
     /// 缺失/超时/异常一律 fail-closed 拒绝上传。
     /// 与桌面端 SDK `abi::export::ON_UPLOAD_REQUEST` 同名同义
     pub const ON_UPLOAD_REQUEST: &str = "__bedcode_on_upload_request";
+    /// 批量传输请求钩子（可选导出，v6 起；决定写入 out_ptr）
+    ///
+    /// 宿主在 POST /transfer-request 时调用一次（批级三路分流 allow/ask/deny）；
+    /// 缺失/超时/异常一律 fail-closed 拒绝（deny）。
+    /// 与桌面端 SDK `abi::export::ON_TRANSFER_REQUEST` 同名同义
+    pub const ON_TRANSFER_REQUEST: &str = "__bedcode_on_transfer_request";
 }
 
 /// 宿主导入函数名（宿主在 Linker 中注册，`WasmHost` 调用）
@@ -146,6 +156,16 @@ pub mod import {
     /// 文件服务：获取对端文件服务信息（out_ptr 输出）
     pub const FILESRV_GET_PEER: &str = "host_filesrv_get_peer";
 
+    // === 批量传输批准（v6） ===
+    /// 文件服务：批准传输批（接收端用户应答「接受全部」；批 pending → approved）
+    pub const FILESRV_APPROVE_TRANSFER: &str = "host_filesrv_approve_transfer";
+    /// 文件服务：拒绝传输批（接收端用户应答「拒绝全部」；批 pending → rejected）
+    pub const FILESRV_REJECT_TRANSFER: &str = "host_filesrv_reject_transfer";
+    /// 文件服务：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+    pub const FILESRV_SET_APPROVAL_TIMEOUT: &str = "host_filesrv_set_approval_timeout";
+    /// 文件服务：取消接收中的上传会话（接收端本地取消，session 级）
+    pub const FILESRV_CANCEL_RECEIVING: &str = "host_filesrv_cancel_receiving";
+
     // === Transfer（v4） ===
     /// 传输引擎：启动传输任务（TransferRequest JSON → out_ptr 输出 task_id）
     pub const TRANSFER_START: &str = "host_transfer_start";
@@ -190,6 +210,10 @@ pub const HOST_FN_SIGNATURES: &[(&str, usize, usize)] = &[
     (import::FILESRV_UNMOUNT, 2, 1),
     (import::FILESRV_UPDATE_ROOTS, 4, 1),
     (import::FILESRV_GET_PEER, 3, 1),
+    (import::FILESRV_APPROVE_TRANSFER, 2, 1),
+    (import::FILESRV_REJECT_TRANSFER, 2, 1),
+    (import::FILESRV_SET_APPROVAL_TIMEOUT, 3, 1),
+    (import::FILESRV_CANCEL_RECEIVING, 2, 1),
     (import::TRANSFER_START, 3, 1),
     (import::TRANSFER_CANCEL, 2, 1),
     (import::CONFIG_GET, 3, 1),
@@ -216,6 +240,7 @@ pub const PLUGIN_EXPORT_SIGNATURES: &[(&str, usize, usize)] = &[
     (export::ON_SESSION_STOPPED, 2, 0),
     (export::ON_BUS_MESSAGE, 7, 1),
     (export::ON_UPLOAD_REQUEST, 3, 1),
+    (export::ON_TRANSFER_REQUEST, 3, 1),
 ];
 
 #[cfg(test)]
@@ -229,7 +254,7 @@ mod tests {
         assert_eq!(NAMESPACE, "bedcode");
         assert_eq!(MEMORY, "memory");
         assert_eq!(RESULT_PAIR_SIZE, 8);
-        assert_eq!(ABI_VERSION, 5);
+        assert_eq!(ABI_VERSION, 6);
     }
 
     #[test]
@@ -253,6 +278,7 @@ mod tests {
         assert_eq!(export::ON_SESSION_STOPPED, "__bedcode_on_session_stopped");
         assert_eq!(export::ON_BUS_MESSAGE, "__bedcode_on_bus_message");
         assert_eq!(export::ON_UPLOAD_REQUEST, "__bedcode_on_upload_request");
+        assert_eq!(export::ON_TRANSFER_REQUEST, "__bedcode_on_transfer_request");
     }
 
     #[test]
@@ -287,6 +313,11 @@ mod tests {
         assert_eq!(import::FILESRV_UNMOUNT, "host_filesrv_unmount");
         assert_eq!(import::FILESRV_UPDATE_ROOTS, "host_filesrv_update_roots");
         assert_eq!(import::FILESRV_GET_PEER, "host_filesrv_get_peer");
+        // v6 批量传输批准
+        assert_eq!(import::FILESRV_APPROVE_TRANSFER, "host_filesrv_approve_transfer");
+        assert_eq!(import::FILESRV_REJECT_TRANSFER, "host_filesrv_reject_transfer");
+        assert_eq!(import::FILESRV_SET_APPROVAL_TIMEOUT, "host_filesrv_set_approval_timeout");
+        assert_eq!(import::FILESRV_CANCEL_RECEIVING, "host_filesrv_cancel_receiving");
         assert_eq!(import::TRANSFER_START, "host_transfer_start");
         assert_eq!(import::TRANSFER_CANCEL, "host_transfer_cancel");
         // v5 配置读取
@@ -297,12 +328,12 @@ mod tests {
     fn test_host_signature_table_contract() {
         // 宿主侧测试遍历此表校验 Linker 实际注册签名，漂移在测试期暴露；
         // 锁死总数与关键行（参数/返回个数 = 宿主 RegisterFunc 签名）
-        assert_eq!(HOST_FN_SIGNATURES.len(), 31);
+        assert_eq!(HOST_FN_SIGNATURES.len(), 35);
         // 无重复名称（宿主注册冲突会 panic）
         let mut names: Vec<&str> = HOST_FN_SIGNATURES.iter().map(|(n, _, _)| *n).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 31);
+        assert_eq!(names.len(), 35);
         // 关键行锁死：out_ptr 函数 (ptr,len)+out_ptr = 3 参数，返回状态码
         assert_eq!(HOST_FN_SIGNATURES[0], (import::STORAGE_GET, 3, 1));
         assert_eq!(HOST_FN_SIGNATURES[1], (import::STORAGE_SET, 4, 1));
@@ -311,18 +342,24 @@ mod tests {
         assert_eq!(HOST_FN_SIGNATURES[18], (import::FS_EXISTS, 2, 1));
         assert_eq!(HOST_FN_SIGNATURES[23], (import::MARK_PLUGIN_ERROR, 2, 0));
         assert_eq!(HOST_FN_SIGNATURES[24], (import::FILESRV_MOUNT, 3, 1));
-        assert_eq!(HOST_FN_SIGNATURES[29], (import::TRANSFER_CANCEL, 2, 1));
-        assert_eq!(HOST_FN_SIGNATURES[30], (import::CONFIG_GET, 3, 1));
+        // v6 批量传输批准（FILESRV_* 后追加）
+        assert_eq!(HOST_FN_SIGNATURES[28], (import::FILESRV_APPROVE_TRANSFER, 2, 1));
+        assert_eq!(HOST_FN_SIGNATURES[29], (import::FILESRV_REJECT_TRANSFER, 2, 1));
+        assert_eq!(HOST_FN_SIGNATURES[30], (import::FILESRV_SET_APPROVAL_TIMEOUT, 3, 1));
+        assert_eq!(HOST_FN_SIGNATURES[31], (import::FILESRV_CANCEL_RECEIVING, 2, 1));
+        assert_eq!(HOST_FN_SIGNATURES[32], (import::TRANSFER_START, 3, 1));
+        assert_eq!(HOST_FN_SIGNATURES[33], (import::TRANSFER_CANCEL, 2, 1));
+        assert_eq!(HOST_FN_SIGNATURES[34], (import::CONFIG_GET, 3, 1));
     }
 
     #[test]
     fn test_plugin_export_signature_table_contract() {
         // 宿主加载 WASM 模块后按此表校验导出签名；锁死总数与关键行
-        assert_eq!(PLUGIN_EXPORT_SIGNATURES.len(), 17);
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES.len(), 18);
         let mut names: Vec<&str> = PLUGIN_EXPORT_SIGNATURES.iter().map(|(n, _, _)| *n).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 18);
         // 版本协商：无参数返回 i32；out_ptr 型导出：参数 + 1 个 out_ptr，无返回值
         assert_eq!(PLUGIN_EXPORT_SIGNATURES[0], (export::ALLOCATE, 1, 1));
         assert_eq!(PLUGIN_EXPORT_SIGNATURES[2], (export::ABI_VERSION, 0, 1));
@@ -332,6 +369,7 @@ mod tests {
         assert_eq!(PLUGIN_EXPORT_SIGNATURES[12], (export::ON_DISCONNECT, 2, 0));
         assert_eq!(PLUGIN_EXPORT_SIGNATURES[15], (export::ON_BUS_MESSAGE, 7, 1));
         assert_eq!(PLUGIN_EXPORT_SIGNATURES[16], (export::ON_UPLOAD_REQUEST, 3, 1));
+        assert_eq!(PLUGIN_EXPORT_SIGNATURES[17], (export::ON_TRANSFER_REQUEST, 3, 1));
     }
 
     #[test]

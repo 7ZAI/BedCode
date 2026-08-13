@@ -51,7 +51,11 @@ pub async fn plugin_reveal_in_dir(
 ) -> crate::Result<()> {
     require_system_open(&plugin_host, &plugin_id, "plugin_reveal_in_dir").await?;
 
-    let path = std::path::PathBuf::from(&path);
+    // 兼容历史 wasm 产物：旧版插件曾用 POSIX 语义 PathBuf 拼出 `\\?\` verbatim
+    // 前缀 + 混合分隔符路径（如 `\\?\D:\下载/file.mkv`），Windows 下
+    // exists/canonicalize 直接报 os error 123。先剥 verbatim 前缀（纯正斜杠/
+    // 混合分隔符均为宿主 API 接受，canonicalize 会还原原生形态）。
+    let path = std::path::PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(&path));
     if !path.exists() {
         return Err(crate::AppError::NotFound(format!(
             "reveal: path not found: {}",

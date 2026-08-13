@@ -176,20 +176,25 @@ fn fingerprint_via_list(
 
 /// 创建上传会话
 ///
-/// POST {base}/upload body={relativePath, size}
-/// 成功返回 SessionCreated；409 = 同名被拒；其他 = 错误
+/// POST {base}/upload body={relativePath, size, batchId?}
+/// 成功返回 SessionCreated；409 = 同名被拒；403 = 批 gating 拒绝/策略拒绝；其他 = 错误
+/// v2：带 batch_id 时宿主走批 gating（已批准批免钩子）；不带时走 v1 per-file 钩子
 pub fn create_session(
     host: &impl HostHttp,
     base: &str,
     auth: &str,
     relative_path: &str,
     size: u64,
+    batch_id: Option<&str>,
 ) -> Result<SessionCreated, CreateSessionError> {
     let url = format!("{}/upload", base);
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "relativePath": relative_path,
         "size": size,
     });
+    if let Some(bid) = batch_id {
+        body["batchId"] = serde_json::json!(bid);
+    }
     let resp = do_fetch(host, "POST", &url, auth, Some(&body))
         .map_err(|e| CreateSessionError::Other(e))?;
     match resp.status {
@@ -200,11 +205,82 @@ pub fn create_session(
                 .map_err(|e| CreateSessionError::Other(format!("parse session response: {}", e)))
         }
         409 => Err(CreateSessionError::DuplicateName),
+        403 => Err(CreateSessionError::Other(format!(
+            "create_session: HTTP 403 {}",
+            resp.body.trim()
+        ))),
         _ => Err(CreateSessionError::Other(format!(
             "create_session: HTTP {}",
             resp.status
         ))),
     }
+}
+
+/// 批量传输请求结果（v2，POST /transfer-request）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferRequestOutcome {
+    /// 200：接收端钩子 allow，批直接批准，批内任务可调度
+    Approved,
+    /// 202：接收端钩子 ask，批进入 pending，批内任务等待对方同意
+    Pending,
+}
+
+/// 批量传输请求错误（v2）
+#[derive(Debug)]
+pub enum TransferRequestError {
+    /// 403：接收端策略拒绝（reason 如 policy-denied）——任务转 rejected(policy-denied)
+    Denied(String),
+    /// 网络错误/超时/非预期状态码——任务转 failed
+    Network(String),
+}
+
+/// 发起批量传输请求（v2，批内首个任务启动时调用一次）
+///
+/// POST {base}/transfer-request body={batchId, files:[{relativePath,size}], totalSize}
+/// 与桌面端 handshake.rs 同构：200 → Approved；202 → Pending；403 → Denied；其他 → Network
+pub fn request_transfer(
+    host: &impl HostHttp,
+    base: &str,
+    auth: &str,
+    batch_id: &str,
+    files: &[bedcode_plugin_api_mobile::UploadRequestMeta],
+    total_size: u64,
+) -> Result<TransferRequestOutcome, TransferRequestError> {
+    let url = format!("{}/transfer-request", base);
+    let body = serde_json::json!({
+        "batchId": batch_id,
+        "files": files,
+        "totalSize": total_size,
+    });
+    let resp = do_fetch(host, "POST", &url, auth, Some(&body))
+        .map_err(|e| TransferRequestError::Network(format!("request_transfer: {}", e)))?;
+    match resp.status {
+        200 => Ok(TransferRequestOutcome::Approved),
+        202 => Ok(TransferRequestOutcome::Pending),
+        403 => Err(TransferRequestError::Denied(
+            // 宿主 403 为 { code, message } JSON（两端统一 error_response 形态）；
+            // 提取 message 字段作为拒绝原因（policy-denied 等），兜底退回原文
+            extract_error_message(&resp.body),
+        )),
+        other => Err(TransferRequestError::Network(format!(
+            "request_transfer: HTTP {}",
+            other
+        ))),
+    }
+}
+
+/// 从宿主错误响应体提取 message（{ code, message } 或裸字符串；可能被 JSON 转义）
+fn extract_error_message(body: &str) -> String {
+    let trimmed = body.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
+            return msg.to_string();
+        }
+        if let Some(s) = v.as_str() {
+            return s.to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 /// 查询上传会话已收字节
@@ -240,19 +316,36 @@ pub fn query_session(
 /// 完成上传会话
 ///
 /// POST {base}/upload/{session_id}/complete
+/// 409 = 目标同名（该文件 rejected(duplicate-name)，批内其他不受影响）
+///
+/// v2：批内文件同名沿用 v1 per-file 同名即拒（complete 409 → 该文件 rejected），
+/// 错误类型化以便发送方把 409 与其他失败区分（§2.3 响应码语义）
 pub fn complete_session(
     host: &impl HostHttp,
     base: &str,
     auth: &str,
     session_id: &str,
-) -> Result<(), String> {
+) -> Result<(), CompleteSessionError> {
     let url = format!("{}/upload/{}/complete", base, session_id);
-    let resp = do_fetch(host, "POST", &url, auth, None)?;
-    if resp.status >= 200 && resp.status < 300 {
-        Ok(())
-    } else {
-        Err(format!("complete_session: HTTP {}", resp.status))
+    let resp = do_fetch(host, "POST", &url, auth, None)
+        .map_err(|e| CompleteSessionError::Other(e))?;
+    match resp.status {
+        200 | 201 => Ok(()),
+        409 => Err(CompleteSessionError::DuplicateName),
+        other => Err(CompleteSessionError::Other(format!(
+            "complete_session: HTTP {}",
+            other
+        ))),
     }
+}
+
+/// 完成上传会话错误（v2 类型化：409 与其他失败区分）
+#[derive(Debug)]
+pub enum CompleteSessionError {
+    /// 目标同名（409）→ 该文件 rejected(duplicate-name)
+    DuplicateName,
+    /// 其他失败（网络/非预期状态码）
+    Other(String),
 }
 
 /// 取消上传会话

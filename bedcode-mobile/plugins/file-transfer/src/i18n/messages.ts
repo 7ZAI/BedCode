@@ -151,4 +151,38 @@ export interface MessageSchema {
   'transfer.size.gb': string
   'transfer.time.justNow': string
   'transfer.time.minutesAgo': string
+
+  // ==================== v2 队列 4 tab / 批量批准 / 接收 / 历史 ====================
+  'transfer.queue.all': string
+  'transfer.queue.sending': string
+  'transfer.queue.receiving': string
+  'transfer.queue.history': string
+  'transfer.queue.emptyHistory': string
+  'transfer.task.waitingApproval': string
+  'transfer.task.receiving': string
+  'transfer.batch.pendingTitle': string
+  'transfer.batch.acceptAll': string
+  'transfer.batch.rejectAll': string
+  'transfer.request.title': string
+  'transfer.request.body': string
+  'transfer.request.acceptAll': string
+  'transfer.request.rejectAll': string
+  'transfer.toast.receiving': string
+  'transfer.error.rejectedByUser': string
+  'transfer.error.noResponse': string
+  'transfer.error.policyDenied': string
+  'transfer.history.title': string
+  'transfer.history.clear': string
+  'transfer.history.empty': string
+  'transfer.history.openFolder': string
+  'transfer.history.results.completed': string
+  'transfer.history.results.failed': string
+  'transfer.history.results.rejected': string
+  'transfer.history.results.cancelled': string
+  'transfer.settings.receivingPolicy': string
+  'transfer.settings.receivingPolicyAsk': string
+  'transfer.settings.receivingPolicyAccept': string
+  'transfer.settings.receivingPolicyReject': string
+  'transfer.settings.receivingPolicyHint': string
+  'transfer.settings.approvalTimeout': string
 }

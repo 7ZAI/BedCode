@@ -6,12 +6,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// 任务状态（spec §7.1）
+/// 任务状态（spec §7.1 + v2 §14.3）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskState {
     /// 排队等待槽位
     Queued,
+    /// v2：等待对方同意（仅 ask 模式上传任务，批上下文内）
+    #[serde(rename = "waiting-approval")]
+    WaitingApproval,
     /// 传输进行中
     Transferring,
     /// 用户手动暂停
@@ -48,16 +51,28 @@ impl TaskState {
     }
 }
 
-/// 校验状态迁移合法性（spec §7.1）
+/// 校验状态迁移合法性（spec §7.1 + v2 §14.3）
 ///
 /// 返回 `Ok(())` 表示迁移合法，`Err(reason)` 表示非法迁移。
 /// 纯函数，无副作用，可独立单测。
+/// v2 新增边：Queued→WaitingApproval（ask 批等待同意）、
+/// WaitingApproval→Queued（批准后重新调度）/Rejected（拒绝/超时）/
+/// Cancelled（用户取消）/Resumable（对端下线兜底，防御性）
 pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), &'static str> {
     match (from, to) {
-        // queued → transferring（槽位空出）/ cancelled / resumable（对端下线）
+        // queued → transferring（槽位空出）/ cancelled / resumable（对端下线）/
+        // waiting-approval（v2：ask 批等待同意）
         (TaskState::Queued, TaskState::Transferring) => Ok(()),
         (TaskState::Queued, TaskState::Cancelled) => Ok(()),
         (TaskState::Queued, TaskState::Resumable) => Ok(()),
+        (TaskState::Queued, TaskState::WaitingApproval) => Ok(()),
+
+        // waiting-approval（v2）：批准 → queued 重新调度；拒绝/超时 → rejected；
+        // 用户取消 → cancelled；对端下线兜底 → resumable（实际采用 rejected(timeout)）
+        (TaskState::WaitingApproval, TaskState::Queued) => Ok(()),
+        (TaskState::WaitingApproval, TaskState::Rejected) => Ok(()),
+        (TaskState::WaitingApproval, TaskState::Cancelled) => Ok(()),
+        (TaskState::WaitingApproval, TaskState::Resumable) => Ok(()),
 
         // transferring → paused（用户）/ resumable（断线）/ completed / failed / rejected / cancelled
         (TaskState::Transferring, TaskState::Paused) => Ok(()),
@@ -122,6 +137,11 @@ pub struct Fingerprint {
     pub mtime: u64,
 }
 
+/// v2：默认发起方（wire 值 "me"，桌面端任务均为本端发起）
+fn default_initiator() -> String {
+    "me".to_string()
+}
+
 /// 传输任务（spec §7.3 字段 + 前端便利字段）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -151,6 +171,15 @@ pub struct Task {
     pub created_at: u64,
     /// 更新时间（Unix 毫秒）
     pub updated_at: u64,
+    /// v2：所属批 ID（上传任务，一次「发送」动作一匹；wire snake_case）
+    ///
+    /// 批上下文只在批记录（内存）存在时有效；重启后批记录丢失，
+    /// 带批 ID 的排队任务会在启动时重新发起 transfer-request（新批）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    /// v2：发起方（队列分类依据；桌面端任务均为本端发起，固定 "me"）
+    #[serde(default = "default_initiator")]
+    pub initiator: String,
 
     // ---- 运行时字段（不持久化） ----
     /// 宿主传输引擎 task_id（关联进度回调）
@@ -211,7 +240,8 @@ impl TaskStore {
         }
     }
 
-    /// 从宿主 storage 加载（保留 paused/resumable，传输中残留降级为 resumable，spec §7.3）
+    /// 从宿主 storage 加载（保留 paused/resumable，传输中残留降级为 resumable，spec §7.3；
+    /// v2：WaitingApproval 任务丢弃——批上下文不可恢复，等价于未发，spec §8.2）
     pub fn load(&mut self, host: &impl bedcode_plugin_api::host::HostStorage) {
         match host.storage_get(STORAGE_KEY) {
             Ok(Some(value)) => {
@@ -306,6 +336,135 @@ impl TaskStore {
     }
 }
 
+// ==================== HistoryStore（v2 传输历史，spec §14.5） ====================
+
+/// 历史存储 key（插件 KV 存储）
+const HISTORY_KEY: &str = "transfer-history";
+/// 历史封顶条数（超出滚动淘汰最旧）
+const HISTORY_CAP: usize = 200;
+
+/// 传输历史条目（终态任务归档，per-file 记录，批维度不记）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    /// 任务 ID（发送任务 = 原任务 ID；接收任务 = 接收 session_id）
+    pub id: String,
+    /// 协议方向：upload（我发送）/ download（我下载）
+    pub direction: Direction,
+    /// 发起方："me" | "peer"（队列分类依据）
+    #[serde(default = "default_initiator")]
+    pub initiator: String,
+    /// 文件名（展示用）
+    pub file_name: String,
+    /// 文件大小（字节）
+    pub size: u64,
+    /// 终态（completed / failed / rejected / cancelled）
+    pub state: TaskState,
+    /// 失败/拒绝原因（如 duplicate-name / user-rejected / timeout / policy-denied）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// 对端设备名（展示用）
+    #[serde(default)]
+    pub peer_name: String,
+    /// 本地路径（仅 completed 且本地有文件时，供「打开所在文件夹」；
+    /// 接收任务无 localPath——桌面接收落点在私有下载目录，路径对端不可知）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+    /// 创建时间（Unix 毫秒）
+    pub created_at: u64,
+    /// 终态时间（Unix 毫秒）
+    pub updated_at: u64,
+}
+
+/// 滚动淘汰最旧条目（纯函数，可单测）：返回被淘汰的条数
+///
+/// 封顶 200 条；超出部分从头部（最旧）开始淘汰
+pub fn trim_to_cap(entries: &mut Vec<HistoryEntry>, cap: usize) -> usize {
+    if entries.len() <= cap {
+        return 0;
+    }
+    let removed = entries.len() - cap;
+    entries.drain(0..removed);
+    removed
+}
+
+/// 传输历史存储（同 TaskStore 模式：load/save/insert/clear/snapshot + 封顶滚动）
+///
+/// 写入策略：终态任务归档时立即写；deactivate 强制 flush。
+/// 记录范围（spec §14.5）：全部终态任务（发送 + 接收），直接拒绝模式无任务不补记。
+pub struct HistoryStore {
+    /// 历史条目（头部最旧，尾部最新）
+    entries: Vec<HistoryEntry>,
+    /// 待持久化标记
+    dirty: bool,
+}
+
+impl HistoryStore {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            dirty: false,
+        }
+    }
+
+    /// 从宿主 storage 加载（损坏数据静默重置为空）
+    pub fn load(&mut self, host: &impl bedcode_plugin_api::host::HostStorage) {
+        match host.storage_get(HISTORY_KEY) {
+            Ok(Some(value)) => {
+                let mut entries: Vec<HistoryEntry> =
+                    serde_json::from_value(value).unwrap_or_default();
+                // 加载时同样执行封顶（防御：旧数据或手工修改超出上限）
+                trim_to_cap(&mut entries, HISTORY_CAP);
+                self.entries = entries;
+            }
+            _ => {
+                self.entries = Vec::new();
+            }
+        }
+        self.dirty = false;
+    }
+
+    /// 全量持久化到宿主 storage
+    pub fn save(&self, host: &impl bedcode_plugin_api::host::HostStorage) {
+        if let Ok(json) = serde_json::to_value(&self.entries) {
+            let _ = host.storage_set(HISTORY_KEY, &json);
+        }
+    }
+
+    /// 归档一条终态记录（封顶滚动淘汰 + 立即持久化），返回是否成功
+    pub fn insert(&mut self, host: &impl bedcode_plugin_api::host::HostStorage, entry: HistoryEntry) -> bool {
+        self.dirty = true;
+        self.entries.push(entry);
+        trim_to_cap(&mut self.entries, HISTORY_CAP);
+        self.save(host);
+        self.dirty = false;
+        true
+    }
+
+    /// 清空历史（立即持久化）
+    pub fn clear(&mut self, host: &impl bedcode_plugin_api::host::HostStorage) {
+        self.entries.clear();
+        self.dirty = true;
+        self.save(host);
+        self.dirty = false;
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// 返回全部条目快照（最新在前，供前端渲染）
+    pub fn snapshot(&self) -> Vec<HistoryEntry> {
+        let mut entries = self.entries.clone();
+        entries.reverse();
+        entries
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -318,6 +477,13 @@ mod tests {
         assert!(validate_transition(TaskState::Queued, TaskState::Transferring).is_ok());
         // queued → cancelled
         assert!(validate_transition(TaskState::Queued, TaskState::Cancelled).is_ok());
+        // v2：queued → waiting-approval（ask 批等待同意）
+        assert!(validate_transition(TaskState::Queued, TaskState::WaitingApproval).is_ok());
+        // v2：waiting-approval → queued（批准后重新调度）/ rejected（拒绝/超时）/ cancelled
+        assert!(validate_transition(TaskState::WaitingApproval, TaskState::Queued).is_ok());
+        assert!(validate_transition(TaskState::WaitingApproval, TaskState::Rejected).is_ok());
+        assert!(validate_transition(TaskState::WaitingApproval, TaskState::Cancelled).is_ok());
+        assert!(validate_transition(TaskState::WaitingApproval, TaskState::Resumable).is_ok());
         // transferring → all valid targets
         assert!(validate_transition(TaskState::Transferring, TaskState::Paused).is_ok());
         assert!(validate_transition(TaskState::Transferring, TaskState::Resumable).is_ok());
@@ -344,12 +510,15 @@ mod tests {
         assert!(validate_transition(TaskState::Completed, TaskState::Queued).is_err());
         assert!(validate_transition(TaskState::Rejected, TaskState::Queued).is_err());
         assert!(validate_transition(TaskState::Cancelled, TaskState::Queued).is_err());
+        // v2：waiting-approval 不可直接转入 transferring（必须经 queued 重新调度）
+        assert!(validate_transition(TaskState::WaitingApproval, TaskState::Transferring).is_err());
         // 非法迁移
         assert!(validate_transition(TaskState::Queued, TaskState::Paused).is_err());
         assert!(validate_transition(TaskState::Paused, TaskState::Completed).is_err());
         assert!(validate_transition(TaskState::Resumable, TaskState::Paused).is_err());
         // 自迁移
         assert!(validate_transition(TaskState::Queued, TaskState::Queued).is_err());
+        assert!(validate_transition(TaskState::WaitingApproval, TaskState::WaitingApproval).is_err());
     }
 
     #[test]
@@ -362,6 +531,7 @@ mod tests {
         assert!(!TaskState::Transferring.is_terminal());
         assert!(!TaskState::Paused.is_terminal());
         assert!(!TaskState::Resumable.is_terminal());
+        assert!(!TaskState::WaitingApproval.is_terminal());
     }
 
     #[test]
@@ -380,6 +550,8 @@ mod tests {
             reason: None,
             created_at: 0,
             updated_at: 0,
+            batch_id: None,
+            initiator: "me".to_string(),
             host_task_id: None,
             auto_resumable: false,
             last_flush: 0,
@@ -389,5 +561,60 @@ mod tests {
         // 非法迁移保持原状态
         assert!(task.transition(TaskState::Queued).is_err());
         assert_eq!(task.state, TaskState::Transferring);
+    }
+
+    #[test]
+    fn test_waiting_approval_wire_name() {
+        // wire lowercase：前端按字面量展示「等待对方同意」
+        assert_eq!(
+            serde_json::to_value(TaskState::WaitingApproval).unwrap(),
+            serde_json::json!("waiting-approval")
+        );
+        let back: TaskState =
+            serde_json::from_value(serde_json::json!("waiting-approval")).unwrap();
+        assert_eq!(back, TaskState::WaitingApproval);
+    }
+
+    // ==================== HistoryStore（v2） ====================
+
+    fn sample_entry(id: &str) -> HistoryEntry {
+        HistoryEntry {
+            id: id.to_string(),
+            direction: Direction::Upload,
+            initiator: "me".to_string(),
+            file_name: format!("{}.bin", id),
+            size: 1024,
+            state: TaskState::Completed,
+            reason: None,
+            peer_name: "phone".to_string(),
+            local_path: Some("/tmp/a.bin".to_string()),
+            created_at: 1,
+            updated_at: 2,
+        }
+    }
+
+    #[test]
+    fn trim_to_cap_removes_oldest_only() {
+        let mut entries: Vec<HistoryEntry> =
+            (0..250).map(|i| sample_entry(&format!("t{}", i))).collect();
+        let removed = trim_to_cap(&mut entries, 200);
+        assert_eq!(removed, 50);
+        assert_eq!(entries.len(), 200);
+        // 最旧 50 条被淘汰（t0..t49），最新 200 条保留
+        assert_eq!(entries[0].id, "t50");
+        assert_eq!(entries[199].id, "t249");
+        // 未超上限：不动
+        let removed = trim_to_cap(&mut entries, 200);
+        assert_eq!(removed, 0);
+        assert_eq!(entries.len(), 200);
+    }
+
+    #[test]
+    fn history_snapshot_newest_first() {
+        let mut store = HistoryStore::new();
+        store.entries = vec![sample_entry("old"), sample_entry("new")];
+        let snap = store.snapshot();
+        assert_eq!(snap[0].id, "new");
+        assert_eq!(snap[1].id, "old");
     }
 }

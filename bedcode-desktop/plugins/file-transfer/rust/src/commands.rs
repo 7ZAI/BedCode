@@ -6,10 +6,15 @@
 //! 宿主调用（transfer_start 等）在释放状态锁后执行，
 //! 避免 on_message 回调死锁。
 
-use crate::handshake::{self, CreateSessionError, QuerySessionError};
+use crate::handshake::{
+    self, request_transfer, CreateSessionError, QuerySessionError, TransferRequestError,
+    TransferRequestOutcome,
+};
 use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
-use crate::state::{Direction, Fingerprint, PeerInfo, Task, TaskState, TaskStore};
+use crate::state::{
+    Direction, Fingerprint, HistoryEntry, HistoryStore, PeerInfo, Task, TaskState, TaskStore,
+};
 use bedcode_plugin_api::host::{
     ConfigKey, HostBus, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog,
     HostStorage, HostTransfer,
@@ -20,13 +25,20 @@ use bedcode_plugin_api::types::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 /// 设置 storage key
 const SETTINGS_KEY: &str = "file-transfer-settings";
+/// v2 接收策略默认值：每次询问
+const DEFAULT_RECEIVING_POLICY: &str = "ask";
+/// v2 同意超时默认值（秒）
+const DEFAULT_APPROVAL_TIMEOUT_SEC: u64 = 60;
+/// v2 同意超时边界（秒，与宿主校验一致）
+const MIN_APPROVAL_TIMEOUT_SEC: u64 = 10;
+const MAX_APPROVAL_TIMEOUT_SEC: u64 = 600;
 
 /// 插件设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// 共享目录根列表（绝对路径）
     #[serde(default)]
@@ -37,10 +49,24 @@ pub struct Settings {
     /// 并发数（1..=8）
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
+    /// v2 接收策略：ask(默认) | accept | reject
+    #[serde(default = "default_receiving_policy")]
+    pub receiving_policy: String,
+    /// v2 同意超时秒（10–600，仅 ask 生效，默认 60）
+    #[serde(default = "default_approval_timeout")]
+    pub approval_timeout_sec: u64,
 }
 
 fn default_concurrency() -> usize {
     DEFAULT_CONCURRENCY
+}
+
+fn default_receiving_policy() -> String {
+    DEFAULT_RECEIVING_POLICY.to_string()
+}
+
+fn default_approval_timeout() -> u64 {
+    DEFAULT_APPROVAL_TIMEOUT_SEC
 }
 
 impl Default for Settings {
@@ -49,8 +75,76 @@ impl Default for Settings {
             roots: Vec::new(),
             download_dir: String::new(),
             concurrency: DEFAULT_CONCURRENCY,
+            receiving_policy: DEFAULT_RECEIVING_POLICY.to_string(),
+            approval_timeout_sec: DEFAULT_APPROVAL_TIMEOUT_SEC,
         }
     }
+}
+
+/// v2 发送方批记录（内存，不持久化；批上下文只在当次会话有效）
+#[derive(Debug, Clone)]
+pub struct BatchRecord {
+    /// 批 ID
+    pub batch_id: String,
+    /// 对端设备 ID（任务绑定对端，批请求发往同一对端）
+    pub peer_id: String,
+    /// 批状态
+    pub state: BatchRecordState,
+}
+
+/// v2 发送方批记录状态
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchRecordState {
+    /// 已发起 transfer-request，等待接收端应答
+    Pending,
+    /// 接收端已批准（批内任务可建 session）
+    Approved,
+    /// 接收端拒绝 / 超时 / 策略拒绝（reason 为 wire 值）
+    Rejected { reason: String },
+}
+
+/// v2 接收端 pending 批（应答卡数据源，内存不持久化）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingBatch {
+    /// 批 ID
+    pub batch_id: String,
+    /// 发送方设备 ID
+    pub peer_id: String,
+    /// 发送方设备名（展示用）
+    pub peer_name: String,
+    /// 批内文件清单
+    pub files: Vec<UploadRequestMeta>,
+    /// 批总大小（字节）
+    pub total_size: u64,
+    /// 创建时间（Unix 毫秒）
+    pub created_at: u64,
+}
+
+/// v2 接收中任务（「正在接收」tab；仅 session 级取消，无暂停/恢复）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceivingTask {
+    /// 上传 session ID（宿主侧标识）
+    pub session_id: String,
+    /// 所属批 ID（ask 模式有值；accept 模式为空）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    /// 远端文件相对路径
+    pub remote_path: String,
+    /// 文件大小（字节）
+    pub size: u64,
+    /// 当前状态（Transferring | 终态，终态随即归档移除）
+    pub state: TaskState,
+    /// 失败/拒绝原因
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// 发送方设备 ID
+    pub peer_id: String,
+    /// 创建时间（Unix 毫秒）
+    pub created_at: u64,
+    /// 更新时间（Unix 毫秒）
+    pub updated_at: u64,
 }
 
 /// 插件全局状态（Mutex 保护，WASM 单线程）
@@ -65,6 +159,14 @@ pub struct PluginState {
     pub peer: PeerStore,
     /// 是否已挂载
     pub mounted: bool,
+    /// v2 发送方批记录（batch_id → 记录，内存不持久化）
+    pub batches: HashMap<String, BatchRecord>,
+    /// v2 接收端 pending 批（batch_id → 批）
+    pub pending_batches: HashMap<String, PendingBatch>,
+    /// v2 接收中任务（session_id → 任务）
+    pub receiving: HashMap<String, ReceivingTask>,
+    /// v2 传输历史（终态归档，封顶 200）
+    pub history: HistoryStore,
 }
 
 impl PluginState {
@@ -75,6 +177,10 @@ impl PluginState {
             settings: Settings::default(),
             peer: PeerStore::new(false),
             mounted: false,
+            batches: HashMap::new(),
+            pending_batches: HashMap::new(),
+            receiving: HashMap::new(),
+            history: HistoryStore::new(),
         }
     }
 }
@@ -139,6 +245,9 @@ pub fn list_remote(
 }
 
 /// enqueue：入队传输任务
+///
+/// v2：`batchId` 可选参数（上传任务的批上下文，一次「发送」动作一匹）；
+/// 非空时任务归属该批，批内首个任务启动时发起 transfer-request
 pub fn enqueue(
     state: &mut PluginState,
     host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostFileService),
@@ -160,10 +269,15 @@ pub fn enqueue(
         .get("peerName")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let batch_id = args
+        .get("batchId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     match direction {
         "download" => enqueue_download(state, host, remote_path, peer_id, peer_name, args),
-        "upload" => enqueue_upload(state, host, remote_path, peer_id, peer_name, args),
+        "upload" => enqueue_upload(state, host, remote_path, peer_id, peer_name, batch_id, args),
         _ => Err(anyhow::anyhow!("invalid direction: {}", direction)),
     }
 }
@@ -186,20 +300,14 @@ fn enqueue_download(
         .next()
         .unwrap_or(remote_path);
 
-    // 路径用 PathBuf::join 拼接以得到原生分隔符（Windows 反斜杠），
-    // 避免 HomeDir 返回反斜杠 + format! 拼接 `/` 产出混合分隔符路径
-    // `C:\Users\x/Downloads/file.mkv`——后续 fs_exists / rename / explorer /select
-    // 收到混合路径会定位失败。home_dir/Downloads 在 HomeDir 已为原生分隔符，
-    // join 再补原生分隔符，结尾 .part 串为纯文件名（不含分隔符），
-    // 附加后仍是原生形态。
-    let local_path = std::path::Path::new(&download_dir)
-        .join(format!("{}.part", file_name))
-        .to_string_lossy()
-        .into_owned();
-    let final_path = std::path::Path::new(&download_dir)
-        .join(file_name)
-        .to_string_lossy()
-        .into_owned();
+    // 路径拼接不用 PathBuf::join：wasm32-unknown-unknown 的 PathBuf 是 POSIX
+    // 语义（MAIN_SEP='/'），`Path::new(r"C:\Users\x").join("Downloads")` 会把
+    // `C:\Users\x` 视为单组件再追加 `/`，产出 `C:\Users\x/Downloads` 混合
+    // 分隔符路径；若下载目录带 `\\?\` verbatim 前缀，混合路径在宿主 Windows
+    // API（CreateFileW 等）下直接报 os error 123。join_download_path 统一剥
+    // 前缀 + 转正斜杠，宿主 fs_exists / rename / explorer canonicalize 均接受。
+    let local_path = join_download_path(&download_dir, &format!("{}.part", file_name));
+    let final_path = join_download_path(&download_dir, file_name);
 
     // 目标存在性预检（spec §7.4：目标已存在 → rejected duplicate-name）
     if let Ok(true) = host.fs_exists(&final_path) {
@@ -215,7 +323,10 @@ fn enqueue_download(
         task.state = TaskState::Rejected;
         task.reason = Some("duplicate-name".to_string());
         let task_json = serde_json::to_value(&task)?;
+        let task_id = task.id.clone();
+        // v2：终态即归档（本地同名预检的 rejected 也进历史，不在当前队列留痕）
         state.tasks.insert(task);
+        archive_task_if_terminal(state, host, &task_id);
         state.tasks.save(host);
         emit_tasks_changed(host, &state.tasks);
         return Ok(task_json);
@@ -247,6 +358,7 @@ fn enqueue_upload(
     remote_path: &str,
     peer_id: &str,
     peer_name: &str,
+    batch_id: Option<String>,
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let local_path = args
@@ -259,7 +371,7 @@ fn enqueue_upload(
         return Err(anyhow::anyhow!("local file not found: {}", local_path));
     }
 
-    let task = make_task(
+    let mut task = make_task(
         Direction::Upload,
         peer_id,
         peer_name,
@@ -268,6 +380,7 @@ fn enqueue_upload(
         0,
         now_ms(host),
     );
+    task.batch_id = batch_id;
     let task_json = serde_json::to_value(&task)?;
     let task_id = task.id.clone();
     state.tasks.insert(task);
@@ -341,7 +454,7 @@ pub fn resume(
 /// cancel：取消任务
 pub fn cancel(
     state: &mut PluginState,
-    host: &(impl HostTransfer + HostFs + HostHttp + HostStorage + HostEvents + HostLog),
+    host: &(impl HostTransfer + HostFs + HostHttp + HostStorage + HostEvents + HostLog + HostConfig),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
     let (host_task_id, direction, upload_session_id, local_path, peer_id) = {
@@ -376,6 +489,8 @@ pub fn cancel(
     // 若放在 emit 之后执行，WASM 单线程被阻塞，前端表现为「取消无反应」
     state.queue.release(task_id);
     state.queue.remove(task_id);
+    // v2：取消即终态 → 先归档进历史并从当前队列移除，再持久化任务表
+    archive_task_if_terminal(state, host, task_id);
     state.tasks.save(host);
     emit_tasks_changed(host, &state.tasks);
 
@@ -467,10 +582,10 @@ pub fn resume_all(
 /// （spec 禁止删除远端），重试前需用户在对端处理。
 pub fn retry(
     state: &mut PluginState,
-    host: &(impl HostStorage + HostEvents + HostLog + HostFs),
+    host: &(impl HostStorage + HostEvents + HostLog + HostFs + HostConfig),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let (direction, reason, local_path) = {
+    let (direction, reason, local_path, batch_id) = {
         let task = state.tasks.get_mut(task_id)
             .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
         if task.state != TaskState::Failed && task.state != TaskState::Rejected {
@@ -480,6 +595,7 @@ pub fn retry(
             task.direction,
             task.reason.clone(),
             task.local_path.clone(),
+            task.batch_id.clone(),
         )
     };
 
@@ -509,6 +625,18 @@ pub fn retry(
     task.offset = 0;
     task.host_task_id = None;
     task.upload_session_id = None;
+    // v2：approval 相关拒绝（user-rejected/timeout/policy-denied）重试 = 重新询问——
+    // 换新批 ID（启动时重新发起 transfer-request）。清空批 ID 不可行：ask 策略下
+    // 无批上下文的 session 创建必 403（batch-context-required），重试必然死胡同；
+    // 与移动端行为逐字一致。duplicate-name 保留批上下文（批已批准，重试免问直接传）
+    if batch_id.is_some() {
+        if matches!(
+            reason.as_deref(),
+            Some("user-rejected" | "timeout" | "policy-denied")
+        ) {
+            task.batch_id = Some(format!("b-{}", generate_id(now_ms(host))));
+        }
+    }
     let id = task.id.clone();
     state.queue.enqueue(&id);
     state.tasks.save(host);
@@ -607,7 +735,31 @@ pub fn set_settings(
         state.queue.set_concurrency(n as usize);
         state.settings.concurrency = state.queue.concurrency();
     }
+    // v2 接收策略与同意超时：校验取值后写入设置，并在已挂载时同步到宿主
+    // （宿主 TTL 扫描用 per-mount 配置；每次挂载时也同步一次，保证两侧一致）
+    if let Some(policy) = args.get("receivingPolicy").and_then(|v| v.as_str()) {
+        if matches!(policy, "ask" | "accept" | "reject") {
+            state.settings.receiving_policy = policy.to_string();
+        } else {
+            return Err(anyhow::anyhow!(
+                "invalid receivingPolicy '{}' (expected ask|accept|reject)",
+                policy
+            ));
+        }
+    }
+    if let Some(secs) = args.get("approvalTimeoutSec").and_then(|v| v.as_u64()) {
+        if secs < MIN_APPROVAL_TIMEOUT_SEC || secs > MAX_APPROVAL_TIMEOUT_SEC {
+            return Err(anyhow::anyhow!(
+                "approvalTimeoutSec {} out of range {}-{}",
+                secs,
+                MIN_APPROVAL_TIMEOUT_SEC,
+                MAX_APPROVAL_TIMEOUT_SEC
+            ));
+        }
+        state.settings.approval_timeout_sec = secs;
+    }
     save_settings(host, &state.settings);
+    sync_approval_timeout(state, host);
     Ok(serde_json::json!({"ok": true}))
 }
 
@@ -641,6 +793,8 @@ pub fn mount_local(
             state.mounted = true;
             state.settings.roots = roots;
             host.log_info(&format!("mounted at {}", result.base_path));
+            // v2：挂载后同步批准超时（宿主 TTL 扫描配置）
+            sync_approval_timeout(state, host);
             Ok(serde_json::json!({"ok": true, "basePath": result.base_path}))
         }
         Err(e) => Err(anyhow::anyhow!("mount failed: {}", e)),
@@ -696,17 +850,22 @@ pub fn schedule_and_start(
                 task.reason = Some(e);
             }
             state.queue.release(&task_id);
+            // v2：启动即终态（失败）→ 归档历史并从当前队列移除
+            archive_task_if_terminal(state, host, &task_id);
         }
     }
     if state.tasks.is_dirty() {
         state.tasks.save(host);
+        // 终态归档/等待同意等迁移会改变列表，主动推送（v1 仅靠进度事件被动推送，
+        // 启动即失败的任务会一直显示「排队」）
+        emit_tasks_changed(host, &state.tasks);
     }
 }
 
 /// 启动单个任务传输
 fn start_single_task(
     state: &mut PluginState,
-    host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostFileService + HostBus),
+    host: &(impl HostHttp + HostFs + HostStorage + HostLog + HostConfig + HostTransfer + HostEvents + HostFileService + HostBus),
     task_id: &str,
 ) -> Result<(), String> {
     host.log_info(&format!("start_single_task: enter task_id={}", task_id));
@@ -723,6 +882,7 @@ fn start_single_task(
     let offset = task.offset;
     let upload_session_id = task.upload_session_id.clone();
     let fingerprint = task.fingerprint.clone();
+    let task_peer_id = task.peer.device_id.clone();
 
     match direction {
         Direction::Download => {
@@ -761,7 +921,14 @@ fn start_single_task(
             }
 
             let task = state.tasks.get(task_id).unwrap();
-            let final_path = task.local_path.trim_end_matches(".part").to_string();
+            // 只剥一次后缀，与前端 openInDir 的 strip 逻辑及 remove_task 清理一致；
+            // trim_end_matches 会重复剥除（文件名为 `x.part` 时 `x.part.part` → `x`），
+            // 与宿主 rename 目标不一致会导致完成后 reveal 定位失败。
+            let final_path = task
+                .local_path
+                .strip_suffix(".part")
+                .unwrap_or(&task.local_path)
+                .to_string();
 
             let request = TransferRequest {
                 task_id: task_id.to_string(),
@@ -797,21 +964,163 @@ fn start_single_task(
             }
         }
         Direction::Upload => {
+            // v2 批 gating（spec 14.2）：批内任务先确认批状态再建 session
+            // - 批记录不存在 → 发起 POST /transfer-request（首个任务触发）
+            // - 批记录 Pending → 任务转 waiting-approval（等批准后再调度）
+            // - 批记录 Approved → 免钩子建 session（带 batchId）
+            // - 批记录 Rejected → 任务终态（reason 透传）
+            // - 网络错误 → 任务 failed
+            let task_batch_id = state
+                .tasks
+                .get(task_id)
+                .and_then(|t| t.batch_id.clone());
+            // 克隆：批 ID 在 gating 分支内被 move，续传分支还要用它带批上下文
+            let task_batch_id = task_batch_id.clone();
+            let session_batch_id = task_batch_id.clone();
+            if let Some(batch_id) = task_batch_id {
+                let record = state.batches.get(&batch_id).cloned();
+                match record {
+                    Some(rec) => match rec.state {
+                        BatchRecordState::Approved => {}
+                        BatchRecordState::Pending => {
+                            // 等待同意：释放槽位，任务保持 waiting-approval
+                            if let Some(task) = state.tasks.get_mut(task_id) {
+                                let _ = task.transition(TaskState::WaitingApproval);
+                            }
+                            state.queue.release(task_id);
+                            host.log_info(&format!(
+                                "start_single_task: task {} waiting approval (batch {})",
+                                task_id, batch_id
+                            ));
+                            return Ok(());
+                        }
+                        BatchRecordState::Rejected { reason } => {
+                            if let Some(task) = state.tasks.get_mut(task_id) {
+                                task.state = TaskState::Rejected;
+                                task.reason = Some(reason);
+                            }
+                            state.queue.release(task_id);
+                            archive_task_if_terminal(state, host, task_id);
+                            return Err("batch rejected".to_string());
+                        }
+                    },
+                    None => {
+                        // 批记录不存在：发起 transfer-request（files = 当前已入队的
+                        // 同批任务清单；批准后后续入队的任务由记录状态直接分流）
+                        let files: Vec<UploadRequestMeta> = state
+                            .tasks
+                            .values()
+                            .filter(|t| t.batch_id.as_deref() == Some(batch_id.as_str()))
+                            .map(|t| UploadRequestMeta {
+                                relative_path: t.remote_path.clone(),
+                                size: t.size,
+                            })
+                            .collect();
+                        let total_size: u64 = files.iter().map(|f| f.size).sum();
+                        let outcome = request_transfer(
+                            host,
+                            &base,
+                            &auth,
+                            &batch_id,
+                            &files,
+                            total_size,
+                        );
+                        match outcome {
+                            Ok(TransferRequestOutcome::Approved) => {
+                                state.batches.insert(
+                                    batch_id.clone(),
+                                    BatchRecord {
+                                        batch_id: batch_id.clone(),
+                                        peer_id: task_peer_id.clone(),
+                                        state: BatchRecordState::Approved,
+                                    },
+                                );
+                                host.log_info(&format!(
+                                    "start_single_task: batch {} approved directly by hook",
+                                    batch_id
+                                ));
+                            }
+                            Ok(TransferRequestOutcome::Pending) => {
+                                state.batches.insert(
+                                    batch_id.clone(),
+                                    BatchRecord {
+                                        batch_id: batch_id.clone(),
+                                        peer_id: task_peer_id.clone(),
+                                        state: BatchRecordState::Pending,
+                                    },
+                                );
+                                if let Some(task) = state.tasks.get_mut(task_id) {
+                                    let _ = task.transition(TaskState::WaitingApproval);
+                                }
+                                state.queue.release(task_id);
+                                host.log_info(&format!(
+                                    "start_single_task: batch {} pending, task {} waiting approval",
+                                    batch_id, task_id
+                                ));
+                                return Ok(());
+                            }
+                            Err(TransferRequestError::Denied(reason)) => {
+                                // 策略拒绝（如 policy-denied）：批记录与任务都终态
+                                state.batches.insert(
+                                    batch_id.clone(),
+                                    BatchRecord {
+                                        batch_id: batch_id.clone(),
+                                        peer_id: task_peer_id.clone(),
+                                        state: BatchRecordState::Rejected { reason: reason.clone() },
+                                    },
+                                );
+                                if let Some(task) = state.tasks.get_mut(task_id) {
+                                    task.state = TaskState::Rejected;
+                                    task.reason = Some(reason);
+                                }
+                                state.queue.release(task_id);
+                                archive_task_if_terminal(state, host, task_id);
+                                return Err("transfer request denied".to_string());
+                            }
+                            Err(TransferRequestError::Network(e)) => {
+                                // 网络错误：不建批记录（任务 failed，reason 原文）
+                                if let Some(task) = state.tasks.get_mut(task_id) {
+                                    task.state = TaskState::Failed;
+                                    task.reason = Some(e.clone());
+                                }
+                                state.queue.release(task_id);
+                                archive_task_if_terminal(state, host, task_id);
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+            }
+
             // 续传握手（spec §7.4）
             let (session_id, received) = if let Some(ref sid) = upload_session_id {
                 match handshake::query_session(host, &base, &auth, sid) {
                     Ok(received) => (sid.clone(), received),
                     Err(QuerySessionError::SessionLost) => {
-                        // session 丢失 → 重建从头传
-                        let created = handshake::create_session(host, &base, &auth, &remote_path, 0)
-                            .map_err(|e| format!("recreate session: {:?}", e))?;
+                        // session 丢失 → 重建从头传（批准后免问重连续传，带批上下文）
+                        let created = handshake::create_session(
+                            host,
+                            &base,
+                            &auth,
+                            &remote_path,
+                            0,
+                            session_batch_id.as_deref(),
+                        )
+                        .map_err(|e| format!("recreate session: {:?}", e))?;
                         (created.session_id, created.received)
                     }
                     Err(QuerySessionError::Other(e)) => return Err(e),
                 }
             } else {
-                // 新上传：创建 session
-                match handshake::create_session(host, &base, &auth, &remote_path, 0) {
+                // 新上传：创建 session（v2 批内任务带 batchId，免钩子）
+                match handshake::create_session(
+                    host,
+                    &base,
+                    &auth,
+                    &remote_path,
+                    0,
+                    session_batch_id.as_deref(),
+                ) {
                     Ok(created) => (created.session_id, created.received),
                     Err(CreateSessionError::DuplicateName) => {
                         if let Some(task) = state.tasks.get_mut(task_id) {
@@ -819,6 +1128,7 @@ fn start_single_task(
                             task.reason = Some("duplicate-name".to_string());
                         }
                         state.queue.release(task_id);
+                        archive_task_if_terminal(state, host, task_id);
                         return Err("duplicate-name".to_string());
                     }
                     Err(CreateSessionError::Other(e)) => return Err(e),
@@ -981,7 +1291,10 @@ pub fn handle_transfer_progress(
     );
 
     if is_terminal {
+        // v2：终态任务归档进历史并从当前队列移除（终态不留在当前列表）
+        archive_task_if_terminal(state, host, &task_id);
         state.tasks.save(host);
+        emit_tasks_changed(host, &state.tasks);
         // 终态已到，取消进度 topic 订阅（避免 topic 泄漏）；失败仅告警，不影响任务收尾
         if let Err(e) = host.bus_unsubscribe(&format!("transfer:{}", progress.task_id)) {
             host.log_warn(&format!(
@@ -1045,6 +1358,8 @@ pub fn handle_peer_changed(
 
     if !online {
         // 该对端下线：其 transferring/queued 任务 → resumable（auto_resumable=true）；
+        // v2：WaitingApproval 任务 → rejected(timeout)——等待同意期间断线不重发
+        // （spec 14.2 边界 1），批记录保留 Pending（接收端自然超时）；
         // 其他对端的任务不受影响。queued 不摘除会留待后续调度周期被
         // start_single_task 误判 Failed（peer not online），且上线后无法自动恢复
         let affected_ids: Vec<String> = state
@@ -1070,7 +1385,21 @@ pub fn handle_peer_changed(
                 state.queue.remove(id);
             }
         }
-        if !affected_ids.is_empty() {
+        // v2：等待同意期间对端下线 → 任务直接 rejected(timeout)，不重发
+        let waiting_ids: Vec<String> = state
+            .tasks
+            .values()
+            .filter(|t| t.state == TaskState::WaitingApproval && t.peer.device_id == peer_id)
+            .map(|t| t.id.clone())
+            .collect();
+        for id in &waiting_ids {
+            if let Some(task) = state.tasks.get_mut(&id) {
+                task.state = TaskState::Rejected;
+                task.reason = Some("timeout".to_string());
+            }
+            archive_task_if_terminal(state, host, &id);
+        }
+        if !affected_ids.is_empty() || !waiting_ids.is_empty() {
             state.tasks.save(host);
             emit_tasks_changed(host, &state.tasks);
         }
@@ -1106,6 +1435,414 @@ pub fn handle_peer_changed(
     if peers_changed {
         emit_peers_changed(host, &state.peer);
     }
+}
+
+// ==================== v2 接收端（批应答 / 接收任务） ====================
+
+/// 处理批量传输请求事件（`filesrv:transfer_request`，ask 分流建 pending 批时）
+///
+/// 接收端：建 PendingBatch（应答卡数据源）+ 推送 batches-changed；
+/// ask 模式不发 toast（等待应答，spec §9.3）
+pub fn handle_transfer_request(
+    state: &mut PluginState,
+    host: &(impl HostEvents + HostLog + HostConfig),
+    payload: &serde_json::Value,
+) {
+    let batch_id = payload.get("batchId").and_then(|v| v.as_str()).unwrap_or("");
+    if batch_id.is_empty() {
+        return;
+    }
+    let files: Vec<UploadRequestMeta> = payload
+        .get("files")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let total_size = payload.get("totalSize").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // 发送方 = 当前激活对端（接收端插件只服务一个激活对端）；
+    // 设备名插件侧无缓存，前端按 peer_id 从设备列表补全展示名
+    let peer_id = state.peer.active_id().unwrap_or("").to_string();
+    let batch = PendingBatch {
+        batch_id: batch_id.to_string(),
+        peer_id,
+        peer_name: String::new(),
+        files,
+        total_size,
+        created_at: now_ms(host),
+    };
+    state.pending_batches.insert(batch_id.to_string(), batch);
+    emit_batches_changed(host, state);
+}
+
+/// 处理批量传输请求已解决事件（`filesrv:transfer_resolved`，approve/reject 命令、TTL 超时）
+///
+/// 移除 PendingBatch（应答卡消失）；approved → 批级 toast（前端展示）
+pub fn handle_transfer_resolved(
+    state: &mut PluginState,
+    host: &(impl HostEvents + HostLog),
+    payload: &serde_json::Value,
+) {
+    let batch_id = payload.get("batchId").and_then(|v| v.as_str()).unwrap_or("");
+    let decision = payload.get("decision").and_then(|v| v.as_str()).unwrap_or("");
+    let removed = state.pending_batches.remove(batch_id);
+    if let Some(batch) = removed {
+        emit_batches_changed(host, state);
+        if decision == "approved" {
+            // 批准后批级一条 toast（spec §9.3 / §12.4：mode=batch 立即弹）
+            host.emit_event(
+                "plugin:file-transfer:toast",
+                &serde_json::json!({
+                    "name": batch.peer_name,
+                    "count": batch.files.len(),
+                    "totalSize": batch.total_size,
+                    "mode": "batch",
+                }),
+            );
+        }
+    }
+}
+
+/// 处理接收开始事件（`filesrv:receiving_started`，session 创建成功时）
+///
+/// 接收端：建 ReceivingTask（Transferring）+ 推送 receiving-changed；
+/// accept 模式 → per-file toast（前端 3s 窗口合并去重）
+pub fn handle_receiving_started(
+    state: &mut PluginState,
+    host: &(impl HostEvents + HostLog + HostConfig),
+    payload: &serde_json::Value,
+) {
+    let session_id = payload.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+    if session_id.is_empty() {
+        return;
+    }
+    let batch_id = payload
+        .get("batchId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let remote_path = payload.get("relativePath").and_then(|v| v.as_str()).unwrap_or("");
+    let size = payload.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+    let now = now_ms(host);
+    let task = ReceivingTask {
+        session_id: session_id.to_string(),
+        batch_id,
+        remote_path: remote_path.to_string(),
+        size,
+        state: TaskState::Transferring,
+        reason: None,
+        peer_id: state.peer.active_id().unwrap_or("").to_string(),
+        created_at: now,
+        updated_at: now,
+    };
+    state.receiving.insert(session_id.to_string(), task);
+    emit_receiving_changed(host, state);
+
+    // accept 模式：传输开始时发 toast（3s 窗口合并去重由前端做）。
+    // 发送方 v2 一律带 batchId（含 accept 模式），不能以 batchId 为空作为
+    // 判断——否则 accept 模式 toast 永不触发（批级 toast 只在 ask 批准时经
+    // transfer_resolved 发，此处 per-file 不会与批级重复）
+    if state.settings.receiving_policy == "accept" {
+        host.emit_event(
+            "plugin:file-transfer:toast",
+            &serde_json::json!({
+                "name": active_peer_name(state),
+                "count": 1,
+                "mode": "per-file",
+            }),
+        );
+    }
+}
+
+/// 处理接收结束事件（`filesrv:receiving_done`，complete / 409 / cancel）
+///
+/// ReceivingTask 终态 + 归档历史（initiator=peer）+ 推送 receiving-changed /
+/// history-changed；409 竞态（duplicate-name）→ rejected 展示语义
+pub fn handle_receiving_done(
+    state: &mut PluginState,
+    host: &(impl HostEvents + HostStorage + HostLog + HostConfig),
+    payload: &serde_json::Value,
+) {
+    let session_id = payload.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+    let done_state = payload.get("state").and_then(|v| v.as_str()).unwrap_or("failed");
+    let reason = payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let now = now_ms(host);
+
+    let Some(mut task) = state.receiving.remove(session_id) else {
+        return;
+    };
+    // 状态映射：completed / cancelled 直映；failed + duplicate-name → rejected
+    // （批内同名即拒展示语义，spec 14.2 边界 5），其余 failed
+    let (state_kind, final_reason) = match (done_state, reason.as_deref()) {
+        ("completed", _) => (TaskState::Completed, None),
+        ("cancelled", _) => (TaskState::Cancelled, None),
+        ("failed", Some("duplicate-name")) => {
+            (TaskState::Rejected, Some("duplicate-name".to_string()))
+        }
+        ("failed", r) => (TaskState::Failed, r.map(|s| s.to_string())),
+        _ => (TaskState::Failed, reason.clone()),
+    };
+    task.state = state_kind;
+    task.reason = final_reason.clone();
+    task.updated_at = now;
+
+    // 归档历史：接收任务（initiator=peer）；接收落点在私有下载目录，
+    // 插件侧无路径语义，localPath 留空（spec §10 字段说明）
+    let entry = HistoryEntry {
+        id: task.session_id.clone(),
+        // 接收方向（对端发起）文件流向 = 对端 → 本地，历史方向显示 ↓，
+        // 与移动端归档一致（initiator=peer 时记 download）
+        direction: Direction::Download,
+        initiator: "peer".to_string(),
+        file_name: task
+            .remote_path
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string(),
+        size: task.size,
+        state: state_kind,
+        reason: final_reason,
+        peer_name: active_peer_name(state),
+        local_path: None,
+        created_at: task.created_at,
+        updated_at: now,
+    };
+    state.history.insert(host, entry);
+    emit_receiving_changed(host, state);
+    emit_history_changed(host, state);
+}
+
+/// 处理传输批应答事件（`filesrv:transfer_approval`，接收端批准/拒绝/超时 → 发送端）
+///
+/// approved → 批记录 Approved，批内 WaitingApproval 任务 → Queued + 重新调度；
+/// rejected → 批记录 Rejected，批内 WaitingApproval 任务 → 终态归档（reason 映射）
+pub fn handle_transfer_approval(
+    state: &mut PluginState,
+    host: &(impl HostEvents + HostStorage + HostLog + HostHttp + HostFs + HostConfig + HostTransfer + HostFileService + HostBus),
+    payload: &serde_json::Value,
+) {
+    let batch_id = payload.get("batchId").and_then(|v| v.as_str()).unwrap_or("");
+    let decision = payload.get("decision").and_then(|v| v.as_str()).unwrap_or("");
+    let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    if batch_id.is_empty() {
+        return;
+    }
+
+    match decision {
+        "approved" => {
+            if let Some(rec) = state.batches.get_mut(batch_id) {
+                rec.state = BatchRecordState::Approved;
+            }
+            host.log_info(&format!("transfer approval: batch {} approved", batch_id));
+            // 批内 WaitingApproval 任务 → queued + 入队调度
+            let task_ids: Vec<String> = state
+                .tasks
+                .values()
+                .filter(|t| {
+                    t.state == TaskState::WaitingApproval
+                        && t.batch_id.as_deref() == Some(batch_id)
+                })
+                .map(|t| t.id.clone())
+                .collect();
+            for id in &task_ids {
+                if let Some(task) = state.tasks.get_mut(id) {
+                    let _ = task.transition(TaskState::Queued);
+                    state.queue.enqueue(id);
+                }
+            }
+            if !task_ids.is_empty() {
+                state.tasks.save(host);
+                emit_tasks_changed(host, &state.tasks);
+            }
+        }
+        "rejected" => {
+            let reason_owned = reason.to_string();
+            if let Some(rec) = state.batches.get_mut(batch_id) {
+                rec.state = BatchRecordState::Rejected {
+                    reason: reason_owned.clone(),
+                };
+            }
+            host.log_info(&format!(
+                "transfer approval: batch {} rejected (reason={})",
+                batch_id, reason
+            ));
+            // 批内 WaitingApproval 任务 → rejected（reason 映射：user-rejected / timeout）
+            let task_ids: Vec<String> = state
+                .tasks
+                .values()
+                .filter(|t| {
+                    t.state == TaskState::WaitingApproval
+                        && t.batch_id.as_deref() == Some(batch_id)
+                })
+                .map(|t| t.id.clone())
+                .collect();
+            for id in &task_ids {
+                if let Some(task) = state.tasks.get_mut(&id) {
+                    task.state = TaskState::Rejected;
+                    task.reason = Some(reason_owned.clone());
+                }
+                archive_task_if_terminal(state, host, &id);
+            }
+            if !task_ids.is_empty() {
+                state.tasks.save(host);
+                emit_tasks_changed(host, &state.tasks);
+            }
+        }
+        _ => {
+            host.log_warn(&format!(
+                "transfer approval: unknown decision '{}' for batch {}",
+                decision, batch_id
+            ));
+        }
+    }
+}
+
+// ==================== v2 接收端/历史命令 ====================
+
+/// list-batches：pending 批快照（前端应答卡数据源）
+pub fn list_batches(state: &PluginState) -> serde_json::Value {
+    let mut list: Vec<&PendingBatch> = state.pending_batches.values().collect();
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    serde_json::to_value(list).unwrap_or(serde_json::Value::Array(vec![]))
+}
+
+/// approve-batch：批准传输批（接收端应答「接受全部」）
+pub fn approve_batch(
+    _state: &mut PluginState,
+    host: &(impl HostFileService + HostLog),
+    batch_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    host.filesrv_approve_transfer(batch_id)
+        .map_err(|e| anyhow::anyhow!("approve-batch failed: {}", e))?;
+    host.log_info(&format!("approve-batch: {} approved", batch_id));
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// reject-batch：拒绝传输批（接收端应答「拒绝全部」）
+pub fn reject_batch(
+    _state: &mut PluginState,
+    host: &(impl HostFileService + HostLog),
+    batch_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    host.filesrv_reject_transfer(batch_id)
+        .map_err(|e| anyhow::anyhow!("reject-batch failed: {}", e))?;
+    host.log_info(&format!("reject-batch: {} rejected", batch_id));
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// list-receiving：接收中任务快照
+pub fn list_receiving(state: &PluginState) -> serde_json::Value {
+    let mut list: Vec<&ReceivingTask> = state.receiving.values().collect();
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    serde_json::to_value(list).unwrap_or(serde_json::Value::Array(vec![]))
+}
+
+/// cancel-receiving：取消接收中的上传会话（接收端本地取消，session 级）
+pub fn cancel_receiving(
+    _state: &mut PluginState,
+    host: &(impl HostFileService + HostLog),
+    session_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    host.filesrv_cancel_receiving(session_id)
+        .map_err(|e| anyhow::anyhow!("cancel-receiving failed: {}", e))?;
+    host.log_info(&format!("cancel-receiving: {} cancelled", session_id));
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// list-history：传输历史快照（终态归档，最新在前）
+pub fn list_history(state: &PluginState) -> serde_json::Value {
+    serde_json::to_value(state.history.snapshot()).unwrap_or(serde_json::Value::Array(vec![]))
+}
+
+/// clear-history：清空传输历史
+pub fn clear_history(
+    state: &mut PluginState,
+    host: &(impl HostStorage + HostEvents + HostLog),
+) -> anyhow::Result<serde_json::Value> {
+    state.history.clear(host);
+    emit_history_changed(host, state);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+// ==================== v2 事件推送 helper ====================
+
+/// 推送 pending 批快照事件
+fn emit_batches_changed(host: &(impl HostEvents + HostLog), state: &PluginState) {
+    let snapshot = list_batches(state);
+    host.emit_event("plugin:file-transfer:batches-changed", &snapshot);
+}
+
+/// 推送接收任务快照事件
+fn emit_receiving_changed(host: &(impl HostEvents + HostLog), state: &PluginState) {
+    let snapshot = list_receiving(state);
+    host.emit_event("plugin:file-transfer:receiving-changed", &snapshot);
+}
+
+/// 推送历史快照事件
+fn emit_history_changed(host: &(impl HostEvents + HostLog), state: &PluginState) {
+    let snapshot = list_history(state);
+    host.emit_event("plugin:file-transfer:history-changed", &snapshot);
+}
+
+/// 激活对端设备名（toast 展示用；插件侧无设备名缓存，
+/// 回退到绑定该对端的任务名，再回退空串由前端兜底）
+fn active_peer_name(state: &PluginState) -> String {
+    let Some(active_id) = state.peer.active_id() else {
+        return String::new();
+    };
+    state
+        .tasks
+        .values()
+        .find(|t| t.peer.device_id == active_id && !t.peer.name.is_empty())
+        .map(|t| t.peer.name.clone())
+        .unwrap_or_default()
+}
+
+/// 终态任务归档：插入历史并从当前任务列表移除（v2 终态不留在当前队列）
+///
+/// 幂等：非终态 / 已不在列表时静默跳过。接收任务经 receiving_done 归档，
+/// 不走此路径（数据结构不同）
+fn archive_task_if_terminal(
+    state: &mut PluginState,
+    host: &(impl HostStorage + HostEvents + HostLog + HostConfig),
+    task_id: &str,
+) {
+    let Some(task) = state.tasks.get(task_id).cloned() else {
+        return;
+    };
+    if !task.state.is_terminal() {
+        return;
+    }
+    let file_name = task
+        .remote_path
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let local_path = if task.state == TaskState::Completed {
+        Some(task.local_path.clone())
+    } else {
+        None
+    };
+    let entry = HistoryEntry {
+        id: task.id.clone(),
+        direction: task.direction,
+        initiator: task.initiator.clone(),
+        file_name,
+        size: task.size,
+        state: task.state,
+        reason: task.reason.clone(),
+        peer_name: task.peer.name.clone(),
+        local_path,
+        created_at: task.created_at,
+        updated_at: now_ms(host),
+    };
+    state.history.insert(host, entry);
+    emit_history_changed(host, state);
+    // 终态任务保留在 TaskStore（当次会话可见，供 retry/remove），与移动端一致；
+    // 历史为只读归档副本（跨重启可见，spec 14.5「终态即归档替代重启清除」）
 }
 
 /// list-peers：返回在线对端列表与激活对端（前端设备列表/切换数据源）
@@ -1162,7 +1899,24 @@ fn emit_peers_changed(host: &(impl HostEvents + HostLog), peer: &PeerStore) {
 /// 解析 meta.relativePath 到 roots 下的绝对路径，对每个 root 拼出目标绝对路径，
 /// 用 host.fs_exists 检查目标是否已存在（wasm 环境 std::fs 全部 stub false，不可用）。
 /// 宿主沙箱已在上传创建前完成路径合法性校验，插件只需同名即拒。
+///
+/// v2：ask 策略下无批上下文的上传一律返回 ask（宿主 → 403 batch-context-required，
+/// 防绕过 /upload）；accept 策略走 v1 同名即拒；reject 策略直接 deny(policy-denied)
 pub fn handle_upload_request(
+    state: &PluginState,
+    host: &(impl HostFs + HostConfig),
+    meta: &UploadRequestMeta,
+) -> UploadHookDecision {
+    match state.settings.receiving_policy.as_str() {
+        "accept" => handle_upload_request_accept(state, host, meta),
+        "reject" => UploadHookDecision::deny("policy-denied"),
+        // ask（默认）：无批上下文的上传必须经批批准（spec 14.2 防绕过）
+        _ => UploadHookDecision::ask(),
+    }
+}
+
+/// accept 策略：v1 语义（同名即拒，其余放行）
+fn handle_upload_request_accept(
     state: &PluginState,
     host: &(impl HostFs + HostConfig),
     meta: &UploadRequestMeta,
@@ -1185,15 +1939,25 @@ pub fn handle_upload_request(
         Ok(d) => d,
         Err(e) => return UploadHookDecision::deny(&format!("no-download-dir: {}", e)),
     };
-    let mut target = std::path::PathBuf::from(&download_dir);
-    for part in &parts {
-        target.push(part);
-    }
-    if let Ok(true) = host.fs_exists(target.to_string_lossy().as_ref()) {
+    let target = join_download_path(&download_dir, &parts.join("/"));
+    if let Ok(true) = host.fs_exists(&target) {
         return UploadHookDecision::deny("duplicate-name");
     }
 
     UploadHookDecision::allow()
+}
+
+/// v2 批量传输请求钩子（on_transfer_request）：按接收策略分流（spec §9.1）
+///
+/// accept → allow（直接放行）；reject → deny("policy-denied")（零打扰）；
+/// ask（默认）→ ask（批置 pending 等待用户应答）。
+/// 钩子函数不可异步：策略是同步读 settings，无 IO，满足
+pub fn handle_transfer_request_hook(state: &PluginState) -> UploadHookDecision {
+    match state.settings.receiving_policy.as_str() {
+        "accept" => UploadHookDecision::allow(),
+        "reject" => UploadHookDecision::deny("policy-denied"),
+        _ => UploadHookDecision::ask(),
+    }
 }
 
 /// 清洗相对路径为安全分量列表（复刻 sandbox::clean_relative_parts）
@@ -1246,6 +2010,8 @@ fn make_task(
         reason: None,
         created_at: now,
         updated_at: now,
+        batch_id: None,
+        initiator: "me".to_string(),
         host_task_id: None,
         auto_resumable: false,
         last_flush: 0,
@@ -1276,6 +2042,30 @@ fn now_ms(host: &impl HostConfig) -> u64 {
         .unwrap_or(0)
 }
 
+/// 归一化 Windows 目录路径（wasm 侧路径拼接专用）
+///
+/// wasm32-unknown-unknown 的 `std::path::PathBuf` 是 POSIX 语义
+/// （MAIN_SEP='/'）：`Path::new(r"C:\Users\x").join("Downloads")` 会把
+/// `C:\Users\x` 视为单组件并在其后追加 `/`，产出 `C:\Users\x/Downloads`
+/// 混合分隔符路径。宿主 Windows fs API（CreateFileW 等）接受正斜杠，但
+/// pickDirectory 返回的 `\\?\D:\下载` verbatim 前缀 + 混合分隔符会直接
+/// 失败（os error 123 语法不正确）。统一剥 verbatim 前缀并把反斜杠转
+/// 正斜杠，产出宿主全 API（fs_exists / rename / canonicalize）接受的
+/// 纯正斜杠绝对路径；宿主侧 canonicalize 会还原为原生分隔符。
+fn normalize_win_dir(dir: &str) -> String {
+    dir.strip_prefix(r"\\?\")
+        .unwrap_or(dir)
+        .replace('\\', "/")
+}
+
+/// 拼接下载路径（目录 + 文件名/相对分量），规避 wasm32 POSIX PathBuf 陷阱
+///
+/// 目录尾部分隔符（`\` 或 `/`）先剥除再拼接，避免 `dir/name` 双斜杠；
+/// 产出纯正斜杠路径，见 [`normalize_win_dir`]。
+fn join_download_path(dir: &str, name: &str) -> String {
+    format!("{}/{}", normalize_win_dir(dir).trim_end_matches('/'), name)
+}
+
 /// 解析下载目录
 ///
 /// 两个用法：下载任务 `.part` 落点（[`enqueue_download`]）；以及文件服务挂载的
@@ -1290,12 +2080,10 @@ pub fn resolve_download_dir(
         return Ok(state.settings.download_dir.clone());
     }
 
-    // 桌面端：尝试 HostConfig::HomeDir + /Downloads
+    // 桌面端：尝试 HostConfig::HomeDir + /Downloads（join_download_path 统一
+    // 正斜杠，理由见其文档；宿主 canonicalize 时还原原生分隔符）
     if let Ok(Some(home)) = host.config_get(bedcode_plugin_api::host::ConfigKey::HomeDir) {
-        // 用 PathBuf::join 产出原生分隔符，避免 HomeDir 反斜杠 + format! 的 `/`
-        // 拼出混合分隔符路径 `C:\Users\x/Downloads`。
-        let downloads = std::path::PathBuf::from(&home).join("Downloads");
-        return Ok(downloads.to_string_lossy().into_owned());
+        return Ok(join_download_path(&home, "Downloads"));
     }
 
     Err(anyhow::anyhow!(
@@ -1359,6 +2147,25 @@ fn save_settings(host: &impl HostStorage, settings: &Settings) {
     }
 }
 
+/// 同步批准超时到宿主（v2，仅已挂载时有效；失败仅告警不阻塞设置保存）
+///
+/// 宿主以 per-(plugin, mount) 配置驱动 pending 批 TTL 扫描；插件侧每次
+/// 设置变化/挂载后调用，保证两侧配置一致
+pub fn sync_approval_timeout(state: &PluginState, host: &(impl HostFileService + HostLog)) {
+    if !state.mounted {
+        return;
+    }
+    if let Err(e) = host.filesrv_set_approval_timeout(
+        MOUNT_PATH,
+        state.settings.approval_timeout_sec,
+    ) {
+        host.log_warn(&format!(
+            "sync_approval_timeout FAILED (will retry on next set/mount): {}",
+            e
+        ));
+    }
+}
+
 /// 加载设置从 storage
 pub fn load_settings(host: &impl HostStorage) -> Settings {
     match host.storage_get(SETTINGS_KEY) {
@@ -1371,4 +2178,56 @@ pub fn load_settings(host: &impl HostStorage) -> Settings {
 fn emit_tasks_changed(host: &(impl HostEvents + HostLog), tasks: &TaskStore) {
     let snapshot = serde_json::to_value(tasks.snapshot()).unwrap_or(serde_json::Value::Array(vec![]));
     host.emit_event("plugin:file-transfer:tasks-changed", &snapshot);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_win_dir_strips_verbatim_prefix_and_backslashes() {
+        // 对话框返回的 verbatim 前缀路径（logs 中 roots 形态）
+        assert_eq!(normalize_win_dir(r"\\?\D:\小说"), "D:/小说");
+        // 无前缀原生反斜杠
+        assert_eq!(normalize_win_dir(r"C:\Users\x\Downloads"), "C:/Users/x/Downloads");
+        // 已是正斜杠
+        assert_eq!(normalize_win_dir("C:/Users/x/Downloads"), "C:/Users/x/Downloads");
+    }
+
+    #[test]
+    fn join_download_path_never_emits_mixed_or_double_separators() {
+        // 反斜杠目录 + 文件名 → 纯正斜杠（无 `\\?\`，宿主全 API 可接受）
+        assert_eq!(
+            join_download_path(r"C:\Users\x\Downloads", "a.mkv.part"),
+            "C:/Users/x/Downloads/a.mkv.part"
+        );
+        // verbatim 前缀剥除
+        assert_eq!(
+            join_download_path(r"\\?\D:\下载", "a.mkv.part"),
+            "D:/下载/a.mkv.part"
+        );
+        // 目录尾部分隔符不产生双斜杠
+        assert_eq!(join_download_path("D:/下载/", "a.mkv"), "D:/下载/a.mkv");
+        assert_eq!(join_download_path(r"D:\下载\", "a.mkv"), "D:/下载/a.mkv");
+        // 多级相对分量
+        assert_eq!(join_download_path(r"C:\Users\x", "小说/第一章.txt"), "C:/Users/x/小说/第一章.txt");
+    }
+
+    #[test]
+    fn final_path_strips_part_once_only() {
+        // 与前端 openInDir / remove_task 对齐：只剥一次后缀
+        let local_path = join_download_path(r"C:\Users\x\Downloads", "movie.part.part");
+        let final_path = local_path
+            .strip_suffix(".part")
+            .unwrap_or(&local_path)
+            .to_string();
+        assert_eq!(final_path, "C:/Users/x/Downloads/movie.part");
+        // 普通文件名剥一次
+        let local_path = join_download_path(r"C:\Users\x\Downloads", "movie.mkv.part");
+        let final_path = local_path
+            .strip_suffix(".part")
+            .unwrap_or(&local_path)
+            .to_string();
+        assert_eq!(final_path, "C:/Users/x/Downloads/movie.mkv");
+    }
 }

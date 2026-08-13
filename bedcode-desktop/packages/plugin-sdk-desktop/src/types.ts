@@ -242,11 +242,24 @@ export interface UploadRequestMeta {
   size: number
 }
 
-/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝） */
+/** 批量传输请求元信息（v2 批钩子入参，与 SDK Rust TransferRequestMeta camelCase 对应） */
+export interface TransferRequestMeta {
+  /** 批 ID（UUID，发送方生成） */
+  batchId: string
+  /** 批内文件清单 */
+  files: UploadRequestMeta[]
+  /** 批总大小（字节） */
+  totalSize: number
+}
+
+/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝）
+ * v2 三路化：allow / ask / deny（wire 兼容旧 `{ allow, reason }`） */
 export interface UploadHookDecision {
   /** 是否允许上传 */
   allow: boolean
-  /** 拒绝原因（如 duplicate-name），允许时为空 */
+  /** v2：true = 需要用户批准（批上下文）；与 allow 互斥 */
+  ask?: boolean
+  /** 拒绝原因（如 duplicate-name / policy-denied），允许时为空 */
   reason?: string
 }
 
@@ -260,6 +273,8 @@ export interface MountOptions {
   operations: ('list' | 'download' | 'upload')[]
   /** 上传策略钩子（可选；提供时以 Webview 钩子目标注册，上传会话创建时调用一次） */
   onUploadRequest?: (meta: UploadRequestMeta) => Promise<UploadHookDecision>
+  /** v2：批量传输请求钩子（可选；提供时以 Webview 批钩子目标注册，POST /transfer-request 时调用一次） */
+  onTransferRequest?: (meta: TransferRequestMeta) => Promise<UploadHookDecision>
 }
 
 /** 挂载句柄（fileService.mount 返回值） */
@@ -306,6 +321,14 @@ export interface FileServiceAPI {
   pickDirectory(): Promise<string | null>
   /** 弹出系统多文件选择对话框（上传方向用；用户取消返回空数组） */
   pickFiles(): Promise<string[]>
+  /** v2：批准传输批（接收端应答「接受全部」） */
+  approveTransferRequest(batchId: string): Promise<void>
+  /** v2：拒绝传输批（接收端应答「拒绝全部」） */
+  rejectTransferRequest(batchId: string): Promise<void>
+  /** v2：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用） */
+  setApprovalTimeout(mountPath: string, seconds: number): Promise<void>
+  /** v2：取消接收中的上传会话（接收端本地取消，session 级） */
+  cancelReceivingSession(sessionId: string): Promise<void>
 }
 
 /** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */

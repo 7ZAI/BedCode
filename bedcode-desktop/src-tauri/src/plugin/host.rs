@@ -702,6 +702,55 @@ impl PluginHost {
         }
     }
 
+    /// 调用 WASM 插件的批量传输请求钩子（v2，fail-closed，spec 2.1）
+    ///
+    /// 与 [`call_upload_hook`](Self::call_upload_hook) 同构：锁 wasm_plugins →
+    /// LoadedWasmPlugin::on_transfer_request(meta_json) → 解析返回的决定。
+    /// 插件未加载 / 未导出钩子 / 调用失败 / 决定 JSON 非法时一律拒绝。
+    /// （2 秒超时由调用方 registry 用 tokio::time::timeout 包裹）
+    pub async fn call_transfer_hook(
+        &self,
+        plugin_id: &str,
+        meta_json: &str,
+    ) -> bedcode_plugin_api::UploadHookDecision {
+        use bedcode_plugin_api::UploadHookDecision;
+
+        // 插件未加载 → 直接拒绝（fail-closed），不触发重载
+        if self.get_wasm_plugin(plugin_id).await.is_none() {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "call_transfer_hook: wasm plugin not loaded, denying (fail-closed)"
+            );
+            return UploadHookDecision::deny("wasm plugin not loaded");
+        }
+
+        // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        match self
+            .with_wasm_plugin_call(plugin_id, |plugin| plugin.on_transfer_request(meta_json))
+            .await
+        {
+            Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
+                Ok(decision) => decision,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        plugin_id = %plugin_id,
+                        "call_transfer_hook: invalid decision JSON from plugin, denying (fail-closed)"
+                    );
+                    UploadHookDecision::deny("invalid transfer hook decision")
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    plugin_id = %plugin_id,
+                    "call_transfer_hook: plugin hook call failed, denying (fail-closed)"
+                );
+                UploadHookDecision::deny("transfer hook call failed")
+            }
+        }
+    }
+
     /// 热重载 WASM 插件（开发模式）
     ///
     /// 执行完整的卸载-重载-激活循环：

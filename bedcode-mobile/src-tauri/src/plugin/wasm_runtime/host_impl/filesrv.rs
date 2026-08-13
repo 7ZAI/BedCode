@@ -487,4 +487,211 @@ pub(crate) fn host_transfer_cancel(
     0
 }
 
+// ==================== Batch Transfer Host Functions（ABI v6） ====================
+//
+// 批量传输批准协议（v2 接收策略）：接收端用户应答「接受全部/拒绝全部」、
+// 设置批准超时、取消接收中的上传会话。全部经 fileservice 权限门控，
+// 与 host_filesrv_* 同模式（block_in_place + handle.block_on 执行异步 registry）。
+
+/// 批准传输批（接收端用户应答「接受全部」）
+///
+/// 参数：(batch_ptr, batch_len)
+/// 返回：0 成功，-1 失败（权限/批不存在/批非 pending）
+pub(crate) fn host_filesrv_approve_transfer(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    batch_ptr: u32,
+    batch_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_approve_transfer: permission denied (fileservice)");
+        return -1;
+    }
+
+    let batch_id = match read_wasm_string(&mut caller, batch_ptr, batch_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_approve_transfer: failed to read batch id");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_approve_transfer",
+        Err(crate::AppError::Internal("host_filesrv_approve_transfer panicked".to_string())),
+        || tokio::task::block_in_place(|| {
+            handle
+                .block_on(fs.registry.approve_transfer(&plugin_id, &batch_id))
+                .map_err(crate::file_service::registry::BatchError::into_app_error)
+        }),
+    );
+
+    match result {
+        Ok(()) => {
+            tracing::info!(plugin_id = %plugin_id, batch_id = %batch_id, "transfer batch approved");
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, batch_id = %batch_id, error = %e, "host_filesrv_approve_transfer failed");
+            -1
+        }
+    }
+}
+
+/// 拒绝传输批（接收端用户应答「拒绝全部」）
+///
+/// 参数：(batch_ptr, batch_len)
+/// 返回：0 成功，-1 失败（权限/批不存在/批非 pending）
+pub(crate) fn host_filesrv_reject_transfer(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    batch_ptr: u32,
+    batch_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_reject_transfer: permission denied (fileservice)");
+        return -1;
+    }
+
+    let batch_id = match read_wasm_string(&mut caller, batch_ptr, batch_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_reject_transfer: failed to read batch id");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_reject_transfer",
+        Err(crate::AppError::Internal("host_filesrv_reject_transfer panicked".to_string())),
+        || tokio::task::block_in_place(|| {
+            handle
+                .block_on(fs.registry.reject_transfer(&plugin_id, &batch_id))
+                .map_err(crate::file_service::registry::BatchError::into_app_error)
+        }),
+    );
+
+    match result {
+        Ok(()) => {
+            tracing::info!(plugin_id = %plugin_id, batch_id = %batch_id, "transfer batch rejected");
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, batch_id = %batch_id, error = %e, "host_filesrv_reject_transfer failed");
+            -1
+        }
+    }
+}
+
+/// 设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+///
+/// 参数：(mount_ptr, mount_len, seconds: i64)
+/// 返回：0 成功，-1 失败（权限/超时值越界）
+pub(crate) fn host_filesrv_set_approval_timeout(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    mount_ptr: u32,
+    mount_len: u32,
+    seconds: i64,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_set_approval_timeout: permission denied (fileservice)");
+        return -1;
+    }
+
+    let mount_path = match read_wasm_string(&mut caller, mount_ptr, mount_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_set_approval_timeout: failed to read mount path");
+            return -1;
+        }
+    };
+    if seconds < 0 {
+        tracing::warn!(plugin_id = %plugin_id, seconds, "host_filesrv_set_approval_timeout: negative seconds");
+        return -1;
+    }
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_set_approval_timeout",
+        Err(crate::AppError::Internal("host_filesrv_set_approval_timeout panicked".to_string())),
+        || tokio::task::block_in_place(|| {
+            handle
+                .block_on(fs.registry.set_approval_timeout(
+                    &plugin_id,
+                    &mount_path,
+                    seconds as u64,
+                ))
+                .map_err(crate::file_service::registry::BatchError::into_app_error)
+        }),
+    );
+
+    match result {
+        Ok(()) => {
+            tracing::info!(plugin_id = %plugin_id, mount = %mount_path, seconds, "approval timeout set");
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, mount = %mount_path, error = %e, "host_filesrv_set_approval_timeout failed");
+            -1
+        }
+    }
+}
+
+/// 取消接收中的上传会话（接收端本地取消，session 级）
+///
+/// 参数：(sid_ptr, sid_len)
+/// 返回：0 成功，-1 失败（权限/session 不存在）
+pub(crate) fn host_filesrv_cancel_receiving(
+    mut caller: wasmtime::Caller<'_, WasmPluginState>,
+    sid_ptr: u32,
+    sid_len: u32,
+) -> i32 {
+    let plugin_id = caller.data().plugin_id.clone();
+    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE) {
+        tracing::warn!(plugin_id = %plugin_id, "host_filesrv_cancel_receiving: permission denied (fileservice)");
+        return -1;
+    }
+
+    let session_id = match read_wasm_string(&mut caller, sid_ptr, sid_len) {
+        Some(s) => s,
+        None => {
+            tracing::error!(plugin_id = %plugin_id, "host_filesrv_cancel_receiving: failed to read session id");
+            return -1;
+        }
+    };
+
+    let fs = crate::state::get_file_service();
+    let handle = caller.data().runtime_handle.clone();
+    let result = guarded_host_call(
+        &plugin_id,
+        "host_filesrv_cancel_receiving",
+        Err(crate::AppError::Internal("host_filesrv_cancel_receiving panicked".to_string())),
+        || tokio::task::block_in_place(|| {
+            handle
+                .block_on(fs.registry.cancel_receiving_session(&plugin_id, &session_id))
+                .map_err(crate::file_service::registry::BatchError::into_app_error)
+        }),
+    );
+
+    match result {
+        Ok(()) => {
+            tracing::info!(plugin_id = %plugin_id, session_id = %session_id, "receiving session cancelled");
+            0
+        }
+        Err(e) => {
+            tracing::warn!(plugin_id = %plugin_id, session_id = %session_id, error = %e, "host_filesrv_cancel_receiving failed");
+            -1
+        }
+    }
+}
+
 // ==================== Config Host Function（ABI v5） ====================

@@ -152,6 +152,131 @@ pub async fn plugin_filesrv_respond_upload_request(
     }
 }
 
+// ==================== v2 传输批命令 ====================
+
+/// 批准传输批（接收端用户应答「接受全部」）
+///
+/// 批 pending → approved + 本地 `filesrv:transfer_resolved` 事件 +
+/// 跨端 WS 推送 TransferApproval（发送方任务转传输中）
+#[tauri::command]
+pub async fn plugin_filesrv_approve_transfer(
+    plugin_id: String,
+    batch_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    require_fileservice(&plugin_host, &plugin_id, "plugin_filesrv_approve_transfer").await?;
+    plugin_host
+        .file_service()
+        .approve_transfer(&plugin_id, &batch_id)
+        .await
+        .map_err(map_batch_error)?;
+    plugin_host
+        .file_service()
+        .publish_batch_resolved(&batch_id, "approved", "")
+        .await;
+    Ok(())
+}
+
+/// 拒绝传输批（接收端用户应答「拒绝全部」）
+///
+/// 批 pending → rejected(user-rejected) + resolved 事件 + 跨端推送
+#[tauri::command]
+pub async fn plugin_filesrv_reject_transfer(
+    plugin_id: String,
+    batch_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    require_fileservice(&plugin_host, &plugin_id, "plugin_filesrv_reject_transfer").await?;
+    plugin_host
+        .file_service()
+        .reject_transfer(&plugin_id, &batch_id)
+        .await
+        .map_err(map_batch_error)?;
+    plugin_host
+        .file_service()
+        .publish_batch_resolved(&batch_id, "rejected", "user-rejected")
+        .await;
+    Ok(())
+}
+
+/// 设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+#[tauri::command]
+pub async fn plugin_filesrv_set_approval_timeout(
+    plugin_id: String,
+    mount_path: String,
+    seconds: u64,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    require_fileservice(&plugin_host, &plugin_id, "plugin_filesrv_set_approval_timeout").await?;
+    plugin_host
+        .file_service()
+        .set_approval_timeout(&plugin_id, &mount_path, seconds)
+        .await
+        .map_err(map_batch_error)
+}
+
+/// 取消接收中的上传会话（接收端本地取消，session 级）
+///
+/// 清理 .part + 推送 `filesrv:receiving_done(cancelled)`；
+/// 发送方 session 丢失后自动重建从头传（v1 语义兜底）
+#[tauri::command]
+pub async fn plugin_filesrv_cancel_receiving(
+    plugin_id: String,
+    session_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    require_fileservice(&plugin_host, &plugin_id, "plugin_filesrv_cancel_receiving").await?;
+    plugin_host
+        .file_service()
+        .cancel_receiving_session(&plugin_id, &session_id)
+        .await
+        .map_err(|e| crate::AppError::NotFound(format!("cancel receiving failed: {}", e)))?;
+    Ok(())
+}
+
+/// 回填 Webview 批量传输请求钩子的决定（v2，decision_json 为 UploadHookDecision JSON）
+///
+/// 宿主在 POST /transfer-request 时 emit `filesrv:transfer_request_hook` 事件，
+/// 前端插件回调后经本命令回填；request 已超时/不存在时返回错误（fail-closed 已由宿主兜底）
+#[tauri::command]
+pub async fn plugin_filesrv_respond_transfer_request(
+    plugin_id: String,
+    request_id: String,
+    decision_json: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    require_fileservice(&plugin_host, &plugin_id, "plugin_filesrv_respond_transfer_request").await?;
+    let decision: UploadHookDecision = serde_json::from_str(&decision_json).map_err(|e| {
+        crate::AppError::InvalidInput(format!(
+            "plugin_filesrv_respond_transfer_request: invalid decision JSON for plugin '{}': {}",
+            plugin_id, e
+        ))
+    })?;
+    let matched = plugin_host
+        .file_service()
+        .respond_transfer_hook(&request_id, decision)
+        .await;
+    if matched {
+        Ok(())
+    } else {
+        Err(crate::AppError::InvalidInput(format!(
+            "plugin_filesrv_respond_transfer_request: request '{}' not pending (timed out or unknown) for plugin '{}'",
+            request_id, plugin_id
+        )))
+    }
+}
+
+/// BatchError → AppError（spec §3.3：批不存在 → NotFound；非 pending → InvalidInput）
+fn map_batch_error(e: crate::plugin::file_service::transfer::BatchError) -> crate::AppError {
+    use crate::plugin::file_service::transfer::BatchError;
+    match e {
+        BatchError::NotFound(msg) => crate::AppError::NotFound(msg),
+        BatchError::NotPending(msg) => crate::AppError::InvalidInput(msg),
+        // 命令路径不产生 gating/策略拒绝（那是 HTTP 端点语义），按插件错误兜底
+        other => crate::AppError::Plugin(other.to_string()),
+    }
+}
+
 // ==================== 对端信息与目录选择 ====================
 
 /// 获取对端文件服务信息（peers 表由 WS 控制面填充；未公告返回 null）

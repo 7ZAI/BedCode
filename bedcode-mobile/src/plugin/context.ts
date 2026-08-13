@@ -26,6 +26,7 @@ import type {
   MountOptions,
   PeerFileServiceInfo,
   UploadRequestMeta,
+  TransferRequestMeta,
   SafEntry,
   SafCopyHandle,
   SafCopyStatus,
@@ -50,6 +51,14 @@ interface UploadHookEventPayload {
   pluginId: string
   mountPath: string
   meta: UploadRequestMeta
+}
+
+/** Webview 批量传输钩子事件载荷（v2；meta 为 TransferRequestMeta） */
+interface TransferHookEventPayload {
+  requestId: string
+  pluginId: string
+  mountPath: string
+  meta: TransferRequestMeta
 }
 
 // ==================== Android 系统返回键（跨插件共享单例） ====================
@@ -252,6 +261,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requireFileservicePermission('fileService.mount')
 
       const hook = options.onUploadRequest
+      const batchHook = options.onTransferRequest
       // 构造线上传输选项：剥离函数，只序列化数据字段
       const wireOptions: Record<string, unknown> = {
         mountPath: options.mountPath,
@@ -302,12 +312,54 @@ export function createPluginContext(info: PluginInfo): PluginContext {
         }
       }
 
+      // v2：批量传输请求钩子（onTransferRequest）——与上传钩子同构的事件桥
+      let batchHookUnlisten: (() => void) | null = null
+      if (batchHook) {
+        try {
+          const { listen } = await import('@tauri-apps/api/event')
+          batchHookUnlisten = await listen<TransferHookEventPayload>(
+            'filesrv:transfer_request_hook',
+            async (event) => {
+              const payload = event.payload
+              if (payload.pluginId !== info.id || payload.mountPath !== result.mountPath) return
+
+              try {
+                const decision = await batchHook(payload.meta)
+                await pluginCmds.pluginFilesrvRespondTransferRequest(
+                  info.id,
+                  payload.requestId,
+                  JSON.stringify(decision),
+                )
+              } catch (err) {
+                console.error(`[FileService] transfer hook error for ${info.id}:`, err)
+                // fail-closed：hook 异常一律 deny（回填失败只记 debug）
+                try {
+                  await pluginCmds.pluginFilesrvRespondTransferRequest(
+                    info.id,
+                    payload.requestId,
+                    JSON.stringify({ allow: false, reason: 'hook-error' }),
+                  )
+                } catch (respondErr) {
+                  console.debug('[FileService] respond after transfer hook-error failed (likely timed out):', respondErr)
+                }
+              }
+            },
+          )
+        } catch (listenErr) {
+          console.warn('[FileService] failed to establish transfer hook listener:', listenErr)
+        }
+      }
+
       // 封装 unlisten 为 Disposable，随插件 deactivate 清理
       const hookDisposable: Disposable = {
         dispose() {
           if (hookUnlisten) {
             hookUnlisten()
             hookUnlisten = null
+          }
+          if (batchHookUnlisten) {
+            batchHookUnlisten()
+            batchHookUnlisten = null
           }
         },
       }
@@ -328,6 +380,28 @@ export function createPluginContext(info: PluginInfo): PluginContext {
           return pluginCmds.pluginFilesrvDispose(info.id, result.mountPath)
         },
       }
+    },
+
+    // ==================== v2 批量传输批准 ====================
+
+    async approveTransferRequest(batchId: string): Promise<void> {
+      requireFileservicePermission('fileService.approveTransferRequest')
+      return pluginCmds.pluginFilesrvApproveTransfer(info.id, batchId)
+    },
+
+    async rejectTransferRequest(batchId: string): Promise<void> {
+      requireFileservicePermission('fileService.rejectTransferRequest')
+      return pluginCmds.pluginFilesrvRejectTransfer(info.id, batchId)
+    },
+
+    async setApprovalTimeout(mountPath: string, seconds: number): Promise<void> {
+      requireFileservicePermission('fileService.setApprovalTimeout')
+      return pluginCmds.pluginFilesrvSetApprovalTimeout(info.id, mountPath, seconds)
+    },
+
+    async cancelReceivingSession(sessionId: string): Promise<void> {
+      requireFileservicePermission('fileService.cancelReceivingSession')
+      return pluginCmds.pluginFilesrvCancelReceiving(info.id, sessionId)
     },
 
     async getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null> {

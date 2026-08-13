@@ -469,6 +469,50 @@ impl HostFileService for WasmHost {
             Err(HostError::call_failed("filesrv_query_peer"))
         }
     }
+
+    fn filesrv_approve_transfer(&self, batch_id: &str) -> Result<(), HostError> {
+        let (ptr, len) = wasm_alloc_string(batch_id);
+        let status = unsafe { host_filesrv_approve_transfer(ptr, len) };
+        wasm_dealloc_string(ptr, len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_approve_transfer"))
+        }
+    }
+
+    fn filesrv_reject_transfer(&self, batch_id: &str) -> Result<(), HostError> {
+        let (ptr, len) = wasm_alloc_string(batch_id);
+        let status = unsafe { host_filesrv_reject_transfer(ptr, len) };
+        wasm_dealloc_string(ptr, len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_reject_transfer"))
+        }
+    }
+
+    fn filesrv_set_approval_timeout(&self, mount_path: &str, seconds: u64) -> Result<(), HostError> {
+        let (ptr, len) = wasm_alloc_string(mount_path);
+        let status = unsafe { host_filesrv_set_approval_timeout(ptr, len, seconds as i64) };
+        wasm_dealloc_string(ptr, len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_set_approval_timeout"))
+        }
+    }
+
+    fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError> {
+        let (ptr, len) = wasm_alloc_string(session_id);
+        let status = unsafe { host_filesrv_cancel_receiving(ptr, len) };
+        wasm_dealloc_string(ptr, len);
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(HostError::call_failed("filesrv_cancel_receiving"))
+        }
+    }
 }
 
 // ==================== HostTransfer ====================
@@ -609,6 +653,14 @@ extern "C" {
     fn host_filesrv_get_peer(peer_ptr: u32, peer_len: u32, out_ptr: u32) -> i32;
     /// 文件服务：主动询问对端状态 — 经 WS 控制面发送 Query，返回 0 成功 -1 失败
     fn host_filesrv_query_peer(peer_ptr: u32, peer_len: u32) -> i32;
+    /// 文件服务：批准传输批（v2）— 返回 0 成功，-1 失败
+    fn host_filesrv_approve_transfer(batch_ptr: u32, batch_len: u32) -> i32;
+    /// 文件服务：拒绝传输批（v2）— 返回 0 成功，-1 失败
+    fn host_filesrv_reject_transfer(batch_ptr: u32, batch_len: u32) -> i32;
+    /// 文件服务：设置批准超时（v2，秒，i64）— 返回 0 成功，-1 失败
+    fn host_filesrv_set_approval_timeout(mount_ptr: u32, mount_len: u32, seconds: i64) -> i32;
+    /// 文件服务：取消接收中的上传会话（v2）— 返回 0 成功，-1 失败
+    fn host_filesrv_cancel_receiving(sid_ptr: u32, sid_len: u32) -> i32;
     /// 传输引擎：启动任务 — TransferRequest JSON → out_ptr 输出 task_id，返回 0 成功 -1 失败
     fn host_transfer_start(req_ptr: u32, req_len: u32, out_ptr: u32) -> i32;
     /// 传输引擎：取消任务 — 返回 0 成功，-1 失败

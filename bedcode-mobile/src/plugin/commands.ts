@@ -154,6 +154,54 @@ export async function pluginFilesrvGetPeer(
   return await invoke<PeerFileServiceInfo | null>('plugin_filesrv_get_peer', { pluginId, peerId })
 }
 
+// ==================== v2 批量传输批准（TS 通道） ====================
+
+/** 批准传输批（接收端应答「接受全部」） */
+export async function pluginFilesrvApproveTransfer(
+  pluginId: string,
+  batchId: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_approve_transfer', { pluginId, batchId })
+}
+
+/** 拒绝传输批（接收端应答「拒绝全部」） */
+export async function pluginFilesrvRejectTransfer(
+  pluginId: string,
+  batchId: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_reject_transfer', { pluginId, batchId })
+}
+
+/** 设置批准超时（秒，10–600） */
+export async function pluginFilesrvSetApprovalTimeout(
+  pluginId: string,
+  mountPath: string,
+  seconds: number,
+): Promise<void> {
+  return await invoke('plugin_filesrv_set_approval_timeout', { pluginId, mountPath, seconds })
+}
+
+/** 取消接收中的上传会话（本地取消） */
+export async function pluginFilesrvCancelReceiving(
+  pluginId: string,
+  sessionId: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_cancel_receiving', { pluginId, sessionId })
+}
+
+/** 回填 Webview 批量传输钩子决定（decision 为 UploadHookDecision JSON） */
+export async function pluginFilesrvRespondTransferRequest(
+  pluginId: string,
+  requestId: string,
+  decisionJson: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_respond_transfer_request', {
+    pluginId,
+    requestId,
+    decisionJson,
+  })
+}
+
 /** 系统目录选择对话框（用户取消返回 null） */
 export async function pluginPickDirectory(pluginId: string): Promise<string | null> {
   return await invoke<string | null>('plugin_pick_directory', { pluginId })

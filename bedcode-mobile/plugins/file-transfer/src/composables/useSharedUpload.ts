@@ -154,6 +154,8 @@ export function useSharedUpload(
       peerName: tasks.displayPeerName.value,
       remotePath: entry.name,
       localPath: entry.uri,
+      // v2：声明文件大小（SAF 条目元信息；批请求 totalSize 与进度展示用）
+      size: entry.size,
     })
     if (ok) {
       context.dialogs.showToast(context.i18n.t('transfer.upload.enqueued'), 'success')

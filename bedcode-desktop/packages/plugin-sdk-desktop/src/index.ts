@@ -36,6 +36,7 @@ export type {
   I18nAPI,
   UploadRequestMeta,
   UploadHookDecision,
+  TransferRequestMeta,
   MountOptions,
   FileServiceMount,
   PeerMountAnnouncement,

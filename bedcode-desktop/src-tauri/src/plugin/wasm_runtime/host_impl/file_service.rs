@@ -121,6 +121,83 @@ pub(crate) fn filesrv_get_peer(
     }
 }
 
+/// v2：批准传输批（接收端用户应答「接受全部」，权限 + 注册表 approve_transfer）
+pub(crate) fn filesrv_approve_transfer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    batch_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_approve_transfer",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.approve_transfer(plugin_id, batch_id))
+        .map_err(|e| format!("file service error: approve transfer failed: {}", e))
+}
+
+/// v2：拒绝传输批（接收端用户应答「拒绝全部」，权限 + 注册表 reject_transfer）
+pub(crate) fn filesrv_reject_transfer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    batch_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_reject_transfer",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.reject_transfer(plugin_id, batch_id))
+        .map_err(|e| format!("file service error: reject transfer failed: {}", e))
+}
+
+/// v2：设置批准超时（秒，10–600；权限 + 注册表 set_approval_timeout）
+pub(crate) fn filesrv_set_approval_timeout(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+    seconds: u64,
+) -> Result<(), String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_set_approval_timeout",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.set_approval_timeout(plugin_id, mount_path, seconds))
+        .map_err(|e| format!("file service error: set approval timeout failed: {}", e))
+}
+
+/// v2：取消接收中的上传会话（接收端本地取消，session 级）
+pub(crate) fn filesrv_cancel_receiving(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_cancel_receiving",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.cancel_receiving_session(plugin_id, session_id))
+        .map_err(|e| format!("file service error: cancel receiving failed: {}", e))
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -196,6 +273,40 @@ mod tests {
     fn filesrv_get_peer_permission_denied() {
         let ctx = build_host_ctx();
         let err = filesrv_get_peer(&ctx, PLUGIN, "peer-1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    // ==================== v2 批命令权限门禁 ====================
+
+    /// 无 fileservice 权限：批准传输批被拒绝
+    #[test]
+    fn filesrv_approve_transfer_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_approve_transfer(&ctx, PLUGIN, "b1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：拒绝传输批被拒绝
+    #[test]
+    fn filesrv_reject_transfer_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_reject_transfer(&ctx, PLUGIN, "b1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：设置批准超时被拒绝
+    #[test]
+    fn filesrv_set_approval_timeout_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_set_approval_timeout(&ctx, PLUGIN, "m", 60).unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：取消接收会话被拒绝
+    #[test]
+    fn filesrv_cancel_receiving_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_cancel_receiving(&ctx, PLUGIN, "s1").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 

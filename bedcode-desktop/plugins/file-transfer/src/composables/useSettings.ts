@@ -14,7 +14,13 @@ import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 import type { Settings } from '../types'
 
 export function useSettings(context: PluginContext) {
-  const settings = ref<Settings>({ roots: [], downloadDir: '', concurrency: 3 }) as Ref<Settings>
+  const settings = ref<Settings>({
+    roots: [],
+    downloadDir: '',
+    concurrency: 3,
+    receivingPolicy: 'ask',
+    approvalTimeoutSec: 60,
+  }) as Ref<Settings>
   const loading = ref(false)
 
   /** 拉取设置并归一化 */
@@ -23,10 +29,14 @@ export function useSettings(context: PluginContext) {
     try {
       const r = await context.commands.execute('file-transfer.get-settings', {})
       if (r) {
+        const policy = r.receiving_policy ?? r.receivingPolicy ?? 'ask'
         settings.value = {
           roots: Array.isArray(r.roots) ? r.roots : [],
           downloadDir: r.download_dir ?? r.downloadDir ?? '',
           concurrency: typeof r.concurrency === 'number' ? r.concurrency : 3,
+          receivingPolicy: ['ask', 'accept', 'reject'].includes(policy) ? policy : 'ask',
+          approvalTimeoutSec:
+            typeof r.approval_timeout_sec === 'number' ? r.approval_timeout_sec : 60,
         }
       }
     } catch (e) {
@@ -42,7 +52,22 @@ export function useSettings(context: PluginContext) {
       roots: settings.value.roots,
       downloadDir: settings.value.downloadDir,
       concurrency: settings.value.concurrency,
+      receivingPolicy: settings.value.receivingPolicy,
+      approvalTimeoutSec: settings.value.approvalTimeoutSec,
     })
+  }
+
+  /** 设置接收策略（v2；即时保存） */
+  async function setReceivingPolicy(policy: Settings['receivingPolicy']): Promise<void> {
+    settings.value = { ...settings.value, receivingPolicy: policy }
+    await save()
+  }
+
+  /** 设置同意超时（v2，10–600 钳制；仅 ask 策略生效） */
+  async function setApprovalTimeoutSec(secs: number): Promise<void> {
+    const clamped = Math.min(600, Math.max(10, Math.round(secs)))
+    settings.value = { ...settings.value, approvalTimeoutSec: clamped }
+    await save()
   }
 
   /** 添加共享目录（弹系统目录选择器；去重后持久化，返回 null 表示用户取消） */
@@ -94,5 +119,7 @@ export function useSettings(context: PluginContext) {
     removeRoot,
     pickDownloadDir,
     setConcurrency,
+    setReceivingPolicy,
+    setApprovalTimeoutSec,
   }
 }

@@ -42,12 +42,22 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_upload_request(_meta: &crate::types::UploadRequestMeta) -> crate::types::UploadHookDecision {
         crate::types::UploadHookDecision::deny("plugin does not implement on_upload_request")
     }
+
+    /// 批量传输请求钩子（v2，可选，默认 fail-closed 拒绝）
+    ///
+    /// 宿主在 POST /transfer-request 时调用一次（批级三路分流 allow/ask/deny），
+    /// 同步阻塞握手，宿主外层 2 秒超时（复用上传钩子超时常量）。
+    /// 接收策略在此实现："accept" → allow；"reject" → deny("policy-denied")；
+    /// "ask"（默认）→ ask（批进入 pending 等待用户应答）。
+    fn on_transfer_request(_meta: &crate::types::TransferRequestMeta) -> crate::types::UploadHookDecision {
+        crate::types::UploadHookDecision::deny("plugin does not implement on_transfer_request")
+    }
 }
 
 #[cfg(all(test, feature = "wasm"))]
 mod tests {
     use super::*;
-    use crate::types::{PluginContributes, PluginType, UploadHookDecision, UploadRequestMeta};
+    use crate::types::{PluginContributes, PluginType, UploadHookDecision, UploadRequestMeta, TransferRequestMeta};
     use crate::BusMessage;
 
     /// 最小 WASM 测试插件：仅实现必需方法，其余走 trait 默认
@@ -126,6 +136,46 @@ mod tests {
         }
     }
 
+    /// 覆盖批钩子的插件：ask 模式（请求用户批准）
+    struct AskTransferPlugin;
+
+    impl WasmPlugin for AskTransferPlugin {
+        const ID: &'static str = "com.bedcode.test-ask";
+
+        fn manifest() -> PluginManifest {
+            PluginManifest {
+                id: Self::ID.to_string(),
+                name: "Ask".to_string(),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                main: String::new(),
+                plugin_type: PluginType::Wasm,
+                permissions: vec![],
+                contributes: PluginContributes::default(),
+                icon: None,
+                wasm_hash: String::new(),
+                rust_library: String::new(),
+            }
+        }
+
+        fn activate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn deactivate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+
+        fn on_transfer_request(_meta: &TransferRequestMeta) -> UploadHookDecision {
+            UploadHookDecision::ask()
+        }
+    }
+
     #[test]
     fn test_default_terminal_hooks_are_pass_through() {
         // 默认行为 = 不修改管道（None），宿主按原样放行
@@ -171,6 +221,36 @@ mod tests {
         let meta = UploadRequestMeta { relative_path: "a.txt".into(), size: 1 };
         assert!(AllowUploadPlugin::on_upload_request(&meta).allow);
     }
+
+    #[test]
+    fn test_default_transfer_hook_is_fail_closed() {
+        // 安全契约：未实现批钩子的插件默认拒绝一切批请求（fail-closed）
+        let meta = TransferRequestMeta {
+            batch_id: "b1".to_string(),
+            files: vec![UploadRequestMeta { relative_path: "a.txt".into(), size: 1 }],
+            total_size: 1,
+        };
+        let decision = TestWasmPlugin::on_transfer_request(&meta);
+        assert!(!decision.allow);
+        assert!(!decision.ask);
+        assert_eq!(
+            decision.reason.as_deref(),
+            Some("plugin does not implement on_transfer_request")
+        );
+    }
+
+    #[test]
+    fn test_transfer_hook_override_can_ask() {
+        // 插件可覆盖批钩子表达 ask（批进入 pending 等待用户应答）
+        let meta = TransferRequestMeta {
+            batch_id: "b1".to_string(),
+            files: vec![],
+            total_size: 0,
+        };
+        let decision = AskTransferPlugin::on_transfer_request(&meta);
+        assert!(!decision.allow);
+        assert!(decision.ask);
+    }
 }
 
 /// 自动生成 WASM 导出函数 + 线性内存分配器/回收器
@@ -190,6 +270,7 @@ mod tests {
 /// - `__bedcode_on_session_created(sid, sid_len)` / `__bedcode_on_session_stopped(sid, sid_len)`
 /// - `__bedcode_on_bus_message(topic, topic_len, sender, sender_len, payload, payload_len, timestamp) -> i32`
 /// - `__bedcode_on_upload_request(meta_ptr, meta_len, out_ptr) -> i32` — 上传策略钩子，决定写入 out_ptr
+/// - `__bedcode_on_transfer_request(meta_ptr, meta_len, out_ptr) -> i32` — 批量传输请求钩子（v2），决定写入 out_ptr
 ///
 /// # WASM ABI 约定
 ///
@@ -433,6 +514,40 @@ macro_rules! wasm_entry {
                         &format!("on_upload_request: invalid meta payload: {}", e),
                     );
                     $crate::types::UploadHookDecision::deny("invalid upload request meta")
+                }
+            };
+
+            // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
+            let json = serde_json::to_string(&decision)
+                .unwrap_or_else(|_| r#"{"allow":false,"reason":"serialize decision failed"}"#.to_string());
+            let (ptr, len) = $crate::wasm_host::wasm_alloc_string(&json);
+            $crate::wasm_host::wasm_write_result_to_out_ptr(out_ptr, ptr, len);
+            0
+            }
+
+        /// 批量传输请求钩子 — 决定 JSON 写入 out_ptr（8 字节: ptr + len）
+        ///
+        /// 与 __bedcode_on_upload_request 完全同构：写入 meta JSON、返回 i32 状态码、
+        /// out_ptr 决定结果。fail-closed：入参解析失败/未实现时直接拒绝，不调用插件逻辑。
+        #[no_mangle]
+        pub extern "C" fn __bedcode_on_transfer_request(
+            meta_ptr: u32,
+            meta_len: u32,
+            out_ptr: u32,
+        ) -> i32 {
+            let meta_str = $crate::wasm_host::wasm_read_string(meta_ptr, meta_len);
+            // 参数已拷贝为 Rust String，立即归还宿主写入时分配的线性内存
+            $crate::wasm_host::wasm_dealloc_string(meta_ptr, meta_len);
+
+            let decision = match serde_json::from_str::<$crate::types::TransferRequestMeta>(&meta_str) {
+                Ok(meta) => <$plugin_type>::on_transfer_request(&meta),
+                Err(e) => {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(
+                        &host,
+                        &format!("on_transfer_request: invalid meta payload: {}", e),
+                    );
+                    $crate::types::UploadHookDecision::deny("invalid transfer request meta")
                 }
             };
 

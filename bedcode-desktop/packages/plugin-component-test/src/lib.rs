@@ -21,7 +21,9 @@ use crate::bedcode::plugin::{
     host_bus, host_database, host_events, host_log, host_plugin_database, host_session,
     host_storage,
 };
-use crate::exports::bedcode::plugin::{abi, command, events, lifecycle, manifest, terminal_hooks, upload_hook};
+use crate::exports::bedcode::plugin::{
+    abi, command, events, lifecycle, manifest, terminal_hooks, transfer_request_hook, upload_hook,
+};
 
 struct Guest;
 
@@ -149,6 +151,16 @@ impl upload_hook::Guest for Guest {
     fn on_upload_request(meta_json: String) -> String {
         format!(
             "{{\"allow\":false,\"reason\":\"component-test deny ({})\"}}",
+            meta_json.len()
+        )
+    }
+}
+
+impl transfer_request_hook::Guest for Guest {
+    // v2：批量传输请求钩子（默认 fail-closed；测试插件固定拒绝并附原因）
+    fn on_transfer_request(meta_json: String) -> String {
+        format!(
+            "{{\"allow\":false,\"reason\":\"component-test transfer deny ({})\"}}",
             meta_json.len()
         )
     }

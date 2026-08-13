@@ -384,6 +384,26 @@ impl HostFileService for WasmHost {
     fn filesrv_query_peer(&self, peer_id: &str) -> Result<(), HostError> {
         host_file_service::query_peer(peer_id).map_err(|e| host_err("filesrv_query_peer", e))
     }
+
+    fn filesrv_approve_transfer(&self, batch_id: &str) -> Result<(), HostError> {
+        host_file_service::approve_transfer(batch_id)
+            .map_err(|e| host_err("filesrv_approve_transfer", e))
+    }
+
+    fn filesrv_reject_transfer(&self, batch_id: &str) -> Result<(), HostError> {
+        host_file_service::reject_transfer(batch_id)
+            .map_err(|e| host_err("filesrv_reject_transfer", e))
+    }
+
+    fn filesrv_set_approval_timeout(&self, mount_path: &str, seconds: u64) -> Result<(), HostError> {
+        host_file_service::set_approval_timeout(mount_path, seconds)
+            .map_err(|e| host_err("filesrv_set_approval_timeout", e))
+    }
+
+    fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError> {
+        host_file_service::cancel_receiving(session_id)
+            .map_err(|e| host_err("filesrv_cancel_receiving", e))
+    }
 }
 
 // ==================== HostTransfer ====================

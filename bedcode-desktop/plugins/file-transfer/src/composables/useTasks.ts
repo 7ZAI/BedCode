@@ -38,12 +38,15 @@ function mapWireTask(raw: any): Task {
     reason: raw.reason ?? null,
     createdAt: raw.created_at ?? raw.createdAt ?? 0,
     updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
+    batchId: raw.batch_id ?? raw.batchId ?? null,
   }
 }
 
 /** 状态 → 展示文案 key（错误类额外附原因，见 TaskPanel） */
 export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
   queued: 'transfer.task.state.queued',
+  'waiting-approval': 'transfer.task.waitingApproval',
   transferring: 'transfer.task.state.transferring',
   paused: 'transfer.task.state.paused',
   resumable: 'transfer.task.state.resumable',
@@ -169,11 +172,18 @@ export function useTasks(context: PluginContext) {
    *
    * remotePath 为目标相对路径（仅文件名，上传到对端当前挂载根）；
    * 逐个入队，单个失败不中断整批。
+   * v2：一次「发送」动作生成一个批 ID（batchId），批内任务经
+   * transfer-request 协议统一询问接收端（ask 策略），批准后免钩子直传。
    */
   async function enqueueUpload(
     localFiles: string[],
     peer: { id: string; name: string },
   ): Promise<number> {
+    // 批 ID：webview 为安全上下文，crypto.randomUUID 可用；不可用时降级时间戳
+    const batchId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `b-${Date.now().toString(16)}`
     let ok = 0
     for (const localPath of localFiles) {
       const name = localPath.split(/[\\/]/).pop() ?? localPath
@@ -184,6 +194,7 @@ export function useTasks(context: PluginContext) {
           peerName: peer.name,
           remotePath: name,
           localPath,
+          batchId,
         })
         ok++
       } catch (e) {
@@ -212,10 +223,14 @@ export function useTasks(context: PluginContext) {
   async function openInDir(id: string): Promise<void> {
     const task = tasks.value.find((tk) => tk.id === id)
     if (!task || task.state !== 'completed' || !task.localPath) return
-    // 下载方向 local_path 为 .part 临时名，完成后已 rename 到最终路径（去后缀）
-    const finalPath = task.localPath.endsWith('.part')
-      ? task.localPath.slice(0, -'.part'.length)
-      : task.localPath
+    // 兼容历史产物快照：旧 wasm 曾产出 `\\?\` verbatim 前缀 + 混合分隔符路径，
+    // 宿主 canonicalize 前 exists 会报错（os error 123）；剥前缀后由宿主原生化。
+    const path = task.localPath.replace(/^\\\\\\?\\/, '')
+    // 下载方向 local_path 为 .part 临时名，完成后已 rename 到最终路径（去后缀，
+    // 与 wasm 侧 strip_suffix 一致只剥一次，避免 `x.part.part` 类文件名错位）
+    const finalPath = path.endsWith('.part')
+      ? path.slice(0, -'.part'.length)
+      : path
     try {
       await context.system.revealInDir(finalPath)
     } catch (err) {
@@ -229,7 +244,7 @@ export function useTasks(context: PluginContext) {
 
   // ==================== 派生状态 ====================
 
-  /** 队列汇总（状态 chips 数据源） */
+  /** 队列汇总（状态 chips 数据源；v2：waiting-approval 计入排队类） */
   const summary = computed(() => {
     let active = 0
     let queued = 0
@@ -240,7 +255,8 @@ export function useTasks(context: PluginContext) {
     for (const t of tasks.value) {
       switch (t.state) {
         case 'transferring': active++; break
-        case 'queued': queued++; break
+        case 'queued':
+        case 'waiting-approval': queued++; break
         case 'failed': failed++; break
         case 'rejected': rejected++; break
         case 'resumable': resumable++; break

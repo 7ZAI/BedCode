@@ -50,6 +50,24 @@ impl ClientRouteHandler for FileServiceHandler {
                         crate::file_service::announce::withdraw().await;
                     }
                 }
+                FileServicePayload::TransferApproval {
+                    batch_id,
+                    decision,
+                    reason,
+                } => {
+                    // 接收端批应答：双通道发布 filesrv:transfer_approval，
+                    // 发送方插件据此调度批内 waiting-approval 任务
+                    tracing::info!(
+                        batch_id = %batch_id,
+                        decision = %decision,
+                        reason = %reason,
+                        "desktop transfer approval received"
+                    );
+                    crate::state::get_file_service()
+                        .registry
+                        .publish_transfer_approval(&batch_id, &decision, &reason)
+                        .await;
+                }
             }
         }
         Ok(None)

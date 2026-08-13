@@ -435,11 +435,26 @@ export interface UploadRequestMeta {
   size: number
 }
 
-/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝） */
+/** 批量传输请求元信息（宿主 → 插件批钩子入参，v2；与 SDK Rust TransferRequestMeta 对应） */
+export interface TransferRequestMeta {
+  /** 批 ID（发送方生成，跨端唯一标识一次「发送」动作） */
+  batchId: string
+  /** 批内文件清单（相对路径 + 大小） */
+  files: { relativePath: string; size: number }[]
+  /** 批内文件总大小（字节） */
+  totalSize: number
+}
+
+/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝）
+ *
+ * v2 三路化：allow / ask（请求用户批准，批上下文）/ deny。
+ * wire 兼容：旧插件返回 `{ allow: false }` → deny；`{ allow: true }` → allow。 */
 export interface UploadHookDecision {
   /** 是否允许上传 */
   allow: boolean
-  /** 拒绝原因（如 duplicate-name），允许时为空 */
+  /** v2：true = 需要用户批准（批上下文）；与 allow 互斥 */
+  ask?: boolean
+  /** 拒绝原因（如 duplicate-name / policy-denied），允许时为空 */
   reason?: string
 }
 
@@ -453,6 +468,8 @@ export interface MountOptions {
   operations: ('list' | 'download' | 'upload')[]
   /** 上传策略钩子（可选；提供时以 Webview 钩子目标注册，上传会话创建时调用一次） */
   onUploadRequest?: (meta: UploadRequestMeta) => Promise<UploadHookDecision>
+  /** v2：批量传输请求钩子（可选；提供时以 Webview 批钩子目标注册，POST /transfer-request 时调用一次） */
+  onTransferRequest?: (meta: TransferRequestMeta) => Promise<UploadHookDecision>
 }
 
 /** 挂载句柄（fileService.mount 返回值） */
@@ -560,6 +577,14 @@ export interface FileServiceAPI {
   mount(options: MountOptions): Promise<FileServiceMount>
   /** 获取对端文件服务信息（对端 = 桌面端；未公告返回 null） */
   getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null>
+  /** v2：批准传输批（接收端应答「接受全部」） */
+  approveTransferRequest(batchId: string): Promise<void>
+  /** v2：拒绝传输批（接收端应答「拒绝全部」） */
+  rejectTransferRequest(batchId: string): Promise<void>
+  /** v2：设置批准超时（秒，10–600） */
+  setApprovalTimeout(mountPath: string, seconds: number): Promise<void>
+  /** v2：取消接收中的上传会话（本地取消） */
+  cancelReceivingSession(sessionId: string): Promise<void>
   /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null）。
    * Android 使用 SAF 目录树选择器并解析为真实路径；不支持的 provider
    * （云盘/SD 卡等）或 iOS 会 reject，插件应捕获后改用手动路径输入（如 dialogs.showPrompt） */

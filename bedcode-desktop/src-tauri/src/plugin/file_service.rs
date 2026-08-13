@@ -15,8 +15,10 @@
 pub mod cipher;
 pub mod registry;
 pub mod sandbox;
+pub mod transfer;
 pub mod upload;
 
 pub use cipher::{PassthroughCipher, TransportCipher};
 pub use registry::{FileServiceRegistry, HookTarget, MountEntry};
+pub use transfer::{BatchError, BatchState, RejectReason, TransferBatch};
 pub use upload::{UploadSession, UploadSessionError, UploadSessionManager};

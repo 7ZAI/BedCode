@@ -46,15 +46,36 @@ export interface MessageSchema {
   'transfer.task.pause': string
   'transfer.task.resume': string
   'transfer.task.cancel': string
+  'transfer.task.remove': string
   'transfer.task.retry': string
   'transfer.task.resumeAll': string
   'transfer.task.download': string
   'transfer.task.upload': string
   'transfer.task.empty': string
+  'transfer.task.receivingEmpty': string
+  'transfer.task.waitingApproval': string
+  'transfer.task.receiving': string
+  'transfer.task.openDir': string
 
   // ==================== 队列面板 ====================
   'transfer.queue.title': string
   'transfer.queue.count': string
+
+  // ==================== 队列分类 tabs（v2） ====================
+  'transfer.queue.all': string
+  'transfer.queue.sending': string
+  'transfer.queue.receiving': string
+  'transfer.queue.history': string
+
+  // ==================== 批量请求应答（v2） ====================
+  'transfer.batch.pendingTitle': string
+  'transfer.batch.acceptAll': string
+  'transfer.batch.rejectAll': string
+  'transfer.request.title': string
+  'transfer.request.body': string
+  'transfer.request.acceptAll': string
+  'transfer.request.rejectAll': string
+  'transfer.toast.receiving': string
 
   // ==================== 队列汇总 ====================
   'transfer.summary.active': string
@@ -74,11 +95,30 @@ export interface MessageSchema {
   'transfer.settings.concurrency': string
   'transfer.settings.concurrencyHint': string
   'transfer.settings.plainWarning': string
+  'transfer.settings.receivingPolicy': string
+  'transfer.settings.receivingPolicyAsk': string
+  'transfer.settings.receivingPolicyAccept': string
+  'transfer.settings.receivingPolicyReject': string
+  'transfer.settings.receivingPolicyHint': string
+  'transfer.settings.approvalTimeout': string
 
-  // ==================== 错误（spec §10） ====================
+  // ==================== 错误（spec §10 + v2 拒绝原因） ====================
   'transfer.error.duplicateName': string
   'transfer.error.remoteChanged': string
   'transfer.error.dirUnavailable': string
+  'transfer.error.rejectedByUser': string
+  'transfer.error.noResponse': string
+  'transfer.error.policyDenied': string
+
+  // ==================== 传输历史（v2） ====================
+  'transfer.history.title': string
+  'transfer.history.clear': string
+  'transfer.history.empty': string
+  'transfer.history.openFolder': string
+  'transfer.history.results.completed': string
+  'transfer.history.results.failed': string
+  'transfer.history.results.rejected': string
+  'transfer.history.results.cancelled': string
 
   // ==================== 空态 ====================
   'transfer.empty.noRoots': string

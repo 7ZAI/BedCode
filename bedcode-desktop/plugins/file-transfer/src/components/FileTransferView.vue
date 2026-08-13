@@ -12,9 +12,11 @@ import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import { useTasks } from '../composables/useTasks'
+import { useReceiving } from '../composables/useReceiving'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
 import { usePeer } from '../composables/usePeer'
+import { formatBytes } from '../utils/format'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -29,7 +31,8 @@ const {
   stop: stopPeer,
 } = usePeer(context)
 const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, removeTask, openInDir, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
-const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency } = useSettings(context)
+const { batches, receiving, history, toasts, approveBatch, rejectBatch, cancelReceiving, clearHistory, dismissToast, start: startReceiving, stop: stopReceiving } = useReceiving(context)
+const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency, setReceivingPolicy, setApprovalTimeoutSec } = useSettings(context)
 const {
   entries,
   loading,
@@ -71,6 +74,37 @@ const peerDisplayName = computed(() => {
 })
 
 const selectedCount = computed(() => selectedNames.value.length)
+
+/** v2：对端名映射（peerId → 展示名，批卡/接收任务展示用） */
+const peerNames = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {}
+  for (const p of peers.value) map[p.id] = p.name || p.ip || p.id
+  // 任务快照里的 peer.name 兜底（设备列表可能未含任务绑定的对端）
+  for (const t of tasks.value) {
+    if (t.peer?.deviceId && t.peer.name && !map[t.peer.deviceId]) {
+      map[t.peer.deviceId] = t.peer.name
+    }
+  }
+  return map
+})
+
+/** v2：批卡展示名（对端名 → 占位符） */
+function batchPeerName(batch: { peerId: string; peerName: string }): string {
+  return batch.peerName || peerNames.value[batch.peerId] || '—'
+}
+
+/** v2：批卡总大小 */
+function batchTotalSize(batch: { totalSize: number }): string {
+  return formatBytes(batch.totalSize)
+}
+
+/** v2：历史条目打开所在文件夹（localPath 直接可用） */
+function openHistoryDir(localPath: string): void {
+  if (!localPath) return
+  void context.system.revealInDir(localPath).catch((err: unknown) => {
+    console.error(`[File Transfer] reveal failed for "${localPath}":`, err)
+  })
+}
 
 /** 顶栏状态文案：未连接 / 已连接但对端未共享 / 已连接 */
 const peerStatusLabel = computed(() => {
@@ -146,6 +180,7 @@ watch(
 onMounted(async () => {
   startPeer()
   startTasks()
+  startReceiving()
   await Promise.all([loadSettings(), refreshTasks()])
   // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）
   void queryPeer()
@@ -155,12 +190,39 @@ onMounted(async () => {
 onUnmounted(() => {
   stopPeer()
   stopTasks()
+  stopReceiving()
   stopRemote()
 })
 </script>
 
 <template>
   <div class="ft-view">
+    <!-- v2：pending 批横幅（接收端应答：接受全部/拒绝全部；批准后经 batches-changed 消失） -->
+    <Transition name="ft-banner">
+      <div v-if="batches.length > 0" class="ft-batch-banner">
+        <div class="ft-batch-banner-inner">
+          <div class="ft-batch-banner-text">
+            <span class="ft-batch-banner-title">{{ t('transfer.batch.pendingTitle') }}</span>
+            <span class="ft-batch-banner-desc">
+              {{ t('transfer.request.body', {
+                name: batchPeerName(batches[0]),
+                count: batches[0].files.length,
+                size: batchTotalSize(batches[0]),
+              }) }}
+            </span>
+          </div>
+          <div class="ft-batch-banner-actions">
+            <button class="ft-btn ft-btn--primary" @click="approveBatch(batches[0].batchId)">
+              {{ t('transfer.batch.acceptAll') }}
+            </button>
+            <button class="ft-btn" @click="rejectBatch(batches[0].batchId)">
+              {{ t('transfer.batch.rejectAll') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 顶栏 -->
     <div class="ft-topbar">
       <div class="ft-peer-pill">
@@ -339,6 +401,9 @@ onUnmounted(() => {
           :summary="summary"
           :resumable-count="resumableCount"
           :total-speed="totalSpeed"
+          :receiving="receiving"
+          :history="history"
+          :peer-names="peerNames"
           @pause="pause"
           @resume="resume"
           @cancel="cancel"
@@ -346,9 +411,29 @@ onUnmounted(() => {
           @remove="removeTask"
           @open-dir="openInDir"
           @resume-all="resumeAll"
+          @cancel-receiving="cancelReceiving"
+          @clear-history="clearHistory"
+          @open-history-dir="openHistoryDir"
         />
       </Transition>
     </div>
+
+    <!-- v2：接收中 toast（batch 立即弹；per-file 3s 窗口合并去重由 composable 处理） -->
+    <Teleport to="body">
+      <TransitionGroup name="ft-toast" tag="div" class="ft-toasts">
+        <div v-for="toast in toasts" :key="toast.id" class="ft-toast">
+          <svg class="ft-toast-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5M5 12l7-7 7 7" />
+          </svg>
+          <span class="ft-toast-text">
+            {{ t('transfer.toast.receiving', { name: toast.name || '—', count: toast.count }) }}
+          </span>
+          <button class="ft-mini-btn ft-toast-close" :title="t('transfer.task.cancel')" @click="dismissToast(toast.id)">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+      </TransitionGroup>
+    </Teleport>
 
     <!-- 设置覆盖层（淡入 + 上滑） -->
     <Transition name="ft-settings">
@@ -359,6 +444,8 @@ onUnmounted(() => {
         @remove-root="removeRoot"
         @pick-download-dir="pickDownloadDir"
         @set-concurrency="setConcurrency"
+        @set-receiving-policy="setReceivingPolicy"
+        @set-approval-timeout-sec="setApprovalTimeoutSec"
         @close="showSettings = false"
       />
     </Transition>

@@ -5,7 +5,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import type { PluginInfo, PeerFileServiceInfo } from './types'
+import type { PluginInfo, PeerFileServiceInfo, UploadHookDecision } from './types'
 
 /** Registry entry types from Rust backend */
 export interface CommandEntry {
@@ -196,6 +196,54 @@ export async function pluginPickDirectory(pluginId: string): Promise<string | nu
 /** 系统多文件选择对话框（上传方向用；用户取消返回空数组） */
 export async function pluginPickFiles(pluginId: string): Promise<string[]> {
   return await invoke<string[]>('plugin_pick_files', { pluginId })
+}
+
+// ==================== v2 传输批命令 ====================
+
+/** 批准传输批（接收端应答「接受全部」） */
+export async function pluginFilesrvApproveTransfer(
+  pluginId: string,
+  batchId: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_approve_transfer', { pluginId, batchId })
+}
+
+/** 拒绝传输批（接收端应答「拒绝全部」） */
+export async function pluginFilesrvRejectTransfer(
+  pluginId: string,
+  batchId: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_reject_transfer', { pluginId, batchId })
+}
+
+/** 设置批准超时（秒，10–600；仅 ask 策略生效） */
+export async function pluginFilesrvSetApprovalTimeout(
+  pluginId: string,
+  mountPath: string,
+  seconds: number,
+): Promise<void> {
+  return await invoke('plugin_filesrv_set_approval_timeout', { pluginId, mountPath, seconds })
+}
+
+/** 取消接收中的上传会话（接收端本地取消，session 级） */
+export async function pluginFilesrvCancelReceiving(
+  pluginId: string,
+  sessionId: string,
+): Promise<void> {
+  return await invoke('plugin_filesrv_cancel_receiving', { pluginId, sessionId })
+}
+
+/** 回填 Webview 批量传输请求钩子决定（v2，decision 为 UploadHookDecision） */
+export async function pluginFilesrvRespondTransferRequest(
+  pluginId: string,
+  requestId: string,
+  decision: UploadHookDecision,
+): Promise<void> {
+  return await invoke('plugin_filesrv_respond_transfer_request', {
+    pluginId,
+    requestId,
+    decisionJson: JSON.stringify(decision),
+  })
 }
 
 /** 在系统文件管理器中显示文件/目录（需 system:open 权限） */

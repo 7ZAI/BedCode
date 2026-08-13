@@ -51,10 +51,29 @@ const zhCN: MessageSchema = {
   'transfer.task.download': '下载',
   'transfer.task.upload': '上传',
   'transfer.task.empty': '暂无任务',
+  'transfer.task.receivingEmpty': '暂无接收任务',
+  'transfer.task.waitingApproval': '等待对方同意',
+  'transfer.task.receiving': '正在接收',
 
   // ==================== 队列面板 ====================
   'transfer.queue.title': '传输队列',
   'transfer.queue.count': '{count} 项任务',
+
+  // ==================== 队列分类 tabs（v2） ====================
+  'transfer.queue.all': '全部',
+  'transfer.queue.sending': '正在发送',
+  'transfer.queue.receiving': '正在接收',
+  'transfer.queue.history': '历史',
+
+  // ==================== 批量请求应答（v2） ====================
+  'transfer.batch.pendingTitle': '文件传输请求',
+  'transfer.batch.acceptAll': '接受全部',
+  'transfer.batch.rejectAll': '拒绝全部',
+  'transfer.request.title': '文件传输请求',
+  'transfer.request.body': '{name} 想向你发送 {count} 个文件（共 {size}）',
+  'transfer.request.acceptAll': '接受全部',
+  'transfer.request.rejectAll': '拒绝全部',
+  'transfer.toast.receiving': '{name} 正在向你上传 {count} 个文件',
 
   // ==================== 队列汇总 ====================
   'transfer.summary.active': '{count} 传输中',
@@ -74,11 +93,30 @@ const zhCN: MessageSchema = {
   'transfer.settings.concurrency': '并发数',
   'transfer.settings.concurrencyHint': '同时传输的任务数量，增大可能占用更多带宽',
   'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任的 WiFi 网络中使用',
+  'transfer.settings.receivingPolicy': '接收策略',
+  'transfer.settings.receivingPolicyAsk': '每次询问',
+  'transfer.settings.receivingPolicyAccept': '直接接收',
+  'transfer.settings.receivingPolicyReject': '直接拒绝',
+  'transfer.settings.receivingPolicyHint': '对端发送文件前是否需要你同意',
+  'transfer.settings.approvalTimeout': '同意超时（秒）',
 
-  // ==================== 错误（spec §10） ====================
+  // ==================== 错误（spec §10 + v2 拒绝原因） ====================
   'transfer.error.duplicateName': '无法上传：目标目录已存在同名文件',
   'transfer.error.remoteChanged': '远端文件已变化，无法续传，请重新传输',
   'transfer.error.dirUnavailable': '该目录当前不可用',
+  'transfer.error.rejectedByUser': '对方拒绝了传输',
+  'transfer.error.noResponse': '对方未响应，请求已超时',
+  'transfer.error.policyDenied': '对方设置了直接拒绝',
+
+  // ==================== 传输历史（v2） ====================
+  'transfer.history.title': '历史',
+  'transfer.history.clear': '清空历史',
+  'transfer.history.empty': '暂无传输历史',
+  'transfer.history.openFolder': '打开所在文件夹',
+  'transfer.history.results.completed': '已完成',
+  'transfer.history.results.failed': '失败',
+  'transfer.history.results.rejected': '已拒绝',
+  'transfer.history.results.cancelled': '已取消',
 
   // ==================== 空态 ====================
   'transfer.empty.noRoots': '请先在设置中配置共享目录',

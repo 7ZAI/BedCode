@@ -574,6 +574,30 @@ impl PluginManager {
         }
     }
 
+    /// 调用 WASM 插件的批量传输请求钩子（`on_transfer_request` 导出，v2）
+    ///
+    /// 返回插件写入的决定 JSON；插件未加载/导出缺失/调用失败返回 None
+    /// （调用方 registry 据此 fail-closed 拒绝批请求）。
+    /// 锁约定同 call_upload_hook：执行导出期间不持 wasm_plugins map 守卫
+    pub async fn call_transfer_hook(&self, plugin_id: &str, meta_json: &str) -> Option<String> {
+        let wasm_plugin = {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            wasm_plugins.get(plugin_id).cloned()
+        }?;
+        let mut loaded = wasm_plugin.lock().await;
+        match loaded.call_transfer_request(meta_json) {
+            Ok(json) => Some(json),
+            Err(e) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "transfer hook export call failed"
+                );
+                None
+            }
+        }
+    }
+
     /// 分发生命周期事件到所有已激活插件
     ///
     /// 1. 快照目标插件（短锁）→ drop map 守卫 → 逐个锁单插件实例调用导出函数

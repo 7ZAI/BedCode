@@ -45,3 +45,14 @@ export function displayName(remotePath: string): string {
   const seg = remotePath.split('/').filter(Boolean).pop()
   return seg || remotePath
 }
+
+/** Unix 毫秒 → 本地化时间（历史条目；跟随宿主系统 locale） */
+export function formatClock(ms: number | null | undefined): string {
+  if (!ms) return '—'
+  return new Date(ms).toLocaleString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}

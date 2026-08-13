@@ -41,6 +41,7 @@ export type {
   StatusAPI,
   UploadRequestMeta,
   UploadHookDecision,
+  TransferRequestMeta,
   MountOptions,
   FileServiceMount,
   PeerMountAnnouncement,

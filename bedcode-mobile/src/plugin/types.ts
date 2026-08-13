@@ -44,6 +44,7 @@ export type {
   PluginModule,
   UploadRequestMeta,
   UploadHookDecision,
+  TransferRequestMeta,
   MountOptions,
   FileServiceMount,
   PeerMountAnnouncement,

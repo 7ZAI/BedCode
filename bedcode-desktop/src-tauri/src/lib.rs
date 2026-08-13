@@ -594,6 +594,11 @@ pub fn run() {
             commands::file_service::plugin_filesrv_dispose,
             commands::file_service::plugin_filesrv_respond_upload_request,
             commands::file_service::plugin_filesrv_get_peer,
+            commands::file_service::plugin_filesrv_approve_transfer,
+            commands::file_service::plugin_filesrv_reject_transfer,
+            commands::file_service::plugin_filesrv_set_approval_timeout,
+            commands::file_service::plugin_filesrv_cancel_receiving,
+            commands::file_service::plugin_filesrv_respond_transfer_request,
             commands::file_service::plugin_pick_directory,
             commands::file_service::plugin_pick_files,
             // Server

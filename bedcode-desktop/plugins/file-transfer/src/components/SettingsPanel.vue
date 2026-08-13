@@ -24,6 +24,8 @@ const emit = defineEmits<{
   (e: 'removeRoot', dir: string): void
   (e: 'pickDownloadDir'): void
   (e: 'setConcurrency', n: number): void
+  (e: 'setReceivingPolicy', policy: 'ask' | 'accept' | 'reject'): void
+  (e: 'setApprovalTimeoutSec', secs: number): void
   (e: 'close'): void
 }>()
 
@@ -36,6 +38,21 @@ const concurrencyOptions = Array.from({ length: 8 }, (_, i) => ({
 // SDK Select 的 modelValue 为 string | number，统一转 number 后上抛
 function onConcurrencyChange(value: string | number): void {
   emit('setConcurrency', Number(value))
+}
+
+// ==================== v2 接收策略（自绘分段控件，禁原生 select） ====================
+
+/** 策略选项（顺序即展示顺序） */
+const POLICY_OPTIONS: Array<{ value: 'ask' | 'accept' | 'reject'; key: string }> = [
+  { value: 'ask', key: 'transfer.settings.receivingPolicyAsk' },
+  { value: 'accept', key: 'transfer.settings.receivingPolicyAccept' },
+  { value: 'reject', key: 'transfer.settings.receivingPolicyReject' },
+]
+
+/** 超时输入：数字键盘 + 失焦提交（钳制在 composable 内） */
+function onTimeoutBlur(e: Event): void {
+  const v = Number((e.target as HTMLInputElement).value)
+  if (Number.isFinite(v)) emit('setApprovalTimeoutSec', v)
 }
 </script>
 
@@ -100,6 +117,40 @@ function onConcurrencyChange(value: string | number): void {
             @update:model-value="onConcurrencyChange"
           />
           <p class="ft-settings-helper">{{ t('transfer.settings.concurrencyHint') }}</p>
+        </section>
+
+        <!-- 接收策略（v2：自绘分段控件，禁原生 select；超时输入仅 ask 时显示） -->
+        <section class="ft-settings-section">
+          <h3 class="ft-settings-section-title">{{ t('transfer.settings.receivingPolicy') }}</h3>
+          <div class="ft-segmented" role="tablist">
+            <button
+              v-for="opt in POLICY_OPTIONS"
+              :key="opt.value"
+              class="ft-segmented-item"
+              :class="{ 'ft-segmented-item--active': settings.receivingPolicy === opt.value }"
+              role="tab"
+              :aria-selected="settings.receivingPolicy === opt.value"
+              @click="emit('setReceivingPolicy', opt.value)"
+            >
+              {{ t(opt.key) }}
+            </button>
+          </div>
+          <p class="ft-settings-helper">{{ t('transfer.settings.receivingPolicyHint') }}</p>
+          <div v-if="settings.receivingPolicy === 'ask'" class="ft-settings-row ft-settings-timeout">
+            <label class="ft-timeout-label" for="ft-approval-timeout">
+              {{ t('transfer.settings.approvalTimeout') }}
+            </label>
+            <input
+              id="ft-approval-timeout"
+              class="ft-timeout-input"
+              type="number"
+              min="10"
+              max="600"
+              step="1"
+              :value="settings.approvalTimeoutSec"
+              @blur="onTimeoutBlur"
+            />
+          </div>
         </section>
 
         <!-- 安全告知（spec §10 常驻） -->

@@ -360,6 +360,35 @@ impl UploadSessionManager {
         cancelled
     }
 
+    /// 按插件取消单个会话（v2 接收端本地取消；归属校验在内部按 session 记录完成）
+    ///
+    /// 与 [`cancel`](Self::cancel) 的区别：不需要调用方提供 mount_path——
+    /// session 记录自带归属（plugin + mount），宿主命令层只有 plugin_id + session_id。
+    pub async fn cancel_for_plugin(&self, sid: &str, plugin_id: &str) -> Result<(), UploadSessionError> {
+        let mut sessions = self.sessions.lock().await;
+        let matches = sessions
+            .get(sid)
+            .map(|s| s.plugin_id == plugin_id)
+            .unwrap_or(false);
+        if !matches {
+            return Err(UploadSessionError::NotFound(sid.to_string()));
+        }
+        let session = sessions.remove(sid).expect("session present after check");
+        drop(sessions);
+
+        if session.tmp.exists() {
+            if let Err(e) = std::fs::remove_file(&session.tmp) {
+                tracing::warn!(
+                    session_id = %sid,
+                    tmp = %session.tmp.display(),
+                    "cancel_for_plugin: failed to remove temp file: {}",
+                    e
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// 清理超过 TTL 无活动的会话（返回清理数量）
     pub async fn sweep_expired(&self) -> usize {
         let now = Instant::now();

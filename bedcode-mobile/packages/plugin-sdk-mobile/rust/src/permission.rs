@@ -182,8 +182,8 @@ mod tests {
     #[test]
     fn test_valid_permission_whitelist_complete() {
         // 白名单 = VALID_PERMISSIONS 静态表：任何新增权限必须同步登记，
-        // 否则 grant 静默丢弃（此处锁死 16 项，含移动端特有 ui:navtab/ui:settings/ui:route）
-        assert_eq!(VALID_PERMISSIONS.len(), 16);
+        // 否则 grant 静默丢弃（此处锁死 17 项，含移动端特有 ui:navtab/ui:settings/ui:route）
+        assert_eq!(VALID_PERMISSIONS.len(), 17);
         for p in [
             PERMISSION_TERMINAL_INPUT,
             PERMISSION_TERMINAL_OUTPUT,

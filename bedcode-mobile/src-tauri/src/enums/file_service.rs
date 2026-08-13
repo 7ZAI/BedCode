@@ -42,6 +42,19 @@ pub enum FileServicePayload {
     /// 对端状态事件遗漏/未同步时主动恢复（如先挂载后连接、广播丢失）。
     /// 响应：有挂载且服务运行 → Announce；否则 → Withdraw
     Query {},
+    /// 传输批应答推送（v2）：接收端批准/拒绝/超时 → 发送端
+    ///
+    /// 发送端宿主收到后发布 `filesrv:transfer_approval`（双通道），
+    /// 发送方插件据此把批内 waiting-approval 任务转为 queued / rejected。
+    /// 与桌面端 `enums/file_service.rs` 同名变体保持同构（逐字一致）
+    TransferApproval {
+        /// 批 ID
+        batch_id: String,
+        /// "approved" | "rejected"
+        decision: String,
+        /// "" | "user-rejected" | "timeout"
+        reason: String,
+    },
 }
 
 /// 单个挂载的公告信息
@@ -100,6 +113,30 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<FileServicePayload>(&json).unwrap(),
             FileServicePayload::Query {}
+        ));
+    }
+
+    #[test]
+    fn test_transfer_approval_wire_format() {
+        // v2：跨端推送逐字一致（snake_case action + data 载荷字段）
+        let payload = FileServicePayload::TransferApproval {
+            batch_id: "b1".to_string(),
+            decision: "rejected".to_string(),
+            reason: "user-rejected".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"action\":\"transfer_approval\""));
+        assert!(json.contains("\"batch_id\":\"b1\""));
+        assert!(json.contains("\"decision\":\"rejected\""));
+        assert!(json.contains("\"reason\":\"user-rejected\""));
+        let back: FileServicePayload = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back,
+            FileServicePayload::TransferApproval {
+                batch_id,
+                decision,
+                reason,
+            } if batch_id == "b1" && decision == "rejected" && reason == "user-rejected"
         ));
     }
 }

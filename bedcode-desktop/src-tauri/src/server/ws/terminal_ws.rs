@@ -104,6 +104,13 @@ pub struct TerminalWs {
     /// 把旧历史注入新通道 → 客户端收到重复字节（游标连续不触发自愈，重复
     /// 内容直接显示）。abort 直接终止旧任务的发送循环
     subscribe_tasks: std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
+    /// 输出流代数（key = `client_id:session_id` → AtomicU64）
+    ///
+    /// 订阅 / 取消订阅 / 断连时递增；forward_loop 每次转发前校验代数，
+    /// 旧代 forward_loop 的残留帧（abort 异步取消窗口内已投递到 actor 邮箱
+    /// 的帧）直接丢弃——与 abort 互补，杜绝旧流帧注入新订阅通道（移动端
+    /// 字节游标错位 → 连续性违反 → 重订阅风暴的根源）
+    stream_generations: std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl TerminalWs {
@@ -114,6 +121,7 @@ impl TerminalWs {
             local: false,
             output_forwarders: std::collections::HashMap::new(),
             subscribe_tasks: std::collections::HashMap::new(),
+            stream_generations: std::collections::HashMap::new(),
         }
     }
 
@@ -177,6 +185,10 @@ impl Actor for TerminalWs {
         // 占位订阅者残留也会随断连清理移除）
         for (_, handle) in self.subscribe_tasks.drain() {
             handle.abort();
+        }
+        // 流代数全部失效：abort 异步取消窗口内仍可能发出的残留帧直接丢弃
+        for (_, gen) in self.stream_generations.drain() {
+            gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
 
         // 通知前端设备下线（与 DEVICE_CONNECTED 对称；仅已认证连接有 device_id）
@@ -388,6 +400,28 @@ impl TerminalWs {
                     }
                     send_file_service_snapshot_to(addr).await;
                 });
+            }
+            FileServicePayload::TransferApproval { batch_id, decision, reason } => {
+                // v2：移动端（接收端宿主）应答传输批 → 桌面端（发送端宿主）：
+                // 经注册表双通道发布 `filesrv:transfer_approval`，发送方插件据此
+                // 推进批记录（approved → 批内任务重新调度 / rejected → 任务拒绝）
+                tracing::info!(
+                    device_id = %device_id,
+                    batch_id = %batch_id,
+                    decision = %decision,
+                    reason = %reason,
+                    "transfer approval received from peer"
+                );
+                // 后台任务统一经 error boundary 包装（AGENTS.md：tokio::spawn
+                // 用 spawn_with_error_boundary；publish 内部自吞错，此处防 panic 泄漏）
+                crate::system::error_boundary::spawn_with_error_boundary(
+                    "file_service_transfer_approval_publish",
+                    async move {
+                        file_service
+                            .publish_transfer_approval(&batch_id, &decision, &reason)
+                            .await;
+                    },
+                );
             }
         }
     }
@@ -701,6 +735,15 @@ impl TerminalWs {
             prev.abort();
         }
 
+        // 输出流代数递增：旧 forward_loop 立即失效（即使 abort 异步取消
+        // 窗口内仍有帧投递到 actor 邮箱，也会被代数校验丢弃）
+        let generation = self
+            .stream_generations
+            .entry(fwd_key.clone())
+            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+            .clone();
+        let my_gen = generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+
         // 创建输出转发通道
         // 容量 8192：历史回放 + 实时输出并发到达时，subscribe() 的历史发送
         // 会被 send_queue 背压阻塞（历史发不完 → subscribe_response 不回 →
@@ -775,6 +818,8 @@ impl TerminalWs {
             max_buffer_size,
             local,
             session_id_for_fwd,
+            generation,
+            my_gen,
         ));
         // 注册转发任务：替换订阅 / 取消订阅 / 断连时 abort
         self.output_forwarders.insert(fwd_key, fwd_handle);
@@ -823,6 +868,11 @@ impl TerminalWs {
         if let Some(prev) = self.subscribe_tasks.remove(&sub_key) {
             tracing::debug!("[TerminalWs] Aborting subscribe task on unsubscribe: {}", sub_key);
             prev.abort();
+        }
+        // 流代数失效：即使旧 forward_loop 在 abort 异步取消窗口内仍发出帧，
+        // 也会被代数校验丢弃，不会与后续新订阅的流交错
+        if let Some(gen) = self.stream_generations.get(&fwd_key) {
+            gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
 
         actix::spawn(async move {

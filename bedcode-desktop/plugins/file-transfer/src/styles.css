@@ -1009,3 +1009,268 @@
   color: var(--text-tertiary);
   font-size: 12px;
 }
+
+/* ==================== v2 队列 4 tab（自绘分段，禁原生 select） ==================== */
+
+.ft-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 6px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  flex-shrink: 0;
+}
+
+.ft-tab {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px;
+  border: none;
+  border-radius: calc(var(--radius-btn) - 3px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.ft-tab:hover {
+  color: var(--text-primary);
+}
+
+.ft-tab--active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+/* ==================== v2 传输历史 ==================== */
+
+.ft-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.ft-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-card);
+  transition: background-color 0.15s;
+}
+
+.ft-history-item:hover {
+  background: var(--bg-hover);
+}
+
+.ft-history-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ft-history-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ft-history-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.ft-history-clear {
+  margin: 8px auto 4px;
+  flex-shrink: 0;
+}
+
+/* ==================== v2 pending 批横幅（接收端应答） ==================== */
+
+.ft-batch-banner {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  background: var(--color-primary-light);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+.ft-batch-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.ft-batch-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ft-batch-banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-batch-banner-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-batch-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 横幅滑入/滑出：transform 位移 + 淡入（GPU 合成属性） */
+.ft-banner-enter-active,
+.ft-banner-leave-active {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s;
+}
+
+.ft-banner-enter-from,
+.ft-banner-leave-to {
+  transform: translateY(-8px);
+  opacity: 0;
+}
+
+/* ==================== v2 接收中 toast ==================== */
+
+.ft-toasts {
+  position: fixed;
+  top: 54px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 340px;
+}
+
+.ft-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  pointer-events: auto;
+  max-width: 100%;
+}
+
+.ft-toast-ico {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ft-toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-toast-close {
+  flex-shrink: 0;
+}
+
+/* toast 进出：位移 + 淡入（GPU 合成属性） */
+.ft-toast-enter-active,
+.ft-toast-leave-active {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s;
+}
+
+.ft-toast-enter-from,
+.ft-toast-leave-to {
+  transform: translateX(16px);
+  opacity: 0;
+}
+
+.ft-toast-move {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==================== v2 设置：接收策略分段控件 + 超时输入 ==================== */
+
+.ft-segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  width: fit-content;
+}
+
+.ft-segmented-item {
+  padding: 5px 12px;
+  border: none;
+  border-radius: calc(var(--radius-btn) - 3px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.ft-segmented-item:hover {
+  color: var(--text-primary);
+}
+
+.ft-segmented-item--active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.ft-settings-timeout {
+  margin-top: 8px;
+}
+
+.ft-timeout-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 完全自绘外观的数字输入（宿主 Input 风格：token-bound、无系统观感） */
+.ft-timeout-input {
+  width: 88px;
+  padding: 5px 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  color: var(--text-primary);
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+
+.ft-timeout-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}

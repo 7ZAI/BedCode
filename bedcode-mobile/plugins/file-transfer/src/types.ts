@@ -15,10 +15,14 @@ export type TaskStateName =
   | 'transferring'
   | 'paused'
   | 'resumable'
+  | 'waiting-approval'
   | 'completed'
   | 'failed'
   | 'rejected'
   | 'cancelled'
+
+/** 任务发起方（v2 队列分类依据；wire snake_case） */
+export type TaskInitiator = 'me' | 'peer'
 
 /** 对端设备信息 */
 export interface PeerInfo {
@@ -45,6 +49,10 @@ export interface Task {
   fingerprint: Fingerprint | null
   state: TaskStateName
   reason: string | null
+  /** v2：发起方（队列分类依据；wire snake_case，默认 me） */
+  initiator: TaskInitiator
+  /** v2：所属批 ID（发送方上传任务） */
+  batchId?: string | null
   /** 下载落点标记（M2/M3）：system=公共下载目录 / private=私有目录回退 /
    * saved-to=已保存到所选位置 / save-failed=保存失败保留私有副本 */
   place: string | null
@@ -98,7 +106,15 @@ export interface Settings {
   roots: SharedRoot[]
   downloadDir: string
   concurrency: number
+  /** v2 接收策略：ask（默认，每次询问）| accept（直接接收）| reject（直接拒绝） */
+  receivingPolicy: 'ask' | 'accept' | 'reject'
+  /** v2 同意超时秒（10–600，仅 ask 策略生效） */
+  approvalTimeoutSec: number
 }
+
+/** 接收策略取值常量（与 WASM POLICY_* 一致） */
+export const RECEIVING_POLICIES = ['ask', 'accept', 'reject'] as const
+export type ReceivingPolicy = (typeof RECEIVING_POLICIES)[number]
 
 /**
  * TransferProgress.state 的 serde 形状（tag="state" content="reason"）：
@@ -138,6 +154,7 @@ export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
   transferring: 'transfer.task.state.transferring',
   paused: 'transfer.task.state.paused',
   resumable: 'transfer.task.state.resumable',
+  'waiting-approval': 'transfer.task.waitingApproval',
   completed: 'transfer.task.state.completed',
   failed: 'transfer.task.state.failed',
   rejected: 'transfer.task.state.rejected',
@@ -150,6 +167,7 @@ export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
   queued: 'ft-color-queued',
   paused: 'ft-color-paused',
   resumable: 'ft-color-paused',
+  'waiting-approval': 'ft-color-queued',
   completed: 'ft-color-completed',
   failed: 'ft-color-failed',
   rejected: 'ft-color-rejected',
@@ -162,6 +180,7 @@ export const TASK_STATE_PROGRESS_CLASS: Record<TaskStateName, string> = {
   queued: 'ft-progress-queued',
   paused: 'ft-progress-paused',
   resumable: 'ft-progress-paused',
+  'waiting-approval': 'ft-progress-queued',
   completed: 'ft-progress-completed',
   failed: 'ft-progress-failed',
   rejected: 'ft-progress-rejected',
@@ -176,4 +195,73 @@ export function isTerminalState(state: TaskStateName): boolean {
     state === 'rejected' ||
     state === 'cancelled'
   )
+}
+
+// ==================== v2 接收端 / 历史类型 ====================
+
+/** pending 批（接收端应答卡数据源；batches-changed / list-batches） */
+export interface PendingBatch {
+  batchId: string
+  /** 对端名（宿主公告携带；缺失时为对端 ID） */
+  peerName: string
+  files: { relativePath: string; size: number }[]
+  totalSize: number
+  createdAt: number
+}
+
+/** 接收中任务（v2「正在接收」tab；仅可取消，无暂停/恢复） */
+export interface ReceivingTask {
+  sessionId: string
+  batchId?: string | null
+  /** 远端相对路径（= 目标文件名） */
+  remotePath: string
+  size: number
+  /** transferring / completed / failed / rejected / cancelled */
+  state: string
+  reason?: string | null
+  peerId: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** 传输历史条目（list-history / history-changed） */
+export interface HistoryEntry {
+  id: string
+  /** upload = 我发出；download = 我接收 */
+  direction: TaskDirection
+  /** 发起方：me | peer */
+  initiator: TaskInitiator
+  fileName: string
+  size: number
+  /** completed / failed / rejected / cancelled */
+  state: string
+  reason?: string | null
+  peerName: string
+  /** 仅 completed 且本地有文件时非空（打开所在文件夹用；移动接收任务恒缺） */
+  localPath?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+/** 接收端 toast 请求载荷（plugin:file-transfer:toast） */
+export interface TransferToastPayload {
+  /** 对端名 */
+  name: string
+  /** 文件数 */
+  count: number
+  /** 总大小（仅 batch 模式） */
+  totalSize?: number
+  /** batch = 批级一条立即弹；per-file = 3s 窗口合并去重 */
+  mode: 'batch' | 'per-file'
+}
+
+/** 拒绝原因 wire → 展示文案 key 后缀（§8.4 映射；unknown 兜底） */
+export function mapRejectReasonKey(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'duplicate-name': return 'duplicateName'
+    case 'user-rejected': return 'rejectedByUser'
+    case 'timeout': return 'noResponse'
+    case 'policy-denied': return 'policyDenied'
+    default: return 'unknown'
+  }
 }

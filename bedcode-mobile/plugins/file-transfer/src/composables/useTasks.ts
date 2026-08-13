@@ -21,6 +21,10 @@ import type {
   TaskStateName,
   TransferProgress,
   PeerStatus,
+  PendingBatch,
+  ReceivingTask,
+  HistoryEntry,
+  TransferToastPayload,
 } from '../types'
 import { isTerminalState } from '../types'
 import { MOCK_ENABLED, MOCK_PEER, mockTasks } from '../mock'
@@ -48,9 +52,54 @@ function mapWireTask(raw: any): Task {
     fingerprint: raw.fingerprint ?? null,
     state: raw.state as TaskStateName,
     reason: raw.reason ?? null,
+    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
+    batchId: raw.batch_id ?? raw.batchId ?? null,
     place: raw.place ?? null,
     createdAt: raw.created_at ?? raw.createdAt ?? 0,
     updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+  }
+}
+
+/** 将 WASM 接收任务快照项（camelCase，ReceivingTask serde）映射为前端模型 */
+function mapWireReceiving(raw: any): ReceivingTask {
+  return {
+    sessionId: raw.session_id ?? raw.sessionId ?? '',
+    batchId: raw.batch_id ?? raw.batchId ?? null,
+    remotePath: raw.remote_path ?? raw.remotePath ?? '',
+    size: raw.size ?? 0,
+    state: raw.state ?? 'transferring',
+    reason: raw.reason ?? null,
+    peerId: raw.peer_id ?? raw.peerId ?? '',
+    createdAt: raw.created_at ?? raw.createdAt ?? 0,
+    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+  }
+}
+
+/** 将 WASM 历史条目快照（camelCase，HistoryEntry serde）映射为前端模型 */
+function mapWireHistory(raw: any): HistoryEntry {
+  return {
+    id: raw.id ?? '',
+    direction: raw.direction === 'upload' ? 'upload' : 'download',
+    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
+    fileName: raw.file_name ?? raw.fileName ?? '',
+    size: raw.size ?? 0,
+    state: raw.state ?? 'failed',
+    reason: raw.reason ?? null,
+    peerName: raw.peer_name ?? raw.peerName ?? '',
+    localPath: raw.local_path ?? raw.localPath ?? null,
+    createdAt: raw.created_at ?? raw.createdAt ?? 0,
+    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+  }
+}
+
+/** 将 WASM pending 批快照项（batches-snapshot camelCase）映射为前端模型 */
+function mapWireBatch(raw: any): PendingBatch {
+  return {
+    batchId: raw.batch_id ?? raw.batchId ?? '',
+    peerName: raw.peer_name ?? raw.peerName ?? '',
+    files: Array.isArray(raw.files) ? raw.files : [],
+    totalSize: raw.total_size ?? raw.totalSize ?? 0,
+    createdAt: raw.created_at ?? raw.createdAt ?? 0,
   }
 }
 
@@ -65,6 +114,10 @@ export interface EnqueueArgs {
   cleanupLocal?: boolean
   /** 下载「保存到…」（M3）：完成时弹系统保存对话框（用户选位置），代替默认 MediaStore 落位 */
   saveTo?: boolean
+  /** v2：声明的文件大小（字节，上传批请求 totalSize 与进度展示用；0 = 未知） */
+  size?: number
+  /** v2：所属批 ID（一次「发送」动作一匹；不传时 WASM 自动生成每任务一批） */
+  batchId?: string
 }
 
 /** 是否被拒任务（enqueue 返回的 rejected / reason=duplicate-name） */
@@ -91,6 +144,12 @@ const notifiedSaveTo = new Set<string>()
 export function useTasks(context: PluginContext) {
   /** 任务列表（按 WASM 快照时间序，最新在前） */
   const tasks = ref<Task[]>([])
+  /** v2 接收中任务（「正在接收」tab 数据源） */
+  const receivingTasks = ref<ReceivingTask[]>([])
+  /** v2 传输历史（「历史」tab 数据源） */
+  const history = ref<HistoryEntry[]>([])
+  /** v2 pending 批（接收端应答卡数据源） */
+  const batches = ref<PendingBatch[]>([])
   /** 逐任务速率（快照差分，字节/秒） */
   const speedMap = ref<Record<string, number>>({})
   /** 进度事件聚合瞬时速率（host task id → bps 的存活窗口求和） */
@@ -112,12 +171,22 @@ export function useTasks(context: PluginContext) {
   let dispTasks: Disposable | null = null
   let dispProgress: Disposable | null = null
   let dispPeer: Disposable | null = null
+  /** v2 接收端/历史事件监听 */
+  let dispBatches: Disposable | null = null
+  let dispReceiving: Disposable | null = null
+  let dispHistory: Disposable | null = null
+  let dispToast: Disposable | null = null
   /** WS 连接状态事件监听集合 */
   let dispConn: Disposable[] = []
   /** 开发期 mock：传输中任务进度推进定时器 */
   let mockTimer: ReturnType<typeof setInterval> | null = null
   /** 开发期 mock：入队任务自增序号 */
   let mockEnqueueSeq = 0
+
+  /** v2 toast：per-file 3s 窗口合并去重（窗口内只更新计数不重复弹） */
+  let perFileToastTimer: ReturnType<typeof setTimeout> | null = null
+  let perFileToastPeer = ''
+  let perFileToastCount = 0
 
   // 初始连接状态：读取宿主共享连接状态（视图挂载可能晚于 ws_paired 事件，
   // 事件驱动会漏掉已连接场景；host 未就绪（dev-shell）时保持 false 等事件）
@@ -204,6 +273,55 @@ export function useTasks(context: PluginContext) {
     if (payload?.online) connOnline.value = true
   }
 
+  /** v2 接收端 toast 请求：batch 模式立即弹；per-file 3s 窗口合并去重 */
+  function onToast(payload: TransferToastPayload): void {
+    if (!payload || payload.mode !== 'batch' && payload.mode !== 'per-file') return
+    if (payload.mode === 'batch') {
+      context.dialogs.showToast(
+        context.i18n.t('transfer.toast.receiving', {
+          name: payload.name || context.i18n.t('transfer.peer.unknown'),
+          count: payload.count ?? 0,
+        }),
+        'info',
+      )
+      return
+    }
+    // per-file：3 秒窗口合并（窗口内新文件启动只更新计数不重复弹）——
+    // 窗口内再次收到事件：重置窗口并重弹（宿主 toast 替换旧 toast，等效更新计数）
+    perFileToastPeer = payload.name || perFileToastPeer
+    perFileToastCount += payload.count ?? 1
+    if (perFileToastTimer) clearTimeout(perFileToastTimer)
+    const peer = perFileToastPeer
+    const count = perFileToastCount
+    context.dialogs.showToast(
+      context.i18n.t('transfer.toast.receiving', { name: peer || context.i18n.t('transfer.peer.unknown'), count }),
+      'info',
+    )
+    perFileToastTimer = setTimeout(() => {
+      perFileToastTimer = null
+      perFileToastPeer = ''
+      perFileToastCount = 0
+    }, 3000)
+  }
+
+  /** v2 pending 批快照事件（应答卡数据源） */
+  function onBatchesChanged(payload: any): void {
+    if (!Array.isArray(payload)) return
+    batches.value = payload.map(mapWireBatch)
+  }
+
+  /** v2 接收任务快照事件 */
+  function onReceivingChanged(payload: any): void {
+    if (!Array.isArray(payload)) return
+    receivingTasks.value = payload.map(mapWireReceiving)
+  }
+
+  /** v2 历史快照事件 */
+  function onHistoryChanged(payload: any): void {
+    if (!Array.isArray(payload)) return
+    history.value = payload.map(mapWireHistory)
+  }
+
   /** WS 连接状态事件（宿主 ws_* 事件；连接 ≠ 对端已共享） */
   function onConnChanged(online: boolean): void {
     connOnline.value = online
@@ -222,12 +340,14 @@ export function useTasks(context: PluginContext) {
       localPath:
         args.localPath ??
         `/storage/emulated/0/Download/${args.remotePath.split('/').pop() ?? 'file'}`,
-      size: 86_400_000,
+      size: args.size ?? 86_400_000,
       offset: 0,
       uploadSessionId: null,
       fingerprint: null,
       state: 'queued',
       reason: null,
+      initiator: 'me',
+      batchId: args.batchId ?? null,
       place: null,
       createdAt: now,
       updatedAt: now,
@@ -289,6 +409,8 @@ export function useTasks(context: PluginContext) {
       localPath: args.localPath ?? null,
       cleanupLocal: args.cleanupLocal ?? false,
       saveTo: args.saveTo ?? false,
+      size: args.size ?? 0,
+      batchId: args.batchId ?? null,
     })
   }
 
@@ -428,6 +550,71 @@ export function useTasks(context: PluginContext) {
       return
     }
     await context.commands.execute('file-transfer.resume-all', {})
+  }
+
+  // ==================== v2 接收端命令与历史 ====================
+
+  /** 批准传输批（应答卡「接受全部」） */
+  async function approveBatch(batchId: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      batches.value = batches.value.filter((b) => b.batchId !== batchId)
+      return
+    }
+    try {
+      await context.commands.execute('file-transfer.approve-batch', { batchId })
+    } catch (e) {
+      console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
+    }
+  }
+
+  /** 拒绝传输批（应答卡「拒绝全部」） */
+  async function rejectBatch(batchId: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      batches.value = batches.value.filter((b) => b.batchId !== batchId)
+      return
+    }
+    try {
+      await context.commands.execute('file-transfer.reject-batch', { batchId })
+    } catch (e) {
+      console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
+    }
+  }
+
+  /** 取消接收中的上传会话（「正在接收」tab 仅此操作） */
+  async function cancelReceiving(sessionId: string): Promise<void> {
+    if (MOCK_ENABLED) {
+      receivingTasks.value = receivingTasks.value.filter((r) => r.sessionId !== sessionId)
+      return
+    }
+    try {
+      await context.commands.execute('file-transfer.cancel-receiving', { sessionId })
+    } catch (e) {
+      console.error(`[File Transfer] cancel-receiving failed for "${sessionId}":`, e)
+    }
+  }
+
+  /** 清空传输历史 */
+  async function clearHistory(): Promise<void> {
+    if (MOCK_ENABLED) {
+      history.value = []
+      return
+    }
+    try {
+      await context.commands.execute('file-transfer.clear-history', {})
+    } catch (e) {
+      console.error('[File Transfer] clear-history failed:', e)
+    }
+  }
+
+  /** 打开历史条目的本地文件（仅 completed 且带 localPath；复用系统查看器） */
+  async function openHistoryEntry(entry: HistoryEntry): Promise<void> {
+    if (entry.state !== 'completed' || !entry.localPath) return
+    try {
+      await context.system.openFile(entry.localPath, entry.fileName)
+    } catch (err) {
+      console.error(`[File Transfer] open history file failed for "${entry.localPath}":`, err)
+      context.dialogs.showToast(String(err), 'error')
+    }
   }
 
   // ==================== 派生状态 ====================
@@ -570,6 +757,23 @@ export function useTasks(context: PluginContext) {
     else void refresh()
   }
 
+  /** 拉取 v2 初始快照（pending 批 + 接收任务 + 历史；宿主重启后补同步） */
+  async function refreshV2(): Promise<void> {
+    if (MOCK_ENABLED) return
+    try {
+      const [b, r, h] = await Promise.all([
+        context.commands.execute('file-transfer.list-batches', {}),
+        context.commands.execute('file-transfer.list-receiving', {}),
+        context.commands.execute('file-transfer.list-history', {}),
+      ])
+      batches.value = Array.isArray(b) ? b.map(mapWireBatch) : []
+      receivingTasks.value = Array.isArray(r) ? r.map(mapWireReceiving) : []
+      history.value = Array.isArray(h) ? h.map(mapWireHistory) : []
+    } catch (e) {
+      console.error('[File Transfer] list batches/receiving/history failed:', e)
+    }
+  }
+
   /** 摘除事件监听并清空差分缓存（组件 onUnmounted / 入口卡调用） */
   function stop(): void {
     dispTasks?.dispose()
@@ -578,11 +782,25 @@ export function useTasks(context: PluginContext) {
     dispProgress = null
     dispPeer?.dispose()
     dispPeer = null
+    dispBatches?.dispose()
+    dispBatches = null
+    dispReceiving?.dispose()
+    dispReceiving = null
+    dispHistory?.dispose()
+    dispHistory = null
+    dispToast?.dispose()
+    dispToast = null
     dispConn.forEach(d => d.dispose())
     dispConn = []
     if (mockTimer) {
       clearInterval(mockTimer)
       mockTimer = null
+    }
+    if (perFileToastTimer) {
+      clearTimeout(perFileToastTimer)
+      perFileToastTimer = null
+      perFileToastPeer = ''
+      perFileToastCount = 0
     }
     offsetSamples.clear()
     progressSamples.clear()
@@ -591,6 +809,9 @@ export function useTasks(context: PluginContext) {
 
   return {
     tasks,
+    receivingTasks,
+    history,
+    batches,
     speedMap,
     summary,
     resumableCount,
@@ -603,6 +824,7 @@ export function useTasks(context: PluginContext) {
     peerName,
     displayPeerName,
     refresh,
+    refreshV2,
     enqueueDownload,
     enqueueUpload,
     queryPeer,
@@ -613,6 +835,11 @@ export function useTasks(context: PluginContext) {
     removeTask,
     openTask,
     resumeAll,
+    approveBatch,
+    rejectBatch,
+    cancelReceiving,
+    clearHistory,
+    openHistoryEntry,
     showDuplicateDialog,
     start,
     stop,

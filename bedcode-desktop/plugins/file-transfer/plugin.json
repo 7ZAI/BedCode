@@ -94,6 +94,34 @@
       {
         "id": "file-transfer.update-roots",
         "title": "Update Mount Roots"
+      },
+      {
+        "id": "file-transfer.list-batches",
+        "title": "List Pending Transfer Batches"
+      },
+      {
+        "id": "file-transfer.approve-batch",
+        "title": "Approve Transfer Batch"
+      },
+      {
+        "id": "file-transfer.reject-batch",
+        "title": "Reject Transfer Batch"
+      },
+      {
+        "id": "file-transfer.list-receiving",
+        "title": "List Receiving Tasks"
+      },
+      {
+        "id": "file-transfer.cancel-receiving",
+        "title": "Cancel Receiving Task"
+      },
+      {
+        "id": "file-transfer.list-history",
+        "title": "List Transfer History"
+      },
+      {
+        "id": "file-transfer.clear-history",
+        "title": "Clear Transfer History"
       }
     ],
     "views": [

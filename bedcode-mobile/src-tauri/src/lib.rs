@@ -66,6 +66,9 @@ pub fn run() {
 
             let app_handle = app.handle();
 
+            // 窗口焦点监听（后台/锁屏判定：批量传输请求系统通知用）
+            crate::file_service::notify::attach_focus_listener(app_handle);
+
             // 托管 SafIo 主 seam 实现（Android = KotlinSafIo 转发 SafTransferPlugin；
             // 其他平台 = 明确不可用）。经 state 注入命令层，测试可替换为 fake
             app.manage(crate::plugin::saf_io::SafIoState(
@@ -269,6 +272,12 @@ pub fn run() {
             crate::plugin::commands::plugin_filesrv_dispose,
             crate::plugin::commands::plugin_filesrv_respond_upload_request,
             crate::plugin::commands::plugin_filesrv_get_peer,
+            // v2 批量传输批准（接收策略 / 异步批量批准）
+            crate::plugin::commands::plugin_filesrv_approve_transfer,
+            crate::plugin::commands::plugin_filesrv_reject_transfer,
+            crate::plugin::commands::plugin_filesrv_set_approval_timeout,
+            crate::plugin::commands::plugin_filesrv_cancel_receiving,
+            crate::plugin::commands::plugin_filesrv_respond_transfer_request,
             crate::plugin::commands::plugin_open_file,
             crate::plugin::commands::plugin_pick_directory,
             crate::plugin::commands::plugin_pick_file,

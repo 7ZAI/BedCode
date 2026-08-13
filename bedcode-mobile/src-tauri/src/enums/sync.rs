@@ -111,4 +111,19 @@ pub enum SyncPayload {
         /// 挂载支持的操作集合（unmount 时为空）
         operations: Vec<bedcode_plugin_api_mobile::FileOperation>,
     },
+
+    // === 传输批应答（v2，桌面 → 移动，发送端=移动） ===
+    /// 传输批应答推送（接收端批准/拒绝/超时 → 发送端）
+    ///
+    /// 移动端作为发送方时收到（对端桌面接收方经 WS 推送）；宿主发布
+    /// `filesrv:transfer_approval` 双通道事件，发送方插件据此调度批内任务。
+    /// 与桌面端 `enums/sync.rs` 同名变体保持同构（逐字一致）
+    TransferApproval {
+        /// 批 ID
+        batch_id: String,
+        /// "approved" | "rejected"
+        decision: String,
+        /// "" | "user-rejected" | "timeout"
+        reason: String,
+    },
 }

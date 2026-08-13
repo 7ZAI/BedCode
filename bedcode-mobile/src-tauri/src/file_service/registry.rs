@@ -15,6 +15,10 @@
 use crate::file_service::cipher::{PassthroughCipher, TransportCipher};
 use crate::file_service::sandbox;
 use crate::file_service::saf_tree;
+use crate::file_service::transfer::{
+    is_batch_expired, validate_approval_timeout, validate_batch_transition, BatchDecision,
+    BatchState, RejectReason, TransferBatch, TransferRequestDto, DEFAULT_APPROVAL_TIMEOUT_SECS,
+};
 use crate::file_service::upload::UploadSessionManager;
 use bedcode_plugin_api_mobile::{
     FileOperation, MountOptions, PeerFileService, UploadHookDecision, UploadRequestMeta,
@@ -22,11 +26,66 @@ use bedcode_plugin_api_mobile::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Mutex, RwLock};
+
+/// 批内文件清单数量上限（信任边界：防对端超大清单滥用，hook 前 fail-fast）
+const MAX_BATCH_FILES: usize = 1000;
 
 /// 上传策略钩子调用超时（规格 4.2：同步阻塞握手，2 秒超时 fail-closed）
 const UPLOAD_HOOK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 批量传输请求钩子调用超时（v2：复用上传钩子 2s fail-closed 语义）
+const TRANSFER_HOOK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 批操作错误（registry → HTTP/命令层映射）
+#[derive(Debug)]
+pub enum BatchError {
+    /// 批不存在（404；归属不匹配也归此类，不泄露存在性）
+    NotFound(String),
+    /// 批非 pending（重复应答/已超时，400）
+    NotPending(String),
+    /// session 创建 gating：批未批准（403，message batch-not-approved）
+    NotApproved(String),
+    /// session 创建 gating：批已拒绝（403，message batch-rejected）
+    Rejected(String),
+    /// 批钩子拒绝（403，message 为钩子原因，如 policy-denied）
+    Denied(String),
+    /// 钩子不可用/超时/解析失败（fail-closed，403）
+    HookFailed(String),
+    /// session 创建 gating 拒绝（403，消息即 wire 值：batch-not-approved /
+    /// batch-rejected / batch-not-found，发送方据此解析；信任边界校验失败也归此）
+    GatingDenied(String),
+    /// 输入非法（400，如超时值越界）
+    InvalidInput(String),
+}
+
+impl BatchError {
+    /// 转换为宿主 AppError（Tauri 命令层；HTTP 层按变体直接映射状态码）
+    pub fn into_app_error(self) -> crate::AppError {
+        match self {
+            BatchError::NotFound(m) => crate::AppError::NotFound(m),
+            BatchError::NotPending(m)
+            | BatchError::NotApproved(m)
+            | BatchError::Rejected(m)
+            | BatchError::Denied(m)
+            | BatchError::HookFailed(m)
+            | BatchError::GatingDenied(m)
+            | BatchError::InvalidInput(m) => crate::AppError::InvalidInput(m),
+        }
+    }
+}
+
+/// 批 sweeper 一次扫描的过期结果（调用方据此发事件/推送）
+#[derive(Debug)]
+pub struct ExpiredBatch {
+    /// 批 ID
+    pub batch_id: String,
+    /// "rejected"（pending 超时 → 拒绝，需通知）| "cleaned"（TTL 清理，仅删除）
+    pub decision: String,
+    /// 拒绝原因（cleaned 为空串）
+    pub reason: String,
+}
 
 /// 上传策略钩子目标
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +133,14 @@ pub struct FileServiceRegistry {
     ///
     /// 前端 Tauri command 经 [`respond_upload_hook`](Self::respond_upload_hook) 回填
     pending_hook_replies: Mutex<HashMap<String, oneshot::Sender<UploadHookDecision>>>,
+    /// Webview 批钩子待回复表：request_id → 回复通道（v2）
+    ///
+    /// 前端 Tauri command 经 [`respond_transfer_hook`](Self::respond_transfer_hook) 回填
+    pending_transfer_hook_replies: Mutex<HashMap<String, oneshot::Sender<UploadHookDecision>>>,
+    /// 传输批记录表（v2，batch_id → 批；宿主内存态，不持久化）
+    batches: RwLock<HashMap<String, TransferBatch>>,
+    /// per-mount 批准超时（v2，(plugin, mount) → 超时；未配置默认 60s）
+    approval_timeouts: RwLock<HashMap<(String, String), Duration>>,
     /// Tauri AppHandle（Webview 钩子事件发送；经 [`set_app_handle`](Self::set_app_handle) 注入）
     app_handle: RwLock<Option<tauri::AppHandle>>,
     /// SAF 存储访问实现（M2 三端点；生产 = default_saf_io，测试注入 fake）
@@ -97,6 +164,9 @@ impl FileServiceRegistry {
             peers: RwLock::new(HashMap::new()),
             upload_sessions: Arc::new(UploadSessionManager::new()),
             pending_hook_replies: Mutex::new(HashMap::new()),
+            pending_transfer_hook_replies: Mutex::new(HashMap::new()),
+            batches: RwLock::new(HashMap::new()),
+            approval_timeouts: RwLock::new(HashMap::new()),
             app_handle: RwLock::new(None),
             saf_io: RwLock::new(Some(saf_io)),
             downloads_dir: RwLock::new(None),
@@ -179,9 +249,52 @@ impl FileServiceRegistry {
         self.mounts.write().await.insert(key, entry);
     }
 
+    /// 测试辅助：直接注入批记录（绕过钩子分发）
+    #[cfg(test)]
+    pub async fn insert_batch_for_test(&self, batch: TransferBatch) {
+        self.batches.write().await.insert(batch.batch_id.clone(), batch);
+    }
+
     /// 启动后台任务（必须在 tokio runtime 上下文内调用一次）
     pub fn start_background_tasks(self: &Arc<Self>) {
         UploadSessionManager::spawn_sweeper(self.upload_sessions.clone());
+        Self::spawn_batch_sweeper(self.clone());
+    }
+
+    /// 启动批 sweeper：每秒扫描 pending 超时（→ rejected 并通知）与 approved 24h 清理
+    ///
+    /// 超时批由本任务执行 resolved 事件 + 跨端推送（与命令路径同一入口
+    /// publish_batch_resolved，保证应答与超时两条路径的端侧语义一致）
+    fn spawn_batch_sweeper(registry: Arc<FileServiceRegistry>) {
+        crate::system::error_boundary::spawn_with_error_boundary(
+            "transfer_batch_sweeper",
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                // 首个 tick 立即完成，跳过以对齐"每秒一次"语义（仿上传会话 sweeper）
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    let expired = registry.sweep_batches().await;
+                    for e in expired {
+                        if e.decision == "rejected" {
+                            tracing::info!(
+                                batch_id = %e.batch_id,
+                                reason = %e.reason,
+                                "transfer batch expired, rejected"
+                            );
+                            registry
+                                .publish_batch_resolved(&e.batch_id, &e.decision, &e.reason)
+                                .await;
+                        } else {
+                            tracing::info!(
+                                batch_id = %e.batch_id,
+                                "transfer batch cleaned (TTL without activity)"
+                            );
+                        }
+                    }
+                }
+            },
+        );
     }
 
     /// 上传会话管理器引用（server 使用）
@@ -386,7 +499,7 @@ impl FileServiceRegistry {
         Ok(())
     }
 
-    /// 卸载挂载点（同时取消该挂载下的全部上传会话）
+    /// 卸载挂载点（同时取消该挂载下的全部上传会话与传输批）
     pub async fn unmount(&self, plugin_id: &str, mount_path: &str) -> crate::Result<()> {
         let removed = self
             .mounts
@@ -404,6 +517,10 @@ impl FileServiceRegistry {
             .upload_sessions
             .cancel_for_mount(plugin_id, mount_path)
             .await;
+        // 清理该挂载的传输批（挂载摘除 = 接收能力消失，pending/approved 批自然失效）
+        self.batches.write().await.retain(|_, b| {
+            b.plugin_id != plugin_id || b.mount_path != mount_path
+        });
         tracing::info!(
             plugin_id = %plugin_id,
             mount = %mount_path,
@@ -443,6 +560,8 @@ impl FileServiceRegistry {
                 "file service unmounted (plugin lifecycle)"
             );
         }
+        // 清理该插件的传输批（停用 = 服务消失，批上下文随插件失效）
+        self.batches.write().await.retain(|_, b| b.plugin_id != plugin_id);
     }
 
     /// 获取挂载条目（不存在返回 NotFound）
@@ -637,6 +756,561 @@ impl FileServiceRegistry {
     /// 回填 Webview 钩子决定（Tauri command 调用；request 不存在/已超时返回 false）
     pub async fn respond_upload_hook(&self, request_id: &str, decision: UploadHookDecision) -> bool {
         let tx = self.pending_hook_replies.lock().await.remove(request_id);
+        match tx {
+            Some(tx) => tx.send(decision).is_ok(),
+            None => false,
+        }
+    }
+
+    // ==================== Transfer Batches（v2） ====================
+    //
+    // 批状态机（spec 14.2）：POST /transfer-request → 钩子三路分流 →
+    // pending/approved 批 → 用户应答命令或 TTL 扫描迁移终态 →
+    // resolved 事件 + 跨端推送。批为宿主内存态，不持久化。
+
+    /// 创建传输批请求（POST /transfer-request 处理：批钩子三路分流）
+    ///
+    /// - allow → 批 approved + Ok(Approved)（HTTP 200）
+    /// - ask → 批 pending + 本地事件 `filesrv:transfer_request` + Ok(Pending)（HTTP 202）
+    /// - deny → Err(Denied)（HTTP 403，不建批、无任务无记录）
+    ///
+    /// 批钩子超时/插件异常/挂载不存在一律 fail-closed deny（复用上传钩子 2s 超时语义）
+    pub async fn create_transfer_request(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        req: &TransferRequestDto,
+    ) -> Result<BatchDecision, BatchError> {
+        // 信任边界校验（对端可控输入，hook 调用前 fail-fast）：批 ID 非空限长、
+        // 清单非空且数量有上限（防空批污染批表 / 超大清单滥用）；路径/大小逐项
+        // 不校验（仅元数据展示，session 创建时的沙箱与钩子才是写路径守卫）
+        if req.batch_id.is_empty() || req.batch_id.len() > 128 {
+            return Err(BatchError::GatingDenied("invalid batch id".to_string()));
+        }
+        if req.files.is_empty() || req.files.len() > MAX_BATCH_FILES {
+            return Err(BatchError::GatingDenied("invalid batch file list".to_string()));
+        }
+        let hook = {
+            let mounts = self.mounts.read().await;
+            match mounts.get(&(plugin_id.to_string(), mount_path.to_string())) {
+                Some(entry) => entry.hook.clone(),
+                // 挂载不存在 → fail-closed 拒绝
+                None => return Err(BatchError::Denied("mount not found".to_string())),
+            }
+        };
+
+        let decision = match hook {
+            HookTarget::None => {
+                return Err(BatchError::Denied("mount has no upload hook".to_string()))
+            }
+            HookTarget::Wasm => {
+                self.call_wasm_batch_hook(plugin_id, mount_path, req).await
+            }
+            HookTarget::Webview => {
+                self.call_webview_batch_hook(plugin_id, mount_path, req).await
+            }
+        };
+
+        if decision.allow {
+            // allow 分流：批直接 approved（可立即建 session），无需本地事件
+            let batch = self.build_batch(plugin_id, mount_path, req, BatchState::Approved).await;
+            self.batches.write().await.insert(req.batch_id.clone(), batch);
+            Ok(BatchDecision::Approved)
+        } else if decision.ask {
+            let batch = self.build_batch(plugin_id, mount_path, req, BatchState::Pending).await;
+            self.batches.write().await.insert(req.batch_id.clone(), batch);
+            // ask 分流：本地事件（接收端 pending 卡 + 批级 toast 数据源）
+            self.emit_filesrv_event(
+                "filesrv:transfer_request",
+                serde_json::json!({
+                    "batchId": req.batch_id,
+                    "pluginId": plugin_id,
+                    "mountPath": mount_path,
+                    "files": req.files,
+                    "totalSize": req.total_size,
+                }),
+            )
+            .await;
+            // 后台/锁屏：系统通知带应答 action（前台由插件对话框应答，不重复打扰）
+            if !crate::file_service::notify::is_app_focused() {
+                let peer_name = self.sender_peer_name().await;
+                crate::file_service::notify::show_transfer_request_notification(
+                    &req.batch_id,
+                    plugin_id,
+                    &peer_name,
+                    req.files.len(),
+                    req.total_size,
+                )
+                .await;
+            }
+            Ok(BatchDecision::Pending)
+        } else {
+            let reason = decision
+                .reason
+                .unwrap_or_else(|| "policy-denied".to_string());
+            tracing::info!(
+                plugin_id = %plugin_id,
+                mount = %mount_path,
+                batch_id = %req.batch_id,
+                reason = %reason,
+                "transfer request denied by batch hook"
+            );
+            Err(BatchError::Denied(reason))
+        }
+    }
+
+    /// 构造批记录（允许/询问分流共用；approval_timeout 取 per-mount 配置）
+    async fn build_batch(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        req: &TransferRequestDto,
+        state: BatchState,
+    ) -> TransferBatch {
+        TransferBatch {
+            batch_id: req.batch_id.clone(),
+            plugin_id: plugin_id.to_string(),
+            mount_path: mount_path.to_string(),
+            files: req.files.clone(),
+            total_size: req.total_size,
+            state,
+            created_at: Instant::now(),
+            last_active: Instant::now(),
+            approval_timeout: self.approval_timeout_for(plugin_id, mount_path).await,
+        }
+    }
+
+    /// 批准传输批（接收端用户应答「接受全部」）：pending → approved
+    ///
+    /// 迁移成功后发 resolved 事件 + 跨端推送（发送方据此调度批内任务）
+    pub async fn approve_transfer(
+        &self,
+        plugin_id: &str,
+        batch_id: &str,
+    ) -> Result<(), BatchError> {
+        let (batch_id, plugin_id) = (batch_id.to_string(), plugin_id.to_string());
+        {
+            let mut batches = self.batches.write().await;
+            let batch = batches.get_mut(&batch_id).ok_or_else(|| {
+                BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
+            })?;
+            // 归属校验：其他插件应答 → NotFound（不泄露存在性）
+            if batch.plugin_id != plugin_id {
+                return Err(BatchError::NotFound(format!(
+                    "transfer batch not found: {}",
+                    batch_id
+                )));
+            }
+            validate_batch_transition(&batch.state, &BatchState::Approved).map_err(|_| {
+                BatchError::NotPending(format!("transfer batch {} not pending", batch_id))
+            })?;
+            batch.state = BatchState::Approved;
+            batch.last_active = Instant::now();
+        }
+        self.publish_batch_resolved(&batch_id, "approved", "").await;
+        Ok(())
+    }
+
+    /// 拒绝传输批（接收端用户应答「拒绝全部」）：pending → rejected(user-rejected)
+    pub async fn reject_transfer(
+        &self,
+        plugin_id: &str,
+        batch_id: &str,
+    ) -> Result<(), BatchError> {
+        let (batch_id, plugin_id) = (batch_id.to_string(), plugin_id.to_string());
+        {
+            let mut batches = self.batches.write().await;
+            let batch = batches.get_mut(&batch_id).ok_or_else(|| {
+                BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
+            })?;
+            if batch.plugin_id != plugin_id {
+                return Err(BatchError::NotFound(format!(
+                    "transfer batch not found: {}",
+                    batch_id
+                )));
+            }
+            validate_batch_transition(
+                &batch.state,
+                &BatchState::Rejected {
+                    reason: RejectReason::UserRejected,
+                },
+            )
+            .map_err(|_| {
+                BatchError::NotPending(format!("transfer batch {} not pending", batch_id))
+            })?;
+            batch.state = BatchState::Rejected {
+                reason: RejectReason::UserRejected,
+            };
+        }
+        self.publish_batch_resolved(&batch_id, "rejected", "user-rejected")
+            .await;
+        Ok(())
+    }
+
+    /// session 创建 gating：批已批准 → Ok(批引用)；其他 → Err（403 语义）
+    ///
+    /// ask 模式防绕过核心：pending / rejected / not-found 一律拒绝，
+    /// 发送方只有拿到已批准批 ID 才能创建 session。
+    pub async fn check_batch(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        batch_id: &str,
+    ) -> Result<TransferBatch, BatchError> {
+        let batches = self.batches.read().await;
+        let batch = batches
+            .get(batch_id)
+            .ok_or_else(|| BatchError::NotFound("batch-not-found".to_string()))?;
+        // 归属不匹配（其他插件/挂载的批）→ NotFound，不泄露存在性
+        if batch.plugin_id != plugin_id || batch.mount_path != mount_path {
+            return Err(BatchError::NotFound("batch-not-found".to_string()));
+        }
+        match &batch.state {
+            BatchState::Approved => Ok(batch.clone()),
+            BatchState::Pending => Err(BatchError::NotApproved("batch-not-approved".to_string())),
+            BatchState::Rejected { .. } => Err(BatchError::Rejected("batch-rejected".to_string())),
+        }
+    }
+
+    /// 批内 session 活动刷新（建 session 成功时调用；approved 批 24h TTL 依据）
+    pub async fn touch_batch(&self, batch_id: &str) {
+        if let Some(batch) = self.batches.write().await.get_mut(batch_id) {
+            batch.last_active = Instant::now();
+        }
+    }
+
+    /// 设置 per-mount 批准超时（10–600 秒校验；已存在的 pending 批同步生效）
+    pub async fn set_approval_timeout(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        secs: u64,
+    ) -> Result<(), BatchError> {
+        let secs = validate_approval_timeout(secs)
+            .map_err(|e| BatchError::InvalidInput(format!("set_approval_timeout: {}", e)))?;
+        let timeout = Duration::from_secs(secs);
+        self.approval_timeouts
+            .write()
+            .await
+            .insert((plugin_id.to_string(), mount_path.to_string()), timeout);
+        // 已存在 pending 批同步新超时（设置变更即时生效，无需等新批）
+        let mut batches = self.batches.write().await;
+        for batch in batches.values_mut() {
+            if batch.plugin_id == plugin_id
+                && batch.mount_path == mount_path
+                && batch.state == BatchState::Pending
+            {
+                batch.approval_timeout = timeout;
+            }
+        }
+        Ok(())
+    }
+
+    /// sweeper 一次扫描：pending 超时 → rejected(Timeout)；approved 24h 无活动 → 清理；
+    /// rejected 超 24h → 清理（内存态记录回收）
+    ///
+    /// 返回本次超时/清理的批，由调用方（sweeper 任务）对 rejected 批执行
+    /// resolved 事件 + 跨端推送（cleaned 仅删除，无通知）
+    pub async fn sweep_batches(&self) -> Vec<ExpiredBatch> {
+        let mut expired = Vec::new();
+        {
+            let mut batches = self.batches.write().await;
+            let ids: Vec<String> = batches.keys().cloned().collect();
+            for id in ids {
+                let Some(batch) = batches.get_mut(&id) else {
+                    continue;
+                };
+                match &batch.state {
+                    BatchState::Pending => {
+                        if is_batch_expired(batch) {
+                            batch.state = BatchState::Rejected {
+                                reason: RejectReason::Timeout,
+                            };
+                            expired.push(ExpiredBatch {
+                                batch_id: id,
+                                decision: "rejected".to_string(),
+                                reason: "timeout".to_string(),
+                            });
+                        }
+                    }
+                    BatchState::Approved => {
+                        if is_batch_expired(batch) {
+                            batches.remove(&id);
+                            expired.push(ExpiredBatch {
+                                batch_id: id,
+                                decision: "cleaned".to_string(),
+                                reason: String::new(),
+                            });
+                        }
+                    }
+                    // 终态批超过 24h 也回收（内存态记录不长期驻留）
+                    BatchState::Rejected { .. } => {
+                        if is_batch_expired(batch) {
+                            batches.remove(&id);
+                            expired.push(ExpiredBatch {
+                                batch_id: id,
+                                decision: "cleaned".to_string(),
+                                reason: String::new(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        expired
+    }
+
+    /// 取消接收中的上传会话（接收端本地取消，session 级）
+    ///
+    /// 取消后删除 .part 临时文件并发出 `filesrv:receiving_done`(cancelled)
+    pub async fn cancel_receiving_session(
+        &self,
+        plugin_id: &str,
+        session_id: &str,
+    ) -> Result<(), BatchError> {
+        self.upload_sessions
+            .cancel_for_plugin(session_id, plugin_id)
+            .await
+            .map_err(|e| {
+                BatchError::NotFound(format!(
+                    "upload session not found: {} (plugin: {})",
+                    e, plugin_id
+                ))
+            })?;
+        self.emit_filesrv_event(
+            "filesrv:receiving_done",
+            serde_json::json!({ "sessionId": session_id, "state": "cancelled" }),
+        )
+        .await;
+        Ok(())
+    }
+
+    /// 批已解决：本地事件 `filesrv:transfer_resolved` + 跨端推送 TransferApproval
+    ///
+    /// 应答命令（approve/reject）与 TTL 超时（sweeper）共用此入口，
+    /// 保证两条路径的端侧语义一致
+    pub async fn publish_batch_resolved(&self, batch_id: &str, decision: &str, reason: &str) {
+        self.emit_filesrv_event(
+            "filesrv:transfer_resolved",
+            serde_json::json!({
+                "batchId": batch_id,
+                "decision": decision,
+                "reason": reason,
+            }),
+        )
+        .await;
+        // 批已解决：后台通知如仍在则取消（spec 14.6：resolved 后宿主 cancel）
+        if !crate::file_service::notify::is_app_focused() {
+            crate::file_service::notify::cancel_transfer_request_notification(batch_id).await;
+        }
+        self.push_transfer_approval(batch_id, decision, reason).await;
+    }
+
+    /// 发送方设备名（后台批通知展示用；单连接场景取当前桌面端 peer）
+    async fn sender_peer_name(&self) -> String {
+        if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
+            if let Some(peer) = self.get_peer(&peer_id).await {
+                if !peer.device_name.is_empty() {
+                    return peer.device_name;
+                }
+            }
+        }
+        "peer".to_string()
+    }
+
+    /// 发布对端批应答（发送端宿主收到 TransferApproval：双通道发布 `filesrv:transfer_approval`）
+    ///
+    /// 载荷与 resolved 事件相同形状 { batchId, decision, reason }，
+    /// 发送方插件订阅 bus topic（WASM）/ Tauri 事件（前端）接收
+    pub async fn publish_transfer_approval(&self, batch_id: &str, decision: &str, reason: &str) {
+        self.emit_filesrv_event(
+            "filesrv:transfer_approval",
+            serde_json::json!({ "batchId": batch_id, "decision": decision, "reason": reason }),
+        )
+        .await;
+    }
+
+    /// 跨端推送传输批应答（接收端 → 发送端；经已认证 WS 控制面，移动端实现）
+    ///
+    /// 与 announce.rs 同款 ConnectionManager.send 模式；连接断开时静默跳过
+    ///（发送方等待同意期间断线由任务层 rejected(timeout) 兜底，批推送丢失
+    /// 不影响语义——发送方批记录保留 pending，接收端 TTL 自然超时）
+    async fn push_transfer_approval(&self, batch_id: &str, decision: &str, reason: &str) {
+        let conn = crate::state::get_connection_manager();
+        if !conn.is_connected().await {
+            tracing::debug!(
+                batch_id = %batch_id,
+                "transfer approval push skipped: WS not connected"
+            );
+            return;
+        }
+        let msg = crate::model::message::Message::file_service(
+            crate::enums::file_service::FileServicePayload::TransferApproval {
+                batch_id: batch_id.to_string(),
+                decision: decision.to_string(),
+                reason: reason.to_string(),
+            },
+        );
+        if let Err(e) = conn.send(&msg).await {
+            tracing::warn!(batch_id = %batch_id, "transfer approval push failed: {}", e);
+        }
+    }
+
+    /// 双通道发布文件服务本地事件（Tauri 事件 + 插件消息总线；仿 emit_peer_changed）
+    ///
+    /// 发射失败只 warn，不影响主流程（事件通道为 best-effort 通知）
+    pub(crate) async fn emit_filesrv_event(&self, event: &str, payload: serde_json::Value) {
+        use tauri::Emitter;
+
+        // 通道 1：Tauri 事件（前端 UI 订阅，如 pending 批卡 / toast）
+        let app_handle = self.app_handle.read().await.clone();
+        if let Some(handle) = app_handle {
+            if let Err(e) = handle.emit(event, &payload) {
+                tracing::warn!(event = %event, "emit {} failed: {}", event, e);
+            }
+        } else {
+            tracing::debug!(event = %event, "app_handle not injected, Tauri event skipped");
+        }
+
+        // 通道 2：插件消息总线（WASM 插件后端经 host_bus_subscribe 订阅）
+        if let Some(pm) = crate::state::try_get_plugin_manager() {
+            pm.message_bus().publish(event, "host", payload);
+        } else {
+            tracing::debug!(event = %event, "plugin manager not initialized, bus publish skipped");
+        }
+    }
+
+    /// 读取 per-mount 批准超时（未配置回退默认 60s）
+    async fn approval_timeout_for(&self, plugin_id: &str, mount_path: &str) -> Duration {
+        self.approval_timeouts
+            .read()
+            .await
+            .get(&(plugin_id.to_string(), mount_path.to_string()))
+            .copied()
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_APPROVAL_TIMEOUT_SECS))
+    }
+
+    /// WASM 批钩子：经 PluginManager 的 WASM 实例调用导出 `on_transfer_request`
+    async fn call_wasm_batch_hook(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        req: &TransferRequestDto,
+    ) -> UploadHookDecision {
+        let meta_json = serde_json::to_string(req).unwrap_or_default();
+        let manager = crate::state::get_plugin_manager();
+        let plugin_id = plugin_id.to_string();
+
+        match tokio::time::timeout(
+            TRANSFER_HOOK_TIMEOUT,
+            manager.call_transfer_hook(&plugin_id, &meta_json),
+        )
+        .await
+        {
+            Ok(Some(decision_json)) => {
+                // 插件返回决定 JSON；解析失败一律 fail-closed
+                match serde_json::from_str::<UploadHookDecision>(&decision_json) {
+                    Ok(decision) => decision,
+                    Err(e) => {
+                        tracing::warn!(
+                            plugin_id = %plugin_id,
+                            mount = %mount_path,
+                            error = %e,
+                            "transfer hook returned invalid decision JSON, denying (fail-closed)"
+                        );
+                        UploadHookDecision::deny("invalid transfer hook decision")
+                    }
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    mount = %mount_path,
+                    "transfer hook unavailable (plugin not loaded / missing export), denying (fail-closed)"
+                );
+                UploadHookDecision::deny("transfer hook unavailable")
+            }
+            Err(_) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    mount = %mount_path,
+                    "transfer hook timed out (2s), denying (fail-closed)"
+                );
+                UploadHookDecision::deny("transfer hook timed out")
+            }
+        }
+    }
+
+    /// Webview 批钩子：emit 事件到前端 + oneshot 等待回复（2 秒超时 fail-closed）
+    ///
+    /// 与 upload hook 同构，事件名/回填命令区分（filesrv:transfer_request_hook /
+    /// plugin_filesrv_respond_transfer_request），payload 携带批元信息
+    async fn call_webview_batch_hook(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        req: &TransferRequestDto,
+    ) -> UploadHookDecision {
+        use tauri::Emitter;
+
+        let app_handle = self.app_handle.read().await.clone();
+        let Some(app_handle) = app_handle else {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                mount = %mount_path,
+                "webview transfer hook unavailable: app handle not injected, denying (fail-closed)"
+            );
+            return UploadHookDecision::deny("webview transfer hook unavailable");
+        };
+
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.pending_transfer_hook_replies
+            .lock()
+            .await
+            .insert(request_id.clone(), reply_tx);
+
+        let payload = serde_json::json!({
+            "requestId": request_id,
+            "pluginId": plugin_id,
+            "mountPath": mount_path,
+            "meta": req,
+        });
+        if let Err(e) = app_handle.emit("filesrv:transfer_request_hook", payload) {
+            self.pending_transfer_hook_replies.lock().await.remove(&request_id);
+            tracing::error!(
+                plugin_id = %plugin_id,
+                "webview transfer hook emit failed: {}",
+                e
+            );
+            return UploadHookDecision::deny("webview transfer hook emit failed");
+        }
+
+        match tokio::time::timeout(TRANSFER_HOOK_TIMEOUT, reply_rx).await {
+            Ok(Ok(decision)) => decision,
+            _ => {
+                self.pending_transfer_hook_replies.lock().await.remove(&request_id);
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    mount = %mount_path,
+                    "webview transfer hook timed out (2s), denying (fail-closed)"
+                );
+                UploadHookDecision::deny("webview transfer hook timed out")
+            }
+        }
+    }
+
+    /// 回填 Webview 批钩子决定（Tauri command 调用；request 不存在/已超时返回 false）
+    pub async fn respond_transfer_hook(
+        &self,
+        request_id: &str,
+        decision: UploadHookDecision,
+    ) -> bool {
+        let tx = self
+            .pending_transfer_hook_replies
+            .lock()
+            .await
+            .remove(request_id);
         match tx {
             Some(tx) => tx.send(decision).is_ok(),
             None => false,
@@ -838,6 +1512,10 @@ fn validate_mount_path(mount_path: &str) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_service::transfer::{
+        RejectReason, TransferBatch, TransferRequestDto, APPROVED_BATCH_TTL,
+    };
+    use std::sync::Arc;
 
     #[test]
     fn test_validate_mount_path() {
@@ -849,5 +1527,237 @@ mod tests {
         assert!(validate_mount_path("../evil").is_err());
         assert!(validate_mount_path("a/b").is_err());
         assert!(validate_mount_path(&"x".repeat(65)).is_err());
+    }
+
+    fn test_registry() -> Arc<FileServiceRegistry> {
+        FileServiceRegistry::with_saf_io(crate::plugin::saf_io::default_saf_io())
+    }
+
+    fn dto(batch_id: &str) -> TransferRequestDto {
+        TransferRequestDto {
+            batch_id: batch_id.to_string(),
+            files: vec![UploadRequestMeta {
+                relative_path: "a.txt".to_string(),
+                size: 100,
+            }],
+            total_size: 100,
+        }
+    }
+
+    fn test_batch(batch_id: &str, plugin_id: &str, state: BatchState) -> TransferBatch {
+        TransferBatch {
+            batch_id: batch_id.to_string(),
+            plugin_id: plugin_id.to_string(),
+            mount_path: "files".to_string(),
+            files: vec![],
+            total_size: 0,
+            state,
+            created_at: Instant::now(),
+            last_active: Instant::now(),
+            approval_timeout: Duration::from_secs(DEFAULT_APPROVAL_TIMEOUT_SECS),
+        }
+    }
+
+    // ==================== 批钩子三路分流 ====================
+
+    #[tokio::test]
+    async fn test_create_transfer_request_none_hook_fail_closed() {
+        // HookTarget::None（TS 挂载未提供钩子）→ deny，不建批（fail-closed）
+        let registry = test_registry();
+        registry
+            .insert_entry_for_test(MountEntry {
+                plugin_id: "p1".to_string(),
+                mount_path: "files".to_string(),
+                roots: vec![],
+                saf_roots: vec![],
+                operations: vec![FileOperation::Upload],
+                hook: HookTarget::None,
+                cipher: Arc::new(PassthroughCipher),
+            })
+            .await;
+        let result = registry.create_transfer_request("p1", "files", &dto("b1")).await;
+        match result {
+            Err(BatchError::Denied(reason)) => {
+                assert!(reason.contains("no upload hook"));
+            }
+            other => panic!("expected Denied, got {:?}", other.map(|_| ())),
+        }
+        assert!(registry.batches.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_transfer_request_mount_missing_denies() {
+        // 挂载不存在 → fail-closed 拒绝
+        let registry = test_registry();
+        let result = registry.create_transfer_request("p1", "nope", &dto("b1")).await;
+        assert!(matches!(result, Err(BatchError::Denied(_))));
+    }
+
+    // ==================== approve / reject 归属校验 ====================
+
+    #[tokio::test]
+    async fn test_approve_transfer_ownership_and_transition() {
+        let registry = test_registry();
+        registry
+            .insert_batch_for_test(test_batch("b1", "p1", BatchState::Pending))
+            .await;
+
+        // 他插件应答 → NotFound（不泄露存在性）
+        assert!(matches!(
+            registry.approve_transfer("other", "b1").await,
+            Err(BatchError::NotFound(_))
+        ));
+        // 正确归属 → approved
+        assert!(registry.approve_transfer("p1", "b1").await.is_ok());
+        // 重复应答（已 approved）→ NotPending
+        assert!(matches!(
+            registry.approve_transfer("p1", "b1").await,
+            Err(BatchError::NotPending(_))
+        ));
+        // 批不存在 → NotFound
+        assert!(matches!(
+            registry.approve_transfer("p1", "ghost").await,
+            Err(BatchError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_reject_transfer_transition() {
+        let registry = test_registry();
+        registry
+            .insert_batch_for_test(test_batch("b1", "p1", BatchState::Pending))
+            .await;
+        assert!(registry.reject_transfer("p1", "b1").await.is_ok());
+        // 已拒绝后再次拒绝 → NotPending
+        assert!(matches!(
+            registry.reject_transfer("p1", "b1").await,
+            Err(BatchError::NotPending(_))
+        ));
+    }
+
+    // ==================== check_batch gating（ask 防绕过） ====================
+
+    #[tokio::test]
+    async fn test_check_batch_gating() {
+        let registry = test_registry();
+        registry
+            .insert_batch_for_test(test_batch("b-approved", "p1", BatchState::Approved))
+            .await;
+        registry
+            .insert_batch_for_test(test_batch("b-pending", "p1", BatchState::Pending))
+            .await;
+        registry
+            .insert_batch_for_test(test_batch(
+                "b-rejected",
+                "p1",
+                BatchState::Rejected {
+                    reason: RejectReason::UserRejected,
+                },
+            ))
+            .await;
+
+        // approved → Ok(批引用)
+        assert!(registry.check_batch("p1", "files", "b-approved").await.is_ok());
+        // pending → batch-not-approved（403 语义）
+        match registry.check_batch("p1", "files", "b-pending").await {
+            Err(BatchError::NotApproved(m)) => assert_eq!(m, "batch-not-approved"),
+            other => panic!("expected NotApproved, got {:?}", other.map(|_| ())),
+        }
+        // rejected → batch-rejected
+        match registry.check_batch("p1", "files", "b-rejected").await {
+            Err(BatchError::Rejected(m)) => assert_eq!(m, "batch-rejected"),
+            other => panic!("expected Rejected, got {:?}", other.map(|_| ())),
+        }
+        // not-found / 归属不匹配 → batch-not-found（不泄露存在性）
+        match registry.check_batch("p1", "files", "ghost").await {
+            Err(BatchError::NotFound(m)) => assert_eq!(m, "batch-not-found"),
+            other => panic!("expected NotFound, got {:?}", other.map(|_| ())),
+        }
+        match registry.check_batch("other", "files", "b-approved").await {
+            Err(BatchError::NotFound(m)) => assert_eq!(m, "batch-not-found"),
+            other => panic!("expected NotFound (ownership), got {:?}", other.map(|_| ())),
+        }
+    }
+
+    // ==================== TTL / 超时 ====================
+
+    #[tokio::test]
+    async fn test_set_approval_timeout_bounds() {
+        let registry = test_registry();
+        // 9 / 601 越界 → InvalidInput；10 / 600 合法
+        assert!(registry
+            .set_approval_timeout("p1", "files", 9)
+            .await
+            .is_err());
+        assert!(registry
+            .set_approval_timeout("p1", "files", 601)
+            .await
+            .is_err());
+        assert!(registry
+            .set_approval_timeout("p1", "files", 10)
+            .await
+            .is_ok());
+        assert!(registry
+            .set_approval_timeout("p1", "files", 600)
+            .await
+            .is_ok());
+        // pending 批同步新超时（设置变更即时生效）
+        let mut batch = test_batch("b1", "p1", BatchState::Pending);
+        batch.approval_timeout = Duration::from_secs(DEFAULT_APPROVAL_TIMEOUT_SECS);
+        registry.insert_batch_for_test(batch).await;
+        assert!(registry.set_approval_timeout("p1", "files", 120).await.is_ok());
+        let stored = registry.batches.read().await.get("b1").cloned().unwrap();
+        assert_eq!(stored.approval_timeout, Duration::from_secs(120));
+    }
+
+    #[tokio::test]
+    async fn test_sweep_batches_timeout_and_cleanup() {
+        let registry = test_registry();
+        // pending 超时（approval_timeout 已过）→ rejected(timeout) + expired 通知项
+        let mut pending = test_batch("b-pending", "p1", BatchState::Pending);
+        pending.approval_timeout = Duration::from_millis(10);
+        pending.last_active = Instant::now() - Duration::from_secs(1);
+        registry.insert_batch_for_test(pending).await;
+
+        // approved 24h 无活动 → 清理
+        //（checked_sub 兜底：短开机时间（测试环境）下不能构造 24h 前的 Instant）
+        let mut approved = test_batch("b-approved", "p1", BatchState::Approved);
+        approved.last_active = Instant::now()
+            .checked_sub(APPROVED_BATCH_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        registry.insert_batch_for_test(approved).await;
+
+        // 未过期批不受影响
+        let fresh = test_batch("b-fresh", "p1", BatchState::Pending);
+        registry.insert_batch_for_test(fresh).await;
+
+        let expired = registry.sweep_batches().await;
+        assert_eq!(expired.len(), 2);
+        let rejected = expired.iter().find(|e| e.batch_id == "b-pending").unwrap();
+        assert_eq!(rejected.decision, "rejected");
+        assert_eq!(rejected.reason, "timeout");
+        let cleaned = expired.iter().find(|e| e.batch_id == "b-approved").unwrap();
+        assert_eq!(cleaned.decision, "cleaned");
+
+        // 批表只剩 fresh + 已终态的 b-pending（rejected 保留至 24h 后回收）
+        let batches = registry.batches.read().await;
+        assert!(batches.contains_key("b-pending"));
+        assert!(!batches.contains_key("b-approved"));
+        assert!(batches.contains_key("b-fresh"));
+        assert_eq!(
+            batches.get("b-pending").unwrap().state,
+            BatchState::Rejected {
+                reason: RejectReason::Timeout
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cancel_receiving_session_unknown_returns_not_found() {
+        let registry = test_registry();
+        assert!(matches!(
+            registry.cancel_receiving_session("p1", "ghost-session").await,
+            Err(BatchError::NotFound(_))
+        ));
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! 暴露插件操作为 Tauri invoke 命令
 
+use crate::file_service::registry::BatchError;
 use crate::plugin::manager::PluginManager;
 use crate::plugin::types::MobilePluginInfo;
 use crate::Result;
@@ -487,6 +488,140 @@ pub async fn plugin_filesrv_respond_upload_request(
     } else {
         Err(crate::AppError::InvalidInput(format!(
             "plugin_filesrv_respond_upload_request: request '{}' not pending (timed out or unknown) for plugin '{}'",
+            request_id, plugin_id
+        )))
+    }
+}
+
+// ==================== Transfer Batch Commands（v2 接收策略 / 批量批准） ====================
+//
+// 接收端用户应答（approve/reject）、批准超时配置、接收中任务取消、
+// Webview 批钩子回填。与 WASM host functions（host_filesrv_*）同构，
+// 均过 require_fileservice 门控。
+
+/// 批准传输批（接收端用户应答「接受全部」）
+///
+/// 批 pending → approved；随后宿主发本地 resolved 事件 + 跨端推送发送方
+#[tauri::command]
+pub async fn plugin_filesrv_approve_transfer(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    batch_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_filesrv_approve_transfer").await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        batch_id = %batch_id,
+        "plugin_filesrv_approve_transfer"
+    );
+    let fs = crate::state::get_file_service();
+    fs.registry
+        .approve_transfer(&plugin_id, &batch_id)
+        .await
+        .map_err(BatchError::into_app_error)
+}
+
+/// 拒绝传输批（接收端用户应答「拒绝全部」）
+///
+/// 批 pending → rejected(user-rejected)；随后宿主发 resolved 事件 + 跨端推送
+#[tauri::command]
+pub async fn plugin_filesrv_reject_transfer(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    batch_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_filesrv_reject_transfer").await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        batch_id = %batch_id,
+        "plugin_filesrv_reject_transfer"
+    );
+    let fs = crate::state::get_file_service();
+    fs.registry
+        .reject_transfer(&plugin_id, &batch_id)
+        .await
+        .map_err(BatchError::into_app_error)
+}
+
+/// 设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+#[tauri::command]
+pub async fn plugin_filesrv_set_approval_timeout(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    mount_path: String,
+    seconds: u64,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_filesrv_set_approval_timeout").await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        mount = %mount_path,
+        seconds = seconds,
+        "plugin_filesrv_set_approval_timeout"
+    );
+    let fs = crate::state::get_file_service();
+    fs.registry
+        .set_approval_timeout(&plugin_id, &mount_path, seconds)
+        .await
+        .map_err(BatchError::into_app_error)
+}
+
+/// 取消接收中的上传会话（接收端本地取消，session 级）
+///
+/// 取消后删除 .part 临时文件并发出 `filesrv:receiving_done`(cancelled)
+#[tauri::command]
+pub async fn plugin_filesrv_cancel_receiving(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    session_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_filesrv_cancel_receiving").await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        session_id = %session_id,
+        "plugin_filesrv_cancel_receiving"
+    );
+    let fs = crate::state::get_file_service();
+    fs.registry
+        .cancel_receiving_session(&plugin_id, &session_id)
+        .await
+        .map_err(BatchError::into_app_error)
+}
+
+/// 回填 Webview 批量传输钩子的决定
+///
+/// 宿主在 POST /transfer-request 时 emit `filesrv:transfer_request_hook` 事件，
+/// 前端插件回调后经本命令回填；decision_json 为 `UploadHookDecision` 的
+/// camelCase JSON（allow/ask/reason）。request 已超时/不存在时返回错误
+#[tauri::command]
+pub async fn plugin_filesrv_respond_transfer_request(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    request_id: String,
+    decision_json: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_fileservice(&manager, &plugin_id, "plugin_filesrv_respond_transfer_request").await?;
+    let decision: bedcode_plugin_api_mobile::UploadHookDecision =
+        serde_json::from_str(&decision_json).map_err(|e| {
+            crate::AppError::InvalidInput(format!(
+                "plugin_filesrv_respond_transfer_request: invalid decision JSON for plugin '{}': {}",
+                plugin_id, e
+            ))
+        })?;
+    let fs = crate::state::get_file_service();
+    let matched = fs
+        .registry
+        .respond_transfer_hook(&request_id, decision)
+        .await;
+    if matched {
+        Ok(())
+    } else {
+        Err(crate::AppError::InvalidInput(format!(
+            "plugin_filesrv_respond_transfer_request: request '{}' not pending (timed out or unknown) for plugin '{}'",
             request_id, plugin_id
         )))
     }

@@ -294,6 +294,19 @@ export function createMockContext(pluginId: string): PluginContext {
       // 对端（桌面端）信息来自控制面公告，浏览器中不可用
       return null
     },
+    // ==================== v2 批量传输批准（dev-shell mock） ====================
+    async approveTransferRequest(_batchId) {
+      pushLog('info', pluginId, 'fileService.approveTransferRequest (mock) 已批准')
+    },
+    async rejectTransferRequest(_batchId) {
+      pushLog('info', pluginId, 'fileService.rejectTransferRequest (mock) 已拒绝')
+    },
+    async setApprovalTimeout(mountPath, seconds) {
+      pushLog('info', pluginId, `fileService.setApprovalTimeout "${mountPath}" ${seconds}s (mock)`)
+    },
+    async cancelReceivingSession(sessionId) {
+      pushLog('info', pluginId, `fileService.cancelReceivingSession ${sessionId} (mock)`)
+    },
     async pickDirectory() {
       const value = await dialogService.showPrompt({
         title: '选择目录（dev-shell mock）',

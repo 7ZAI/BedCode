@@ -34,4 +34,26 @@ pub trait HostFileService {
     /// `filesrv:peer_changed` 事件推送。peer_id 为空表示询问当前连接对端
     ///（移动端单连接场景）。用于对端状态事件遗漏时主动恢复。
     fn filesrv_query_peer(&self, peer_id: &str) -> Result<(), HostError>;
+
+    /// 批准传输批（v2 接收端用户应答「接受全部」）
+    ///
+    /// 批必须处于 pending 且归属当前插件，否则返回错误；
+    /// 宿主将批置 approved、发本地 resolved 事件并跨端推送发送方。
+    fn filesrv_approve_transfer(&self, batch_id: &str) -> Result<(), HostError>;
+
+    /// 拒绝传输批（v2 接收端用户应答「拒绝全部」）
+    ///
+    /// 批必须处于 pending 且归属当前插件；宿主将批置 rejected(user-rejected)、
+    /// 发本地 resolved 事件并跨端推送发送方。
+    fn filesrv_reject_transfer(&self, batch_id: &str) -> Result<(), HostError>;
+
+    /// 设置批准超时（v2，秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+    ///
+    /// 按 (plugin, mount) 维度配置；越界值返回错误。
+    fn filesrv_set_approval_timeout(&self, mount_path: &str, seconds: u64) -> Result<(), HostError>;
+
+    /// 取消接收中的上传会话（v2 接收端本地取消，session 级）
+    ///
+    /// 宿主删除 .part 临时文件并发出 `filesrv:receiving_done`(cancelled)。
+    fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError>;
 }

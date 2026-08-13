@@ -131,6 +131,13 @@ impl UploadSessionManager {
         })
     }
 
+    /// 查询会话归属（(plugin_id, mount_path)）；v2 接收端取消命令用，
+    /// 先定位归属再按归属取消（session 级取消不要求调用方已知挂载点）
+    pub async fn owner_of(&self, sid: &str) -> Option<(String, String)> {
+        let sessions = self.sessions.lock().await;
+        sessions.get(sid).map(|s| (s.plugin_id.clone(), s.mount_path.clone()))
+    }
+
     /// 追加数据块（校验 offset == 已收字节数，否则 OffsetMismatch → HTTP 409）
     ///
     /// 返回追加后的已收字节数。数据块先经挂载点的 TransportCipher 解密
