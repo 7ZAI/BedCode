@@ -7,6 +7,13 @@
     </button>
     <div class="header-title-area">
       <h1 class="header-title">{{ sessionName }}</h1>
+      <!-- 便捷功能教程入口：跟随标题文字（间距固定），标题截断时保持可见 -->
+      <button class="help-btn" @click="$emit('action', 'help')" :title="t('mobile.terminalHelp.title')">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.5 9.5a2.6 2.6 0 115.1 1c-1.1.7-1.6 1.3-1.6 2.6m0 3h.01" />
+        </svg>
+      </button>
       <transition name="mode-badge">
         <span v-if="isSelectionMode" class="selection-mode-badge">{{ t('mobile.terminal.selectMode') }}</span>
       </transition>
@@ -162,6 +169,23 @@ function emitAction(key: string) {
 
 .back-btn:hover {
   color: var(--accent, #ece8dc);
+}
+
+.help-btn {
+  padding: 0.375rem;
+  color: var(--mobile-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.help-btn:hover {
+  color: var(--mobile-accent);
 }
 
 .header-title-area {

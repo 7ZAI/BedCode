@@ -7,10 +7,10 @@
       @click.self="emit('close')"
     >
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="emit('close')"></div>
-      <div class="shortcut-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
+      <div class="terminal-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
-          <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ $t('mobile.shortcutHelp.title') }}</span>
+          <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ $t('mobile.terminalHelp.title') }}</span>
           <button
             class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] active:opacity-70 transition-colors"
             @click="emit('close')"
@@ -33,14 +33,15 @@
 
 <script setup lang="ts">
 /**
- * 快捷键说明弹窗
- * 使用 marked 渲染静态 markdown 文档，展示各快捷键在终端中的功能
+ * 终端便捷功能教程弹窗
+ * 使用 marked 渲染静态 markdown 文档，覆盖快捷键面板/自定义快捷键/自定义命令/
+ * Agent 命令预设/`/` 补全/@ 文件引用等输入组件全部便捷功能
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
-import zhCNHelp from '@/assets/shortcut-help.zh-CN.md?raw'
-import enHelp from '@/assets/shortcut-help.en.md?raw'
+import zhCNHelp from '@/assets/terminal-help.zh-CN.md?raw'
+import enHelp from '@/assets/terminal-help.en.md?raw'
 import '@/styles/markdown-body.css'
 
 const { locale } = useI18n()
