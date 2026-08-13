@@ -51,7 +51,7 @@ BedCode is a LAN remote terminal application: the desktop app acts as the host r
 - **JWT Session Auth** (HS256, 7-day expiry) + device fingerprint verification; plugin token for Agent CLI hooks authentication
 
 > [!WARNING]
-> The end-to-end encryption toolkit (X25519 ECDH + AES-256-GCM) is implemented, but WebSocket / file transfer integration is still in progress — terminal communication is currently plaintext (`ws://`). See [Roadmap](#roadmap).
+> The end-to-end encryption toolkit (X25519 ECDH + AES-256-GCM) is implemented, but WebSocket / file transfer integration is still in progress — terminal communication is currently plaintext (`ws://`). Use only on trusted LANs.
 
 ### Internationalization
 
@@ -148,19 +148,6 @@ Agent CLI (PTY)
 - **`@bedcode/plugin-sdk-desktop`** / **`@bedcode/plugin-sdk-mobile`** (npm, MIT) — subpath exports: main API, Vite plugin (`./vite`), shared UI components (`./ui`), type definitions (`./types`)
 - **Scaffolding CLI** — `bedcode-plugin-desktop` (mobile: `bedcode-plugin`): `create` scaffolds a plugin project, `dev` browser HMR dev environment, `build`, `manifest` auto-fills declarations, `validate`, `doctor` environment self-check
 - **Docs** — `docs/plugin-dev-desktop.md` (desktop) and `docs/plugin-dev-mobile.md` (mobile)
-
-## Roadmap
-
-- [x] Agent CLI hooks plugin system and cdylib dynamic loading
-- [x] Mobile file browser and code viewer with diff rendering
-- [x] Multi-language support (i18n: zh-CN / en)
-- [x] Preset task cards with one-tap execution
-- [x] Advanced Actix Web network configuration, server management view and metrics dashboard
-- [ ] End-to-end encryption for WebSocket and file transfer (X25519 + AES-GCM toolkit done)
-- [ ] Linux desktop support
-- [ ] Internet connectivity interface
-- [ ] FCM push notifications
-- [ ] Virtual scrolling for terminal history
 
 ## Contributing
 

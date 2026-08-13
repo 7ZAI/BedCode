@@ -4,8 +4,6 @@
 
 # BedCode
 
-**躺在被窝里，用手机远程控制桌面上的 Agent CLI**
-
 [![Version](https://img.shields.io/badge/version-1.1.11-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
@@ -22,7 +20,7 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 > [!NOTE]
 > 当前面向桌面端与移动端同一 WiFi 的场景；未来预留互联网连接接口 / 内网穿透协议（需服务器）。
 
-## Features
+## 功能特性
 
 ### 桌面端（主机）
 
@@ -51,13 +49,13 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 - **JWT 会话认证**（HS256，7 天）+ 设备指纹验证；插件 Token 用于 Agent CLI hooks 认证
 
 > [!WARNING]
-> 端到端加密工具库（X25519 ECDH + AES-256-GCM）已实现，但 WebSocket / 文件传输接入仍在进行中，当前终端通信仍为明文（`ws://`）。详见[路线图](#roadmap)。
+> 端到端加密工具库（X25519 ECDH + AES-256-GCM）已实现，但 WebSocket / 文件传输接入仍在进行中，当前终端通信仍为明文（`ws://`），请在可信局域网内使用。
 
 ### 国际化
 
 vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错误码映射系统提供本地化错误消息。
 
-## Architecture
+## 架构
 
 Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 后端）：
 
@@ -68,7 +66,7 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 
 通信：**WebSocket**（终端双向流）+ **HTTP REST API**（插件 hooks、文件服务）。
 
-## Tech Stack
+## 技术栈
 
 | 分类 | 技术 |
 |------|------|
@@ -84,15 +82,15 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 | 插件系统 | wasmtime（WASM 组件运行时）+ cdylib 动态加载 |
 | 其他 | shiki（代码高亮）、ECharts（指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志 |
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
 - [Node.js](https://nodejs.org/) >= 18、[Rust](https://www.rust-lang.org/tools/install) >= 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)）
 
-### Install & Run
+### 安装与运行
 
 ```bash
 # 安装依赖
@@ -112,7 +110,7 @@ cd bedcode-desktop && npm run test:run          # 前端（vitest run）
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
-## Plugin System
+## 插件系统
 
 桌面端插件基于 **wasmtime 运行时（WASM Component Model）**：插件由 Rust / TypeScript 编译为 WASM 组件，在宿主内沙箱加载运行，同时兼容 cdylib 动态库插件。插件可观察和扩展宿主会话行为：
 
@@ -149,20 +147,7 @@ Agent CLI (PTY)
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
 - **开发文档** — `docs/plugin-dev-desktop.md`（桌面端）与 `docs/plugin-dev-mobile.md`（移动端）
 
-## Roadmap
-
-- [x] Agent CLI hooks 插件系统与 cdylib 动态加载
-- [x] 移动端文件浏览器和代码查看器（含 diff 渲染）
-- [x] 多语言支持（i18n: zh-CN / en）
-- [x] 预设任务卡片，一键执行
-- [x] Actix Web 高级网络配置、服务器管理视图与指标仪表盘
-- [ ] 端到端加密接入 WebSocket 与文件传输（X25519 + AES-GCM 工具库已完成）
-- [ ] Linux 桌面端支持
-- [ ] 互联网连接接口预留
-- [ ] FCM 推送通知
-- [ ] 终端历史虚拟滚动
-
-## Contributing
+## 贡献指南
 
 欢迎贡献！随时提交 Pull Request：
 
@@ -171,6 +156,6 @@ Agent CLI (PTY)
 3. 提交更改（`git commit -m 'feat: ...'`）
 4. 推送分支并发起 PR
 
-## License
+## 许可证
 
 MIT - 详见 [LICENSE](LICENSE)。
