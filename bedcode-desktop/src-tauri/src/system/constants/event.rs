@@ -28,3 +28,7 @@ pub const PLUGIN_ERROR: &str = "plugin:error";
 
 /// 窗口关闭请求 — 有运行中会话时发送到前端，请求用户确认
 pub const WINDOW_CLOSE_REQUESTED: &str = "window-close-requested";
+
+/// 终端尺寸控制权变更事件（远程客户端 resize / 本地 resize 应用时发出，
+/// 桌面端终端窗口据此提示「当前以移动端尺寸显示」）
+pub const TERMINAL_SIZE_OWNER: &str = "terminal-size-owner";

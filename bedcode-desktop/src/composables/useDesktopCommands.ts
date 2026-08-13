@@ -98,9 +98,28 @@ export async function restartSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * 远程客户端（移动端）控制的终端尺寸（本地终端窗口提示用）
+ */
+export interface RemoteSizeInfo {
+  cols: number
+  rows: number
+}
+
+/**
+ * resize_session 命令返回：本地窗口的 resize 是否应用到 PTY
+ *
+ * 会话存在远程（移动端）订阅者时 applied=false + 远程尺寸，
+ * 本地终端窗口据此提示「以移动端尺寸显示」
+ */
+export interface ResizeSessionResult {
+  applied: boolean
+  remoteSize: RemoteSizeInfo | null
+}
+
+/**
  * 调整终端大小
  */
-export async function resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
+export async function resizeSession(sessionId: string, cols: number, rows: number): Promise<ResizeSessionResult> {
   return await invoke('resize_session', { sessionId, cols, rows })
 }
 

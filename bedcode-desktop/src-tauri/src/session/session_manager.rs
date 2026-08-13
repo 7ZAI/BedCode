@@ -28,11 +28,34 @@ use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::enums::{SessionStatus, SessionType};
 use crate::Result;
 use chrono::Utc;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, RwLock};
+
+/// 远程客户端（移动端）最近一次设置的终端尺寸
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSize {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// 本地终端窗口 resize 的应用结果
+///
+/// 会话存在远程订阅者时本地 resize 被跳过（远程尺寸优先），
+/// 前端据此提示「当前以移动端尺寸显示」
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalResizeResult {
+    /// 本次 resize 是否已应用到 PTY
+    pub applied: bool,
+    /// 被跳过时：远程控制的尺寸（远程订阅者存在但从未 resize 时为空）
+    pub remote_size: Option<RemoteSize>,
+}
 
 /// Session Manager
 ///
@@ -61,6 +84,9 @@ pub struct SessionManager {
     app_handle: Arc<RwLock<Option<AppHandle>>>,
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
+    /// 最近一次远程客户端设置的终端尺寸（session_id → 尺寸），
+    /// 供本地终端窗口提示「当前以移动端尺寸显示」；本地 resize 应用时清除
+    remote_size: RwLock<HashMap<String, RemoteSize>>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
     resource_dir: Arc<PathBuf>,
     /// 会话生命周期监听器注册表
@@ -137,6 +163,7 @@ impl SessionManager {
             running,
             app_handle: Arc::new(RwLock::new(None)),
             sync_tx: RwLock::new(None),
+            remote_size: RwLock::new(HashMap::new()),
             resource_dir,
             lifecycle_listeners,
             input_listeners,
@@ -711,9 +738,71 @@ impl SessionManager {
         Ok(())
     }
 
-    /// 调整会话终端大小
+    /// 调整会话终端大小（远程客户端路径：HTTP / 移动端 WS）
+    ///
+    /// 总是应用，并记录「尺寸由远程控制」+ 通知前端（本地终端窗口显示提示）。
+    /// 多个远程客户端并发时按「最后调整者生效」竞争（与既有设计一致）。
     pub async fn resize_session(&self, session_id: &str, cols: u16, rows: u16) -> Result<()> {
-        self.pty_registry.resize(session_id, cols, rows).await
+        self.pty_registry.resize(session_id, cols, rows).await?;
+        self.remote_size
+            .write()
+            .await
+            .insert(session_id.to_string(), RemoteSize { cols, rows });
+        self.emit_terminal_size_owner(session_id, cols, rows, "remote").await;
+        Ok(())
+    }
+
+    /// 调整会话终端大小（本地桌面终端窗口路径）
+    ///
+    /// 会话存在远程订阅者时跳过（远程查看者宽度优先，避免移动端行尾截断）；
+    /// 返回结果供前端提示「当前以移动端尺寸显示」。远程订阅者全部断开后，
+    /// 本地窗口下一次 fit 自然接管尺寸并清除提示。
+    pub async fn resize_session_local(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<LocalResizeResult> {
+        let global = GlobalOutputManager::global();
+        if global.remote_subscriber_count(session_id).await > 0 {
+            let remote_size = self.remote_size.read().await.get(session_id).copied();
+            tracing::debug!(
+                "[SessionManager] Local resize skipped for session {} ({}x{}): remote viewer controls size",
+                session_id, cols, rows
+            );
+            return Ok(LocalResizeResult { applied: false, remote_size });
+        }
+        self.pty_registry.resize(session_id, cols, rows).await?;
+        self.remote_size.write().await.remove(session_id);
+        self.emit_terminal_size_owner(session_id, cols, rows, "local").await;
+        Ok(LocalResizeResult { applied: true, remote_size: None })
+    }
+
+    /// 清除远程尺寸控制记录（最后一个远程订阅者断开时由 WS 断连清理调用）：
+    /// 本地窗口下次 fit 直接接管尺寸，且不再返回陈旧远程尺寸
+    pub async fn clear_remote_size(&self, session_id: &str) {
+        self.remote_size.write().await.remove(session_id);
+    }
+
+    /// 通知前端终端尺寸控制权变更（远程控制时本地终端窗口显示提示）
+    async fn emit_terminal_size_owner(&self, session_id: &str, cols: u16, rows: u16, owner: &str) {
+        let app_handle = self.app_handle.read().await.clone();
+        if let Some(app) = app_handle {
+            if let Err(e) = app.emit(
+                crate::system::constants::event::TERMINAL_SIZE_OWNER,
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "cols": cols,
+                    "rows": rows,
+                    "owner": owner,
+                }),
+            ) {
+                tracing::warn!(
+                    "[SessionManager] Failed to emit terminal-size-owner: {}",
+                    e
+                );
+            }
+        }
     }
 
     /// 终止会话

@@ -58,6 +58,7 @@
           <div class="group-card">
             <SessionCard
               :session="mockSession"
+              :subscribe-available="false"
               @click="handleMockSessionClick"
               @stop=""
               @delete=""
@@ -82,6 +83,7 @@
             @click="handleSessionClick(session)"
             @stop="handleStopSession(session)"
             @delete="handleDeleteSession(session)"
+            @toggle-subscribe="handleToggleSubscribe(session)"
           />
         </div>
       </template>
@@ -124,6 +126,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { httpStopSession, httpRemoveSession } from '@/composables/useHttpApi'
 import { useToast } from '@/composables/useToast'
 import { useMockTerminal, MOCK_SESSION_ID } from '@/composables/useMockTerminal'
@@ -134,7 +137,8 @@ import LoadingDialog from '@/components/LoadingDialog.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
-const { prepareSession } = useTerminalBuffer()
+const { prepareSession, pauseSessionSubscription, resumeSessionSubscription } = useTerminalBuffer()
+const terminalBufferStore = useTerminalBufferStore()
 const toast = useToast()
 const { t } = useI18n()
 
@@ -197,6 +201,45 @@ async function handleSessionClick(session: any) {
 function handleStopSession(session: any) {
   pendingSession.value = session
   showStopConfirm.value = true
+}
+
+// ==================== 手动订阅控制 ====================
+// 场景：移动端保持连接，但想用桌面端终端以桌面尺寸展示 —— 暂停订阅
+// 让出 PTY 尺寸控制权（桌面端 resize 不再被远程订阅者跳过）；恢复订阅后
+// 移动端重新成为远程订阅者，尺寸在下次进入终端页时同步回移动端。
+// 状态流转：pauseSubscription（保游标）→ wsLeaveSession；resume → 按游标
+// 续传（服务端裁决 incremental/reset），见 useTerminalBuffer。
+
+const subscriptionBusy = ref(false)
+
+async function handleToggleSubscribe(session: any) {
+  if (subscriptionBusy.value || !isConnected.value) return
+  subscriptionBusy.value = true
+  try {
+    const buffer = terminalBufferStore.getBuffer(session.id)
+    const paused = buffer?.manuallyPaused ?? false
+    if (paused) {
+      const result = await resumeSessionSubscription(session.id)
+      if (!result) {
+        toast.error(t('mobile.sessionCard.resumeSubscriptionFailed'))
+        return
+      }
+      toast.success(t('mobile.sessionCard.subscriptionResumed'))
+    } else {
+      const ok = await pauseSessionSubscription(session.id)
+      if (!ok) {
+        // wsLeaveSession 失败：服务端订阅者未移除，桌面端仍无法接管尺寸
+        toast.error(t('mobile.sessionCard.pauseSubscriptionFailed'))
+        return
+      }
+      toast.success(t('mobile.sessionCard.subscriptionPaused'))
+    }
+  } catch (e) {
+    console.error('[SessionsView] Toggle subscription failed:', e)
+    toast.error(t('mobile.sessionCard.subscriptionToggleFailed'))
+  } finally {
+    subscriptionBusy.value = false
+  }
 }
 
 async function confirmStop() {

@@ -364,6 +364,13 @@ pub struct SubscriberState {
     pub dropped: AtomicU64,
 }
 
+/// 判断客户端 ID（WS 对端地址字符串）是否为回环地址（本地桌面终端窗口）
+fn is_loopback_client_id(client_id: &str) -> bool {
+    let host = client_id.rsplit_once(':').map(|(h, _)| h).unwrap_or(client_id);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "127.0.0.1" || host == "::1" || host == "localhost"
+}
+
 /// inactive 占位期间 pending 缓存上限：超出丢弃新事件（客户端激活后
 /// 字节游标连续性校验检测到缺口 → 增量重订阅自愈，事件仍留在输出队列）
 /// 16384：大历史重播（数万事件）期间实时输出缓存余量，降低重订阅风暴频率
@@ -683,6 +690,20 @@ impl SessionOutputManager {
             .count()
     }
 
+    /// 远程（非回环）订阅者数量 — 移动端等外部客户端的查看者数
+    ///
+    /// 本地桌面终端窗口（127.0.0.1 / ::1）不计入：本地窗口不拥有尺寸优先权，
+    /// 会话存在远程查看者时其 resize 不生效（远程尺寸优先，见
+    /// `SessionManager::resize_session_local`）
+    pub async fn remote_subscriber_count(&self) -> usize {
+        self.subscribers
+            .read()
+            .await
+            .values()
+            .filter(|s| !is_loopback_client_id(&s.client_id))
+            .count()
+    }
+
     /// 获取历史输出（供桌面端回放使用）
     ///
     /// 从 UnifiedOutputQueue 读取指定游标之后的全部事件，
@@ -812,6 +833,15 @@ impl GlobalOutputManager {
             "[GlobalOutputManager] Cleaned up subscriptions for client {} across {} sessions",
             client_id, sessions.len()
         );
+    }
+
+    /// 会话的远程订阅者数量（非回环客户端：移动端）
+    pub async fn remote_subscriber_count(&self, session_id: &str) -> usize {
+        let sessions = self.sessions.read().await;
+        match sessions.get(session_id) {
+            Some(manager) => manager.remote_subscriber_count().await,
+            None => 0,
+        }
     }
 
     /// 获取会话历史输出（供桌面端终端窗口回放使用）

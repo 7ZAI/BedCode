@@ -298,6 +298,13 @@ export default {
       taskAsking: '等待输入',
       taskCompleted: '已完成',
       taskInterrupted: '已中断',
+      pauseSubscription: '暂停订阅',
+      resumeSubscription: '恢复订阅',
+      subscriptionPaused: '已暂停订阅，桌面端可接管终端尺寸',
+      pauseSubscriptionFailed: '暂停订阅失败，请重试',
+      subscriptionResumed: '已恢复订阅',
+      resumeSubscriptionFailed: '恢复订阅失败',
+      subscriptionToggleFailed: '订阅操作失败',
     },
     sessionConfig: {
       start: '启动',

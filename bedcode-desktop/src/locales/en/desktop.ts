@@ -167,6 +167,7 @@ export default {
       bgImageRemove: 'Remove',
       bgImageOpacity: 'Image Opacity',
       bgImageSetFailed: 'Failed to set background image',
+      remoteSizeHint: 'Displaying at mobile size {cols}×{rows}',
     },
     server: {
       title: 'Server Management',

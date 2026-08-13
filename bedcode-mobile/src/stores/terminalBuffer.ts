@@ -51,6 +51,9 @@ export interface SessionBuffer {
   subscribing: boolean
   /** 会话是否已停止 */
   sessionStopped: boolean
+  /** 手动暂停订阅（会话卡片操作）：不订阅、丢弃在途帧、禁止自愈/自动重试，
+   *  桌面端可接管 PTY 尺寸；恢复时按游标续传（服务端裁决 incremental/reset） */
+  manuallyPaused: boolean
   /** 订阅确认前缓冲的回放帧（裁决消息与历史帧经不同消息路径，顺序无保证） */
   pending: OutputPayload[]
   /** 缓冲帧总字节数（防御性上限，超限重置订阅） */
@@ -79,6 +82,29 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 订阅确认前缓冲回放帧的上限（防御性；服务端环形容量远小于此） */
   const MAX_PENDING_FRAME_BYTES = 8 * 1024 * 1024
+
+  /**
+   * 手动暂停订阅（会话卡片操作）
+   *
+   * 后端取消订阅（调用方负责 wsLeaveSession）+ 保留字节游标，
+   * 桌面端可接管 PTY 尺寸；恢复时按游标续传（服务端裁决 incremental/reset）。
+   * 暂停期间 ws_output 入口丢弃在途帧（不推进游标）、自愈与自动重试均被
+   * manuallyPaused 守卫挡下，避免订阅被悄悄重建导致尺寸控制权被抢回。
+   */
+  function pauseSubscription(sessionId: string) {
+    invalidatePrepared(sessionId)
+    const buffer = ensureBuffer(sessionId)
+    buffer.manuallyPaused = true
+    buffer.subscribed = false
+    buffer.pending = []
+    buffer.pendingBytes = 0
+  }
+
+  /** 解除手动暂停（会话卡片恢复 / 进入终端页）：订阅由调用方按既有路径发起 */
+  function resumeSubscription(sessionId: string) {
+    const buffer = buffers.get(sessionId)
+    if (buffer) buffer.manuallyPaused = false
+  }
 
   /** 自愈重订阅冷却间隔下限（毫秒）：限制同一会话连续性自愈的频率 */
   const RESUBSCRIBE_COOLDOWN_MIN_MS = 2000
@@ -131,6 +157,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
           // 会话已停止后不再接收
           if (buffer.sessionStopped) return
+
+          // 手动暂停（会话卡片操作）：丢弃在途帧（不推进游标、不触发自愈），
+          // 避免取消订阅生效前的残留帧推进游标或悄悄重建订阅
+          if (buffer.manuallyPaused) return
 
           const handler = realtimeHandlers.get(sessionId)
 
@@ -274,7 +304,17 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
           handler?.onClear?.()
         }
 
-        buffer.subscribed = true
+        if (buffer.manuallyPaused) {
+          // 订阅在途期间被手动暂停（恢复途中点暂停的竞态窗口）：
+          // 服务端订阅由 pauseSessionSubscription 的 wsLeaveSession 撤销，
+          // 前端保持暂停不置已订阅——下次显式恢复时重新订阅
+          buffer.pending = []
+          buffer.pendingBytes = 0
+        } else {
+          // 订阅建立 = 暂停解除（任何路径成功订阅后不再处于手动暂停，
+          // 保证 ws_output 入口的 manuallyPaused 丢弃不会误伤新订阅流）
+          buffer.subscribed = true
+        }
         // incremental：缓冲帧跳过快照已覆盖部分后排空写入（服务端历史快照
         // 与订阅往返期间先到的帧字节重叠——不跳过则重复写入触发连续性自愈
         // 闪屏）；reset：缓冲帧已丢弃，回放帧随后按序到达（游标 -1 首帧锚定）
@@ -331,6 +371,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     sessionId: string,
     buffer: SessionBuffer,
   ) {
+    // 手动暂停期间不自愈重订阅：暂停语义 = 不订阅（尺寸控制权让给桌面端），
+    // 连续性违反的残留帧已被 ws_output 入口丢弃，不会到达此处；
+    // 此守卫防御未来路径遗漏
+    if (buffer.manuallyPaused) return
     invalidatePrepared(sessionId)
     const now = Date.now()
     const last = lastResubscribeAt.get(sessionId) ?? 0
@@ -383,6 +427,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         subscribed: false,
         subscribing: false,
         sessionStopped: false,
+        manuallyPaused: false,
         pending: [],
         pendingBytes: 0,
         replayRequested: false,
@@ -458,6 +503,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.cursor = -1
       buffer.pending = []
       buffer.pendingBytes = 0
+      // 会话停止即暂停理由消失：新会话生命周期默认正常订阅（可重新手动暂停）
+      buffer.manuallyPaused = false
     }
   }
 
@@ -556,6 +603,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     markUnsubscribed,
     markAllUnsubscribed,
     markSessionStopped,
+    pauseSubscription,
+    resumeSubscription,
     forceReplay,
     clearBuffer,
     clearAllBuffers,

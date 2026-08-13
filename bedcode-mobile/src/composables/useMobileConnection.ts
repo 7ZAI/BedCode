@@ -228,7 +228,9 @@ async function init() {
         console.warn('[MobileConnection] Global listener start failed:', e)
       })
       for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        if (!buffer.sessionStopped && !buffer.subscribed) {
+        // 手动暂停（会话卡片）过的会话不自动重建订阅：暂停语义 = 让出尺寸
+        // 控制权给桌面端，断连重连也不悄悄抢回（恢复由会话卡片显式发起）
+        if (!buffer.sessionStopped && !buffer.subscribed && !buffer.manuallyPaused) {
           // 统一订阅入口：字节游标续传 + 缓冲帧排空 + subscribing 防重
           // （失败不抛错，内部保持未订阅，等待下次重连/页面重进重试）
           bufferStore.subscribeSession(sid).catch((e) => {

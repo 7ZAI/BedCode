@@ -704,9 +704,11 @@ async function initTerminal() {
   })
   resizeObserverRef.value.observe(xtermContainer.value)
 
-  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到主机会话
+  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到主机会话。
+  // 不依赖会话状态门控：状态可能 stale，错过同步会让 PTY 停留在
+  // 桌面端宽度导致行尾截断（会话不存在时服务端处理无害）
   term.onResize(({ cols, rows }) => {
-    if (!isMockSession(sessionId.value) && isConnected.value && isSessionActive.value && sessionId.value) {
+    if (!isMockSession(sessionId.value) && isConnected.value && sessionId.value) {
       wsResizeTerminal(sessionId.value, cols, rows).catch((e: Error) => {
         console.warn('[TerminalView] Resize failed:', e)
       })
@@ -835,10 +837,13 @@ function clearTerminal() {
 
 /** 主动同步当前终端尺寸到主机 PTY（HTTP，带响应确认）
  * 重连/会话激活后 PTY 重建为默认 80x24，容器尺寸未变化时 fit/onResize 都不会触发，
- * 必须显式同步一次，否则输出按错误宽度换行导致格式混乱 */
+ * 必须显式同步一次，否则输出按错误宽度换行导致格式混乱。
+ * 不依赖会话状态门控：会话列表状态可能 stale，只要 WS 已连接就同步
+ * （会话不存在时服务端 404 无害）——错过同步会让 PTY 停留在桌面端宽度，
+ * 移动端行尾文字被截断 */
 async function syncTerminalSizeToHost() {
   if (!terminalRef.value || isMockSession(sessionId.value)) return
-  if (!isConnected.value || !isSessionActive.value) return
+  if (!isConnected.value) return
   const { cols, rows } = terminalRef.value
   if (cols <= 0 || rows <= 0) return
   const result = await httpResizeSession(sessionId.value, cols, rows)
@@ -926,6 +931,9 @@ function clearSubscribeRetry() {
 /** 订阅 + 失败自动重试（页面存活且会话活跃期间有效） */
 async function subscribeWithRetry() {
   if (isMockSession(sessionId.value)) return
+  // 手动暂停（会话卡片操作）期间不自动订阅：订阅恢复由会话卡片显式发起，
+  // 或进入终端页时自动解除（onMounted 的 resumeSubscription）
+  if (bufferStore.getBuffer(sessionId.value)?.manuallyPaused) return
   const result = await subscribeSession(sessionId.value)
   const buffer = bufferStore.getBuffer(sessionId.value)
 
@@ -979,6 +987,13 @@ onMounted(async () => {
   await nextTick()
   await initTerminal()
 
+  // 会话卡片手动暂停过订阅：进入终端页视为查看意图，解除暂停。
+  // 必须早于订阅路径（subscribeWithRetry）执行，否则 paused 守卫
+  // 会挡住订阅导致终端无输出；订阅本身由下方既有路径发起
+  if (!isMockSession(sessionId.value)) {
+    bufferStore.resumeSubscription(sessionId.value)
+  }
+
   // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
   if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
     if (terminalRef.value) {
@@ -994,8 +1009,12 @@ onMounted(async () => {
       forceReplay(sessionId.value)
     }
     await subscribeWithRetry()
-    syncTerminalSizeToHost()
   }
+
+  // 无条件同步一次尺寸（内部按 isConnected 门控）：会话状态 stale 时
+  // 上方 isSessionActive 分支可能被跳过，不兜底会令 PTY 停留在桌面端
+  // 宽度 → 移动端行尾截断；活跃时也由此处统一发送（避免重复调用）
+  syncTerminalSizeToHost()
 
   isTerminalReady.value = true
 })
@@ -1041,9 +1060,13 @@ watch(isConnected, async (connected) => {
   if (!connected) {
     handleDisconnect()
     clearSubscribeRetry()
-  } else if (connected && isSessionActive.value) {
-    // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
-    await subscribeWithRetry()
+  } else {
+    if (isSessionActive.value) {
+      // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
+      await subscribeWithRetry()
+    }
+    // 无论会话状态是否 stale 都重发尺寸（服务端 404 无害），
+    // 避免 PTY 停留在桌面端宽度导致移动端行尾截断
     syncTerminalSizeToHost()
   }
 })

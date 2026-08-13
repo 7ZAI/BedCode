@@ -154,7 +154,8 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function resizeSessionAction(sessionId: string, cols: number, rows: number) {
-    await resizeSession(sessionId, cols, rows)
+    // 返回命令结果：本地窗口 resize 可能因远程（移动端）订阅者存在而被跳过
+    return await resizeSession(sessionId, cols, rows)
   }
 
   return {

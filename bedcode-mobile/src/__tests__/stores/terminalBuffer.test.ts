@@ -403,4 +403,154 @@ describe('terminalBuffer store', () => {
     expect(store.consumePrepared()).toBe('s1')
     expect(store.consumePrepared()).toBeNull()
   })
+
+  // ==================== 手动暂停 / 恢复（会话卡片） ====================
+  // 核心不变量：暂停保留字节游标，恢复按游标续传（服务端裁决 incremental/
+  // reset），PTY 输出字节不缺失、不重复（服务端 get_range「严格连续」保证）
+
+  it('暂停：保留游标、清除订阅状态；暂停期间在途帧丢弃（游标不推进、不悄悄重建订阅）', async () => {
+    store.ensureBuffer('s1')
+    const buf = store.getBuffer('s1')!
+    buf.cursor = 10
+    await flushAsync()
+
+    const onOutput = vi.fn()
+    store.registerRealtimeHandler('s1', { onOutput })
+
+    store.pauseSubscription('s1')
+    expect(buf.manuallyPaused).toBe(true)
+    expect(buf.subscribed).toBe(false)
+    // 游标保留：恢复时从该位置续传
+    expect(buf.cursor).toBe(10)
+
+    // 取消订阅生效前的在途帧：丢弃，不推进游标、不触发自愈重订阅
+    listener!({ payload: payload('s1', 'ab', 10, 12) })
+    expect(buf.cursor).toBe(10)
+    expect(onOutput).not.toHaveBeenCalled()
+    expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  it('暂停期间连续性违反不触发自愈（尺寸控制权不被悄悄抢回）', async () => {
+    store.ensureBuffer('s1')
+    const buf = store.getBuffer('s1')!
+    buf.cursor = 5
+    store.markSubscribed('s1')
+    store.pauseSubscription('s1')
+    await flushAsync()
+
+    // 若入口未拦截，start=6 会触发连续性违反 → 自愈重订阅（invoke 调用）
+    listener!({ payload: payload('s1', 'xy', 6, 8) })
+    expect(buf.manuallyPaused).toBe(true)
+    expect(buf.subscribed).toBe(false)
+    expect(buf.cursor).toBe(5)
+    expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  it('恢复：以保留游标请求续传（incremental），帧从游标起字节连续写入', async () => {
+    store.ensureBuffer('s1')
+    const buf = store.getBuffer('s1')!
+    buf.cursor = 10
+    store.pauseSubscription('s1')
+    await flushAsync()
+
+    const onOutput = vi.fn()
+    store.registerRealtimeHandler('s1', { onOutput })
+
+    // 会话卡片「恢复订阅」：解除暂停 + 按保留游标订阅
+    store.resumeSubscription('s1')
+    expect(buf.manuallyPaused).toBe(false)
+    await store.subscribeSession('s1')
+
+    // 订阅请求携带保留游标（非 null）→ 服务端 incremental 从 10 字节级续传
+    expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: 10 })
+    expect(buf.subscribed).toBe(true)
+    expect(buf.manuallyPaused).toBe(false)
+
+    // 续传帧从游标 10 起（start_offset === cursor 通过连续性校验），不缺失
+    listener!({ payload: payload('s1', 'ef', 10, 12) })
+    listener!({ payload: payload('s1', 'gh', 12, 14) })
+    expect(onOutput).toHaveBeenCalledTimes(2)
+    expect(buf.cursor).toBe(14)
+  })
+
+  it('恢复：游标被环形淘汰时服务端裁决 reset → 清屏后全量重播（不缺失）', async () => {
+    store.ensureBuffer('s1')
+    const buf = store.getBuffer('s1')!
+    buf.cursor = 10
+    store.pauseSubscription('s1')
+    await flushAsync()
+
+    const onClear = vi.fn()
+    const onOutput = vi.fn()
+    store.registerRealtimeHandler('s1', { onOutput, onClear })
+
+    // 暂停期间输出量超过环形保留区间：游标 10 < minOffset → 服务端裁决 reset
+    invokeMock.mockResolvedValueOnce({
+      minSeq: 0,
+      maxSeq: 50,
+      historyCount: 40,
+      mode: 'reset',
+      minOffset: 5,
+      maxOffset: 45,
+    })
+    store.resumeSubscription('s1')
+    await store.subscribeSession('s1')
+
+    expect(buf.subscribed).toBe(true)
+    expect(buf.cursor).toBe(-1)
+    expect(onClear).toHaveBeenCalledTimes(1)
+
+    // 全量回放帧按序写入（起点 0，游标 -1 首帧锚定）
+    listener!({ payload: payload('s1', 'full-replay', 0, 11) })
+    expect(onOutput).toHaveBeenCalledTimes(1)
+    expect(buf.cursor).toBe(11)
+  })
+
+  it('断连保留手动暂停；会话停止清除暂停（新生命周期默认正常订阅）', async () => {
+    store.ensureBuffer('s1')
+    store.pauseSubscription('s1')
+    expect(store.getBuffer('s1')!.manuallyPaused).toBe(true)
+
+    // 断连：订阅状态全清，但手动暂停意图保留
+    store.markAllUnsubscribed()
+    expect(store.getBuffer('s1')!.manuallyPaused).toBe(true)
+    expect(store.getBuffer('s1')!.subscribed).toBe(false)
+
+    // 会话停止：暂停理由消失，新会话生命周期正常订阅
+    store.markSessionStopped('s1')
+    expect(store.getBuffer('s1')!.manuallyPaused).toBe(false)
+    expect(store.getBuffer('s1')!.subscribed).toBe(false)
+  })
+
+  it('订阅在途时手动暂停：完成后保持暂停不置已订阅（暂停不被静默解除）', async () => {
+    store.ensureBuffer('s1')
+    const buf = store.getBuffer('s1')!
+    buf.cursor = 10
+    await flushAsync()
+
+    let resolveInvoke: ((v: unknown) => void) | undefined
+    invokeMock.mockImplementation(
+      () => new Promise((r) => { resolveInvoke = r })
+    )
+
+    // 恢复订阅请求在途（subscribing=true）
+    const pending = store.subscribeSession('s1')
+    expect(buf.subscribing).toBe(true)
+    // 推进微任务：doSubscribe 完成 startGlobalListener 后到达 invoke（挂起中）
+    await flushAsync()
+    expect(resolveInvoke).toBeDefined()
+
+    // 在途期间用户点了「暂停」：wsLeaveSession 由 composable 发出，
+    // store 侧仅标记——在途订阅完成后不得覆盖暂停语义
+    store.pauseSubscription('s1')
+    expect(buf.manuallyPaused).toBe(true)
+
+    resolveInvoke!(subscribeOk)
+    await pending
+    await flushAsync()
+
+    // 暂停保持：订阅未被悄悄建立（服务端最终状态由 wsLeaveSession 撤销）
+    expect(buf.manuallyPaused).toBe(true)
+    expect(buf.subscribed).toBe(false)
+  })
 })

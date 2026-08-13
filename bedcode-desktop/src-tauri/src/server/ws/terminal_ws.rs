@@ -230,6 +230,11 @@ impl Actor for TerminalWs {
             let global_manager = GlobalOutputManager::global();
             for session_id in sessions {
                 global_manager.unsubscribe(&session_id, &client_id).await;
+                // 最后一个远程订阅者断开：清除远程尺寸控制记录，
+                // 本地窗口下次 fit 直接接管尺寸，不返回陈旧远程尺寸
+                if global_manager.remote_subscriber_count(&session_id).await == 0 {
+                    app_ctx.session_manager().clear_remote_size(&session_id).await;
+                }
             }
 
             if let Some(device_id) = device_id {

@@ -167,6 +167,7 @@ export default {
       bgImageRemove: '移除',
       bgImageOpacity: '图片不透明度',
       bgImageSetFailed: '设置背景图片失败',
+      remoteSizeHint: '以移动端尺寸 {cols}×{rows} 显示',
     },
     server: {
       title: '服务器管理',

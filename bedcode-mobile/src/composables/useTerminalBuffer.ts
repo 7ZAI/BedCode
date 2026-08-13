@@ -107,6 +107,42 @@ export function useTerminalBuffer() {
   }
 
   /**
+   * 手动暂停订阅（会话卡片操作）：让出 PTY 尺寸控制权给桌面端
+   *
+   * 取消后端订阅 + 保留字节游标（恢复时按游标续传，服务端裁决 incremental/reset）。
+   * 暂停期间自动订阅路径（页面重试/连续性自愈/断连重连）被 manuallyPaused
+   * 守卫挡下，订阅不会悄悄重建。
+   *
+   * @param sessionId - 会话 ID
+   * @returns 后端取消订阅是否成功（失败时订阅者未移除，桌面端仍无法接管尺寸）
+   */
+  async function pauseSessionSubscription(sessionId: string): Promise<boolean> {
+    store.pauseSubscription(sessionId)
+    try {
+      await wsLeaveSession(sessionId)
+      return true
+    } catch (e) {
+      console.warn('[useTerminalBuffer] Pause subscription leave session failed:', e)
+      return false
+    }
+  }
+
+  /**
+   * 手动恢复订阅（会话卡片操作）
+   *
+   * 解除暂停并按既有订阅路径重建（游标续传，服务端裁决；失败返回 null，
+   * 由调用方提示）。恢复后移动端重新成为远程订阅者，桌面端 resize 恢复被跳过
+   * （尺寸在下次进入终端页时由 syncTerminalSizeToHost 同步）。
+   *
+   * @param sessionId - 会话 ID
+   * @returns 订阅裁决信息；已订阅/在途/失败时返回 null
+   */
+  async function resumeSessionSubscription(sessionId: string): Promise<SubscribeResultInfo | null> {
+    store.resumeSubscription(sessionId)
+    return store.subscribeSession(sessionId)
+  }
+
+  /**
    * 强制全量重播 — 页面重进时 xterm 为全新实例，旧游标续传会丢失历史。
    * 重置游标与订阅状态，下次订阅服务端裁决 reset 全量重播
    *
@@ -192,6 +228,8 @@ export function useTerminalBuffer() {
     unregisterRealtimeHandler,
     subscribeSession,
     unsubscribeSession,
+    pauseSessionSubscription,
+    resumeSessionSubscription,
     forceReplay,
     prepareSession,
     handleDisconnect,

@@ -23,6 +23,20 @@
     </span>
 
     <button
+      v-if="session.status !== 'stopped' && subscribeAvailable"
+      class="ml-1 w-11 h-11 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
+      :style="subscriptionBtnStyle"
+      @click.stop="$emit('toggle-subscribe')"
+      :title="subscriptionPaused ? t('mobile.sessionCard.resumeSubscription') : t('mobile.sessionCard.pauseSubscription')"
+    >
+      <!-- 眼睛：订阅中；暂停时叠加斜线（桌面端可接管尺寸） -->
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+        <path v-if="subscriptionPaused" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4l16 16" />
+      </svg>
+    </button>
+    <button
       v-if="session.status !== 'stopped'"
       class="ml-1 w-11 h-11 rounded-lg flex items-center justify-center active:opacity-80 transition-colors flex-shrink-0"
       style="background: color-mix(in srgb, var(--mobile-chip-red) 16%, transparent); color: var(--mobile-chip-red); border: 1px solid color-mix(in srgb, var(--mobile-chip-red) 35%, transparent)"
@@ -52,18 +66,45 @@ import { computed, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RemoteSession } from '@/composables/useMobileCommands'
 import { useRunTime } from '@/composables/useRunTime'
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 const { t } = useI18n()
+const terminalBuffer = useTerminalBufferStore()
 
 const props = defineProps<{
   session: RemoteSession
+  /** 是否显示订阅开关（mock 会话无真实订阅，隐藏） */
+  subscribeAvailable?: boolean
 }>()
 
 defineEmits<{
   click: []
   stop: []
   delete: []
+  'toggle-subscribe': []
 }>()
+
+/** 订阅是否被手动暂停（会话卡片操作）——尺寸控制权已让给桌面端 */
+const subscriptionPaused = computed(() => {
+  const buffer = terminalBuffer.getBuffer(props.session.id)
+  return buffer?.manuallyPaused ?? false
+})
+
+/** 订阅开关配色：暂停中 amber 高亮（有状态），订阅中中性色；
+ * 全部走既有 chip token（--mobile-chip-amber* / --mobile-chip-zinc*），
+ * 不另造百分比避免主题下偏色 */
+const subscriptionBtnStyle = computed(() => {
+  if (subscriptionPaused.value) {
+    return {
+      background: 'var(--mobile-chip-amber-bg)',
+      color: 'var(--mobile-chip-amber)',
+    }
+  }
+  return {
+    background: 'var(--mobile-chip-zinc-bg)',
+    color: 'var(--mobile-chip-zinc)',
+  }
+})
 
 const isRunning = computed(() => {
   return props.session.status === 'running' || props.session.status === 'waiting_input'
