@@ -49,14 +49,6 @@
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <Select
-              v-if="hasProvider"
-              :model-value="activeProviderId"
-              :options="providerOptions"
-              size="sm"
-              class="w-40 flex-shrink-0"
-              @update:model-value="onProviderChange"
-            />
             <button
               v-if="hasProvider"
               class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0"
@@ -151,10 +143,10 @@
             >
               <template #toolbar>
                 <Select
-                  :model-value="activeModel"
+                  :model-value="currentModelKey"
                   :options="modelOptions"
                   size="sm"
-                  class="model-picker w-52 flex-shrink-0"
+                  class="model-picker w-64 flex-shrink-0"
                   @update:model-value="onModelChange"
                 />
               </template>
@@ -178,7 +170,7 @@ import ChatInput from './ChatInput.vue'
 import ConversationList from './ConversationList.vue'
 import ProviderConfigPage from './ProviderConfigPage.vue'
 import Select from '@bedcode/plugin-sdk-desktop/ui'
-import { useAiConfig } from '../composables/useAiConfig'
+import { modelKey, useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePluginConfig } from '../composables/usePluginConfig'
 import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
@@ -204,7 +196,6 @@ const {
   addProvider,
   updateProvider,
   removeProvider,
-  setActiveProvider,
   setActiveModel,
 } = config
 
@@ -258,8 +249,17 @@ const showReasoning = computed(
   () => !pluginConfig.loading.value && pluginConfig.config.value.showReasoning,
 )
 
-const providerOptions = computed(() => providers.value.map(p => ({ value: p.id, label: p.name })))
-const modelOptions = computed(() => activeProvider.value?.models.map(m => ({ value: m, label: m })) || [])
+/** 输入框模型选择：全供应商模型扁平化（供应商名 / 模型名 区分），value 为供应商限定复合键 */
+const modelOptions = computed(() =>
+  providers.value.flatMap(p =>
+    p.models.map(m => ({ value: modelKey(p.id, m), label: `${p.name} / ${m}` })),
+  ),
+)
+
+/** 当前选择在模型选择器中的复合键（无有效选择时为空串） */
+const currentModelKey = computed(() =>
+  activeProviderId.value && activeModel.value ? modelKey(activeProviderId.value, activeModel.value) : '',
+)
 
 /** 最近一条消息的错误文本（assistant 空内容时显示） */
 const messageErrorText = computed(() => {
@@ -285,11 +285,8 @@ const canRegenerate = computed(() =>
   messages.value[messages.value.length - 1].role === 'assistant'
 )
 
-function onProviderChange(value: string | number): void {
-  setActiveProvider(String(value))
-}
-
 function onModelChange(value: string | number): void {
+  // 复合键（providerId::model），useAiConfig 内部解析并切换到对应供应商
   setActiveModel(String(value))
 }
 

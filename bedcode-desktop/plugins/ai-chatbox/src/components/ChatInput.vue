@@ -142,10 +142,10 @@ defineExpose({ focusInput })
   width: 14px;
   height: 14px;
 }
-/* 模型名过长时截断，保持 chip 稳定宽度 */
+/* 模型名过长时截断，保持 chip 稳定宽度（供应商名 / 模型名 展示空间） */
 :deep(.model-picker .relative button span) {
   font-size: 12px;
-  max-width: 150px;
+  max-width: 230px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

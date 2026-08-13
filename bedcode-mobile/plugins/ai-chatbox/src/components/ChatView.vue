@@ -125,7 +125,7 @@
             :disabled="sending || !hasProvider"
             :streaming="isStreaming"
             :placeholder="t('mobile.plugin.aiChatbox.inputPlaceholder')"
-            :model-value="activeModel"
+            :model-value="currentModelKey"
             :model-options="modelOptions"
             :show-model="hasProvider"
             @send="sendMessage"
@@ -170,7 +170,7 @@ import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import ConversationList from './ConversationList.vue'
 import ProviderConfigPage from './ProviderConfigPage.vue'
-import { useAiConfig } from '../composables/useAiConfig'
+import { modelKey, useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePluginConfig } from '../composables/usePluginConfig'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
@@ -236,7 +236,17 @@ const currentTitle = computed(() => {
   return title
 })
 
-const modelOptions = computed(() => activeProvider.value?.models.map(m => ({ value: m, label: m })) || [])
+/** 输入框模型选择：全供应商模型扁平化（供应商名 / 模型名 区分），value 为供应商限定复合键 */
+const modelOptions = computed(() =>
+  providers.value.flatMap(p =>
+    p.models.map(m => ({ value: modelKey(p.id, m), label: `${p.name} / ${m}` })),
+  ),
+)
+
+/** 当前选择在模型选择器中的复合键（无有效选择时为空串） */
+const currentModelKey = computed(() =>
+  activeProviderId.value && activeModel.value ? modelKey(activeProviderId.value, activeModel.value) : '',
+)
 
 // 配置加载完成前按 false 处理：避免用户已设 showReasoning=false 时，历史消息的
 // 思考块在首帧用默认值闪现后再消失（storage 读取为异步，与消息加载并行）

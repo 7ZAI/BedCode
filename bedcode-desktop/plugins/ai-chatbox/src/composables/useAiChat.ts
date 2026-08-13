@@ -231,11 +231,17 @@ export function useAiChat(
 
   // ==================== 发送 / 流式 ====================
 
-  /** 更新对话 meta 的模型/时间并落盘（发送或流结束时调用） */
+  /** 更新对话 meta 的供应商/模型/时间并落盘（发送或流结束时调用） */
   async function touchConversationMeta(): Promise<void> {
     const conv = currentConversation.value
     if (!conv) return
     conv.updatedAt = nowIso()
+    // 会话跟随当前选择：多供应商模型混选时 meta 记录实际使用的供应商（后端索引据此展示）
+    const provider = config.activeProvider.value
+    if (provider) {
+      conv.providerId = provider.id
+      conv.providerName = provider.name
+    }
     conv.model = config.activeModel.value || conv.model
     await saveConversation(conv)
   }

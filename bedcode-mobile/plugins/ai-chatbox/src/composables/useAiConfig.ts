@@ -18,6 +18,21 @@ const STORAGE_PROVIDERS = 'apiProviders'
 const STORAGE_ACTIVE_PROVIDER = 'activeProvider'
 const STORAGE_ACTIVE_MODEL = 'activeModel'
 
+/** 跨供应商模型选择键分隔符（模型名可跨供应商重名，选择键必须以供应商限定） */
+const MODEL_KEY_SEP = '::'
+
+/** 拼接跨供应商模型选择键：`${providerId}::${model}`（输入框模型选择器选项 value） */
+export function modelKey(providerId: string, model: string): string {
+  return providerId + MODEL_KEY_SEP + model
+}
+
+/** 解析跨供应商模型选择键；非法键返回 null（防御：无法解析的选择直接忽略） */
+export function parseModelKey(key: string): { providerId: string; model: string } | null {
+  const idx = key.indexOf(MODEL_KEY_SEP)
+  if (idx <= 0 || idx + MODEL_KEY_SEP.length >= key.length) return null
+  return { providerId: key.slice(0, idx), model: key.slice(idx + MODEL_KEY_SEP.length) }
+}
+
 export function useAiConfig(context: PluginContext) {
   const providers = ref<ApiProvider[]>([])
   const activeProviderId = ref('')
@@ -48,6 +63,12 @@ export function useAiConfig(context: PluginContext) {
       activeProviderId.value = activeId || (providers.value[0]?.id ?? '')
       if (!activeModel.value) {
         activeModel.value = model || providers.value[0]?.activeModel || providers.value[0]?.models[0] || ''
+      }
+      // 恢复的 activeModel 若不属于当前供应商（该供应商已删除或模型列表变更），
+      // 回退到供应商记录/首个模型，避免模型选择器显示无效选中
+      const restored = activeProvider.value
+      if (restored && activeModel.value && !restored.models.includes(activeModel.value)) {
+        activeModel.value = restored.activeModel || restored.models[0] || ''
       }
     } catch (e) {
       console.error('[AI Chatbox] Failed to load config:', e)
@@ -153,12 +174,21 @@ export function useAiConfig(context: PluginContext) {
     }
   }
 
-  async function setActiveModel(model: string): Promise<void> {
-    activeModel.value = model
-    await context.storage.set(STORAGE_ACTIVE_MODEL, model)
+  /**
+   * 选择模型（跨供应商）：key 为 `${providerId}::${model}` 复合键；
+   * 模型属于其他供应商时先切换激活供应商，再持久化选择（多供应商模型混选）
+   */
+  async function setActiveModel(key: string): Promise<void> {
+    const parsed = parseModelKey(key)
+    if (!parsed) return
+    if (parsed.providerId !== activeProviderId.value) {
+      await setActiveProvider(parsed.providerId)
+    }
+    activeModel.value = parsed.model
+    await context.storage.set(STORAGE_ACTIVE_MODEL, parsed.model)
     // 同步回供应商记录（持久化当前选择）
     if (activeProvider.value) {
-      const updated = { ...activeProvider.value, activeModel: model }
+      const updated = { ...activeProvider.value, activeModel: parsed.model }
       await updateProvider(updated)
     }
   }

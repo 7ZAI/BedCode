@@ -103,10 +103,46 @@ describe('useAiConfig', () => {
   it('切换模型：持久化 activeModel + 同步供应商记录', async () => {
     const { mock, config } = setup()
     await config.addProvider(makeProvider())
-    await config.setActiveModel('deepseek-reasoner')
+    await config.setActiveModel('p1::deepseek-reasoner')
 
     expect(mock.storageMap.get('activeModel')).toBe('deepseek-reasoner')
     expect(config.providers.value[0].activeModel).toBe('deepseek-reasoner')
+  })
+
+  it('跨供应商模型切换：选中其他供应商的模型时切换激活供应商并持久化', async () => {
+    const { mock, config } = setup()
+    await config.addProvider(makeProvider())
+    await config.addProvider(makeProvider({
+      id: 'p2',
+      name: 'Qwen',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-turbo', 'qwen-plus'],
+      activeModel: 'qwen-turbo',
+    }))
+
+    // 从 DeepSeek 的 deepseek-chat 切到 Qwen 的 qwen-plus（复合键带供应商 id）
+    await config.setActiveModel('p2::qwen-plus')
+
+    expect(config.activeProviderId.value).toBe('p2')
+    expect(config.activeModel.value).toBe('qwen-plus')
+    expect(mock.storageMap.get('activeProvider')).toBe('p2')
+    expect(mock.storageMap.get('activeModel')).toBe('qwen-plus')
+    expect(config.providers.value[1].activeModel).toBe('qwen-plus')
+    // 同供应商内切换不改变激活供应商
+    await config.setActiveModel('p1::deepseek-reasoner')
+    expect(config.activeProviderId.value).toBe('p1')
+  })
+
+  it('setActiveModel：非法复合键直接忽略，不改变任何状态', async () => {
+    const { config } = setup()
+    await config.addProvider(makeProvider())
+
+    await config.setActiveModel('no-separator')
+    expect(config.activeModel.value).toBe('deepseek-chat')
+    await config.setActiveModel('::model')
+    expect(config.activeModel.value).toBe('deepseek-chat')
+    await config.setActiveModel('p1::')
+    expect(config.activeModel.value).toBe('deepseek-chat')
   })
 
   it('拉取模型：命令调用 + 落库', async () => {
