@@ -180,35 +180,41 @@ describe('inputAssistant store', () => {
     expect(store.topShortcuts).toEqual(['ctrl+c', 'ctrl+a', 'ctrl+b'])
   })
 
-  it('getQuickBarItems: no stats → default quick keys, top N with count 0', () => {
+  it('getQuickBarItems: no stats → fixed enter/del at front + default quick keys, top N with count 0', () => {
     const store = newStore()
     const items = store.getQuickBarItems([])
-    expect(items.map((i) => i.key)).toEqual(['escape', 'enter', 'tab', 'shift+tab', 'ctrl+c', 'ctrl+o'])
+    expect(items.map((i) => i.key)).toEqual(['enter', 'backspace', 'escape', 'tab', 'shift+tab', 'ctrl+c', 'ctrl+o', 'ctrl+t'])
     expect(items.every((i) => i.count === 0)).toBe(true)
   })
 
-  it('getQuickBarItems: merges shortcuts and custom commands sorted by usage desc', () => {
+  it('getQuickBarItems: merges shortcuts and custom commands sorted by usage desc, enter/del fixed at front', () => {
     const store = newStore()
     store.recordShortcut('ctrl_c')
     store.recordShortcut('ctrl_c')
+    store.recordShortcut('enter')
+    store.recordShortcut('enter')
     store.recordShortcut('enter')
     store.recordCustomCommand('cmd-1')
     store.recordCustomCommand('cmd-1')
     store.recordCustomCommand('cmd-1')
     const items = store.getQuickBarItems([{ id: 'cmd-1', command: 'git status' }])
-    expect(items.map((i) => i.key)).toEqual(['cmd-1', 'ctrl_c', 'enter'])
-    expect(items[0].type).toBe('custom')
-    expect(items[0].label).toBe('git status')
+    expect(items.map((i) => i.key)).toEqual(['enter', 'backspace', 'cmd-1', 'ctrl_c'])
+    expect(items[0].type).toBe('shortcut')
+    expect(items[0].label).toBe('Enter')
     expect(items[1].type).toBe('shortcut')
-    expect(items[1].label).toBe('Ctrl+C')
+    expect(items[1].label).toBe('Del')
+    expect(items[2].type).toBe('custom')
+    expect(items[2].label).toBe('git status')
+    expect(items[3].type).toBe('shortcut')
+    expect(items[3].label).toBe('Ctrl+C')
   })
 
-  it('getQuickBarItems: quickBarCount clamped to [3, 10]', () => {
+  it('getQuickBarItems: quickBarCount clamped to [3, 10] plus 2 fixed (enter/del)', () => {
     const store = newStore()
     store.saveSettings({ quickBarCount: 2 })
-    expect(store.getQuickBarItems([])).toHaveLength(3)
+    expect(store.getQuickBarItems([])).toHaveLength(5)
     store.saveSettings({ quickBarCount: 20 })
-    expect(store.getQuickBarItems([])).toHaveLength(10)
+    expect(store.getQuickBarItems([])).toHaveLength(11) // 默认池 9 项 + 2 固定
   })
 
   it('getQuickBarItems: category mapping (enter/del/arrow/shortcut/custom)', () => {

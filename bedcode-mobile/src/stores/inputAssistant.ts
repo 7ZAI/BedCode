@@ -161,8 +161,8 @@ const SHORTCUT_LABELS: Record<string, string> = {
   page_down: 'PgDn',
 }
 
-/** 无统计数据时的默认快捷键（按 agent CLI 场景常用程度排序） */
-const DEFAULT_QUICK_KEYS = ['escape', 'enter', 'tab', 'shift+tab', 'ctrl+c', 'ctrl+o', 'ctrl+t', 'ctrl+l', 'arrow_up', 'ctrl+r']
+/** 无统计数据时的默认快捷键（按 agent CLI 场景常用程度排序；不含 Enter/Del，它们固定显示在最右） */
+const DEFAULT_QUICK_KEYS = ['escape', 'tab', 'shift+tab', 'ctrl+c', 'ctrl+o', 'ctrl+t', 'ctrl+l', 'arrow_up', 'ctrl+r']
 
 export const useInputAssistantStore = defineStore('inputAssistant', () => {
   // 悬浮球位置
@@ -396,16 +396,18 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
   })
 
   /**
-   * 获取快捷键条项目：合并快捷键和自定义命令，按频次排序取 top N
+   * 获取快捷键条项目：合并快捷键和自定义命令，按频次排序取 top N；
+   * Enter/Del 不参与频次排序，恒固定显示在最右（配合 quick-bar RTL 布局，DOM 首位渲染在最右）
    *
    * @param customCommands - 当前自定义命令列表（需要传入以获取命令文本作为 label）
-   * @returns 排序后的 QuickBarItem 列表
+   * @returns 排序后的 QuickBarItem 列表（[enter, del, ...频次项]）
    */
   function getQuickBarItems(customCommands: { id: string; command: string }[]): QuickBarItem[] {
     const count = Math.max(3, Math.min(10, settings.value.quickBarCount))
 
-    // 收集快捷键项
+    // 收集快捷键项（排除 Enter/Del：固定项不参与频次统计排序）
     const shortcutItems: QuickBarItem[] = Object.entries(shortcutStats.value)
+      .filter(([key]) => key !== 'enter' && key !== 'backspace')
       .map(([key, cnt]) => ({
         type: 'shortcut' as const,
         key,
@@ -428,19 +430,23 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
     const all = [...shortcutItems, ...cmdItems]
       .sort((a, b) => b.count - a.count)
 
-    // 有统计数据时取 top N
-    if (all.some(item => item.count > 0)) {
-      return all.slice(0, count)
-    }
+    // 有统计数据时取 top N；无统计数据时返回默认快捷键（降序：最常用的首项渲染在最右）
+    const pool: QuickBarItem[] = all.some(item => item.count > 0)
+      ? all.slice(0, count)
+      : DEFAULT_QUICK_KEYS.slice(0, count).map(key => ({
+          type: 'shortcut' as const,
+          key,
+          label: SHORTCUT_LABELS[key] || key,
+          count: 0,
+          category: getShortcutCategory(key),
+        }))
 
-    // 无统计数据时返回默认快捷键（降序：最常用的首项渲染在最右）
-    return DEFAULT_QUICK_KEYS.slice(0, count).map(key => ({
-      type: 'shortcut' as const,
-      key,
-      label: SHORTCUT_LABELS[key] || key,
-      count: 0,
-      category: getShortcutCategory(key),
-    }))
+    // 固定项：Enter/Del 恒显示在最右（RTL 布局下 DOM 首位渲染在最右）
+    return [
+      { type: 'shortcut', key: 'enter', label: SHORTCUT_LABELS.enter, count: 0, category: 'enter' },
+      { type: 'shortcut', key: 'backspace', label: SHORTCUT_LABELS.backspace, count: 0, category: 'del' },
+      ...pool,
+    ]
   }
 
   // 切换展开状态

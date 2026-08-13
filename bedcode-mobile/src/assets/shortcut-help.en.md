@@ -2,6 +2,31 @@
 
 The mobile terminal simulates common desktop terminal shortcuts. Below is a description of each shortcut's function in the terminal.
 
+## Input Bar
+
+The terminal bottom is the input bar, which from bottom to top contains: input box, action buttons, and the quick bar.
+
+### Quick Bar
+
+- Always shows frequently used shortcuts and quick commands, automatically sorted by usage frequency (scroll horizontally for more)
+- **Enter / Del are pinned to the far right**: they do not participate in frequency sorting and are always visible for thumb-friendly high-frequency access
+- Tap to send the corresponding key/command to the terminal
+
+### Input Box Action Buttons
+
+| Button | Function |
+|--------|----------|
+| Sliders button | Toggle the shortcut panel (shortcuts, arrow keys and custom commands, swipe left/right to switch pages) |
+| Send button (↑) | Send the input to the terminal input line (without Enter) |
+| Execute button (paper plane) | Execute the input (appends Enter automatically, e.g. run a command) |
+
+### File Sidebar (Referencing Files)
+
+After opening the file tree from the terminal sidebar:
+
+- **Tap a file**: open the file to view its content
+- **Long-press a file**: copy the file path and auto-fill it into the input box as `@path` (no manual typing needed)
+
 ## Modifier Keys
 
 | Shortcut | Function |

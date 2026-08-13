@@ -376,8 +376,9 @@
             :disabled="!canSubmit"
             @click="handleSubmit"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 13l8-9 8 9M12 4v16" />
+            <!-- 实体上箭头：发送语义，填充图标 + 放大尺寸提升辨识度 -->
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 4l8 9h-4.5v7h-7v-7H4z" />
             </svg>
           </button>
 
@@ -386,7 +387,7 @@
             :disabled="!canSubmit"
             @click="handleExecute"
           >
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
           </button>
