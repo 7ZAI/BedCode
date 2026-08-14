@@ -4,9 +4,10 @@
 //! 解析 plugin.json，编译并实例化 WASM 组件（Component Model，迁移 ticket 06）
 
 use crate::plugin::types::*;
+use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
 use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -107,6 +108,9 @@ impl PluginLoader {
 
         let mut plugins = HashMap::new();
         let mut wasm_plugins = HashMap::new();
+        // 已加载 id 集合：重复 id 先到先得，后出现的目录拒绝加载，
+        // 防止冒名插件顶替已加载插件（HashMap insert 覆盖语义是漏洞本体）
+        let mut seen_ids: HashSet<String> = HashSet::new();
 
         let entries = match fs::read_dir(plugins_dir) {
             Ok(entries) => entries,
@@ -139,6 +143,32 @@ impl PluginLoader {
                 Ok(manifest) => {
                     let plugin_id = manifest.id.clone();
                     let extension_path = path.to_string_lossy().to_string();
+
+                    // ==================== 身份校验（防冒名顶替） ====================
+                    // 1. id 必须为反向域名格式（拒绝大写/下划线/单段等非约定格式）
+                    if !validate_plugin_id(&plugin_id) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting plugin from {:?}: invalid id format {:?}",
+                            dir_name, plugin_id
+                        );
+                        continue;
+                    }
+                    // 2. 目录名必须与 manifest id 一致（卸载/文件服务路径依赖此约定）
+                    if !validate_dir_binding(&dir_name, &plugin_id) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting plugin {:?} from {:?}: dir name does not match manifest id (possible impersonation)",
+                            plugin_id, dir_name
+                        );
+                        continue;
+                    }
+                    // 3. 重复 id：先到先得，后到目录拒绝（防静默覆盖已加载插件）
+                    if !seen_ids.insert(plugin_id.clone()) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting duplicate plugin id {:?} from {:?}: already loaded from another directory",
+                            plugin_id, dir_name
+                        );
+                        continue;
+                    }
 
                     let source = Self::detect_source(&path);
 

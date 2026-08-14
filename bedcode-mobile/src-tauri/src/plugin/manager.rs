@@ -3,6 +3,9 @@
 //! 插件生命周期管理 — WASM 动态加载、激活、停用、状态持久化
 
 use async_trait::async_trait;
+use crate::plugin::approval::{
+    compute_dir_hash, effective_permissions, verify_approval, ApprovalStatus, PluginApprovalStore,
+};
 use crate::plugin::loader::PluginLoader;
 use crate::plugin::registry::builtin_manifests;
 use crate::plugin::storage::PluginStorage;
@@ -34,6 +37,8 @@ pub struct PluginManager {
     wasm_host_ctx: OnceLock<Arc<WasmHostContext>>,
     /// 插件键值存储
     storage: Arc<PluginStorage>,
+    /// 权限审批存储（批准记录 + 内容哈希钉扎，见 approval.rs）
+    approvals: Arc<PluginApprovalStore>,
     /// 设置管理器
     settings: Arc<SettingsManager>,
     /// 插件数据目录
@@ -60,6 +65,7 @@ impl PluginManager {
         app_handle: Arc<tauri::AppHandle>,
     ) -> Self {
         let storage = Arc::new(PluginStorage::new(app_data_dir));
+        let approvals = Arc::new(PluginApprovalStore::new(storage.clone()));
         let plugins_dir = app_data_dir.join(PLUGIN_DATA_DIR);
 
         let fs_auth = Arc::new(crate::plugin::fs_auth::FsAuthChecker::new(
@@ -92,6 +98,7 @@ impl PluginManager {
             wasm_plugins: Arc::new(RwLock::new(HashMap::new())),
             wasm_host_ctx: OnceLock::new(),
             storage,
+            approvals,
             settings,
             plugins_dir,
             plugin_db,
@@ -223,11 +230,114 @@ impl PluginManager {
         }
     }
 
+    /// 存量兼容：迁移后首启，对「已启用且无审批记录」的非内置插件自动批准一次
+    ///
+    /// 记录当前请求权限 + 目录哈希钉扎，避免升级后用户插件全部失活。
+    /// 一次性语义由持久化 migration_done 标记保证：HashMismatch 撤销批准后
+    /// 不会重新武装（篡改文件 → 重启不得静默重新批准），必须人工审批。
+    /// 哈希计算走 spawn_blocking（插件目录读取不进 async 事件循环）。
+    async fn auto_approve_legacy(&self, plugin_ids: &[String]) {
+        let done = match self.approvals.migration_done().await {
+            Ok(done) => done,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to read approval migration flag, skipping legacy auto-approval"
+                );
+                return;
+            }
+        };
+        if done {
+            return;
+        }
+
+        for id in plugin_ids {
+            if self.is_trusted_source(id).await {
+                continue;
+            }
+            let enabled = match self
+                .settings
+                .get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, id))
+                .await
+            {
+                Ok(Some(value)) => value == "true",
+                Ok(None) => false,
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "Failed to read enabled state");
+                    continue;
+                }
+            };
+            if !enabled {
+                continue;
+            }
+            match self.approvals.get(id).await {
+                Ok(Some(_)) => continue,
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "Failed to read approval");
+                    continue;
+                }
+            }
+
+            let (extension_path, version, requested) = {
+                let plugins = self.plugins.read().await;
+                match plugins.get(id) {
+                    Some(p) => (
+                        p.extension_path.clone(),
+                        p.manifest.version.clone(),
+                        p.manifest.permissions.clone(),
+                    ),
+                    None => continue,
+                }
+            };
+            let hash = {
+                let ext = extension_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    compute_dir_hash(std::path::Path::new(&ext))
+                })
+                .await
+                .map_err(|e| {
+                    crate::AppError::Plugin(format!("Approval hash task failed: {}", e))
+                })
+                .and_then(|r| r)
+            };
+            match hash {
+                Ok(hash) => {
+                    if let Err(e) = self.approvals.approve(id, &requested, &hash, &version).await {
+                        tracing::warn!(
+                            plugin_id = %id,
+                            error = %e,
+                            "Failed to auto-approve legacy enabled plugin"
+                        );
+                    } else {
+                        tracing::info!(
+                            plugin_id = %id,
+                            "Legacy enabled plugin auto-approved (migration one-time)"
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    plugin_id = %id,
+                    error = %e,
+                    "Failed to hash plugin dir for legacy auto-approval"
+                ),
+            }
+        }
+
+        // 无论是否有插件被批准，一次性标记置位
+        if let Err(e) = self.approvals.set_migration_done().await {
+            tracing::warn!(error = %e, "Failed to persist approval migration flag");
+        }
+    }
+
     /// 应用启动时：读取持久化启用状态，自动激活
     pub async fn load_all(&self, app_handle: &tauri::AppHandle) {
         let plugins = self.plugins.read().await;
         let plugin_ids: Vec<String> = plugins.keys().cloned().collect();
         drop(plugins);
+
+        // 存量兼容：迁移后首启自动批准（一次性，见 auto_approve_legacy）
+        self.auto_approve_legacy(&plugin_ids).await;
 
         for id in plugin_ids {
             if let Ok(Some(value)) = self.settings.get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, &id)).await {
@@ -243,11 +353,161 @@ impl PluginManager {
         self.dispatch_lifecycle_event(PluginLifecycleEvent::AppStartup).await;
     }
 
+    /// 判断插件来源是否属于内置信任域（无需审批）
+    ///
+    /// ApkAsset（APK assets 随包，含无标记历史产物）与 FrontendOnly
+    /// （内置注册）为应用构建产物，直接全量授权；FileInstall /
+    /// RemoteDownload（用户安装）必须经过人工审批。
+    pub async fn is_trusted_source(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins
+            .get(plugin_id)
+            .map(|p| {
+                p.source == PluginSource::ApkAsset || p.source == PluginSource::FrontendOnly
+            })
+            .unwrap_or(false)
+    }
+
+    /// 批准插件权限（人工审批入口）
+    ///
+    /// 记录用户同意的权限全集（manifest 请求）+ 目录内容哈希钉扎。
+    /// 仅用户安装插件需要审批；内置插件（ApkAsset/FrontendOnly）返回错误。
+    /// 批准成功后插件状态 NeedsApproval → Loaded，由前端继续启用激活。
+    pub async fn approve(&self, plugin_id: &str) -> Result<()> {
+        if self.is_trusted_source(plugin_id).await {
+            return Err(crate::AppError::Plugin(format!(
+                "Builtin plugin '{}' does not require approval",
+                plugin_id
+            )));
+        }
+        let (extension_path, version, requested) = {
+            let plugins = self.plugins.read().await;
+            let plugin = plugins.get(plugin_id).ok_or_else(|| {
+                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
+            })?;
+            (
+                plugin.extension_path.clone(),
+                plugin.manifest.version.clone(),
+                plugin.manifest.permissions.clone(),
+            )
+        };
+
+        let content_hash = {
+            let ext = extension_path.clone();
+            tokio::task::spawn_blocking(move || {
+                compute_dir_hash(std::path::Path::new(&ext))
+            })
+            .await
+            .map_err(|e| crate::AppError::Plugin(format!("Approval hash task failed: {}", e)))?
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to hash plugin dir: {}", e)))?
+        };
+        self.approvals
+            .approve(plugin_id, &requested, &content_hash, &version)
+            .await?;
+
+        // NeedsApproval → Loaded（前端随后可启用激活）
+        let mut plugins = self.plugins.write().await;
+        if let Some(p) = plugins.get_mut(plugin_id) {
+            if p.state == PluginState::NeedsApproval {
+                p.state = PluginState::Loaded;
+            }
+        }
+        tracing::info!(
+            plugin_id = %plugin_id,
+            permissions = ?requested,
+            "Plugin permissions approved and content pinned"
+        );
+        Ok(())
+    }
+
     /// 激活插件
     ///
     /// 锁约定：执行 WASM 导出函数期间不持有 plugins / wasm_plugins map 守卫
     /// （仅持单插件实例锁），避免 WASM 回调 host function 重入取 map 锁死锁。
     pub async fn activate(&self, plugin_id: &str, _app_handle: &tauri::AppHandle) -> Result<()> {
+        // 0. 审批门禁（防冒名顶替获取权限）
+        //
+        // 内置插件（ApkAsset/FrontendOnly）属于应用构建信任域，直接放行；
+        // 用户安装的插件必须已获人工批准且内容哈希未变，否则拒绝激活：
+        // - 无批准 → NeedsApproval（权限清单未经用户确认，不得生效）
+        // - 批准后文件被替换（哈希不匹配）→ 撤销批准 + NeedsApproval，
+        //   防止「批准 A 插件后换入 B 插件代码」的在位冒名攻击
+        let gate = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(plugin_id)
+                .map(|p| (p.source.clone(), p.extension_path.clone()))
+        };
+        let Some((source, extension_path)) = gate else {
+            return Err(crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)));
+        };
+        if source != PluginSource::ApkAsset && source != PluginSource::FrontendOnly {
+            let approval = self.approvals.get(plugin_id).await?;
+            // 目录哈希不进 async 事件循环（Android 主线程阻塞风险）
+            let (status, _current_hash) = {
+                let approval_for_hash = approval.clone();
+                let ext_for_hash = extension_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    verify_approval(
+                        approval_for_hash.as_ref(),
+                        std::path::Path::new(&ext_for_hash),
+                    )
+                })
+                .await
+                .map_err(|e| {
+                    crate::AppError::Plugin(format!("Approval verify task failed: {}", e))
+                })?
+                .map_err(|e| {
+                    crate::AppError::Plugin(format!("Failed to verify plugin approval: {}", e))
+                })?
+            };
+            match status {
+                ApprovalStatus::Approved => {
+                    // 生效权限 = 用户批准 ∩ manifest 请求（storage 恒授予），
+                    // 收紧 LoadedPlugin.granted_permissions（宿主侧权限裁决点）。
+                    // 注：WASM 实例内嵌权限集为实例化时的全量（上限），
+                    // 宿主侧检查（manager.has_permission 等）以本集合为准。
+                    let requested = {
+                        let plugins = self.plugins.read().await;
+                        plugins
+                            .get(plugin_id)
+                            .map(|p| p.manifest.permissions.clone())
+                            .unwrap_or_default()
+                    };
+                    let effective = effective_permissions(&requested, approval.as_ref(), false);
+                    let mut plugins = self.plugins.write().await;
+                    if let Some(p) = plugins.get_mut(plugin_id) {
+                        p.granted_permissions = effective;
+                    }
+                }
+                _ => {
+                    // Pending / HashMismatch 一律置 NeedsApproval 并拒绝激活
+                    let mut plugins = self.plugins.write().await;
+                    if let Some(p) = plugins.get_mut(plugin_id) {
+                        p.state = PluginState::NeedsApproval;
+                    }
+                    if status == ApprovalStatus::HashMismatch {
+                        tracing::warn!(
+                            plugin_id = %plugin_id,
+                            "Plugin content changed since approval, revoking approval"
+                        );
+                        // 撤销失败不阻断本次拒绝（插件仍无法激活），但必须留痕
+                        if let Err(e) = self.approvals.revoke(plugin_id).await {
+                            tracing::error!(
+                                plugin_id = %plugin_id,
+                                error = %e,
+                                "Failed to revoke approval after content mismatch"
+                            );
+                        }
+                    }
+                    return Err(crate::AppError::Plugin(format!(
+                        "Plugin '{}' requires user approval before activation (or its files changed since approval)",
+                        plugin_id
+                    )));
+                }
+            }
+        }
+
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {
             let mut plugins = self.plugins.write().await;
@@ -493,10 +753,13 @@ impl PluginManager {
         self.wasm_plugins.write().await.remove(plugin_id);
         self.plugins.write().await.remove(plugin_id);
 
-        // 清理启用偏好与插件存储
+        // 清理启用偏好、审批记录与插件存储
         let enabled_key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
         if let Err(e) = self.settings.remove(&enabled_key).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to remove enabled setting on uninstall");
+        }
+        if let Err(e) = self.approvals.revoke(plugin_id).await {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to revoke approval on uninstall");
         }
         if let Err(e) = self.storage().clear_plugin(plugin_id).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");

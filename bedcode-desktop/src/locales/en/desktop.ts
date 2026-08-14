@@ -243,6 +243,7 @@ export default {
       disabledSection: 'Disabled',
       activated: 'Activated',
       loaded: 'Loaded',
+      needsApproval: 'Pending approval',
       deactivated: 'Deactivated',
       disable: 'Disable',
       error: 'Error',

@@ -158,6 +158,7 @@ export function getDetailRows(plugin: PluginInfo): { key: string; label: string;
 export function getStateKey(state: PluginState): string {
   if (state.state === 'Error') return 'desktop.plugin.error'
   if (state.state === 'Activated') return 'desktop.plugin.activated'
+  if (state.state === 'NeedsApproval') return 'desktop.plugin.needsApproval'
   if (state.state === 'Loaded') return 'desktop.plugin.loaded'
   if (state.state === 'Deactivated') return 'desktop.plugin.deactivated'
   return 'desktop.plugin.loaded'

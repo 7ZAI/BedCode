@@ -95,6 +95,19 @@ pub async fn plugin_report_ready(
     manager.report_ready(&plugin_id).await
 }
 
+/// 批准插件权限（人工审批：记录权限清单 + 目录内容哈希钉扎）
+///
+/// 仅用户安装插件（file-install / remote-download）需要审批；
+/// 内置插件（apk-asset）调用返回错误。批准成功后状态 NeedsApproval → Loaded。
+#[tauri::command]
+pub async fn plugin_approve(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.approve(&plugin_id).await
+}
+
 // ==================== Plugin Storage Commands ====================
 
 /// 获取插件存储值

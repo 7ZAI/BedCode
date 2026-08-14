@@ -243,6 +243,7 @@ export default {
       disabledSection: '未启用',
       activated: '已激活',
       loaded: '已加载',
+      needsApproval: '待授权',
       deactivated: '已停用',
       disable: '停用',
       error: '错误',

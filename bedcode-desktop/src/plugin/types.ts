@@ -117,6 +117,7 @@ export interface FileHandlerContribution {
 export type PluginState =
   | { state: 'Loaded' }
   | { state: 'Activated' }
+  | { state: 'NeedsApproval' }
   | { state: 'Error'; error: string }
   | { state: 'Deactivated' }
 

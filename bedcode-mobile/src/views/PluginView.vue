@@ -43,6 +43,23 @@
             </div>
           </div>
 
+          <!-- 待授权横幅：权限未经批准，启用前必须人工审批 -->
+          <div
+            v-if="detailPlugin.state.state === 'NeedsApproval'"
+            class="mx-5 mt-3 px-4 py-3 rounded-xl border border-[color:color-mix(in_srgb,var(--mobile-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--mobile-warning)_10%,transparent)]"
+          >
+            <div class="text-sm font-medium text-[var(--mobile-warning)]">
+              {{ $t('mobile.plugin.approveHint') }}
+            </div>
+            <button
+              class="mt-2 w-full py-2.5 rounded-xl text-sm font-medium bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity disabled:opacity-50"
+              :disabled="installing"
+              @click="requestApprove(detailPlugin)"
+            >
+              {{ $t('mobile.plugin.approve') }}
+            </button>
+          </div>
+
           <!-- 操作按钮 -->
           <div class="px-5 grid grid-cols-2 gap-3">
             <button
@@ -353,6 +370,55 @@
       :loading="installing"
       @confirm="confirmUninstall"
     />
+
+    <!-- 权限审批弹层 -->
+    <Teleport to="body">
+      <Transition name="center-modal">
+        <div v-if="showApproveSheet" class="fixed inset-0 z-50 flex items-center justify-center p-4 mobile-ui">
+          <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="closeApproveSheet()"></div>
+          <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-5 shadow-xl modal-panel">
+            <h3 class="text-lg font-semibold text-[var(--mobile-text-primary)] mb-1">
+              {{ $t('mobile.plugin.approveTitle') }}
+            </h3>
+            <p class="text-xs mb-4 leading-relaxed text-[var(--mobile-text-muted)]">
+              {{ approveTarget ? $t('mobile.plugin.approveDesc', { name: approveTarget.name }) : '' }}
+            </p>
+
+            <!-- 权限清单 -->
+            <div v-if="approveTarget" class="rounded-xl border border-[var(--mobile-border)] divide-y divide-[var(--mobile-border)] overflow-hidden bg-[var(--mobile-bg-secondary)]">
+              <div v-for="perm in approveTarget.permissions" :key="perm" class="flex items-center gap-3 px-3 py-2.5">
+                <span class="w-4 h-4 flex items-center justify-center text-xs flex-shrink-0">{{ getPermissionMeta(perm).emoji }}</span>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-medium text-[var(--mobile-text-primary)]">{{ getPermissionMeta(perm).title }}</div>
+                  <div class="text-xs text-[var(--mobile-text-muted)]">{{ getPermissionMeta(perm).desc }}</div>
+                </div>
+                <span class="font-mono text-xs text-[var(--mobile-text-disabled)] flex-shrink-0">{{ perm }}</span>
+              </div>
+              <div v-if="approveTarget.permissions.length === 0" class="px-3 py-2.5 text-xs text-[var(--mobile-text-muted)]">
+                {{ $t('mobile.plugin.noPermissions') }}
+              </div>
+            </div>
+
+            <div class="mt-4 flex gap-3">
+              <button
+                class="flex-1 py-2.5 rounded-xl text-sm font-medium bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] active:opacity-80 transition-opacity disabled:opacity-50"
+                :disabled="installing"
+                @click="closeApproveSheet()"
+              >
+                {{ $t('mobile.plugin.dialog.cancel') }}
+              </button>
+              <button
+                class="flex-1 py-2.5 rounded-xl text-sm font-medium bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] active:opacity-80 transition-opacity disabled:opacity-50"
+                :disabled="installing"
+                @click="confirmApprove"
+              >
+                {{ installing ? $t('mobile.plugin.approving') : $t('mobile.plugin.approve') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -380,6 +446,7 @@ import {
   pluginInstallFromFile,
   pluginDownload,
   pluginUninstall,
+  pluginApprove,
 } from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
 import type { PluginInfo, PluginState } from '@/plugin/types'
@@ -396,6 +463,10 @@ const installUrl = ref('')
 const installing = ref(false)
 const uninstallTarget = ref<PluginInfo | null>(null)
 const showUninstallConfirm = ref(false)
+/** 审批弹层：目标插件 + 批准后是否继续启用 */
+const approveTarget = ref<PluginInfo | null>(null)
+const showApproveSheet = ref(false)
+const approveThenEnable = ref(false)
 
 /** 已启用分区：按开关偏好分组（启用后自动进入启用区） */
 const enabledPlugins = computed(() => plugins.value.filter((p) => pluginEnabledStates.value[p.id]))
@@ -432,6 +503,15 @@ function openDetail(plugin: PluginInfo): void {
 
 /** 切换启用/停用：持久化偏好 + 联动激活/停用 */
 async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<void> {
+  // 待授权插件：先走审批流程，批准成功后继续启用
+  if (enabled) {
+    const plugin = plugins.value.find((p) => p.id === pluginId)
+    if (plugin && plugin.state.state === 'NeedsApproval') {
+      approveThenEnable.value = true
+      requestApprove(plugin)
+      return
+    }
+  }
   try {
     await pluginSetEnabled(pluginId, enabled)
     if (enabled) {
@@ -518,12 +598,55 @@ function closeInstallSheet(): void {
   }
 }
 
+// ==================== 权限审批 ====================
+
+/** 请求审批（打开权限清单弹层） */
+function requestApprove(plugin: PluginInfo): void {
+  approveTarget.value = plugin
+  showApproveSheet.value = true
+}
+
+/** 确认批准：记录权限 + 内容钉扎，批准后按意图继续启用 */
+async function confirmApprove(): Promise<void> {
+  const plugin = approveTarget.value
+  if (!plugin) return
+  installing.value = true
+  try {
+    await pluginApprove(plugin.id)
+    toast.success(t('mobile.plugin.approveSuccess', { name: plugin.name }))
+    showApproveSheet.value = false
+    approveTarget.value = null
+    await loadPlugins()
+    // 审批由「启用」意图触发时，继续完成启用激活
+    if (approveThenEnable.value) {
+      approveThenEnable.value = false
+      await handlePluginToggle(plugin.id, true)
+    }
+  } catch (e: any) {
+    toast.error(t('mobile.plugin.approveFailed', { error: e.message || String(e) }))
+  } finally {
+    installing.value = false
+  }
+}
+
+function closeApproveSheet(): void {
+  if (!installing.value) {
+    showApproveSheet.value = false
+    approveTarget.value = null
+    approveThenEnable.value = false
+  }
+}
+
+
 // ==================== 展示辅助 ====================
 
 /** 状态徽章样式 */
 function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) {
     return 'bg-[var(--mobile-danger-bg)] text-[var(--mobile-danger-color)]'
+  }
+  if (state.state === 'NeedsApproval') {
+    return 'bg-[color:color-mix(in_srgb,var(--mobile-warning)_15%,transparent)] text-[var(--mobile-warning)]'
   }
   if (state.state === 'Activated') {
     return 'bg-[var(--mobile-success-muted)] text-[var(--mobile-success)]'
@@ -534,6 +657,7 @@ function stateBadgeClass(state: PluginState): string {
 /** 状态文本 key */
 function getStateKey(state: PluginState): string {
   if (state.state === 'Error') return 'mobile.plugin.stateError'
+  if (state.state === 'NeedsApproval') return 'mobile.plugin.stateNeedsApproval'
   if (state.state === 'Activated') return 'mobile.plugin.stateActivated'
   if (state.state === 'Deactivated') return 'mobile.plugin.stateDeactivated'
   return 'mobile.plugin.stateLoaded'

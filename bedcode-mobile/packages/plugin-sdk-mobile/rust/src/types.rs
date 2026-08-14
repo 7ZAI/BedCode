@@ -31,6 +31,8 @@ impl Default for PluginType {
 pub enum PluginState {
     Loaded,
     Activated,
+    /// 插件请求的权限尚未获得用户批准（需在插件管理页人工审批后才能激活）
+    NeedsApproval,
     Deactivated,
     Error { error: String },
 }

@@ -7,7 +7,8 @@
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
-use std::collections::HashMap;
+use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +29,9 @@ impl PluginLoader {
         }
 
         let mut plugins = HashMap::new();
+        // 已加载 id 集合：重复 id 先到先得，后出现的目录拒绝加载，
+        // 防止冒名插件顶替已加载插件（HashMap insert 覆盖语义是漏洞本体）
+        let mut seen_ids: HashSet<String> = HashSet::new();
         let entries = match fs::read_dir(plugins_dir) {
             Ok(entries) => entries,
             Err(e) => {
@@ -52,7 +56,36 @@ impl PluginLoader {
 
             match Self::load_manifest(&manifest_path) {
                 Ok(manifest) => {
+                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                     let plugin_id = manifest.id.clone();
+
+                    // ==================== 身份校验（防冒名顶替） ====================
+                    // 1. id 必须为反向域名格式（拒绝大写/下划线/单段等非约定格式）
+                    if !validate_plugin_id(&plugin_id) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting plugin from {:?}: invalid id format {:?}",
+                            dir_name, plugin_id
+                        );
+                        continue;
+                    }
+                    // 2. 目录名必须与 manifest id 一致
+                    //    （watcher 热重载/卸载/文件服务路径全部依赖「目录名 = id」约定，
+                    //    不一致说明目录被复制改名或 manifest 被替换，直接拒绝）
+                    if !validate_dir_binding(&dir_name, &plugin_id) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting plugin {:?} from {:?}: dir name does not match manifest id (possible impersonation)",
+                            plugin_id, dir_name
+                        );
+                        continue;
+                    }
+                    // 3. 重复 id：先到先得，后到目录拒绝（防静默覆盖已加载插件）
+                    if !seen_ids.insert(plugin_id.clone()) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting duplicate plugin id {:?} from {:?}: already loaded from another directory",
+                            plugin_id, dir_name
+                        );
+                        continue;
+                    }
                     // Windows read_dir 返回带 \\?\ verbatim 前缀的路径，该形式不允许
                     // 正斜杠拼接（插件用 "{resource_dir}/{file}" 拼接会触发
                     // ERROR_INVALID_NAME os error 123），统一剥离为常规路径

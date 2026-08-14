@@ -18,6 +18,7 @@ export type PluginType = 'rust' | 'rust-ts' | 'ts-only' | 'wasm'
 export type PluginState =
   | { state: 'Loaded' }
   | { state: 'Activated' }
+  | { state: 'NeedsApproval' }
   | { state: 'Deactivated' }
   | { state: 'Error'; error: string }
 

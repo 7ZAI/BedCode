@@ -54,6 +54,11 @@ export async function pluginReportReady(pluginId: string): Promise<void> {
   return await invoke('plugin_report_ready', { pluginId })
 }
 
+/** 批准插件权限（人工审批：记录权限清单 + 目录内容哈希钉扎） */
+export async function pluginApprove(pluginId: string): Promise<void> {
+  return await invoke('plugin_approve', { pluginId })
+}
+
 /** 获取插件存储值 */
 export async function pluginStorageGet(pluginId: string, key: string): Promise<any> {
   return await invoke('plugin_storage_get', { pluginId, key })
