@@ -5,6 +5,10 @@
 > 但「现状：自研 ABI」等描述已过时——自研 ABI 残留已在两端清理删除。
 > 实施细节与坑记录：桌面端 `.scratch/wasmtime-component-migration/`，
 > 移动端 `.scratch/mobile-wasmtime-component-migration/issues/`。
+>
+> 版本对齐：宿主 wasmtime 两端均为 47（硬约束，R6）；**SDK wit-bindgen / wit-component
+> 已两端对齐 =0.60.0 / =0.256.0（桌面端 2025-08-14 从 0.41/0.255 升级，源码零改动兼容，
+> 四插件 wasm32 构建 + 宿主 511 测试全绿验证）**。
 
 ---
 

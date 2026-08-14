@@ -10,4 +10,4 @@ path = "src/main.rs"
 
 [dependencies]
 # 与宿主测试（src-tauri dev-dep）同版本，保证编码行为一致
-wit-component = "0.255"
+wit-component = "=0.256.0"

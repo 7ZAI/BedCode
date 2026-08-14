@@ -132,8 +132,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 [dev-dependencies]
 tempfile = "3"
 # 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
-# （等价于 `wasm-tools component new`；版本与 wasmtime 46 的 wasm-tools 工具链对齐）
-wit-component = "0.255"
+# （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
+wit-component = "=0.256.0"
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
