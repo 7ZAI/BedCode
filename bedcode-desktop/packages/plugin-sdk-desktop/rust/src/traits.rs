@@ -127,6 +127,7 @@ mod tests {
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
                 rust_library: String::new(),
+                api: vec![],
                 icon: None,
             }
         }

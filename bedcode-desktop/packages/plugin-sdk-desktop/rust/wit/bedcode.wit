@@ -55,6 +55,17 @@ interface host-bus {
     unsubscribe: func(topic: string) -> result<_, string>;
 }
 
+/// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复
+interface host-api-call {
+    /// 发布请求到 request-topic（宿主按 `bedcode.api.*` 门禁校验目标 api
+    /// 已被某激活插件声明，未声明拒绝），并按调用方插件 ID + 请求载荷中的
+    /// 字符串 `id` 构造响应 topic（`bedcode.api.reply.<caller-id>.<request-id>`），
+    /// 宿主侧注册静态回复订阅 + 阻塞等待（调用方 wasm 实例阻塞期间无法接收
+    /// on_message，回复必须宿主侧消费，见 SDK api_call 模块注释）。
+    /// 返回回复 JSON 字符串（result | error 对象）；超时/门禁拒绝返回错误。
+    call: func(request-topic: string, payload-json: string, timeout-ms: u64) -> result<string, string>;
+}
+
 /// HTTP 代理（原 http.rs：http_fetch）
 interface host-http {
     fetch: func(request-json: string) -> result<option<string>, string>;
@@ -63,6 +74,31 @@ interface host-http {
 /// 宿主周期定时器（原 timer.rs：timer_register，ABI v6）
 interface host-timer {
     register: func(interval-secs: u64, command: string) -> result<_, string>;
+}
+
+/// 进程执行（v8：host-process）——调度框架等插件需要执行外部命令/脚本
+///
+/// 异步执行：`run` 立即返回 run-id，进程结束后宿主经 `events.on-process-done`
+/// 回调插件（携带 exit_code / 超时标记）；`kill` 用于超时/取消。
+interface host-process {
+    run: func(request-json: string) -> result<string, string>;
+    kill: func(run-id: string) -> result<_, string>;
+}
+
+/// 插件随包 CLI 生命周期（v8：host-app）——安装/卸载到用户 bin 目录并注册 PATH
+///
+/// WASM 插件无注册表/文件系统写权限的直接通道，PATH 操作由宿主侧实现：
+/// 插件在 activate 时安装自身随包的 cli/ 产物（如 bedtask），停用时卸载。
+/// 幂等：重复安装不产生重复条目，升级覆盖；卸载仅移除本插件条目。
+interface host-app {
+    /// 安装 CLI（幂等）：源 = 插件包目录 `cli/<file-name>`（Windows 自动补 .exe），
+    /// 复制到用户 bin 目录并注册 PATH；`bin-dir` 为空用平台默认
+    /// （Windows `%LOCALAPPDATA%/com.bedcode.app/bin`；unix `~/.bedcode/bin`）。
+    /// 返回安装后的 bin 目录绝对路径。
+    install-cli: func(payload-json: string) -> result<string, string>;
+    /// 卸载 CLI（幂等）：删除文件 + 移除仅本插件添加的 PATH 条目
+    /// （保留用户原有项）；应用关闭流程中调用时自动跳过（CLI 随下次激活重建）
+    uninstall-cli: func(payload-json: string) -> result<_, string>;
 }
 
 /// 文件系统访问（原 fs.rs：fs_read/write/copy/delete/exists）
@@ -166,6 +202,10 @@ interface events {
     on-message: func(topic: string, sender: string, payload-json: string) -> result<_, string>;
     on-session-lifecycle: func(payload-json: string) -> result<_, string>;
     on-input-submitted: func(payload-json: string) -> result<_, string>;
+    /// 进程执行完成回调（v8）：host-process run 的进程结束时触发
+    /// （正常退出 / 非零退出 / 超时 kill），payload-json 为
+    /// `{ run_id, exit_code, timed_out }`
+    on-process-done: func(payload-json: string) -> result<_, string>;
 }
 
 /// 终端输入/输出钩子（原 on_terminal_input/on_terminal_output）
@@ -213,9 +253,12 @@ world plugin {
     import host-config;
     import host-log;
     import host-bus;
+    import host-api-call;
     import host-file-service;
     import host-transfer;
     import host-timer;
+    import host-process;
+    import host-app;
 
     export command;
     export lifecycle;

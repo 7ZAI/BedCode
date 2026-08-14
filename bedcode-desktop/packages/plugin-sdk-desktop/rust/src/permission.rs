@@ -29,6 +29,16 @@ pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
 pub const PERMISSION_TRANSFER: &str = "transfer";
 /// 定时器：注册宿主周期回调（到点调用插件 command，见 ADR 0003）
 pub const PERMISSION_TIMER: &str = "timer:schedule";
+/// 进程执行：在桌面端进程内 spawn 外部命令/脚本（host-process，v8）
+///
+/// 高危能力（执行任意命令），插件 manifest 声明即信任；
+/// 每次执行由宿主全量审计日志（命令/参数/cwd/env/结果）
+pub const PERMISSION_PROCESS: &str = "process:run";
+/// 随包 CLI 生命周期：安装/卸载到用户 bin 目录并注册 PATH（host-app，v8）
+///
+/// 与 process:run 同信任域（CLI 本质是进程执行入口的封装）；
+/// 幂等安装/卸载，仅操作本插件声明的文件与 PATH 条目
+pub const PERMISSION_APP_CLI: &str = "app:cli";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -50,6 +60,8 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_SYSTEM_OPEN,
     PERMISSION_TRANSFER,
     PERMISSION_TIMER,
+    PERMISSION_PROCESS,
+    PERMISSION_APP_CLI,
 ];
 
 /// 权限到 API 方法的映射
@@ -79,6 +91,8 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_SYSTEM_OPEN, &["system.revealInDir"]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
     (PERMISSION_TIMER, &["timer.register"]),
+    (PERMISSION_PROCESS, &["process.run", "process.kill"]),
+    (PERMISSION_APP_CLI, &["app.cliInstall", "app.cliUninstall"]),
 ];
 
 /// 权限管理器

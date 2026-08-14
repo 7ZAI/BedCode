@@ -3,6 +3,7 @@
 //! 插件系统 - 加载、注册、权限管理和 API 桥接
 
 pub mod api_bridge;
+pub mod api_registry;
 pub mod file_service;
 pub mod fs_auth;
 pub mod host;

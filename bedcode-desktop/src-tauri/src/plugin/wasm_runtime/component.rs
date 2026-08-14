@@ -5,10 +5,10 @@
 //!   （单一事实来源），本模块用 `bindgen!` 生成绑定：
 //!   - import 接口 → `Host` trait，由本模块对 `WasmPluginState` 实现
 //!   - export 接口 → `exports::bedcode::plugin::*::Guest`，宿主侧调用组件
-//! - 已接线 13 组 import 接口（host-storage / host-log / host-config /
+//! - 已接线 15 组 import 接口（host-app / host-storage / host-log / host-config /
 //!   host-terminal / host-database / host-plugin-database / host-session /
 //!   host-timer / host-events / host-http / host-fs / host-bus /
-//!   host-file-service / host-transfer），完整 `plugin` world 可直接实例化；
+//!   host-file-service / host-transfer / host-process），完整 `plugin` world 可直接实例化；
 //!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块
 //! - 宿主能力实现层在 `host_impl`（阶段 C 后仅此一层，core 胶水已删）
 //!
@@ -21,8 +21,8 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    bus, config, database, events, file_service, fs, http, lifecycle, log, session, status,
-    storage, terminal, timer, transfer,
+    api, app, bus, config, database, events, file_service, fs, http, lifecycle, log, process,
+    session, status, storage, terminal, timer, transfer,
 };
 use super::{WasmHostContext, WasmPluginState, FUEL_PER_CALL};
 use crate::AppError;
@@ -159,6 +159,26 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
     }
 }
 
+impl bedcode::plugin::host_process::Host for WasmPluginState {
+    fn run(&mut self, request_json: String) -> Result<String, String> {
+        process::process_run(&self.host_ctx, &self.plugin_id, &request_json)
+    }
+
+    fn kill(&mut self, run_id: String) -> Result<(), String> {
+        process::process_kill(&self.host_ctx, &self.plugin_id, &run_id)
+    }
+}
+
+impl bedcode::plugin::host_app::Host for WasmPluginState {
+    fn install_cli(&mut self, payload_json: String) -> Result<String, String> {
+        app::install_cli(&self.host_ctx, &self.plugin_id, &payload_json)
+    }
+
+    fn uninstall_cli(&mut self, payload_json: String) -> Result<(), String> {
+        app::uninstall_cli(&self.host_ctx, &self.plugin_id, &payload_json)
+    }
+}
+
 impl bedcode::plugin::host_timer::Host for WasmPluginState {
     fn register(&mut self, interval_secs: u64, command: String) -> Result<(), String> {
         timer::timer_register(&self.host_ctx, &self.plugin_id, interval_secs, &command)
@@ -230,6 +250,18 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
     }
 }
 
+impl bedcode::plugin::host_api_call::Host for WasmPluginState {
+    fn call(&mut self, request_topic: String, payload_json: String, timeout_ms: u64) -> Result<String, String> {
+        api::api_call(
+            &self.host_ctx,
+            &self.plugin_id,
+            &request_topic,
+            &payload_json,
+            timeout_ms,
+        )
+    }
+}
+
 impl bedcode::plugin::host_file_service::Host for WasmPluginState {
     fn mount(&mut self, options_json: String) -> Result<String, String> {
         file_service::filesrv_mount(&self.host_ctx, &self.plugin_id, &options_json)
@@ -287,18 +319,21 @@ impl bedcode::plugin::host_transfer::Host for WasmPluginState {
 pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Result<()> {
     type D = wasmtime::component::HasSelf<WasmPluginState>;
     for iface in [
+        bedcode::plugin::host_app::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_terminal::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_session::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_api_call::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_file_service::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_transfer::add_to_linker::<WasmPluginState, D>,
     ] {
@@ -544,6 +579,22 @@ impl LoadedWasmPlugin {
             }
             Err(e) => {
                 Err(AppError::Plugin(format!("WASM on_input_submitted() call failed: {}", e)))
+            }
+        }
+    }
+
+    /// 调用插件的进程执行完成事件导出（host-process，v8）
+    pub(crate) fn on_process_done(&mut self, payload_json: &str) -> crate::Result<()> {
+        let exports = self.exports()?;
+        let events = exports.bedcode_plugin_events();
+        match events.call_on_process_done(&mut self.store, payload_json) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => {
+                tracing::warn!("WASM on_process_done() failed: {}", msg);
+                Ok(())
+            }
+            Err(e) => {
+                Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e)))
             }
         }
     }

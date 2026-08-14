@@ -133,6 +133,10 @@ impl events::Guest for Guest {
     fn on_input_submitted(_payload: String) -> Result<(), String> {
         Ok(())
     }
+
+    fn on_process_done(_payload: String) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl terminal_hooks::Guest for Guest {

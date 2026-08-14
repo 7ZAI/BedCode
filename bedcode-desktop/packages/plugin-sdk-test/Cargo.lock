@@ -31,10 +31,21 @@ name = "bedcode-plugin-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bedcode-plugin-api-macros",
  "inventory",
  "serde",
  "serde_json",
  "wit-bindgen",
+]
+
+[[package]]
+name = "bedcode-plugin-api-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -7,11 +7,12 @@
 //!
 //! 各子 trait 按功能域一一对应宿主侧 host function 分组
 //! （storage / database / terminal / session / events / http / fs / log / bus / config /
-//! file_service / transfer）。
+//! file_service / transfer / process / app）。
 //!
 //! 错误语义见 [`HostError`]：首期仅承载状态码与通用描述，
 //! 详细错误原因记录在宿主日志（完整错误透传见 ABI v2 计划）。
 
+pub mod app;
 pub mod bus;
 pub mod config;
 pub mod database;
@@ -20,12 +21,14 @@ pub mod file_service;
 pub mod fs;
 pub mod http;
 pub mod log;
+pub mod process;
 pub mod session;
 pub mod storage;
 pub mod terminal;
 pub mod timer;
 pub mod transfer;
 
+pub use app::HostApp;
 pub use bus::HostBus;
 pub use config::{ConfigKey, HostConfig};
 pub use database::{HostDatabase, HostPluginDatabase};
@@ -34,6 +37,7 @@ pub use file_service::HostFileService;
 pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
+pub use process::HostProcess;
 pub use session::HostSession;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
@@ -157,6 +161,8 @@ pub trait HostApi:
     + HostFileService
     + HostTransfer
     + HostTimer
+    + HostProcess
+    + HostApp
 {
 }
 
@@ -175,5 +181,7 @@ impl<T> HostApi for T where
         + HostFileService
         + HostTransfer
         + HostTimer
+        + HostProcess
+        + HostApp
 {
 }

@@ -20,7 +20,7 @@
 //!   指向本 SDK 的 `wasm` 模块（`$crate::wasm`），导出函数内的类型引用
 //!   （`exports::bedcode::plugin::<iface>::Guest`）随宏体解析到 SDK
 
-use crate::events::{InputSubmittedEvent, SessionLifecycleEvent};
+use crate::events::{InputSubmittedEvent, ProcessDoneEvent, SessionLifecycleEvent};
 use crate::types::{PluginManifest, TransferRequestMeta, UploadHookDecision, UploadRequestMeta};
 use crate::BusMessage;
 
@@ -98,6 +98,14 @@ pub trait WasmPlugin: Send + Sync + 'static {
         Ok(())
     }
 
+    /// 接收进程执行完成事件（可选，默认忽略）
+    ///
+    /// 由宿主 host-process 分发（`process_run` 启动的进程结束时触发），
+    /// 不走消息总线。事件为类型化结构体（宏已从 JSON 载荷解析）。
+    fn on_process_done(_event: &ProcessDoneEvent) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// 上传请求策略钩子（可选，默认 fail-closed 拒绝）
     ///
     /// 宿主在文件服务上传会话创建时调用一次（写任何字节前），
@@ -144,6 +152,7 @@ mod tests {
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
                 rust_library: String::new(),
+                api: vec![],
                 icon: None,
             }
         }
@@ -180,6 +189,7 @@ mod tests {
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
                 rust_library: String::new(),
+                api: vec![],
                 icon: None,
             }
         }
@@ -220,6 +230,7 @@ mod tests {
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
                 rust_library: String::new(),
+                api: vec![],
                 icon: None,
             }
         }
@@ -454,6 +465,23 @@ macro_rules! wasm_entry {
                         $crate::host::HostLog::log_error(
                             &host,
                             &format!("on_input_submitted failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_process_done(payload: String) -> Result<(), String> {
+                // JSON 字符串 → 类型化 ProcessDoneEvent（解析失败视为协议错误）
+                let event: $crate::events::ProcessDoneEvent = serde_json::from_str(&payload)
+                    .map_err(|e| format!("on_process_done: invalid event payload: {}", e))?;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_process_done(&event) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_process_done failed: {}", e),
                         );
                         Err(e.to_string())
                     }

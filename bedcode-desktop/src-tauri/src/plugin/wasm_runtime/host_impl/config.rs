@@ -49,6 +49,11 @@ pub(crate) fn config_get(plugin_id: &str, key: &str) -> Result<Option<String>, S
                 .map(|d| d.as_millis().to_string())
                 .map_err(|e| format!("system time unavailable: {}", e))?
         }
+        ConfigKey::OsPlatform => {
+            // 插件侧 wasm32-unknown-unknown 无法感知宿主 OS，经此获取平台名
+            // （std::env::consts::OS：windows / linux / macos / …）
+            std::env::consts::OS.to_string()
+        }
     };
 
     Ok(Some(value))
@@ -97,6 +102,20 @@ mod tests {
         let value = config_get("test-plugin", "home_dir")
             .expect("home dir ok")
             .expect("some value");
+        assert!(!value.is_empty());
+    }
+
+    /// os.platform：返回宿主平台名（std::env::consts::OS，无全局状态）
+    ///
+    /// 插件侧 wasm32-unknown-unknown 无法感知宿主 OS，命令包装等
+    /// 平台相关逻辑依赖此值（scheduler 插件 inline 命令 sh -c vs cmd /C）
+    #[test]
+    fn config_get_os_platform_ok() {
+        let value = config_get("test-plugin", "os.platform")
+            .expect("platform key ok")
+            .expect("some value");
+        // 必须与 std 编译目标一致（当前进程的平台），插件据此分支
+        assert_eq!(value, std::env::consts::OS);
         assert!(!value.is_empty());
     }
 

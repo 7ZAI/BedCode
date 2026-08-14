@@ -1,0 +1,43 @@
+/**
+ * 计划任务插件前端入口
+ *
+ * Rust+TS 双层架构：Rust WASM 提供调度引擎与 HTTP 端点，TS 提供只读面板。
+ * 侧边栏面板（registerSidebarPanel）→ SchedulerPanelView：任务列表 + 最近执行 + 日志路径。
+ */
+import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import SchedulerPanelView from './components/SchedulerPanelView.vue'
+import { messages } from './i18n'
+
+let sidebarDisposable: { dispose(): void } | null = null
+
+/**
+ * 注册侧边栏面板
+ *
+ * 注册时标题被静态捕获（宿主 labelKey 非 i18n key，不随 vue-i18n 自动更新），
+ * 语言切换时先释放旧注册再重新注册，菜单/路由显示文本即时刷新。
+ */
+function registerSidebarPanel(context: PluginContext) {
+  sidebarDisposable?.dispose()
+  sidebarDisposable = context.ui.registerSidebarPanel({
+    id: 'scheduler.panel',
+    title: context.i18n.t('panel.title'),
+    // 菜单排序：插件区（内置 400）内，位于 auto-task 历史（410）之前
+    order: 405,
+    icon: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z',
+    component: SchedulerPanelView,
+  })
+}
+
+/** 插件入口：宿主 webview 加载 dist/index.js 后调用 */
+export function activate(context: PluginContext) {
+  // 向宿主注册插件级 i18n 消息（SDK 自动加插件 ID 前缀，locale 切换时与宿主翻译合并）
+  for (const [locale, msgs] of Object.entries(messages)) {
+    context.i18n.registerMessages(locale, msgs)
+  }
+  registerSidebarPanel(context)
+}
+
+export function deactivate() {
+  sidebarDisposable?.dispose()
+  sidebarDisposable = null
+}

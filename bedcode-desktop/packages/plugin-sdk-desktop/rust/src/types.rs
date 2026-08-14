@@ -30,6 +30,14 @@ pub struct PluginManifest {
     /// 请求的权限列表
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// 对外可互调 api 清单（ADR-0017，插件互调机制）
+    ///
+    /// 全限定名数组（如 `com.bedcode.scheduler.add`）；宿主在插件激活时
+    /// 登记到 api 注册表，`bedcode.api.*` 请求 topic 的目标 api 必须命中
+    /// 某已激活插件的声明清单，否则被总线门禁拒绝。缺省空数组 = 不对外
+    /// 提供互调 api（现有插件不受影响）。
+    #[serde(default)]
+    pub api: Vec<String>,
     /// 扩展点声明
     #[serde(default)]
     pub contributes: PluginContributes,

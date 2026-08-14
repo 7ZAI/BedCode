@@ -19,11 +19,21 @@ pub enum ConfigKey {
     /// 均 panic），需要真实时间的插件一律经此获取，禁止直接调 std 时间 API。
     /// 不可用时返回 `Ok(None)`，调用方降级（如用 0/计数器）。
     CurrentTimeMs,
+    /// 宿主操作系统平台（std::env::consts::OS 值：windows / linux / macos / …）
+    ///
+    /// wasm32-unknown-unknown 无法感知宿主 OS，需要按平台选择命令包装
+    /// （如 inline 命令 sh -c vs cmd /C）的插件经此获取。
+    OsPlatform,
 }
 
 impl ConfigKey {
     /// 全部合法配置项（宿主白名单校验用）
-    pub const ALL: &'static [ConfigKey] = &[ConfigKey::NetworkPort, ConfigKey::HomeDir, ConfigKey::CurrentTimeMs];
+    pub const ALL: &'static [ConfigKey] = &[
+        ConfigKey::NetworkPort,
+        ConfigKey::HomeDir,
+        ConfigKey::CurrentTimeMs,
+        ConfigKey::OsPlatform,
+    ];
 
     /// 线上协议字符串（host function 传参格式）
     pub fn as_str(&self) -> &'static str {
@@ -31,6 +41,7 @@ impl ConfigKey {
             ConfigKey::NetworkPort => "network.port",
             ConfigKey::HomeDir => "home_dir",
             ConfigKey::CurrentTimeMs => "system.time_ms",
+            ConfigKey::OsPlatform => "os.platform",
         }
     }
 
@@ -40,6 +51,7 @@ impl ConfigKey {
             "network.port" => Some(ConfigKey::NetworkPort),
             "home_dir" => Some(ConfigKey::HomeDir),
             "system.time_ms" => Some(ConfigKey::CurrentTimeMs),
+            "os.platform" => Some(ConfigKey::OsPlatform),
             _ => None,
         }
     }
@@ -62,6 +74,7 @@ mod tests {
         assert_eq!(ConfigKey::NetworkPort.as_str(), "network.port");
         assert_eq!(ConfigKey::HomeDir.as_str(), "home_dir");
         assert_eq!(ConfigKey::CurrentTimeMs.as_str(), "system.time_ms");
+        assert_eq!(ConfigKey::OsPlatform.as_str(), "os.platform");
     }
 
     #[test]
@@ -72,12 +85,13 @@ mod tests {
     }
 
     #[test]
-    fn test_all_contains_exactly_three_keys() {
+    fn test_all_contains_exactly_four_keys() {
         // 白名单即枚举本身：ALL 必须穷尽全部变体，新增配置项时此处同步断言
-        assert_eq!(ConfigKey::ALL.len(), 3);
+        assert_eq!(ConfigKey::ALL.len(), 4);
         assert!(ConfigKey::ALL.contains(&ConfigKey::NetworkPort));
         assert!(ConfigKey::ALL.contains(&ConfigKey::HomeDir));
         assert!(ConfigKey::ALL.contains(&ConfigKey::CurrentTimeMs));
+        assert!(ConfigKey::ALL.contains(&ConfigKey::OsPlatform));
     }
 
     #[test]

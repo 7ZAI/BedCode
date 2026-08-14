@@ -20,6 +20,7 @@ use crate::plugin::storage::PluginStorage;
 use crate::session::{SessionConfigManager, SessionManager};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
@@ -188,6 +189,37 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 宿主按 interval_secs 到点调用插件的 command（附当前时间参数），
     /// 幂等判断归插件。重复注册替换该插件已有定时器。
     fn register_plugin_timer(&self, plugin_id: String, interval_secs: u64, command: String);
+
+    /// 分发进程执行完成事件到插件（host-process，v8）
+    ///
+    /// 由 host_impl/process.rs 在进程结束时调用：经插件 export
+    /// `on_process_done` 投递 `{ run_id, exit_code, timed_out }`。
+    /// 插件未激活/已卸载时调用失败，仅记日志（尽力而为）。
+    fn dispatch_process_done(&self, plugin_id: String, event: serde_json::Value);
+
+    /// 安装插件随包 CLI（host-app，v8）：复制到用户 bin 目录 + 注册 PATH（幂等）
+    ///
+    /// 源 = 插件包目录 `cli/<file-name>`（Windows 自动补 .exe）；
+    /// `bin_dir` 为空用平台默认。返回安装后的 bin 目录绝对路径。
+    /// 由 host_impl/app.rs 经 block_on_async 驱动（宿主侧注册表/PATH 实现）。
+    /// 返回 Box<dyn Future> 保持 trait dyn 兼容（async fn 会破坏 Arc<dyn>）。
+    fn install_cli(
+        &self,
+        plugin_id: String,
+        file_name: String,
+        bin_dir: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
+
+    /// 卸载插件随包 CLI（host-app，v8）：删文件 + 移除仅本插件的 PATH 条目（幂等）
+    ///
+    /// 应用关闭流程（deactivate_all 置位 shutting_down）中调用时自动跳过，
+    /// CLI 随下次激活重新安装。
+    fn uninstall_cli(
+        &self,
+        plugin_id: String,
+        file_name: String,
+        bin_dir: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>>;
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -214,6 +246,134 @@ pub struct WasmHostContext {
     file_service: Arc<FileServiceRegistry>,
     /// 插件宿主服务（两阶段初始化，避免 PluginHost 与 WasmHostContext 类型互引）
     plugin_services: Arc<RwLock<Option<Arc<dyn PluginServices>>>>,
+    /// 运行中进程注册表（host-process，v8）：run_id → 进程句柄
+    ///
+    /// host_impl/process.rs 注册/移除；kill（超时/取消）经此查找句柄。
+    process_registry: Arc<ProcessRegistry>,
+    /// 插件互调 api 注册表（ADR-0017）：激活登记 / 停用注销，
+    /// `bus_publish` 对 `bedcode.api.*` 请求 topic 做目标校验
+    api_registry: Arc<crate::plugin::api_registry::ApiRegistry>,
+}
+
+/// 运行中的进程（记录 pid 供进程组 kill）
+///
+/// Child 句柄由执行任务（host_impl/process.rs）独占持有：`Child::wait`
+/// 在整个进程生命周期内独占 `&mut self`，注册表若同时持句柄，kill 路径
+/// 将阻塞到进程自然退出（死锁）；按 pid 杀进程组则与 wait 无冲突。
+struct RunningProcess {
+    /// 发起执行的插件 ID（完成事件分发目标）
+    plugin_id: String,
+    /// 子进程 pid（process_group(0)/CREATE_NEW_PROCESS_GROUP 后为进程组组长）
+    pid: u32,
+}
+
+/// 进程注册表（run_id → 运行中进程）
+///
+/// 生命周期：`process_run` 注册 → 进程结束/kill 后移除。
+/// 应用退出时进程由 OS 回收（孤儿进程随宿主进程终止）。
+pub struct ProcessRegistry {
+    runs: std::sync::RwLock<HashMap<String, RunningProcess>>,
+}
+
+impl ProcessRegistry {
+    pub fn new() -> Self {
+        Self {
+            runs: std::sync::RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// 注册运行中进程（run_id 由调用方预生成，UUID）
+    ///
+    /// 同步锁：临界区仅 map 操作（无 await），wasm host 调用栈内直接可用
+    pub fn register(&self, run_id: String, plugin_id: String, pid: u32) {
+        let mut runs = self.runs.write().unwrap_or_else(|e| e.into_inner());
+        runs.insert(
+            run_id,
+            RunningProcess { plugin_id, pid },
+        );
+    }
+
+    /// 移除并返回进程的发起插件 ID（进程结束/kill 后调用）
+    pub fn remove(&self, run_id: &str) -> Option<String> {
+        let mut runs = self.runs.write().unwrap_or_else(|e| e.into_inner());
+        runs.remove(run_id).map(|p| p.plugin_id)
+    }
+
+    /// 终止进程组（尽力而为）：找到记录则按 pid 杀进程组，返回是否找到
+    pub async fn kill(&self, run_id: &str) -> bool {
+        let pid = {
+            let runs = self.runs.read().unwrap_or_else(|e| e.into_inner());
+            match runs.get(run_id) {
+                Some(proc) => proc.pid,
+                None => return false,
+            }
+        };
+        kill_process_group(pid).await;
+        true
+    }
+
+    /// 运行中进程数（并发限制/诊断用）
+    pub fn running_count(&self) -> usize {
+        let runs = self.runs.read().unwrap_or_else(|e| e.into_inner());
+        runs.len()
+    }
+}
+
+/// 终止进程组（尽力而为，超时 kill 与插件取消共用）
+///
+/// - unix：`kill -9 -<pgid>`（`process_group(0)` 保证 pgid == pid）
+/// - Windows：`taskkill /F /T /PID`（/T 连带子进程树）
+///
+/// 返回是否成功发起（进程已退出 / pid 无效返回 false，属预期内竞态）。
+pub(crate) async fn kill_process_group(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match tokio::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => true,
+            Ok(o) => {
+                tracing::warn!(
+                    pid,
+                    output = %String::from_utf8_lossy(&o.stderr),
+                    "kill_process_group: taskkill reported failure"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(pid, error = %e, "kill_process_group: taskkill failed");
+                false
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 负 pid 表示进程组；process_group(0) 后组 id == 进程 pid
+        match tokio::process::Command::new("kill")
+            .args(["-9", &format!("-{}", pid)])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => true,
+            Ok(o) => {
+                tracing::warn!(
+                    pid,
+                    output = %String::from_utf8_lossy(&o.stderr),
+                    "kill_process_group: kill reported failure"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(pid, error = %e, "kill_process_group: kill failed");
+                false
+            }
+        }
+    }
 }
 
 /// 已加载的 WASM 插件（迁移阶段 C：组件形态唯一）
@@ -455,7 +615,14 @@ impl WasmHostContext {
             message_bus,
             file_service,
             plugin_services: Arc::new(RwLock::new(None)),
+            process_registry: Arc::new(ProcessRegistry::new()),
+            api_registry: Arc::new(crate::plugin::api_registry::ApiRegistry::new()),
         }
+    }
+
+    /// 获取进程注册表引用（host-process）
+    pub fn process_registry(&self) -> &Arc<ProcessRegistry> {
+        &self.process_registry
     }
 
     /// 两阶段初始化：PluginHost 构造完成后注入宿主服务
@@ -475,6 +642,11 @@ impl WasmHostContext {
     /// 获取消息总线引用
     pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
         &self.message_bus
+    }
+
+    /// 获取插件互调 api 注册表引用（ADR-0017 门禁）
+    pub fn api_registry(&self) -> &Arc<crate::plugin::api_registry::ApiRegistry> {
+        &self.api_registry
     }
 
     /// 获取文件服务注册表引用
@@ -810,8 +982,11 @@ mod tests {
         if module_path.exists() {
             let src_files = [
                 plugin_dir.join("src/lib.rs"),
+                plugin_dir.join("plugin.json"),
                 packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
                 packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/api_call.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust-macros/src/lib.rs"),
                 packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
             ];
             let module_modified = std::fs::metadata(&module_path)
@@ -937,6 +1112,167 @@ mod tests {
                 .expect("on_upload_request");
             let d: serde_json::Value = serde_json::from_str(&decision).unwrap();
             assert_eq!(d["allow"], false);
+        });
+    }
+
+    /// 测试用消息投递器：总线消息按 plugin_id 路由到测试持有的插件实例
+    ///
+    /// 生产环境由 PluginHost 实现 MessageDispatcher（with_wasm_plugin_call
+    /// 加锁调用 + trap 自动重载）；互调测试无 PluginHost，等价实现：查实例表
+    /// 加锁调用 on_message。is_activated 恒真（本测试全部实例均已 activate，
+    /// 「未激活订阅者不投递」的语义由门禁/注销断言覆盖）。
+    struct TestInstanceDispatcher {
+        instances: Arc<RwLock<HashMap<String, Arc<Mutex<LoadedWasmPlugin>>>>>,
+    }
+
+    impl crate::plugin::message_bus::MessageDispatcher for TestInstanceDispatcher {
+        fn dispatch_to_wasm(
+            &self,
+            plugin_id: &str,
+            msg: &bedcode_plugin_api::BusMessage,
+        ) -> anyhow::Result<()> {
+            let instances = self.instances.clone();
+            let plugin_id = plugin_id.to_string();
+            let msg = msg.clone();
+            block_on_async(async move {
+                let instances = instances.read().await;
+                let plugin = instances.get(&plugin_id).ok_or_else(|| {
+                    anyhow::anyhow!("TestInstanceDispatcher: no instance '{}'", plugin_id)
+                })?;
+                let mut plugin = plugin.lock().await;
+                plugin
+                    .on_message(&msg.topic, &msg.sender, &msg.payload)
+                    .map_err(|e| anyhow::Error::from(e))
+            })
+        }
+
+        fn is_activated(&self, _plugin_id: &str) -> bool {
+            true
+        }
+    }
+
+    /// 插件互调端到端（issue 04，ADR-0017）：同一 sdk-test 组件以两个实例加载
+    /// —— caller（com.bedcode.api-caller）+ 目标（com.bedcode.sdk-test），
+    /// 覆盖：请求/响应配对成功、错误传播、超时（模拟无响应目标）、
+    /// 门禁拒绝（未声明 api）、停用注销后目标被拒。
+    ///
+    /// 请求投递依赖 MessageBus 的 dispatcher 路由（生产 = PluginHost），
+    /// 本测试注入 TestInstanceDispatcher 把总线消息转发到共享实例。
+    #[test]
+    fn test_sdk_plugin_api_call_roundtrip() {
+        const CALLER_ID: &str = "com.bedcode.api-caller";
+        const TARGET_ID: &str = "com.bedcode.sdk-test";
+
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_sdk_test_component())
+            .expect("compile SDK test component");
+
+        // 登记目标插件声明的 api（等价 PluginHost::activate_plugin 的登记）
+        host_ctx.api_registry().register(
+            TARGET_ID,
+            &["com.bedcode.sdk-test.echo".to_string(), "com.bedcode.sdk-test.fail".to_string()],
+        );
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let target = Arc::new(Mutex::new(
+                wasm_runtime
+                    .instantiate_component(&component, TARGET_ID, host_ctx.clone())
+                    .expect("instantiate target"),
+            ));
+            let caller = Arc::new(Mutex::new(
+                wasm_runtime
+                    .instantiate_component(&component, CALLER_ID, host_ctx.clone())
+                    .expect("instantiate caller"),
+            ));
+
+            // 注入消息投递器（生产为 PluginHost）：总线消息 → 插件实例 on_message
+            let instances = Arc::new(RwLock::new(HashMap::from([
+                (TARGET_ID.to_string(), target.clone()),
+                (CALLER_ID.to_string(), caller.clone()),
+            ])));
+            host_ctx
+                .message_bus
+                .set_dispatcher(Arc::new(TestInstanceDispatcher { instances }))
+                .await;
+
+            // 激活两实例：宏生成的 register() 订阅请求 topic（宿主订阅去重）
+            target.lock().await.activate().expect("target activate");
+            caller.lock().await.activate().expect("caller activate");
+
+            // 请求/响应配对成功：caller 经 JSON-RPC 调目标 echo
+            let result = caller
+                .lock()
+                .await
+                .invoke_command("test_api_echo", r#"{"text":"hi"}"#)
+                .expect("test_api_echo");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["echo"], "echo: hi", "got: {}", result);
+
+            // 错误传播：目标方法返回 error → JSON-RPC error 对象 → 调用方报错
+            let result = caller
+                .lock()
+                .await
+                .invoke_command("test_api_fail", "{}")
+                .expect("test_api_fail");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                r["error"].as_str().map(|e| e.contains("boom")).unwrap_or(false),
+                "fail error must propagate, got: {}",
+                result
+            );
+
+            // 门禁拒绝：未声明的 api（ghost 不在注册表）在发布前被拒，不等待
+            let result = caller
+                .lock()
+                .await
+                .invoke_command("test_api_undeclared", "{}")
+                .expect("test_api_undeclared");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                r["error"].as_str().map(|e| e.contains("not declared")).unwrap_or(false),
+                "undeclared api must be rejected by gate, got: {}",
+                result
+            );
+
+            // 超时：目标声明并订阅了 no-response topic（模拟构建期不可能出现的
+            // 声明未实现场景），分派器不处理 → 不回复 → 调用方 800ms 超时
+            host_ctx.api_registry().register(
+                TARGET_ID,
+                &["com.bedcode.sdk-test.no-response".to_string()],
+            );
+            host_ctx
+                .message_bus
+                .subscribe_wasm(TARGET_ID, "bedcode.api.com.bedcode.sdk-test.no-response")
+                .await;
+            let result = caller
+                .lock()
+                .await
+                .invoke_command("test_api_timeout", "{}")
+                .expect("test_api_timeout");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                r["error"].as_str().map(|e| e.contains("timeout")).unwrap_or(false),
+                "no-reply target must time out, got: {}",
+                result
+            );
+
+            // 停用注销：目标 api 从注册表移除后，调用被门禁拒绝（验收「未激活
+            // 插件目标调用被拒」；注销由 PluginHost::deactivate_plugin 执行，
+            // 此处等价手动注销）
+            host_ctx.api_registry().unregister(TARGET_ID);
+            let result = caller
+                .lock()
+                .await
+                .invoke_command("test_api_echo", r#"{"text":"again"}"#)
+                .expect("test_api_echo after unregister");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                r["error"].as_str().map(|e| e.contains("not declared")).unwrap_or(false),
+                "unregistered target must be rejected, got: {}",
+                result
+            );
         });
     }
 
@@ -1161,6 +1497,57 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root_dir);
+    }
+
+    /// 真实组件：scheduler 插件加载 + activate + tick 命令路由冒烟
+    ///
+    /// 验证 bindgen world 与产物 export 一致（events 含 on_process_done）、
+    /// activate 恢复路径无 panic（测试上下文无宿主 DB/services，相关调用
+    /// 仅记日志降级）。完整调度行为属 issue 06 端到端验证。
+    #[test]
+    fn test_real_scheduler_plugin_loads_and_ticks() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        const SCHED_PLUGIN_ID: &str = "com.bedcode.scheduler";
+
+        // 授予与插件 manifest 一致的权限（activate 的 timer_register/cli_install 路径）
+        let permissions: &[&str] =
+            &["app:cli", "broadcast", "process:run", "storage", "timer:schedule"];
+        host_ctx.permission.grant_permissions(
+            SCHED_PLUGIN_ID,
+            &permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+
+        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/plugins/desktop/com.bedcode.scheduler")
+            .join("bedcode_plugin_scheduler.wasm");
+        assert!(
+            wasm_path.exists(),
+            "scheduler wasm artifact missing (run plugins/scheduler build first): {}",
+            wasm_path.display()
+        );
+
+        let mut plugin = wasm_runtime
+            .load_plugin_from_file(&wasm_path, SCHED_PLUGIN_ID, host_ctx.clone())
+            .expect("load real scheduler component");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            plugin
+                .activate()
+                .expect("real scheduler activate should succeed");
+            // tick 命令路由：now_local 参数透传，宿主 DB 缺失时插件侧降级不 panic
+            let result = plugin
+                .invoke_command(
+                    "task-scheduler.tick",
+                    r#"{"now_local":"2026-08-14 12:00:00","now_utc":"2026-08-14 04:00:00"}"#,
+                )
+                .expect("tick command should return");
+            assert!(
+                result.contains("ticked"),
+                "tick response should contain ticked: {}",
+                result
+            );
+        });
     }
 
     /// 燃料看门狗：guest 执行必须消耗燃料（组件形态下 fuel 生效），

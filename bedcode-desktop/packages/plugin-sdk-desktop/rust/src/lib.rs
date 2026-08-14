@@ -37,6 +37,8 @@ pub struct BusMessage {
 }
 
 #[cfg(feature = "wasm")]
+pub mod api_call;
+#[cfg(feature = "wasm")]
 pub mod wasm;
 #[cfg(feature = "wasm")]
 pub mod wasm_host;
@@ -101,3 +103,7 @@ mod tests {
 pub use wasm::WasmPlugin;
 #[cfg(feature = "wasm")]
 pub use wasm_host::WasmHost;
+// 插件互调 IDL 属性宏（rust-macros crate；经本 crate 再导出，插件侧
+// 以 `#[bedcode_plugin_api::plugin_api]` 引用，无需额外依赖）
+#[cfg(feature = "wasm")]
+pub use bedcode_plugin_api_macros::plugin_api;

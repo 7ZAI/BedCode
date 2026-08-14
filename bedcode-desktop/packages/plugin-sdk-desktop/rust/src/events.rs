@@ -91,6 +91,22 @@ pub struct InputSubmittedEvent {
     pub text: String,
 }
 
+/// 进程执行完成事件（宿主 host-process → 插件回调）
+///
+/// 由 [`WasmPlugin::on_process_done`](crate::wasm::WasmPlugin::on_process_done)
+/// 接收。三种结束形态：正常退出（exit_code 为 Some）、被信号终止
+/// （exit_code 为 None）、超时 kill（timed_out = true）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProcessDoneEvent {
+    /// 宿主返回的 run-id（对应 `process_run` 的返回值）
+    pub run_id: String,
+    /// 退出码（正常退出 = Some(code)；被信号终止 = None）
+    pub exit_code: Option<i32>,
+    /// 是否因超时被宿主 kill
+    pub timed_out: bool,
+}
+
 /// 同步事件（插件 → 宿主 → 移动端客户端）
 ///
 /// 通过 `HostEvents::broadcast_sync` 发布，宿主转发给所有已认证的

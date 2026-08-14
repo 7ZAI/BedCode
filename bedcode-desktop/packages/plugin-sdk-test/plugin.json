@@ -1,0 +1,36 @@
+{
+  "id": "com.bedcode.sdk-test",
+  "name": "SDK Test Plugin",
+  "version": "0.1.0",
+  "description": "SDK component bindings test plugin",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_sdk_test",
+  "permissions": [
+    "storage",
+    "broadcast",
+    "terminal:input",
+    "terminal:output",
+    "session:read"
+  ],
+  "api": [
+    "com.bedcode.sdk-test.echo",
+    "com.bedcode.sdk-test.fail"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "test.echo",
+        "title": "Echo"
+      }
+    ],
+    "views": [],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": []
+  }
+}

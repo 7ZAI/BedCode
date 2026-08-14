@@ -15,14 +15,15 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService, HostFs,
-    HostHttp, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTerminal, HostTransfer,
+    ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService,
+    HostFs, HostHttp, HostLog, HostPluginDatabase, HostProcess, HostSession, HostStorage,
+    HostTerminal, HostTransfer,
 };
 use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest};
 use crate::wasm::bedcode::plugin::{
-    host_bus, host_config, host_database, host_events, host_file_service, host_fs, host_http,
-    host_log, host_plugin_database, host_session, host_storage, host_terminal, host_timer,
-    host_transfer,
+    host_app, host_bus, host_config, host_database, host_events, host_file_service, host_fs,
+    host_http, host_log, host_plugin_database, host_process, host_session, host_storage,
+    host_terminal, host_timer, host_transfer,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -224,6 +225,32 @@ impl HostSession for WasmHost {
 impl crate::host::HostTimer for WasmHost {
     fn timer_register(&self, interval_secs: u64, command: &str) -> Result<(), HostError> {
         host_timer::register(interval_secs, command).map_err(|e| host_err("timer_register", e))
+    }
+}
+
+// ==================== HostProcess ====================
+
+impl HostProcess for WasmHost {
+    fn process_run(&self, request_json: &str) -> Result<String, HostError> {
+        host_process::run(request_json).map_err(|e| host_err("process_run", e))
+    }
+
+    fn process_kill(&self, run_id: &str) -> Result<(), HostError> {
+        host_process::kill(run_id).map_err(|e| host_err("process_kill", e))
+    }
+}
+
+// ==================== HostApp ====================
+
+impl HostApp for WasmHost {
+    fn cli_install(&self, file_name: &str, bin_dir: &str) -> Result<String, HostError> {
+        let payload = serde_json::json!({ "file_name": file_name, "bin_dir": bin_dir }).to_string();
+        host_app::install_cli(&payload).map_err(|e| host_err("cli_install", e))
+    }
+
+    fn cli_uninstall(&self, file_name: &str, bin_dir: &str) -> Result<(), HostError> {
+        let payload = serde_json::json!({ "file_name": file_name, "bin_dir": bin_dir }).to_string();
+        host_app::uninstall_cli(&payload).map_err(|e| host_err("cli_uninstall", e))
     }
 }
 

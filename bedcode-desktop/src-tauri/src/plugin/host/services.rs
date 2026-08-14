@@ -4,6 +4,7 @@
 //! 从 `host.rs` 拆出：WASM host 函数回路的服务侧实现、定时器管理、
 //! 会话生命周期/输入事件分发。
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tauri::Emitter;
@@ -160,6 +161,9 @@ impl PluginServices for PluginHost {
                     // 与 SQLite datetime('now') 同格式（UTC，无时区后缀），
                     // 便于插件在 SQL 中直接字符串比较到期时间
                     "now_utc": now.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    // 本地时区基准（task-scheduler spec §5.1）：
+                    // 调度时间表达式按用户本地时间解释，由宿主注入（WASM 无系统时钟）
+                    "now_local": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                 });
 
                 // 到点调用插件 command；插件未激活/已卸载时返回 Err，
@@ -186,6 +190,145 @@ impl PluginServices for PluginHost {
             plugin_id, interval_secs, command
         );
     }
+
+    fn dispatch_process_done(&self, plugin_id: String, event: serde_json::Value) {
+        // 与 dispatch_to_wasm 同模式：block_on_async + with_wasm_plugin_call
+        // （调用失败自动重载恢复；插件未激活/已卸载时仅记日志，尽力而为）
+        let event_str = match serde_json::to_string(&event) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] dispatch_process_done: serialize event failed"
+                );
+                return;
+            }
+        };
+        let host = self.clone();
+        let pid = plugin_id.clone();
+        crate::plugin::wasm_runtime::block_on_async(async move {
+            match host
+                .with_wasm_plugin_call(&pid, |plugin| plugin.on_process_done(&event_str))
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!(
+                        plugin_id = %pid,
+                        error = %e,
+                        "[PluginHost] dispatch_process_done failed"
+                    );
+                }
+            }
+        });
+    }
+
+    fn install_cli(
+        &self,
+        plugin_id: String,
+        file_name: String,
+        bin_dir: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+        Box::pin(async move {
+            // 源文件位于插件包目录 cli/<file-name>（宿主按已加载插件的 extension_path 解析）
+            let extension_path = {
+                let plugins = self.plugins.read().await;
+                plugins
+                    .get(&plugin_id)
+                    .map(|p| p.extension_path.clone())
+                    .ok_or_else(|| format!("install_cli: plugin not found: {}", plugin_id))?
+            };
+            let exe = super::app_cli::exe_name(&file_name);
+            let src = std::path::Path::new(&extension_path).join("cli").join(&exe);
+            if !src.exists() {
+                return Err(format!(
+                    "install_cli: CLI artifact not found: {}",
+                    src.display()
+                ));
+            }
+
+            let bin_dir = if bin_dir.is_empty() {
+                super::app_cli::default_bin_dir()
+            } else {
+                std::path::PathBuf::from(&bin_dir)
+            };
+            std::fs::create_dir_all(&bin_dir)
+                .map_err(|e| format!("install_cli: create bin dir failed: {}", e))?;
+            let dst = bin_dir.join(&exe);
+            std::fs::copy(&src, &dst).map_err(|e| {
+                format!(
+                    "install_cli: copy {} -> {} failed: {}",
+                    src.display(),
+                    dst.display(),
+                    e
+                )
+            })?;
+
+            // PATH 注册（幂等）
+            #[cfg(target_os = "windows")]
+            super::app_cli::register_path_windows(&bin_dir).await?;
+            #[cfg(not(target_os = "windows"))]
+            super::app_cli::register_path_unix(&bin_dir, &exe)?;
+
+            tracing::info!(
+                "[PluginHost] CLI installed for '{}': {} -> {}",
+                plugin_id,
+                src.display(),
+                dst.display()
+            );
+            Ok(bin_dir.to_string_lossy().to_string())
+        })
+    }
+
+    fn uninstall_cli(
+        &self,
+        plugin_id: String,
+        file_name: String,
+        bin_dir: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(async move {
+            // 应用关闭流程（deactivate_all 置位）：保留随包 CLI，下次激活幂等重装
+            if self
+                .shutting_down
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tracing::debug!(
+                    "[PluginHost] uninstall_cli skipped for '{}': app shutting down",
+                    plugin_id
+                );
+                return Ok(());
+            }
+
+            let exe = super::app_cli::exe_name(&file_name);
+            let bin_dir = if bin_dir.is_empty() {
+                super::app_cli::default_bin_dir()
+            } else {
+                std::path::PathBuf::from(&bin_dir)
+            };
+
+            // 删除文件（不存在视为已卸载，幂等）
+            let file = bin_dir.join(&exe);
+            if file.exists() {
+                std::fs::remove_file(&file).map_err(|e| {
+                    format!("uninstall_cli: remove {} failed: {}", file.display(), e)
+                })?;
+            }
+
+            // PATH 条目移除（仅本插件条目，保留用户原有项）
+            #[cfg(target_os = "windows")]
+            super::app_cli::unregister_path_windows(&bin_dir).await?;
+            #[cfg(not(target_os = "windows"))]
+            super::app_cli::unregister_path_unix(&bin_dir, &exe)?;
+
+            tracing::info!(
+                "[PluginHost] CLI uninstalled for '{}': {}",
+                plugin_id,
+                file.display()
+            );
+            Ok(())
+        })
+    }
 }
 
 // 通过 Arc 共享内部状态实现 Clone
@@ -205,6 +348,7 @@ impl Clone for PluginHost {
             file_service: self.file_service.clone(),
             plugin_timers: self.plugin_timers.clone(),
             wasm_reload_throttle: self.wasm_reload_throttle.clone(),
+            shutting_down: self.shutting_down.clone(),
         }
     }
 }

@@ -149,6 +149,7 @@ mod tests {
             main: "index.ts".to_string(),
             sandbox: "inline".to_string(),
             permissions: vec!["broadcast".to_string(), "storage".to_string()],
+            api: vec![],
             contributes: PluginContributes::default(),
             plugin_type: PluginType::RustTs,
             rust_library: "bedcode_test.wasm".to_string(),

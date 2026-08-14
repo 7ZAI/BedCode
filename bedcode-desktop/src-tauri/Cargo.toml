@@ -125,6 +125,10 @@ actix-files = "0.6"
 # PTY management
 portable-pty = "0.8"
 
+# Windows：WM_SETTINGCHANGE 广播（CLI PATH 注册后通知新终端/agent 进程生效）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 [dev-dependencies]
 tempfile = "3"
 # 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件

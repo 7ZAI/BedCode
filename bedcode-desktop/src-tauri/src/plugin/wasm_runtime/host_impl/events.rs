@@ -47,7 +47,11 @@ pub(crate) fn broadcast_sync(
         .map_err(|e| format!("broadcast error: unknown or malformed sync event: {}", e))?;
     // 穷尽转换：SyncEvent 新增变体时 From 实现编译失败，强制同步
     let sync_event = crate::events::DesktopSyncEvent::from(sdk_event);
-    let ctx = crate::system::app_context::AppContext::global();
+    // 启动早期（AppContext::init 完成前，auto-activate 的插件可能已广播）
+    // 无同步通道可用：静默丢弃（与 MessageBus 无订阅者同语义），不 panic
+    let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
+        return Err("broadcast error: AppContext not initialized yet".to_string());
+    };
     let sync_tx = ctx.sync_tx();
     sync_tx
         .send(sync_event)

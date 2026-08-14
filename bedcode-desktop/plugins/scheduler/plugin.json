@@ -1,0 +1,51 @@
+{
+  "id": "com.bedcode.scheduler",
+  "name": "Task Scheduler",
+  "version": "1.0.0-beta",
+  "description": "通用调度框架：cron 表达式触发执行 shell 脚本/内联命令（本地时区），执行记录可审计；管理主入口为 CLI（bedtask）。",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_scheduler",
+  "permissions": [
+    "app:cli",
+    "broadcast",
+    "process:run",
+    "storage",
+    "timer:schedule",
+    "ui:sidebar"
+  ],
+  "api": [
+    "com.bedcode.scheduler.add",
+    "com.bedcode.scheduler.remove",
+    "com.bedcode.scheduler.list",
+    "com.bedcode.scheduler.show",
+    "com.bedcode.scheduler.run",
+    "com.bedcode.scheduler.logs"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "task-scheduler.tick",
+        "title": "Task Scheduler Tick"
+      }
+    ],
+    "views": [
+      {
+        "id": "scheduler.panel",
+        "type": "sidebar",
+        "title": "计划任务",
+        "component": "SchedulerPanelView",
+        "icon": "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+      }
+    ],
+    "lifecycle": {
+      "onStartup": true,
+      "onShutdown": true
+    },
+    "provides": [
+      "scheduler:changed"
+    ]
+  }
+}

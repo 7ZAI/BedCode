@@ -11,6 +11,26 @@ pub(crate) fn bus_publish(
 ) -> Result<(), String> {
     let payload: serde_json::Value = serde_json::from_str(payload_json)
         .map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
+
+    // 互调门禁（ADR-0017 层 1）：`bedcode.api.<api>` 请求 topic 的目标 api
+    // 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
+    // `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
+    // 普通广播 topic 不校验，保持向后兼容。
+    if let Some(api) = topic.strip_prefix("bedcode.api.") {
+        if !api.starts_with("reply.") && !host_ctx.api_registry().contains(api) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                topic = %topic,
+                api = %api,
+                "bus_publish: api call to undeclared api rejected (inter-plugin call gate, ADR-0017)"
+            );
+            return Err(format!(
+                "bus error: api '{}' is not declared by any activated plugin (gate)",
+                api
+            ));
+        }
+    }
+
     let bus = host_ctx.message_bus.clone();
     bus.publish(topic, plugin_id, payload);
     Ok(())
@@ -118,6 +138,91 @@ mod tests {
         assert_eq!(msg.topic, "greeting");
         assert_eq!(msg.sender, "plugin-a");
         assert_eq!(msg.payload, serde_json::json!({ "hello": "world" }));
+    }
+
+    // ==================== 互调门禁（ADR-0017） ====================
+
+    /// 已登记 api 的请求 topic：放行（门禁命中声明清单）
+    #[test]
+    fn gate_allows_declared_api() {
+        let ctx = build_host_ctx();
+        ctx.api_registry()
+            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
+        bus_publish(
+            &ctx,
+            "plugin-a",
+            "bedcode.api.com.bedcode.scheduler.add",
+            r#"{"jsonrpc":"2.0"}"#,
+        )
+        .expect("declared api must pass gate");
+    }
+
+    /// 未登记 api 的请求 topic：拒绝 + 明确错误（「未声明 api 的调用被宿主拒绝」验收）
+    #[test]
+    fn gate_rejects_undeclared_api() {
+        let ctx = build_host_ctx();
+        let err = bus_publish(
+            &ctx,
+            "plugin-a",
+            "bedcode.api.com.bedcode.scheduler.remove",
+            "{}",
+        )
+        .unwrap_err();
+        assert!(err.contains("not declared"), "got: {}", err);
+        assert!(err.contains("com.bedcode.scheduler.remove"), "got: {}", err);
+    }
+
+    /// 停用注销后的 api：不再放行（未激活插件目标调用被拒）
+    #[test]
+    fn gate_rejects_after_unregister() {
+        let ctx = build_host_ctx();
+        ctx.api_registry()
+            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
+        ctx.api_registry().unregister("com.bedcode.scheduler");
+        let err = bus_publish(
+            &ctx,
+            "plugin-a",
+            "bedcode.api.com.bedcode.scheduler.add",
+            "{}",
+        )
+        .unwrap_err();
+        assert!(err.contains("not declared"), "got: {}", err);
+    }
+
+    /// 响应通道（`bedcode.api.reply.`）：免门禁校验（回复的调用方即为目标）
+    #[test]
+    fn gate_allows_reply_topic() {
+        let ctx = build_host_ctx();
+        bus_publish(
+            &ctx,
+            "com.bedcode.scheduler",
+            "bedcode.api.reply.com.bedcode.caller.req-1",
+            r#"{"jsonrpc":"2.0","result":1}"#,
+        )
+        .expect("reply topic must bypass gate");
+    }
+
+    /// 普通广播 topic：不校验（向后兼容，filesrv:peer_changed 等既有约定不受影响）
+    #[test]
+    fn gate_ignores_regular_topics() {
+        let ctx = build_host_ctx();
+        bus_publish(&ctx, "plugin-a", "filesrv:peer_changed", "{}")
+            .expect("regular topics must bypass gate");
+    }
+
+    /// 门禁只校验目标（层 1）：任意已激活插件声明的 api 均可调，不校验调用方身份
+    #[test]
+    fn gate_layer1_does_not_check_caller() {
+        let ctx = build_host_ctx();
+        ctx.api_registry()
+            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.list".to_string()]);
+        bus_publish(
+            &ctx,
+            "any-plugin",
+            "bedcode.api.com.bedcode.scheduler.list",
+            "{}",
+        )
+        .expect("layer 1 gate checks target declaration only");
     }
 
     /// 总线语义：不投递给发送者自己（同一插件发布+订阅同一 topic）

@@ -66,6 +66,11 @@ pub struct PluginHost {
     ///
     /// std Mutex：仅短时 map 操作，不跨 await 持锁
     wasm_reload_throttle: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
+    /// 应用关闭标志：deactivate_all（应用退出）置位
+    ///
+    /// 插件 deactivate 内的卸载动作（如 CLI 安装清理）据此跳过：
+    /// 应用正常退出 ≠ 用户停用插件，随包 CLI 应保留（下次启动 activate 幂等重装）
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PluginHost {
@@ -234,6 +239,7 @@ impl PluginHost {
             file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -439,8 +445,13 @@ impl PluginHost {
         tracing::info!("PluginHost notify_shutdown completed");
     }
 
-    /// 停用所有已激活的插件
+    /// 停用所有已激活的插件（应用关闭流程）
     pub async fn deactivate_all(&self) -> crate::Result<()> {
+        // 置关闭标志：deactivate 内的卸载动作（CLI 清理等）跳过，
+        // 保留随包产物供下次启动重新激活（幂等安装）
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         let plugin_ids: Vec<String> = {
             let plugins = self.plugins.read().await;
             plugins.values()
@@ -467,90 +478,117 @@ impl PluginHost {
     pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] activate_plugin({}, persist={})", plugin_id, persist);
 
-        let mut plugins = self.plugins.write().await;
-        let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
-            tracing::error!("[PluginHost] activate_plugin: plugin {} not found in plugins map", plugin_id);
-            crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
-        })?;
-
-        match &loaded.state {
-            PluginState::Activated => {
-                tracing::debug!("[PluginHost] Plugin {} already activated, skipping", plugin_id);
-                return Ok(());
-            }
-            PluginState::Error(e) => {
-                tracing::warn!("[PluginHost] Plugin {} in error state: {}, attempting re-activation", plugin_id, e);
-            }
-            _ => {
-                tracing::debug!("[PluginHost] Plugin {} current state: {:?}, proceeding with activation", plugin_id, loaded.state);
-            }
+        // 阶段 1（短写锁）：读取状态与 manifest 字段、重新授权后立即释放锁。
+        // 禁止持 plugins 锁执行 WASM activate：activate 内可能回调宿主
+        // （如 scheduler 的 cli_install 经 services.install_cli 读 plugins map），
+        // 持写锁回调会死锁（锁约定见 PluginManager::activate，双侧一致）
+        struct ActivatePlan {
+            source: PluginSource,
+            api: Vec<String>,
+            subscribes: Vec<String>,
         }
+        let plan = {
+            let mut plugins = self.plugins.write().await;
+            let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
+                tracing::error!("[PluginHost] activate_plugin: plugin {} not found in plugins map", plugin_id);
+                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
+            })?;
 
-        // 重新授权：deactivate 会 revoke_all，再次激活时必须重新授予
-        let permissions = loaded.manifest.permissions.clone();
-        let granted = self.permission.grant_permissions(plugin_id, &permissions);
-        loaded.granted_permissions = granted;
-
-        // WASM 插件：调用 __bedcode_activate
-        if loaded.source == PluginSource::Wasm {
-            let wasm_plugins = self.wasm_plugins.read().await;
-            if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
-                drop(wasm_plugins);
-                let mut wasm_plugin = wasm_plugin.lock().await;
-                match wasm_plugin.activate() {
-                    Ok(0) => {
-                        tracing::info!("[PluginHost] Plugin '{}' activated", plugin_id);
-                    }
-                    Ok(code) => {
-                        tracing::error!("[PluginHost] Plugin '{}' activate() returned error code {}", plugin_id, code);
-                        loaded.state = PluginState::Error(
-                            format!("activate() returned error code {}", code)
-                        );
-                        return Err(crate::AppError::Plugin(format!(
-                            "Plugin {} activate() returned error code {}", plugin_id, code
-                        )));
-                    }
-                    Err(e) => {
-                        tracing::error!("[PluginHost] Plugin '{}' activate() failed: {}", plugin_id, e);
-                        loaded.state = PluginState::Error(format!("activate() failed: {}", e));
-                        return Err(crate::AppError::Plugin(format!(
-                            "Plugin {} activate() failed: {}", plugin_id, e
-                        )));
-                    }
+            match &loaded.state {
+                PluginState::Activated => {
+                    tracing::debug!("[PluginHost] Plugin {} already activated, skipping", plugin_id);
+                    return Ok(());
                 }
-
-                // 激活成功后自动调用 on_startup
-                tracing::info!("[PluginHost] Calling on_startup for plugin '{}'", plugin_id);
-                if let Err(e) = wasm_plugin.on_startup() {
-                    tracing::warn!("[PluginHost] Plugin '{}' on_startup failed: {}", plugin_id, e);
-                } else {
-                    tracing::info!("[PluginHost] Plugin '{}' on_startup completed", plugin_id);
+                PluginState::Error(e) => {
+                    tracing::warn!("[PluginHost] Plugin {} in error state: {}, attempting re-activation", plugin_id, e);
                 }
-            } else {
+                _ => {
+                    tracing::debug!("[PluginHost] Plugin {} current state: {:?}, proceeding with activation", plugin_id, loaded.state);
+                }
+            }
+
+            // 重新授权：deactivate 会 revoke_all，再次激活时必须重新授予
+            let permissions = loaded.manifest.permissions.clone();
+            let granted = self.permission.grant_permissions(plugin_id, &permissions);
+            loaded.granted_permissions = granted;
+
+            ActivatePlan {
+                source: loaded.source.clone(),
+                api: loaded.manifest.api.clone(),
+                subscribes: loaded.manifest.contributes.subscribes.clone(),
+            }
+        };
+
+        // 阶段 2（无 map 锁）：执行 WASM activate + on_startup
+        // 仅持单插件实例锁（避免重入死锁），失败置 Error 状态
+        if plan.source == PluginSource::Wasm {
+            let wasm_plugin = {
+                let wasm_plugins = self.wasm_plugins.read().await;
+                wasm_plugins.get(plugin_id).cloned()
+            };
+            let Some(wasm_plugin) = wasm_plugin else {
                 tracing::error!("WASM plugin {} not found in wasm_plugins map", plugin_id);
                 return Err(crate::AppError::Plugin(format!(
                     "Plugin {} WASM module not loaded", plugin_id
                 )));
+            };
+
+            let mut wasm_plugin = wasm_plugin.lock().await;
+            match wasm_plugin.activate() {
+                Ok(0) => {
+                    tracing::info!("[PluginHost] Plugin '{}' activated", plugin_id);
+                }
+                Ok(code) => {
+                    tracing::error!("[PluginHost] Plugin '{}' activate() returned error code {}", plugin_id, code);
+                    self.mark_error(plugin_id, format!("activate() returned error code {}", code)).await;
+                    return Err(crate::AppError::Plugin(format!(
+                        "Plugin {} activate() returned error code {}", plugin_id, code
+                    )));
+                }
+                Err(e) => {
+                    tracing::error!("[PluginHost] Plugin '{}' activate() failed: {}", plugin_id, e);
+                    self.mark_error(plugin_id, format!("activate() failed: {}", e)).await;
+                    return Err(crate::AppError::Plugin(format!(
+                        "Plugin {} activate() failed: {}", plugin_id, e
+                    )));
+                }
+            }
+
+            // 激活成功后自动调用 on_startup
+            tracing::info!("[PluginHost] Calling on_startup for plugin '{}'", plugin_id);
+            if let Err(e) = wasm_plugin.on_startup() {
+                tracing::warn!("[PluginHost] Plugin '{}' on_startup failed: {}", plugin_id, e);
+            } else {
+                tracing::info!("[PluginHost] Plugin '{}' on_startup completed", plugin_id);
             }
         }
 
-        loaded.state = PluginState::Activated;
-        loaded.activated_at = Some(Utc::now());
+        // 阶段 3（短写锁）：更新激活状态，然后释放锁执行订阅
+        {
+            let mut plugins = self.plugins.write().await;
+            if let Some(loaded) = plugins.get_mut(plugin_id) {
+                loaded.state = PluginState::Activated;
+                loaded.activated_at = Some(Utc::now());
+            }
+        }
+
+        // 登记互调 api 清单（ADR-0017）：激活后 `bedcode.api.*` 请求可路由到本插件。
+        // 未声明 api 的插件登记空清单，幂等无操作
+        self.wasm_host_ctx
+            .api_registry()
+            .register(plugin_id, &plan.api);
 
         // 注册 manifest 中声明的 topic 订阅
-        let subscribes = loaded.manifest.contributes.subscribes.clone();
-        let plugin_id_owned = plugin_id.to_string();
-        drop(plugins);
-
-        if !subscribes.is_empty() {
-            for topic in &subscribes {
+        if !plan.subscribes.is_empty() {
+            let plugin_id_owned = plugin_id.to_string();
+            for topic in &plan.subscribes {
                 self.message_bus.subscribe_wasm(&plugin_id_owned, topic).await;
             }
             tracing::info!(
                 "[PluginHost] Plugin {} subscribed to {} topic(s): {:?}",
                 plugin_id_owned,
-                subscribes.len(),
-                subscribes
+                plan.subscribes.len(),
+                plan.subscribes
             );
         }
 
@@ -616,6 +654,8 @@ impl PluginHost {
         // 统一清理：取消注册和撤销权限
         self.registry.unregister_plugin(plugin_id).await;
         self.permission.revoke_all(plugin_id);
+        // 注销互调 api 清单（ADR-0017）：停用后目标调用被门禁拒绝
+        self.wasm_host_ctx.api_registry().unregister(plugin_id);
 
         // 中止插件定时器（若有）：停用后不再到点回调
         self.abort_plugin_timer(plugin_id);
@@ -933,6 +973,7 @@ impl PluginHost {
 }
 
 // ==================== 子模块（自本文件拆分） ====================
+mod app_cli;
 mod commands;
 mod listeners;
 mod services;
@@ -1028,6 +1069,7 @@ mod tests {
             file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -1043,6 +1085,7 @@ mod tests {
                 main: "index.ts".to_string(),
                 sandbox: "inline".to_string(),
                 permissions: vec!["storage".to_string(), "terminal:input".to_string()],
+                api: vec![],
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::TsOnly,
                 rust_library: String::new(),
