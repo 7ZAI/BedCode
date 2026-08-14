@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
@@ -106,6 +106,8 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
 tempfile = "3"
+# 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
+wit-component = "=0.256.0"
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic

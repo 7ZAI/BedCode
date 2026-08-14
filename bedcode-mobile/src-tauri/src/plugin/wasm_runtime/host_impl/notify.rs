@@ -1,72 +1,43 @@
-//! host_notify — 系统通知
+//! host_notify — 系统通知（逻辑层）
+//!
+//! 移动端特有能力：组件路径归属 WIT `host-events.notify`（SDK HostEvents trait 现状即
+//! emit+notify 同组，spec §3.1 如实映射）
 
 use super::super::WasmPluginState;
-use super::support::{guarded_host_call, read_wasm_string};
 
-/// 通知：移动端特有，转发 Kotlin TaskNotificationPlugin（host_notify）
+/// 逻辑层：发送系统通知（title/body → Kotlin TaskNotificationPlugin）
 ///
-/// 同步 host 函数内部经 tokio block_in_place + block_on 执行异步插件调用
-pub(crate) fn host_notify(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    title_ptr: u32,
-    title_len: u32,
-    body_ptr: u32,
-    body_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-
-    let title = match read_wasm_string(&mut caller, title_ptr, title_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_notify: failed to read title");
-            return -1;
-        }
-    };
-
-    let body = match read_wasm_string(&mut caller, body_ptr, body_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_notify: failed to read body");
-            return -1;
-        }
-    };
-
+/// 非 Android 平台（桌面 dev 场景）不支持，返回 Err（与旧 func_wrap 同语义）
+pub(crate) fn notify(state: &WasmPluginState, title: &str, body: &str) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         use crate::plugin::android_plugins::notification_plugin_handle;
+        use super::support::guarded_host_call;
 
-        let handle = match notification_plugin_handle() {
-            Some(h) => h,
-            None => {
-                tracing::error!(plugin_id = %plugin_id, "host_notify: TaskNotificationPlugin not registered");
-                return -1;
-            }
+        let Some(handle) = notification_plugin_handle() else {
+            return Err("TaskNotificationPlugin not registered".to_string());
         };
-        let runtime_handle = caller.data().runtime_handle.clone();
         let payload = serde_json::json!({ "title": title, "body": body });
-        match guarded_host_call(
-            &plugin_id,
+        guarded_host_call(
+            &state.plugin_id,
             "host_notify",
             Err::<serde_json::Value, _>(anyhow::anyhow!("host_notify panicked")),
             || {
                 tokio::task::block_in_place(|| {
-                    runtime_handle
+                    state
+                        .runtime_handle
                         .block_on(handle.run_mobile_plugin_async("showPluginNotification", payload))
                         .map_err(|e| anyhow::anyhow!("{e}"))
                 })
             },
-        ) {
-            Ok(_) => 0,
-            Err(e) => {
-                tracing::error!(error = %e, plugin_id = %plugin_id, "host_notify: notification failed");
-                -1
-            }
-        }
+        )
+        .map(|_| ())
+        .map_err(|e| format!("notification failed: {}", e))
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (&title, &body);
-        tracing::warn!(plugin_id = %plugin_id, "host_notify: only supported on Android");
-        -1
+        let _ = (title, body);
+        let _ = state;
+        Err("only supported on Android".to_string())
     }
 }

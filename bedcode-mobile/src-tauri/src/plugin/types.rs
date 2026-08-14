@@ -64,21 +64,6 @@ impl PluginLifecycleEvent {
         }
     }
 
-    /// 返回 WASM 导出函数名（与 SDK abi 常量保持一致）
-    pub fn wasm_export_name(&self) -> &'static str {
-        use bedcode_plugin_api_mobile::abi::export;
-        match self {
-            Self::AppStartup => export::ON_STARTUP,
-            Self::AppShutdown => export::ON_SHUTDOWN,
-            Self::AuthSuccess => export::ON_AUTH_SUCCESS,
-            Self::Disconnect { .. } => export::ON_DISCONNECT,
-            Self::SessionCreated { .. } => export::ON_SESSION_CREATED,
-            Self::SessionStopped { .. } => export::ON_SESSION_STOPPED,
-            Self::TerminalInput { .. } => export::ON_TERMINAL_INPUT,
-            Self::TerminalOutput { .. } => export::ON_TERMINAL_OUTPUT,
-        }
-    }
-
     /// 返回前端 Tauri 事件名（不含 plugin:lifecycle: 前缀）
     pub fn tauri_event_name(&self) -> &'static str {
         match self {

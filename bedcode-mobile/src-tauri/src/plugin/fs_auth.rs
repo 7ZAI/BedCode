@@ -46,8 +46,8 @@ pub struct FsAuthChecker {
     storage: Arc<PluginStorage>,
     /// 待处理的弹窗授权请求
     pending_requests: Arc<Mutex<Vec<PendingRequest>>>,
-    /// Tauri AppHandle（用于发送弹窗事件）
-    app_handle: Arc<tauri::AppHandle>,
+    /// 弹窗授权句柄（None 时无头/测试上下文：授权请求拒绝，check/request_auth 返回 false）
+    app_handle: Option<Arc<tauri::AppHandle>>,
 }
 
 /// 存储键名常量
@@ -64,7 +64,7 @@ impl FsAuthChecker {
     /// 创建文件访问校验器
     pub fn new(
         storage: Arc<PluginStorage>,
-        app_handle: Arc<tauri::AppHandle>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> Self {
         Self {
             storage,
@@ -192,11 +192,18 @@ impl FsAuthChecker {
             "operation": operation.to_string(),
         });
 
-        if let Err(e) = self.app_handle.emit("plugin:fs-auth-request", payload) {
-            // 事件未送达前端：请求永远不会被响应，移除已入队条目避免 pending 泄漏
+        // 事件未送达（无头/测试上下文无 app_handle 同样视为未送达）：请求永远不会
+        // 被响应，移除已入队条目避免 pending 泄漏
+        let emit_result = match &self.app_handle {
+            Some(app) => app
+                .emit("plugin:fs-auth-request", payload)
+                .map_err(|e| format!("emit failed: {}", e)),
+            None => Err("app_handle unavailable".to_string()),
+        };
+        if let Err(err) = emit_result {
             let mut pending = self.pending_requests.lock().await;
             pending.retain(|r| r.request_id != request_id);
-            tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
+            tracing::error!(error = %err, "fs_auth: failed to deliver auth request event");
             return false;
         }
 
@@ -363,11 +370,18 @@ impl FsAuthChecker {
             "operation": operation.to_string(),
         });
 
-        if let Err(e) = self.app_handle.emit("plugin:fs-auth-request", payload) {
-            // 事件未送达前端：请求永远不会被响应，移除已入队条目避免 pending 泄漏
+        // 事件未送达（无头/测试上下文无 app_handle 同样视为未送达）：请求永远不会
+        // 被响应，移除已入队条目避免 pending 泄漏
+        let emit_result = match &self.app_handle {
+            Some(app) => app
+                .emit("plugin:fs-auth-request", payload)
+                .map_err(|e| format!("emit failed: {}", e)),
+            None => Err("app_handle unavailable".to_string()),
+        };
+        if let Err(err) = emit_result {
             let mut pending = self.pending_requests.lock().await;
             pending.retain(|r| r.request_id != request_id);
-            tracing::error!(error = %e, "fs_auth: failed to emit auth request event");
+            tracing::error!(error = %err, "fs_auth: failed to deliver auth request event");
             return false;
         }
 

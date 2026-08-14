@@ -267,6 +267,18 @@ sh scripts/doc-tracking.sh untrack && git commit
 
 **禁止在 commit message 中添加 `Co-Authored-By: Claude ...` 行。**
 
+### 文件回滚规范（强制）
+
+回滚/撤销对某文件的修改前，必须先确认该文件**不包含本次会话之外的未提交改动**：
+
+1. 检查：`git status <file>` + `git diff <file>`，并核对本次会话开始时的内容
+2. **若文件包含他人/其他任务的在途改动（未提交），禁止 `git checkout -- <file>` / `git restore` 整文件回滚** —— 这会把无关的在途工作一并覆盖丢失（git 无法恢复未提交内容）
+3. 正确做法：**只精确删除本次修改的内容**（用 edit 工具逐段逆向替换，恢复为本次修改前的原文），保留其余行原样
+4. 本次新增的独立文件可直接删除（前提是确认非他人创建）
+5. 误用 `git checkout` 覆盖了在途改动时，立即停手并如实上报（可能的恢复源：`.pi/sessions/` 会话日志中的 Read 输出、`.scratch/` 交接文档），不得自行猜测重建
+
+> 教训案例：2026-08 移动端 wasmtime 组件迁移的在途未提交改动（loader.rs / manager.rs 等）曾因整文件 `git checkout` 被一并覆盖丢失，分支与 git 均无法恢复。
+
 ---
 
 ## Constraints

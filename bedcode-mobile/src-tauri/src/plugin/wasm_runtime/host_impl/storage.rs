@@ -1,158 +1,68 @@
-//! host_storage_* — 插件键值存储
+//! host_storage_* — 插件键值存储（逻辑层）
 
 use super::super::WasmPluginState;
-use super::support::{guarded_host_call, has_permission, read_wasm_string, write_result_to_out_ptr, write_wasm_string};
+use super::support::guarded_host_call;
 
-pub(crate) fn host_storage_get(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    key_ptr: u32,
-    key_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
-        tracing::warn!(plugin_id = %plugin_id, "host_storage_get: permission denied (storage)");
-        return -1;
+/// 逻辑层：读取值（返回 JSON 字符串；值以 serde_json::Value 存储，
+/// 组件契约 WIT `option<string>` 即承载 JSON 载荷）
+pub(crate) fn storage_get(
+    state: &WasmPluginState,
+    key: &str,
+) -> Result<Option<String>, String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE)
+    {
+        return Err("permission denied: storage".to_string());
     }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_storage_get: failed to read key");
-            return -1;
-        }
-    };
-
-    let storage = host_ctx.storage.clone();
-    let handle = caller.data().runtime_handle.clone();
-    let result = guarded_host_call(
-        &plugin_id,
-        "host_storage_get",
-        Err(crate::AppError::Internal("host_storage_get panicked".to_string())),
-        || tokio::task::block_in_place(|| handle.block_on(storage.get(&plugin_id, &key))),
-    );
-
-    match result {
-        Ok(Some(value)) => {
-            let json_str = match serde_json::to_string(&value) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_get: JSON serialization failed");
-                    return -1;
-                }
-            };
-            match write_wasm_string(&mut caller, &json_str) {
-                Some((ptr, len)) => {
-                    if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
-                        0
-                    } else {
-                        -1
-                    }
-                }
-                None => {
-                    tracing::error!(plugin_id = %plugin_id, "host_storage_get: failed to write result to WASM memory");
-                    -1
-                }
-            }
-        }
-        Ok(None) => {
-            let _ = write_result_to_out_ptr(&mut caller, out_ptr, 0, 0);
-            0
-        }
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, key = %key, "host_storage_get: storage error");
-            -1
-        }
-    }
+    let storage = state.host_ctx.storage.clone();
+    let value = guarded_host_call(&state.plugin_id, "host_storage_get",
+        Err(crate::AppError::Internal("host_storage_get panicked".to_string())), || {
+        tokio::task::block_in_place(|| {
+            state.runtime_handle.block_on(storage.get(&state.plugin_id, key))
+        })
+    })
+    .map_err(|e| format!("storage error: {}", e))?;
+    value
+        .map(|v| serde_json::to_string(&v).map_err(|e| format!("JSON serialize failed: {}", e)))
+        .transpose()
 }
 
-pub(crate) fn host_storage_set(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    key_ptr: u32,
-    key_len: u32,
-    val_ptr: u32,
-    val_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
-        tracing::warn!(plugin_id = %plugin_id, "host_storage_set: permission denied (storage)");
-        return -1;
+/// 逻辑层：设置值（value 为 JSON 字符串，送入前解析；
+/// 组件契约 WIT 与 desktop 同语义：set(key, value: string) 先 JSON 解析）
+pub(crate) fn storage_set(state: &WasmPluginState, key: &str, value: &str) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE)
+    {
+        return Err("permission denied: storage".to_string());
     }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_storage_set: failed to read key");
-            return -1;
-        }
-    };
-
-    let val_str = match read_wasm_string(&mut caller, val_ptr, val_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_storage_set: failed to read value");
-            return -1;
-        }
-    };
-
-    let json_value: serde_json::Value = match serde_json::from_str(&val_str) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_set: invalid JSON value");
-            return -1;
-        }
-    };
-
-    let storage = host_ctx.storage.clone();
-    let handle = caller.data().runtime_handle.clone();
-    match guarded_host_call(
-        &plugin_id,
-        "host_storage_set",
-        Err(crate::AppError::Internal("host_storage_set panicked".to_string())),
-        || tokio::task::block_in_place(|| handle.block_on(storage.set(&plugin_id, &key, json_value))),
-    ) {
-        Ok(()) => 0,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_set: storage error");
-            -1
-        }
-    }
+    let json_value: serde_json::Value = serde_json::from_str(value)
+        .map_err(|e| format!("invalid JSON value: {}", e))?;
+    let storage = state.host_ctx.storage.clone();
+    guarded_host_call(&state.plugin_id, "host_storage_set",
+        Err(crate::AppError::Internal("host_storage_set panicked".to_string())), || {
+        tokio::task::block_in_place(|| {
+            state.runtime_handle.block_on(storage.set(&state.plugin_id, key, json_value))
+        })
+    })
+    .map_err(|e| format!("storage error: {}", e))
 }
 
-pub(crate) fn host_storage_delete(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    key_ptr: u32,
-    key_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
-        tracing::warn!(plugin_id = %plugin_id, "host_storage_delete: permission denied (storage)");
-        return -1;
+/// 逻辑层：删除值
+pub(crate) fn storage_delete(state: &WasmPluginState, key: &str) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE)
+    {
+        return Err("permission denied: storage".to_string());
     }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let key = match read_wasm_string(&mut caller, key_ptr, key_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_storage_delete: failed to read key");
-            return -1;
-        }
-    };
-
-    let storage = host_ctx.storage.clone();
-    let handle = caller.data().runtime_handle.clone();
-    match guarded_host_call(
-        &plugin_id,
-        "host_storage_delete",
-        Err(crate::AppError::Internal("host_storage_delete panicked".to_string())),
-        || tokio::task::block_in_place(|| handle.block_on(storage.delete(&plugin_id, &key))),
-    ) {
-        Ok(()) => 0,
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_storage_delete: storage error");
-            -1
-        }
-    }
+    let storage = state.host_ctx.storage.clone();
+    guarded_host_call(&state.plugin_id, "host_storage_delete",
+        Err(crate::AppError::Internal("host_storage_delete panicked".to_string())), || {
+        tokio::task::block_in_place(|| {
+            state.runtime_handle.block_on(storage.delete(&state.plugin_id, key))
+        })
+    })
+    .map_err(|e| format!("storage error: {}", e))
 }

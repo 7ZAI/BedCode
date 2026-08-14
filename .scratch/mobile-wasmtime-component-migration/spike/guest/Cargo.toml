@@ -1,0 +1,12 @@
+[package]
+name = "spike-guest"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Spike 版本锚定目标（spec §5 R1）：wit-bindgen 0.60.0
+wit-bindgen = { version = "=0.60.0", features = ["macros"] }
+serde_json = "1"

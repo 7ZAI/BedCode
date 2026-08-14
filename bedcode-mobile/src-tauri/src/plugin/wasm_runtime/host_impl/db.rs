@@ -1,84 +1,50 @@
-//! host_db_* — 插件 SQLite 访问
+//! host_db_* — 插件 SQLite 访问（逻辑层）
 
 use crate::plugin::wasm_host;
 use super::super::WasmPluginState;
-use super::support::{guarded_host_call, has_permission, read_wasm_string, write_result_to_out_ptr, write_wasm_string};
 
-pub(crate) fn host_db_execute(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
-        tracing::warn!(plugin_id = %plugin_id, "host_db_execute: permission denied (storage)");
-        return -1;
-    }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let sql = match read_wasm_string(&mut caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_db_execute: failed to read SQL");
-            return -1;
-        }
-    };
-
-    // 表名前缀校验
-    if let Err(e) = wasm_host::validate_sql_table_prefix(&plugin_id, &sql) {
-        tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_execute: table name validation failed");
-        return -1;
+/// 逻辑层：执行 SQL（表名前缀校验不变量保留）
+pub(crate) fn db_execute(state: &WasmPluginState, sql: &str) -> Result<u32, String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE)
+    {
+        return Err("permission denied: storage".to_string());
     }
 
-    let db = host_ctx.db.clone();
-    // 作用域收窄 guard 生命周期：避免尾部表达式临时值悬垂（db 先于 guard drop）
-    // poison 容忍：host fn 内 panic 被 guarded_host_call 截获后锁会中毒，不能连锁 panic
+    // 表名前缀校验（跨插件数据隔离不变量）
+    wasm_host::validate_sql_table_prefix(&state.plugin_id, sql)
+        .map_err(|e| format!("table name validation failed: {}", e))?;
+
+    let db = state.host_ctx.db.clone();
+    // 作用域收窄 guard 生命周期；poison 容忍（panic 截获后锁中毒不连锁 panic）
     let affected = {
         let conn = db.lock().unwrap_or_else(|e| e.into_inner());
-        match conn.execute(&sql, []) {
-            Ok(affected) => affected as i32,
-            Err(e) => {
-                tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_execute: SQL execution failed");
-                -1
-            }
-        }
+        conn.execute(sql, [])
+            .map_err(|e| format!("SQL execution failed: {}", e))?
     };
-    affected
+    Ok(affected as u32)
 }
 
-pub(crate) fn host_db_query(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    sql_ptr: u32,
-    sql_len: u32,
-    out_ptr: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE) {
-        tracing::warn!(plugin_id = %plugin_id, "host_db_query: permission denied (storage)");
-        return -1;
-    }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let sql = match read_wasm_string(&mut caller, sql_ptr, sql_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to read SQL");
-            return -1;
-        }
-    };
-
-    if let Err(e) = wasm_host::validate_sql_table_prefix(&plugin_id, &sql) {
-        tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: table name validation failed");
-        return -1;
+/// 逻辑层：查询 SQL（返回行集 JSON 字符串；表名前缀校验不变量保留）
+pub(crate) fn db_query(state: &WasmPluginState, sql: &str) -> Result<Option<String>, String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE)
+    {
+        return Err("permission denied: storage".to_string());
     }
 
-    let db = host_ctx.db.clone();
+    wasm_host::validate_sql_table_prefix(&state.plugin_id, sql)
+        .map_err(|e| format!("table name validation failed: {}", e))?;
+
+    let db = state.host_ctx.db.clone();
     let query_result: Result<serde_json::Value, String> = (|| {
         // poison 容忍：host fn 内 panic 被截获后锁会中毒，不能连锁 panic
         let conn = db.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
-            .prepare(&sql)
+            .prepare(sql)
             .map_err(|e| format!("prepare: {}", e))?;
 
         let column_count = stmt.column_count();
@@ -110,32 +76,8 @@ pub(crate) fn host_db_query(
         ))
     })();
 
-    match query_result {
-        Ok(value) => {
-            let json_str = match serde_json::to_string(&value) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: JSON serialization failed");
-                    return -1;
-                }
-            };
-            match write_wasm_string(&mut caller, &json_str) {
-                Some((ptr, len)) => {
-                    if write_result_to_out_ptr(&mut caller, out_ptr, ptr, len) {
-                        0
-                    } else {
-                        -1
-                    }
-                }
-                None => {
-                    tracing::error!(plugin_id = %plugin_id, "host_db_query: failed to write result to WASM memory");
-                    -1
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(error = %e, plugin_id = %plugin_id, "host_db_query: SQL query failed");
-            -1
-        }
-    }
+    query_result.map(|value| {
+        serde_json::to_string(&value).map_err(|e| format!("JSON serialization failed: {}", e))
+    })?
+    .map(Some)
 }

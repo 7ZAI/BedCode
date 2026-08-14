@@ -23,7 +23,7 @@ use tokio::sync::Mutex;
 /// 由 PluginManager 实现，避免 MessageBus 与 PluginManager 循环引用
 #[async_trait]
 pub trait MessageDispatcher: Send + Sync + 'static {
-    /// 投递消息给 WASM 插件（调用 __bedcode_on_bus_message）
+    /// 投递消息给 WASM 插件（调用组件契约 events.on-bus-message）
     async fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
     /// 检查插件是否已激活
     async fn is_activated(&self, plugin_id: &str) -> bool;

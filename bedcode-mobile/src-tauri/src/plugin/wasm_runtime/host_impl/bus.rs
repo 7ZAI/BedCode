@@ -1,107 +1,68 @@
-//! host_bus_* — 消息总线
+//! host_bus_* — 消息总线（逻辑层）
+//!
+//! 逻辑层函数（值传递）供组件 trait impl（wasm_runtime/component.rs）调用；
+//! core 形态的 func_wrap 胶水（内存搬运 + 状态码映射）已随 09 清理删除。
 
 use super::super::WasmPluginState;
-use super::support::{guarded_host_call, has_permission, read_wasm_string};
+use super::support::guarded_host_call;
 
-/// 消息总线：发布消息
-pub(crate) fn host_bus_publish(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    topic_ptr: u32,
-    topic_len: u32,
-    payload_ptr: u32,
-    payload_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_BUS) {
-        tracing::warn!(plugin_id = %plugin_id, "host_bus_publish: permission denied (bus)");
-        return -1;
+/// 逻辑层：发布消息
+pub(crate) fn bus_publish(
+    state: &WasmPluginState,
+    topic: &str,
+    payload_str: &str,
+) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_BUS)
+    {
+        return Err("permission denied: bus".to_string());
     }
-    let host_ctx = caller.data().host_ctx.clone();
 
-    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_bus_publish: failed to read topic");
-            return -1;
-        }
-    };
-
-    let payload_str = match read_wasm_string(&mut caller, payload_ptr, payload_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, topic = %topic, "host_bus_publish: failed to read payload");
-            return -1;
-        }
-    };
-
-    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+    let payload: serde_json::Value = match serde_json::from_str(payload_str) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error = %e, plugin_id = %plugin_id, topic = %topic, "host_bus_publish: invalid JSON payload, using raw string");
-            serde_json::Value::String(payload_str)
+            tracing::warn!(error = %e, plugin_id = %state.plugin_id, topic = %topic, "host_bus_publish: invalid JSON payload, using raw string");
+            serde_json::Value::String(payload_str.to_string())
         }
     };
 
-    host_ctx.message_bus.publish(&topic, &plugin_id, payload);
-    0
+    state.host_ctx.message_bus.publish(topic, &state.plugin_id, payload);
+    Ok(())
 }
 
-
-/// 消息总线：订阅 topic
-pub(crate) fn host_bus_subscribe(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    topic_ptr: u32,
-    topic_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_BUS) {
-        tracing::warn!(plugin_id = %plugin_id, "host_bus_subscribe: permission denied (bus)");
-        return -1;
+/// 逻辑层：订阅 topic
+pub(crate) fn bus_subscribe(state: &WasmPluginState, topic: &str) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_BUS)
+    {
+        return Err("permission denied: bus".to_string());
     }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_bus_subscribe: failed to read topic");
-            return -1;
-        }
-    };
-
-    let bus = host_ctx.message_bus.clone();
-    let handle = caller.data().runtime_handle.clone();
-    guarded_host_call(&plugin_id, "host_bus_subscribe", (), || {
-        tokio::task::block_in_place(|| handle.block_on(bus.subscribe_wasm(&plugin_id, &topic)))
+    guarded_host_call(&state.plugin_id, "host_bus_subscribe", (), || {
+        tokio::task::block_in_place(|| {
+            state.runtime_handle.block_on(
+                state.host_ctx.message_bus.subscribe_wasm(&state.plugin_id, topic),
+            )
+        })
     });
-    0
+    Ok(())
 }
 
-
-/// 消息总线：取消订阅
-pub(crate) fn host_bus_unsubscribe(
-    mut caller: wasmtime::Caller<'_, WasmPluginState>,
-    topic_ptr: u32,
-    topic_len: u32,
-) -> i32 {
-    let plugin_id = caller.data().plugin_id.clone();
-    if !has_permission(&caller, bedcode_plugin_api_mobile::permission::PERMISSION_BUS) {
-        tracing::warn!(plugin_id = %plugin_id, "host_bus_unsubscribe: permission denied (bus)");
-        return -1;
+/// 逻辑层：取消订阅
+pub(crate) fn bus_unsubscribe(state: &WasmPluginState, topic: &str) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_BUS)
+    {
+        return Err("permission denied: bus".to_string());
     }
-    let host_ctx = caller.data().host_ctx.clone();
-
-    let topic = match read_wasm_string(&mut caller, topic_ptr, topic_len) {
-        Some(s) => s,
-        None => {
-            tracing::error!(plugin_id = %plugin_id, "host_bus_unsubscribe: failed to read topic");
-            return -1;
-        }
-    };
-
-    let bus = host_ctx.message_bus.clone();
-    let handle = caller.data().runtime_handle.clone();
-    guarded_host_call(&plugin_id, "host_bus_unsubscribe", (), || {
-        tokio::task::block_in_place(|| handle.block_on(bus.unsubscribe(&plugin_id, &topic)))
+    guarded_host_call(&state.plugin_id, "host_bus_unsubscribe", (), || {
+        tokio::task::block_in_place(|| {
+            state
+                .runtime_handle
+                .block_on(state.host_ctx.message_bus.unsubscribe(&state.plugin_id, topic))
+        })
     });
-    0
+    Ok(())
 }

@@ -13,7 +13,8 @@
  *
  * create  从 SDK 内置模板生成插件工程（填充 id/name/author/crate 名）；
  *          --ts-only 生成纯前端插件（无 rust/ 目录）；--registry 时引用已发布版本
- * build   串联 vite build → cargo wasm32 构建；--resources-dir 时复制产物到宿主资源目录；
+ * build   串联 vite build → cargo wasm32 构建 → componentize 组件化（Component Model）；
+ *          --resources-dir 时复制产物到宿主资源目录；
  *          --watch 时 vite 长驻构建前端，重建后自动复制产物（前端热更）
  * package 将产物打包为 {id}.zip 插件包（分发单元）；--hash 时计算并写入 wasmHash
  * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR，插件源码在
@@ -529,6 +530,23 @@ function cmdBuild(flags) {
       console.error('  若提示 target 缺失: rustup target add wasm32-unknown-unknown')
       process.exit(1)
     }
+
+    // 组件化：将 wit-bindgen 产出的 core module（含 component-type 自定义段）
+    // 编码为 Component Model 组件（等价 wasm-tools component new）。
+    // 工具幂等——产物已是组件（0d 00 01 00）时直接复制，支持增量构建。
+    // 迁移 spec §4 S2：产物字节形态 `00 61 73 6d 0d 00 01 00`（模块段在组件头前）
+    console.log('\n[bedcode-plugin] ====== 组件化 WASM (Component Model) ======')
+    const componentizeManifest = join(SDK_ROOT, 'rust/tools/componentize/Cargo.toml')
+    run('cargo', [
+      'run',
+      '--release',
+      '--manifest-path',
+      componentizeManifest,
+      '--',
+      wasmPath,
+      '-o',
+      wasmPath,
+    ], cwd)
   }
 
   // 3. 复制产物到宿主资源目录（--resources-dir <父目录>，按插件 id 建子目录）

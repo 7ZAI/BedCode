@@ -1,0 +1,24 @@
+[package]
+name = "bedcode-plugin-component-test"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# 与迁移 spec §5 R1 结论一致：guest 侧 wit-bindgen 0.60.0（宿主侧无此依赖）
+wit-bindgen = { version = "=0.60.0", features = ["macros"] }
+serde_json = "1"
+
+[features]
+# 异常形态（宿主单测制造拒绝场景用）：
+#   high-abi      — abi.version() 返回 999（测宿主 abi 协商拒绝）
+#   spin-loop     — command.invoke 死循环（测燃料看门狗 trap）
+#   big-alloc     — command.invoke 显式 memory.grow 300MB（测 ResourceLimiter 拒绝）
+# 注：import-extra（unknown import 场景）已随 03 全量接线移除——所有 WIT 接口
+# 均已注册，"未知接口"由 WIT 类型系统从构造上排除
+default = []
+high-abi = []
+spin-loop = []
+big-alloc = []

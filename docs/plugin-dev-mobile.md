@@ -85,6 +85,11 @@ npm run package     # = bedcode-plugin package：产出 dist/{id}.zip
 - `--frontend-only` / `--rust-only`：只构建一半
 - `--resources-dir <父目录>`：额外把产物复制到 `<父目录>/{id}/`（宿主资源目录）
 
+> **组件化构建链**：`build` 内置 **componentize**（幂等）——cargo wasm32（`--features wasm`）
+> 产物经 wit-component 编码为 **Component Model 组件**（字节头 `00 61 73 6d 0d 00 01 00`）。
+> 宿主只接受组件形态；裸 `cargo build --target wasm32` 会把产物还原为 core module
+> （宿主加载报错），**重编后必须重跑 `bedcode-plugin build` 再部署**。
+
 `bedcode-plugin package --hash`：计算 WASM SHA256 写入 `plugin.json` 的 `wasmHash`
 （安装时宿主校验完整性；`--hash` 之外的常规打包不强制要求）。
 
@@ -212,7 +217,31 @@ app.mount(container)
 
 ## 8. WASM 后端（rust）
 
-`rust/src/lib.rs` 实现 `WasmPlugin` trait：`ID`、`manifest()`、`activate()`、`deactivate()`、`invoke_command()`，并以 `wasm_entry!` 宏生成 ABI 导出。宿主按 `rustLibrary` 查找 `{crate}.wasm` 编译实例化。
+插件后端编译为 **WASM 组件（Component Model）**，契约定义在 SDK 的
+`packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 11 接口 / 插件导出 8 接口，
+单一事实来源，wit-bindgen 编译期校验）。`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以
+`wasm_entry!` 宏生成组件导出（manifest / activate / deactivate / invoke_command / 生命周期
+钩子 / 事件 / 上传与传输钩子 / abi.version）；宿主按 `rustLibrary` 查找 `{crate}.wasm`
+（组件产物）编译实例化。自研 ABI（`__bedcode_*` 导出、`(ptr,len)` 内存搬运、签名表）
+已在 2025-08 迁移清理删除。
+
+**SDK 依赖**：插件 rust crate 依赖 `bedcode-plugin-api-mobile`（即 plugin-sdk-mobile/rust），
+wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 在此 feature 下）；
+构建命令见 §4（内置 componentize）。
+
+**契约差异表（移动端 vs 桌面端 WIT）**：
+
+| 项 | 桌面端 | 移动端 | 说明 |
+|----|--------|--------|------|
+| import 接口 | 17 组 | 11 组 | 无 session/api-call/timer/process/app/plugin-database |
+| host-database | 4 函数 | 2 函数 | 无 params 变体、无插件独立库 |
+| host-fs | 6 函数 | 8 函数 | 移动端新增 download/document 保存（SAF/MediaStore） |
+| host-events | emit/broadcast-sync/notify | emit/notify | 无 broadcast |
+| host-log | 5 函数 | 5 函数 | mark-plugin-error 语义对齐 |
+| events 导出 | 4 个 | 5 个 | 移动端 WS 认证生命周期事件 |
+| abi | version + form | 仅 version | 无 core 共存形态 |
+
+完整 WIT 与迁移背景见 `docs/implementation-plans/mobile-wasmtime-component-migration.md`。
 
 **重要**：`plugin.json` 与 `rust/src/lib.rs` 中的 `manifest()` 都声明清单——**以 `plugin.json` 为准**（宿主扫描读取），`manifest()` 用于 SDK 内部校验。
 

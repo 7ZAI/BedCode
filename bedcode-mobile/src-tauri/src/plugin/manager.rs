@@ -7,7 +7,7 @@ use crate::plugin::loader::PluginLoader;
 use crate::plugin::registry::builtin_manifests;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::*;
-use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::constants::plugin::PLUGIN_DATA_DIR;
 use crate::system::settings::SettingsManager;
@@ -29,7 +29,7 @@ pub struct PluginManager {
     ///
     /// 每插件独立 Mutex：map 守卫只短持有（查找/增删），同步执行 WASM 期间
     /// 仅持有单插件实例锁，避免持 map 守卫执行 WASM 导致 host function 重入死锁
-    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedComponentPlugin>>>>>,
     /// WASM 宿主上下文（延迟初始化）
     wasm_host_ctx: OnceLock<Arc<WasmHostContext>>,
     /// 插件键值存储
@@ -64,7 +64,7 @@ impl PluginManager {
 
         let fs_auth = Arc::new(crate::plugin::fs_auth::FsAuthChecker::new(
             storage.clone(),
-            app_handle.clone(),
+            Some(app_handle.clone()),
         ));
         let message_bus = Arc::new(crate::plugin::message_bus::MessageBus::new());
 
@@ -169,14 +169,14 @@ impl PluginManager {
         let host_ctx = Arc::new(WasmHostContext::new(
             self.plugin_db.clone(),
             self.storage.clone(),
-            self.app_handle.clone(),
+            Some(self.app_handle.clone()),
             self.fs_auth.clone(),
             self.message_bus.clone(),
             status_reporter,
         ));
 
-        // 校验宿主 ABI 注册与 SDK 签名表一致（启动期暴露契约漂移）
-        runtime.verify_abi(host_ctx.clone())?;
+        // 组件路径无启动期签名表校验：契约由 WIT 编译期保证，
+        // 插件侧 `abi.version()` 协商在 instantiate_component 内逐实例校验
 
         let _ = self.wasm_runtime.set(runtime);
         let _ = self.wasm_host_ctx.set(host_ctx);
@@ -606,7 +606,7 @@ impl PluginManager {
         let event_name = event.name();
 
         // 快照：声明了该事件的已激活 WASM 插件 id + 实例句柄（短锁）
-        let targets: Vec<(String, Option<Arc<TokioMutex<LoadedWasmPlugin>>>)> = {
+        let targets: Vec<(String, Option<Arc<TokioMutex<LoadedComponentPlugin>>>)> = {
             let ids: Vec<String> = {
                 let plugins = self.plugins.read().await;
                 plugins
@@ -674,7 +674,7 @@ impl PluginManager {
 /// 独立结构体避免 PluginManager 直接实现 trait 导致的生命周期问题
 struct PluginManagerDispatcher {
     plugins: Arc<RwLock<HashMap<String, LoadedPlugin>>>,
-    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedComponentPlugin>>>>>,
 }
 
 #[async_trait]

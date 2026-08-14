@@ -1,8 +1,10 @@
 # WASM 插件运行时：Component Model 迁移方案记录
 
-> 状态：**调研记录，未实施**。本文基于 wasmtime-guide.md 的第 6 点建议，
-> 探索 BedCode 现有 WASM 插件 ABI 实现后，给出迁移到 Component Model 的完整方案与评估。
-> 迁移时机未定，当前自研 ABI 运行良好，本记录供未来决策使用。
+> 状态：**两端均已实施**（桌面端 2025-07；移动端 2025-08，tickets 01–09）。
+> 本文为迁移调研记录（历史文档）：背景方案、迁移路径与决策依据仍有效，
+> 但「现状：自研 ABI」等描述已过时——自研 ABI 残留已在两端清理删除。
+> 实施细节与坑记录：桌面端 `.scratch/wasmtime-component-migration/`，
+> 移动端 `.scratch/mobile-wasmtime-component-migration/issues/`。
 
 ---
 

@@ -1,10 +1,10 @@
 //! Plugin Loader（移动端）
 //!
 //! APK assets 内置插件解压 + app_data_dir 插件扫描
-//! 解析 plugin.json，编译并实例化 WASM 模块
+//! 解析 plugin.json，编译并实例化 WASM 组件（Component Model，迁移 ticket 06）
 
 use crate::plugin::types::*;
-use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::*;
 use std::collections::HashMap;
 use std::fs;
@@ -90,13 +90,14 @@ impl PluginLoader {
 
     /// 扫描插件目录并加载所有 plugin.json
     ///
-    /// 对 pluginType: "wasm" 的插件，编译 + 实例化 WASM 模块
+    /// 对 pluginType: "wasm" 的插件，编译 + 实例化 WASM 组件（Component Model，
+    /// 一次性切割无共存：产物必须为组件，core module 加载报错即检查员）
     /// 对 pluginType: "ts-only" 的插件，仅注册 manifest
-    pub fn load_all(
+    pub(crate) fn load_all(
         plugins_dir: &Path,
         wasm_runtime: &WasmRuntime,
         wasm_host_ctx: &Arc<WasmHostContext>,
-    ) -> (HashMap<String, LoadedPlugin>, HashMap<String, LoadedWasmPlugin>) {
+    ) -> (HashMap<String, LoadedPlugin>, HashMap<String, LoadedComponentPlugin>) {
         tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
 
         if !plugins_dir.exists() {
@@ -141,12 +142,13 @@ impl PluginLoader {
 
                     let source = Self::detect_source(&path);
 
-                    // WASM 插件：编译 + 实例化
+                    // WASM 插件：编译 + 实例化（组件路径；core module 在此编译失败，
+                    // 报错信息明确——旧 ABI 产物残留在切换期即暴露）
                     if manifest.plugin_type == PluginType::Wasm && !manifest.rust_library.is_empty() {
                         let wasm_file = path.join(format!("{}{}", manifest.rust_library, WASM_FILE_EXT));
                         if wasm_file.exists() {
-                            match wasm_runtime.compile_module_from_file(&wasm_file) {
-                                Ok(module) => {
+                            match wasm_runtime.compile_component_from_file(&wasm_file) {
+                                Ok(component) => {
                                     // 与 SDK PermissionManager::grant_permissions 语义一致：storage 默认授予
                                     let mut granted: std::collections::HashSet<String> =
                                         manifest.permissions.iter().cloned().collect();
@@ -154,8 +156,8 @@ impl PluginLoader {
                                         bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE
                                             .to_string(),
                                     );
-                                    match wasm_runtime.instantiate(
-                                        &module,
+                                    match wasm_runtime.instantiate_component(
+                                        &component,
                                         &plugin_id,
                                         wasm_host_ctx.clone(),
                                         granted,
@@ -287,4 +289,77 @@ fn copy_dir_all(src: &Path, dest: &Path) -> crate::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::fs_auth::FsAuthChecker;
+    use crate::plugin::message_bus::MessageBus;
+    use crate::plugin::storage::PluginStorage;
+
+    /// 迁移 ticket 06 验收：生产加载路径（PluginLoader::load_all）直接吃组件产物
+    ///
+    /// 覆盖 manifest 解析 → 组件编译（AOT 缓存）→ instantiate_component → 实例落表；
+    /// 再经实例调用 activate 导出（SDK wasm_entry! 宏产物）。
+    /// 与 component.rs 的 instantiate 直测互补：此处验证 loader/manager 接线本身。
+    #[test]
+    fn test_load_all_loads_component_plugin() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // 插件目录布局：{plugins_dir}/{plugin_id}/plugin.json + {rustLibrary}.wasm
+            // （与 APK assets / dev 资源目录解压后的布局一致）
+            let plugin_dir = tmp.path().join("com.bedcode.auto-task");
+            std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+            std::fs::write(
+                plugin_dir.join(PLUGIN_MANIFEST_FILE),
+                r#"{
+                    "id": "com.bedcode.auto-task",
+                    "name": "Auto Task",
+                    "version": "1.0.0-beta",
+                    "pluginType": "wasm",
+                    "rustLibrary": "bedcode_plugin_auto_task"
+                }"#,
+            )
+            .expect("write plugin.json");
+            // 真实 SDK 宏产物（wasm_entry! 8 组导出），组件形态字节已在 build 助手断言
+            std::fs::write(
+                plugin_dir.join("bedcode_plugin_auto_task.wasm"),
+                &crate::plugin::wasm_runtime::component::tests::build_auto_task_component(),
+            )
+            .expect("write component wasm");
+
+            let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
+            let host_ctx = crate::plugin::wasm_runtime::component::tests::build_host_ctx(&tmp);
+
+            let (plugins, wasm_plugins) = PluginLoader::load_all(tmp.path(), &runtime, &host_ctx);
+
+            // manifest 注册 + 组件实例落表
+            assert!(plugins.contains_key("com.bedcode.auto-task"));
+            let mut loaded = wasm_plugins
+                .into_iter()
+                .find(|(id, _)| id == "com.bedcode.auto-task")
+                .expect("auto-task 组件必须被 loader 实例化")
+                .1;
+
+            // 实例可用：activate 导出调用（宏内 HostLog 接线走真实 host 日志）
+            assert_eq!(loaded.activate().expect("activate"), 0);
+
+            // AOT 缓存产物落在宿主 cache 目录（组件缓存 `c` 前缀）
+            let cache_files: Vec<_> = std::fs::read_dir(tmp.path().join("aot"))
+                .expect("aot dir")
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "cwasm").unwrap_or(false))
+                .collect();
+            assert!(
+                cache_files.iter().any(|e| e
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with('c')),
+                "组件 AOT 缓存应以 c 前缀命名"
+            );
+        });
+    }
 }

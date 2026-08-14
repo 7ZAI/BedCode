@@ -5,11 +5,13 @@
 //! - 插件业务代码可依赖 `impl HostStorage + HostLog` 等抽象组合，而非具体类型，
 //!   便于单元测试时 mock
 //!
-//! 各子 trait 按功能域一一对应宿主侧 host function 分组
-//! （storage / database / terminal / session / events / http / fs / log / bus）。
+//! 各子 trait 按功能域一一对应 WIT `bedcode:plugin` world 的 import 接口
+//! （storage / database / terminal / events / http / fs / log / bus / config /
+//! file_service / transfer）。session 能力已随组件迁移删除（内置插件零使用，
+//! 见迁移 spec §3.2/D-Q3）—— WIT 为单一事实来源，编译期杜绝残存调用。
 //!
 //! 错误语义见 [`HostError`]：仅承载状态码与通用描述，
-//! 详细错误原因记录在宿主日志（完整错误透传见 ABI v2 计划）。
+//! 详细错误原因记录在宿主日志（WIT `result<T, string>` 透传后含真实消息）。
 
 pub mod bus;
 pub mod config;
@@ -19,7 +21,6 @@ pub mod file_service;
 pub mod fs;
 pub mod http;
 pub mod log;
-pub mod session;
 pub mod storage;
 pub mod terminal;
 pub mod transfer;
@@ -32,7 +33,6 @@ pub use file_service::HostFileService;
 pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
-pub use session::HostSession;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
 pub use transfer::HostTransfer;
@@ -143,7 +143,6 @@ pub trait HostApi:
     HostStorage
     + HostDatabase
     + HostTerminal
-    + HostSession
     + HostEvents
     + HostHttp
     + HostFs
@@ -159,7 +158,6 @@ impl<T> HostApi for T where
     T: HostStorage
         + HostDatabase
         + HostTerminal
-        + HostSession
         + HostEvents
         + HostHttp
         + HostFs
