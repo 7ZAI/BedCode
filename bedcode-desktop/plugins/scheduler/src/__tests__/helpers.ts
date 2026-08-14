@@ -21,6 +21,11 @@ export function endpointError(status: number, message: string) {
 
 /** 扁平解析 'panel.title' → zh-CN 文案（未知 key 返回 key 本身） */
 function resolveKey(obj: unknown, key: string): string {
+  // 扁平点号 key 优先（messages 顶层即 'panel.*' 字面 key）
+  if (obj && typeof obj === 'object' && key in (obj as Record<string, unknown>)) {
+    return String((obj as Record<string, unknown>)[key])
+  }
+  // 兜底：嵌套对象路径解析（兼容旧结构）
   const value = key.split('.').reduce<unknown>((o, k) => {
     if (o && typeof o === 'object' && k in (o as Record<string, unknown>)) {
       return (o as Record<string, unknown>)[k]

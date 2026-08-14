@@ -193,7 +193,7 @@ onUnmounted(() => {
     <!-- 错误态（桌面端网关/插件异常） -->
     <div
       v-if="error"
-      class="mx-4 mt-3 px-3 py-2 rounded-md bg-red-500/10 text-red-500 text-xs flex-shrink-0 break-words"
+      class="mx-4 mt-3 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-red-500 text-xs flex-shrink-0 break-words"
     >
       {{ error }}
     </div>
@@ -201,7 +201,7 @@ onUnmounted(() => {
     <!-- 滚动内容区 -->
     <div class="flex-1 overflow-y-auto min-h-0 px-4 py-3">
       <!-- 加载中（首次） -->
-      <div v-if="loading && jobs.length === 0" class="flex justify-center py-8">
+      <div v-if="loading && jobs.length === 0" class="flex justify-center py-4">
         <span class="text-sm text-[var(--text-tertiary)]">{{ t('panel.loading') }}</span>
       </div>
 
@@ -223,7 +223,7 @@ onUnmounted(() => {
       </div>
 
       <!-- 任务列表 -->
-      <div v-else class="space-y-2">
+      <div v-else class="space-y-1.5">
         <h3
           class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2 flex-shrink-0"
         >
@@ -233,16 +233,11 @@ onUnmounted(() => {
         <div
           v-for="job in jobs"
           :key="job.id"
-          class="scheduler-job rounded-lg border bg-[var(--bg-card)] p-3 cursor-pointer transition-colors duration-200"
-          :class="
-            selectedId === job.id
-              ? 'border-[var(--color-primary)]'
-              : 'border-[var(--border)] hover:border-[var(--border-strong)]'
-          "
+          class="scheduler-job rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
           @click="toggleSelect(job)"
         >
-          <!-- 行首：名称 + 启停徽标 + 最近执行状态徽标 -->
-          <div class="flex items-center gap-2 min-w-0">
+          <!-- 行首：名称 + 启停徽标 + 最近执行状态徽标 + 展开箭头 -->
+          <div class="flex items-center gap-2 min-w-0 px-2.5 py-2">
             <span class="text-sm font-medium text-[var(--text-primary)] truncate flex-1 min-w-0">
               {{ job.name || job.id }}
             </span>
@@ -259,23 +254,33 @@ onUnmounted(() => {
             <span v-if="job.last_status" class="flex-shrink-0" :class="statusBadge(job.last_status)">
               {{ statusLabel[job.last_status] || job.last_status }}
             </span>
+            <svg
+              class="w-3 h-3 text-[var(--text-tertiary)] flex-shrink-0 transition-transform duration-200"
+              :class="{ 'rotate-90': selectedId === job.id }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
           </div>
 
-          <!-- cron 表达式 -->
-          <p class="text-xs text-[var(--text-secondary)] font-mono mt-1.5 truncate">{{ job.schedule }}</p>
+          <!-- cron 表达式 + 元信息 -->
+          <div class="px-2.5 pb-2.5 -mt-0.5">
+            <p class="text-xs text-[var(--text-secondary)] font-mono truncate">{{ job.schedule }}</p>
 
-          <!-- 元信息：下次触发 + 最近执行时间 -->
-          <div class="flex items-center gap-3 mt-1 text-xs text-[var(--text-tertiary)] min-w-0">
-            <span class="truncate min-w-0">{{ t('panel.nextAt') }}: {{ job.next_at || '-' }}</span>
-            <span class="truncate min-w-0 flex-shrink-0">
-              {{ t('panel.lastRun') }}: {{ job.last_finished_at || t('panel.neverRun') }}
-            </span>
+            <div class="flex items-center gap-3 mt-1 text-xs text-[var(--text-tertiary)] min-w-0">
+              <span class="truncate min-w-0">{{ t('panel.nextAt') }}: {{ job.next_at || '-' }}</span>
+              <span class="truncate min-w-0 flex-shrink-0">
+                {{ t('panel.lastRun') }}: {{ job.last_finished_at || t('panel.neverRun') }}
+              </span>
+            </div>
           </div>
 
           <!-- 选中：最近执行记录（点击内部不触发卡片收起/切换） -->
           <div
             v-if="selectedId === job.id"
-            class="mt-2.5 pt-2.5 border-t border-[var(--border)]"
+            class="mx-2.5 mb-2.5 pt-2 border-t border-[var(--border)]"
             @click.stop
           >
             <h4 class="text-xs font-semibold text-[var(--text-secondary)] mb-2">
@@ -289,7 +294,7 @@ onUnmounted(() => {
             <p v-else-if="executions.length === 0" class="text-xs text-[var(--text-tertiary)]">
               {{ t('panel.noExecutions') }}
             </p>
-            <div v-else class="space-y-2">
+            <div v-else class="space-y-1.5">
               <div
                 v-for="ex in executions"
                 :key="ex.exec_id"
@@ -326,13 +331,13 @@ onUnmounted(() => {
                   <button
                     v-if="ex.output_path"
                     type="button"
-                    class="flex-shrink-0 h-6 px-2 rounded-[6px] text-[calc(11px*var(--ui-scale))] font-medium transition-colors duration-200"
+                    class="flex-shrink-0 h-6 px-2 rounded-[6px] border border-[var(--border)] text-[calc(11px*var(--ui-scale))] font-medium transition-colors duration-200"
                     :class="
                       copiedId === ex.exec_id
-                        ? 'bg-green-500/10 text-green-500'
+                        ? 'bg-green-500/10 border-green-500/40 text-green-500'
                         : copyFailedId === ex.exec_id
-                          ? 'bg-red-500/10 text-red-500'
-                          : 'bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                          ? 'bg-red-500/10 border-red-500/40 text-red-500'
+                          : 'bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]'
                     "
                     :title="ex.output_path"
                     @click="copyOutput(ex)"
@@ -351,7 +356,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] pt-1">
+        <p v-if="!selectedId" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] pt-1">
           {{ t('panel.selectHint') }}
         </p>
       </div>
