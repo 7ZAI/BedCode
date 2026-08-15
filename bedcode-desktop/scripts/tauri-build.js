@@ -22,7 +22,7 @@
  */
 
 import { spawnSync } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, renameSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
@@ -85,10 +85,65 @@ if (signingEnv) {
   extraArgs.push('--config', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }))
 }
 
+/**
+ * 转义正则特殊字符，用于以字面量匹配 productName/version
+ */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * NSIS 安装包重命名为带 release 标记的格式
+ *
+ * Tauri 2 打包器固定用 {productName}_{version}_{arch}-setup.exe 命名（BundleConfig
+ * 无 fileName 字段），与移动端 APK 的 {name}-{version}-release.apk 风格不一致。
+ * 本步骤在构建成功后重命名安装包及其 .sig（签名覆盖文件内容、与文件名无关，同步改名即可）。
+ * CI（GitHub Actions）走 tauri-action 发布链路不经本脚本，重命名仅影响本地/自定义构建产物。
+ */
+function renameInstallerWithReleaseSuffix() {
+  if (process.env.GITHUB_ACTIONS) return
+
+  let productName, version
+  try {
+    const config = JSON.parse(readFileSync(join(projectRoot, 'src-tauri/tauri.conf.json'), 'utf8'))
+    productName = config.productName
+    version = config.version
+  } catch (err) {
+    console.warn(`[tauri-build] 读取 tauri.conf.json 失败，跳过安装包重命名: ${err.message}`)
+    return
+  }
+
+  const nsisDir = join(projectRoot, 'src-tauri/target/release/bundle/nsis')
+  if (!existsSync(nsisDir)) return
+
+  const pattern = new RegExp(`^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\\w+)-setup\\.exe$`)
+  for (const file of readdirSync(nsisDir)) {
+    const match = file.match(pattern)
+    if (!match) continue
+    const arch = match[1]
+    const renamed = `${productName}-${version}-release-${arch}-setup.exe`
+    for (const suffix of ['', '.sig']) {
+      const from = join(nsisDir, file + suffix)
+      const to = join(nsisDir, renamed + suffix)
+      if (!existsSync(from)) continue
+      try {
+        renameSync(from, to)
+        console.log(`[tauri-build] 安装包已重命名: ${file}${suffix} -> ${renamed}${suffix}`)
+      } catch (err) {
+        console.warn(`[tauri-build] 重命名 ${file}${suffix} 失败: ${err.message}`)
+      }
+    }
+  }
+}
+
 const args = process.argv.slice(2)
 const result = spawnSync(process.execPath, [tauriCli, 'build', ...extraArgs, ...args], {
   stdio: 'inherit',
   env: { ...process.env, ...signingEnv },
 })
 
-process.exit(result.status ?? 1)
+const status = result.status ?? 1
+if (status === 0) {
+  renameInstallerWithReleaseSuffix()
+}
+process.exit(status)
