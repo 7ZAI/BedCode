@@ -2,7 +2,7 @@
 
 BedCode Desktop 插件开发工具包 — 提供插件所需的**类型定义**、**运行时代理**、**Vite 构建插件**与**共享 UI 组件**，插件只需依赖本包即可开发，无需引用宿主源码。
 
-> 完整开发指南见仓库文档 [`docs/plugin-dev-desktop.md`](../../../docs/plugin-dev-desktop.md)。
+> 完整开发指南见仓库文档 [`plugin-dev-desktop.md`](../../plugin-dev-desktop.md)。
 
 [English](README_en.md) | 简体中文
 

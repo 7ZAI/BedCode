@@ -4,7 +4,7 @@
 > logcat + CDP 证据链）；S4（09）自研 ABI 残留清零，宿主测试 293 全绿、SDK `--features wasm` 85 全绿。
 > 目标读者：移动端插件运行时维护者、SDK 维护者、内置插件（ai-chatbox / auto-task / file-transfer）owner
 > 关联文档：`docs/knowledge/wasmtime-component-migration.md`（桌面端迁移记录）、
-> `docs/knowledge/wasmtime-guide.md`（wasmtime 嵌入式开发指南）、`docs/plugin-dev-mobile.md`
+> `docs/knowledge/wasmtime-guide.md`（wasmtime 嵌入式开发指南）、`../../bedcode-mobile/plugin-dev-mobile.md`
 > 参照实现：桌面端 `src-tauri/src/plugin/wasm_runtime/component.rs` + `plugin-sdk-desktop/rust/wit/bedcode.wit`（已完工的同类迁移）
 
 ---
@@ -373,7 +373,7 @@ HostFs/HostLog → file-transfer（HostBus/HostFileService/HostTransfer/HostHttp
 2. `wasm_runtime.rs` 瘦身为组件单路径（与桌面形态对齐）；`host_impl/session.rs` 删除、
    `host_impl/notify.rs` 并入 events 接线
 3. 文档同步：`docs/knowledge/wasmtime-component-migration.md` 更新为「两端均已实施」、
-   `docs/plugin-dev-mobile.md` 构建段更新（组件化步骤、SDK 依赖）
+   `../../bedcode-mobile/plugin-dev-mobile.md` 构建段更新（组件化步骤、SDK 依赖）
 
 ---
 

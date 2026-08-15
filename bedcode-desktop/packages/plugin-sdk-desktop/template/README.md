@@ -27,4 +27,4 @@ npm run manifest   # 按源码自动填充 plugin.json 的 contributes/permissio
 `npm run build -- --resources-dir <宿主资源父目录>` 把产物复制到
 `<父目录>/{id}/`（内置插件随安装包分发）；用户安装走宿主插件管理。
 
-完整开发指南见仓库文档 `docs/plugin-dev-desktop.md`。
+完整开发指南见仓库文档 `../../../plugin-dev-desktop.md`。

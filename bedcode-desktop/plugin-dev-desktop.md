@@ -28,7 +28,7 @@
 - **扩展点**：`views`（sidebar / toolbox / statusbar）、`terminal`、
   `toolProviders`、`fileHandlers`、`commands`、`configuration`、`lifecycle`
 - **PluginContext**：插件访问宿主能力的唯一通道（commands / terminal / session /
-  ui / events / storage / http / fileService / i18n）
+  ui / events / storage / http / fileService / system / i18n）
 - **共享运行时**：宿主将 vue / vue-i18n / pinia / i18n / router 暴露到
   `window.__BEDCODE_SHARED__`，插件构建时由 SDK vite 插件外部化，
   经 `getVue()` / `getI18n()` 等复用宿主实例
@@ -44,14 +44,14 @@ npm install
 ```
 
 - 默认生成 **ts-only**（纯前端）插件；`--rust` 附带 WASM 后端脚手架（`pluginType: rust-ts`）
-- `create` 从 SDK 内置模板生成：`plugin.json` / `vite.config.ts`（vue 等外部化到宿主）/
-  `src/index.ts` / 可选 `rust/`（WasmPlugin 实现 + `wasm_entry!`）
+- `create` 从 SDK 内置模板生成：`plugin.json` / `vite.config.ts`（vue 等外部化到宿主）/ `src/index.ts` / 可选 `rust/`（WasmPlugin 实现 + `wasm_entry!`）；`--dir <dir>` 指定生成目录，`--registry` 改为引用已发布 SDK 版本（npm + crates.io，默认引用本地 SDK 相对路径）
 
 构建与分发：
 
 ```bash
 npm run build    # = bedcode-plugin-desktop build：vite（+ rust-ts 时 cargo wasm32）
 npm run build -- --resources-dir <宿主resources/plugins父目录>   # 复制产物到宿主（内置插件分发方式）
+npm run build -- --frontend-only / --rust-only   # 只构建一半（rust-ts 插件）
 ```
 
 ## 3. 前端 API（context）
@@ -63,13 +63,14 @@ npm run build -- --resources-dir <宿主resources/plugins父目录>   # 复制�
 | `context.ui` | 注册侧边栏面板 / 工具箱页 / 状态栏项 / 输入扩展 / 终端工具栏项 / 标题栏项 / 页面工具栏项 / 文件处理器 |
 | `context.commands` | 调用宿主命令（前端 handler 优先，未注册时回退 Rust 后端） |
 | `context.events` | 事件订阅与发射 |
-| `context.storage` | 插件键值存储（localStorage / 宿主 SQLite） |
+| `context.storage` | 插件键值存储（宿主 SQLite，dev-shell 中为 localStorage） |
 | `context.http` | 注册 HTTP 端点（宿主 Rust 服务端挂载，插件经 `/api/plugin/{pluginId}/...` 访问） |
 | `context.terminal` / `context.session` | 终端输入输出 / 会话能力 |
-| `context.fileService` | 文件服务挂载 / 对端信息 / 目录与多文件选择 |
+| `context.fileService` | 文件服务挂载（mount / updateRoots / dispose）、对端信息、目录与多文件选择；v2 批量传输应答（approveTransferRequest / rejectTransferRequest / setApprovalTimeout / cancelReceivingSession） |
+| `context.system` | `revealInDir(path)` 在系统文件管理器中打开目录并选中文件（Shell COM 直调，中文路径原生支持） |
 | `context.i18n` | `getI18n()` 取宿主 i18n 实例；`registerMessages` / `t` 自动加插件 ID 前缀 |
 
-示例插件：`bedcode-desktop/plugins/ai-chatbox/`（侧边栏 AI 面板 + 终端工具栏项）。
+内置插件示例：`plugins/ai-chatbox`（侧边栏 AI 面板 + 终端工具栏项）、`plugins/auto-task`（Claude Code 任务队列 + 定时任务）、`plugins/file-transfer`（局域网文件传输）、`plugins/scheduler`（计划任务）。
 
 ## 4. 浏览器开发环境（Dev Shell）
 
@@ -123,6 +124,6 @@ Rust 后端逻辑、真实 HTTP 端点、系统文件选择需在真实宿主验
 | SDK 命令行 | `bedcode-desktop/packages/plugin-sdk-desktop/bin/cli.js` |
 | SDK 模板 | `bedcode-desktop/packages/plugin-sdk-desktop/template/` |
 | SDK 浏览器开发环境 | `bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/` |
-| 插件宿主 | `bedcode-desktop/src-tauri/src/plugin/`（host / wasm_runtime / file_service） |
-| 示例插件 | `bedcode-desktop/plugins/ai-chatbox/` |
-| 前端插件运行时 | `bedcode-desktop/src/plugin/`（context / registry / loader） |
+| 插件宿主（Rust） | `bedcode-desktop/src-tauri/src/plugin/`（host / loader / registry / api_bridge / wasm_runtime / file_service / storage / permission / validation / message_bus / fs_auth / approval / watcher） |
+| 前端插件运行时 | `bedcode-desktop/src/plugin/`（context / registry / loader / commands / events / permission / shared-runtime / contributionKinds） |
+| 内置插件 | `bedcode-desktop/plugins/ai-chatbox`、`auto-task`、`file-transfer`、`scheduler` |

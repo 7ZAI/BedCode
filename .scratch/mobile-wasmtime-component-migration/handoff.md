@@ -21,7 +21,7 @@ SDK `--features wasm` **85 全绿**（89 − 4 个 legacy 契约锁测试）、K
 | 9 个 ticket（01–09，含坑记录与证据链；09 含清理明细） | `.scratch/mobile-wasmtime-component-migration/issues/` |
 | SDK 组件绑定 + componentize 构建链 | `bedcode-mobile/packages/plugin-sdk-mobile/`（rust/wasm.rs、wasm_host.rs、abi.rs（仅 ABI_VERSION）、host/、tools/componentize、bin/cli.js） |
 | 宿主运行时（组件单路径） | `bedcode-mobile/src-tauri/src/plugin/{loader,manager,wasm_runtime,wasm_runtime/component}.rs` + `wasm_runtime/host_impl/`（逻辑层） |
-| 移动端插件开发文档（构建链/SDK 依赖/契约差异表） | `docs/plugin-dev-mobile.md`（§4/§8） |
+| 移动端插件开发文档（构建链/SDK 依赖/契约差异表） | `../../bedcode-mobile/plugin-dev-mobile.md`（§4/§8） |
 | 两端迁移记录（已标「两端均已实施」） | `docs/knowledge/wasmtime-component-migration.md` |
 
 ## 关键决策（勿重新论证）

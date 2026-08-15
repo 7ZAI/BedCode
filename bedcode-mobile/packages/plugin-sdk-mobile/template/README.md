@@ -37,4 +37,4 @@ WASM 后端命令与真机专属能力仍需真机验证（见下方指南）。
 - **扩展点**：`plugin.json` 的 `contributes`（命令、视图、navTab、终端工具栏、设置区）
 - **前端逻辑**：`src/index.ts` 使用 `context` 提供的 API（`ui`/`events`/`storage`/`logger`/`dialogs` 等）
 
-完整开发指南见仓库文档 `docs/plugin-dev-mobile.md`。
+完整开发指南见仓库文档 `../../../plugin-dev-mobile.md`。

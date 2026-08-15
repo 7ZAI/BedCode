@@ -95,7 +95,7 @@ node scripts/build.js --rust-only      # 仅 Rust 并复制产物
 # 需先构建 SDK：cd bedcode-desktop/packages/plugin-sdk-desktop && npm run build
 npx bedcode-plugin-desktop dev   # 或 npm i -D @bedcode/plugin-sdk-desktop 后在插件目录运行
 # 首次运行自动安装 dev-shell 依赖，浏览器打开 http://localhost:5173
-# 详见 docs/plugin-dev-desktop.md
+# 详见 ../bedcode-desktop/plugin-dev-desktop.md
 ```
 
 **产物输出路径**（随桌面端安装包分发）：
@@ -201,7 +201,7 @@ npm run build     # = bedcode-plugin build：vite + cargo wasm32
 npm run package   # = bedcode-plugin package：产出 dist/{id}.zip 插件包
 ```
 
-> Dev Shell 用 mock 宿主 + 移动端页面骨架在浏览器预览插件前端，WASM 后端命令需真机验证；详见 `docs/plugin-dev-mobile.md`。
+> Dev Shell 用 mock 宿主 + 移动端页面骨架在浏览器预览插件前端，WASM 后端命令需真机验证；详见 `../bedcode-mobile/plugin-dev-mobile.md`。
 
 **产物输出路径**：
 

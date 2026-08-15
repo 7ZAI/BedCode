@@ -2,7 +2,7 @@
 
 BedCode 移动端插件开发工具包 — 提供插件所需的**类型定义**、**运行时代理**、**Vite 构建插件**与**共享 UI 组件**。相比桌面端 SDK，额外封装了移动端专属能力：SAF 存储访问、对话框 / 系统通知、动态路由、生命周期钩子与 dev-shell 演示数据协议。
 
-> 完整开发指南见仓库文档 [`docs/plugin-dev-mobile.md`](../../../docs/plugin-dev-mobile.md)。
+> 完整开发指南见仓库文档 [`plugin-dev-mobile.md`](../../plugin-dev-mobile.md)。
 
 [English](README_en.md) | 简体中文
 

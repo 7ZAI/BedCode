@@ -102,4 +102,4 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
 - **SDK 报找不到模块**：插件工程的 `@bedcode/plugin-sdk-mobile` 依赖指向
   SDK 包（file: 或 npm），其 `dist` 需存在（`npm run build` 一次）。
 - **真机专属能力**（WASM 命令、真实 WS、SAF 文件选择、系统通知）无法在
-  浏览器模拟，发布前仍按 `docs/plugin-dev-mobile.md` 验证清单过真机。
+  浏览器模拟，发布前仍按 `../../../plugin-dev-mobile.md` 验证清单过真机。

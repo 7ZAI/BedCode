@@ -37,6 +37,6 @@
 **文档同步**
 
 - `docs/implementation-plans/mobile-wasmtime-component-migration.md`：状态改「已实施完成」；S0–S4 全部标注完成；§6 验收标准标注全过
-- `docs/plugin-dev-mobile.md`：§4 补组件化构建链说明；§8 重写为组件形态 + SDK 依赖 + 契约差异表（spec §3.2 表纳入）
+- `../../../bedcode-mobile/plugin-dev-mobile.md`：§4 补组件化构建链说明；§8 重写为组件形态 + SDK 依赖 + 契约差异表（spec §3.2 表纳入）
 - `docs/knowledge/wasmtime-component-migration.md`：状态改「两端均已实施」，标注历史记录性质
 - `handoff.md`：更新为完结状态（见下）

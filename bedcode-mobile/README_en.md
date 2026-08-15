@@ -121,7 +121,7 @@ cd src-tauri && cargo test  # Rust tests
 
 Mobile plugins share the same architecture as the desktop (WASM Component Model + permission control), with mobile-only capabilities added: **SAF storage access**, dialogs / system notifications, **dynamic routing**, lifecycle hooks, Android system back-key interception, and a dev-shell mock protocol (browser HMR dev environment).
 
-To build your own plugin, use [`@bedcode/plugin-sdk-mobile`](packages/plugin-sdk-mobile/README_en.md) (TS SDK + Rust `bedcode-plugin-api-mobile` crate); full guide in [docs/plugin-dev-mobile.md](../docs/plugin-dev-mobile.md).
+To build your own plugin, use [`@bedcode/plugin-sdk-mobile`](packages/plugin-sdk-mobile/README_en.md) (TS SDK + Rust `bedcode-plugin-api-mobile` crate); full guide in [plugin-dev-mobile.md](plugin-dev-mobile.md).
 
 ### Official Plugins
 
@@ -134,7 +134,7 @@ To build your own plugin, use [`@bedcode/plugin-sdk-mobile`](packages/plugin-sdk
 ## Related Docs
 
 - Root [README](../README.md) — project overview & security model
-- [docs/plugin-dev-mobile.md](../docs/plugin-dev-mobile.md) — mobile plugin development guide
+- [plugin-dev-mobile.md](plugin-dev-mobile.md) — mobile plugin development guide
 - [docs/code-map.md](docs/code-map.md) — code structure index
 
 ## License

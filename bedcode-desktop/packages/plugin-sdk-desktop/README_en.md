@@ -2,7 +2,7 @@
 
 The BedCode Desktop plugin development kit — provides everything a plugin needs: **type definitions**, **runtime proxies**, a **Vite build plugin**, and **shared UI components**. Plugins only need this package; no host source code required.
 
-> Full development guide: [`docs/plugin-dev-desktop.md`](../../../docs/plugin-dev-desktop.md) (Chinese).
+> Full development guide: [`plugin-dev-desktop.md`](../../plugin-dev-desktop.md) (Chinese).
 
 English | [简体中文](README.md)
 

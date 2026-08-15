@@ -145,7 +145,7 @@ Agent CLI (PTY)
 
 - **`@bedcode/plugin-sdk-desktop`** / **`@bedcode/plugin-sdk-mobile`**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
-- **开发文档** — `docs/plugin-dev-desktop.md`（桌面端）与 `docs/plugin-dev-mobile.md`（移动端）
+- **开发文档** — `bedcode-desktop/plugin-dev-desktop.md`（桌面端）与 `bedcode-mobile/plugin-dev-mobile.md`（移动端）
 
 ## 贡献指南
 

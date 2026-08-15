@@ -30,7 +30,7 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**关键概念**（见仓库根 `CONTEXT.md` 词汇表）：
+**关键概念**（见仓库根 [`../CONTEXT.md`](../CONTEXT.md) 词汇表）：
 
 - **启用 (Enabled)**：用户的持久化偏好，决定启动时是否自动激活；Toggle 绑定它。插件上报错误时自动撤销启用。
 - **激活 (Activated)**：运行时状态（Activated / Loaded / Deactivated / Error），由状态徽章展示。
@@ -83,6 +83,7 @@ npm run package     # = bedcode-plugin package：产出 dist/{id}.zip
 `bedcode-plugin build` 支持：
 
 - `--frontend-only` / `--rust-only`：只构建一半
+- `--watch`：监听源码变更自动重建
 - `--resources-dir <父目录>`：额外把产物复制到 `<父目录>/{id}/`（宿主资源目录）
 
 > **组件化构建链**：`build` 内置 **componentize**（幂等）——cargo wasm32（`--features wasm`）
@@ -114,6 +115,7 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 
 | 命令 | 说明 |
 |---|---|
+| `bedcode-plugin manifest [--check]` | 按源码自动填充 plugin.json 的 contributes/permissions；`--check` 只检查（CI） |
 | `bedcode-plugin validate [--dir]` | 校验 plugin.json 结构（id 格式、必填字段、权限白名单、wasmHash 格式、产物存在性）；CI 用，exit 1 表示不合法 |
 | `bedcode-plugin doctor` | 环境自检：Node ≥ 20 / Rust / wasm32 target / dev-shell 依赖 / SDK 构建产物 |
 | `bedcode-plugin --version` | 打印 SDK 版本 |
@@ -142,6 +144,7 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 | `main` | ✅ | 前端入口（产物文件名，通常 `index.js`） |
 | `pluginType` | ✅ | `wasm`（前端 + WASM 后端）或 `ts-only` |
 | `rustLibrary` | wasm 必填 | Rust crate 名（与 `Cargo.toml` 一致） |
+| `icon` | | 列表图标（SVG path 字符串或图标文件路径） |
 | `permissions` | | 权限声明，`storage` 默认授予 |
 | `contributes` | | 扩展点声明（命令/视图/navTab/终端/设置区/配置） |
 | `wasmHash` | 可选 | WASM 文件 SHA256（`sha256-` 前缀），安装时校验 |
@@ -156,8 +159,11 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 | `ui:toolbox` | 工具箱页注册 |
 | `ui:navtab` | 底部导航 Tab 注册 |
 | `ui:input` | 终端工具栏注册 |
+| `ui:settings` | 设置区注册 |
+| `ui:route` | 插件路由注册 / 页面跳转（registerRoute / openPage / goBack） |
+| `ui:back` | 系统返回键拦截（onBackPressed） |
 | `terminal:input` / `terminal:output` | 终端输入/输出事件 |
-| `session:read` | 会话信息读取 |
+| `session:read` / `session:write` | 会话信息读取 / 会话创建与停止 |
 | `network:http` | HTTP 请求（经宿主代理） |
 | `fs:read` / `fs:write` | 文件系统访问（经授权弹窗） |
 | `bus` | 插件间消息总线 |
@@ -172,15 +178,18 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 
 | 子 API | 说明 |
 |---|---|
-| `context.ui` | 注册工具箱页 / navTab / 终端工具栏项 / 设置区 |
-| `context.commands` | 调用宿主命令 |
+| `context.ui` | 注册工具箱页 / navTab / 终端工具栏项 / 设置区 / 插件路由（registerRoute / openPage / goBack / onBackPressed） |
+| `context.commands` | 调用宿主命令（前端 handler 优先，未注册时回退 WASM 后端） |
 | `context.events` | 事件订阅与发射 |
-| `context.storage` | 插件键值存储 |
-| `context.i18n` | 国际化 |
+| `context.storage` | 插件键值存储（宿主 SQLite，dev-shell 中为 localStorage） |
+| `context.fileService` | 文件服务挂载（mount / updateRoots / dispose）与授权弹窗 |
+| `context.i18n` | 国际化（`registerMessages` / `t` 自动加插件 ID 前缀） |
 | `context.logger` | 日志（转发宿主 tracing） |
 | `context.dialogs` | 弹窗 |
 | `context.notifications` | 系统通知 |
-| `context.status` | 生命周期状态上报（`reportReady` 等） |
+| `context.lifecycle` | 应用生命周期事件（onAppStartup / onAppShutdown / onAuthSuccess / onDisconnect 等） |
+| `context.system` | `openFile(path)` 打开文件、`revealInDir(path)` 在文件管理器中显示文件（SAF 授权） |
+| `context.status` | 生命周期状态上报（`reportReady` / `reportError`） |
 | `context.terminal` / `context.session` | 终端 / 会话能力 |
 
 ### 共享运行时模块（SDK 函数直取）
@@ -241,7 +250,7 @@ wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 
 | events 导出 | 4 个 | 5 个 | 移动端 WS 认证生命周期事件 |
 | abi | version + form | 仅 version | 无 core 共存形态 |
 
-完整 WIT 与迁移背景见 `docs/implementation-plans/mobile-wasmtime-component-migration.md`。
+完整 WIT 与迁移背景见 `../docs/implementation-plans/mobile-wasmtime-component-migration.md`。
 
 **重要**：`plugin.json` 与 `rust/src/lib.rs` 中的 `manifest()` 都声明清单——**以 `plugin.json` 为准**（宿主扫描读取），`manifest()` 用于 SDK 内部校验。
 
@@ -291,7 +300,7 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 
 详见 `packages/plugin-sdk-mobile/dev-shell/README.md`。
 
-> 桌面端插件开发与 Dev Shell 见 `docs/plugin-dev-desktop.md`。
+> 桌面端插件开发与 Dev Shell 见 `../bedcode-desktop/plugin-dev-desktop.md`。
 
 ## 11. 验证清单（真机 / 模拟器）
 
@@ -314,8 +323,8 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 | SDK 命令行 | `bedcode-mobile/packages/plugin-sdk-mobile/bin/cli.js` |
 | SDK 模板 | `bedcode-mobile/packages/plugin-sdk-mobile/template/` |
 | SDK 浏览器开发环境 | `bedcode-mobile/packages/plugin-sdk-mobile/dev-shell/` |
-| 插件宿主 | `bedcode-mobile/src-tauri/src/plugin/`（manager / loader / downloader / wasm_runtime） |
-| 内置插件 | `bedcode-mobile/plugins/ai-chatbox`、`plugins/auto-task` |
+| 插件宿主 | `bedcode-mobile/src-tauri/src/plugin/`（manager / loader / downloader / wasm_runtime / wasm_host / registry / commands / storage / transfer / saf_io / saf_path / fs_auth / approval / message_bus / validation / android_plugins） |
+| 内置插件 | `bedcode-mobile/plugins/ai-chatbox`、`plugins/auto-task`、`plugins/file-transfer` |
 | 插件管理页 | `bedcode-mobile/src/views/PluginView.vue` |
-| 前端插件运行时 | `bedcode-mobile/src/plugin/`（loader / registry / context / commands） |
+| 前端插件运行时 | `bedcode-mobile/src/plugin/`（loader / registry / context / commands / events / permission / shared-runtime / routes / dialog-host / components） |
 | Kotlin 解压桥 | `bedcode-mobile/src-tauri/gen/android/.../PluginAssetExtractor.kt` |

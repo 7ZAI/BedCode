@@ -20,7 +20,7 @@ Label: wayfinder:map
 **宿主现状事实**（charting 时勘察）：
 - 插件后端是 WASM 沙箱：不能直接开 TCP socket；出站 HTTP 走宿主代理（`network:http` / `host_http_fetch`）；文件访问走 `fs:read`/`fs:write` 授权弹窗；另有 storage、消息总线、UI 扩展点（toolbox/navTab/设置区）。
 - 桌面端宿主已有 actix HTTP server：JWT 中间件、配对码、QR 连接、file-tree 等路由齐全。移动端宿主无任何对外 server。
-- 插件开发文档：`docs/plugin-dev-mobile.md`；权限表、清单格式见其中第 5–6 节。
+- 插件开发文档：`../../bedcode-mobile/plugin-dev-mobile.md`；权限表、清单格式见其中第 5–6 节。
 
 **已锁定共识**（charting grilling 结论）：
 1. 访问语义：允许浏览/下载/上传（新建文件）；**禁止删除、重命名、移动、覆盖**——目标目录已存在同名文件时上传被拒并提醒，不自动避让。

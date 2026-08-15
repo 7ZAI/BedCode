@@ -2,7 +2,7 @@
 
 The BedCode Mobile plugin development kit — provides **type definitions**, **runtime proxies**, a **Vite build plugin**, and **shared UI components**. Compared to the desktop SDK, it additionally wraps mobile-only capabilities: SAF storage access, dialogs / system notifications, dynamic routing, lifecycle hooks, and the dev-shell mock data protocol.
 
-> Full development guide: [`docs/plugin-dev-mobile.md`](../../../docs/plugin-dev-mobile.md) (Chinese).
+> Full development guide: [`plugin-dev-mobile.md`](../../plugin-dev-mobile.md) (Chinese).
 
 English | [简体中文](README.md)
 
