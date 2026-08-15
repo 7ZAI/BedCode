@@ -63,24 +63,6 @@
         </button>
       </transition>
 
-      <!-- 远程尺寸控制提示：移动端正在控制该终端尺寸时显示（不拦截终端交互） -->
-      <div class="absolute top-3 inset-x-0 z-20 pointer-events-none flex justify-center">
-        <transition name="remote-size-hint">
-          <div
-            v-if="remoteSizeHint"
-            class="flex items-center gap-1.5 px-3 py-1 bg-card/90 backdrop-blur border border-[var(--border)] rounded-full shadow-card"
-          >
-            <svg class="w-3.5 h-3.5 flex-shrink-0 text-[var(--text-secondary)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <rect x="7" y="2" width="10" height="20" rx="2" />
-              <path d="M11 18h2" />
-            </svg>
-            <span class="text-xs font-medium text-[var(--text-secondary)] whitespace-nowrap">
-              {{ $t('desktop.terminal.remoteSizeHint', { cols: remoteSizeHint.cols, rows: remoteSizeHint.rows }) }}
-            </span>
-          </div>
-        </transition>
-      </div>
-
       <!-- 输入导航条：右侧悬浮，默认透明仅横线，hover 展开列表，点击滚动到对应输入 -->
       <TerminalInputRail
         :markers="visibleMarkers"
@@ -128,21 +110,12 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from '@/plugin/events'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import '@xterm/xterm/css/xterm.css'
 
 /** Rust 端本地 WS 订阅裁决（服务端基于真源裁决，消费者零猜测） */
 interface SubscribeControl {
   mode: string
   minOffset: number
-}
-
-/** terminal-size-owner 事件载荷：终端尺寸控制权变更 */
-interface TerminalSizeOwnerEvent {
-  sessionId: string
-  cols: number
-  rows: number
-  owner: 'remote' | 'local'
 }
 
 interface Props {
@@ -188,10 +161,6 @@ let resizeRaf = 0
 
 // 滚动状态追踪
 const isUserScrolling = ref(false)
-
-// 远程尺寸控制提示：移动端正在控制该终端尺寸时显示（事件 + resize 结果双通道更新）
-const remoteSizeHint = ref<{ cols: number; rows: number } | null>(null)
-let unlistenSizeOwner: (() => void) | null = null
 
 // rAF 节流：同一帧内多次 scrollToBottom 调用只执行一次
 let pendingScrollRaf = 0
@@ -662,11 +631,10 @@ function initTerminal() {
   fitAddon.fit()
   syncTerminalSize()
 
-  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到后端会话；
-  // 会话存在远程（移动端）订阅者时服务端跳过，结果驱动尺寸提示
+  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到后端会话
   terminal.onResize(({ cols, rows }) => {
     if (props.session) {
-      sessionStore.resizeSession(props.session.id, cols, rows).then(applyResizeOutcome)
+      sessionStore.resizeSession(props.session.id, cols, rows)
     }
     // resize 改变 rows → buffer 总行数变化，刷新导航条位置分母
     bufferLength.value = terminal?.buffer.active.length ?? 0
@@ -773,18 +741,7 @@ function syncTerminalSize() {
   const cols = terminal.cols
   const rows = terminal.rows
   if (cols > 0 && rows > 0) {
-    sessionStore.resizeSession(props.session.id, cols, rows).then(applyResizeOutcome)
-  }
-}
-
-/** 处理 resize 命令结果：被跳过（远程控制中）时显示尺寸提示，应用时清除 */
-function applyResizeOutcome(result: { applied: boolean; remoteSize: { cols: number; rows: number } | null }) {
-  if (result && !result.applied) {
-    if (result.remoteSize) {
-      remoteSizeHint.value = result.remoteSize
-    }
-  } else {
-    remoteSizeHint.value = null
+    sessionStore.resizeSession(props.session.id, cols, rows)
   }
 }
 
@@ -881,8 +838,6 @@ watch(() => settingsStore.settings.ui.terminal_theme, (newTheme) => {
 let streamMounted = false
 watch(sessionId, async (newId, oldId) => {
   if (newId !== oldId) {
-    // 切换会话：清远程尺寸提示（横幅按会话隔离，避免残留上一会话尺寸）
-    remoteSizeHint.value = null
     if (oldId) {
       clearTerminal()
     }
@@ -936,16 +891,6 @@ onMounted(async () => {
     pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
   })
 
-  // 监听终端尺寸控制权事件：移动端 resize / 本地接管时更新提示
-  unlistenSizeOwner = await listen<TerminalSizeOwnerEvent>('terminal-size-owner', (event) => {
-    if (event.payload.sessionId !== props.session?.id) return
-    if (event.payload.owner === 'remote') {
-      remoteSizeHint.value = { cols: event.payload.cols, rows: event.payload.rows }
-    } else {
-      remoteSizeHint.value = null
-    }
-  })
-
   // terminal 就绪后启动本地 WS 输出流：历史回放 + 实时推送同通道流式到达
   terminalStream.start(sessionId.value)
   terminalStream.subscribe()
@@ -957,12 +902,6 @@ onMounted(async () => {
 onUnmounted(() => {
   // 断开本地 WS 输出流（停止重连）
   terminalStream.stop()
-
-  // 清理终端尺寸控制权事件监听
-  if (unlistenSizeOwner) {
-    unlistenSizeOwner()
-    unlistenSizeOwner = null
-  }
 
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
@@ -1133,18 +1072,5 @@ defineExpose({
 .scroll-indicator-leave-to {
   opacity: 0;
   transform: translateY(8px);
-}
-
-/* ==================== 远程尺寸控制提示 ==================== */
-
-.remote-size-hint-enter-active,
-.remote-size-hint-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.remote-size-hint-enter-from,
-.remote-size-hint-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
 }
 </style>

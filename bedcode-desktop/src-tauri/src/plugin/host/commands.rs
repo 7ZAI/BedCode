@@ -121,6 +121,9 @@ impl PluginHost {
                         error = %e,
                         "plugin auto reload after trap failed"
                     );
+                    // 统一异常通道：自动恢复失败，插件进入 Error 态（前端提示）
+                    host.notify_plugin_runtime_error(&plugin_id, "recovery_failed", &e.to_string())
+                        .await;
                     // 置 Error 态：UI 可见原因，且 is_activated 门禁停止后续分发
                     host.mark_error(
                         &plugin_id,
@@ -134,9 +137,11 @@ impl PluginHost {
 
     /// 持锁调用 WASM 插件导出并统一处理失败恢复
     ///
-    /// 调用失败（trap / 导出绑定失败 / store 中毒）时：先释放实例锁（防死锁），
+    /// 调用失败（trap / 导出绑定失败 / store 中毒）或 panic（宿主函数内
+    /// 嵌套 block_in_place 等）时：先释放实例锁（unwind 自动释放 / 显式释放），
     /// 再调度自动重载（见 [`schedule_plugin_reload_after_trap`]），最后返回 Err 给调用方。
-    /// 调用方只需把 Err 转成自己的错误形态（anyhow / 日志 / fail-closed 决定）。
+    /// panic 不捕获会穿透污染 wasmtime Store 且不触发重载——插件永久不可用
+    /// （任务卡 transferring、hook 全部超时），故必须 catch_unwind。
     pub(super) async fn with_wasm_plugin_call<T>(
         &self,
         plugin_id: &str,
@@ -150,13 +155,40 @@ impl PluginHost {
         };
         let result = {
             let mut guard = wasm_plugin.lock().await;
-            call(&mut guard)
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
         };
-        if result.is_err() {
-            // 实例已不可用 → 自动重载恢复（锁已释放，无死锁）
-            self.schedule_plugin_reload_after_trap(plugin_id);
+        match result {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(e)) => {
+                // 实例已不可用 → 自动重载恢复（锁已释放，无死锁）；
+                // 统一异常通道通知前端（trap 连发由节流合并）
+                self.notify_plugin_runtime_error(plugin_id, "trap", &e.to_string())
+                    .await;
+                self.schedule_plugin_reload_after_trap(plugin_id);
+                Err(e)
+            }
+            Err(panic) => {
+                // panic：unwind 已释放实例锁，但 wasmtime Store 被污染，
+                // 必须重载才能恢复插件
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    panic = %msg,
+                    "WASM plugin call panicked, scheduling reload"
+                );
+                // 统一异常通道通知前端：插件发生未知错误（用户可见的业务提示）
+                self.notify_plugin_runtime_error(plugin_id, "panic", &msg).await;
+                self.schedule_plugin_reload_after_trap(plugin_id);
+                Err(crate::AppError::Plugin(format!(
+                    "WASM plugin {} call panicked: {}",
+                    plugin_id, msg
+                )))
+            }
         }
-        result
     }
 
     /// 调用 WASM 插件的 command

@@ -26,9 +26,12 @@ pub const PLUGIN_DEV_RELOAD: &str = "plugin:dev-reload";
 /// 插件自检失败提示（host_mark_plugin_error）— 前端弹窗提示，不改插件状态
 pub const PLUGIN_ERROR: &str = "plugin:error";
 
+/// 插件运行时异常统一上报（WASM 调用 panic / trap / 自动恢复失败）
+///
+/// payload: `{ plugin_id, plugin_name, kind, error }`，kind ∈ panic | trap | recovery_failed。
+/// 与 `PLUGIN_ERROR`（插件主动自检上报）不同：本事件由宿主在检测到插件异常时
+/// 主动发出，前端统一 toast 提示用户（节流：同一插件 15s 内合并）。
+pub const PLUGIN_RUNTIME_ERROR: &str = "plugin:runtime-error";
+
 /// 窗口关闭请求 — 有运行中会话时发送到前端，请求用户确认
 pub const WINDOW_CLOSE_REQUESTED: &str = "window-close-requested";
-
-/// 终端尺寸控制权变更事件（远程客户端 resize / 本地 resize 应用时发出，
-/// 桌面端终端窗口据此提示「当前以移动端尺寸显示」）
-pub const TERMINAL_SIZE_OWNER: &str = "terminal-size-owner";

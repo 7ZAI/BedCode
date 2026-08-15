@@ -108,10 +108,8 @@ pub async fn resize_session(
     session_id: String,
     cols: u16,
     rows: u16,
-) -> Result<crate::session::LocalResizeResult> {
-    // 本地终端窗口路径：会话存在远程（移动端）订阅者时 resize 被跳过，
-    // 返回结果供前端提示「当前以移动端尺寸显示」
-    session_manager.resize_session_local(&session_id, cols, rows).await
+) -> Result<()> {
+    session_manager.resize_session(&session_id, cols, rows).await
 }
 
 /// 获取会话的 PTY 输出历史（从 UnifiedOutputQueue 读取，供桌面端终端窗口回放）

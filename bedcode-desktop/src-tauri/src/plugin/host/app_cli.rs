@@ -116,8 +116,14 @@ pub fn path_remove(path: &str, entry: &str) -> (String, bool) {
 
 /// 读取 HKCU\Environment\Path（含类型），返回 (value, is_expand_sz)
 async fn reg_query_path() -> Result<Option<(String, bool)>, String> {
-    let output = tokio::process::Command::new("reg")
-        .args(["query", "HKCU\\Environment", "/v", "Path"])
+    let mut cmd = tokio::process::Command::new("reg");
+    cmd.args(["query", "HKCU\\Environment", "/v", "Path"]);
+    // CREATE_NO_WINDOW：reg 为控制台程序，插件激活时静默注册 PATH，避免黑窗闪烁
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("reg query failed: {}", e))?;
@@ -147,18 +153,24 @@ async fn reg_query_path() -> Result<Option<(String, bool)>, String> {
 /// 写回 HKCU\Environment\Path（保留原 REG_EXPAND_SZ 类型）
 async fn reg_write_path(value: &str, is_expand_sz: bool) -> Result<(), String> {
     let reg_type = if is_expand_sz { "REG_EXPAND_SZ" } else { "REG_SZ" };
-    let output = tokio::process::Command::new("reg")
-        .args([
-            "add",
-            "HKCU\\Environment",
-            "/v",
-            "Path",
-            "/t",
-            reg_type,
-            "/d",
-            value,
-            "/f",
-        ])
+    let mut cmd = tokio::process::Command::new("reg");
+    cmd.args([
+        "add",
+        "HKCU\\Environment",
+        "/v",
+        "Path",
+        "/t",
+        reg_type,
+        "/d",
+        value,
+        "/f",
+    ]);
+    // CREATE_NO_WINDOW：reg 为控制台程序，静默写入，避免黑窗闪烁
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("reg add failed: {}", e))?;

@@ -23,7 +23,7 @@ mod session_output;
 
 pub use session_config::SessionConfigManager;
 pub use session_event::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
-pub use session_manager::{LocalResizeResult, RemoteSize, SessionManager};
+pub use session_manager::SessionManager;
 pub use storage::{SessionStore, SessionStorage};
 
 // 从 session_components 重导出

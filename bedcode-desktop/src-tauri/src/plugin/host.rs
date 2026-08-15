@@ -30,6 +30,12 @@ use tokio::sync::{Mutex, RwLock};
 /// （持久性 bug 时最多每间隔重试一次，期间插件保持 Error 态）。
 const PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS: u64 = 30;
 
+/// 插件运行时异常前端提示最小间隔（秒）
+///
+/// 统一异常通道（`PLUGIN_RUNTIME_ERROR`）按插件合并提示：重载循环等
+/// 连发异常场景下只弹一次 toast，日志始终记录全量错误。
+const PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS: u64 = 15;
+
 /// 插件宿主
 pub struct PluginHost {
     /// 已加载的插件
@@ -66,6 +72,10 @@ pub struct PluginHost {
     ///
     /// std Mutex：仅短时 map 操作，不跨 await 持锁
     wasm_reload_throttle: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
+    /// 插件运行时异常前端提示限频表（plugin_id → 最近一次 toast 时刻）
+    ///
+    /// 见 [`PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS`]；std Mutex：短时 map 操作
+    runtime_error_notify_throttle: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
     /// 应用关闭标志：deactivate_all（应用退出）置位
     ///
     /// 插件 deactivate 内的卸载动作（如 CLI 安装清理）据此跳过：
@@ -239,6 +249,7 @@ impl PluginHost {
             file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
@@ -867,6 +878,80 @@ impl PluginHost {
         }
     }
 
+    /// 插件运行时异常统一上报前端（全局异常通道，`PLUGIN_RUNTIME_ERROR`）
+    ///
+    /// 宿主检测到插件异常（非插件主动上报）时调用，覆盖三类场景：
+    /// - `panic`：宿主函数 panic 穿透 wasmtime（catch_unwind 兜底，Store 已污染）
+    /// - `trap`：wasm trap / 导出绑定失败 / store 中毒（已调度自动重载）
+    /// - `recovery_failed`：自动重载失败，插件进入 Error 态
+    ///
+    /// 语义：日志**始终**记录全量错误（重载循环期间不丢现场）；前端 toast
+    /// 按插件节流（见 [`PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS`]），连发
+    /// 异常只弹一次，避免 trap 重载风暴刷屏。无 AppContext（测试/无头）时
+    /// 降级为纯日志，不 panic。
+    pub async fn notify_plugin_runtime_error(&self, plugin_id: &str, kind: &str, error: &str) {
+        // 日志始终记录（调用方也各自记日志，此处为统一通道的兜底记录）
+        tracing::error!(
+            plugin_id = %plugin_id,
+            kind = %kind,
+            error = %error,
+            "Plugin runtime error (unified channel)"
+        );
+
+        // 节流：同一插件窗口内已提示过则跳过 toast（日志不受影响）；
+        // recovery_failed 不节流——它每次重载失败只发一次（重载循环 30s 间隔），
+        // 若落在 trap 通知的 15s 窗口内会被吞，用户看到「已恢复」实际进入 Error 态
+        if kind != "recovery_failed" {
+            let mut throttle = self
+                .runtime_error_notify_throttle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(last) = throttle.get(plugin_id) {
+                if last.elapsed()
+                    < std::time::Duration::from_secs(PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS)
+                {
+                    tracing::debug!(
+                        plugin_id = %plugin_id,
+                        kind = %kind,
+                        "plugin runtime error toast throttled (recent notification)"
+                    );
+                    return;
+                }
+            }
+            throttle.insert(plugin_id.to_string(), std::time::Instant::now());
+        }
+
+        // 插件展示名（manifest.name），查不到时退回插件 ID
+        let plugin_name = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(plugin_id)
+                .map(|p| p.manifest.name.clone())
+                .unwrap_or_else(|| plugin_id.to_string())
+        };
+
+        // 无头/测试上下文无 AppHandle：降级为纯日志
+        let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
+            return;
+        };
+        if let Err(e) = ctx.app_handle().emit(
+            crate::system::constants::event::PLUGIN_RUNTIME_ERROR,
+            serde_json::json!({
+                "plugin_id": plugin_id,
+                "plugin_name": plugin_name,
+                "kind": kind,
+                "error": error,
+            }),
+        ) {
+            // 前端事件派发失败不致命：日志已全量记录，仅提示通道中断
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "Failed to emit PLUGIN_RUNTIME_ERROR to frontend: {}",
+                e
+            );
+        }
+    }
+
     /// 获取当前所有非 StaticRegistry 插件的激活状态映射
     pub async fn get_activated_state(&self) -> HashMap<String, bool> {
         let plugins = self.plugins.read().await;
@@ -1069,6 +1154,7 @@ mod tests {
             file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -1948,5 +2034,21 @@ mod tests {
         assert_eq!(SessionLifecycleListener::plugin_id(&l1), Some(TEST_PLUGIN_ID));
         let l2 = PluginInputListener::new(TEST_PLUGIN_ID.to_string(), host);
         assert_eq!(SessionInputListener::plugin_id(&l2), Some(TEST_PLUGIN_ID));
+    }
+
+    #[tokio::test]
+    async fn notify_plugin_runtime_error_throttle_and_no_app_context() {
+        // 统一异常通道（PLUGIN_RUNTIME_ERROR）：
+        // 1. 无 AppContext（测试/无头）时降级为纯日志，不 panic
+        // 2. 同一插件窗口内二次通知被节流（不重复提示），节流表只记录一次
+        let host = setup_host().await;
+
+        host.notify_plugin_runtime_error(TEST_PLUGIN_ID, "panic", "boom").await;
+        host.notify_plugin_runtime_error(TEST_PLUGIN_ID, "trap", "boom again").await;
+
+        let throttle = host.runtime_error_notify_throttle.lock().unwrap();
+        assert!(throttle.contains_key(TEST_PLUGIN_ID), "first call must record throttle entry");
+        // 窗口内二次调用不新增/刷新条目（被节流）
+        assert_eq!(throttle.len(), 1, "second call within window must be throttled");
     }
 }

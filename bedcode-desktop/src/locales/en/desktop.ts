@@ -167,7 +167,6 @@ export default {
       bgImageRemove: 'Remove',
       bgImageOpacity: 'Image Opacity',
       bgImageSetFailed: 'Failed to set background image',
-      remoteSizeHint: 'Displaying at mobile size {cols}×{rows}',
     },
     server: {
       title: 'Server Management',
@@ -261,6 +260,10 @@ export default {
       enabledSuccess: 'Plugin {name} enabled',
       disabledSuccess: 'Plugin {name} disabled',
       selfCheckFailed: 'Plugin {plugin} self-check failed: {error}. Check the plugin configuration.',
+      runtimePanic: 'Plugin "{name}" hit an unknown error and is being auto-recovered: {error}',
+      runtimeTrap: 'Plugin "{name}" crashed unexpectedly; attempting auto-reload',
+      runtimeRecoveryFailed: 'Plugin "{name}" failed and auto-recovery did not help: {error}. Check the plugin list',
+      runtimeUnexpected: 'An unexpected error occurred. See logs for details',
       toggleTimeout: 'Operation timed out (backend not responding)',
       copyFailed: 'Failed to copy path',
       pluginNotActivated: 'Plugin not activated, cannot access configuration',

@@ -113,8 +113,10 @@ pub(crate) fn process_run(
     }
     #[cfg(windows)]
     {
-        // CREATE_NEW_PROCESS_GROUP：与 taskkill /T 配合可整树终止
-        cmd.creation_flags(0x0000_0200);
+        // CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW：
+        // 前者与 taskkill /T 配合整树终止；后者抑制控制台窗口——任务多为
+        // cmd /C、.bat、python 等控制台程序，无标志会弹出黑窗一闪而过
+        cmd.creation_flags(0x0000_0200 | 0x0800_0000);
     }
 
     let mut child = cmd.spawn().map_err(|e| {

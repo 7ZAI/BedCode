@@ -57,6 +57,42 @@ const MAX_PLUGIN_TABLE_ENTRIES: usize = 1_000_000;
 /// 策略：
 /// - 多线程运行时：`block_in_place` + `block_on`（不阻塞 worker 线程）
 /// - current_thread 运行时或非运行时线程：`std::thread::spawn` + `block_on`（新线程上运行）
+///
+/// 重入安全：`dispatch_to_wasm` → 插件 on_message → host http_fetch 的调用链会
+/// 嵌套调用本函数。嵌套 `block_in_place` 在已让出的线程上会 panic；而嵌套
+/// `handle.block_on` 同样 panic——外层 `block_in_place(|| handle.block_on(...))`
+/// 的 tokio enter 守卫仍挂在当前线程上（block_in_place 只是把线程让出 worker 池，
+/// 守卫不释放），实证见 panic.log 的 wasm_runtime.rs:82 FATAL
+/// （"Cannot start a runtime from within a runtime"）。两种 panic 都会穿透污染
+/// wasmtime Store、插件永久不可用，故用线程局部标志检测重入，重入时改在
+/// **新线程上 block_on**：新线程无 enter 守卫、非 worker，任意 flavor 均合法，
+/// 外层线程 join 等待（runtime 其他 worker 推进 IO，无死锁）。
+thread_local! {
+    /// 当前线程是否已处于 block_in_place 让出后的阻塞上下文
+    static IN_BLOCK_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 重入标志的 RAII 守卫：作用域退出（含 block_in_place panic 穿透）时复位标志，
+/// 避免线程残留 `true` 导致后续调用恒走新线程路径（正确但多一次线程切换）
+struct BlockInPlaceGuard;
+
+impl BlockInPlaceGuard {
+    /// 进入阻塞上下文：重入时返回 None（调用方改走新线程路径）
+    fn enter() -> Option<Self> {
+        if IN_BLOCK_IN_PLACE.with(|f| f.get()) {
+            return None;
+        }
+        IN_BLOCK_IN_PLACE.with(|f| f.set(true));
+        Some(BlockInPlaceGuard)
+    }
+}
+
+impl Drop for BlockInPlaceGuard {
+    fn drop(&mut self) {
+        IN_BLOCK_IN_PLACE.with(|f| f.set(false));
+    }
+}
+
 pub(crate) fn block_on_async<F, R>(fut: F) -> R
 where
     F: std::future::Future<Output = R> + Send,
@@ -65,7 +101,20 @@ where
     let handle = tokio::runtime::Handle::current();
     match handle.runtime_flavor() {
         tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| handle.block_on(fut))
+            if let Some(_guard) = BlockInPlaceGuard::enter() {
+                // guard 持有期间当前线程在 worker 池外阻塞；退出（含 panic）时复位重入标志
+                tokio::task::block_in_place(|| handle.block_on(fut))
+            } else {
+                // 重入：当前线程已被外层 block_in_place + handle.block_on 占据
+                // （enter 守卫仍生效），嵌套 handle.block_on 必然 panic
+                // （Cannot start a runtime from within a runtime）。
+                // 新线程无 enter 守卫，block_on 合法；外层同步 join 等待结果。
+                std::thread::scope(|s| {
+                    s.spawn(|| handle.block_on(fut))
+                        .join()
+                        .expect("block_on_async: spawned thread panicked")
+                })
+            }
         }
         _ => {
             // current_thread 运行时（如 Actix-rt）或未来新增变体：
@@ -331,10 +380,11 @@ pub(crate) async fn kill_process_group(pid: u32) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        match tokio::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .output()
-            .await
+        let mut cmd = tokio::process::Command::new("taskkill");
+        cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+        // CREATE_NO_WINDOW：taskkill 为控制台程序，避免超时杀进程时黑窗闪烁
+        cmd.creation_flags(0x0800_0000);
+        match cmd.output().await
         {
             Ok(o) if o.status.success() => true,
             Ok(o) => {
@@ -572,13 +622,20 @@ impl WasmRuntime {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
     ) -> crate::Result<LoadedWasmPlugin> {
-        Ok(component::LoadedWasmPlugin::new(
+        let plugin = component::LoadedWasmPlugin::new(
             &self.engine,
             &self.linker,
             component,
             plugin_id,
             host_ctx,
-        )?)
+        )?;
+        // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
+        // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
+        tracing::info!(
+            plugin_id = %plugin_id,
+            "WASM plugin instance created (component model)"
+        );
+        Ok(plugin)
     }
 
     /// 获取文件系统访问校验器引用
@@ -1673,5 +1730,37 @@ mod tests {
                 .expect("fresh instance must work")
         });
         assert!(echo.contains("recovered"), "got: {}", echo);
+    }
+
+    #[test]
+    fn block_on_async_reentrant_nested_call_no_panic() {
+        // 回归（panic.log 实证 wasm_runtime.rs:82 FATAL）：
+        // 插件分发路径 dispatch_*_to_plugin → block_on_async（block_in_place +
+        // handle.block_on）包着插件调用，插件回调里的宿主函数（session_get /
+        // config_get / db 查询等）再调 block_on_async 构成重入。旧实现重入分支
+        // 直接 handle.block_on —— 外层 block_on 的 enter 守卫仍挂在当前线程上，
+        // 必然 panic（Cannot start a runtime from within a runtime），panic 穿透
+        // 污染 wasmtime Store 导致插件 trap → 重载循环 → 插件整体失效。
+        // 修复：重入分支改在新线程上 block_on，此处验证重入可返回且嵌套 future
+        // 真正挂起（sleep）时也能被 runtime 唤醒（无死锁）。
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // tokio::spawn：模拟真实分发在 worker 线程执行（block_in_place 前置条件）
+            tokio::spawn(async move {
+                // 外层 block_on_async：模拟 dispatch_*_to_plugin 的同步桥接
+                let outer = block_on_async(async {
+                    // 内层 block_on_async：模拟插件回调内的宿主函数调用（重入分支）
+                    let inner = block_on_async(async {
+                        // 真实挂起：验证新线程上的 block_on 能被 runtime 定时器唤醒
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        42u32
+                    });
+                    inner * 2
+                });
+                assert_eq!(outer, 84);
+            })
+            .await
+            .expect("spawned task must not panic");
+        });
     }
 }

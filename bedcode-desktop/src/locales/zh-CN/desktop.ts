@@ -167,7 +167,6 @@ export default {
       bgImageRemove: '移除',
       bgImageOpacity: '图片不透明度',
       bgImageSetFailed: '设置背景图片失败',
-      remoteSizeHint: '以移动端尺寸 {cols}×{rows} 显示',
     },
     server: {
       title: '服务器管理',
@@ -261,6 +260,10 @@ export default {
       enabledSuccess: '插件 {name} 已启用',
       disabledSuccess: '插件 {name} 已停用',
       selfCheckFailed: '插件 {plugin} 自检失败：{error}，请检查插件配置',
+      runtimePanic: '插件「{name}」发生未知错误，已尝试自动恢复：{error}',
+      runtimeTrap: '插件「{name}」异常退出，正在尝试自动重载恢复',
+      runtimeRecoveryFailed: '插件「{name}」运行异常且自动恢复失败：{error}，请到插件列表查看',
+      runtimeUnexpected: '发生了未知错误，详情见日志',
       toggleTimeout: '操作超时（后端未响应），已停止等待',
       copyFailed: '复制路径失败',
       pluginNotActivated: '插件未激活，无法访问配置',

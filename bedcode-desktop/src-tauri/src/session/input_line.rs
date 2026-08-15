@@ -108,6 +108,11 @@ enum EscState {
     Escape,
     /// Within a CSI / SS3 sequence, collecting parameter bytes, waiting for the final byte
     Csi { params: [u8; 16], count: usize },
+    /// Within an OSC sequence (`\x1b]...`), discarding until BEL or ST —
+    /// OSC 内容不做行重建（调色板/标题等应用控制序列），完整丢弃
+    Osc,
+    /// OSC 内收到 `\x1b`：等待 ST 终止符 `\x1b\\`（其余字符回 Osc 继续丢弃）
+    OscSt,
 }
 
 /// Per-session line buffer (pure in-memory state machine)
@@ -137,6 +142,8 @@ impl LineBuffer {
                         self.feed_ground(reprocess, &mut submitted);
                     }
                 }
+                EscState::Osc => self.feed_osc(c),
+                EscState::OscSt => self.feed_osc_st(c),
             }
         }
         submitted
@@ -214,6 +221,11 @@ impl LineBuffer {
                     count: 0,
                 };
             }
+            // OSC (\x1b]): 丢弃直到 BEL (\x07) 或 ST (\x1b\\)
+            // （opencode/pi 等 TUI 的调色板/标题序列；粘贴内容可能携带 raw 字节）
+            ']' => {
+                self.esc = EscState::Osc;
+            }
             // Common encoding for Shift+Enter / Option+Enter: restored as newline content, does not trigger submission
             '\r' | '\n' => {
                 self.esc = EscState::Ground;
@@ -222,9 +234,29 @@ impl LineBuffer {
             }
             // Other two-character escape sequences (Alt+key, ESC =, etc.) are discarded as a whole: shortcut keys are not content
             _ => {
-                self.esc = EscState::Ground;
+                // 连续 ESC（独立 ESC 键 + 随后另一 ESC 序列，如 \x1b 后接 \x1b[A 方向键）：
+                // 必须保持 Escape 状态继续丢弃，否则序列头被丢弃后回到 Ground，
+                // 下一个序列的 [A 会被当作普通字符累积进提交行
+                // （任务日志出现 [A/ 垃圾描述，实测：ESC 键 + 上箭头 + / + Enter）
+                if c != '\x1b' {
+                    self.esc = EscState::Ground;
+                }
             }
         }
+    }
+
+    /// OSC 内容字节：全部丢弃，直到 BEL 或 ESC（ST 起始）终止
+    fn feed_osc(&mut self, c: char) {
+        match c {
+            '\x07' => self.esc = EscState::Ground,
+            '\x1b' => self.esc = EscState::OscSt,
+            _ => {}
+        }
+    }
+
+    /// OSC 内 ESC 后的字节：`\\` 为 ST 终止，其余回 Osc 继续丢弃
+    fn feed_osc_st(&mut self, c: char) {
+        self.esc = if c == '\\' { EscState::Ground } else { EscState::Osc };
     }
 
     /// CSI / SS3 sequence body: collect parameter bytes, terminate on the final byte
@@ -372,6 +404,47 @@ mod tests {
         let t = SubmittedLineTracker::new();
         let out = feed_chunks(&t, "s1", &["a\x1b[Ab\x1b[1~c\x1b[Hd\r"]);
         assert_eq!(out, vec!["abcd"]);
+    }
+
+    #[test]
+    fn test_esc_key_then_arrow_csi_does_not_leak() {
+        // 独立 ESC 键（\x1b）后紧跟方向键序列（\x1b[A）：连续 ESC 不应让 [A 泄漏为内容
+        // （实测回归：任务日志出现 [A/ 垃圾描述 = ESC 键 + 上箭头 + / + Enter）
+        let t = SubmittedLineTracker::new();
+        let out = feed_chunks(&t, "s1", &["\x1b", "\x1b[A/", "\r"]);
+        assert_eq!(out, vec!["/"]);
+    }
+
+    #[test]
+    fn test_osc_sequence_bel_terminated_dropped() {
+        // OSC 序列（\x1b]4;0;rgb:...\x07，BEL 终止）整体丢弃
+        let t = SubmittedLineTracker::new();
+        let out = feed_chunks(&t, "s1", &["a\x1b]4;0;rgb:2828/2c2c/3434\x07b\r"]);
+        assert_eq!(out, vec!["ab"]);
+    }
+
+    #[test]
+    fn test_osc_sequence_st_terminated_dropped() {
+        // OSC 序列（\x1b]4;0;rgb:...\x1b\\，ST 终止）整体丢弃
+        let t = SubmittedLineTracker::new();
+        let out = feed_chunks(&t, "s1", &["a\x1b]4;0;rgb:2828/2c2c/3434\x1b\\b\r"]);
+        assert_eq!(out, vec!["ab"]);
+    }
+
+    #[test]
+    fn test_osc_sequence_split_across_chunks() {
+        // OSC 序列跨 chunk 到达（BEL 在后续 chunk）：状态机跨 chunk 保持，全部丢弃
+        let t = SubmittedLineTracker::new();
+        let out = feed_chunks(&t, "s1", &["a\x1b]4;0;rgb:2828/2c2c/3434", "\x07b\r"]);
+        assert_eq!(out, vec!["ab"]);
+    }
+
+    #[test]
+    fn test_osc_within_paste_dropped() {
+        // 粘贴块内的 OSC 序列同样丢弃，粘贴内容不受影响
+        let t = SubmittedLineTracker::new();
+        let out = feed_chunks(&t, "s1", &["\x1b[200~pre\x1b]4;0;rgb:2828/2c2c/3434\x07post\x1b[201~\r"]);
+        assert_eq!(out, vec!["prepost"]);
     }
 
     #[test]

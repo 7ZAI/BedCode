@@ -648,50 +648,61 @@ impl FileServiceRegistry {
 
     /// 应答命令：pending → approved（校验归属 plugin）
     ///
-    /// 他插件应答同一批 → NotFound（不泄露存在性，spec §3.3）
+    /// 他插件应答同一批 → NotFound（不泄露存在性，spec §3.3）。
+    /// 迁移成功后发布 resolved + 跨端推送（发送方据此调度批内任务，spec 14.2）；
+    /// 与移动端 registry.approve_transfer 对称，缺发布会导致发送方永远等不到应答
     pub async fn approve_transfer(
         &self,
         plugin_id: &str,
         batch_id: &str,
     ) -> Result<(), BatchError> {
-        let mut batches = self.batches.write().await;
-        let batch = batches.get_mut(batch_id).ok_or_else(|| {
-            BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
-        })?;
-        if batch.plugin_id != plugin_id {
-            return Err(BatchError::NotFound(format!(
-                "transfer batch not found: {}",
-                batch_id
-            )));
+        {
+            let mut batches = self.batches.write().await;
+            let batch = batches.get_mut(batch_id).ok_or_else(|| {
+                BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
+            })?;
+            if batch.plugin_id != plugin_id {
+                return Err(BatchError::NotFound(format!(
+                    "transfer batch not found: {}",
+                    batch_id
+                )));
+            }
+            transition_batch(batch, BatchState::Approved)?;
         }
-        transition_batch(batch, BatchState::Approved)?;
         tracing::info!(batch_id = %batch_id, plugin_id = %plugin_id, "transfer batch approved by user");
+        self.publish_batch_resolved(batch_id, "approved", "").await;
         Ok(())
     }
 
     /// 应答命令：pending → rejected(UserRejected)（校验归属 plugin）
+    ///
+    /// 迁移成功后发布 resolved + 跨端推送（发送方据此置批内任务 rejected，spec 14.2）
     pub async fn reject_transfer(
         &self,
         plugin_id: &str,
         batch_id: &str,
     ) -> Result<(), BatchError> {
-        let mut batches = self.batches.write().await;
-        let batch = batches.get_mut(batch_id).ok_or_else(|| {
-            BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
-        })?;
-        if batch.plugin_id != plugin_id {
-            return Err(BatchError::NotFound(format!(
-                "transfer batch not found: {}",
-                batch_id
-            )));
+        {
+            let mut batches = self.batches.write().await;
+            let batch = batches.get_mut(batch_id).ok_or_else(|| {
+                BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
+            })?;
+            if batch.plugin_id != plugin_id {
+                return Err(BatchError::NotFound(format!(
+                    "transfer batch not found: {}",
+                    batch_id
+                )));
+            }
+            transition_batch(
+                batch,
+                BatchState::Rejected {
+                    reason: transfer::RejectReason::UserRejected,
+                },
+            )?;
         }
-        transition_batch(
-            batch,
-            BatchState::Rejected {
-                reason: transfer::RejectReason::UserRejected,
-            },
-        )?;
         tracing::info!(batch_id = %batch_id, plugin_id = %plugin_id, "transfer batch rejected by user");
+        self.publish_batch_resolved(batch_id, "rejected", "user-rejected")
+            .await;
         Ok(())
     }
 
