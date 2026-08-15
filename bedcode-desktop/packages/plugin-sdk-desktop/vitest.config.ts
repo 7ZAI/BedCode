@@ -1,8 +1,10 @@
 import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
+  plugins: [vue()],
   test: {
-    environment: 'node',
+    environment: 'happy-dom',
     globals: true,
     include: ['__tests__/**/*.test.ts'],
     exclude: ['node_modules', 'dist'],

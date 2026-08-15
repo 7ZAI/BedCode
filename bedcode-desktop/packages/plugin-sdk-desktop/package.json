@@ -58,6 +58,9 @@
     "vue": "^3.4.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/test-utils": "^2.4.11",
+    "happy-dom": "^13.10.1",
     "tsup": "^8.5.1"
   }
 }
