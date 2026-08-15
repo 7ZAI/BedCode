@@ -7,6 +7,7 @@ pub mod enums;
 pub mod file_service;
 pub mod handler;
 pub mod model;
+pub mod ocr;
 pub mod plugin;
 pub mod router;
 pub mod session;
@@ -292,6 +293,11 @@ pub fn run() {
             crate::plugin::commands::plugin_saf_check_authorized,
             crate::plugin::commands::plugin_pick_shared_directory,
             crate::plugin::commands::plugin_saf_list_dir,
+            // OCR 引擎命令（插件 com.bedcode.ocr 宿主侧，spec 见 .scratch/ocr-plugin/spec.md §4.2）
+            crate::plugin::commands::plugin_ocr_recognize,
+            crate::plugin::commands::plugin_ocr_engine_status,
+            crate::plugin::commands::plugin_ocr_delete_models,
+            crate::plugin::commands::plugin_ocr_restore_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

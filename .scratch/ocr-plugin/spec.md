@@ -17,22 +17,23 @@
 ## 2. 架构总览
 
 ```
-┌────────────── OCR 插件（WASM 壳，plugins/ocr/，随插件系统分发）──────────────┐
+┌────────────── OCR 插件（plugins/ocr/，随插件系统分发）────────────────────┐
+│  前端 TS（index.ts activate + Vue 页面）＋ Rust WASM 壳（最小 manifest/激活） │
 │  工具箱入口 → 主页（选图/拍照）→ 识别中 → 结果页（行列表+复制）│ 设置区：模型管理 │
-│  前端经 context.commands 调宿主命令；manifest 声明权限                          │
+│  识别命令走宿主命令（context.ocr API），不经 WASM；manifest 声明权限          │
 └──────────────┬───────────────────────────────────────────────┬───────────────┘
-               │ 宿主命令（invoke）                              │ Kotlin 桥（invoke）
+               │ 宿主 Tauri 命令（invoke）                      │ Kotlin 桥（invoke）
 ┌──────────────▼───────────────────────────────┐  ┌────────────▼───────────────┐
 │ 宿主 OCR 引擎（src-tauri/src/ocr/，Rust）     │  │ SafPickerPlugin.pickImage  │
-│  ocr_recognize / ocr_engine_status           │  │  （相册，扩展现有桥）        │
-│  ocr_delete_models / ocr_restore_models      │  │ CameraPlugin（拍照，新桥）  │
+│  plugin_ocr_recognize / engine_status        │  │  （相册，扩展现有桥）        │
+│  plugin_ocr_delete_models / restore_models   │  │  CameraPlugin（拍照，新桥）  │
 │  engine trait（offline 实现；online 接缝）    │  │  BitmapFactory 解码→RGBA    │
 │  PP-OCRv4 ONNX + ort（惰性加载、spawn_blocking）│  └────────────┬───────────────┘
 │  模型文件：assets/models → 首次解压到数据目录    │               │
 └───────────────────────────────────────────────┘   RGBA 临时文件 + 尺寸
 ```
 
-**关键原则**：识别数据（RGBA 像素）不经 WASM；WASM 只传路径与元数据。
+**关键原则**：识别数据（RGBA 像素）不经 WASM——OCR 引擎命令以宿主 Tauri 命令形式暴露（`plugin_ocr_*`，对齐 `plugin_saf_*` 模式），插件前端经 `context.ocr.*` API 直接 invoke，插件 Rust WASM 壳不承载识别命令。
 
 ## 3. 引擎选型（已定，勿重开）
 
@@ -56,13 +57,18 @@ src-tauri/src/ocr/
 └── preprocess.rs   // RGBA 输入 → 引擎预处理（灰度、归一化、det 缩放）
 ```
 
-宿主命令注册于移动端命令注册表（与现有命令同处），按宿主权限机制门控：新增权限类型 `ocr`（或复用现有门控模式，实现时确认 PermissionManager 移动端对应实现），插件 manifest 声明。
+宿主命令注册于 `src-tauri/src/plugin/commands.rs`（与 `plugin_saf_*` 等现有命令同处），命名 `plugin_ocr_*`；门控沿用现有宿主命令模式：新增 `require_ocr()` 辅助函数（仿 `require_fileservice()`，检查插件已激活 + 拥有 `ocr` 权限），插件 manifest 声明。
+
+权限接线三处（缺一不可）：
+1. **SDK** `plugin-sdk-mobile/rust/src/permission.rs`：新增 `PERMISSION_OCR = "ocr"` 常量，加入 `VALID_PERMISSIONS` 与 `PERMISSION_API_MAP`（映射 `ocr.recognize` 等前端 API 方法名）
+2. **前端** `src/plugin/permission.ts`：`PERMISSION_API_MAP` 增加 `'ocr': ['ocr.recognize', ...]`（与 SDK Rust 单一事实来源一致）
+3. **宿主** `commands.rs`：`require_ocr(&manager, &plugin_id, op)` 门控各命令
 
 ### 4.2 命令契约
 
 所有命令输入输出为 JSON。错误遵循宿主 `AppError`（带上下文的错误字符串，禁止裸字符串）。
 
-#### `ocr_recognize`
+#### `plugin_ocr_recognize`（前端 `context.ocr.recognize`）
 
 请求：
 ```json
@@ -94,7 +100,7 @@ src-tauri/src/ocr/
 
 错误语义：模型缺失 → `models not extracted`（UI 引导恢复模型）；图片尺寸非法 → 带上下文的 `AppError`；引擎加载失败 → 带原因。
 
-#### `ocr_engine_status`
+#### `plugin_ocr_engine_status`（前端 `context.ocr.engineStatus`）
 
 响应：
 ```json
@@ -110,20 +116,20 @@ src-tauri/src/ocr/
 - `engineLoaded`：识别引擎是否已加载（UI 显示「引擎加载中/已就绪」）。
 - `supportedEngines`：v1 恒 `["offline"]`，v2 追加在线 provider id。
 
-#### `ocr_delete_models`
+#### `plugin_ocr_delete_models`（前端 `context.ocr.deleteModels`）
 
 删除已解压模型文件（数据目录 `ocr_models/`）。响应 `{ "deleted": true, "freedBytes": 17123456 }`。引擎已加载时先释放 session 再删；返回 `"inUse": true` 需前端确认？——不，v1 简化：删除前若引擎加载中，命令阻塞至本次识别完成（单飞队列保证）再删。删除成功即 `engineLoaded` 复位。
 
-#### `ocr_restore_models`
+#### `plugin_ocr_restore_models`（前端 `context.ocr.restoreModels`）
 
 从 APK assets 重新解压（无需网络）。响应 `{ "restored": true }`。幂等：已存在则跳过。
 
 ### 4.3 引擎生命周期与线程
 
-- **惰性加载**：首次 `ocr_recognize` 时初始化（解压模型 + 建 ort session，预计 2~4s），成功后常驻缓存（`Arc<Mutex<Option<Engine>>>` 或 `OnceCell`）。
+- **惰性加载**：首次 `plugin_ocr_recognize` 时初始化（解压模型 + 建 ort session，预计 2~4s），成功后常驻缓存（`Arc<Mutex<Option<Engine>>>` 或 `OnceCell`）。
 - **后台线程**：识别全程 `tokio::task::spawn_blocking`（ort 推理是阻塞调用，禁止占 async executor）。
 - **单飞队列**：v1 一次一张，串行执行；并发请求排队（`tokio::sync::Mutex` 或任务队列）。UI 侧同时置「识别中」态防重入。
-- **引擎释放**：`ocr_delete_models` 释放；App 进程存活期间不主动卸载（常驻）。
+- **引擎释放**：`plugin_ocr_delete_models` 释放；App 进程存活期间不主动卸载（常驻）。
 
 ### 4.4 解码链路（Kotlin 桥 → RGBA）
 
@@ -132,6 +138,7 @@ src-tauri/src/ocr/
 - 取图成功后，Kotlin 侧用 `BitmapFactory` 解码并**降采样到长边 ≤1600px**（`inSampleSize` 步进，保持比例；12MP 照片 ≈ 降 3 级，识别速度与精度最佳平衡点）。
 - 输出：写入 app cache 目录 `ocr/ocr_<ts>.rgba`（文件头无格式，纯 RGBA8 字节流）+ 返回 `{ path, width, height }` 给调用方；文件名即请求 id，识别完成后宿主删除临时文件。
 - 图源 URI 读取经 `contentResolver.openInputStream`（SAF/camera FileProvider URI 统一处理）。
+- **调用路径**：Kotlin 桥经 Rust `android_plugins` 子模块暴露为宿主命令（如 `plugin_pick_image` → `picker.rs` → `run_mobile_plugin_async`），RGBA 路径返回前端后直接作为 `plugin_ocr_recognize` 的 `image.rgbaPath` 参数传入——**全程不经 WASM**。
 
 ### 4.5 模型资源
 
@@ -166,11 +173,14 @@ onnxruntime Android 库随 APK 打包，两种路径（实现期验证，兜底�
 
 ### 5.3 注册
 
-`android_plugins.rs` 注册 `CameraPlugin`（SafPickerPlugin 已注册，仅加方法）。
+Kotlin 桥经 Rust 侧 `android_plugins` 子模块暴露为宿主 Tauri 命令（现有模式：`picker.rs` / `saf.rs` 子模块 → `run_mobile_plugin_async` 路由到 Kotlin 插件）：
+- 相册：在 `android_plugins/picker.rs` 新增 `pick_image_android()`，对应 Kotlin `SafPickerPlugin` 加 `pickImage` 方法；宿主命令 `plugin_pick_image`（`require_ocr` 门控）。
+- 拍照：新增 `android_plugins/ocr.rs`（或并入 picker.rs）→ 新 Kotlin `CameraPlugin`；宿主命令 `plugin_camera_capture`（`require_ocr` 门控）。
+- **注意**：每个 Kotlin 插件必须用独立 Builder 名称注册（`register_android_plugin` 以 Builder 名作 HashMap key，同名互相覆盖，见 `android_plugins.rs` 模块注释）。
 
-## 6. 插件侧（plugins/ocr/，WASM 壳）
+## 6. 插件侧（plugins/ocr/，前端 TS + Rust WASM 壳）
 
-按 `bedcode-plugin create com.bedcode.ocr "OCR"` 模板生成，参照 `plugins/file-transfer/` 结构。
+按 `bedcode-plugin create com.bedcode.ocr "OCR"` 模板生成，参照 `plugins/file-transfer/` 结构。**插件形态为前端 TS + Rust WASM 壳**（模板默认 `pluginType: "wasm"`）：前端承载全部 UI；Rust 壳为最小实现（`wasm_entry!` 宏 + 激活/停用日志），**不实现识别命令路由**——识别命令由宿主命令直供（§4.2），无需扩 WIT host 接口。
 
 ### 6.1 清单与权限
 
@@ -179,18 +189,27 @@ onnxruntime Android 库随 APK 打包，两种路径（实现期验证，兜底�
   "id": "com.bedcode.ocr",
   "name": "OCR",
   "version": "0.1.0",
+  "description": "...",
+  "author": "BedCode",
+  "icon": "🔍",
+  "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_ocr",
-  "permissions": ["ui:toolbox", "ocr"]
+  "permissions": ["ui:toolbox", "ocr"],
+  "contributes": {
+    "views": [{ "type": "toolbox", "id": "ocr.toolbox", "title": "OCR", "component": "OcrView" }],
+    "settings": { "id": "ocr.settings", "section": "ocr", "component": "OcrSettings" },
+    "routes": [{ "id": "result", "title": "识别结果", "component": "ResultPage" }]
+  }
 }
 ```
-- `ocr` 为新宿主权限（4.1）；`ui:toolbox` 注册工具箱入口。
-- WASM 后端仅承载命令路由与类型（数据不经 WASM，见 4.4），或可纯前端（`--ts-only`）+ 宿主命令——实现期按模板取舍（倾向 ts-only 减负，若 manifest 校验要求 wasm 则保留最小 wasm）。
+- `ocr` 为新宿主权限（接线见 §4.1）；`ui:toolbox` 注册工具箱入口；`ui:route`/`ui:settings` 随 contributes 声明（路由/设置页需要时）与 `ui:back`（结果页系统返回键）一并补入 permissions。
+- 识别命令**不经 WASM**：前端直接用 `context.ocr.*`（宿主命令 API 封装，需 SDK types 扩展 `OcrAPI` 接口 + `PluginContext` 增加 `ocr` 字段，参照 `fileService` 模式）。
 
 ### 6.2 UI 流程
 
 1. **工具箱入口**：长条块状入口（同 file-transfer ToolboxEntry 风格）。
-2. **主页**：两个主按钮「相册选图」「拍照」+ 引擎状态条（`ocr_engine_status`：模型未就绪 → 引导恢复；引擎加载中/已就绪）。
+2. **主页**：两个主按钮「相册选图」「拍照」+ 引擎状态条（`context.ocr.engineStatus()`：模型未就绪 → 引导恢复；引擎加载中/已就绪）。
 3. **识别中**：loading 态（禁用按钮，防重入）。
 4. **结果页**：图片缩略（可选）+ 文本行列表（点击某行复制该行，Toast 反馈）+ 底部「复制全文」；低置信度行弱化（`confidence < 0.6` 时次要色）。空结果给「未识别到文字」空态。
 5. **设置区**（插件设置页）：模型管理——显示模型占用（`modelsBytes`）、「删除模型」「恢复模型」按钮（删除后入口禁用，恢复后解禁）。
@@ -200,6 +219,12 @@ onnxruntime Android 库随 APK 打包，两种路径（实现期验证，兜底�
 ```ts
 interface OcrLine { text: string; confidence: number; bbox: { x: number; y: number; w: number; h: number } }
 interface OcrResult { engine: string; durationMs: number; lines: OcrLine[] }
+interface OcrApi {
+  recognize(input: { engine?: string; image: { rgbaPath: string; width: number; height: number }; maxSide?: number }): Promise<OcrResult>
+  engineStatus(): Promise<{ available: boolean; modelsPresent: boolean; modelsBytes: number; engineLoaded: boolean; supportedEngines: string[] }>
+  deleteModels(): Promise<{ deleted: boolean; freedBytes: number }>
+  restoreModels(): Promise<{ restored: boolean }>
+}
 ```
 
 ### 6.4 i18n
@@ -229,7 +254,7 @@ zh-CN（默认）+ en 双语言，key 遵循 `{domain}.{section}.{key}`；新增
 ## 9. 分步实施计划
 
 1. **宿主引擎骨架**：`src-tauri/src/ocr/` 模块 + 4 个命令注册 + `OcrEngine` trait + engine 路由 + `AppError` 上下文。验证：`cargo test`（单元：路由、模型状态机、RGBA 预处理）。
-2. **模型资源与 ort 集成**：assets 打包 + 惰性解压 + 删除/恢复 + ort 链接打通（4.6 兜底链）。验证：真机/模拟器跑通 `ocr_engine_status`；`./gradlew :app:compileUniversalDebugKotlin`（若动 Kotlin）。
+2. **模型资源与 ort 集成**：assets 打包 + 惰性解压 + 删除/恢复 + ort 链接打通（4.6 兜底链）。验证：真机/模拟器跑通 `plugin_ocr_engine_status`；`./gradlew :app:compileUniversalDebugKotlin`（若动 Kotlin）。
 3. **识别流水线**：ppocr.rs det/cls/rec 三段 + 行排序 + 置信度。验证：`cargo test`（用合成 RGBA 图测预处理/排序逻辑，模型推理留真机）。
 4. **Kotlin 桥**：SafPickerPlugin.pickImage + CameraPlugin + Manifest/FileProvider + 解码降采样 → RGBA。验证：`./gradlew :app:compileUniversalDebugKotlin` + 真机取图。
 5. **插件壳**：`bedcode-plugin create` + UI 四页 + 宿主命令调用 + 模型管理 + i18n。验证：dev-shell 联调（mock 宿主命令）→ 真机全链路。
@@ -253,5 +278,7 @@ zh-CN（默认）+ en 双语言，key 遵循 `{domain}.{section}.{key}`；新增
 
 - **ORT Android 预编译**：`ort` 2.x `download-binaries` 对 android 目标的支持在实现期验证；兜底 dlopen（4.6）。
 - **ONNX 模型来源**：PP-OCRv4 三模型 ONNX 具体出处（Paddle2ONNX 官方模型自转 vs RapidOCR 社区导出），实现期确认并记录许可。
-- **插件形态**：ts-only vs 最小 wasm 壳（6.1），模板校验后定。
-- **新权限 `ocr` 的门控接线**：PermissionManager 移动端对应实现（4.1），实现期确认沿用现有模式即可。
+- **Kotlin 相册桥落点**：`pickImage` 加在 `SafPickerPlugin`（扩展现有桥）还是新 `OcrPickerPlugin`（独立 Builder 名，避免互相覆盖），实现期定（§5.3）。
+- **`context.ocr` API 的 SDK 扩展**：`OcrAPI` 接口 + `PluginContext.ocr` 字段加入 SDK types（参照 `fileService` 模式），随插件实现一并提交。
+
+> 已解决（不开放）：插件形态定为前端 TS + Rust WASM 壳（模板默认，无需 ts-only 取舍）；`ocr` 权限门控接线按 §4.1 三处落实（SDK 常量 + 前端映射 + 宿主 `require_ocr`）。

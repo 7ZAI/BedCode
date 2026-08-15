@@ -1121,6 +1121,85 @@ async fn list_private_downloads_dir(
 }
 
 
+// ==================== OCR Commands（spec §4.2，插件 com.bedcode.ocr 宿主侧）====================
+
+/// 身份 + ocr 权限校验（Rust 端为最终仲裁，仿 require_fileservice）
+async fn require_ocr(
+    manager: &PluginManager,
+    plugin_id: &str,
+    op: &str,
+) -> Result<()> {
+    if !manager.is_activated(plugin_id).await {
+        return Err(crate::AppError::Plugin(format!(
+            "{}: plugin '{}' is not activated",
+            op, plugin_id
+        )));
+    }
+    if !manager
+        .has_permission(
+            plugin_id,
+            bedcode_plugin_api_mobile::permission::PERMISSION_OCR,
+        )
+        .await
+    {
+        return Err(crate::AppError::Plugin(format!(
+            "{}: plugin '{}' has no ocr permission",
+            op, plugin_id
+        )));
+    }
+    Ok(())
+}
+
+/// 识别图片：RGBA 由 Kotlin 桥产出，engine 字段 v1 固定 offline（接缝路由见 §7）
+#[tauri::command]
+pub async fn plugin_ocr_recognize(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    input: crate::ocr::OcrRecognizeInput,
+) -> Result<crate::ocr::OcrOutput> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_ocr(&manager, &plugin_id, "plugin_ocr_recognize").await?;
+    crate::ocr::engine::recognize(&app_handle, &input).await
+}
+
+/// 引擎状态：模型是否就位/占用字节/引擎加载态/支持引擎列表
+#[tauri::command]
+pub async fn plugin_ocr_engine_status(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<crate::ocr::OcrEngineStatus> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_ocr(&manager, &plugin_id, "plugin_ocr_engine_status").await?;
+    let data_dir = app_handle.path().app_data_dir()?;
+    Ok(crate::ocr::engine::engine_status(&data_dir).await)
+}
+
+/// 删除已解压模型（释放空间；引擎加载后先释放 session 再删，见 spec §4.2）
+#[tauri::command]
+pub async fn plugin_ocr_delete_models(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<crate::ocr::OcrDeleteModelsOutput> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_ocr(&manager, &plugin_id, "plugin_ocr_delete_models").await?;
+    let data_dir = app_handle.path().app_data_dir()?;
+    crate::ocr::models::delete_models(&data_dir)
+        .map(|(deleted, freed_bytes)| crate::ocr::OcrDeleteModelsOutput { deleted, freed_bytes })
+}
+
+/// 从 APK assets 恢复模型（幂等；解压在票据 06 填充）
+#[tauri::command]
+pub async fn plugin_ocr_restore_models(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<crate::ocr::OcrRestoreModelsOutput> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_ocr(&manager, &plugin_id, "plugin_ocr_restore_models").await?;
+    let data_dir = app_handle.path().app_data_dir()?;
+    crate::ocr::models::restore_models(&data_dir)
+        .map(|restored| crate::ocr::OcrRestoreModelsOutput { restored })
+}
+
 // ==================== Plugin Command Invoke ====================
 
 /// 调用 WASM 插件命令（前端 context.commands.execute 的回退桥）

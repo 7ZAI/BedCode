@@ -25,6 +25,8 @@ pub const PERMISSION_FILESERVICE: &str = "fileservice";
 pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
 /// 传输引擎：发起断点续传的文件上传/下载任务
 pub const PERMISSION_TRANSFER: &str = "transfer";
+/// OCR 引擎：离线识别（插件 com.bedcode.ocr 宿主命令，见 .scratch/ocr-plugin/spec.md §4.1）
+pub const PERMISSION_OCR: &str = "ocr";
 
 static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_INPUT,
@@ -44,6 +46,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FILESERVICE,
     PERMISSION_SYSTEM_OPEN,
     PERMISSION_TRANSFER,
+    PERMISSION_OCR,
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
@@ -71,6 +74,12 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     ]),
     (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir"]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
+    (PERMISSION_OCR, &[
+        "ocr.recognize",
+        "ocr.engineStatus",
+        "ocr.deleteModels",
+        "ocr.restoreModels",
+    ]),
 ];
 
 pub struct PermissionManager {
@@ -182,8 +191,8 @@ mod tests {
     #[test]
     fn test_valid_permission_whitelist_complete() {
         // 白名单 = VALID_PERMISSIONS 静态表：任何新增权限必须同步登记，
-        // 否则 grant 静默丢弃（此处锁死 17 项，含移动端特有 ui:navtab/ui:settings/ui:route）
-        assert_eq!(VALID_PERMISSIONS.len(), 17);
+        // 否则 grant 静默丢弃（此处锁死 18 项，含移动端特有 ui:navtab/ui:settings/ui:route）
+        assert_eq!(VALID_PERMISSIONS.len(), 18);
         for p in [
             PERMISSION_TERMINAL_INPUT,
             PERMISSION_TERMINAL_OUTPUT,
@@ -201,9 +210,26 @@ mod tests {
             PERMISSION_BUS,
             PERMISSION_FILESERVICE,
             PERMISSION_TRANSFER,
+            PERMISSION_OCR,
         ] {
             assert!(VALID_PERMISSIONS.contains(&p), "{} not in whitelist", p);
         }
+    }
+
+    /// ocr 权限：API 方法映射 + 未授予拒绝
+    #[test]
+    fn test_check_api_ocr() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("p", &["ocr".to_string()]);
+        assert!(pm.check_api("p", "ocr.recognize"));
+        assert!(pm.check_api("p", "ocr.engineStatus"));
+        assert!(pm.check_api("p", "ocr.deleteModels"));
+        assert!(pm.check_api("p", "ocr.restoreModels"));
+        // 未授予 ocr 的插件一律拒绝
+        assert!(!pm.check_api("p", "transfer.start"));
+        let pm2 = PermissionManager::new();
+        pm2.grant_permissions("p2", &["storage".to_string()]);
+        assert!(!pm2.check_api("p2", "ocr.recognize"));
     }
 
     #[test]
