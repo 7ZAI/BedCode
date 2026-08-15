@@ -276,8 +276,9 @@ function checkModalsOpen() {
   // Teleport 弹窗使用 v-if 控制显隐，存在即表示弹窗打开
   // 排除 .mobile-loading-overlay（加载遮罩不应阻止滑动）
   // .confirm-modal-overlay 匹配 SettingsView 等自定义弹窗
+  // .dp--menu-wrapper 匹配插件日期选择器的 bottom-sheet 遮罩（选择期间禁滑动）
   const overlays = document.body.querySelectorAll(
-    '.fixed.inset-0:not(.mobile-loading-overlay), .confirm-modal-overlay'
+    '.fixed.inset-0:not(.mobile-loading-overlay), .confirm-modal-overlay, .dp--menu-wrapper'
   )
   isModalOpen.value = overlays.length > 0
 }

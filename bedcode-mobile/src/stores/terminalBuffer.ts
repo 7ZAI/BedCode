@@ -51,9 +51,6 @@ export interface SessionBuffer {
   subscribing: boolean
   /** 会话是否已停止 */
   sessionStopped: boolean
-  /** 手动暂停订阅（会话卡片操作）：不订阅、丢弃在途帧、禁止自愈/自动重试，
-   *  桌面端可接管 PTY 尺寸；恢复时按游标续传（服务端裁决 incremental/reset） */
-  manuallyPaused: boolean
   /** 订阅确认前缓冲的回放帧（裁决消息与历史帧经不同消息路径，顺序无保证） */
   pending: OutputPayload[]
   /** 缓冲帧总字节数（防御性上限，超限重置订阅） */
@@ -83,29 +80,6 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 订阅确认前缓冲回放帧的上限（防御性；服务端环形容量远小于此） */
   const MAX_PENDING_FRAME_BYTES = 8 * 1024 * 1024
 
-  /**
-   * 手动暂停订阅（会话卡片操作）
-   *
-   * 后端取消订阅（调用方负责 wsLeaveSession）+ 保留字节游标，
-   * 桌面端可接管 PTY 尺寸；恢复时按游标续传（服务端裁决 incremental/reset）。
-   * 暂停期间 ws_output 入口丢弃在途帧（不推进游标）、自愈与自动重试均被
-   * manuallyPaused 守卫挡下，避免订阅被悄悄重建导致尺寸控制权被抢回。
-   */
-  function pauseSubscription(sessionId: string) {
-    invalidatePrepared(sessionId)
-    const buffer = ensureBuffer(sessionId)
-    buffer.manuallyPaused = true
-    buffer.subscribed = false
-    buffer.pending = []
-    buffer.pendingBytes = 0
-  }
-
-  /** 解除手动暂停（会话卡片恢复 / 进入终端页）：订阅由调用方按既有路径发起 */
-  function resumeSubscription(sessionId: string) {
-    const buffer = buffers.get(sessionId)
-    if (buffer) buffer.manuallyPaused = false
-  }
-
   /** 自愈重订阅冷却间隔下限（毫秒）：限制同一会话连续性自愈的频率 */
   const RESUBSCRIBE_COOLDOWN_MIN_MS = 2000
   /** 自愈重订阅冷却间隔上限（毫秒）：连续自愈风暴（violation 循环）时指数退避封顶 */
@@ -116,6 +90,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   const lastResubscribeAt = reactive(new Map<string, number>())
   /** sessionId → 连续自愈次数（指数退避用，风暴平息后经 STREAK_RESET 窗口清零） */
   const resubscribeStreak = reactive(new Map<string, number>())
+  /** sessionId → 冷却被挡日志限频时间戳（风暴中每帧 violation 都会走到这里，2s 一条避免刷屏） */
+  const lastCooldownLogAt = reactive(new Map<string, number>())
 
   /** 预加载已就绪的会话（会话页 prepareSession 成功后标记，终端页挂载时消费一次） */
   const preparedSessionId = ref<string | null>(null)
@@ -157,10 +133,6 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
           // 会话已停止后不再接收
           if (buffer.sessionStopped) return
-
-          // 手动暂停（会话卡片操作）：丢弃在途帧（不推进游标、不触发自愈），
-          // 避免取消订阅生效前的残留帧推进游标或悄悄重建订阅
-          if (buffer.manuallyPaused) return
 
           const handler = realtimeHandlers.get(sessionId)
 
@@ -304,17 +276,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
           handler?.onClear?.()
         }
 
-        if (buffer.manuallyPaused) {
-          // 订阅在途期间被手动暂停（恢复途中点暂停的竞态窗口）：
-          // 服务端订阅由 pauseSessionSubscription 的 wsLeaveSession 撤销，
-          // 前端保持暂停不置已订阅——下次显式恢复时重新订阅
-          buffer.pending = []
-          buffer.pendingBytes = 0
-        } else {
-          // 订阅建立 = 暂停解除（任何路径成功订阅后不再处于手动暂停，
-          // 保证 ws_output 入口的 manuallyPaused 丢弃不会误伤新订阅流）
-          buffer.subscribed = true
-        }
+        // 订阅建立：标记已订阅（后续 ws_output 帧按序写入）
+        buffer.subscribed = true
         // incremental：缓冲帧跳过快照已覆盖部分后排空写入（服务端历史快照
         // 与订阅往返期间先到的帧字节重叠——不跳过则重复写入触发连续性自愈
         // 闪屏）；reset：缓冲帧已丢弃，回放帧随后按序到达（游标 -1 首帧锚定）
@@ -371,10 +334,6 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     sessionId: string,
     buffer: SessionBuffer,
   ) {
-    // 手动暂停期间不自愈重订阅：暂停语义 = 不订阅（尺寸控制权让给桌面端），
-    // 连续性违反的残留帧已被 ws_output 入口丢弃，不会到达此处；
-    // 此守卫防御未来路径遗漏
-    if (buffer.manuallyPaused) return
     invalidatePrepared(sessionId)
     const now = Date.now()
     const last = lastResubscribeAt.get(sessionId) ?? 0
@@ -383,13 +342,29 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       resubscribeStreak.set(sessionId, 0)
     }
     const streak = resubscribeStreak.get(sessionId) ?? 0
-    resubscribeStreak.set(sessionId, streak + 1)
-    lastResubscribeAt.set(sessionId, now)
     const cooldown = Math.min(
       RESUBSCRIBE_COOLDOWN_MIN_MS * 2 ** Math.min(streak, 4),
       RESUBSCRIBE_COOLDOWN_MAX_MS,
     )
-    if (now - last < cooldown) return
+    // 冷却期内不重订阅，且不刷新 last/streak：被挡住的调用只是拒绝当前帧，
+    // 若也推进退避计数，持续 violating 流会每帧刷新 last → 复位窗口（60s）
+    // 永不满足 → streak 永不清零 → 冷却恒 30s 封顶 → 重订阅永不执行 →
+    // 终端永久黑屏（2026-08-15 实测：cursor 卡死数分钟，每次 violation 一条 ERROR）
+    if (now - last < cooldown) {
+      // 限频日志：风暴中每帧 violation 都会走到这里，2s 一条避免刷屏
+      const lastLog = lastCooldownLogAt.get(sessionId) ?? 0
+      if (now - lastLog > 2000) {
+        lastCooldownLogAt.set(sessionId, now)
+        console.warn(
+          `[terminalBuffer] resubscribe cooled down (streak=${streak}, retry in ${Math.ceil((cooldown - (now - last)) / 1000)}s), frames rejected`
+        )
+      }
+      return
+    }
+
+    // 真正执行重订阅时才记录时间与风暴计数
+    resubscribeStreak.set(sessionId, streak + 1)
+    lastResubscribeAt.set(sessionId, now)
 
     buffer.cursor = -1
     buffer.subscribed = false
@@ -427,7 +402,6 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         subscribed: false,
         subscribing: false,
         sessionStopped: false,
-        manuallyPaused: false,
         pending: [],
         pendingBytes: 0,
         replayRequested: false,
@@ -503,8 +477,26 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.cursor = -1
       buffer.pending = []
       buffer.pendingBytes = 0
-      // 会话停止即暂停理由消失：新会话生命周期默认正常订阅（可重新手动暂停）
-      buffer.manuallyPaused = false
+    }
+  }
+
+  /**
+   * 标记会话恢复运行：复位 sessionStopped（会话停止后重启，旧流已终止、
+   * 偏移空间重建——不复位则 ws_output 监听器永久丢弃新流帧，终端冻结；
+   * 游标一并失效，重启后的订阅走服务端 reset 全量重播校准）
+   *
+   * 不主动复位 subscribing：若旧订阅在途（断连重连窗口），此处复位会让
+   * doSubscribe 的 finally 误清新订阅的防重标志，存在双订阅窗口；保持现状
+   * 由旧订阅自然结束后新订阅重试，极端情况下靠连续性 violation 自愈兜底
+   */
+  function markSessionRunning(sessionId: string) {
+    const buffer = buffers.get(sessionId)
+    if (buffer) {
+      buffer.sessionStopped = false
+      buffer.subscribed = false
+      buffer.cursor = -1
+      buffer.pending = []
+      buffer.pendingBytes = 0
     }
   }
 
@@ -603,8 +595,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     markUnsubscribed,
     markAllUnsubscribed,
     markSessionStopped,
-    pauseSubscription,
-    resumeSubscription,
+    markSessionRunning,
     forceReplay,
     clearBuffer,
     clearAllBuffers,

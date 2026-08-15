@@ -36,8 +36,8 @@
  * 键盘弹出时通过 transform 整体上移，GPU 合成不触发布局重排
  * Header 不在此区域内，保持固定位置
  * 父容器 .movable-clip 裁剪超出部分，防止突破安全区
- * 不使用 transition/will-change：transform 逐帧跟随 visualViewport，
- * 与系统键盘动画同步，避免动画滞后露出底部空隙（白屏闪烁） */
+ * transition 由 JS 在键盘偏移稳定后临时启用（250ms，与快捷键面板动画一致），
+ * 动画结束立即移除，避免 movable-area 长期保持合成层 */
 .movable-area {
   display: flex;
   flex-direction: column;
@@ -45,7 +45,7 @@
   overflow: hidden;
   /* height: 100% 确保裁剪容器能正确裁剪 transform 后的内容 */
   height: 100%;
-  /* transition 由 JS 在键盘偏移变化时临时添加 */
+  /* transition 由 JS 在键盘偏移稳定后临时添加（动画结束移除） */
 }
 
 /* Loading Overlay */

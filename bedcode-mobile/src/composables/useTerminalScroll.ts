@@ -78,8 +78,6 @@ export function useTerminalScroll(
   // rAF 节流滚动
   let pendingScrollRaf = 0
   let pendingScrollLine = -1
-  // 滚动后强制重绘可见区：清除 WebGL 渲染器滚动遗留的重影纹理行（每帧至多一次）
-  let pendingScrollRefreshRaf = 0
   // 渲染帧同步：确保 scrollToLine 只在 xterm 渲染完成后执行
   // WebGL 渲染器双缓冲在渲染未完成时切换 viewport 会导致新旧帧同时可见
   let renderSyncRaf = 0
@@ -178,7 +176,6 @@ export function useTerminalScroll(
       // 执行时复查：触摸已接管则放弃自动滚动
       if (terminalRef.value && target >= 0 && !isUserScrolling.value) {
         terminalRef.value.scrollToLine(target)
-        scheduleScrollRefresh()
       }
     })
   }
@@ -186,6 +183,9 @@ export function useTerminalScroll(
   /** 用户点击"回到底部"：强制滚到底并恢复自动跟随（不受触摸状态影响） */
   function scrollToBottomManual() {
     if (!terminalRef.value) return
+
+    // 打断进行中的惯性滑行（否则本次滚动会被平滑动画接管）
+    cancelGlide()
 
     // 显式复位底部状态与滚动锁：已在底部时 scrollToLine 不触发 onScroll，
     // 推导路径不会执行，需手动复位
@@ -202,7 +202,6 @@ export function useTerminalScroll(
     pendingScrollLine = -1
     currentLine.value = targetLine
     terminalRef.value.scrollToLine(targetLine)
-    scheduleScrollRefresh()
   }
 
   function syncViewportToLine(line: number) {
@@ -273,17 +272,6 @@ export function useTerminalScroll(
     }, 1200)
   }
 
-  /** 滚动后强制重绘可见区：清除 WebGL 渲染器滚动遗留的重影纹理行（每帧至多一次） */
-  function scheduleScrollRefresh() {
-    if (!terminalRef.value || pendingScrollRefreshRaf) return
-    pendingScrollRefreshRaf = requestAnimationFrame(() => {
-      pendingScrollRefreshRaf = 0
-      if (terminalRef.value) {
-        terminalRef.value.refresh(0, terminalRef.value.rows - 1)
-      }
-    })
-  }
-
   // ==================== Touch Handlers ====================
 
   function onTouchStart(e: TouchEvent) {
@@ -315,6 +303,8 @@ export function useTerminalScroll(
       cancelAnimationFrame(touchState.inertiaRafId)
       touchState.inertiaRafId = 0
     }
+    // 手指按下立即打断进行中的惯性滑行（恢复即时滚动）
+    cancelGlide()
 
     const touch = e.touches[0]
     touchState.startY = touch.clientY
@@ -408,6 +398,20 @@ export function useTerminalScroll(
 
     // 手指抬起解除滚动锁：是否停在底部由 onScroll 按位置推导
     touchActive.value = false
+
+    // 先应用最后一次拖动的挂起滚动位置（syncViewportToLine 的 rAF 可能尚未
+    // 触发），并取消挂起帧——否则惯性开始后旧帧会把滑行目标拉回拖动终点
+    if (pendingScrollRaf) {
+      cancelAnimationFrame(pendingScrollRaf)
+      pendingScrollRaf = 0
+    }
+    if (pendingScrollLine >= 0) {
+      const lastLine = pendingScrollLine
+      pendingScrollLine = -1
+      terminalRef.value.scrollToLine(lastLine)
+      currentLine.value = lastLine
+    }
+
     startInertia()
   }
 
@@ -426,49 +430,122 @@ export function useTerminalScroll(
 
   // ==================== Inertia Scroll ====================
 
+  // 惯性滑行参数（非 TUI 模式）：甩动后单次 xterm 平滑滚动（smoothScrollDuration）
+  // 代替逐帧步进，消除低速度尾段的「走走停停」顿感
+  const INERTIA_GLIDE_MIN_MS = 160
+  const INERTIA_GLIDE_MAX_MS = 320
+  const INERTIA_GLIDE_MS_PER_LINE = 8
+  /** 等效摩擦投影：总行程 = v·16ms/(1−0.95)，与旧逐帧衰减的总距离一致 */
+  const INERTIA_PROJECT_FACTOR = 16 / (1 - 0.95)
+
+  let glideTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** 终止进行中的惯性滑行：恢复即时滚动（xterm 动画由 duration 置 0 后的
+   * scrollToLine 走 setScrollPositionNow 取消） */
+  function cancelGlide() {
+    if (glideTimer) {
+      clearTimeout(glideTimer)
+      glideTimer = null
+    }
+    const term = terminalRef.value
+    if (!term || !('options' in term)) return
+    if ((term.options.smoothScrollDuration ?? 0) > 0) {
+      term.options.smoothScrollDuration = 0
+      term.scrollToLine(term.buffer.active.viewportY)
+    }
+  }
+
   function startInertia() {
-    if (Math.abs(touchState.velocity) < 0.02) {
+    const term = terminalRef.value
+    if (!term || Math.abs(touchState.velocity) < 0.02) {
       // 是否停在底部由 onScroll 按位置推导，无需手动判定
       disableGpuHint()
       return
     }
 
-    const friction = 0.95
+    // TUI 模式：保持逐帧滚轮事件惯性（应用侧每事件渲染一行，天然平滑）
+    if (tuiCompat?.isTuiMode.value) {
+      const friction = 0.95
 
-    function step() {
-      if (!terminalRef.value || cellHeight.value <= 0) {
-        touchState.inertiaRafId = 0
-        disableGpuHint()
-        return
-      }
+      function step() {
+        if (!terminalRef.value || cellHeight.value <= 0) {
+          touchState.inertiaRafId = 0
+          disableGpuHint()
+          return
+        }
 
-      touchState.velocity *= friction
-      if (Math.abs(touchState.velocity) < 0.005) {
-        touchState.inertiaRafId = 0
-        touchState.fractionalLine = 0
-        // 惯性结束：是否停在底部由 onScroll 按位置推导
-        disableGpuHint()
-        return
-      }
+        touchState.velocity *= friction
+        if (Math.abs(touchState.velocity) < 0.005) {
+          touchState.inertiaRafId = 0
+          touchState.fractionalLine = 0
+          // 惯性结束：是否停在底部由 onScroll 按位置推导
+          disableGpuHint()
+          return
+        }
 
-      const pixelsPerFrame = touchState.velocity * 16
-      const rawLines = -pixelsPerFrame / cellHeight.value
-      const totalLines = rawLines + touchState.fractionalLine
-      const linesPerFrame = Math.trunc(totalLines)
+        const pixelsPerFrame = touchState.velocity * 16
+        const rawLines = -pixelsPerFrame / cellHeight.value
+        const totalLines = rawLines + touchState.fractionalLine
+        const linesPerFrame = Math.trunc(totalLines)
 
-      if (linesPerFrame !== 0) {
-        touchState.fractionalLine = totalLines - linesPerFrame
-        // TUI 模式下惯性转为滚轮事件（坐标用最后触摸位置），
-        // 否则滚动 xterm 缓冲区（syncViewportToLine 内部 rAF 节流每帧至多一次）
-        commitGesture(linesPerFrame, touchState.lastX, touchState.lastY)
-      } else {
-        touchState.fractionalLine = totalLines
+        if (linesPerFrame !== 0) {
+          touchState.fractionalLine = totalLines - linesPerFrame
+          // TUI 模式下惯性转为滚轮事件（坐标用最后触摸位置），
+          // 否则滚动 xterm 缓冲区（syncViewportToLine 内部 rAF 节流每帧至多一次）
+          commitGesture(linesPerFrame, touchState.lastX, touchState.lastY)
+        } else {
+          touchState.fractionalLine = totalLines
+        }
+
+        touchState.inertiaRafId = requestAnimationFrame(step)
       }
 
       touchState.inertiaRafId = requestAnimationFrame(step)
+      return
     }
 
-    touchState.inertiaRafId = requestAnimationFrame(step)
+    // 非 TUI：投影惯性行程 → 单次平滑滑行到目标行（不再逐帧步进）
+    const projectedPx = touchState.velocity * INERTIA_PROJECT_FACTOR
+    const lines = -projectedPx / cellHeight.value
+    if (Math.abs(lines) < 0.5) {
+      disableGpuHint()
+      return
+    }
+
+    const bufferLength = term.buffer.active.length
+    const maxLine = Math.max(0, bufferLength - term.rows)
+    const targetLine = Math.max(0, Math.min(Math.round(currentLine.value + lines), maxLine))
+    if (targetLine === currentLine.value) {
+      disableGpuHint()
+      return
+    }
+
+    // 滑行期间暂停输出自动跟随；结束位置由 onScroll 按位置推导恢复
+    isUserScrolling.value = true
+    touchState.fractionalLine = 0
+    // 取消挂起的拖动滚动帧，避免滑行开始后被旧帧拉回拖动终点
+    if (pendingScrollRaf) {
+      cancelAnimationFrame(pendingScrollRaf)
+      pendingScrollRaf = 0
+    }
+    pendingScrollLine = -1
+
+    // 行程越远滑行越久（8ms/行），限制在 160~320ms 内
+    const duration = Math.max(INERTIA_GLIDE_MIN_MS, Math.min(
+      INERTIA_GLIDE_MAX_MS,
+      Math.round(Math.abs(lines) * INERTIA_GLIDE_MS_PER_LINE),
+    ))
+    term.options.smoothScrollDuration = duration
+    term.scrollToLine(targetLine)
+    showScrollbar()
+
+    // 滑行结束后恢复即时滚动（触摸接管/输出跟随不受平滑动画干扰）
+    if (glideTimer) clearTimeout(glideTimer)
+    glideTimer = setTimeout(() => {
+      glideTimer = null
+      if (!terminalRef.value) return
+      terminalRef.value.options.smoothScrollDuration = 0
+    }, duration + 60)
   }
 
   // ==================== Selection Mode ====================
@@ -655,7 +732,8 @@ export function useTerminalScroll(
       const buffer = terminalRef.value!.buffer.active
       const viewportBottom = buffer.viewportY + terminalRef.value!.rows
       isUserScrolling.value = viewportBottom < buffer.length - 1
-      scheduleScrollRefresh()
+      // 不做额外全量重绘：xterm scrollLines 已自带 refresh(0, rows-1)，
+      // 再加一次 DOM 渲染器下的全量重绘是纯开销（每帧双倍 canvas 绘制，卡顿源）
     })
 
     terminalRef.value.onResize(() => {
@@ -672,7 +750,14 @@ export function useTerminalScroll(
   function fitTerminal(fitAddon: FitAddon | null) {
     if (!fitAddon || !terminalRef.value) return
     try {
+      // 余量 fit：官方 FitAddon 填满容器后回缩——列尾 2 格（滚动条之外
+      // 再留两格）、行尾 1 格（与 TerminalView.fitWithMargin 保持一致）
       fitAddon.fit()
+      const cols = Math.max(2, terminalRef.value.cols - 2)
+      const rows = Math.max(1, terminalRef.value.rows - 1)
+      if (cols !== terminalRef.value.cols || rows !== terminalRef.value.rows) {
+        terminalRef.value.resize(cols, rows)
+      }
     } catch (e) {
       console.warn('[useTerminalScroll] fit failed:', e)
     }
@@ -706,6 +791,9 @@ export function useTerminalScroll(
     touchActive.value = false
     scrollbarVisible.value = false
 
+    // 终止惯性滑行并复位即时滚动
+    cancelGlide()
+
     if (xtermTransitionTimer) {
       clearTimeout(xtermTransitionTimer)
       xtermTransitionTimer = null
@@ -722,10 +810,6 @@ export function useTerminalScroll(
     if (pendingScrollRaf) {
       cancelAnimationFrame(pendingScrollRaf)
       pendingScrollRaf = 0
-    }
-    if (pendingScrollRefreshRaf) {
-      cancelAnimationFrame(pendingScrollRefreshRaf)
-      pendingScrollRefreshRaf = 0
     }
     if (renderSyncRaf) {
       cancelAnimationFrame(renderSyncRaf)

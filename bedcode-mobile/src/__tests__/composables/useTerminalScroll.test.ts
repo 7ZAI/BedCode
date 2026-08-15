@@ -150,11 +150,12 @@ describe('useTerminalScroll', () => {
     scroll.scrollToBottomManual()
     // 复位后立即滚到底：scrollToLine 直接调用（不依赖触摸锁、不走 rAF）
     expect(term.scrollToLine).toHaveBeenCalledWith(5) // 10 行 buffer - 5 行视口
-    expect(rafMap.size).toBe(1) // 仅 scheduleScrollRefresh 的重绘调度
+    // 滚动由 xterm 内部自带重绘，无额外 rAF 调度
+    expect(rafMap.size).toBe(0)
 
     // 手动复位后触摸锁解除：scrollToBottom 恢复调度
     scroll.scrollToBottom()
-    expect(rafMap.size).toBe(2)
+    expect(rafMap.size).toBe(1)
   })
 
   it('handleShortcutsPanelToggle：仅在底部时上移内容（isAtBottom 推导）', async () => {

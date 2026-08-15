@@ -4,7 +4,8 @@
  * 验证移动端写入管线行为：
  * - 同帧多次 write 合并为一次 term.write（默认无 DEC 2026 包裹——DOM 渲染器
  *   不需要，且包裹会与 TUI 应用自身 2026 序列嵌套导致闪烁）
- * - wrapSyncOutput: true 时启用 DEC 2026 包裹（WebGL 渲染器模式，防双缓冲重影）
+ * - wrapSyncOutput: true + enableSyncOutputWrap（全局调试开关）时启用 DEC 2026 包裹
+ *   （WebGL 渲染器模式，防双缓冲重影）
  * - 单次 write 超过 64KB 拆块，让 xterm parser 让出主线程
  * - 累积超过 256KB 阈值立即 flush（移动端特殊处理）
  * - rAF 暂停（最小化/后台）时 100ms 兜底定时器清空队列
@@ -54,6 +55,30 @@ describe('wrapSyncOutput', () => {
 })
 
 describe('createWriteCoalescer', () => {
+  it('rAF 合并默认关闭：每个事件直接写入，不经合并管线', () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term)
+
+    const d1 = new Uint8Array([1, 2, 3])
+    const d2 = new Uint8Array([4, 5])
+    coalescer(d1)
+    coalescer(d2)
+
+    // 两次独立 write，且未注册任何 rAF
+    expect(term.write).toHaveBeenCalledTimes(2)
+    expect(term.write.mock.calls[0][0]).toEqual(d1)
+    expect(term.write.mock.calls[1][0]).toEqual(d2)
+    expect(rafCallbacks).toHaveLength(0)
+  })
+
+  it('rAF 合并关闭时 dispose 幂等无害', () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term)
+    coalescer(new Uint8Array([1]))
+    coalescer.dispose()
+    expect(term.write).toHaveBeenCalledTimes(1)
+  })
+
   let rafCallbacks: FrameRequestCallback[]
 
   beforeEach(() => {
@@ -71,7 +96,7 @@ describe('createWriteCoalescer', () => {
 
   it('同帧多次 write 合并为一次 terminal.write（默认无 2026 包裹）', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     const d1 = new Uint8Array([1, 2, 3])
     const d2 = new Uint8Array([4, 5])
@@ -88,9 +113,10 @@ describe('createWriteCoalescer', () => {
     expectRaw(term.write, [1, 2, 3, 4, 5, 6, 7, 8, 9])
   })
 
-  it('wrapSyncOutput: true 时同帧合并写入带 2026 包裹（WebGL 模式）', () => {
+  it('wrapSyncOutput: true + enableSyncOutputWrap 时同帧合并写入带 2026 包裹（WebGL 模式）', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term, { wrapSyncOutput: true })
+    // enableSyncOutputWrap：测试显式开启全局调试开关（产品默认关闭）
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true, wrapSyncOutput: true, enableSyncOutputWrap: true })
 
     coalescer(new Uint8Array([1, 2, 3]))
     rafCallbacks[0](0)
@@ -101,7 +127,7 @@ describe('createWriteCoalescer', () => {
 
   it('flush 后下一帧再次入队可正常 flush', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     coalescer(new Uint8Array([1]))
     rafCallbacks[0](0)
@@ -116,7 +142,7 @@ describe('createWriteCoalescer', () => {
 
   it('单次 write 也走 rAF，不直接调用', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     coalescer(new Uint8Array([42]))
     expect(term.write).not.toHaveBeenCalled()
@@ -128,7 +154,7 @@ describe('createWriteCoalescer', () => {
 
   it('超过 64KB 拆块写入（默认裸分块，无包裹）', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     // 96KB 载荷 → 2 块（零拷贝 subarray 切片）
     const payload = new Uint8Array(MAX_WRITE_CHUNK + 32 * 1024).fill(7)
@@ -141,9 +167,9 @@ describe('createWriteCoalescer', () => {
     expect(calls[1]).toEqual(Array.from(payload.subarray(MAX_WRITE_CHUNK)))
   })
 
-  it('超过 64KB 拆块写入（wrapSyncOutput: true）：BSU + 分块 + ESU', () => {
+  it('超过 64KB 拆块写入（wrapSyncOutput: true + enableSyncOutputWrap）：BSU + 分块 + ESU', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term, { wrapSyncOutput: true })
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true, wrapSyncOutput: true, enableSyncOutputWrap: true })
 
     // 96KB 载荷 → 2 块（零拷贝 subarray 切片）
     const payload = new Uint8Array(MAX_WRITE_CHUNK + 32 * 1024).fill(7)
@@ -160,7 +186,7 @@ describe('createWriteCoalescer', () => {
 
   it('累积超过 256KB 阈值时立即 flush（取消挂起 rAF，仍拆块）', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     coalescer(new Uint8Array(200 * 1024))
     expect(term.write).not.toHaveBeenCalled()
@@ -191,7 +217,7 @@ describe('createWriteCoalescer', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const term = makeMockTerminal()
-      const coalescer = createWriteCoalescer(term)
+      const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
       coalescer(new Uint8Array([1, 2, 3]))
       expect(term.write).not.toHaveBeenCalled()
@@ -209,7 +235,7 @@ describe('createWriteCoalescer', () => {
 
   it('terminal 已 dispose 时 flush 静默丢弃', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     coalescer(new Uint8Array([1, 2]))
     ;(term as unknown as { element: HTMLElement | undefined }).element = undefined
@@ -222,7 +248,7 @@ describe('createWriteCoalescer', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const term = makeMockTerminal()
-      const coalescer = createWriteCoalescer(term)
+      const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
       coalescer(new Uint8Array([1, 2, 3]))
       coalescer.dispose()
@@ -236,7 +262,7 @@ describe('createWriteCoalescer', () => {
 
   it('dispose 之后再次 write 会重新调度 rAF', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
     coalescer(new Uint8Array([1]))
     coalescer.dispose()

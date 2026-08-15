@@ -175,6 +175,26 @@ describe('useTerminalBuffer.subscribeSession', () => {
     expect(wsLeaveSession).toHaveBeenCalledWith('s1')
   })
 
+  it('markSessionRunning：复位 sessionStopped 与游标（会话同 id 重启后新流帧可写入）', async () => {
+    store.ensureBuffer('s1')
+    store.markSubscribed('s1')
+    const buf = store.getBuffer('s1')!
+    buf.sessionStopped = true
+    buf.cursor = 42
+    buf.pending = [{ data_base64: 'x', start_offset: 0, end_offset: 1 }] as never
+    buf.pendingBytes = 1
+    await flushAsync()
+
+    terminalBuffer.markSessionRunning('s1')
+
+    expect(buf.sessionStopped).toBe(false)
+    // 订阅与游标一并失效：重启后偏移空间重建，必须走服务端 reset 全量重播
+    expect(buf.subscribed).toBe(false)
+    expect(buf.cursor).toBe(-1)
+    expect(buf.pending).toHaveLength(0)
+    expect(buf.pendingBytes).toBe(0)
+  })
+
   it('handleSessionRemoved：清理 buffer 与 handler，并通知后端离开', async () => {
     store.ensureBuffer('s1')
     store.markSubscribed('s1')

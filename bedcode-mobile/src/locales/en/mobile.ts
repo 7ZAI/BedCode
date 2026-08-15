@@ -298,13 +298,6 @@ export default {
       taskAsking: 'Waiting for Input',
       taskCompleted: 'Completed',
       taskInterrupted: 'Interrupted',
-      pauseSubscription: 'Pause Subscription',
-      resumeSubscription: 'Resume Subscription',
-      subscriptionPaused: 'Subscription paused, desktop terminal can take over the size',
-      pauseSubscriptionFailed: 'Failed to pause subscription, please retry',
-      subscriptionResumed: 'Subscription resumed',
-      resumeSubscriptionFailed: 'Failed to resume subscription',
-      subscriptionToggleFailed: 'Subscription operation failed',
     },
     sessionConfig: {
       start: 'Start',

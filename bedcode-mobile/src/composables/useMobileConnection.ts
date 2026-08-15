@@ -228,15 +228,14 @@ async function init() {
         console.warn('[MobileConnection] Global listener start failed:', e)
       })
       for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        // 手动暂停（会话卡片）过的会话不自动重建订阅：暂停语义 = 让出尺寸
-        // 控制权给桌面端，断连重连也不悄悄抢回（恢复由会话卡片显式发起）
-        if (!buffer.sessionStopped && !buffer.subscribed && !buffer.manuallyPaused) {
-          // 统一订阅入口：字节游标续传 + 缓冲帧排空 + subscribing 防重
-          // （失败不抛错，内部保持未订阅，等待下次重连/页面重进重试）
-          bufferStore.subscribeSession(sid).catch((e) => {
-            console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
-          })
-        }
+        // 无条件重订阅（仅跳过已停止会话）：服务端订阅随连接关闭清理，
+        // subscribed 只是前端信念且可能残留（意外断开路径已由
+        // markAllUnsubscribed 兜底，但重订阅本身幂等——桌面端按
+        // (client_id, session_id) 替换订阅者，cursor 续传无重复帧）
+        if (buffer.sessionStopped) continue
+        bufferStore.subscribeSession(sid).catch((e) => {
+          console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
+        })
       }
     },
     onAuthSuccess: () => {
@@ -333,6 +332,12 @@ async function init() {
       if (index !== -1) {
         activeSessions.value[index].status = data.new_status
       }
+      // 会话重新运行：复位 buffer 的 sessionStopped（停止→重启同 id 场景，
+      // 不复位则 ws_output 监听器永久丢弃新流帧 → 终端只有旧历史、无实时）
+      if (data.new_status === 'running') {
+        const bufferStore = useTerminalBufferStore()
+        bufferStore.markSessionRunning(data.session_id)
+      }
     },
     onSyncSessionStopped: (data) => {
       console.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
@@ -383,6 +388,12 @@ async function init() {
     connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
     clearConnectionTimeout()
+
+    // 与 ws_disconnected 路径（onDisconnected）对齐：断连即清理订阅信念——
+    // 服务端订阅已随连接关闭清理，若这里不清，重连后的 onPaired 重订阅会
+    // 被 subscribed=true 跳过，桌面端新连接无订阅 → 终端只有历史没有实时
+    const bufferStore = useTerminalBufferStore()
+    bufferStore.markAllUnsubscribed()
 
     // 弹出 Toast 通知（手动断开不会触发此事件）
     const toast = useToast()

@@ -10,8 +10,11 @@
  *   且应用启用了 SGR 鼠标上报（输出流嗅探 DECSET 1006h）才视为 TUI 模式
  * - TUI 模式下触摸拖动/惯性翻译成 SGR 滚轮序列（ESC[<64/65;col;rowM），
  *   经既有 WS 通道（ws_send_input_async）原样写入主机 PTY，由应用自行滚动
- * - 节流 ~40ms 合并 + 发送在途（inflight）时丢弃积压：最新滚动意图优先，
- *   避免给应用灌入延迟拖尾的滚轮事件；与自研 WS client 的背压语义互为防线
+ * - 节流 ~16ms 合并发送；发送在途（inflight）时不丢弃积压——滚动量保留，
+ *   窗口结束后补发（否则快速翻历史时滚动距离严重缩水，体感只能滚一屏多）；
+ *   仅积压超限（一屏两倍）时丢弃最旧部分；每窗口至多发送 2 行（超出部分
+ *   随下一窗口补发），把单帧批量跳跃摊平成逐窗口小步推进，减少顿感；
+ *   与自研 WS client 的背压语义互为防线
  * - 退出备用屏幕（应用退出/会话停止）自动恢复现有 scrollback 滚动
  */
 
@@ -25,11 +28,30 @@ import { wsSendInput } from '@/composables/useMobileCommands'
 const WHEEL_UP_BUTTON = 64
 const WHEEL_DOWN_BUTTON = 65
 
-/** 滚轮事件节流窗口（毫秒）：窗口内多次拖动合并为一个发送 */
-const WHEEL_THROTTLE_MS = 40
+/** 滚轮事件节流窗口（毫秒）：窗口内多次拖动合并为一个发送。
+ * 对齐一帧（16ms）：窗口越短事件流越连续，应用滚动越跟手；
+ * 窗口内累积行数由 MAX_WHEEL_EVENTS_PER_WINDOW 限制 */
+const WHEEL_THROTTLE_MS = 16
 
-/** 单次发送的滚轮事件上限：超出的累积丢弃（持续拖动会继续累积补偿） */
-const MAX_WHEEL_EVENTS_PER_SEND = 10
+/**
+ * 单次序列生成的事件上限：createSgrWheelSequence 的生成安全网
+ * （窗口发送量已由 MAX_WHEEL_EVENTS_PER_WINDOW 控制，此上限仅防极端值）
+ */
+const MAX_WHEEL_EVENTS_PER_SEND = 60
+
+/**
+ * 单次发送窗口的滚轮事件上限：窗口内累积超过该值时只发一部分，剩余积压
+ * 随下一窗口补发。把一次手势的批量跳跃（单帧多行）摊平成每窗口 1~2 行，
+ * 应用侧逐窗口重绘，快速滑动时不再整段跳变（减少顿感）；
+ * 每窗口 2 行 ≈ 125 行/秒，足够覆盖拖动与甩动速度
+ */
+const MAX_WHEEL_EVENTS_PER_WINDOW = 2
+
+/**
+ * 积压丢弃上限（行）：发送在途期间新累积的滚动量超过该上限时，
+ * 只保留最近部分（最新滚动意图优先），防止网络持续拥塞时无限堆积
+ */
+const MAX_PENDING_DELTA = 120
 
 /** 输出流嗅探尾部保留长度：`ESC[?1006l` 最长 9 字符，留足跨 chunk 切分余量 */
 const TAIL_KEEP_CHARS = 16
@@ -148,25 +170,24 @@ export function useTuiCompat(sessionId: string) {
     updateMode()
   }
 
-  /**
-   * 发送滚轮事件（TUI 模式）：累积 delta 并节流合并，
-   * 窗口到期生成 SGR 序列经 WS 送达 PTY，fire-and-forget
-   */
-  function sendWheel(deltaLines: number, col: number, row: number) {
-    if (!isTuiMode.value || deltaLines === 0) return
-
-    pendingDelta += deltaLines
-    pendingCol = col
-    pendingRow = row
-
+  /** 调度发送窗口：发送在途时不丢积压，由下一个窗口补发 */
+  function scheduleSend() {
     if (throttleTimer) return
     throttleTimer = setTimeout(() => {
       throttleTimer = null
       const delta = pendingDelta
-      pendingDelta = 0
-      if (delta === 0 || inflight) return
-
-      const seq = createSgrWheelSequence(delta, pendingCol, pendingRow)
+      if (delta === 0) return
+      if (inflight) {
+        // 上次发送仍在途：保留积压不清零（丢弃会丢失大量滚动量，
+        // 体感「只能滚一屏多一点」），窗口到期后由下一次调度补发
+        scheduleSend()
+        return
+      }
+      // 每窗口至多发送 MAX_WHEEL_EVENTS_PER_WINDOW 行：超出部分留在积压
+      // 随下一窗口补发（不丢弃），摊平单帧批量跳跃
+      const capped = Math.max(-MAX_WHEEL_EVENTS_PER_WINDOW, Math.min(delta, MAX_WHEEL_EVENTS_PER_WINDOW))
+      pendingDelta -= capped
+      const seq = createSgrWheelSequence(capped, pendingCol, pendingRow)
       if (!seq) return
 
       inflight = true
@@ -176,8 +197,25 @@ export function useTuiCompat(sessionId: string) {
         })
         .finally(() => {
           inflight = false
+          // 在途期间可能已累积新积压：立即调度补发（不等下一次手势）
+          if (pendingDelta !== 0) scheduleSend()
         })
     }, WHEEL_THROTTLE_MS)
+  }
+
+  /**
+   * 发送滚轮事件（TUI 模式）：累积 delta 并节流合并，
+   * 窗口到期生成 SGR 序列经 WS 送达 PTY，fire-and-forget
+   */
+  function sendWheel(deltaLines: number, col: number, row: number) {
+    if (!isTuiMode.value || deltaLines === 0) return
+
+    // 积压上限：超过上限丢弃最旧部分（保留最新滚动意图），防长期拥塞无限堆积
+    pendingDelta = Math.max(-MAX_PENDING_DELTA, Math.min(pendingDelta + deltaLines, MAX_PENDING_DELTA))
+    pendingCol = col
+    pendingRow = row
+
+    scheduleSend()
   }
 
   function dispose() {
