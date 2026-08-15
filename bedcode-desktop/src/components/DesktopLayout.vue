@@ -17,9 +17,13 @@
         <main class="flex-1 overflow-hidden bg-page">
           <router-view v-slot="{ Component }">
             <Transition name="page" mode="out-in">
-              <!-- :key 强制路由参数变化（如插件侧边栏 A→B）时重建组件实例，
-                   避免 vue-router 复用实例导致 provide('pluginContext') 停留在旧插件 context -->
-              <component :is="Component" :key="$route.fullPath" />
+              <!-- 路由页面 KeepAlive：切换路由不销毁插件视图（AI 对话等插件页面保活——
+                   切走时流式监听继续、切回保留离开时画面）；:key=fullPath 配合缓存：
+                   同一路径命中同一实例，路由参数变化（插件 A→B）仍重建。max 限制
+                   缓存总量（LRU 淘汰，防长时间使用后内存无限增长） -->
+              <KeepAlive :max="8">
+                <component :is="Component" :key="$route.fullPath" />
+              </KeepAlive>
             </Transition>
           </router-view>
         </main>
