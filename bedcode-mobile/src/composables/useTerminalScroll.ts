@@ -81,6 +81,11 @@ export function useTerminalScroll(
   // 渲染帧同步：确保 scrollToLine 只在 xterm 渲染完成后执行
   // WebGL 渲染器双缓冲在渲染未完成时切换 viewport 会导致新旧帧同时可见
   let renderSyncRaf = 0
+  // 输出自动跟随标志：scrollToBottom 的程序性追赶滚动（xterm 同步 fire
+  // onScroll）在 onScroll 推导中跳过——回放流式写入时滚动常追不上最新行，
+  // 若按位置推导会把「程序性滚动未追到位」误判为「用户上滚」，导致
+  // isUserScrolling 被置 true 后自动跟随永久锁死（进入终端停在历史中间）
+  let autoFollowScroll = false
 
   // ==================== Computed ====================
 
@@ -175,6 +180,7 @@ export function useTerminalScroll(
       pendingScrollLine = -1
       // 执行时复查：触摸已接管则放弃自动滚动
       if (terminalRef.value && target >= 0 && !isUserScrolling.value) {
+        autoFollowScroll = true
         terminalRef.value.scrollToLine(target)
       }
     })
@@ -201,6 +207,7 @@ export function useTerminalScroll(
     }
     pendingScrollLine = -1
     currentLine.value = targetLine
+    autoFollowScroll = false
     terminalRef.value.scrollToLine(targetLine)
   }
 
@@ -318,6 +325,9 @@ export function useTerminalScroll(
     // 触摸即锁定滚动：暂停输出自动跟随，避免手势被新输出拉回底部；
     // 底部判定仍由 onScroll 按位置推导，手指抬起后自动恢复
     touchActive.value = true
+    // 用户接管滚动：清除可能残留的自动跟随标志（scrollToLine 未触发
+    // onScroll 的边界场景），保证后续推导从干净状态开始
+    autoFollowScroll = false
 
     enableGpuHint()
 
@@ -727,6 +737,12 @@ export function useTerminalScroll(
 
     terminalRef.value.onScroll((viewportY: number) => {
       currentLine.value = viewportY
+      // 输出自动跟随的追赶滚动：本次滚动由 scrollToBottom 发起（非用户
+      // 主动），跳过位置推导，避免回放/输出追赶被误判为离开底部
+      if (autoFollowScroll) {
+        autoFollowScroll = false
+        return
+      }
       // 对齐桌面端：由滚动位置推导是否处于底部（位置即状态），
       // 在底部时输出自动跟随，向上滚动后停止跟随
       const buffer = terminalRef.value!.buffer.active
@@ -750,14 +766,9 @@ export function useTerminalScroll(
   function fitTerminal(fitAddon: FitAddon | null) {
     if (!fitAddon || !terminalRef.value) return
     try {
-      // 余量 fit：官方 FitAddon 填满容器后回缩——列尾 2 格（滚动条之外
-      // 再留两格）、行尾 1 格（与 TerminalView.fitWithMargin 保持一致）
+      // 原始尺寸 fit：采用 FitAddon 计算的尺寸，宽度/高度不做增减
+      // （与 TerminalView.fitWithMargin 保持一致）
       fitAddon.fit()
-      const cols = Math.max(2, terminalRef.value.cols - 2)
-      const rows = Math.max(1, terminalRef.value.rows - 1)
-      if (cols !== terminalRef.value.cols || rows !== terminalRef.value.rows) {
-        terminalRef.value.resize(cols, rows)
-      }
     } catch (e) {
       console.warn('[useTerminalScroll] fit failed:', e)
     }
@@ -816,6 +827,7 @@ export function useTerminalScroll(
       renderSyncRaf = 0
     }
     pendingScrollLine = -1
+    autoFollowScroll = false
 
     if (scrollContainerRef.value) {
       scrollContainerRef.value.removeEventListener('touchstart', onTouchStart, { passive: true, capture: true } as EventListenerOptions)

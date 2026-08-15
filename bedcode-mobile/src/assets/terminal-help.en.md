@@ -76,11 +76,11 @@ Typing `/` in the input box pops up a **local completion list** (reuses preset d
 
 ## @ File References
 
-In the file sidebar (header "files" button), a single tap on a file fills the input box with `@path`:
+In the file sidebar (header "files" button):
 
-- The sidebar closes automatically and the input box gains focus; a space is inserted when there is existing content
+- **Tap a file**: open the file to view its content
+- **Long-press a file**: copy the file path and auto-fill it into the input box as `@path` (the sidebar closes and the input box gains focus; a space is inserted when there is existing content)
 - Agent CLIs (Claude Code etc.) resolve `@path` file references
-- **Long-press** a file to open the action sheet: view file / copy path (viewing stays available in reference mode)
 
 ## Interrupt & Cleanup
 

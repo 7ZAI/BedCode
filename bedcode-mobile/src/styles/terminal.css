@@ -178,6 +178,11 @@
 }
 
 /* xterm 核心样式 */
+/* 调试验证：隐藏 xterm 6 自定义 slider 滚动条，验证右侧遮挡是否与其相关 */
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
 .xterm {
   touch-action: none;
   user-select: none;

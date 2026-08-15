@@ -158,6 +158,44 @@ describe('useTerminalScroll', () => {
     expect(rafMap.size).toBe(1)
   })
 
+  it('输出自动跟随的追赶滚动不污染 isUserScrolling（回放不误判用户上滚）', async () => {
+    const { state, onScrollCb, scroll } = await setup(0, 10, 5)
+
+    // 回放流式写入触发自动跟随：scrollToBottom 调度 rAF → scrollToLine
+    //（真实 xterm 同步 fire onScroll，mock 下手动模拟该次滚动事件）
+    scroll.scrollToBottom()
+    flushFrames()
+    state.viewportY = 0
+    onScrollCb.cb!(0) // 追赶滚动触发的 onScroll：应跳过推导
+    expect(scroll.isUserScrolling.value).toBe(false)
+
+    // 追赶完成后用户真实上滚（非自动跟随）：位置推导正常生效
+    state.viewportY = 2
+    onScrollCb.cb!(2)
+    expect(scroll.isUserScrolling.value).toBe(true)
+
+    // 上滚后新输出到达：scrollToBottom 被守卫拦截（不把用户拉回底部）
+    scroll.scrollToBottom()
+    expect(rafMap.size).toBe(0)
+  })
+
+  it('触摸接管后清除自动跟随标志（后续推导从干净状态开始）', async () => {
+    const { state, onScrollCb, scroll, container } = await setup(0, 10, 5)
+
+    // 自动跟随滚动执行（scrollToLine 未触发 onScroll 的边界：标志残留）
+    scroll.scrollToBottom()
+    flushFrames()
+
+    // 手指按下：清除残留标志
+    dispatchTouch(container, 'touchstart')
+
+    // 抬起后触发的推导不应被残留标志跳过
+    state.viewportY = 2
+    dispatchTouch(container, 'touchend')
+    onScrollCb.cb!(2)
+    expect(scroll.isUserScrolling.value).toBe(true)
+  })
+
   it('handleShortcutsPanelToggle：仅在底部时上移内容（isAtBottom 推导）', async () => {
     const { state, onScrollCb, scroll } = await setup(5, 10, 5) // 初始在底部
 

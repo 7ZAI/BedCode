@@ -745,6 +745,10 @@ onUnmounted(async () => {
     clearTimeout(keyboardRefreshTimer)
     keyboardRefreshTimer = null
   }
+  if (panelRepaintTimer) {
+    clearTimeout(panelRepaintTimer)
+    panelRepaintTimer = null
+  }
   // 移除 visualViewport 事件监听
   if (window.visualViewport) {
     window.visualViewport.removeEventListener('resize', handleVisualViewportChange)
@@ -815,6 +819,7 @@ const {
   scrollbarVisible,
   scrollbarThumbStyle,
   xtermContainerStyle,
+  shortcutsPanelHeight,
   isUserScrolling,
   cellHeight,
   scrollToBottom,
@@ -861,7 +866,30 @@ watch(keyboardSettledOffset, () => {
     if (terminalRef.value && terminalRef.value.rows > 0) {
       terminalRef.value.refresh(0, terminalRef.value.rows - 1)
     }
+    // 键盘收起（偏移回落为 0）：内容回落后强制滚动到最新行——键盘弹出
+    // 期间用户可能已向上查看历史或视口停在中间，收起后回到底部跟随输出
+    if (keyboardSettledOffset.value === 0) {
+      scrollToBottomManual()
+    }
   }, KEYBOARD_TRANSITION_MS + 50)
+})
+
+// 快捷键面板收起后强制重绘：xterm 容器经 translateY(-h) 上移后还原时，真机
+// WebView 合成层会残留旧帧分块（错位/露出主题背景色，实测表现为终端区出现
+// 米白横带与右侧竖带、底部“间隔”）。过渡动画（250ms）结束后强制 xterm 重绘
+// 全部行 + 合成器重合成，清除残留（与键盘避让的 keyboardRefreshTimer 同模式）
+let panelRepaintTimer: ReturnType<typeof setTimeout> | null = null
+watch(shortcutsPanelHeight, (height) => {
+  // 仅面板收起（还原 transform）时需要清理；展开时上移由合成器处理
+  if (height > 0) return
+  if (panelRepaintTimer) clearTimeout(panelRepaintTimer)
+  panelRepaintTimer = setTimeout(() => {
+    panelRepaintTimer = null
+    if (terminalRef.value && terminalRef.value.rows > 0) {
+      terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+    }
+    forceCompositorRepaint()
+  }, 320)
 })
 
 watch(() => settingsStore.settings.ui.theme, (uiTheme) => {
@@ -937,25 +965,25 @@ async function initWebGL(term: Terminal): Promise<boolean> {
     return false
   }
 }
-// 终端字体栈（对齐桌面端，VS Code 终端默认字体栈 + 跨平台回退）——
-// 常量提取：创建前预测量（measureCellSize）与 Terminal 构造必须使用同一字体串
-const FONT_FAMILY = 'Cascadia Mono, Consolas, Monaco, Courier New, monospace'
+// 终端字体栈：monospace 优先（Android 无 Cascadia/Consolas/Monaco，直接回退
+// 系统等宽，避免「测量时字体缓存未就绪 → fallback 不同 → 网格与渲染宽度
+// 不一致」导致行尾字符溢出/裁半）；Windows 桌面调试时回退链覆盖等宽字体
+const FONT_FAMILY = 'monospace, "Cascadia Mono", Consolas, Monaco, "Courier New", "Roboto Mono", "Droid Sans Mono"'
 
-/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（含滚动条 14px + 列尾两格、
- * 行尾一格余量，与 fitWithMargin 保持一致） */
+/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，
+ * 仅扣滚动条 14px，宽度/高度不增减） */
 function computeInitialSize(): { cols: number; rows: number } {
   const container = xtermContainer.value
   if (!container) return { cols: 80, rows: 24 }
-  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, 2, 1)
+  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, 0, 0)
   // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
   if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
   return grid
 }
 
 /**
- * 余量感知 fit（替代直接 FitAddon.fit）：官方 API 填满容器后按余量回缩——
- * 列尾留 2 格（滚动条 14px 之外再留两格，行尾字符不贴边）、行尾留 1 格
- * （内容底部不溢出被输入栏遮挡；与 computeGridSize 初始尺寸一致）。
+ * FitAddon 尺寸适配：直接采用官方 fit 计算的原始尺寸，宽度/高度不做任何
+ * 增减（不额外扣列余量、不补行数）。
  * FitAddon 在字体测量未就绪时 proposeDimensions 返回 null → 无操作（幂等），
  * 由就绪轮询重试。
  * @returns 是否实际发生了尺寸变化
@@ -963,14 +991,14 @@ function computeInitialSize(): { cols: number; rows: number } {
 function fitWithMargin(): boolean {
   const term = terminalRef.value
   if (!term || !fitAddonRef.value) return false
+  const beforeCols = term.cols
+  const beforeRows = term.rows
   fitAddonRef.value.fit()
-  const cols = Math.max(2, term.cols - 2)
-  const rows = Math.max(1, term.rows - 1)
-  if (cols !== term.cols || rows !== term.rows) {
-    term.resize(cols, rows)
-    return true
+  if (term.cols !== beforeCols || term.rows !== beforeRows) {
+    // 调试验证：记录 fit 导致的尺寸变化轨迹（排查行尾裁切/右侧遮挡）
+    console.debug(`[TerminalView] fit: ${beforeCols}x${beforeRows} -> ${term.cols}x${term.rows}`)
   }
-  return false
+  return term.cols !== beforeCols || term.rows !== beforeRows
 }
 
 async function initTerminal() {
@@ -1088,6 +1116,8 @@ async function initTerminal() {
   // 尺寸的请求乱序送达服务端——fit 前的 80x24 默认值若后到会覆盖实际
   // 尺寸，PTY 停在 80x24 → opencode 按 24 行渲染，显示区下半黑（半屏黑）
   term.onResize(({ cols, rows }) => {
+    // 调试验证：记录 xterm 每次尺寸变化（fit/容器变化/字号变化）
+    console.debug(`[TerminalView] onResize: ${cols}x${rows}`)
     queueResize(cols, rows)
   })
 }
@@ -1116,6 +1146,8 @@ async function queueResize(cols: number, rows: number) {
       const next = pendingResize
       pendingResize = null
       if (!isConnected.value) break
+      // 调试验证：记录实际发送给主机 PTY 的尺寸
+      console.debug(`[TerminalView] send resize to PTY: ${next.cols}x${next.rows}`)
       const result = await httpResizeSession(sid, next.cols, next.rows)
       if (result.code !== 0) {
         console.warn('[TerminalView] Queue resize failed:', result.message)
