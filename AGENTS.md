@@ -227,7 +227,7 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 
 ## Git Hooks：分支级文档跟踪
 
-文档与配置文件只在除 **uat / master** 外的分支入库（dev、feature/* 等全部正常跟踪）；uat / master 仅从 index 剔除、不提交删除，工作区始终保留副本。实现在 `scripts/doc-tracking.sh` + `scripts/hooks/`，通过 `core.hooksPath` 生效。
+开发过程文档与配置文件（docs/、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch 等，见下）只在除 **uat / master** 外的分支入库（dev、feature/* 等全部正常跟踪）；uat / master 仅从 index 剔除、不提交删除，工作区始终保留副本。README 与 AGENTS.md 不受此限（全分支跟踪）。实现在 `scripts/doc-tracking.sh` + `scripts/hooks/`，通过 `core.hooksPath` 生效。
 
 ### 启用（clone 后每人执行一次）
 
@@ -237,9 +237,9 @@ git config core.hooksPath scripts/hooks
 
 ### 受保护路径
 
-`docs/`、`AGENTS.md`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置（`agents/`、`extensions/`、`prompts/`、`settings.json`）、`.scratch/`（issue 文档）。定义在 `scripts/doc-tracking.sh` 的 `PROTECTED_PATHS`，与 `.gitignore` 对应段落保持同步。
+`docs/`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置（`agents/`、`extensions/`、`prompts/`、`settings.json`）、`.scratch/`（issue 文档）。定义在 `scripts/doc-tracking.sh` 的 `PROTECTED_PATHS`，与 `.gitignore` 对应段落保持同步。
 
-**`README.md` / `README_en.md` 不在受保护路径中，所有分支（含 uat/master）均正常跟踪。**
+**`README.md` / `README_en.md` 与 `AGENTS.md` 不在受保护路径中，所有分支（含 uat/master）均正常跟踪。**
 
 ### 行为规则
 
