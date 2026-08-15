@@ -129,19 +129,25 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /// 启动目录查看 Intent：resource/folder 优先，ActivityNotFoundException 时
-    /// 回退 vnd.android.document/directory（部分文件管理器只认后者）
+    /// 启动目录查看 Intent：vnd.android.document/directory 优先，
+    /// ActivityNotFoundException 时回退 resource/folder。
+    ///
+    /// 顺序依据（2026-08-15 实测）：不少设备（含 MIUI）没有应用注册
+    /// resource/folder（或仅网盘类 app 注册，选择器体验差），而
+    /// Google Files（documentsui）普遍注册 vnd.android.document/directory
+    /// 且 isDefault=true —— 先发它可直接打开文件管理器、不弹选择器。
+    /// resource/folder 作为回退（部分设备只有文件管理器注册它）。
     private fun startFolderView(uri: Uri) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
         try {
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "resource/folder")
+                setDataAndType(uri, "vnd.android.document/directory")
                 addFlags(flags)
             }
             activity.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             val fallback = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "vnd.android.document/directory")
+                setDataAndType(uri, "resource/folder")
                 addFlags(flags)
             }
             activity.startActivity(fallback)

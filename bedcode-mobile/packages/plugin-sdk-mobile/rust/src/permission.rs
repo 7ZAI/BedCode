@@ -69,7 +69,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "fileService.pickDirectory",
         "fileService.requestAllFilesAccess",
     ]),
-    (PERMISSION_SYSTEM_OPEN, &["system.openFile"]),
+    (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir"]),
     (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
 ];
 
