@@ -46,6 +46,14 @@ pub const SCHEDULER_INTERVAL_SECS: u64 = 1;
 /// 调度空洞（轮询间隔缩短后宽限仍按原语义保留）
 const MISSED_GRACE_SECONDS: i64 = 120;
 
+/// 定时任务会话首轮下发宽限（秒）：TUI 型 agent（opencode）不输入 prompt 不创建
+/// 会话（TUI 启动后停在输入界面，首个 prompt 提交才触发 session.created），
+/// SessionStart idle 推送永不产生，队列会卡在 pending。入队超过该时长仍无任何
+/// waiting/executing 项时由 scheduler-tick 兜底主动调度（handle_scheduler_tick
+/// 步骤 3）。取值覆盖 opencode TUI 从 PTY 启动到输入框就绪的实测耗时（约 9s），
+/// 留足余量；claude code / pi 等 agent 的 idle 秒级到达，正常路径不受影响
+const FIRST_DISPATCH_GRACE_SECS: i64 = 15;
+
 // ==================== CRUD ====================
 
 /// 创建定时任务
@@ -312,6 +320,97 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) {
                 broadcast_scheduled_changed(host, &job_id, "failed", "failed");
             }
         }
+    }
+
+    // 3. 定时任务会话首轮下发兜底：opencode 等 TUI 型 agent 不输入 prompt 不创建
+    //    会话（opencode TUI 启动后停在输入界面，会话由首个 prompt 提交触发），
+    //    session.created → idle 推送永不产生，handle_session_created 有意等待的
+    //    首轮调度信号缺失，队列会永久卡在 pending。入队超过宽限期仍无任何
+    //    waiting/executing 项时主动 try_dispatch_next：对无 clear 命令的 agent
+    //    （opencode）会直接下发 prompt（输入即创建会话并执行）。
+    //    claude code / pi 等 agent 的 SessionStart idle 秒级到达，正常路径早已
+    //    完成首轮下发，此兜底不会触发（幂等：有 waiting/executing 即跳过）。
+    let stale_sessions = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT DISTINCT q.session_id AS session_id FROM task_queue q \
+                 JOIN scheduled_jobs j ON j.session_id = q.session_id AND j.status = 'executed' \
+                 WHERE q.status = 'pending' \
+                   AND q.created_at <= datetime(?1, '-{} seconds') \
+                   AND NOT EXISTS ( \
+                       SELECT 1 FROM task_queue q2 \
+                       WHERE q2.session_id = q.session_id AND q2.status IN ('waiting', 'executing') \
+                   )",
+                FIRST_DISPATCH_GRACE_SECS
+            ),
+            &sql_params![now_utc],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    for row in stale_sessions {
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if session_id.is_empty() {
+            continue;
+        }
+
+        // 会话已不存在（进程退出 / 应用重启后的残留队列，如 opencode TUI 未
+        // 创建会话即被杀）：继续每 tick（1s）重试只会无限刷日志且永远失败。
+        // 一次性取消全部 pending 项并广播（复用 check_waiting_timeouts 的
+        // cancel 语义：移动端预设据此落 interrupted），cancelled 不再命中
+        // 本查询，后续 tick 静默跳过
+        if host.session_get(&session_id).ok().flatten().is_none() {
+            let pending_ids: Vec<String> = host
+                .plugin_db_query_params(
+                    "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'pending'",
+                    &sql_params![session_id],
+                )
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|row| {
+                    row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                })
+                .collect();
+            for task_id in &pending_ids {
+                let _ = host.plugin_db_execute_params(
+                    "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') \
+                     WHERE id = ?1",
+                    &sql_params![task_id],
+                );
+                let remaining = crate::queue::pending_count(host, &session_id);
+                crate::queue::broadcast_queue_changed(
+                    host,
+                    &session_id,
+                    remaining,
+                    "cancel",
+                    Some(task_id),
+                    Some("cancelled"),
+                );
+            }
+            if !pending_ids.is_empty() {
+                host.log_warn(&format!(
+                    "scheduler-tick: session {} gone, cancelled {} stale pending task(s)",
+                    session_id,
+                    pending_ids.len()
+                ));
+            }
+            continue;
+        }
+
+        host.log_info(&format!(
+            "scheduler-tick: first dispatch fallback for scheduled session_id={} (no idle signal)",
+            session_id
+        ));
+        crate::queue::try_dispatch_next(host, &session_id);
     }
 }
 
