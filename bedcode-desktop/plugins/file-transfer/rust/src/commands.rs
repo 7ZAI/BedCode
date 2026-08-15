@@ -1822,7 +1822,15 @@ fn archive_task_if_terminal(
         .unwrap_or("")
         .to_string();
     let local_path = if task.state == TaskState::Completed {
-        Some(task.local_path.clone())
+        // 下载方向 local_path 为 .part 临时名，文件完成后已 rename 到最终路径
+        // （去后缀，只剥一次防 `x.part.part` 错位）；上传方向为源文件路径无需
+        // 处理。历史条目保存最终路径，使「打开所在文件夹」可直接定位
+        Some(
+            task.local_path
+                .strip_suffix(".part")
+                .unwrap_or(&task.local_path)
+                .to_string(),
+        )
     } else {
         None
     };

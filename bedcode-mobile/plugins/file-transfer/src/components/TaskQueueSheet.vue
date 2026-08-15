@@ -61,10 +61,10 @@ const activeCount = computed(
   () => props.tasks.filter(tk => tk.state === 'transferring').length,
 )
 
-/** 发送 tab 任务（发起方 = me；终态任务保留在列表供 retry/remove，与 v1 一致） */
-const sendingTasks = computed(() => props.tasks.filter(tk => tk.initiator !== 'peer'))
+/** 发送 tab 任务（仅本端上传；本端发起的下载归「全部」tab，避免接收方向任务混入发送语义） */
+const sendingTasks = computed(() => props.tasks.filter(tk => tk.direction === 'upload'))
 
-/** 当前 tab 展示列表（全部 = 任务全表；发送 = 我发起；接收/历史 = 各自快照） */
+/** 当前 tab 展示列表（全部 = 任务全表；发送 = 仅上传；接收/历史 = 各自快照） */
 const visibleTasks = computed(() => (tab.value === 'sending' ? sendingTasks.value : props.tasks))
 
 /** 任务是否可暂停 */

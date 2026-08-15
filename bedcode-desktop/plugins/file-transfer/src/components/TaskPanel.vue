@@ -4,7 +4,7 @@
  *
  * v2 四 tab：全部 | 正在发送 | 正在接收 | 历史（spec §14.4）。
  * - 全部 = 本端任务（非终态）+ 接收任务合并，按创建时间倒序
- * - 正在发送 = 本端发起的任务（waiting-approval 显示「等待对方同意」+ 可取消）
+ * - 正在发送 = 本端上传任务（waiting-approval 显示「等待对方同意」+ 可取消）
  * - 正在接收 = 对端发起的接收任务（只可取消，无暂停/恢复）
  * - 历史 = 终态归档只读条目（时间/方向/文件名/大小/结果 + 清空 + 打开所在文件夹）
  * 状态汇总 chips（四色体系，spec §9.3）+ 进度条 + 速率 · 剩余时间。
@@ -152,10 +152,12 @@ function receivingPeerName(task: ReceivingTask): string {
   return task.peerId ? peerNameOf(task.peerId) : ''
 }
 
-/** 全部 tab：本端非终态任务 + 接收任务合并；正在发送 tab：仅本端任务（按创建时间倒序） */
+/** tab 列表：正在发送 = 本端上传任务（本端发起的下载归「全部」tab，避免
+ * 接收方向任务混入发送语义）；全部 tab = 本端非终态任务 + 接收任务合并 */
 const tabItems = computed(() => {
   if (activeTab.value === 'sending') {
     return props.tasks
+      .filter(t => t.direction === 'upload')
       .slice()
       .sort((a, b) => b.createdAt - a.createdAt)
       .map(t => ({ id: t.id, kind: 'task' as const }))

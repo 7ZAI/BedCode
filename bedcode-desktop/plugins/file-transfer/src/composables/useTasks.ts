@@ -231,6 +231,8 @@ export function useTasks(context: PluginContext) {
     const finalPath = path.endsWith('.part')
       ? path.slice(0, -'.part'.length)
       : path
+    // 诊断：点击「打开目录」时打印实际解析出的定位路径
+    console.log(`[File Transfer] openInDir task=${task.id} dir=${task.direction} raw=${task.localPath} -> ${finalPath}`)
     try {
       await context.system.revealInDir(finalPath)
     } catch (err) {

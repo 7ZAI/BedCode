@@ -89,11 +89,19 @@ const peerNames = computed<Record<string, string>>(() => {
   return map
 })
 
-/** v2：历史条目打开所在文件夹（localPath 直接可用） */
+/** v2：历史条目打开所在文件夹（localPath 直接可用）
+ * 下载方向历史 local_path 为 .part 临时名（文件完成后已 rename 到最终路径），
+ * 需去后缀后才存在；兼容旧库数据的同时与任务卡 openInDir 保持一致 */
 function openHistoryDir(localPath: string): void {
   if (!localPath) return
-  void context.system.revealInDir(localPath).catch((err: unknown) => {
-    console.error(`[File Transfer] reveal failed for "${localPath}":`, err)
+  // 与 openInDir 相同的 .part 剥离（历史库可能存旧 .part 路径，见 wasm 归档逻辑）
+  const finalPath = localPath.endsWith('.part')
+    ? localPath.slice(0, -'.part'.length)
+    : localPath
+  // 诊断：点击历史「打开所在文件夹」时打印实际解析出的定位路径
+  console.log(`[File Transfer] openHistoryDir raw=${localPath} -> ${finalPath}`)
+  void context.system.revealInDir(finalPath).catch((err: unknown) => {
+    console.error(`[File Transfer] reveal failed for "${finalPath}":`, err)
   })
 }
 
