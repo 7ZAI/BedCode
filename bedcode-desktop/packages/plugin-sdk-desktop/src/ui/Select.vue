@@ -188,15 +188,26 @@ function onClickOutside(e: MouseEvent) {
   }
 }
 
+/**
+ * 滚动关闭：scroll 事件不冒泡，但捕获阶段监听（capture:true）仍会收到
+ * 任意后代元素的滚动。面板自身的选项列表滚动（选项过多需滚动查看）不应
+ * 关闭下拉——否则一滚面板就消失，无法选中可视区外的选项；
+ * 其余滚动（页面/输入区/消息列表）视为失焦关闭，保持原意图
+ */
+function onScroll(e: Event) {
+  if (panelRef.value?.contains(e.target as Node)) return
+  close()
+}
+
 onMounted(() => {
   document.addEventListener('mousedown', onClickOutside)
   window.addEventListener('resize', close)
-  window.addEventListener('scroll', close, true)
+  window.addEventListener('scroll', onScroll, true)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onClickOutside)
   window.removeEventListener('resize', close)
-  window.removeEventListener('scroll', close, true)
+  window.removeEventListener('scroll', onScroll, true)
 })
 </script>
